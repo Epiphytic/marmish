@@ -1,0 +1,43 @@
+{
+  "assertions": [
+    "distinct_signing_identities_and_explicit_relay_lists",
+    "exact_two_member_room_and_one_day_retention",
+    "authenticated_incoming_alice_to_bob",
+    "authenticated_incoming_bob_to_alice"
+  ],
+  "binary_sha256": {
+    "wn": "c1f5a130549a142070b477303f1cf1e50153ab33b61815b5c7b4f681546747e5",
+    "wnd": "1324c70d389fb49f37ae8f7f6ab2a16840b138a0c438d7aef10bb6f9eee20a03"
+  },
+  "group_id": "7ea8f0872876d6ed234035b63af4fceb",
+  "limitations": [
+    "relay_lists_are_not_egress_enforcement",
+    "sender_authentication_trusts_selected_mdk_binary",
+    "binary_source_build_revision_unverified",
+    "public_keypackage_and_relay_list_residue_may_remain",
+    "retention_setting_is_not_deletion_certification",
+    "sigkill_and_escaped_descendants_are_not_contained"
+  ],
+  "local_cleanup": "complete",
+  "message_ids": [
+    "f1b9e2f34997a8bcd9d50bb9c3015527d44cf5e456c31d2eb86eddd57afde1ec",
+    "eb3034149299bb815161f1682d8cdea2e9d167baf6d2cea841accf57df5e7cd6"
+  ],
+  "outcome": "passed",
+  "public_identities": {
+    "alice": {
+      "hex": "e5d46afc731f2916ebddf396bc036b547f1ca5dbbeef7fca1925332991c72d3d",
+      "npub": "npub1uh2x4lrnru53d67a7wttcqmt23l3efwmhmhhljsey5ejnyw8957she70kv"
+    },
+    "bob": {
+      "hex": "261ca254f2ad42fa39a2a7f410d6127ab0c565c241e68026e283b918919a966c",
+      "npub": "npub1ycw2y48j44p05wdz5l6pp4sj02cv2ewzg8ngqfhzswu33yv6jekq6rmqlc"
+    }
+  },
+  "relays": [
+    "wss://relay.eu.whitenoise.chat/",
+    "wss://relay.us.whitenoise.chat/"
+  ],
+  "stage": "complete",
+  "wn_version": "wn 0.13.0"
+}

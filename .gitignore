@@ -4,3 +4,78 @@
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Private runtime state (may contain identities, commands and output)
+.marmish/
+/state/
+/fixtures-output/
+.whitenoise/
+.wn/
+
+# Master/identity keys, interrupted publication and worker credentials
+engine.key
+.engine.key.pending
+*.key
+*.key.*
+*.nsec
+*.nsec.*
+*.pem
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+**/jobs/*/credential
+
+# SQLite/SQLCipher databases and all journal modes, including hot sidecars
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# Build products and local analysis/cache data
+target/
+/.ripwire_quality_baseline
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Python developer tools
+__pycache__/
+*.py[cod]
+
+# Local environment and credentials (no environment examples currently needed)
+.env
+.env.*
+.envrc
+.cargo/credentials*
+secrets/
+credentials.json
+
+# Temporary files, editor state and process output
+/tmp/
+/temp/
+*.tmp
+*.temp
+*.log
+*.pid
+*.sock
+*.swp
+*.swo
+*~
+.#*
+\#*\#
+.vscode/
+.idea/
+.DS_Store
+
+# Linux/macOS crash dumps; leave marmish-core and core source files trackable
+core
+core.[0-9]*
+*.core
+
+# Keep source directories named core visible while excluding core dump files
+!core/

@@ -1,0 +1,36 @@
+[package]
+name = "marmish-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+fault-injection = []
+
+[dependencies]
+marmish-core = { path = "../marmish-core" }
+libc.workspace = true
+rusqlite.workspace = true
+sha2.workspace = true
+hkdf.workspace = true
+hmac.workspace = true
+getrandom.workspace = true
+zeroize.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[[bin]]
+name = "marmish-worker"
+path = "src/bin/marmish-worker.rs"
+
+[[bin]]
+name = "marmish-test-frontend"
+path = "tests/support/frontend.rs"
+required-features = ["fault-injection"]

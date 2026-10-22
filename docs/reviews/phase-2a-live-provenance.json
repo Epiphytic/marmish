@@ -1,0 +1,9 @@
+{
+  "evidence": "phase-2a-live.json",
+  "evidence_date": "2026-10-22",
+  "runner_path": "tools/mdk_smoke.py",
+  "runner_sha256": "653869a3bbb83d89801cb82936d31797728372ca3c7f2a40fcde3acb9f07f60b",
+  "recorded_after_run": true,
+  "runner_unchanged_since_live_run": true,
+  "note": "Supplementary integrator record; original live report is preserved. Code reviewer also checked source modification preceded the live evidence. No source-build provenance claimed for MDK executables."
+}
