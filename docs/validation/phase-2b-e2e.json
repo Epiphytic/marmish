@@ -1,0 +1,39 @@
+{
+  "assertions": [
+    "literal_argv_spaces_unicode_quotes_newline_dollar_backticks_leading_dash_nonutf8",
+    "separate_binary_stderr_and_nonzero_exit",
+    "exact_admitted_retry_and_status_first_retry_execute_once_conflict_rejected",
+    "byte_exact_binary_stdin_stdout_stderr_eof",
+    "live_cancellation_reports_signal_and_remains_queryable",
+    "live_stale_challenge_wrong_group_and_chat_payload_never_execute",
+    "live_ordinary_room_and_unallowlisted_identity_invites_remain_unaccepted",
+    "frontend_disconnect_does_not_cancel_running_worker",
+    "persisted_mls_room_and_command_output_recovered_after_frontend_restart",
+    "previous_boot_valid_control_frame_rejected_after_restart",
+    "fresh_independent_mls_group_configurable_retention_same_principal_reattach",
+    "actual_client_and_server_cli_processes_execute_command_via_marmot"
+  ],
+  "duration_seconds": 168.471,
+  "groups": [
+    "4cdf784c91f5db388bebad305ed75d5b",
+    "f984fa0ec3e0474dfd13924ade27a59e"
+  ],
+  "limitations": [
+    "prototype_single_device_linux_only",
+    "pinned_binary_source_provenance_unverified",
+    "relay_retention_is_not_guaranteed_erasure",
+    "same_principal_can_reattach_across_sessions"
+  ],
+  "local_cleanup": "complete",
+  "outcome": "passed",
+  "public_identities": {
+    "client": "34360b685a1d5acd1a286d6506eec0a38763f0997368076b2ad7f16277566ecb",
+    "server": "26b437eed305367769bc0db30079ebc2b73a1c76d41cf22c85923225217b2a48"
+  },
+  "relays": [
+    "wss://relay.eu.whitenoise.chat/",
+    "wss://relay.us.whitenoise.chat/"
+  ],
+  "stage": "complete",
+  "wnd_sha256": "1324c70d389fb49f37ae8f7f6ab2a16840b138a0c438d7aef10bb6f9eee20a03"
+}

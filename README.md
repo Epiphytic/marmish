@@ -2,9 +2,63 @@
 
 Asynchronous remote commands and resumable shells over Marmot, using explicitly configured relays.
 
-The first milestone is noninteractive remote commands that continue running after client disconnection. Interactive PTY/tmux sessions follow, with takeover and simultaneous read-only attachments. Application messages default to a configurable 24-hour lifetime. The planned destination syntax is `marmish npub@relay`; the remote identity may have a configured alias, and relays must always be explicitly selected.
+The current Linux prototype runs noninteractive commands over Marmot. Commands continue running after client disconnection. Interactive PTY/tmux sessions, takeover and simultaneous read-only attachments follow in later phases. Application messages default to a configurable 24-hour retention policy. Destination syntax is `npub@relay`, also accepting a hexadecimal Nostr public key; aliases and SRV discovery are later work. Relays must always be explicitly selected.
 
-See [the phased build plan](docs/build-plan.md). Beads tracks implementation and review work. The offline foundation includes explicit relay configuration, bounded message framing, and an MDK version probe. The Linux-only `marmish-engine` library adds durable same-user command jobs, detached workers, ordered stdin, bounded output with explicit gaps, cancellation, and reconnect/replay protection. No working remote-shell release is available yet; live MDK integration is gated on the prerequisites in the [compatibility report](docs/mdk-compatibility.md).
+See [the phased build plan](docs/build-plan.md). Beads tracks implementation and review work. The prototype uses a bounded adapter to a hash-pinned MDK daemon and the Linux-only `marmish-engine` library for durable same-user jobs, detached workers, ordered stdin, bounded output, cancellation and replay protection. It is an experimental single-device command transport, not a production remote-shell release. See [prototype validation and limits](docs/validation/phase-2b-prototype.md) and the earlier [MDK compatibility report](docs/mdk-compatibility.md).
+
+## Run the command prototype
+
+Build the worker and engine bridge with `cargo build --locked --workspace` using the prerequisites below. The Python tools need Python 3.11 or newer and the standard library. Run as a non-root Unix user. On each endpoint, install `bubblewrap`, util-linux `unshare`, iproute2 `ip` and `sysctl`; the current Linux layout expects `/usr/bin/python3`, `/usr/sbin/ip`, `/usr/sbin/sysctl` and `/etc/ssl/certs`. Unprivileged user, network and PID namespaces must be enabled by the host. Startup fails if the confinement checks cannot pass; it does not change host namespace policy.
+
+Select a trusted MDK daemon explicitly. The observed artifact used during compatibility work is `/home/openclaw/.local/bin/wnd`, SHA-256 `1324c70d389fb49f37ae8f7f6ab2a16840b138a0c438d7aef10bb6f9eee20a03`. The hash identifies that tested artifact; its exact build provenance is unverified. The adapter was checked against MDK source at `37c248a`. Another binary or hash needs its own compatibility validation.
+
+Set these variables on each endpoint, choosing your relay and local daemon path. Repeat `--relay` for additional explicit URLs. Supported URLs are `wss://` DNS origins with an optional port and root path; there are no built-in public relays.
+
+```sh
+WND=/absolute/path/to/wnd
+WND_SHA256=1324c70d389fb49f37ae8f7f6ab2a16840b138a0c438d7aef10bb6f9eee20a03
+RELAY=wss://your-relay.example/
+```
+
+Generate an identity on the client, then generate the server identity on the remote host. Each command prints a public `account` identifier. Keep identity directory paths short enough for a Unix socket (the internal `mdk/s` path must fit within 100 bytes).
+
+```sh
+# Client host
+python3 tools/marmish.py -i "$HOME/.marmish/client" --relay "$RELAY" \
+  --wnd "$WND" --wnd-sha256 "$WND_SHA256" --init
+
+# Remote host
+python3 tools/marmish.py -i "$HOME/.marmish/server" --relay "$RELAY" \
+  --wnd "$WND" --wnd-sha256 "$WND_SHA256" --init
+```
+
+On the remote host, allow the client's public identity and choose an existing working directory. Commands execute as this server's local Unix account. The server refuses root and does not switch users.
+
+```sh
+CLIENT_NPUB_OR_HEX='paste-client-public-identity'
+python3 tools/marmishd.py -i "$HOME/.marmish/server" --relay "$RELAY" \
+  --wnd "$WND" --wnd-sha256 "$WND_SHA256" --allow "$CLIENT_NPUB_OR_HEX" \
+  --bridge "$PWD/target/debug/marmish-engine-bridge" \
+  --worker "$PWD/target/debug/marmish-worker" --cwd "$HOME"
+```
+
+From the client host, address the server's public identity at the explicitly configured relay host. Arguments following `--` are literal argv, with no shell interpretation. Binary stdin, stdout and stderr are supported separately; stdin from a terminal is treated as empty for this noninteractive prototype.
+
+```sh
+SERVER_NPUB_OR_HEX='paste-server-public-identity'
+TARGET="$SERVER_NPUB_OR_HEX@your-relay.example"
+python3 tools/marmish.py -i "$HOME/.marmish/client" --relay "$RELAY" \
+  --wnd "$WND" --wnd-sha256 "$WND_SHA256" "$TARGET" -- \
+  /usr/bin/printf '%s\n' 'literal spaces, $HOME and `id`'
+```
+
+The equivalent identity option is `-u "$SERVER_NPUB_OR_HEX" your-relay.example`. Here `-i` selects a persistent private identity **directory**, not an SSH key file. Importing a supplied Nostr secret key is not implemented. Preserve the directory to reuse its identity and session; only one frontend may use it at a time.
+
+Use `--detach` to return an invocation ID after submitting the command and sending stdin. The command keeps running if either frontend disconnects. Later, use the same identity and destination with `--status ID`, `--wait ID`, `--cancel ID` or `--retry ID`. Waiting reads retained output from the beginning and propagates the command's exit code or signal. Retry consults status before resubmitting the original invocation ID and argv; it never automatically allocates a replacement invocation. Its private journal is durable before the first submit. Interrupted stdin is not a durable client-side replay stream. A client timeout or transport error does not imply the command was cancelled.
+
+Each remote identity and canonical relay set reuses one saved conversation by default. `--new-session` creates a fresh independent MLS group; it can still inspect jobs belonging to the same authenticated principal. `--retention SECONDS` configures a new group's application-message policy (default 86400, accepted range 1–604800). Retention is best effort: relay copies, unread or deferred local messages and backups can outlive that duration. Engine output retention is a separate policy. Explicit shell execution uses `--shell-command` and requires the server's `--allow-shell` option.
+
+Engine state and retained output use SQLCipher as described below. The frontend's private 0600 JSON files hold session metadata and, while retry is needed, original command arguments and authorization tokens; these frontend files are not encrypted. Protect the whole identity directory and keep it out of source control. Completing a wait or observing terminal status with status/cancel removes command/token fields from its retry journal, without guaranteeing forensic erasure.
 
 ## Offline development
 
@@ -27,7 +81,7 @@ The probe runs only `--version` with an empty environment. It does not approve t
 
 ## Local command engine
 
-Phase 1 exposes a Rust API, not a remote command CLI. `EnginePolicy` requires a private absolute state directory, an explicitly selected trusted `marmish-worker` executable, a server identity, and an allowlist of principals. The frontend is responsible for authenticating that principal before calling `authorize`. Both frontend and worker refuse root and account switching.
+The underlying Rust API remains available independently of the prototype CLI. `EnginePolicy` requires a private absolute state directory, an explicitly selected trusted `marmish-worker` executable, a server identity, and an allowlist of principals. The frontend is responsible for authenticating that principal before calling `authorize`. Both frontend and worker refuse root and account switching.
 
 Commands run as the local Unix account with a fixed environment and account home as cwd unless server policy supplies another directory. Direct argv execution is the default; shell strings require explicit policy permission. Dropping or restarting the frontend leaves detached workers running. Service managers must preserve workers across frontend restarts; a unit configured to kill its entire control group would defeat this behavior. The embedding frontend must call `maintain` at least once a minute for bounded reconciliation and retention cleanup.
 

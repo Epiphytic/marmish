@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/marmish-core", "crates/marmish-mdk", "crates/marmish-engine"]
+members = ["crates/marmish-core", "crates/marmish-mdk", "crates/marmish-engine", "crates/marmish-prototype"]
 resolver = "2"
 
 [workspace.package]
