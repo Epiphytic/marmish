@@ -1,0 +1,33 @@
+{
+  "scope": "Test-only isolated OFD lock-presence assertions; production unchanged",
+  "rust": {
+    "focused_repetitions": 100,
+    "workspace_tests_passed": 130,
+    "workspace_mode": "offline, default parallel harness",
+    "clippy": "PASS all workspace targets, warnings denied",
+    "fmt": "PASS"
+  },
+  "python": {
+    "total": 172,
+    "skipped_darwin_only": 4,
+    "outcome": "PASS"
+  },
+  "independent_review": {
+    "path": "docs/reviews/ofd-test-code-final.json",
+    "verdict": "APPROVE",
+    "focused_repetitions": 30,
+    "parallel_launcher_module_repetitions": 10,
+    "tests_per_module_run": 13,
+    "native_macos_execution": "unavailable"
+  },
+  "quality_delta": {
+    "exit_code": 2,
+    "baseline": "52b49433f0ebdd0ffe3146b50424683a50b77299",
+    "regressions": 3,
+    "gating": 3,
+    "disposition": "Two short-horizon churn findings and test-function growth from47 to69lines. The bounded isolated subprocess, nonvacuous completion and explicit cleanup account for growth; retained as one test rather than adding a one-use framework. No suppression or new baseline."
+  },
+  "mechanism": "ofd-fork-mechanism.json",
+  "failed_native_run": "native-run-39910001479.json",
+  "limits": "Original retaining CI child unidentified. Actual native rerun required. Mac/ARM jobs unassigned; no cross-platform acceptance claimed."
+}

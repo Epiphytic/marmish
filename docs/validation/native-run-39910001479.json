@@ -1,0 +1,20 @@
+{
+  "run": 39910001479,
+  "url": "https://github.com/Epiphytic/marmish/actions/runs/39910001479",
+  "commit": "52b49433f0ebdd0ffe3146b50424683a50b77299",
+  "linux_x64": {
+    "job": 120270542092,
+    "authenticated_bubblewrap_acquisition": "PASS",
+    "real_namespace_prerequisite": "PASS",
+    "offline_engine_tests": {
+      "passed": 91,
+      "failed": 1,
+      "failure": "launcher::tests::root_locks_are_ofd_and_presence_does_not_acquire: final immediate WorkerPresence::Absent assertion"
+    },
+    "cleanup": "Prefix intentionally retained by guard after failed offline tests; no successful cleanup claimed",
+    "native_bundle": "not reached"
+  },
+  "linux_arm64": "queued, unassigned",
+  "macos_arm64": "queued, unassigned",
+  "diagnosis": "Concurrent subprocess fork inheritance of OFD is a candidate; log does not establish exact retaining child. Strict isolated test proposed; production behavior unchanged."
+}

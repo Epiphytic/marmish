@@ -1,0 +1,10 @@
+{
+  "platform": "linux",
+  "mechanism": "F_OFD_SETLK/F_OFD_GETLK across fork before exec",
+  "original_failure_child_identified": false,
+  "parent_lock_probe_busy": true,
+  "parent_drop_child_retains_probe_busy": true,
+  "child_exit_success": true,
+  "after_child_release_probe_absent": true,
+  "passed": true
+}

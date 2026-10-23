@@ -490,3 +490,34 @@ Keep the validator and namespaces unchanged. Run affected and full Python tests,
 Claude auto code review, publish and rerun the actual native gate. This routine
 fix implements the existing approved requirement for a non-group-writable path;
 it adds no interface or trust-boundary change.
+
+### Isolated OFD lock-presence test
+
+Native run 39910001479 passed authenticated Bubblewrap selection and the real
+namespace prerequisite, then failed the final immediate Absent assertion in
+`root_locks_are_ofd_and_presence_does_not_acquire`. The same test had just
+observed Live for the current process. Concurrent tests spawn children; an OFD
+can survive dropping the parent's descriptor until a forked child execs, even
+with CLOEXEC. The exact retaining child is not established by the log.
+
+Run this test through bounded self-reexecution, using the existing isolated
+umask-test pattern. Start the child before creating any test locks, select only
+this exact test, use a private recursion marker, and preserve every original
+presence assertion. Bound the parent wait and kill/reap on timeout. Production
+locking, identity checks and presence behavior remain unchanged. Validate the
+isolated test repeatedly, full parallel workspace tests, fmt and clippy; obtain
+Claude design and completed-code review before publishing and native rerun.
+
+Design-review dispositions: the parent creates and owns a 0700 temporary
+root, passes its path through a private environment variable, and starts the
+exact test with cleared ambient environment. The child creates no subprocesses.
+After every assertion succeeds it writes a completion sentinel in that root;
+the parent requires both successful exit and the sentinel, so a mistyped exact
+filter cannot pass with zero tests. Inherit stdout/stderr for diagnosis, with
+no unread pipes. Use a 30-second deadline, killing and reaping on timeout;
+parent ownership ensures root cleanup even on child failure. Remove the old
+frontend retry from the isolated body: lock release must now be immediate.
+Repeat isolated and full parallel tests. Passing supports this bounded test
+repair but cannot identify the original retaining child; an isolated failure
+would require renewed production investigation. Other unobserved lock-drop
+tests remain outside this change.

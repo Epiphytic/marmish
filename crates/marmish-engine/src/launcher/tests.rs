@@ -3,30 +3,51 @@ use std::os::unix::fs::PermissionsExt;
 
 #[test]
 fn root_locks_are_ofd_and_presence_does_not_acquire() {
-    let temp = tempfile::tempdir().unwrap();
-    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    let root = StateRoot::open(temp.path()).unwrap();
-    let acquire_frontend = || {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    const ROOT_ENV: &str = "MARMISH_OFD_PRESENCE_TEST_ROOT";
+    let Some(test_root) = std::env::var_os(ROOT_ENV) else {
+        use std::process::{Command, Stdio};
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        // Start before creating locks: unrelated parallel forks must not retain
+        // the isolated child's open descriptions after its strict drop checks.
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "launcher::tests::root_locks_are_ofd_and_presence_does_not_acquire",
+                "--nocapture",
+            ])
+            .env_clear()
+            .env(ROOT_ENV, temp.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
-            match root.lock_frontend() {
-                Ok(guard) => break guard,
-                // Another test can fork while this thread opens a CLOEXEC lock
-                // descriptor. The inherited OFD disappears when that child execs.
-                Err(EngineError::AlreadyOpen) if std::time::Instant::now() < deadline => {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                }
-                Err(error) => panic!("frontend lock acquisition failed: {error}"),
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success(), "isolated OFD test failed: {status}");
+                break;
             }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                child.wait().unwrap();
+                panic!("isolated OFD test timed out");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        assert_eq!(std::fs::read(temp.path().join("completed")).unwrap(), b"ok");
+        return;
     };
-    let guard = acquire_frontend();
+    let test_root = PathBuf::from(test_root);
+    let root = StateRoot::open(&test_root.join("state")).unwrap();
+    let guard = root.lock_frontend().unwrap();
     assert!(matches!(
         root.lock_frontend(),
         Err(EngineError::AlreadyOpen)
     ));
     drop(guard);
-    acquire_frontend();
+    root.lock_frontend().unwrap();
     let job = JobId([1; 16]);
     root.prepare_job(job, &WorkerCredential([2; 32])).unwrap();
     assert!(matches!(
@@ -48,6 +69,7 @@ fn root_locks_are_ofd_and_presence_does_not_acquire() {
         root.presence(job, Some(&identity)).unwrap(),
         WorkerPresence::Absent
     ));
+    std::fs::write(test_root.join("completed"), b"ok").unwrap();
 }
 
 #[test]
