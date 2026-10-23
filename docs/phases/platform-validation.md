@@ -596,3 +596,50 @@ umask002; retain ordinary full tests, clippy/fmt and fault checks as appropriate
 The permissive child mask must be set by subprocess creation, never by changing
 the multithreaded parent test process. A new CI run must validate this exact
 boundary. This routine correction enforces the existing private-fixture design.
+
+### Reconciliation unit-test reopen boundary (marmish-ech)
+
+The full child-002 run recorded an AlreadyOpen at store/tests.rs:1644, immediately
+after dropping Engine in the transient-attempt/quota reconciliation test.
+AlreadyOpen originates from frontend lock acquisition before keys, Store or
+reconciliation; the failing test's injected transient worker spawn never reaches
+OS spawn. Another parallel test may fork while the guard exists and retain its
+CLOEXEC OFD until exec. The retaining child remains unidentified.
+
+Use a small local helper following the integration Harness::reopen convention
+in this one unit test, with a fixed Instant deadline. Unlike that integration
+helper, match only AlreadyOpen: lock_frontend already translates lock Busy.
+Retry only AlreadyOpen for at most five seconds with ten-millisecond waits,
+cloning the unchanged policy. Other errors fail immediately; deadline exhaustion
+fails visibly. Keep every attempt-count, quota, exit and NotStarted assertion.
+This is a test synchronization boundary, with no production locking or retry
+change. Validate focused repetitions and full parallel child umasks 002/022 suites after
+the change; preserve the prior failed evidence rather than replacing it.
+Other drop/reopen sites remain potentially exposed and outside this increment.
+A timeout is new evidence of a persistent holder and must not be rerun away.
+
+### Portable empty-environment observer fixture
+
+Native run 39913807652 passes engine tests but MDK's isolated empty-environment
+observer returns SubprocessFailure. That test copies /usr/bin/env and renames it
+synthetic-env-observer. A local GNU env passes under umask 002; an argv0-dispatched
+multicall binary reproduces exit 127 when renamed and succeeds when its basename
+is env. Native uutils provenance and the native failure cause remain unconfirmed;
+argv0 dispatch or rejection of -0 could explain it. This change removes both.
+The exit 127 reproduction is local multicall emulation, not native host evidence.
+
+Keep the copied fixture basename env and invoke it without arguments. Zero
+output still proves the entire child environment is empty; no platform-specific
+-0 option is required when zero variables are expected. Preserve poisoned
+ambient variables, subprocess isolation and strict zero-byte assertions. This
+is test-only portability; no production spawn, environment or allowlist changes.
+Validate the focused test, local multicall mechanism, full parallel workspace
+under umasks 002/022, clippy/fmt, Claude code review and the next actual native gate.
+
+Local exit evidence: both full parallel workspace runs passed 131 tests under
+child umasks 002 and 022, with four additional self-reexec checks in each.
+Clippy (all targets, fault-injection, warnings denied) and formatting passed.
+Claude independently approved the integrated code and ran focused checks; see
+[validation](../validation/portable-test-fixtures.json) and
+[code review](../reviews/portable-fixtures-code-final.json). Actual native and
+macOS interoperability gates remain pending.

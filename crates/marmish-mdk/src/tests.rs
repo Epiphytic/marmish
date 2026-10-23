@@ -94,9 +94,10 @@ fn environment_is_exactly_empty_even_when_ambient_is_poisoned() {
     }
     let root = TempDir::new().unwrap();
     // Copy env: no shell/runtime can add PWD or locale variables before observation.
-    let executable = root.path().join("synthetic-env-observer");
+    // Preserve the applet basename for multicall implementations that dispatch on argv[0].
+    let executable = root.path().join("env");
     std::fs::copy("/usr/bin/env", &executable).unwrap();
-    let (stdout, stderr) = fixture_run(&root, &executable, &["-0".into()], PROBE_TIMEOUT).unwrap();
+    let (stdout, stderr) = fixture_run(&root, &executable, &[], PROBE_TIMEOUT).unwrap();
     assert_eq!(stdout, b"");
     assert_eq!(stderr, b"");
     let fake = script(

@@ -1623,6 +1623,20 @@ fn reconciliation_global_failures_never_burn_attempts_and_late_failure_refunds()
     assert_eq!(store.job_state(job).unwrap(), InvocationState::Accepted);
 }
 
+fn reopen_after_frontend_drop(policy: &EnginePolicy) -> crate::Engine {
+    let until = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match crate::Engine::open(policy.clone()) {
+            Err(EngineError::AlreadyOpen) if std::time::Instant::now() < until => {
+                // A parallel fork may retain the CLOEXEC frontend lock until
+                // exec. AlreadyOpen occurs before any reconciliation attempts.
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            result => return result.unwrap(),
+        }
+    }
+}
+
 #[test]
 fn reconciliation_transient_attempts_are_durable_bounded_and_advance_after_quota_frees() {
     let mut fixture = Fixture::new();
@@ -1641,7 +1655,7 @@ fn reconciliation_transient_attempts_are_durable_bounded_and_advance_after_quota
     assert_eq!(load(&engine.store.conn, waiting).unwrap().attempts, 1);
     let policy = engine.policy.clone();
     drop(engine);
-    let mut engine = crate::Engine::open(policy).unwrap();
+    let mut engine = reopen_after_frontend_drop(&policy);
     assert_eq!(load(&engine.store.conn, waiting).unwrap().attempts, 2);
     engine.reconcile_background(waiting).unwrap();
     assert_eq!(load(&engine.store.conn, waiting).unwrap().attempts, 3);

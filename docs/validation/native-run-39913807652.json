@@ -1,0 +1,24 @@
+{
+  "run": 39913807652,
+  "url": "https://github.com/Epiphytic/marmish/actions/runs/39913807652",
+  "commit": "5d53267960ddea1c5fa8807ff211236865df817b",
+  "linux_x64": {
+    "job": 120282716736,
+    "authenticated_bubblewrap": "PASS",
+    "real_namespace_prerequisite": "PASS",
+    "engine_unit_tests_passed": 92,
+    "encrypted_storage_passed": 2,
+    "engine_integration_passed": 14,
+    "mdk_unit_tests": {
+      "passed": 3,
+      "failed": 6,
+      "primary_failure": "environment_is_exactly_empty_even_when_ambient_is_poisoned: isolated child SubprocessFailure tests.rs99",
+      "secondary": "Five Mutex PoisonError failures after primary panic"
+    },
+    "native_bundle": "not reached",
+    "cleanup": "Prefix intentionally retained after offline failure; no successful cleanup claimed"
+  },
+  "linux_arm64": "queued, unassigned",
+  "macos_arm64": "queued, unassigned",
+  "diagnosis": "First MDK failure investigation pending; no cause assigned."
+}

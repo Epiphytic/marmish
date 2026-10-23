@@ -1,0 +1,41 @@
+{
+  "scope": "Two test-only portability/synchronization corrections; production and workflow unchanged",
+  "workspace_tests_passed_by_child_umask": {
+    "002": 131,
+    "022": 131
+  },
+  "focused_reconciliation_repetitions": {
+    "002": 50,
+    "022": 50,
+    "outcome": "PASS"
+  },
+  "multicall_mechanism": {
+    "GNU_env": "Both basenames succeed locally",
+    "BusyBox_copy_renamed": "exit127 applet not found",
+    "BusyBox_copy_basename_env": "exit0 empty stdout/stderr",
+    "native_failure_cause": "Unconfirmed; renamed applet dispatch and -0 portability removed, actual native gate required"
+  },
+  "clippy": "PASS workspace all-targets fault-injection warnings denied",
+  "fmt": "PASS",
+  "prior_failed_evidence": [
+    "fixture-mode-increment.json",
+    "native-run-39913807652.json"
+  ],
+  "quality_delta": {
+    "exit_code": 2,
+    "gating_findings": 5,
+    "kinds": [
+      "duplication",
+      "new-clone-of-reused-helper",
+      "short-horizon-churn"
+    ],
+    "disposition": "Local unit-test helper follows approved review; integration Harness is unavailable to unit tests and has a broader Busy retry contract. Avoid creating production retry APIs or broad cross-target fixture refactor for one test. No suppression/baseline."
+  },
+  "acceptance": "Local suites pass; native macOS/ARM and interop remain pending; transport unchanged since actual Linux14/14 evidence in bwrap-placement-e2e.json",
+  "child_self_reexec_checks_per_suite": 4,
+  "independent_claude_review": {
+    "verdict": "APPROVE",
+    "evidence": "../reviews/portable-fixtures-code-final.json",
+    "tests": "Focused MDK environment and reconciliation tests; reconciliation group repeated three times"
+  }
+}
