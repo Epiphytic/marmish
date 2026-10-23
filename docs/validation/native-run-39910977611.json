@@ -1,0 +1,25 @@
+{
+  "run": 39910977611,
+  "url": "https://github.com/Epiphytic/marmish/actions/runs/39910977611",
+  "commit": "bf9c44b0025b5f525d5ca793c500888f5a27f3b3",
+  "linux_x64": {
+    "job": 120273750686,
+    "authenticated_bubblewrap": "PASS",
+    "real_namespace_prerequisite": "PASS",
+    "engine_unit_tests": {
+      "passed": 92,
+      "failed": 0,
+      "isolated_ofd_test": "PASS"
+    },
+    "encrypted_storage_integration": {
+      "passed": 1,
+      "failed": 1,
+      "failure": "retained_command_input_and_streams_require_the_storage_key: Engine::open returned InvalidPolicy"
+    },
+    "bundle": "not reached",
+    "cleanup": "Prefix intentionally retained after offline failure; no successful cleanup claimed"
+  },
+  "linux_arm64": "queued, unassigned",
+  "macos_arm64": "queued, unassigned",
+  "diagnosis": "Worker executable validation is a leading candidate. Fresh linker output under permissive runner umask may be writable; exact worker mode is absent from log, so not proven."
+}

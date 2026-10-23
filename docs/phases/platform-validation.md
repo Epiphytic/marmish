@@ -521,3 +521,56 @@ Repeat isolated and full parallel tests. Passing supports this bounded test
 repair but cannot identify the original retaining child; an isolated failure
 would require renewed production investigation. Other unobserved lock-drop
 tests remain outside this change.
+
+### Private worker installation for integration tests
+
+Native run 39910977611 passed the namespace prerequisite and all 92 engine unit
+tests, including the isolated OFD check. The encrypted-storage integration test
+then returned InvalidPolicy from Engine::open. Its policy directly references
+Cargo's worker output. Worker-file validation rejects writable, nonexecutable,
+missing or wrong-owner files with this error; the exact rejected metadata is
+not logged, so the runner's permissive umask remains a hypothesis.
+
+Integration fixtures should install the built worker into their own private
+0700 temporary root and explicitly set the copied executable to 0700 before
+passing its canonical absolute path to Engine. This mirrors bundle installation,
+which already copies the worker and sets its mode explicitly. Preserve the
+original built artifact and production validation; do not chmod checkout or
+runner ancestors. Keep worker copies outside mutable state subdirectories and
+alive for detached workers throughout the fixture lifetime. Apply this boundary
+to the engine integration harnesses and bridge tests that supply Cargo worker
+paths. Reuse a shared test-only staging helper through explicit module paths.
+A meaningful regression must configure an owned worker copy with mode 0775 and
+observe InvalidPolicy, then install a private 0700 copy and open the real engine
+successfully. Validate full parallel Rust tests, clippy and fmt; record native
+rerun results and obtain Claude design/code reviews before publishing.
+
+Implementation scope: the policy helper in `tests/encrypted_storage.rs`,
+`tests/engine.rs` Harness, and prototype `tests/bridge.rs` Pipe will use a shared
+test-only helper under engine `tests/support/executable.rs`. The feature-gated
+fault fixture will use it too while preserving explicit production/fault worker
+artifact selection. The helper copies the explicitly selected worker into a
+fixed fixture-local filename, sets the owned root and copy to 0700 and returns
+the canonical installed path. A fixture stages once, retaining the same path
+for restart/reopen; its owned TempDir outlives command completion. No dependency
+on Cargo siblings or worker self-location exists. The negative regression
+creates a separate unsafe source, never changes the Cargo binary or global
+umask, and confirms staging leaves source mode 0775 intact.
+
+Claude design-review dispositions: unsafe ancestors report UnsafePath, narrowing
+the observed InvalidPolicy to file-level validation. Copy with fs::copy (never
+link), then chmod explicitly; bundle installation uses 0755 whereas private
+test installation uses 0700. Canonicalize the private staging directory before
+forming the worker path. Each fixture owns a separate worker TempDir outside
+state_root, declared to drop after engines, children and state owners. The shared
+std/tempfile-only helper returns that owner and canonical path. Preserve explicit
+fault/production source selection and stage once across bridge restart.
+
+The regression will assert exact InvalidPolicy for the installed copy at 0775,
+then chmod that same copy to 0700 and require real engine open plus bounded
+command completion. Also stage from an explicitly unsafe owned source and prove
+the helper leaves that source unchanged. Do not mutate Cargo artifacts, global
+umask, checkout or runner parents. Run the parallel suite repeatedly to catch
+copy/exec fork timing failures; do not claim this establishes the original CI
+worker mode. Keep one shared test-only helper across the small repository via
+explicit module paths, without adding production APIs or a support crate.

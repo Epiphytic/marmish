@@ -1,0 +1,14 @@
+{
+  "scope": "Standalone local rustc link under controlled child umask; not original runner metadata",
+  "outcomes": {
+    "002": {
+      "mode": "0o775",
+      "would_fail_worker_write_mode_check": true
+    },
+    "077": {
+      "mode": "0o700",
+      "would_fail_worker_write_mode_check": false
+    }
+  },
+  "cleanup": "temporary source and binaries removed"
+}

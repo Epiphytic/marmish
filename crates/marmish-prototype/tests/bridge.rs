@@ -1,3 +1,5 @@
+#[path = "../../marmish-engine/tests/support/executable.rs"]
+mod executable;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -30,10 +32,23 @@ struct Pipe {
     input: Option<ChildStdin>,
     output: BufReader<ChildStdout>,
     directory: tempfile::TempDir,
+    worker: executable::InstalledWorker,
 }
 impl Pipe {
     fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
+        let worker = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("marmish-worker");
+        assert!(
+            worker.is_file(),
+            "build reviewed worker first: cargo build -p marmish-engine --bin marmish-worker"
+        );
+        let worker = executable::stage_worker(&worker);
         let mut child = Command::new(env!("CARGO_BIN_EXE_marmish-engine-bridge"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -47,6 +62,7 @@ impl Pipe {
             input,
             output,
             directory,
+            worker,
         }
     }
     fn restart(&mut self) {
@@ -77,18 +93,7 @@ impl Pipe {
         self.init_policy(shell, Value::Null);
     }
     fn init_policy(&mut self, shell: bool, policy: Value) {
-        let worker = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("marmish-worker");
-        assert!(
-            worker.is_file(),
-            "build reviewed worker first: cargo build -p marmish-engine --bin marmish-worker"
-        );
-        let request = json!({"op":"init","version":1,"state_root":self.directory.path().join("state"),"worker_executable":worker,"server":"5555555555555555555555555555555555555555555555555555555555555555","allowed_principals":[PRINCIPAL],"cwd":self.directory.path(),"allow_shell_command":shell,"command_policy":policy});
+        let request = json!({"op":"init","version":1,"state_root":self.directory.path().join("state"),"worker_executable":self.worker.path,"server":"5555555555555555555555555555555555555555555555555555555555555555","allowed_principals":[PRINCIPAL],"cwd":self.directory.path(),"allow_shell_command":shell,"command_policy":policy});
         let until = Instant::now() + Duration::from_secs(5);
         loop {
             let response = self.call(request.clone());

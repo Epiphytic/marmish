@@ -1,5 +1,7 @@
 #![cfg(feature = "fault-injection")]
 //! Cross-process faults use only the public fixture executable/API.
+#[path = "support/executable.rs"]
+mod executable;
 use hkdf::Hkdf;
 use rusqlite::{Connection, OpenFlags};
 use sha2::Sha256;
@@ -107,19 +109,22 @@ struct Fixture {
     root: TempDir,
     worker: PathBuf,
     scenario: &'static str,
+    _worker: executable::InstalledWorker,
 }
 impl Fixture {
     fn new(scenario: &'static str, production: bool) -> Self {
         let root = TempDir::new().unwrap();
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let worker = executable::stage_worker(&artifact(if production {
+            "MARMISH_TEST_PRODUCTION_WORKER"
+        } else {
+            "MARMISH_TEST_FAULT_WORKER"
+        }));
         Self {
             root,
             scenario,
-            worker: artifact(if production {
-                "MARMISH_TEST_PRODUCTION_WORKER"
-            } else {
-                "MARMISH_TEST_FAULT_WORKER"
-            }),
+            worker: worker.path.clone(),
+            _worker: worker,
         }
     }
     fn start(&self, action: &str) -> Frontend {

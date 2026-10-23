@@ -1,0 +1,29 @@
+{
+  "scope": "Test-only private installation of worker executables in four fixture families; production validation unchanged",
+  "rust": {
+    "default_workspace_tests": 131,
+    "default_parallel_runs_passed": 2,
+    "fault_injection_workspace_tests": 139,
+    "fault_injection_tests": 8,
+    "fault_artifacts": "Fresh separately rebuilt default-production and fault-enabled release workers, selected explicitly",
+    "clippy": "PASS all default workspace targets, warnings denied",
+    "fmt": "PASS"
+  },
+  "regression": "Owned unsafe source0775 unchanged; installed copy0700; same installed copy0775 gives exact InvalidPolicy, chmod0700 then real engine command completes exit0",
+  "independent_review": {
+    "path": "docs/reviews/worker-install-code-final.json",
+    "verdict": "APPROVE",
+    "tests": "existing binaries: new regression, engine14/14, encrypted-storage2/2, bridge7/7",
+    "fault_tests": "reviewed statically; agent separately ran full feature suite"
+  },
+  "quality_delta": {
+    "exit_code": 2,
+    "baseline": "bf9c44b0025b5f525d5ca793c500888f5a27f3b3",
+    "regressions": 11,
+    "gating": 5,
+    "disposition": "Five gating short-horizon churn findings reflect fixtures touched in this initiative; three other churn findings are minor. One-line encrypted test growth is minor. Two new dead-code reports are false positives for a test-harness entry point and a helper imported through explicit module paths. Default and feature compilation/clippy validate usage. Retained bounded test ownership and staging without suppressions or a new baseline. A later agent scan reported exit0; conservative root scan recorded here."
+  },
+  "native_failure": "native-run-39910977611.json",
+  "mechanism": "worker-linker-mode-mechanism.json",
+  "limits": "Original runner worker metadata unlogged; local mechanism confirms possibility only. Actual native rerun required. macOS/ARM jobs unassigned; no new interoperability claim."
+}

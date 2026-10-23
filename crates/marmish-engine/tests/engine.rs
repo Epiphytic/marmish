@@ -1,10 +1,12 @@
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use marmish_engine::*;
+#[path = "support/executable.rs"]
+mod executable;
 #[path = "support/inspect.rs"]
 mod inspect;
-use std::os::unix::fs::MetadataExt;
-use std::path::PathBuf;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 const PRINCIPAL: PrincipalId = PrincipalId([11; 32]);
@@ -58,18 +60,24 @@ fn cleanup_guard_closes_sqlcipher_before_removal_and_retains_frontend_lock() {
 }
 
 struct Harness {
-    _directory: tempfile::TempDir,
-    policy: EnginePolicy,
     engine: Option<Engine>,
     jobs: Vec<InvocationId>,
+    policy: EnginePolicy,
+    _directory: tempfile::TempDir,
+    _worker: executable::InstalledWorker,
 }
 
 impl Harness {
     fn new(limits: EngineLimits) -> Self {
+        let worker = executable::stage_worker(Path::new(env!("CARGO_BIN_EXE_marmish-worker")));
+        Self::with_worker(limits, worker)
+    }
+
+    fn with_worker(limits: EngineLimits, worker: executable::InstalledWorker) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let policy = EnginePolicy {
             state_root: directory.path().join("state"),
-            worker_executable: PathBuf::from(env!("CARGO_BIN_EXE_marmish-worker")),
+            worker_executable: worker.path.clone(),
             server: SERVER,
             allowed_principals: vec![PRINCIPAL, OTHER],
             allow_shell_command: false,
@@ -83,6 +91,7 @@ impl Harness {
             policy,
             engine: Some(engine),
             jobs: Vec::new(),
+            _worker: worker,
         }
     }
 
@@ -200,6 +209,39 @@ fn retry<T>(mut action: impl FnMut() -> Result<T>) -> Result<T> {
             result => return result,
         }
     }
+}
+
+#[test]
+fn installed_worker_rejects_writable_mode_and_preserves_unsafe_source() {
+    if uid() == 0 {
+        return;
+    }
+    let source = executable::stage_worker(Path::new(env!("CARGO_BIN_EXE_marmish-worker")));
+    std::fs::set_permissions(&source.path, std::fs::Permissions::from_mode(0o775)).unwrap();
+    let installed = executable::stage_worker(&source.path);
+    assert_eq!(source.path.metadata().unwrap().mode() & 0o777, 0o775);
+    assert_eq!(installed.path.metadata().unwrap().mode() & 0o777, 0o700);
+    let mut h = Harness::with_worker(EngineLimits::default(), installed);
+    drop(h.engine.take());
+    std::fs::set_permissions(
+        &h.policy.worker_executable,
+        std::fs::Permissions::from_mode(0o775),
+    )
+    .unwrap();
+    assert!(matches!(
+        Engine::open(h.policy.clone()),
+        Err(EngineError::InvalidPolicy)
+    ));
+    std::fs::set_permissions(
+        &h.policy.worker_executable,
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    h.reopen();
+    let ctx = h.context(PRINCIPAL, 1);
+    let (id, _) = h.start(&ctx, 99, &exec(&[b"/usr/bin/true"]));
+    assert_eq!(h.finished(&ctx, id).outcome, Some(ExitOutcome::Code(0)));
+    assert_eq!(source.path.metadata().unwrap().mode() & 0o777, 0o775);
 }
 
 #[test]

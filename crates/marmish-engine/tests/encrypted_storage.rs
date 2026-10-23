@@ -2,11 +2,13 @@
 
 use hkdf::Hkdf;
 use marmish_engine::*;
+#[path = "support/executable.rs"]
+mod executable;
 use rusqlite::{Connection, OpenFlags};
 use sha2::Sha256;
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
@@ -23,10 +25,10 @@ fn uid() -> u32 {
     unsafe { libc::getuid() }
 }
 
-fn policy(directory: &Path) -> EnginePolicy {
+fn policy(directory: &Path, worker: &Path) -> EnginePolicy {
     EnginePolicy {
         state_root: directory.join("state"),
-        worker_executable: PathBuf::from(env!("CARGO_BIN_EXE_marmish-worker")),
+        worker_executable: worker.to_owned(),
         server: SERVER,
         allowed_principals: vec![PRINCIPAL],
         allow_shell_command: false,
@@ -129,8 +131,9 @@ fn retained_command_input_and_streams_require_the_storage_key() {
     eprintln!("compiled SQLCipher version: {version}");
     drop(probe);
 
+    let worker = executable::stage_worker(Path::new(env!("CARGO_BIN_EXE_marmish-worker")));
     let directory = tempfile::tempdir().unwrap();
-    let policy = policy(directory.path());
+    let policy = policy(directory.path(), &worker.path);
     let mut engine = Engine::open(policy.clone()).unwrap();
     let ctx = context(&engine);
     let token = engine.issue_execute_token(&ctx).unwrap();
@@ -234,8 +237,9 @@ fn legacy_plaintext_database_is_rejected_intact_without_creating_key() {
     if uid() == 0 {
         return;
     }
+    let worker = executable::stage_worker(Path::new(env!("CARGO_BIN_EXE_marmish-worker")));
     let directory = tempfile::tempdir().unwrap();
-    let policy = policy(directory.path());
+    let policy = policy(directory.path(), &worker.path);
     std::fs::create_dir(&policy.state_root).unwrap();
     std::fs::set_permissions(&policy.state_root, std::fs::Permissions::from_mode(0o700)).unwrap();
     let path = policy.state_root.join("engine.sqlite3");
