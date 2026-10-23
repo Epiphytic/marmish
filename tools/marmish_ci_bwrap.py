@@ -427,7 +427,7 @@ def bootstrap(state):
                 digest(packages[0]) == sha, 'bwrap_package_digest_mismatch')
         data = run(['/usr/bin/dpkg-deb', '--fsys-tarfile', str(packages[0])],
                    root=root, limit=16 * 1024 * 1024)
-        (root / 'bin').mkdir()
+        (root / 'bin').mkdir(mode=0o700)
         executable = root / 'bin/bwrap'
         extract(data, executable, arch)
         reported = runtime_version(executable, root)

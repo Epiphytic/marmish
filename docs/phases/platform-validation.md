@@ -477,3 +477,16 @@ Record possible SIGTERM/SIGKILL orphan retention explicitly. Parent verification
 is separately testable with patched stat/fds; real fixed-`/tmp` integration is
 Linux-only and removes its owned prefix in a finally block. macOS behavior is
 unchanged.
+
+
+### Native umask correction
+
+Run 39909539758 at b2c6d95 reached pre-export production validation and reported
+ancestor index3, uid1000, mode 0775. For fixed `/tmp/<prefix>/bin/bwrap`, index3 is
+`bin`: the helper used default mkdir permissions, and the runner retained group
+write. Set `bin` creation mode explicitly to 0700. Add a permissive-umask002
+bootstrap regression using the real production selector, not a mocked approval.
+Keep the validator and namespaces unchanged. Run affected and full Python tests,
+Claude auto code review, publish and rerun the actual native gate. This routine
+fix implements the existing approved requirement for a non-group-writable path;
+it adds no interface or trust-boundary change.

@@ -38,7 +38,7 @@ class BwrapTests(unittest.TestCase):
         (root / 'owned-state').chmod(0o600)
 
     @contextlib.contextmanager
-    def bootstrap_fixture(self, *, reject=False):
+    def bootstrap_fixture(self, *, reject=False, real_validation=False):
         original_read, original_file = Path.read_text, Path.is_file
         keyring = Mock()
         keyring.read_bytes.return_value = b'public test keyring'
@@ -58,12 +58,14 @@ class BwrapTests(unittest.TestCase):
             if argv[1] == '--version':
                 return b'bubblewrap 0.9.0'
             return b''
-        from marmish_transport_sandbox import SandboxError
+        from marmish_transport_sandbox import SandboxError, validated_bwrap
         def validate():
             self.assertIn('MARMISH_BWRAP_SHA256', os.environ)
             self.assertEqual(Path(os.environ['MARMISH_BWRAP']).parent.parent.parent, self.root)
             if reject:
                 raise SandboxError('fixture_rejection')
+            if real_validation:
+                return validated_bwrap()
             return Path(os.environ['MARMISH_BWRAP'])
         with self.trusted_fixture(), patch.dict(os.environ, {'RUNNER_TEMP': str(self.root / 'untrusted-runner'),
                 'TMPDIR': str(self.root / 'untrusted-tmpdir'), 'GITHUB_ENV': str(self.root / 'github.env')}, clear=True), \
@@ -292,6 +294,25 @@ class BwrapTests(unittest.TestCase):
             bwrap.cleanup(state)
         self.assertFalse(prefix.exists())
         self.assertFalse(state.exists())
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'literal Linux /tmp production contract')
+    def test_bootstrap_under_group_writable_umask_passes_production_validator(self):
+        # Model native runners whose default umask is 002 without approving via mocks.
+        with tempfile.TemporaryDirectory(prefix='marmish-umask-test-', dir='/tmp') as temporary, \
+                patch.object(self, 'root', Path(temporary)):
+            state = self.root / 'state'
+            previous_umask = os.umask(0o002)
+            try:
+                with self.bootstrap_fixture(real_validation=True), contextlib.redirect_stdout(io.StringIO()):
+                    bwrap.bootstrap(state)
+                    prefix = Path(json.loads(state.read_text())['root'])
+                    self.assertEqual(stat.S_IMODE((prefix / 'bin').stat().st_mode), 0o700)
+                    self.assertTrue((self.root / 'github.env').exists())
+                    bwrap.cleanup(state)
+                    self.assertFalse(prefix.exists())
+                    self.assertFalse(state.exists())
+            finally:
+                os.umask(previous_umask)
 
     def test_validation_rejection_exports_nothing_and_cleans_owned_prefix(self):
         with self.bootstrap_fixture(reject=True), contextlib.redirect_stdout(io.StringIO()) as output:

@@ -1,0 +1,27 @@
+{
+  "run_id": 39909539758,
+  "run_url": "https://github.com/Epiphytic/marmish/actions/runs/39909539758",
+  "commit": "b2c6d95b9e5e4e56edb06e12b94934fe54aa9459",
+  "job_id": 120269057537,
+  "platform": "linux-x64",
+  "job_result": "failure",
+  "acquisition": {
+    "signed_package_runtime": "reached before selection",
+    "selection": "failed",
+    "error": "unsafe_bwrap_path",
+    "diagnostic": {
+      "category": "ancestor_mode",
+      "index": 3,
+      "uid": 1000,
+      "mode_decimal": 509,
+      "mode_octal": "0775",
+      "errno": null
+    },
+    "identified_component": "owned prefix bin directory",
+    "cause": "mkdir used default mode, permissive umask retained group write"
+  },
+  "namespaces": "not_reached",
+  "offline_tests": "not_reached",
+  "owned_bubblewrap_cleanup": "complete",
+  "native_acceptance": false
+}

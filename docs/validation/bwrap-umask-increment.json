@@ -1,0 +1,25 @@
+{
+  "scope": "Explicit0700 private binary directory under permissive native runner umask",
+  "python": {
+    "focused_tests": 21,
+    "full_tests": 172,
+    "darwin_only_skips": 4,
+    "outcome": "passed"
+  },
+  "actual_signed_acquisition_and_probe": "docs/validation/bwrap-umask-local.json",
+  "native_failure": "docs/validation/native-run-39909539758.json",
+  "prior_full_live_execution": "docs/validation/bwrap-placement-e2e.json",
+  "quality_delta": {
+    "exit_code": 2,
+    "baseline": "b2c6d95b9e5e4e56edb06e12b94934fe54aa9459",
+    "regressions": 6,
+    "gating": 4,
+    "disposition": "Three short-horizon churn findings reflect successive real-runner corrections; test-class verbosity grows21lines for a real-validator permissive-umask regression. Production fix is one explicit directory mode. No suppression or baseline added."
+  },
+  "native_acceptance": "pending actual rerun; Mac/ARM runners remain unassigned",
+  "review": {
+    "path": "docs/reviews/bwrap-umask-code-final.json",
+    "verdict": "APPROVE",
+    "mutation_test": "Reviewer reverted fix in isolated temp copy; new real-validator regression failed with same unsafe_bwrap_path category, then passed with fix."
+  }
+}

@@ -214,6 +214,11 @@ retry does not establish its cause or prove macOS interoperability. The
 14 checks in 211.453 seconds with complete owned cleanup; see the
 [increment validation](validation/bwrap-placement-increment.json) and
 [final code review](reviews/bwrap-placement-code-final.json).
+The next native attempt identified a group-writable `bin` directory under the
+runner's permissive umask. Its creation now explicitly requests mode `0700`,
+with a real-selector bootstrap regression and
+[actual signed acquisition/probe evidence under umask002](validation/bwrap-umask-local.json).
+Native platform acceptance still requires the workflow results.
 
 
 ### Storage, retention and bounds
