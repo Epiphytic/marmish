@@ -188,8 +188,15 @@ native isolation probes, offline tests, fresh pinned daemon builds, native real
 Marmot command tests and commands in both Linux/macOS directions in one run
 attempt at the same SHA. See [the validation design](phases/platform-validation.md).
 Only trusted master pushes execute this workflow. macOS AMD64 runtime support
-remains unvalidated without a corresponding native runner. Native checks are
-pending; cross-compilation and Linux mocks are not substitutes for them.
+remains unvalidated without a corresponding native runner.
+
+[Native run 39982966090](validation/native-run-39982966090.json), at commit
+`fccfddc`, passed the Linux AMD64 namespace prerequisite, 131 Rust workspace
+tests, clippy/formatting, Python checks (172 total, four Darwin-only skips),
+pinned daemon build, executable upload and owned Bubblewrap cleanup. Linux
+ARM64 and macOS ARM64 jobs remain queued without assigned runners. Their native
+checks and both live cross-platform directions remain pending; cross-compilation
+and Linux mocks are not substitutes for them.
 
 The first native Linux runner stopped before tests because Bubblewrap was absent.
 The reviewed CI refinement acquires a private executable from authenticated Ubuntu
