@@ -137,6 +137,31 @@ Transient RPC failures retry. Semantic room faults quarantine only that room,
 persistently. Bridge framing/I/O faults close the bridge and fail closed until
 restart rather than reading mismatched replies.
 
+### Additive command restrictions
+
+The command-policy increment adds optional server `--command-policy` JSON.
+`--allow` remains the authentication allowlist. Defaults and every per-key entry
+are cumulative: each present allow list must match and any deny match wins.
+An absent allow list is unconstrained; an empty one denies all. Entry ordering
+never grants an override. Patterns are anchored executable-path byte matches:
+`*` excludes slash, `**` includes slash, slash is literal, and backslash escapes
+only star or backslash. See [the approved design](phases/command-policy.md).
+
+Applicable restrictions require already canonical absolute argv[0], checked at
+admission and launch; they refuse explicit shell strings. This is executable
+selection, not argument filtering, interpreter confinement or inode pinning.
+The engine and transactional Store enforce policy before consuming a launch
+token or creating a job. Denial is the fixed `command_denied` category.
+Existing accepted retries precede current policy checks. Each job persists its
+canonical-path requirement; tightening policy does not revoke accepted jobs.
+Validation: [14-assertion real-relay report](validation/command-policy-e2e.json)
+and [checks and limits](validation/command-policy.md); 109 Rust and 87 Python
+tests passed for this increment.
+
+Config JSON version 2 prevents older binaries silently ignoring restrictions;
+new binaries accept version 1, with absent policy and job markers defaulted.
+The encrypted database schema version is unchanged.
+
 ### Storage, retention and bounds
 
 Use SQLCipher for engine state and retained stdout/stderr. The colocated private

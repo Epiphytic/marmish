@@ -54,6 +54,7 @@ pub(crate) struct ChildSpec {
     pub environment: Vec<(OsString, OsString)>,
     pub cwd: PathBuf,
     pub umask: u32,
+    pub canonical_exec_required: bool,
 }
 #[derive(Debug)]
 pub(crate) struct SpawnedChild {
@@ -1102,6 +1103,10 @@ fn discard_spawned_child(child: &mut Child, pid: i32) {
     }
 }
 pub(crate) fn spawn_child(spec: &ChildSpec) -> std::result::Result<SpawnedChild, ChildSpawnError> {
+    if spec.canonical_exec_required {
+        crate::policy::require_canonical_exec(&spec.request)
+            .map_err(|_| ChildSpawnError::NotStarted)?;
+    }
     let account = local_account(Some(&spec.cwd)).map_err(|_| ChildSpawnError::NotStarted)?;
     if account.uid != spec.account.uid
         || account.gid != spec.account.gid

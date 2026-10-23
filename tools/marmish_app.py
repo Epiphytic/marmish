@@ -16,6 +16,7 @@ from marmish_protocol import (Dispatcher, EngineBridge, History, b64, check_memb
                               incoming, load_json, private_directory, save_json,
                               unb64, validate_frame)
 from marmish_rpc import MdkRpc, RpcError
+from marmish_policy import load_policy
 from marmish_transport_sandbox import ConfinedDaemon, SandboxError
 
 
@@ -254,14 +255,16 @@ class Client:
 
 
 class Server:
-    def __init__(self, profile, allow, bridge, worker, cwd, allow_shell=False):
+    def __init__(self, profile, allow, bridge, worker, cwd, allow_shell=False,
+                 *, command_policy=None):
         self.profile = profile
         self.allow = set(allow)
         require(1 <= len(self.allow) <= 32 and profile.account not in self.allow, 'invalid_allowlist')
         self.engine = EngineBridge(bridge, {'version': 1,
             'state_root': str(profile.root / 'engine'), 'worker_executable': str(Path(worker).absolute()),
             'server': profile.account, 'allowed_principals': sorted(self.allow),
-            'cwd': str(Path(cwd).absolute()), 'allow_shell_command': allow_shell})
+            'cwd': str(Path(cwd).absolute()), 'allow_shell_command': allow_shell,
+            'command_policy': command_policy})
         self.dispatcher = Dispatcher(self.engine, profile.account)
         self.groups = {}
         self.histories = {}
@@ -486,10 +489,13 @@ def server_main(argv=None):
     parser.add_argument('--worker', required=True, type=Path)
     parser.add_argument('--cwd', required=True, type=Path)
     parser.add_argument('--allow-shell', action='store_true')
+    parser.add_argument('--command-policy', type=Path,
+                        help='trusted JSON file with additive default/per-key executable restrictions')
     args = parser.parse_args(argv)
     os.umask(0o077)
     require(os.geteuid() != 0, 'root_forbidden')
     allow = [public_key(key) for key in args.allow]
+    command_policy = load_policy(args.command_policy, allow)
     running = True
     def stop(_sig, _frame):
         nonlocal running
@@ -497,7 +503,8 @@ def server_main(argv=None):
     handlers = {sig: signal.signal(sig, stop) for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
         with Profile(args) as profile:
-            server = Server(profile, allow, args.bridge, args.worker, args.cwd, args.allow_shell)
+            server = Server(profile, allow, args.bridge, args.worker, args.cwd, args.allow_shell,
+                            command_policy=command_policy)
             try:
                 print(json.dumps({'ready': True, 'account': profile.account}), flush=True)
                 while running:

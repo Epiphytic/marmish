@@ -24,6 +24,8 @@ enum Operation {
         cwd: PathBuf,
         #[serde(default)]
         allow_shell_command: bool,
+        #[serde(default)]
+        command_policy: Option<WirePolicy>,
     },
     Token {
         principal: String,
@@ -84,6 +86,42 @@ enum Operation {
 enum Command {
     Exec { argv: Vec<String> },
     Shell { command: String },
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WirePolicy {
+    version: u32,
+    #[serde(default)]
+    defaults: Restrictions,
+    #[serde(default)]
+    keys: Vec<WireKeyRestrictions>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireKeyRestrictions {
+    principal: String,
+    restrictions: Restrictions,
+}
+
+impl WirePolicy {
+    fn policy(self) -> Result<CommandPolicy> {
+        Ok(CommandPolicy {
+            version: self.version,
+            defaults: self.defaults,
+            keys: self
+                .keys
+                .into_iter()
+                .map(|entry| {
+                    Ok(KeyRestrictions {
+                        principal: PrincipalId(hex(&entry.principal)?),
+                        restrictions: entry.restrictions,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+        })
+    }
 }
 
 fn hex<const N: usize>(value: &str) -> Result<[u8; N]> {
@@ -167,6 +205,7 @@ impl Bridge {
             allowed_principals,
             cwd,
             allow_shell_command,
+            command_policy,
         } = operation
         {
             if self.engine.is_some() || version != 1 || !cwd.is_absolute() {
@@ -183,6 +222,7 @@ impl Bridge {
                 server,
                 allowed_principals,
                 allow_shell_command,
+                command_policy: command_policy.map(WirePolicy::policy).transpose()?,
                 cwd: Some(cwd),
                 limits: EngineLimits {
                     token_lifetime: Duration::from_secs(120),
@@ -366,6 +406,7 @@ fn error_code(error: EngineError) -> &'static str {
         EngineError::Unauthorized => "unauthorized",
         EngineError::RootForbidden => "root_forbidden",
         EngineError::InvalidPolicy => "invalid_policy",
+        EngineError::CommandDenied => "command_denied",
         EngineError::UnsafePath => "unsafe_path",
         EngineError::AlreadyOpen => "already_open",
         EngineError::InvalidRequest => "invalid_request",

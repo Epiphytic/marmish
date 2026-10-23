@@ -45,6 +45,8 @@ pub struct EnginePolicy {
     pub server: ServerId,
     pub allowed_principals: Vec<PrincipalId>,
     pub allow_shell_command: bool,
+    #[serde(default)]
+    pub command_policy: Option<crate::policy::CommandPolicy>,
     pub cwd: Option<PathBuf>,
     pub limits: EngineLimits,
 }
@@ -198,6 +200,8 @@ pub enum EngineError {
     AlreadyOpen,
     #[error("invalid command request")]
     InvalidRequest,
+    #[error("command denied")]
+    CommandDenied,
     #[error("invocation not found")]
     NotFound,
     #[error("invocation content conflict")]

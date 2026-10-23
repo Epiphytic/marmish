@@ -57,6 +57,9 @@ impl Pipe {
         response
     }
     fn init(&mut self, shell: bool) {
+        self.init_policy(shell, Value::Null);
+    }
+    fn init_policy(&mut self, shell: bool, policy: Value) {
         let worker = std::env::current_exe()
             .unwrap()
             .parent()
@@ -68,7 +71,7 @@ impl Pipe {
             worker.is_file(),
             "build reviewed worker first: cargo build -p marmish-engine --bin marmish-worker"
         );
-        let request = json!({"op":"init","version":1,"state_root":self.directory.path().join("state"),"worker_executable":worker,"server":"5555555555555555555555555555555555555555555555555555555555555555","allowed_principals":[PRINCIPAL],"cwd":self.directory.path(),"allow_shell_command":shell});
+        let request = json!({"op":"init","version":1,"state_root":self.directory.path().join("state"),"worker_executable":worker,"server":"5555555555555555555555555555555555555555555555555555555555555555","allowed_principals":[PRINCIPAL],"cwd":self.directory.path(),"allow_shell_command":shell,"command_policy":policy});
         let until = Instant::now() + Duration::from_secs(5);
         loop {
             let response = self.call(request.clone());
@@ -287,4 +290,46 @@ fn detached_worker_survives_frontend_restart_and_cancel_is_queryable() {
         pipe.call(json!({"op":"maintain","limit":0}))["error"]["code"],
         "invalid_request"
     );
+}
+
+#[test]
+fn policy_bridge_enforces_cumulative_layers_without_consuming_token() {
+    let mut pipe = Pipe::new();
+    let exe = std::fs::canonicalize("/usr/bin/printf").unwrap();
+    let allowed_exe = std::fs::canonicalize("/usr/bin/echo").unwrap();
+    pipe.init_policy(
+        true,
+        json!({
+            "version": 1,
+            "defaults": {"allow_exec": ["/**"], "deny_exec": [exe]},
+            "keys": [
+                {"principal": PRINCIPAL, "restrictions": {"allow_exec": [exe, allowed_exe]}},
+                {"principal": PRINCIPAL, "restrictions": {"allow_exec": ["/**"]}}
+            ]
+        }),
+    );
+    let token = pipe.token();
+    use std::os::unix::ffi::OsStrExt;
+    let denied = pipe.submit(
+        INVOCATION,
+        &token,
+        &[exe.as_os_str().as_bytes(), b"forbidden"],
+    );
+    assert_eq!(denied["error"]["code"], "command_denied", "{denied}");
+    assert_eq!(
+        pipe.auth(json!({"op":"status","invocation":INVOCATION}))["error"]["code"],
+        "not_found"
+    );
+    let denied = pipe.auth(json!({"op":"submit","invocation":INVOCATION,"token":token,"command":{"mode":"shell","command":STANDARD.encode(b"printf forbidden")}}));
+    assert_eq!(denied["error"]["code"], "command_denied", "{denied}");
+    // Denial did not create a job or consume the launch token. An allowed
+    // real subprocess now succeeds with that same token and invocation ID.
+    let accepted = pipe.submit(
+        INVOCATION,
+        &token,
+        &[allowed_exe.as_os_str().as_bytes(), b"allowed"],
+    );
+    assert_eq!(accepted["ok"], true, "{accepted}");
+    pipe.finished(INVOCATION);
+    assert_eq!(pipe.read(INVOCATION, "stdout"), b"allowed\n");
 }

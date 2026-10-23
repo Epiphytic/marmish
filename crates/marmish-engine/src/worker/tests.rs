@@ -10,6 +10,7 @@ fn child(command: &[u8]) -> SpawnedChild {
             argv: vec![b"/bin/sh".to_vec(), b"-c".to_vec(), command.to_vec()],
         },
         umask: 0o077,
+        canonical_exec_required: false,
     })
     .unwrap()
 }
@@ -129,6 +130,7 @@ fn with_claimed_command(
         server: ServerId([2; 32]),
         allowed_principals: vec![PrincipalId([3; 32])],
         allow_shell_command: false,
+        command_policy: None,
         cwd: Some(temp.path().to_path_buf()),
         limits: EngineLimits::default(),
     };
@@ -178,6 +180,7 @@ fn with_claimed_command(
         account,
         request,
         umask: 0o077,
+        canonical_exec_required: false,
     };
     let spawned = launcher::spawn_child(&spec).unwrap();
     exercise(&root, job, &mut store, &worker, claim, spawned, owner.owner);
@@ -454,4 +457,35 @@ fn failed_launch_state_is_classified_without_mismatched_cas_retry() {
         mark_worker_failure(store, job).unwrap();
         drop(child);
     });
+}
+
+#[test]
+fn canonical_launch_marker_checks_actual_path_again_before_spawning() {
+    use std::os::unix::ffi::OsStrExt;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("program");
+    std::fs::copy("/usr/bin/true", &path).unwrap();
+    let canonical = std::fs::canonicalize(&path).unwrap();
+    let account = launcher::local_account(Some(directory.path())).unwrap();
+    let spec = ChildSpec {
+        environment: launcher::child_environment(&account),
+        cwd: account.cwd.clone(),
+        account,
+        request: CommandRequest::Exec {
+            argv: vec![canonical.as_os_str().as_bytes().to_vec()],
+        },
+        umask: 0o077,
+        canonical_exec_required: true,
+    };
+    crate::policy::require_canonical_exec(&spec.request).unwrap();
+    std::fs::remove_file(&canonical).unwrap();
+    std::os::unix::fs::symlink("/usr/bin/true", &canonical).unwrap();
+    assert!(matches!(
+        launcher::spawn_child(&spec),
+        Err(ChildSpawnError::NotStarted)
+    ));
+    std::fs::remove_file(&canonical).unwrap();
+    std::fs::copy("/usr/bin/true", &canonical).unwrap();
+    let mut spawned = launcher::spawn_child(&spec).unwrap();
+    assert_eq!(spawned.child.wait().unwrap().code(), Some(0));
 }

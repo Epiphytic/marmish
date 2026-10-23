@@ -1,0 +1,41 @@
+{
+  "assertions": [
+    "live_additive_default_and_per_key_denials_path_and_shell_refusal",
+    "policy_denials_create_no_job_and_preserve_token_for_allowed_execution",
+    "literal_argv_spaces_unicode_quotes_newline_dollar_backticks_leading_dash_nonutf8",
+    "separate_binary_stderr_and_nonzero_exit",
+    "exact_admitted_retry_and_status_first_retry_execute_once_conflict_rejected",
+    "byte_exact_binary_stdin_stdout_stderr_eof",
+    "live_cancellation_reports_signal_and_remains_queryable",
+    "live_stale_challenge_wrong_group_and_chat_payload_never_execute",
+    "live_ordinary_room_and_unallowlisted_identity_invites_remain_unaccepted",
+    "frontend_disconnect_does_not_cancel_running_worker",
+    "persisted_mls_room_and_command_output_recovered_after_frontend_restart",
+    "previous_boot_valid_control_frame_rejected_after_restart",
+    "fresh_independent_mls_group_configurable_retention_same_principal_reattach",
+    "actual_client_and_server_cli_processes_execute_command_via_marmot"
+  ],
+  "duration_seconds": 207.696,
+  "groups": [
+    "31852480f4d6942d75066b067f543948",
+    "6807ae0765d1ffae3eeae00a717c9dae"
+  ],
+  "limitations": [
+    "prototype_single_device_linux_only",
+    "pinned_binary_source_provenance_unverified",
+    "relay_retention_is_not_guaranteed_erasure",
+    "same_principal_can_reattach_across_sessions"
+  ],
+  "local_cleanup": "complete",
+  "outcome": "passed",
+  "public_identities": {
+    "client": "9f8d2b0dc7f5950c0a5fe8d66be004206b5381e0eb023dc8d9a682fa11b1e7aa",
+    "server": "a3c8b0434bb1d6f1b12e5129a854c2aa612477ee549688b38db582fa25eb33b3"
+  },
+  "relays": [
+    "wss://relay.eu.whitenoise.chat/",
+    "wss://relay.us.whitenoise.chat/"
+  ],
+  "stage": "complete",
+  "wnd_sha256": "1324c70d389fb49f37ae8f7f6ab2a16840b138a0c438d7aef10bb6f9eee20a03"
+}

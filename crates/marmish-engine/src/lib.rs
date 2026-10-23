@@ -5,12 +5,14 @@ mod cipher;
 mod fault;
 mod launcher;
 mod model;
+mod policy;
 mod spool;
 mod store;
 mod worker;
 use admission::{context_owner, random_bytes, sha256};
 use launcher::{FrontendGuard, LaunchSpec, StateRoot, WorkerPresence};
 pub use model::*;
+pub use policy::{CommandPolicy, KeyRestrictions, Restrictions};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use store::{AccountSpec, BootTime, InputOwner, StartDecision, Store, WorkerCredential};
@@ -119,7 +121,7 @@ impl Engine {
     ) -> Result<Submission> {
         let owner = self.owner(ctx)?;
         let hash = token_hash(token);
-        admission::validate_request(request, self.policy.allow_shell_command)?;
+        admission::validate_request(request, true)?;
         if let Some(existing) = self.store.check_existing(&owner, hash, id, request)? {
             let job = self.store.job_for(&owner.owner, id)?;
             self.reconcile(job)?;
@@ -128,6 +130,10 @@ impl Engine {
                 ..existing
             });
         }
+        if policy::check_command(&self.policy, ctx.principal, request)? {
+            policy::require_canonical_exec(request)?;
+        }
+        admission::validate_request(request, self.policy.allow_shell_command)?;
         let now = launcher::boot_time()?;
         let expires = self.deadlines.get(&hash).ok_or(EngineError::InvalidToken)?;
         if expires.boot_id != now.boot_id || expires.millis <= now.millis {

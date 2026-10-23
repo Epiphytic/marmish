@@ -25,6 +25,7 @@ impl Fixture {
             server: ServerId([1; 32]),
             allowed_principals: vec![PrincipalId([2; 32])],
             allow_shell_command: true,
+            command_policy: None,
             cwd: None,
             limits: Default::default(),
         };
@@ -1061,4 +1062,233 @@ fn empty_authenticated_schema_with_surviving_job_is_not_initialized() {
         .query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get(0))
         .unwrap();
     assert_eq!(tables, 0);
+}
+
+#[test]
+fn command_policy_store_boundary_denies_without_mutation_and_marks_accepted_work() {
+    let mut f = Fixture::new();
+    let hash = f.issue(211);
+    f.store.config.policy.command_policy = Some(crate::CommandPolicy {
+        version: 1,
+        defaults: crate::Restrictions {
+            allow_exec: Some(vec![]),
+            deny_exec: vec![],
+        },
+        keys: vec![],
+    });
+    let changes = f.store.test_total_changes();
+    let result = f.store.admit(
+        &f.owner,
+        f.epoch,
+        hash,
+        f.now,
+        InvocationId([211; 16]),
+        &request(),
+        JobId([211; 16]),
+        [0; 32],
+    );
+    assert_eq!(result.unwrap_err(), EngineError::CommandDenied);
+    assert_eq!(changes, f.store.test_total_changes());
+    assert!(!load_token(&f.store.conn, hash).unwrap().consumed);
+    assert!(matches!(
+        f.store.job_for(&f.owner.owner, InvocationId([211; 16])),
+        Err(EngineError::NotFound)
+    ));
+    f.store
+        .config
+        .policy
+        .command_policy
+        .as_mut()
+        .unwrap()
+        .defaults
+        .allow_exec = Some(vec!["/**".into()]);
+    f.store
+        .admit(
+            &f.owner,
+            f.epoch,
+            hash,
+            f.now,
+            InvocationId([211; 16]),
+            &request(),
+            JobId([211; 16]),
+            sha256(&[4; 32]),
+        )
+        .unwrap();
+    assert!(
+        load(&f.store.conn, JobId([211; 16]))
+            .unwrap()
+            .canonical_exec_required
+    );
+    f.store
+        .config
+        .policy
+        .command_policy
+        .as_mut()
+        .unwrap()
+        .defaults
+        .allow_exec = Some(vec![]);
+    assert_eq!(
+        f.store
+            .admit(
+                &f.owner,
+                f.epoch,
+                hash,
+                f.now,
+                InvocationId([211; 16]),
+                &request(),
+                JobId([212; 16]),
+                [0; 32]
+            )
+            .unwrap()
+            .disposition,
+        SubmitDisposition::Existing
+    );
+    let worker = ProcessIdentity {
+        boot_id: f.now.boot_id,
+        pid: 123,
+        start_ticks: 1,
+    };
+    let ClaimResult::Claimed(claim) = f
+        .store
+        .claim_worker(JobId([211; 16]), &WorkerCredential([4; 32]), &worker)
+        .unwrap()
+    else {
+        panic!("claim")
+    };
+    assert!(claim.canonical_exec_required);
+}
+
+#[test]
+fn persisted_v1_migrates_to_v2_without_rechecking_accepted_shell_authority() {
+    let mut f = Fixture::new();
+    let hash = f.issue(213);
+    let shell = CommandRequest::Shell {
+        command: b"printf accepted".to_vec(),
+    };
+    f.store
+        .admit(
+            &f.owner,
+            f.epoch,
+            hash,
+            f.now,
+            InvocationId([213; 16]),
+            &shell,
+            JobId([213; 16]),
+            sha256(&[4; 32]),
+        )
+        .unwrap();
+    // Serialize exactly the old versioned JSON, lacking the newly added fields.
+    let mut config = serde_json::to_value(&f.store.config).unwrap();
+    config["version"] = 1.into();
+    config["policy"]
+        .as_object_mut()
+        .unwrap()
+        .remove("command_policy");
+    f.store
+        .conn
+        .execute(
+            "UPDATE meta SET data=? WHERE name='config'",
+            [serde_json::to_vec(&config).unwrap()],
+        )
+        .unwrap();
+    let mut job = serde_json::to_value(load(&f.store.conn, JobId([213; 16])).unwrap()).unwrap();
+    job.as_object_mut()
+        .unwrap()
+        .remove("canonical_exec_required");
+    f.store
+        .conn
+        .execute(
+            "UPDATE jobs SET data=? WHERE job=?",
+            params![
+                serde_json::to_vec(&job).unwrap(),
+                JobId([213; 16]).0.as_slice()
+            ],
+        )
+        .unwrap();
+    let mut policy = f.store.config.policy.clone();
+    policy.allow_shell_command = false;
+    policy.command_policy = Some(crate::CommandPolicy {
+        version: 1,
+        defaults: crate::Restrictions {
+            allow_exec: Some(vec![]),
+            deny_exec: vec![],
+        },
+        keys: vec![],
+    });
+    let account = f.store.config.account.clone();
+    drop(f.store);
+    f.store = Store::create_frontend(&f.root, &f.keys, &policy, &account, [8; 16]).unwrap();
+    assert_eq!(f.store.config.version, 2);
+    assert_eq!(
+        f.store
+            .admit(
+                &f.owner,
+                f.epoch,
+                hash,
+                f.now,
+                InvocationId([213; 16]),
+                &shell,
+                JobId([215; 16]),
+                [0; 32]
+            )
+            .unwrap()
+            .disposition,
+        SubmitDisposition::Existing
+    );
+    let mut worker_store = Store::open_worker(&f.root, &f.keys).unwrap();
+    let worker = ProcessIdentity {
+        boot_id: f.now.boot_id,
+        pid: 123,
+        start_ticks: 1,
+    };
+    let ClaimResult::Claimed(claim) = worker_store
+        .claim_worker(JobId([213; 16]), &WorkerCredential([4; 32]), &worker)
+        .unwrap()
+    else {
+        panic!("claim")
+    };
+    assert!(!claim.canonical_exec_required);
+    assert_eq!(claim.request, shell);
+    let persisted: Vec<u8> = f
+        .store
+        .conn
+        .query_row("SELECT data FROM meta WHERE name='config'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let persisted: serde_json::Value = serde_json::from_slice(&persisted).unwrap();
+    assert_eq!(persisted["version"], 2);
+    assert_ne!(persisted["version"], 1); // old worker's exact version check refuses it
+}
+
+#[test]
+fn malformed_persisted_policy_or_canonical_marker_fails_closed() {
+    let mut f = Fixture::new();
+    let job = f.admit(214);
+    let mut data = serde_json::to_value(load(&f.store.conn, job).unwrap()).unwrap();
+    data["canonical_exec_required"] = "false".into();
+    f.store
+        .conn
+        .execute(
+            "UPDATE jobs SET data=? WHERE job=?",
+            params![serde_json::to_vec(&data).unwrap(), job.0.as_slice()],
+        )
+        .unwrap();
+    assert!(matches!(
+        load(&f.store.conn, job),
+        Err(EngineError::StorageFailure)
+    ));
+    let mut config = serde_json::to_value(&f.store.config).unwrap();
+    config["policy"]["command_policy"] = serde_json::json!({"version":9});
+    f.store
+        .conn
+        .execute(
+            "UPDATE meta SET data=? WHERE name='config'",
+            [serde_json::to_vec(&config).unwrap()],
+        )
+        .unwrap();
+    assert!(matches!(
+        Store::open_worker(&f.root, &f.keys),
+        Err(EngineError::StorageFailure)
+    ));
 }

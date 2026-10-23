@@ -55,6 +55,7 @@ fn authorization_binds_server_account_and_current_allowlist() {
         server: ServerId([1; 32]),
         allowed_principals: vec![PrincipalId([2; 32])],
         allow_shell_command: false,
+        command_policy: None,
         cwd: None,
         limits: EngineLimits::default(),
     };

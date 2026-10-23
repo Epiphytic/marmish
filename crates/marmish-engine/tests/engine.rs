@@ -25,6 +25,7 @@ impl Harness {
             server: SERVER,
             allowed_principals: vec![PRINCIPAL, OTHER],
             allow_shell_command: false,
+            command_policy: None,
             cwd: Some(directory.path().to_path_buf()),
             limits,
         };
@@ -589,4 +590,126 @@ fn storage_keys_do_not_enter_worker_or_child_process_interfaces() {
         }
     }
     h.finished(&ctx, id);
+}
+
+#[test]
+fn additive_command_policy_denial_keeps_token_and_invocation_unused() {
+    use std::os::unix::ffi::OsStrExt;
+    let mut h = Harness::new(Default::default());
+    let allowed = std::fs::canonicalize("/usr/bin/printf").unwrap();
+    let allowed_text = allowed.to_str().unwrap().to_string();
+    h.policy.command_policy = Some(CommandPolicy {
+        version: 1,
+        defaults: Restrictions {
+            allow_exec: Some(vec![allowed_text]),
+            deny_exec: vec![],
+        },
+        keys: vec![KeyRestrictions {
+            principal: OTHER,
+            restrictions: Restrictions {
+                allow_exec: Some(vec![]),
+                deny_exec: vec![],
+            },
+        }],
+    });
+    h.reopen();
+    let ctx = h.context(PRINCIPAL, 1);
+    let other = h.context(OTHER, 2);
+    let id = InvocationId([240; 16]);
+    let token = h.engine().issue_execute_token(&ctx).unwrap();
+    for request in [
+        exec(&[b"printf"]),
+        exec(&[b"/usr/bin/false"]),
+        CommandRequest::Shell {
+            command: b"printf forbidden".to_vec(),
+        },
+    ] {
+        assert!(matches!(
+            h.engine().submit(&ctx, &token, id, &request),
+            Err(EngineError::CommandDenied)
+        ));
+        assert!(matches!(
+            h.engine().status(&ctx, id),
+            Err(EngineError::NotFound)
+        ));
+    }
+    let other_token = h.engine().issue_execute_token(&other).unwrap();
+    let request = exec(&[allowed.as_os_str().as_bytes(), b"%s", b"$x;\n'\"*\\\xff"]);
+    assert!(matches!(
+        h.engine().submit(&other, &other_token, id, &request),
+        Err(EngineError::CommandDenied)
+    ));
+    h.jobs.push(id);
+    retry(|| h.engine().submit(&ctx, &token, id, &request)).unwrap();
+    assert_eq!(h.finished(&ctx, id).outcome, Some(ExitOutcome::Code(0)));
+    assert_eq!(h.output(&ctx, id, Stream::Stdout).bytes, b"$x;\n'\"*\\\xff");
+    // A tightened policy cannot turn an accepted duplicate into a new command.
+    h.policy
+        .command_policy
+        .as_mut()
+        .unwrap()
+        .defaults
+        .allow_exec = Some(vec![]);
+    h.reopen();
+    let ctx = h.context(PRINCIPAL, 1);
+    let duplicate = h.engine().submit(&ctx, &token, id, &request).unwrap();
+    assert_eq!(duplicate.disposition, SubmitDisposition::Existing);
+    assert!(matches!(
+        h.engine()
+            .submit(&ctx, &token, id, &exec(&[b"/usr/bin/false"])),
+        Err(EngineError::InvocationConflict)
+    ));
+}
+
+#[test]
+fn restricted_commands_refuse_traversal_and_symlink_spelling_without_creating_jobs() {
+    use std::os::unix::ffi::OsStrExt;
+    let mut h = Harness::new(Default::default());
+    h.policy.command_policy = Some(CommandPolicy {
+        version: 1,
+        defaults: Restrictions {
+            allow_exec: Some(vec!["/**".into()]),
+            deny_exec: vec![],
+        },
+        keys: vec![],
+    });
+    h.reopen();
+    let ctx = h.context(PRINCIPAL, 1);
+    let token = h.engine().issue_execute_token(&ctx).unwrap();
+    let alias = h._directory.path().join("alias");
+    std::os::unix::fs::symlink("/usr/bin/true", &alias).unwrap();
+    for path in [
+        alias.as_os_str().as_bytes(),
+        b"/usr/bin/./true",
+        b"/usr/bin/../bin/true",
+        b"/usr//bin/true",
+        b"/nonexistent-marmish",
+    ] {
+        assert!(matches!(
+            h.engine()
+                .submit(&ctx, &token, InvocationId([241; 16]), &exec(&[path])),
+            Err(EngineError::CommandDenied)
+        ));
+    }
+    assert_eq!(
+        std::fs::read_dir(h.policy.state_root.join("jobs"))
+            .unwrap()
+            .count(),
+        0
+    );
+    let canonical = std::fs::canonicalize("/usr/bin/true").unwrap();
+    h.jobs.push(InvocationId([241; 16]));
+    retry(|| {
+        h.engine().submit(
+            &ctx,
+            &token,
+            InvocationId([241; 16]),
+            &exec(&[canonical.as_os_str().as_bytes()]),
+        )
+    })
+    .unwrap();
+    assert_eq!(
+        h.finished(&ctx, InvocationId([241; 16])).outcome,
+        Some(ExitOutcome::Code(0))
+    );
 }

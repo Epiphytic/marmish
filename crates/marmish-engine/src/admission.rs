@@ -15,6 +15,9 @@ pub(crate) fn validate_policy(policy: &EnginePolicy) -> Result<AccountSpec> {
         return Err(EngineError::InvalidPolicy);
     }
     validate_limits(&policy.limits)?;
+    if let Some(commands) = &policy.command_policy {
+        commands.validate(&policy.allowed_principals)?;
+    }
     let account = launcher::local_account(policy.cwd.as_deref())?;
     // Trusted executable validation is also performed at launch. Canonicalization
     // here never selects an implicit executable or PATH fallback.

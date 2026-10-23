@@ -60,6 +60,48 @@ Each remote identity and canonical relay set reuses one saved conversation by de
 
 Engine state and retained output use SQLCipher as described below. The frontend's private 0600 JSON files hold session metadata and, while retry is needed, original command arguments and authorization tokens; these frontend files are not encrypted. Protect the whole identity directory and keep it out of source control. Completing a wait or observing terminal status with status/cancel removes command/token fields from its retry journal, without guaranteeing forensic erasure.
 
+## Command restrictions
+
+On the server, `--allow` selects identities that may connect. Add
+`--command-policy /absolute/path/policy.json` to restrict their executable paths.
+The policy must be a private regular file owned by the server account, with no
+group or other write permission; symlinks are rejected. For example:
+
+```json
+{
+  "version": 1,
+  "defaults": {"allow_exec": ["/usr/bin/**"], "deny_exec": ["/usr/bin/sudo"]},
+  "keys": [
+    {"principal": "CLIENT_NPUB_OR_HEX", "restrictions": {"allow_exec": ["/usr/bin/printf"]}}
+  ]
+}
+```
+
+Defaults and **every** entry for a key apply together. Each allow list must match;
+any deny match wins. Repeated entries add restrictions regardless of order.
+An omitted allow list adds no constraint; an empty one denies all commands.
+Policy entries must name identities already selected by `--allow`.
+
+Patterns match the entire absolute executable path, case sensitively. `*`
+matches bytes up to a `/`; `**` can cross `/`. Slashes remain literal, so
+`/usr/**/echo` does not match `/usr/echo`. Backslash escapes only a literal star
+or backslash. Other characters are literal. Restricted commands must supply an
+absolute, already canonical executable path: PATH lookup, relative paths and
+symlink aliases are refused. Resolve the executable on the server first.
+
+These rules select executables; they do not restrict arguments or sandbox their
+behavior. Allowing an interpreter, shell, `env` or a program that launches other
+programs grants those capabilities. Explicit shell-string requests are refused
+whenever applicable restrictions exist, even with `--allow-shell`. Policies are
+bounded and malformed policies prevent startup. Matching has a shared one-million-state
+budget; unusually large policies or paths can exhaust it and deny a command.
+Reload by restarting the server;
+accepted jobs and exact retries retain their original authority.
+
+The engine configuration now uses version 2. New binaries read version 1 roots;
+older binaries reject a version 2 root. Back up state before upgrading and do
+not downgrade binaries against the upgraded root.
+
 ## Offline development
 
 Use the pinned Rust 1.97.1 toolchain. The SQLCipher build vendors OpenSSL and needs a C compiler, make and Perl. After preparing the dependency cache:

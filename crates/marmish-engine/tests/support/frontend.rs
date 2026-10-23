@@ -72,6 +72,7 @@ fn run() -> Result<(), String> {
         server: ServerId([3; 32]),
         allowed_principals: vec![PrincipalId([1; 32])],
         allow_shell_command: false,
+        command_policy: None,
         cwd: Some(root.clone()),
         limits: EngineLimits {
             cancel_grace: Duration::from_millis(100),

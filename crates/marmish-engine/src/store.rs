@@ -52,6 +52,7 @@ pub(crate) struct WorkerClaim {
     pub request: CommandRequest,
     pub account: AccountSpec,
     pub limits: EngineLimits,
+    pub canonical_exec_required: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct AccountSpec {
@@ -132,6 +133,21 @@ struct Config {
     account: AccountSpec,
     epoch: [u8; 16],
 }
+impl Config {
+    fn validate(&self) -> Result<()> {
+        if !matches!(self.version, 1 | 2)
+            || (self.version == 1 && self.policy.command_policy.is_some())
+        {
+            return Err(EngineError::StorageFailure);
+        }
+        if let Some(policy) = &self.policy.command_policy {
+            policy
+                .validate(&self.policy.allowed_principals)
+                .map_err(|_| EngineError::StorageFailure)?;
+        }
+        Ok(())
+    }
+}
 #[derive(Serialize, Deserialize, Default)]
 struct Clock {
     boot: [u8; 16],
@@ -197,6 +213,8 @@ struct Job {
     limits: EngineLimits,
     account: AccountSpec,
     request: Option<CommandRequest>,
+    #[serde(default)]
+    canonical_exec_required: bool,
     state: InvocationState,
     outcome: Option<ExitOutcome>,
     worker: Option<ProcessIdentity>,
@@ -444,7 +462,8 @@ fn validate_frontend_schema(conn: &Connection, root: &StateRoot) -> Result<()> {
                 r.get(0)
             })
             .map_err(db_error)?;
-        let _: Config = decode(&config)?;
+        let config: Config = decode(&config)?;
+        config.validate()?;
         for table in ["jobs", "tokens"] {
             let present: i64 = conn
                 .query_row(
@@ -515,15 +534,13 @@ impl Store {
             .map_err(db_error)?;
         if let Some(bytes) = old {
             let config: Config = decode(&bytes)?;
-            if config.version != 1
-                || config.policy.server != policy.server
-                || config.account.uid != account.uid
-            {
+            config.validate()?;
+            if config.policy.server != policy.server || config.account.uid != account.uid {
                 return Err(EngineError::Unauthorized);
             }
         }
         let config = Config {
-            version: 1,
+            version: 2,
             policy: policy.clone(),
             account: account.clone(),
             epoch,
@@ -600,7 +617,8 @@ impl Store {
             })
             .map_err(db_error)?;
         let config: Config = decode(&bytes)?;
-        if config.version != 1 || config.account.uid != account.uid || account.uid == 0 {
+        config.validate()?;
+        if config.account.uid != account.uid || account.uid == 0 {
             return Err(EngineError::Unauthorized);
         }
         root.verify_db_files()?;
@@ -690,7 +708,7 @@ impl Store {
         id: InvocationId,
         request: &CommandRequest,
     ) -> Result<Option<Submission>> {
-        validate_request(request, self.config.policy.allow_shell_command)?;
+        validate_request(request, true)?;
         existing(&self.conn, owner, token_hash, id, request)
     }
     pub fn preflight_admit(
@@ -715,9 +733,9 @@ impl Store {
         job: JobId,
         credential_hash: [u8; 32],
     ) -> Result<Submission> {
-        validate_request(request, self.config.policy.allow_shell_command)?;
+        validate_request(request, true)?;
         let config = Config {
-            version: 1,
+            version: 2,
             policy: self.config.policy.clone(),
             account: self.config.account.clone(),
             epoch: self.config.epoch,
@@ -725,12 +743,15 @@ impl Store {
         if let Some(existing) = existing(&self.conn, owner, hash, id, request)? {
             return Ok(existing);
         }
+        let canonical_exec_required =
+            crate::policy::check_command(&self.config.policy, owner.owner.principal, request)?;
+        validate_request(request, self.config.policy.allow_shell_command)?;
         fault_point(&self.root, job, FaultPoint::BeforeAccepted);
         let result=self.transaction(|tx|{
             if let Some(existing)=existing(tx,owner,hash,id,request)? {return Ok(existing)}
             check_admission(tx,&config,owner,epoch,hash,now)?;
             let empty=OutputStatus {retained:0,produced:0,closed:false,gaps:Vec::new()};
-            let j=Job {id:job,owner:owner.owner.clone(),endpoint:owner.endpoint,invocation:id,digest:request_digest(request)?,token:hash,credential:credential_hash,limits:config.policy.limits.clone(),account:config.account.clone(),request:Some(request.clone()),state:InvocationState::Accepted,outcome:None,worker:None,child:None,pgid:None,cancel:false,attempts:0,reserved:None,input:Input::default(),stdout:empty.clone(),stderr:empty,completed:None};
+            let j=Job {id:job,owner:owner.owner.clone(),endpoint:owner.endpoint,invocation:id,digest:request_digest(request)?,token:hash,credential:credential_hash,limits:config.policy.limits.clone(),account:config.account.clone(),request:Some(request.clone()),canonical_exec_required,state:InvocationState::Accepted,outcome:None,worker:None,child:None,pgid:None,cancel:false,attempts:0,reserved:None,input:Input::default(),stdout:empty.clone(),stderr:empty,completed:None};
             tx.execute("INSERT INTO jobs(job,principal,server,target,invocation,state,data) VALUES(?,?,?,?,?,0,?)",params![job.0.as_slice(),owner.owner.principal.0.as_slice(),owner.owner.server.0.as_slice(),owner.owner.target_uid,id.0.as_slice(),encode(&j)?]).map_err(db_error)?;
             save(tx, &j)?;
             let mut token=load_token(tx,hash)?;token.consumed=true;
@@ -858,7 +879,6 @@ impl Store {
         identity: &ProcessIdentity,
     ) -> Result<ClaimResult> {
         let config = &self.config;
-        let allow_shell = config.policy.allow_shell_command;
         let account = config.account.clone();
         let server = config.policy.server;
         fault_point(&self.root, id, FaultPoint::BeforeClaim);
@@ -876,7 +896,11 @@ impl Store {
                 return Err(EngineError::WorkerUnavailable);
             }
             let request = j.request.take().ok_or(EngineError::StorageFailure)?;
-            validate_request(&request, allow_shell)?;
+            // Accepted work retains its original authority across policy changes.
+            validate_request(&request, true)?;
+            if j.canonical_exec_required && !matches!(request, CommandRequest::Exec { .. }) {
+                return Err(EngineError::StorageFailure);
+            }
             j.state = InvocationState::Launching;
             j.worker = Some(identity.clone());
             j.reserved = None;
@@ -885,6 +909,7 @@ impl Store {
                 request,
                 account: j.account.clone(),
                 limits: j.limits.clone(),
+                canonical_exec_required: j.canonical_exec_required,
             }))
         })?;
         fault_point(&self.root, id, FaultPoint::AfterClaim);

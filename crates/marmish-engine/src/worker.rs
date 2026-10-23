@@ -752,6 +752,7 @@ fn launch_claimed(
         cwd: claim.account.cwd.clone(),
         account: claim.account.clone(),
         request: claim.request.clone(),
+        canonical_exec_required: claim.canonical_exec_required,
         umask: 0o077,
     };
     fault_point(root, job, FaultPoint::BeforeSpawn);

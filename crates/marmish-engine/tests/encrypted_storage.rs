@@ -30,6 +30,7 @@ fn policy(directory: &Path) -> EnginePolicy {
         server: SERVER,
         allowed_principals: vec![PRINCIPAL],
         allow_shell_command: false,
+        command_policy: None,
         cwd: Some(directory.to_owned()),
         limits: EngineLimits::default(),
     }

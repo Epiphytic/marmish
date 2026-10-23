@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 from mdk_smoke import SmokeError, require
 from marmish_app import Client, Profile, exit_code
-from marmish_protocol import b64, encode, envelope, load_json
+from marmish_protocol import b64, encode, envelope, load_json, save_json
 from marmish_rpc import RpcError, MdkRpc
 from marmish_transport_sandbox import SandboxError
 
@@ -55,9 +55,15 @@ class Harness:
     def start_server(self):
         self.checkpoint('server_start')
         script = Path(__file__).with_name('marmishd.py')
+        policy = self.root / 'command-policy.json'
+        save_json(policy, {'version': 1, 'defaults': {'allow_exec': ['/**'],
+                  'deny_exec': [str(Path('/usr/bin/false').resolve())]}, 'keys': [
+                  {'principal': self.client_identity,
+                   'restrictions': {'deny_exec': [str(Path('/usr/bin/true').resolve())]}}]})
         self.server = subprocess.Popen([sys.executable, str(script), *self.common_args('server'),
             '--allow', self.client_identity, '--bridge', str(self.args.bridge),
-            '--worker', str(self.args.worker), '--cwd', str(self.cwd)],
+            '--worker', str(self.args.worker), '--cwd', str(self.cwd),
+            '--command-policy', str(policy), '--allow-shell'],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             start_new_session=True, env={'PATH': '/usr/bin:/usr/sbin:/bin:/sbin', 'LANG': 'C'})
         require(select.select([self.server.stdout], [], [], 25)[0], 'server_start_timeout')
@@ -92,7 +98,38 @@ class Harness:
     @staticmethod
     def command(script, *args):
         return {'mode': 'exec', 'argv': [b64(x) for x in
-                [b'/usr/bin/python3', b'-c', script.encode('ascii'), *args]]}
+                [os.fsencode(Path(sys.executable).resolve()), b'-c', script.encode('ascii'), *args]]}
+
+    def check_command_policy(self, client):
+        self.checkpoint('command_policy')
+        policy_token = client.call('token')['token']
+        policy_id = secrets.token_hex(16)
+        for command in (
+                {'mode': 'exec', 'argv': [b64(os.fsencode(Path('/usr/bin/false').resolve()))]},
+                {'mode': 'exec', 'argv': [b64(os.fsencode(Path('/usr/bin/true').resolve()))]},
+                {'mode': 'exec', 'argv': [b64(b'true')]},
+                {'mode': 'shell', 'command': b64(b'touch forbidden-policy')}):
+            try:
+                client.call('submit', invocation=policy_id, token=policy_token, command=command)
+                raise SmokeError('policy_denial_missing')
+            except SmokeError as error:
+                require(str(error) == 'command_denied', 'policy_wrong_error')
+            try:
+                client.call('status', invocation=policy_id)
+                raise SmokeError('denied_job_created')
+            except SmokeError as error:
+                require(str(error) == 'not_found', 'denied_job_wrong_error')
+        require(not (self.cwd / 'forbidden-policy').exists(), 'policy_shell_side_effect')
+        admitted = client.call('submit', invocation=policy_id, token=policy_token,
+                               command=self.command('print("policy allowed")'))
+        require(admitted['disposition'] == 'accepted', 'denial_consumed_token')
+        client.send_input(policy_id, io.BytesIO())
+        policy_out = io.BytesIO()
+        policy_status = client.wait(policy_id, policy_out, io.BytesIO())
+        require(policy_out.getvalue() == b'policy allowed\n' and exit_code(policy_status) == 0,
+                'policy_allowed_execution_failed')
+        self.passed('live_additive_default_and_per_key_denials_path_and_shell_refusal')
+        self.passed('policy_denials_create_no_job_and_preserve_token_for_allowed_execution')
 
     def run(self):
         self.checkpoint('identity_setup')
@@ -107,6 +144,7 @@ class Harness:
             client = self.client(profile)
             initial_group = client.group
             self.report['groups'] = [initial_group]
+            self.check_command_policy(client)
             special = [b'with spaces', 'marmotte \U0001f9ab'.encode(), b"'double\"quote", b'line\nline',
                        b'-leading', b'$HOME', b'`id`', b'$(id)', b'\\backslash', b'', b'\xff']
             script = ('import sys,os,json,base64; '
