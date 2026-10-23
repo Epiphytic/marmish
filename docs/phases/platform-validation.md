@@ -409,3 +409,71 @@ quiescence is uncertain. Live cleanup additionally requires the single-host E2E
 report's `local_cleanup=complete` and removal of distributed private state.
 See [the local acquisition and namespace probe evidence](../validation/rootless-bwrap-local.json)
 for the bounded noble smoke test; supplied-runner acceptance is still pending.
+
+
+### Runner refinement: trusted temporary executable placement
+
+Run 39907438883 acquired the signed resolute AMD64 package successfully, but
+`probe` failed `unsafe_bwrap_path` before namespaces. The executable was under
+`/var/lib/bel-ci-worker/workers/<runner>/_work/_temp/`; the existing error does
+not identify whether ownership, mode, or path opening rejected an ancestor.
+Do not infer a kernel denial or weaken executable trust checks.
+
+Place the CI-owned authenticated package prefix directly under Linux `/tmp`,
+whose directory must be opened without following links and verified root-owned,
+a directory, and sticky when writable by other users. Keep an unpredictable
+0700 owned prefix, exclusive creation, bounded package work, and the private
+state pointer at the explicit RUNNER_TEMP location. The private prefix's
+`owned-state` backlink still binds cleanup to that exact pointer. Cleanup must
+verify the fixed trusted parent, immediate prefix relationship, name, owner,
+0700 mode and backlink, and preserve state on uncertainty. No arbitrary parent
+option, relaxed ancestor checks, host chmod, system installation or fallback.
+Validate the selected executable with the production validator before exporting
+it to later steps, so failed acquisition cannot be reported as usable.
+
+Agent implementation owns `tools/marmish_ci_bwrap.py` and its focused tests.
+Cover symlink/nonroot/nonsticky writable parent rejection, replacement and
+unrelated cleanup rejection, state backlink mismatch, private extraction and
+final production selection. Root reviews integration with Claude auto mode,
+runs affected offline checks, repeats the actual namespace probe and publishes
+sanitized second-run evidence. Native runner execution remains required; this
+change alone establishes no macOS or cross-platform acceptance.
+
+
+Placement review dispositions: add a read-only CI-side first-failure diagnostic
+on production validator rejection, reporting only category, component index,
+uid/mode and errno (never paths or raw exception text). Open `/tmp` via
+O_DIRECTORY|O_NOFOLLOW and fstat; create a random prefix using fd-relative
+mkdir with mode 0700, not resolve/mkdtemp/TMPDIR. Remove only via verified-parent dir_fd
+rmtree; bind cleanup through the exact pointer and backlink. Native macOS is
+unchanged. Keep execution/noexec failure categories distinct and no fallback.
+
+Cleanup policy remains fail-closed: successful runs and failures before tests
+remove owned prefixes; failed/cancelled offline tests and uncertain live cleanup
+retain prefixes because a descendant may still need the executable. This is
+intentional retention, not successful cleanup. Heavy work starts only after the
+private state pointer and backlink are written. A hard kill before that point
+can retain an empty prefix; hard kill afterwards can retain up to 128 MiB. An
+operator lifecycle mechanism can remove retained `/tmp` state before reuse;
+none is currently verified. No automatic
+stale sweep or timeout reclamation is authorized: unknown ownership/liveness
+must preserve state, and adding a sweeper would expand scope. Record this
+operational limitation explicitly in evidence. A successful native acceptance
+run must prove its own owned cleanup; an interrupted or uncertain run never
+counts as successful acceptance. No host-service installation is required. Bootstrap catches ordinary
+BaseException around prefix setup and heavy work to narrow orphan creation.
+
+
+Placement review C1 disposition: report any known runner lifecycle cleanup
+mechanism and filesystem type/mount options. No cleanup mechanism is currently
+proven active; do not infer it from ephemeral registration or workspace cleanup.
+The change does not require a new privileged host service to validate a run
+whose own cleanup completed. Interrupted/uncertain cleanup is a failed run with
+retention, and this operational limitation remains explicit. Do
+not change host configuration or install a privileged cleanup service. Strip
+APT lists/cache/download/config work before export and retain only the at-most
+1MiB executable, provenance and ownership marker on uncertain test cleanup.
+Record possible SIGTERM/SIGKILL orphan retention explicitly. Parent verification
+is separately testable with patched stat/fds; real fixed-`/tmp` integration is
+Linux-only and removes its owned prefix in a finally block. macOS behavior is
+unchanged.

@@ -200,6 +200,22 @@ denial remains a hard failure, and successful acquisition alone proves neither
 confinement nor native support. See [the refinement design](phases/platform-validation.md#runner-refinement-rootless-linux-bubblewrap-prerequisite)
 and [the first-run evidence](validation/native-run-39904454063.json).
 
+A second runner attempt authenticated and ran Bubblewrap but rejected its
+service-managed ancestor path before namespaces; see [that evidence](validation/native-run-39907438883.json).
+The reviewed placement refinement uses a fixed trusted Linux `/tmp` parent,
+without relaxing the production validator. Prefixes are retained after uncertain cleanup, and no operator lifecycle
+cleanup mechanism is currently verified. A successful native acceptance run must
+complete its own cleanup; no host configuration is changed by Marmish. The local fresh-key
+[full real-relay retry](validation/rootless-bwrap-e2e-retry.json) passed all
+14 checks and completed cleanup. An earlier invitation-stage timeout is retained
+in [the failed-run record](validation/rootless-bwrap-e2e.json); the successful
+retry does not establish its cause or prove macOS interoperability. The
+[final placement E2E run](validation/bwrap-placement-e2e.json) also passed all
+14 checks in 211.453 seconds with complete owned cleanup; see the
+[increment validation](validation/bwrap-placement-increment.json) and
+[final code review](reviews/bwrap-placement-code-final.json).
+
+
 ### Storage, retention and bounds
 
 Use SQLCipher for engine state and retained stdout/stderr. The colocated private

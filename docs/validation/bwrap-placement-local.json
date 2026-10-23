@@ -1,0 +1,44 @@
+{
+  "scope": "Local Ubuntu noble signed acquisition, trusted fixed /tmp placement, real nested namespace probe and ownership-bound cleanup",
+  "acquisition_exit_code": 0,
+  "provenance": {
+    "architecture": "amd64",
+    "executable_sha256": "e318903862396f96de3df57264e0158682b952fd3fb53ac23d876413e7b30f71",
+    "keyring_sha256": "80a36b0a6de2f69f49d2df75ef473ccde121e9e190b9ea01d20a4f63778d5c31",
+    "package_sha256": "2461f1beee9cb04c8942739fe1a2b37e7b7c2a3d518f0779dc75f9245baa3094",
+    "package_version": "0.9.0-1ubuntu0.3",
+    "sources": [
+      "deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble main",
+      "deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-updates main",
+      "deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://security.ubuntu.com/ubuntu noble-security main"
+    ],
+    "suite": "noble",
+    "system_bwrap_present": true,
+    "version": "bubblewrap 0.9.0"
+  },
+  "retained_entries": [
+    "bin",
+    "bin/bwrap",
+    "owned-state",
+    "provenance.json"
+  ],
+  "retained_file_bytes": 73009,
+  "probe_exit_code": 0,
+  "owned_cleanup_exit_code": 0,
+  "state_removed": true,
+  "prefix_removed": true,
+  "operator_lifecycle_cleanup": "unknown; successful probe cleans its own prefix",
+  "limitations": [
+    "Does not establish supplied runner namespace policy",
+    "Does not establish macOS or ARM64 runtime support",
+    "Interrupted or uncertain cleanup can retain the small executable prefix; no stale sweep"
+  ],
+  "outcome": "passed",
+  "local_tmp_filesystem": {
+    "type": "ext4",
+    "mount_flags": [
+      "rw",
+      "relatime"
+    ]
+  }
+}

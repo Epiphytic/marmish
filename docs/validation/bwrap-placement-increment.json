@@ -1,0 +1,59 @@
+{
+  "scope": "Trusted fixed-/tmp CI Bubblewrap placement refinement",
+  "python_normal": {
+    "tests_run": 171,
+    "darwin_only_skips": 4,
+    "outcome": "passed"
+  },
+  "focused_python": {
+    "tests_run": 20,
+    "normal": "passed",
+    "hostile_nonsticky_world_writable_TMPDIR": "passed"
+  },
+  "hostile_full_suite": {
+    "tests_run": 171,
+    "skips": 4,
+    "errors": 10,
+    "outcome": "failed",
+    "disposition": "Existing Mac ControlTests (7) and production BwrapSelectionTests (3) use actual hostile-ancestor fixture roots and reject them. No claim that the full suite supports unsafe TMPDIR; final diagnostic test uses a hermetic walk."
+  },
+  "actual_signed_acquisition_namespace_probe_cleanup": "docs/validation/bwrap-placement-local.json",
+  "final_live_e2e": "docs/validation/bwrap-placement-e2e.json",
+  "prior_fresh_key_full_live_retry": "docs/validation/rootless-bwrap-e2e-retry.json",
+  "prior_live_timeout": "docs/validation/rootless-bwrap-e2e.json",
+  "quality_delta": {
+    "baseline": "4fae51a6bb4567d448975d8859f70cba0e7b44aa",
+    "exit_code": 2,
+    "regressions": 22,
+    "gating": 7,
+    "disposition": [
+      "Bootstrap complexity/verbosity increase reflects explicit descriptor lifecycle, identity-bound rollback and original-failure preservation. Generic bootstrap symbol maps to unchanged tools/marmish_ci.py in the report; actual changed bootstrap is in marmish_ci_bwrap.py.",
+      "Bootstrap secondary-cleanup exceptions are suppressed intentionally to preserve the original failure; partial-write and failed-cleanup tests cover this policy.",
+      "Temporary OS-release fixture readers are duplicated across independent orchestration/failure fixtures; retained rather than couple failure injection contexts.",
+      "The 76-token private writer pattern resembles the macOS transport JSON writer. Linux helper accepts text and a directory fd; importing platform confinement code would add coupling. Exclusive nofollow create, exact mode and fsync remain explicit.",
+      "Test class growth and new-symbol findings remain visible. No baseline or suppression added."
+    ]
+  },
+  "native_acceptance": {
+    "linux_amd64": "requires new actual runner attempt",
+    "linux_arm64": "unassigned runner",
+    "macos_arm64": "unassigned runner",
+    "cross_platform": "pending same-attempt native bundles and both live directions"
+  },
+  "operator_tmp_lifecycle": "unknown; a successful acceptance run must complete its own cleanup; interrupted uncertain runs retain small prefix; no host changes",
+  "reviews": {
+    "design": "docs/reviews/bwrap-placement-plan-final.json",
+    "initial_code": "docs/reviews/bwrap-placement-code-initial.json",
+    "followup_code": "docs/reviews/bwrap-placement-code-followup.json",
+    "final_code": "docs/reviews/bwrap-placement-code-final.json",
+    "final_verdict": "APPROVE",
+    "blockers": []
+  },
+  "final_live_result": {
+    "outcome": "passed",
+    "assertions": 14,
+    "seconds": 211.453,
+    "local_cleanup": "complete",
+    "bubblewrap_owned_cleanup": "complete"
+  }
+}

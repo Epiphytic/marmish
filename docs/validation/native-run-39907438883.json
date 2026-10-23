@@ -1,0 +1,36 @@
+{
+  "run_id": 39907438883,
+  "run_url": "https://github.com/Epiphytic/marmish/actions/runs/39907438883",
+  "commit": "4fae51a6bb4567d448975d8859f70cba0e7b44aa",
+  "platform": "linux-x64",
+  "job_id": 120262514060,
+  "job_result": "failure",
+  "acquisition": {
+    "outcome": "passed",
+    "provenance": {
+      "architecture": "amd64",
+      "executable_sha256": "523da3e7399044be5163aee6f57a77a6bef7454376e28f0a0627920bae1b76b6",
+      "keyring_sha256": "80a36b0a6de2f69f49d2df75ef473ccde121e9e190b9ea01d20a4f63778d5c31",
+      "package_sha256": "d3a6c1b6b0e0474eaed6dbd055c0d601fd875af153976a0dc4aae75f4ea10868",
+      "package_version": "0.11.1-1ubuntu0.3",
+      "sources": [
+        "deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu resolute main",
+        "deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu resolute-updates main",
+        "deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://security.ubuntu.com/ubuntu resolute-security main"
+      ],
+      "suite": "resolute",
+      "system_bwrap_present": false,
+      "version": "bubblewrap 0.11.1"
+    }
+  },
+  "prerequisite_probe": {
+    "outcome": "failed",
+    "error": "unsafe_bwrap_path",
+    "rejected_ancestor": "unknown; owner/mode/path-open collapsed by validator",
+    "namespaces": "not_reached"
+  },
+  "offline_tests": "not_reached",
+  "live_tests": "not_reached",
+  "owned_bubblewrap_cleanup": "complete",
+  "native_acceptance": false
+}

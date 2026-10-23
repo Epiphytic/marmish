@@ -1,0 +1,67 @@
+{
+  "assertions": [
+    "live_additive_default_and_per_key_denials_path_and_shell_refusal",
+    "policy_denials_create_no_job_and_preserve_token_for_allowed_execution",
+    "literal_argv_spaces_unicode_quotes_newline_dollar_backticks_leading_dash_nonutf8",
+    "separate_binary_stderr_and_nonzero_exit",
+    "exact_admitted_retry_and_status_first_retry_execute_once_conflict_rejected",
+    "byte_exact_binary_stdin_stdout_stderr_eof",
+    "live_cancellation_reports_signal_and_remains_queryable",
+    "live_stale_challenge_wrong_group_and_chat_payload_never_execute",
+    "live_ordinary_room_and_unallowlisted_identity_invites_remain_unaccepted",
+    "frontend_disconnect_does_not_cancel_running_worker",
+    "persisted_mls_room_and_command_output_recovered_after_frontend_restart",
+    "previous_boot_valid_control_frame_rejected_after_restart",
+    "fresh_independent_mls_group_configurable_retention_same_principal_reattach",
+    "actual_client_and_server_cli_processes_execute_command_via_marmot"
+  ],
+  "bubblewrap": {
+    "architecture": "amd64",
+    "executable_sha256": "e318903862396f96de3df57264e0158682b952fd3fb53ac23d876413e7b30f71",
+    "keyring_sha256": "80a36b0a6de2f69f49d2df75ef473ccde121e9e190b9ea01d20a4f63778d5c31",
+    "package_sha256": "2461f1beee9cb04c8942739fe1a2b37e7b7c2a3d518f0779dc75f9245baa3094",
+    "package_version": "0.9.0-1ubuntu0.3",
+    "sources": [
+      "deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble main",
+      "deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-updates main",
+      "deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://security.ubuntu.com/ubuntu noble-security main"
+    ],
+    "suite": "noble",
+    "system_bwrap_present": true,
+    "tmp_filesystem": {
+      "flags": [
+        "relatime",
+        "rw"
+      ],
+      "fstype": "ext4"
+    },
+    "version": "bubblewrap 0.9.0"
+  },
+  "duration_seconds": 211.453,
+  "groups": [
+    "9b43c291815a8581d2fa982f36c1b042",
+    "656b27b923eed06e51aa896cabf4bd93"
+  ],
+  "limitations": [
+    "prototype_single_device",
+    "relay_retention_is_not_guaranteed_erasure",
+    "same_principal_can_reattach_across_sessions"
+  ],
+  "local_cleanup": "complete",
+  "outcome": "passed",
+  "platform": "linux",
+  "public_identities": {
+    "client": "2d1a139ad26897da3929c92edd36c10bf6a6ea9f24baa54a3ffabb9f19299d0c",
+    "server": "038c4018bcae4122be752cb25917e66a300bf68ea8a0a78491fb164db35b4809"
+  },
+  "python": "3.12.3",
+  "relays": [
+    "wss://relay.eu.whitenoise.chat/",
+    "wss://relay.us.whitenoise.chat/"
+  ],
+  "stage": "complete",
+  "wnd_sha256": "1324c70d389fb49f37ae8f7f6ab2a16840b138a0c438d7aef10bb6f9eee20a03",
+  "validation_scope": "Final trusted-/tmp placement refinement; local Linux fresh-key real-relay E2E, daemon source provenance unknown",
+  "bubblewrap_owned_cleanup": "complete",
+  "retained_prefix_file_bytes_before_cleanup": 73067
+}

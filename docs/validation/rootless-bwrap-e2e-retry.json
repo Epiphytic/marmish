@@ -1,0 +1,59 @@
+{
+  "assertions": [
+    "live_additive_default_and_per_key_denials_path_and_shell_refusal",
+    "policy_denials_create_no_job_and_preserve_token_for_allowed_execution",
+    "literal_argv_spaces_unicode_quotes_newline_dollar_backticks_leading_dash_nonutf8",
+    "separate_binary_stderr_and_nonzero_exit",
+    "exact_admitted_retry_and_status_first_retry_execute_once_conflict_rejected",
+    "byte_exact_binary_stdin_stdout_stderr_eof",
+    "live_cancellation_reports_signal_and_remains_queryable",
+    "live_stale_challenge_wrong_group_and_chat_payload_never_execute",
+    "live_ordinary_room_and_unallowlisted_identity_invites_remain_unaccepted",
+    "frontend_disconnect_does_not_cancel_running_worker",
+    "persisted_mls_room_and_command_output_recovered_after_frontend_restart",
+    "previous_boot_valid_control_frame_rejected_after_restart",
+    "fresh_independent_mls_group_configurable_retention_same_principal_reattach",
+    "actual_client_and_server_cli_processes_execute_command_via_marmot"
+  ],
+  "bubblewrap": {
+    "architecture": "amd64",
+    "executable_sha256": "e318903862396f96de3df57264e0158682b952fd3fb53ac23d876413e7b30f71",
+    "keyring_sha256": "80a36b0a6de2f69f49d2df75ef473ccde121e9e190b9ea01d20a4f63778d5c31",
+    "package_sha256": "2461f1beee9cb04c8942739fe1a2b37e7b7c2a3d518f0779dc75f9245baa3094",
+    "package_version": "0.9.0-1ubuntu0.3",
+    "sources": [
+      "deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble main",
+      "deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-updates main",
+      "deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://security.ubuntu.com/ubuntu noble-security main"
+    ],
+    "suite": "noble",
+    "system_bwrap_present": true,
+    "version": "bubblewrap 0.9.0"
+  },
+  "duration_seconds": 213.8,
+  "groups": [
+    "84c7fb70b7b91a523ee156049b8a8404",
+    "257c3ee0454f5fad85cbb5b7b3707e66"
+  ],
+  "limitations": [
+    "prototype_single_device",
+    "relay_retention_is_not_guaranteed_erasure",
+    "same_principal_can_reattach_across_sessions"
+  ],
+  "local_cleanup": "complete",
+  "outcome": "passed",
+  "platform": "linux",
+  "public_identities": {
+    "client": "20c3f80e964f5e4ad13b8f96fd86cc088805c3ae5261e31feab0c2f132e27901",
+    "server": "3cc50ec127f589205561bdf2e8c802916a826af8a41ba2e3f082a39af8bdcba7"
+  },
+  "python": "3.12.3",
+  "relays": [
+    "wss://relay.eu.whitenoise.chat/",
+    "wss://relay.us.whitenoise.chat/"
+  ],
+  "stage": "complete",
+  "wnd_sha256": "1324c70d389fb49f37ae8f7f6ab2a16840b138a0c438d7aef10bb6f9eee20a03",
+  "validation_scope": "Fresh-key retry of local Linux real-relay E2E with freshly authenticated private Bubblewrap; daemon source provenance remains unknown",
+  "bubblewrap_owned_cleanup": "complete"
+}
