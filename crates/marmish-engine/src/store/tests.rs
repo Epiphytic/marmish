@@ -104,6 +104,138 @@ fn request() -> CommandRequest {
 }
 
 #[test]
+fn cleanup_retries_teardown_locks_and_fences_late_terminal_claim() {
+    let mut fixture = Fixture::new();
+    let job = fixture.admit(61);
+    fixture
+        .root
+        .prepare_job(job, &WorkerCredential([4; 32]))
+        .unwrap();
+    let worker = fixture.claim(job);
+    fixture
+        .store
+        .finish(job, &worker, ExitOutcome::NotStarted)
+        .unwrap();
+    let worker_lock = fixture.root.lock_job(job).unwrap();
+    let io_lock = fixture.root.lock_io(job).unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        drop(io_lock);
+        drop(worker_lock);
+    });
+    let started = std::time::Instant::now();
+    let guards = crate::cleanup::acquire(&fixture.root, &mut fixture.store).unwrap();
+    assert!(started.elapsed() >= Duration::from_millis(75));
+    release.join().unwrap();
+    assert!(matches!(fixture.root.lock_job(job), Err(EngineError::Busy)));
+    drop(guards);
+    let _late_guard = fixture.root.lock_job(job).unwrap();
+    assert!(matches!(
+        fixture
+            .store
+            .claim_worker(job, &WorkerCredential([4; 32]), &worker)
+            .unwrap(),
+        ClaimResult::AlreadyClaimed
+    ));
+}
+
+#[test]
+fn cleanup_rejects_active_unrecorded_and_malformed_directories_but_accepts_tombstones() {
+    let mut fixture = Fixture::new();
+    let job = fixture.admit(62);
+    assert!(matches!(
+        crate::cleanup::acquire(&fixture.root, &mut fixture.store),
+        Err(EngineError::RecoveryUncertain)
+    ));
+    let worker = fixture.claim(job);
+    fixture
+        .store
+        .finish(job, &worker, ExitOutcome::NotStarted)
+        .unwrap();
+    assert!(crate::cleanup::acquire(&fixture.root, &mut fixture.store)
+        .unwrap()
+        .is_empty());
+    fixture
+        .root
+        .prepare_job(JobId([63; 16]), &WorkerCredential([4; 32]))
+        .unwrap();
+    assert!(matches!(
+        crate::cleanup::acquire(&fixture.root, &mut fixture.store),
+        Err(EngineError::RecoveryUncertain)
+    ));
+    std::fs::create_dir(fixture.root.path().join("jobs/not-a-job")).unwrap();
+    assert!(fixture.root.cleanup_directories().is_err());
+}
+
+#[test]
+fn cleanup_store_snapshot_never_silently_truncates() {
+    let mut fixture = Fixture::new();
+    for n in 0u16..257 {
+        let mut id = [0; 16];
+        id[..2].copy_from_slice(&n.to_be_bytes());
+        fixture.store.conn.execute("INSERT INTO jobs(job,principal,server,target,invocation,state,data) VALUES(?,?,?,?,?,?,?)", params![id.as_slice(), &[1u8;32], &[1u8;32], 1, id.as_slice(), 3, &[] as &[u8]]).unwrap();
+    }
+    assert!(matches!(
+        fixture.store.cleanup_jobs(),
+        Err(EngineError::QuotaExceeded)
+    ));
+}
+
+#[test]
+fn cleanup_failed_lock_validation_releases_every_acquired_guard() {
+    let mut fixture = Fixture::new();
+    let job = fixture.admit(64);
+    fixture
+        .root
+        .prepare_job(job, &WorkerCredential([4; 32]))
+        .unwrap();
+    let worker = fixture.claim(job);
+    fixture
+        .store
+        .finish(job, &worker, ExitOutcome::NotStarted)
+        .unwrap();
+    std::fs::remove_file(
+        fixture
+            .root
+            .path()
+            .join("jobs")
+            .join(crate::launcher::job_hex(job))
+            .join("io.lock"),
+    )
+    .unwrap();
+    assert!(crate::cleanup::acquire(&fixture.root, &mut fixture.store).is_err());
+    assert!(fixture.root.lock_job(job).is_ok());
+}
+
+#[test]
+fn cleanup_directory_snapshot_and_descriptor_budget_fail_closed_on_overflow() {
+    use std::os::unix::fs::DirBuilderExt;
+    let fixture = Fixture::new();
+    for n in 0u16..257 {
+        let mut id = [0; 16];
+        id[..2].copy_from_slice(&n.to_be_bytes());
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(
+                fixture
+                    .root
+                    .path()
+                    .join("jobs")
+                    .join(crate::launcher::job_hex(JobId(id))),
+            )
+            .unwrap();
+    }
+    assert!(matches!(
+        fixture.root.cleanup_directories(),
+        Err(EngineError::QuotaExceeded)
+    ));
+    assert!(matches!(
+        crate::platform::cleanup_descriptor_budget(usize::MAX),
+        Err(EngineError::QuotaExceeded)
+    ));
+}
+
+#[test]
 fn replay_binding_conflicts_expiry_and_restart_never_relaunch() {
     let mut f = Fixture::new();
     let job = f.admit(10);
@@ -1291,4 +1423,476 @@ fn malformed_persisted_policy_or_canonical_marker_fails_closed() {
         Store::open_worker(&f.root, &f.keys),
         Err(EngineError::StorageFailure)
     ));
+}
+
+#[test]
+fn startup_lock_contention_only_accepts_verified_live_active_claim() {
+    let mut fixture = Fixture::new();
+    let job = fixture.admit(232);
+    fixture
+        .root
+        .prepare_job(job, &WorkerCredential([4; 32]))
+        .unwrap();
+    let held = fixture.root.lock_job(job).unwrap();
+    let actual = launcher::process_identity(std::process::id() as i32).unwrap();
+    fixture
+        .store
+        .claim_worker(job, &WorkerCredential([4; 32]), &actual)
+        .unwrap();
+    assert!(
+        crate::worker::acquire_job(&fixture.root, &mut fixture.store, job)
+            .unwrap()
+            .is_none()
+    );
+    drop(held);
+    assert!(
+        crate::worker::acquire_job(&fixture.root, &mut fixture.store, job)
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn shared_presence_probe_cannot_silently_discard_worker_start() {
+    use std::os::fd::AsRawFd;
+    let mut fixture = Fixture::new();
+    let job = fixture.admit(233);
+    fixture
+        .root
+        .prepare_job(job, &WorkerCredential([4; 32]))
+        .unwrap();
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(
+            fixture
+                .root
+                .path()
+                .join("jobs")
+                .join(crate::launcher::job_hex(job))
+                .join("worker.lock"),
+        )
+        .unwrap();
+    assert_eq!(
+        unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) },
+        0
+    );
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) }, 0);
+    });
+    let before = std::time::Instant::now();
+    assert!(
+        crate::worker::acquire_job(&fixture.root, &mut fixture.store, job)
+            .unwrap()
+            .is_some()
+    );
+    assert!(before.elapsed() >= Duration::from_millis(100));
+    release.join().unwrap();
+    // A permanently held probe produces an explicit bounded retryable error.
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(
+            fixture
+                .root
+                .path()
+                .join("jobs")
+                .join(crate::launcher::job_hex(job))
+                .join("worker.lock"),
+        )
+        .unwrap();
+    assert_eq!(
+        unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) },
+        0
+    );
+    assert!(matches!(
+        crate::worker::acquire_job(&fixture.root, &mut fixture.store, job),
+        Err(EngineError::Busy)
+    ));
+}
+
+impl Fixture {
+    fn into_engine(self) -> (tempfile::TempDir, crate::Engine, InputOwner) {
+        let guard = self.root.lock_frontend().unwrap();
+        let policy = self.store.config.policy.clone();
+        let account = self.store.config.account.clone();
+        let engine = crate::Engine {
+            store: self.store,
+            keys: self.keys,
+            root: self.root,
+            _guard: guard,
+            policy,
+            account,
+            epoch: self.epoch,
+            deadlines: Default::default(),
+            orphan_cursor: None,
+        };
+        (self._dir, engine, self.owner)
+    }
+    fn defer(&mut self, job: JobId) {
+        let now = self.now;
+        self.store
+            .mutate(job, |record, _| {
+                record.reserved = Some(BootTime {
+                    millis: now.millis + 60_000,
+                    ..now
+                });
+                Ok(())
+            })
+            .unwrap();
+    }
+}
+fn test_context(engine: &crate::Engine, owner: &InputOwner) -> AuthorizedContext {
+    engine
+        .authorize(
+            owner.owner.principal,
+            owner.endpoint,
+            owner.owner.server,
+            owner.owner.target_uid,
+        )
+        .unwrap()
+}
+
+#[test]
+fn reconciliation_deferred_job_does_not_wedge_open_maintenance_or_unrelated_work() {
+    let mut fixture = Fixture::new();
+    let deferred = fixture.admit(71);
+    fixture.defer(deferred);
+    let finished = fixture.admit(72);
+    let worker = fixture.claim(finished);
+    fixture
+        .store
+        .finish(finished, &worker, ExitOutcome::NotStarted)
+        .unwrap();
+    let (_directory, engine, owner) = fixture.into_engine();
+    let policy = engine.policy.clone();
+    drop(engine);
+    let before = std::time::Instant::now();
+    let mut engine = crate::Engine::open(policy).unwrap();
+    let ctx = test_context(&engine, &owner);
+    assert_eq!(
+        engine.status(&ctx, InvocationId([71; 16])).unwrap().state,
+        InvocationState::Accepted
+    );
+    assert_eq!(
+        engine.status(&ctx, InvocationId([72; 16])).unwrap().state,
+        InvocationState::Exited
+    );
+    engine.maintain(128).unwrap();
+    engine.issue_execute_token(&ctx).unwrap();
+    assert!(before.elapsed() < Duration::from_secs(3));
+    // Cancel bypasses start preparation, even if host spawning became unavailable.
+    let _failure = launcher::test_spawn::inject(launcher::test_spawn::Failure::Global);
+    assert_eq!(
+        engine.cancel(&ctx, InvocationId([71; 16])).unwrap().outcome,
+        Some(ExitOutcome::NotStarted)
+    );
+    assert_eq!(load(&engine.store.conn, deferred).unwrap().attempts, 0);
+}
+
+#[test]
+fn reconciliation_global_failures_never_burn_attempts_and_late_failure_refunds() {
+    let mut fixture = Fixture::new();
+    let job = fixture.admit(73);
+    let (_directory, mut engine, _) = fixture.into_engine();
+    let policy = engine.policy.clone();
+    {
+        let _failure = launcher::test_spawn::inject(launcher::test_spawn::Failure::Global);
+        assert!(matches!(
+            engine.maintain(128),
+            Err(EngineError::WorkerUnavailable)
+        ));
+        assert_eq!(load(&engine.store.conn, job).unwrap().attempts, 0);
+        drop(engine);
+        assert!(matches!(
+            crate::Engine::open(policy.clone()),
+            Err(EngineError::WorkerUnavailable)
+        ));
+    }
+    let _failure = launcher::test_spawn::inject(launcher::test_spawn::Failure::LateGlobal);
+    assert!(matches!(
+        crate::Engine::open(policy.clone()),
+        Err(EngineError::WorkerUnavailable)
+    ));
+    let root = StateRoot::open_existing(&policy.state_root).unwrap();
+    let keys = root.load_storage_keys().unwrap();
+    let mut store = Store::open_worker(&root, &keys).unwrap();
+    assert_eq!(load(&store.conn, job).unwrap().attempts, 0);
+    assert_eq!(store.job_state(job).unwrap(), InvocationState::Accepted);
+}
+
+#[test]
+fn reconciliation_transient_attempts_are_durable_bounded_and_advance_after_quota_frees() {
+    let mut fixture = Fixture::new();
+    fixture.store.config.policy.limits.starting_workers = 1;
+    let held = fixture.admit(74);
+    fixture.defer(held);
+    let waiting = fixture.admit(75);
+    let (_directory, mut engine, owner) = fixture.into_engine();
+    let _failure = launcher::test_spawn::inject(launcher::test_spawn::Failure::Transient);
+    engine.reconcile_background(waiting).unwrap();
+    assert_eq!(load(&engine.store.conn, waiting).unwrap().attempts, 0);
+    engine.store.release_worker_start(held).unwrap();
+    // Cancel the reservation holder so it cannot take quota on reopen.
+    engine.store.request_cancel(&owner.owner, held).unwrap();
+    engine.reconcile_background(waiting).unwrap();
+    assert_eq!(load(&engine.store.conn, waiting).unwrap().attempts, 1);
+    let policy = engine.policy.clone();
+    drop(engine);
+    let mut engine = crate::Engine::open(policy).unwrap();
+    assert_eq!(load(&engine.store.conn, waiting).unwrap().attempts, 2);
+    engine.reconcile_background(waiting).unwrap();
+    assert_eq!(load(&engine.store.conn, waiting).unwrap().attempts, 3);
+    engine.reconcile_background(waiting).unwrap();
+    let record = load(&engine.store.conn, waiting).unwrap();
+    assert_eq!(record.attempts, 3);
+    assert_eq!(record.state, InvocationState::Exited);
+    assert_eq!(record.outcome, Some(ExitOutcome::NotStarted));
+}
+
+#[test]
+fn reconciliation_job_anomalies_are_isolated_and_claimed_absence_is_never_relaunched() {
+    let mut fixture = Fixture::new();
+    let malformed = fixture.admit(76);
+    fixture
+        .root
+        .prepare_job(malformed, &WorkerCredential([4; 32]))
+        .unwrap();
+    std::fs::remove_file(
+        fixture
+            .root
+            .path()
+            .join("jobs")
+            .join(launcher::job_hex(malformed))
+            .join("worker.lock"),
+    )
+    .unwrap();
+    let launching = fixture.admit(77);
+    fixture.claim(launching);
+    let running = fixture.admit(78);
+    let worker = fixture.claim(running);
+    fixture
+        .store
+        .mark_running(
+            running,
+            &worker,
+            &ProcessIdentity {
+                pid: 124,
+                ..worker.clone()
+            },
+            124,
+        )
+        .unwrap();
+    let (_directory, mut engine, owner) = fixture.into_engine();
+    let ctx = test_context(&engine, &owner);
+    engine.maintain(128).unwrap();
+    assert_eq!(
+        engine.status(&ctx, InvocationId([76; 16])).unwrap_err(),
+        EngineError::UnsafePath
+    );
+    assert_eq!(
+        engine.status(&ctx, InvocationId([77; 16])).unwrap().state,
+        InvocationState::UnknownLaunch
+    );
+    assert_eq!(
+        engine.status(&ctx, InvocationId([78; 16])).unwrap().state,
+        InvocationState::Lost
+    );
+    assert_eq!(load(&engine.store.conn, launching).unwrap().attempts, 0);
+    assert_eq!(load(&engine.store.conn, running).unwrap().attempts, 0);
+}
+
+#[test]
+fn reconciliation_128_pending_steps_are_nonblocking_and_cursor_fair() {
+    let mut fixture = Fixture::new();
+    fixture.store.config.policy.limits.active_jobs = 256;
+    fixture.store.config.policy.limits.starting_workers = 256;
+    fixture.store.config.policy.limits.spool_bytes_per_stream = 1024;
+    for n in 1..=129 {
+        let job = fixture.admit(n);
+        if n <= 128 {
+            fixture.defer(job);
+        }
+    }
+    let (_directory, mut engine, _) = fixture.into_engine();
+    let _failure = launcher::test_spawn::inject(launcher::test_spawn::Failure::Transient);
+    let before = std::time::Instant::now();
+    engine.maintain(128).unwrap();
+    assert_eq!(
+        load(&engine.store.conn, JobId([129; 16])).unwrap().attempts,
+        0
+    );
+    engine.maintain(128).unwrap();
+    assert_eq!(
+        load(&engine.store.conn, JobId([129; 16])).unwrap().attempts,
+        1
+    );
+    assert!(before.elapsed() < Duration::from_secs(5));
+}
+
+#[test]
+fn reconciliation_submit_timeout_preserves_original_token_and_endpoint_retry_contract() {
+    let mut fixture = Fixture::new();
+    fixture.store.config.policy.limits.starting_workers = 1;
+    let held = fixture.admit(80);
+    fixture.defer(held);
+    let (_directory, mut engine, owner) = fixture.into_engine();
+    let ctx = test_context(&engine, &owner);
+    let token = engine.issue_execute_token(&ctx).unwrap();
+    let id = InvocationId([81; 16]);
+    let started = std::time::Instant::now();
+    assert_eq!(
+        engine.submit(&ctx, &token, id, &request()).unwrap_err(),
+        EngineError::WorkerUnavailable
+    );
+    assert!(started.elapsed() >= Duration::from_secs(8));
+    assert!(started.elapsed() < Duration::from_secs(11));
+    let job = engine.store.job_for(&owner.owner, id).unwrap();
+    assert_eq!(load(&engine.store.conn, job).unwrap().attempts, 0);
+    assert!(!engine.deadlines.contains_key(&crate::token_hash(&token)));
+    let fresh = engine.issue_execute_token(&ctx).unwrap();
+    assert_eq!(
+        engine.submit(&ctx, &fresh, id, &request()).unwrap_err(),
+        EngineError::InvalidToken
+    );
+    let other = engine
+        .authorize(
+            owner.owner.principal,
+            EndpointId([99; 32]),
+            owner.owner.server,
+            owner.owner.target_uid,
+        )
+        .unwrap();
+    assert_eq!(
+        engine.submit(&other, &token, id, &request()).unwrap_err(),
+        EngineError::InvalidToken
+    );
+    engine.cancel(&ctx, InvocationId([80; 16])).unwrap();
+    let _failure = launcher::test_spawn::inject(launcher::test_spawn::Failure::Transient);
+    let retry = engine.submit(&ctx, &token, id, &request()).unwrap();
+    assert_eq!(retry.disposition, SubmitDisposition::Existing);
+    assert_eq!(retry.status.outcome, Some(ExitOutcome::NotStarted));
+    assert_eq!(engine.store.job_for(&owner.owner, id).unwrap(), job);
+    assert_eq!(
+        engine
+            .store
+            .conn
+            .query_row("SELECT count(*) FROM jobs", [], |row| row.get::<_, u32>(0))
+            .unwrap(),
+        2
+    );
+}
+
+#[test]
+fn reconciliation_initializing_is_nonblocking_but_requested_readiness_times_out_uncertain() {
+    let mut fixture = Fixture::new();
+    let job = fixture.admit(82);
+    fixture
+        .root
+        .prepare_job(job, &WorkerCredential([4; 32]))
+        .unwrap();
+    let lock = fixture.root.lock_job(job).unwrap();
+    let (_directory, mut engine, owner) = fixture.into_engine();
+    let ctx = test_context(&engine, &owner);
+    let started = std::time::Instant::now();
+    assert_eq!(
+        engine.status(&ctx, InvocationId([82; 16])).unwrap().state,
+        InvocationState::Accepted
+    );
+    engine.maintain(128).unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_eq!(
+        engine.await_worker(job).unwrap_err(),
+        EngineError::RecoveryUncertain
+    );
+    assert_eq!(
+        engine.store.job_state(job).unwrap(),
+        InvocationState::Accepted
+    );
+    assert_eq!(load(&engine.store.conn, job).unwrap().attempts, 0);
+    drop(lock);
+    engine.cancel(&ctx, InvocationId([82; 16])).unwrap();
+}
+
+#[test]
+fn reconciliation_refund_never_resets_a_worker_which_claimed_concurrently() {
+    let mut fixture = Fixture::new();
+    let job = fixture.admit(83);
+    assert!(matches!(
+        fixture
+            .store
+            .reserve_worker_start(job, fixture.now)
+            .unwrap(),
+        StartDecision::Reserved
+    ));
+    fixture.claim(job);
+    fixture.store.refund_worker_start(job).unwrap();
+    let record = load(&fixture.store.conn, job).unwrap();
+    assert_eq!(record.state, InvocationState::Launching);
+    assert_eq!(record.attempts, 1);
+    assert!(record.worker.is_some());
+}
+
+#[test]
+fn reconciliation_global_precondition_precedes_root_creation_and_page_selection() {
+    let mut fixture = Fixture::new();
+    fixture.admit(84);
+    let (_directory, mut engine, _) = fixture.into_engine();
+    let before: Vec<u8> = engine
+        .store
+        .conn
+        .query_row(
+            "SELECT data FROM meta WHERE name='pending_cursor'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let _failure = launcher::test_spawn::inject(launcher::test_spawn::Failure::Global);
+    assert_eq!(
+        engine.maintain(1).unwrap_err(),
+        EngineError::WorkerUnavailable
+    );
+    let after: Vec<u8> = engine
+        .store
+        .conn
+        .query_row(
+            "SELECT data FROM meta WHERE name='pending_cursor'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(before, after);
+    let mut policy = engine.policy.clone();
+    policy.state_root = engine.root.path().join("never-created");
+    assert!(matches!(
+        crate::Engine::open(policy.clone()),
+        Err(EngineError::WorkerUnavailable)
+    ));
+    assert!(!policy.state_root.exists());
+}
+
+#[test]
+fn reconciliation_late_global_error_keeps_committed_page_cursor_and_wraps() {
+    let mut fixture = Fixture::new();
+    fixture.admit(85);
+    let later = fixture.admit(86);
+    fixture.defer(later);
+    let (_directory, mut engine, _) = fixture.into_engine();
+    let _failure = launcher::test_spawn::inject(launcher::test_spawn::Failure::LateGlobal);
+    assert_eq!(
+        engine.maintain(1).unwrap_err(),
+        EngineError::WorkerUnavailable
+    );
+    engine.maintain(1).unwrap(); // progresses to the deferred second page
+    engine.maintain(1).unwrap(); // exhausted page resets the persisted cursor
+    assert_eq!(
+        engine.maintain(1).unwrap_err(),
+        EngineError::WorkerUnavailable
+    );
+    assert_eq!(
+        load(&engine.store.conn, JobId([85; 16])).unwrap().attempts,
+        0
+    );
 }

@@ -36,6 +36,14 @@ IDLE_SECONDS = 660
 BUFFER = 16384
 
 
+def _clock():
+    # The namespace bootstrap mounts only this file; Linux needs no helper import.
+    if sys.platform.startswith('linux'):
+        return time.clock_gettime(time.CLOCK_BOOTTIME)
+    from marmish_platform import continuous_time
+    return continuous_time()
+
+
 class SandboxError(RuntimeError):
     """A fixed operation category; never includes remote or daemon output."""
 
@@ -76,7 +84,7 @@ class _DuplexPump:
         self.readable = {left, right}
         self.peers = {left: right, right: left}
         self.pending_shutdown = set()
-        self.deadline = time.monotonic() + IDLE_SECONDS
+        self.deadline = _clock() + IDLE_SECONDS
 
     def run(self):
         for stream in self.streams:
@@ -84,7 +92,7 @@ class _DuplexPump:
         with selectors.DefaultSelector() as poll:
             while not self.stop.is_set() and (self.readable or any(self.queues.values())):
                 self._register(poll)
-                remaining = self.deadline - time.monotonic()
+                remaining = self.deadline - _clock()
                 if remaining <= 0:
                     return
                 for key, events in poll.select(min(remaining, .2)):
@@ -127,7 +135,7 @@ class _DuplexPump:
         received = bool(events & selectors.EVENT_READ) and self._receive(stream)
         sent = bool(events & selectors.EVENT_WRITE) and self._send(stream)
         if received or sent:
-            self.deadline = time.monotonic() + IDLE_SECONDS
+            self.deadline = _clock() + IDLE_SECONDS
         self._flush_half_closes()
 
     def _flush_half_closes(self):
@@ -227,7 +235,7 @@ class _Broker:
                     process.kill()
         try:
             try:
-                output, _ = process.communicate(timeout=max(.001, deadline - time.monotonic()))
+                output, _ = process.communicate(timeout=max(.001, deadline - _clock()))
             except subprocess.TimeoutExpired:
                 with contextlib.suppress(ProcessLookupError):
                     process.kill()
@@ -244,9 +252,9 @@ class _Broker:
                 self.resolvers.discard(process)
 
     def _connect(self, target):
-        deadline = time.monotonic() + CONNECT_SECONDS
+        deadline = _clock() + CONNECT_SECONDS
         for family, address in self._resolve(target, deadline):
-            if self.stop.is_set() or time.monotonic() >= deadline:
+            if self.stop.is_set() or _clock() >= deadline:
                 break
             if family not in (socket.AF_INET, socket.AF_INET6):
                 continue
@@ -257,7 +265,7 @@ class _Broker:
                     break
                 self.sockets.add(stream)
             try:
-                stream.settimeout(max(.001, deadline - time.monotonic()))
+                stream.settimeout(max(.001, deadline - _clock()))
                 stream.connect((address, target[1]))
                 return stream
             except OSError:
@@ -278,9 +286,9 @@ class _Broker:
             with contextlib.suppress(OSError):
                 stream.shutdown(socket.SHUT_RDWR)
             stream.close()
-        deadline = time.monotonic() + 1
+        deadline = _clock() + 1
         for thread in tuple(self.threads):
-            thread.join(max(0, deadline - time.monotonic()))
+            thread.join(max(0, deadline - _clock()))
 
 
 class ConfinedDaemon:
@@ -293,6 +301,7 @@ class ConfinedDaemon:
         self.process = None
         self._lock = None
         self._temporary = None
+        self._execution_marker = {}
         self._broker = None
         self._socket_inode = None
 
@@ -309,20 +318,23 @@ class ConfinedDaemon:
             self.close()
             raise SandboxError("daemon_exited")
         try:
+            from marmish_platform import execution_marker
+            self._execution_marker = execution_marker()
             self._prepare()
-            deadline = time.monotonic() + STARTUP_SECONDS
+            deadline = _clock() + STARTUP_SECONDS
             directory = Path(self._temporary.name)
             config_path = directory / 'config.json'
             self.process = subprocess.Popen(
                 ['unshare', '--user', '--map-root-user', '--net', '/usr/bin/python3',
                  str(Path(__file__).resolve()), '--outer', str(config_path)],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                env={'PATH': '/usr/bin:/usr/sbin:/bin', 'LANG': 'C.UTF-8'},
+                env={'PATH': '/usr/bin:/usr/sbin:/bin', 'LANG': 'C.UTF-8',
+                     **self._execution_marker},
                 start_new_session=True, close_fds=True,
             )
             os.set_blocking(self.process.stdout.fileno(), False)
             ready = bytearray()
-            while time.monotonic() < deadline:
+            while _clock() < deadline:
                 if self.process.poll() is not None:
                     raise SandboxError("namespace_start_failed")
                 try:
@@ -400,7 +412,8 @@ class ConfinedDaemon:
         (directory / 'hosts').write_text('\n'.join(dict.fromkeys(hosts)) + '\n')
         (directory / 'resolv').write_text('')
         config = {'home': str(self.home), 'wnd': str(self.wnd), 'origins': origins,
-                  'relays': self.relays, 'directory': str(directory)}
+                  'relays': self.relays, 'directory': str(directory),
+                  'execution_marker': self._execution_marker}
         (directory / 'config.json').write_text(json.dumps(config))
         self._broker = _Broker(routes)
         self._broker.start()
@@ -456,6 +469,10 @@ def _outer(config_path):
             '--ro-bind', str(Path(__file__).resolve()), '/sandbox.py',
             '--ro-bind', config_path, '/config.json', '--',
             '/usr/bin/python3', '/sandbox.py', '--inner', '/config.json']
+    marker = config.get('execution_marker', {})
+    if marker:
+        args[args.index('--'):args.index('--')] = [
+            '--setenv', 'EPIPHYTIC_EXECUTION_ID', marker['EPIPHYTIC_EXECUTION_ID']]
     os.execvp(args[0], args)
 
 

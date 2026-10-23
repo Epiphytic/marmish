@@ -1,20 +1,24 @@
 //! Offline, same-user durable command engine.
-#![cfg(target_os = "linux")]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+compile_error!("marmish-engine supports Linux and macOS only");
 mod admission;
 mod cipher;
+mod cleanup;
 mod fault;
 mod launcher;
 mod model;
+mod platform;
 mod policy;
 mod spool;
 mod store;
 mod worker;
 use admission::{context_owner, random_bytes, sha256};
+pub use cleanup::CleanupGuard;
 use launcher::{FrontendGuard, LaunchSpec, StateRoot, WorkerPresence};
 pub use model::*;
 pub use policy::{CommandPolicy, KeyRestrictions, Restrictions};
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use store::{AccountSpec, BootTime, InputOwner, StartDecision, Store, WorkerCredential};
 
 /// A single local frontend. Detached workers continue after this value is dropped.
@@ -30,10 +34,42 @@ pub struct Engine {
     orphan_cursor: Option<JobId>,
 }
 
+enum Readiness {
+    Ready,
+    Pending,
+    Initializing,
+}
+enum ReconcileFailure {
+    Job(EngineError),
+    Global(EngineError),
+}
+impl From<EngineError> for ReconcileFailure {
+    fn from(error: EngineError) -> Self {
+        Self::Global(error)
+    }
+}
+
 impl Engine {
+    /// Consume a stopped frontend and prove that its private state can be removed.
+    /// Keep the returned guard alive until removal finishes. Failure leaves state intact.
+    pub fn into_cleanup(mut self) -> Result<CleanupGuard> {
+        self.check_uid()?;
+        let locks = cleanup::acquire(&self.root, &mut self.store)?;
+        let Self {
+            store,
+            keys,
+            root,
+            _guard,
+            ..
+        } = self;
+        drop(store);
+        drop(keys);
+        Ok(CleanupGuard::new(root, _guard, locks))
+    }
+
     pub fn open(mut policy: EnginePolicy) -> Result<Self> {
         let account = admission::validate_policy(&policy)?;
-        policy.worker_executable = launcher::trusted_worker_executable(&policy.worker_executable)?;
+        policy.worker_executable = launcher::worker_preconditions(&policy.worker_executable)?;
         let root = StateRoot::open(&policy.state_root)?;
         let guard = root.lock_frontend()?;
         let keys = root.initialize_storage(&guard)?;
@@ -55,7 +91,7 @@ impl Engine {
                 pending.state,
                 InvocationState::Accepted | InvocationState::Launching | InvocationState::Running
             ) {
-                engine.reconcile(pending.job)?;
+                engine.reconcile_background(pending.job)?;
             }
         }
         Ok(engine)
@@ -124,7 +160,7 @@ impl Engine {
         admission::validate_request(request, true)?;
         if let Some(existing) = self.store.check_existing(&owner, hash, id, request)? {
             let job = self.store.job_for(&owner.owner, id)?;
-            self.reconcile(job)?;
+            self.await_worker(job)?;
             return Ok(Submission {
                 status: self.store.status(&owner.owner, job)?,
                 ..existing
@@ -134,6 +170,7 @@ impl Engine {
             policy::require_canonical_exec(request)?;
         }
         admission::validate_request(request, self.policy.allow_shell_command)?;
+        launcher::worker_preconditions(&self.policy.worker_executable)?;
         let now = launcher::boot_time()?;
         let expires = self.deadlines.get(&hash).ok_or(EngineError::InvalidToken)?;
         if expires.boot_id != now.boot_id || expires.millis <= now.millis {
@@ -172,7 +209,7 @@ impl Engine {
         match admission {
             Ok(submission) if submission.disposition == SubmitDisposition::Accepted => {
                 self.deadlines.remove(&hash);
-                self.reconcile(job)?;
+                self.await_worker(job)?;
                 Ok(Submission {
                     status: self.store.status(&owner.owner, job)?,
                     ..submission
@@ -192,7 +229,9 @@ impl Engine {
     ) -> Result<(InputOwner, JobId)> {
         let owner = self.owner(ctx)?;
         let job = self.store.job_for(&owner.owner, id)?;
-        self.reconcile(job)?;
+        self.reconcile_step(job).map_err(|error| match error {
+            ReconcileFailure::Job(error) | ReconcileFailure::Global(error) => error,
+        })?;
         Ok((owner, job))
     }
 
@@ -292,50 +331,82 @@ impl Engine {
         ctx: &AuthorizedContext,
         id: InvocationId,
     ) -> Result<InvocationStatus> {
-        let (owner, job) = self.authorized_job(ctx, id)?;
+        // Cancel Accepted work before any reconciliation can start it.
+        let owner = self.owner(ctx)?;
+        let job = self.store.job_for(&owner.owner, id)?;
         self.store.request_cancel(&owner.owner, job)?;
         self.store.status(&owner.owner, job)
     }
 
-    fn reconcile(&mut self, job: JobId) -> Result<()> {
-        let until = Instant::now() + Duration::from_secs(2);
-        let mut started = false;
+    fn reconcile_background(&mut self, job: JobId) -> Result<()> {
+        match self.reconcile_step(job) {
+            Ok(_) | Err(ReconcileFailure::Job(_)) => Ok(()),
+            Err(ReconcileFailure::Global(error)) => Err(error),
+        }
+    }
+
+    fn await_worker(&mut self, job: JobId) -> Result<()> {
+        let deadline = platform::Deadline::after_millis(8_000)?;
         loop {
-            let state = self.store.job_state(job)?;
-            if matches!(
-                state,
-                InvocationState::Exited | InvocationState::UnknownLaunch | InvocationState::Lost
-            ) {
-                return Ok(());
+            let readiness = match self.reconcile_step(job) {
+                Ok(readiness) => readiness,
+                Err(ReconcileFailure::Job(EngineError::RecoveryUncertain)) => {
+                    Readiness::Initializing
+                }
+                Err(ReconcileFailure::Job(error) | ReconcileFailure::Global(error)) => {
+                    return Err(error)
+                }
+            };
+            match readiness {
+                Readiness::Ready => return Ok(()),
+                Readiness::Pending if deadline.expired()? => {
+                    return Err(EngineError::WorkerUnavailable)
+                }
+                Readiness::Initializing if deadline.expired()? => {
+                    return Err(EngineError::RecoveryUncertain)
+                }
+                _ => std::thread::sleep(Duration::from_millis(50)),
             }
-            let identity = self.store.worker_identity(job)?;
-            match self.root.presence(job, identity.as_ref())? {
-                WorkerPresence::Live(live) => {
-                    if identity.as_ref() != Some(&live) {
-                        return Err(EngineError::RecoveryUncertain);
-                    }
-                    return Ok(());
+        }
+    }
+
+    /// One job-local observation/start/CAS, with no readiness sleeps.
+    fn reconcile_step(&mut self, job: JobId) -> std::result::Result<Readiness, ReconcileFailure> {
+        let state = self.store.job_state(job)?;
+        if matches!(
+            state,
+            InvocationState::Exited | InvocationState::UnknownLaunch | InvocationState::Lost
+        ) {
+            return Ok(Readiness::Ready);
+        }
+        let identity = self.store.worker_identity(job)?;
+        let presence = self
+            .root
+            .presence(job, identity.as_ref())
+            .map_err(|error| match error {
+                EngineError::UnsafePath => ReconcileFailure::Job(error),
+                other => ReconcileFailure::Global(other),
+            })?;
+        match presence {
+            WorkerPresence::Live(live) => {
+                if identity.as_ref() != Some(&live) {
+                    return Err(ReconcileFailure::Job(EngineError::RecoveryUncertain));
                 }
-                WorkerPresence::Initializing => {
-                    if Instant::now() >= until {
-                        return Err(EngineError::RecoveryUncertain);
-                    }
-                }
-                WorkerPresence::Absent => {
-                    if state == InvocationState::Accepted && (started || Instant::now() >= until) {
-                        return Ok(());
-                    }
-                    match self.recover_absent(job, state) {
-                        Ok(false) => return Ok(()),
-                        Ok(true) => started = true,
-                        // A worker may have committed a legitimate transition
-                        // between our snapshot and the recovery CAS. Reread it.
-                        Err(EngineError::Busy) if Instant::now() < until => {}
-                        Err(error) => return Err(error),
-                    }
-                }
+                Ok(Readiness::Ready)
             }
-            std::thread::sleep(Duration::from_millis(50));
+            WorkerPresence::Initializing => Ok(if state == InvocationState::Accepted {
+                Readiness::Initializing
+            } else {
+                Readiness::Ready
+            }),
+            WorkerPresence::Absent => {
+                self.recover_absent(job, state)?;
+                Ok(if self.store.job_state(job)? == InvocationState::Accepted {
+                    Readiness::Pending
+                } else {
+                    Readiness::Ready
+                })
+            }
         }
     }
 
@@ -350,29 +421,37 @@ impl Engine {
                 } else {
                     InvocationState::Lost
                 };
-                self.store.mark_unrecoverable(job, state, terminal)?;
-                Ok(false)
+                match self.store.mark_unrecoverable(job, state, terminal) {
+                    Ok(()) | Err(EngineError::Busy) => Ok(false),
+                    Err(error) => Err(error),
+                }
             }
             _ => Ok(false),
         }
     }
 
     fn start_accepted(&mut self, job: JobId) -> Result<bool> {
-        match self
-            .store
-            .reserve_worker_start(job, launcher::boot_time()?)?
-        {
-            StartDecision::Reserved => {
-                let spec = LaunchSpec {
-                    root: self.root.path().to_owned(),
-                    job,
-                };
-                if launcher::spawn_worker(&self.policy.worker_executable, &spec).is_err() {
+        let spec = LaunchSpec {
+            root: self.root.path().to_owned(),
+            job,
+        };
+        let prepared = launcher::prepare_worker(&self.policy.worker_executable, &spec)?;
+        let decision = match self.store.reserve_worker_start(job, launcher::boot_time()?) {
+            Err(EngineError::Busy) => return Ok(false),
+            other => other?,
+        };
+        match decision {
+            StartDecision::Reserved => match prepared.spawn() {
+                Ok(()) => Ok(true),
+                Err(launcher::WorkerSpawnError::Transient) => {
                     self.store.release_worker_start(job)?;
-                    return Ok(false);
+                    Ok(false)
                 }
-                Ok(true)
-            }
+                Err(launcher::WorkerSpawnError::Global(error)) => {
+                    self.store.refund_worker_start(job)?;
+                    Err(error)
+                }
+            },
             StartDecision::Deferred | StartDecision::FinishedNotStarted => Ok(false),
         }
     }
@@ -382,14 +461,17 @@ impl Engine {
         if !(1..=128).contains(&max_jobs) {
             return Err(EngineError::InvalidRequest);
         }
+        launcher::worker_preconditions(&self.policy.worker_executable)?;
         let now = launcher::boot_time()?;
         self.store.reap_tokens(now, max_jobs)?;
+        // The page cursor is committed before processing. A late global error
+        // leaves it advanced; the next page proceeds, then the cursor wraps.
         for pending in self.store.pending_jobs(max_jobs)? {
             if matches!(
                 pending.state,
                 InvocationState::Accepted | InvocationState::Launching | InvocationState::Running
             ) {
-                self.reconcile(pending.job)?;
+                self.reconcile_background(pending.job)?;
             }
         }
         // Sample the clock after taking the transaction: reconciliation or a

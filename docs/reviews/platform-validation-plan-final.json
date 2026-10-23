@@ -1,0 +1,87 @@
+{
+  "duration_api_ms": 44097,
+  "stop_reason": "end_turn",
+  "session_id": "37e0cd80-5d86-4b23-8806-11ad09e2ce87",
+  "total_cost_usd": 0.2552644,
+  "usage": {
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 48804,
+    "cache_read_input_tokens": 52904,
+    "output_tokens": 5475,
+    "output_tokens_details": {
+      "thinking_tokens": 3897
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 48804,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 4,
+      "outputTokens": 5475,
+      "cacheReadInputTokens": 52904,
+      "cacheCreationInputTokens": 48804,
+      "webSearchRequests": 0,
+      "costUSD": 0.2552644,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 3897,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "subagent_stats": {
+    "spawned": 0,
+    "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+    },
+    "started_in_background": 0,
+    "max_depth": 0,
+    "spawned_by_subagents": 0,
+    "completed": 0,
+    "failed": 0,
+    "killed": {
+      "parent": 0,
+      "user": 0,
+      "system": 0
+    },
+    "refused": {
+      "depth_limit": 0,
+      "concurrency_limit": 0,
+      "budget": 0
+    },
+    "by_type": {}
+  },
+  "safety_stops": 0,
+  "is_error": false,
+  "num_turns": 4,
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "**APPROVE.** All four prior blockers are resolved, and I found no unresolved blockers. This was a read-only review of the three documents; I ran nothing and made no network calls.\n\n## Prior blockers\n\n1. **Trust boundary: resolved.**\n   - The workflow triggers only on `push` to `master`, with no manual dispatch, pull-request trigger or inputs. It also has a job-level `refs/heads/master` guard.\n   - The design states that master-write authority equals code execution on the runners. It does not assume branch protection or runner-group restrictions, and it does not require policy changes.\n   - `contents: read` is the default, with `actions: read` only on live jobs. Checkout uses `persist-credentials: false`.\n   - `GITHUB_TOKEN` is limited to the artifact API steps and kept away from build tools, coordinators, MDK and fixtures.\n   - Public artifacts carry only short canonical fixture paths.\n\n2. **Rendezvous and timing: resolved.**\n   - There are two artifacts per role. `-ready` is published after profiles and fixtures exist, so the peer client npub is available for the allowlist. `-paired` is published only after actual authenticated local readiness.\n   - Each side waits for the peer's `-paired` record before running any test command. Because each side starts its server after seeing the peer's `-ready`, the two barriers cannot deadlock.\n   - The nonce's purpose is stated: stale-record correlation only, not authentication.\n   - The stage ceilings sum to 3,720 seconds, inside the 70-minute budget and the 75-minute job timeout. The 1,200-second pairing budget covers the 900-second gate delay plus 300 seconds of jitter.\n   - Increment C is declared normative, and increment B already defers to it. Relays are the explicit URLs, and acceptance requires a complete single attempt.\n\n3. **Code review, then push CI, then evidence: resolved.**\n   - The flow is: review code, push the implementation commit, check that `head_sha` equals the reviewed SHA, review results, then push a separate docs-only evidence commit.\n   - `cancel-in-progress: false` is handled: a skipped or superseded run counts as no evidence.\n   - Docs-only paths are ignored so the evidence commit does not trigger another live run.\n\n4. **Native fixtures and completion marker: resolved.**\n   - The fixture is a repository-built native binary per OS, hash-verified and installed in a prebuilt tree under a short canonical `/private/tmp` root.\n   - It has no shell, no interpreter and no arbitrary-path subcommands, and it never creates filenames from non-UTF-8 bytes.\n   - The marker is created exclusively in a fresh per-run directory. Its full content binds the run, attempt, SHA, direction and both nonces, and it is validated. A 30-second service grace period lets the peer fetch the final result.\n   - The unlisted-client-npub denial test is now in the live matrix.\n\n## Non-blocking items for implementation\n\n- **Evidence commit paths.** The ignore list is `docs/**`, `README.md` and `AGENTS.md`. The evidence step also says to audit `.gitignore` and record the result in Beads. If that commit touches `.beads/**` (`interactions.jsonl` is tracked) or `.gitignore`, it will trigger another live run. Either add those paths to the ignore list or keep them out of the evidence commit.\n- **Gate delay versus the job timeout.** The 70-minute budget starts after the runner start hook releases execution. A worst-case 900-second gate wait plus the full budget exceeds the 75-minute job timeout if the hook counts toward it. The failure mode is a cancelled job, not a false pass. The native spike should measure whether it counts and adjust the timeout if so.\n- **Token and coordinator split.** Polling and downloading must happen in workflow steps that hold the token, while the coordinator owns the server and receives signals over the control channel. The text implies this but never states it. Make it explicit when implementing, so the coordinator never receives the token.",
+  "ttft_ms": 2584,
+  "type": "result",
+  "duration_ms": 44627,
+  "uuid": "3086cd48-9bd1-4d67-9fae-08e40f33371a",
+  "ttft_stream_ms": 1816,
+  "time_to_request_ms": 219,
+  "first_content_frame_ms": 1816,
+  "queued_turn_count": 0,
+  "result_index": 0
+}

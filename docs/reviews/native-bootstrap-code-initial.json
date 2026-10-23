@@ -1,0 +1,87 @@
+{
+  "duration_api_ms": 116002,
+  "stop_reason": "end_turn",
+  "session_id": "86dc665e-c299-4979-90e0-62edfb7bf5ba",
+  "total_cost_usd": 0.38040339999999995,
+  "usage": {
+    "input_tokens": 14,
+    "cache_creation_input_tokens": 51341,
+    "cache_read_input_tokens": 325614,
+    "output_tokens": 14245,
+    "output_tokens_details": {
+      "thinking_tokens": 7844
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 51341,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 14,
+      "outputTokens": 14245,
+      "cacheReadInputTokens": 325614,
+      "cacheCreationInputTokens": 51341,
+      "webSearchRequests": 0,
+      "costUSD": 0.38040339999999995,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 7844,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "subagent_stats": {
+    "spawned": 0,
+    "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+    },
+    "started_in_background": 0,
+    "max_depth": 0,
+    "spawned_by_subagents": 0,
+    "completed": 0,
+    "failed": 0,
+    "killed": {
+      "parent": 0,
+      "user": 0,
+      "system": 0
+    },
+    "refused": {
+      "depth_limit": 0,
+      "concurrency_limit": 0,
+      "budget": 0
+    },
+    "by_type": {}
+  },
+  "safety_stops": 0,
+  "is_error": false,
+  "num_turns": 8,
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "```json\n{\n  \"verdict\": \"REQUEST_CHANGES\",\n  \"scope\": \"tools/bootstrap_ci_python.sh, .github/workflows/native-validation.yml, tools/marmish_ci.py, and the build_mdk.py paths the bundle step calls. I ran offline checks only: `sh -n`, py_compile, and a crafted-tar harness against `unpack()` in a temp dir. I made no edits, network calls, live tests, or pushes.\",\n  \"unverifiable_offline\": [\n    \"Whether python-build-standalone release 20261021 / cpython 3.13.17 exists and whether its sha256 9c985cbf\u2026f445 is the real digest of the aarch64-apple-darwin install_only asset. This is the main provenance gap (finding 3).\",\n    \"Whether the MANIFEST_SHA256 and xz_hash values match what static.rust-lang.org serves for 1.97.1.\",\n    \"Whether the actions/checkout SHA 11d5960a\u2026 is a legitimate release commit. Of the other three pinned SHAs, I recall 0057852b as cache v4.3.0, ea165f8d as upload-artifact v4.6.2, and d3f86a10 as download-artifact v4.3.0. That is from memory, not checked.\",\n    \"Whether the bel-ci and laptop-ci runners provide curl, shasum, xz-capable tar, bwrap, cc, make, perl, and a Python version that suits finding 1.\"\n  ],\n  \"verified_ok\": [\n    \"Rust is pinned consistently: RUST='1.97.1' in marmish_ci.py, rust-toolchain.toml channel 1.97.1, Cargo.toml rust-version 1.97, build_mdk.py requires 'rustc 1.97.1 ', and the local rustc reports 1.97.1. The cache key also contains rust1.97.1.\",\n    \"The Rust channel manifest is pinned by sha256, and each package is pinned by the manifest's xz_hash. Downloads are limited to the static.rust-lang.org origin and capped at 400 MB.\",\n    \"The Python download is hash-checked under `set -eu` before extraction. A mismatch aborts the job, and extraction happens only after the check.\",\n    \"PATH and environment propagation is correct. GITHUB_PATH is prepended, so the pinned python and rustc come first and shadow Apple's 3.9 and any system rustc. CARGO_HOME and MARMISH_MDK_TARGET_DIR go through GITHUB_ENV and reach every later step.\",\n    \"Trusted-only execution holds in the workflow file. It triggers only on push to master, has no pull_request or workflow_dispatch trigger, has an `if: github.ref == refs/heads/master` guard, uses read-only permissions, and pins actions by SHA.\",\n    \"No token is inherited. Checkout uses persist-credentials:false, the bundle step has no env token, and `bundle()` aborts if GITHUB_TOKEN is set. GITHUB_TOKEN is exposed only to the two rendezvous steps, and the live job's actions:read is job-scoped.\",\n    \"`unpack()` rejects every malformed tar I tried: path traversal, symlinks, duplicate names, names outside the allowlist, and a digest mismatch. The executable mode 0755 survives extraction with filter='data'.\",\n    \"The bundle contents are consistent. The bundle's file list matches what build_mdk.py writes (wnd, wnd.manifest.json, and the macOS helpers marmish-lifetime and marmish-probe), plus the worker, bridge and fixture binaries.\"\n  ],\n  \"findings\": [\n    {\n      \"id\": 1,\n      \"severity\": \"high\",\n      \"file\": \"tools/bootstrap_ci_python.sh\",\n      \"topic\": \"Linux runner compatibility\",\n      \"issue\": \"The Linux branch accepts any system Python >= 3.11, but `marmish_ci.py` calls `tarfile.extractall(..., filter='data')`. That keyword exists only from 3.11.4. A runner with 3.11.0\u20133.11.3 passes the gate and then fails in `bootstrap` and `unpack` with a TypeError. The Linux job has no pinned or installed Python, so correctness depends on the host.\",\n      \"fix\": \"Gate on the capability instead of the version: `python3 -c 'import sys,tarfile; assert sys.version_info>=(3,11) and hasattr(tarfile,\\\"data_filter\\\")'`. Alternatively, require 3.12 and make the same check inside `marmish_ci.py`. Also record the minimum in the docs for the bel-ci and laptop-ci runners, and optionally add a Linux provisioning step.\",\n      \"test\": \"Add a unit test that monkeypatches `tarfile.data_filter` away and asserts a clear 'python_too_old' error. Add a shell test that stubs `python3` as 3.11.2 and expects exit 1.\"\n    },\n    {\n      \"id\": 2,\n      \"severity\": \"medium\",\n      \"file\": \"tools/bootstrap_ci_python.sh\",\n      \"topic\": \"Repeat attempts and directory collisions\",\n      \"issue\": \"`mkdir \\\"$destination\\\"` is not idempotent. If `$RUNNER_TEMP/marmish-python` already exists, for example after a retry within the same temp dir or a runner whose _temp was not cleaned, the step fails under `set -e`. A failed hash check also leaves the untrusted archive behind. The same non-idempotence appears in marmish_ci.py:\",\n      \"fix\": \"In the shell script, extract into `mktemp -d \\\"$RUNNER_TEMP/marmish-python.XXXXXX\\\"`, then `rm -rf \\\"$destination\\\"` and `mv` the extracted tree into place. Add a `trap 'rm -f \\\"$archive\\\"' EXIT`. Also add `--proto '=https' --tlsv1.2 --retry 3` to curl. In `marmish_ci.py`, make `bundle()` and `unpack()` remove or refuse a pre-existing destination explicitly, and clean up a partial destination on failure. Note that `build_mdk.py` opens `wnd` and the manifest with 'xb'/'x', so re-running on a dirty destination fails there too.\",\n      \"test\": \"Add tests that run `bootstrap_ci_python.sh` twice with a stubbed curl and uname and expect the second run to succeed. Add tests for `bundle()` and `unpack()` with a pre-existing destination; on the existing code, `unpack` raises FileExistsError (confirmed in my harness).\"\n    },\n    {\n      \"id\": 3,\n      \"severity\": \"medium\",\n      \"file\": \"tools/bootstrap_ci_python.sh\",\n      \"topic\": \"Pinned Python provenance\",\n      \"issue\": \"The Python tarball digest is hard-coded with no recorded source. No document in the repo says where the 9c985cbf\u2026 digest came from, such as the release's SHA256SUMS asset, an independent download, or an attestation. The release is a day old (20261021), and I could not verify offline that it or its hash exists. The Rust pins have a verifiable trail (the manifest pin plus xz_hash). The Python pin has none, and the Linux Python is not pinned at all.\",\n      \"fix\": \"Record the provenance next to the pin, in docs/phases/macos-platform.md or a CI README: the release URL, the SHA256SUMS source, the date, and who verified it. Do that verification online before approving. Move the version, URL and digest into named variables at the top of the script so they can be reviewed in one place.\",\n      \"test\": \"Offline: a test that parses the script and asserts the URL's release tag and file name are consistent with the digest line. Online (maintainer, not me): `curl -sL <url> | shasum -a 256` and compare it to the SHA256SUMS asset.\"\n    },\n    {\n      \"id\": 4,\n      \"severity\": \"medium\",\n      \"file\": \".github/workflows/native-validation.yml\",\n      \"topic\": \"Cache key vs pinned toolchain\",\n      \"issue\": \"The cache key hard-codes `rust1.97.1` and does not include `tools/marmish_ci.py` or `tools/bootstrap_ci_python.sh`. If RUST or MANIFEST_SHA256 changes without the literal in the key being edited, a restored cache holds the old toolchain. `bootstrap()` then raises `cached_toolchain_mismatch` instead of reinstalling, so the job fails on every run until someone edits the key. The cached `bin/rustc` is also trusted by version string only, and an installation interrupted before bin/rustc was written looks like a cache miss and re-installs over a partial prefix.\",\n      \"fix\": \"Add `hashFiles('tools/marmish_ci.py','rust-toolchain.toml')` to the key. On a version mismatch, `bootstrap()` should delete the destination and reinstall rather than raise. Install only `--components=rustc,cargo,rust-std,clippy,rustfmt`, which also avoids the large rust-docs payload from the combined installer.\",\n      \"test\": \"A unit test that creates a fake `bin/rustc` reporting 1.96.0 and expects a reinstall path (with a stubbed download), not a raise.\"\n    },\n    {\n      \"id\": 5,\n      \"severity\": \"low\",\n      \"file\": \"tools/marmish_ci.py\",\n      \"topic\": \"Bundle verification is self-referential\",\n      \"issue\": \"`bundle.json` ships inside the same tar it describes. My harness shows a forged tar with a swapped binary and a matching self-written bundle.json is accepted. The live job also takes `WND_SHA` from that same bundle.json and passes it back as `--wnd-sha256`, so the wnd digest is checked only against itself. This is acceptable only because the artifact is same-run, same-attempt, and from the trusted store. It detects corruption, not substitution.\",\n      \"fix\": \"Either document that scope, or publish the bundle.json digest through a channel the downstream job reads independently, such as a job output or a digest line in the artifact name. If neither, take WND_SHA from `wnd.manifest.json`, which build_mdk.py generates, rather than from the file being verified. Also have `unpack()` fail clearly with 'invalid_native_bundle' when bundle.json is missing, instead of FileNotFoundError, and bound the total extracted size.\",\n      \"test\": \"Extend the harness: forged-consistent tar must be rejected when an expected digest is supplied. Missing bundle.json must raise RuntimeError.\"\n    },\n    {\n      \"id\": 6,\n      \"severity\": \"low\",\n      \"file\": \"tools/marmish_ci.py\",\n      \"topic\": \"Token hygiene check is narrow\",\n      \"issue\": \"`bundle()` refuses only GITHUB_TOKEN, but it runs `cargo build`, which runs build scripts, plus git fetches, in a job whose steps inherit the environment. GH_TOKEN, GITHUB_ENTERPRISE_TOKEN, ACTIONS_ID_TOKEN_REQUEST_TOKEN and ACTIONS_RUNTIME_TOKEN are not checked. Separately, the build subprocesses inherit the whole `os.environ`.\",\n      \"fix\": \"Check a small set of token-like variable names. Better, pass the build commands an explicit environment allowlist (PATH, HOME, CARGO_HOME, CARGO_TARGET_DIR, MARMISH_*) instead of `dict(os.environ)`.\",\n      \"test\": \"Parameterized test: with each listed variable set, `bundle()` raises before any subprocess runs. Stub `checked` and assert it was never called.\"\n    },\n    {\n      \"id\": 7,\n      \"severity\": \"low\",\n      \"file\": \"tools/bootstrap_ci_python.sh\",\n      \"topic\": \"Architecture check\",\n      \"issue\": \"`test \\\"$(uname -m)\\\" = arm64` aborts, with no message, when the shell runs under Rosetta (uname -m reports x86_64). Because of `set -e`, the failure is silent.\",\n      \"fix\": \"Print a clear message such as 'macos_arm64_required' before exiting.\",\n      \"test\": \"A shell test with a stubbed uname returning x86_64 expects a non-zero exit and the message.\"\n    },\n    {\n      \"id\": 8,\n      \"severity\": \"info\",\n      \"file\": \"tools/\",\n      \"topic\": \"No test coverage for the CI tooling\",\n      \"issue\": \"Nothing in `tools/test_*.py` references `marmish_ci` or `bootstrap_ci_python.sh`. The CI-critical paths (digest check, tar validation, destination handling, token refusal) are untested, and `unittest discover` in the workflow would not catch regressions.\",\n      \"fix\": \"Add `tools/test_marmish_ci.py`. The crafted-tar cases from my offline harness (good, existing destination, traversal, symlink, duplicate, bad hash, missing bundle.json, forged-consistent) are a ready starting point. Add a shell-level test with stubs for curl, shasum and uname for the Python bootstrap.\"\n    }\n  ],\n  \"required_before_approval\": [1, 2, 3, 4],\n  \"recommended\": [5, 6, 7, 8]\n}\n```",
+  "ttft_ms": 2636,
+  "type": "result",
+  "duration_ms": 117018,
+  "uuid": "f29a9e5d-b4b4-4a21-a3bb-5723672f870b",
+  "ttft_stream_ms": 1940,
+  "time_to_request_ms": 234,
+  "first_content_frame_ms": 1940,
+  "queued_turn_count": 0,
+  "result_index": 0
+}

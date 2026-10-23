@@ -1,0 +1,87 @@
+{
+  "duration_api_ms": 123088,
+  "stop_reason": "end_turn",
+  "session_id": "77662974-9281-46e9-a8cd-c3655215f79a",
+  "total_cost_usd": 0.5308788000000001,
+  "usage": {
+    "input_tokens": 22,
+    "cache_creation_input_tokens": 78732,
+    "cache_read_input_tokens": 766168,
+    "output_tokens": 13929,
+    "output_tokens_details": {
+      "thinking_tokens": 9468
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 78732,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 22,
+      "outputTokens": 13929,
+      "cacheReadInputTokens": 766168,
+      "cacheCreationInputTokens": 78732,
+      "webSearchRequests": 0,
+      "costUSD": 0.5308788000000001,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 9468,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "subagent_stats": {
+    "spawned": 0,
+    "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+    },
+    "started_in_background": 0,
+    "max_depth": 0,
+    "spawned_by_subagents": 0,
+    "completed": 0,
+    "failed": 0,
+    "killed": {
+      "parent": 0,
+      "user": 0,
+      "system": 0
+    },
+    "refused": {
+      "depth_limit": 0,
+      "concurrency_limit": 0,
+      "budget": 0
+    },
+    "by_type": {}
+  },
+  "safety_stops": 0,
+  "is_error": false,
+  "num_turns": 14,
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "**Review of the root-owned macOS integration work: three blocking findings, plus smaller items**\n\nI ran the offline Python tests (`test_marmish_platform`, `rpc`, `protocol`, `app`, `transport_sandbox`; 65 pass on Linux). Nothing was edited and I did not run cargo, live or CI tests. I read the Darwin module and manifest helper only through the facade, and `marmish_transport_macos.py` doesn't exist yet.\n\n**Checked and correct**\n- **Darwin ABI:** `_BsdInfo` matches `proc_bsdinfo`: size 136, pid at offset 12, uid at 20, ruid at 28, start seconds at 120, microseconds at 128. `PROC_PIDTBSDINFO` is 3, and `LOCAL_PEERPID` (level 0, option 2) is right. The `proc_pidinfo`, `sysctlbyname`, `getpeereid` and `mach_timebase_info` signatures are right. The `kern.bootsessionuuid` handling of 36 or 37 bytes with a NUL is right.\n- **Peer checks:** `verify_peer` runs before the first write, after `connect`. On Darwin it requires the UID and the exact `{pid, boot_id, start}` identity. On Linux it uses `SO_PEERCRED`, and `_checked` turns failures into `RpcError` with `uncertain=False`.\n- **Clocks:** every converted site uses `continuous_time()`, which is `CLOCK_BOOTTIME` on Linux. No `time.monotonic()` value is mixed into those deadlines.\n- **Execution marker:** it is validated, and propagates through the Linux sandbox. `bwrap --clearenv` followed by `--setenv` inserted before the first `--` is valid, and the inner `wnd` `Popen` inherits it. `EngineBridge` also carries it.\n- **Linux compatibility:** nothing Darwin-specific loads on Linux.\n\n**Blocking**\n\n1. **Native macOS RPC tests will fail.** Darwin `verify_peer` fails closed with `missing_peer_identity` when no identity is given, which is correct.\n   - `tools/test_marmish_rpc.py` builds `rpc.MdkRpc(self.path, ...)` with no `peer_identity` in the roundtrip, drip-deadline and similar tests. The same goes for `test_peer_uid_checked_before_request` and for `MdkRpc(\"/unused/s\")` at line 187.\n   - On a native runner these all raise before any bytes are sent, so the \"native RPC\" acceptance gate can't pass.\n   - **Fix:** give the test helper `peer_identity=process_identity(os.getpid())`, since the fake peer lives in-process. Keep one explicit test that no identity on Darwin means no send.\n   - **Same problem in e2e:** `tools/marmish_e2e.py:227` calls `MdkRpc(root/'server'/'mdk'/'s', timeout=20)` directly, so it needs `rpc_home`, `rpc_socket` and `peer_identity` from the transport. That file is the workflow owner's.\n\n2. **The facade doesn't enforce the manifest on macOS.** `tools/marmish_transport.py:8-11` forwards `manifest=None` to `DarwinConfinedDaemon`.\n   - `--wnd-manifest` is optional in argparse, and the help text only says it is \"required on macOS\".\n   - The design requires manifest provenance before any native launch. Today that depends on code that isn't written yet.\n   - **Fix:** add `require(manifest is not None, 'manifest_required')` in the facade's darwin branch.\n   - **Also:** the facade must reject an unsupported platform before importing `marmish_transport_macos`, which it already does. Make the Darwin class raise the same `SandboxError` class, imported from `marmish_transport_sandbox`.\n\n3. **The `..` path hole is untested and the Darwin path is unexercised.**\n   - **Missing test:** the `canonical_state_path` darwin branch has no test, even though trusted `/tmp` and `/var` aliases are a stated requirement. Nothing covers alias accepted, wrong `readlink` target, non-root-owned alias, or `/var` not a symlink. Patch `sys.platform` and the `lstat` result in `tools/test_marmish_platform.py`. The existing \"private symlink\" test only exercises the Linux no-op.\n   - **Hole:** `Path.absolute()` doesn't collapse `..`. `/tmp/../Users/x` becomes `/private/tmp/../Users/x`, and `private_directory` then checks the parents of that unresolved spelling, so the `is_symlink` walk examines the wrong chain.\n   - **Fix:** after `absolute()`, `require('..' not in path.parts and '.' not in path.parts, 'unsafe_state_path')`.\n   - **Also:** `alias.lstat()` can raise `FileNotFoundError`, an `OSError` rather than `SmokeError`. Catch it and convert.\n\n**Non-blocking**\n- **Test gaps on Darwin:** wrong UID (`wrong_peer_uid`), a `LOCAL_PEERPID` result that isn't 4 bytes, `sysctl` failing or returning a malformed UUID, and `proc_pidinfo` returning a short count or a mismatched pid are all untested. Cheap to add with the mocked library already in the test file.\n- **Marker propagation gaps:** `marmish_e2e.py` lines 68 and 292 launch the supervisor and client with a fixed `env={'PATH':..,'LANG':'C'}`, which drops `EPIPHYTIC_EXECUTION_ID`. Add `**execution_marker()`. In the sandbox, initialize `self._execution_marker = {}` in `__init__` rather than only in `start()`.\n- **Linux sandbox deadlines:** `marmish_transport_sandbox.py` still uses `time.monotonic()` for broker idle (660 s), connect and startup deadlines. The design says Linux should use boottime too. It's out of the mac path, so I'd defer it deliberately.\n- **Clock arithmetic:** `mach_continuous_time() * numer / denom / 1e9` goes through float division. It's fine at microsecond precision for any realistic uptime. The design says \"checked wide arithmetic\", so `ticks * numer // denom` in integer nanoseconds, then divide, is a tighter match.\n- **Style drift:** `getattr(args, \"wnd_manifest\", None)` uses double quotes in an otherwise single-quoted file.\n\nI left the final Darwin module and manifest-helper integration to be re-reviewed once they land. After the fixes, `python3 -B -m unittest test_marmish_platform test_marmish_rpc` from `tools/` is the focused check. Note that `-I` drops the working directory from the import path, so those test modules can't be found with it.",
+  "ttft_ms": 4164,
+  "type": "result",
+  "duration_ms": 125699,
+  "uuid": "e02a00e7-53c5-46a7-bbb0-4b174678233f",
+  "ttft_stream_ms": 4022,
+  "time_to_request_ms": 227,
+  "first_content_frame_ms": 4022,
+  "queued_turn_count": 0,
+  "result_index": 0
+}

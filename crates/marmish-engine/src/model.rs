@@ -228,6 +228,8 @@ pub enum EngineError {
     RecoveryUncertain,
     #[error("storage failure")]
     StorageFailure,
+    #[error("unsupported storage filesystem or durability primitive")]
+    UnsupportedStorage,
     #[error("engine busy")]
     Busy,
     #[error("input backpressure")]

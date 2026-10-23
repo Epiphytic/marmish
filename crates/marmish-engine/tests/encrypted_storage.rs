@@ -1,11 +1,11 @@
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use hkdf::Hkdf;
 use marmish_engine::*;
 use rusqlite::{Connection, OpenFlags};
 use sha2::Sha256;
 use std::collections::BTreeMap;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -20,7 +20,7 @@ const STDERR_CANARY: &str = "marmish-stderr-confidential-b3d47168";
 const INPUT_CANARY: &[u8] = b"marmish-input-confidential-5d341947\0\xff\n";
 
 fn uid() -> u32 {
-    std::fs::metadata("/proc/self").unwrap().uid()
+    unsafe { libc::getuid() }
 }
 
 fn policy(directory: &Path) -> EnginePolicy {
@@ -134,20 +134,17 @@ fn retained_command_input_and_streams_require_the_storage_key() {
     let mut engine = Engine::open(policy.clone()).unwrap();
     let ctx = context(&engine);
     let token = engine.issue_execute_token(&ctx).unwrap();
-    let request = CommandRequest::Exec {
-        argv: vec![
-            // A failed assertion must not leave an orphaned cat/worker forever.
-            b"/usr/bin/timeout".to_vec(),
-            b"30".to_vec(),
-            b"/bin/sh".to_vec(),
-            b"-c".to_vec(),
-            format!(
-                ": '{COMMAND_CANARY}'; printf '%s' '{STDOUT_CANARY}'; \
+    let mut argv = bounded_prefix();
+    argv.extend([
+        b"/bin/sh".to_vec(),
+        b"-c".to_vec(),
+        format!(
+            ": '{COMMAND_CANARY}'; printf '%s' '{STDOUT_CANARY}'; \
                  printf '%s' '{STDERR_CANARY}' >&2; cat"
-            )
-            .into_bytes(),
-        ],
-    };
+        )
+        .into_bytes(),
+    ]);
+    let request = CommandRequest::Exec { argv };
     retry(|| engine.submit(&ctx, &token, INVOCATION, &request)).unwrap();
     let generation = retry(|| engine.begin_input(&ctx, INVOCATION))
         .unwrap()
@@ -248,4 +245,20 @@ fn legacy_plaintext_database_is_rejected_intact_without_creating_key() {
     assert!(Engine::open(policy).is_err());
     assert_eq!(std::fs::read(&path).unwrap(), legacy);
     assert!(!directory.path().join("state/engine.key").exists());
+}
+
+fn bounded_prefix() -> Vec<Vec<u8>> {
+    #[cfg(target_os = "linux")]
+    {
+        vec![b"/usr/bin/timeout".to_vec(), b"30".to_vec()]
+    }
+    #[cfg(target_os = "macos")]
+    {
+        vec![
+            b"/usr/bin/perl".to_vec(),
+            b"-e".to_vec(),
+            b"alarm 30; exec @ARGV or die \"exec failed\"".to_vec(),
+            b"--".to_vec(),
+        ]
+    }
 }

@@ -711,6 +711,40 @@ fn wait_for_io(
     Ok(())
 }
 
+/// A presence probe can transiently hold a shared Darwin flock. Busy is
+/// duplicate success only when the durable active claimant is demonstrably live.
+pub(super) fn acquire_job(
+    root: &StateRoot,
+    store: &mut Store,
+    job: JobId,
+) -> Result<Option<launcher::JobGuard>> {
+    let deadline = crate::platform::Deadline::after_millis(5_000)?;
+    loop {
+        match root.lock_job(job) {
+            Ok(guard) => return Ok(Some(guard)),
+            Err(EngineError::Busy) => {
+                let active = matches!(
+                    store.job_state(job)?,
+                    InvocationState::Launching | InvocationState::Running
+                );
+                if active {
+                    if let Some(identity) = store.worker_identity(job)? {
+                        if matches!(root.presence(job, Some(&identity))?, launcher::WorkerPresence::Live(actual) if actual == identity)
+                        {
+                            return Ok(None);
+                        }
+                    }
+                }
+                if deadline.expired()? {
+                    return Err(EngineError::Busy);
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 fn run(args: Vec<OsString>) -> Result<()> {
     if args.len() != 2 {
         return Err(EngineError::InvalidRequest);
@@ -718,15 +752,16 @@ fn run(args: Vec<OsString>) -> Result<()> {
     let root = StateRoot::open_existing(&PathBuf::from(&args[0]))?;
     root.prepare_db(false)?;
     let job = launcher::parse_job(&args[1])?;
-    let _job_guard = match root.lock_job(job) {
-        Ok(g) => g,
-        Err(EngineError::Busy) => return Ok(()),
-        Err(e) => return Err(e),
-    };
-    let worker = launcher::process_identity(std::process::id() as i32)?;
     let credential = root.read_credential(job)?;
     let keys = root.load_storage_keys()?;
+    // Declaration order keeps the lifetime lock held through Store's drop.
+    let _job_guard;
     let mut store = Store::open_worker(&root, &keys)?;
+    _job_guard = match acquire_job(&root, &mut store, job)? {
+        Some(guard) => guard,
+        None => return Ok(()),
+    };
+    let worker = launcher::process_identity(std::process::id() as i32)?;
     let claim = match retry(|| store.claim_worker(job, &credential, &worker))? {
         ClaimResult::AlreadyClaimed => return Ok(()),
         ClaimResult::Claimed(claim) => claim,

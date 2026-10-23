@@ -18,16 +18,20 @@ from types import SimpleNamespace
 
 from mdk_smoke import SmokeError, require
 from marmish_app import Client, Profile, exit_code
-from marmish_protocol import b64, encode, envelope, load_json, save_json
-from marmish_rpc import RpcError, MdkRpc
+from marmish_protocol import b64, encode, envelope, load_json, save_json, remove_engine_state
+from marmish_rpc import RpcError, MdkRpc, strict_json
 from marmish_transport_sandbox import SandboxError
+from marmish_platform import continuous_time, execution_marker
 
 
 class Harness:
     def __init__(self, args, root, report):
         self.args, self.root, self.report = args, root, report
-        self.deadline = time.monotonic() + args.timeout
+        self.deadline = continuous_time() + args.timeout
         self.server = None
+        self.inhibitor = None
+        self.clock_start = continuous_time()
+        self.monotonic_start = time.monotonic()
         self.cwd = root / 'commands'
         self.cwd.mkdir(mode=0o700)
         self.server_identity = None
@@ -35,17 +39,23 @@ class Harness:
 
     def profile_args(self, name):
         return SimpleNamespace(identity=self.root / name, relay=self.args.relay,
-                               wnd=self.args.wnd, wnd_sha256=self.args.wnd_sha256)
+                               wnd=self.args.wnd, wnd_sha256=self.args.wnd_sha256,
+                               wnd_manifest=getattr(self.args, 'wnd_manifest', None))
 
     def common_args(self, name):
         args = ['-i', str(self.root / name), '--wnd', str(self.args.wnd),
                 '--wnd-sha256', self.args.wnd_sha256]
         for relay in self.args.relay:
             args += ['--relay', relay]
+        if getattr(self.args, 'wnd_manifest', None):
+            args += ['--wnd-manifest', str(self.args.wnd_manifest)]
         return args
 
     def checkpoint(self, stage):
-        require(time.monotonic() < self.deadline, 'global_timeout')
+        require(continuous_time() < self.deadline, 'global_timeout')
+        require(abs((continuous_time() - self.clock_start) -
+                    (time.monotonic() - self.monotonic_start)) <= 5, 'host_suspended')
+        require(not self.inhibitor or self.inhibitor.poll() is None, 'sleep_assertion_failed')
         self.report['stage'] = stage
         print('e2e: ' + stage, file=sys.stderr, flush=True)
 
@@ -65,7 +75,8 @@ class Harness:
             '--worker', str(self.args.worker), '--cwd', str(self.cwd),
             '--command-policy', str(policy), '--allow-shell'],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            start_new_session=True, env={'PATH': '/usr/bin:/usr/sbin:/bin:/sbin', 'LANG': 'C'})
+            start_new_session=True, env={'PATH': '/usr/bin:/usr/sbin:/bin:/sbin', 'LANG': 'C', **execution_marker(),
+                **({key: os.environ[key] for key in ('RUNNER_TRACKING_ID',) if key in os.environ})})
         require(select.select([self.server.stdout], [], [], 25)[0], 'server_start_timeout')
         ready = self.server.stdout.readline(1024)
         try:
@@ -93,7 +104,7 @@ class Harness:
 
     def client(self, profile, **options):
         return Client(profile, self.server_identity,
-                      timeout=min(900, max(1, self.deadline - time.monotonic())), **options)
+                      timeout=min(900, max(1, self.deadline - continuous_time())), **options)
 
     @staticmethod
     def command(script, *args):
@@ -132,6 +143,10 @@ class Harness:
         self.passed('policy_denials_create_no_job_and_preserve_token_for_allowed_execution')
 
     def run(self):
+        if sys.platform == 'darwin':
+            self.inhibitor = subprocess.Popen(['/usr/bin/caffeinate', '-i', '-s'],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                env={'PATH': '/usr/bin:/bin', **execution_marker()})
         self.checkpoint('identity_setup')
         with Profile(self.profile_args('server')) as profile:
             self.server_identity = profile.account
@@ -224,7 +239,13 @@ class Harness:
                 intruder.rpc.fetch_keys(intruder.account, self.server_identity, intruder.relays)
                 unallowed = intruder.rpc.create_group(intruder.account, self.server_identity,
                                                      secrets.token_hex(16))['group_id']
-                server_rpc = MdkRpc(self.root / 'server' / 'mdk' / 's', timeout=20)
+                home = self.root / 'server' / 'mdk'
+                options = {}
+                if sys.platform == 'darwin':
+                    from marmish_transport_macos import read_running_identity
+                    options = {'rpc_home': str(home), 'rpc_socket': str(home / 's'),
+                               'peer_identity': read_running_identity(home)}
+                server_rpc = MdkRpc(home / 's', timeout=20, **options)
                 observed = set()
                 while observed != {ordinary, unallowed}:
                     client.remaining()
@@ -251,9 +272,9 @@ class Harness:
         self.stop_server()
         require(not (self.cwd / 'survived').exists(), 'job_finished_before_frontend_stop')
         (self.cwd / 'disconnect-release').touch()
-        until = time.monotonic() + 8
+        until = continuous_time() + 8
         while not (self.cwd / 'survived').exists():
-            require(time.monotonic() < until, 'detached_worker_did_not_finish')
+            require(continuous_time() < until, 'detached_worker_did_not_finish')
             time.sleep(.1)
         self.passed('frontend_disconnect_does_not_cancel_running_worker')
         self.start_server()
@@ -288,8 +309,9 @@ class Harness:
             *self.common_args('client'), '--timeout', '120', target, '--',
             '/usr/bin/printf', '%s\n', 'marmish cli e2e'],
             input=b'', stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            timeout=min(150, max(1, self.deadline - time.monotonic())),
-            env={'PATH': '/usr/bin:/usr/sbin:/bin:/sbin', 'LANG': 'C'})
+            timeout=min(150, max(1, self.deadline - continuous_time())),
+            env={'PATH': '/usr/bin:/usr/sbin:/bin:/sbin', 'LANG': 'C', **execution_marker(),
+                **({key: os.environ[key] for key in ('RUNNER_TRACKING_ID',) if key in os.environ})})
         require(result.returncode == 0 and result.stdout == b'marmish cli e2e\n' and result.stderr == b'',
                 'cli_process_failed')
         self.passed('actual_client_and_server_cli_processes_execute_command_via_marmot')
@@ -302,19 +324,20 @@ def main(argv=None):
     parser.add_argument('--relay', action='append', required=True)
     parser.add_argument('--wnd', type=Path, required=True)
     parser.add_argument('--wnd-sha256', required=True)
+    parser.add_argument('--wnd-manifest', type=Path)
     parser.add_argument('--bridge', type=Path, required=True)
     parser.add_argument('--worker', type=Path, required=True)
     parser.add_argument('--timeout', type=int, default=900)
     args = parser.parse_args(argv)
     require(60 <= args.timeout <= 900, 'invalid_timeout')
     os.umask(0o077)
-    root = Path(tempfile.mkdtemp(prefix='msh-e2e-', dir='/tmp'))
+    root = Path(tempfile.mkdtemp(prefix='me-', dir='/tmp')).resolve()
     report = {'outcome': 'failed', 'stage': 'setup', 'assertions': [], 'relays': args.relay,
               'wnd_sha256': args.wnd_sha256, 'limitations': [
-                  'prototype_single_device_linux_only', 'pinned_binary_source_provenance_unverified',
+                  'prototype_single_device',
                   'relay_retention_is_not_guaranteed_erasure', 'same_principal_can_reattach_across_sessions']}
     harness = Harness(args, root, report)
-    started = time.monotonic()
+    started = continuous_time()
     handlers = {}
     def interrupted(_sig, _frame):
         raise SmokeError('interrupted')
@@ -334,17 +357,43 @@ def main(argv=None):
         for sig in handlers:
             signal.signal(sig, signal.SIG_IGN)
         harness.stop_server()
+        if harness.inhibitor:
+            harness.inhibitor.terminate()
+            harness.inhibitor.wait(timeout=5)
         # Release bounded test workers even when an assertion fails, then let
         # detached workers finish before removing their encrypted state.
         for name in ('cancel-release', 'disconnect-release'):
             (harness.cwd / name).touch()
-        if report['outcome'] != 'passed':
-            time.sleep(3)
-        shutil.rmtree(root)
-        report['local_cleanup'] = 'complete'
-        report['duration_seconds'] = round(time.monotonic() - started, 3)
+        engine_policy = {'version': 1, 'state_root': str(root / 'server/engine'),
+            'worker_executable': str(args.worker.absolute()), 'server': harness.server_identity,
+            'allowed_principals': [harness.client_identity], 'cwd': str(harness.cwd),
+            'allow_shell_command': True, 'command_policy': load_json(root / 'command-policy.json')}
+        until = continuous_time() + 65
+        while True:
+            try:
+                if (root / 'server/engine').exists():
+                    remove_engine_state(args.bridge, engine_policy)
+                if sys.platform == 'darwin':
+                    from marmish_transport_macos import cleanup_control, control_dir
+                    for name in ('server', 'client'):
+                        home = root / name / 'mdk'
+                        if os.path.lexists(control_dir(home)):
+                            cleanup_control(home)
+                shutil.rmtree(root)
+                report['local_cleanup'] = 'complete'
+                break
+            except (SmokeError, SandboxError, OSError, ValueError):
+                if continuous_time() >= until:
+                    report.update(outcome='failed', local_cleanup='incomplete',
+                                  private_state_retained=True)
+                    break
+                time.sleep(.5)
+        report['duration_seconds'] = round(continuous_time() - started, 3)
         for sig, handler in handlers.items():
             signal.signal(sig, handler)
+    report.update(platform=sys.platform, python=sys.version.split()[0])
+    if args.wnd_manifest:
+        report['wnd_manifest'] = strict_json(args.wnd_manifest.read_bytes())
     print(json.dumps(report, sort_keys=True))
     return 0 if report['outcome'] == 'passed' else 1
 

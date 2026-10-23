@@ -80,10 +80,12 @@ fn private_modes_and_symlinks_are_rejected() {
     ));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn proc_stat_handles_spaces_and_parentheses_and_rejects_forgery() {
     let identity = process_identity(std::process::id() as i32).unwrap();
     assert!(identity.start_ticks > 0);
+    use crate::platform::linux::parse_proc_stat;
     let mut fields = vec!["0"; 50];
     fields[0] = "S";
     fields[19] = "12345";

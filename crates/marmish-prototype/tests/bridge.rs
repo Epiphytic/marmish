@@ -1,8 +1,25 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
+
+fn python() -> Vec<u8> {
+    let configured = std::env::var_os("MARMISH_TEST_PYTHON").map(std::path::PathBuf::from);
+    let executable = configured
+        .or_else(|| {
+            std::env::split_paths(&std::env::var_os("PATH")?)
+                .map(|p| p.join("python3"))
+                .find(|p| p.is_file())
+        })
+        .expect("native tests require Python 3");
+    std::fs::canonicalize(executable)
+        .unwrap()
+        .as_os_str()
+        .as_bytes()
+        .to_vec()
+}
 
 const PRINCIPAL: &str = "1111111111111111111111111111111111111111111111111111111111111111";
 const ENDPOINT: &str = "2222222222222222222222222222222222222222222222222222222222222222";
@@ -156,7 +173,8 @@ fn actual_binary_preserves_argv_and_deduplicates_invocations() {
     let token = pipe.token();
     let script=b"import sys;open('once','ab').write(b'x');sys.stdout.buffer.write(b'\\0'.join(x.encode() for x in sys.argv[1:]));sys.stderr.buffer.write(b'err\\0\\xff');sys.exit(7)";
     let special = b"space unicode \xe2\x98\x83 ' \"\n --leading $HOME `touch forbidden`";
-    let args = [b"/usr/bin/python3".as_slice(), b"-c", script, special];
+    let python = python();
+    let args = [python.as_slice(), b"-c", script, special];
     let response = pipe.submit(INVOCATION, &token, &args);
     assert_eq!(response["ok"], true, "{response}");
     assert_eq!(response["result"]["disposition"], "accepted");
@@ -184,7 +202,8 @@ fn actual_binary_handles_binary_stdin_eof_and_bounds() {
     let mut pipe = Pipe::new();
     pipe.init(false);
     let token = pipe.token();
-    let response=pipe.submit(INVOCATION,&token,&[b"/usr/bin/python3",b"-c",b"import sys;d=sys.stdin.buffer.read();sys.stdout.buffer.write(d);sys.stderr.buffer.write(d[::-1])"]);
+    let python = python();
+    let response=pipe.submit(INVOCATION,&token,&[python.as_slice(),b"-c",b"import sys;d=sys.stdin.buffer.read();sys.stdout.buffer.write(d);sys.stderr.buffer.write(d[::-1])"]);
     assert_eq!(response["ok"], true, "{response}");
     let begin = pipe.auth(json!({"op":"begin_input","invocation":INVOCATION}));
     assert_eq!(begin["ok"], true, "{begin}");
@@ -254,11 +273,12 @@ fn detached_worker_survives_frontend_restart_and_cancel_is_queryable() {
     let mut pipe = Pipe::new();
     pipe.init(false);
     let token = pipe.token();
+    let python = python();
     let response = pipe.submit(
         INVOCATION,
         &token,
         &[
-            b"/usr/bin/python3",
+            python.as_slice(),
             b"-c",
             b"import time,sys;time.sleep(1);sys.stdout.write('survived')",
         ],
@@ -296,7 +316,7 @@ fn detached_worker_survives_frontend_restart_and_cancel_is_queryable() {
 fn policy_bridge_enforces_cumulative_layers_without_consuming_token() {
     let mut pipe = Pipe::new();
     let exe = std::fs::canonicalize("/usr/bin/printf").unwrap();
-    let allowed_exe = std::fs::canonicalize("/usr/bin/echo").unwrap();
+    let allowed_exe = std::fs::canonicalize("/bin/echo").unwrap();
     pipe.init_policy(
         true,
         json!({
@@ -309,7 +329,6 @@ fn policy_bridge_enforces_cumulative_layers_without_consuming_token() {
         }),
     );
     let token = pipe.token();
-    use std::os::unix::ffi::OsStrExt;
     let denied = pipe.submit(
         INVOCATION,
         &token,
@@ -332,4 +351,25 @@ fn policy_bridge_enforces_cumulative_layers_without_consuming_token() {
     assert_eq!(accepted["ok"], true, "{accepted}");
     pipe.finished(INVOCATION);
     assert_eq!(pipe.read(INVOCATION, "stdout"), b"allowed\n");
+}
+
+#[test]
+fn cleanup_fences_state_and_disables_normal_bridge_operations() {
+    let mut pipe = Pipe::new();
+    pipe.init(false);
+    let response = pipe.call(json!({"op":"cleanup_ready"}));
+    assert_eq!(response["result"], json!({"ready":true}), "{response}");
+    assert_eq!(
+        pipe.call(json!({"op":"cleanup_ready"}))["result"],
+        json!({"ready":true})
+    );
+    assert_eq!(
+        pipe.auth(json!({"op":"token"}))["error"]["code"],
+        "invalid_request"
+    );
+    std::fs::remove_dir_all(pipe.directory.path().join("state")).unwrap();
+    assert!(!pipe.directory.path().join("state").exists());
+    pipe.restart();
+    pipe.init(false);
+    assert_eq!(pipe.auth(json!({"op":"token"}))["ok"], true);
 }

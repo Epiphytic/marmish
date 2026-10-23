@@ -1,0 +1,87 @@
+{
+  "duration_api_ms": 15005,
+  "stop_reason": "end_turn",
+  "session_id": "5237437f-5871-48bc-991f-5a7161bd9cd4",
+  "total_cost_usd": 0.1920201,
+  "usage": {
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 42054,
+    "cache_read_input_tokens": 52861,
+    "output_tokens": 1851,
+    "output_tokens_details": {
+      "thinking_tokens": 616
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 42054,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 4,
+      "outputTokens": 1851,
+      "cacheReadInputTokens": 52861,
+      "cacheCreationInputTokens": 42054,
+      "webSearchRequests": 0,
+      "costUSD": 0.1920201,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 616,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "subagent_stats": {
+    "spawned": 0,
+    "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+    },
+    "started_in_background": 0,
+    "max_depth": 0,
+    "spawned_by_subagents": 0,
+    "completed": 0,
+    "failed": 0,
+    "killed": {
+      "parent": 0,
+      "user": 0,
+      "system": 0
+    },
+    "refused": {
+      "depth_limit": 0,
+      "concurrency_limit": 0,
+      "budget": 0
+    },
+    "by_type": {}
+  },
+  "safety_stops": 0,
+  "is_error": false,
+  "num_turns": 3,
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "**APPROVE**\n\nI checked `docs/phases/macos-platform.md` against `docs/reviews/macos-plan-revised.json`. I found no remaining blockers.\n\n**Required correction: resolved**\n- The only relay-selection text is now `:400-405`. It uses the fixed `wss://relay.eu.whitenoise.chat/` and `wss://relay.us.whitenoise.chat/` URLs, adds \"no SRV-derived destinations\", records the exact URLs, and says they are never production defaults.\n- No SRV wording is left elsewhere in the doc.\n- The launch config carries only explicit canonical URLs (`:185-197`). The daemon checks the full URL against that set and the broker checks domain and port. Any other URL, including one from peer metadata or directory lookup, is rejected before connecting.\n- Increment B's TLS probe has a 5-second deadline and runs no command workload (`:403-405`). Increment C uses the same URL set with disposable keys.\n\n**Narrow followups: all resolved**\n- **Transitive SOCKS (`:189-191`):** the design says to verify `async-wsocket`'s SOCKS feature in the locked relay-pool build. It also says `nostr-sdk` 0.44.1 has no such feature, so nobody will add a nonexistent flag.\n- **`open_ranking` (`:180-183`):** `directory/open_ranking.rs` is now on the non-SDK reqwest list. Those functions are disabled in restricted mode, a test confirms config can't trigger them, and Seatbelt is the backstop.\n- **Worker readiness budgets (`:59-71`):**\n  - The worker gets a 5-second continuous-clock acquisition budget with state-aware retry.\n  - The frontend gets an 8-second deadline and retries only unclaimed jobs.\n  - Success on `Busy` requires a verified live holder with the matching claim.\n  - Fault injection is required for a shared probe racing worker startup.\n- **Parent-only fd checks (`:109-123`):**\n  - The parent checks the `RLIMIT_NOFILE` soft limit and enumerates descriptors before each spawn.\n  - There is no `getrlimit` or proc enumeration after fork.\n  - `pre_exec` only calls `setsid`, `umask` and `fcntl`.\n  - The soft limit is never raised.\n- **Normative C CI reference (`:373-389`):** the increment C design is normative for artifact schemas, barriers, queue budgets and deadlines. It is reviewed independently before the workflows are built.\n  - It binds same-run artifacts to commit, run, attempt, role and nonces.\n  - Token scopes are limited to `contents: read` and `actions: read`.\n  - Triggers are `push` to `master` only, with a constant concurrency group.\n  - A peer that never appears is a runner-prerequisite failure.\n\n**Non-blocking note:** \"canonical form and checked in\" isn't stated outright for the relay set. `:401` says \"fixed\", and the shared Rust/Python canonicalization fixtures at `:200-201` should pin the trailing-slash spelling. Add one sentence at implementation time. This does not block approval.\n\nThis was a read-only review. I made no edits and ran no tests.",
+  "ttft_ms": 3122,
+  "type": "result",
+  "duration_ms": 15540,
+  "uuid": "fc4bb41c-8155-43bc-9036-13df692501bf",
+  "ttft_stream_ms": 1908,
+  "time_to_request_ms": 224,
+  "first_content_frame_ms": 1908,
+  "queued_turn_count": 0,
+  "result_index": 0
+}

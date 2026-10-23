@@ -17,7 +17,8 @@ from marmish_protocol import (Dispatcher, EngineBridge, History, b64, check_memb
                               unb64, validate_frame)
 from marmish_rpc import MdkRpc, RpcError
 from marmish_policy import load_policy
-from marmish_transport_sandbox import ConfinedDaemon, SandboxError
+from marmish_transport import ConfinedDaemon, SandboxError
+from marmish_platform import continuous_time
 
 
 class Profile:
@@ -32,13 +33,16 @@ class Profile:
             public_key(self.value.get('account'))
         self.relays = configured
         self.transport = ConfinedDaemon(self.root / 'mdk', Path(args.wnd), configured,
-                                        args.wnd_sha256)
+                                        args.wnd_sha256, manifest=getattr(args, 'wnd_manifest', None))
         self.rpc = None
         self.account = None
 
     def __enter__(self):
         self.transport.start()
-        self.rpc = MdkRpc(self.transport.socket, timeout=60)
+        self.rpc = MdkRpc(self.transport.socket, timeout=60,
+                          rpc_home=self.transport.rpc_home,
+                          rpc_socket=self.transport.rpc_socket,
+                          peer_identity=self.transport.peer_identity)
         try:
             if not self.value:
                 account = self.rpc.create_identity(self.relays)
@@ -80,7 +84,7 @@ def verify_room(profile, group, peer, sid):
 class Client:
     def __init__(self, profile, peer, *, timeout=180, new_session=False, retention=86400):
         self.profile, self.rpc, self.peer = profile, profile.rpc, peer
-        self.deadline = time.monotonic() + timeout
+        self.deadline = continuous_time() + timeout
         self.challenge = None
         self.challenge_until = 0
         self.history = History()
@@ -102,8 +106,8 @@ class Client:
         self.hello()
 
     def remaining(self):
-        require(time.monotonic() < self.deadline, 'client_timeout')
-        return self.deadline - time.monotonic()
+        require(continuous_time() < self.deadline, 'client_timeout')
+        return self.deadline - continuous_time()
 
     def hello(self):
         nonce = secrets.token_hex(32)
@@ -111,7 +115,7 @@ class Client:
         result = self._exchange('hello', {'nonce': nonce})
         require(result.get('nonce') == nonce and result.get('lifetime') == 60, 'hello_mismatch')
         self.challenge = hex_id(result.get('challenge'), 32)
-        self.challenge_until = time.monotonic() + 40
+        self.challenge_until = continuous_time() + 40
 
     def _exchange(self, op, body):
         rid = secrets.token_hex(16)
@@ -121,11 +125,12 @@ class Client:
         next_send = 0
         while True:
             self.remaining()
-            if time.monotonic() >= next_send:
+            if continuous_time() >= next_send:
                 # Retransmission preserves both the application request ID and invocation ID.
                 self.rpc.send(self.profile.account, self.group, text)
-                next_send = time.monotonic() + 8
+                next_send = continuous_time() + 8
             rows = self.rpc.history(self.profile.account, self.group)
+            self.remaining()
             for row in self.history.scan(rows):
                 if not incoming(row, self.group, self.peer):
                     continue
@@ -148,7 +153,7 @@ class Client:
             time.sleep(min(.5, self.remaining()))
 
     def call(self, op, **body):
-        if time.monotonic() >= self.challenge_until:
+        if continuous_time() >= self.challenge_until:
             self.hello()
         return self._exchange(op, body)
 
@@ -369,7 +374,7 @@ class Server:
                 continue
             except SmokeError:
                 self._quarantine(group)
-        if time.monotonic() - self.last_maintenance >= 60:
+        if continuous_time() - self.last_maintenance >= 60:
             self.engine.call('maintain', limit=128)
             try:
                 sweep = self.profile.rpc.expiry(self.profile.account)
@@ -378,7 +383,7 @@ class Server:
             for group in sweep.get('groups', []):
                 if group.get('status') == 'failed' and group.get('group_id') in self.groups:
                     self._quarantine(group['group_id'])
-            self.last_maintenance = time.monotonic()
+            self.last_maintenance = continuous_time()
 
     def _tick_group(self, group, binding):
         peer, sid = binding['peer'], binding['session']
@@ -407,6 +412,8 @@ def common(parser):
     parser.add_argument('--relay', action='append', required=True, help='explicit wss root URL')
     parser.add_argument('--wnd', required=True, type=Path)
     parser.add_argument('--wnd-sha256', required=True)
+    parser.add_argument('--wnd-manifest', type=Path,
+                        help='daemon build manifest (macOS defaults to <wnd>.manifest.json)')
 
 
 def exit_code(status):

@@ -11,13 +11,13 @@ import os
 from pathlib import Path
 import re
 import socket
-import struct
-import time
 
 try:
     from . import mdk_smoke as smoke
+    from .marmish_platform import continuous_time, verify_peer
 except ImportError:
     import mdk_smoke as smoke
+    from marmish_platform import continuous_time, verify_peer
 
 KIND = 30100
 PURPOSE = "marmish/v1 command transport"
@@ -143,29 +143,36 @@ def decode_response(data):
 class MdkRpc:
     """One connection per command, one absolute deadline for all socket I/O."""
 
-    def __init__(self, socket_path, *, timeout=10.0, expected_uid=None):
+    def __init__(self, socket_path, *, timeout=10.0, expected_uid=None,
+                 rpc_home="/state", rpc_socket="/state/s", peer_identity=None):
         require(isinstance(timeout, (int, float)) and not isinstance(timeout, bool)
                 and math.isfinite(timeout) and timeout > 0, "invalid_timeout")
         self.socket_path = str(Path(socket_path))
         self.timeout = timeout
+        for path in (rpc_home, rpc_socket):
+            require(isinstance(path, str) and path.startswith("/") and "\0" not in path,
+                    "invalid_rpc_path")
+        self.rpc_home, self.rpc_socket = rpc_home, rpc_socket
+        self.peer_identity = peer_identity
         self.expected_uid = os.geteuid() if expected_uid is None else expected_uid
         require(type(self.expected_uid) is int and self.expected_uid >= 0, "invalid_uid")
 
     @staticmethod
-    def request(command, account=None):
+    def request(command, account=None, *, home="/state", socket_path="/state/s"):
         if account is not None:
             account = public_key(account)
         return {"Execute": {"cli": {
-            "home": "/state", "socket": "/state/s", "relay": None,
+            "home": home, "socket": socket_path, "relay": None,
             "daemon_discovery_relays": [], "daemon_default_account_relays": [],
             "secret_store": "File", "keychain_service": None,
             "account": account, "json": True, "command": command,
         }}}
 
     def execute(self, command, *, account=None, deadline=None):
-        payload = encode(self.request(command, account))
+        payload = encode(self.request(command, account, home=self.rpc_home,
+                                      socket_path=self.rpc_socket))
         require(len(payload) <= REQUEST_CAP, "request_too_large")
-        end = time.monotonic() + self.timeout
+        end = continuous_time() + self.timeout
         if deadline is not None:
             require(isinstance(deadline, (int, float)) and math.isfinite(deadline),
                     "invalid_timeout")
@@ -175,9 +182,7 @@ class MdkRpc:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
                 self._timeout(connection, end)
                 connection.connect(self.socket_path)
-                credentials = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
-                _pid, uid, _gid = struct.unpack("3i", credentials)
-                require(uid == self.expected_uid, "wrong_peer_uid")
+                _checked(verify_peer, connection, self.expected_uid, self.peer_identity)
                 self._timeout(connection, end)
                 # A partial send can be accepted even when sendall fails.
                 written = True
@@ -195,7 +200,7 @@ class MdkRpc:
 
     @staticmethod
     def _timeout(connection, end):
-        remaining = end - time.monotonic()
+        remaining = end - continuous_time()
         require(remaining > 0, "rpc_timeout")
         connection.settimeout(remaining)
 
@@ -204,6 +209,7 @@ class MdkRpc:
         while True:
             self._timeout(connection, end)
             chunk = connection.recv(min(65536, RESPONSE_CAP + 1 - len(data)))
+            self._timeout(connection, end)
             if not chunk:
                 break
             data.extend(chunk)

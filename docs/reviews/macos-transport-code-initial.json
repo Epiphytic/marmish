@@ -1,0 +1,87 @@
+{
+  "duration_api_ms": 571213,
+  "stop_reason": "end_turn",
+  "session_id": "7b539c79-71a7-42c3-8582-414d00e1343d",
+  "total_cost_usd": 1.9081015000000001,
+  "usage": {
+    "input_tokens": 54,
+    "cache_creation_input_tokens": 205424,
+    "cache_read_input_tokens": 3422945,
+    "output_tokens": 63035,
+    "output_tokens_details": {
+      "thinking_tokens": 51253
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 205424,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 4436,
+      "outputTokens": 71427,
+      "cacheReadInputTokens": 3609810,
+      "cacheCreationInputTokens": 206337,
+      "webSearchRequests": 0,
+      "costUSD": 1.9081015000000001,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 51253,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "subagent_stats": {
+    "spawned": 0,
+    "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+    },
+    "started_in_background": 0,
+    "max_depth": 0,
+    "spawned_by_subagents": 0,
+    "completed": 0,
+    "failed": 0,
+    "killed": {
+      "parent": 0,
+      "user": 0,
+      "system": 0
+    },
+    "refused": {
+      "depth_limit": 0,
+      "concurrency_limit": 0,
+      "budget": 0
+    },
+    "by_type": {}
+  },
+  "safety_stops": 0,
+  "is_error": false,
+  "num_turns": 34,
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "**Verdict: REQUEST_CHANGES.** The relay-args omission and the Seatbelt socket-staging mismatch each stop the native E2E from starting at all. This review was read-only. I made no edits, used no network, and did not touch the sibling repo beyond `git show 37c248a`.\n\n```json\n{\n  \"verdict\": \"REQUEST_CHANGES\",\n  \"reviewed_against\": [\"docs/phases/macos-platform.md\", \"docs/reviews/macos-plan-final.json\"],\n  \"findings\": [\n    {\n      \"id\": \"F1\", \"severity\": \"high\",\n      \"file\": \"tools/marmish_transport_macos.py\", \"line\": 532,\n      \"title\": \"Daemon command is launched without relay arguments\",\n      \"detail\": \"The Darwin daemon command (lines 532-533) has no relay args. The Linux path (marmish_transport_sandbox.py:528-530) passes them. In the sibling MDK, run_server returns MissingRelay when it has no relays, so the confined daemon exits at startup. The exact-allowlist/SOCKS path is never exercised.\",\n      \"fix\": \"Pass the canonical relay URLs on the daemon command line (or the restricted config), identical to the Linux launcher, and add a test that the command line includes every canonical relay.\"\n    },\n    {\n      \"id\": \"F2\", \"severity\": \"high\",\n      \"file\": \"tools/marmish_transport_macos.py\", \"line\": 295,\n      \"title\": \"Seatbelt unix-socket bind rule does not match MDK's staging path; socket length check is off\",\n      \"detail\": \"PROFILE allows bind/inbound only on (param SOCKET) (lines 294-296). MDK's fs_private::bind_unix_listener_private binds at <home>/.sock.<pid>.<name>/<name> and then hard_links it to the final name. That staging path is not allowed, so the bind is denied. The length check at line 380 (> 100) also does not account for the longer staging path. sun_path is limited to about 104 bytes on Darwin.\",\n      \"fix\": \"Allow bind on the staging subpath, for example (subpath (param HOME)) restricted to unix-socket, or a regex for .sock.*. Compute the length check on the staging path. Cover this with a Darwin-only integration test that binds through the real MDK helper.\"\n    },\n    {\n      \"id\": \"F3\", \"severity\": \"medium\",\n      \"file\": \"tools/marmish_transport_macos.py\", \"line\": 555,\n      \"title\": \"Run record and control files live in the daemon-writable HOME\",\n      \"detail\": \"The run record (written at 555-558) and the files read by _recover (around 414) are inside the HOME the confined daemon can write. A compromised daemon can forge or delete its own identity record. That undermines the owned-identity recovery.\",\n      \"fix\": \"Keep the run record and ack/config outside the writable subtree, in a parent-owned directory the profile only lets the daemon read. Alternatively, bind the record to a parent-held MAC or fd.\"\n    },\n    {\n      \"id\": \"F4\", \"severity\": \"medium\",\n      \"file\": \"tools/marmish_transport_macos.py\", \"line\": 414,\n      \"title\": \"_recover can wedge permanently on orphan_identity_mismatch\",\n      \"detail\": \"In _recover (lines 414-467), an identity mismatch raises orphan_identity_mismatch and refuses to proceed. There is no way to clear the state after the process has verifiably gone. A stale record, such as after reboot with PID reuse, blocks every future start.\",\n      \"fix\": \"If the recorded identity cannot be resolved to a live process (boot UUID changed, or pid/start time absent), treat it as gone and remove the record. Keep the hard failure only for a live process with a different identity.\"\n    },\n    {\n      \"id\": \"F5\", \"severity\": \"medium\",\n      \"file\": \"tools/check_mdk_builders.py\", \"line\": null,\n      \"title\": \"Builder guard is bypassable by at least 8 forms\",\n      \"detail\": \"I ran the guard against the patched tree. Only plain NostrSdkClient::builder() was caught. These forms all passed: prelude path, ClientBuilder::default, client module path, with_opts, type alias, UFCS, RelayPool::builder, and production code after the first #[cfg(test)] module. The regex guard cannot prove that all four builder paths go through ExactTransport.\",\n      \"fix\": \"Replace the regex with a stronger structural check. Options: a syn/AST scan, a clippy disallowed_methods lint on nostr_sdk::Client/ClientBuilder/RelayPool constructors with one allow site in marmish_transport.rs, or a compile-time seal. At minimum, scan all code outside test modules and add the 8 forms as test cases.\"\n    },\n    {\n      \"id\": \"F6\", \"severity\": \"medium\",\n      \"file\": \".github/workflows/native-validation.yml\", \"line\": null,\n      \"title\": \"Patched MDK Rust tests are never run, and no Rust tests exist for the transport\",\n      \"detail\": \"CI runs the spike, a marmish-only cargo test, and caches the MDK target dir. It does not run cargo test against the patched MDK. The patch adds ExactTransport (exact URL membership, Proxy mode forced, whole-connect timeout) and initialize() with no unit tests.\",\n      \"fix\": \"Add Rust tests to the patch for exact membership, forced Proxy mode, timeout expiry and initialize() ack. Run them in CI on the patched tree.\"\n    },\n    {\n      \"id\": \"F7\", \"severity\": \"medium\",\n      \"file\": \"tools/marmish_transport_macos.py\", \"line\": null,\n      \"title\": \"Relay canonicalization is not backed by shared Rust/Python fixtures\",\n      \"detail\": \"The final plan review called for fixtures to pin the trailing-slash spelling. None exist, so the Python canonical_relays and the Rust exact-membership comparison can drift, and a drift fails closed at runtime or mismatches the allowlist.\",\n      \"fix\": \"Add a shared fixture file consumed by both the Python tests and a Rust test, and state in the doc that the canonical relay set is fixed.\"\n    },\n    {\n      \"id\": \"F8\", \"severity\": \"medium\",\n      \"file\": \"tools/test_marmish_transport_macos.py\", \"line\": 164,\n      \"title\": \"Lifetime test is weak and SIGKILL cases are missing\",\n      \"detail\": \"The only lifetime test runs on Darwin and writes 'G' then closes the pipe. It tests the normal EOF path with /bin/sleep. It does not prove that the gate prevents exec before the record is durable. It does not cover parent SIGKILL (the kqueue EVFILT_PROC path) or process-group TERM-then-KILL of grandchildren.\",\n      \"fix\": \"Add Darwin tests for: close without 'G' means no exec; SIGKILL of the parent reaps the group; a child that ignores TERM is KILLed; a grandchild in the group dies.\"\n    },\n    {\n      \"id\": \"F9\", \"severity\": \"medium\",\n      \"file\": \"tools/marmish_native_spike.py\", \"line\": null,\n      \"title\": \"Denial probes have no unconfined controls, and the spike is thin\",\n      \"detail\": \"Probe exit 2 means denied, but nothing shows the same probe returns 0 outside the sandbox. A denial could come from a probe bug, a missing host, or a bad argument, so the probes can pass vacuously. The spike runs only _preflight and does not check the allowed side (permitted broker connect, permitted socket bind).\",\n      \"fix\": \"For each denial probe, run an unconfined control that must exit 0 with the same arguments. Add positive probes for the allowed broker connect and the allowed socket bind (which would have caught F2).\"\n    },\n    {\n      \"id\": \"F10\", \"severity\": \"low\",\n      \"file\": \"tools/build_mdk.py\", \"line\": null,\n      \"title\": \"Provenance and process-group details\",\n      \"detail\": \"The manifest is pinned and verified for source, revision, lock, patch, rustc, target, deployment target and helper digests, and it uses a private binary copy. Residual gaps: the ad-hoc codesign identity is not recorded or verified on load, and the patch and lock hashes are only checked at build time, not re-checked at launch. The lifetime shim kills the daemon's process group, but a child that calls setsid escapes. Seatbelt is the backstop for that case.\",\n      \"fix\": \"Record and verify the codesign result at launch. Optionally deny setsid-style escapes, or document the Seatbelt dependency.\"\n    }\n  ],\n  \"checks\": {\n    \"all_four_sdk_builder_paths_forced_through_allowlist\": \"Partial. In the patched tree, the production builder sites at lib.rs:6150, relay_plane/directory.rs:483, 626 and mod.rs:622 all call marmish_transport::builder(). directory.rs:1058 is a test. The ExactTransport contract was verified against the crate sources. The Rust was not compiled or run (F6), and the guard cannot enforce this going forward (F5).\",\n    \"no_new_raw_network_paths\": \"Mostly. reqwest is disabled in open_ranking, collector_host_safety (including system_resolve) and media/blossom when restricted. The guard bypasses in F5 mean future paths are unchecked.\",\n    \"manifest_provenance_and_private_copy\": \"Pass with F10 gaps.\",\n    \"seatbelt_mandatory_no_dns_tcp_unix\": \"Cannot be shown. F2 would deny the daemon's own bind, and F1 stops it before connecting. The deny-default profile and loopback-only broker rule read correctly.\",\n    \"denial_probes_nonvacuous\": \"Fail (F9).\",\n    \"lifetime_gate_and_owned_identity_recovery\": \"Fail (F3, F4, F8). The design is sound and the struct layouts in marmish_platform.py are correct.\",\n    \"broker_protocol_bounds_halfclose_deadlines\": \"Pass in the offline tests. The broker is domain-only SOCKS5 with exact host:port, rejects IP forms, other commands, unknown names and wrong ports before any resolve, preserves half-close, and uses continuous-clock deadlines.\"\n  },\n  \"tests_run\": [\n    \"python3 -m unittest test_marmish_transport_macos test_marmish_platform (from tools/): 18 OK, 1 skipped (Darwin-only lifetime test)\",\n    \"git apply --check and git apply of patches/mdk/marmish-restricted.patch onto pristine 37c248a in a temp checkout under /tmp: clean\",\n    \"check_mdk_builders.py on the patched tree: passes, and the lock digest matches\",\n    \"Guard bypass experiment on the patched temp tree: 8 forms passed uncaught; the plain NostrSdkClient::builder() control was caught\",\n    \"Functional broker probe script (/tmp/broker_probe.py): behaviour as described above\",\n    \"Read-only contract checks against MDK sources via git show 37c248a: run_server MissingRelay, bind_unix_listener_private staging path, and the SDK builder site inventory\"\n  ],\n  \"limitations\": [\n    \"The native macOS runtime is unvalidated until CI. Seatbelt, kqueue, proc_pidinfo, getpeereid and LOCAL_PEERPID behaviour cannot be exercised on this Linux host.\",\n    \"The Rust patch was applied but not compiled or tested.\",\n    \"The prebuild spike is a prerequisite only. It does not substitute for the real relay command E2E that follows.\",\n    \"Workflow and RPC layers are out of scope.\",\n    \"No live or network tests were run, per the constraints.\"\n  ],\n  \"approval_conditions\": \"Fix F1 and F2 (the E2E cannot start otherwise). Fix F3 and F4 (the recovery design). Replace the F5 guard. Add the F6 Rust tests, the F8 lifetime tests and the F9 controls. Re-review after that.\"\n}\n```",
+  "ttft_ms": 2848,
+  "type": "result",
+  "duration_ms": 584740,
+  "uuid": "f95dad32-7b38-49f7-97ce-1b811ceba532",
+  "ttft_stream_ms": 2042,
+  "time_to_request_ms": 234,
+  "first_content_frame_ms": 2042,
+  "queued_turn_count": 0,
+  "result_index": 0
+}

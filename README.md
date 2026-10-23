@@ -4,7 +4,7 @@ Asynchronous remote commands and resumable shells over Marmot, using explicitly 
 
 The current Linux prototype runs noninteractive commands over Marmot. Commands continue running after client disconnection. Interactive PTY/tmux sessions, takeover and simultaneous read-only attachments follow in later phases. Application messages default to a configurable 24-hour retention policy. Destination syntax is `npub@relay`, also accepting a hexadecimal Nostr public key; aliases and SRV discovery are later work. Relays must always be explicitly selected.
 
-See [the phased build plan](docs/build-plan.md). Beads tracks implementation and review work. The prototype uses a bounded adapter to a hash-pinned MDK daemon and the Linux-only `marmish-engine` library for durable same-user jobs, detached workers, ordered stdin, bounded output, cancellation and replay protection. It is an experimental single-device command transport, not a production remote-shell release. See [prototype validation and limits](docs/validation/phase-2b-prototype.md) and the earlier [MDK compatibility report](docs/mdk-compatibility.md).
+See [the phased build plan](docs/build-plan.md). Beads tracks implementation and review work. The prototype uses a bounded adapter to a hash-pinned MDK daemon and the `marmish-engine` library for durable same-user jobs, detached workers, ordered stdin, bounded output, cancellation and replay protection. It is an experimental single-device command transport, not a production remote-shell release. See [prototype validation and limits](docs/validation/phase-2b-prototype.md) and the earlier [MDK compatibility report](docs/mdk-compatibility.md).
 
 ## Run the command prototype
 
@@ -101,6 +101,35 @@ accepted jobs and exact retries retain their original authority.
 The engine configuration now uses version 2. New binaries read version 1 roots;
 older binaries reject a version 2 root. Back up state before upgrading and do
 not downgrade binaries against the upgraded root.
+
+## Native macOS validation
+
+The native macOS port is implemented but still awaiting runtime validation on the
+supplied runners. The supported baseline above remains the tested Linux
+prototype. The [native validation report](docs/validation/native-platform.md)
+separates local checks from required native evidence; AMD64 macOS has no confirmed
+native runner yet.
+
+For native development, build a clean pinned daemon and its provenance manifest:
+
+```sh
+python3 tools/build_mdk.py --output /absolute/private/build/wnd
+```
+
+The output must not already exist. The script fetches the pinned MDK revision;
+on macOS it applies the maintained restricted-transport patch, builds the native
+helpers and signs the executables locally. It requires Rust 1.97.1, Python 3.11+
+and a native C toolchain. macOS additionally requires APFS, macOS 15 or newer,
+`sandbox-exec` and `codesign`. The manifest is `<wnd>.manifest.json`; macOS startup
+requires and verifies it, with an optional explicit `--wnd-manifest PATH`.
+Use its recorded binary SHA with `--wnd-sha256`. Linux retains namespace isolation;
+macOS uses Seatbelt and a bounded SOCKS broker restricted to explicit relay origins.
+Failure to establish confinement prevents startup.
+
+The trusted-master CI workflow runs native prerequisite probes, offline checks,
+clean daemon builds, real Marmot commands with disposable identities and commands
+in both Linux/macOS directions. It uses explicit test relays; none becomes a
+public relay default for the application.
 
 ## Offline development
 

@@ -5,9 +5,11 @@ import json
 import os
 from pathlib import Path
 import socket
+import sys
 import tempfile
 import threading
 import time
+from marmish_platform import continuous_time
 import unittest
 from unittest.mock import patch
 
@@ -76,34 +78,57 @@ class SocketTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.path = Path(self.directory.name) / "s"
 
+    def adapter(self, **kwargs):
+        if sys.platform == 'darwin' and 'peer_identity' not in kwargs:
+            from marmish_platform import process_identity
+            kwargs['peer_identity'] = process_identity(os.getpid())
+        return rpc.MdkRpc(self.path, **kwargs)
+
     def test_roundtrip_halfclose_and_wire_paths(self):
         with Peer(self.path, wire({"answer": 42})) as peer:
-            self.assertEqual(rpc.MdkRpc(self.path).execute("Sync", account=A), {"answer": 42})
+            self.assertEqual(self.adapter().execute("Sync", account=A), {"answer": 42})
         self.assertTrue(peer.request.endswith(b"\n"))
         cli = json.loads(peer.request)["Execute"]["cli"]
         self.assertEqual((cli["home"], cli["socket"]), ("/state", "/state/s"))
         self.assertNotIn(str(self.path), peer.request.decode())
 
+    def test_native_paths_and_process_identity_checked_before_send(self):
+        from marmish_platform import process_identity
+        expected = process_identity(os.getpid())
+        with Peer(self.path, wire({})) as peer:
+            adapter = self.adapter(rpc_home='/private/tmp/m-home',
+                                 rpc_socket='/private/tmp/m-home/s', peer_identity=expected)
+            self.assertEqual(adapter.execute('Sync'), {})
+        cli = json.loads(peer.request)['Execute']['cli']
+        self.assertEqual((cli['home'], cli['socket']),
+                         ('/private/tmp/m-home', '/private/tmp/m-home/s'))
+        self.path.unlink()
+        with Peer(self.path, wire({})) as peer:
+            with self.assertRaisesRegex(rpc.RpcError, 'wrong_peer_identity') as caught:
+                self.adapter(peer_identity=dict(expected, start=0)).execute('Sync')
+        self.assertEqual(peer.request, b'')
+        self.assertFalse(caught.exception.uncertain)
+
     def test_peer_uid_checked_before_request(self):
         with Peer(self.path, wire({})) as peer:
             with self.assertRaises(rpc.RpcError) as caught:
-                rpc.MdkRpc(self.path, expected_uid=os.geteuid() + 1).execute("Sync")
+                self.adapter(expected_uid=os.geteuid() + 1).execute("Sync")
         self.assertEqual(str(caught.exception), "wrong_peer_uid")
         self.assertFalse(caught.exception.uncertain)
         self.assertEqual(peer.request, b"")
 
     def test_absolute_deadline_bounds_drip_response(self):
-        start = time.monotonic()
+        start = continuous_time()
         with Peer(self.path, wire({}), drip=True):
             with self.assertRaises(rpc.RpcError) as caught:
-                rpc.MdkRpc(self.path, timeout=0.08).execute("Sync")
+                self.adapter(timeout=0.08).execute("Sync")
         self.assertEqual(str(caught.exception), "rpc_timeout")
         self.assertTrue(caught.exception.uncertain)
-        self.assertLess(time.monotonic() - start, 1)
+        self.assertLess(continuous_time() - start, 1)
 
     def test_expired_caller_deadline_never_sends(self):
         with self.assertRaises(rpc.RpcError) as caught:
-            rpc.MdkRpc(self.path).execute("Sync", deadline=time.monotonic() - 1)
+            self.adapter().execute("Sync", deadline=continuous_time() - 1)
         self.assertFalse(caught.exception.uncertain)
 
     def test_response_limit_and_framing(self):
@@ -115,13 +140,13 @@ class SocketTests(unittest.TestCase):
                     self.path.unlink()
                 with patch.object(rpc, "RESPONSE_CAP", 64), Peer(self.path, data):
                     with self.assertRaises(rpc.RpcError) as caught:
-                        rpc.MdkRpc(self.path).execute("Sync")
+                        self.adapter().execute("Sync")
                 self.assertEqual(str(caught.exception), category)
 
     def test_request_limit_checked_without_connection(self):
         with patch.object(rpc, "REQUEST_CAP", 32):
             with self.assertRaisesRegex(rpc.RpcError, "request_too_large"):
-                rpc.MdkRpc(self.path).execute("Sync")
+                self.adapter().execute("Sync")
 
 
 class DecodingTests(unittest.TestCase):

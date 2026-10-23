@@ -776,6 +776,25 @@ impl Store {
     pub fn job_state(&mut self, id: JobId) -> Result<InvocationState> {
         Ok(load(&self.conn, id)?.state)
     }
+    pub(crate) fn cleanup_jobs(&mut self) -> Result<Vec<JobId>> {
+        self.conn
+            .busy_timeout(std::time::Duration::ZERO)
+            .map_err(db_error)?;
+        let mut statement = self
+            .conn
+            .prepare("SELECT job FROM jobs ORDER BY job LIMIT 257")
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, Vec<u8>>(0))
+            .map_err(db_error)?;
+        let jobs = rows
+            .map(|row| job_id(&row.map_err(db_error)?))
+            .collect::<Result<Vec<_>>>()?;
+        if jobs.len() > 256 {
+            return Err(EngineError::QuotaExceeded);
+        }
+        Ok(jobs)
+    }
     pub fn job_exists(&mut self, id: JobId) -> Result<bool> {
         self.conn
             .query_row(
@@ -823,6 +842,19 @@ impl Store {
     pub fn release_worker_start(&mut self, id: JobId) -> Result<()> {
         self.mutate(id, |j, _| {
             j.reserved = None;
+            Ok(())
+        })
+    }
+    /// Refund only a reservation which has not been claimed by a worker.
+    pub(crate) fn refund_worker_start(&mut self, id: JobId) -> Result<()> {
+        self.mutate(id, |job, _| {
+            if job.state == InvocationState::Accepted && job.reserved.is_some() {
+                job.attempts = job
+                    .attempts
+                    .checked_sub(1)
+                    .ok_or(EngineError::StorageFailure)?;
+                job.reserved = None;
+            }
             Ok(())
         })
     }

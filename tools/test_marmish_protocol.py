@@ -3,6 +3,7 @@ import copy
 import io
 import os
 import select
+import sys
 import tempfile
 from pathlib import Path
 import unittest
@@ -56,11 +57,11 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(self.engine.calls, [])
 
     def test_stale_restart_and_expired_challenges(self):
-        with patch('marmish_protocol.time.monotonic', return_value=100):
+        with patch('marmish_protocol.continuous_time', return_value=100):
             challenge = self.hello()
             frame = self.frame('token', {}, challenge)
             self.dispatch.dispatch(frame, SID, GROUP, CLIENT)
-        with patch('marmish_protocol.time.monotonic', return_value=161):
+        with patch('marmish_protocol.continuous_time', return_value=161):
             self.assertEqual(self.dispatch.dispatch(frame, SID, GROUP, CLIENT)['body'],
                              {'ok': False, 'error': 'stale_challenge'})
             frame['challenge'] = self.hello()
@@ -152,7 +153,7 @@ class BridgeTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         executable = Path(self.temp.name) / 'bridge'
-        executable.write_text('''#!/usr/bin/python3
+        executable.write_text('#!' + str(Path(sys.executable).resolve()) + '''
 import json, sys, time
 for line in sys.stdin.buffer:
     request = json.loads(line)

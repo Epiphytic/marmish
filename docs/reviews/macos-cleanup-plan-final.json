@@ -1,0 +1,87 @@
+{
+  "duration_api_ms": 14003,
+  "stop_reason": "end_turn",
+  "session_id": "690a533c-56d5-49b7-b4df-d60a9d95ddef",
+  "total_cost_usd": 0.15248160000000002,
+  "usage": {
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 32454,
+    "cache_read_input_tokens": 97436,
+    "output_tokens": 1291,
+    "output_tokens_details": {
+      "thinking_tokens": 381
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 32454,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 6,
+      "outputTokens": 1291,
+      "cacheReadInputTokens": 97436,
+      "cacheCreationInputTokens": 32454,
+      "webSearchRequests": 0,
+      "costUSD": 0.15248160000000002,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 381,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "subagent_stats": {
+    "spawned": 0,
+    "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+    },
+    "started_in_background": 0,
+    "max_depth": 0,
+    "spawned_by_subagents": 0,
+    "completed": 0,
+    "failed": 0,
+    "killed": {
+      "parent": 0,
+      "user": 0,
+      "system": 0
+    },
+    "refused": {
+      "depth_limit": 0,
+      "concurrency_limit": 0,
+      "budget": 0
+    },
+    "by_type": {}
+  },
+  "safety_stops": 0,
+  "is_error": false,
+  "num_turns": 3,
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "**APPROVE.** The revised section closes all three blockers from the review.\n\n1. **Lock retry:** Busy locks are retried every 25 ms within one suspend-inclusive five-second deadline. Locks are taken in ascending JobId order, worker before I/O. A timeout releases every guard taken so far and returns an explicit incomplete result, and the engine isn't frozen.\n2. **Job set:** The set is the union of persisted job IDs and job directories, snapshotted under the frontend lock and capped at 256. The descriptor preflight is the current count plus 2 per job plus 64, checked against RLIMIT_NOFILE and Darwin's ceiling. State and worker identity are re-read after the locks are held. An unrecorded directory is rejected, a non-Exited record is rejected, and an Exited tombstone without a directory is accepted.\n3. **Store and engine lifetime:** `into_cleanup(self)` consumes the engine, so a freeze flag on public methods isn't needed. The Store and keys are dropped before the guard is returned, and the worker drops its Store before its lifetime lock. The bridge retains only the guard, so ordinary operations fail because there is no Engine. Duplicate readiness is idempotent.\n\nThese are non-blocking notes to fold into the implementation or tests, not the design:\n\n- **Cap handling:** State that more than 256 jobs fails closed as incomplete, rather than truncating. Enumerate the store pages to exhaustion before applying the cap.\n- **Stray grandchildren:** The locks don't stop a grandchild of the confined command from recreating files during `rmtree`. Either have the Python helper retry `rmtree` briefly, or assert the account cwd is outside the root.\n- **Incomplete report:** Include the retained state path. `Lost` and `UnknownLaunch` jobs will permanently block cleanup, which is acceptable for owned tests.\n- **Test coverage:** Add a test for a worker that is mid-teardown (Busy, then released within the deadline). Add another for a late-initializing worker that finds the Exited job and returns `AlreadyClaimed`.",
+  "ttft_ms": 2633,
+  "type": "result",
+  "duration_ms": 14605,
+  "uuid": "270defd3-efb1-444d-9089-aed10671fb07",
+  "ttft_stream_ms": 1922,
+  "time_to_request_ms": 235,
+  "first_content_frame_ms": 1923,
+  "queued_turn_count": 0,
+  "result_index": 0
+}

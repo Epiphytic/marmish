@@ -8,12 +8,14 @@ from pathlib import Path
 import re
 import secrets
 import select
+import shutil
 import stat
 import subprocess
 import time
 
 from mdk_smoke import SmokeError, public_key, identifier, require
 from marmish_rpc import strict_json, RpcError
+from marmish_platform import canonical_state_path, continuous_time, execution_marker
 
 PROTOCOL = 'marmish/1'
 PURPOSE = 'marmish/v1 command transport'
@@ -56,7 +58,7 @@ def decode(data, limit=FRAME_LIMIT):
 
 
 def private_directory(path):
-    path = Path(path).absolute()
+    path = canonical_state_path(path)
     # Reject symlink components even when a later resolve would hide them.
     for ancestor in [*reversed(path.parents), path]:
         if ancestor.exists() or ancestor.is_symlink():
@@ -188,7 +190,7 @@ class EngineBridge:
     def __init__(self, executable, policy):
         self.child = subprocess.Popen([str(executable)], stdin=subprocess.PIPE,
                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                      env={'PATH': '/usr/bin:/bin', 'LANG': 'C'},
+                                      env={'PATH': '/usr/bin:/bin', 'LANG': 'C', **execution_marker()},
                                       bufsize=0, start_new_session=True)
         self.pending = bytearray()
         self.broken = False
@@ -203,21 +205,23 @@ class EngineBridge:
         request_id = secrets.token_hex(16)
         data = encode({'id': request_id, 'op': op, **body}) + b'\n'
         require(len(data) <= 131072, 'bridge_frame_limit')
-        deadline = time.monotonic() + 20
+        deadline = continuous_time() + 20
         try:
             os.set_blocking(self.child.stdin.fileno(), False)
             offset = 0
             while offset < len(data):
-                remaining = deadline - time.monotonic()
+                remaining = deadline - continuous_time()
                 require(remaining > 0, 'bridge_timeout')
                 require(select.select([], [self.child.stdin], [], remaining)[1], 'bridge_timeout')
+                require(continuous_time() < deadline, 'bridge_timeout')
                 written = os.write(self.child.stdin.fileno(), data[offset:])
                 require(written > 0, 'bridge_closed')
                 offset += written
             while b'\n' not in self.pending:
-                remaining = deadline - time.monotonic()
+                remaining = deadline - continuous_time()
                 require(remaining > 0, 'bridge_timeout')
                 require(select.select([self.child.stdout], [], [], remaining)[0], 'bridge_timeout')
+                require(continuous_time() < deadline, 'bridge_timeout')
                 part = os.read(self.child.stdout.fileno(), 65536)
                 require(part, 'bridge_closed')
                 self.pending.extend(part)
@@ -275,12 +279,12 @@ class Dispatcher:
 
     def _engine(self, op, peer, group, body):
         endpoint = hashlib.sha256(bytes.fromhex(group)).hexdigest()
-        deadline = time.monotonic() + 5
+        deadline = continuous_time() + 5
         while True:
             try:
                 return self.engine.call(op, principal=peer, endpoint=endpoint, **body)
             except SmokeError as error:
-                if str(error) not in ('busy', 'already_open') or time.monotonic() >= deadline:
+                if str(error) not in ('busy', 'already_open') or continuous_time() >= deadline:
                     raise
                 time.sleep(.05)
 
@@ -289,7 +293,7 @@ class Dispatcher:
         op, body = frame['op'], frame['body']
         key = (group, peer, frame['id'])
         digest = hashlib.sha256(encode(frame)).digest()
-        now = time.monotonic()
+        now = continuous_time()
         if op == 'hello':
             require(set(body) == {'nonce'} and frame['challenge'] is None, 'invalid_frame')
             hex_id(body['nonce'], 32)
@@ -356,3 +360,21 @@ def unb64(data):
         return value
     except ValueError:
         raise SmokeError('invalid_bytes') from None
+
+
+def remove_engine_state(executable, policy):
+    """Owned tests only: fence workers and close SQLCipher before removing state.
+
+    Stop the frontend and cancel tracked invocations first. Failure preserves
+    private state; the caller reports the retained path as incomplete cleanup.
+    This operation is deliberately absent from the remote protocol.
+    """
+    root = private_directory(policy['state_root'])
+    bridge = EngineBridge(executable, policy)
+    try:
+        require(bridge.call('cleanup_ready') == {'ready': True}, 'cleanup_incomplete')
+        # The bridge holds only the opaque root/job-lock guard now, with its
+        # SQLCipher connection closed. Keep it alive through the full removal.
+        shutil.rmtree(root)
+    finally:
+        bridge.close()

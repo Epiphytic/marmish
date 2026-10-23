@@ -1,7 +1,8 @@
-//! Linux same-user launch and directory-relative private storage primitives.
+//! Unix same-user launch and directory-relative private storage primitives.
 use crate::cipher::{StorageKeys, KEY_MAGIC};
 use crate::model::*;
-use crate::store::{AccountSpec, BootTime, OrphanPage, ProcessIdentity, WorkerCredential};
+use crate::platform;
+use crate::store::{AccountSpec, OrphanPage, ProcessIdentity, WorkerCredential};
 use std::collections::BTreeSet;
 use std::ffi::{CStr, CString, OsStr, OsString};
 use std::fs::{File, Metadata};
@@ -71,7 +72,7 @@ pub(crate) enum ChildSpawnError {
     Uncertain,
 }
 
-fn io_error(error: std::io::Error) -> EngineError {
+pub(super) fn io_error(error: std::io::Error) -> EngineError {
     match error.raw_os_error() {
         Some(libc::EAGAIN) | Some(libc::EACCES) => EngineError::Busy,
         Some(libc::ELOOP) | Some(libc::ENOTDIR) => EngineError::UnsafePath,
@@ -125,7 +126,7 @@ fn openat(parent: &File, name: &OsStr, flags: i32, mode: u32) -> Result<File> {
             parent.as_raw_fd(),
             name.as_ptr(),
             flags | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-            mode,
+            mode as libc::c_uint,
         )
     };
     if fd < 0 {
@@ -155,7 +156,8 @@ fn private(meta: &Metadata, owner: u32, directory: bool) -> Result<()> {
     Ok(())
 }
 fn ancestor(meta: &Metadata, owner: u32) -> Result<()> {
-    let sticky_system = meta.uid() == 0 && meta.mode() & libc::S_ISVTX != 0;
+    #[allow(clippy::useless_conversion)] // Darwin mode_t is u16, Linux u32.
+    let sticky_system = meta.uid() == 0 && meta.mode() & u32::from(libc::S_ISVTX) != 0;
     if !meta.is_dir()
         || ![0, owner].contains(&meta.uid())
         || (meta.mode() & 0o022 != 0 && !sticky_system)
@@ -221,7 +223,9 @@ impl StateRoot {
     }
     fn open_inner(path: &Path, create: bool) -> Result<Self> {
         let uid = uid()?;
-        let directory = directory_path(path, uid, create)?;
+        let path = platform::state_path(path)?;
+        let directory = directory_path(&path, uid, create)?;
+        platform::validate_storage(&directory)?;
         if create {
             mkdirat(&directory, OsStr::new("jobs"))?;
         }
@@ -235,7 +239,7 @@ impl StateRoot {
         Ok(Self {
             directory,
             jobs,
-            path: path.to_path_buf(),
+            path,
             uid,
         })
     }
@@ -279,22 +283,18 @@ impl StateRoot {
         Ok(StorageKeys(master))
     }
     pub fn storage_is_pristine(&self) -> Result<bool> {
-        Ok(
-            std::fs::read_dir(format!("/proc/self/fd/{}", self.jobs.as_raw_fd()))
-                .map_err(io_error)?
-                .next()
-                .is_none(),
-        )
+        Ok(platform::DirectoryEntries::open(&self.jobs)?
+            .next()
+            .transpose()?
+            .is_none())
     }
     fn storage_candidate(&self) -> Result<bool> {
         // Bootstrap only, before this process opens any SQLite connection.
         self.verify_sqlite_files(&self.directory, "engine.sqlite3", false, true)?;
         let jobs_empty = self.storage_is_pristine()?;
-        for entry in std::fs::read_dir(format!("/proc/self/fd/{}", self.jobs.as_raw_fd()))
-            .map_err(io_error)?
-        {
-            let entry = entry.map_err(io_error)?;
-            let job = parse_job(&entry.file_name()).map_err(|_| EngineError::UnsafePath)?;
+        for entry in platform::DirectoryEntries::open(&self.jobs)? {
+            let entry = entry?;
+            let job = parse_job(&entry).map_err(|_| EngineError::UnsafePath)?;
             let dir = self.job_dir(job)?;
             if exists_at(&dir, "stdout")? || exists_at(&dir, "stderr")? {
                 return Err(EngineError::StorageFailure);
@@ -353,7 +353,7 @@ impl StateRoot {
             let pending = self.protected_key_file(".engine.key.pending")?;
             drop(pending);
             unlink_private(&self.directory, ".engine.key.pending", self.uid, false)?;
-            self.directory.sync_all().map_err(io_error)?;
+            platform::sync(&self.directory)?;
         }
         let master = Zeroizing::new(crate::admission::random_bytes::<32>()?);
         let mut file = openat(
@@ -371,32 +371,19 @@ impl StateRoot {
         file.write_all(KEY_MAGIC)
             .and_then(|()| file.write_all(master.as_ref()))
             .map_err(io_error)?;
-        file.sync_all().map_err(io_error)?;
+        platform::sync(&file)?;
         crate::fault::fault_point(
             self,
             JobId([0; 16]),
             crate::fault::FaultPoint::AfterKeyStage,
         );
-        let old = c".engine.key.pending";
-        let new = c"engine.key";
-        if unsafe {
-            libc::renameat2(
-                self.directory.as_raw_fd(),
-                old.as_ptr(),
-                self.directory.as_raw_fd(),
-                new.as_ptr(),
-                libc::RENAME_NOREPLACE,
-            )
-        } != 0
-        {
-            return Err(EngineError::StorageFailure);
-        }
+        platform::publish_key(&self.directory)?;
         crate::fault::fault_point(
             self,
             JobId([0; 16]),
             crate::fault::FaultPoint::AfterKeyPublish,
         );
-        self.directory.sync_all().map_err(io_error)?;
+        platform::sync(&self.directory)?;
         crate::fault::fault_point(
             self,
             JobId([0; 16]),
@@ -413,8 +400,8 @@ impl StateRoot {
                 0o600,
             )?;
             private(&file.metadata().map_err(io_error)?, self.uid, false)?;
-            file.sync_all().map_err(io_error)?;
-            self.directory.sync_all().map_err(io_error)?;
+            platform::sync(&file)?;
+            platform::sync(&self.directory)?;
             crate::fault::fault_point(
                 self,
                 JobId([0; 16]),
@@ -469,28 +456,9 @@ impl StateRoot {
         Ok(())
     }
     pub fn verify_database_descriptors(&self) -> Result<()> {
-        // Never open/close extra database fds: POSIX locks are process-wide.
-        for entry in std::fs::read_dir("/proc/self/fd").map_err(io_error)? {
-            let entry = entry.map_err(io_error)?;
-            let Ok(target) = std::fs::read_link(entry.path()) else {
-                continue;
-            };
-            if target.starts_with(&self.path) {
-                let Some(fd) = entry
-                    .file_name()
-                    .to_str()
-                    .and_then(|name| name.parse::<i32>().ok())
-                else {
-                    continue;
-                };
-                let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-                if flags == -1 || flags & libc::FD_CLOEXEC == 0 {
-                    return Err(EngineError::UnsafePath);
-                }
-            }
-        }
-        Ok(())
+        platform::verify_descriptors(&self.path, &self.directory, &self.jobs)
     }
+
     fn file(&self, parent: &File, name: &str, create: bool) -> Result<File> {
         let flags = libc::O_RDWR
             | if create && !exists_at(parent, name)? {
@@ -514,7 +482,7 @@ impl StateRoot {
     }
     pub fn lock_frontend(&self) -> Result<FrontendGuard> {
         let file = self.file(&self.directory, "frontend.lock", true)?;
-        ofd_lock(&file).map_err(|error| {
+        platform::lock_exclusive(&file).map_err(|error| {
             if matches!(error, EngineError::Busy) {
                 EngineError::AlreadyOpen
             } else {
@@ -540,12 +508,12 @@ impl StateRoot {
             0o600,
         )?;
         file.write_all(&credential.0).map_err(io_error)?;
-        file.sync_all().map_err(io_error)?;
+        platform::sync(&file)?;
         for name in ["worker.lock", "io.lock"] {
-            self.file(&dir, name, true)?.sync_all().map_err(io_error)?;
+            platform::sync(&self.file(&dir, name, true)?)?;
         }
-        dir.sync_all().map_err(io_error)?;
-        self.jobs.sync_all().map_err(io_error)?;
+        platform::sync(&dir)?;
+        platform::sync(&self.jobs)?;
         Ok(())
     }
     pub fn job_directory_exists(&self, job: JobId) -> Result<bool> {
@@ -573,7 +541,7 @@ impl StateRoot {
     }
     pub fn lock_job(&self, job: JobId) -> Result<JobGuard> {
         let file = self.file(&self.job_dir(job)?, "worker.lock", false)?;
-        ofd_lock(&file)?;
+        platform::lock_exclusive(&file)?;
         Ok(JobGuard { _file: file })
     }
     /// Recover only an unadmitted directory, after the frontend holding this
@@ -592,10 +560,10 @@ impl StateRoot {
         }
         let directory = self.job_dir(job)?;
         let worker = self.file(&directory, "worker.lock", true)?;
-        ofd_lock(&worker)?;
+        platform::lock_exclusive(&worker)?;
         let job_guard = JobGuard { _file: worker };
         let io = self.file(&directory, "io.lock", true)?;
-        ofd_lock(&io)?;
+        platform::lock_exclusive(&io)?;
         Ok((
             job_guard,
             IoGuard {
@@ -607,7 +575,7 @@ impl StateRoot {
     }
     pub fn lock_io(&self, job: JobId) -> Result<IoGuard> {
         let file = self.file(&self.job_dir(job)?, "io.lock", false)?;
-        ofd_lock(&file)?;
+        platform::lock_exclusive(&file)?;
         let meta = self.directory.metadata().map_err(io_error)?;
         Ok(IoGuard {
             _file: file,
@@ -632,12 +600,11 @@ impl StateRoot {
             Err(_) if !exists_at(&self.jobs, &job_hex(job))? => return Ok(WorkerPresence::Absent),
             Err(error) => return Err(error),
         };
-        let file = self.file(&dir, "worker.lock", false)?;
-        let mut lock = flock();
-        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_OFD_GETLK, &mut lock) } == -1 {
-            return Err(EngineError::StorageFailure);
+        if !exists_at(&dir, "worker.lock")? {
+            return Err(EngineError::UnsafePath);
         }
-        if lock.l_type == libc::F_UNLCK as i16 {
+        let file = self.file(&dir, "worker.lock", false)?;
+        if !platform::lock_is_busy(&file)? {
             return Ok(WorkerPresence::Absent);
         }
         if let Some(identity) = recorded {
@@ -656,15 +623,13 @@ impl StateRoot {
         let mut found = BTreeSet::new();
         let cursor = cursor.map(job_hex);
         let mut visits = 0;
-        for entry in std::fs::read_dir(format!("/proc/self/fd/{}", self.jobs.as_raw_fd()))
-            .map_err(io_error)?
-        {
+        for entry in platform::DirectoryEntries::open(&self.jobs)? {
             visits += 1;
             if visits > 100_256 {
                 return Err(EngineError::QuotaExceeded);
             }
-            let entry = entry.map_err(io_error)?;
-            let Ok(job) = parse_job(&entry.file_name()) else {
+            let entry = entry?;
+            let Ok(job) = parse_job(&entry) else {
                 continue;
             };
             self.job_dir(job)?;
@@ -687,6 +652,18 @@ impl StateRoot {
             .collect::<Result<_>>()?;
         let next = if more { jobs.last().copied() } else { None };
         Ok(OrphanPage { jobs, next })
+    }
+    pub(crate) fn cleanup_directories(&self) -> Result<BTreeSet<[u8; 16]>> {
+        let mut jobs = BTreeSet::new();
+        for name in platform::DirectoryEntries::open(&self.jobs)? {
+            let job = parse_job(&name?)?;
+            self.job_dir(job)?;
+            jobs.insert(job.0);
+            if jobs.len() > 256 {
+                return Err(EngineError::QuotaExceeded);
+            }
+        }
+        Ok(jobs)
     }
     pub fn prepare_spool_db(
         &self,
@@ -713,8 +690,8 @@ impl StateRoot {
                 0o600,
             )?;
             private(&file.metadata().map_err(io_error)?, self.uid, false)?;
-            file.sync_all().map_err(io_error)?;
-            dir.sync_all().map_err(io_error)?;
+            platform::sync(&file)?;
+            platform::sync(&dir)?;
         }
         self.verify_spool_files(job, stream, guard)?;
         Ok(self.path.join("jobs").join(job_hex(job)).join(name))
@@ -750,7 +727,7 @@ impl StateRoot {
                 );
             }
         }
-        dir.sync_all().map_err(io_error)
+        platform::sync(&dir)
     }
     pub fn remove_job(&self, job: JobId, guard: &IoGuard) -> Result<()> {
         self.check_io(job, guard)?;
@@ -772,7 +749,7 @@ impl StateRoot {
             unlink_private(&dir, name, self.uid, false)?;
         }
         unlink_private(&self.jobs, &job_hex(job), self.uid, true)?;
-        self.jobs.sync_all().map_err(io_error)
+        platform::sync(&self.jobs)
     }
     #[cfg(feature = "fault-injection")]
     pub fn read_fault(&self, job: JobId) -> Result<Option<Vec<u8>>> {
@@ -859,23 +836,6 @@ fn unlink_private(parent: &File, name: &str, owner: u32, directory: bool) -> Res
     }
     Ok(())
 }
-fn flock() -> libc::flock {
-    libc::flock {
-        l_type: libc::F_WRLCK as i16,
-        l_whence: libc::SEEK_SET as i16,
-        l_start: 0,
-        l_len: 0,
-        l_pid: 0,
-    }
-}
-fn ofd_lock(file: &File) -> Result<()> {
-    let lock = flock();
-    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_OFD_SETLK, &lock) } == -1 {
-        return Err(io_error(std::io::Error::last_os_error()));
-    }
-    Ok(())
-}
-
 pub(crate) fn local_account(cwd: Option<&Path>) -> Result<AccountSpec> {
     let uid = uid()?;
     let mut passwd: libc::passwd = unsafe { std::mem::zeroed() };
@@ -920,67 +880,6 @@ pub(crate) fn local_account(cwd: Option<&Path>) -> Result<AccountSpec> {
         user,
     })
 }
-pub(crate) fn boot_time() -> Result<BootTime> {
-    let boot_id = boot_id()?;
-    let mut clock: libc::timespec = unsafe { std::mem::zeroed() };
-    if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut clock) } == -1 || clock.tv_sec < 0 {
-        return Err(EngineError::StorageFailure);
-    }
-    let millis = (clock.tv_sec as u64)
-        .checked_mul(1000)
-        .and_then(|n| n.checked_add(clock.tv_nsec as u64 / 1_000_000))
-        .ok_or(EngineError::StorageFailure)?;
-    Ok(BootTime { boot_id, millis })
-}
-fn boot_id() -> Result<[u8; 16]> {
-    let raw = std::fs::read("/proc/sys/kernel/random/boot_id").map_err(io_error)?;
-    let compact: Vec<_> = raw
-        .into_iter()
-        .filter(|b| *b != b'-' && *b != b'\n')
-        .collect();
-    Ok(parse_job(OsStr::from_bytes(&compact))?.0)
-}
-pub(crate) fn process_identity(pid: i32) -> Result<ProcessIdentity> {
-    if pid <= 0 {
-        return Err(EngineError::WorkerUnavailable);
-    }
-    let mut raw = Vec::new();
-    File::open(format!("/proc/{pid}/stat"))
-        .map_err(|_| EngineError::WorkerUnavailable)?
-        .take(16385)
-        .read_to_end(&mut raw)
-        .map_err(|_| EngineError::WorkerUnavailable)?;
-    if raw.len() > 16384 {
-        return Err(EngineError::WorkerUnavailable);
-    }
-    let start_ticks = parse_proc_stat(&raw, pid)?;
-    Ok(ProcessIdentity {
-        boot_id: boot_id()?,
-        pid,
-        start_ticks,
-    })
-}
-fn parse_proc_stat(raw: &[u8], pid: i32) -> Result<u64> {
-    let text = std::str::from_utf8(raw).map_err(|_| EngineError::WorkerUnavailable)?;
-    let (before, after) = text
-        .rsplit_once(") ")
-        .ok_or(EngineError::WorkerUnavailable)?;
-    if !before.starts_with(&format!("{pid} (")) {
-        return Err(EngineError::WorkerUnavailable);
-    }
-    let fields: Vec<_> = after.split_whitespace().collect();
-    if fields.len() < 50 || fields[0].len() != 1 {
-        return Err(EngineError::WorkerUnavailable);
-    }
-    for field in &fields[1..] {
-        if field.parse::<i128>().is_err() {
-            return Err(EngineError::WorkerUnavailable);
-        }
-    }
-    fields[19]
-        .parse()
-        .map_err(|_| EngineError::WorkerUnavailable)
-}
 pub(crate) fn same_identity(a: &ProcessIdentity, b: &ProcessIdentity) -> bool {
     a.boot_id == b.boot_id && a.pid == b.pid && a.start_ticks == b.start_ticks
 }
@@ -1020,28 +919,23 @@ pub(crate) fn child_environment(account: &AccountSpec) -> Vec<(OsString, OsStrin
         ("LANG".into(), "C".into()),
     ]
 }
-unsafe fn pre_exec() -> std::io::Result<()> {
-    if unsafe { libc::setsid() } == -1 {
-        return Err(std::io::Error::last_os_error());
-    }
-    unsafe {
-        libc::umask(0o077);
-    }
-    if unsafe {
-        libc::syscall(
-            libc::SYS_close_range,
-            3u32,
-            u32::MAX,
-            libc::CLOSE_RANGE_CLOEXEC,
-        )
-    } == -1
-    {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
-}
-pub(crate) fn spawn_worker(executable: &Path, spec: &LaunchSpec) -> Result<()> {
+/// Global prerequisites are checked before any durable attempt reservation.
+pub(crate) fn worker_preconditions(executable: &Path) -> Result<PathBuf> {
     let executable = trusted_worker_executable(executable)?;
+    platform::prepare_spawn()?;
+    platform::execution_marker()?;
+    #[cfg(test)]
+    test_spawn::precondition()?;
+    Ok(executable)
+}
+
+pub(crate) struct PreparedWorker(Command);
+pub(crate) enum WorkerSpawnError {
+    Transient,
+    Global(EngineError),
+}
+pub(crate) fn prepare_worker(executable: &Path, spec: &LaunchSpec) -> Result<PreparedWorker> {
+    let executable = worker_preconditions(executable)?;
     let root = StateRoot::open_existing(&spec.root)?;
     root.prepare_db(false)?;
     let mut command = Command::new(executable);
@@ -1053,27 +947,75 @@ pub(crate) fn spawn_worker(executable: &Path, spec: &LaunchSpec) -> Result<()> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    unsafe {
-        command.pre_exec(|| pre_exec());
+    if let Some(marker) = platform::execution_marker()? {
+        command.env("EPIPHYTIC_EXECUTION_ID", marker);
     }
-    // Reserve the reaper before spawning: thread exhaustion cannot leave an
-    // already spawned worker without an owner for its eventual wait status.
-    let (sender, receiver) = std::sync::mpsc::sync_channel::<Child>(1);
-    std::thread::Builder::new()
-        .name("marmish-worker-reaper".into())
-        .spawn(move || {
-            if let Ok(mut child) = receiver.recv() {
-                let _ = child.wait();
+    unsafe {
+        command.pre_exec(|| platform::pre_exec());
+    }
+    Ok(PreparedWorker(command))
+}
+impl PreparedWorker {
+    pub(crate) fn spawn(mut self) -> std::result::Result<(), WorkerSpawnError> {
+        #[cfg(test)]
+        test_spawn::spawn()?;
+        // Reserve the reaper before spawning; resource exhaustion is a counted
+        // transient attempt, while no already-spawned child loses its owner.
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<Child>(1);
+        std::thread::Builder::new()
+            .name("marmish-worker-reaper".into())
+            .spawn(move || {
+                if let Ok(mut child) = receiver.recv() {
+                    let _ = child.wait();
+                }
+            })
+            .map_err(|_| WorkerSpawnError::Transient)?;
+        let child = self.0.spawn().map_err(|error| match error.raw_os_error() {
+            Some(libc::EAGAIN | libc::ENOMEM) => WorkerSpawnError::Transient,
+            _ => WorkerSpawnError::Global(EngineError::WorkerUnavailable),
+        })?;
+        sender
+            .send(child)
+            .map_err(|_| WorkerSpawnError::Global(EngineError::RecoveryUncertain))?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_spawn {
+    use super::*;
+    #[derive(Clone, Copy)]
+    pub(crate) enum Failure {
+        Global,
+        Transient,
+        LateGlobal,
+    }
+    thread_local! { static FAILURE: std::cell::Cell<Option<Failure>> = const { std::cell::Cell::new(None) }; }
+    pub(crate) struct Guard(Option<Failure>);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            FAILURE.set(self.0);
+        }
+    }
+    pub(crate) fn inject(failure: Failure) -> Guard {
+        Guard(FAILURE.replace(Some(failure)))
+    }
+    pub(super) fn precondition() -> Result<()> {
+        if matches!(FAILURE.get(), Some(Failure::Global)) {
+            Err(EngineError::WorkerUnavailable)
+        } else {
+            Ok(())
+        }
+    }
+    pub(super) fn spawn() -> std::result::Result<(), WorkerSpawnError> {
+        match FAILURE.get() {
+            Some(Failure::Transient) => Err(WorkerSpawnError::Transient),
+            Some(Failure::LateGlobal) => {
+                Err(WorkerSpawnError::Global(EngineError::WorkerUnavailable))
             }
-        })
-        .map_err(|_| EngineError::WorkerUnavailable)?;
-    let child = command
-        .spawn()
-        .map_err(|_| EngineError::WorkerUnavailable)?;
-    sender
-        .send(child)
-        .map_err(|_| EngineError::WorkerUnavailable)?;
-    Ok(())
+            _ => Ok(()),
+        }
+    }
 }
 /// The returned Child still reserves its PID even when /proc inspection failed.
 fn discard_spawned_child(child: &mut Child, pid: i32) {
@@ -1119,6 +1061,7 @@ pub(crate) fn spawn_child(spec: &ChildSpec) -> std::result::Result<SpawnedChild,
     {
         return Err(ChildSpawnError::NotStarted);
     }
+    platform::prepare_spawn().map_err(|_| ChildSpawnError::NotStarted)?;
     let mut command = match &spec.request {
         CommandRequest::Exec { argv } => {
             if argv.is_empty()
@@ -1151,7 +1094,7 @@ pub(crate) fn spawn_child(spec: &ChildSpec) -> std::result::Result<SpawnedChild,
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     unsafe {
-        command.pre_exec(|| pre_exec());
+        command.pre_exec(|| platform::pre_exec());
     }
     let mut child = command.spawn().map_err(|_| ChildSpawnError::NotStarted)?;
     let pid = child.id() as i32;
@@ -1180,3 +1123,5 @@ pub(crate) fn spawn_child(spec: &ChildSpec) -> std::result::Result<SpawnedChild,
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) use crate::platform::{boot_time, process_identity};

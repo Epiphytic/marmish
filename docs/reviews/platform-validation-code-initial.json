@@ -1,0 +1,87 @@
+{
+  "duration_api_ms": 265974,
+  "stop_reason": "end_turn",
+  "session_id": "05fe45c3-94ef-4530-8257-6e394bb60edb",
+  "total_cost_usd": 0.8710936999999999,
+  "usage": {
+    "input_tokens": 26,
+    "cache_creation_input_tokens": 108732,
+    "cache_read_input_tokens": 1096137,
+    "output_tokens": 32650,
+    "output_tokens_details": {
+      "thinking_tokens": 26199
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 108732,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 26,
+      "outputTokens": 32650,
+      "cacheReadInputTokens": 1096137,
+      "cacheCreationInputTokens": 108732,
+      "webSearchRequests": 0,
+      "costUSD": 0.8710936999999999,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 26199,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "subagent_stats": {
+    "spawned": 0,
+    "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+    },
+    "started_in_background": 0,
+    "max_depth": 0,
+    "spawned_by_subagents": 0,
+    "completed": 0,
+    "failed": 0,
+    "killed": {
+      "parent": 0,
+      "user": 0,
+      "system": 0
+    },
+    "refused": {
+      "depth_limit": 0,
+      "concurrency_limit": 0,
+      "budget": 0
+    },
+    "by_type": {}
+  },
+  "safety_stops": 0,
+  "is_error": false,
+  "num_turns": 23,
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "```json\n{\n  \"verdict\": \"REQUEST_CHANGES\",\n  \"summary\": \"The core design is implemented and matches the plan. It covers the push-only master trigger, SHA-pinned actions, token scoped to two steps, strict zip/JSON parsing, a redirect that never forwards the token, two-stage rendezvous with shared deadline, owned service with always-run cleanup, and a no-shell fixture. Three issues need fixing before this can count as acceptance evidence. The completion marker is sent before the last client assertion. The sanitized result JSON omits evidence the plan requires. The new coordinator code has no offline tests.\",\n  \"findings\": [\n    {\n      \"severity\": \"medium\",\n      \"path\": \"tools/marmish_interop.py\",\n      \"line\": 311,\n      \"action\": \"Move the marker submission (lines 311-312) after the actual-CLI assertion (lines 313-318), and write tests-passed only after the marker succeeds. The plan says the marker is submitted after the client assertions pass. Today a failing CLI step still leaves a valid peer-completed marker, so the peer's service can report outcome=passed and bidirectional completion for a direction that failed.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"path\": \"tools/marmish_interop.py\",\n      \"line\": 325,\n      \"action\": \"Add the evidence the plan lists for the result JSON: tool versions (rustc, cc, python), wnd.manifest.json provenance/digests, fixture digest, elapsed time and cleanup outcome. Also write a compact $GITHUB_STEP_SUMMARY. The result currently carries only run/attempt/SHA, direction, assertions, relays, platform and wnd_sha256. The workflow also prints versions only to logs.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"path\": \"tools/test_marmish_interop.py\",\n      \"line\": 1,\n      \"action\": \"Add offline tests for the untested trusted code. These are interop.policy() (a policy that passes validate_policy; * vs ** and the two key entries), marker() symmetry and direction, the unexpected_api_token refusals, and prepare/cleanup state safety. Also cover marmish_ci.unpack (duplicate/extra/non-file/unknown members, digest mismatch, bundle.json file-set mismatch), bootstrap's origin and digest rejection, and workflow invariants (no dispatch/PR trigger, per-step token scope, pinned SHAs, persist-credentials false). The test file never imports marmish_interop or marmish_ci, so import or logic regressions there are invisible offline.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"path\": \"tools/marmish_interop.py\",\n      \"line\": 246,\n      \"action\": \"Make the unlisted-npub negative non-vacuous. Any relay or peer slowness produces the same client_timeout, so a pass proves nothing about the allowlist. Require evidence that the server saw and refused the intruder (for example a peer-side pending/unaccepted invite or a status check), or submit through a session and assert denial. Keep the check that nothing executed.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"path\": \"tools/marmish_rendezvous.py\",\n      \"line\": 132,\n      \"action\": \"Retry transient API/network errors (429/5xx, URLError) with bounded backoff inside the existing deadline. Currently any single non-200 or network error aborts the pairing at lines 135 and 108, although the plan calls for bounded polling/backoff.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"path\": \"tools/marmish_rendezvous.py\",\n      \"line\": 54,\n      \"action\": \"Do not reject on peer wall-clock expiry. The plan says peer wall time is diagnostic only. Runner skew above 300s will falsely fail. Record it diagnostically and rely on the local continuous deadline.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"path\": \"tools/marmish_interop.py\",\n      \"line\": 68,\n      \"action\": \"Start the 70-minute budget at job start, not at prepare. The 900s native E2E runs before prepare and is outside the budget. Also bound the in-process Client timeouts (lines 256 and 307, fixed at 900) by the remaining execution deadline. Today only the service loop and the step timeout enforce the 1,200s ceiling.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"path\": \"tools/marmish_interop.py\",\n      \"line\": 176,\n      \"action\": \"Retry or tolerate a partial read of root/cwd/peer-completed until the deadline. The fixture creates the file and then writes it, so a poll can read an empty file and fail permanently with invalid_peer_completion.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"path\": \"tools/marmish_interop.py\",\n      \"line\": 44,\n      \"action\": \"Confirm that the sanitized environment (PATH, LANG and EPIPHYTIC_EXECUTION_ID only) combined with start_new_session does not defeat runner descendant tracking. It drops runner tracking variables from the detached service and server. The plan says not to disable descendant tracking. marmish_e2e.py has the same pattern. Document the reliance on EPIPHYTIC_EXECUTION_ID, or preserve the runner's tracking variables.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"path\": \".github/workflows/native-validation.yml\",\n      \"line\": 58,\n      \"action\": \"Strengthen the Linux probe. A single bwrap --unshare-user/net/pid invocation does not exercise the nested user/network/PID namespaces the plan requires. The Linux job should run the confinement probe the way the sandbox transport uses it, or run a nested bwrap-inside-unshare check. prepare() also has no explicit Unix-socket path-length check, which the plan asks for. The /tmp/mci-* path length is only implicitly safe.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"path\": \"tools/marmish_ci.py\",\n      \"line\": 74,\n      \"action\": \"Bind bundle.json to run/attempt/SHA/platform and validate the digests as 64-hex strings. Unpack currently proves only self-consistency of the tarball. Same-attempt provenance rests solely on the artifact name. Also make bundle.json parsing strict, since unpack uses plain json.loads.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"path\": \"tools/marmish_e2e.py\",\n      \"line\": 367,\n      \"action\": \"Remove retained_private_state=str(root) from the report. The workflow redirects this JSON into a public results artifact, and the plan says to omit private paths.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"path\": \"tools/marmish_interop.py\",\n      \"line\": 111,\n      \"action\": \"Add a distributed check that a per-key allow layer narrower than the defaults denies something the defaults allow. The current per-key allow (root/**) is a superset, so it only shows that per-key entries do not relax the defaults. The cumulative-narrowing half of the plan's wording is covered only by deny-key.\"\n    }\n  ],\n  \"plan_checks\": {\n    \"runner_eligibility\": \"OK. The labels and group epiphytic-ci match the plan, the native matrix uses max-parallel:1, live needs all native jobs, live runs only macOS ARM64 and Linux X64, and Linux ARM64 is offline only. Actual runner availability is not provable offline.\",\n    \"same_attempt_and_sha\": \"OK. Artifact names embed run and attempt. download-artifact uses the current run. validate() checks run, attempt, SHA, role, platform, relays and fixture path. run_tests() binds the paired record to the ready record and both nonces.\",\n    \"strict_artifact_parsing\": \"OK. It enforces a 64 KiB compressed limit, exactly one record.json of at most 8 KiB, no ZIP64 or encryption, a bounded read, strict JSON, a digest check and an exact key set. Tests cover these.\",\n    \"token_leak\": \"OK. GITHUB_TOKEN reaches only the two rendezvous steps. The redirect target is host-allowlisted and never receives the token. prepare, run and bundle refuse the token. Subprocess environments are sanitized. Only fixed error categories are printed.\",\n    \"timeout_cleanup\": \"Mostly OK. Step timeouts match the plan's stage ceilings, and cleanup runs under always() and verifies state before rmtree. The gaps are the budget-start and in-process deadline items above.\",\n    \"bidirectional_evidence\": \"Mostly OK. Each job's pass requires its own client assertions plus the peer's marker, which was produced by actually executing the fixture on this server. The marker ordering finding applies.\",\n    \"portable_bytes_and_policy\": \"Mostly OK. The fixture covers argv bytes, NUL and non-UTF-8, binary streams, an exclusive counter, bounded sleep and a validated marker. Policy semantics match policy.rs layer-AND. Test gaps are listed above.\"\n  },\n  \"tests_run\": [\n    \"python3 -I -m unittest discover -s tools -p 'test_*interop*.py': 7 tests passed, including the native fixture tests, since rustc is present.\",\n    \"python3 -m unittest discover -s tools -p 'test_*.py': 113 tests, OK, 1 skipped.\",\n    \"ast.parse of marmish_ci.py, marmish_rendezvous.py and marmish_interop.py.\",\n    \"YAML load of the workflow file.\",\n    \"Manual call of interop.policy() and marker() with a fake config. policy() passes validate_policy, and the two directions' markers match.\"\n  ],\n  \"limitations\": [\n    \"I ran no live relay, GitHub API or workflow tests, so runner availability, real artifact zip shapes and sandbox behavior are unverified.\",\n    \"I could not verify offline that the pinned action SHAs correspond to the intended releases. The checkout SHA 11d5960a\u2026 in particular needs checking.\",\n    \"I did not run cargo or the Rust workspace tests, to avoid cargo locks.\",\n    \"I did not run the native bubblewrap or macOS spike probes, the MDK build or the bootstrap download.\",\n    \"The macOS-specific paths (/private/tmp, caffeinate, the acknowledgement flow) were reviewed by reading only.\",\n    \"Policy matching semantics were confirmed by reading engine policy.rs, not by executing the engine.\"\n  ]\n}\n```",
+  "ttft_ms": 2527,
+  "type": "result",
+  "duration_ms": 269958,
+  "uuid": "90ccf385-ed31-4957-b3e6-123bcd948678",
+  "ttft_stream_ms": 1889,
+  "time_to_request_ms": 206,
+  "first_content_frame_ms": 1889,
+  "queued_turn_count": 0,
+  "result_index": 0
+}

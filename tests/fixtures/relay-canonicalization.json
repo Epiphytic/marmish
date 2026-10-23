@@ -1,0 +1,19 @@
+[
+  {"input":"wss://relay.example", "canonical":"wss://relay.example/"},
+  {"input":"WSS://RELAY.EXAMPLE/", "canonical":"wss://relay.example/"},
+  {"input":"wss://relay.example:443/", "canonical":"wss://relay.example/"},
+  {"input":"wss://relay.example:8443/", "canonical":"wss://relay.example:8443/"},
+  {"input":"wss://relay.example/", "canonical":"wss://relay.example/"},
+  {"input":"ws://relay.example/", "canonical":null},
+  {"input":"wss://user@relay.example/", "canonical":null},
+  {"input":"wss://@relay.example/", "canonical":null},
+  {"input":"wss://127.0.0.1/", "canonical":null},
+  {"input":"wss://[::1]/", "canonical":null},
+  {"input":"wss://relay.example/%2e", "canonical":null},
+  {"input":"wss://relay.example/path", "canonical":null},
+  {"input":"wss://relay.example/?a=1", "canonical":null},
+  {"input":"wss://relay.example/#fragment", "canonical":null},
+  {"input":" wss://relay.example/", "canonical":null},
+  {"input":"wss://relay.example:/", "canonical":null},
+  {"input":"wss://bad_label.example/", "canonical":null}
+]

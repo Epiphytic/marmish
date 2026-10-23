@@ -80,6 +80,7 @@ enum Operation {
     Maintain {
         limit: u32,
     },
+    CleanupReady,
 }
 #[derive(Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
@@ -194,6 +195,7 @@ impl Command {
 struct Bridge {
     engine: Option<Engine>,
     server: Option<ServerId>,
+    cleanup: Option<CleanupGuard>,
 }
 impl Bridge {
     fn dispatch(&mut self, operation: Operation) -> Result<Value> {
@@ -208,7 +210,8 @@ impl Bridge {
             command_policy,
         } = operation
         {
-            if self.engine.is_some() || version != 1 || !cwd.is_absolute() {
+            if self.engine.is_some() || self.cleanup.is_some() || version != 1 || !cwd.is_absolute()
+            {
                 return Err(EngineError::InvalidRequest);
             }
             let server = ServerId(hex(&server)?);
@@ -231,6 +234,13 @@ impl Bridge {
             })?);
             self.server = Some(server);
             return Ok(json!({"version":1}));
+        }
+        if let Operation::CleanupReady = operation {
+            if self.cleanup.is_none() {
+                let engine = self.engine.take().ok_or(EngineError::InvalidRequest)?;
+                self.cleanup = Some(engine.into_cleanup()?);
+            }
+            return Ok(json!({"ready":true}));
         }
         let engine = self.engine.as_mut().ok_or(EngineError::InvalidRequest)?;
         if let Operation::Maintain { limit } = operation {
@@ -423,6 +433,7 @@ fn error_code(error: EngineError) -> &'static str {
         EngineError::WorkerUnavailable => "worker_unavailable",
         EngineError::RecoveryUncertain => "recovery_uncertain",
         EngineError::StorageFailure => "storage_failure",
+        EngineError::UnsupportedStorage => "unsupported_storage",
         EngineError::Busy => "busy",
         EngineError::InputBackpressure { .. } => "input_backpressure",
     }

@@ -1,0 +1,89 @@
+{
+  "duration_api_ms": 332819,
+  "stop_reason": "end_turn",
+  "session_id": "3db083f2-55b3-4d8f-b22f-139f7ccb0dcb",
+  "total_cost_usd": 1.2587096,
+  "usage": {
+    "input_tokens": 32,
+    "cache_creation_input_tokens": 123305,
+    "cache_read_input_tokens": 1513754,
+    "output_tokens": 26833,
+    "output_tokens_details": {
+      "thinking_tokens": 18401
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 123305,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 44,
+      "outputTokens": 39403,
+      "cacheReadInputTokens": 1789991,
+      "cacheCreationInputTokens": 200254,
+      "webSearchRequests": 0,
+      "costUSD": 1.2587096,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 26911,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "subagent_stats": {
+    "spawned": 1,
+    "requested": {
+      "background": 1,
+      "foreground": 0,
+      "unset": 0
+    },
+    "started_in_background": 1,
+    "max_depth": 1,
+    "spawned_by_subagents": 0,
+    "completed": 1,
+    "failed": 0,
+    "killed": {
+      "parent": 0,
+      "user": 0,
+      "system": 0
+    },
+    "refused": {
+      "depth_limit": 0,
+      "concurrency_limit": 0,
+      "budget": 0
+    },
+    "by_type": {
+      "general-purpose": 1
+    }
+  },
+  "safety_stops": 0,
+  "is_error": false,
+  "num_turns": 18,
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "```json\n{\n  \"verdict\": \"REQUEST_CHANGES\",\n  \"summary\": \"No high-severity defect found in the native FFI, descriptor enumeration, lock handling, consuming cleanup guard, launch fd closure, continuous clocks or RPC peer credentials. Two medium findings (one startup wedge and one Linux behavior change) and one vacuous cleanup test need changes before approval. Linux behavior is otherwise preserved. macOS runtime behavior is unverified.\",\n  \"findings\": [\n    {\n      \"severity\": \"medium\",\n      \"path\": \"tools/marmish_transport_macos.py\",\n      \"line\": 328,\n      \"issue\": \"_recover() never discards a stale .marmish-run.json. After a reboot or a pid mismatch it raises orphan_identity_mismatch or orphan_identity_unverified on every start, so the home stays broken until someone deletes the file by hand. When the recorded boot_id differs from the current one, the old processes are provably gone and the record should be dropped.\",\n      \"verdict\": \"CONFIRMED\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"path\": \"crates/marmish-engine/src/lib.rs\",\n      \"line\": 345,\n      \"issue\": \"reconcile() used to return Ok for an Accepted job whose worker had not appeared. It now loops for 8s and returns WorkerUnavailable, and its callers propagate that with `?`. One unstartable job therefore fails Engine::open (lib.rs:79) and maintain (lib.rs:412), and blocks submit (lib.rs:196) and status/output/cancel (lib.rs:216) for 8s. Maintenance and retention for all other jobs stall. On macOS a soft RLIMIT_NOFILE above 65,536 causes this through prepare_spawn. The frontend deadline is in the design. Its effect on unrelated jobs and on read-only calls is not. This also changes Linux behavior.\",\n      \"verdict\": \"CONFIRMED\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"path\": \"crates/marmish-engine/tests/engine.rs\",\n      \"line\": 36,\n      \"issue\": \"The cleanup test asserts that no descriptor under the state root has extension \\\"db\\\". The database is engine.sqlite3 (launcher.rs:293), so the assertion can never fail. The required evidence that SQLCipher is closed before removal is not tested.\",\n      \"verdict\": \"CONFIRMED\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"path\": \"tools/marmish_transport_macos.py\",\n      \"line\": 414,\n      \"issue\": \"The run record lives in HOME, which the Seatbelt profile lets the daemon write (line 293). _recover() trusts it and killpg()s the pids it names. A compromised daemon could forge a record naming another same-uid process group. This may be accepted risk, since the design treats the daemon as confined. It should be decided explicitly, or the record moved out of the writable HOME.\",\n      \"verdict\": \"PLAUSIBLE\"\n    },\n    {\n      \"severity\": \"low\",\n      \"path\": \"crates/marmish-engine/src/platform/macos.rs\",\n      \"line\": 321,\n      \"issue\": \"verify_descriptors fails closed with UnsafePath, with no retry, if a descriptor changes during the scan. That covers an unlinked temp file (F_GETPATH fails), an fd closed between listing and fstat, and an ancestor directory that cannot be opened O_RDONLY. Parallel macOS tests or threads holding temp fds could fail spuriously. One bounded retry on a changed snapshot would reduce flakiness without weakening the check.\",\n      \"verdict\": \"PLAUSIBLE\"\n    },\n    {\n      \"severity\": \"low\",\n      \"path\": \"tools/native/marmish-lifetime.c\",\n      \"line\": 60,\n      \"issue\": \"When waitpid reports the daemon exited, the shim returns without signalling its process group. Helpers the daemon forked survive, which weakens the no-orphans requirement. Kill the group before returning.\",\n      \"verdict\": \"PLAUSIBLE\"\n    },\n    {\n      \"severity\": \"low\",\n      \"path\": \"tools/native/marmish-lifetime.c\",\n      \"line\": 54,\n      \"issue\": \"write(gate[1]) runs with SIGPIPE at its default action. If the child has already exited, the shim dies by SIGPIPE instead of returning a status. Ignore SIGPIPE in the shim.\",\n      \"verdict\": \"PLAUSIBLE\"\n    }\n  ],\n  \"verified_ok\": [\n    \"Descriptor-relative DirectoryEntries: independent offset via openat('.'), fd ownership on fdopendir success and failure, errno handling, visit bound.\",\n    \"macOS lock model: flock on separate descriptions, the shared presence probe unlocked immediately, and a worker Busy path that succeeds only for a live holder with a matching active claim.\",\n    \"Worker lifetime: Store is dropped before the job lock, and duplicate or late workers are fenced.\",\n    \"Consuming cleanup guard: lock order, retry within the deadline, all-or-nothing release, state and identity recheck, rejection of unrecorded directories and non-Exited records, and Store and keys dropped before the guard is returned.\",\n    \"Bridge: cleanup_ready is idempotent, and normal operations fail afterwards.\",\n    \"Deletion safety in the e2e helper: symlink-component rejection, then removal only after cleanup_ready.\",\n    \"macOS clocks and identity: kern.bootsessionuuid parsing, mach_continuous_time with checked u128 arithmetic, proc_pidinfo size and pid checks, checked start-time encoding.\",\n    \"Launch fd closure: the pre_exec sweep of fds 3..65535 ignores only EBADF, and the parent checks the soft limit and enumerates fds first. The exclusive-publish error mapping is fine.\",\n    \"RPC peer credentials: getpeereid and LOCAL_PEERPID with pinned ctypes types, checked return values, and UID checked before PID. A missing identity fails closed. Explicit home and socket paths are used, with no hardcoded /state on macOS. Linux SO_PEERCRED is preserved.\",\n    \"All Python deadlines use continuous clocks. The sandbox-exec profile uses -D parameters, so there is no injection.\"\n  ],\n  \"validation\": {\n    \"cargo_test_workspace_offline\": \"Passed on Linux, including the new cleanup tests, the acquire_job tests and the bridge cleanup test.\",\n    \"cargo_clippy_all_targets_deny_warnings\": \"Clean.\",\n    \"cargo_fmt_check\": \"Clean.\",\n    \"python_unittest\": \"85 tests OK, 1 skipped, covering the app, protocol, rpc, transport_sandbox, platform, transport_macos and interop modules. Run without `-I`, since `-I` drops the working directory from sys.path and the modules fail to import.\",\n    \"code_reading\": \"Read all changed and new engine, platform and prototype files in full. A delegated agent read the Python and C tooling, and I confirmed its two transport findings against the source.\"\n  },\n  \"limitations\": [\n    \"No macOS runtime evidence. The macOS code was reviewed by reading only: FFI behavior, F_GETPATH on unlinked files, F_FULLFSYNC on directories, renameatx_np, proc_pidinfo results, flock probe races and Seatbelt behavior.\",\n    \"I did not run a Darwin type check. The cross-compile targets are installed, but the vendored SQLCipher and OpenSSL C builds need a Darwin SDK.\",\n    \"Linux tests are not evidence for the macOS descriptor, lock and sandbox paths.\",\n    \"No live network, no workflow dispatch, no push and no edits.\"\n  ]\n}\n```",
+  "ttft_ms": 3442,
+  "type": "result",
+  "duration_ms": 226811,
+  "uuid": "29b0e4af-08dd-4fcf-a299-74fcf7dca639",
+  "ttft_stream_ms": 2053,
+  "time_to_request_ms": 212,
+  "first_content_frame_ms": 2053,
+  "queued_turn_count": 0,
+  "result_index": 0
+}

@@ -1,6 +1,8 @@
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use marmish_engine::*;
+#[path = "support/inspect.rs"]
+mod inspect;
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -8,6 +10,52 @@ use std::time::{Duration, Instant};
 const PRINCIPAL: PrincipalId = PrincipalId([11; 32]);
 const OTHER: PrincipalId = PrincipalId([12; 32]);
 const SERVER: ServerId = ServerId([13; 32]);
+
+#[test]
+fn cleanup_guard_closes_sqlcipher_before_removal_and_retains_frontend_lock() {
+    let mut harness = Harness::new(EngineLimits::default());
+    let ctx = harness.context(PRINCIPAL, 1);
+    let (id, _) = harness.start(
+        &ctx,
+        98,
+        &CommandRequest::Exec {
+            argv: vec![b"/usr/bin/true".to_vec()],
+        },
+    );
+    harness.finished(&ctx, id);
+    let root = harness.policy.state_root.canonicalize().unwrap();
+    assert!(inspect::descriptors(std::process::id())
+        .iter()
+        .any(|path| path == &root.join("engine.sqlite3")));
+    let guard = harness.engine.take().unwrap().into_cleanup().unwrap();
+    assert!(matches!(
+        Engine::open(harness.policy.clone()),
+        Err(EngineError::AlreadyOpen | EngineError::Busy)
+    ));
+    // The SQLCipher connection is gone, while the held lock files fence workers.
+    let descriptors = inspect::descriptors(std::process::id());
+    assert!(descriptors
+        .iter()
+        .any(|path| path == &root.join("frontend.lock")));
+    for path in descriptors.iter().filter(|path| path.starts_with(&root)) {
+        let metadata = match path.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("descriptor metadata inspection failed: {error}"),
+        };
+        if metadata.is_file() {
+            assert!(
+                ["frontend.lock", "worker.lock", "io.lock"]
+                    .iter()
+                    .any(|name| path.file_name().unwrap() == *name),
+                "regular state descriptor survived cleanup: {path:?}"
+            );
+        }
+    }
+    std::fs::remove_dir_all(&harness.policy.state_root).unwrap();
+    drop(guard);
+    harness.jobs.clear();
+}
 
 struct Harness {
     _directory: tempfile::TempDir,
@@ -135,7 +183,7 @@ impl Drop for Harness {
 }
 
 fn uid() -> u32 {
-    std::fs::metadata("/proc/self").unwrap().uid()
+    unsafe { libc::getuid() }
 }
 fn exec(argv: &[&[u8]]) -> CommandRequest {
     CommandRequest::Exec {
@@ -559,8 +607,8 @@ fn storage_keys_do_not_enter_worker_or_child_process_interfaces() {
     let master_hex = hex(&key[8..]);
     let derived_hex = hex(derived.as_ref());
     for (index, pid) in pids.iter().enumerate() {
-        for file in ["cmdline", "environ"] {
-            let data = std::fs::read(format!("/proc/{pid}/{file}")).unwrap();
+        {
+            let data = inspect::interfaces(*pid);
             for secret in [
                 &key[8..],
                 derived.as_ref(),
@@ -573,17 +621,19 @@ fn storage_keys_do_not_enter_worker_or_child_process_interfaces() {
                 );
             }
         }
-        for fd in std::fs::read_dir(format!("/proc/{pid}/fd")).unwrap() {
-            let Ok(target) = std::fs::read_link(fd.unwrap().path()) else {
-                continue;
-            };
+        for target in inspect::descriptors(*pid) {
             assert!(
-                target != h.policy.state_root.join("engine.key"),
+                target
+                    != h.policy
+                        .state_root
+                        .canonicalize()
+                        .unwrap()
+                        .join("engine.key"),
                 "inherited storage key descriptor"
             );
             if index == 0 {
                 assert!(
-                    !target.starts_with(&h.policy.state_root),
+                    !target.starts_with(h.policy.state_root.canonicalize().unwrap()),
                     "child inherited private state descriptor"
                 );
             }

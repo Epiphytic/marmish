@@ -75,6 +75,28 @@ The daemon exposes explicit expiry sweeps but does not schedule them. Marmish sc
 - Quota defaults, disconnected stdin behavior, concrete tombstone duration satisfying the freshness invariant, and hard limits on delayed authenticated requests.
 - How to validate complete authenticated room membership and device admission at the selected MDK version; unsupported enrollment cannot silently receive command privileges.
 
+## Command policy and platform extension
+
+The additive default/per-key command policy and native macOS request is tracked
+in Beads `marmish-b33`. These increments precede interactive sessions and retain
+the existing protocol, disconnect, replay and storage guarantees.
+
+| Increment | Deliverable | Exit criteria |
+| --- | --- | --- |
+| A Command restrictions | [Detailed policy design](phases/command-policy.md), strict configuration and engine enforcement | Cumulative defaults/per-key limits, bounded star/double-star matching, shell/PATH refusal and canonical spelling checks at admission/launch (no inode pinning), negative and real Marmot policy tests, Claude design/code approval, commit/push |
+| B Native macOS | Detailed reviewed platform design, durable engine, authenticated Unix RPC and confined MDK | Native macOS build, detached execution/recovery/SQLCipher tests, proven confinement without silent fallback, preserved Linux behavior, Claude review, commit/push |
+| C Interoperability | Native CI matrix and live cross-platform command validation | Linux X64/ARM64 and macOS ARM64 native checks, macOS-to-Linux and Linux-to-macOS real Marmot execution, literal/binary/denial/retry evidence, Claude review, commit/push |
+
+The organization runner configuration at
+[`Epiphytic/.github`](https://github.com/Epiphytic/.github) was inspected via
+`scripts/runners/README.md` and `test-self-hosted-runners.yml`. Labels are
+`[self-hosted, macOS, ARM64, laptop-ci]`, `[self-hosted, Linux, ARM64, laptop-ci]`
+and `[self-hosted, Linux, X64, bel-ci]`. Laptop platforms share one execution
+slot; concurrent live macOS/Linux pairs must use Bel X64. Only public rendezvous
+identities and sanitized results may leave private endpoint state. macOS MDK
+artifact provenance and confinement require source inspection and runner probes
+before claiming support; unavailable capabilities block dependent work only.
+
 ## Reference baseline
 
 Planning starts from the existing checkout at `/home/openclaw/repos/mdk-fork`, revision `37c248a11239e108afc9bd4ee62b8f60542012e3`. The checkout is evidence to inspect, not automatically the selected dependency. Phase 0 must record the exact chosen source and behavior. Upstream references: [MDK](https://github.com/marmot-protocol/mdk) and [Marmot specification](https://github.com/marmot-protocol/marmot).

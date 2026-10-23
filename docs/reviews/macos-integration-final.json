@@ -1,0 +1,87 @@
+{
+  "duration_api_ms": 40033,
+  "stop_reason": "end_turn",
+  "session_id": "aeb461dc-8209-4f23-b3de-280db1b7e2a2",
+  "total_cost_usd": 0.3019143,
+  "usage": {
+    "input_tokens": 14,
+    "cache_creation_input_tokens": 57000,
+    "cache_read_input_tokens": 349863,
+    "output_tokens": 3890,
+    "output_tokens_details": {
+      "thinking_tokens": 1608
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 57000,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 14,
+      "outputTokens": 3890,
+      "cacheReadInputTokens": 349863,
+      "cacheCreationInputTokens": 57000,
+      "webSearchRequests": 0,
+      "costUSD": 0.3019143,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 1608,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "subagent_stats": {
+    "spawned": 0,
+    "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+    },
+    "started_in_background": 0,
+    "max_depth": 0,
+    "spawned_by_subagents": 0,
+    "completed": 0,
+    "failed": 0,
+    "killed": {
+      "parent": 0,
+      "user": 0,
+      "system": 0
+    },
+    "refused": {
+      "depth_limit": 0,
+      "concurrency_limit": 0,
+      "budget": 0
+    },
+    "by_type": {}
+  },
+  "safety_stops": 0,
+  "is_error": false,
+  "num_turns": 9,
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "**Approved for this component, with no blockers.** I checked the root helper, facade, RPC, app, protocol and Linux sandbox files plus their tests. The one thing I could not exercise is the Darwin code, which has no Linux coverage beyond mocks. I edited nothing.\n\nI ran `python3 -B -m unittest` over the platform, rpc, protocol, app, transport_sandbox and policy tests from `tools/`. All 71 passed on Linux.\n\n**The three prior blockers**\n1. **RPC tests on Darwin:** `SocketTests.adapter` supplies `process_identity(os.getpid())` on Darwin, so those tests no longer fail with `missing_peer_identity`. The new test `test_native_paths_and_process_identity_checked_before_send` checks the custom native paths and that a changed identity sends no bytes and is not marked uncertain. The one remaining direct `MdkRpc(...)` call is `marmish_e2e.py:231`, which is your named e2e item.\n2. **Manifest enforcement:**\n   - **Darwin:** I ran the facade with `sys.platform` patched to darwin and a nonexistent wnd. It raised `SandboxError invalid_manifest` before `marmish_transport_macos` was imported.\n   - **Sibling manifest:** `verify_manifest` falls back to `<wnd>.manifest.json` when no flag is given. `marmish_transport.py` also uses the same `SandboxError` class as the Linux sandbox.\n3. **`canonical_state_path`:** it now rejects `..`, accepts only a root-owned `/tmp` or `/var` symlink whose target is `private/<name>`, and turns `lstat` failures into `unsafe_state_path`. The tests cover the accepted aliases, wrong target, wrong owner, non-symlink, missing alias and `..` cases.\n\n**Prior non-blocking items:** the clock conversion is now integer (`ticks * numer // denom`). The sandbox and `EngineBridge` both carry the execution marker, and the app, protocol and rpc modules use `continuous_time()` throughout. Nothing mixes `time.monotonic()` into their deadlines. The remaining `monotonic` uses are in `mdk_smoke.py` and the Linux sandbox's broker, connect and startup timers, which stay separate. The only other `MdkRpc` caller is `marmish_e2e.py`.\n\n**Non-blocking, can wait:**\n- **Facade tests:** `marmish_transport.py` has no tests. A small test for \"darwin without a manifest never imports the macOS module\" would lock in blocker 2.\n- **`verify_peer` Darwin gaps:** the wrong-uid, malformed-length and `proc_pidinfo` short-read paths are still untested.\n- **Sandbox marker:** `self._execution_marker` is still set only in `start()`, so initialise it in `__init__`.\n- **Linux timers:** the Linux sandbox timers still use `time.monotonic()`. This was already deferred; I'm noting it so it stays visible.\n- **Style:** `getattr(args, 'wnd_manifest', None)` is redundant now that `common()` defines the argument, but it is harmless.\n\nNative paths and the marker in e2e remain for the integrated review.",
+  "ttft_ms": 1887,
+  "type": "result",
+  "duration_ms": 42377,
+  "uuid": "d96be78b-fe01-4823-ab8e-84bf09b55633",
+  "ttft_stream_ms": 1253,
+  "time_to_request_ms": 228,
+  "first_content_frame_ms": 1254,
+  "queued_turn_count": 0,
+  "result_index": 0
+}

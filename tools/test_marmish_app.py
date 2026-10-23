@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import tempfile
 import time
+from marmish_platform import continuous_time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -59,7 +60,7 @@ class ClientTests(unittest.TestCase):
         self.client = app.Client.__new__(app.Client)
         self.client.profile = SimpleNamespace(root=Path(self.temp.name), account=CLIENT)
         self.client.peer, self.client.group, self.client.sid = SERVER, GROUP, SID
-        self.client.deadline = time.monotonic() + 30
+        self.client.deadline = continuous_time() + 30
         self.client.call = Mock()
 
     def journal(self, command=COMMAND, token=TOKEN):
@@ -237,7 +238,7 @@ class ServerTests(unittest.TestCase):
                 server = app.Server(profile, [CLIENT], '/bridge', '/worker', temp)
             self.assertEqual(set(server.pending), {GROUP})
             self.assertEqual(server.quarantine, {})
-            server.last_maintenance = time.monotonic()
+            server.last_maintenance = continuous_time()
             with patch.object(app, 'verify_room'):
                 server.tick()
             self.assertEqual(set(server.groups), {GROUP})
@@ -305,7 +306,7 @@ class ServerTests(unittest.TestCase):
             engine = Mock()
             with patch.object(app, 'EngineBridge', return_value=engine):
                 server = app.Server(profile, [CLIENT], '/unused/bridge', '/unused/worker', temp)
-            server.last_maintenance = time.monotonic()
+            server.last_maintenance = continuous_time()
             server.tick()
             rpc.send.assert_not_called()
             self.assertEqual(len(server.dispatcher.challenges), 0)
@@ -380,7 +381,7 @@ class ServerTests(unittest.TestCase):
                 with patch.object(app, 'EngineBridge', return_value=Mock()), \
                         patch.object(app, 'verify_room'):
                     server = app.Server(profile, [CLIENT], '/bridge', '/worker', temp)
-                server.last_maintenance = time.monotonic()
+                server.last_maintenance = continuous_time()
                 fresh = self.row('03' * 32, '04' * 16)
                 fresh['group_id'] = healthy
                 fresh['plaintext'] = encode(envelope(SID, healthy, CLIENT, SERVER, '04' * 16,
@@ -415,7 +416,7 @@ class ServerTests(unittest.TestCase):
             'pending_confirmation': True, 'profile': {'name': 'marmish/v1/' + SID,
                 'description': 'marmish/v1 command transport'}}]
         server.profile = SimpleNamespace(rpc=rpc, account=SERVER, value={}, save=Mock())
-        server.last_maintenance = time.monotonic()
+        server.last_maintenance = continuous_time()
         server._tick_group = Mock()
         server.tick()
         server.tick()

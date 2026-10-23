@@ -41,7 +41,9 @@ substitute.
 
 ## Implemented and tested baseline
 
-The current prototype is Linux-only, single-device and noninteractive. Its
+The validated prototype baseline is Linux-only, single-device and noninteractive.
+A native macOS implementation is under validation; its presence does not establish
+native runtime support until the runner checks below pass. Its
 entry points are `tools/marmish.py` and `tools/marmishd.py`; the Rust
 `marmish-engine-bridge` connects the frontend to `marmish-engine` and detached
 `marmish-worker` processes. The server refuses effective UID 0 and account
@@ -161,6 +163,33 @@ tests passed for this increment.
 Config JSON version 2 prevents older binaries silently ignoring restrictions;
 new binaries accept version 1, with absent policy and job markers defaulted.
 The encrypted database schema version is unchanged.
+
+### Native platform increment under validation
+
+The native implementation separates Linux and Darwin process identities, clocks,
+descriptor enumeration, launch descriptor closure and filesystem durability.
+Darwin uses boot UUID plus process start identity, suspend-inclusive time, native
+Unix peer credentials, APFS exclusive publication and descriptor-relative storage.
+The Python transport factory selects Linux namespace confinement or native macOS
+Seatbelt confinement with an explicitly restricted SOCKS broker. Missing native
+primitives or provenance fail closed. No public relay defaults are introduced.
+
+Clean daemon builds pin upstream MDK source, lockfile and native executable hashes;
+macOS applies the maintained restricted-transport patch. Build provenance is
+verified before execution. See [the native design](phases/macos-platform.md).
+The local `cleanup_ready` bridge operation consumes the engine and closes
+SQLCipher before acknowledging readiness; an opaque guard holds frontend and job
+locks through owned test-state deletion. It is absent from the remote protocol.
+Failure to prove quiescence preserves state and reports incomplete cleanup.
+
+The [native validation workflow](../.github/workflows/native-validation.yml)
+uses the supplied Linux AMD64, Linux ARM64 and macOS ARM64 runners. It requires
+native isolation probes, offline tests, fresh pinned daemon builds, native real
+Marmot command tests and commands in both Linux/macOS directions in one run
+attempt at the same SHA. See [the validation design](phases/platform-validation.md).
+Only trusted master pushes execute this workflow. macOS AMD64 runtime support
+remains unvalidated without a corresponding native runner. Native checks are
+pending; cross-compilation and Linux mocks are not substitutes for them.
 
 ### Storage, retention and bounds
 

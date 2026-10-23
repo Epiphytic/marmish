@@ -8,6 +8,7 @@ import stat
 import tempfile
 import threading
 import time
+from marmish_platform import continuous_time
 import unittest
 from unittest.mock import patch, Mock
 
@@ -70,7 +71,7 @@ class ValidationTests(unittest.TestCase):
 
     def test_resolution_is_bounded_and_numeric_results_are_validated(self):
         broker = sandbox._Broker([])
-        rows = broker._resolve(('localhost', 443), time.monotonic() + 3)
+        rows = broker._resolve(('localhost', 443), continuous_time() + 3)
         self.assertTrue(rows)
         self.assertTrue(all(address in ('127.0.0.1', '::1') for _, address in rows))
         import subprocess
@@ -78,7 +79,7 @@ class ValidationTests(unittest.TestCase):
         process.communicate.side_effect = [subprocess.TimeoutExpired('resolver', .01), (b'', None)]
         with patch.object(sandbox.subprocess, 'Popen', return_value=process):
             with self.assertRaisesRegex(OSError, 'resolver_timeout'):
-                broker._resolve(('approved.invalid', 443), time.monotonic() + .01)
+                broker._resolve(('approved.invalid', 443), continuous_time() + .01)
         process.kill.assert_called_once()
         self.assertEqual(broker.resolvers, set())
         broker.close()
@@ -182,7 +183,7 @@ while True:time.sleep(1)
             # Keep the externally configured relay port443 in every broker
             # request; map only the synthetic TCP fixture at the final dial.
             def fixture_connect(broker, target):
-                rows = broker._resolve(target, time.monotonic() + 5)
+                rows = broker._resolve(target, continuous_time() + 5)
                 self.assertEqual(rows, [(socket.AF_INET, '127.0.0.1')])
                 return socket.create_connection(fixture.getsockname(), timeout=1)
             host_threshold = Path('/proc/sys/net/ipv4/ip_unprivileged_port_start').read_text()
@@ -224,10 +225,10 @@ while True:time.sleep(1)
             binary.chmod(0o700)
             daemon = sandbox.ConfinedDaemon(root / 'home', binary, ['wss://approved.invalid/'],
                                             hashlib.sha256(binary.read_bytes()).hexdigest())
-            started = time.monotonic()
+            started = continuous_time()
             with self.assertRaisesRegex(sandbox.SandboxError, 'namespace_start_failed'):
                 daemon.start()
-            self.assertLess(time.monotonic() - started, 6)
+            self.assertLess(continuous_time() - started, 6)
             self.assertIsNone(daemon.process)
             self.assertIsNone(daemon._temporary)
             self.assertIsNone(daemon._lock)
