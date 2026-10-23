@@ -1,0 +1,21 @@
+{
+  "run": 39912469576,
+  "url": "https://github.com/Epiphytic/marmish/actions/runs/39912469576",
+  "commit": "a944fe170ea394455dfbec1427cab10cce803943",
+  "linux_x64": {
+    "job": 120278432707,
+    "authenticated_bubblewrap": "PASS",
+    "real_namespace_prerequisite": "PASS",
+    "engine_unit_tests_passed": 92,
+    "encrypted_storage": {
+      "passed": 1,
+      "failed": 1,
+      "failure": "Engine::open returned UnsafePath after private worker installation; previous InvalidPolicy no longer occurs"
+    },
+    "native_bundle": "not reached",
+    "cleanup": "Prefix intentionally retained after offline failure; no successful cleanup claimed"
+  },
+  "linux_arm64": "queued, unassigned",
+  "macos_arm64": "queued, unassigned",
+  "diagnosis": "Current log lacks worker/state metadata. Worker ancestor, exact state/jobs mode, or later path verification need isolation; no exact cause claimed."
+}

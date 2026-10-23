@@ -9,9 +9,14 @@ pub struct InstalledWorker {
     _directory: tempfile::TempDir,
 }
 
-pub fn stage_worker(source: &Path) -> InstalledWorker {
+pub fn private_tempdir() -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    directory
+}
+
+pub fn stage_worker(source: &Path) -> InstalledWorker {
+    let directory = private_tempdir();
     let path = directory
         .path()
         .canonicalize()

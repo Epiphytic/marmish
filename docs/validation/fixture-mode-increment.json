@@ -1,0 +1,46 @@
+{
+  "scope": "Normalize only newly owned test-fixture directories0700; production and workflow unchanged",
+  "before": {
+    "child_umask": "0002",
+    "focused_encrypted_storage": "FAIL UnsafePath",
+    "cause_evidence": "mutable-fixture-umask-reproduction.json"
+  },
+  "after": {
+    "ordinary_workspace": {
+      "child_umask": "0022",
+      "tests_passed": 131
+    },
+    "permissive_owned_integrations": {
+      "child_umask": "0002",
+      "encrypted": 2,
+      "engine": 14,
+      "bridge": 7,
+      "total_passed": 23
+    },
+    "permissive_fault_tests": {
+      "child_umask": "0002",
+      "tests_passed": 8
+    },
+    "feature_all_target_clippy": "PASS warnings denied",
+    "fmt": "PASS"
+  },
+  "full_permissive_workspace": {
+    "outcome": "FAIL",
+    "child_umask": "0002",
+    "engine_unit_passed": 91,
+    "engine_unit_failed": 1,
+    "failure": "store::tests::reconciliation_transient_attempts_are_durable_bounded_and_advance_after_quota_frees: Engine::open AlreadyOpen at store/tests.rs1644",
+    "issue": "marmish-ech",
+    "disposition": "Separate lock timing failure; source not widened, failed run preserved and no full002 retry to mask failure"
+  },
+  "mask_proof": "Child reads /proc/self/status Umask immediately before exec cargo; mask inherited unchanged by tests",
+  "quality_delta": {
+    "exit_code": 2,
+    "baseline": "a944fe170ea394455dfbec1427cab10cce803943",
+    "regressions": 5,
+    "gating": 5,
+    "disposition": "All five findings are short-horizon churn in fixture constructors or tests. Bounded shared helper removes repeated permission setup and corrects locally reproduced trust rejection; no suppression or baseline created."
+  },
+  "native_prior_failure": "native-run-39912469576.json",
+  "acceptance": "Native rerun pending; macOS/ARM runner jobs unassigned, cross-platform acceptance not claimed"
+}

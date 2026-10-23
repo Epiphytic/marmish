@@ -8,7 +8,7 @@ use sha2::Sha256;
 use std::{
     fs,
     io::{BufRead, BufReader},
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     thread,
@@ -113,8 +113,7 @@ struct Fixture {
 }
 impl Fixture {
     fn new(scenario: &'static str, production: bool) -> Self {
-        let root = TempDir::new().unwrap();
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let root = executable::private_tempdir();
         let worker = executable::stage_worker(&artifact(if production {
             "MARMISH_TEST_PRODUCTION_WORKER"
         } else {

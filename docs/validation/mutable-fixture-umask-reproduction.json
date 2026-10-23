@@ -1,0 +1,13 @@
+{
+  "scope": "Local existing encrypted-storage test binary under child-only umask002",
+  "result": "FAIL reproduced UnsafePath at Engine::open",
+  "trace": "metadata/file syscalls only, no read/write payload tracing",
+  "observed": {
+    "tempfile_mkdir_requested_mode": "0777",
+    "mutable_fixture_effective_mode": "0775",
+    "staged_worker_directory_mode": "0700",
+    "staged_worker_file_mode": "0700",
+    "failure_boundary": "StateRoot directory_path rejects mutable fixture parent as writable ancestor before state/key/SQLite creation"
+  },
+  "not_established": "Original runner metadata is absent; local mechanism and failure are established. No setgid or ambient TMPDIR hypothesis required."
+}

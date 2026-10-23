@@ -574,3 +574,25 @@ umask, checkout or runner parents. Run the parallel suite repeatedly to catch
 copy/exec fork timing failures; do not claim this establishes the original CI
 worker mode. Keep one shared test-only helper across the small repository via
 explicit module paths, without adding production APIs or a support crate.
+
+### Normalize mutable test fixture directory permissions
+
+Native run 39912469576 advanced past worker-file validation but failed Engine
+open with UnsafePath. A local reproduction of encrypted_storage under a child
+umask002 fails identically. A metadata-only strace established the cause:
+tempfile creates the mutable fixture directory with mkdir mode0777, leaving
+0775 under that mask. Worker installation is0700, but Engine rejects the writable
+state ancestor before creating state. This is established locally; the original
+runner metadata remains unlogged. Setgid and ambient TMPDIR are unnecessary to
+explain this reproduction.
+
+Reuse a tiny test-only private_tempdir helper that creates an owned TempDir then
+sets it to0700. Use it for the mutable engine, encrypted-storage, bridge and
+fault fixture roots as well as worker installation. Do not change production
+validation, global umask, existing directories or Cargo artifacts. Keep all
+worker lifetimes and restart behavior from the approved installation design.
+Run the focused reproduction and full parallel workspace under actual child
+umask002; retain ordinary full tests, clippy/fmt and fault checks as appropriate.
+The permissive child mask must be set by subprocess creation, never by changing
+the multithreaded parent test process. A new CI run must validate this exact
+boundary. This routine correction enforces the existing private-fixture design.

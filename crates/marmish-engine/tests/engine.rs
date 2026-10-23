@@ -74,7 +74,7 @@ impl Harness {
     }
 
     fn with_worker(limits: EngineLimits, worker: executable::InstalledWorker) -> Self {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = executable::private_tempdir();
         let policy = EnginePolicy {
             state_root: directory.path().join("state"),
             worker_executable: worker.path.clone(),

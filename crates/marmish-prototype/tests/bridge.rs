@@ -36,7 +36,7 @@ struct Pipe {
 }
 impl Pipe {
     fn new() -> Self {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = executable::private_tempdir();
         let worker = std::env::current_exe()
             .unwrap()
             .parent()

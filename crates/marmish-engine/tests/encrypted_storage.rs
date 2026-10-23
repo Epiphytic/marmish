@@ -132,7 +132,7 @@ fn retained_command_input_and_streams_require_the_storage_key() {
     drop(probe);
 
     let worker = executable::stage_worker(Path::new(env!("CARGO_BIN_EXE_marmish-worker")));
-    let directory = tempfile::tempdir().unwrap();
+    let directory = executable::private_tempdir();
     let policy = policy(directory.path(), &worker.path);
     let mut engine = Engine::open(policy.clone()).unwrap();
     let ctx = context(&engine);
@@ -238,7 +238,7 @@ fn legacy_plaintext_database_is_rejected_intact_without_creating_key() {
         return;
     }
     let worker = executable::stage_worker(Path::new(env!("CARGO_BIN_EXE_marmish-worker")));
-    let directory = tempfile::tempdir().unwrap();
+    let directory = executable::private_tempdir();
     let policy = policy(directory.path(), &worker.path);
     std::fs::create_dir(&policy.state_root).unwrap();
     std::fs::set_permissions(&policy.state_root, std::fs::Permissions::from_mode(0o700)).unwrap();
