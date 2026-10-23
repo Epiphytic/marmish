@@ -191,6 +191,15 @@ Only trusted master pushes execute this workflow. macOS AMD64 runtime support
 remains unvalidated without a corresponding native runner. Native checks are
 pending; cross-compilation and Linux mocks are not substitutes for them.
 
+The first native Linux runner stopped before tests because Bubblewrap was absent.
+The reviewed CI refinement acquires a private executable from authenticated Ubuntu
+package metadata, checks reviewed version floors and hashes, and passes its
+absolute path through the sanitized frontends. The supervisor validates that path
+before entering namespaces. This changes no host policy: a kernel or AppArmor
+denial remains a hard failure, and successful acquisition alone proves neither
+confinement nor native support. See [the refinement design](phases/platform-validation.md#runner-refinement-rootless-linux-bubblewrap-prerequisite)
+and [the first-run evidence](validation/native-run-39904454063.json).
+
 ### Storage, retention and bounds
 
 Use SQLCipher for engine state and retained stdout/stderr. The colocated private

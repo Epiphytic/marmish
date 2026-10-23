@@ -1,0 +1,52 @@
+{
+  "scope": "Reviewed rootless Bubblewrap CI prerequisite refinement and additive-policy regression",
+  "python": {
+    "command": "python3 -m unittest discover -s tools -p 'test_*.py'",
+    "tests": 161,
+    "skipped_darwin_only": 4,
+    "outcome": "passed"
+  },
+  "rust": {
+    "command": "cargo test --workspace --locked",
+    "tests": 130,
+    "outcome": "passed",
+    "clippy": "passed",
+    "fmt": "passed"
+  },
+  "diff_check": "passed",
+  "reviews": {
+    "design": "docs/reviews/bwrap-plan-final.json",
+    "code": "docs/reviews/bwrap-code-final.json",
+    "diagnostic_followup": "docs/reviews/bwrap-code-followup.json",
+    "verdict": "APPROVE"
+  },
+  "quality_delta": {
+    "exit_code": 2,
+    "baseline": "e5c891f33c3675fd08aa5b7d8eb6b8bcac5d4b01",
+    "regressions": 53,
+    "gating": 16,
+    "disposition": [
+      "Three 36\u201340-token temporary-directory test-fixture clones retained; extracting shared test infrastructure would couple unrelated test classes.",
+      "Eight short-horizon churn findings reflect repeated security review fixes and required environment propagation.",
+      "Three workflow verbosity findings reflect explicit bootstrap, probe and owned-cleanup steps.",
+      "Two run-symbol findings and one bootstrap-symbol finding map generic new Python names onto unchanged Rust worker and CI functions; those source functions are unchanged in this increment.",
+      "New-symbol complexity, verbosity, API and inferred dead-code findings remain visible. Acquisition orchestration keeps security checks explicit and is covered by failure-path and process-budget tests. No baseline or suppression was introduced."
+    ]
+  },
+  "native_acceptance": {
+    "macos": "pending unassigned runner",
+    "linux_arm64": "pending unassigned runner",
+    "linux_x64": "first run failed missing bwrap; refinement requires new runner execution",
+    "cross_platform": "pending both native bundles and same-attempt live exchange"
+  },
+  "live_result": "docs/validation/rootless-bwrap-e2e.json",
+  "live_result_summary": {
+    "outcome": "failed",
+    "assertions_passed": 8,
+    "error": "interrupted at ten-minute deadline",
+    "stage": "unauthorized_and_ordinary_invitations",
+    "local_cleanup": "complete",
+    "bubblewrap_owned_cleanup": "complete",
+    "prior_complete_run": "docs/validation/native-increment-linux-e2e.json"
+  }
+}

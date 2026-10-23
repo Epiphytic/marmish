@@ -15,6 +15,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 from pathlib import Path
 import selectors
 import shutil
@@ -46,6 +47,63 @@ def _clock():
 
 class SandboxError(RuntimeError):
     """A fixed operation category; never includes remote or daemon output."""
+
+
+def validated_bwrap():
+    """Select and verify the host executable before UID mapping, never via PATH."""
+    explicit = 'MARMISH_BWRAP' in os.environ
+    pinned = 'MARMISH_BWRAP_SHA256' in os.environ
+    if explicit != pinned:
+        raise SandboxError('invalid_bwrap_selection')
+    raw = os.environ.get('MARMISH_BWRAP', '/usr/bin/bwrap')
+    expected = os.environ.get('MARMISH_BWRAP_SHA256')
+    path = Path(raw)
+    if (not path.is_absolute() or '..' in path.parts or
+            (explicit and not re.fullmatch('[0-9a-f]{64}', expected or ''))):
+        raise SandboxError('invalid_bwrap_selection')
+    owner = os.geteuid()  # Capture the supervisor identity, before namespace mapping.
+    directory = None
+    binary = None
+    try:
+        directory = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        for component in (*path.parts[1:-1], None):
+            meta = os.fstat(directory)
+            if (meta.st_uid not in (0, owner) or
+                    (meta.st_mode & 0o022 and not (meta.st_uid == 0 and meta.st_mode & stat.S_ISVTX))):
+                raise SandboxError('unsafe_bwrap_path')
+            if component is not None:
+                child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                                dir_fd=directory)
+                os.close(directory)
+                directory = child
+        binary = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                         dir_fd=directory)
+        meta = os.fstat(binary)
+        if (not stat.S_ISREG(meta.st_mode) or meta.st_uid not in (0, owner) or
+                meta.st_mode & (0o022 | stat.S_ISUID | stat.S_ISGID) or
+                not meta.st_mode & 0o111):
+            raise SandboxError('unsafe_bwrap_executable')
+        if os.access in os.supports_effective_ids:
+            executable = os.access(path, os.X_OK, effective_ids=True)
+        else:
+            if os.getuid() != owner or os.getgid() != os.getegid():
+                raise SandboxError('unsafe_bwrap_executable')
+            executable = os.access(path, os.X_OK)
+        if not executable:
+            raise SandboxError('unsafe_bwrap_executable')
+        with os.fdopen(binary, 'rb') as source:
+            binary = None
+            actual = hashlib.file_digest(source, 'sha256').hexdigest()
+        if expected is not None and actual != expected:
+            raise SandboxError('bwrap_hash_mismatch')
+        return path
+    except (OSError, NotImplementedError):
+        raise SandboxError('unsafe_bwrap_path') from None
+    finally:
+        if binary is not None:
+            os.close(binary)
+        if directory is not None:
+            os.close(directory)
 
 
 def canonical_relays(values):
@@ -304,6 +362,7 @@ class ConfinedDaemon:
         self._execution_marker = {}
         self._broker = None
         self._socket_inode = None
+        self._bwrap = None
 
     def __enter__(self):
         return self.start()
@@ -326,7 +385,7 @@ class ConfinedDaemon:
             config_path = directory / 'config.json'
             self.process = subprocess.Popen(
                 ['unshare', '--user', '--map-root-user', '--net', '/usr/bin/python3',
-                 str(Path(__file__).resolve()), '--outer', str(config_path)],
+                 str(Path(__file__).resolve()), '--outer', str(config_path), str(self._bwrap)],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 env={'PATH': '/usr/bin:/usr/sbin:/bin', 'LANG': 'C.UTF-8',
                      **self._execution_marker},
@@ -359,7 +418,8 @@ class ConfinedDaemon:
             raise
 
     def _prepare(self):
-        if any(shutil.which(tool) is None for tool in ('bwrap', 'unshare', 'ip', 'sysctl')):
+        self._bwrap = validated_bwrap()
+        if any(shutil.which(tool) is None for tool in ('unshare', 'ip', 'sysctl')):
             raise SandboxError("missing_confinement_tool")
         if len(os.fsencode(self.socket)) > 100:
             raise SandboxError("daemon_socket_path_too_long")
@@ -448,12 +508,12 @@ class ConfinedDaemon:
             self._lock = None
 
 
-def _outer(config_path):
+def _outer(config_path, bwrap):
     config = json.loads(Path(config_path).read_text())
     subprocess.run(['/usr/sbin/ip', 'link', 'set', 'lo', 'up'], check=True)
     subprocess.run(['/usr/sbin/sysctl', '-q', '-w', 'net.ipv4.ip_unprivileged_port_start=0'], check=True)
     directory = Path(config['directory'])
-    args = ['bwrap', '--unshare-user', '--unshare-pid', '--uid', '0', '--gid', '0',
+    args = [bwrap, '--unshare-user', '--unshare-pid', '--uid', '0', '--gid', '0',
             '--cap-drop', 'ALL', '--die-with-parent', '--new-session', '--clearenv',
             '--setenv', 'PATH', '/usr/bin:/usr/sbin:/bin', '--setenv', 'HOME', '/state',
             '--setenv', 'LANG', 'C.UTF-8', '--ro-bind', '/usr', '/usr',
@@ -473,7 +533,7 @@ def _outer(config_path):
     if marker:
         args[args.index('--'):args.index('--')] = [
             '--setenv', 'EPIPHYTIC_EXECUTION_ID', marker['EPIPHYTIC_EXECUTION_ID']]
-    os.execvp(args[0], args)
+    os.execv(bwrap, args)
 
 
 def _self_test():
@@ -536,11 +596,9 @@ def _inner(config_path):
 
 if __name__ == '__main__':
     try:
-        if len(sys.argv) != 3:
-            raise SandboxError('invalid_bootstrap')
-        if sys.argv[1] == '--outer':
-            _outer(sys.argv[2])
-        elif sys.argv[1] == '--inner':
+        if len(sys.argv) == 4 and sys.argv[1] == '--outer':
+            _outer(sys.argv[2], sys.argv[3])
+        elif len(sys.argv) == 3 and sys.argv[1] == '--inner':
             _inner(sys.argv[2])
         else:
             raise SandboxError('invalid_bootstrap')

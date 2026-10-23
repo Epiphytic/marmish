@@ -110,6 +110,37 @@ fn defaults_and_duplicate_key_layers_accumulate_and_denies_win() {
 }
 
 #[test]
+fn defaults_and_two_narrowing_key_allow_layers_intersect_in_either_order() {
+    let principal = PrincipalId([2; 32]);
+    let mut p = policy(
+        allow(&["/usr/**"]),
+        vec![
+            KeyRestrictions {
+                principal,
+                restrictions: allow(&["/**/echo"]),
+            },
+            KeyRestrictions {
+                principal,
+                restrictions: allow(&["/usr/bin/*", "/bin/echo"]),
+            },
+        ],
+    );
+    for _ in 0..2 {
+        for (path, expected) in [
+            // Each key layer independently excludes a match of the other.
+            (&b"/usr/local/echo"[..], Err(EngineError::CommandDenied)),
+            (&b"/usr/bin/false"[..], Err(EngineError::CommandDenied)),
+            (&b"/usr/bin/echo"[..], Ok(true)),
+            // Matching both key layers cannot relax the default restriction.
+            (&b"/bin/echo"[..], Err(EngineError::CommandDenied)),
+        ] {
+            assert_eq!(check_command(&p, principal, &exec(path)), expected);
+        }
+        p.command_policy.as_mut().unwrap().keys.reverse();
+    }
+}
+
+#[test]
 fn empty_and_missing_allows_and_effective_shell_restrictions_are_distinct() {
     let principal = PrincipalId([2; 32]);
     let shell = CommandRequest::Shell {

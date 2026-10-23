@@ -1,0 +1,34 @@
+{
+  "scope": "local Ubuntu noble, authenticated rootless acquisition and production namespace prerequisite only",
+  "outcome": "passed",
+  "provenance": {
+    "suite": "noble",
+    "architecture": "amd64",
+    "package_version": "0.9.0-1ubuntu0.3",
+    "package_sha256": "2461f1beee9cb04c8942739fe1a2b37e7b7c2a3d518f0779dc75f9245baa3094",
+    "executable_sha256": "e318903862396f96de3df57264e0158682b952fd3fb53ac23d876413e7b30f71",
+    "keyring_sha256": "80a36b0a6de2f69f49d2df75ef473ccde121e9e190b9ea01d20a4f63778d5c31",
+    "sources": [
+      "https://archive.ubuntu.com/ubuntu noble main",
+      "https://archive.ubuntu.com/ubuntu noble-updates main",
+      "https://security.ubuntu.com/ubuntu noble-security main"
+    ],
+    "version": "bubblewrap 0.9.0",
+    "system_bwrap_present": true
+  },
+  "acquisition_exit_code": 0,
+  "probe": {
+    "exit_code": 0,
+    "outer": "/usr/bin/unshare --user --map-root-user --net",
+    "verified_private_bwrap_invocations": 2,
+    "each_unshares": ["user", "network", "pid"],
+    "each_mounts": ["proc", "dev"],
+    "final_child": "/usr/bin/true"
+  },
+  "owned_cleanup_exit_code": 0,
+  "limitations": [
+    "Does not establish Ubuntu resolute or ARM64 execution",
+    "Does not establish supplied Bel runner namespace or AppArmor policy",
+    "Does not replace native live Marmot acceptance tests"
+  ]
+}

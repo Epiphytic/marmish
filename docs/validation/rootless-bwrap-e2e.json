@@ -1,0 +1,53 @@
+{
+  "assertions": [
+    "live_additive_default_and_per_key_denials_path_and_shell_refusal",
+    "policy_denials_create_no_job_and_preserve_token_for_allowed_execution",
+    "literal_argv_spaces_unicode_quotes_newline_dollar_backticks_leading_dash_nonutf8",
+    "separate_binary_stderr_and_nonzero_exit",
+    "exact_admitted_retry_and_status_first_retry_execute_once_conflict_rejected",
+    "byte_exact_binary_stdin_stdout_stderr_eof",
+    "live_cancellation_reports_signal_and_remains_queryable",
+    "live_stale_challenge_wrong_group_and_chat_payload_never_execute"
+  ],
+  "bubblewrap": {
+    "architecture": "amd64",
+    "executable_sha256": "e318903862396f96de3df57264e0158682b952fd3fb53ac23d876413e7b30f71",
+    "keyring_sha256": "80a36b0a6de2f69f49d2df75ef473ccde121e9e190b9ea01d20a4f63778d5c31",
+    "package_sha256": "2461f1beee9cb04c8942739fe1a2b37e7b7c2a3d518f0779dc75f9245baa3094",
+    "package_version": "0.9.0-1ubuntu0.3",
+    "sources": [
+      "deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble main",
+      "deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-updates main",
+      "deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://security.ubuntu.com/ubuntu noble-security main"
+    ],
+    "suite": "noble",
+    "system_bwrap_present": true,
+    "version": "bubblewrap 0.9.0"
+  },
+  "bubblewrap_owned_cleanup": "complete",
+  "duration_seconds": 603.029,
+  "error": "interrupted",
+  "groups": [
+    "9f8efc331ecf837acc5ffab38cc5a9c5"
+  ],
+  "limitations": [
+    "prototype_single_device",
+    "relay_retention_is_not_guaranteed_erasure",
+    "same_principal_can_reattach_across_sessions"
+  ],
+  "local_cleanup": "complete",
+  "outcome": "failed",
+  "platform": "linux",
+  "public_identities": {
+    "client": "7865850cf3a75bd8ec380ad8eff8cbb5b354843294a979dd230a45f843d7bf12",
+    "server": "f8ab0196f6828b56868ab8028e36d00c334e7bb28b0b9df959fe6ad4953eb8fa"
+  },
+  "python": "3.12.3",
+  "relays": [
+    "wss://relay.eu.whitenoise.chat/",
+    "wss://relay.us.whitenoise.chat/"
+  ],
+  "stage": "unauthorized_and_ordinary_invitations",
+  "validation_scope": "local Linux real-relay E2E with freshly authenticated private Bubblewrap; daemon source provenance remains unknown",
+  "wnd_sha256": "1324c70d389fb49f37ae8f7f6ab2a16840b138a0c438d7aef10bb6f9eee20a03"
+}

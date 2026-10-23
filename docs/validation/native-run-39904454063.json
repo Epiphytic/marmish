@@ -1,0 +1,25 @@
+{
+  "run_id": 39904454063,
+  "run_url": "https://github.com/Epiphytic/marmish/actions/runs/39904454063",
+  "commit": "e5c891f33c3675fd08aa5b7d8eb6b8bcac5d4b01",
+  "platform": "linux-x64",
+  "job_id": 120253075348,
+  "job_result": "failure",
+  "prerequisite": {
+    "result": "failed",
+    "category": "bubblewrap_missing",
+    "command": "command -v bwrap",
+    "exit_code": 1
+  },
+  "confirmed_tools": {
+    "python": "3.14.4",
+    "rustc": "1.97.1",
+    "cc": "GCC 15.2.0",
+    "make": "4.4.1",
+    "perl": "5.40.1"
+  },
+  "offline_tests": "not_reached",
+  "daemon_build": "not_reached",
+  "live_tests": "not_reached",
+  "native_acceptance": false
+}

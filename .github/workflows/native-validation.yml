@@ -32,6 +32,10 @@ jobs:
           persist-credentials: false
       - name: Ensure user-local Python 3.11 or newer
         run: sh tools/bootstrap_ci_python.sh
+      - name: Acquire authenticated rootless Bubblewrap
+        if: runner.os == 'Linux'
+        timeout-minutes: 6
+        run: python3 tools/marmish_ci_bwrap.py bootstrap --state "$RUNNER_TEMP/bwrap-state"
       - name: User-local build cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
@@ -57,10 +61,10 @@ jobs:
           if [ "$RUNNER_OS" = macOS ]; then
             python3 tools/marmish_native_spike.py --relay wss://relay.eu.whitenoise.chat/ --relay wss://relay.us.whitenoise.chat/
           else
-            command -v bwrap
-            bwrap --unshare-user --unshare-net --unshare-pid --ro-bind / / --proc /proc --dev /dev bwrap --unshare-user --unshare-net --unshare-pid --ro-bind / / --proc /proc --dev /dev /usr/bin/true
+            python3 tools/marmish_ci_bwrap.py probe
           fi
       - name: Native offline tests
+        id: offline
         run: |
           cargo test --workspace --locked
           cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -75,6 +79,12 @@ jobs:
           path: ${{ runner.temp }}/native-bundle.tar
           if-no-files-found: error
           retention-days: 3
+      - name: Remove owned Bubblewrap prefix
+        if: always() && runner.os == 'Linux'
+        run: |
+          test '${{ steps.offline.outcome }}' != failure
+          test '${{ steps.offline.outcome }}' != cancelled
+          python3 tools/marmish_ci_bwrap.py cleanup --state "$RUNNER_TEMP/bwrap-state"
   live:
     if: github.ref == 'refs/heads/master'
     needs: native
@@ -105,6 +115,13 @@ jobs:
         run: python3 tools/marmish_ci_clock.py "$RUNNER_TEMP/live-clock.json"
       - name: Ensure user-local Python 3.11 or newer
         run: sh tools/bootstrap_ci_python.sh
+      - name: Acquire authenticated rootless Bubblewrap
+        if: runner.os == 'Linux'
+        timeout-minutes: 6
+        run: python3 tools/marmish_ci_bwrap.py bootstrap --state "$RUNNER_TEMP/bwrap-state"
+      - name: Probe acquired private Bubblewrap
+        if: runner.os == 'Linux'
+        run: python3 tools/marmish_ci_bwrap.py probe
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: native-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.platform }}
@@ -114,6 +131,7 @@ jobs:
           python3 tools/marmish_ci.py unpack --archive "$RUNNER_TEMP/native-download/native-bundle.tar" --destination "$RUNNER_TEMP/live-bundle"
           mkdir -p "$RUNNER_TEMP/public-ready" "$RUNNER_TEMP/public-paired" "$RUNNER_TEMP/public-results"
       - name: Full native client and server validation
+        id: e2e
         timeout-minutes: 16
         run: |
           WND_SHA=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["hashes"]["wnd"])' "$RUNNER_TEMP/live-bundle/bundle.json")
@@ -160,3 +178,11 @@ jobs:
           path: ${{ runner.temp }}/public-results/*.json
           if-no-files-found: ignore
           retention-days: 7
+      - name: Remove owned Bubblewrap prefix after verified private cleanup
+        if: always() && runner.os == 'Linux'
+        run: |
+          test ! -e "$RUNNER_TEMP/interop-state"
+          if [ '${{ steps.e2e.outcome }}' != skipped ]; then
+            python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["local_cleanup"] == "complete"' "$RUNNER_TEMP/public-results/native.json"
+          fi
+          python3 tools/marmish_ci_bwrap.py cleanup --state "$RUNNER_TEMP/bwrap-state"

@@ -118,6 +118,153 @@ class ValidationTests(unittest.TestCase):
                 daemon.start()
 
 
+class BwrapSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='marmish-bwrap-')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+        self.binary = self.root / 'bwrap'
+        self.binary.write_bytes(b'owned offline executable fixture')
+        self.binary.chmod(0o700)
+        self.environment = {'MARMISH_BWRAP': str(self.binary),
+                            'MARMISH_BWRAP_SHA256': hashlib.sha256(self.binary.read_bytes()).hexdigest()}
+
+    def selected(self):
+        with patch.dict(os.environ, self.environment, clear=True):
+            return sandbox.validated_bwrap()
+
+    def test_explicit_selection_is_pinned_and_never_uses_path(self):
+        with patch.object(sandbox.shutil, 'which', side_effect=AssertionError('PATH lookup')):
+            self.assertEqual(self.selected(), self.binary)
+        for change in ({'MARMISH_BWRAP_SHA256': '0' * 64},
+                       {'MARMISH_BWRAP_SHA256': ''}, {'MARMISH_BWRAP': 'relative/bwrap'},
+                       {'MARMISH_BWRAP': str(self.root / '..' / self.root.name / 'bwrap')},
+                       {'MARMISH_BWRAP': ''}):
+            with self.subTest(change=change):
+                original = self.environment.copy()
+                self.environment.update(change)
+                with self.assertRaises(sandbox.SandboxError):
+                    self.selected()
+                self.environment = original
+        for key in self.environment:
+            with patch.dict(os.environ, {key: self.environment[key]}, clear=True):
+                with self.assertRaisesRegex(sandbox.SandboxError, 'invalid_bwrap_selection'):
+                    sandbox.validated_bwrap()
+
+    def test_fixed_system_default_ignores_ambient_path(self):
+        with patch.dict(os.environ, {'PATH': str(self.root)}, clear=True), \
+                patch.object(sandbox.os, 'open', side_effect=FileNotFoundError) as opened, \
+                patch.object(sandbox.shutil, 'which', side_effect=AssertionError('PATH lookup')):
+            with self.assertRaises(sandbox.SandboxError):
+                sandbox.validated_bwrap()
+            self.assertEqual(opened.call_args.args[0], '/')
+        # The selected default's final basename is fixed even under hostile PATH.
+        with patch.dict(os.environ, {'PATH': str(self.root)}, clear=True), \
+                patch.object(sandbox.os, 'open', side_effect=[10, 11, 12, FileNotFoundError]) as opened, \
+                patch.object(sandbox.os, 'fstat', return_value=Mock(st_uid=0, st_mode=stat.S_IFDIR | 0o755)), \
+                patch.object(sandbox.os, 'close'):
+            with self.assertRaises(sandbox.SandboxError):
+                sandbox.validated_bwrap()
+            self.assertEqual([call.args[0] for call in opened.call_args_list], ['/', 'usr', 'bin', 'bwrap'])
+
+    def test_file_modes_symlinks_and_untrusted_ancestors_fail_closed(self):
+        for mode in (0o600, 0o775, 0o4755, 0o2755):
+            with self.subTest(mode=mode):
+                self.binary.chmod(mode)
+                with self.assertRaises(sandbox.SandboxError):
+                    self.selected()
+        self.binary.chmod(0o700)
+        self.root.chmod(0o777)
+        with self.assertRaises(sandbox.SandboxError):
+            self.selected()
+        self.root.chmod(0o700)
+        link = self.root / 'alias'
+        link.symlink_to(self.binary)
+        self.environment['MARMISH_BWRAP'] = str(link)
+        with self.assertRaises(sandbox.SandboxError):
+            self.selected()
+        link.unlink()
+        link.symlink_to(self.root, target_is_directory=True)
+        self.environment['MARMISH_BWRAP'] = str(link / 'bwrap')
+        with self.assertRaises(sandbox.SandboxError):
+            self.selected()
+        self.environment['MARMISH_BWRAP'] = str(self.root / 'fifo')
+        os.mkfifo(self.environment['MARMISH_BWRAP'], 0o700)
+        with self.assertRaises(sandbox.SandboxError):
+            self.selected()
+
+    def test_ownership_uses_supervisor_euid_before_mapping(self):
+        supervisor_uid = os.geteuid() or 1001
+        original = sandbox.os.fstat
+        def owned_file(fd):
+            metadata = original(fd)
+            if stat.S_ISREG(metadata.st_mode):
+                return Mock(st_uid=supervisor_uid, st_mode=metadata.st_mode)
+            return metadata
+        with patch.object(sandbox.os, 'geteuid', return_value=supervisor_uid), \
+                patch.object(sandbox.os, 'fstat', side_effect=owned_file), \
+                patch.object(sandbox.os, 'access', return_value=True):
+            self.assertEqual(self.selected(), self.binary)
+        with patch.object(sandbox.os, 'geteuid', return_value=0), \
+                patch.object(sandbox.os, 'fstat', side_effect=owned_file):
+            with self.assertRaisesRegex(sandbox.SandboxError, 'unsafe_bwrap_(path|executable)'):
+                self.selected()
+        def wrong_ancestor(fd):
+            metadata = original(fd)
+            if stat.S_ISDIR(metadata.st_mode):
+                return Mock(st_uid=123456, st_mode=stat.S_IFDIR | 0o700)
+            return metadata
+        with patch.object(sandbox.os, 'fstat', side_effect=wrong_ancestor):
+            with self.assertRaisesRegex(sandbox.SandboxError, 'unsafe_bwrap_path'):
+                self.selected()
+
+    def test_access_without_effective_ids_requires_matching_real_credentials(self):
+        with patch.object(sandbox.os, 'supports_effective_ids', set()), \
+                patch.object(sandbox.os, 'access', return_value=True) as access:
+            self.assertEqual(self.selected(), self.binary)
+            access.assert_called_once_with(self.binary, os.X_OK)
+        for credential in ('getuid', 'getgid'):
+            with self.subTest(credential=credential), \
+                    patch.object(sandbox.os, 'supports_effective_ids', set()), \
+                    patch.object(sandbox.os, credential, return_value=getattr(os, credential)() + 1), \
+                    patch.object(sandbox.os, 'access', return_value=True) as access:
+                with self.assertRaisesRegex(sandbox.SandboxError, 'unsafe_bwrap_executable'):
+                    self.selected()
+                access.assert_not_called()
+
+    def test_outer_executes_exact_prevalidated_path_without_mapped_uid_recheck(self):
+        config = self.root / 'config.json'
+        config.write_text(json.dumps({'directory': str(self.root), 'home': '/owned/state',
+                                     'wnd': '/owned/wnd', 'execution_marker': {'EPIPHYTIC_EXECUTION_ID': 'test-1'}}))
+        with patch.object(sandbox.subprocess, 'run'), patch.object(sandbox.os, 'execv') as execute, \
+                patch.object(sandbox.os, 'geteuid', side_effect=AssertionError('mapped uid check')), \
+                patch.object(sandbox, 'validated_bwrap', side_effect=AssertionError('revalidation')):
+            sandbox._outer(str(config), str(self.binary))
+        executable, command = execute.call_args.args
+        self.assertEqual(executable, str(self.binary))
+        self.assertEqual(command[0], executable)
+        self.assertEqual(command.count(executable), 1)
+        self.assertIn('--clearenv', command)
+        self.assertIn('--cap-drop', command)
+        self.assertIn('--die-with-parent', command)
+        self.assertEqual(command[command.index('PATH') + 1], '/usr/bin:/usr/sbin:/bin')
+        self.assertFalse(any('MARMISH_BWRAP' in argument for argument in command))
+        self.assertNotIn(str(self.binary), config.read_text())
+
+    def test_supervisor_passes_path_only_as_outer_argv(self):
+        daemon = sandbox.ConfinedDaemon(self.root / 'home', self.binary, ['wss://relay.example/'], '0' * 64)
+        daemon._temporary = Mock(name=str(self.root))
+        daemon._temporary.name = str(self.root)
+        daemon._bwrap = self.binary
+        with patch.dict(os.environ, self.environment), patch.object(daemon, '_prepare'), \
+                patch.object(daemon, 'close'), \
+                patch.object(sandbox.subprocess, 'Popen', side_effect=sandbox.SandboxError('stop')) as launch:
+            with self.assertRaisesRegex(sandbox.SandboxError, 'stop'):
+                daemon.start()
+        self.assertEqual(launch.call_args.args[0][-3:], ['--outer', str(self.root / 'config.json'), str(self.binary)])
+        self.assertFalse(any(key.startswith('MARMISH_BWRAP') for key in launch.call_args.kwargs['env']))
+
+
 class NamespaceTests(unittest.TestCase):
     def test_approved_bridge_decoy_denial_capabilities_and_cleanup(self):
         # This is a required test: unsupported namespaces fail, not silently skip.

@@ -22,6 +22,7 @@ from marmish_protocol import b64, encode, envelope, load_json, save_json, remove
 from marmish_rpc import RpcError, MdkRpc, strict_json
 from marmish_transport_sandbox import SandboxError
 from marmish_platform import continuous_time, execution_marker
+from marmish_ci_bwrap import environment as bwrap_environment, provenance as bwrap_provenance
 
 
 class Harness:
@@ -75,7 +76,7 @@ class Harness:
             '--worker', str(self.args.worker), '--cwd', str(self.cwd),
             '--command-policy', str(policy), '--allow-shell'],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            start_new_session=True, env={'PATH': '/usr/bin:/usr/sbin:/bin:/sbin', 'LANG': 'C', **execution_marker(),
+            start_new_session=True, env={'PATH': '/usr/bin:/usr/sbin:/bin:/sbin', 'LANG': 'C', **execution_marker(), **bwrap_environment(),
                 **({key: os.environ[key] for key in ('RUNNER_TRACKING_ID',) if key in os.environ})})
         require(select.select([self.server.stdout], [], [], 25)[0], 'server_start_timeout')
         ready = self.server.stdout.readline(1024)
@@ -310,7 +311,7 @@ class Harness:
             '/usr/bin/printf', '%s\n', 'marmish cli e2e'],
             input=b'', stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             timeout=min(150, max(1, self.deadline - continuous_time())),
-            env={'PATH': '/usr/bin:/usr/sbin:/bin:/sbin', 'LANG': 'C', **execution_marker(),
+            env={'PATH': '/usr/bin:/usr/sbin:/bin:/sbin', 'LANG': 'C', **execution_marker(), **bwrap_environment(),
                 **({key: os.environ[key] for key in ('RUNNER_TRACKING_ID',) if key in os.environ})})
         require(result.returncode == 0 and result.stdout == b'marmish cli e2e\n' and result.stderr == b'',
                 'cli_process_failed')
@@ -392,6 +393,10 @@ def main(argv=None):
         for sig, handler in handlers.items():
             signal.signal(sig, handler)
     report.update(platform=sys.platform, python=sys.version.split()[0])
+    try:
+        report['bubblewrap'] = bwrap_provenance()
+    except (SandboxError, OSError, ValueError, KeyError):
+        report.update(outcome='failed', error='bwrap_provenance_unavailable')
     if args.wnd_manifest:
         report['wnd_manifest'] = strict_json(args.wnd_manifest.read_bytes())
     print(json.dumps(report, sort_keys=True))

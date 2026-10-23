@@ -47,7 +47,9 @@ def common(config, name):
 
 
 def subprocess_env():
+    from marmish_ci_bwrap import environment
     return {'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LANG': 'C', **execution_marker(),
+            **environment(),
             **({key: os.environ[key] for key in ('RUNNER_TRACKING_ID',) if key in os.environ})}
 
 
@@ -391,6 +393,8 @@ def run_tests(args):
                   wnd_manifest=strict_json((Path(config['bundle']) / 'wnd.manifest.json').read_bytes()),
                   elapsed_seconds=round(continuous_time() - config['start'], 3),
                   peer_wall_clock_skew_seconds=round(time.time() - config['peer']['published_at']))
+    from marmish_ci_bwrap import provenance
+    result['bubblewrap'] = provenance()
     args.output.write_text(json.dumps(result, sort_keys=True))
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:

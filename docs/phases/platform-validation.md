@@ -257,3 +257,155 @@ substitution of an entire consistently forged trusted artifact. Runtime/private
 state is never cached. `EPIPHYTIC_EXECUTION_ID` and `RUNNER_TRACKING_ID` remain
 in owned supervisors; the supplied runner uses the former for host cleanup even
 when a daemon boundary intentionally clears other environment variables.
+
+## Runner refinement: rootless Linux Bubblewrap prerequisite
+
+Run [39904454063](https://github.com/Epiphytic/marmish/actions/runs/39904454063),
+commit `e5c891f`, failed the Bel Linux prerequisite because `bwrap` was absent.
+The supplied Ubuntu 26.04 container runs the worker without sudo. This refinement
+installs only a CI tool in private user-owned storage; it neither changes runner
+infrastructure nor relaxes namespace confinement. The current macOS/ARM jobs
+continue to collect evidence. Implementation requires independent Claude design
+approval before changes start.
+
+### Authenticated acquisition and installation
+
+Add a Linux-only bootstrap helper, invoked in both native and live Linux jobs
+after Python setup. Refuse API tokens, effective root and unsupported OS/arch;
+allow Ubuntu `noble`/`resolute`, `amd64`/`arm64` only. Require system `apt-get`,
+`apt-cache`, `dpkg-deb` and a root-owned, non-writable regular
+`/usr/share/keyrings/ubuntu-archive-keyring.gpg`. Existing kernel helpers `unshare`,
+`ip` and `sysctl` remain required; this increment does not silently replace them.
+
+Create a fresh mode-0700 prefix under `$RUNNER_TEMP` for every job, retained until
+an `always()` cleanup step; refuse reuse, and never auto-delete on helper exit.
+Generate explicit
+`signed-by` sources for the detected native architecture and suite, main component
+only: AMD64 uses HTTPS `archive.ubuntu.com/ubuntu` and
+`security.ubuntu.com/ubuntu`; ARM64 uses HTTPS
+`ports.ubuntu.com/ubuntu-ports`. Include release, updates and security pockets.
+Isolate all APT sources, lists, state, downloads and configuration under that
+prefix. Supply `APT_CONFIG` pointing at a private config before APT initialization;
+set `Dir::Etc::main`/`parts`/`sourcelist`/`sourceparts`/`trusted`/`trustedparts`
+and `preferences`/`preferencesparts`/`netrc`/`netrcparts` to private files/directories,
+with only the explicit `Signed-By` system keyring.
+Use empty private dpkg status and private lists/cache/state. Disable ambient
+hooks, translations (`Acquire::Languages=none`), DEP-11 and CNF index targets;
+set `APT::Update::Error-Mode=any`, `Acquire::Check-Date=true`, and explicitly
+forbid insecure repositories/downgrades and unauthenticated packages. Leave
+verifier selection to APT (26.04 may use sqv); a verifier failure is fatal.
+Do not override `APT::Sandbox::User` when unprivileged. Never modify `/etc`,
+system APT lists, dpkg state or installed packages. Require authenticated
+repositories and fail-on-any-update-error. Never use
+`trusted=yes`, allow-unauthenticated, insecure downgrade or installation commands.
+
+Run rootless `apt-get update`, select the native Bubblewrap candidate from those
+authenticated lists with APT's candidate policy, and
+`apt-get download bubblewrap:<arch>=<version>` into the empty private download
+directory. Enforce per-suite minimum versions using `dpkg --compare-versions`:
+`noble >= 0.9.0-1ubuntu0.3`, `resolute >= 0.11.1-1ubuntu0.3`. These floors prevent
+replay below the reviewed fixes; signatures alone do not provide freshness and
+Ubuntu indexes may omit Valid-Until. Keep normal APT date/expiry checks where
+present; do not claim they prevent all replay above the floor. Verify
+package/version/architecture and SHA256 against the authenticated package record.
+Identical duplicate records across updates/security are allowed; differing
+Version/Architecture/Filename/Size/SHA256 for the selected version fail. Bound update to 180s,
+download to 60s, the whole helper to 300s, metadata storage to 128 MiB and the
+single deb to 2 MiB. All subprocesses have hard deadlines and owned process groups;
+on expiry terminate then kill/wait the complete owned group. Bound dpkg's streamed
+uncompressed tar to 16 MiB/256 members and the executable to 1 MiB, including
+draining/checking the producer's exit. Fail closed
+on missing or conflicting metadata, rejected signatures/dates, excess size or any
+command failure. A local UID-1001 spike already verified isolated signed APT
+update/download on Ubuntu 24.04 (`bubblewrap 0.9.0-1ubuntu0.3`). A fresh isolated,
+authenticated Ubuntu 26.04 AMD64 index inspection selected `0.11.1-1ubuntu0.3`
+from both updates/security on 2026-10-22, package SHA256
+`d3a6c1b6b0e0474eaed6dbd055c0d601fd875af153976a0dc4aae75f4ea10868`.
+This sets the resolute floor, not a replacement for signature validation.
+Ubuntu 26.04 execution and ARM64 ports remain actual-runner gates.
+
+Use `dpkg-deb --fsys-tarfile` and a bounded tar reader to copy only the exact
+regular `./usr/bin/bwrap` payload into an exclusive private `bin/bwrap`; reject
+duplicates, links, setuid/setgid bits, oversized payloads and unexpected ELF
+architecture. Execute no package scripts and extract no arbitrary archive paths.
+Publish executable mode 0755 only after package verification. Verify runtime
+loading with this exact executable's `--version`; expected system runtime
+dependencies are libc6, libcap2 and libselinux1. Nonzero runtime checks produce
+`bwrap_runtime_check_failed` without inferring a missing library; deadline and
+output/storage quota categories are preserved. Noexec/permission failure produces
+`bwrap_execution_denied`. Do not replace libc, change the loader or set
+`LD_LIBRARY_PATH`. Remove only this helper's owned temporary data on failure.
+Keep no new package cache: each job verifies fresh signed metadata and installs
+afresh. Record public suite, architecture, package version, source origin,
+keyring SHA256, package SHA256, executable SHA256 and reported version.
+
+### Absolute executable propagation and confinement gate
+
+Bootstrap rejects preexisting `MARMISH_BWRAP`/`MARMISH_BWRAP_SHA256` and writes
+only helper-generated absolute path and digest as single-line `GITHUB_ENV`
+values. Do not prepend PATH or modify GITHUB_PATH. These are local supervisor
+inputs, never remote message fields; the private mode-0700 prefix supplies the
+same-user trust boundary, while the digest detects between-step changes.
+Explicitly forward this pair through both E2E sanitized Popen environments
+(server startup and actual CLI), interop's `subprocess_env` (service/server/CLI),
+and into the Linux transport supervisor. At its sanitized outer-launch boundary,
+consume the override in `_prepare` and pass the validated path only as argv,
+not as outer environment variables. Preserve execution ownership
+markers and continue refusing API tokens. The inner `--setenv PATH` remains
+unchanged and receives neither override.
+
+The Linux transport resolves Bubblewrap to an absolute executable before its
+sanitized outer spawn. In `_prepare`, before entering the user namespace, validate
+regular executable ownership against the real supervisor euid (or root for a
+system install), reject symlink components/privilege bits and require its entire
+directory chain not group/world writable except root-owned sticky temporary
+ancestors. Verify a supplied digest there. Without an explicit override resolve
+only `/usr/bin/bwrap`, never ambient PATH. Pass the validated absolute path as
+outer-only argv, not in the config bind-mounted into the inner. `_outer` uses
+the supplied absolute path in its argv and `os.execv`, with no repeated ownership
+comparison after real UID maps to namespace uid 0, and no `execvp`/bare bwrap.
+The executable runs outside the confined daemon root. The inner daemon receives
+the existing fixed environment and mounts; it neither needs access to the private
+tool prefix nor invokes Bubblewrap. No additional writable mount, capability,
+network access or ambient environment enters that boundary.
+
+The Linux bootstrap steps use `if: runner.os == 'Linux'`, after Python setup and
+before prerequisite checks on both Linux architectures. Replace bare-name probe
+invocations with the exact absolute path. Run the production outer chain
+`/usr/bin/unshare --user --map-root-user --net ...` followed by two invocations
+of the same verified absolute Bubblewrap, each unsharing user/network/PID namespaces and
+mounting its own `/proc` and `/dev` with a read-only host view. Both invocations
+must successfully run the final child; the authenticated binary performs actual
+namespace creation even though that child is `/usr/bin/true`. Additional namespace
+inode diagnostics are optional; do not add unverified capability assumptions as
+prerequisites. Keep the existing production isolation flags and full daemon/E2E
+checks. A kernel, AppArmor or LXD refusal remains a hard prerequisite
+failure with a sanitized category. Ubuntu AppArmor may authorize user namespaces
+only for `/usr/bin/bwrap`; a private copy may fail that path-attached policy even
+when a system binary would pass. Record system binary presence and classify
+`userns_denied_private_bwrap`; do not silently switch binaries. Do not alter
+sysctls, profiles or runner policy. Always cleanup only the owned prefix after
+all frontends/transport processes stop; preserve it if ownership/termination
+cannot be established, and report incomplete cleanup.
+
+### Validation and publication
+
+Add offline tests for source/config isolation, authentication failure, wrong
+suite/architecture/version/hash, size/deadline limits, duplicate/link/privileged
+tar payloads, arbitrary preexisting paths, missing dependencies, token refusal,
+absolute path propagation through sanitized frontends/outer launcher, and nested
+probe failure. Test failure cleanup preserves unrelated data. Public
+result JSON includes package provenance; no private prefix, keys, APT credentials
+or arbitrary output is uploaded. Review the integrated code in Claude auto mode,
+run affected local tests, commit/push the reviewed fix, then require all original
+native and real-Marmot gates at the same reviewed SHA/run attempt. Installation
+success alone establishes neither confinement nor platform support.
+
+The host validation and subsequent `execv` are separate operations. Their
+remaining race assumes the same trusted host user does not replace its own
+0700 private prefix during launch; the digest check is not an atomic execution
+primitive. Failed or cancelled offline tests retain the prefix because worker
+quiescence is uncertain. Live cleanup additionally requires the single-host E2E
+report's `local_cleanup=complete` and removal of distributed private state.
+See [the local acquisition and namespace probe evidence](../validation/rootless-bwrap-local.json)
+for the bounded noble smoke test; supplied-runner acceptance is still pending.
