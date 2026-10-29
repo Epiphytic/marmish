@@ -23,6 +23,8 @@ engine.key
 *.pem
 *.p12
 *.pfx
+*.keychain
+*.keychain-db
 id_rsa
 id_ed25519
 **/jobs/*/credential

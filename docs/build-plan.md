@@ -100,3 +100,27 @@ before claiming support; unavailable capabilities block dependent work only.
 ## Reference baseline
 
 Planning starts from the existing checkout at `/home/openclaw/repos/mdk-fork`, revision `37c248a11239e108afc9bd4ee62b8f60542012e3`. The checkout is evidence to inspect, not automatically the selected dependency. Phase 0 must record the exact chosen source and behavior. Upstream references: [MDK](https://github.com/marmot-protocol/mdk) and [Marmot specification](https://github.com/marmot-protocol/marmot).
+
+## Native keychain storage extension
+
+Beads `marmish-d84` tracks named native keychain storage for Nostr identities
+and SQLCipher master keys. New profiles prefer a present native keychain:
+macOS legacy Keychain or Linux Secret Service. Locked/denied/ambiguous states
+fail closed; backend absence alone may permit auto mode to choose private files.
+Existing file profiles require explicit migration and are never regenerated.
+Expose `--key-storage auto|native|files`; persist the selected backend. Auto mode
+announces file selection when no native backend is present; an uncertain backend
+failure never selects files.
+Human names identify keys; immutable random references bind actual credentials.
+SQLCipher master keys remain independent per state root.
+
+| Phase | Deliverable | Exit criteria |
+| --- | --- | --- |
+| K1 Native vault | Reviewed host-side provider/helper for named native credentials | Non-overwriting create, exact lookup, locked/absent distinction, bounded secret IPC, actual isolated Linux keychain tests, native macOS tests when available, Claude code approval, commit/push |
+| K2 Integration | Reviewed frontend selection, stable references, private engine/MDK handoff and explicit migration | Default selection only for new profiles, no persistent plaintext keys in native mode, detached worker independence, MDK confinement maintained, migration crash recovery and wrong-key/descriptor negatives, Claude code approval, commit/push |
+| K3 Native validation | Real command execution using native keychains | Disposable named identities and per-root SQLCipher keys, reconnect/restart/detach and byte-preservation, native Linux/macOS tests and bidirectional execution where prerequisites work, sanitized evidence and honest outstanding gates, Claude approval, commit/push |
+
+At each phase start, inspect the concrete contracts and obtain Claude approval
+for its detailed design before implementation. A present but inaccessible store
+never triggers silent plaintext fallback. Do not expose broad D-Bus or Keychain
+authority inside the confined daemon.

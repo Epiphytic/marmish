@@ -51,6 +51,10 @@ jobs:
           echo "$RUNNER_TEMP/marmish-toolchain/bin" >> "$GITHUB_PATH"
           echo "CARGO_HOME=$RUNNER_TEMP/marmish-cargo" >> "$GITHUB_ENV"
           echo "MARMISH_MDK_TARGET_DIR=$RUNNER_TEMP/marmish-mdk-target" >> "$GITHUB_ENV"
+      - name: Native disposable macOS keychain acceptance
+        if: runner.os == 'macOS'
+        timeout-minutes: 6
+        run: cargo test --locked -p marmish-vault --test native_vault -- --ignored --test-threads=1
       - name: Native prerequisite spike
         run: |
           python3 --version

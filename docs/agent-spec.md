@@ -276,3 +276,20 @@ not implemented claims. Preserve the phase dependencies in the build plan and
 use Beads to record the specific next work and blockers. Do not interpret an
 unavailable future MDK capability as evidence that the existing command
 prototype or explicit-relay tests cannot run.
+
+### Native named key storage extension
+
+Beads `marmish-d84` tracks native macOS Keychain and Linux Secret Service storage
+for Nostr private keys and per-root SQLCipher masters. The user requested multiple
+named keys and native storage by default when present. The reviewed phasing is
+[the keychain extension](build-plan.md#native-keychain-storage-extension).
+
+K1 adds the host-side `marmish-vault` library and bounded private-stdio
+`marmish-keychain` helper, with exact immutable references, display names,
+non-overwriting creation, readback and metadata-only listing. It distinguishes
+absent, uninitialized, locked/denied, missing and ambiguous results. See
+[the K1 contract](phases/keychain-vault.md) and [validation](validation/keychain-vault.md).
+Linux actual-provider tests run an isolated owned GNOME Keyring; macOS native
+execution remains a separate gate. This component alone does not change existing
+frontend/engine key storage. Native selection, named catalogs, explicit migration
+and confined MDK/detached-worker handoff remain K2 work until validated.
