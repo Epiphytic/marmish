@@ -1521,6 +1521,7 @@ impl Fixture {
         let engine = crate::Engine {
             store: self.store,
             keys: self.keys,
+            storage: crate::storage::StorageMode::Files,
             root: self.root,
             _guard: guard,
             policy,
@@ -1909,4 +1910,178 @@ fn reconciliation_late_global_error_keeps_committed_page_cursor_and_wraps() {
         load(&engine.store.conn, JobId([85; 16])).unwrap().attempts,
         0
     );
+}
+
+#[test]
+fn swapped_worker_root_is_rejected_before_reserving_an_attempt() {
+    let mut fixture = Fixture::new();
+    let job = fixture.admit(79);
+    let (_directory, mut engine, _) = fixture.into_engine();
+    let relocated = tempfile::tempdir().unwrap();
+    let held_path = relocated.path().join("held");
+    let original_path = engine.root.path().to_owned();
+    std::fs::rename(&original_path, &held_path).unwrap();
+    let swapped = StateRoot::open(&original_path).unwrap();
+    swapped.prepare_db(true).unwrap();
+    assert!(matches!(
+        engine.start_accepted(job),
+        Err(EngineError::UnsafePath)
+    ));
+    assert_eq!(load(&engine.store.conn, job).unwrap().attempts, 0);
+    assert_eq!(
+        engine.store.job_state(job).unwrap(),
+        InvocationState::Accepted
+    );
+    drop(swapped);
+    std::fs::remove_dir_all(&original_path).unwrap();
+    std::fs::rename(&held_path, &original_path).unwrap();
+}
+
+fn assert_frame_rejected_in_child(root: &std::path::Path, frame: &[u8]) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "store::tests::rejected_native_worker_frames_leave_an_accepted_job_unclaimed",
+        ])
+        .env_clear()
+        .env("MARMISH_FRAME_TEST_ROOT", root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(frame).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(7);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(status.success(), "isolated negative frame assertion failed");
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            child.wait().unwrap();
+            panic!("isolated negative frame deadline exceeded");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn rejected_native_worker_frames_leave_an_accepted_job_unclaimed() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::ExitCode;
+    const CHILD_ROOT: &str = "MARMISH_FRAME_TEST_ROOT";
+    if let Some(root) = std::env::var_os(CHILD_ROOT) {
+        let outcome =
+            crate::worker::worker_main(vec![root, "50505050505050505050505050505050".into()]);
+        assert_eq!(outcome, ExitCode::FAILURE);
+        return;
+    }
+    let mut fixture = Fixture::new();
+    let job = fixture.admit(80);
+    fixture
+        .root
+        .prepare_job(job, &WorkerCredential([4; 32]))
+        .unwrap();
+    let binding = crate::NativeBinding::new([81; 32], [82; 32]);
+    std::fs::write(
+        fixture.root.path().join("engine.native.json"),
+        serde_json::to_vec(&binding.marker()).unwrap(),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        fixture.root.path().join("engine.native.json"),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    std::fs::remove_file(fixture.root.path().join("engine.key")).unwrap();
+    let frame = crate::storage::frame(
+        &fixture.root,
+        job,
+        &crate::storage::StorageMode::Native(binding),
+        &fixture.keys,
+    )
+    .unwrap();
+    let mut cases = Vec::new();
+    // Every framing/binding field, plus native-marker/file-mode confusion.
+    for index in [0, 8, 9, 16, 32, 40, 48, 80, 112] {
+        let mut invalid = zeroize::Zeroizing::new(frame.to_vec());
+        invalid[index] ^= 1;
+        cases.push(invalid);
+    }
+    let mut files = zeroize::Zeroizing::new(frame.to_vec());
+    files[8] = 0;
+    files[48..112].fill(0);
+    cases.push(files);
+    cases.push(zeroize::Zeroizing::new(frame[..143].to_vec()));
+    let mut trailing = zeroize::Zeroizing::new(frame.to_vec());
+    trailing.push(0);
+    cases.push(trailing);
+    // Correct native framing still rejects a root containing a legacy key.
+    cases.push(zeroize::Zeroizing::new(frame.to_vec()));
+    for (index, invalid) in cases.iter().enumerate() {
+        if index == cases.len() - 1 {
+            let mut legacy = zeroize::Zeroizing::new(b"MRMSKEY1".to_vec());
+            legacy.extend_from_slice(fixture.keys.0.as_ref());
+            std::fs::write(fixture.root.path().join("engine.key"), legacy.as_slice()).unwrap();
+            std::fs::set_permissions(
+                fixture.root.path().join("engine.key"),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+        }
+        assert_frame_rejected_in_child(fixture.root.path(), invalid);
+        let stored = load(&fixture.store.conn, job).unwrap();
+        assert_eq!(stored.state, InvocationState::Accepted);
+        assert!(stored.worker.is_none());
+        assert_eq!(stored.attempts, 0);
+    }
+}
+
+#[test]
+fn wrong_native_master_reopen_leaves_an_inflight_accepted_job_unchanged() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut fixture = Fixture::new();
+    let job = fixture.admit(83);
+    fixture
+        .root
+        .prepare_job(job, &WorkerCredential([4; 32]))
+        .unwrap();
+    let binding = crate::NativeBinding::new([84; 32], [85; 32]);
+    std::fs::write(
+        fixture.root.path().join("engine.native.json"),
+        serde_json::to_vec(&binding.marker()).unwrap(),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        fixture.root.path().join("engine.native.json"),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    std::fs::remove_file(fixture.root.path().join("engine.key")).unwrap();
+    let policy = fixture.store.config.policy.clone();
+    let Fixture {
+        _dir,
+        root,
+        store,
+        keys,
+        ..
+    } = fixture;
+    drop(store);
+    let ciphertext = std::fs::read(root.path().join("engine.sqlite3")).unwrap();
+    assert!(matches!(
+        crate::Engine::open_with_master(policy, binding, crate::ProvidedMaster::new([86; 32])),
+        Err(EngineError::StorageFailure)
+    ));
+    assert!(
+        std::fs::read(root.path().join("engine.sqlite3")).unwrap() == ciphertext,
+        "rejected reopen modified encrypted state"
+    );
+    let store = Store::open_worker(&root, &keys).unwrap();
+    let stored = load(&store.conn, job).unwrap();
+    assert_eq!(stored.state, InvocationState::Accepted);
+    assert_eq!(stored.attempts, 0);
+    assert!(stored.worker.is_none());
 }

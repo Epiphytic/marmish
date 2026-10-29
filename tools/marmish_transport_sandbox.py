@@ -350,7 +350,17 @@ class _Broker:
 
 
 class ConfinedDaemon:
-    def __init__(self, home: Path, wnd: Path, relays: list[str], wnd_sha256: str):
+    def __init__(self, home: Path, wnd: Path, relays: list[str], wnd_sha256: str, *, bootstrap=None, manifest=None):
+        self._bootstrap = bootstrap
+        self._native_key = bootstrap is not None
+        if self._native_key:
+            from marmish_mdk_build import verify_manifest
+            from marmish_bootstrap import wipe
+            try:
+                verify_manifest(wnd, wnd_sha256, manifest, expected_platform='linux')
+            except BaseException:
+                wipe(bootstrap)
+                raise
         self.home = Path(home).absolute()
         self.wnd = Path(wnd).absolute()
         self.relays = canonical_relays(relays)
@@ -383,14 +393,20 @@ class ConfinedDaemon:
             deadline = _clock() + STARTUP_SECONDS
             directory = Path(self._temporary.name)
             config_path = directory / 'config.json'
-            self.process = subprocess.Popen(
-                ['unshare', '--user', '--map-root-user', '--net', '/usr/bin/python3',
-                 str(Path(__file__).resolve()), '--outer', str(config_path), str(self._bwrap)],
-                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                env={'PATH': '/usr/bin:/usr/sbin:/bin', 'LANG': 'C.UTF-8',
-                     **self._execution_marker},
-                start_new_session=True, close_fds=True,
-            )
+            from marmish_bootstrap import open_pipe
+            bootstrap_reader = open_pipe(self._bootstrap)
+            try:
+                self.process = subprocess.Popen(
+                    ['unshare', '--user', '--map-root-user', '--net', '/usr/bin/python3',
+                     str(Path(__file__).resolve()), '--outer', str(config_path), str(self._bwrap)],
+                    stdin=bootstrap_reader, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    env={'PATH': '/usr/bin:/usr/sbin:/bin', 'LANG': 'C.UTF-8',
+                         **self._execution_marker},
+                    start_new_session=True, close_fds=True,
+                )
+            finally:
+                if bootstrap_reader >= 0:
+                    os.close(bootstrap_reader)
             os.set_blocking(self.process.stdout.fileno(), False)
             ready = bytearray()
             while _clock() < deadline:
@@ -416,6 +432,10 @@ class ConfinedDaemon:
         except BaseException:
             self.close()
             raise
+        finally:
+            from marmish_bootstrap import wipe
+            wipe(self._bootstrap)
+            self._bootstrap = None
 
     def _prepare(self):
         self._bwrap = validated_bwrap()
@@ -473,12 +493,15 @@ class ConfinedDaemon:
         (directory / 'resolv').write_text('')
         config = {'home': str(self.home), 'wnd': str(self.wnd), 'origins': origins,
                   'relays': self.relays, 'directory': str(directory),
-                  'execution_marker': self._execution_marker}
+                  'execution_marker': self._execution_marker, 'bootstrap': self._native_key}
         (directory / 'config.json').write_text(json.dumps(config))
         self._broker = _Broker(routes)
         self._broker.start()
 
     def close(self):
+        from marmish_bootstrap import wipe
+        wipe(self._bootstrap)
+        self._bootstrap = None
         if self.process is not None:
             process, self.process = self.process, None
             if process.poll() is None:
@@ -510,8 +533,8 @@ class ConfinedDaemon:
 
 def _outer(config_path, bwrap):
     config = json.loads(Path(config_path).read_text())
-    subprocess.run(['/usr/sbin/ip', 'link', 'set', 'lo', 'up'], check=True)
-    subprocess.run(['/usr/sbin/sysctl', '-q', '-w', 'net.ipv4.ip_unprivileged_port_start=0'], check=True)
+    subprocess.run(['/usr/sbin/ip', 'link', 'set', 'lo', 'up'], check=True, stdin=subprocess.DEVNULL)
+    subprocess.run(['/usr/sbin/sysctl', '-q', '-w', 'net.ipv4.ip_unprivileged_port_start=0'], check=True, stdin=subprocess.DEVNULL)
     directory = Path(config['directory'])
     args = [bwrap, '--unshare-user', '--unshare-pid', '--uid', '0', '--gid', '0',
             '--cap-drop', 'ALL', '--die-with-parent', '--new-session', '--clearenv',
@@ -544,11 +567,11 @@ def _self_test():
     with socket.socket() as probe:
         probe.bind(('127.0.0.250', 443))
     changed = subprocess.run(['/usr/sbin/ip', 'link', 'set', 'lo', 'down'],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if changed.returncode == 0:
         raise SandboxError('namespace_network_mutable')
     for family in ([], ['-6']):
-        routes = json.loads(subprocess.check_output(['/usr/sbin/ip', '-j', *family, 'route', 'show', 'default']))
+        routes = json.loads(subprocess.check_output(['/usr/sbin/ip', '-j', *family, 'route', 'show', 'default'], stdin=subprocess.DEVNULL))
         if routes:
             raise SandboxError('namespace_has_external_route')
     if Path('/etc/resolv.conf').read_bytes():
@@ -586,10 +609,18 @@ def _inner(config_path):
         threading.Thread(target=accept, args=(listener, bridge), daemon=True).start()
     relays = ','.join(config['relays'])
     child = subprocess.Popen(['/wnd', '--home', '/state', '--socket', '/state/s',
-                              '--logs-dir', '/state/logs', '--secret-store', 'file',
+                              '--logs-dir', '/state/logs', '--secret-store',
+                              'marmish-stdin' if config.get('bootstrap') else 'file',
                               '--discovery-relays', relays, '--default-account-relays', relays],
-                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, close_fds=True)
+                             stdin=None if config.get('bootstrap') else subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+    if config.get('bootstrap'):
+        null = os.open('/dev/null', os.O_RDONLY)
+        try:
+            os.dup2(null, 0)
+        finally:
+            if null != 0:
+                os.close(null)
     print('READY', flush=True)
     raise SystemExit(child.wait())
 

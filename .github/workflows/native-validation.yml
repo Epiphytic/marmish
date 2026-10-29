@@ -44,7 +44,7 @@ jobs:
             ${{ runner.temp }}/marmish-cargo
             ${{ runner.temp }}/marmish-mdk-target
             target
-          key: native-${{ matrix.platform }}-rust1.97.1-${{ hashFiles('tools/marmish_ci.py', 'tools/bootstrap_ci_python.sh', 'rust-toolchain.toml', 'Cargo.lock', 'patches/mdk/marmish-restricted.patch', 'patches/mdk/source-guard.json', 'tests/fixtures/relay-canonicalization.json', 'tools/check_mdk_builders.py', 'tools/marmish_mdk_build.py', 'tools/build_mdk.py') }}
+          key: native-${{ matrix.platform }}-rust1.97.1-${{ hashFiles('tools/marmish_ci.py', 'tools/bootstrap_ci_python.sh', 'rust-toolchain.toml', 'Cargo.lock', 'patches/mdk/marmish-restricted.patch', 'patches/mdk/marmish-bootstrap.patch', 'patches/mdk/source-guard.json', 'tests/fixtures/relay-canonicalization.json', 'tools/check_mdk_builders.py', 'tools/marmish_mdk_build.py', 'tools/build_mdk.py') }}
       - name: Bootstrap pinned native Rust without privilege
         run: |
           python3 tools/marmish_ci.py bootstrap --destination "$RUNNER_TEMP/marmish-toolchain"
@@ -74,6 +74,7 @@ jobs:
           cargo clippy --workspace --all-targets --locked -- -D warnings
           cargo fmt --all -- --check
           python3 -m unittest discover -s tools -p 'test_*.py'
+          PYTHONPATH=tools python3 -m unittest discover -s tests -p 'test_marmish_keys.py'
       - name: Build pinned native daemon and executables
         run: python3 tools/marmish_ci.py bundle --destination "$RUNNER_TEMP/native-bundle"
       - name: Publish public native executables

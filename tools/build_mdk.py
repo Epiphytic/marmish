@@ -12,7 +12,7 @@ import stat
 import subprocess
 import tempfile
 
-from marmish_mdk_build import SOURCE, REVISION, LOCK_SHA256, ROOT, PATCH, FIXTURE, digest, _target
+from marmish_mdk_build import SOURCE, REVISION, LOCK_SHA256, ROOT, PATCH, BOOTSTRAP_PATCH, FIXTURE, digest, _target
 
 
 def run(args, **kwargs):
@@ -26,10 +26,10 @@ TRANSPORT_TESTS = (
 )
 
 
-def run_transport_tests(source, selector, environment):
-    for suffix in TRANSPORT_TESTS:
-        name = 'marmish_transport::tests::' + suffix
-        result = subprocess.run(['cargo', *selector, 'test', '--locked', '-p', 'marmot-app',
+def run_exact_tests(source, selector, environment, package, module, names):
+    for suffix in names:
+        name = module + '::tests::' + suffix
+        result = subprocess.run(['cargo', *selector, 'test', '--locked', '-p', package,
                                  '--lib', name, '--', '--exact', '--test-threads=1'],
                                 cwd=source, env=environment, check=True, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -39,6 +39,17 @@ def run_transport_tests(source, selector, environment):
                 'test result: ok. 1 passed; 0 failed;' not in result.stdout):
             raise RuntimeError('transport_test_not_executed')
 
+
+
+def run_transport_tests(source, selector, environment):
+    run_exact_tests(source, selector, environment, 'marmot-app', 'marmish_transport', TRANSPORT_TESTS)
+
+
+BOOTSTRAP_TESTS = ('frame_and_immutable_store', 'metadata_and_setup_recovery', 'startup_handshake_subprocess')
+
+
+def run_bootstrap_tests(source, selector, environment):
+    run_exact_tests(source, selector, environment, 'wn-cli', 'marmish_bootstrap', BOOTSTRAP_TESTS)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -71,14 +82,16 @@ def main():
         rustc = subprocess.check_output(['rustc', *selector, '--version'], text=True).strip()
         if not rustc.startswith('rustc 1.97.1 '):
             raise RuntimeError('toolchain_mismatch')
+        run(['git', '-C', str(source), 'apply', '--check', str(BOOTSTRAP_PATCH)])
+        run(['git', '-C', str(source), 'apply', str(BOOTSTRAP_PATCH)])
         if host == 'darwin':
             run(['git', '-C', str(source), 'apply', '--check', str(PATCH)])
             run(['git', '-C', str(source), 'apply', str(PATCH)])
-            run([shutil.which('python3') or 'python3', str(ROOT / 'tools' / 'check_mdk_builders.py'), str(source)])
             environment['MACOSX_DEPLOYMENT_TARGET'] = '15.0'
             for target in ('aarch64_apple_darwin', 'x86_64_apple_darwin'):
                 environment['CFLAGS_' + target] = '-mmacosx-version-min=15.0'
                 environment['CXXFLAGS_' + target] = '-mmacosx-version-min=15.0'
+        run([shutil.which('python3') or 'python3', str(ROOT / 'tools/check_mdk_builders.py'), str(source)])
         run(['cargo', *selector, 'build', '--locked', '--release', '-p', 'wn-cli', '--bin', 'wnd'], cwd=source, env=environment)
         if host == 'darwin':
             # Release is already built from the guarded tree. Test input is external.
@@ -89,6 +102,7 @@ def main():
                 with (source / 'crates/marmot-app/marmish-relays.json').open('xb') as target:
                     shutil.copyfileobj(fixture, target)
             run_transport_tests(source, selector, environment)
+        run_bootstrap_tests(source, selector, environment)
         if digest(source / 'Cargo.lock') != lock_hash:
             raise RuntimeError('source_lock_changed')
         with (target_dir / 'release/wnd').open('rb') as src, output.open('xb') as dst:
@@ -107,7 +121,7 @@ def main():
             run(['codesign', '--force', '--sign', '-', str(output)])
             for artifact in [output, *(output.parent / name for name in helpers)]:
                 run(['/usr/bin/codesign', '--verify', '--strict', str(artifact)])
-        manifest = {'version': 1, 'source': SOURCE, 'revision': REVISION,
+        manifest = {'version': 2, 'source': SOURCE, 'revision': REVISION,
                     'clean_checkout': True, 'platform': host, 'architecture': platform.machine(),
                     'rust': '1.97.1', 'cargo_lock_sha256': lock_hash,
                     'rustc_version': rustc, 'target': _target(host),
@@ -117,7 +131,10 @@ def main():
                     'patch_sha256': digest(PATCH) if host == 'darwin' else None,
                     'deployment_target': '15.0' if host == 'darwin' else None,
                     'restricted_protocol': 1 if host == 'darwin' else None,
-                    'helpers': helpers, 'sha256': digest(output)}
+                    'helpers': helpers, 'sha256': digest(output),
+                    'bootstrap_protocol': 1, 'bootstrap_patch_sha256': digest(BOOTSTRAP_PATCH),
+                    'bootstrap_tests': 'marmish_bootstrap::tests:passed',
+                    'source_guard_sha256': __import__('check_mdk_builders').source_digest(source)}
         with Path(str(output) + '.manifest.json').open('x') as stream:
             stream.write(json.dumps(manifest, sort_keys=True) + '\n')
         print(json.dumps({'sha256': manifest['sha256'], 'platform': host}))

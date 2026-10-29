@@ -290,6 +290,42 @@ non-overwriting creation, readback and metadata-only listing. It distinguishes
 absent, uninitialized, locked/denied, missing and ambiguous results. See
 [the K1 contract](phases/keychain-vault.md) and [validation](validation/keychain-vault.md).
 Linux actual-provider tests run an isolated owned GNOME Keyring; macOS native
-execution remains a separate gate. This component alone does not change existing
-frontend/engine key storage. Native selection, named catalogs, explicit migration
-and confined MDK/detached-worker handoff remain K2 work until validated.
+execution remains a separate gate. K2 integrates native selection and multiple named Nostr keys. For a new profile,
+`--key-storage auto` selects the native backend when present; only an absent
+backend selects files with an announcement. Locked, denied, uninitialized or
+broken services fail closed. Existing file profiles remain files until explicit
+`--migrate-keys-to-native`; persisted native profiles never fall back. A durable
+nonsecret files-mode marker preserves fresh-profile retries. Native helper
+installation is required to establish availability in auto mode.
+
+`--key-name` selects a catalog entry bound exclusively to one local profile
+path/device/inode and random profile ID. Names cannot copy or adopt another
+profile's MLS state. The default catalog is platform-specific, configurable with
+`--key-catalog`; it contains Nostr references only. Each server engine has an
+independent native SQLCipher reference and strict public marker. Fresh references
+are journaled before creation and read back before profile publication.
+
+The host helper obtains keys through bounded private stdio. A source-guarded,
+manifest-v2 patched MDK consumes its Nostr bootstrap via a private inherited
+stdin pipe, verifies the expected public identity, and uses an immutable
+in-memory secret store. It cannot discover the host keychain from confinement.
+The engine receives a provided master over private bridge stdin; detached workers
+receive a fixed frame bound to job, root device/inode and native reference, then
+replace fd0 with `/dev/null`. Workers already running can finish while the
+keychain is locked; starting a new frontend still requires keychain access.
+
+Migration fences the profile/catalog/MDK home/engine and workers, authenticates
+existing encrypted state, creates native references, publishes both bindings,
+then removes legacy secret files. An active worker refuses migration. Committed
+cleanup is explicitly retryable; no identity or master is silently regenerated.
+Migration currently requires an initialized encrypted database and every retained
+job to be `Exited`; `Lost`/`UnknownLaunch` records refuse it. A fresh pending
+reference whose creation never happened fails closed on retry, with no automatic
+reset. Keep the journal; these are explicit recovery limits.
+Python private RPC copies are not a full memory-erasure guarantee. Authorized
+commands run as the local user and can access that user's services.
+
+See [the K2 contract](phases/keychain-integration.md). Integrated code review and
+real native-provider Marmot validation are in progress; macOS runtime remains a
+separate pending gate. Do not interpret implemented paths as a live acceptance
+claim until linked validation evidence is published.

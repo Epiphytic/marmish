@@ -77,6 +77,11 @@ enum Request {
     Probe {
         version: u8,
     },
+    #[serde(rename = "derive_nostr")]
+    DeriveNostr {
+        version: u8,
+        secret: WireSecret,
+    },
     Create {
         version: u8,
         reference: Reference,
@@ -95,6 +100,7 @@ impl Request {
     fn version(&self) -> u8 {
         match self {
             Self::Probe { version }
+            | Self::DeriveNostr { version, .. }
             | Self::Create { version, .. }
             | Self::Load { version, .. }
             | Self::List { version } => *version,
@@ -120,6 +126,7 @@ impl From<Metadata> for PublicMetadata {
 #[serde(untagged)]
 enum Output {
     Empty {},
+    Derived { public_key: String },
     Loaded { secret: WireSecret },
     Listed { items: Vec<PublicMetadata> },
 }
@@ -157,6 +164,18 @@ fn parse(reader: impl Read) -> Result<Request, Error> {
 fn execute(request: Request) -> Result<Output, Error> {
     // Validate before connecting: malformed input must never contact a vault.
     match request {
+        Request::DeriveNostr { secret, .. } => {
+            let mut scalar = secp256k1::SecretKey::from_slice(secret.0.as_bytes())
+                .map_err(|_| Error::Malformed)?;
+            let mut keypair =
+                secp256k1::Keypair::from_secret_key(&secp256k1::Secp256k1::new(), &scalar);
+            let (public, _) = keypair.x_only_public_key();
+            scalar.non_secure_erase();
+            keypair.non_secure_erase();
+            Ok(Output::Derived {
+                public_key: public.to_string(),
+            })
+        }
         Request::Probe { .. } => {
             Vault::open_default()?.probe()?;
             Ok(Output::Empty {})
@@ -257,6 +276,38 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn derive_nostr_is_stateless_and_validates_scalars() {
+        let mut bytes = [0u8; 32];
+        bytes[31] = 1;
+        let output = execute(Request::DeriveNostr {
+            version: 1,
+            secret: WireSecret(Secret::from_bytes(bytes)),
+        })
+        .unwrap();
+        match output {
+            Output::Derived { public_key } => assert_eq!(
+                public_key,
+                "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+            ),
+            _ => panic!("incorrect result"),
+        }
+        assert!(matches!(
+            execute(Request::DeriveNostr {
+                version: 1,
+                secret: WireSecret(Secret::from_bytes([0; 32])),
+            }),
+            Err(Error::Malformed)
+        ));
+        assert!(matches!(
+            execute(Request::DeriveNostr {
+                version: 1,
+                secret: WireSecret(Secret::from_bytes([255; 32])),
+            }),
+            Err(Error::Malformed)
+        ));
+    }
 
     #[test]
     fn strict_protocol_rejects_unknown_duplicate_trailing_and_versions() {

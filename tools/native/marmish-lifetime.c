@@ -1,6 +1,7 @@
 /* Owned daemon lifetime, independent of Python finally blocks. */
 #include <sys/event.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <mach/mach_time.h>
 #include <errno.h>
@@ -71,6 +72,17 @@ int main(int argc, char **argv) {
         execv(argv[3], &argv[3]); _exit(69);
     }
     close(gate[0]);
+    /* Only the sandbox child retains the bootstrap reader. */
+    int null_input = open("/dev/null", O_RDONLY);
+    if (null_input < 0 || dup2(null_input, STDIN_FILENO) < 0) {
+        kill(child, SIGTERM); close(gate[1]); return finish(child);
+    }
+    struct stat actual_input, expected_input;
+    if (fstat(STDIN_FILENO, &actual_input) || fstat(null_input, &expected_input) ||
+            !S_ISCHR(actual_input.st_mode) || actual_input.st_rdev != expected_input.st_rdev) {
+        kill(child, SIGTERM); close(gate[1]); return finish(child);
+    }
+    if (null_input > 2) close(null_input);
     printf("%ld\n", (long)child); fflush(stdout);
     /* The child cannot execute until Python has durably recorded its identity.
        A killed shim closes gate[1], making the blocked child exit on EOF. */

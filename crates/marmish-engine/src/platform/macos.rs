@@ -35,13 +35,13 @@ pub(super) fn sync(file: &File) -> Result<()> {
     }
     Ok(())
 }
-pub(super) fn publish_key(directory: &File) -> Result<()> {
+pub(super) fn publish_file(directory: &File, from: &CStr, to: &CStr) -> Result<()> {
     if unsafe {
         libc::renameatx_np(
             directory.as_raw_fd(),
-            c".engine.key.pending".as_ptr(),
+            from.as_ptr(),
             directory.as_raw_fd(),
-            c"engine.key".as_ptr(),
+            to.as_ptr(),
             libc::RENAME_EXCL,
         )
     } != 0
@@ -469,9 +469,9 @@ mod tests {
         let root = File::open(tmp.path()).unwrap();
         validate_storage(&root).unwrap();
         std::fs::write(tmp.path().join(".engine.key.pending"), b"first").unwrap();
-        publish_key(&root).unwrap();
+        publish_file(&root, c".engine.key.pending", c"engine.key").unwrap();
         std::fs::write(tmp.path().join(".engine.key.pending"), b"second").unwrap();
-        assert!(publish_key(&root).is_err());
+        assert!(publish_file(&root, c".engine.key.pending", c"engine.key").is_err());
         assert_eq!(
             std::fs::read(tmp.path().join("engine.key")).unwrap(),
             b"first"

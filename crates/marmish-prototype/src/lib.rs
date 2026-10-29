@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::io::{self, BufRead, Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 pub const MAX_LINE: usize = 128 * 1024;
 const STREAM_BYTES: usize = 4096;
@@ -26,6 +26,8 @@ enum Operation {
         allow_shell_command: bool,
         #[serde(default)]
         command_policy: Option<WirePolicy>,
+        #[serde(default)]
+        storage: Option<WireStorage>,
     },
     Token {
         principal: String,
@@ -81,6 +83,154 @@ enum Operation {
         limit: u32,
     },
     CleanupReady,
+    MigrationCommit,
+}
+#[derive(Deserialize)]
+struct Envelope {
+    #[serde(rename = "id")]
+    _id: String,
+    #[serde(flatten)]
+    operation: Operation,
+}
+struct Master(Zeroizing<[u8; 32]>);
+impl<'de> Deserialize<'de> for Master {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let value = Zeroizing::new(String::deserialize(deserializer)?);
+        let bytes = Zeroizing::new(
+            STANDARD
+                .decode(value.as_bytes())
+                .map_err(|_| serde::de::Error::custom("invalid master"))?,
+        );
+        if bytes.len() != 32
+            || Zeroizing::new(STANDARD.encode(bytes.as_slice())).as_str() != value.as_str()
+        {
+            return Err(serde::de::Error::custom("invalid master"));
+        }
+        let mut master = Zeroizing::new([0; 32]);
+        master.copy_from_slice(&bytes);
+        Ok(Self(master))
+    }
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Reference {
+    version: u8,
+    purpose: String,
+    id: String,
+}
+enum WireStorage {
+    Files,
+    Native {
+        root_id: String,
+        reference: Reference,
+        master: Master,
+    },
+    MigrateNative {
+        root_id: String,
+        reference: Reference,
+        master: Master,
+    },
+}
+impl<'de> Deserialize<'de> for WireStorage {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        struct StorageVisitor;
+        impl<'de> serde::de::Visitor<'de> for StorageVisitor {
+            type Value = WireStorage;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("storage configuration")
+            }
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> std::result::Result<Self::Value, M::Error> {
+                let (mut mode, mut root_id, mut reference, mut master) = (None, None, None, None);
+                while let Some(field) = map.next_key::<String>()? {
+                    match field.as_str() {
+                        "mode" if mode.is_none() => mode = Some(map.next_value::<String>()?),
+                        "root_id" if root_id.is_none() => {
+                            root_id = Some(map.next_value::<String>()?)
+                        }
+                        "reference" if reference.is_none() => {
+                            reference = Some(map.next_value::<Reference>()?)
+                        }
+                        "master" if master.is_none() => master = Some(map.next_value::<Master>()?),
+                        _ => return Err(serde::de::Error::custom("invalid storage field")),
+                    }
+                }
+                if mode.as_deref() == Some("files") {
+                    if root_id.is_some() || reference.is_some() || master.is_some() {
+                        return Err(serde::de::Error::custom("invalid files storage"));
+                    }
+                    return Ok(WireStorage::Files);
+                }
+                let root_id = root_id.ok_or_else(|| serde::de::Error::missing_field("root_id"))?;
+                let reference =
+                    reference.ok_or_else(|| serde::de::Error::missing_field("reference"))?;
+                let master = master.ok_or_else(|| serde::de::Error::missing_field("master"))?;
+                match mode.as_deref() {
+                    Some("native") => Ok(WireStorage::Native {
+                        root_id,
+                        reference,
+                        master,
+                    }),
+                    Some("migrate_native") => Ok(WireStorage::MigrateNative {
+                        root_id,
+                        reference,
+                        master,
+                    }),
+                    _ => Err(serde::de::Error::custom("invalid storage mode")),
+                }
+            }
+        }
+        deserializer.deserialize_map(StorageVisitor)
+    }
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InitEnvelope {
+    id: String,
+    op: String,
+    version: u32,
+    state_root: PathBuf,
+    worker_executable: PathBuf,
+    server: String,
+    allowed_principals: Vec<String>,
+    cwd: PathBuf,
+    #[serde(default)]
+    allow_shell_command: bool,
+    #[serde(default)]
+    command_policy: Option<WirePolicy>,
+    #[serde(default)]
+    storage: Option<WireStorage>,
+}
+impl InitEnvelope {
+    fn operation(self) -> Result<Operation> {
+        hex::<16>(&self.id)?;
+        if self.op != "init" {
+            return Err(EngineError::InvalidRequest);
+        }
+        Ok(Operation::Init {
+            version: self.version,
+            state_root: self.state_root,
+            worker_executable: self.worker_executable,
+            server: self.server,
+            allowed_principals: self.allowed_principals,
+            cwd: self.cwd,
+            allow_shell_command: self.allow_shell_command,
+            command_policy: self.command_policy,
+            storage: self.storage,
+        })
+    }
+}
+fn native_binding(root_id: String, reference: Reference) -> Result<NativeBinding> {
+    if reference.version != 1 || reference.purpose != "sqlcipher" {
+        return Err(EngineError::InvalidRequest);
+    }
+    Ok(NativeBinding::new(hex(&root_id)?, hex(&reference.id)?))
 }
 #[derive(Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
@@ -196,9 +346,10 @@ struct Bridge {
     engine: Option<Engine>,
     server: Option<ServerId>,
     cleanup: Option<CleanupGuard>,
+    migration: bool,
 }
 impl Bridge {
-    fn dispatch(&mut self, operation: Operation) -> Result<Value> {
+    fn initialize(&mut self, operation: Operation) -> Result<Value> {
         if let Operation::Init {
             version,
             state_root,
@@ -208,9 +359,13 @@ impl Bridge {
             cwd,
             allow_shell_command,
             command_policy,
+            storage,
         } = operation
         {
-            if self.engine.is_some() || self.cleanup.is_some() || version != 1 || !cwd.is_absolute()
+            if self.engine.is_some()
+                || self.cleanup.is_some()
+                || !matches!(version, 1 | 2)
+                || !cwd.is_absolute()
             {
                 return Err(EngineError::InvalidRequest);
             }
@@ -219,7 +374,10 @@ impl Bridge {
                 .iter()
                 .map(|p| hex(p).map(PrincipalId))
                 .collect::<Result<Vec<_>>>()?;
-            self.engine = Some(Engine::open(EnginePolicy {
+            if (version == 1 && storage.is_some()) || (version == 2 && storage.is_none()) {
+                return Err(EngineError::InvalidRequest);
+            }
+            let policy = EnginePolicy {
                 state_root,
                 worker_executable,
                 server,
@@ -231,11 +389,54 @@ impl Bridge {
                     token_lifetime: Duration::from_secs(120),
                     ..EngineLimits::default()
                 },
-            })?);
+            };
+            match storage.unwrap_or(WireStorage::Files) {
+                WireStorage::Files => self.engine = Some(Engine::open(policy)?),
+                WireStorage::Native {
+                    root_id,
+                    reference,
+                    master,
+                } => {
+                    self.engine = Some(Engine::open_with_master(
+                        policy,
+                        native_binding(root_id, reference)?,
+                        ProvidedMaster::new(*master.0),
+                    )?)
+                }
+                WireStorage::MigrateNative {
+                    root_id,
+                    reference,
+                    master,
+                } => {
+                    self.cleanup = Some(Engine::prepare_native_migration(
+                        policy,
+                        native_binding(root_id, reference)?,
+                        ProvidedMaster::new(*master.0),
+                    )?);
+                    self.migration = true;
+                }
+            }
             self.server = Some(server);
-            return Ok(json!({"version":1}));
+            return Ok(json!({"version":version}));
+        }
+        Err(EngineError::InvalidRequest)
+    }
+
+    fn dispatch(&mut self, operation: Operation) -> Result<Value> {
+        if matches!(operation, Operation::Init { .. }) {
+            return self.initialize(operation);
+        }
+        if let Operation::MigrationCommit = operation {
+            self.cleanup
+                .as_mut()
+                .ok_or(EngineError::InvalidRequest)?
+                .commit_native()?;
+            return Ok(json!({"committed":true}));
         }
         if let Operation::CleanupReady = operation {
+            if self.migration {
+                return Err(EngineError::InvalidRequest);
+            }
             if self.cleanup.is_none() {
                 let engine = self.engine.take().ok_or(EngineError::InvalidRequest)?;
                 self.cleanup = Some(engine.into_cleanup()?);
@@ -443,14 +644,24 @@ fn failure(id: Value, code: &str) -> Value {
 }
 fn handle(bridge: &mut Bridge, line: &[u8]) -> Value {
     let parsed = (|| {
-        let mut value: Value =
+        #[derive(Deserialize)]
+        struct Correlation {
+            id: String,
+            op: String,
+        }
+        let correlation: Correlation =
             serde_json::from_slice(line).map_err(|_| EngineError::InvalidRequest)?;
-        let object = value.as_object_mut().ok_or(EngineError::InvalidRequest)?;
-        let id = object.remove("id").ok_or(EngineError::InvalidRequest)?;
-        hex::<16>(id.as_str().ok_or(EngineError::InvalidRequest)?)?;
-        let operation =
-            serde_json::from_value::<Operation>(value).map_err(|_| EngineError::InvalidRequest);
-        Ok::<_, EngineError>((id, operation))
+        hex::<16>(&correlation.id)?;
+        let operation = if correlation.op == "init" {
+            serde_json::from_slice::<InitEnvelope>(line)
+                .map_err(|_| EngineError::InvalidRequest)
+                .and_then(InitEnvelope::operation)
+        } else {
+            serde_json::from_slice::<Envelope>(line)
+                .map(|envelope| envelope.operation)
+                .map_err(|_| EngineError::InvalidRequest)
+        };
+        Ok::<_, EngineError>((Value::String(correlation.id), operation))
     })();
     match parsed {
         Ok((id, operation)) => match operation.and_then(|op| bridge.dispatch(op)) {
@@ -461,13 +672,49 @@ fn handle(bridge: &mut Bridge, line: &[u8]) -> Value {
     }
 }
 
+// BufRead's ordinary backing allocation can retain consumed master bytes.
+// Consume wipes each copied span; Drop wipes unread data as well.
+struct PrivateReader<R> {
+    inner: R,
+    bytes: Zeroizing<[u8; 8192]>,
+    start: usize,
+    end: usize,
+}
+impl<R: Read> Read for PrivateReader<R> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        let available = self.fill_buf()?;
+        let count = available.len().min(output.len());
+        output[..count].copy_from_slice(&available[..count]);
+        self.consume(count);
+        Ok(count)
+    }
+}
+impl<R: Read> BufRead for PrivateReader<R> {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        if self.start == self.end {
+            self.start = 0;
+            self.end = self.inner.read(self.bytes.as_mut())?;
+        }
+        Ok(&self.bytes[self.start..self.end])
+    }
+    fn consume(&mut self, count: usize) {
+        let end = self.start + count.min(self.end - self.start);
+        self.bytes[self.start..end].zeroize();
+        self.start = end;
+    }
+}
 /// Process one bounded request and flush one bounded reply at a time.
 /// EOF drops only the frontend; detached command workers retain their lifecycle.
-pub fn serve(input: impl BufRead, mut output: impl Write) -> io::Result<()> {
-    let mut input = input;
+pub fn serve(input: impl Read, mut output: impl Write) -> io::Result<()> {
+    let mut input = PrivateReader {
+        inner: input,
+        bytes: Zeroizing::new([0; 8192]),
+        start: 0,
+        end: 0,
+    };
     let mut bridge = Bridge::default();
     loop {
-        let mut line = Zeroizing::new(Vec::new());
+        let mut line = Zeroizing::new(Vec::with_capacity(MAX_LINE + 1));
         let count = input
             .by_ref()
             .take((MAX_LINE + 1) as u64)
@@ -490,6 +737,62 @@ pub fn serve(input: impl BufRead, mut output: impl Write) -> io::Result<()> {
         output.flush()?;
         if fatal {
             return Ok(());
+        }
+    }
+}
+
+#[cfg(test)]
+mod secret_request_tests {
+    use super::*;
+    #[test]
+    fn private_reader_wipes_consumed_spans() {
+        let mut input = PrivateReader {
+            inner: io::Cursor::new(b"private\nnext"),
+            bytes: Zeroizing::new([0; 8192]),
+            start: 0,
+            end: 0,
+        };
+        let mut line = Zeroizing::new(Vec::new());
+        input.read_until(b'\n', &mut line).unwrap();
+        assert_eq!(line.as_slice(), b"private\n");
+        assert!(input.bytes[..8].iter().all(|byte| *byte == 0));
+        assert_eq!(input.fill_buf().unwrap(), b"next");
+        input.consume(4);
+        assert!(input.bytes.iter().all(|byte| *byte == 0));
+    }
+    #[test]
+    fn strict_secret_envelope_rejects_duplicate_unknown_and_noncanonical_fields() {
+        let id = "1234567890abcdef1234567890abcdef";
+        let master = STANDARD.encode([7; 32]);
+        let init = format!(
+            r#"{{"id":"{id}","op":"init","version":2,"state_root":"/invalid","worker_executable":"/invalid","server":"{}","allowed_principals":[],"cwd":"/","storage":{{"mode":"native","root_id":"{}","reference":{{"version":1,"purpose":"sqlcipher","id":"{}"}},"master":"{master}"}}}}"#,
+            "11".repeat(32),
+            "22".repeat(32),
+            "33".repeat(32)
+        );
+        assert!(serde_json::from_str::<InitEnvelope>(&init).is_ok());
+        for invalid in [
+            init.replace("\"version\":2", "\"version\":2,\"version\":2"),
+            init.replace(
+                "\"master\":",
+                &format!("\"master\":\"{master}\",\"master\":"),
+            ),
+            init.replace(
+                "\"purpose\":\"sqlcipher\"",
+                "\"purpose\":\"sqlcipher\",\"purpose\":\"sqlcipher\"",
+            ),
+            init.replace(
+                "\"mode\":\"native\"",
+                "\"mode\":\"native\",\"unknown\":true",
+            ),
+            init.replace("\"op\":\"init\"", "\"op\":\"init\",\"unknown\":true"),
+            init.replace(&master, &STANDARD.encode([7; 31])),
+            init.replace(&master, master.trim_end_matches('=')),
+        ] {
+            let response = handle(&mut Bridge::default(), invalid.as_bytes());
+            assert_eq!(response["ok"], false);
+            assert_eq!(response["error"]["code"], "invalid_request");
+            assert_eq!(response["id"], id);
         }
     }
 }

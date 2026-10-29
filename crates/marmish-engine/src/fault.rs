@@ -3,6 +3,13 @@ use crate::{launcher::StateRoot, model::JobId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FaultPoint {
+    AfterNativePendingCreate,
+    AfterNativePendingWrite,
+    AfterNativePendingSync,
+    AfterNativePublish,
+    AfterNativeDirectorySync,
+    AfterNativeLegacyUnlink,
+    AfterNativeLegacyDirectorySync,
     AfterKeyStage,
     AfterKeyPublish,
     AfterKeyDirectorySync,
@@ -34,6 +41,13 @@ impl FaultPoint {
     #[cfg(feature = "fault-injection")]
     fn label(self) -> &'static str {
         match self {
+            Self::AfterNativePendingCreate => "AfterNativePendingCreate",
+            Self::AfterNativePendingWrite => "AfterNativePendingWrite",
+            Self::AfterNativePendingSync => "AfterNativePendingSync",
+            Self::AfterNativePublish => "AfterNativePublish",
+            Self::AfterNativeDirectorySync => "AfterNativeDirectorySync",
+            Self::AfterNativeLegacyUnlink => "AfterNativeLegacyUnlink",
+            Self::AfterNativeLegacyDirectorySync => "AfterNativeLegacyDirectorySync",
             Self::AfterKeyStage => "AfterKeyStage",
             Self::AfterKeyPublish => "AfterKeyPublish",
             Self::AfterKeyDirectorySync => "AfterKeyDirectorySync",
@@ -67,7 +81,14 @@ pub(crate) fn fault_point(root: &StateRoot, job: JobId, point: FaultPoint) {
     #[cfg(feature = "fault-injection")]
     {
         let sentinel = match point {
-            FaultPoint::BeforeAccepted
+            FaultPoint::AfterNativePendingCreate
+            | FaultPoint::AfterNativePendingWrite
+            | FaultPoint::AfterNativePendingSync
+            | FaultPoint::AfterNativePublish
+            | FaultPoint::AfterNativeDirectorySync
+            | FaultPoint::AfterNativeLegacyUnlink
+            | FaultPoint::AfterNativeLegacyDirectorySync
+            | FaultPoint::BeforeAccepted
             | FaultPoint::AfterAccepted
             | FaultPoint::AfterKeyStage
             | FaultPoint::AfterKeyPublish

@@ -424,3 +424,26 @@ fn unsafe_staging_file_is_left_intact() {
         assert!(!root.path.join("engine.key").exists());
     }
 }
+
+#[test]
+fn native_initialization_and_commit_require_the_held_root_guard() {
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    for path in [first.path(), second.path()] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let first = StateRoot::open(first.path()).unwrap();
+    let second = StateRoot::open(second.path()).unwrap();
+    let guard = first.lock_frontend().unwrap();
+    let binding = crate::NativeBinding::new([1; 32], [2; 32]);
+    assert!(matches!(
+        second.initialize_native(&guard, &binding),
+        Err(EngineError::UnsafePath)
+    ));
+    assert!(matches!(
+        second.commit_native(&guard, &binding, &[0; 32]),
+        Err(EngineError::UnsafePath)
+    ));
+    assert!(!second.path().join("engine.native.json").exists());
+    assert!(!second.path().join(".engine.native.pending").exists());
+}

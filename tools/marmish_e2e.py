@@ -39,12 +39,12 @@ class Harness:
         self.client_identity = None
 
     def profile_args(self, name):
-        return SimpleNamespace(identity=self.root / name, relay=self.args.relay,
+        return SimpleNamespace(identity=self.root / name, relay=self.args.relay, key_storage='files',
                                wnd=self.args.wnd, wnd_sha256=self.args.wnd_sha256,
                                wnd_manifest=getattr(self.args, 'wnd_manifest', None))
 
     def common_args(self, name):
-        args = ['-i', str(self.root / name), '--wnd', str(self.args.wnd),
+        args = ['--key-storage', 'files', '-i', str(self.root / name), '--wnd', str(self.args.wnd),
                 '--wnd-sha256', self.args.wnd_sha256]
         for relay in self.args.relay:
             args += ['--relay', relay]

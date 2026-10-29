@@ -16,6 +16,7 @@ REVISION = '37c248a11239e108afc9bd4ee62b8f60542012e3'
 LOCK_SHA256 = 'd8a5367e49427c79f354b0611902808de9b92abbe173eb82ed6864d01e488a71'
 ROOT = Path(__file__).resolve().parent.parent
 PATCH = ROOT / 'patches' / 'mdk' / 'marmish-restricted.patch'
+BOOTSTRAP_PATCH = ROOT / 'patches/mdk/marmish-bootstrap.patch'
 FIXTURE = ROOT / 'tests/fixtures/relay-canonicalization.json'
 
 
@@ -54,9 +55,10 @@ def verify_manifest(wnd, sha256, manifest=None, expected_platform=None):
         fields = {'version', 'source', 'revision', 'clean_checkout', 'platform', 'architecture',
                   'rust', 'cargo_lock_sha256', 'patch_sha256', 'deployment_target',
                   'restricted_protocol', 'helpers', 'sha256', 'rustc_version', 'target',
-                  'codesign', 'relay_fixture_sha256', 'transport_tests'}
+                  'codesign', 'relay_fixture_sha256', 'transport_tests', 'bootstrap_protocol',
+                  'bootstrap_patch_sha256', 'bootstrap_tests', 'source_guard_sha256'}
         if (not isinstance(value, dict) or set(value) != fields
-                or type(value.get('version')) is not int or value.get('version') != 1 or value.get('source') != SOURCE
+                or type(value.get('version')) is not int or value.get('version') != 2 or value.get('source') != SOURCE
                 or value.get('revision') != REVISION or value.get('clean_checkout') is not True
                 or value.get('platform') != host or value.get('sha256') != sha256
                 or value.get('rust') != '1.97.1'
@@ -68,6 +70,12 @@ def verify_manifest(wnd, sha256, manifest=None, expected_platform=None):
                 or not re.fullmatch('[0-9a-f]{64}', sha256)
                 or digest(wnd) != sha256):
             raise SandboxError('manifest_mismatch')
+        guard = json.loads((ROOT / 'patches/mdk/source-guard.json').read_bytes(), object_pairs_hook=strict_object)
+        if (type(value.get('bootstrap_protocol')) is not int or value['bootstrap_protocol'] != 1
+                or value.get('bootstrap_patch_sha256') != digest(BOOTSTRAP_PATCH)
+                or value.get('bootstrap_tests') != 'marmish_bootstrap::tests:passed'
+                or value.get('source_guard_sha256') != guard['source_sha256'][host]):
+            raise SandboxError('manifest_bootstrap_mismatch')
         if host == 'darwin':
             if (value.get('patch_sha256') != digest(PATCH)
                     or value.get('codesign') != 'adhoc'
@@ -89,7 +97,7 @@ def verify_manifest(wnd, sha256, manifest=None, expected_platform=None):
         return value
     except SandboxError:
         raise
-    except (OSError, ValueError, TypeError, AttributeError):
+    except (OSError, ValueError, TypeError, AttributeError, KeyError):
         raise SandboxError('invalid_manifest') from None
 
 

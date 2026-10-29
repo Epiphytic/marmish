@@ -1,0 +1,632 @@
+diff --git a/crates/cli/src/args.rs b/crates/cli/src/args.rs
+index 1748171c..04137d7c 100644
+--- a/crates/cli/src/args.rs
++++ b/crates/cli/src/args.rs
+@@ -65,6 +65,7 @@ pub(crate) struct Cli {
+ 
+ #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, ValueEnum)]
+ pub enum SecretStoreKind {
++    MarmishStdin,
+     Keychain,
+     File,
+ }
+@@ -72,6 +73,7 @@ pub enum SecretStoreKind {
+ impl SecretStoreKind {
+     pub(crate) fn as_str(self) -> &'static str {
+         match self {
++            SecretStoreKind::MarmishStdin => "marmish-stdin",
+             SecretStoreKind::Keychain => "keychain",
+             SecretStoreKind::File => "file",
+         }
+diff --git a/crates/cli/src/commands/account.rs b/crates/cli/src/commands/account.rs
+index c910234d..b178c994 100644
+--- a/crates/cli/src/commands/account.rs
++++ b/crates/cli/src/commands/account.rs
+@@ -453,6 +453,7 @@ fn wn_status_json(status: AppStatus, runtime_info: &CliRuntimeInfo) -> Result<Va
+ 
+ fn secret_store_json(runtime_info: &CliRuntimeInfo) -> Value {
+     match runtime_info.secret_store {
++        SecretStoreKind::MarmishStdin => json!({"backend": "marmish-stdin"}),
+         SecretStoreKind::File => json!({
+             "backend": runtime_info.secret_store.as_str(),
+         }),
+diff --git a/crates/cli/src/daemon/mod.rs b/crates/cli/src/daemon/mod.rs
+index 52a40c99..a516009d 100644
+--- a/crates/cli/src/daemon/mod.rs
++++ b/crates/cli/src/daemon/mod.rs
+@@ -162,6 +162,7 @@ async fn run_server(args: DaemonArgs) -> Result<(), Box<dyn std::error::Error +
+     // that intentionally share its root without constructing another lease.
+     // Acquire before touching socket/pid artifacts belonging to another host.
+     let _root_lease = marmot_app::MarmotRootRuntimeLease::try_acquire(&home)?;
++    crate::marmish_bootstrap::initialize(args.secret_store, &home)?;
+     let _socket_parent_guard = socket
+         .parent()
+         .map(|parent| prepare_socket_dir(parent, &home))
+@@ -334,6 +335,10 @@ async fn handle_daemon_connection(
+         };
+ 
+     match request {
++        DaemonRequest::MarmishCapabilities => {
++            let output = crate::marmish_bootstrap::capabilities(defaults.secret_store);
++            write_daemon_output(&mut stream, &output).await;
++        }
+         DaemonRequest::Status => {
+             let output = daemon_status_output(&defaults, state, workers).await;
+             write_daemon_output(&mut stream, &output).await;
+@@ -363,6 +368,11 @@ async fn handle_daemon_connection(
+         }
+         DaemonRequest::MessagesSubscribe { mut cli } => {
+             apply_defaults(&mut cli, &defaults);
++            if crate::marmish_bootstrap::authorize_operation(&cli, None).is_err() {
++                let response = DaemonStreamResponse::err("marmish_bootstrap_rejected");
++                let _ = write_stream_response(&mut stream, &response).await;
++                return;
++            }
+             let runtime = {
+                 let mut workers_guard = workers.lock().await;
+                 reconcile_app_runtime(
+@@ -380,6 +390,11 @@ async fn handle_daemon_connection(
+         }
+         DaemonRequest::ChatsSubscribe { mut cli } => {
+             apply_defaults(&mut cli, &defaults);
++            if crate::marmish_bootstrap::authorize_operation(&cli, None).is_err() {
++                let response = DaemonStreamResponse::err("marmish_bootstrap_rejected");
++                let _ = write_stream_response(&mut stream, &response).await;
++                return;
++            }
+             let runtime = {
+                 let mut workers_guard = workers.lock().await;
+                 reconcile_app_runtime(
+@@ -395,6 +410,11 @@ async fn handle_daemon_connection(
+         }
+         DaemonRequest::GroupStateSubscribe { mut cli } => {
+             apply_defaults(&mut cli, &defaults);
++            if crate::marmish_bootstrap::authorize_operation(&cli, None).is_err() {
++                let response = DaemonStreamResponse::err("marmish_bootstrap_rejected");
++                let _ = write_stream_response(&mut stream, &response).await;
++                return;
++            }
+             let runtime = {
+                 let mut workers_guard = workers.lock().await;
+                 reconcile_app_runtime(
+@@ -410,6 +430,11 @@ async fn handle_daemon_connection(
+         }
+         DaemonRequest::NotificationsSubscribe { mut cli } => {
+             apply_defaults(&mut cli, &defaults);
++            if crate::marmish_bootstrap::authorize_operation(&cli, None).is_err() {
++                let response = DaemonStreamResponse::err("marmish_bootstrap_rejected");
++                let _ = write_stream_response(&mut stream, &response).await;
++                return;
++            }
+             let runtime = {
+                 let mut workers_guard = workers.lock().await;
+                 reconcile_app_runtime(
+@@ -423,7 +448,13 @@ async fn handle_daemon_connection(
+             };
+             let _ = handle_notifications_subscription(&mut stream, runtime, *cli).await;
+         }
+-        DaemonRequest::StreamWatch { cli } => {
++        DaemonRequest::StreamWatch { mut cli } => {
++            apply_defaults(&mut cli, &defaults);
++            if crate::marmish_bootstrap::authorize_operation(&cli, None).is_err() {
++                let response = DaemonStreamResponse::err("marmish_bootstrap_rejected");
++                let _ = write_stream_response(&mut stream, &response).await;
++                return;
++            }
+             let _ = handle_stream_watch_connection(
+                 cli,
+                 &mut stream,
+@@ -550,6 +581,10 @@ async fn handle_execute_connection(
+     workers: &SharedDaemonWorkers,
+ ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+     apply_defaults(&mut cli, defaults);
++    if let Err(error) = crate::marmish_bootstrap::authorize_operation(&cli, import_nsec.as_ref()) {
++        write_daemon_output(stream, &crate::command_output_result(cli.json, Err(error))).await;
++        return Ok(());
++    }
+     if let Some(output) = blocked_daemon_execute_output(cli.as_ref()) {
+         write_daemon_output(stream, &output).await;
+         return Ok(());
+diff --git a/crates/cli/src/daemon/protocol.rs b/crates/cli/src/daemon/protocol.rs
+index bd24eda7..54b9b9fe 100644
+--- a/crates/cli/src/daemon/protocol.rs
++++ b/crates/cli/src/daemon/protocol.rs
+@@ -112,6 +112,7 @@ pub type DaemonOutgoingStreamReport = StreamComposeReport;
+ 
+ #[derive(Debug, Serialize, Deserialize)]
+ pub(crate) enum DaemonRequest {
++    MarmishCapabilities,
+     Ping,
+     Status,
+     Shutdown,
+diff --git a/crates/cli/src/daemon/runtime_host.rs b/crates/cli/src/daemon/runtime_host.rs
+index 3c7b3f86..3a8fd590 100644
+--- a/crates/cli/src/daemon/runtime_host.rs
++++ b/crates/cli/src/daemon/runtime_host.rs
+@@ -510,7 +510,7 @@ pub(crate) async fn reconcile_app_runtime(
+     events: DaemonEventHub,
+     host: &mut AppRuntimeHost,
+ ) {
+-    if !app_runtime_enabled(defaults) {
++    if !app_runtime_enabled(defaults) || !crate::marmish_bootstrap::reconcile_allowed() {
+         return;
+     }
+ 
+diff --git a/crates/cli/src/lib.rs b/crates/cli/src/lib.rs
+index 08f3a532..e7d7516e 100644
+--- a/crates/cli/src/lib.rs
++++ b/crates/cli/src/lib.rs
+@@ -24,6 +24,7 @@ mod args;
+ pub(crate) mod commands;
+ pub mod daemon;
+ mod error;
++mod marmish_bootstrap;
+ mod secret;
+ mod terminal;
+ pub mod tui;
+@@ -1344,6 +1345,7 @@ fn open_account_home(
+     keychain_service: &str,
+ ) -> Result<AccountHome, WnError> {
+     match secret_store {
++        SecretStoreKind::MarmishStdin => Ok(marmish_bootstrap::open(home)?),
+         SecretStoreKind::File => Ok(AccountHome::open(home)),
+         SecretStoreKind::Keychain => Ok(AccountHome::open_with_keychain(home, keychain_service)?),
+     }
+diff --git a/crates/cli/src/marmish_bootstrap.rs b/crates/cli/src/marmish_bootstrap.rs
+new file mode 100644
+index 00000000..d129d04d
+--- /dev/null
++++ b/crates/cli/src/marmish_bootstrap.rs
+@@ -0,0 +1,437 @@
++//! Marmish-only, one-shot anonymous-pipe injection. Never contacts a host vault.
++use crate::{Cli, CliOutput, Command, ImportNsec, SecretStoreKind, WnError};
++use marmot_account::{
++    AccountHome, AccountHomeError, AccountHomeResult, AccountSecretStore, AccountSummary,
++};
++use nostr::Keys;
++use std::io;
++use std::os::fd::AsRawFd;
++use std::os::unix::fs::MetadataExt;
++use std::path::Path;
++use std::sync::atomic::{AtomicBool, Ordering};
++use std::sync::{Arc, OnceLock};
++use std::time::{Duration, Instant};
++use zeroize::Zeroizing;
++
++const MAGIC: &[u8; 8] = b"MRMNST01";
++static STORE: OnceLock<Arc<InjectedStore>> = OnceLock::new();
++static CAPABILITY_SEEN: AtomicBool = AtomicBool::new(false);
++static OPERATION_SEEN: AtomicBool = AtomicBool::new(false);
++
++fn failure() -> AccountHomeError {
++    AccountHomeError::SecretStore("marmish_bootstrap_rejected".into())
++}
++struct InjectedStore {
++    keys: Keys,
++    public: String,
++}
++impl InjectedStore {
++    fn from_frame(frame: &[u8]) -> AccountHomeResult<Self> {
++        if frame.len() != 72 || &frame[..8] != MAGIC {
++            return Err(failure());
++        }
++        let secret = nostr::SecretKey::from_slice(&frame[8..40]).map_err(|_| failure())?;
++        let keys = Keys::new(secret);
++        if keys.public_key().as_bytes() != &frame[40..72] {
++            return Err(failure());
++        }
++        Ok(Self {
++            public: keys.public_key().to_hex(),
++            keys,
++        })
++    }
++    fn check(&self, account: &AccountSummary) -> AccountHomeResult<()> {
++        if account.account_id_hex != self.public
++            || account.label != self.public
++            || !account.local_signing
++            || account.external_signing
++        {
++            return Err(failure());
++        }
++        Ok(())
++    }
++}
++impl AccountSecretStore for InjectedStore {
++    fn has_secret_for_label(&self, _: &str) -> AccountHomeResult<bool> {
++        Ok(false)
++    }
++    fn has_secret_for_account_id(&self, id: &str) -> AccountHomeResult<bool> {
++        Ok(id == self.public)
++    }
++    fn load_secret(&self, account: &AccountSummary) -> AccountHomeResult<Keys> {
++        self.check(account)?;
++        Ok(self.keys.clone())
++    }
++    fn write_secret(&self, account: &AccountSummary, keys: &Keys) -> AccountHomeResult<()> {
++        self.check(account)?;
++        if keys.secret_key() != self.keys.secret_key() {
++            return Err(failure());
++        }
++        Ok(())
++    }
++    fn remove_secret(&self, account: &AccountSummary) -> AccountHomeResult<()> {
++        // Account setup can roll back its own metadata; the host credential is immutable.
++        self.check(account)
++    }
++}
++
++fn read_pipe() -> io::Result<Zeroizing<Vec<u8>>> {
++    let mut metadata: libc::stat = unsafe { std::mem::zeroed() };
++    if unsafe { libc::fstat(0, &mut metadata) } != 0
++        || metadata.st_mode & libc::S_IFMT != libc::S_IFIFO
++    {
++        return Err(io::Error::other("marmish_bootstrap_pipe_required"));
++    }
++    let deadline = Instant::now() + Duration::from_secs(3);
++    let mut frame = Zeroizing::new(Vec::with_capacity(73));
++    loop {
++        let remaining = deadline.saturating_duration_since(Instant::now());
++        if remaining.is_zero() {
++            return Err(io::Error::other("marmish_bootstrap_timeout"));
++        }
++        let mut channel = libc::pollfd {
++            fd: 0,
++            events: libc::POLLIN,
++            revents: 0,
++        };
++        let ready = unsafe { libc::poll(&mut channel, 1, remaining.as_millis().min(3000) as i32) };
++        if ready < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
++            continue;
++        }
++        if ready <= 0 {
++            return Err(io::Error::other("marmish_bootstrap_read"));
++        }
++        let mut bytes = Zeroizing::new([0u8; 73]);
++        let count = unsafe { libc::read(0, bytes.as_mut_ptr().cast(), 73 - frame.len()) };
++        if count < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
++            continue;
++        }
++        if count < 0 {
++            return Err(io::Error::other("marmish_bootstrap_read"));
++        }
++        if count == 0 {
++            return Ok(frame);
++        }
++        frame.extend_from_slice(&bytes[..count as usize]);
++        if frame.len() > 72 {
++            return Err(io::Error::other("marmish_bootstrap_size"));
++        }
++    }
++}
++
++pub(crate) fn initialize(mode: Option<SecretStoreKind>, home: &Path) -> AccountHomeResult<()> {
++    if mode != Some(SecretStoreKind::MarmishStdin) {
++        return Ok(());
++    }
++    // Always replace stdin, including parse failures, before any runtime can spawn.
++    let frame = read_pipe();
++    let null = std::fs::File::open("/dev/null")?;
++    if unsafe { libc::dup2(null.as_raw_fd(), 0) } != 0 {
++        return Err(failure());
++    }
++    let store = Arc::new(InjectedStore::from_frame(&frame?)?);
++    validate_metadata(home, &store)?;
++    STORE.set(store).map_err(|_| failure())
++}
++
++fn validate_metadata(home: &Path, store: &InjectedStore) -> AccountHomeResult<()> {
++    let accounts = home.join("accounts");
++    let metadata = match std::fs::symlink_metadata(&accounts) {
++        Ok(value) => value,
++        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
++        Err(error) => return Err(error.into()),
++    };
++    if !metadata.is_dir()
++        || metadata.file_type().is_symlink()
++        || metadata.uid() != unsafe { libc::geteuid() }
++        || metadata.mode() & 0o022 != 0
++    {
++        return Err(failure());
++    }
++    for entry in std::fs::read_dir(accounts)? {
++        let entry = entry?;
++        if entry.file_name() != std::ffi::OsStr::new(&store.public) || !entry.file_type()?.is_dir()
++        {
++            return Err(failure());
++        }
++        let directory = entry.path();
++        let directory_metadata = std::fs::symlink_metadata(&directory)?;
++        if directory_metadata.uid() != unsafe { libc::geteuid() }
++            || directory_metadata.mode() & 0o022 != 0
++        {
++            return Err(failure());
++        }
++        match std::fs::symlink_metadata(directory.join("secret.json")) {
++            Ok(_) => return Err(failure()),
++            Err(error) if error.kind() == io::ErrorKind::NotFound => (),
++            Err(error) => return Err(error.into()),
++        }
++        for name in ["account.json", ".account-setup.json"] {
++            let path = directory.join(name);
++            let metadata = match std::fs::symlink_metadata(&path) {
++                Ok(value) => value,
++                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
++                Err(error) => return Err(error.into()),
++            };
++            if !metadata.is_file()
++                || metadata.file_type().is_symlink()
++                || metadata.len() > 65536
++                || metadata.uid() != unsafe { libc::geteuid() }
++                || metadata.mode() & 0o022 != 0
++                || metadata.nlink() != 1
++            {
++                return Err(failure());
++            }
++            let bytes = std::fs::read(path)?;
++            if name == "account.json" {
++                let value: AccountSummary = serde_json::from_slice(&bytes)?;
++                store.check(&value)?;
++            } else {
++                let value: marmot_account::AccountSetupState = serde_json::from_slice(&bytes)?;
++                if value.account_id_hex != store.public
++                    || value.kind != marmot_account::AccountSetupKind::ImportedIdentity
++                {
++                    return Err(failure());
++                }
++            }
++        }
++    }
++    let account_home = AccountHome::open_with_secret_store(
++        home,
++        Arc::new(InjectedStore {
++            keys: store.keys.clone(),
++            public: store.public.clone(),
++        }),
++    );
++    for account in account_home.accounts_strict()? {
++        store.check(&account)?;
++    }
++    Ok(())
++}
++
++pub(crate) fn open(home: &Path) -> AccountHomeResult<AccountHome> {
++    let store = STORE.get().ok_or_else(failure)?;
++    validate_metadata(home, store)?;
++    Ok(AccountHome::open_with_secret_store(home, store.clone()))
++}
++
++pub(crate) fn reconcile_allowed() -> bool {
++    STORE.get().is_none() || OPERATION_SEEN.load(Ordering::Acquire)
++}
++
++pub(crate) fn capabilities(mode: Option<SecretStoreKind>) -> CliOutput {
++    let (mode, public) = match mode {
++        Some(SecretStoreKind::MarmishStdin) => {
++            ("MarmishStdin", STORE.get().map(|s| s.public.as_str()))
++        }
++        Some(SecretStoreKind::File) => ("File", None),
++        _ => ("Keychain", None),
++    };
++    CAPABILITY_SEEN.store(true, Ordering::Release);
++    CliOutput {
++        code: 0,
++        stderr: String::new(),
++        stdout: format!(
++            "{}\n",
++            serde_json::json!({"ok": true, "result": {
++                "version": 1, "secret_store": mode, "public_key": public
++            }})
++        ),
++    }
++}
++
++pub(crate) fn authorize_operation(cli: &Cli, import: Option<&ImportNsec>) -> Result<(), WnError> {
++    let Some(store) = STORE.get() else {
++        return Ok(());
++    };
++    if !CAPABILITY_SEEN.load(Ordering::Acquire) {
++        return Err(failure().into());
++    }
++    // Export is already forbidden upstream; explicitly preserve that policy here.
++    if matches!(
++        cli.command,
++        Command::CreateIdentity
++            | Command::ExportNsec { .. }
++            | Command::Logout { .. }
++            | Command::Reset { .. }
++    ) {
++        return Err(failure().into());
++    }
++    if cli.account.as_deref().is_some_and(|id| id != store.public) {
++        return Err(failure().into());
++    }
++    if matches!(
++        cli.command,
++        Command::Account {
++            command: crate::AccountCommand::Create { .. }
++        } | Command::Accounts {
++            command: crate::AccountCommand::Create { .. }
++        }
++    ) || (matches!(cli.command, Command::Login { .. }) && import.is_none())
++    {
++        return Err(failure().into());
++    }
++    if let Some(value) = import {
++        let secret = value.as_str();
++        let keys = Keys::parse(secret).map_err(|_| failure())?;
++        if keys.secret_key() != store.keys.secret_key() {
++            return Err(failure().into());
++        }
++        if !matches!(
++            cli.command,
++            Command::Login {
++                identity: None,
++                nsec_stdin: true,
++                ..
++            }
++        ) {
++            return Err(failure().into());
++        }
++    }
++    validate_metadata(&cli.home.clone().ok_or_else(failure)?, store)?;
++    OPERATION_SEEN.store(true, Ordering::Release);
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    fn frame() -> Zeroizing<Vec<u8>> {
++        let mut frame = Zeroizing::new(MAGIC.to_vec());
++        let secret = [1u8; 32];
++        let keys = Keys::new(nostr::SecretKey::from_slice(&secret).unwrap());
++        frame.extend_from_slice(&secret);
++        frame.extend_from_slice(keys.public_key().as_bytes());
++        frame
++    }
++    fn account(store: &InjectedStore) -> AccountSummary {
++        AccountSummary {
++            label: store.public.clone(),
++            account_id_hex: store.public.clone(),
++            local_signing: true,
++            external_signing: false,
++            signed_out: false,
++        }
++    }
++    #[test]
++    fn frame_and_immutable_store() {
++        let good = frame();
++        let store = InjectedStore::from_frame(&good).unwrap();
++        let account = account(&store);
++        assert!(!store.has_secret_for_label(&store.public).unwrap());
++        assert!(store.has_secret_for_account_id(&store.public).unwrap());
++        assert!(!store.has_secret_for_account_id(&"ab".repeat(32)).unwrap());
++        assert!(store
++            .write_secret(&account, &store.load_secret(&account).unwrap())
++            .is_ok());
++        assert!(store.write_secret(&account, &Keys::generate()).is_err());
++        // Opposite scalars share the x-only public identity, but are distinct keys.
++        let opposite = Keys::new(
++            nostr::SecretKey::from_slice(
++                &hex::decode("fefefefefefefefefefefefefefefefdb9addbe5ae479f3abed15d8bcf354040")
++                    .unwrap(),
++            )
++            .unwrap(),
++        );
++        assert_eq!(opposite.public_key(), store.keys.public_key());
++        assert!(store.write_secret(&account, &opposite).is_err());
++        assert!(store.remove_secret(&account).is_ok());
++        let mut other = account.clone();
++        other.account_id_hex = "ab".repeat(32);
++        assert!(store.load_secret(&other).is_err());
++        assert!(store.remove_secret(&other).is_err());
++        for size in 0..72 {
++            assert!(InjectedStore::from_frame(&good[..size]).is_err());
++        }
++        let mut extra = good.to_vec();
++        extra.push(0);
++        assert!(InjectedStore::from_frame(&extra).is_err());
++        let mut wrong = good.to_vec();
++        wrong[71] ^= 1;
++        assert!(InjectedStore::from_frame(&wrong).is_err());
++        let mut zero = good.to_vec();
++        zero[8..40].fill(0);
++        assert!(InjectedStore::from_frame(&zero).is_err());
++    }
++    #[test]
++    fn startup_handshake_subprocess() {
++        use std::io::Write;
++        use std::process::{Command as Process, Stdio};
++        if let Ok(mode) = std::env::var("MARMISH_BOOTSTRAP_TEST_CHILD") {
++            let home = tempfile::tempdir().unwrap();
++            let accepted = initialize(Some(SecretStoreKind::MarmishStdin), home.path());
++            if mode == "valid" {
++                accepted.unwrap();
++                assert!(!reconcile_allowed());
++                let before_handshake: Cli = serde_json::from_value(serde_json::json!({
++                    "home": home.path(), "json": true, "command": "Whoami"
++                }))
++                .unwrap();
++                assert!(authorize_operation(&before_handshake, None).is_err());
++                assert!(!reconcile_allowed());
++                let output = capabilities(Some(SecretStoreKind::MarmishStdin));
++                let value: serde_json::Value = serde_json::from_str(&output.stdout).unwrap();
++                assert_eq!(value["result"]["public_key"], STORE.get().unwrap().public);
++                assert_eq!(value["result"]["secret_store"], "MarmishStdin");
++                let mut cli: Cli = serde_json::from_value(serde_json::json!({
++                    "home": home.path(), "json": true, "command": "CreateIdentity"
++                }))
++                .unwrap();
++                assert!(authorize_operation(&cli, None).is_err());
++                cli.command = Command::Whoami;
++                assert!(authorize_operation(&cli, None).is_ok());
++                assert!(reconcile_allowed());
++                let mut byte = 0u8;
++                assert_eq!(
++                    unsafe { libc::read(0, (&mut byte as *mut u8).cast(), 1) },
++                    0
++                );
++            } else {
++                assert!(accepted.is_err());
++                assert!(STORE.get().is_none());
++            }
++            return;
++        }
++        for (mode, payload) in [
++            ("valid", frame().to_vec()),
++            ("invalid", vec![0; 72]),
++            ("extra", vec![0; 73]),
++            ("short", vec![0; 71]),
++        ] {
++            let mut child = Process::new(std::env::current_exe().unwrap())
++                .args([
++                    "marmish_bootstrap::tests::startup_handshake_subprocess",
++                    "--exact",
++                ])
++                .env("MARMISH_BOOTSTRAP_TEST_CHILD", mode)
++                .stdin(Stdio::piped())
++                .stdout(Stdio::piped())
++                .stderr(Stdio::piped())
++                .spawn()
++                .unwrap();
++            child.stdin.take().unwrap().write_all(&payload).unwrap();
++            let result = child.wait_with_output().unwrap();
++            assert!(
++                result.status.success(),
++                "{}",
++                String::from_utf8_lossy(&result.stdout)
++            );
++        }
++    }
++    #[test]
++    fn metadata_and_setup_recovery() {
++        let store = Arc::new(InjectedStore::from_frame(&frame()).unwrap());
++        let temp = tempfile::tempdir().unwrap();
++        validate_metadata(temp.path(), &store).unwrap();
++        let home = AccountHome::open_with_secret_store(temp.path(), store.clone());
++        let secret = Zeroizing::new(hex::encode(store.keys.secret_key().as_secret_bytes()));
++        let first = home.import_nostr_account_idempotent(&secret).unwrap();
++        assert_eq!(first.account().account_id_hex, store.public);
++
++        assert!(!home.account_dir(&store.public).join("secret.json").exists());
++        validate_metadata(temp.path(), &store).unwrap();
++        assert!(home.import_nostr_account_idempotent(&secret).is_ok());
++        std::fs::create_dir(temp.path().join("accounts").join("other")).unwrap();
++        assert!(validate_metadata(temp.path(), &store).is_err());
++    }
++}
+diff --git a/crates/cli/src/secret.rs b/crates/cli/src/secret.rs
+index d026a94b..049cfb20 100644
+--- a/crates/cli/src/secret.rs
++++ b/crates/cli/src/secret.rs
+@@ -15,6 +15,10 @@ impl ImportNsec {
+         Self(value)
+     }
+ 
++    pub(crate) fn as_str(&self) -> &str {
++        self.0.as_str()
++    }
++
+     pub(crate) fn into_inner(self) -> Zeroizing<String> {
+         self.0
+     }

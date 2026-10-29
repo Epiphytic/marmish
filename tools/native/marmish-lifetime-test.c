@@ -17,6 +17,17 @@ static void report(const char *path, long value) {
 }
 int main(int argc, char **argv) {
     if (argc != 3) return 64;
+    if (!strcmp(argv[1], "stdin")) {
+        unsigned char input[73];
+        size_t received = 0;
+        ssize_t count;
+        while (received < sizeof(input) && (count = read(0, input + received, sizeof(input) - received)) > 0)
+            received += (size_t)count;
+        if (received != 72 || memcmp(input, "MRMNST01", 8)) return 67;
+        for (size_t i = 8; i < 72; ++i) if (input[i] != (unsigned char)(i - 8)) return 68;
+        report(argv[2], (long)received);
+        return 0;
+    }
     if (!strcmp(argv[1], "signal")) {
         struct sigaction action;
         if (sigaction(SIGPIPE, NULL, &action)) return 65;

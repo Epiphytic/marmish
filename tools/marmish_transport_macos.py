@@ -280,6 +280,9 @@ def _execution_marker():
         raise SandboxError('invalid_execution_marker') from None
 
 
+# The bootstrap uses only inherited anonymous fd0, not a filesystem endpoint.
+# Do not broaden vnode/network permissions for it. Native injected startup and
+# lifetime tests remain the acceptance gate for the inherited-pipe path.
 PROFILE = '''(version 1)
 (deny default)
 (allow process-exec (literal (param "EXEC")))
@@ -474,7 +477,9 @@ def _current_identity(identity):
 
 
 class DarwinConfinedDaemon:
-    def __init__(self, home, wnd, relays, wnd_sha256, *, manifest=None):
+    def __init__(self, home, wnd, relays, wnd_sha256, *, manifest=None, bootstrap=None):
+        self._bootstrap = bootstrap
+        self._native_key = bootstrap is not None
         self.home = Path(home).absolute()
         self.wnd = Path(wnd).absolute()
         self.relays = canonical_relays(relays)
@@ -513,7 +518,7 @@ class DarwinConfinedDaemon:
     def _daemon_command(self):
         relays = ','.join(self.relays)
         return self._command(self._binary, '--home', self.home, '--socket', self.socket,
-                             '--secret-store', 'file', '--discovery-relays', relays,
+                             '--secret-store', 'marmish-stdin' if self._native_key else 'file', '--discovery-relays', relays,
                              '--default-account-relays', relays)
 
     def _prepare(self):
@@ -755,13 +760,18 @@ class DarwinConfinedDaemon:
             environment = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'HOME': str(self.home),
                            'MARMISH_RESTRICTED_CONFIG': str(self._config), **_execution_marker()}
             command = self._daemon_command()
+            from marmish_bootstrap import open_pipe
+            bootstrap_reader = subprocess.DEVNULL
             try:
+                bootstrap_reader = open_pipe(self._bootstrap)
                 self.process = subprocess.Popen([str(self._directory / 'marmish-lifetime'), str(reader), str(os.getpid()), *command],
                                                 pass_fds=(reader,), start_new_session=True,
                                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                                stdin=subprocess.DEVNULL, close_fds=True, env=environment)
+                                                stdin=bootstrap_reader, close_fds=True, env=environment)
             finally:
                 os.close(reader)
+                if bootstrap_reader >= 0:
+                    os.close(bootstrap_reader)
             os.set_blocking(self.process.stdout.fileno(), False)
             deadline = continuous_time() + 15
             response = bytearray()
@@ -794,6 +804,9 @@ class DarwinConfinedDaemon:
                     if not stat.S_ISSOCK(meta.st_mode) or meta.st_uid != os.geteuid():
                         raise SandboxError('unsafe_daemon_socket')
                     self._socket_inode = meta.st_ino
+                    from marmish_bootstrap import wipe
+                    wipe(self._bootstrap)
+                    self._bootstrap = None
                     return self
                 time.sleep(.02)
             raise SandboxError('native_daemon_start_timeout')
@@ -802,6 +815,9 @@ class DarwinConfinedDaemon:
             raise
 
     def close(self):
+        from marmish_bootstrap import wipe
+        wipe(self._bootstrap)
+        self._bootstrap = None
         failure = None
         if self._writer is not None:
             os.close(self._writer)

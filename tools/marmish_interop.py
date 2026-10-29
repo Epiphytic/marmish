@@ -33,13 +33,13 @@ def refuse_tokens():
 
 def profile_args(config, name):
     root = Path(config['root'])
-    return SimpleNamespace(identity=root / name, relay=RELAYS, wnd=Path(config['bundle']) / 'wnd',
+    return SimpleNamespace(identity=root / name, relay=RELAYS, key_storage='files', wnd=Path(config['bundle']) / 'wnd',
         wnd_sha256=config['wnd_sha256'], wnd_manifest=Path(config['bundle']) / 'wnd.manifest.json')
 
 
 def common(config, name):
     args = profile_args(config, name)
-    result = ['-i', str(args.identity), '--wnd', str(args.wnd), '--wnd-sha256', args.wnd_sha256,
+    result = ['--key-storage', 'files', '-i', str(args.identity), '--wnd', str(args.wnd), '--wnd-sha256', args.wnd_sha256,
               '--wnd-manifest', str(args.wnd_manifest)]
     for relay in RELAYS:
         result += ['--relay', relay]

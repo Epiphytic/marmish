@@ -338,6 +338,11 @@ impl StateRoot {
         if guard.root != (meta.dev(), meta.ino()) {
             return Err(EngineError::UnsafePath);
         }
+        if exists_at(&self.directory, "engine.native.json")?
+            || exists_at(&self.directory, ".engine.native.pending")?
+        {
+            return Err(EngineError::StorageFailure);
+        }
         let nonempty = self.storage_candidate()?;
         if exists_at(&self.directory, "engine.key")? {
             if exists_at(&self.directory, ".engine.key.pending")? {
@@ -929,7 +934,7 @@ pub(crate) fn worker_preconditions(executable: &Path) -> Result<PathBuf> {
     Ok(executable)
 }
 
-pub(crate) struct PreparedWorker(Command);
+pub(crate) struct PreparedWorker(Command, StateRoot, JobId);
 pub(crate) enum WorkerSpawnError {
     Transient,
     Global(EngineError),
@@ -953,10 +958,28 @@ pub(crate) fn prepare_worker(executable: &Path, spec: &LaunchSpec) -> Result<Pre
     unsafe {
         command.pre_exec(|| platform::pre_exec());
     }
-    Ok(PreparedWorker(command))
+    Ok(PreparedWorker(command, root, spec.job))
 }
 impl PreparedWorker {
-    pub(crate) fn spawn(mut self) -> std::result::Result<(), WorkerSpawnError> {
+    pub(crate) fn verify_root(&self, root: &StateRoot) -> Result<()> {
+        if self.1.identity()? != root.identity()? {
+            return Err(EngineError::UnsafePath);
+        }
+        Ok(())
+    }
+    pub(crate) fn spawn(
+        mut self,
+        keys: &StorageKeys,
+        mode: &crate::storage::StorageMode,
+    ) -> std::result::Result<(), WorkerSpawnError> {
+        let frame =
+            crate::storage::frame(&self.1, self.2, mode, keys).map_err(WorkerSpawnError::Global)?;
+        let (reader, mut writer) = std::io::pipe().map_err(|_| WorkerSpawnError::Transient)?;
+        writer
+            .write_all(frame.as_ref())
+            .map_err(|_| WorkerSpawnError::Transient)?;
+        drop(writer);
+        self.0.stdin(Stdio::from(reader));
         #[cfg(test)]
         test_spawn::spawn()?;
         // Reserve the reaper before spawning; resource exhaustion is a counted
@@ -1125,3 +1148,182 @@ pub(crate) fn spawn_child(spec: &ChildSpec) -> std::result::Result<SpawnedChild,
 mod tests;
 
 pub(crate) use crate::platform::{boot_time, process_identity};
+
+impl StateRoot {
+    pub(crate) fn identity(&self) -> Result<(u64, u64)> {
+        let meta = self.directory.metadata().map_err(io_error)?;
+        Ok((meta.dev(), meta.ino()))
+    }
+    pub(crate) fn validate_files(&self) -> Result<()> {
+        if exists_at(&self.directory, "engine.native.json")?
+            || exists_at(&self.directory, ".engine.native.pending")?
+            || exists_at(&self.directory, ".engine.key.pending")?
+        {
+            return Err(EngineError::StorageFailure);
+        }
+        drop(self.protected_key_file("engine.key")?);
+        Ok(())
+    }
+    fn check_frontend(&self, guard: &FrontendGuard) -> Result<()> {
+        if guard.root != self.identity()? {
+            return Err(EngineError::UnsafePath);
+        }
+        Ok(())
+    }
+    // A protected but torn staging file can be discarded only by callers that
+    // have proved pristine initialization or authenticated legacy migration.
+    // A parsed marker, including a foreign binding, is never discarded.
+    fn pending_matches(&self, binding: &crate::NativeBinding, allow_torn: bool) -> Result<bool> {
+        let file = self.protected_key_file(".engine.native.pending")?;
+        if file.metadata().map_err(io_error)?.len() > 2048 {
+            return Err(EngineError::StorageFailure);
+        }
+        match serde_json::from_reader::<_, crate::storage::Marker>(file) {
+            Ok(marker) if marker == binding.marker() => Ok(true),
+            Ok(_) => Err(EngineError::StorageFailure),
+            Err(_) if allow_torn => Ok(false),
+            Err(_) => Err(EngineError::StorageFailure),
+        }
+    }
+    fn marker_matches(&self, name: &str, binding: &crate::NativeBinding) -> Result<()> {
+        let file = self.protected_key_file(name)?;
+        if file.metadata().map_err(io_error)?.len() > 2048 {
+            return Err(EngineError::StorageFailure);
+        }
+        let marker: crate::storage::Marker =
+            serde_json::from_reader(file).map_err(|_| EngineError::StorageFailure)?;
+        if marker != binding.marker() {
+            return Err(EngineError::StorageFailure);
+        }
+        Ok(())
+    }
+    pub(crate) fn validate_native(
+        &self,
+        binding: &crate::NativeBinding,
+        mixed: bool,
+    ) -> Result<()> {
+        if exists_at(&self.directory, ".engine.key.pending")?
+            || (!mixed && exists_at(&self.directory, "engine.key")?)
+            || exists_at(&self.directory, ".engine.native.pending")?
+        {
+            return Err(EngineError::StorageFailure);
+        }
+        self.marker_matches("engine.native.json", binding)
+    }
+    fn publish_native(&self, binding: &crate::NativeBinding, allow_torn: bool) -> Result<()> {
+        use crate::fault::{fault_point, FaultPoint};
+        if exists_at(&self.directory, "engine.native.json")? {
+            self.marker_matches("engine.native.json", binding)?;
+            if exists_at(&self.directory, ".engine.native.pending")? {
+                self.pending_matches(binding, allow_torn)?;
+                unlink_private(&self.directory, ".engine.native.pending", self.uid, false)?;
+                platform::sync(&self.directory)?;
+            }
+            return Ok(());
+        }
+        if exists_at(&self.directory, ".engine.native.pending")?
+            && !self.pending_matches(binding, allow_torn)?
+        {
+            unlink_private(&self.directory, ".engine.native.pending", self.uid, false)?;
+            platform::sync(&self.directory)?;
+        }
+        if !exists_at(&self.directory, ".engine.native.pending")? {
+            let mut file = openat(
+                &self.directory,
+                OsStr::new(".engine.native.pending"),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+                0o600,
+            )?;
+            if unsafe { libc::fchmod(file.as_raw_fd(), 0o600) } != 0 {
+                return Err(EngineError::UnsafePath);
+            }
+            fault_point(self, JobId([0; 16]), FaultPoint::AfterNativePendingCreate);
+            let bytes =
+                serde_json::to_vec(&binding.marker()).map_err(|_| EngineError::StorageFailure)?;
+            file.write_all(&bytes).map_err(io_error)?;
+            fault_point(self, JobId([0; 16]), FaultPoint::AfterNativePendingWrite);
+            platform::sync(&file)?;
+            fault_point(self, JobId([0; 16]), FaultPoint::AfterNativePendingSync);
+        }
+        platform::publish_native(&self.directory)?;
+        fault_point(self, JobId([0; 16]), FaultPoint::AfterNativePublish);
+        platform::sync(&self.directory)?;
+        fault_point(self, JobId([0; 16]), FaultPoint::AfterNativeDirectorySync);
+        Ok(())
+    }
+    pub(crate) fn initialize_native(
+        &self,
+        guard: &FrontendGuard,
+        binding: &crate::NativeBinding,
+    ) -> Result<()> {
+        self.check_frontend(guard)?;
+        if exists_at(&self.directory, "engine.key")?
+            || exists_at(&self.directory, ".engine.key.pending")?
+        {
+            return Err(EngineError::StorageFailure);
+        }
+        let nonempty = self.storage_candidate()?;
+        if exists_at(&self.directory, "engine.native.json")? {
+            return self.validate_native(binding, false);
+        }
+        if nonempty || !self.storage_is_pristine()? {
+            return Err(EngineError::StorageFailure);
+        }
+        self.publish_native(binding, true)
+    }
+    pub(crate) fn validate_migration(
+        &self,
+        binding: &crate::NativeBinding,
+        master: &[u8; 32],
+    ) -> Result<()> {
+        if exists_at(&self.directory, ".engine.key.pending")? || !self.storage_candidate()? {
+            return Err(EngineError::StorageFailure);
+        }
+        let legacy = exists_at(&self.directory, "engine.key")?;
+        let marker = exists_at(&self.directory, "engine.native.json")?;
+        if !legacy && !marker {
+            return Err(EngineError::StorageFailure);
+        }
+        if legacy && self.load_storage_keys()?.0.as_ref() != master {
+            return Err(EngineError::StorageFailure);
+        }
+        if marker {
+            self.marker_matches("engine.native.json", binding)?;
+        }
+        if exists_at(&self.directory, ".engine.native.pending")? {
+            self.pending_matches(binding, legacy)?;
+        }
+        Ok(())
+    }
+    pub(crate) fn commit_native(
+        &self,
+        guard: &FrontendGuard,
+        binding: &crate::NativeBinding,
+        fingerprint: &[u8; 32],
+    ) -> Result<()> {
+        use crate::fault::{fault_point, FaultPoint};
+        self.check_frontend(guard)?;
+        if exists_at(&self.directory, ".engine.key.pending")? {
+            return Err(EngineError::StorageFailure);
+        }
+        if exists_at(&self.directory, "engine.key")? {
+            if crate::admission::sha256(self.load_storage_keys()?.0.as_ref()) != *fingerprint {
+                return Err(EngineError::StorageFailure);
+            }
+        } else {
+            self.marker_matches("engine.native.json", binding)?;
+        }
+        self.publish_native(binding, exists_at(&self.directory, "engine.key")?)?;
+        if exists_at(&self.directory, "engine.key")? {
+            unlink_private(&self.directory, "engine.key", self.uid, false)?;
+            fault_point(self, JobId([0; 16]), FaultPoint::AfterNativeLegacyUnlink);
+        }
+        platform::sync(&self.directory)?;
+        fault_point(
+            self,
+            JobId([0; 16]),
+            FaultPoint::AfterNativeLegacyDirectorySync,
+        );
+        Ok(())
+    }
+}

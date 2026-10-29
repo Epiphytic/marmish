@@ -378,3 +378,57 @@ fn cleanup_fences_state_and_disables_normal_bridge_operations() {
     pipe.init(false);
     assert_eq!(pipe.auth(json!({"op":"token"}))["ok"], true);
 }
+
+fn storage_init(pipe: &Pipe, storage: Value) -> Value {
+    json!({"op":"init","version":2,"state_root":pipe.directory.path().join("state"),"worker_executable":pipe.worker.path,"server":"5555555555555555555555555555555555555555555555555555555555555555","allowed_principals":[PRINCIPAL],"cwd":pipe.directory.path(),"storage":storage})
+}
+fn native_storage(mode: &str, master: &[u8]) -> Value {
+    json!({"mode":mode,"root_id":"61".repeat(32),"reference":{"version":1,"purpose":"sqlcipher","id":"62".repeat(32)},"master":STANDARD.encode(master)})
+}
+#[test]
+fn native_bridge_detaches_reopens_and_migration_stays_local() {
+    let mut pipe = Pipe::new();
+    let init = storage_init(&pipe, native_storage("native", &[63; 32]));
+    assert_eq!(pipe.call(init.clone())["ok"], true);
+    let token = pipe.token();
+    let result = pipe.submit(
+        INVOCATION,
+        &token,
+        &[b"/bin/sh", b"-c", b"sleep 0.2; printf 'native bridge'"],
+    );
+    assert_eq!(result["ok"], true);
+    pipe.restart();
+    assert_eq!(pipe.call(init)["ok"], true);
+    assert_eq!(
+        pipe.finished(INVOCATION)["outcome"],
+        json!({"kind":"code","value":0})
+    );
+    assert_eq!(pipe.read(INVOCATION, "stdout"), b"native bridge");
+    assert!(!pipe.directory.path().join("state/engine.key").exists());
+    let response = pipe.call(json!({"op":"migration_commit"}));
+    assert_eq!(response["ok"], false);
+}
+#[test]
+fn migration_bridge_authenticates_without_opening_normal_operations() {
+    let mut pipe = Pipe::new();
+    pipe.init(false);
+    let key = zeroize::Zeroizing::new(
+        std::fs::read(pipe.directory.path().join("state/engine.key")).unwrap(),
+    );
+    pipe.restart();
+    let init = storage_init(&pipe, native_storage("migrate_native", &key[8..]));
+    assert_eq!(pipe.call(init)["ok"], true);
+    assert_eq!(pipe.auth(json!({"op":"token"}))["ok"], false);
+    assert!(pipe.directory.path().join("state/engine.key").exists());
+    assert_eq!(
+        pipe.call(json!({"op":"cleanup_ready"}))["error"]["code"],
+        "invalid_request"
+    );
+    assert_eq!(pipe.call(json!({"op":"migration_commit"}))["ok"], true);
+    assert_eq!(pipe.call(json!({"op":"migration_commit"}))["ok"], true);
+    assert!(!pipe.directory.path().join("state/engine.key").exists());
+    pipe.restart();
+    let init = storage_init(&pipe, native_storage("native", &key[8..]));
+    assert_eq!(pipe.call(init)["ok"], true);
+    assert!(!pipe.token().as_str().unwrap().is_empty());
+}

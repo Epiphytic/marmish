@@ -10,6 +10,7 @@ mod model;
 mod platform;
 mod policy;
 mod spool;
+mod storage;
 mod store;
 mod worker;
 use admission::{context_owner, random_bytes, sha256};
@@ -19,12 +20,14 @@ pub use model::*;
 pub use policy::{CommandPolicy, KeyRestrictions, Restrictions};
 use std::collections::HashMap;
 use std::time::Duration;
+pub use storage::{NativeBinding, ProvidedMaster};
 use store::{AccountSpec, BootTime, InputOwner, StartDecision, Store, WorkerCredential};
 
 /// A single local frontend. Detached workers continue after this value is dropped.
 pub struct Engine {
     store: Store,
     keys: cipher::StorageKeys,
+    storage: storage::StorageMode,
     root: StateRoot,
     _guard: FrontendGuard,
     policy: EnginePolicy,
@@ -67,17 +70,69 @@ impl Engine {
         Ok(CleanupGuard::new(root, _guard, locks))
     }
 
-    pub fn open(mut policy: EnginePolicy) -> Result<Self> {
+    pub fn open(policy: EnginePolicy) -> Result<Self> {
+        Self::open_storage(policy, None)
+    }
+
+    pub fn open_with_master(
+        policy: EnginePolicy,
+        binding: NativeBinding,
+        master: ProvidedMaster,
+    ) -> Result<Self> {
+        Self::open_storage(policy, Some((binding, master)))
+    }
+
+    pub fn prepare_native_migration(
+        policy: EnginePolicy,
+        binding: NativeBinding,
+        master: ProvidedMaster,
+    ) -> Result<CleanupGuard> {
+        admission::validate_policy(&policy)?;
+        let root = StateRoot::open_existing(&policy.state_root)?;
+        let guard = root.lock_frontend()?;
+        root.validate_migration(&binding, &master.0)?;
+        let keys = cipher::StorageKeys(master.0);
+        let fingerprint = sha256(keys.0.as_ref());
+        let mut store = Store::open_worker(&root, &keys)?;
+        let locks = cleanup::acquire(&root, &mut store)?;
+        drop(store);
+        drop(keys);
+        Ok(CleanupGuard::migration(
+            root,
+            guard,
+            locks,
+            binding,
+            fingerprint,
+        ))
+    }
+
+    fn open_storage(
+        mut policy: EnginePolicy,
+        provided: Option<(NativeBinding, ProvidedMaster)>,
+    ) -> Result<Self> {
         let account = admission::validate_policy(&policy)?;
         policy.worker_executable = launcher::worker_preconditions(&policy.worker_executable)?;
         let root = StateRoot::open(&policy.state_root)?;
         let guard = root.lock_frontend()?;
-        let keys = root.initialize_storage(&guard)?;
+        let (keys, storage) = match provided {
+            None => (
+                root.initialize_storage(&guard)?,
+                storage::StorageMode::Files,
+            ),
+            Some((binding, master)) => {
+                root.initialize_native(&guard, &binding)?;
+                (
+                    cipher::StorageKeys(master.0),
+                    storage::StorageMode::Native(binding),
+                )
+            }
+        };
         let epoch = random_bytes()?;
         let store = Store::create_frontend(&root, &keys, &policy, &account, epoch)?;
         let mut engine = Self {
             store,
             keys,
+            storage,
             root,
             _guard: guard,
             policy,
@@ -436,12 +491,13 @@ impl Engine {
             job,
         };
         let prepared = launcher::prepare_worker(&self.policy.worker_executable, &spec)?;
+        prepared.verify_root(&self.root)?;
         let decision = match self.store.reserve_worker_start(job, launcher::boot_time()?) {
             Err(EngineError::Busy) => return Ok(false),
             other => other?,
         };
         match decision {
-            StartDecision::Reserved => match prepared.spawn() {
+            StartDecision::Reserved => match prepared.spawn(&self.keys, &self.storage) {
                 Ok(()) => Ok(true),
                 Err(launcher::WorkerSpawnError::Transient) => {
                     self.store.release_worker_start(job)?;

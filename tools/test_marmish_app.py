@@ -50,7 +50,191 @@ class DestinationTests(unittest.TestCase):
                 args.relay = ['wss://RELAY.example:443/']
                 profile = app.Profile(args)
                 self.assertEqual(profile.relays, RELAYS)
-                daemon.assert_called_once()
+                daemon.assert_not_called() # Keys and bootstrap are selected on context entry.
+
+
+class NativeProfileTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        os.chmod(self.root, 0o700)
+        self.helper = Mock()
+        self.helper.probe.return_value = None
+        self.helper.derive_nostr.return_value = CLIENT
+        self.helper.secrets = {}
+        def load(reference):
+            if reference['id'] not in self.helper.secrets:
+                raise SmokeError('missing')
+            return self.helper.secrets[reference['id']]
+        self.helper.load.side_effect = load
+        self.helper.create.side_effect = lambda ref, label, secret: self.helper.secrets.__setitem__(ref['id'], secret)
+        self.args = SimpleNamespace(identity=self.root / 'profile', relay=RELAYS,
+            wnd=Path('/not-executed'), wnd_sha256='00' * 32, key_storage='auto',
+            key_name='work', keychain_helper=self.helper, key_catalog=self.root / 'catalog/keys.json')
+
+    def test_binding_published_before_daemon_and_verified_on_restart(self):
+        rpc = Mock()
+        rpc.capabilities.return_value = {'version': 1, 'secret_store': 'MarmishStdin', 'public_key': CLIENT}
+        rpc.accounts.return_value = []
+        rpc.login.return_value = CLIENT
+        def start():
+            saved = load_json(self.args.identity / 'profile.json')
+            self.assertEqual(saved['account'], CLIENT)
+            self.assertFalse(saved['initialized'])
+            self.assertEqual(saved['keys']['backend'], 'native')
+        with patch.object(app, 'ConfinedDaemon') as daemon, patch.object(app, 'MdkRpc', return_value=rpc):
+            daemon.return_value.start.side_effect = start
+            with app.Profile(self.args) as profile:
+                self.assertEqual(profile.account, CLIENT)
+                frame = daemon.call_args.kwargs['bootstrap']
+                self.assertEqual(len(frame), 72)
+                self.assertEqual(frame[:8], b'MRMNST01')
+            self.assertTrue(load_json(self.args.identity / 'profile.json')['initialized'])
+            rpc.login.assert_called_once()
+        # Existing initialized metadata is mandatory; deleting it cannot import anew.
+        with patch.object(app, 'ConfinedDaemon') as daemon:
+            with self.assertRaisesRegex(SmokeError, 'missing_account_state'):
+                with app.Profile(self.args):
+                    pass
+            daemon.assert_not_called()
+
+    def test_wrong_capability_fails_before_login_and_closes(self):
+        rpc = Mock()
+        rpc.capabilities.return_value = {'public_key': SERVER}
+        with patch.object(app, 'ConfinedDaemon') as daemon, patch.object(app, 'MdkRpc', return_value=rpc):
+            with self.assertRaisesRegex(SmokeError, 'account_mismatch'):
+                with app.Profile(self.args):
+                    pass
+            rpc.login.assert_not_called()
+            daemon.return_value.close.assert_called_once()
+        self.assertFalse(load_json(self.args.identity / 'profile.json')['initialized'])
+
+    def _pending_native_login(self):
+        from marmish_protocol import private_directory
+        rpc = Mock()
+        rpc.capabilities.return_value = {'public_key': CLIENT}
+        rpc.accounts.return_value = []
+        rpc.login.side_effect = SmokeError('interrupted_login')
+        with patch.object(app, 'ConfinedDaemon'), patch.object(app, 'MdkRpc', return_value=rpc):
+            with self.assertRaisesRegex(SmokeError, 'interrupted_login'):
+                with app.Profile(self.args):
+                    pass
+        home = private_directory(self.args.identity / 'mdk')
+        accounts = private_directory(home / 'accounts')
+        account = private_directory(accounts / CLIENT)
+        save_json(account / 'account.json', {'label': CLIENT, 'account_id_hex': CLIENT,
+            'local_signing': True, 'external_signing': False, 'signed_out': False})
+        save_json(account / '.account-setup.json', {'account_id_hex': CLIENT,
+            'reused_account_id_credential': False, 'kind': 'imported_identity',
+            'phase': 'key_package_publication_started'})
+        rpc.accounts.return_value = [CLIENT]
+        rpc.login.reset_mock()
+        return rpc
+
+    def test_pending_setup_resumes_login_even_when_whoami_has_account(self):
+        rpc = self._pending_native_login()
+        secret_count = len(self.helper.secrets)
+        def login(nsec, relays):
+            self.assertFalse(load_json(self.args.identity / 'profile.json')['initialized'])
+            from marmish_keys import encode_nsec
+            self.assertEqual(nsec, encode_nsec(next(iter(self.helper.secrets.values()))))
+            self.assertEqual(relays, RELAYS)
+            return CLIENT
+        rpc.login.side_effect = login
+        with patch.object(app, 'ConfinedDaemon'), patch.object(app, 'MdkRpc', return_value=rpc):
+            with app.Profile(self.args) as profile:
+                self.assertTrue(profile.value['initialized'])
+        rpc.login.assert_called_once()
+        self.assertEqual(len(self.helper.secrets), secret_count)
+        self.assertTrue(load_json(self.args.identity / 'profile.json')['initialized'])
+
+    def test_pending_setup_failed_login_keeps_uninitialized(self):
+        rpc = self._pending_native_login()
+        rpc.login.side_effect = SmokeError('setup_publication_failed')
+        # Even stale initialized metadata cannot override the MDK setup journal.
+        value = load_json(self.args.identity / 'profile.json')
+        value['initialized'] = True
+        save_json(self.args.identity / 'profile.json', value)
+        with patch.object(app, 'ConfinedDaemon') as daemon, patch.object(app, 'MdkRpc', return_value=rpc):
+            with self.assertRaisesRegex(SmokeError, 'setup_publication_failed'):
+                with app.Profile(self.args):
+                    pass
+            daemon.return_value.close.assert_called_once()
+        rpc.login.assert_called_once()
+        self.assertFalse(load_json(self.args.identity / 'profile.json')['initialized'])
+
+    def _legacy_server(self):
+        from marmish_protocol import private_directory
+        root = private_directory(self.args.identity)
+        home = private_directory(root / 'mdk')
+        accounts = private_directory(home / 'accounts')
+        account = private_directory(accounts / CLIENT)
+        save_json(account / 'account.json', {'label': CLIENT, 'account_id_hex': CLIENT,
+            'local_signing': True, 'external_signing': False, 'signed_out': False})
+        save_json(account / 'secret.json', {'version': 1, 'backend': 'local-dev-file',
+                                           'secret_key_hex': '11' * 32})
+        engine = private_directory(root / 'engine')
+        (engine / 'engine.key').write_bytes(b'MRMSKEY1' + b'2' * 32)
+        (engine / 'engine.key').chmod(0o600)
+        save_json(root / 'profile.json', {'version': 1, 'account': CLIENT,
+            'relays': RELAYS, 'sessions': {}, 'server_groups': {}})
+        self.args.__dict__.update(server_mode=True, migrate_keys_to_native=True,
+            allow=[SERVER], worker=Path('/worker'), bridge=Path('/bridge'),
+            cwd=self.root, allow_shell=False, loaded_command_policy=None)
+        return account / 'secret.json', engine / 'engine.key'
+
+    def test_migration_quiesces_before_create_and_commits_before_cleanup(self):
+        nostr_file, master_file = self._legacy_server()
+        original = self.helper.create.side_effect
+        events = []
+        def create(*args):
+            self.assertEqual(events, ['quiescent'])
+            original(*args)
+        self.helper.create.side_effect = create
+        def bridge(_executable, policy):
+            self.assertEqual(policy['storage']['mode'], 'migrate_native')
+            self.assertTrue(nostr_file.exists() and master_file.exists())
+            events.append('quiescent')
+            guard = Mock()
+            def commit(op):
+                self.assertEqual(op, 'migration_commit')
+                self.assertEqual(load_json(self.args.identity / 'profile.json')['keys']['backend'], 'native')
+                self.assertTrue(nostr_file.exists())
+                master_file.unlink()
+            guard.call.side_effect = commit
+            return guard
+        with patch.object(app, 'EngineBridge', side_effect=bridge), patch.object(app, 'ConfinedDaemon') as daemon:
+            with app.Profile(self.args) as profile:
+                self.assertTrue(profile.migrated)
+                self.assertEqual(profile.account, CLIENT)
+            daemon.assert_not_called()
+        self.assertEqual(len(self.helper.secrets), 2)
+        self.assertFalse(nostr_file.exists() or master_file.exists())
+        self.assertFalse((self.args.identity / 'keys.pending.json').exists())
+
+    def test_migration_busy_keeps_originals_and_creates_no_native_secret(self):
+        nostr_file, master_file = self._legacy_server()
+        original_profile = (self.args.identity / 'profile.json').read_bytes()
+        with patch.object(app, 'EngineBridge', side_effect=SmokeError('busy')):
+            with self.assertRaisesRegex(SmokeError, 'busy'):
+                with app.Profile(self.args):
+                    pass
+        self.assertTrue(nostr_file.exists() and master_file.exists())
+        self.assertEqual((self.args.identity / 'profile.json').read_bytes(), original_profile)
+        self.assertFalse(self.helper.secrets)
+
+    def test_unbound_nonempty_mdk_never_generates_new_identity(self):
+        from marmish_protocol import private_directory
+        private_directory(self.args.identity)
+        home = private_directory(self.args.identity / 'mdk')
+        (home / 'state').write_bytes(b'old state')
+        with patch.object(app, 'ConfinedDaemon') as daemon:
+            with self.assertRaisesRegex(SmokeError, 'nonpristine_key_state'):
+                with app.Profile(self.args):
+                    pass
+            daemon.assert_not_called()
+
 
 
 class ClientTests(unittest.TestCase):

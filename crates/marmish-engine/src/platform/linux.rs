@@ -90,13 +90,13 @@ pub(crate) fn parse_proc_stat(raw: &[u8], pid: i32) -> Result<u64> {
         .map_err(|_| EngineError::WorkerUnavailable)
 }
 
-pub(super) fn publish_key(directory: &File) -> Result<()> {
+pub(super) fn publish_file(directory: &File, from: &CStr, to: &CStr) -> Result<()> {
     if unsafe {
         libc::renameat2(
             directory.as_raw_fd(),
-            c".engine.key.pending".as_ptr(),
+            from.as_ptr(),
             directory.as_raw_fd(),
-            c"engine.key".as_ptr(),
+            to.as_ptr(),
             libc::RENAME_NOREPLACE,
         )
     } != 0

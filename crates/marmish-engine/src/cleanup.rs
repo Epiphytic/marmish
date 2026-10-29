@@ -10,6 +10,7 @@ pub struct CleanupGuard {
     _root: StateRoot,
     _frontend: FrontendGuard,
     _locks: Vec<(JobGuard, IoGuard)>,
+    migration: Option<(crate::NativeBinding, [u8; 32])>,
 }
 impl CleanupGuard {
     pub(crate) fn new(
@@ -21,7 +22,24 @@ impl CleanupGuard {
             _root: root,
             _frontend: frontend,
             _locks: locks,
+            migration: None,
         }
+    }
+    pub(crate) fn migration(
+        root: StateRoot,
+        frontend: FrontendGuard,
+        locks: Vec<(JobGuard, IoGuard)>,
+        binding: crate::NativeBinding,
+        fingerprint: [u8; 32],
+    ) -> Self {
+        let mut guard = Self::new(root, frontend, locks);
+        guard.migration = Some((binding, fingerprint));
+        guard
+    }
+    pub fn commit_native(&mut self) -> Result<()> {
+        let (binding, fingerprint) = self.migration.as_ref().ok_or(EngineError::InvalidRequest)?;
+        self._root
+            .commit_native(&self._frontend, binding, fingerprint)
     }
 }
 

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import secrets
 import signal
+import stat
 import sys
 import time
 
@@ -17,49 +18,236 @@ from marmish_protocol import (Dispatcher, EngineBridge, History, b64, check_memb
                               unb64, validate_frame)
 from marmish_rpc import MdkRpc, RpcError
 from marmish_policy import load_policy
-from marmish_transport import ConfinedDaemon, SandboxError
+from marmish_keys import KeySession, encode_nsec, protected_read, protected_unlink
+from marmish_transport import ConfinedDaemon, SandboxError, acquire_profile_home_lock
 from marmish_platform import continuous_time
+
+
+def _pristine(path):
+    return not path.exists() or (path.is_dir() and not path.is_symlink()
+                                 and not any(path.iterdir()))
+
+
+def _read_public_metadata(path):
+    # MDK public metadata may be 0644; secret readers remain strictly 0600.
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
+                and not info.st_mode & 0o022 and info.st_nlink == 1
+                and info.st_size <= 1048576, 'unsafe_account_metadata')
+        return decode(os.read(fd, 1048577), 1048576)
+    finally:
+        os.close(fd)
+
+
+def _check_mdk_account(home, account, *, initialized=False, migration=False):
+    """Return (secret path, pending setup) after validating the exact identity."""
+    accounts = home / 'accounts'
+    if not accounts.exists() and not accounts.is_symlink():
+        require(not initialized, 'missing_account_state')
+        return None, False
+    private_directory(accounts)
+    entries = list(accounts.iterdir())
+    require(len(entries) <= 1 and all(item.name == account for item in entries),
+            'account_mismatch')
+    if not entries:
+        require(not initialized, 'missing_account_state')
+        return None, False
+    directory = private_directory(entries[0])
+    metadata = directory / 'account.json'
+    if metadata.exists() or metadata.is_symlink():
+        value = _read_public_metadata(metadata)
+        require(value.get('label') == value.get('account_id_hex') == account
+                and value.get('local_signing') is True
+                and value.get('external_signing') is False
+                and value.get('signed_out') is False, 'account_mismatch')
+    else:
+        require(not initialized, 'missing_account_state')
+    setup = directory / '.account-setup.json'
+    setup_pending = setup.exists() or setup.is_symlink()
+    if setup_pending:
+        require(not migration, 'pending_account_setup')
+        value = _read_public_metadata(setup)
+        require(set(value) == {'account_id_hex', 'reused_account_id_credential', 'kind', 'phase'}
+                and value['account_id_hex'] == account
+                and type(value['reused_account_id_credential']) is bool
+                and value['kind'] == 'imported_identity'
+                and value['phase'] in ('local_state_created', 'local_ready',
+                    'bootstrap_publication_started', 'bootstrap_publication_confirmed',
+                    'key_package_publication_started', 'key_package_publication_confirmed'),
+                'invalid_account_setup')
+    secret = directory / 'secret.json'
+    if not migration:
+        require(not secret.exists() and not secret.is_symlink(), 'mixed_key_storage')
+    return secret, setup_pending
 
 
 class Profile:
     def __init__(self, args):
+        self.args = args
         self.root = private_directory(args.identity)
         self.path = self.root / 'profile.json'
         self.value = load_json(self.path, {})
-        configured = sorted({relay_url(x) for x in args.relay})
-        require(1 <= len(configured) <= 8, 'relay_count_limit')
+        self.relays = sorted({relay_url(x) for x in args.relay})
+        require(1 <= len(self.relays) <= 8, 'relay_count_limit')
+        self._check_relays()
+        self.transport = self.rpc = self.account = self.keys = None
+        self.master = None
+        self.migrated = False
+
+    def _check_relays(self):
         if self.value:
-            require(self.value.get('relays') == configured, 'profile_relay_mismatch')
+            require(self.value.get('relays') == self.relays, 'profile_relay_mismatch')
             public_key(self.value.get('account'))
-        self.relays = configured
-        self.transport = ConfinedDaemon(self.root / 'mdk', Path(args.wnd), configured,
-                                        args.wnd_sha256, manifest=getattr(args, 'wnd_manifest', None))
-        self.rpc = None
-        self.account = None
 
     def __enter__(self):
-        self.transport.start()
-        self.rpc = MdkRpc(self.transport.socket, timeout=60,
-                          rpc_home=self.transport.rpc_home,
-                          rpc_socket=self.transport.rpc_socket,
-                          peer_identity=self.transport.peer_identity)
+        args = self.args
+        self.keys = KeySession(self.root, storage=getattr(args, 'key_storage', 'auto'),
+                               key_name=getattr(args, 'key_name', None),
+                               helper=getattr(args, 'keychain_helper', None),
+                               catalog=getattr(args, 'key_catalog', None))
+        self.keys.__enter__()
         try:
-            if not self.value:
+            self.value = self.keys.value
+            self._check_relays()
+            if getattr(args, 'migrate_keys_to_native', False):
+                self._migrate()
+                self.migrated = True
+                return self
+            require(not self.keys.migration, 'key_migration_required')
+            require(bool(self.value) or _pristine(self.root / 'mdk'), 'nonpristine_key_state')
+            binding = self.keys.prepare_nostr(existing_account=self.value.get('account'),
+                                               pristine=_pristine(self.root / 'mdk'))
+            native = binding.backend == 'native'
+            bootstrap = None
+            if native:
+                bootstrap, setup_pending = self._prepare_native(binding)
+            self.transport = ConfinedDaemon(self.root / 'mdk', Path(args.wnd), self.relays,
+                args.wnd_sha256, manifest=getattr(args, 'wnd_manifest', None), bootstrap=bootstrap)
+            self.transport.start()
+            self.rpc = MdkRpc(self.transport.socket, timeout=60,
+                rpc_home=self.transport.rpc_home, rpc_socket=self.transport.rpc_socket,
+                peer_identity=self.transport.peer_identity,
+                secret_store='MarmishStdin' if native else 'File')
+            if native:
+                self._authenticate_native(binding, setup_pending)
+            elif not self.value:
                 account = self.rpc.create_identity(self.relays)
                 self.value = {'version': 1, 'account': account, 'relays': self.relays,
                               'sessions': {}, 'server_groups': {}}
+                self.account = public_key(account)
                 self.save()
             self.account = public_key(self.value['account'])
             return self
         except BaseException:
-            self.transport.close()
+            self.__exit__()
             raise
 
+    def _prepare_native(self, binding):
+        """Publish recoverable bindings before passing a secret to the daemon."""
+        self.account = public_key(binding.account)
+        _, setup_pending = _check_mdk_account(self.root / 'mdk', self.account,
+                                             initialized=self.value.get('initialized', False))
+        if not self.value:
+            self.value = {'version': 2, 'account': self.account, 'initialized': False,
+                          'relays': self.relays, 'sessions': {}, 'server_groups': {}}
+        if setup_pending:
+            self.value['initialized'] = False
+        self._prepare_master()
+        self.save()
+        frame = bytearray(b'MRMNST01' + binding.secret + bytes.fromhex(self.account))
+        return frame, setup_pending
+
+    def _authenticate_native(self, binding, setup_pending):
+        """Complete interrupted Login before marking the exact account ready."""
+        require(self.rpc.capabilities()['public_key'] == self.account, 'account_mismatch')
+        accounts = self.rpc.accounts()
+        if accounts:
+            require(accounts == [self.account], 'account_mismatch')
+        if setup_pending or not accounts:
+            require(self.value.get('initialized') is False, 'missing_account_state')
+            require(self.rpc.login(encode_nsec(binding.secret), self.relays) == self.account,
+                    'account_mismatch')
+        self.value['initialized'] = True
+        self.save()
+
+    def _migrate(self):
+        require(bool(self.value), 'missing_profile')
+        self.account = public_key(self.value['account'])
+        home, engine = self.root / 'mdk', self.root / 'engine'
+        has_engine = not _pristine(engine)
+        require(not has_engine or getattr(self.args, 'server_mode', False),
+                'server_migration_required')
+        guard = None
+        self.keys.lock_catalog()
+        with acquire_profile_home_lock(home):
+            secret_path, _ = _check_mdk_account(home, self.account, initialized=True, migration=True)
+            require(secret_path is not None, 'missing_account_state')
+            legacy_nsec = legacy_master = None
+            legacy_secret_bytes = None
+            if secret_path.exists() or secret_path.is_symlink():
+                legacy_secret_bytes = protected_read(secret_path)
+                value = decode(legacy_secret_bytes, 1048576)
+                require(set(value) == {'version', 'backend', 'secret_key_hex'}
+                        and type(value['version']) is int and value['version'] == 1
+                        and value['backend'] == 'local-dev-file', 'invalid_legacy_secret')
+                legacy_nsec = bytes.fromhex(hex_id(value['secret_key_hex'], 32))
+            if has_engine and ((engine / 'engine.key').exists()
+                               or (engine / 'engine.key').is_symlink()):
+                raw = protected_read(engine / 'engine.key', 40)
+                require(len(raw) == 40 and raw[:8] == b'MRMSKEY1', 'invalid_legacy_secret')
+                legacy_master = raw[8:]
+            self.keys.begin_migration(self.account)
+            targets = self.keys.migration_targets(engine if has_engine else None)
+            try:
+                if has_engine:
+                    target = targets['master']
+                    master = legacy_master if legacy_master is not None else (
+                        self.keys.load_migration_master())
+                    storage = {'mode': 'migrate_native', 'root_id': target['root_id'],
+                               'reference': target['reference'], 'master': b64(master)}
+                    policy = _server_policy(self, self.args.allow, self.args.worker,
+                        self.args.cwd, self.args.allow_shell, self.args.loaded_command_policy)
+                    policy.update(version=2, storage=storage)
+                    guard = EngineBridge(self.args.bridge, policy)
+                self.keys.prepare_nostr(existing_account=self.account,
+                                        migration_secret=legacy_nsec)
+                if has_engine:
+                    self.master = self.keys.prepare_master(engine, migration_secret=legacy_master)
+                self.value.update(version=2, initialized=True)
+                self.save()
+                if guard is not None:
+                    guard.call('migration_commit')
+                if legacy_secret_bytes is not None:
+                    protected_unlink(secret_path, legacy_secret_bytes)
+                self.keys.mark_cleaned()
+            finally:
+                if guard is not None:
+                    guard.close()
+
+    def _prepare_master(self):
+        if getattr(self.args, 'server_mode', False):
+            root = self.root / 'engine'
+            self.master = self.keys.prepare_master(root, pristine=_pristine(root))
+
+    def engine_storage(self):
+        if self.master is None or self.master.backend == 'files':
+            return None
+        return {'mode': 'native', 'root_id': self.master.root_id,
+                'reference': self.master.reference, 'master': b64(self.master.secret)}
+
     def save(self):
-        save_json(self.path, self.value)
+        self.keys.commit(self.value)
+        self.value = self.keys.value
 
     def __exit__(self, *_args):
-        self.transport.close()
+        if self.transport is not None:
+            self.transport.close()
+        if self.keys is not None:
+            self.keys.__exit__()
+        self.master = None
+
 
 
 def destination(value, user, relays):
@@ -259,17 +447,24 @@ class Client:
             save_json(path, journal)
 
 
+def _server_policy(profile, allow, worker, cwd, allow_shell, command_policy):
+    return {'version': 1, 'state_root': str(profile.root / 'engine'),
+            'worker_executable': str(Path(worker).absolute()), 'server': profile.account,
+            'allowed_principals': sorted(allow), 'cwd': str(Path(cwd).absolute()),
+            'allow_shell_command': allow_shell, 'command_policy': command_policy}
+
+
 class Server:
     def __init__(self, profile, allow, bridge, worker, cwd, allow_shell=False,
                  *, command_policy=None):
         self.profile = profile
         self.allow = set(allow)
         require(1 <= len(self.allow) <= 32 and profile.account not in self.allow, 'invalid_allowlist')
-        self.engine = EngineBridge(bridge, {'version': 1,
-            'state_root': str(profile.root / 'engine'), 'worker_executable': str(Path(worker).absolute()),
-            'server': profile.account, 'allowed_principals': sorted(self.allow),
-            'cwd': str(Path(cwd).absolute()), 'allow_shell_command': allow_shell,
-            'command_policy': command_policy})
+        policy = _server_policy(profile, self.allow, worker, cwd, allow_shell, command_policy)
+        storage = profile.engine_storage() if isinstance(profile, Profile) else None
+        if storage is not None:
+            policy.update(version=2, storage=storage)
+        self.engine = EngineBridge(bridge, policy)
         self.dispatcher = Dispatcher(self.engine, profile.account)
         self.groups = {}
         self.histories = {}
@@ -410,6 +605,12 @@ def common(parser):
     parser.add_argument('-i', '--identity', required=True, type=Path,
                         help='private persistent local identity directory')
     parser.add_argument('--relay', action='append', required=True, help='explicit wss root URL')
+    parser.add_argument('--key-storage', choices=('auto', 'native', 'files'), default='auto')
+    parser.add_argument('--key-name', help='local named Nostr key bound to this profile')
+    parser.add_argument('--keychain-helper', type=Path, help='absolute native helper executable')
+    parser.add_argument('--key-catalog', type=Path, help='private named-key catalog path')
+    parser.add_argument('--migrate-keys-to-native', action='store_true',
+                        help='migrate existing keys, preserving identity and encrypted state')
     parser.add_argument('--wnd', required=True, type=Path)
     parser.add_argument('--wnd-sha256', required=True)
     parser.add_argument('--wnd-manifest', type=Path,
@@ -451,7 +652,7 @@ def client_main(argv=None):
     args = parser.parse_args(argv)
     os.umask(0o077)
     with Profile(args) as profile:
-        if args.init:
+        if args.init or profile.migrated:
             print(json.dumps({'account': profile.account}))
             return 0
         peer = destination(args.destination, args.user, profile.relays)
@@ -501,8 +702,11 @@ def server_main(argv=None):
     args = parser.parse_args(argv)
     os.umask(0o077)
     require(os.geteuid() != 0, 'root_forbidden')
+    args.server_mode = True
     allow = [public_key(key) for key in args.allow]
     command_policy = load_policy(args.command_policy, allow)
+    args.allow = allow
+    args.loaded_command_policy = command_policy
     running = True
     def stop(_sig, _frame):
         nonlocal running
@@ -510,6 +714,9 @@ def server_main(argv=None):
     handlers = {sig: signal.signal(sig, stop) for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
         with Profile(args) as profile:
+            if profile.migrated:
+                print(json.dumps({'migrated': True, 'account': profile.account}))
+                return 0
             server = Server(profile, allow, args.bridge, args.worker, args.cwd, args.allow_shell,
                             command_policy=command_policy)
             try:

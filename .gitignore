@@ -25,6 +25,7 @@ engine.key
 *.pfx
 *.keychain
 *.keychain-db
+**/accounts/*/secret.json
 id_rsa
 id_ed25519
 **/jobs/*/credential

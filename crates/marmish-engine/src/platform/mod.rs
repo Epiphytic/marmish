@@ -30,7 +30,10 @@ pub(crate) fn lock_is_busy(file: &File) -> Result<bool> {
     native::lock_is_busy(file)
 }
 pub(crate) fn publish_key(directory: &File) -> Result<()> {
-    native::publish_key(directory)
+    native::publish_file(directory, c".engine.key.pending", c"engine.key")
+}
+pub(crate) fn publish_native(directory: &File) -> Result<()> {
+    native::publish_file(directory, c".engine.native.pending", c"engine.native.json")
 }
 pub(crate) fn verify_descriptors(path: &Path, root: &File, jobs: &File) -> Result<()> {
     native::verify_descriptors(path, root, jobs)

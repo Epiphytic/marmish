@@ -84,6 +84,30 @@ class SocketTests(unittest.TestCase):
             kwargs['peer_identity'] = process_identity(os.getpid())
         return rpc.MdkRpc(self.path, **kwargs)
 
+    def test_native_capabilities_use_authenticated_raw_request(self):
+        value = {"version": 1, "secret_store": "MarmishStdin", "public_key": A}
+        with Peer(self.path, wire(value)) as peer:
+            self.assertEqual(self.adapter(secret_store="MarmishStdin").capabilities(), value)
+        self.assertEqual(json.loads(peer.request), "MarmishCapabilities")
+        self.path.unlink()
+        with Peer(self.path, wire(dict(value, secret_store="File"))):
+            with self.assertRaisesRegex(rpc.RpcError, "capability_mismatch"):
+                self.adapter(secret_store="MarmishStdin").capabilities()
+
+    def test_login_secret_is_private_execute_sidecar(self):
+        # Synthetic invalid scalar encoding is sufficient to check this IPC shape.
+        nsec = "nsec1" + "q" * 58
+        command = {"Login": {"identity": None, "nsec_stdin": True, "relay": None}}
+        with Peer(self.path, wire({})) as peer:
+            self.adapter(secret_store="MarmishStdin").execute(command, import_nsec=nsec)
+        request = json.loads(peer.request)["Execute"]
+        self.assertEqual(request["cli"]["command"], command)
+        self.assertEqual(request["cli"]["secret_store"], "MarmishStdin")
+        self.assertEqual(request["import_nsec"], nsec)
+        self.assertIsNone(request["cli"]["command"]["Login"]["identity"])
+        with self.assertRaisesRegex(rpc.RpcError, "invalid_secret_import"):
+            rpc.MdkRpc.request("CreateIdentity", import_nsec=nsec)
+
     def test_roundtrip_halfclose_and_wire_paths(self):
         with Peer(self.path, wire({"answer": 42})) as peer:
             self.assertEqual(self.adapter().execute("Sync", account=A), {"answer": 42})

@@ -144,9 +144,12 @@ class MdkRpc:
     """One connection per command, one absolute deadline for all socket I/O."""
 
     def __init__(self, socket_path, *, timeout=10.0, expected_uid=None,
-                 rpc_home="/state", rpc_socket="/state/s", peer_identity=None):
+                 rpc_home="/state", rpc_socket="/state/s", peer_identity=None,
+                 secret_store="File"):
         require(isinstance(timeout, (int, float)) and not isinstance(timeout, bool)
                 and math.isfinite(timeout) and timeout > 0, "invalid_timeout")
+        require(secret_store in ("File", "MarmishStdin"), "invalid_secret_store")
+        self.secret_store = secret_store
         self.socket_path = str(Path(socket_path))
         self.timeout = timeout
         for path in (rpc_home, rpc_socket):
@@ -158,19 +161,56 @@ class MdkRpc:
         require(type(self.expected_uid) is int and self.expected_uid >= 0, "invalid_uid")
 
     @staticmethod
-    def request(command, account=None, *, home="/state", socket_path="/state/s"):
+    def request(command, account=None, *, home="/state", socket_path="/state/s",
+                secret_store="File", import_nsec=None):
         if account is not None:
             account = public_key(account)
-        return {"Execute": {"cli": {
+        require(secret_store in ("File", "MarmishStdin"), "invalid_secret_store")
+        value = {"Execute": {"cli": {
             "home": home, "socket": socket_path, "relay": None,
             "daemon_discovery_relays": [], "daemon_default_account_relays": [],
-            "secret_store": "File", "keychain_service": None,
+            "secret_store": secret_store, "keychain_service": None,
             "account": account, "json": True, "command": command,
         }}}
+        if import_nsec is not None:
+            require(command == {"Login": {"identity": None, "nsec_stdin": True,
+                                           "relay": None}}
+                    and isinstance(import_nsec, str) and len(import_nsec) == 63
+                    and import_nsec.startswith("nsec1"), "invalid_secret_import")
+            value["Execute"]["import_nsec"] = import_nsec
+        return value
 
-    def execute(self, command, *, account=None, deadline=None):
-        payload = encode(self.request(command, account, home=self.rpc_home,
-                                      socket_path=self.rpc_socket))
+    def execute(self, command, *, account=None, deadline=None, import_nsec=None):
+        request = self.request(command, account, home=self.rpc_home,
+                               socket_path=self.rpc_socket, secret_store=self.secret_store,
+                               import_nsec=import_nsec)
+        return self._request(request, deadline=deadline)
+
+    def capabilities(self):
+        value = self._request("MarmishCapabilities")
+        require(set(value) == {"version", "secret_store", "public_key"}
+                and type(value["version"]) is int and value["version"] == 1
+                and value["secret_store"] == self.secret_store, "capability_mismatch")
+        if self.secret_store == "MarmishStdin":
+            require(public_key(value["public_key"]) == value["public_key"], "capability_mismatch")
+        else:
+            require(value["public_key"] is None, "capability_mismatch")
+        return value
+
+    def login(self, nsec, relays):
+        value = self.execute({"Login": {"identity": None, "nsec_stdin": True,
+                                       "relay": None}}, import_nsec=nsec)
+        return _checked(smoke.verify_identity, value, self._relays(relays))
+
+    def accounts(self):
+        value = self.execute("Whoami")
+        require(set(value) == {"accounts"} and isinstance(value["accounts"], list)
+                and len(value["accounts"]) <= 1, "account_mismatch")
+        require(all(isinstance(item, dict) for item in value["accounts"]), "account_mismatch")
+        return [public_key(item.get("account_id")) for item in value["accounts"]]
+
+    def _request(self, request, *, deadline=None):
+        payload = encode(request)
         require(len(payload) <= REQUEST_CAP, "request_too_large")
         end = continuous_time() + self.timeout
         if deadline is not None:

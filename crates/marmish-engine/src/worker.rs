@@ -753,7 +753,7 @@ fn run(args: Vec<OsString>) -> Result<()> {
     root.prepare_db(false)?;
     let job = launcher::parse_job(&args[1])?;
     let credential = root.read_credential(job)?;
-    let keys = root.load_storage_keys()?;
+    let keys = crate::storage::receive(&root, job)?;
     // Declaration order keeps the lifetime lock held through Store's drop.
     let _job_guard;
     let mut store = Store::open_worker(&root, &keys)?;

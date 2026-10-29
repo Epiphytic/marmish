@@ -59,6 +59,14 @@ class SocksTests(unittest.TestCase):
             with self.subTest(request=request), self.assertRaises(OSError):
                 self.negotiate(request)
 
+    def test_resolver_uses_private_devnull_stdin(self):
+        broker = native.SocksBroker(['wss://selected.example/'])
+        try:
+            rows = broker._resolve(('localhost', 443), native.continuous_time() + 3)
+            self.assertTrue(rows)
+        finally:
+            broker.close()
+
     def test_malformed_socks_never_invokes_resolver(self):
         broker = native.SocksBroker(['wss://selected.example/']).start()
         self.addCleanup(broker.close)
@@ -108,13 +116,16 @@ class ManifestTests(unittest.TestCase):
         self.wnd.write_bytes(b'disposable artifact')
         self.sha = build.digest(self.wnd)
         self.path = Path(str(self.wnd) + '.manifest.json')
-        self.value = {'version': 1, 'source': build.SOURCE, 'revision': build.REVISION,
+        self.value = {'version': 2, 'source': build.SOURCE, 'revision': build.REVISION,
                       'clean_checkout': True, 'platform': 'linux', 'architecture': platform.machine(),
                       'rust': '1.97.1', 'cargo_lock_sha256': build.LOCK_SHA256,
                       'patch_sha256': None, 'deployment_target': None,
                       'restricted_protocol': None, 'helpers': {}, 'sha256': self.sha,
                       'rustc_version': 'rustc 1.97.1 (fixture)', 'target': build._target('linux'),
-                      'codesign': None, 'relay_fixture_sha256': None, 'transport_tests': None}
+                      'codesign': None, 'relay_fixture_sha256': None, 'transport_tests': None,
+                      'bootstrap_protocol': 1, 'bootstrap_patch_sha256': build.digest(build.BOOTSTRAP_PATCH),
+                      'bootstrap_tests': 'marmish_bootstrap::tests:passed',
+                      'source_guard_sha256': json.loads(check_mdk_builders.PIN.read_bytes())['source_sha256']['linux']}
 
     def write(self):
         self.path.write_text(json.dumps(self.value))
@@ -155,9 +166,31 @@ class ManifestTests(unittest.TestCase):
                     self.assertRaisesRegex(RuntimeError, 'transport_test_not_executed'):
                 build_mdk.run_transport_tests(self.root, [], {})
 
+    def test_native_direct_constructor_rejects_unpatched_manifest(self):
+        import marmish_bootstrap
+        import marmish_transport_sandbox
+        self.value['version'] = 1
+        self.write()
+        frame = bytearray(marmish_bootstrap.MAGIC + bytes(range(64)))
+        with patch.object(marmish_transport_sandbox.subprocess, 'Popen') as execute:
+            with self.assertRaises(SandboxError):
+                marmish_transport_sandbox.ConfinedDaemon(self.root / 'home', self.wnd,
+                    ['wss://selected.example/'], self.sha, bootstrap=frame)
+            execute.assert_not_called()
+        self.assertFalse(any(frame))
+
+    def test_malformed_trusted_guard_has_typed_error(self):
+        self.write()
+        guard = self.root / 'patches/mdk'
+        guard.mkdir(parents=True)
+        (guard / 'source-guard.json').write_text('{}')
+        with patch.object(build, 'ROOT', self.root):
+            with self.assertRaisesRegex(SandboxError, 'invalid_manifest'):
+                build.verify_manifest(self.wnd, self.sha, expected_platform='linux')
+
     def test_duplicate_json_and_fifo_rejected_without_blocking(self):
         self.write()
-        self.path.write_text(self.path.read_text().replace('"version": 1', '"version": 1,"version": 1'))
+        self.path.write_text(self.path.read_text().replace('"version": 2', '"version": 2,"version": 2'))
         with self.assertRaises(SandboxError):
             build.verify_manifest(self.wnd, self.sha, expected_platform='linux')
         self.path.unlink()
@@ -166,9 +199,15 @@ class ManifestTests(unittest.TestCase):
             build.verify_manifest(self.wnd, self.sha, expected_platform='linux')
 
     def test_guard_rejects_new_production_builder(self):
+        for crate in ('cli', 'marmot-account', 'marmot-app'):
+            tree = self.root / 'crates' / crate
+            (tree / 'src').mkdir(parents=True)
+            (tree / 'Cargo.toml').write_text('[package]')
+        (self.root / 'Cargo.lock').write_text('lock')
         source = self.root / 'crates/marmot-app/src'
-        source.mkdir(parents=True)
         (source / 'marmish_transport.rs').write_text('fn factory() { nostr_sdk::Client::builder(); }')
+        sql = source / 'embedded.sql'
+        sql.write_text('CREATE TABLE reviewed(x);')
         baseline = check_mdk_builders.source_digest(self.root)
         check_mdk_builders.check(self.root, expected=baseline)
         for constructor in ['NostrSdkClient::builder()', 'nostr_sdk::prelude::Client::builder()',
@@ -181,6 +220,10 @@ class ManifestTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     check_mdk_builders.check(self.root, expected=baseline)
         (source / 'bypass.rs').unlink()
+        sql.write_text('CREATE TABLE changed(x);')
+        with self.assertRaises(ValueError):
+            check_mdk_builders.check(self.root, expected=baseline)
+        sql.write_text('CREATE TABLE reviewed(x);')
         (source / 'link.rs').symlink_to(source / 'marmish_transport.rs')
         with self.assertRaises(ValueError):
             check_mdk_builders.check(self.root, expected=baseline)
@@ -375,6 +418,36 @@ class NativeLifetimeTests(unittest.TestCase):
                 return
             threading.Event().wait(.02)
         self.fail('native descendant remained after cleanup')
+
+    def test_bootstrap_child_reads_exact_frame_parent_uses_devnull(self):
+        import marmish_bootstrap
+        with tempfile.TemporaryDirectory(prefix='marmish-lifetime-test-') as directory:
+            helper, stub = self.build_helpers(directory)
+            report = helper.parent / 'stdin.report'
+            reader, writer = os.pipe()
+            payload = bytearray(marmish_bootstrap.MAGIC + bytes(range(64)))
+            bootstrap_reader = marmish_bootstrap.open_pipe(payload)
+            try:
+                child = subprocess.Popen([str(helper), str(reader), str(os.getpid()), str(stub),
+                                          'stdin', str(report)], pass_fds=(reader,), stdin=bootstrap_reader,
+                                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                         start_new_session=True)
+            finally:
+                os.close(reader)
+                os.close(bootstrap_reader)
+            try:
+                int(child.stdout.readline())
+                # The production shim verifies its own fd0 is the /dev/null
+                # character device before reporting PID/granting child execution.
+                os.write(writer, b'G')
+                self.assertEqual(self.await_file(report), 72)
+                self.assertEqual(child.wait(timeout=5), 0)
+            finally:
+                os.close(writer)
+                if child.poll() is None:
+                    child.kill()
+                    child.wait()
+                child.stdout.close()
 
     def test_gate_signal_reset_natural_exit_and_term_ignoring_descendant(self):
         with tempfile.TemporaryDirectory(prefix='marmish-lifetime-test-') as directory:

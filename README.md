@@ -10,13 +10,19 @@ See [the phased build plan](docs/build-plan.md). Beads tracks implementation and
 
 Build the worker and engine bridge with `cargo build --locked --workspace` using the prerequisites below. The Python tools need Python 3.11 or newer and the standard library. Run as a non-root Unix user. On each endpoint, install `bubblewrap`, util-linux `unshare`, iproute2 `ip` and `sysctl`; the current Linux layout expects `/usr/bin/python3`, `/usr/sbin/ip`, `/usr/sbin/sysctl` and `/etc/ssl/certs`. Unprivileged user, network and PID namespaces must be enabled by the host. Startup fails if the confinement checks cannot pass; it does not change host namespace policy.
 
-Select a trusted MDK daemon explicitly. The observed artifact used during compatibility work is `/home/openclaw/.local/bin/wnd`, SHA-256 `1324c70d389fb49f37ae8f7f6ab2a16840b138a0c438d7aef10bb6f9eee20a03`. The hash identifies that tested artifact; its exact build provenance is unverified. The adapter was checked against MDK source at `37c248a`. Another binary or hash needs its own compatibility validation.
-
+Build the pinned daemon with `python3 tools/build_mdk.py --output /absolute/private/build/wnd`.
+Native key storage requires this build's private bootstrap capability and provenance
+manifest on both platforms. The historical unpatched daemon is usable only with
+explicit `--key-storage files`; its old hash does not attest the new capability.
+Install `target/debug/marmish-keychain` at a stable private executable path on PATH
+(or alongside the Python entry point), or pass `--keychain-helper /absolute/path`.
+On Linux, native storage uses an already initialized persistent Secret Service
+collection. macOS uses the user's default legacy Keychain.
 Set these variables on each endpoint, choosing your relay and local daemon path. Repeat `--relay` for additional explicit URLs. Supported URLs are `wss://` DNS origins with an optional port and root path; there are no built-in public relays.
 
 ```sh
 WND=/absolute/path/to/wnd
-WND_SHA256=1324c70d389fb49f37ae8f7f6ab2a16840b138a0c438d7aef10bb6f9eee20a03
+WND_SHA256=PASTE_SHA256_FROM_WND_MANIFEST
 RELAY=wss://your-relay.example/
 ```
 
@@ -59,6 +65,51 @@ Use `--detach` to return an invocation ID after submitting the command and sendi
 Each remote identity and canonical relay set reuses one saved conversation by default. `--new-session` creates a fresh independent MLS group; it can still inspect jobs belonging to the same authenticated principal. `--retention SECONDS` configures a new group's application-message policy (default 86400, accepted range 1–604800). Retention is best effort: relay copies, unread or deferred local messages and backups can outlive that duration. Engine output retention is a separate policy. Explicit shell execution uses `--shell-command` and requires the server's `--allow-shell` option.
 
 Engine state and retained output use SQLCipher as described below. The frontend's private 0600 JSON files hold session metadata and, while retry is needed, original command arguments and authorization tokens; these frontend files are not encrypted. Protect the whole identity directory and keep it out of source control. Completing a wait or observing terminal status with status/cancel removes command/token fields from its retry journal, without guaranteeing forensic erasure.
+
+## Local key storage
+
+New profiles default to `--key-storage auto`: use native Keychain on macOS or
+Secret Service on Linux when available. Only a proven absent backend selects
+private files, with a message on stderr. A locked, denied, uninitialized or failed
+keychain stops startup. `--key-storage native` requires native storage;
+`--key-storage files` explicitly selects file storage. Existing profiles retain
+their backend, and a saved native reference never falls back or regenerates a key.
+
+Use `--key-name work` (or another local name) when creating a native profile. Many
+names can coexist. A name remains bound to its original `-i` directory and Nostr
+identity; use that same directory to reopen it. A different profile cannot adopt
+that name or copy its MLS state. Without a name, Marmish generates a unique name.
+The private catalog is `$XDG_CONFIG_HOME/marmish/keys.json` on Linux (default
+`~/.config/marmish/keys.json`) or
+`~/Library/Application Support/Marmish/keys.json` on macOS. `--key-catalog PATH`
+selects an isolated catalog. Catalog and profile bindings contain public metadata
+and immutable random references, never the private keys. SQLCipher masters are
+separate random keys per engine root, independent of the Nostr key name.
+
+To migrate an existing profile, stop its frontend and wait for its commands to
+finish. Repeat its usual client or server invocation with
+`--migrate-keys-to-native`; server migration needs its usual bridge, worker,
+allowlist and cwd options. Migration preserves the Nostr identity, MLS rooms and
+SQLCipher master, verifies native readback, commits references, then removes the
+legacy key files. It refuses active workers and resumes interrupted cleanup on an
+explicit retry. Keep the same arguments and profile; do not delete the journal or
+keys to repair a failed migration. Unlink does not guarantee forensic erasure. Migration requires an initialized encrypted database and all retained jobs to
+be in the `exited` state. A `lost` or `unknown_launch` record refuses migration;
+there is currently no automatic acknowledgement or repair for such records.
+
+If fresh provisioning stops after reserving a reference but before creating its
+secret, restart fails closed rather than generating a different key. Preserve
+the pending journal for diagnosis; no automatic reset command is provided. A
+missing helper also stops auto selection (`key_helper_required`), because Marmish
+cannot establish that the native backend is absent without the helper.
+
+Detached workers receive keys through a bounded private pipe and keep running if
+the keychain locks or a frontend disconnects. A new frontend needs access to the
+same native entries to reopen state. Keep a separate secure key backup: losing a
+SQLCipher master loses the encrypted state. Keys pass through memory; this is not
+protection from the same Unix account or authorized arbitrary commands. Rebuilt
+macOS helpers may require renewed ACL authorization; install helpers at a stable
+location. Native macOS execution remains a pending validation gate.
 
 ## Command restrictions
 
@@ -117,11 +168,13 @@ python3 tools/build_mdk.py --output /absolute/private/build/wnd
 ```
 
 The output must not already exist. The script fetches the pinned MDK revision;
-on macOS it applies the maintained restricted-transport patch, builds the native
+it applies the maintained private-bootstrap patch on both platforms and the
+restricted-transport patch on macOS, builds the native
 helpers and signs the executables locally. It requires Rust 1.97.1, Python 3.11+
 and a native C toolchain. macOS additionally requires APFS, macOS 15 or newer,
 `sandbox-exec` and `codesign`. The manifest is `<wnd>.manifest.json`; macOS startup
-requires and verifies it, with an optional explicit `--wnd-manifest PATH`.
+requires and verifies it, as does native key storage on Linux, with an optional
+explicit `--wnd-manifest PATH`.
 Use its recorded binary SHA with `--wnd-sha256`. Linux retains namespace isolation;
 macOS uses Seatbelt and a bounded SOCKS broker restricted to explicit relay origins.
 Failure to establish confinement prevents startup.
@@ -158,7 +211,7 @@ Commands run as the local Unix account with a fixed environment and account home
 
 Output defaults to 8 MiB per stream with a 24-hour lifetime. Reads report truncation, expiry, and uncertain output tails explicitly. Invocation replay records last at least 48 hours independently of output. Worker death or reboot can leave an uncertain result and surviving descendants; these jobs are never automatically executed again. Process groups do not contain descendants that deliberately create a new session. Private state and logical payload deletion provide no forensic secure-erasure guarantee.
 
-The engine encrypts its state database and retained stdout/stderr with SQLCipher. It creates a private `engine.key` in the state directory so detached workers can reopen storage unattended. Keep this key safe: losing it loses the stored data. For an encrypted-data-only backup, exclude `engine.key` and protect a separate key backup. Copying both the data and key provides no protection against whoever obtains that copy. Encryption does not protect against the same Unix account, child-created files, execution memory, swap or core dumps. Job names, file sizes, timestamps and execution-authority tokens remain outside content encryption. Output quotas count logical bytes; each stream database allows about twice its logical cap plus 256 KiB, with additional bounded rollback-journal space during writes.
+The engine encrypts its state database and retained stdout/stderr with SQLCipher. The standalone file-backed engine API creates a private `engine.key`; the frontends instead supply the master from native storage when selected. Detached workers receive it over private stdin and do not reopen the keychain. Keep this key safe: losing it loses the stored data. For an encrypted-data-only backup, exclude `engine.key` and protect a separate key backup. Copying both the data and key provides no protection against whoever obtains that copy. Encryption does not protect against the same Unix account, child-created files, execution memory, swap or core dumps. Job names, file sizes, timestamps and execution-authority tokens remain outside content encryption. Output quotas count logical bytes; each stream database allows about twice its logical cap plus 256 KiB, with additional bounded rollback-journal space during writes.
 
 This unreleased storage format rejects older plaintext roots intact. Finish existing plaintext workers and preserve their old state directory before selecting a fresh encrypted root. There is no automatic migration, deletion or key replacement. Missing, malformed or incorrect keys fail closed; do not remove a key to reset a root containing jobs. See [the reviewed storage design](docs/phases/sqlcipher-storage.md) for recovery rules and limits.
 

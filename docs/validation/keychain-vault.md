@@ -53,3 +53,9 @@ coverage; exact-item rollback is implemented and reviewed. The macOS two-query
 lookup retains the documented same-UID concurrent-writer limitation. Cargo.lock
 adds 94 packages including the vault, removes none, and preserves every existing
 package version; existing dependency strings only gain version disambiguation.
+
+Subsequent native evidence: the macOS ARM runner at commit `392e8e6` passed the
+actual disposable-keychain acceptance, including restart and replacement checks.
+The following transport prerequisite failed independently. See
+[the runner evidence](keychain-integration.md) for exact scope and job links;
+this establishes provider runtime coverage, not complete macOS frontend support.
