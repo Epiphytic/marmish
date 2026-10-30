@@ -452,8 +452,60 @@ def prepare_slots(root, fixture, target, report, env):
     return slots, dependencies
 
 
+def native_probe(app_root, env, index):
+    result = {'slot': 'slot_' + str(index), 'exit_code': None, 'signal': None,
+              'marker_exact': False, 'output_bytes': 0}
+    try:
+        status, raw = run([app_root / 'libexec/marmish/wnd', '--help'], env, capture=True)
+        result.update(exit_code=status if status >= 0 else None,
+                      signal=-status if status < 0 else None,
+                      marker_exact=raw == b'marmish_restricted_start_failed\n', output_bytes=len(raw))
+    except FileNotFoundError:
+        result['category'] = 'missing_tool'
+    except OSError:
+        result['category'] = 'spawn_failed'
+    except Refused as error:
+        require(str(error) in ('child_timeout', 'child_output_limit'), 'native_probe_internal_failure')
+        result['category'] = str(error)
+    return result
+
+
+def verify_native_signatures(app_root, env):
+    if platform.system() != 'Darwin':
+        return
+    for helper in (app_root / 'libexec/marmish').iterdir():
+        if helper.is_file() and not helper.name.endswith('.json'):
+            status, _ = run(['/usr/bin/codesign', '--verify', '--strict', helper], env)
+            require(status == 0, 'native_signature_changed')
+
+
+def native_manifest_contract(app_root):
+    if platform.system() != 'Darwin':
+        return True
+    try:
+        manifest = json.loads((app_root / 'libexec/marmish/wnd.manifest.json').read_bytes())
+        return (isinstance(manifest, dict)
+                and manifest.get('patch_sha256') == digest(app_root / 'patches/mdk/marmish-restricted.patch')
+                and type(manifest.get('restricted_protocol')) is int and manifest['restricted_protocol'] == 1)
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def accept_native_results(native_results, manifest_contracts, report):
+    require(all(manifest_contracts), 'native_manifest_contract_mismatch')
+    darwin = platform.system() == 'Darwin'
+    require(all(row['exit_code'] == (1 if darwin else 0) and row['signal'] is None
+                and (row['marker_exact'] if darwin else True) and row.get('category') is None
+                for row in native_results), 'native_probe_failed')
+    mode = 'restricted_startup_guard_refusal' if darwin else 'native_help_and_manifest_provenance'
+    report['native_probe_mode'] = mode
+    report['native_execution_probe'] = mode
+
+
 def installed_acceptance(slots, root, launch_env, env, report):
-    for slot, _, app_root in slots:
+    native_results = []
+    manifest_contracts = []
+    for index, (slot, _, app_root) in enumerate(slots, 1):
         for command in ('marmish', 'marmishd'):
             status, raw = run([app_root / 'scratch-bin' / command, '--help'], launch_env, capture=True)
             if status != 0:
@@ -462,13 +514,11 @@ def installed_acceptance(slots, root, launch_env, env, report):
             require(status == 0, 'installed_help_failed')
         status, raw = run([app_root / 'scratch-bin/marmish', '--doctor'], launch_env, capture=True)
         require(status == 0 and json.loads(raw)['ok'], 'installed_doctor_failed')
-        if platform.system() == 'Darwin':
-            for helper in (app_root / 'libexec/marmish').iterdir():
-                if helper.is_file() and not helper.name.endswith('.json'):
-                    status, _ = run(['/usr/bin/codesign', '--verify', '--strict', helper], env)
-                    require(status == 0, 'native_signature_changed')
-        status, _ = run([app_root / 'libexec/marmish/wnd', '--help'], launch_env)
-        require(status == 0, 'native_help_failed')
+        verify_native_signatures(app_root, env)
+        manifest_contracts.append(native_manifest_contract(app_root))
+        native_results.append(native_probe(app_root, launch_env, index))
+    report['native_probe_results'] = native_results
+    accept_native_results(native_results, manifest_contracts, report)
 
 
 def test_compiler_directory():
@@ -496,10 +546,60 @@ def test_compiler_directory():
     return selected.parent
 
 
+def namespace_probe(command, env):
+    result = {'exit_code': None, 'signal': None, 'denied_operation_hint': None}
+    try:
+        status, raw = run(command, env, timeout=10, capture=True)
+        result.update(exit_code=status if status >= 0 else None, signal=-status if status < 0 else None)
+        if b'Operation not permitted' in raw:
+            result['denied_operation_hint'] = 'operation_not_permitted'
+        elif b'Permission denied' in raw:
+            result['denied_operation_hint'] = 'permission_denied'
+    except FileNotFoundError:
+        result['category'] = 'missing_tool'
+    except OSError:
+        result['category'] = 'spawn_failed'
+    except Refused as error:
+        require(str(error) in ('child_timeout', 'child_output_limit'), 'namespace_probe_internal_failure')
+        result['category'] = str(error)
+    return result
+
+
+def linux_namespace_preflight(env, report):
+    if platform.system() != 'Linux':
+        return
+    policies = {}
+    for name, path in (('apparmor_restrict_unprivileged_userns', '/proc/sys/kernel/apparmor_restrict_unprivileged_userns'),
+                       ('unprivileged_userns_clone', '/proc/sys/kernel/unprivileged_userns_clone'),
+                       ('max_user_namespaces', '/proc/sys/user/max_user_namespaces')):
+        try:
+            with open(path, 'rb') as source:
+                raw = source.read(33)
+            valid = re.fullmatch(rb'[0-9]{1,20}\s?', raw)
+            policies[name] = {'value': int(raw) if valid else None, 'category': None if valid else 'invalid_value'}
+        except OSError:
+            policies[name] = {'value': None, 'category': 'unavailable'}
+    bwrap = ['/usr/bin/bwrap', '--unshare-user', '--unshare-pid', '--uid', '0', '--gid', '0',
+             '--cap-drop', 'ALL', '--die-with-parent', '--new-session', '--clearenv',
+             '--setenv', 'PATH', '/usr/bin:/usr/sbin:/bin', '--setenv', 'HOME', '/tmp',
+             '--setenv', 'LANG', 'C.UTF-8', '--ro-bind', '/', '/', '--proc', '/proc',
+             '--dev', '/dev', '--', '/usr/bin/true']
+    outer = ['/usr/bin/unshare', '--user', '--map-root-user', '--net']
+    preparation = ('/usr/sbin/ip link set lo up && /usr/sbin/sysctl -q -w '
+                   'net.ipv4.ip_unprivileged_port_start=0 && exec "$@"')
+    report['linux_namespace_preflight'] = {
+        'policy': policies,
+        'tools_present': {name: shutil.which(name, path=env['PATH']) is not None for name in ('ip', 'sysctl')},
+        'bare_unshare': namespace_probe([*outer, '/usr/bin/true'], env),
+        'bwrap': namespace_probe(bwrap, env),
+        'unshare_preparation_bwrap': namespace_probe([*outer, '/bin/sh', '-c', preparation, 'marmish-probe', *bwrap], env)}
+
+
 def full_tools_acceptance(interpreter, env, root, report, failure_log=None):
     report['stage'] = 'full_tools'
     compiler = test_compiler_directory()
     test_env = dict(env, PATH=str(interpreter.parent) + ':' + str(compiler) + ':/usr/bin:/bin:/usr/sbin:/sbin')
+    linux_namespace_preflight(test_env, report)
     status, raw = run([interpreter, '-I', '-B', '-m', 'unittest', 'discover', '-s', REPO / 'tools', '-p', 'test_*.py', '-q'],
                       test_env, timeout=900, capture=True)
     count = re.search(rb'Ran ([0-9]+) tests?', raw)
@@ -587,8 +687,9 @@ def proof(root, fixture, target, report, failure_log=None):
     launch_env = dict(env, PATH=str(sentinel) + ':/usr/bin:/bin')
     installed_acceptance(slots, root, launch_env, env, report)
     require(not touched.exists(), 'path_python_was_used')
-    report['assertions'].append('installed_help_doctor_native_help_and_literal_argv')
-    report['native_execution_probe'] = 'native_help_and_manifest_provenance'
+    report['assertions'].append('installed_help_doctor_restricted_guard_and_literal_argv'
+                                if platform.system() == 'Darwin' else
+                                'installed_help_doctor_native_help_and_literal_argv')
     report['native_version_flag_supported'] = False
     report['system_python_dependency'] = ('linux_doctor_and_sandbox_still_require_usr_bin_python3'
                                           if platform.system() == 'Linux' else 'no_linux_dependency_claim')

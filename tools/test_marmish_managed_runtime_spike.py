@@ -323,6 +323,151 @@ class ManagedRuntimeTests(unittest.TestCase):
             self.assertTrue(recorded.pop('verified'))
             self.assertEqual(recorded, frozen)
 
+    def native_slots(self):
+        slots = []
+        for index in (1, 2):
+            app = self.root / ('app' + str(index))
+            (app / 'libexec/marmish').mkdir(parents=True)
+            patch_file = app / 'patches/mdk/marmish-restricted.patch'
+            patch_file.parent.mkdir(parents=True)
+            patch_file.write_bytes(b'verified-fixture-patch')
+            manifest = {'patch_sha256': spike.digest(patch_file), 'restricted_protocol': 1}
+            (app / 'libexec/marmish/wnd.manifest.json').write_text(json.dumps(manifest))
+            slots.append((self.root, self.root / 'python', app))
+        return slots
+
+    def test_darwin_native_contract_exact_marker_and_both_slots(self):
+        slots = self.native_slots()
+        marker = b'marmish_restricted_start_failed\n'
+        for code, output, accepted in [(1, marker, True), (0, marker, False),
+                                      (1, b'wrong', False), (1, marker + b' ', False),
+                                      (-6, marker, False)]:
+            report = {}
+            def invoke(command, *args, **kwargs):
+                if command[-1] == '--doctor': return 0, b'{"ok":true}'
+                if Path(command[0]).name == 'wnd': return code, output
+                return 0, b''
+            with self.subTest(code=code, output=output), \
+                    patch.object(spike.platform, 'system', return_value='Darwin'), \
+                    patch.object(spike, 'run', side_effect=invoke):
+                if accepted:
+                    spike.installed_acceptance(slots, self.root, {}, {}, report)
+                    self.assertEqual(report['native_probe_mode'], 'restricted_startup_guard_refusal')
+                else:
+                    with self.assertRaisesRegex(spike.Refused, 'native_probe_failed'):
+                        spike.installed_acceptance(slots, self.root, {}, {}, report)
+                self.assertEqual(len(report['native_probe_results']), 2)
+                self.assertNotIn('wrong', json.dumps(report))
+                self.assertEqual(report['native_probe_results'][0]['signal'], 6 if code == -6 else None)
+
+    def test_native_missing_tool_and_timeout_fixed_private_diagnostics(self):
+        for error, category in [(FileNotFoundError(), 'missing_tool'),
+                                (spike.Refused('child_timeout'), 'child_timeout')]:
+            with patch.object(spike, 'run', side_effect=error):
+                row = spike.native_probe(self.root, {}, 1)
+            self.assertEqual(row['category'], category)
+            self.assertEqual(set(row), {'slot', 'exit_code', 'signal', 'marker_exact', 'output_bytes', 'category'})
+
+    def test_namespace_ladder_uses_suite_environment_and_darwin_never_probes(self):
+        env = {'PATH': '/usr/bin:/bin:/usr/sbin:/sbin'}
+        report = {}
+        with patch.object(spike.platform, 'system', return_value='Linux'), \
+                patch.object(spike, 'namespace_probe', return_value={'exit_code': 1}) as probes:
+            spike.linux_namespace_preflight(env, report)
+        self.assertEqual(probes.call_count, 3)
+        for call in probes.call_args_list:
+            self.assertIs(call.args[1], env)
+        bwrap = probes.call_args_list[1].args[0]
+        for flag in ('--unshare-user', '--unshare-pid', '--uid', '--gid', '--cap-drop', '--proc', '--dev'):
+            self.assertIn(flag, bwrap)
+        nested = probes.call_args_list[2].args[0]
+        self.assertIn('ip link set lo up', nested[nested.index('-c') + 1])
+        self.assertIn('sysctl -q -w', nested[nested.index('-c') + 1])
+        with patch.object(spike.platform, 'system', return_value='Darwin'), \
+                patch.object(spike, 'namespace_probe') as probes:
+            spike.linux_namespace_preflight(env, {})
+            probes.assert_not_called()
+
+    def test_namespace_failure_exports_only_fixed_denial_hint(self):
+        with patch.object(spike, 'run', return_value=(1, b'private-secret Operation not permitted')):
+            result = spike.namespace_probe(['/usr/bin/true'], {})
+        self.assertEqual(result['denied_operation_hint'], 'operation_not_permitted')
+        self.assertNotIn('private-secret', json.dumps(result))
+
+    def test_linux_native_help_requires_zero_even_with_darwin_marker(self):
+        slots = self.native_slots()
+        for code, output in ((0, b'help'), (1, b'marmish_restricted_start_failed\n')):
+            report = {}
+            def invoke(command, *args, **kwargs):
+                if command[-1] == '--doctor': return 0, b'{"ok":true}'
+                if Path(command[0]).name == 'wnd': return code, output
+                return 0, b''
+            with patch.object(spike.platform, 'system', return_value='Linux'), \
+                    patch.object(spike, 'run', side_effect=invoke):
+                if code == 0:
+                    spike.installed_acceptance(slots, self.root, {}, {}, report)
+                    self.assertEqual(report['native_probe_mode'], 'native_help_and_manifest_provenance')
+                else:
+                    with self.assertRaisesRegex(spike.Refused, 'native_probe_failed'):
+                        spike.installed_acceptance(slots, self.root, {}, {}, report)
+                self.assertEqual(len(report['native_probe_results']), 2)
+
+    def test_darwin_native_contract_rejects_patch_digest_and_protocol_mismatch(self):
+        slots = self.native_slots()
+        manifest_path = slots[0][2] / 'libexec/marmish/wnd.manifest.json'
+        original = json.loads(manifest_path.read_text())
+        for field, bad in (('patch_sha256', '0' * 64), ('restricted_protocol', 2),
+                           ('restricted_protocol', True)):
+            record = dict(original, **{field: bad})
+            manifest_path.write_text(json.dumps(record))
+            report = {}
+            def invoke(command, *args, **kwargs):
+                if command[-1] == '--doctor': return 0, b'{"ok":true}'
+                if Path(command[0]).name == 'wnd': return 1, b'marmish_restricted_start_failed\n'
+                return 0, b''
+            with patch.object(spike.platform, 'system', return_value='Darwin'), \
+                    patch.object(spike, 'run', side_effect=invoke):
+                with self.assertRaisesRegex(spike.Refused, 'native_manifest_contract_mismatch'):
+                    spike.installed_acceptance(slots, self.root, {}, {}, report)
+            self.assertEqual(len(report['native_probe_results']), 2)
+            self.assertNotIn('native_probe_mode', report)
+
+    def test_native_manifest_malformed_nonobject_or_missing_is_false(self):
+        app = self.native_slots()[0][2]
+        manifest = app / 'libexec/marmish/wnd.manifest.json'
+        with patch.object(spike.platform, 'system', return_value='Darwin'):
+            for raw in (b'{broken', b'[]', b'null', b'"text"'):
+                manifest.write_bytes(raw)
+                self.assertFalse(spike.native_manifest_contract(app))
+            manifest.unlink()
+            self.assertFalse(spike.native_manifest_contract(app))
+
+    def test_probe_permission_error_stays_private_and_fixed(self):
+        with patch.object(spike, 'run', side_effect=PermissionError('private-exception')):
+            native = spike.native_probe(self.root, {}, 1)
+            namespace = spike.namespace_probe(['/usr/bin/true'], {})
+        self.assertEqual(native['category'], 'spawn_failed')
+        self.assertEqual(namespace['category'], 'spawn_failed')
+        self.assertNotIn('private-exception', json.dumps([native, namespace]))
+
+    def test_darwin_native_timeout_outputlimit_and_permission_collect_both_slots(self):
+        slots = self.native_slots()
+        for category in ('child_timeout', 'child_output_limit', 'spawn_failed'):
+            report = {}
+            def invoke(command, *args, **kwargs):
+                if command[-1] == '--doctor': return 0, b'{"ok":true}'
+                if Path(command[0]).name == 'wnd':
+                    if category == 'spawn_failed': raise PermissionError('private-secret')
+                    raise spike.Refused(category)
+                return 0, b''
+            with patch.object(spike.platform, 'system', return_value='Darwin'), \
+                    patch.object(spike, 'run', side_effect=invoke):
+                with self.assertRaisesRegex(spike.Refused, 'native_probe_failed'):
+                    spike.installed_acceptance(slots, self.root, {}, {}, report)
+            self.assertEqual(len(report['native_probe_results']), 2)
+            self.assertTrue(all(row['category'] == category for row in report['native_probe_results']))
+            self.assertNotIn('private-secret', json.dumps(report))
+
 
 if __name__=='__main__':
     unittest.main()

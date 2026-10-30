@@ -134,7 +134,8 @@ traffic. No claims about Marmot E2E or confinement follow from packaging smoke.
 
 - Positive: full `tools` suite; installed help/doctor/native executable smoke and manifest provenance;
   tools imports, argv fidelity, spaced prefix, matching helper hashes; system
-  Python absent from PATH and failing python3 sentinel unused.
+  Python absent from PATH and failing python3 sentinel unused. The
+  [completion amendment](managed-runtime-spike-completion.md) corrects the macOS native-help gate.
 - Isolation: hostile UV/PIP/PYTHON variables, uv config in cwd/parents/user home,
   unexpected current directory and preexisting installation cannot change choice.
 - Integrity: wrong uv/CPython/Marmish digest, missing mandatory hash, truncated or
@@ -159,7 +160,9 @@ Only then design increment 1's production bootstrap/setup integration.
 
 Interface clarification from actual trials: the published `wnd` does not expose
 `--version`; inspect its supported help interface and use native `--help` execution
-plus verified manifest/source/hash provenance. Do not claim a nonexistent version
+plus verified manifest/source/hash provenance. The [completion amendment](managed-runtime-spike-completion.md)
+replaces native help on macOS with its artifact-bound restricted guard refusal.
+Do not claim a nonexistent version
 probe or initialize daemon identities in this packaging-only increment.
 Real-home snapshots compare lstat device/inode/mode/owner/size/mtime/ctime and
 symlink targets, without reading preexisting user cache contents; concurrent
