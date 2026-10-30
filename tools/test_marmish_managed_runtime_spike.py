@@ -7,7 +7,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import mock_open, patch
 
 import marmish_managed_runtime_spike as spike
 
@@ -426,12 +426,18 @@ class ManagedRuntimeTests(unittest.TestCase):
         env = {'PATH': '/usr/bin:/bin:/usr/sbin:/sbin'}
         report = {}
         with patch.object(spike.platform, 'system', return_value='Linux'), \
+                patch.object(spike, 'bwrap_executable', return_value=Path('/verified/helper')) as selected, \
+                patch('marmish_transport_sandbox.validated_bwrap', side_effect=AssertionError('host validator used')), \
+                patch('builtins.open', mock_open(read_data=b'1\n')) as policies, \
                 patch.object(spike, 'namespace_probe', return_value={'exit_code': 1}) as probes:
             spike.linux_namespace_preflight(env, report)
+        selected.assert_called_once_with()
+        self.assertEqual(policies.call_count, 3)
         self.assertEqual(probes.call_count, 3)
         for call in probes.call_args_list:
             self.assertIs(call.args[1], env)
         bwrap = probes.call_args_list[1].args[0]
+        self.assertEqual(bwrap[0], '/verified/helper')
         for flag in ('--unshare-user', '--unshare-pid', '--uid', '--gid', '--cap-drop', '--proc', '--dev'):
             self.assertIn(flag, bwrap)
         nested = probes.call_args_list[2].args[0]
@@ -789,15 +795,22 @@ class SelfHostedRuntimeTests(unittest.TestCase):
         report = {}
         with patch.object(spike.platform, 'system', return_value='Linux'), \
                 patch.object(spike, 'bwrap_executable', return_value=Path('/verified/helper')), \
+                patch('marmish_transport_sandbox.validated_bwrap', side_effect=AssertionError('host validator used')), \
+                patch('builtins.open', mock_open(read_data=b'1\n')) as policies, \
+                patch.object(spike.os, 'readlink', return_value='net:[fixture]') as namespace, \
                 patch.object(spike, 'run', return_value=(0, b'')) as run:
             prefix, mode = spike.network_prefix(self.root / 'python', env)
             self.assertEqual(prefix[0], '/verified/helper')
             self.assertEqual(mode, 'network_namespace_enforced')
             spike.linux_namespace_preflight(env, report)
+        namespace.assert_called_once_with('/proc/self/ns/net')
+        self.assertEqual(policies.call_count, 3)
         for call in run.call_args_list:
             self.assertFalse({'MARMISH_BWRAP','MARMISH_BWRAP_SHA256'} & call.args[1].keys())
         self.assertEqual(run.call_args_list[-2].args[0][0], '/verified/helper')
         with patch.object(spike.platform, 'system', return_value='Linux'), \
+                patch('builtins.open', mock_open(read_data=b'1\n')), \
+                patch.object(spike.os, 'readlink', side_effect=AssertionError('unexpected host namespace read')), \
                 patch.object(spike, 'bwrap_executable', side_effect=spike.Refused('bwrap_selection:unsafe_bwrap_path')):
             with self.assertRaisesRegex(spike.Refused, 'bwrap_selection:unsafe_bwrap_path'):
                 spike.network_prefix(self.root / 'python', env)
