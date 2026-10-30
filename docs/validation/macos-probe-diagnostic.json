@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "scope": "Synthetic macOS confined probe diagnostic only; no production behavior changes",
+  "offline_tests": {
+    "command": "PYTHONPATH=tools python3 -m unittest test_marmish_macos_probe_diagnostic test_marmish_transport_macos",
+    "run": 40,
+    "passed": 34,
+    "skipped_native_only": 6
+  },
+  "linux_cli_smoke": {
+    "darwin_refusal": true,
+    "report_mode": "0600",
+    "exclusive_no_clobber": true
+  },
+  "workflow_checks": [
+    "YAML assertions",
+    "bash -n both run blocks"
+  ],
+  "quality_delta": {
+    "exit_code": 2,
+    "findings": "Three duplication matches on standard unittest temporary-directory setUp against existing tests; new-symbol dead-code findings are dynamic unittest discovery, plus test-class length. No production symbol changed. Reviewed as test-fixture/discovery artifacts; no shared fixture abstraction added for five lines."
+  },
+  "native_acceptance": "pending manual hosted macos-15 run"
+}

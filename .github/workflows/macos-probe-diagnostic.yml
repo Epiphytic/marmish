@@ -1,0 +1,42 @@
+name: macOS confined probe diagnostic
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: marmish-macos-probe-diagnostic
+  cancel-in-progress: false
+jobs:
+  diagnostic:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Prepare private report directory
+        id: report
+        shell: bash
+        run: |
+          umask 077
+          report_dir=$(mktemp -d "$RUNNER_TEMP/marmish-probe-diagnostic.XXXXXX")
+          printf 'path=%s/report.json\n' "$report_dir" >> "$GITHUB_OUTPUT"
+      - name: Run disposable native probe diagnostic
+        shell: bash
+        env:
+          REPORT_PATH: ${{ steps.report.outputs.path }}
+        run: |
+          umask 077
+          if ! command -v python3 >/dev/null 2>&1; then
+            (set -o noclobber; printf '%s\n' '{"schema":1,"failure":{"category":"python_missing","exit_code":null},"cases":[],"ok":false}' > "$REPORT_PATH")
+            exit 1
+          fi
+          python3 tools/marmish_macos_probe_diagnostic.py --output "$REPORT_PATH"
+      - name: Preserve bounded diagnostic report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: macos-confined-probe-diagnostic
+          path: ${{ steps.report.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7

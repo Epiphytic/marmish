@@ -85,6 +85,14 @@ stderr can imitate diagnostic text. See [the reviewed design](phases/debug-diagn
 [validation evidence](validation/debug-diagnostics.json), and
 [code approval](reviews/debug-diagnostics-code-final.json).
 
+A real experimental.2 macOS ARM64 quickstart run passes the unconfined broker
+control and aborts the confined probe with SIGABRT (-6), before identity setup
+completes. The log establishes the failing boundary, not its cause. The
+[diagnostic increment](phases/macos-probe-abort.md) specifies a manual hosted
+macOS reproduction using the exact production sandbox profile and native probe,
+with bounded stderr from disposable, secret-free fixtures. It changes no
+production permissions or runtime acceptance gates.
+
 The installer retains prior versions and all identity/keychain/command state;
 uninstall removes only owned launchers/bookkeeping. It does not modify host
 namespace policy. `--doctor` is read-only static prerequisite diagnosis. Both
