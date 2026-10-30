@@ -52,10 +52,20 @@
     "tools/test_marmish_quickstart.py": "f27d6abe0d6ec5f080a1a85f4e753b582fd313fa719f4f1aa6175cad653980c2",
     ".github/workflows/installer-validation.yml": "4406cd5111d584bbca88dead3bc6519a18eb509d521745966d241bce75bf5d63"
   },
-  "native_ci": "Focused three-platform workflow will run on source push; results recorded separately.",
+  "native_ci": {
+    "result": "PASS",
+    "source_commit": "e62fe8dec0ec98a5a28b25c147a88076ed77a0ea",
+    "run_url": "https://github.com/Epiphytic/marmish/actions/runs/41117893643",
+    "evidence": "installer-quickstart-native.json",
+    "tests_per_platform": 41,
+    "platforms": [
+      "Linux amd64",
+      "Linux arm64",
+      "macOS arm64"
+    ]
+  },
   "limits": [
     "No real account identities or keychain access used; fixtures are fake installed programs.",
-    "No new live Marmot command acceptance claimed.",
-    "Native macOS/Linux arm64 results await CI. Existing runtime confinement limits remain."
+    "No new live Marmot command acceptance claimed."
   ]
 }

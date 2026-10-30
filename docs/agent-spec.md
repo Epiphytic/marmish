@@ -49,8 +49,11 @@ controlling terminal; ordinary installation remains noninteractive and does not
 access keys. Quickstart uses absolute installed launchers, preserves existing
 profiles, and stops on setup failure. Server authorization lasts for that
 foreground invocation only. Terminal prompts and owned child signal cleanup are
-covered by offline PTY tests; this does not establish native MDK confinement or
-change the platform acceptance limits above. See [the increment design](phases/installer-quickstart.md).
+covered by offline PTY tests. All 41 installer/setup tests passed on native
+Linux amd64, Linux arm64 and macOS arm64 in
+[run 41117893643](validation/installer-quickstart-native.json); these use fake
+frontends and do not establish native MDK confinement or change the platform
+acceptance limits above. See [the increment design](phases/installer-quickstart.md).
 
 The installer retains prior versions and all identity/keychain/command state;
 uninstall removes only owned launchers/bookkeeping. It does not modify host

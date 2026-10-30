@@ -1,0 +1,83 @@
+{
+  "scope": "Native offline archive installation and actual shell-wrapper controlling-terminal quickstart acceptance",
+  "source_commit": "e62fe8dec0ec98a5a28b25c147a88076ed77a0ea",
+  "run_url": "https://github.com/Epiphytic/marmish/actions/runs/41117893643",
+  "run_id": 41117893643,
+  "conclusion": "success",
+  "jobs": [
+    {
+      "name": "installer (ubuntu-24.04)",
+      "id": 124276759805,
+      "url": "https://github.com/Epiphytic/marmish/actions/runs/41117893643/job/124276759805",
+      "started_at": "2026-10-30T19:45:55Z",
+      "completed_at": "2026-10-30T19:46:03Z",
+      "conclusion": "success",
+      "python": "3.12.3",
+      "suites": [
+        {
+          "count": 28,
+          "seconds": 0.8
+        },
+        {
+          "count": 13,
+          "seconds": 2.466
+        }
+      ]
+    },
+    {
+      "name": "installer (ubuntu-24.04-arm)",
+      "id": 124276760287,
+      "url": "https://github.com/Epiphytic/marmish/actions/runs/41117893643/job/124276760287",
+      "started_at": "2026-10-30T19:45:57Z",
+      "completed_at": "2026-10-30T19:46:04Z",
+      "conclusion": "success",
+      "python": "3.12.3",
+      "suites": [
+        {
+          "count": 28,
+          "seconds": 0.669
+        },
+        {
+          "count": 13,
+          "seconds": 2.512
+        }
+      ]
+    },
+    {
+      "name": "installer (macos-15)",
+      "id": 124276760363,
+      "url": "https://github.com/Epiphytic/marmish/actions/runs/41117893643/job/124276760363",
+      "started_at": "2026-10-30T19:45:56Z",
+      "completed_at": "2026-10-30T19:46:07Z",
+      "conclusion": "success",
+      "python": "3.13.17",
+      "suites": [
+        {
+          "count": 28,
+          "seconds": 1.001
+        },
+        {
+          "count": 13,
+          "seconds": 2.487
+        }
+      ]
+    }
+  ],
+  "test_commands": [
+    "sh -n scripts/install.sh",
+    "python3 -m unittest discover -s tools -p test_marmish_install.py -v",
+    "python3 -m unittest discover -s tools -p test_marmish_quickstart.py -v"
+  ],
+  "installer_sha256": "67ccb386d0c33a2191f4b08c2cae2547d7a572117778a7b69327c38e44b98f5f",
+  "publication_verification": {
+    "source_commit": "e62fe8dec0ec98a5a28b25c147a88076ed77a0ea",
+    "github_master": "verified with git ls-remote",
+    "radicle_delegate_master": "verified with git ls-remote and public Iris remotes API",
+    "iris_raw_commit_and_head": "both exact installer bytes matched source"
+  },
+  "limits": [
+    "Fake installed frontends and fixture archives only; no real account identity or keychain mutation.",
+    "This validates native installer/setup orchestration, not MDK confinement, live Marmot transport or cross-platform command interoperability.",
+    "Existing experimental distribution runtime limits remain in README and agent specification."
+  ]
+}
