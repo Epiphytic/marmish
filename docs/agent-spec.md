@@ -198,6 +198,16 @@ and offline failure/cancellation still retains its private prefix. See the
 [diagnostic correction](phases/native-diagnostics.md) for offline checks and
 remaining native gates.
 
+[Native run 40978430684](validation/native-run-40978430684.json), at `f1f3616`,
+passed Linux AMD64 validation, including all three required patched-daemon
+bootstrap tests and the metadata permission regression check. Linux ARM64
+refused its nested namespace prerequisite (`userns_denied_private_bwrap`).
+macOS ARM64 passed disposable explicit-Keychain provider acceptance; its
+independent unconfined shim received the exact 72-byte frame, then exited 70
+during lifetime cleanup. That status does not identify which cleanup operation
+failed. The broader Seatbelt spike, full native frontend acceptance and
+cross-platform live jobs remain pending; these provider results do not close them.
+
 [Native run 39982966090](validation/native-run-39982966090.json), at commit
 `fccfddc`, passed the Linux AMD64 namespace prerequisite, 131 Rust workspace
 tests, clippy/formatting, Python checks (172 total, four Darwin-only skips),

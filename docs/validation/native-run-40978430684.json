@@ -1,0 +1,94 @@
+{
+  "run_id": 40978430684,
+  "sha": "f1f3616bb85c4b3f79fcf2bc2a464c8b0c3da4ee",
+  "created_at": "2026-10-30T00:14:30Z",
+  "observed_completed_at": "2026-10-30T00:25:26Z",
+  "observation": "read_only_completed_job_logs",
+  "jobs": [
+    {
+      "id": 123812351013,
+      "platform": "linux-x64",
+      "status": "completed",
+      "conclusion": "success",
+      "offline_python": {
+        "passed": 206,
+        "skipped": 5
+      },
+      "explicit_key_tests": {
+        "passed": 21
+      },
+      "required_mdk_bootstrap_tests": {
+        "frame_and_immutable_store": "passed",
+        "metadata_and_setup_recovery": "passed",
+        "startup_handshake_subprocess": "passed"
+      },
+      "native_spike": "success",
+      "provider": "not_applicable",
+      "shim": "not_applicable"
+    },
+    {
+      "id": 123812350710,
+      "platform": "linux-arm64",
+      "status": "completed",
+      "conclusion": "failure",
+      "failure_step": "Native prerequisite spike",
+      "fixed_diagnostic": {
+        "outcome": "failed",
+        "error": "userns_denied_private_bwrap"
+      },
+      "bubblewrap_acquisition": "success",
+      "tmp_filesystem": {
+        "fstype": "ext4",
+        "flags": [
+          "relatime",
+          "rw"
+        ]
+      },
+      "provider": "not_applicable",
+      "shim": "not_applicable",
+      "offline_tests": "skipped",
+      "mdk_build": "skipped"
+    },
+    {
+      "id": 123812351102,
+      "platform": "macos-arm64",
+      "status": "completed",
+      "conclusion": "failure",
+      "provider": "success_disposable_explicit_keychain",
+      "shim": {
+        "outcome": "failed",
+        "test": "NativeLifetimeTests.test_bootstrap_child_reads_exact_frame_parent_uses_devnull",
+        "assertion": "shim_returncode_equals_zero",
+        "expected_exit_code": 0,
+        "actual_exit_code": 70,
+        "frame_report_bytes": 72,
+        "frame_report_assertion": "passed"
+      },
+      "broad_spike": "skipped",
+      "offline_tests": "skipped",
+      "mdk_build": "skipped"
+    },
+    {
+      "id": 123815813918,
+      "platform": "cross-platform-live",
+      "status": "completed",
+      "conclusion": "skipped"
+    }
+  ],
+  "queue_observation": {
+    "at_five_minutes": "linux_arm64_and_macos_unassigned_zero_steps",
+    "later": "linux_arm64_assigned_then_macos_assigned_after_arm_completed",
+    "interpretation": "later_macos_queue_consistent_with_single_laptop_slot"
+  },
+  "bounded_next_steps": {
+    "macos": "Inspect fixed stage and errno for lifetime finish group signal, leader signal and waitpid failures; exit70 alone does not distinguish them. Preserve fail-closed cleanup. Frame handoff succeeded before cleanup failed.",
+    "linux_arm64": "Nested user namespace prerequisite denied; fixed category alone does not prove a repository defect. No weakening proposed."
+  },
+  "pending_gates": [
+    "macOS confined inherited-pipe and Seatbelt acceptance",
+    "macOS full frontend acceptance in dedicated owned default-keychain account",
+    "Linux ARM nested namespace prerequisite",
+    "cross-platform live interoperability"
+  ],
+  "scope": "No source edits, tests, provider calls, live calls, reruns, cancellations, commits, or ambient-keychain changes by monitor."
+}
