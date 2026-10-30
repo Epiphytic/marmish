@@ -211,7 +211,16 @@ The [reviewed lifetime diagnostic increment](phases/native-lifetime-diagnostics.
 now emits fixed operation/errno records after final cleanup attempts, and the
 bootstrap test accepts only a closed, bounded diagnostic schema. Its portable
 cleanup harness and full offline Python suite passed (250 tests, five Darwin
-skips). Actual native cause identification awaits the new runner result.
+skips). [Run 40980988449](validation/native-run-40980988449.json) then
+passed disposable macOS provider acceptance and identified `kill_group` errno 1
+(EPERM) after the 72-byte handoff. Broader native tests remain skipped. Apple
+kernel source makes a zombie-only process group a plausible cause; exact group
+state and the running kernel revision were not captured, so EPERM cannot be
+accepted unconditionally. A group-state correction is being designed for independent review.
+The same run exposed three Linux audit fixtures whose executable links were
+missing during inspection; the audit correctly refused an unreadable executable. A
+deterministic test-fixture replacement is in progress, with production audit
+behavior preserved. Historical K3 reports remain bound to their recorded files.
 
 
 [Native run 39982966090](validation/native-run-39982966090.json), at commit

@@ -1,0 +1,160 @@
+{
+  "run_id": 40980988449,
+  "sha": "76e487c8c51c5b53c3eb29d30b830c33d5111e67",
+  "created_at": "2026-10-30T00:38:51Z",
+  "status": "completed",
+  "predecessor_cancellation": "40980818244 completed/cancelled before currentjobs progressed",
+  "jobs": [
+    {
+      "id": 123821029866,
+      "name": "native (linux-x64, self-hosted, Linux, X64, bel-ci)",
+      "status": "completed",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "name": "Native disposable macOS keychain acceptance",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Native unconfined shim handoff",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Native prerequisite spike",
+          "conclusion": "success"
+        },
+        {
+          "name": "Native offline tests",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Build pinned native daemon and executables",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Remove owned Bubblewrap prefix",
+          "conclusion": "failure"
+        }
+      ],
+      "audit_fixture_failures": [
+        {
+          "test": "ProcessAuditTests.test_daemon_null_stdin_and_private_environment",
+          "line": 189,
+          "category": "native_scan_process_changed"
+        },
+        {
+          "test": "AdditionalProcessTests.test_bridge_requires_two_private_pipes",
+          "line": 380,
+          "category": "native_scan_process_changed",
+          "expected": "native_private_pipe_required"
+        },
+        {
+          "test": "ProcessAuditTests.test_required_role_is_nonvacuous",
+          "line": 206,
+          "category": "native_scan_process_changed",
+          "expected": "native_audit_missing_worker"
+        }
+      ]
+    },
+    {
+      "id": 123821030183,
+      "name": "native (linux-arm64, self-hosted, Linux, ARM64, laptop-ci)",
+      "status": "completed",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "name": "Native disposable macOS keychain acceptance",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Native unconfined shim handoff",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Native prerequisite spike",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Native offline tests",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Build pinned native daemon and executables",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Remove owned Bubblewrap prefix",
+          "conclusion": "success"
+        }
+      ],
+      "fixed_diagnostic": {
+        "outcome": "failed",
+        "error": "userns_denied_private_bwrap"
+      }
+    },
+    {
+      "id": 123821030249,
+      "name": "native (macos-arm64, self-hosted, macOS, ARM64, laptop-ci)",
+      "status": "completed",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "name": "Native disposable macOS keychain acceptance",
+          "conclusion": "success"
+        },
+        {
+          "name": "Native unconfined shim handoff",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Native prerequisite spike",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Native offline tests",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Build pinned native daemon and executables",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Remove owned Bubblewrap prefix",
+          "conclusion": "skipped"
+        }
+      ],
+      "fixed_diagnostics": [
+        {
+          "outcome": "failed",
+          "category": "native_lifetime_failed",
+          "stage": "kill_group",
+          "errno": 1
+        }
+      ],
+      "bootstrap_frame_report_bytes": 72,
+      "shim_returncode": 70
+    },
+    {
+      "id": 123822418160,
+      "name": "live",
+      "status": "completed",
+      "conclusion": "skipped",
+      "steps": []
+    }
+  ],
+  "pending_gates": [
+    "macOS broad Seatbelt/native spike",
+    "macOS confined inherited bootstrap pipe",
+    "dedicated owned default-keychain account frontend acceptance",
+    "Linux ARM nested namespace prerequisite",
+    "cross-platform live interoperability"
+  ],
+  "scope": "Read-only GitHub monitoring and source inspection; no code edits/provider/live/native/test/rerun/cancel/commit operations.",
+  "source_inference": {
+    "primary_source": "https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sig.c#L1675-L1719",
+    "mechanism": "killpg1 excludes SZOMB groupmembers and returns EPERM when nfound zero; WNOWAIT intentionally retains exitedleader. Observed kill_group EPERM is consistent with zombie-only group.",
+    "not_proven": "Exact running kernel source revision and full group state were not captured. EPERM alone must not be accepted as cleanup success.",
+    "proposed_boundary": "Bounded native fullgroup inspection proving onlyzombies including held unreapedleader, then classify only that case as completed; failclosed on live/uncertain members, other errno, inspection failure or truncation."
+  },
+  "assignment": "Linuxx64 assignedfirst, ARM thenMac assigned beforefive-minute deadline; Mac waited behind active shared laptop slot."
+}

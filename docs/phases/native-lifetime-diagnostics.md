@@ -134,3 +134,15 @@ portable harness across modes0–10 and the transport tests; the five Darwin-onl
 tests remained skipped. The final quality/pr-context evidence is scoped against
 e5cb345; reported API movement is internal static relocation, with unchanged
 signatures. The small test-only complexity increase above is accepted explicitly.
+
+## Native observation after publication
+
+[Run40980988449](../validation/native-run-40980988449.json) at `76e487c`
+passed explicit disposable-Keychain acceptance and returned the closed diagnostic
+`kill_group`, errno1 (EPERM), after the exact72-byte handoff. The broad native
+spike and live jobs were skipped. The new records achieved the diagnostic goal;
+no uncertain permission error was changed into success. The possible zombie-only
+group mechanism and correction require their own detailed reviewed phase.
+The same run's Linux x64 offline suite failed in three process fixtures that
+had unreadable executable links during audit; the production audit refused them. ARM retained its
+`userns_denied_private_bwrap` prerequisite refusal.
