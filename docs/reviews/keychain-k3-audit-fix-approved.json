@@ -1,0 +1,44 @@
+{
+  "duration_ms": 49503,
+  "is_error": false,
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "cacheCreationInputTokens": 49786,
+      "cacheReadInputTokens": 486040,
+      "canonicalModel": "claude-sonnet-5-5",
+      "contextWindow": 1000000,
+      "costBasis": "list",
+      "costUSD": 0.30003799999999997,
+      "inputTokens": 20,
+      "maxOutputTokens": 128000,
+      "outputTokens": 5225,
+      "provider": "firstParty",
+      "thinkingTokens": 1265,
+      "webSearchRequests": 0
+    }
+  },
+  "result": "**Verdict: APPROVE.** This covers the code and offline tests only. I did not verify anything live.\n\n**What I checked**\n- **Code:** `audit_tree` in `tools/marmish_native_validation.py` (lines 437\u2013497).\n- **Test:** `test_exited_child_preserves_observed_security_findings` (`tools/test_marmish_native_validation.py:344`).\n- **Suites run:** `test_marmish_native_validation` and `test_marmish_e2e_native`, with `env -i` and `python3 -B -s -m unittest`. That is 41 tests, all passing. The earlier review counted 40, and the extra one is the new test. I used `-s` instead of `-I` because `-I` drops the working directory, so the sibling modules (`marmish_keys`, `marmish_e2e`) would not import.\n- **Extra probe:** a throwaway script (no files edited) that crosses `/proc/<pid>` present or absent with three error categories and with the failing process being the child or the root.\n- **Not done:** no live run, provider call, keychain call or ambient credentials. No edits and no commits.\n\n**Does it fix the finding?** Yes.\n- The skip is now limited to `process_identity_failed` and `native_scan_process_changed`. It applies only to a non-root child, and only when `/proc/<pid>` is absent on a fresh check.\n- `native_secret_in_process`, `native_environment_leak`, `native_bootstrap_fd_open` and every other category always propagate. The probe confirmed this for the child and root cases whether `/proc` was present or absent. `scan_process` raises on the first finding, so a leak is never replaced by an identity error.\n- A live process with a changed identity still fails: with `/proc` present, both identity categories raise. A `FileNotFoundError` on a live child also still fails, per the existing `test_missing_live_child_fd_is_not_skipped`.\n- The root PID is never skipped, and the final root identity re-check is unchanged.\n\n**Blockers:** none.\n\n**Limitations (nonblocking)**\n1. The new test patches `Path.exists` to `False` throughout. It does not cover the same two identity categories with `/proc` present, or an identity failure on the root. The code is correct for both (my probe showed it), but only the probe checked it, so those two cases are worth adding as test cases.\n2. An unreaped zombie child still fails with `native_scan_process_changed`, because `/proc/<pid>` exists but `exe` is unreadable. That is conservative and unchanged.\n3. If a PID is reused and the new process also exits before the check, the audit skips it. The process that was audited is gone, so that is acceptable.\n4. The earlier nits are untouched by this change: the root cause being lost on exception paths, the missing offline tests for the storage, names and migration helpers, the missing check for unexpected descriptors, and the doc baseline wording.\n\n**Evidence binding**\n\nCurrent digests, taken from my own `sha256sum` run:\n\n| File | SHA-256 prefix |\n|---|---|\n| `marmish_native_validation.py` | `57f3d3a6` |\n| `test_marmish_native_validation.py` | `d2eaf1c5` |\n| `marmish_e2e.py` | `f7b35ac5` |\n| `test_marmish_e2e_native.py` | `780ad421` |\n\n- **Not bound to the current files:** no existing report binds `57f3d3a6` or `d2eaf1c5`. Every report's recorded `marmish_native_validation.py` digest differs from the current one.\n- **Older passing runs:** the reports the repo now has are `native-final`, `migration-reviewed`, their `-before-audit-fix` copies, both `parallel-failed` reports, `native-reviewed`, and the two `initial` reports. These show `marmish_native_validation.py` digests `2d8a1247`, `02b94685` and `33d1b31b`, and test digests `4d991246`, `0bd361a7` and `22d0769a`. They remain evidence only for those older files.\n- **`before-audit-fix` copies:** they bind the same digests as the current `final` and `reviewed` reports. They are identical to the pre-fix runs, so they do not describe the current code.\n- **Pending:** the two sequential final-code reruns are not in the repo yet. They must bind `57f3d3a6` and `d2eaf1c5` plus the unchanged `marmish_e2e.py` and `test_marmish_e2e_native.py` digests before they count for the current code. macOS remains pending.",
+  "review_scope": "K3 optional-child process audit race correction and regression test; live reports remain independent evidence",
+  "usage": {
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 49786,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "cache_creation_input_tokens": 49786,
+    "cache_read_input_tokens": 486040,
+    "fallback_credit": null,
+    "inference_geo": "global",
+    "input_tokens": 20,
+    "iterations": [],
+    "output_tokens": 5225,
+    "output_tokens_details": {
+      "thinking_tokens": 1265
+    },
+    "server_tool_use": {
+      "web_fetch_requests": 0,
+      "web_search_requests": 0
+    },
+    "service_tier": "standard",
+    "speed": "standard"
+  }
+}

@@ -347,6 +347,17 @@ commands run as the local user and can access that user's services.
 
 See [the K2 contract](phases/keychain-integration.md) and
 [approved Linux integration review](reviews/keychain-k2-code-followup.json).
-K2 is committed as `ed4271c`. Real native-provider Marmot validation is in progress; macOS runtime remains a
-separate pending gate. Do not interpret implemented paths as a live acceptance
-claim until linked validation evidence is published.
+K2 is committed as `ed4271c`; `9054f5a` corrects public MDK metadata creation
+under permissive umasks without weakening strict validation. Linux native-provider
+Marmot acceptance passed 20 fresh-profile assertions and 22 migration assertions
+on the final reviewed harness, using disposable keys and explicitly selected
+relays. Both reports record complete local/provider cleanup and exact source and
+executable digests. Checks include named/default native provisioning, separate
+SQLCipher storage, literal/binary command handling, disconnected worker completion,
+locked-profile refusal, identity/output recovery, migration preservation and
+actual daemon/worker/helper process audits. The offline Python suite passed 247
+tests with five Darwin-specific skips. See [K3 validation](validation/keychain-native.md)
+and its linked code reviews and retained successful/failed runtime reports.
+macOS explicit-Keychain provider tests passed, while the same CI job failed
+on shim cleanup (exit 70). Default frontend and confined runtime gates remain
+pending. Linux acceptance does not establish those gates.

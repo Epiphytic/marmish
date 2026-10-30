@@ -1,0 +1,116 @@
+{
+  "assertions": [
+    "live_additive_default_and_per_key_denials_path_and_shell_refusal",
+    "policy_denials_create_no_job_and_preserve_token_for_allowed_execution",
+    "literal_argv_spaces_unicode_quotes_newline_dollar_backticks_leading_dash_nonutf8",
+    "separate_binary_stderr_and_nonzero_exit",
+    "exact_admitted_retry_and_status_first_retry_execute_once_conflict_rejected",
+    "byte_exact_binary_stdin_stdout_stderr_eof",
+    "live_cancellation_reports_signal_and_remains_queryable",
+    "live_stale_challenge_wrong_group_and_chat_payload_never_execute",
+    "live_ordinary_room_and_unallowlisted_identity_invites_remain_unaccepted",
+    "active_worker_refuses_migration_preserving_legacy_keys_and_native_inventory",
+    "frontend_disconnect_does_not_cancel_running_worker",
+    "unnamed_auto_native_profile_and_named_binding_refusals",
+    "native_reference_inventory_catalog_and_secret_at_rest_process_checks",
+    "file_to_native_migration_preserves_identity_rooms_and_encrypted_state",
+    "native_restart_capability_identity_preserved",
+    "persisted_mls_room_and_command_output_recovered_after_frontend_restart",
+    "previous_boot_valid_control_frame_rejected_after_restart",
+    "fresh_independent_mls_group_configurable_retention_same_principal_reattach",
+    "actual_client_and_server_cli_processes_execute_command_via_marmot",
+    "native_reference_inventory_catalog_and_secret_at_rest_process_checks"
+  ],
+  "bubblewrap": null,
+  "duration_seconds": 226.521,
+  "groups": [
+    "c2445bbeb948849fef92e67faf97dada",
+    "2dca9e8ac2093ef1b12d78c0c1036820"
+  ],
+  "limitations": [
+    "prototype_single_device",
+    "relay_retention_is_not_guaranteed_erasure",
+    "same_principal_can_reattach_across_sessions"
+  ],
+  "local_cleanup": "complete",
+  "native_references": [
+    {
+      "id": "ba7334c4aac617c8ece96412bb4f249a2a5cd3e82302158ea9b8e5b99f361e5a",
+      "purpose": "nostr",
+      "version": 1
+    },
+    {
+      "id": "b098dd2c6cf7da7cd9d4961108ae3fc42a01aca2d961ff5375f93ab163e8f884",
+      "purpose": "sqlcipher",
+      "version": 1
+    },
+    {
+      "id": "d2e405a86ec9511566bd51fe8ffd50a0e6f2e79fbc3d40efbf78444a5afb578f",
+      "purpose": "nostr",
+      "version": 1
+    },
+    {
+      "id": "5bb53f5cf4b6df0d0347b8716ab784abdc8bba8d84c2ed14355a97d016895069",
+      "purpose": "nostr",
+      "version": 1
+    },
+    {
+      "id": "959c652ab1500961403f714d38ab8544e8446162007d7fd824872ffba9800f80",
+      "purpose": "nostr",
+      "version": 1
+    }
+  ],
+  "outcome": "passed",
+  "platform": "linux",
+  "provider_cleanup": "complete_verified_by_successful_wrapper_exit",
+  "public_identities": {
+    "client": "0360a66a8f5db5d1e9ffbfab46f7269446083402a4a2e59f896ffc02f25a5ab5",
+    "server": "4110dfa8c5a2ae4ea268f23acecb7b2ed9af7ab1d886fa38be1a27be8c34c8df"
+  },
+  "python": "3.12.3",
+  "relays": [
+    "wss://relay.eu.whitenoise.chat/",
+    "wss://relay.us.whitenoise.chat/"
+  ],
+  "source": {
+    "executables_sha256": {
+      "marmish-engine-bridge": "56ef128e49e6e4b619db78654bec60e9ded506aa63464407506a8da55d19a29f",
+      "marmish-keychain": "fc6629ef03049619f27e95866f21fda8b9c6359a01cfd4b0e4d4b699b68d6263",
+      "marmish-worker": "cbf4ff5542a4a2e8d781e75c7c8204fd78f076d004b364cc621f90dd7b6d59de"
+    },
+    "harness_files_sha256": {
+      "tools/marmish_e2e.py": "e20453af4d881c1efbd3da25f83737180075523b9fe05d0bbcd535870e17c9fe",
+      "tools/marmish_native_validation.py": "33d1b31b2312d0a71de8fc5b98d412c5ff28f9a14ef58e44b97031cc2d852939",
+      "tools/test_marmish_e2e_native.py": "c22cd08d108be89bb5cad63525242bbce0c70768dac0f6de913743224746c174",
+      "tools/test_marmish_native_validation.py": "22d0769a1a1658cc03bc865aa824f28f09de7134ef6f38824989dc41b52ee1a9"
+    },
+    "harness_sha256": "eb43d5bb734869cfee3575f6b6ca3a098f7935dc566d076e827bb8dc3f6adb6f",
+    "implementation_commit": "ed4271c62a29dc138b43663dfd0e3ab2513a5076"
+  },
+  "stage": "complete",
+  "wnd_manifest": {
+    "architecture": "x86_64",
+    "bootstrap_patch_sha256": "512caebb5e6352d4e5589624d74a7197724597d01796ad53e6d09df015d49621",
+    "bootstrap_protocol": 1,
+    "bootstrap_tests": "marmish_bootstrap::tests:passed",
+    "cargo_lock_sha256": "d8a5367e49427c79f354b0611902808de9b92abbe173eb82ed6864d01e488a71",
+    "clean_checkout": true,
+    "codesign": null,
+    "deployment_target": null,
+    "helpers": {},
+    "patch_sha256": null,
+    "platform": "linux",
+    "relay_fixture_sha256": null,
+    "restricted_protocol": null,
+    "revision": "37c248a11239e108afc9bd4ee62b8f60542012e3",
+    "rust": "1.97.1",
+    "rustc_version": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "sha256": "d1a2eefa9f5e5593040adae59f1285150de1edacd3a6bde50cc18bfae01429f2",
+    "source": "https://github.com/liamhelmer-bel/mdk.git",
+    "source_guard_sha256": "937f680e5fccb42fb5c5c22eeca224bb21a25885b859bb90d2aa944122cd4692",
+    "target": "x86_64-unknown-linux-gnu",
+    "transport_tests": null,
+    "version": 2
+  },
+  "wnd_sha256": "d1a2eefa9f5e5593040adae59f1285150de1edacd3a6bde50cc18bfae01429f2"
+}

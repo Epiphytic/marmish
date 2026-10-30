@@ -1,0 +1,44 @@
+{
+  "duration_ms": 61742,
+  "is_error": false,
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "cacheCreationInputTokens": 57826,
+      "cacheReadInputTokens": 421547,
+      "canonicalModel": "claude-sonnet-5-5",
+      "contextWindow": 1000000,
+      "costBasis": "list",
+      "costUSD": 0.34335070000000006,
+      "inputTokens": 16,
+      "maxOutputTokens": 128000,
+      "outputTokens": 6986,
+      "provider": "firstParty",
+      "thinkingTokens": 2797,
+      "webSearchRequests": 0
+    }
+  },
+  "result": "**Verdict: APPROVE.** This covers report/code consistency only, with two non-blocking wording notes (items 1 and 2 below). I ran no providers, keychains or live tests, and I edited and committed nothing.\n\n**Verified**\n- **Harness hashes:** the current SHA-256 of all four files matches both FINAL reports (`keychain-native-e2e-final.json` and `keychain-migration-e2e-reviewed.json`):\n  - `marmish_e2e.py` `f7b35ac5\u2026`\n  - `marmish_native_validation.py` `57f3d3a6\u2026`\n  - `test_marmish_e2e_native.py` `780ad421\u2026`\n  - `test_marmish_native_validation.py` `d2eaf1c5\u2026`\n- **Composite digest:** I recomputed `harness_sha256` as the SHA-256 of the sorted-key `json.dumps` of the per-file hashes. That gives `b5ed4f8c\u20266680`, which matches both reports and the doc.\n- **Daemon and build provenance:** the two final reports have identical daemon/WND SHA `577ae154\u2026`, MDK revision `37c248a1\u2026`, executable digests, bootstrap patch, `Cargo.lock` and source guard. Both show a clean checkout.\n- **Source binding:**\n  - Both final reports bind `f1f3616`.\n  - `git diff f1f3616 HEAD` touches only `docs/agent-spec.md` and `native-run-40978430684.json`, so the docs-only `c38ab2b` explanation holds.\n  - `9054f5a`\u2192`f1f3616` changes the CI workflow, the macOS spike and transport, and docs. It does not touch the Linux harness or command path.\n- **Outcomes and counts:**\n  - The final fresh run has 20 assertions, 235.67 s, `passed`, exit 0, and local and provider cleanup `complete`.\n  - The final migration run has 22 assertions, 221.908 s, with the same outcome and cleanup fields.\n  - Both audits show 8 server processes (daemon, worker and bridge), 4 client processes, a helper with private pipes, no secrets, fd0 closed and no host discovery environment. The fresh run lists 4 Nostr references and 1 SQLCipher reference, as documented.\n- **Older evidence:**\n  - The initial reports (`ed4271c`) have no `provider_cleanup` field, only `complete_verified_by_successful_wrapper_exit`, and the doc says so.\n  - `keychain-native-e2e-reviewed.json` has no `provider_cleanup` field and binds `ed4271c`, as the doc says.\n  - The two pre-audit-fix reports bind `9054f5a` (228.249 s and 235.6 s), as the doc says.\n  - Both parallel failures are `failed` at `negative_frames` with `message_not_published`. They have 8 and 7 assertions, cleanup `complete`, exit 1, and are retained with the cause stated as unproven.\n- **Duration:** the nine scenario durations sum to exactly 1884.735 s, including the two failed runs (140.787 and 133.453).\n- **Budget:** the doc states the 2400 s budget is operator-set and not enforced in code. Each scenario has its own 900 s cap (`marmish_e2e.py:417,664-671`).\n- **Mac gate:** it is explicitly pending. Beads `marmish-d84.4` is OPEN and P1. The runner report records the shim failure (exit 70) and the pending gates. `agent-spec.md` says Linux does not establish the macOS gates.\n\n**Non-blocking notes**\n1. The doc says provider setup and teardown \"fits within the remaining 2400-second operator budget\" (1884.735 s used, so about 515 s left). Provider overhead isn't measured in any report, so \"is expected to fit\" or \"not measured\" would be more accurate. The preflight failure is also not in the nine-run sum, though the doc says it failed before transport.\n2. The `agent-spec.md` native-key paragraph says macOS explicit-keychain provider tests passed. It omits that the same CI run's macOS job failed on the shim cleanup. The K3 doc discloses this, so it's only a link-depth nit.\n\n**Limits**\n- The four harness files, `agent-spec.md`, the K3 docs and the validation reports are all uncommitted. The digests match the working tree now, but they only become reproducible from history once committed. Commit them together with the reports.\n- I did not check the 41/247 test counts or the quality-delta \"ten major findings\" against code, and I did not independently check reviewer claims. The reports are self-attested, and the code reviews explicitly disclaim live verification.\n- I did not check the native-lifetime files.",
+  "review_scope": "Final Linux K3 runtime-report/code digest and documentation consistency; no independent live execution",
+  "usage": {
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 57826,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "cache_creation_input_tokens": 57826,
+    "cache_read_input_tokens": 421547,
+    "fallback_credit": null,
+    "inference_geo": "global",
+    "input_tokens": 16,
+    "iterations": [],
+    "output_tokens": 6986,
+    "output_tokens_details": {
+      "thinking_tokens": 2797
+    },
+    "server_tool_use": {
+      "web_fetch_requests": 0,
+      "web_search_requests": 0
+    },
+    "service_tier": "standard",
+    "speed": "standard"
+  }
+}

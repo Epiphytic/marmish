@@ -1,0 +1,44 @@
+{
+  "duration_ms": 60134,
+  "is_error": false,
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "cacheCreationInputTokens": 68780,
+      "cacheReadInputTokens": 463437,
+      "canonicalModel": "claude-sonnet-5-5",
+      "contextWindow": 1000000,
+      "costBasis": "list",
+      "costUSD": 0.3844857,
+      "inputTokens": 16,
+      "maxOutputTokens": 128000,
+      "outputTokens": 6299,
+      "provider": "firstParty",
+      "thinkingTokens": 3302,
+      "webSearchRequests": 0
+    }
+  },
+  "result": "**Verdict: APPROVE the K3 harness code, with no remaining blockers.** Final runtime validation is still pending and is not claimed here.\n\nI read the approved design, the initial review, the full `tools/marmish_e2e.py` diff against HEAD, the new wrapper, and the validation doc. I did not read the test files line by line. I ran both offline suites with `python3 -I`: `test_marmish_native_validation` passed 26 tests and `test_marmish_e2e_native` passed 14, so 40 in total. I ran no live or provider tests, modified no files, and inspected no ambient credentials.\n\n## Initial Medium findings\n\n| # | Disposition |\n|---|---|\n| M1 server endpoint not rechecked | **Resolved.** `check_native_identities` checks MarmishStdin, exact P and Whoami for both the server (`server_rpc()`) and the client. It runs in the fresh-run block and again after restart. In migration mode the restart happens after migration, so that case is covered too. |\n| M2 no native audit after migration | **Resolved.** `audit_after_migration` starts a gated `running` job after the post-migration restart. It then calls `audit_running_native_worker`, which runs `audit_tree` on the server tree (worker required) and the client daemon tree. `_audit_process` checks daemon and worker fd0 and the host-bus variables. It also checks that the bridge has FIFO fds 0 and 1, and `audit_helper` checks the helper's pipes. The command's output is then asserted. |\n| M3 report printed before teardown | **Resolved.** `marmish_e2e.main(report_sink=\u2026)` collects the report and the wrapper prints it once, after `close()`. A `close()` failure, `rmtree` failure or retained state turns the report into `failed` with `native_cleanup_incomplete`. The stderr scan and the report secret scan run before the print. |\n| M4 snapshot too broad | **Resolved.** `encrypted_snapshot` now covers only `engine.sqlite3` and files under `jobs/`, so MDK files and `-wal`/`-shm` are excluded. The caveat is that the engine uses `journal_mode=WAL`. The comparison is valid because the guard closes cleanly before the first snapshot, but it is not proof of byte-stable WAL contents. That is acceptable. |\n\n## Useful lows\n\n- **Resolved:**\n  - Unregistered child: `_spawn_registered` now kills the process group in its `except BaseException` path.\n  - Signal gap: handlers are installed before the context is created, and the cleanup paths block SIGINT and SIGTERM.\n  - Skipped-process masking: a `FileNotFoundError` is skipped only if `/proc/<pid>` is really gone.\n  - Report and log scan: `scan_owned_stderr` and the report scan were added.\n  - Active-worker refusal accepting `recovery_uncertain` as well as `busy`: this is now documented as a disposition (both are refusals, neither permits migration).\n  - Unlock mechanism: the doc now says the collection is restart-recovered with the original password.\n- **Temp dir leaked in `main`:** the `owned_native_context_required` check is repeated in `main` before `mkdtemp`, so the leak is effectively unreachable.\n- **Not changed, non-blocking:**\n  - `require_worker` is satisfied by any one clean worker.\n  - `check_locked_restarts` still checks the server through an in-process `Profile`, so it covers the Nostr key and not the SQLCipher or engine start.\n  - The 2400-second total budget has no code enforcement. The wrapper runs one scenario capped at 900 seconds, and cleanup runs on top of that.\n\n## Doc nits\n\n- `docs/validation/keychain-native.md` says \"passed 29 tests\", but the suites now total 40. Update that figure.\n- The doc says the 2400-second total budget is enforced by the operator. A one-line note would do.\n- Nothing else in the doc overclaims. It discloses that the two initial runtime reports predate the review changes, and macOS is stated as pending.\n\n## Still required before close\n\n- Rerun the Linux fresh auto-native and migration scenarios on the final code. Bind the reports to the final source and executable digests, and report the diff on top of `ed4271c`.\n- macOS native gates stay pending, as the design requires.",
+  "review_scope": "K3 integrated harness after initial findings; final runtime evidence pending",
+  "usage": {
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 68780,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "cache_creation_input_tokens": 68780,
+    "cache_read_input_tokens": 463437,
+    "fallback_credit": null,
+    "inference_geo": "global",
+    "input_tokens": 16,
+    "iterations": [],
+    "output_tokens": 6299,
+    "output_tokens_details": {
+      "thinking_tokens": 3302
+    },
+    "server_tool_use": {
+      "web_fetch_requests": 0,
+      "web_search_requests": 0
+    },
+    "service_tier": "standard",
+    "speed": "standard"
+  }
+}

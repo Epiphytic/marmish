@@ -2,6 +2,7 @@
 """Opt-in real Marmot command validation with disposable private identities."""
 import argparse
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -18,8 +19,11 @@ from types import SimpleNamespace
 
 from mdk_smoke import SmokeError, require
 from marmish_app import Client, Profile, exit_code
-from marmish_protocol import b64, encode, envelope, load_json, save_json, remove_engine_state
+from marmish_protocol import b64, encode, envelope, load_json, save_json, remove_engine_state, EngineBridge
 from marmish_rpc import RpcError, MdkRpc, strict_json
+from marmish_keys import KeySession, NativeHelper, protected_read
+from marmish_native_validation import (active_context, native_environment, scan_at_rest,
+                                       scan_process, audit_tree, audit_helper)
 from marmish_transport_sandbox import SandboxError
 from marmish_platform import continuous_time, execution_marker
 from marmish_ci_bwrap import environment as bwrap_environment, provenance as bwrap_provenance
@@ -37,20 +41,325 @@ class Harness:
         self.cwd.mkdir(mode=0o700)
         self.server_identity = None
         self.client_identity = None
+        self.storage = 'files' if getattr(args, 'migrate_acceptance', False) else args.key_storage
+        self.native = active_context()
+        self.provider_locked = False
+        require(self.storage == 'files' or self.native is not None, 'owned_native_context_required')
+        require(not getattr(args, 'migrate_acceptance', False) or self.native is not None,
+                'owned_native_context_required')
 
     def profile_args(self, name):
-        return SimpleNamespace(identity=self.root / name, relay=self.args.relay, key_storage='files',
+        return SimpleNamespace(identity=self.root / name, relay=self.args.relay, key_storage=self.storage,
+                               key_name=(self.args.key_name_prefix + '-' + name
+                                         if self.args.key_name_prefix and self.storage != 'files' else None),
+                               keychain_helper=self.args.keychain_helper, key_catalog=self.args.key_catalog,
                                wnd=self.args.wnd, wnd_sha256=self.args.wnd_sha256,
                                wnd_manifest=getattr(self.args, 'wnd_manifest', None))
 
     def common_args(self, name):
-        args = ['--key-storage', 'files', '-i', str(self.root / name), '--wnd', str(self.args.wnd),
+        args = ['--key-storage', self.storage, '-i', str(self.root / name), '--wnd', str(self.args.wnd),
                 '--wnd-sha256', self.args.wnd_sha256]
+        if self.args.key_name_prefix and self.storage != 'files':
+            args += ['--key-name', self.args.key_name_prefix + '-' + name]
+        if self.args.keychain_helper:
+            args += ['--keychain-helper', str(self.args.keychain_helper)]
+        if self.args.key_catalog:
+            args += ['--key-catalog', str(self.args.key_catalog)]
         for relay in self.args.relay:
             args += ['--relay', relay]
         if getattr(self.args, 'wnd_manifest', None):
             args += ['--wnd-manifest', str(self.args.wnd_manifest)]
         return args
+
+    def check_locked_restarts(self):
+        self.checkpoint('locked_frontend_refusal')
+        for name in ('server', 'client'):
+            try:
+                with Profile(self.profile_args(name)):
+                    raise SmokeError('locked_frontend_started')
+            except SmokeError as error:
+                require(str(error) == 'locked_or_denied', 'locked_frontend_wrong_error')
+            require(load_json(self.root / name / 'profile.json')['keys']['backend'] == 'native',
+                    'locked_frontend_fell_back')
+        self.passed('locked_native_provider_refuses_both_frontends_without_file_fallback')
+
+    def migration_args(self, name):
+        args = self.profile_args(name)
+        args.migrate_keys_to_native = True
+        args.server_mode = name == 'server'
+        args.allow = [self.client_identity]
+        args.worker, args.bridge, args.cwd = self.args.worker, self.args.bridge, self.cwd
+        args.allow_shell = True
+        args.loaded_command_policy = load_json(self.root / 'command-policy.json')
+        return args
+
+    def refuse_active_migration(self):
+        self.checkpoint('active_worker_migration_refusal')
+        root = self.root / 'server'
+        saved = {path: path.read_bytes() for path in (root / 'profile.json',
+            root / 'engine/engine.key',
+            root / 'mdk/accounts' / self.server_identity / 'secret.json')}
+        references = self.native.references()
+        storage = self.storage
+        self.storage = 'native'
+        try:
+            try:
+                with Profile(self.migration_args('server')):
+                    raise SmokeError('active_worker_migration_accepted')
+            except SmokeError as error:
+                require(str(error) in ('busy', 'recovery_uncertain'),
+                        'active_worker_migration_wrong_error')
+                self.report['active_migration_refusal'] = str(error)
+        finally:
+            self.storage = storage
+        require(all(path.read_bytes() == data for path, data in saved.items()),
+                'active_worker_migration_changed_legacy_keys')
+        require(self.native.references() == references, 'active_worker_migration_created_keys')
+        pending = load_json(root / 'keys.pending.json')
+        self.migration_reserved = {kind: pending[kind] for kind in ('nostr', 'master')}
+        self.passed('active_worker_refuses_migration_preserving_legacy_keys_and_native_inventory')
+
+    def encrypted_snapshot(self):
+        # The migration guard proved quiescence. Compare the SQLCipher database
+        # and retained job files; WAL/SHM and MDK housekeeping are not this check.
+        result = {}
+        directory = self.root / 'server/engine'
+        for path in directory.rglob('*'):
+            if path.is_file() and (path.name == 'engine.sqlite3'
+                                   or 'jobs' in path.relative_to(directory).parts):
+                result[str(path.relative_to(self.root))] = hashlib.sha256(path.read_bytes()).hexdigest()
+        require(result, 'migration_snapshot_empty')
+        return result
+
+    def quiesce_migration(self):
+        """Authenticate and prove job/IO quiescence before ciphertext fingerprinting."""
+        self.checkpoint('migration_quiescence')
+        require(self.server is None, 'migration_frontend_still_running')
+        target = self.migration_reserved['master']
+        raw = protected_read(self.root / 'server/engine/engine.key', 40)
+        require(len(raw) == 40 and raw[:8] == b'MRMSKEY1', 'invalid_legacy_secret')
+        policy = {'version': 2, 'state_root': str(self.root / 'server/engine'),
+            'worker_executable': str(self.args.worker.absolute()), 'server': self.server_identity,
+            'allowed_principals': [self.client_identity], 'cwd': str(self.cwd),
+            'allow_shell_command': True,
+            'command_policy': load_json(self.root / 'command-policy.json'),
+            'storage': {'mode': 'migrate_native', 'root_id': target['root_id'],
+                        'reference': target['reference'], 'master': b64(raw[8:])}}
+        started = continuous_time()
+        until = min(self.deadline, started + 20)
+        prior_timer = signal.getitimer(signal.ITIMER_REAL)
+        prior_handler = signal.getsignal(signal.SIGALRM)
+        def expired(_sig, _frame):
+            raise SmokeError('migration_quiescence_timeout')
+        signal.signal(signal.SIGALRM, expired)
+        signal.setitimer(signal.ITIMER_REAL,
+                         min(until - started, prior_timer[0]) if prior_timer[0] else until - started)
+        try:
+            while True:
+                self.checkpoint('migration_quiescence')
+                require(continuous_time() < until, 'migration_quiescence_timeout')
+                guard = None
+                try:
+                    guard = EngineBridge(self.args.bridge, policy)
+                    return
+                except SmokeError as error:
+                    if str(error) not in ('busy', 'recovery_uncertain'):
+                        raise
+                    require(continuous_time() < until, 'migration_quiescence_timeout')
+                    time.sleep(min(.1, max(0, until - continuous_time())))
+                finally:
+                    if guard is not None:
+                        guard.close()
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, prior_handler)
+            if prior_timer[0]:
+                signal.setitimer(signal.ITIMER_REAL,
+                                 max(.001, prior_timer[0] - (continuous_time() - started)), prior_timer[1])
+
+    def migrate_profiles(self):
+        self.quiesce_migration()
+        self.checkpoint('native_migration')
+        before = self.encrypted_snapshot()
+        public = {name: load_json(self.root / name / 'profile.json')
+                  for name in ('server', 'client', 'intruder')}
+        self.storage = 'native'
+        for name in ('server', 'client', 'intruder'):
+            with Profile(self.migration_args(name)) as profile:
+                require(profile.migrated and profile.account == public[name]['account'],
+                        'migration_identity_changed')
+                require(profile.value['sessions'] == public[name]['sessions']
+                        and profile.value['server_groups'] == public[name]['server_groups'],
+                        'migration_room_state_changed')
+        require(self.encrypted_snapshot() == before, 'migration_ciphertext_changed')
+        committed = load_json(self.root / 'server/profile.json')['keys']
+        require(all(committed[kind] == binding for kind, binding in self.migration_reserved.items()),
+                'migration_retry_changed_reserved_references')
+        self.check_native_names()
+        self.check_native_storage()
+        self.passed('file_to_native_migration_preserves_identity_rooms_and_encrypted_state')
+
+    def check_native_storage(self):
+        if self.storage == 'files':
+            return
+        references = []
+        for name in ('server', 'client', 'intruder', 'unnamed'):
+            root = self.root / name
+            value = load_json(root / 'profile.json')
+            require(value['keys']['backend'] == 'native', 'native_profile_missing')
+            references.append(value['keys']['nostr']['reference'])
+            require(not list((root / 'mdk').rglob('secret.json'))
+                    and not (root / 'engine/engine.key').exists(), 'native_secret_file_present')
+            master = value['keys']['master']
+            if master is not None:
+                references.append(master['reference'])
+        require(len({item['id'] for item in references}) == len(references),
+                'native_reference_reused')
+        catalog = load_json(self.args.key_catalog or self.native.catalog)
+        require(sorted((entry['reference'] for entry in catalog['entries']), key=lambda item: item['id']) ==
+                sorted((item for item in references if item['purpose'] == 'nostr'),
+                       key=lambda item: item['id']), 'native_catalog_inventory_mismatch')
+        observed = self.native.references()
+        require(sorted(observed, key=lambda item: item['id']) ==
+                sorted(references, key=lambda item: item['id']), 'native_reference_inventory_mismatch')
+        self.report['native_references'] = references
+        secrets_to_scan = [NativeHelper(self.args.keychain_helper or self.native.helper).load(reference)
+                           for reference in references]
+        self.native.remember_secrets(secrets_to_scan)
+        scan_at_rest([self.root, self.args.key_catalog or self.native.catalog], secrets_to_scan)
+        self.report['native_helper_audit'] = audit_helper(
+            self.args.keychain_helper or self.native.helper, self.native.env, secrets_to_scan)
+        if sys.platform.startswith('linux') and self.server is not None:
+            scan_process(self.server.pid, secrets_to_scan)
+        self.passed('native_reference_inventory_catalog_and_secret_at_rest_process_checks')
+
+    def audit_running_native_worker(self, profile=None):
+        references = self.native.references()
+        helper = NativeHelper(self.args.keychain_helper or self.native.helper)
+        private = [helper.load(reference) for reference in references]
+        self.native.remember_secrets(private)
+        self.report['native_process_audit'] = audit_tree(
+            self.server.pid, private, require_worker=True)
+        if profile is not None:
+            self.report['native_client_process_audit'] = audit_tree(
+                profile.transport.process.pid, private)
+        self.passed('running_native_daemon_worker_have_no_secret_arguments_environment_or_bootstrap_stdin')
+
+    def server_rpc(self):
+        home = self.root / 'server/mdk'
+        options = {'secret_store': 'MarmishStdin' if self.storage != 'files' else 'File'}
+        if sys.platform == 'darwin':
+            from marmish_transport_macos import read_running_identity
+            options.update(rpc_home=str(home), rpc_socket=str(home / 's'),
+                           peer_identity=read_running_identity(home))
+        return MdkRpc(home / 's', timeout=20, **options)
+
+    def check_native_identities(self, profile):
+        if self.storage == 'files':
+            return
+        for rpc, expected in ((self.server_rpc(), self.server_identity),
+                              (profile.rpc, self.client_identity)):
+            require(rpc.capabilities() == {'version': 1, 'secret_store': 'MarmishStdin',
+                                           'public_key': expected}
+                    and rpc.accounts() == [expected], 'native_endpoint_identity_capability_mismatch')
+
+    def audit_after_migration(self, client, profile):
+        """Inspect a live native worker and both daemons after the file migration."""
+        self.checkpoint('post_migration_native_audit')
+        gate = self.cwd / 'native-audit-release'
+        invocation, _ = client.submit(self.command(
+            'import pathlib,time; p=pathlib.Path("native-audit-release"); t=time.monotonic()+45\n'
+            'while not p.exists() and time.monotonic()<t: time.sleep(.05)\nprint("native audit")'))
+        try:
+            client.send_input(invocation, io.BytesIO())
+            until = continuous_time() + 20
+            while client.call('status', invocation=invocation)['state'] != 'running':
+                require(continuous_time() < until, 'native_audit_worker_not_running')
+                time.sleep(.1)
+            self.audit_running_native_worker(profile)
+        finally:
+            gate.touch()
+        out = io.BytesIO()
+        status = client.wait(invocation, out, io.BytesIO())
+        require(out.getvalue() == b'native audit\n' and exit_code(status) == 0,
+                'native_audit_command_failed')
+        self.passed('post_migration_native_command_and_process_audit')
+
+    def check_native_names(self):
+        if self.storage == 'files':
+            return
+        options = {'storage': 'auto', 'helper': self.args.keychain_helper,
+                   'catalog': self.args.key_catalog}
+        with KeySession(self.root / 'unnamed', **options) as keys:
+            binding = keys.prepare_nostr(pristine=True)
+            keys.commit({'version': 2, 'account': binding.account, 'initialized': False,
+                         'relays': sorted(self.args.relay), 'sessions': {}, 'server_groups': {}})
+        if self.args.key_name_prefix:
+            for root, name, expected in (
+                    (self.root / 'client', self.args.key_name_prefix + '-different', 'key_name_mismatch'),
+                    (self.root / 'adoption', self.args.key_name_prefix + '-client', 'key_name_bound_elsewhere')):
+                try:
+                    with KeySession(root, key_name=name, **options) as keys:
+                        keys.prepare_nostr(existing_account=(self.client_identity
+                            if root.name == 'client' else None), pristine=root.name != 'client')
+                    raise SmokeError('native_name_refusal_missing')
+                except SmokeError as error:
+                    require(str(error) == expected, 'native_name_refusal_wrong_error')
+        self.passed('unnamed_auto_native_profile_and_named_binding_refusals')
+
+    def remove_engine(self, policy):
+        root = self.root / 'server'
+        value = load_json(root / 'profile.json')
+        if value.get('keys', {}).get('backend') != 'native':
+            return remove_engine_state(self.args.bridge, policy)
+        with KeySession(root, storage='native', helper=self.args.keychain_helper,
+                        catalog=self.args.key_catalog) as keys:
+            keys.prepare_nostr(existing_account=value['account'])
+            master = keys.prepare_master(root / 'engine')
+            native_policy = dict(policy, version=2, storage={'mode': 'native',
+                'root_id': master.root_id, 'reference': master.reference, 'master': b64(master.secret)})
+            remove_engine_state(self.args.bridge, native_policy)
+
+    def cleanup(self):
+        """Quiesce owned work before deleting either data or provider credentials."""
+        try:
+            for name in ('cancel-release', 'disconnect-release', 'native-audit-release'):
+                (self.cwd / name).touch()
+            self.stop_server()
+            if self.inhibitor:
+                self.inhibitor.terminate()
+                self.inhibitor.wait(timeout=5)
+            policy = {'version': 1, 'state_root': str(self.root / 'server/engine'),
+                'worker_executable': str(self.args.worker.absolute()), 'server': self.server_identity,
+                'allowed_principals': [self.client_identity], 'cwd': str(self.cwd),
+                'allow_shell_command': True,
+                'command_policy': load_json(self.root / 'command-policy.json', None)}
+            until = continuous_time() + 65
+            while True:
+                try:
+                    if self.provider_locked:
+                        self.native.unlock()
+                        self.provider_locked = False
+                    if (self.root / 'server/engine').exists():
+                        self.remove_engine(policy)
+                    if sys.platform == 'darwin':
+                        from marmish_transport_macos import cleanup_control, control_dir
+                        for name in ('server', 'client', 'intruder'):
+                            home = self.root / name / 'mdk'
+                            if os.path.lexists(control_dir(home)):
+                                cleanup_control(home)
+                    shutil.rmtree(self.root)
+                    self.report['local_cleanup'] = 'complete'
+                    return
+                except (SmokeError, SandboxError, OSError, ValueError):
+                    if continuous_time() >= until:
+                        raise SmokeError('cleanup_incomplete') from None
+                    time.sleep(.5)
+        except (SmokeError, SandboxError, OSError, ValueError, subprocess.TimeoutExpired):
+            self.report.update(outcome='failed', local_cleanup='incomplete',
+                               private_state_retained=True)
+            if self.native is not None:
+                self.native.retain_private_state()
 
     def checkpoint(self, stage):
         require(continuous_time() < self.deadline, 'global_timeout')
@@ -76,7 +385,7 @@ class Harness:
             '--worker', str(self.args.worker), '--cwd', str(self.cwd),
             '--command-policy', str(policy), '--allow-shell'],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            start_new_session=True, env={'PATH': '/usr/bin:/usr/sbin:/bin:/sbin', 'LANG': 'C', **execution_marker(), **bwrap_environment(),
+            start_new_session=True, env={'PATH': '/usr/bin:/usr/sbin:/bin:/sbin', 'LANG': 'C', **execution_marker(), **bwrap_environment(), **native_environment(),
                 **({key: os.environ[key] for key in ('RUNNER_TRACKING_ID',) if key in os.environ})})
         require(select.select([self.server.stdout], [], [], 25)[0], 'server_start_timeout')
         ready = self.server.stdout.readline(1024)
@@ -153,6 +462,7 @@ class Harness:
             self.server_identity = profile.account
         with Profile(self.profile_args('client')) as profile:
             self.client_identity = profile.account
+        self.check_native_names()
         self.report['public_identities'] = {'server': self.server_identity, 'client': self.client_identity}
         self.start_server()
         with Profile(self.profile_args('client')) as profile:
@@ -240,13 +550,10 @@ class Harness:
                 intruder.rpc.fetch_keys(intruder.account, self.server_identity, intruder.relays)
                 unallowed = intruder.rpc.create_group(intruder.account, self.server_identity,
                                                      secrets.token_hex(16))['group_id']
-                home = self.root / 'server' / 'mdk'
-                options = {}
-                if sys.platform == 'darwin':
-                    from marmish_transport_macos import read_running_identity
-                    options = {'rpc_home': str(home), 'rpc_socket': str(home / 's'),
-                               'peer_identity': read_running_identity(home)}
-                server_rpc = MdkRpc(home / 's', timeout=20, **options)
+                server_rpc = self.server_rpc()
+                if self.storage != 'files':
+                    self.check_native_identities(profile)
+                    self.passed('native_daemon_capabilities_and_exact_server_client_identities')
                 observed = set()
                 while observed != {ordinary, unallowed}:
                     client.remaining()
@@ -265,12 +572,26 @@ class Harness:
                 'command': self.command('open("forbidden","w").write("replay")')}, client.challenge)
             self.checkpoint('disconnect_submit')
             detached, _ = client.submit(self.command(
-                'import pathlib,time; p=pathlib.Path("disconnect-release"); t=time.monotonic()+120\nwhile not p.exists() and time.monotonic()<t: time.sleep(.05)\nopen("survived","w").write("yes"); print("survived")'))
+                'import pathlib,time; p=pathlib.Path("disconnect-release"); t=time.monotonic()+120\nwhile not p.exists() and time.monotonic()<t: time.sleep(.05)\nopen("survived","a").write("yes"); print("survived")'))
             client.send_input(detached, io.BytesIO())
             running = client.call('status', invocation=detached)
             require(running['state'] in ('accepted', 'launching', 'running'), 'job_finished_before_disconnect')
+            until_running = continuous_time() + 20
+            while running['state'] != 'running':
+                require(continuous_time() < until_running, 'detached_worker_not_running')
+                time.sleep(.1)
+                running = client.call('status', invocation=detached)
+                require(running['state'] in ('accepted', 'launching', 'running'),
+                        'job_finished_before_disconnect')
+            if self.storage != 'files':
+                self.audit_running_native_worker(profile)
+        if self.storage != 'files':
+            self.native.lock()
+            self.provider_locked = True
         # Both client MDK and server/bridge frontends exit while the worker runs.
         self.stop_server()
+        if self.args.migrate_acceptance:
+            self.refuse_active_migration()
         require(not (self.cwd / 'survived').exists(), 'job_finished_before_frontend_stop')
         (self.cwd / 'disconnect-release').touch()
         until = continuous_time() + 8
@@ -278,11 +599,22 @@ class Harness:
             require(continuous_time() < until, 'detached_worker_did_not_finish')
             time.sleep(.1)
         self.passed('frontend_disconnect_does_not_cancel_running_worker')
+        if self.storage != 'files':
+            self.check_locked_restarts()
+            self.native.unlock()
+            self.provider_locked = False
+        if self.args.migrate_acceptance:
+            self.migrate_profiles()
         self.start_server()
         with Profile(self.profile_args('client')) as profile:
             self.checkpoint('reattach_after_restart')
             client = self.client(profile)
             require(client.group == initial_group, 'session_not_reused')
+            if self.storage != 'files':
+                self.check_native_identities(profile)
+                self.passed('native_restart_capability_identity_preserved')
+            if self.args.migrate_acceptance:
+                self.audit_after_migration(client, profile)
             out, err = io.BytesIO(), io.BytesIO()
             status = client.wait(detached, out, err)
             require(out.getvalue() == b'survived\n' and exit_code(status) == 0
@@ -311,15 +643,16 @@ class Harness:
             '/usr/bin/printf', '%s\n', 'marmish cli e2e'],
             input=b'', stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             timeout=min(150, max(1, self.deadline - continuous_time())),
-            env={'PATH': '/usr/bin:/usr/sbin:/bin:/sbin', 'LANG': 'C', **execution_marker(), **bwrap_environment(),
+            env={'PATH': '/usr/bin:/usr/sbin:/bin:/sbin', 'LANG': 'C', **execution_marker(), **bwrap_environment(), **native_environment(),
                 **({key: os.environ[key] for key in ('RUNNER_TRACKING_ID',) if key in os.environ})})
         require(result.returncode == 0 and result.stdout == b'marmish cli e2e\n' and result.stderr == b'',
                 'cli_process_failed')
         self.passed('actual_client_and_server_cli_processes_execute_command_via_marmot')
+        self.check_native_storage()
         self.report.update(outcome='passed', stage='complete')
 
 
-def main(argv=None):
+def main(argv=None, *, report_sink=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--live', action='store_true', required=True)
     parser.add_argument('--relay', action='append', required=True)
@@ -329,8 +662,15 @@ def main(argv=None):
     parser.add_argument('--bridge', type=Path, required=True)
     parser.add_argument('--worker', type=Path, required=True)
     parser.add_argument('--timeout', type=int, default=900)
+    parser.add_argument('--key-storage', choices=('files', 'auto', 'native'), default='files')
+    parser.add_argument('--keychain-helper', type=Path)
+    parser.add_argument('--key-catalog', type=Path)
+    parser.add_argument('--key-name-prefix')
+    parser.add_argument('--migrate-acceptance', action='store_true')
     args = parser.parse_args(argv)
     require(60 <= args.timeout <= 900, 'invalid_timeout')
+    require((args.key_storage == 'files' and not args.migrate_acceptance) or
+            active_context() is not None, 'owned_native_context_required')
     os.umask(0o077)
     root = Path(tempfile.mkdtemp(prefix='me-', dir='/tmp')).resolve()
     report = {'outcome': 'failed', 'stage': 'setup', 'assertions': [], 'relays': args.relay,
@@ -357,38 +697,7 @@ def main(argv=None):
         signal.alarm(0)
         for sig in handlers:
             signal.signal(sig, signal.SIG_IGN)
-        harness.stop_server()
-        if harness.inhibitor:
-            harness.inhibitor.terminate()
-            harness.inhibitor.wait(timeout=5)
-        # Release bounded test workers even when an assertion fails, then let
-        # detached workers finish before removing their encrypted state.
-        for name in ('cancel-release', 'disconnect-release'):
-            (harness.cwd / name).touch()
-        engine_policy = {'version': 1, 'state_root': str(root / 'server/engine'),
-            'worker_executable': str(args.worker.absolute()), 'server': harness.server_identity,
-            'allowed_principals': [harness.client_identity], 'cwd': str(harness.cwd),
-            'allow_shell_command': True, 'command_policy': load_json(root / 'command-policy.json')}
-        until = continuous_time() + 65
-        while True:
-            try:
-                if (root / 'server/engine').exists():
-                    remove_engine_state(args.bridge, engine_policy)
-                if sys.platform == 'darwin':
-                    from marmish_transport_macos import cleanup_control, control_dir
-                    for name in ('server', 'client'):
-                        home = root / name / 'mdk'
-                        if os.path.lexists(control_dir(home)):
-                            cleanup_control(home)
-                shutil.rmtree(root)
-                report['local_cleanup'] = 'complete'
-                break
-            except (SmokeError, SandboxError, OSError, ValueError):
-                if continuous_time() >= until:
-                    report.update(outcome='failed', local_cleanup='incomplete',
-                                  private_state_retained=True)
-                    break
-                time.sleep(.5)
+        harness.cleanup()
         report['duration_seconds'] = round(continuous_time() - started, 3)
         for sig, handler in handlers.items():
             signal.signal(sig, handler)
@@ -399,7 +708,10 @@ def main(argv=None):
         report.update(outcome='failed', error='bwrap_provenance_unavailable')
     if args.wnd_manifest:
         report['wnd_manifest'] = strict_json(args.wnd_manifest.read_bytes())
-    print(json.dumps(report, sort_keys=True))
+    if report_sink is None:
+        print(json.dumps(report, sort_keys=True))
+    else:
+        report_sink.append(report)
     return 0 if report['outcome'] == 'passed' else 1
 
 
