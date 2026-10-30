@@ -375,4 +375,7 @@ class WorkflowTests(unittest.TestCase):
         block = self.block('Native unconfined shim handoff')
         self.assertIn("if: runner.os == 'macOS'", block)
         self.assertIn('timeout-minutes: 2', block)
-        self.assertIn('PYTHONPATH=tools python3 -m unittest test_marmish_transport_macos.NativeLifetimeTests.test_bootstrap_child_reads_exact_frame_parent_uses_devnull', block)
+        command = ' '.join(block.replace('\\\n', ' ').split())
+        self.assertIn('PYTHONPATH=tools python3 -m unittest '
+                      'test_marmish_transport_macos.NativeLifetimeTests.test_bootstrap_child_reads_exact_frame_parent_uses_devnull '
+                      'test_marmish_transport_macos.NativeLifetimeTests.test_native_zombie_group_proof', command)

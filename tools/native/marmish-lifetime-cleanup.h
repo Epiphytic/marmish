@@ -9,8 +9,8 @@
 #include <string.h>
 #include <unistd.h>
 
-enum lifetime_stage { LIFETIME_WAITID, LIFETIME_KILL_GROUP, LIFETIME_KILL_LEADER, LIFETIME_WAITPID };
-static struct { enum lifetime_stage stage; int error; } lifetime_errors[5];
+enum lifetime_stage { LIFETIME_WAITID, LIFETIME_GROUP_INSPECTION, LIFETIME_KILL_GROUP, LIFETIME_KILL_LEADER, LIFETIME_WAITPID };
+static struct { enum lifetime_stage stage; int error; } lifetime_errors[6];
 static size_t lifetime_error_count;
 
 static void lifetime_record(enum lifetime_stage stage, int error) {
@@ -22,7 +22,7 @@ static void lifetime_record(enum lifetime_stage stage, int error) {
 
 /* Called only after every final signal and wait attempt, never during cleanup. */
 static void lifetime_emit(void) {
-    static const char *const stages[] = {"waitid", "kill_group", "kill_leader", "waitpid"};
+    static const char *const stages[] = {"waitid", "group_inspection", "kill_group", "kill_leader", "waitpid"};
     char output[1024];
     size_t used = 0;
     for (size_t i = 0; i < lifetime_error_count; ++i) {
@@ -57,7 +57,14 @@ static int finish(pid_t child) {
     int failed = 0;
     if (kill(-child, SIGKILL) < 0) {
         int error = errno;
-        if (error != ESRCH) { lifetime_record(LIFETIME_KILL_GROUP, error); failed = 1; }
+        if (error != ESRCH) {
+            int inspection = 0;
+            if (error != EPERM || !lifetime_zombie_group(child, &inspection)) {
+                if (error == EPERM) lifetime_record(LIFETIME_GROUP_INSPECTION, inspection);
+                lifetime_record(LIFETIME_KILL_GROUP, error);
+                failed = 1;
+            }
+        }
     }
     if (kill(child, SIGKILL) < 0) {
         int error = errno;

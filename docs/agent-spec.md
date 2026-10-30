@@ -216,7 +216,12 @@ passed disposable macOS provider acceptance and identified `kill_group` errno 1
 (EPERM) after the 72-byte handoff. Broader native tests remain skipped. Apple
 kernel source makes a zombie-only process group a plausible cause; exact group
 state and the running kernel revision were not captured, so EPERM cannot be
-accepted unconditionally. A group-state correction is being designed for independent review.
+accepted unconditionally. The reviewed [group-state correction](phases/native-lifetime-zombie-groups.md)
+accepts only group SIGKILL EPERM after a bounded two-snapshot libproc proof of a
+same-identity zombie-only original group, while the direct-child leader remains
+unreaped. Live, uncertain, truncated or changed groups retain exit 70. Portable
+proof/cleanup harnesses and 260 Python tests passed (six Darwin skips); actual
+native acceptance remains pending. See [offline evidence](validation/native-zombie-groups.md).
 The same run exposed three Linux audit fixtures whose executable links were
 missing during inspection; the audit correctly refused an unreadable executable. A
 deterministic [test-fixture replacement](phases/native-audit-fixture.md) now uses

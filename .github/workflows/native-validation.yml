@@ -59,7 +59,10 @@ jobs:
       - name: Native unconfined shim handoff
         if: runner.os == 'macOS'
         timeout-minutes: 2
-        run: PYTHONPATH=tools python3 -m unittest test_marmish_transport_macos.NativeLifetimeTests.test_bootstrap_child_reads_exact_frame_parent_uses_devnull
+        run: |
+          PYTHONPATH=tools python3 -m unittest \
+            test_marmish_transport_macos.NativeLifetimeTests.test_bootstrap_child_reads_exact_frame_parent_uses_devnull \
+            test_marmish_transport_macos.NativeLifetimeTests.test_native_zombie_group_proof
       - name: Native prerequisite spike
         run: |
           python3 --version

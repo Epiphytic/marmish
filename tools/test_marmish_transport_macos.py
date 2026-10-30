@@ -24,7 +24,7 @@ import marmish_transport_macos as native
 from marmish_transport_sandbox import SandboxError
 
 
-LIFETIME_STAGES = ('waitid', 'kill_group', 'kill_leader', 'waitpid')
+LIFETIME_STAGES = ('waitid', 'group_inspection', 'kill_group', 'kill_leader', 'waitpid')
 
 
 def parse_lifetime_diagnostics(raw):
@@ -33,7 +33,7 @@ def parse_lifetime_diagnostics(raw):
         if len(raw) > 4096 or b'\r' in raw or (raw and not raw.endswith(b'\n')):
             raise ValueError()
         lines = raw.split(b'\n')[:-1] if raw else []
-        if len(lines) > 5:
+        if len(lines) > 6:
             raise ValueError()
         records = []
         previous = -1
@@ -471,6 +471,29 @@ class NativeLifetimeTests(unittest.TestCase):
                 return
             threading.Event().wait(.02)
         self.fail('native descendant remained after cleanup')
+
+    def test_native_zombie_group_proof(self):
+        with tempfile.TemporaryDirectory(prefix='marmish-native-group-test-') as directory:
+            executable = Path(directory).resolve() / 'group-test'
+            source = Path(native.__file__).resolve().parent / 'native/marmish-lifetime-group-test.c'
+            subprocess.run(['clang', '-Wall', '-Wextra', '-Werror', str(source), '-o', str(executable)],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', str(executable)], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            for mode in range(5):
+                with self.subTest(mode=mode):
+                    child = subprocess.Popen([str(executable), str(mode)], stdout=subprocess.DEVNULL,
+                                             stderr=subprocess.PIPE)
+                    try:
+                        status = child.wait(timeout=5)
+                        records = read_lifetime_diagnostics(child.stderr)
+                        self.assertEqual(status, 0, json.dumps(records, sort_keys=True))
+                        self.assertEqual(records, [], json.dumps(records, sort_keys=True))
+                    finally:
+                        if child.poll() is None:
+                            child.kill()
+                            child.wait()
+                        child.stderr.close()
 
     def test_bootstrap_child_reads_exact_frame_parent_uses_devnull(self):
         import marmish_bootstrap

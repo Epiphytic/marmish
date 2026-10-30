@@ -20,6 +20,7 @@ static double elapsed(void) {
     return (double)mach_continuous_time() * (double)scale.numer / (double)scale.denom / 1000000000.0;
 }
 
+#include "marmish-lifetime-group.h"
 #include "marmish-lifetime-cleanup.h"
 
 int main(int argc, char **argv) {
