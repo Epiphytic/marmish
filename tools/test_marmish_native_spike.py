@@ -399,7 +399,13 @@ class WorkflowTests(unittest.TestCase):
 
     def test_shim_order_and_mac_gate(self):
         text = self.source()
-        self.assertEqual(text.count('        id: checkout\n'), 2)
+        self.assertEqual(text.count('        id: checkout\n'), 3)
+        jobs = ('native', 'live', 'managed-proof')
+        for index, job in enumerate(jobs):
+            section = text.split('  ' + job + ':\n', 1)[1]
+            if index + 1 < len(jobs):
+                section = section.split('\n  ' + jobs[index + 1] + ':\n', 1)[0]
+            self.assertEqual(section.count('        id: checkout\n'), 1)
         self.assertLess(text.index('Native disposable macOS keychain acceptance'), text.index('Native unconfined shim handoff'))
         self.assertLess(text.index('Native unconfined shim handoff'), text.index('Native prerequisite spike'))
         block = self.block('Native unconfined shim handoff')

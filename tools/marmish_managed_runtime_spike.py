@@ -2,6 +2,8 @@
 """Disposable managed-Python packaging proof; never a production installer."""
 import argparse
 import copy
+import contextlib
+import gzip
 import json
 import os
 from pathlib import Path
@@ -53,6 +55,130 @@ def checked_url(url):
     return url
 
 
+BWRAP_CATEGORIES = frozenset({'invalid_bwrap_selection', 'unsafe_bwrap_path',
+                              'unsafe_bwrap_executable', 'bwrap_hash_mismatch'})
+CI_PLATFORMS = {'linux-x64': ('x86_64-unknown-linux-gnu', ['self-hosted', 'Linux', 'X64', 'bel-ci']),
+                'linux-arm64': ('aarch64-unknown-linux-gnu', ['self-hosted', 'Linux', 'ARM64', 'laptop-ci']),
+                'macos-arm64': ('aarch64-apple-darwin', ['self-hosted', 'macOS', 'ARM64', 'laptop-ci'])}
+
+
+def bwrap_validation(operation):
+    from marmish_transport_sandbox import SandboxError
+    try:
+        return operation()
+    except SandboxError as error:
+        category = str(error) if str(error) in BWRAP_CATEGORIES else 'unknown'
+        raise Refused('bwrap_selection:' + category) from None
+
+
+def bwrap_executable():
+    from marmish_transport_sandbox import validated_bwrap
+    return bwrap_validation(validated_bwrap)
+
+
+def verified_helper_pair():
+    from marmish_ci_bwrap import environment as helper_environment
+    return bwrap_validation(helper_environment)
+
+
+def helper_provenance(pair):
+    require(str(bwrap_executable()) == pair['MARMISH_BWRAP'], 'bwrap_provenance_invalid')
+    path = Path(pair['MARMISH_BWRAP']).parent.parent / 'provenance.json'
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        with os.fdopen(descriptor, 'rb') as source:
+            info = os.fstat(source.fileno())
+            require(stat.S_ISREG(info.st_mode) and info.st_uid in (0, os.geteuid())
+                    and info.st_size <= 65536, 'bwrap_provenance_invalid')
+            raw = source.read(65537)
+            require(len(raw) <= 65536, 'bwrap_provenance_invalid')
+            value = json.loads(raw)
+        require(isinstance(value, dict), 'bwrap_provenance_invalid')
+        names = ('suite', 'architecture', 'package_version', 'keyring_sha256', 'package_sha256',
+                 'executable_sha256', 'version')
+        result = {name: value[name] for name in names}
+        architecture = {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(platform.machine())
+        require(result['suite'] in ('noble', 'resolute') and result['architecture'] == architecture,
+                'bwrap_provenance_invalid')
+        patterns = {'package_version': r'[A-Za-z0-9.+:~_-]{1,128}',
+                    'version': r'bubblewrap [0-9]+(?:\.[0-9]+){1,3}',
+                    **{key: '[0-9a-f]{64}' for key in ('keyring_sha256', 'package_sha256', 'executable_sha256')}}
+        require(all(isinstance(result[key], str) and re.fullmatch(pattern, result[key])
+                    for key, pattern in patterns.items()) and len(result['version']) <= 64
+                and result['executable_sha256'] == pair['MARMISH_BWRAP_SHA256'], 'bwrap_provenance_invalid')
+        return result
+    except (OSError, ValueError, KeyError, TypeError):
+        raise Refused('bwrap_provenance_invalid') from None
+
+
+def initialize_helper(required, report):
+    if platform.system() == 'Darwin':
+        require(not required and not any(name.startswith('MARMISH_BWRAP') for name in os.environ),
+                'bwrap_configuration_on_darwin')
+        return
+    pair = verified_helper_pair()
+    require(not required or bool(pair), 'bwrap_helper_required')
+    bwrap_executable()  # Validate system selection too, never fallback after refusal.
+    report['bwrap_source'] = 'helper' if pair else 'system'
+    if pair:
+        report['bwrap_helper'] = helper_provenance(pair)
+
+
+def test_supervisor(env):
+    if platform.system() == 'Darwin':
+        return dict(env)
+    return dict(env, **verified_helper_pair())
+
+
+def ci_context(raw, target):
+    fields = raw.split(':')
+    require(len(fields) == 4, 'ci_context_invalid')
+    sha, run_id, attempt, native = fields
+    require(re.fullmatch('[0-9a-f]{40}', sha) and re.fullmatch('[1-9][0-9]{0,19}', run_id)
+            and re.fullmatch('[1-9][0-9]{0,5}', attempt) and native in CI_PLATFORMS
+            and CI_PLATFORMS[native][0] == target, 'ci_context_invalid')
+    return {'source_commit': sha, 'run_id': run_id, 'attempt': attempt, 'platform': native,
+            'workflow': 'native-validation', 'runner_class': CI_PLATFORMS[native][1]}
+
+
+def host_facts():
+    result = {'system': platform.system(), 'architecture': platform.machine()}
+    if platform.system() == 'Linux':
+        try:
+            distribution = platform.freedesktop_os_release()
+        except OSError:
+            distribution = {}
+        result['distribution'] = {name.lower(): value if re.fullmatch('[A-Za-z0-9._-]{1,64}', value) else None
+                                  for name in ('ID', 'VERSION_ID')
+                                  for value in [distribution.get(name, '')]}
+    else:
+        version = platform.mac_ver()[0]
+        result['os_version'] = version if re.fullmatch(r'[0-9]+(?:\.[0-9]+){0,3}', version) else None
+    return result
+
+
+def interrupted(signum, frame):
+    raise Refused('total_timeout' if signum == signal.SIGALRM else 'interrupted')
+
+
+def install_interrupt_handlers(timeout):
+    require(type(timeout) is int and 1 <= timeout <= 1320, 'total_timeout_invalid')
+    old_handlers = {number: signal.getsignal(number) for number in (signal.SIGALRM, signal.SIGTERM)}
+    for number in old_handlers:
+        signal.signal(number, interrupted)
+    old_timer = signal.setitimer(signal.ITIMER_REAL, timeout)
+    return old_handlers, old_timer, time.monotonic()
+
+
+def restore_interrupt_handlers(state):
+    old_handlers, (delay, interval), started = state
+    signal.setitimer(signal.ITIMER_REAL, 0)
+    for number, handler in old_handlers.items():
+        signal.signal(number, handler)
+    if delay:
+        signal.setitimer(signal.ITIMER_REAL, max(0.001, delay - (time.monotonic() - started)), interval)
+
+
 def environment(root):
     """Deliberately does not inherit UV/PIP/PYTHON/loader or runner variables."""
     result = {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}
@@ -65,33 +191,103 @@ def environment(root):
     return result
 
 
-def total_bytes(root):
+def regular_entry(path):
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        # uv atomically renames/removes owned staging files during monitoring.
+        return None
+    return info if stat.S_ISREG(info.st_mode) else None
+
+
+def observe_entry(observer, path, info):
+    if observer is None:
+        return False
+    try:
+        observer(path, info)
+        return observer.observed
+    except Exception:
+        raise Refused('interruption_observer_failed') from None
+
+
+def total_bytes(root, observer=None):
     total = 0
-    for path in root.rglob('*'):
-        try:
-            info = path.lstat()
-        except FileNotFoundError:
-            # uv atomically renames/removes owned staging files during monitoring.
-            continue
-        if stat.S_ISREG(info.st_mode):
+    for count, path in enumerate(root.rglob('*'), 1):
+        require(count <= 50000, 'runtime_entry_count_limit')
+        info = regular_entry(path)
+        if info is not None:
             total += info.st_size
+            if observe_entry(observer, path, info):
+                break
     return total
 
 
-def run(command, env, *, timeout=120, monitor=None, limit=1 << 30, capture=False):
+def checked_cwd(env, cwd):
+    root = Path(env['HOME']).parent.resolve(strict=True)
+    selected = Path(env['HOME']) if cwd is None else Path(cwd)
+    require(selected.is_absolute() and not selected.is_symlink(), 'child_cwd_refused')
+    try:
+        info = selected.stat()
+    except OSError:
+        raise Refused('child_cwd_refused') from None
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+            and selected.resolve(strict=True).is_relative_to(root), 'child_cwd_refused')
+    return selected
+
+
+def require_group_gone(pid):
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.01)
+    raise Refused('interruption_group_survived')
+
+
+def run(command, env, *, timeout=120, monitor=None, limit=1 << 30, capture=False,
+        cwd=None, observer=None):
+    selected = checked_cwd(env, cwd)
+    return _run_process(command, env, timeout=timeout, monitor=monitor, limit=limit,
+                        capture=capture, cwd=selected, observer=observer)
+
+
+def interrupt_observed(child, observer, deadline):
+    if not observer.observed:
+        require(time.monotonic() < deadline, 'interruption_observation_timeout')
+        return False
+    require(child.poll() is None, 'finished_before_interruption')
+    try:
+        os.killpg(child.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        raise Refused('finished_before_interruption') from None
+    child.wait(timeout=2)
+    require(child.returncode == -signal.SIGKILL, 'interruption_not_sigkill')
+    require_group_gone(child.pid)
+    return True
+
+
+def _run_process(command, env, *, timeout=120, monitor=None, limit=1 << 30, capture=False,
+                 cwd, observer=None):
     """Bounded private output; terminate/reap owned process group on every failure."""
+    require(observer is None or monitor is not None, 'interruption_monitor_required')
     with tempfile.TemporaryFile() as output:
         child = subprocess.Popen(list(map(str, command)), env=env, stdin=subprocess.DEVNULL,
                                  stdout=output, stderr=output, close_fds=True,
-                                 start_new_session=True, cwd=env["HOME"])
+                                 start_new_session=True, cwd=cwd)
         deadline = time.monotonic() + timeout
+        observation_deadline = min(deadline, time.monotonic() + 10)
         try:
             while child.poll() is None:
                 require(time.monotonic() < deadline, 'child_timeout')
                 require(os.fstat(output.fileno()).st_size <= 2 << 20, 'child_output_limit')
                 if monitor is not None:
-                    require(total_bytes(monitor) <= limit, 'runtime_expansion_limit')
-                time.sleep(0.05)
+                    require(total_bytes(monitor, observer) <= limit, 'runtime_expansion_limit')
+                if observer is not None and interrupt_observed(child, observer, observation_deadline):
+                    break
+                time.sleep(0.01 if observer is not None else 0.05)
+            require(observer is None or observer.observed, 'finished_before_interruption')
             if monitor is not None:
                 require(total_bytes(monitor) <= limit, 'runtime_expansion_limit')
             require(os.fstat(output.fileno()).st_size <= 2 << 20, 'child_output_limit')
@@ -105,6 +301,8 @@ def run(command, env, *, timeout=120, monitor=None, limit=1 << 30, capture=False
             except ProcessLookupError:
                 pass
             child.wait()
+            if observer is not None:
+                require_group_gone(child.pid)
 
 
 def download(url, destination, limit, env):
@@ -194,14 +392,24 @@ def local_metadata(row, archive, output):
     output.chmod(0o600)
 
 
-def install_python(uv, row, archive, slot, metadata, env):
+class UvInstallFailure(Refused):
+    def __init__(self, output):
+        super().__init__('uv_install_failed')
+        self.output = output
+
+
+def install_python(uv, row, archive, slot, metadata, env, *, after_rehash=None, cwd=None):
     require(not (slot / 'python').exists() and not (slot / 'python').is_symlink(), 'runtime_slot_exists')
     require(archive.is_file() and not archive.is_symlink(), 'python_archive_missing')
     archive.chmod(0o400)
     verify_asset(archive, row['python'], 'python', env)
+    if after_rehash is not None:
+        after_rehash()
     local_metadata(row, archive, metadata)
-    status, _ = run(uv_command(uv, row, slot, metadata), env, monitor=Path(env['HOME']).parent)
-    require(status == 0, 'uv_install_failed')
+    status, raw = run(uv_command(uv, row, slot, metadata), env, monitor=Path(env['HOME']).parent,
+                      capture=True, cwd=cwd)
+    if status != 0:
+        raise UvInstallFailure(raw)
     interpreter = discover_interpreter(slot)
     base = (slot / 'python').resolve()
     target = TARGETS.get((platform.system(), platform.machine()))
@@ -342,7 +550,7 @@ def home_snapshot(home):
     return result
 
 
-def argv_acceptance(root, interpreter, env):
+def argv_acceptance(root, interpreter, env, cwd=None):
     fixture = root / 'argv-fixture'
     (fixture / 'tools').mkdir(parents=True)
     (fixture / 'tools/marmish_app.py').write_text(
@@ -350,7 +558,7 @@ def argv_acceptance(root, interpreter, env):
         'def client_main(): print(json.dumps(sys.argv[1:]));return 0\nserver_main=client_main\n')
     launchers = make_launchers(fixture, interpreter)
     arguments = ['space here', "quote'\"", '$HOME;$(false)', 'line\nbreak', '**/*', '', 'snowman☃']
-    status, raw = run([launchers / 'marmish', *arguments], env, capture=True)
+    status, raw = run([launchers / 'marmish', *arguments], env, capture=True, cwd=cwd)
     require(status == 0 and json.loads(raw) == arguments, 'launcher_argv_mismatch')
 
 
@@ -408,7 +616,7 @@ def network_prefix(interpreter, env):
         return [], 'uv_offline_only_not_independently_enforced'
     root = Path(env['HOME']).parent
     uid, gid = os.geteuid(), os.getegid()
-    prefix = ['/usr/bin/bwrap', '--die-with-parent', '--unshare-user', '--uid', str(uid),
+    prefix = [str(bwrap_executable()), '--die-with-parent', '--unshare-user', '--uid', str(uid),
               '--gid', str(gid), '--unshare-net', '--tmpfs', '/']
     for directory in ('/usr', '/bin', '/lib', '/lib64'):
         if Path(directory).exists():
@@ -428,35 +636,44 @@ def network_prefix(interpreter, env):
     return (prefix, 'network_namespace_enforced') if status == 0 else ([], 'network_namespace_unavailable')
 
 
+def prepare_slot(slot, fixture, target, report, env, cwd=None):
+    root = slot.parent
+    row = fixture['targets'][target]
+    stage = root / 'downloads'
+    slot.mkdir(mode=0o700)
+    report['stage'] = 'python_install'
+    interpreter = install_python(stage / 'uv', row, stage / 'python.tar.gz', slot,
+                                 stage / (slot.name.replace(' ', '-') + '.json'), env, cwd=cwd)
+    report['stage'] = 'archive_install'
+    dependencies = install_payload(interpreter, root / 'verified-installer.py', stage / 'marmish.tar.gz',
+                                   slot, fixture, target, env)
+    app_root = slot / dependencies['root_name']
+    require(app_root.name == 'marmish-' + fixture['marmish_version'] + '-' + target,
+            'verified_archive_basename_changed')
+    for helper in (app_root / 'libexec/marmish').iterdir():
+        if helper.is_file() and not helper.name.endswith('.json'):
+            verify_architecture(helper, target)
+    make_launchers(app_root, interpreter)
+    return (slot, interpreter, app_root), dependencies
+
+
+@contextlib.contextmanager
 def prepare_slots(root, fixture, target, report, env):
-    row = fixture["targets"][target]
-    stage = root / "downloads"
-    uv = stage / "uv"
-    verifier = root / "verified-installer.py"
-    slots = []
-    for name in ('version one', 'version-two'):
-        slot = root / name
-        slot.mkdir(mode=0o700)
-        report['stage'] = 'python_install'
-        interpreter = install_python(uv, row, stage / 'python.tar.gz', slot, stage / (name.replace(' ', '-') + '.json'), env)
-        report['stage'] = 'archive_install'
-        dependencies = install_payload(interpreter, verifier, stage / 'marmish.tar.gz', slot, fixture, target, env)
-        app_root = slot / dependencies['root_name']
-        require(app_root.name == 'marmish-' + fixture['marmish_version'] + '-' + target,
-                'verified_archive_basename_changed')
-        for helper in (app_root / 'libexec/marmish').iterdir():
-            if helper.is_file() and not helper.name.endswith('.json'):
-                verify_architecture(helper, target)
-        make_launchers(app_root, interpreter)
-        slots.append((slot, interpreter, app_root))
-    return slots, dependencies
+    first, _ = prepare_slot(root / 'version one', fixture, target, report, env)
+    with hostile_ambient(root, env) as cwd:
+        second, dependencies = prepare_slot(root / 'version-two', fixture, target, report, env, cwd)
+        # Both ran the same exact identity checks; compare their native executable too.
+        require(digest(first[1]) == digest(second[1]), 'clean_hostile_interpreter_identity_mismatch')
+        yield [first, second], dependencies, cwd
+    report['assertions'].append('actual_hostile_ambient_and_cwd_isolation_and_restoration')
+    report['unmet_acceptance'].remove('complete_hostile_ambient_and_cwd_combinations')
 
 
-def native_probe(app_root, env, index):
+def native_probe(app_root, env, index, cwd=None):
     result = {'slot': 'slot_' + str(index), 'exit_code': None, 'signal': None,
               'marker_exact': False, 'output_bytes': 0}
     try:
-        status, raw = run([app_root / 'libexec/marmish/wnd', '--help'], env, capture=True)
+        status, raw = run([app_root / 'libexec/marmish/wnd', '--help'], env, capture=True, cwd=cwd)
         result.update(exit_code=status if status >= 0 else None,
                       signal=-status if status < 0 else None,
                       marker_exact=raw == b'marmish_restricted_start_failed\n', output_bytes=len(raw))
@@ -502,23 +719,28 @@ def accept_native_results(native_results, manifest_contracts, report):
     report['native_execution_probe'] = mode
 
 
-def installed_acceptance(slots, root, launch_env, env, report):
+def installed_acceptance(slots, root, launch_env, env, report, cwd=None):
     native_results = []
     manifest_contracts = []
     for index, (slot, _, app_root) in enumerate(slots, 1):
         for command in ('marmish', 'marmishd'):
-            status, raw = run([app_root / 'scratch-bin' / command, '--help'], launch_env, capture=True)
+            status, raw = run([app_root / 'scratch-bin' / command, '--help'], launch_env, capture=True, cwd=cwd)
             if status != 0:
                 report['launcher_failure'] = {'command': command, 'exit_code': status,
                                                'category': 'installed_help_failed'}
             require(status == 0, 'installed_help_failed')
-        status, raw = run([app_root / 'scratch-bin/marmish', '--doctor'], launch_env, capture=True)
+        status, raw = run([app_root / 'scratch-bin/marmish', '--doctor'], launch_env, capture=True, cwd=cwd)
         require(status == 0 and json.loads(raw)['ok'], 'installed_doctor_failed')
         verify_native_signatures(app_root, env)
         manifest_contracts.append(native_manifest_contract(app_root))
-        native_results.append(native_probe(app_root, launch_env, index))
+        native_results.append(native_probe(app_root, launch_env, index, cwd))
     report['native_probe_results'] = native_results
     accept_native_results(native_results, manifest_contracts, report)
+
+
+def compiler_lookup(rustup, env):
+    # Dedicated host lookup: fixed argv and cwd, never an installed launcher.
+    return _run_process([rustup, 'which', 'rustc'], env, cwd=Path('/'), timeout=10, capture=True)
 
 
 def test_compiler_directory():
@@ -527,13 +749,13 @@ def test_compiler_directory():
     require(compiler is not None, 'test_compiler_missing')
     selected = Path(compiler).resolve(strict=True)
     rustup = shutil.which('rustup')
-    if rustup is not None:
+    if rustup is not None and selected.name == 'rustup':
         # Never run a rustup shim with the disposable HOME: it has no toolchain.
         lookup_env = {'HOME': str(Path.home()), 'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}
         for name in ('RUSTUP_HOME', 'CARGO_HOME'):
             if name in os.environ:
                 lookup_env[name] = os.environ[name]
-        status, raw = run([Path(rustup).resolve(strict=True), 'which', 'rustc'], lookup_env, timeout=10, capture=True)
+        status, raw = compiler_lookup(Path(rustup).resolve(strict=True), lookup_env)
         require(status == 0, 'test_compiler_resolution_failed')
         try:
             selected = Path(raw.decode('utf-8').strip())
@@ -579,7 +801,12 @@ def linux_namespace_preflight(env, report):
             policies[name] = {'value': int(raw) if valid else None, 'category': None if valid else 'invalid_value'}
         except OSError:
             policies[name] = {'value': None, 'category': 'unavailable'}
-    bwrap = ['/usr/bin/bwrap', '--unshare-user', '--unshare-pid', '--uid', '0', '--gid', '0',
+    try:
+        executable = str(bwrap_executable())
+    except Refused as error:
+        report['linux_namespace_preflight'] = {'selection_failure': str(error)}
+        raise
+    bwrap = [executable, '--unshare-user', '--unshare-pid', '--uid', '0', '--gid', '0',
              '--cap-drop', 'ALL', '--die-with-parent', '--new-session', '--clearenv',
              '--setenv', 'PATH', '/usr/bin:/usr/sbin:/bin', '--setenv', 'HOME', '/tmp',
              '--setenv', 'LANG', 'C.UTF-8', '--ro-bind', '/', '/', '--proc', '/proc',
@@ -600,6 +827,7 @@ def full_tools_acceptance(interpreter, env, root, report, failure_log=None):
     compiler = test_compiler_directory()
     test_env = dict(env, PATH=str(interpreter.parent) + ':' + str(compiler) + ':/usr/bin:/bin:/usr/sbin:/sbin')
     linux_namespace_preflight(test_env, report)
+    test_env = test_supervisor(test_env)
     status, raw = run([interpreter, '-I', '-B', '-m', 'unittest', 'discover', '-s', REPO / 'tools', '-p', 'test_*.py', '-q'],
                       test_env, timeout=900, capture=True)
     count = re.search(rb'Ran ([0-9]+) tests?', raw)
@@ -638,6 +866,192 @@ def offline_acceptance(slots, stage, env, launch_env, touched, report):
     report['assertions'].append('offline_retention_after_uv_download_cache_removal_and_version_deletion')
 
 
+def require_uv_hash_mismatch(raw, expected, computed):
+    expected_match = re.search(rb'Expected:\s+([0-9a-f]{64})', raw)
+    computed_match = re.search(rb'Computed:\s+([0-9a-f]{64})', raw)
+    require(b'Caused by: Hash mismatch for `' in raw
+            and expected_match is not None and expected_match[1].decode('ascii') == expected
+            and computed_match is not None and computed_match[1].decode('ascii') == computed,
+            'uv_negative_wrong_failure')
+
+
+def substituted_gzip(original, destination):
+    shutil.copyfile(original, destination)
+    require(destination.stat().st_ino != original.stat().st_ino, 'substitute_inode_unchanged')
+    with destination.open('r+b') as output:
+        header = output.read(10)
+        require(len(header) == 10 and header[:3] == b'\x1f\x8b\x08'
+                and not header[3] & 2, 'substitute_invalid_gzip')
+        output.seek(4)
+        output.write(bytes([header[4] ^ 1]) + header[5:8])
+    with gzip.open(original, 'rb') as first, gzip.open(destination, 'rb') as second:
+        total = 0
+        while True:
+            left, right = first.read(1 << 20), second.read(1 << 20)
+            require(left == right, 'substitute_decompressed_mismatch')
+            total += len(left)
+            require(total <= 512 << 20, 'substitute_decompressed_limit')
+            if not left:
+                break
+    destination.chmod(0o400)
+    require(destination.stat().st_uid == os.geteuid() and not destination.is_symlink(),
+            'substitute_owner_invalid')
+    return digest(destination)
+
+
+def require_no_exposure(slot, staging=None, scope=None):
+    base = slot / 'python'
+    require(not any(base.glob('cpython-*')), 'negative_runtime_exposed')
+    for path in (scope or slot).rglob('*'):
+        if (path.is_file() or path.is_symlink()) and re.fullmatch(r'python(?:[0-9]+(?:\.[0-9]+)*)?', path.name):
+            require(staging is not None and path.is_relative_to(staging), 'negative_interpreter_exposed')
+        require(path.name not in ('scratch-bin', 'bin-launchers'), 'negative_launcher_exposed')
+
+
+def substitution_acceptance(uv, row, archive, root, report):
+    case = root / 'substitution-case'
+    case.mkdir(mode=0o700)
+    env = environment(case)
+    slot = case / 'slot'
+    slot.mkdir()
+    original = case / 'python.tar.gz'
+    shutil.copyfile(archive, original)
+    replacement = case / 'replacement.tar.gz'
+    computed = substituted_gzip(original, replacement)
+    calls = []
+    def replace_after_rehash():
+        calls.append(True)
+        os.replace(replacement, original)
+    try:
+        install_python(uv, row, original, slot, case / 'metadata.json', env,
+                       after_rehash=replace_after_rehash)
+    except UvInstallFailure as error:
+        require_uv_hash_mismatch(error.output, row['python']['sha256'], computed)
+    else:
+        raise Refused('negative_accepted')
+    require(len(calls) == 1, 'substitution_callback_not_called_once')
+    require_no_exposure(slot, scope=case)
+    shutil.rmtree(case)
+    report['assertions'].append('actual_uv_rejects_archive_substituted_after_final_rehash')
+    report['unmet_acceptance'].remove('substituted_archive_after_rehash')
+
+
+class ExtractionObserver:
+    def __init__(self, slot, temporary):
+        self.slot = slot
+        self.temporary = temporary
+        self.observed = False
+        self.staging = None
+
+    def __call__(self, path, info):
+        if path.suffix not in ('.py', '.so', '.dylib'):
+            return
+        base = self.slot / 'python'
+        for parent in (self.temporary, base):
+            if path.is_relative_to(parent):
+                relative = path.relative_to(parent)
+                if len(relative.parts) > 1 and not relative.parts[0].startswith('cpython-'):
+                    self.staging = parent / relative.parts[0]
+                    self.observed = True
+                    return
+
+
+def require_fresh_isolation(fresh, env, previous):
+    require(not previous.exists() and not previous.is_symlink(), 'interruption_debris_visible')
+    root = fresh.parent.resolve(strict=True)
+    require(not fresh.is_symlink(), 'retry_slot_escape')
+    for name in ('HOME', 'TMPDIR', 'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME'):
+        require(Path(env[name]).resolve(strict=True).is_relative_to(root), 'retry_environment_escape')
+    for path in fresh.rglob('*'):
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError:
+            raise Refused('retry_slot_escape') from None
+        require(resolved.is_relative_to(fresh), 'retry_slot_escape')
+
+
+def interruption_acceptance(uv, row, archive, root, report):
+    case = root / 'interruption-case'
+    case.mkdir(mode=0o700)
+    env = environment(case)
+    slot = case / 'slot'
+    slot.mkdir()
+    metadata = case / 'metadata.json'
+    local_metadata(row, archive, metadata)
+    observer = ExtractionObserver(slot, Path(env['TMPDIR']))
+    status, _ = run(uv_command(uv, row, slot, metadata), env, monitor=case, observer=observer)
+    require(status == -signal.SIGKILL and observer.observed and observer.staging is not None,
+            'interruption_not_observed')
+    require_no_exposure(slot, observer.staging, case)
+    shutil.rmtree(case)
+    retry = root / 'interruption-retry'
+    retry.mkdir(mode=0o700)
+    retry_env = environment(retry)
+    fresh = retry / 'fresh-slot'
+    fresh.mkdir()
+    install_python(uv, row, archive, fresh, retry / 'metadata.json', retry_env)
+    require_fresh_isolation(fresh, retry_env, case)
+    shutil.rmtree(retry)
+    report['assertions'].append('actual_interrupted_uv_extraction_no_exposure_and_fresh_retry')
+    report['unmet_acceptance'].remove('interrupted_extraction')
+
+
+def hostile_configuration(root, env):
+    case = root / 'hostile-case'
+    cwd = case / 'unexpected cwd' / 'nested'
+    cwd.mkdir(parents=True)
+    for directory in (case, cwd.parent, cwd):
+        (directory / 'uv.toml').write_text('invalid TOML [\n')
+        (directory / 'pyproject.toml').write_text('[tool.uv]\nunsupported-value = true\n')
+        (directory / '.python-version').write_text('0.0.0-do-not-install\n')
+    configuration = Path(env['XDG_CONFIG_HOME']) / 'uv'
+    configuration.mkdir(exist_ok=True)
+    (configuration / 'uv.toml').write_text('invalid TOML [\n')
+    cache, install = case / 'unused-cache', case / 'unused-install'
+    cache.mkdir()
+    install.mkdir()
+    bad = case / 'bad-metadata.json'
+    bad.write_text('{invalid')
+    sentinels = {'UV_CACHE_DIR': str(cache), 'UV_PYTHON_INSTALL_DIR': str(install),
+                 'UV_PYTHON_DOWNLOADS_JSON_URL': bad.as_uri(), 'PIP_CONFIG_FILE': str(bad),
+                 'PYTHONHOME': str(case / 'missing-python'), 'PYTHONPATH': str(case / 'missing-modules'),
+                 'LD_PRELOAD': str(case / 'missing.so'), 'DYLD_INSERT_LIBRARIES': str(case / 'missing.dylib'),
+                 'MARMISH_RESTRICTED_CONFIG': str(case / 'missing-config')}
+    return cwd, sentinels, (cache, install)
+
+
+@contextlib.contextmanager
+def hostile_ambient(root, env):
+    cwd, sentinels, untouched = hostile_configuration(root, env)
+    allowed = {'HOME', 'PATH', 'LANG', 'LC_ALL', 'TMPDIR', 'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME'}
+    require(set(env) == allowed, 'child_environment_not_allowlisted')
+    before = dict(os.environ)
+    descriptor = os.open('.', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.environ.update(sentinels)
+        os.chdir(cwd)
+        yield cwd
+        require(all(not list(path.iterdir()) for path in untouched), 'hostile_sentinel_used')
+    finally:
+        restored = True
+        try:
+            for name in sentinels:
+                if name in before:
+                    os.environ[name] = before[name]
+                else:
+                    os.environ.pop(name, None)
+        except Exception:
+            restored = False
+        try:
+            os.fchdir(descriptor)
+            restored = restored and os.stat('.').st_ino == os.fstat(descriptor).st_ino
+        except Exception:
+            restored = False
+        finally:
+            os.close(descriptor)
+        require(restored and dict(os.environ) == before, 'ambient_restore_failed')
+
+
 def proof(root, fixture, target, report, failure_log=None):
     row = fixture['targets'][target]
     env = environment(root)
@@ -665,53 +1079,70 @@ def proof(root, fixture, target, report, failure_log=None):
     report['stage'] = 'uv_negative'
     uv_negative_acceptance(uv, row, assets['python'], root, env)
     report['assertions'].append('uv_rejects_bad_digest_missing_archive_and_existing_slot')
+    report['stage'] = 'interrupted_extraction'
+    interruption_acceptance(uv, row, assets['python'], root, report)
+    report['stage'] = 'substituted_archive'
+    substitution_acceptance(uv, row, assets['python'], root, report)
     verifier = root / 'verified-installer.py'
     report['installer_python_sha256'] = embedded_verifier(verifier)
-    slots, dependencies = prepare_slots(root, fixture, target, report, env)
-    report['native_prerequisites'] = dependencies['prerequisites']
-    report['assertions'].extend(['two_absolute_base_interpreters_and_exact_archive_verifier',
-                                 'invalid_cwd_uv_configuration_ignored_and_environment_allowlisted'])
-    report['base_prefixes'] = ['<scratch>/' + slot.name + '/python/<discovered-managed-install>'
-                               for slot, _, _ in slots]
-    report['stage'] = 'launcher_acceptance'
-    first, interpreter, _ = slots[0]
-    report['runtime_audit'] = audit_runtime(first, interpreter, env)
-    argv_acceptance(root, interpreter, env)
-    # Hostile ambient state cannot affect the allowlisted env or --no-config uv.
-    sentinel = root / 'sentinel'
-    sentinel.mkdir()
-    touched = root / 'python-sentinel-used'
-    fake = sentinel / 'python3'
-    fake.write_text('#!/bin/sh\ntouch ' + shlex.quote(str(touched)) + '\nexit 93\n')
-    fake.chmod(0o700)
-    launch_env = dict(env, PATH=str(sentinel) + ':/usr/bin:/bin')
-    installed_acceptance(slots, root, launch_env, env, report)
-    require(not touched.exists(), 'path_python_was_used')
-    report['assertions'].append('installed_help_doctor_restricted_guard_and_literal_argv'
-                                if platform.system() == 'Darwin' else
-                                'installed_help_doctor_native_help_and_literal_argv')
-    report['native_version_flag_supported'] = False
-    report['system_python_dependency'] = ('linux_doctor_and_sandbox_still_require_usr_bin_python3'
-                                          if platform.system() == 'Linux' else 'no_linux_dependency_claim')
+    with prepare_slots(root, fixture, target, report, env) as (slots, dependencies, cwd):
+        report['native_prerequisites'] = dependencies['prerequisites']
+        report['assertions'].extend(['two_absolute_base_interpreters_and_exact_archive_verifier',
+                                     'invalid_cwd_uv_configuration_ignored_and_environment_allowlisted'])
+        report['base_prefixes'] = ['<scratch>/' + slot.name + '/python/<discovered-managed-install>'
+                                   for slot, _, _ in slots]
+        report['stage'] = 'launcher_acceptance'
+        first, interpreter, _ = slots[0]
+        report['runtime_audit'] = audit_runtime(first, interpreter, env)
+        argv_acceptance(root, interpreter, env, cwd)
+        # Hostile ambient state cannot affect the allowlisted env or --no-config uv.
+        sentinel = root / 'sentinel'
+        sentinel.mkdir()
+        touched = root / 'python-sentinel-used'
+        fake = sentinel / 'python3'
+        fake.write_text('#!/bin/sh\ntouch ' + shlex.quote(str(touched)) + '\nexit 93\n')
+        fake.chmod(0o700)
+        launch_env = dict(env, PATH=str(sentinel) + ':/usr/bin:/bin')
+        installed_acceptance(slots, root, launch_env, env, report, cwd)
+        require(not touched.exists(), 'path_python_was_used')
+        report['assertions'].append('installed_help_doctor_restricted_guard_and_literal_argv'
+                                    if platform.system() == 'Darwin' else
+                                    'installed_help_doctor_native_help_and_literal_argv')
+        report['native_version_flag_supported'] = False
+        report['system_python_dependency'] = ('linux_doctor_and_sandbox_still_require_usr_bin_python3'
+                                              if platform.system() == 'Linux' else 'no_linux_dependency_claim')
     full_tools_acceptance(slots[1][1], env, root, report, failure_log)
     offline_acceptance(slots, stage, env, launch_env, touched, report)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--total-timeout', type=int, default=1320)
+    parser.add_argument('--ci-context')
+    parser.add_argument('--require-bwrap-helper', action='store_true')
     parser.add_argument('--report', required=True, type=Path)
     parser.add_argument('--failure-log', type=Path, help='Private local diagnostic only; never upload this file')
     options = parser.parse_args(argv)
+    options.report = options.report.absolute()
+    if options.failure_log is not None:
+        options.failure_log = options.failure_log.absolute()
     report = {'schema': 1, 'ok': False, 'assertions': [], 'failure': None,
               'cleanup': 'not_started', 'home_unchanged': False,
               'unmet_acceptance': ['interrupted_extraction', 'substituted_archive_after_rehash',
                                    'complete_hostile_ambient_and_cwd_combinations']}
     before = None
     owned_root = None
+    handler_state = None
     try:
+        handler_state = install_interrupt_handlers(options.total_timeout)
+        report['total_timeout_seconds'] = options.total_timeout
         require(os.geteuid() != 0, 'root_refused')
         target = TARGETS.get((platform.system(), platform.machine()))
         require(target is not None, 'unsupported_target')
+        if options.ci_context is not None:
+            report['ci'] = ci_context(options.ci_context, target)
+        initialize_helper(options.require_bwrap_helper, report)
+        report['host'] = host_facts()
         fixture = json.loads(FIXTURE.read_bytes())
         report.update(target=target, uv_version=fixture['uv_version'], python_version=fixture['python_version'],
                       marmish_version=fixture['marmish_version'], assets=fixture['targets'][target],
@@ -728,6 +1159,8 @@ def main(argv=None):
             report['ok'] = True
     except Refused as error:
         report['failure'] = str(error)
+    except KeyboardInterrupt:
+        report['failure'] = 'interrupted'
     except Exception as error:
         report['failure'] = 'unexpected_local_failure'
         report['error_type'] = type(error).__name__
@@ -735,6 +1168,8 @@ def main(argv=None):
         report['error_frames'] = [{'file': Path(frame.filename).name, 'line': frame.lineno,
                                    'function': frame.name} for frame in traceback.extract_tb(error.__traceback__)[-8:]]
     finally:
+        if handler_state is not None:
+            restore_interrupt_handlers(handler_state)
         if owned_root is not None:
             report['cleanup'] = 'incomplete' if owned_root.exists() else 'complete'
             if report['cleanup'] != 'complete':

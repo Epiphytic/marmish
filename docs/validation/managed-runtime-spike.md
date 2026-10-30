@@ -68,11 +68,26 @@ the complete native packaging results and its conditionally approved design.
 
 ## Remaining acceptance gaps
 
-Native CI and any outstanding
-design cases must pass before phase acceptance. Current unit tests cover archive
-headers, link/path refusal and environment construction; they do not establish
-an end-to-end interrupted extraction, a substituted archive after the final
-rehash, or all hostile ambient-configuration/current-directory combinations.
+The three previously outstanding executable cases passed in actual local
+[Trial13](managed-runtime-completion-trial13.md): interrupted extraction with
+fresh retry, post-rehash substituted-archive rejection, and hostile ambient/cwd
+isolation. Those results are separate from unit coverage. Trial14 preserves a
+later integration failure from outdated workflow assertions; Trial15 preserves
+a passing integration run with five new optional-dependency skips, subsequently
+removed from the workflow tests. Native acceptance remains incomplete.
+[Final local Trial16](managed-runtime-selfhosted-trial16.md) passed 478 tools
+tests with the original seven reported skips, all executable cases, offline
+retention, cleanup and home checks. The separate authenticated-helper smoke
+passed its actual bootstrap/probe, selection/provenance, namespace and cleanup
+checks. It is not a full helper-mode proof or three-platform evidence.
+
+[Hosted run 41138717122](managed-runtime-native-41138717122.md) passed all three
+installer/PTY jobs. Both Linux managed proofs failed required namespace tests;
+macOS passed both exact native startup-guard probes but the full suite hit its
+900-second child timeout. Cleanup/home checks passed on all three. The
+[self-hosted design](../phases/managed-runtime-self-hosted.md) retains all gates
+and introduces authenticated helper selection; queued jobs are absent evidence,
+not a pass. Runner-group policy remains unverified with available API access.
 The expanded-size monitor polls, so its 1GiB limit is a best-effort detection
 bound rather than a hard filesystem quota. These limits must not be represented
 as completed security or confinement guarantees. uv installation itself uses

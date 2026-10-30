@@ -23,6 +23,18 @@ exercise the proposed interpreter alongside the existing installer/PTY gates.
 See [validation status](validation/managed-runtime-spike.md); packaging acceptance
 and the [production bootstrap](phases/managed-bootstrap.md) remain pending.
 These tests do not change the current installation command or release.
+Local Linux AMD64 [Trial16](validation/managed-runtime-selfhosted-trial16.md)
+passed all executable packaging cases, 478 tools tests with 7 reported skips,
+and enforced offline retention checks. A separate authenticated-helper smoke
+passed selection/provenance, namespace enforcement and owned cleanup; it is not
+a full helper-mode proof. Historical Trials13–15 retain earlier results and
+integration gaps. [Hosted run 41138717122](validation/managed-runtime-native-41138717122.md)
+passed all installer/PTY jobs, but both Linux managed suites failed namespace
+gates and macOS hit its full-suite deadline after passing both exact native
+startup-guard probes. The [self-hosted proof design](phases/managed-runtime-self-hosted.md)
+adds explicit authenticated-helper selection, bounded cancellation reporting and
+an independent canonical-master proof job. Actual native results and runner-group
+policy remain required; queued jobs provide no acceptance evidence.
 
 ## Purpose and intended product
 

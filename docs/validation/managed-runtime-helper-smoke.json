@@ -1,0 +1,56 @@
+{
+  "bootstrap_exit_code": 0,
+  "bwrap_helper": {
+    "architecture": "amd64",
+    "executable_sha256": "e318903862396f96de3df57264e0158682b952fd3fb53ac23d876413e7b30f71",
+    "keyring_sha256": "80a36b0a6de2f69f49d2df75ef473ccde121e9e190b9ea01d20a4f63778d5c31",
+    "package_sha256": "2461f1beee9cb04c8942739fe1a2b37e7b7c2a3d518f0779dc75f9245baa3094",
+    "package_version": "0.9.0-1ubuntu0.3",
+    "suite": "noble",
+    "version": "bubblewrap 0.9.0"
+  },
+  "bwrap_source": "helper",
+  "cleanup": "complete",
+  "failure": null,
+  "helper_cleanup": "complete",
+  "linux_namespace_preflight": {
+    "bare_unshare": {
+      "denied_operation_hint": null,
+      "exit_code": 0,
+      "signal": null
+    },
+    "bwrap": {
+      "denied_operation_hint": null,
+      "exit_code": 0,
+      "signal": null
+    },
+    "policy": {
+      "apparmor_restrict_unprivileged_userns": {
+        "category": null,
+        "value": 0
+      },
+      "max_user_namespaces": {
+        "category": null,
+        "value": 510960
+      },
+      "unprivileged_userns_clone": {
+        "category": null,
+        "value": 1
+      }
+    },
+    "tools_present": {
+      "ip": true,
+      "sysctl": false
+    },
+    "unshare_preparation_bwrap": {
+      "denied_operation_hint": null,
+      "exit_code": 0,
+      "signal": null
+    }
+  },
+  "offline_network": "network_namespace_enforced",
+  "ok": true,
+  "pair_only_in_supervisor": true,
+  "probe_exit_code": 0,
+  "schema": 1
+}

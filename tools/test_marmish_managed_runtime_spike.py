@@ -238,12 +238,66 @@ class ManagedRuntimeTests(unittest.TestCase):
         compiler.write_bytes(b'fixture')
         compiler.chmod(0o700)
         with patch.object(spike.shutil, 'which', return_value=str(shim)), \
-                patch.object(spike, 'run', return_value=(0, str(compiler).encode())) as lookup:
+                patch.object(spike, 'compiler_lookup', return_value=(0, str(compiler).encode())) as lookup:
             self.assertEqual(spike.test_compiler_directory(), compiler.parent)
         command, env = lookup.call_args.args
-        self.assertEqual(command, [shim, 'which', 'rustc'])
+        self.assertEqual(command, shim)
         self.assertEqual(set(env), {'HOME', 'PATH', 'LANG', 'LC_ALL'})
-        self.assertLessEqual(lookup.call_args.kwargs['timeout'], 10)
+
+    def test_direct_compiler_ignores_unrelated_rustup(self):
+        compiler = self.root / 'toolchain/bin/rustc'
+        compiler.parent.mkdir(parents=True)
+        compiler.write_bytes(b'fixture')
+        compiler.chmod(0o700)
+        unrelated = self.root / 'rustup'
+        unrelated.write_bytes(b'fixture')
+        with patch.object(spike.shutil, 'which', side_effect=[str(compiler), str(unrelated)]), \
+                patch.object(spike, 'compiler_lookup') as lookup:
+            self.assertEqual(spike.test_compiler_directory(), compiler.parent)
+        lookup.assert_not_called()
+
+    def test_no_exposure_checks_entire_interrupted_case(self):
+        slot = self.root / 'slot'
+        slot.mkdir()
+        staging = self.root / 'tmp/staging'
+        staging.mkdir(parents=True)
+        (staging / 'python3').write_bytes(b'partial')
+        spike.require_no_exposure(slot, staging, self.root)
+        (self.root / 'escaped/python3').parent.mkdir()
+        (self.root / 'escaped/python3').write_bytes(b'partial')
+        with self.assertRaisesRegex(spike.Refused, 'negative_interpreter_exposed'):
+            spike.require_no_exposure(slot, staging, self.root)
+
+    def test_no_exposure_covers_other_python_versions_and_tmpdir(self):
+        slot = self.root / 'slot'
+        slot.mkdir()
+        temporary = self.root / 'tmp'
+        temporary.mkdir()
+        for name in ('python', 'python3', 'python3.14', 'python2.7', 'python3.13.13'):
+            with self.subTest(name=name):
+                path = temporary / name
+                path.write_bytes(b'interpreter')
+                with self.assertRaisesRegex(spike.Refused, 'negative_interpreter_exposed'):
+                    spike.require_no_exposure(slot, scope=self.root)
+                path.unlink()
+
+    def test_retry_isolation_rejects_links_to_removed_case_and_external_environment(self):
+        retry = self.root / 'retry'
+        retry.mkdir()
+        env = spike.environment(retry)
+        fresh = retry / 'fresh'
+        fresh.mkdir()
+        previous = self.root / 'removed-case'
+        spike.require_fresh_isolation(fresh, env, previous)
+        link = fresh / 'stale-runtime'
+        link.symlink_to(previous / 'python', target_is_directory=True)
+        with self.assertRaisesRegex(spike.Refused, 'retry_slot_escape'):
+            spike.require_fresh_isolation(fresh, env, previous)
+        link.unlink()
+        external = self.root / 'outside'
+        external.mkdir()
+        with self.assertRaisesRegex(spike.Refused, 'retry_environment_escape'):
+            spike.require_fresh_isolation(fresh, dict(env, TMPDIR=str(external)), previous)
 
     def test_setup_class_failure_identifier_is_safely_reported(self):
         report = {'assertions': []}
@@ -467,6 +521,361 @@ class ManagedRuntimeTests(unittest.TestCase):
             self.assertEqual(len(report['native_probe_results']), 2)
             self.assertTrue(all(row['category'] == category for row in report['native_probe_results']))
             self.assertNotIn('private-secret', json.dumps(report))
+
+    def test_owned_cwd_refuses_relative_symlink_and_outside_before_spawn(self):
+        env = spike.environment(self.root)
+        link = self.root / 'link'
+        link.symlink_to(Path(env['HOME']), target_is_directory=True)
+        for cwd in (Path('relative'), link, Path('/')):
+            with self.subTest(cwd=cwd), patch.object(spike.subprocess, 'Popen') as spawn:
+                with self.assertRaisesRegex(spike.Refused, 'child_cwd_refused'):
+                    spike.run(['/usr/bin/true'], env, cwd=cwd)
+                spawn.assert_not_called()
+
+    def test_observer_kills_only_live_child_and_requires_sigkill(self):
+        import sys
+        env = spike.environment(self.root)
+        slot = self.root / 'slot'
+        slot.mkdir()
+        marker = Path(env['TMPDIR']) / 'unpacked/lib/test.py'
+        code = ('import pathlib,time; p=pathlib.Path(' + repr(str(marker))
+                + ');p.parent.mkdir(parents=True);p.write_text("fixture");time.sleep(30)')
+        observer = spike.ExtractionObserver(slot, Path(env['TMPDIR']))
+        status, _ = spike.run([sys.executable, '-I', '-c', code], env, monitor=self.root,
+                              observer=observer, timeout=5)
+        self.assertEqual(status, -spike.signal.SIGKILL)
+        self.assertTrue(observer.observed)
+        self.assertEqual(observer.staging, marker.parents[1])
+
+    def test_early_completion_or_natural_error_does_not_count_as_interruption(self):
+        env = spike.environment(self.root)
+        for code in ('0', '7'):
+            observer = spike.ExtractionObserver(self.root / 'slot', Path(env['TMPDIR']))
+            with self.subTest(code=code), self.assertRaisesRegex(spike.Refused, 'finished_before_interruption'):
+                spike.run(['/bin/sh', '-c', 'exit ' + code], env, monitor=self.root, observer=observer)
+
+    def test_observer_exception_fails_closed_and_cleans_group(self):
+        env = spike.environment(self.root)
+        marker = self.root / 'observed.py'
+        marker.write_text('fixture')
+        class Broken:
+            observed = False
+            def __call__(self, path, info): raise ValueError('private-observer-error')
+        with patch.object(spike.os, 'killpg', wraps=os.killpg) as cleanup:
+            with self.assertRaisesRegex(spike.Refused, 'interruption_observer_failed'):
+                spike.run(['/bin/sleep', '30'], env, monitor=self.root, observer=Broken())
+        self.assertTrue(cleanup.called)
+
+    def test_surviving_group_is_detected_and_walk_is_finite(self):
+        with patch.object(spike.os, 'killpg'), patch.object(spike.time, 'monotonic', side_effect=[0, 1, 3]), \
+                patch.object(spike.time, 'sleep'):
+            with self.assertRaisesRegex(spike.Refused, 'interruption_group_survived'):
+                spike.require_group_gone(123)
+        file = self.root / 'file'
+        file.write_bytes(b'x')
+        with patch.object(Path, 'rglob', return_value=iter([file] * 50001)):
+            with self.assertRaisesRegex(spike.Refused, 'runtime_entry_count_limit'):
+                spike.total_bytes(self.root)
+
+    def test_gzip_substitution_changes_only_header_and_equal_bounded_stream(self):
+        import gzip
+        original, replacement = self.root / 'original.gz', self.root / 'replacement.gz'
+        original.write_bytes(gzip.compress(b'valid distribution fixture', mtime=0))
+        computed = spike.substituted_gzip(original, replacement)
+        first, second = original.read_bytes(), replacement.read_bytes()
+        self.assertEqual(first[:4] + first[8:], second[:4] + second[8:])
+        self.assertNotEqual(spike.digest(original), computed)
+        self.assertEqual(gzip.decompress(first), gzip.decompress(second))
+        self.assertEqual(replacement.stat().st_mode & 0o777, 0o400)
+        invalid = self.root / 'invalid.gz'
+        invalid.write_bytes(b'not gzip')
+        with self.assertRaisesRegex(spike.Refused, 'substitute_invalid_gzip'):
+            spike.substituted_gzip(invalid, self.root / 'invalid-copy.gz')
+
+    def test_substitution_requires_exact_expected_and_computed_digests(self):
+        raw = b'Caused by: Hash mismatch for `python` Expected: ' + b'1' * 64 + b' Computed: ' + b'2' * 64
+        spike.require_uv_hash_mismatch(raw, '1' * 64, '2' * 64)
+        for expected, computed in [('3' * 64, '2' * 64), ('1' * 64, '4' * 64)]:
+            with self.assertRaisesRegex(spike.Refused, 'uv_negative_wrong_failure'):
+                spike.require_uv_hash_mismatch(raw, expected, computed)
+
+    def test_substitution_uncalled_hook_or_acceptance_fails(self):
+        archive = self.root / 'original.tar.gz'
+        archive.write_bytes(b'fixture')
+        raw = (b'Caused by: Hash mismatch for `python` Expected: '
+               + self.row['python']['sha256'].encode() + b' Computed: ' + b'1' * 64)
+        for index, (effect, category) in enumerate([(spike.UvInstallFailure(raw), 'substitution_callback_not_called_once'),
+                                                    (None, 'negative_accepted')]):
+            root = self.root / str(index)
+            root.mkdir()
+            with patch.object(spike, 'substituted_gzip', return_value='1' * 64), \
+                    patch.object(spike, 'install_python', side_effect=effect):
+                with self.assertRaisesRegex(spike.Refused, category):
+                    spike.substitution_acceptance(self.root / 'uv', self.row, archive, root, {})
+
+    def test_after_rehash_hook_runs_once_before_uv_and_private_failure(self):
+        archive = self.root / 'python.tar.gz'
+        archive.write_bytes(b'fixture')
+        env = spike.environment(self.root)
+        slot = self.root / 'slot'
+        slot.mkdir()
+        events = []
+        with patch.object(spike, 'verify_asset', side_effect=lambda *args: events.append('verify')), \
+                patch.object(spike, 'run', return_value=(1, b'private failure')):
+            with self.assertRaises(spike.UvInstallFailure) as failure:
+                spike.install_python(self.root / 'uv', self.row, archive, slot, self.root / 'meta.json', env,
+                                     after_rehash=lambda: events.append('hook'))
+        self.assertEqual(events, ['verify', 'hook'])
+        self.assertEqual(failure.exception.output, b'private failure')
+        self.assertEqual(str(failure.exception), 'uv_install_failed')
+
+    def test_hostile_ambient_restores_environment_and_cwd_on_success_and_error(self):
+        before = dict(os.environ)
+        original = Path.cwd()
+        for index, fail in enumerate((False, True)):
+            root = self.root / str(index)
+            root.mkdir()
+            env = spike.environment(root)
+            try:
+                with spike.hostile_ambient(root, env) as cwd:
+                    self.assertEqual(Path.cwd(), cwd)
+                    self.assertEqual(os.environ['UV_CACHE_DIR'], str(root / 'hostile-case/unused-cache'))
+                    self.assertEqual(env['HOME'], str(root / 'home'))
+                    if fail: raise ValueError('intentional')
+            except ValueError:
+                self.assertTrue(fail)
+            self.assertEqual(dict(os.environ), before)
+            self.assertEqual(Path.cwd(), original)
+
+    def test_restoration_failure_is_not_accepted(self):
+        env = spike.environment(self.root)
+        descriptor = os.open('.', os.O_RDONLY | os.O_DIRECTORY)
+        restore = os.fchdir
+        try:
+            with patch.object(spike.os, 'fchdir', side_effect=OSError('private-error')):
+                with self.assertRaisesRegex(spike.Refused, 'ambient_restore_failed'):
+                    with spike.hostile_ambient(self.root, env): pass
+        finally:
+            restore(descriptor)
+            os.close(descriptor)
+
+    def test_relative_report_is_resolved_before_caller_cwd_changes(self):
+        descriptor = os.open('.', os.O_RDONLY | os.O_DIRECTORY)
+        elsewhere = self.root / 'elsewhere'
+        elsewhere.mkdir()
+        try:
+            os.chdir(self.root)
+            with patch.object(spike, 'proof', side_effect=lambda *args: os.chdir(elsewhere)), \
+                    patch.object(spike, 'home_snapshot', return_value={}):
+                self.assertEqual(spike.main(['--report', 'report.json']), 0)
+            self.assertTrue((self.root / 'report.json').is_file())
+            self.assertFalse((elsewhere / 'report.json').exists())
+        finally:
+            os.fchdir(descriptor)
+            os.close(descriptor)
+
+
+class SelfHostedRuntimeTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+
+    def test_ci_context_exact_grammar_and_native_target(self):
+        valid = 'a' * 40 + ':123:2:linux-x64'
+        result = spike.ci_context(valid, 'x86_64-unknown-linux-gnu')
+        self.assertEqual(result['workflow'], 'native-validation')
+        self.assertEqual(result['runner_class'], ['self-hosted', 'Linux', 'X64', 'bel-ci'])
+        for raw in (valid + ':extra', valid.upper(), valid.replace(':123:', ':0123:'),
+                    valid.replace(':2:', ':0:'), valid.replace(':123:', ':' + '1'*21 + ':'),
+                    valid.replace(':2:', ':1234567:'), valid + ' ', valid.replace('linux-x64', 'macos-arm64')):
+            with self.subTest(raw=raw), self.assertRaisesRegex(spike.Refused, 'ci_context_invalid'):
+                spike.ci_context(raw, 'x86_64-unknown-linux-gnu')
+
+    def test_selection_fixed_categories_and_unknown_redaction(self):
+        from marmish_transport_sandbox import SandboxError
+        for category in (*spike.BWRAP_CATEGORIES, 'private-path-secret'):
+            with self.subTest(category=category), \
+                    patch('marmish_transport_sandbox.validated_bwrap', side_effect=SandboxError(category)):
+                expected = category if category in spike.BWRAP_CATEGORIES else 'unknown'
+                with self.assertRaisesRegex(spike.Refused, '^bwrap_selection:' + expected + '$'):
+                    spike.bwrap_executable()
+
+    def test_required_helper_and_darwin_refuse_configuration(self):
+        with patch.object(spike.platform, 'system', return_value='Linux'), \
+                patch.object(spike, 'verified_helper_pair', return_value={}), \
+                patch.object(spike, 'bwrap_executable', return_value=Path('/usr/bin/bwrap')):
+            with self.assertRaisesRegex(spike.Refused, 'bwrap_helper_required'):
+                spike.initialize_helper(True, {})
+            report = {}
+            spike.initialize_helper(False, report)
+            self.assertEqual(report, {'bwrap_source': 'system'})
+        with patch.object(spike.platform, 'system', return_value='Darwin'), patch.dict(os.environ, {}, clear=True):
+            spike.initialize_helper(False, {})
+            with self.assertRaisesRegex(spike.Refused, 'bwrap_configuration_on_darwin'):
+                spike.initialize_helper(True, {})
+            with patch.dict(os.environ, {'MARMISH_BWRAP_UNRECOGNIZED': 'sentinel'}):
+                with self.assertRaisesRegex(spike.Refused, 'bwrap_configuration_on_darwin'):
+                    spike.initialize_helper(False, {})
+
+    def selected_fixture(self):
+        binary = self.root / 'helper/bin/bwrap'
+        binary.parent.mkdir(parents=True)
+        binary.write_bytes(b'not executed')
+        binary.chmod(0o755)
+        pair = {'MARMISH_BWRAP': str(binary), 'MARMISH_BWRAP_SHA256': spike.digest(binary)}
+        provenance = {'suite': 'noble', 'architecture': 'amd64', 'package_version': '0.9.0-1ubuntu0.3',
+                      'keyring_sha256': 'a'*64, 'package_sha256': 'b'*64,
+                      'executable_sha256': pair['MARMISH_BWRAP_SHA256'], 'version': 'bubblewrap 0.9.0',
+                      'private_path': 'must not export'}
+        path = binary.parent.parent / 'provenance.json'
+        path.write_text(json.dumps(provenance))
+        return binary, pair, provenance, path
+
+    def test_helper_provenance_is_bounded_digest_bound_and_allowlisted(self):
+        binary, pair, original, path = self.selected_fixture()
+        with patch.object(spike.platform, 'machine', return_value='x86_64'), patch.dict(os.environ, pair):
+            result = spike.helper_provenance(pair)
+            self.assertNotIn('private_path', result)
+            for key, value in [('executable_sha256', '0'*64), ('architecture', 'arm64'),
+                               ('version', 'private raw output'), ('suite', ['noble']),
+                               ('package_version', 7)]:
+                invalid = dict(original); invalid[key] = value
+                path.write_text(json.dumps(invalid))
+                with self.subTest(key=key), self.assertRaisesRegex(spike.Refused, 'bwrap_provenance_invalid'):
+                    spike.helper_provenance(pair)
+            path.write_bytes(b'x' * 65537)
+            with self.assertRaisesRegex(spike.Refused, 'bwrap_provenance_invalid'):
+                spike.helper_provenance(pair)
+            path.unlink(); path.symlink_to(self.root / 'missing')
+            with self.assertRaisesRegex(spike.Refused, 'bwrap_provenance_invalid'):
+                spike.helper_provenance(pair)
+
+    def test_actual_helper_validation_rejects_half_pair_mutation_permissions_and_symlink(self):
+        binary, pair, _, _ = self.selected_fixture()
+        with patch.dict(os.environ, pair):
+            self.assertEqual(spike.bwrap_executable(), binary)
+            binary.write_bytes(b'altered')
+            with self.assertRaisesRegex(spike.Refused, 'bwrap_selection:bwrap_hash_mismatch'):
+                spike.bwrap_executable()
+            binary.chmod(0o777)
+            with self.assertRaisesRegex(spike.Refused, 'bwrap_selection:unsafe_bwrap_executable'):
+                spike.bwrap_executable()
+            binary.chmod(0o755)
+            binary.rename(binary.with_name('actual')); binary.symlink_to('actual')
+            with self.assertRaisesRegex(spike.Refused, 'bwrap_selection:unsafe_bwrap_path'):
+                spike.bwrap_executable()
+        with patch.dict(os.environ, {'MARMISH_BWRAP': str(binary)}, clear=True):
+            with self.assertRaisesRegex(spike.Refused, 'bwrap_selection:invalid_bwrap_selection'):
+                spike.verified_helper_pair()
+
+    def test_pair_reaches_only_full_suite_and_never_probe_or_application_environment(self):
+        pair = {'MARMISH_BWRAP': '/verified/helper', 'MARMISH_BWRAP_SHA256': 'a'*64}
+        env = spike.environment(self.root)
+        with patch.object(spike.platform, 'system', return_value='Linux'), \
+                patch.object(spike, 'verified_helper_pair', return_value=pair), \
+                patch.object(spike, 'test_compiler_directory', return_value=self.root), \
+                patch.object(spike, 'linux_namespace_preflight') as probe, \
+                patch.object(spike, 'run', return_value=(0, b'Ran 1 test in 0.1s')) as run:
+            spike.full_tools_acceptance(self.root / 'python', env, self.root, {'assertions': []})
+        suite_env = run.call_args.args[1]
+        self.assertEqual({key:suite_env[key] for key in pair}, pair)
+        self.assertFalse(set(pair) & probe.call_args.args[0].keys())
+        self.assertFalse(set(pair) & env.keys())
+        self.assertNotIn('EPIPHYTIC_EXECUTION_ID', suite_env)
+
+    def test_diagnostic_and_offline_builders_use_verified_absolute_executable_without_pair(self):
+        env = spike.environment(self.root)
+        report = {}
+        with patch.object(spike.platform, 'system', return_value='Linux'), \
+                patch.object(spike, 'bwrap_executable', return_value=Path('/verified/helper')), \
+                patch.object(spike, 'run', return_value=(0, b'')) as run:
+            prefix, mode = spike.network_prefix(self.root / 'python', env)
+            self.assertEqual(prefix[0], '/verified/helper')
+            self.assertEqual(mode, 'network_namespace_enforced')
+            spike.linux_namespace_preflight(env, report)
+        for call in run.call_args_list:
+            self.assertFalse({'MARMISH_BWRAP','MARMISH_BWRAP_SHA256'} & call.args[1].keys())
+        self.assertEqual(run.call_args_list[-2].args[0][0], '/verified/helper')
+        with patch.object(spike.platform, 'system', return_value='Linux'), \
+                patch.object(spike, 'bwrap_executable', side_effect=spike.Refused('bwrap_selection:unsafe_bwrap_path')):
+            with self.assertRaisesRegex(spike.Refused, 'bwrap_selection:unsafe_bwrap_path'):
+                spike.network_prefix(self.root / 'python', env)
+            with self.assertRaises(spike.Refused):
+                spike.linux_namespace_preflight(env, report)
+            self.assertEqual(report['linux_namespace_preflight']['selection_failure'], 'bwrap_selection:unsafe_bwrap_path')
+
+    def test_real_interruptions_reap_child_cleanup_and_emit_report(self):
+        import signal
+        import subprocess
+        import sys
+        import time
+        for mode in ('term', 'keyboard', 'deadline'):
+            with self.subTest(mode=mode):
+                marker = self.root / (mode + '.pid')
+                report = self.root / (mode + '.json')
+                code = ('import sys,os;sys.path.insert(0,' + repr(str(spike.REPO/'tools')) + ');'
+                        'import marmish_managed_runtime_spike as s;'
+                        's.home_snapshot=lambda p:{};s.initialize_helper=lambda *a:None;'
+                        's.proof=lambda root,*a:s.run(["/bin/sh","-c",'
+                        '"echo $$ > "+' + repr(str(marker)) + '+"; exec /bin/sleep 30"],s.environment(root));'
+                        'raise SystemExit(s.main(["--report",' + repr(str(report)) + ',"--total-timeout","1" if '
+                        + repr(mode) + '=="deadline" else "10"]))')
+                child = subprocess.Popen([sys.executable, '-I', '-B', '-c', code],
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                try:
+                    deadline = time.monotonic() + 5
+                    while not marker.exists() and child.poll() is None and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertTrue(marker.exists())
+                    owned_pid = int(marker.read_text())
+                    if mode != 'deadline':
+                        child.send_signal(signal.SIGTERM if mode == 'term' else signal.SIGINT)
+                    self.assertEqual(child.wait(timeout=7), 1)
+                    result = json.loads(report.read_text())
+                    self.assertEqual(result['failure'], 'total_timeout' if mode == 'deadline' else 'interrupted')
+                    self.assertEqual(result['cleanup'], 'complete')
+                    self.assertFalse(result['ok'])
+                    with self.assertRaises(ProcessLookupError):
+                        os.kill(owned_pid, 0)
+                finally:
+                    if child.poll() is None: child.kill()
+                    child.wait()
+
+    def test_main_ci_context_and_helper_refusals_emit_exclusive_reports_before_proof(self):
+        for arguments, category in [(['--ci-context', 'private-invalid-context'], 'ci_context_invalid'),
+                                    (['--require-bwrap-helper'], 'bwrap_helper_required')]:
+            report = self.root / (category + '.json')
+            with patch.object(spike.platform, 'system', return_value='Linux'), \
+                    patch.object(spike.platform, 'machine', return_value='x86_64'), \
+                    patch.object(spike, 'verified_helper_pair', return_value={}), \
+                    patch.object(spike, 'proof') as proof:
+                self.assertEqual(spike.main(['--report', str(report), *arguments]), 1)
+            proof.assert_not_called()
+            result = json.loads(report.read_text())
+            self.assertEqual(result['failure'], category)
+            self.assertNotIn('private-invalid-context', report.read_text())
+            self.assertEqual(report.stat().st_mode & 0o777, 0o600)
+
+    def test_host_facts_keep_only_bounded_distribution_identifiers(self):
+        with patch.object(spike.platform, 'system', return_value='Linux'), \
+                patch.object(spike.platform, 'machine', return_value='x86_64'), \
+                patch.object(spike.platform, 'freedesktop_os_release', return_value={
+                    'ID':'ubuntu', 'VERSION_ID':'26.04', 'PRETTY_NAME':'private host label'}):
+            result = spike.host_facts()
+        self.assertEqual(result['distribution'], {'id':'ubuntu', 'version_id':'26.04'})
+        self.assertNotIn('private', json.dumps(result))
+
+    def test_handlers_and_existing_timer_are_restored(self):
+        import signal
+        old = {number:signal.getsignal(number) for number in (signal.SIGALRM, signal.SIGTERM)}
+        state = spike.install_interrupt_handlers(5)
+        spike.restore_interrupt_handlers(state)
+        self.assertEqual({number:signal.getsignal(number) for number in old}, old)
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+        for timeout in (0, -1, 1321):
+            with self.assertRaisesRegex(spike.Refused, 'total_timeout_invalid'):
+                spike.install_interrupt_handlers(timeout)
 
 
 if __name__=='__main__':

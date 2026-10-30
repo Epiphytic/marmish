@@ -220,10 +220,28 @@ class CoordinatorTests(unittest.TestCase):
     def test_workflow_has_fixed_trust_boundary_and_token_only_in_polling_steps(self):
         workflow = (Path(__file__).parents[1] / '.github/workflows/native-validation.yml').read_text()
         self.assertIn('branches: [master]', workflow)
-        self.assertNotIn('workflow_dispatch', workflow)
+        self.assertIn('  workflow_dispatch:\npermissions:', workflow)
         self.assertNotIn('pull_request', workflow)
-        self.assertEqual(workflow.count("if: github.ref == 'refs/heads/master'"), 2)
+        push_guard = ("    if: github.repository == 'Epiphytic/marmish' && "
+                      "github.ref == 'refs/heads/master' && github.event_name == 'push'\n")
+        for name in ('native', 'live'):
+            self.assertIn('  ' + name + ':\n' + push_guard, workflow)
+        managed = workflow.split('  managed-proof:\n', 1)[1]
+        self.assertTrue(managed.startswith(
+            "    if: github.repository == 'Epiphytic/marmish' && "
+            "github.ref == 'refs/heads/master' && "
+            "(github.event_name == 'push' || github.event_name == 'workflow_dispatch')\n"))
+        self.assertNotIn('GITHUB_TOKEN:', managed)
         self.assertEqual(workflow.count('GITHUB_TOKEN:'), 2)
+        token_steps = []
+        step_name = None
+        for line in workflow.splitlines():
+            if line.startswith('      - name: '):
+                step_name = line.removeprefix('      - name: ')
+            if 'GITHUB_TOKEN:' in line:
+                token_steps.append(step_name)
+        self.assertEqual(token_steps, ['Wait for peer identity in this run attempt',
+                                      'Wait for peer actual readiness'])
         self.assertIn('persist-credentials: false', workflow)
         self.assertIn('max-parallel: 1', workflow)
         self.assertIn('RUNNER_TEMP/live-clock.json', workflow)

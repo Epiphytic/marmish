@@ -1,0 +1,198 @@
+{
+  "assertions": [
+    "all_downloads_size_and_system_sha256_verified",
+    "uv_rejects_bad_digest_missing_archive_and_existing_slot",
+    "actual_interrupted_uv_extraction_no_exposure_and_fresh_retry",
+    "actual_uv_rejects_archive_substituted_after_final_rehash",
+    "two_absolute_base_interpreters_and_exact_archive_verifier",
+    "invalid_cwd_uv_configuration_ignored_and_environment_allowlisted",
+    "installed_help_doctor_native_help_and_literal_argv",
+    "actual_hostile_ambient_and_cwd_isolation_and_restoration",
+    "full_tools_suite_under_managed_python",
+    "offline_retention_after_uv_download_cache_removal_and_version_deletion"
+  ],
+  "assets": {
+    "marmish": {
+      "sha256": "c409afda196314a3033049e21e64339594445eebd4afa3bbbbda0b7d3f6c6f0c",
+      "size": 37259100,
+      "url": "https://github.com/Epiphytic/marmish/releases/download/v0.1.0-experimental.2/marmish-0.1.0-experimental.2-x86_64-unknown-linux-gnu.tar.gz"
+    },
+    "metadata_key": "cpython-3.13.13-linux-x86_64-gnu",
+    "python": {
+      "sha256": "bbe27549e475fe5f22d42a8e0d553dc79d80d8a00e05712599637857d287360e",
+      "size": 34848728,
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260510/cpython-3.13.13%2B20260510-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+    },
+    "python_entry": {
+      "arch": {
+        "family": "x86_64",
+        "variant": null
+      },
+      "build": "20260510",
+      "libc": "gnu",
+      "major": 3,
+      "minor": 13,
+      "name": "cpython",
+      "os": "linux",
+      "patch": 13,
+      "prerelease": "",
+      "sha256": "bbe27549e475fe5f22d42a8e0d553dc79d80d8a00e05712599637857d287360e",
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260510/cpython-3.13.13%2B20260510-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+      "variant": null
+    },
+    "uv": {
+      "sha256": "1bc4be1be0a000f893b0d1db97906cf392b63fa22fda9a0ecf33d0d4bbb4bc9a",
+      "size": 24286608,
+      "url": "https://github.com/astral-sh/uv/releases/download/0.11.16/uv-x86_64-unknown-linux-musl.tar.gz"
+    },
+    "uv_member": "uv-x86_64-unknown-linux-musl/uv"
+  },
+  "base_prefixes": [
+    "<scratch>/version one/python/<discovered-managed-install>",
+    "<scratch>/version-two/python/<discovered-managed-install>"
+  ],
+  "bwrap_source": "system",
+  "checksum_sources": {
+    "marmish": {
+      "sha256": "fc17033578213bc15bf969e66f9e327e39ea12b7054e94c2ccb1e6ca522711d7",
+      "size": 859,
+      "url": "https://github.com/Epiphytic/marmish/releases/download/v0.1.0-experimental.2/SHA256SUMS"
+    },
+    "pbs": {
+      "sha256": "52933bb25b684e4b241cc67748b183c125187447cf258293bc82a2177809a4b6",
+      "size": 121896,
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260510/SHA256SUMS"
+    },
+    "uv": {
+      "sha256": "8ef7fe76d67be3330e18e8d6ecbbb68f7a1ae46fe31198008170e911ad025c6a",
+      "size": 1901,
+      "url": "https://github.com/astral-sh/uv/releases/download/0.11.16/sha256.sum"
+    }
+  },
+  "cleanup": "complete",
+  "failure": null,
+  "full_tools_tests": {
+    "compiler": "existing_host_toolchain_test_only",
+    "count": 478,
+    "exit_code": 0,
+    "skipped": 7,
+    "top_level_and_path_children": "managed_interpreter"
+  },
+  "home_unchanged": true,
+  "host": {
+    "architecture": "x86_64",
+    "distribution": {
+      "id": "ubuntu",
+      "version_id": "24.04"
+    },
+    "system": "Linux"
+  },
+  "installer_python_sha256": "1e1745b7dda9f380efbd9d6fb3852c195e3650ad190c302f51f3c9908f6f044c",
+  "linux_namespace_preflight": {
+    "bare_unshare": {
+      "denied_operation_hint": null,
+      "exit_code": 0,
+      "signal": null
+    },
+    "bwrap": {
+      "denied_operation_hint": null,
+      "exit_code": 0,
+      "signal": null
+    },
+    "policy": {
+      "apparmor_restrict_unprivileged_userns": {
+        "category": null,
+        "value": 0
+      },
+      "max_user_namespaces": {
+        "category": null,
+        "value": 510960
+      },
+      "unprivileged_userns_clone": {
+        "category": null,
+        "value": 1
+      }
+    },
+    "tools_present": {
+      "ip": true,
+      "sysctl": true
+    },
+    "unshare_preparation_bwrap": {
+      "denied_operation_hint": null,
+      "exit_code": 0,
+      "signal": null
+    }
+  },
+  "marmish_version": "0.1.0-experimental.2",
+  "metadata_source": {
+    "sha256": "ec523a2d0d6b290633f9db0424c457056567973ba03eaa850bf079f32a078d80",
+    "size": 2752303,
+    "url": "https://raw.githubusercontent.com/astral-sh/uv/135a3636789bb6886e0a7876f58cb4dbb270ba6d/crates/uv-python/download-metadata.json"
+  },
+  "native_execution_probe": "native_help_and_manifest_provenance",
+  "native_prerequisites": {
+    "glibc": "2.39",
+    "python": "3.11",
+    "shared_libraries": [
+      "ld-linux-x86-64.so.2",
+      "libc.so.6",
+      "libgcc_s.so.1",
+      "libm.so.6"
+    ]
+  },
+  "native_probe_mode": "native_help_and_manifest_provenance",
+  "native_probe_results": [
+    {
+      "exit_code": 0,
+      "marker_exact": false,
+      "output_bytes": 900,
+      "signal": null,
+      "slot": "slot_1"
+    },
+    {
+      "exit_code": 0,
+      "marker_exact": false,
+      "output_bytes": 900,
+      "signal": null,
+      "slot": "slot_2"
+    }
+  ],
+  "native_version_flag_supported": false,
+  "offline_network": "network_namespace_enforced",
+  "ok": true,
+  "python_version": "3.13.13",
+  "runtime_audit": {
+    "base_prefix_inside_slot": true,
+    "bytes": 98220404,
+    "files": 3471,
+    "layout": [
+      ".gitignore",
+      ".lock",
+      ".temp",
+      "cpython-3.13-linux-x86_64-gnu",
+      "cpython-3.13.13-linux-x86_64-gnu"
+    ],
+    "max_glibc": "2.17",
+    "native_objects_audited": 9,
+    "needed_library_basenames": [
+      "ld-linux-x86-64.so.2",
+      "libc.so.6",
+      "libdl.so.2",
+      "libm.so.6",
+      "libpthread.so.0",
+      "librt.so.1",
+      "libtcl9.0.so",
+      "libtcl9tk9.0.so",
+      "libutil.so.1"
+    ],
+    "stdlib_import_smoke": true,
+    "symlinks": 1048
+  },
+  "schema": 1,
+  "stage": "offline_retention",
+  "system_python_dependency": "linux_doctor_and_sandbox_still_require_usr_bin_python3",
+  "target": "x86_64-unknown-linux-gnu",
+  "total_timeout_seconds": 1320,
+  "unmet_acceptance": [],
+  "uv_version": "0.11.16"
+}
