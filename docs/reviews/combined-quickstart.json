@@ -1,0 +1,45 @@
+{
+  "scope": "README copy-and-paste script installation and first-run quickstart; documentation only",
+  "reviewer": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "permission_mode": "auto",
+  "verdict": "APPROVED",
+  "review": "**Verdict: APPROVED**, with four non-blocking suggestions. No blocking defects were found.\n\nReviewer model: Sonnet 5.5 (`claude-sonnet-5-5`). The review was read-only. I made no edits and did no network, keychain, real-key or git operations. The only scratch files were under `/tmp`, and I deleted them afterwards. The repo still shows only `README.md` and the ignored `.beads/interactions.jsonl` as modified.\n\n## Validation\n\n**Shell block** (extracted verbatim from the diff and run with stubbed `curl`, `marmish` and `marmishd` in a fake `$HOME` and `$TMPDIR`):\n- It parses cleanly under `sh -n` with dash, bash and `sh`. `shellcheck` is not installed.\n- The server and client paths run in the documented order: `--doctor`, then `--init`, then the peer prompt, then `marmishd --allow` or the client command.\n- A bad role exits 1 before any `marmish` call. EOF at a prompt exits 1.\n- A failed download (`curl` exit 22) stops the block, with no installer run and no `marmish` call. A failed install stops the block.\n- A failing `--doctor` (exit 1) stops it before `--init`.\n- An empty relay fails closed: `relay_url('')` raises `invalid_relay` in `Profile.__init__`, before any key access.\n- The mktemp file is removed on success, on failure, and on SIGTERM, SIGINT and SIGHUP sent to the process group, with both dash and bash. A SIGTERM sent only to the outer shell does not run the subshell trap, but that is not what Ctrl-C does.\n- There is no pipe in the download step, so `pipefail` is not needed.\n- Launchers land in `~/.local/bin` (`scripts/install.sh:539-540`) and the block prepends that to `PATH`, so it matches the installer default.\n\n**CLI contracts** (against `tools/marmish_app.py`, `tools/marmish_installed.py`, `tools/mdk_smoke.py` and `tools/marmish_keys.py`):\n- `--doctor` runs before the `-i` and `--relay` required-argument checks and exits 1 when a check fails (`DoctorAction`).\n- `--init` prints `{\"account\": <lowercase hex>}`, and does so again on reuse. Both endpoints therefore print their own account before the peer prompt, so the identity exchange works.\n- `public_key()` accepts a checksum-verified npub or 32-byte lowercase hex, and rejects anything else.\n- `--allow` is `required=True` and is not persisted. It must be repeated on each restart, which matches the new text.\n- `destination` with `-u` plus a `wss://` relay requires the relay to be in the configured set, and the quickstart passes the same `$RELAY` in both places. A mismatch fails closed with `destination_relay_not_configured`.\n- `--init` on an existing profile with a different relay fails closed with `profile_relay_mismatch`.\n- Key storage `auto` tries the native backend first. It falls back to files, with a stderr notice, only when the helper reports `unavailable` for a pristine profile. Any other error is re-raised, and `guarded_main` exits 125. This matches the README wording.\n- `marmishd` refuses root (`root_forbidden`), and the block adds no root, relay or authorization-persistence claims.\n- The platform limits in the opening README section are preserved and referenced.\n\n## Non-blocking suggestions\n\n1. **Ordering.** The client branch runs the command immediately after you enter the server identity. If the server has not been started with `--allow`, the client waits up to the default 180 seconds and fails. Add one sentence: enter the client identity and start the server first, then run the client.\n2. **PATH is not persisted.** \"Environment changes stay in the subshell\" is true, but it does not say that `~/.local/bin` is not added to your shell profile. A later `marmishd` restart from the step-by-step section needs `marmish` on `PATH` and `IDENTITY` and `RELAY` set again. Either say so or link to line 97.\n3. **`--cwd \"$HOME\"` scope.** The quickstart does not say that an authorized client can run commands as this Unix user from `$HOME`. The step-by-step section says it. A short clause in the quickstart would help.\n4. **Output shape.** The quickstart says \"a public `account` identifier\" but does not show `{\"account\":\"\u2026\"}`. `--doctor` JSON prints just before it, so a quoted example would help avoid copying the wrong line. Hex must be lowercase.\n\nInformational only: an interrupt exits the block with status 1 rather than 130 or 143, and stopping the server with Ctrl-C also exits 1 even though `marmishd` itself exits cleanly.",
+  "disposition": "All four non-blocking usability suggestions incorporated in prose: server-first connection ordering, persistent PATH and variable setup, authorized command permissions, and exact account JSON output shape. Shell block unchanged after review.",
+  "validation": {
+    "shell_syntax": "PASS: exact README block under /bin/sh -n; reviewer also checked dash and bash",
+    "stubbed_execution": [
+      {
+        "case": "server",
+        "passed": true
+      },
+      {
+        "case": "client",
+        "passed": true
+      },
+      {
+        "case": "curl",
+        "passed": true
+      },
+      {
+        "case": "install",
+        "passed": true
+      },
+      {
+        "case": "doctor",
+        "passed": true
+      },
+      {
+        "case": "init",
+        "passed": true
+      },
+      {
+        "case": "invalid_role",
+        "passed": true
+      }
+    ],
+    "quoting_and_cleanup": "PASS: HOME and TMPDIR containing spaces, semicolon and literal dollar; quoted relay, identity and peer arguments preserved; owned temporary installer removed in all seven cases",
+    "quality_delta": "PASS: zero regressions",
+    "scope_limit": "Offline shell orchestration and CLI contract review only. No new live transport, real keychain or native-platform validation claimed."
+  }
+}

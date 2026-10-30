@@ -19,16 +19,77 @@ these are not observations from hosted packaging jobs. Successful building or
 installation does not establish working confined execution on those platforms.
 Intel macOS is not included.
 
-Install as your normal user with Python 3.11+ and curl:
+### Copy-and-paste quickstart
+
+Run this block on both machines as your normal Unix user with Python 3.11+ and
+curl. Have the platform prerequisites described below in place; the installer
+does not install system tools, initialize a keychain service or enable namespaces.
+Choose `server` on the remote machine and `client` on the connecting machine,
+using the same explicit relay URL:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL \
-  https://iris.radicle.network/raw/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/head/scripts/install.sh | sh
-marmish --doctor
+(
+  set -e
+  installer=$(mktemp "${TMPDIR:-/tmp}/marmish-install.XXXXXX")
+  trap 'rm -f "$installer"' 0
+  trap 'exit 1' HUP INT TERM
+  curl --proto '=https' --tlsv1.2 -fsSL \
+    https://iris.radicle.network/raw/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/head/scripts/install.sh \
+    -o "$installer"
+  sh "$installer"
+  rm -f "$installer"
+  PATH="$HOME/.local/bin:$PATH"
+  export PATH
+
+  printf 'Role (server or client): '
+  IFS= read -r ROLE
+  case "$ROLE" in
+    server|client) ;;
+    *) printf '%s\n' 'Choose server or client.' >&2; exit 1 ;;
+  esac
+  printf 'Relay URL (wss://your-relay.example/): '
+  IFS= read -r RELAY
+  IDENTITY="$HOME/.marmish/default"
+  marmish --doctor
+  marmish -i "$IDENTITY" --relay "$RELAY" --key-storage auto --init
+
+  case "$ROLE" in
+    server)
+      printf 'Client public identity to allow (npub or hex): '
+      IFS= read -r CLIENT_NPUB_OR_HEX
+      marmishd -i "$IDENTITY" --relay "$RELAY" \
+        --allow "$CLIENT_NPUB_OR_HEX" --cwd "$HOME"
+      ;;
+    client)
+      printf 'Server public identity (npub or hex): '
+      IFS= read -r SERVER_NPUB_OR_HEX
+      marmish -i "$IDENTITY" --relay "$RELAY" -u "$SERVER_NPUB_OR_HEX" "$RELAY" -- \
+        /usr/bin/printf '%s\n' 'Hello through Marmot'
+      ;;
+  esac
+)
 ```
 
-Continue with [first-run setup](#first-run-with-installed-binaries) to create
-your local identity and authorize a client npub.
+Initialization prints `{"account":"…"}` with a public identifier in lowercase
+hexadecimal. Exchange those public identifiers between the machines when
+prompted; `npub` values work too. Enter the client identity on the server and
+start it before submitting the server identity at the client prompt. The server
+stays in the foreground, so keep its terminal open while running the client.
+An allowed client can execute commands as this Unix user, starting in `$HOME`.
+Its allowlist applies to that invocation; supply `--allow` again on
+each restart. See [the step-by-step setup](#first-run-with-installed-binaries)
+for restarting without reinstalling and allowing multiple client identities.
+
+The chosen `~/.marmish/default` profile is reused on subsequent runs; this path
+is a quickstart convention, and the CLI still requires `-i`. If both endpoints
+run on one machine, edit `IDENTITY` to use separate directories for client and
+server because a profile permits only one active frontend. Key storage defaults
+to the available native keychain, with files selected only for a proven absent
+backend; locked, denied or failed keychains stop setup. The block stops on a
+failed download, install, prerequisite check or initialization. Its environment
+changes stay in the subshell. For later commands, add `~/.local/bin` to your
+shell's PATH and set `IDENTITY` and `RELAY` again as shown in the step-by-step
+setup. The runtime limitations above still apply.
 
 The script is served from Radicle through Iris and downloads complete native
 archives and `SHA256SUMS` from [GitHub Releases](https://github.com/Epiphytic/marmish/releases).
