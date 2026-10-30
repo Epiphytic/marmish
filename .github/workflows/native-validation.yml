@@ -62,7 +62,8 @@ jobs:
         run: |
           PYTHONPATH=tools python3 -m unittest \
             test_marmish_transport_macos.NativeLifetimeTests.test_bootstrap_child_reads_exact_frame_parent_uses_devnull \
-            test_marmish_transport_macos.NativeLifetimeTests.test_native_zombie_group_proof
+            test_marmish_transport_macos.NativeLifetimeTests.test_native_zombie_group_proof \
+            test_marmish_native_spike.NativeStorageTests.test_opened_private_directory_filesystem
       - name: Native prerequisite spike
         run: |
           python3 --version

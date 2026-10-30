@@ -6,7 +6,8 @@ import io
 import json
 import os
 from pathlib import Path
-import plistlib
+import shutil
+import sys
 import subprocess
 import tempfile
 from types import SimpleNamespace
@@ -209,17 +210,17 @@ class StorageTests(unittest.TestCase):
                         return 0
                     ctypes.set_errno(collision_errno)
                     return -1
-                result = SimpleNamespace(stdout=plistlib.dumps({'FilesystemType': 'apfs'}))
+                result = SimpleNamespace(stdout=b'', returncode=0)
                 diagnostic = spike.Diagnostics()
                 ctypes.set_errno(errno.ESRCH)
                 with patch.object(spike.ctypes, 'CDLL', return_value=SimpleNamespace(renameatx_np=MagicMock(side_effect=rename))), \
                         patch.object(spike.subprocess, 'run', return_value=result), \
                         patch.object(spike.os, 'fsync'), patch.object(spike.fcntl, 'fcntl'):
                     if collision_errno == errno.EEXIST:
-                        spike.storage_probe(home, diagnostic)
+                        spike.storage_probe(home, diagnostic, home / 'probe')
                     else:
                         with self.assertRaises(OSError if collision_errno else SandboxError):
-                            spike.storage_probe(home, diagnostic)
+                            spike.storage_probe(home, diagnostic, home / 'probe')
                 self.assertEqual(observed, [0, 0])
                 if collision_errno == errno.EEXIST:
                     self.assertIsNone(diagnostic.primary)
@@ -237,10 +238,10 @@ class StorageTests(unittest.TestCase):
                 diagnostic = spike.Diagnostics()
                 ctypes.set_errno(errno.ESRCH)
                 with patch.object(spike.ctypes, 'CDLL', return_value=SimpleNamespace(renameatx_np=MagicMock(side_effect=rename))), \
-                        patch.object(spike.subprocess, 'run', return_value=SimpleNamespace(stdout=plistlib.dumps({'FilesystemType': 'apfs'}))), \
+                        patch.object(spike.subprocess, 'run', return_value=SimpleNamespace(stdout=b'', returncode=0)), \
                         patch.object(spike.os, 'fsync'), patch.object(spike.fcntl, 'fcntl'):
                     with self.assertRaises(OSError if number else SandboxError):
-                        spike.storage_probe(Path(directory), diagnostic)
+                        spike.storage_probe(Path(directory), diagnostic, Path(directory) / 'probe')
                 self.assertEqual(diagnostic.primary['stage'], 'storage_publish')
                 self.assertEqual(diagnostic.primary['errno'], number or None)
                 self.assertEqual(diagnostic.primary['category'], 'native_io_failed' if number else 'native_exclusive_publish_failed')
@@ -283,33 +284,62 @@ class StorageTests(unittest.TestCase):
                     os.rename(source, destination)
                     return 0
                 function = MagicMock(side_effect=rename)
-                with patch.object(spike.subprocess, 'run', return_value=SimpleNamespace(stdout=plistlib.dumps({'FilesystemType': 'apfs'}))), \
+                with patch.object(spike.subprocess, 'run', return_value=SimpleNamespace(stdout=b'', returncode=0)), \
                         patch.object(spike.ctypes, 'CDLL', return_value=SimpleNamespace(renameatx_np=function)), \
                         patch.object(Path, 'open', path_open), patch.object(spike.os, 'open', side_effect=open_directory), \
                         patch.object(spike.os, 'fsync', side_effect=fsync), \
                         patch.object(spike.os, 'urandom', side_effect=lambda size: fail() if target == 'storage_write' else bytes(size)), \
                         patch.object(spike.fcntl, 'fcntl', side_effect=lambda *args: fail() if target == 'storage_fullfsync' else None):
                     with self.assertRaises(OSError):
-                        spike.storage_probe(home, diagnostic)
+                        spike.storage_probe(home, diagnostic, home / 'probe')
                 self.assertEqual(diagnostic.primary['stage'], target)
                 self.assertEqual(diagnostic.primary['errno'], errno.EACCES)
                 if target == 'storage_close':
                     function.assert_not_called()
 
-    def test_bad_plist_and_subprocess_errors(self):
-        for payload in (b'<plist><private', plistlib.dumps(['private'])):
+    def test_closed_helper_results_and_launch_errors(self):
+        for code, output, stage, category, number in (
+                (0, b'', None, None, None),
+                (2, b'', 'storage_filesystem_type', 'unsupported_native_filesystem', None),
+                (7, b'', 'storage_filesystem_directory', 'native_storage_directory_unsafe', None),
+                *((code, b'13\n', 'storage_filesystem_' + name, 'native_io_failed', 13)
+                  for code, name in ((3, 'open'), (4, 'fstat'), (5, 'fstatfs'), (6, 'close')))):
+            with self.subTest(code=code):
+                diagnostic = spike.Diagnostics()
+                with patch.object(spike.subprocess, 'run', return_value=SimpleNamespace(returncode=code, stdout=output)) as call:
+                    if stage:
+                        with self.assertRaises(OSError if number else SandboxError):
+                            spike.filesystem_probe(Path('/private-owned'), diagnostic, Path('/owned-probe'))
+                    else:
+                        spike.filesystem_probe(Path('/private-owned'), diagnostic, Path('/owned-probe'))
+                self.assertEqual(call.call_args.args[0], ['/owned-probe', 'storage', '/private-owned'])
+                self.assertEqual(call.call_args.kwargs, {'check': False, 'stdin': subprocess.DEVNULL,
+                    'close_fds': True, 'env': {'PATH': '/usr/bin:/bin'}, 'stdout': subprocess.PIPE,
+                    'stderr': subprocess.DEVNULL, 'timeout': 5})
+                if stage:
+                    result = records(diagnostic)[0]
+                    self.assertEqual((result['stage'], result['category'], result['errno']), (stage, category, number))
+                else:
+                    self.assertIsNone(diagnostic.primary)
+        for code, output in ((0, b'private'), (2, b'1\n'), (7, b'1\n'), (64, b''), (-9, b''),
+                             (True, b''), (3, b'0\n'), (4, b'4096\n'), (5, b'01\n'),
+                             (6, b'13\nprivate'), (3, b'13'), (4, b'-1\n'), (5, b'\xff\n'),
+                             (6, b'1' * 65537), (0, ''), (None, b'')):
             diagnostic = spike.Diagnostics()
-            with patch.object(spike.subprocess, 'run', return_value=SimpleNamespace(stdout=payload)):
-                with self.assertRaises(Exception):
-                    spike.storage_probe(Path('/never-used'), diagnostic)
-            self.assertEqual(diagnostic.primary['stage'], 'storage_plist')
-            self.assertNotIn('private', json.dumps(dict(diagnostic.primary)))
-        diagnostic = spike.Diagnostics()
-        with patch.object(spike.subprocess, 'run', side_effect=subprocess.CalledProcessError(3, ['private'])):
-            with self.assertRaises(subprocess.CalledProcessError):
-                spike.storage_probe(Path('/never-used'), diagnostic)
-        self.assertEqual(diagnostic.primary['exit_code'], 3)
-        self.assertEqual(diagnostic.primary['stage'], 'storage_diskutil')
+            with patch.object(spike.subprocess, 'run', return_value=SimpleNamespace(returncode=code, stdout=output)):
+                with self.assertRaises(ValueError):
+                    spike.filesystem_probe(Path('/never-used'), diagnostic, Path('/owned-probe'))
+            self.assertEqual(records(diagnostic)[0], {'outcome': 'failed', 'stage': 'storage_filesystem_result',
+                'category': 'native_result_invalid', 'errno': None, 'exit_code': None})
+        for error, category in ((subprocess.TimeoutExpired(['private'], 5), 'native_timeout'),
+                                (OSError(errno.ENOENT, 'private'), 'native_io_failed')):
+            diagnostic = spike.Diagnostics()
+            with patch.object(spike.subprocess, 'run', side_effect=error):
+                with self.assertRaises(type(error)):
+                    spike.filesystem_probe(Path('/never-used'), diagnostic, Path('/owned-probe'))
+            self.assertEqual(records(diagnostic)[0]['stage'], 'storage_filesystem')
+            self.assertEqual(records(diagnostic)[0]['category'], category)
+            self.assertNotIn('private', json.dumps(records(diagnostic)))
 
 
 class WorkflowTests(unittest.TestCase):
@@ -378,4 +408,146 @@ class WorkflowTests(unittest.TestCase):
         command = ' '.join(block.replace('\\\n', ' ').split())
         self.assertIn('PYTHONPATH=tools python3 -m unittest '
                       'test_marmish_transport_macos.NativeLifetimeTests.test_bootstrap_child_reads_exact_frame_parent_uses_devnull '
-                      'test_marmish_transport_macos.NativeLifetimeTests.test_native_zombie_group_proof', command)
+                      'test_marmish_transport_macos.NativeLifetimeTests.test_native_zombie_group_proof '
+                      'test_marmish_native_spike.NativeStorageTests.test_opened_private_directory_filesystem', command)
+
+
+class PortableStorageProbeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        compiler = shutil.which('cc')
+        if compiler is None:
+            raise AssertionError('native_storage_test_compiler_missing')
+        cls.temporary = tempfile.TemporaryDirectory(prefix='marmish-storage-contract-')
+        cls.addClassCleanup(cls.temporary.cleanup)
+        root = Path(cls.temporary.name)
+        (root / 'sys').mkdir()
+        (root / 'sys/mount.h').write_text('''#ifndef TEST_MOUNT_H
+#define TEST_MOUNT_H
+struct statfs { unsigned int f_flags; char f_fstypename[16]; };
+#define MNT_LOCAL 0x1000
+int fstatfs(int fd, struct statfs *result);
+#endif
+''')
+        source = root / 'storage.c'
+        source.write_text(r'''
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/mount.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+static int mode, opens, stats, filesystems, closes;
+static int fake_open(const char *path, int flags, ...) {
+ ++opens;
+ if (strcmp(path, "/owned") || flags != (O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC)) abort();
+ if (mode == 1 || mode == 16 || mode == 17) { errno = mode == 1 ? EACCES : (mode == 16 ? 0 : 9999); return -1; }
+ return 42;
+}
+static uid_t fake_euid(void) { return mode == 5 ? 0 : 1001; }
+static int fake_stat(int fd, struct stat *value) {
+ ++stats; if (fd != 42) abort();
+ if (mode == 2 || mode == 13) { errno = EIO; return -1; }
+ value->st_mode = S_IFDIR | 0700; value->st_uid = 1001;
+ if (mode == 3) value->st_mode = S_IFREG | 0700;
+ if (mode == 4) value->st_uid = 1002;
+ if (mode == 6) value->st_mode = S_IFDIR | 0755;
+ if (mode == 7) value->st_mode = S_IFDIR | 04700;
+ if (mode == 15) value->st_mode = S_IFDIR | 01700;
+ errno = EBUSY; return 0;
+}
+static int fake_filesystem(int fd, struct statfs *value) {
+ ++filesystems; if (fd != 42) abort();
+ if (mode == 11 || mode == 14) { errno = ENOTSUP; return -1; }
+ value->f_flags = mode == 8 ? 0 : MNT_LOCAL;
+ strcpy(value->f_fstypename, mode == 9 ? "hfs" : "apfs");
+ if (mode == 10) memset(value->f_fstypename, 'x', sizeof(value->f_fstypename));
+ errno = ERANGE; return 0;
+}
+static int fake_close(int fd) {
+ ++closes; if (fd != 42) abort();
+ errno = EINTR;
+ return mode >= 12 && mode <= 15 ? -1 : 0;
+}
+#define open fake_open
+#define geteuid fake_euid
+#define fstat fake_stat
+#define fstatfs fake_filesystem
+#define close fake_close
+#define main probe_main
+#include "marmish-probe.c"
+#undef main
+int main(int argc, char **argv) {
+ if (argc != 2) return 64;
+ mode = atoi(argv[1]);
+ char *args[] = {"probe", "storage", "/owned", "extra", NULL};
+ int result = probe_main(mode == 18 ? 4 : 3, args);
+ int failed_open = mode == 1 || mode == 16 || mode == 17;
+ if (mode == 18) { if (opens || stats || filesystems || closes) abort(); }
+ else {
+  int metadata_refused = (mode >= 2 && mode <= 7) || mode == 13 || mode == 15;
+  if (opens != 1 || stats != !failed_open || closes != !failed_open ||
+      filesystems != (!failed_open && !metadata_refused)) abort();
+ }
+ return result;
+}
+''')
+        cls.executable = root / 'probe-contract'
+        native_source = Path(spike.__file__).resolve().parent / 'native'
+        subprocess.run([compiler, '-Wall', '-Wextra', '-Werror', '-I', str(root),
+                        '-I', str(native_source), str(source), '-o', str(cls.executable)],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=60)
+
+    def test_actual_c_mode_closed_results_and_cleanup(self):
+        expected = {0: (0, b''), 1: (3, b'13\n'), 2: (4, b'5\n'),
+                    **{mode: (7, b'') for mode in (3, 4, 5, 6, 7, 15)},
+                    **{mode: (2, b'') for mode in (8, 9, 10)},
+                    11: (5, f'{errno.ENOTSUP}\n'.encode()), 12: (6, b'4\n'),
+                    13: (4, b'5\n'), 14: (5, f'{errno.ENOTSUP}\n'.encode()),
+                    16: (3, b'0\n'), 17: (3, b'0\n'), 18: (64, b'')}
+        for mode, result in expected.items():
+            with self.subTest(mode=mode):
+                completed = subprocess.run([str(self.executable), str(mode)],
+                                           capture_output=True, timeout=5)
+                self.assertEqual((completed.returncode, completed.stdout), result)
+                self.assertEqual(completed.stderr, b'')
+
+
+@unittest.skipUnless(sys.platform == 'darwin', 'native Darwin storage acceptance')
+class NativeStorageTests(unittest.TestCase):
+    def test_opened_private_directory_filesystem(self):
+        with tempfile.TemporaryDirectory(prefix='mn-', dir='/private/tmp') as temporary:
+            root = Path(temporary).resolve()
+            root.chmod(0o700)
+            executable = root / 'probe'
+            source = Path(spike.__file__).resolve().parent / 'native/marmish-probe.c'
+            subprocess.run(['clang', '-Wall', '-Wextra', '-Werror', '-O2', '-mmacosx-version-min=15.0',
+                            str(source), '-o', str(executable)], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+            subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', str(executable)],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+            home = root / 'data'
+            home.mkdir(mode=0o700)
+            spike.filesystem_probe(home, spike.Diagnostics(), executable)
+            regular, link, unsafe = root / 'file', root / 'link', root / 'unsafe'
+            regular.write_bytes(b'owned fixture')
+            link.symlink_to(home, target_is_directory=True)
+            unsafe.mkdir(mode=0o700)
+            for destination, allowed in ((regular, {errno.ENOTDIR}),
+                                         (root / 'missing', {errno.ENOENT}),
+                                         (link, {errno.ELOOP, errno.ENOTDIR})):
+                diagnostic = spike.Diagnostics()
+                with self.assertRaises(OSError):
+                    spike.filesystem_probe(destination, diagnostic, executable)
+                result = records(diagnostic)[0]
+                self.assertEqual(result['stage'], 'storage_filesystem_open')
+                self.assertIn(result['errno'], allowed)
+            for mode in (0o755, 0o1700):
+                unsafe.chmod(mode)
+                diagnostic = spike.Diagnostics()
+                with self.assertRaisesRegex(SandboxError, '^native_storage_directory_unsafe$'):
+                    spike.filesystem_probe(unsafe, diagnostic, executable)
+                self.assertEqual(records(diagnostic)[0]['stage'], 'storage_filesystem_directory')

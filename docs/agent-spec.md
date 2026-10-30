@@ -225,7 +225,12 @@ proof/cleanup harnesses and 260 Python tests passed (six Darwin skips).
 macOS unconfined tests: exact bootstrap handoff and positive/negative zombie-group
 proof. Disposable explicit-Keychain acceptance passed too. The broader spike
 now stops at `storage_diskutil` (subprocess exit 1), before Seatbelt checks; the
-exact cause remains under investigation. Linux AMD64 passed all offline and
+exact prior cause is unproven. A reviewed [descriptor-based correction](phases/native-storage-filesystem.md)
+now checks the opened private directory with system `fstatfs`, requiring APFS
+and `MNT_LOCAL`, matching the engine. Directory-metadata refusals and native-call
+errors have distinct fixed diagnostics. Existing durability probes remain in
+place. Offline Python passed 262 tests (seven native skips); actual native
+acceptance of this correction is pending. Linux AMD64 passed all offline and
 pinned-build checks; ARM64 still refused namespaces. See
 [offline evidence](validation/native-zombie-groups.md).
 The same run exposed three Linux audit fixtures whose executable links were

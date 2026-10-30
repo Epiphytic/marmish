@@ -8,7 +8,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
-import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -32,7 +32,9 @@ PREFLIGHT_STAGES = {f'preflight_{probe}_{part}' for probe in PROBES
 STAGES = PREFLIGHT_STAGES | {
     'arguments', 'compiler', 'workspace', 'control', 'profile', 'identity', 'clock',
     'socket_budget', 'daemon_fixture', 'broker', 'confinement', 'broker_cleanup',
-    'workspace_cleanup', 'unexpected', 'storage_diskutil', 'storage_plist',
+    'workspace_cleanup', 'unexpected', 'storage_filesystem', 'storage_filesystem_result',
+    'storage_filesystem_type', 'storage_filesystem_directory',
+    *(f'storage_filesystem_{call}' for call in ('open', 'fstat', 'fstatfs', 'close')),
     'storage_abi', 'storage_create', 'storage_write', 'storage_fsync',
     'storage_fullfsync', 'storage_close', 'storage_publish', 'storage_collision',
     'storage_directory_open', 'storage_directory_fsync', 'storage_directory_close',
@@ -40,7 +42,8 @@ STAGES = PREFLIGHT_STAGES | {
       for helper in ('marmish-probe', 'marmish-lifetime'))}
 REFUSALS = {'native_control_' + name for name in PROBES} | {
     'native_probe_' + name for name in PROBES} | {
-    'unsupported_native_filesystem', 'native_exclusive_publish_failed',
+    'unsupported_native_filesystem', 'native_storage_directory_unsafe',
+    'native_exclusive_publish_failed',
     'native_exclusive_publish_unsafe', 'native_identity_probe_failed',
     'native_socket_path_too_long', 'missing_native_compiler',
     'native_interface_probe_failed', 'native_interface_probe_unavailable'}
@@ -104,15 +107,38 @@ class Diagnostics:
             print(json.dumps(dict(record), sort_keys=True), file=sys.stderr)
 
 
-def storage_probe(home, diagnostic):
+def filesystem_probe(home, diagnostic, probe):
+    result = diagnostic.run('storage_filesystem', lambda: subprocess.run(
+        [str(probe), 'storage', str(home)], check=False, stdin=subprocess.DEVNULL,
+        close_fds=True, env={'PATH': '/usr/bin:/bin'}, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, timeout=5))
+    def decode():
+        code, output = result.returncode, result.stdout
+        if type(code) is not int or type(output) is not bytes:
+            raise ValueError('native_storage_result_invalid')
+        if code in (0, 2, 7) and output == b'':
+            return code, None
+        if code in (3, 4, 5, 6) and re.fullmatch(rb'[1-9][0-9]{0,3}\n', output):
+            number = int(output)
+            if number <= 4095:
+                return code, number
+        raise ValueError('native_storage_result_invalid')
+    code, number = diagnostic.run('storage_filesystem_result', decode)
+    def refusal(value):
+        raise SandboxError(value)
+    if code == 2:
+        diagnostic.run('storage_filesystem_type', lambda: refusal('unsupported_native_filesystem'))
+    if code == 7:
+        diagnostic.run('storage_filesystem_directory', lambda: refusal('native_storage_directory_unsafe'))
+    if code in (3, 4, 5, 6):
+        def fail():
+            raise OSError(number, 'native_storage_call_failed')
+        diagnostic.run('storage_filesystem_' + {3: 'open', 4: 'fstat', 5: 'fstatfs', 6: 'close'}[code], fail)
+
+
+def storage_probe(home, diagnostic, probe):
     run = diagnostic.run
-    result = run('storage_diskutil', lambda: subprocess.run(
-        ['/usr/sbin/diskutil', 'info', '-plist', str(home)], check=True,
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5))
-    def plist():
-        if len(result.stdout) > 65536 or plistlib.loads(result.stdout).get('FilesystemType') != 'apfs':
-            raise SandboxError('unsupported_native_filesystem')
-    run('storage_plist', plist)
+    filesystem_probe(home, diagnostic, probe)
     def abi():
         library = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
         library.renameatx_np.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
@@ -193,7 +219,7 @@ def run_spike(relays, diagnostic):
             if continuous_time() <= 0:
                 raise SandboxError('native_identity_probe_failed')
         run('clock', clock)
-        storage_probe(home, diagnostic)
+        storage_probe(home, diagnostic, runtime / 'marmish-probe')
         def budget():
             if not socket_path_fits(home):
                 raise SandboxError('native_socket_path_too_long')
