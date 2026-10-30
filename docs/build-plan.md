@@ -146,3 +146,19 @@ cleanup. Exit criteria are offline archive/PTY acceptance on Linux amd64/arm64
 and macOS arm64, independent Claude design/code review, accurate setup docs and
 verified GitHub/Radicle publication. This does not close outstanding native
 confinement or interoperability gates.
+
+## Managed installation and unified identity service
+
+The [reviewed overall proposal](phases/native-setup-unified-daemon.md), tracked
+in Beads `marmish-x6z`, sequences a uv-managed interpreter/native-companion
+packaging spike, thin verified bootstrap and app-owned setup, a shared per-identity
+service with authenticated local CLI access, durable client/server/both roles,
+and native installed acceptance. The default setup selection is Both through
+Enter or c/s/b; absent inbound authorization leaves serving durably disabled
+until explicit enablement. The installer increment can ship independently.
+
+This is intended work, not existing support. Detailed designs and Claude reviews
+precede each increment; the current macOS sandbox startup failure remains a
+separate release/runtime gate. See [the overall review](reviews/managed-install-unified-overall.md)
+for the nonempty engine contract, retained per-key restrictions, authoritative
+configuration/migration, policy-transition recovery, and bootstrap trust decisions.

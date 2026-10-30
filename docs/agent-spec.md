@@ -7,6 +7,17 @@ status and dependencies, [AGENTS.md](../AGENTS.md) for the build workflow,
 [the build plan](build-plan.md) for phases and [the README](../README.md) for
 concrete commands.
 
+## Intended managed setup and unified service
+
+The [reviewed proposal](phases/native-setup-unified-daemon.md), Beads marmish-x6z,
+plans uv-managed tested Python plus matching native helpers, a thin bootstrap,
+app-owned setup, and one daemon/identity serving both inbound and outbound work.
+Setup will accept c/s/b, default Both, and persistently disable inbound service
+without an authorized npub until explicitly re-enabled. These are intended
+capabilities, not implemented behavior. Python currently runs the application
+as well as the installer; uv packaging is not yet available. The proposal retains
+keychain/replay/policy/confinement gates and requires detailed reviews per phase.
+
 ## Purpose and intended product
 
 ### Experimental distribution increment
