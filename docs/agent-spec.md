@@ -17,6 +17,12 @@ without an authorized npub until explicitly re-enabled. These are intended
 capabilities, not implemented behavior. Python currently runs the application
 as well as the installer; uv packaging is not yet available. The proposal retains
 keychain/replay/policy/confinement gates and requires detailed reviews per phase.
+The disposable [packaging proof](phases/managed-runtime-spike.md) and
+[native installer workflow](../.github/workflows/installer-validation.yml)
+exercise the proposed interpreter alongside the existing installer/PTY gates.
+See [validation status](validation/managed-runtime-spike.md); packaging acceptance
+and the [production bootstrap](phases/managed-bootstrap.md) remain pending.
+These tests do not change the current installation command or release.
 
 ## Purpose and intended product
 

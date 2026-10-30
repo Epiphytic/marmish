@@ -1,0 +1,141 @@
+{
+  "checksum_sources": {
+    "marmish": {
+      "sha256": "fc17033578213bc15bf969e66f9e327e39ea12b7054e94c2ccb1e6ca522711d7",
+      "size": 859,
+      "url": "https://github.com/Epiphytic/marmish/releases/download/v0.1.0-experimental.2/SHA256SUMS"
+    },
+    "pbs": {
+      "sha256": "52933bb25b684e4b241cc67748b183c125187447cf258293bc82a2177809a4b6",
+      "size": 121896,
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260510/SHA256SUMS"
+    },
+    "uv": {
+      "sha256": "8ef7fe76d67be3330e18e8d6ecbbb68f7a1ae46fe31198008170e911ad025c6a",
+      "size": 1901,
+      "url": "https://github.com/astral-sh/uv/releases/download/0.11.16/sha256.sum"
+    }
+  },
+  "marmish_source_commit": "f609b6ccdc9302aeec661a2ae3692d3ef68b86fa",
+  "marmish_version": "0.1.0-experimental.2",
+  "metadata_source": {
+    "sha256": "ec523a2d0d6b290633f9db0424c457056567973ba03eaa850bf079f32a078d80",
+    "size": 2752303,
+    "url": "https://raw.githubusercontent.com/astral-sh/uv/135a3636789bb6886e0a7876f58cb4dbb270ba6d/crates/uv-python/download-metadata.json"
+  },
+  "pbs_release": "20260510",
+  "python_version": "3.13.13",
+  "schema": 1,
+  "targets": {
+    "aarch64-apple-darwin": {
+      "marmish": {
+        "sha256": "340b6f4f5a870cb33ae1d77b5f9c4891453a70b3f329094ffbacf1df3fbb264e",
+        "size": 32602938,
+        "url": "https://github.com/Epiphytic/marmish/releases/download/v0.1.0-experimental.2/marmish-0.1.0-experimental.2-aarch64-apple-darwin.tar.gz"
+      },
+      "metadata_key": "cpython-3.13.13-darwin-aarch64-none",
+      "python": {
+        "sha256": "16d2332d950178968534e65fe09f01f876d13af1147176fd0c77a74c9e4d1a4b",
+        "size": 25038077,
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260510/cpython-3.13.13%2B20260510-aarch64-apple-darwin-install_only_stripped.tar.gz"
+      },
+      "python_entry": {
+        "arch": {
+          "family": "aarch64",
+          "variant": null
+        },
+        "build": "20260510",
+        "libc": "none",
+        "major": 3,
+        "minor": 13,
+        "name": "cpython",
+        "os": "darwin",
+        "patch": 13,
+        "prerelease": "",
+        "sha256": "16d2332d950178968534e65fe09f01f876d13af1147176fd0c77a74c9e4d1a4b",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260510/cpython-3.13.13%2B20260510-aarch64-apple-darwin-install_only_stripped.tar.gz",
+        "variant": null
+      },
+      "uv": {
+        "sha256": "2b25be1af546be330b340b0a76b99f989daa6d92678fdffb87438e661e9d88fb",
+        "size": 20641665,
+        "url": "https://github.com/astral-sh/uv/releases/download/0.11.16/uv-aarch64-apple-darwin.tar.gz"
+      },
+      "uv_member": "uv-aarch64-apple-darwin/uv"
+    },
+    "aarch64-unknown-linux-gnu": {
+      "marmish": {
+        "sha256": "90e5c44ef9235c0825ec59ecded8909a6f76642f7a8461d8f3418a2f5ef70be6",
+        "size": 38451852,
+        "url": "https://github.com/Epiphytic/marmish/releases/download/v0.1.0-experimental.2/marmish-0.1.0-experimental.2-aarch64-unknown-linux-gnu.tar.gz"
+      },
+      "metadata_key": "cpython-3.13.13-linux-aarch64-gnu",
+      "python": {
+        "sha256": "67c837838c56a7d16187d1be9fad326a617e0b1ee2687e1a0dda0c85053dac33",
+        "size": 29181287,
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260510/cpython-3.13.13%2B20260510-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz"
+      },
+      "python_entry": {
+        "arch": {
+          "family": "aarch64",
+          "variant": null
+        },
+        "build": "20260510",
+        "libc": "gnu",
+        "major": 3,
+        "minor": 13,
+        "name": "cpython",
+        "os": "linux",
+        "patch": 13,
+        "prerelease": "",
+        "sha256": "67c837838c56a7d16187d1be9fad326a617e0b1ee2687e1a0dda0c85053dac33",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260510/cpython-3.13.13%2B20260510-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "variant": null
+      },
+      "uv": {
+        "sha256": "ac022d96411143b9a2dd75ea711fa8dd4cd14538bf248f2e5df3c10a80f7f6a4",
+        "size": 22340125,
+        "url": "https://github.com/astral-sh/uv/releases/download/0.11.16/uv-aarch64-unknown-linux-musl.tar.gz"
+      },
+      "uv_member": "uv-aarch64-unknown-linux-musl/uv"
+    },
+    "x86_64-unknown-linux-gnu": {
+      "marmish": {
+        "sha256": "c409afda196314a3033049e21e64339594445eebd4afa3bbbbda0b7d3f6c6f0c",
+        "size": 37259100,
+        "url": "https://github.com/Epiphytic/marmish/releases/download/v0.1.0-experimental.2/marmish-0.1.0-experimental.2-x86_64-unknown-linux-gnu.tar.gz"
+      },
+      "metadata_key": "cpython-3.13.13-linux-x86_64-gnu",
+      "python": {
+        "sha256": "bbe27549e475fe5f22d42a8e0d553dc79d80d8a00e05712599637857d287360e",
+        "size": 34848728,
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260510/cpython-3.13.13%2B20260510-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+      },
+      "python_entry": {
+        "arch": {
+          "family": "x86_64",
+          "variant": null
+        },
+        "build": "20260510",
+        "libc": "gnu",
+        "major": 3,
+        "minor": 13,
+        "name": "cpython",
+        "os": "linux",
+        "patch": 13,
+        "prerelease": "",
+        "sha256": "bbe27549e475fe5f22d42a8e0d553dc79d80d8a00e05712599637857d287360e",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260510/cpython-3.13.13%2B20260510-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "variant": null
+      },
+      "uv": {
+        "sha256": "1bc4be1be0a000f893b0d1db97906cf392b63fa22fda9a0ecf33d0d4bbb4bc9a",
+        "size": 24286608,
+        "url": "https://github.com/astral-sh/uv/releases/download/0.11.16/uv-x86_64-unknown-linux-musl.tar.gz"
+      },
+      "uv_member": "uv-x86_64-unknown-linux-musl/uv"
+    }
+  },
+  "uv_source_commit": "135a3636789bb6886e0a7876f58cb4dbb270ba6d",
+  "uv_version": "0.11.16"
+}

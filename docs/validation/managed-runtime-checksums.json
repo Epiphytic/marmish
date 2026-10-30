@@ -1,0 +1,89 @@
+{
+  "artifacts": [
+    {
+      "checksum_matches": true,
+      "filename": "uv-aarch64-apple-darwin.tar.gz",
+      "kind": "uv",
+      "sha256": "2b25be1af546be330b340b0a76b99f989daa6d92678fdffb87438e661e9d88fb",
+      "target": "aarch64-apple-darwin"
+    },
+    {
+      "checksum_matches": true,
+      "filename": "cpython-3.13.13+20260510-aarch64-apple-darwin-install_only_stripped.tar.gz",
+      "kind": "python",
+      "sha256": "16d2332d950178968534e65fe09f01f876d13af1147176fd0c77a74c9e4d1a4b",
+      "target": "aarch64-apple-darwin"
+    },
+    {
+      "checksum_matches": true,
+      "filename": "marmish-0.1.0-experimental.2-aarch64-apple-darwin.tar.gz",
+      "kind": "marmish",
+      "sha256": "340b6f4f5a870cb33ae1d77b5f9c4891453a70b3f329094ffbacf1df3fbb264e",
+      "target": "aarch64-apple-darwin"
+    },
+    {
+      "checksum_matches": true,
+      "filename": "uv-aarch64-unknown-linux-musl.tar.gz",
+      "kind": "uv",
+      "sha256": "ac022d96411143b9a2dd75ea711fa8dd4cd14538bf248f2e5df3c10a80f7f6a4",
+      "target": "aarch64-unknown-linux-gnu"
+    },
+    {
+      "checksum_matches": true,
+      "filename": "cpython-3.13.13+20260510-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+      "kind": "python",
+      "sha256": "67c837838c56a7d16187d1be9fad326a617e0b1ee2687e1a0dda0c85053dac33",
+      "target": "aarch64-unknown-linux-gnu"
+    },
+    {
+      "checksum_matches": true,
+      "filename": "marmish-0.1.0-experimental.2-aarch64-unknown-linux-gnu.tar.gz",
+      "kind": "marmish",
+      "sha256": "90e5c44ef9235c0825ec59ecded8909a6f76642f7a8461d8f3418a2f5ef70be6",
+      "target": "aarch64-unknown-linux-gnu"
+    },
+    {
+      "checksum_matches": true,
+      "filename": "uv-x86_64-unknown-linux-musl.tar.gz",
+      "kind": "uv",
+      "sha256": "1bc4be1be0a000f893b0d1db97906cf392b63fa22fda9a0ecf33d0d4bbb4bc9a",
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    {
+      "checksum_matches": true,
+      "filename": "cpython-3.13.13+20260510-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+      "kind": "python",
+      "sha256": "bbe27549e475fe5f22d42a8e0d553dc79d80d8a00e05712599637857d287360e",
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    {
+      "checksum_matches": true,
+      "filename": "marmish-0.1.0-experimental.2-x86_64-unknown-linux-gnu.tar.gz",
+      "kind": "marmish",
+      "sha256": "c409afda196314a3033049e21e64339594445eebd4afa3bbbbda0b7d3f6c6f0c",
+      "target": "x86_64-unknown-linux-gnu"
+    }
+  ],
+  "purpose": "freeze_time_official_checksum_crosscheck",
+  "schema": 1,
+  "sources": {
+    "marmish": {
+      "sha256": "fc17033578213bc15bf969e66f9e327e39ea12b7054e94c2ccb1e6ca522711d7",
+      "size": 859,
+      "url": "https://github.com/Epiphytic/marmish/releases/download/v0.1.0-experimental.2/SHA256SUMS",
+      "verified": true
+    },
+    "pbs": {
+      "sha256": "52933bb25b684e4b241cc67748b183c125187447cf258293bc82a2177809a4b6",
+      "size": 121896,
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260510/SHA256SUMS",
+      "verified": true
+    },
+    "uv": {
+      "sha256": "8ef7fe76d67be3330e18e8d6ecbbb68f7a1ae46fe31198008170e911ad025c6a",
+      "size": 1901,
+      "url": "https://github.com/astral-sh/uv/releases/download/0.11.16/sha256.sum",
+      "verified": true
+    }
+  }
+}

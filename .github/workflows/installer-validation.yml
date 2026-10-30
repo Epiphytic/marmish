@@ -4,16 +4,14 @@ on:
     branches: [master]
     paths:
       - 'scripts/install.sh'
-      - 'tools/test_marmish_install.py'
-      - 'tools/test_marmish_quickstart.py'
-      - 'tools/bootstrap_ci_python.sh'
+      - 'tools/**'
+      - 'tests/fixtures/managed-runtime-assets.json'
       - '.github/workflows/installer-validation.yml'
   pull_request:
     paths:
       - 'scripts/install.sh'
-      - 'tools/test_marmish_install.py'
-      - 'tools/test_marmish_quickstart.py'
-      - 'tools/bootstrap_ci_python.sh'
+      - 'tools/**'
+      - 'tests/fixtures/managed-runtime-assets.json'
       - '.github/workflows/installer-validation.yml'
   workflow_dispatch:
 permissions:
@@ -38,3 +36,35 @@ jobs:
           sh -n scripts/install.sh
           python3 -m unittest discover -s tools -p test_marmish_install.py -v
           python3 -m unittest discover -s tools -p test_marmish_quickstart.py -v
+  managed-packaging:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Ensure harness Python 3.11 or newer
+        run: sh tools/bootstrap_ci_python.sh
+      - name: Install Linux packaging test prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends bubblewrap binutils
+      - name: Offline managed packaging contract tests
+        run: python3 -m unittest discover -s tools -p test_marmish_managed_runtime_spike.py -v
+      - name: Validate pinned runtime and published native archive
+        run: >-
+          python3 tools/marmish_managed_runtime_spike.py
+          --report "$RUNNER_TEMP/managed-runtime-report.json"
+      - name: Upload sanitized packaging evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: managed-runtime-${{ matrix.runner }}
+          path: ${{ runner.temp }}/managed-runtime-report.json
+          if-no-files-found: error
+          retention-days: 14

@@ -62,7 +62,7 @@ interpreter, application and helper paths. They do not run `uvx`, resolve packag
 upgrade tools, or download an interpreter when the service starts. A service must
 start offline with only its configured Marmot relays available. Avoid depending
 on a transient uv cache or mutable generic tool environment for a running service;
-retain a version-owned environment and its interpreter until no installed version
+retain an install-owned runtime slot and its interpreter until no installed version
 uses them. Package application code and matching target-specific helpers together
 or bind them by an exact release manifest; do not mix Python code from one version
 with native helpers from another. Native licenses, helper hashes, code signatures,
@@ -170,7 +170,7 @@ roles. Retain current root refusal until privileged mapping has its own design.
 | Increment | Deliverable and dependency | Required exit evidence |
 | --- | --- | --- |
 | 0 Contracts and packaging spike | Review this overall plan; define versioned service/config/IPC schemas and migration. Prove a pinned uv-managed interpreter can install the exact application and native companion without system Python, source builds or ambient package resolution. Select archive-plus-environment versus platform wheel layout from evidence. | Native Linux amd64/arm64 and macOS arm64 installation/launch smoke; exact interpreter and helper provenance; offline restart; written role transitions and bounded scheduler design approved by Claude. No claim that packaging fixes confinement. |
-| 1 Managed bootstrap and application setup seam | Small curl/shell bootstrap plus version-owned managed Python environment; keep existing verifier semantics; move interactive setup entrypoint out of installer. Add app packaging/entrypoints where required. Depends on packaging spike. | No-system-Python install, malformed/traversal/oversize/archive/hash rejection, interrupted upgrade rollback, idempotence and owned uninstall; no automatic service downloads; argv/path/space tests; signatures, licenses and installed default paths validated. |
+| 1 Managed bootstrap and application setup seam | Small curl/shell bootstrap plus install-owned retained managed Python slots; keep existing verifier semantics; move interactive setup entrypoint out of installer. Add app packaging/entrypoints where required. Depends on packaging spike. | No-system-Python install, malformed/traversal/oversize/archive/hash rejection, interrupted upgrade rollback, idempotence and owned uninstall; no automatic service downloads; argv/path/space tests; signatures, licenses and installed default paths validated. |
 | 2 Unified identity owner and CLI IPC | Single service owns Profile/keys/MDK; bounded request demux and scheduler; CLI routes through authenticated local API. Preserve current noninteractive protocol and Rust engine. Depends on approved IPC/scheduler detailed design and increment1 entrypoint contract; may be developed separately from packaging mechanics. | Two local CLIs share one MDK/profile; simultaneous inbound/outbound commands with same Nostr identity; slow client isolation; foreign UID/stale endpoint denial; literal/binary streams, disconnect, retry/no duplicate, restart recovery, replay and quarantine tests. Real Marmot execution required. |
 | 3 Persistent roles and guided setup | c/s/b menu default Both; optional inbound npub; explicit server enable/disable/status; atomic config and migration; optional user service integration. Depends on owner/control API. | Native PTY tests for Enter/c/s/b/invalid/EOF/signals; Both with no npub remains client-only through restart and later authorization edits; explicit enable succeeds only with allowed peer; disabling does not cancel detached work; old profile/keychain/room/journal migration preserves account and state. |
 | 4 Native acceptance and distribution | Freeze exact sources/artifacts and perform Linux/macOS cross-platform acceptance, then publish reviewed experimental increment. | Fresh-key installed bidirectional command execution, same-identity client+server operation, all negative confinement/policy/IPC gates, native keychains, three architecture installs, offline service restart, explicit relay selection, bounded failure reporting, GitHub/Radicle/Iris verification. Report platform failures honestly; no success inferred from build or static doctor. |
@@ -236,9 +236,11 @@ proposed increments, not implemented behavior:
    never run uv or download anything at startup.
 
 Increment1 can ship independently of the unified daemon and retains existing
-frontend behavior until later reviewed increments. Setup explicitly replaces
-foreground-only authorization with the durable managed configuration; documentation
-and migration tests must distinguish those modes. Root refusal, debug/doctor
+frontend behavior, including invocation-only authorization. Its detailed managed
+bootstrap design uses install-owned retained runtime slots rather than modifying
+immutable release trees. Increment3 setup replaces foreground-only authorization
+with the durable managed configuration; documentation and migration tests must
+distinguish those modes. Root refusal, debug/doctor
 semantics and explicit relay selection remain covered. Role disablement response/
 status/cancel semantics and the bounded shared scheduler are mandatory detailed
 phase design items, not implicit choices delegated to implementation.
