@@ -109,6 +109,12 @@ abort with signal 6 and empty stderr. This reproduces a general confined startup
 failure; the cause remains unestablished. A separately reviewed
 [owned probe crash-context diagnostic](phases/macos-probe-crash-context.md)
 selects only the synthetic child PID/path and extracts bounded allowlisted facts.
+Hosted run [41132685757](https://github.com/Epiphytic/marmish/actions/runs/41132685757)
+matched the owned PID and Mach-O UUID through a reviewed redacted-path rule.
+The confined read aborted in dyld/libignition startup (namespace 0x23, code 2),
+before probe logic; the exact failing operation remains unknown. See
+[the evidence and investigation boundary](phases/macos-dyld-startup.md).
+This is diagnostic progress, not a production fix or a passing runtime gate.
 
 The installer retains prior versions and all identity/keychain/command state;
 uninstall removes only owned launchers/bookkeeping. It does not modify host

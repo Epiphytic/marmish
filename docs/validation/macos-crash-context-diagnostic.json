@@ -23,5 +23,12 @@
     "passed": 57,
     "skipped_native_only": 6
   },
-  "uuid_extension_quality": "One major test-class length finding; diagnostic fact extraction split into semantic helpers. New bounded parser/attribution code reviewed independently; no production contract changed."
+  "uuid_extension_quality": "One major test-class length finding; diagnostic fact extraction split into semantic helpers. New bounded parser/attribution code reviewed independently; no production contract changed.",
+  "uuid_extension_native": {
+    "source": "e6ba0b471c856453b46e24b2586131f48e9639db",
+    "run": "https://github.com/Epiphytic/marmish/actions/runs/41132685757",
+    "status": "failure: control0, confinedSIGABRT; ownedPID+UUID attribution succeeded",
+    "facts": "dyld/libignition startup, namespace0x23/code2; exact operation unknown",
+    "production_fix": false
+  }
 }
