@@ -100,7 +100,7 @@ from pathlib import Path
 args = sys.argv[1:]
 name = Path(sys.argv[0]).name
 with open(os.environ['QUICKSTART_TEST_LOG'], 'a') as output:
-    output.write(json.dumps({'name': name, 'args': args, 'cwd': os.getcwd(), 'tty': os.isatty(0), 'pid': os.getpid()}) + '\\n')
+    output.write(json.dumps({'name': name, 'args': args, 'cwd': os.getcwd(), 'tty': os.isatty(0), 'pid': os.getpid(), 'debug': os.environ.get('MARMISH_DEBUG')}) + '\\n')
 if os.environ.get('QUICKSTART_TEST_FAIL') in args:
     sys.exit(7)
 if '--init' in args:
@@ -123,8 +123,9 @@ if name == 'marmishd' and os.environ.get('QUICKSTART_TEST_STDIN'):
     def command(self, *args):
         return ['/bin/sh', str(self.wrapper), '--prefix', str(self.prefix), *args]
 
-    def start(self, **environment):
-        process = TerminalProcess(self.command('--quickstart'), dict(self.environment, **environment))
+    def start(self, debug=False, **environment):
+        args = ['--quickstart', *(['--debug'] if debug else [])]
+        process = TerminalProcess(self.command(*args), dict(self.environment, **environment))
         self.addCleanup(process.close)
         return process
 
@@ -166,6 +167,60 @@ if name == 'marmishd' and os.environ.get('QUICKSTART_TEST_STDIN'):
                     self.assertIn('-u' + 'a' * 64, final['args'])
                     self.assertEqual(final['args'][-4:], ['--', '/usr/bin/printf', '%s\n', 'Hello through Marmot'])
                 self.assertFalse((self.home / 'NEVER').exists())
+
+    def test_debug_forwards_only_environment_and_retains_legacy_argv(self):
+        for role in ('server', 'client'):
+            with self.subTest(role=role):
+                self.log.unlink(missing_ok=True)
+                process = self.start(debug=True)
+                self.identify(process, role)
+                process.send('a' * 64 + '\n')
+                self.assertEqual(process.wait(), 0, process.output)
+                self.assertEqual(len(self.calls()), 3)
+                for call in self.calls():
+                    self.assertEqual(call['debug'], '1')
+                    self.assertNotIn('--debug', call['args'])
+                records = self.debug_records(process.output)
+                self.assertEqual(records[0]['event'], 'context')
+                self.assertTrue(any(item['stage'] == role + '_command' for item in records))
+                serialized = json.dumps(records)
+                self.assertNotIn(str(self.home), serialized)
+                self.assertNotIn('relay.example', serialized)
+                self.assertNotIn('a' * 64, serialized)
+                self.assertIn(b'older archives retain category-only errors', process.output)
+
+    @staticmethod
+    def debug_records(output):
+        prefix = 'marmish installer debug: '
+        return [json.loads(line[len(prefix):]) for line in output.decode().splitlines()
+                if line.startswith(prefix)]
+
+    def test_debug_child_failure_records_status_and_stops_setup(self):
+        process = self.start(debug=True, QUICKSTART_TEST_FAIL='--init')
+        process.expect('Role')
+        process.send('server\n')
+        process.expect('Relay URL')
+        process.send('wss://relay.example/\n')
+        self.assertEqual(process.wait(), 1, process.output)
+        failures = [item for item in self.debug_records(process.output) if item['event'] == 'failed']
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]['stage'], 'identity_initialization')
+        self.assertEqual(failures[0]['exit_code'], 7)
+        self.assertEqual(len(self.calls()), 2)
+
+    def test_debug_signal_still_reaps_server(self):
+        process = self.start(debug=True, QUICKSTART_TEST_LONG='1')
+        self.identify(process, 'server')
+        process.send('a' * 64 + '\n')
+        process.expect('FAKE_SERVER_RUNNING')
+        child = self.calls()[-1]['pid']
+        os.kill(process.pid, signal.SIGTERM)
+        self.assertEqual(process.wait(), 128 + signal.SIGTERM, process.output)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(child, 0)
+        failure = [item for item in self.debug_records(process.output) if item['event'] == 'failed']
+        self.assertEqual(failure[0]['stage'], 'server_command')
+        self.assertEqual(failure[0]['category'], 'interrupted')
 
     def test_typeahead_remains_available_to_child(self):
         process = self.start(QUICKSTART_TEST_STDIN='1')
@@ -293,6 +348,36 @@ if name == 'marmishd' and os.environ.get('QUICKSTART_TEST_STDIN'):
         self.assertEqual(signals.first, signal.SIGTERM)
         child.send_signal.assert_called_once_with(signal.SIGTERM)
         self.assertEqual(child.wait.call_count, 2)
+
+    def test_logging_interruption_during_failure_cannot_skip_child_reaping(self):
+        installer = load_installer()
+        signals = installer.QuickstartSignals()
+        child = mock.Mock()
+        child.poll.return_value = None
+        child.wait.side_effect = [RuntimeError('private failure'), 0]
+        diagnostic = mock.Mock()
+        diagnostic.enabled = True
+        diagnostic.child_stages = {}
+        diagnostic.failure.side_effect = installer.QuickstartInterrupted(signal.SIGINT)
+        with mock.patch.object(installer.subprocess, 'Popen', return_value=child):
+            with self.assertRaises(installer.QuickstartInterrupted):
+                installer.run_quickstart_child(['owned-test-child'], 0, signals, 'test', diagnostic)
+        child.send_signal.assert_called_once_with(signal.SIGTERM)
+        self.assertEqual(child.wait.call_args_list, [mock.call(), mock.call(timeout=5)])
+
+    def test_compatibility_notice_does_not_swallow_interruption(self):
+        installer = load_installer()
+        diagnostic = mock.Mock()
+        diagnostic.enabled = True
+        signals = installer.QuickstartSignals()
+        stream = mock.Mock()
+        stream.write.side_effect = lambda *_: signals.handle(signal.SIGHUP, None)
+        with mock.patch.object(installer.sys, 'stderr', stream), \
+                mock.patch.object(installer, 'quickstart_prompt') as prompt:
+            with self.assertRaises(installer.QuickstartInterrupted):
+                installer.quickstart(self.prefix / 'bin', 0, signals, diagnostic)
+        prompt.assert_not_called()
+        self.assertEqual(signals.first, signal.SIGHUP)
 
     def test_unresponsive_child_is_killed_and_reaped(self):
         installer = load_installer()

@@ -1,0 +1,65 @@
+{
+  "format": 1,
+  "scope": "Sanitized opt-in debug diagnostics increment",
+  "tests": [
+    {
+      "command": "python3 -m unittest discover -s tools",
+      "outcome": "passed",
+      "tests": 374,
+      "skipped": 7,
+      "seconds": 10.632
+    },
+    {
+      "command": "python3 -m unittest discover -s tests -p *.py",
+      "outcome": "passed",
+      "tests": 21,
+      "seconds": 1.185
+    },
+    {
+      "command": "sh -n scripts/install.sh",
+      "outcome": "passed"
+    },
+    {
+      "command": "python3 -m compileall -q tools",
+      "outcome": "passed"
+    },
+    {
+      "command": "git diff --check",
+      "outcome": "passed"
+    }
+  ],
+  "covered": [
+    "installer flag help/plain install/version/uninstall",
+    "both quickstart roles inherit exact debug environment with legacy argv unchanged",
+    "stage/status/HTTP/errno redaction and secret canaries",
+    "SIGTERM/SIGHUP during diagnostic writes propagate and owned children are reaped",
+    "frontend flag/env opt-in and per-invocation reset",
+    "literal remote --debug and option values do not enable local diagnostics",
+    "doctor argument order documented and tested",
+    "mock native broker control=0 confined=-6 reports stage and SIGABRT",
+    "native timeout and OSError omit raw command/path contents",
+    "primary+cleanup failure distinguishes production versus spike behavior",
+    "actual production _prepare passes explicit cleanup preservation",
+    "broken diagnostic stderr does not replace results",
+    "record-shaped remote stderr does not control application"
+  ],
+  "limitations": [
+    "No native macOS runtime or live Marmot acceptance performed for this diagnostics source increment.",
+    "Existing experimental.1 archives ignore MARMISH_DEBUG; updated runtime archives tracked separately in marmish-5o1.",
+    "Debug does not establish root cause or resolve native_probe_broker.",
+    "Stderr is not authenticated and may contain remote output."
+  ],
+  "quality_review": {
+    "tool": "ripwire quality-delta and pr-context",
+    "quality_delta_exit": 2,
+    "disposition": "Reviewed: churn and aggregate Profile/test-class LOC findings; dynamic argparse/decorator/unittest callbacks falsely appear dead. Best-effort error-masking is intentional and tested. No claim of a clean quality score; source safety reviewed independently with Claude. Embedded installer Python is outside the static graph."
+  },
+  "files_sha256": {
+    "scripts/install.sh": "eac417b4748f0252adef82fe18c1260ef744523ec0ed6b624927dc6b803d0768",
+    "tools/marmish_app.py": "75277fbac496eca1c2f0e073087055d1613bc912a2c0a0ff9adadd2065b10548",
+    "tools/marmish_transport_macos.py": "59a594fa1b3ec9ae16ef4e4e5bb4408ceddc16c7ce28ff9d338fca6df8ce0430",
+    "tools/test_marmish_debug.py": "d607cba4c30a363f1a04c0f7f292594a5491f024c2b2c8ce39b3582259aca222",
+    "tools/test_marmish_install.py": "0c0e167beb327c2add22313ff057125563b859c4606c8c79c8476e087b963aae",
+    "tools/test_marmish_quickstart.py": "2ca02e7af0f4f17e959cfb35383eecf5a7127820dcba78f75709587d9a306214"
+  }
+}

@@ -1,13 +1,17 @@
 """Client/server frontends for the reviewed noninteractive Marmish prototype."""
 import argparse
 import contextlib
+from contextvars import ContextVar
+from functools import wraps
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import secrets
 import signal
 import stat
+import subprocess
 import sys
 import time
 
@@ -21,6 +25,128 @@ from marmish_policy import load_policy
 from marmish_keys import KeySession, encode_nsec, protected_read, protected_unlink
 from marmish_transport import ConfinedDaemon, SandboxError, acquire_profile_home_lock
 from marmish_platform import continuous_time
+
+
+_DEBUG = ContextVar('marmish_debug', default=None)
+_DEBUG_STAGES = frozenset({'startup', 'client_arguments', 'server_arguments',
+    'profile_open', 'key_session', 'identity_prepare', 'transport_create',
+    'transport_start', 'rpc_connect', 'rpc_authenticate', 'profile_ready'})
+_DEBUG_PROBES = ('broker', 'home_read', 'home_write', 'rpc_staging', 'outside_read',
+    'outside_write', 'other_tcp', 'udp', 'other_unix', 'other_unix_bind', 'ipv6',
+    'interface', 'dns', 'control_create', 'ack_create', 'ack_publish',
+    *(f'control_{item}_{mode}' for item in ('record', 'config', 'binary')
+      for mode in ('write', 'truncate', 'unlink', 'rename')))
+_DEBUG_PREFLIGHT = frozenset({f'preflight_{probe}_{part}' for probe in _DEBUG_PROBES
+    for part in ('control', 'reset', 'confined')} | {'preflight_' + item for item in
+    ('home_fixture', 'outside_create', 'outside_fixture', 'tcp_fixture', 'unix_fixture',
+     'ipv6_fixture', 'outside_cleanup', 'interfaces', 'interface_fixture', 'dns_fixture',
+     'control_fixture', 'files_cleanup')})
+
+
+class _DebugDiagnostics:
+    """Bounded, best-effort records containing no external text or payloads."""
+    def __init__(self):
+        self.enabled = False
+        self.current = 'startup'
+        self.count = 0
+
+    def emit(self, event, **fields):
+        if not self.enabled or self.count >= 256:
+            return
+        try:
+            self.count += 1
+            print('marmish debug: ' + json.dumps({'schema': 1, 'event': event,
+                  'stage': self.current, **fields}, sort_keys=True), file=sys.stderr)
+        except Exception:
+            pass  # Diagnostics must never replace the original result.
+
+    def enable(self):
+        if self.enabled:
+            return
+        self.enabled = True
+        try:
+            host = sys.platform if sys.platform in ('linux', 'darwin') else 'other'
+            cpu = platform.machine()
+            cpu = cpu if cpu in ('x86_64', 'amd64', 'aarch64', 'arm64') else 'other'
+            self.emit('context', platform=host, architecture=cpu,
+                      python=list(sys.version_info[:3]))
+        except Exception:
+            pass
+
+    def stage(self, stage):
+        if stage in _DEBUG_STAGES or stage in _DEBUG_PREFLIGHT:
+            self.current = stage
+            self.emit('begin')
+
+    def failure(self, error, exit_code=None, event='failed'):
+        try:
+            kinds = {OSError: 'os_error', ValueError: 'value_error', TypeError: 'type_error',
+                     KeyError: 'key_error', AttributeError: 'attribute_error',
+                     subprocess.TimeoutExpired: 'timeout',
+                     SmokeError: 'smoke_error', RpcError: 'rpc_error', SandboxError: 'sandbox_error'}
+            kind = kinds.get(type(error), 'other')
+            if isinstance(error, OSError):
+                kind = 'os_error'
+            number = error.errno if isinstance(error, OSError) else None
+            number = number if type(number) is int and 1 <= number <= 4095 else None
+            code = exit_code if type(exit_code) is int and -255 <= exit_code <= 255 else None
+            fields = {'error_type': kind, 'errno': number, 'exit_code': code}
+            if code is not None and code < 0:
+                fields['signal'] = -code
+                try:
+                    fields['signal_name'] = signal.Signals(-code).name
+                except ValueError:
+                    fields['signal_name'] = 'UNKNOWN'
+            self.emit(event, **fields)
+        except Exception:
+            pass
+
+    def preflight(self, event, stage, error=None, exit_code=None):
+        if stage not in _DEBUG_PREFLIGHT or event not in ('begin', 'failed', 'cleanup_failed'):
+            return
+        self.current = stage
+        if event == 'begin':
+            self.emit('begin')
+        else:
+            self.failure(error, exit_code, event)
+
+
+@contextlib.contextmanager
+def _debug_context():
+    existing = _DEBUG.get()
+    if existing is not None:
+        yield existing
+        return
+    diagnostic = _DebugDiagnostics()
+    token = _DEBUG.set(diagnostic)
+    try:
+        if os.environ.get('MARMISH_DEBUG') == '1':
+            diagnostic.enable()
+        yield diagnostic
+    finally:
+        _DEBUG.reset(token)
+
+
+def _debug_invocation(main):
+    @wraps(main)
+    def invoke(*args, **kwargs):
+        with _debug_context():
+            return main(*args, **kwargs)
+    return invoke
+
+
+def _debug_stage(stage):
+    diagnostic = _DEBUG.get()
+    if diagnostic is not None:
+        diagnostic.stage(stage)
+
+
+class _DebugAction(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, True)
+        diagnostic = _DEBUG.get()
+        if diagnostic is not None:
+            diagnostic.enable()
 
 
 def _pristine(path):
@@ -85,6 +211,7 @@ def _check_mdk_account(home, account, *, initialized=False, migration=False):
 
 class Profile:
     def __init__(self, args):
+        _debug_stage('profile_open')
         self.args = args
         self.root = private_directory(args.identity)
         self.path = self.root / 'profile.json'
@@ -103,6 +230,7 @@ class Profile:
 
     def __enter__(self):
         args = self.args
+        _debug_stage('key_session')
         self.keys = KeySession(self.root, storage=getattr(args, 'key_storage', 'auto'),
                                key_name=getattr(args, 'key_name', None),
                                helper=getattr(args, 'keychain_helper', None),
@@ -117,19 +245,27 @@ class Profile:
                 return self
             require(not self.keys.migration, 'key_migration_required')
             require(bool(self.value) or _pristine(self.root / 'mdk'), 'nonpristine_key_state')
+            _debug_stage('identity_prepare')
             binding = self.keys.prepare_nostr(existing_account=self.value.get('account'),
                                                pristine=_pristine(self.root / 'mdk'))
             native = binding.backend == 'native'
             bootstrap = None
             if native:
                 bootstrap, setup_pending = self._prepare_native(binding)
+            _debug_stage('transport_create')
             self.transport = ConfinedDaemon(self.root / 'mdk', Path(args.wnd), self.relays,
                 args.wnd_sha256, manifest=getattr(args, 'wnd_manifest', None), bootstrap=bootstrap)
+            diagnostic = _DEBUG.get()
+            if diagnostic is not None and diagnostic.enabled:
+                self.transport.diagnostic = diagnostic.preflight
+            _debug_stage('transport_start')
             self.transport.start()
+            _debug_stage('rpc_connect')
             self.rpc = MdkRpc(self.transport.socket, timeout=60,
                 rpc_home=self.transport.rpc_home, rpc_socket=self.transport.rpc_socket,
                 peer_identity=self.transport.peer_identity,
                 secret_store='MarmishStdin' if native else 'File')
+            _debug_stage('rpc_authenticate')
             if native:
                 self._authenticate_native(binding, setup_pending)
             elif not self.value:
@@ -139,6 +275,7 @@ class Profile:
                 self.account = public_key(account)
                 self.save()
             self.account = public_key(self.value['account'])
+            _debug_stage('profile_ready')
             return self
         except BaseException:
             self.__exit__()
@@ -604,6 +741,8 @@ class Server:
 def common(parser):
     from marmish_installed import DoctorAction, installed_defaults
     defaults = installed_defaults()
+    parser.add_argument('--debug', nargs=0, action=_DebugAction,
+                        help='emit sanitized troubleshooting records to stderr; use before --doctor')
     parser.add_argument('--doctor', nargs=0, action=DoctorAction,
                         help='report static platform prerequisites without accessing keys')
     parser.add_argument('-i', '--identity', required=True, type=Path,
@@ -632,7 +771,9 @@ def exit_code(status):
     return 1
 
 
+@_debug_invocation
 def client_main(argv=None):
+    _debug_stage('client_arguments')
     argv = list(sys.argv[1:] if argv is None else argv)
     command = []
     if '--' in argv:
@@ -694,7 +835,9 @@ def client_main(argv=None):
         return exit_code(client.wait(invocation, sys.stdout.buffer, sys.stderr.buffer))
 
 
+@_debug_invocation
 def server_main(argv=None):
+    _debug_stage('server_arguments')
     parser = argparse.ArgumentParser(description=__doc__)
     defaults = common(parser)
     parser.add_argument('--allow', action='append', required=True)
@@ -737,16 +880,19 @@ def server_main(argv=None):
     return 0
 
 
+@_debug_invocation
 def guarded_main(main):
     try:
         return main()
     except (SmokeError, RpcError, SandboxError) as error:
+        _DEBUG.get().failure(error)
         # Categories only; never print MDK stdout, command contents, token or key material.
         category = str(error)
         if not category.isascii() or not category.replace('_', '').isalnum() or len(category) > 80:
             category = 'transport_failure'
         print('marmish: ' + category, file=sys.stderr)
         return 125
-    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+        _DEBUG.get().failure(error)
         print('marmish: local_io_or_schema_failure', file=sys.stderr)
         return 125

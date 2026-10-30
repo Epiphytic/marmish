@@ -561,7 +561,8 @@ class DarwinConfinedDaemon:
         (self._directory / 'profile.sb').write_text(PROFILE)
         (self._directory / 'profile.sb').chmod(0o600)
         self._broker = SocksBroker(self.relays).start()
-        self._preflight()
+        self._preflight(diagnostic=getattr(self, 'diagnostic', None),
+                        preserve_cleanup_errors=True)
         self._config = self._directory / 'restricted.json'
         self._nonce = os.urandom(32).hex()
         _json_private(self._config, {'version': 1, 'nonce': self._nonce, 'relays': self.relays,
@@ -658,7 +659,7 @@ class DarwinConfinedDaemon:
                 else:
                     raise SandboxError('daemon_home_in_use')
 
-    def _preflight(self, diagnostic=None):
+    def _preflight(self, diagnostic=None, *, preserve_cleanup_errors=False):
         failed = False
         def notify(event, label, error=None, exit_code=None):
             if diagnostic is not None:
@@ -682,7 +683,7 @@ class DarwinConfinedDaemon:
                 prior = failed
                 failed = True
                 notify('cleanup_failed', label, error)
-                if diagnostic is None or not prior:
+                if preserve_cleanup_errors or diagnostic is None or not prior:
                     raise
         probe = self._directory / 'marmish-probe'
         def invoke(arguments, confined):

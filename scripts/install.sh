@@ -48,6 +48,84 @@ class InstallError(Exception):
     pass
 
 
+class InstallerDiagnostics:
+    """Opt-in fixed-schema records; logging never replaces the original error."""
+    stages = frozenset({'arguments', 'installation', 'release_metadata',
+        'archive_download', 'archive_verify', 'archive_install', 'terminal',
+        'quickstart_setup', 'prerequisite_check', 'identity_initialization',
+        'server_command', 'client_command', 'quickstart_child', 'uninstall'})
+    child_stages = {'prerequisite check': 'prerequisite_check',
+        'identity initialization': 'identity_initialization',
+        'server command': 'server_command', 'client command': 'client_command'}
+
+    def __init__(self, enabled=False):
+        self.enabled = enabled
+        self.current = 'arguments'
+        self.failed = False
+
+    @staticmethod
+    def number(value, low, high):
+        return value if type(value) is int and low <= value <= high else None
+
+    def emit(self, event, **fields):
+        if not self.enabled:
+            return
+        try:
+            record = {'schema': 1, 'event': event, 'stage': self.current, **fields}
+            print('marmish installer debug: ' + json.dumps(record, sort_keys=True),
+                  file=sys.stderr, flush=True)
+        except QuickstartInterrupted:
+            raise
+        except Exception:
+            # Diagnostic output may be closed; preserve installation/child status.
+            pass
+
+    def context(self):
+        try:
+            system = platform.system()
+            machine = platform.machine()
+            self.emit('context', platform=system if system in ('Linux', 'Darwin') else 'other',
+                architecture=machine if machine in ('x86_64', 'aarch64', 'arm64') else 'other',
+                python=[self.number(part, 0, 999) for part in sys.version_info[:3]])
+        except QuickstartInterrupted:
+            raise
+        except Exception:
+            pass
+
+    def begin(self, stage):
+        self.current = stage if stage in self.stages else 'quickstart_child'
+        self.emit('begin')
+
+    def failure(self, error=None, exit_code=None):
+        if self.failed:
+            return
+        self.failed = True
+        try:
+            category = 'installer_refused' if isinstance(error, InstallError) else 'unexpected_failure'
+            if isinstance(error, QuickstartInterrupted):
+                category = 'interrupted'
+                exit_code = 128 + error.number
+            elif isinstance(error, OSError):
+                category = 'local_io_failure'
+            cause = error.__cause__ if isinstance(error, InstallError) else error
+            http_status = self.number(cause.code, 100, 599) if isinstance(cause, urllib.error.HTTPError) else None
+            if isinstance(cause, urllib.error.URLError) and isinstance(cause.reason, OSError):
+                cause = cause.reason
+            number = self.number(cause.errno, 1, 4095) if isinstance(cause, OSError) else None
+            status = self.number(exit_code, -255, 255)
+            signum = -status if status is not None and status < 0 else None
+            try:
+                signame = signal.Signals(signum).name if signum is not None else None
+            except ValueError:
+                signame = None
+            self.emit('failed', category=category, errno=number, http_status=http_status,
+                      exit_code=status, signal=signum, signal_name=signame)
+        except QuickstartInterrupted:
+            raise
+        except Exception:
+            pass
+
+
 def require(condition, message):
     if not condition:
         raise InstallError(message)
@@ -574,17 +652,22 @@ def stop_quickstart_child(child, number):
         child.wait()
 
 
-def run_quickstart_child(argv, terminal_fd, signals, step):
+def run_quickstart_child(argv, terminal_fd, signals, step, diagnostic=None):
+    diagnostic = diagnostic or InstallerDiagnostics()
+    diagnostic.begin(diagnostic.child_stages.get(step, 'quickstart_child'))
     child = None
     try:
         signals.spawning = True
         try:
-            child = subprocess.Popen(argv, stdin=terminal_fd, cwd=Path.home())
+            environment = dict(os.environ, MARMISH_DEBUG='1') if diagnostic.enabled else None
+            child = subprocess.Popen(argv, stdin=terminal_fd, cwd=Path.home(), env=environment)
         finally:
             signals.spawning = False
         if signals.first is not None:
             raise QuickstartInterrupted(signals.first)
         result = child.wait()
+        if result != 0:
+            diagnostic.failure(InstallError(), result)
         require(result == 0, "quickstart " + step + " failed (exit " + str(result) + ")")
     except BaseException as error:
         if child is not None:
@@ -596,6 +679,8 @@ def run_quickstart_child(argv, terminal_fd, signals, step):
             finally:
                 for number, handler in previous.items():
                     signal.signal(number, handler)
+        # Logging can itself receive a signal; reap the owned child first.
+        diagnostic.failure(error)
         raise
 
 
@@ -624,10 +709,20 @@ def quickstart_prompt(terminal_fd, prompt):
     return value
 
 
-def quickstart(launcher_dir, terminal_fd, signals=None):
+def quickstart(launcher_dir, terminal_fd, signals=None, diagnostic=None):
     if signals is None:
         with QuickstartSignals() as scoped:
-            return quickstart(launcher_dir, terminal_fd, scoped)
+            return quickstart(launcher_dir, terminal_fd, scoped, diagnostic)
+    diagnostic = diagnostic or InstallerDiagnostics()
+    diagnostic.begin('quickstart_setup')
+    if diagnostic.enabled:
+        try:
+            print('marmish installer: debug runtime details require an archive built after the '
+                  'debug feature; older archives retain category-only errors.', file=sys.stderr)
+        except QuickstartInterrupted:
+            raise
+        except Exception:
+            pass
     role = quickstart_prompt(terminal_fd, 'Role (server or client): ')
     require(role in ('server', 'client'), "quickstart role must be server or client")
     relay = quickstart_prompt(terminal_fd, 'Relay URL (wss://your-relay.example/): ')
@@ -635,9 +730,9 @@ def quickstart(launcher_dir, terminal_fd, signals=None):
     identity = str(Path.home() / '.marmish/default')
     client = str(launcher_dir / 'marmish')
     common = ['-i', identity, '--relay=' + relay]
-    run_quickstart_child([client, '--doctor'], terminal_fd, signals, 'prerequisite check')
+    run_quickstart_child([client, '--doctor'], terminal_fd, signals, 'prerequisite check', diagnostic)
     run_quickstart_child([client, *common, '--key-storage', 'auto', '--init'],
-                         terminal_fd, signals, 'identity initialization')
+                         terminal_fd, signals, 'identity initialization', diagnostic)
     terminal_write(terminal_fd,
         'Initialization prints {"account":"…"}, your public identity in hex; npub also works.\n'
         'Exchange public identities between machines. Start the server before submitting the client prompt.\n')
@@ -651,20 +746,26 @@ def quickstart(launcher_dir, terminal_fd, signals=None):
     else:
         peer = quickstart_prompt(terminal_fd, 'Server public identity (npub or hex): ')
         argv = [client, *common, '-u' + peer, relay, '--', '/usr/bin/printf', '%s\n', 'Hello through Marmot']
-    run_quickstart_child(argv, terminal_fd, signals, role + ' command')
+    run_quickstart_child(argv, terminal_fd, signals, role + ' command', diagnostic)
 
 
 def install_release(options, prefix, launcher_dir):
+    diagnostic = getattr(options, 'diagnostic', None) or InstallerDiagnostics()
+    diagnostic.begin('installation')
     target = native_target()
     with tempfile.TemporaryDirectory(prefix='marmish-download-') as temporary:
         directory = Path(temporary)
+        diagnostic.begin('release_metadata')
         version, release = release_metadata(options.version, directory)
         archive_name = 'marmish-' + version + '-' + target + '.tar.gz'
         assets = release_assets(release, archive_name)
         archive, sums = directory / archive_name, directory / 'SHA256SUMS'
+        diagnostic.begin('archive_download')
         download(assets['SHA256SUMS'], sums, MAX_MANIFEST)
         download(assets[archive_name], archive, MAX_DOWNLOAD)
+        diagnostic.begin('archive_verify')
         verify_checksum(archive, sums, archive_name)
+        diagnostic.begin('archive_install')
         manifest = install_archive(archive, prefix, launcher_dir, version, target)
     print('Installed Marmish ' + version + ' (' + target + '). EXPERIMENTAL:')
     for limitation in manifest['limitations']:
@@ -677,12 +778,24 @@ def install_release(options, prefix, launcher_dir):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Install experimental Marmish binaries for your user. Optional --quickstart initializes an identity and runs guided setup.')
+    parser.add_argument('--debug', action='store_true', help='emit sanitized setup diagnostics to stderr; enable runtime details in supporting binaries')
     parser.add_argument('--version', help='MAJOR.MINOR.PATCH-experimental.N; defaults to newest matching prerelease')
     parser.add_argument('--prefix', help='absolute private install prefix; its bin/ receives launchers (default: ~/.local/share/marmish, launchers in ~/.local/bin)')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--uninstall', action='store_true', help='remove owned launchers/current selector; retain versions and all user state')
     mode.add_argument('--quickstart', action='store_true', help='after installation, initialize a profile and guide server/client setup using your terminal')
     options = parser.parse_args(argv)
+    options.diagnostic = InstallerDiagnostics(options.debug)
+    options.diagnostic.context()
+    try:
+        return run_options(options)
+    except BaseException as error:
+        options.diagnostic.failure(error)
+        raise
+
+
+def run_options(options):
+    diagnostic = options.diagnostic
     require(sys.version_info >= (3, 11), "Python 3.11 or newer is required")
     require(os.geteuid() != 0, "run this installer as your normal user, without sudo")
     if options.version is not None:
@@ -693,6 +806,7 @@ def main(argv=None):
     safe_path(launcher_dir)
     if options.uninstall:
         require(options.version is None, "--version cannot be combined with --uninstall")
+        diagnostic.begin('uninstall')
         uninstall(prefix, launcher_dir)
         return
     if not options.quickstart:
@@ -702,6 +816,7 @@ def main(argv=None):
     foreground = False
     with QuickstartSignals() as signals:
         try:
+            diagnostic.begin('terminal')
             try:
                 terminal_fd = os.open('/dev/tty', os.O_RDWR | os.O_NOCTTY)
             except OSError as error:
@@ -711,7 +826,7 @@ def main(argv=None):
             foreground = True
             install_release(options, prefix, launcher_dir)
             require(read_installation(prefix, launcher_dir) is not None, "quickstart requires installer-owned launchers")
-            quickstart(launcher_dir, terminal_fd, signals)
+            quickstart(launcher_dir, terminal_fd, signals, diagnostic)
         except BaseException:
             if terminal_fd is not None and foreground:
                 try:

@@ -1,5 +1,6 @@
 """Offline adversarial tests for the self-contained distribution installer."""
 import gzip
+import contextlib
 import hashlib
 import io
 import json
@@ -93,7 +94,91 @@ class InstallerTests(unittest.TestCase):
         result = subprocess.run(['sh', str(INSTALLER), '--help'], cwd=decoys, env=environment, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('--uninstall', result.stdout)
+        self.assertIn('--debug', result.stdout)
         self.assertFalse(self.prefix.exists())
+
+    def test_debug_records_are_opt_in_and_redact_error_details(self):
+        secret = 'nsec-private-token-command-/private/path?credential=secret'
+        for enabled in (False, True):
+            output = io.StringIO()
+            diagnostic = self.installer.InstallerDiagnostics(enabled)
+            with contextlib.redirect_stderr(output):
+                diagnostic.context()
+                diagnostic.begin('archive_install')
+                diagnostic.failure(OSError(13, secret, secret))
+                diagnostic.failure(RuntimeError(secret))
+            self.assertNotIn(secret, output.getvalue())
+            if not enabled:
+                self.assertEqual(output.getvalue(), '')
+                continue
+            records = [json.loads(line.split(': ', 1)[1]) for line in output.getvalue().splitlines()]
+            self.assertEqual([item['event'] for item in records], ['context', 'begin', 'failed'])
+            self.assertEqual(records[-1]['stage'], 'archive_install')
+            self.assertEqual(records[-1]['errno'], 13)
+            self.assertEqual(records[-1]['category'], 'local_io_failure')
+            self.assertTrue(all(item['schema'] == 1 for item in records))
+
+    def test_debug_retains_only_numeric_download_cause_details(self):
+        secret = 'https://private.invalid/nsec-secret?credential=secret'
+        causes = [self.installer.urllib.error.HTTPError(secret, 429, secret, {}, None),
+                  self.installer.urllib.error.URLError(OSError(61, secret, secret))]
+        for cause in causes:
+            output = io.StringIO()
+            error = self.installer.InstallError('fixed refusal')
+            error.__cause__ = cause
+            diagnostic = self.installer.InstallerDiagnostics(True)
+            with contextlib.redirect_stderr(output):
+                diagnostic.begin('archive_download')
+                diagnostic.failure(error)
+            self.assertNotIn(secret, output.getvalue())
+            result = json.loads(output.getvalue().splitlines()[-1].split(': ', 1)[1])
+            if isinstance(cause, self.installer.urllib.error.HTTPError):
+                self.assertEqual(result['http_status'], 429)
+            else:
+                self.assertEqual(result['errno'], 61)
+
+    def test_debug_broken_stderr_never_changes_failure(self):
+        stream = mock.Mock()
+        stream.write.side_effect = OSError(32, 'private canary')
+        with mock.patch.object(self.installer.sys, 'stderr', stream):
+            diagnostic = self.installer.InstallerDiagnostics(True)
+            diagnostic.context()
+            diagnostic.begin('archive_verify')
+            diagnostic.failure(OSError(5, 'private canary'))
+        self.assertTrue(diagnostic.failed)
+
+    def test_debug_logging_preserves_first_quickstart_signal(self):
+        for operation in ('emit', 'context', 'failure'):
+            with self.subTest(operation=operation):
+                diagnostic = self.installer.InstallerDiagnostics(True)
+                signals = self.installer.QuickstartSignals()
+                stream = mock.Mock()
+                stream.write.side_effect = lambda *_: signals.handle(self.installer.signal.SIGTERM, None)
+                with mock.patch.object(self.installer.sys, 'stderr', stream):
+                    with self.assertRaises(self.installer.QuickstartInterrupted) as caught:
+                        if operation == 'emit':
+                            diagnostic.emit('begin')
+                        elif operation == 'context':
+                            diagnostic.context()
+                        else:
+                            diagnostic.failure(OSError(5, 'private canary'))
+                self.assertEqual(caught.exception.number, self.installer.signal.SIGTERM)
+                self.assertEqual(signals.first, self.installer.signal.SIGTERM)
+
+    def test_debug_main_scope_resets_and_supports_version_uninstall(self):
+        output = io.StringIO()
+        with mock.patch.object(self.installer, 'install_release') as install, \
+                mock.patch.object(self.installer, 'uninstall') as uninstall, \
+                contextlib.redirect_stderr(output):
+            self.installer.main(['--debug', '--version', VERSION, '--prefix', str(self.prefix)])
+            self.assertEqual(install.call_args.args[0].version, VERSION)
+            first = output.getvalue()
+            self.assertIn('marmish installer debug: ', first)
+            self.installer.main(['--prefix', str(self.prefix)])
+            self.assertEqual(output.getvalue(), first)
+            self.installer.main(['--debug', '--uninstall', '--prefix', str(self.prefix)])
+            uninstall.assert_called_once_with(self.prefix, self.launcher_dir)
+            self.assertIn('"stage": "uninstall"', output.getvalue())
 
     def test_install_special_characters_argv_idempotence_and_uninstall(self):
         manifest = self.install()
@@ -200,6 +285,7 @@ class InstallerTests(unittest.TestCase):
 
     def test_unrelated_launchers_and_broad_prefix_permissions_refused(self):
         self.prefix.mkdir(mode=0o755)
+        self.prefix.chmod(0o755)  # Exercise broad permissions regardless of process umask.
         with self.assertRaises(self.installer.InstallError):
             self.install()
         self.prefix.chmod(0o700)

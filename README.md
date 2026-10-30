@@ -27,11 +27,18 @@ does not install system tools, initialize a keychain service or enable namespace
 
 ```sh
 curl --proto '=https' --tlsv1.2 -fsSL https://iris.radicle.network/raw/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/head/scripts/install.sh -o marmish-install.sh &&
-sh marmish-install.sh --quickstart
+sh marmish-install.sh --quickstart --debug
 ```
 
 This saves the installer as `marmish-install.sh` and runs it only if the download
-succeeds. Setup needs a foreground terminal. Choose `server` on the remote machine
+succeeds. Debug diagnostics are enabled here temporarily to help diagnose setup
+failures. They report stages and numeric failure details to stderr, excluding
+private keys, credentials and command contents. The installer forwards debug mode
+through `MARMISH_DEBUG=1`; older archives, including experimental.1, ignore it and
+retain category-only runtime errors. Detailed runtime diagnostics require an
+archive built with debug support; updating the installer alone does not add them.
+
+Setup needs a foreground terminal. Choose `server` on the remote machine
 and `client` on the connecting machine, using the same explicit relay URL.
 Exchange the public account identifiers printed during initialization (`npub` or
 hex); start the server before submitting the client's peer prompt. The server
@@ -73,7 +80,13 @@ Installed `marmish` and `marmishd` supply their bundled daemon, manifest, native
 keychain helper, bridge and worker paths. Keep specifying identity, relays and
 server authorization/cwd as in the examples below; explicit helper overrides
 remain supported. `--doctor` reports static prerequisites without accessing
-keys or proving confinement. Linux needs Bubblewrap, util-linux/unshare,
+keys or proving confinement. Updated frontends support `--debug` (also
+`MARMISH_DEBUG=1`); use `marmish --debug --doctor` with the debug flag first
+because doctor exits during argument parsing. Debug output uses a fixed prefix
+and JSON schema. Stderr can also carry remote command output, so it is not an
+authenticated diagnostic channel. Linux reports setup stages; macOS additionally
+reports native preflight exit status and signals. Linux needs Bubblewrap,
+util-linux/unshare,
 iproute2, `/usr/bin/python3` 3.11+, CA certificates and working unprivileged
 user/network/PID namespaces. Each archive records its measured minimum glibc and
 shared libraries; installation checks those requirements. macOS builds are

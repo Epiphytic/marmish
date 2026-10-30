@@ -55,6 +55,18 @@ Linux amd64, Linux arm64 and macOS arm64 in
 frontends and do not establish native MDK confinement or change the platform
 acceptance limits above. See [the increment design](phases/installer-quickstart.md).
 
+The debug diagnostics increment adds opt-in `--debug` to the installer and both
+frontends, with fixed-schema stderr records and no raw exception/argv/env/key
+logging. Installer quickstart propagates `MARMISH_DEBUG=1` to its owned children;
+legacy archives ignore that setting. The README temporarily enables installer
+debug by default in its copy/paste command. Updated frontends report setup stages
+and Darwin native preflight status/signal; Linux reports setup stages only.
+`--debug` must precede `--doctor` because doctor exits during parsing. Debug
+does not bypass confinement or establish native acceptance; arbitrary remote
+stderr can imitate diagnostic text. See [the reviewed design](phases/debug-diagnostics.md),
+[validation evidence](validation/debug-diagnostics.json), and
+[code approval](reviews/debug-diagnostics-code-final.json).
+
 The installer retains prior versions and all identity/keychain/command state;
 uninstall removes only owned launchers/bookkeeping. It does not modify host
 namespace policy. `--doctor` is read-only static prerequisite diagnosis. Both
