@@ -1,0 +1,61 @@
+{
+  "scope": "Guided installation and existing CLI orchestration; no transport or keychain implementation change",
+  "platform": "Local Linux amd64",
+  "tests": [
+    {
+      "command": "python3 -m unittest discover -s tools -p test_marmish_install.py -q",
+      "count": 28,
+      "result": "PASS"
+    },
+    {
+      "command": "python3 -m unittest discover -s tools -p test_marmish_quickstart.py -v",
+      "count": 13,
+      "result": "PASS"
+    },
+    {
+      "command": "sh -n scripts/install.sh",
+      "result": "PASS"
+    },
+    {
+      "command": "sh scripts/install.sh --help",
+      "result": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS"
+    }
+  ],
+  "coverage": [
+    "Both client/server flows using actual embedded shell/Python wrapper through controlling PTY",
+    "Real verified offline fixture archive installation and installer-owned launcher checks",
+    "Absolute custom prefix and home paths containing spaces, quotes, dollar and shell substitution syntax",
+    "Explicit relay, auto key storage, identity path, peer and literal printf argv",
+    "Parent stdin EOF with controlling terminal present; tty EOF and invalid role fail",
+    "No controlling terminal fails before installation; invalid version and uninstall conflict fail early",
+    "Plain install remains noninteractive and does not access keys",
+    "Doctor/init failures stop later steps and retain successful installation",
+    "Unbuffered input preserves typeahead for child",
+    "Rejected pasted line and queued tail absent when parent shell resumes",
+    "Leading-dash peer remains option value; relay option injection rejected",
+    "Real SIGINT/SIGTERM/SIGHUP reap fake foreground server",
+    "Deterministic mocks test signal-during-spawn, repeated signal cleanup and forced kill/reaping"
+  ],
+  "quality_check": {
+    "command": "ripwire . --quality-delta",
+    "exit_code": 0,
+    "gating": 0,
+    "disposition": "New findings are unittest discovery callbacks marked dead, intentional repeated setup in two distinct signal tests, test-class length, and suppression of ProcessLookupError when cleaning an already-exited owned test process. Retained for explicit independent test scenarios; no existing symbol quality regression. Embedded Python in shell requires separate review/tests."
+  },
+  "source_sha256": {
+    "scripts/install.sh": "67ccb386d0c33a2191f4b08c2cae2547d7a572117778a7b69327c38e44b98f5f",
+    "tools/test_marmish_install.py": "9d9f79fdc3af1ff7faa6c712234a033e1af8b7e6cae431cc7efbcc1a2cbc84ca",
+    "tools/test_marmish_quickstart.py": "f27d6abe0d6ec5f080a1a85f4e753b582fd313fa719f4f1aa6175cad653980c2",
+    ".github/workflows/installer-validation.yml": "4406cd5111d584bbca88dead3bc6519a18eb509d521745966d241bce75bf5d63"
+  },
+  "native_ci": "Focused three-platform workflow will run on source push; results recorded separately.",
+  "limits": [
+    "No real account identities or keychain access used; fixtures are fake installed programs.",
+    "No new live Marmot command acceptance claimed.",
+    "Native macOS/Linux arm64 results await CI. Existing runtime confinement limits remain."
+  ]
+}

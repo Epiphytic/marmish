@@ -17,9 +17,12 @@ import re
 import secrets
 import shlex
 import shutil
+import signal
 import stat
+import subprocess
 import sys
 import tempfile
+import termios
 import time
 import urllib.error
 import urllib.parse
@@ -528,22 +531,130 @@ def uninstall_locked(prefix, launcher_dir):
     print('Removed installer-owned launchers. Version trees and all user state were retained.')
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(description='Install experimental Marmish binaries for your user. Downloads from GitHub Releases; no shell profile or identity changes.')
-    parser.add_argument('--version', help='MAJOR.MINOR.PATCH-experimental.N; defaults to newest matching prerelease')
-    parser.add_argument('--prefix', help='absolute private install prefix; its bin/ receives launchers (default: ~/.local/share/marmish, launchers in ~/.local/bin)')
-    parser.add_argument('--uninstall', action='store_true', help='remove owned launchers/current selector; retain versions and all user state')
-    options = parser.parse_args(argv)
-    require(sys.version_info >= (3, 11), "Python 3.11 or newer is required")
-    require(os.geteuid() != 0, "run this installer as your normal user, without sudo")
-    prefix = Path(options.prefix) if options.prefix else Path.home() / '.local/share/marmish'
-    launcher_dir = prefix / 'bin' if options.prefix else Path.home() / '.local/bin'
-    safe_path(prefix)
-    safe_path(launcher_dir)
-    if options.uninstall:
-        require(options.version is None, "--version cannot be combined with --uninstall")
-        uninstall(prefix, launcher_dir)
+class QuickstartInterrupted(Exception):
+    def __init__(self, number):
+        self.number = number
+
+
+class QuickstartSignals:
+    numbers = (signal.SIGINT, signal.SIGHUP, signal.SIGTERM)
+
+    def __init__(self):
+        self.first = None
+        self.spawning = False
+        self.previous = {}
+
+    def handle(self, number, frame):
+        if self.first is None:
+            self.first = number
+            if not self.spawning:
+                raise QuickstartInterrupted(number)
+
+    def __enter__(self):
+        for number in self.numbers:
+            self.previous[number] = signal.signal(number, self.handle)
+        return self
+
+    def __exit__(self, *exception):
+        for number, handler in self.previous.items():
+            signal.signal(number, handler)
+
+
+def stop_quickstart_child(child, number):
+    if child.poll() is not None:
         return
+    try:
+        child.send_signal(number)
+    except ProcessLookupError:
+        pass
+    try:
+        child.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        child.wait()
+
+
+def run_quickstart_child(argv, terminal_fd, signals, step):
+    child = None
+    try:
+        signals.spawning = True
+        try:
+            child = subprocess.Popen(argv, stdin=terminal_fd, cwd=Path.home())
+        finally:
+            signals.spawning = False
+        if signals.first is not None:
+            raise QuickstartInterrupted(signals.first)
+        result = child.wait()
+        require(result == 0, "quickstart " + step + " failed (exit " + str(result) + ")")
+    except BaseException as error:
+        if child is not None:
+            # Repeated signals must not interrupt bounded termination and reaping.
+            previous = {number: signal.signal(number, signal.SIG_IGN) for number in signals.numbers}
+            try:
+                number = error.number if isinstance(error, QuickstartInterrupted) else signal.SIGTERM
+                stop_quickstart_child(child, number)
+            finally:
+                for number, handler in previous.items():
+                    signal.signal(number, handler)
+        raise
+
+
+def terminal_write(terminal_fd, text):
+    remaining = text.encode('utf-8')
+    while remaining:
+        remaining = remaining[os.write(terminal_fd, remaining):]
+
+
+def quickstart_prompt(terminal_fd, prompt):
+    terminal_write(terminal_fd, prompt)
+    line = bytearray()
+    while True:
+        part = os.read(terminal_fd, 1)
+        require(part, "quickstart input ended; rerun --quickstart from a terminal")
+        if part == b'\n':
+            break
+        line.extend(part)
+        require(len(line) <= 4096, "quickstart input exceeds 4096 bytes")
+    try:
+        value = line.decode('utf-8')
+    except UnicodeDecodeError as error:
+        raise InstallError("quickstart input must be valid UTF-8") from error
+    require(value and all(char.isprintable() and not char.isspace() for char in value),
+            "quickstart input must be nonempty and contain no whitespace or control characters")
+    return value
+
+
+def quickstart(launcher_dir, terminal_fd, signals=None):
+    if signals is None:
+        with QuickstartSignals() as scoped:
+            return quickstart(launcher_dir, terminal_fd, scoped)
+    role = quickstart_prompt(terminal_fd, 'Role (server or client): ')
+    require(role in ('server', 'client'), "quickstart role must be server or client")
+    relay = quickstart_prompt(terminal_fd, 'Relay URL (wss://your-relay.example/): ')
+    require(relay.startswith('wss://'), "quickstart relay must start with wss://")
+    identity = str(Path.home() / '.marmish/default')
+    client = str(launcher_dir / 'marmish')
+    common = ['-i', identity, '--relay=' + relay]
+    run_quickstart_child([client, '--doctor'], terminal_fd, signals, 'prerequisite check')
+    run_quickstart_child([client, *common, '--key-storage', 'auto', '--init'],
+                         terminal_fd, signals, 'identity initialization')
+    terminal_write(terminal_fd,
+        'Initialization prints {"account":"…"}, your public identity in hex; npub also works.\n'
+        'Exchange public identities between machines. Start the server before submitting the client prompt.\n')
+    if role == 'server':
+        terminal_write(terminal_fd,
+            'Allowed clients can execute commands as this Unix user, starting in HOME.\n'
+            'Authorization applies only to this server invocation; supply --allow again on restart.\n'
+            'The server stays in the foreground; keep this terminal open.\n')
+        peer = quickstart_prompt(terminal_fd, 'Client public identity to allow (npub or hex): ')
+        argv = [str(launcher_dir / 'marmishd'), *common, '--allow=' + peer, '--cwd', str(Path.home())]
+    else:
+        peer = quickstart_prompt(terminal_fd, 'Server public identity (npub or hex): ')
+        argv = [client, *common, '-u' + peer, relay, '--', '/usr/bin/printf', '%s\n', 'Hello through Marmot']
+    run_quickstart_child(argv, terminal_fd, signals, role + ' command')
+
+
+def install_release(options, prefix, launcher_dir):
     target = native_target()
     with tempfile.TemporaryDirectory(prefix='marmish-download-') as temporary:
         directory = Path(temporary)
@@ -561,10 +672,63 @@ def main(argv=None):
     print('Run marmish --doctor for static prerequisites; this does not validate runtime confinement.')
     print('Add this directory to PATH if needed: ' + shlex.quote(str(launcher_dir)))
 
+    print('Installed launchers: ' + str(launcher_dir / 'marmish') + ' and ' + str(launcher_dir / 'marmishd'))
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description='Install experimental Marmish binaries for your user. Optional --quickstart initializes an identity and runs guided setup.')
+    parser.add_argument('--version', help='MAJOR.MINOR.PATCH-experimental.N; defaults to newest matching prerelease')
+    parser.add_argument('--prefix', help='absolute private install prefix; its bin/ receives launchers (default: ~/.local/share/marmish, launchers in ~/.local/bin)')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--uninstall', action='store_true', help='remove owned launchers/current selector; retain versions and all user state')
+    mode.add_argument('--quickstart', action='store_true', help='after installation, initialize a profile and guide server/client setup using your terminal')
+    options = parser.parse_args(argv)
+    require(sys.version_info >= (3, 11), "Python 3.11 or newer is required")
+    require(os.geteuid() != 0, "run this installer as your normal user, without sudo")
+    if options.version is not None:
+        validate_version(options.version)
+    prefix = Path(options.prefix) if options.prefix else Path.home() / '.local/share/marmish'
+    launcher_dir = prefix / 'bin' if options.prefix else Path.home() / '.local/bin'
+    safe_path(prefix)
+    safe_path(launcher_dir)
+    if options.uninstall:
+        require(options.version is None, "--version cannot be combined with --uninstall")
+        uninstall(prefix, launcher_dir)
+        return
+    if not options.quickstart:
+        install_release(options, prefix, launcher_dir)
+        return
+    terminal_fd = None
+    foreground = False
+    with QuickstartSignals() as signals:
+        try:
+            try:
+                terminal_fd = os.open('/dev/tty', os.O_RDWR | os.O_NOCTTY)
+            except OSError as error:
+                raise InstallError("--quickstart requires a controlling terminal; rerun it in an interactive terminal") from error
+            require(os.tcgetpgrp(terminal_fd) == os.getpgrp(),
+                    "--quickstart must run in the foreground of its controlling terminal")
+            foreground = True
+            install_release(options, prefix, launcher_dir)
+            require(read_installation(prefix, launcher_dir) is not None, "quickstart requires installer-owned launchers")
+            quickstart(launcher_dir, terminal_fd, signals)
+        except BaseException:
+            if terminal_fd is not None and foreground:
+                try:
+                    termios.tcflush(terminal_fd, termios.TCIFLUSH)
+                except (OSError, termios.error):
+                    pass
+            raise
+        finally:
+            if terminal_fd is not None:
+                os.close(terminal_fd)
+
 
 if __name__ == '__main__':
     try:
         main()
+    except QuickstartInterrupted as error:
+        sys.exit(128 + error.number)
     except (InstallError, OSError) as error:
         print('marmish installer: ' + str(error), file=sys.stderr)
         sys.exit(1)

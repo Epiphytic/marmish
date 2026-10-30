@@ -1,0 +1,40 @@
+name: Installer and guided quickstart
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'scripts/install.sh'
+      - 'tools/test_marmish_install.py'
+      - 'tools/test_marmish_quickstart.py'
+      - 'tools/bootstrap_ci_python.sh'
+      - '.github/workflows/installer-validation.yml'
+  pull_request:
+    paths:
+      - 'scripts/install.sh'
+      - 'tools/test_marmish_install.py'
+      - 'tools/test_marmish_quickstart.py'
+      - 'tools/bootstrap_ci_python.sh'
+      - '.github/workflows/installer-validation.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  installer:
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Ensure Python 3.11 or newer
+        run: sh tools/bootstrap_ci_python.sh
+      - name: Offline archive and controlling-terminal acceptance
+        run: |
+          python3 --version
+          sh -n scripts/install.sh
+          python3 -m unittest discover -s tools -p test_marmish_install.py -v
+          python3 -m unittest discover -s tools -p test_marmish_quickstart.py -v

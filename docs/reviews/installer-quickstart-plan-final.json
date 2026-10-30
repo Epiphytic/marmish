@@ -1,0 +1,9 @@
+{
+  "reviewer": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "permission_mode": "auto",
+  "verdict": "APPROVED",
+  "scope": "Installer quickstart design before implementation",
+  "review": "**APPROVED**, with one non-blocking implementation note.\n\n- **Input drain:** reading the whole line before validating, then using `TCIFLUSH` only on abort or overlong input, closes the paste-execution gap. The canonical-mode line limit makes a bounded drain unnecessary. Successful prompts keep their type-ahead.\n- **Relay injection:** requiring `wss://` before any launcher call means the relay value can't start with `-`. The `--relay URL` and `--relay=URL` forms are then safe, and `-uPEER` covers the peer.\n- **Popen signal race:** recording the first signal during `Popen` assignment, then forwarding and raising once the handle is stored, is sound. This holds as long as the recording handler is only installed around the `Popen` call, and the child doesn't inherit a blocked signal mask.\n\nNote for implementation, not a design gap: wrap `tcflush` in `try/except OSError`. After SIGHUP or a vanished tty it can raise, and that must not mask the abort diagnostic or skip handler restore and fd close.\n\nModel: Sonnet 5.5 (`claude-sonnet-5-5`).",
+  "disposition": "Input validation consumes complete lines; failure-only TCIFLUSH guarded against OSError. Relay requires wss://. Deferred signal exceptions protect Popen handle assignment. Final design approved before code implementation."
+}

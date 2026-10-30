@@ -21,75 +21,33 @@ Intel macOS is not included.
 
 ### Copy-and-paste quickstart
 
-Run this block on both machines as your normal Unix user with Python 3.11+ and
-curl. Have the platform prerequisites described below in place; the installer
+Run these commands on both machines as your normal Unix user with Python 3.11+
+and curl. Have the platform prerequisites described below in place; the installer
 does not install system tools, initialize a keychain service or enable namespaces.
-Choose `server` on the remote machine and `client` on the connecting machine,
-using the same explicit relay URL:
 
 ```sh
-(
-  set -e
-  installer=$(mktemp "${TMPDIR:-/tmp}/marmish-install.XXXXXX")
-  trap 'rm -f "$installer"' 0
-  trap 'exit 1' HUP INT TERM
-  curl --proto '=https' --tlsv1.2 -fsSL \
-    https://iris.radicle.network/raw/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/head/scripts/install.sh \
-    -o "$installer"
-  sh "$installer"
-  rm -f "$installer"
-  PATH="$HOME/.local/bin:$PATH"
-  export PATH
-
-  printf 'Role (server or client): '
-  IFS= read -r ROLE
-  case "$ROLE" in
-    server|client) ;;
-    *) printf '%s\n' 'Choose server or client.' >&2; exit 1 ;;
-  esac
-  printf 'Relay URL (wss://your-relay.example/): '
-  IFS= read -r RELAY
-  IDENTITY="$HOME/.marmish/default"
-  marmish --doctor
-  marmish -i "$IDENTITY" --relay "$RELAY" --key-storage auto --init
-
-  case "$ROLE" in
-    server)
-      printf 'Client public identity to allow (npub or hex): '
-      IFS= read -r CLIENT_NPUB_OR_HEX
-      marmishd -i "$IDENTITY" --relay "$RELAY" \
-        --allow "$CLIENT_NPUB_OR_HEX" --cwd "$HOME"
-      ;;
-    client)
-      printf 'Server public identity (npub or hex): '
-      IFS= read -r SERVER_NPUB_OR_HEX
-      marmish -i "$IDENTITY" --relay "$RELAY" -u "$SERVER_NPUB_OR_HEX" "$RELAY" -- \
-        /usr/bin/printf '%s\n' 'Hello through Marmot'
-      ;;
-  esac
-)
+curl --proto '=https' --tlsv1.2 -fsSL https://iris.radicle.network/raw/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/head/scripts/install.sh -o marmish-install.sh &&
+sh marmish-install.sh --quickstart
 ```
 
-Initialization prints `{"account":"…"}` with a public identifier in lowercase
-hexadecimal. Exchange those public identifiers between the machines when
-prompted; `npub` values work too. Enter the client identity on the server and
-start it before submitting the server identity at the client prompt. The server
-stays in the foreground, so keep its terminal open while running the client.
-An allowed client can execute commands as this Unix user, starting in `$HOME`.
-Its allowlist applies to that invocation; supply `--allow` again on
-each restart. See [the step-by-step setup](#first-run-with-installed-binaries)
-for restarting without reinstalling and allowing multiple client identities.
+This saves the installer as `marmish-install.sh` and runs it only if the download
+succeeds. Setup needs a foreground terminal. Choose `server` on the remote machine
+and `client` on the connecting machine, using the same explicit relay URL.
+Exchange the public account identifiers printed during initialization (`npub` or
+hex); start the server before submitting the client's peer prompt. The server
+stays in the foreground. Allowed clients can execute commands as that Unix user;
+authorization applies to the current server invocation and must be supplied again
+on restart. See [manual setup](#first-run-with-installed-binaries) for restarting
+without reinstalling and allowing multiple clients.
 
-The chosen `~/.marmish/default` profile is reused on subsequent runs; this path
-is a quickstart convention, and the CLI still requires `-i`. If both endpoints
-run on one machine, edit `IDENTITY` to use separate directories for client and
-server because a profile permits only one active frontend. Key storage defaults
-to the available native keychain, with files selected only for a proven absent
-backend; locked, denied or failed keychains stop setup. The block stops on a
-failed download, install, prerequisite check or initialization. Its environment
-changes stay in the subshell. For later commands, add `~/.local/bin` to your
-shell's PATH and set `IDENTITY` and `RELAY` again as shown in the step-by-step
-setup. The runtime limitations above still apply.
+Quickstart reuses `~/.marmish/default`; this is a setup convention, and the CLI
+still requires `-i`. Use manual setup with separate profiles for colocated client
+and server. Key storage uses the native keychain when available and files only
+when the backend is proven absent; locked or denied keychains fail closed. Setup
+stops on failure, retaining any completed installation or initialized profile.
+For installation alone without identity or keychain access, omit `--quickstart`.
+Add `~/.local/bin` to PATH for later commands, or use the printed absolute launcher
+paths. The runtime limitations above still apply.
 
 The script is served from Radicle through Iris and downloads complete native
 archives and `SHA256SUMS` from [GitHub Releases](https://github.com/Epiphytic/marmish/releases).
@@ -104,7 +62,9 @@ under `~/.local/bin`; add that directory to PATH if needed. `--prefix /absolute/
 uses that prefix's `bin/` for launchers. Paths containing spaces and shell
 characters are supported. The installer refuses root, unsafe destinations,
 unrelated existing launchers and corrupt archives. It does not edit shell
-profiles, identities or keychains. Reinstalling identical bytes is safe;
+profiles. Plain installation does not access identities or keychains;
+`--quickstart` opts into identity initialization and guided command execution.
+Reinstalling identical bytes is safe;
 upgrades retain old version trees, and running processes keep their old paths.
 There is no automatic state downgrade. `sh install.sh --uninstall` removes only
 installer-owned launchers and bookkeeping, retaining versions and user state.
@@ -161,9 +121,9 @@ frontend.
 Service when available. Only a proven absent backend selects private files,
 with a notice on stderr; a locked, denied, uninitialized or failed keychain stops
 setup. Linux native
-storage needs an initialized persistent Secret Service collection. Installation
-itself does not create identities or access the keychain; setup needs your
-explicit relay selection.
+storage needs an initialized persistent Secret Service collection. Plain
+installation does not create identities or access the keychain; `--quickstart`
+and manual initialization require your explicit relay selection.
 
 On the **server**, enter the client's public identity and start the server in
 the foreground:

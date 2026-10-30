@@ -135,3 +135,14 @@ At each phase start, inspect the concrete contracts and obtain Claude approval
 for its detailed design before implementation. A present but inaccessible store
 never triggers silent plaintext fallback. Do not expose broad D-Bus or Keychain
 authority inside the confined daemon.
+
+## Guided installer increment
+
+The [installer quickstart design](phases/installer-quickstart.md) adds opt-in
+`install.sh --quickstart` after the experimental distribution. Its boundary is
+verified installation plus existing CLI setup, with portable terminal I/O,
+explicit relay and peer entry, native-keychain auto selection and owned child
+cleanup. Exit criteria are offline archive/PTY acceptance on Linux amd64/arm64
+and macOS arm64, independent Claude design/code review, accurate setup docs and
+verified GitHub/Radicle publication. This does not close outstanding native
+confinement or interoperability gates.

@@ -41,6 +41,17 @@ launchers use isolated Python imports; parser defaults supply absolute bundled
 helpers without changing explicit relays, identities or authorization. Native
 keychain discovery does not fall back to PATH for the installed default.
 
+The installer also supports opt-in `--quickstart`: after verified installation,
+it guides client/server selection, explicit relay entry, default profile
+initialization with native-keychain auto selection, and peer authorization or a
+test command. It uses the same Linux/macOS implementation and a foreground
+controlling terminal; ordinary installation remains noninteractive and does not
+access keys. Quickstart uses absolute installed launchers, preserves existing
+profiles, and stops on setup failure. Server authorization lasts for that
+foreground invocation only. Terminal prompts and owned child signal cleanup are
+covered by offline PTY tests; this does not establish native MDK confinement or
+change the platform acceptance limits above. See [the increment design](phases/installer-quickstart.md).
+
 The installer retains prior versions and all identity/keychain/command state;
 uninstall removes only owned launchers/bookkeeping. It does not modify host
 namespace policy. `--doctor` is read-only static prerequisite diagnosis. Both
