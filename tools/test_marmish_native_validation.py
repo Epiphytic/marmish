@@ -1,5 +1,8 @@
 """Offline validation support tests; no ambient provider operations."""
 import os
+import errno
+import select
+import time
 from pathlib import Path
 import subprocess
 import shutil
@@ -12,6 +15,118 @@ from marmish_keys import encode_nsec
 from marmish_native_validation import (NativeLinuxContext, _bounded, native_environment,
                                        scan_at_rest, scan_process, audit_tree, audit_native_process)
 from mdk_smoke import SmokeError
+
+
+_FIXTURE_SOURCE = r"""
+#include <errno.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+    if (argc != 2) return 2;
+    char *end;
+    errno = 0;
+    long value = strtol(argv[1], &end, 10);
+    if (errno || !*argv[1] || *end || value <= 2 || value > INT_MAX) return 2;
+    int fd = (int)value;
+    if (write(fd, "R", 1) != 1 || close(fd) != 0) return 3;
+    for (;;) pause();
+}
+"""
+
+
+def _compile_audit_fixture(directory):
+    compiler = shutil.which('cc')
+    if compiler is None:
+        raise AssertionError('fixture_compiler_missing')
+    source, binary = directory / 'fixture.c', directory / 'fixture'
+    source.write_text(_FIXTURE_SOURCE)
+    try:
+        _bounded([compiler, '-std=c11', '-D_POSIX_C_SOURCE=200809L', '-Wall',
+                  '-Werror', '-O0', '-o', str(binary), str(source)],
+                 {'PATH': os.environ.get('PATH', os.defpath)}, timeout=30, limit=65536)
+    except (SmokeError, OSError):
+        raise AssertionError('fixture_compile_failed') from None
+    return binary
+
+
+def _await_audit_fixture(child, ready_fd, binary):
+    deadline = time.monotonic() + 5
+    data = b''
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([ready_fd], [], [], remaining)[0]:
+            raise AssertionError('fixture_ready_timeout')
+        chunk = os.read(ready_fd, 2)
+        if not chunk:
+            if not data:
+                raise AssertionError('fixture_ready_eof')
+            break
+        data += chunk
+        if data != b'R':
+            raise AssertionError('fixture_ready_invalid')
+    if child.poll() is not None:
+        raise AssertionError('fixture_exited')
+    base = Path('/proc') / str(child.pid)
+    if ((base / 'stat').read_text().rpartition(')')[2].split()[0] == 'Z'
+            or Path(os.readlink(base / 'exe')) != binary.resolve()):
+        raise AssertionError('fixture_not_live')
+
+
+class AuditFixtureTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.fixture_directory = Path(tempfile.mkdtemp(prefix='marmish-audit-'))
+        cls.fixture_children = []
+        cls.addClassCleanup(cls.cleanup_fixture_directory)
+        cls.fixture_binary = _compile_audit_fixture(cls.fixture_directory)
+
+    @classmethod
+    def cleanup_fixture_directory(cls):
+        if any(child.returncode is None for child in cls.fixture_children):
+            raise AssertionError('fixture_cleanup_incomplete')
+        shutil.rmtree(cls.fixture_directory)
+
+    def launch_fixture(self, role, *, env=None, stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL):
+        binary = self.fixture_directory / role
+        if not binary.exists():
+            shutil.copyfile(self.fixture_binary, binary)
+            binary.chmod(0o700)
+        read_fd, write_fd = os.pipe()
+        try:
+            self.assertGreater(read_fd, 2)
+            self.assertGreater(write_fd, 2)
+            child = subprocess.Popen([str(binary), str(write_fd)],
+                                     env={'PATH': '/usr/bin:/bin'} if env is None else env,
+                                     stdin=stdin, stdout=stdout, stderr=subprocess.DEVNULL,
+                                     close_fds=True, pass_fds=(write_fd,))
+        except BaseException:
+            os.close(read_fd)
+            os.close(write_fd)
+            raise
+        self.fixture_children.append(child)
+        child.fixture_ready_fd = read_fd
+        def cleanup():
+            try:
+                if child.returncode is None:
+                    child.kill()
+                    child.wait(timeout=5)
+            finally:
+                for stream in (child.stdin, child.stdout):
+                    if stream is not None:
+                        stream.close()
+        self.addCleanup(cleanup)
+        os.close(write_fd)
+        try:
+            _await_audit_fixture(child, read_fd, binary)
+        except BaseException:
+            cleanup()
+            raise
+        finally:
+            os.close(read_fd)
+        return child
 
 
 class ValidationSupportTests(unittest.TestCase):
@@ -162,25 +277,89 @@ assert importlib.import_module('marmish_native_validation') is module
 
 
 @unittest.skipUnless(sys.platform.startswith('linux'), 'Linux process/FD acceptance')
-class ProcessAuditTests(unittest.TestCase):
-    def setUp(self):
-        self.directory = tempfile.TemporaryDirectory()
-        self.addCleanup(self.directory.cleanup)
-        self.executable = Path(self.directory.name) / 'wnd'
-        shutil.copyfile('/bin/sleep', self.executable)
-        self.executable.chmod(0o700)
-
+class ProcessAuditTests(AuditFixtureTests):
     def launch(self, *, env=None, stdin=subprocess.DEVNULL):
-        child = subprocess.Popen([str(self.executable), '10'],
-                                 env={'PATH': '/usr/bin:/bin'} if env is None else env,
-                                 stdin=stdin, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        def cleanup():
-            child.kill()
-            child.wait()
-            if child.stdin is not None:
-                child.stdin.close()
-        self.addCleanup(cleanup)
-        return child
+        return self.launch_fixture('wnd', env=env, stdin=stdin)
+
+    def test_fixture_is_ready_and_live_until_cleanup(self):
+        child = self.launch()
+        self.assertEqual(Path(os.readlink(f'/proc/{child.pid}/exe')).name, 'wnd')
+        with self.assertRaises(OSError) as closed:
+            os.fstat(child.fixture_ready_fd)
+        self.assertEqual(closed.exception.errno, errno.EBADF)
+        for _ in range(3):
+            audit_native_process(child.pid, [], role='daemon')
+            self.assertIsNone(child.poll())
+
+    def test_readiness_failure_reaps_and_closes_pipes(self):
+        with patch(__name__ + '._await_audit_fixture',
+                   side_effect=AssertionError('fixture_ready_timeout')) as waiting:
+            with self.assertRaisesRegex(AssertionError, 'fixture_ready_timeout'):
+                self.launch_fixture('wnd', stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        child = waiting.call_args.args[0]
+        self.assertIsNotNone(child.returncode)
+        self.assertTrue(child.stdin.closed and child.stdout.closed)
+        with self.assertRaises(OSError) as closed:
+            os.fstat(child.fixture_ready_fd)
+        self.assertEqual(closed.exception.errno, errno.EBADF)
+
+    def test_readiness_rejects_eof_wrong_byte_and_timeout(self):
+        for data, category in ((b'', 'fixture_ready_eof'), (b'X', 'fixture_ready_invalid')):
+            read_fd, write_fd = os.pipe()
+            try:
+                if data:
+                    os.write(write_fd, data)
+                os.close(write_fd)
+                with self.assertRaisesRegex(AssertionError, category):
+                    _await_audit_fixture(None, read_fd, self.fixture_binary)
+            finally:
+                os.close(read_fd)
+        with patch.object(select, 'select', return_value=([], [], [])):
+            with self.assertRaisesRegex(AssertionError, 'fixture_ready_timeout'):
+                _await_audit_fixture(None, 100, self.fixture_binary)
+
+    def test_popen_failure_closes_readiness_descriptors(self):
+        descriptors = os.pipe()
+        with patch.object(os, 'pipe', return_value=descriptors), \
+                patch.object(subprocess, 'Popen', side_effect=OSError('fixture_exec_failed')):
+            with self.assertRaisesRegex(OSError, 'fixture_exec_failed'):
+                self.launch()
+        for fd in descriptors:
+            with self.assertRaises(OSError) as closed:
+                os.fstat(fd)
+            self.assertEqual(closed.exception.errno, errno.EBADF)
+
+    def test_invalid_readiness_descriptors_are_closed(self):
+        with patch.object(os, 'pipe', return_value=(0, 1)), \
+                patch.object(os, 'close') as close, \
+                patch.object(subprocess, 'Popen') as spawn:
+            with self.assertRaises(AssertionError):
+                self.launch()
+            self.assertEqual(close.call_args_list, [unittest.mock.call(0), unittest.mock.call(1)])
+            spawn.assert_not_called()
+
+    def test_cleanup_wait_timeout_closes_pipes_and_propagates(self):
+        child = self.launch_fixture('wnd', stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        cleanup = self._cleanups[-1][0]
+        wait = child.wait
+        try:
+            with patch.object(child, 'wait', side_effect=subprocess.TimeoutExpired('fixture', 5)) as bounded:
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    cleanup()
+                bounded.assert_called_once_with(timeout=5)
+            self.assertTrue(child.stdin.closed and child.stdout.closed)
+        finally:
+            wait(timeout=5)
+
+    def test_compile_failure_has_fixed_category(self):
+        with patch(__name__ + '._bounded', side_effect=SmokeError('native_operation_timeout')):
+            with self.assertRaisesRegex(AssertionError, 'fixture_compile_failed'):
+                _compile_audit_fixture(self.fixture_directory)
+
+    def test_missing_compiler_fails_closed(self):
+        with patch.object(shutil, 'which', return_value=None):
+            with self.assertRaisesRegex(AssertionError, 'fixture_compiler_missing'):
+                _compile_audit_fixture(self.fixture_directory)
 
     def test_daemon_null_stdin_and_private_environment(self):
         child = self.launch()
@@ -189,17 +368,20 @@ class ProcessAuditTests(unittest.TestCase):
         result = audit_tree(child.pid, [bytes(range(32))])
         self.assertEqual(result['daemons'], 1)
         self.assertEqual(result['workers'], 0)
+        self.assertIsNone(child.poll())
 
     def test_open_bootstrap_pipe_rejected(self):
         child = self.launch(stdin=subprocess.PIPE)
         with self.assertRaisesRegex(SmokeError, 'native_bootstrap_fd_open'):
             audit_native_process(child.pid, [], role='daemon')
+        self.assertIsNone(child.poll())
 
     def test_daemon_host_bus_discovery_rejected(self):
         for name in ('DBUS_SESSION_BUS_ADDRESS', 'GNOME_KEYRING_CONTROL', 'XDG_RUNTIME_DIR'):
             child = self.launch(env={name: 'private-but-unwanted'})
             with self.subTest(name=name), self.assertRaisesRegex(SmokeError, 'native_environment_leak'):
                 audit_native_process(child.pid, [], role='daemon')
+            self.assertIsNone(child.poll())
 
     def test_required_role_is_nonvacuous(self):
         child = self.launch()
@@ -309,7 +491,7 @@ class FinalReportTests(unittest.TestCase):
 
 
 @unittest.skipUnless(sys.platform.startswith('linux'), 'Linux owned processes')
-class AdditionalProcessTests(unittest.TestCase):
+class AdditionalProcessTests(AuditFixtureTests):
     def test_identity_failure_reaps_unregistered_child(self):
         import marmish_native_validation as validation
         context = NativeLinuxContext(Path(sys.executable).resolve())
@@ -366,25 +548,15 @@ class AdditionalProcessTests(unittest.TestCase):
 
     def test_bridge_requires_two_private_pipes(self):
         import marmish_native_validation as validation
-        with tempfile.TemporaryDirectory() as directory:
-            binary = Path(directory) / 'marmish-engine-bridge'
-            shutil.copyfile('/bin/sleep', binary)
-            binary.chmod(0o700)
-            for output in (subprocess.DEVNULL, subprocess.PIPE):
-                child = subprocess.Popen([str(binary), '10'], env={}, stdin=subprocess.PIPE,
-                                         stdout=output, stderr=subprocess.DEVNULL)
-                try:
-                    if output == subprocess.PIPE:
-                        self.assertEqual(validation.audit_tree(child.pid, [], require_daemon=False)['bridges'], 1)
-                    else:
-                        with self.assertRaisesRegex(SmokeError, 'native_private_pipe_required'):
-                            validation.audit_tree(child.pid, [], require_daemon=False)
-                finally:
-                    child.kill()
-                    child.wait()
-                    child.stdin.close()
-                    if child.stdout:
-                        child.stdout.close()
+        for output in (subprocess.DEVNULL, subprocess.PIPE):
+            child = self.launch_fixture('marmish-engine-bridge', env={},
+                                        stdin=subprocess.PIPE, stdout=output)
+            if output == subprocess.PIPE:
+                self.assertEqual(validation.audit_tree(child.pid, [], require_daemon=False)['bridges'], 1)
+            else:
+                with self.assertRaisesRegex(SmokeError, 'native_private_pipe_required'):
+                    validation.audit_tree(child.pid, [], require_daemon=False)
+            self.assertIsNone(child.poll())
 
     def test_helper_inspection_precedes_protocol_request(self):
         import marmish_native_validation as validation

@@ -219,8 +219,11 @@ state and the running kernel revision were not captured, so EPERM cannot be
 accepted unconditionally. A group-state correction is being designed for independent review.
 The same run exposed three Linux audit fixtures whose executable links were
 missing during inspection; the audit correctly refused an unreadable executable. A
-deterministic test-fixture replacement is in progress, with production audit
-behavior preserved. Historical K3 reports remain bound to their recorded files.
+deterministic [test-fixture replacement](phases/native-audit-fixture.md) now uses
+a compiled, readiness-synchronized process with bounded owned cleanup. Production
+audit behavior is unchanged. It passed 258 offline Python tests (five Darwin
+skips) and independent Claude reviews; fresh runner validation remains pending.
+Historical K3 reports remain bound to their recorded files and source digests.
 
 
 [Native run 39982966090](validation/native-run-39982966090.json), at commit

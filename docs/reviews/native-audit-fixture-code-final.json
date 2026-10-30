@@ -1,0 +1,87 @@
+{
+  "duration_api_ms": 50424,
+  "stop_reason": "end_turn",
+  "session_id": "d29f0c9b-3c02-47e7-a696-980c2ead3d30",
+  "total_cost_usd": 0.2768059,
+  "usage": {
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 48703,
+    "cache_read_input_tokens": 169079,
+    "output_tokens": 6507,
+    "output_tokens_details": {
+      "thinking_tokens": 3246
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 48703,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 8,
+      "outputTokens": 6507,
+      "cacheReadInputTokens": 169079,
+      "cacheCreationInputTokens": 48703,
+      "webSearchRequests": 0,
+      "costUSD": 0.2768059,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 3246,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "subagent_stats": {
+    "spawned": 0,
+    "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+    },
+    "started_in_background": 0,
+    "max_depth": 0,
+    "spawned_by_subagents": 0,
+    "completed": 0,
+    "failed": 0,
+    "killed": {
+      "parent": 0,
+      "user": 0,
+      "system": 0
+    },
+    "refused": {
+      "depth_limit": 0,
+      "concurrency_limit": 0,
+      "budget": 0
+    },
+    "by_type": {}
+  },
+  "safety_stops": 0,
+  "is_error": false,
+  "num_turns": 7,
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "```json\n{\n  \"verdict\": \"APPROVE\",\n  \"scope\": {\n    \"reviewed\": [\n      \"tools/test_marmish_native_validation.py (git diff HEAD, +188/-38)\",\n      \"docs/phases/native-audit-fixture.md (untracked, 69 lines)\",\n      \"docs/reviews/native-audit-fixture-plan-initial.json\",\n      \"docs/reviews/native-audit-fixture-plan-final.json\"\n    ],\n    \"read_only_context\": \"tools/marmish_native_validation.py (only _bounded and the audit contracts). Git status shows it unchanged, so production behavior is unchanged.\",\n    \"out_of_scope\": \"The modified .beads/interactions.jsonl was not reviewed. Historical K3 evidence is untouched by this diff.\",\n    \"not_done\": \"No edits, no git mutations, and no provider, keychain or network activity. I ran only bounded offline unittest commands.\"\n  },\n  \"contract_checks\": {\n    \"design_readiness_eof\": \"PASS. _await_audit_fixture uses a select with a monotonic 5s deadline and reads at most 2 bytes per call. EOF with no data raises fixture_ready_eof. Any data other than exactly b'R' raises fixture_ready_invalid. A timeout raises fixture_ready_timeout. Exactly one 'R' followed by EOF is accepted, which proves the child closed its readiness fd. After that it requires child.poll() is None, a non-zombie /proc/PID/stat state (parsed after rpartition(')')), and a resolved /proc/PID/exe equal to the fixture path. This matches the doc's Review refinement section. The tests cover EOF, a wrong byte and a timeout. The timeout test patches select.select, which is fine.\",\n    \"deterministic_lifetime_exact_exe_names\": \"PASS. The C fixture writes 'R', closes the fd, then blocks in `for(;;) pause()`. It has no timer, never reads fd0, never writes fd1 and does not fork. It is compiled once per class, then copied to the exact role basenames (`wnd`, `marmish-engine-bridge`) in a class-owned 0700 directory. The binary is reused for the same role, so a second launch does not rewrite a running executable. test_fixture_is_ready_and_live_until_cleanup asserts the exe basename is 'wnd' and poll() is None across 3 repeated real audits. The retained daemon, environment-leak, open-pipe and bridge tests each assert poll() is None after the audit.\",\n    \"bounded_cleanup_all_failures\": \"PASS. Cleanup is registered right after Popen, before the readiness wait. It is idempotent (it kills only if returncode is None, then does wait(timeout=5)). It closes stdin/stdout in a finally block, so the pipes close even if wait times out, and the timeout propagates. On any BaseException from readiness, cleanup runs immediately and the readiness fd is closed in a finally block. If Popen raises, both pipe ends are closed. The class cleanup raises fixture_cleanup_incomplete and keeps the directory if any child is unreaped, otherwise it removes it. Tests cover readiness failure (child reaped, pipes closed, readiness fd EBADF) and Popen failure (both fds EBADF).\",\n    \"compiler_fail_closed\": \"PASS. Compilation runs in setUpClass, so any failure errors the whole class and never skips. A missing compiler raises fixture_compiler_missing. SmokeError or OSError from _bounded raises fixture_compile_failed. The argv is explicit with no shell, using -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Werror -O0. The timeout is 30s, the stdout cap is 65536, stderr is discarded by _bounded, and only PATH is passed to the compiler. Both failure modes have direct tests, and the compile runs in a standalone helper so the tests can patch it.\",\n    \"negative_checks_retained\": \"PASS. These tests are kept or strengthened, with the same launch parameters: native_bootstrap_fd_open (stdin=PIPE), native_environment_leak (three discovery variables), native_private_pipe_required with the bridge count of 1 (DEVNULL versus PIPE), required-role non-vacuity, and the identity-change tests. The fixture never reads fd0 or writes fd1, so these checks stay meaningful.\"\n  },\n  \"validation\": {\n    \"focused_test_marmish_native_validation\": \"33 tests OK, run 3 times with no flakes.\",\n    \"combined\": \"test_marmish_native_validation + test_marmish_e2e_native + test_marmish_native_spike: 59 tests OK. That is a different set from the 47-test run you reported, because I chose the module list myself, so it is not a like-for-like match.\",\n    \"full_tools_discovery\": \"unittest discover -s tools -p 'test_*.py': 256 tests OK (skipped=5). This matches your figure.\",\n    \"leaks\": \"No leftover /tmp/marmish-audit-* directories after the runs.\",\n    \"design_approval_evidence\": \"The initial review (claude-opus-5-5) returned REQUEST_CHANGES with 3 required changes. The final review (claude-sonnet-5-5) returned APPROVE and confirmed each was resolved. That is two different LLMs iterating on the design, and the doc's Review refinement section folds the fixes in. The files do not show the human design approval step required by the queue protocol, so confirm it exists elsewhere (e.g. in the bead).\"\n  },\n  \"findings\": [\n    {\n      \"severity\": \"info\",\n      \"blocking\": false,\n      \"summary\": \"launch_fixture runs the two assertGreater(fd, 2) calls before its try block, so a failure there would leak both pipe fds.\",\n      \"location\": \"tools/test_marmish_native_validation.py, launch_fixture\",\n      \"suggestion\": \"Move the assertions inside the try block, or close the fds on assertion failure.\"\n    },\n    {\n      \"severity\": \"info\",\n      \"blocking\": false,\n      \"summary\": \"No test pins the 'wait timeout still closes pipes and propagates' path, or the 'readiness never closes \u2192 timeout' path against a real child. The design describes both, and the code implements both.\",\n      \"suggestion\": \"Optional follow-up: add a test with a patched child.wait raising TimeoutExpired.\"\n    },\n    {\n      \"severity\": \"info\",\n      \"blocking\": false,\n      \"summary\": \"The EBADF assertions use a saved fd number that could in principle be reused. In these tests nothing opens a descriptor between the close and the assertion, so they are deterministic as written.\"\n    },\n    {\n      \"severity\": \"info\",\n      \"blocking\": false,\n      \"summary\": \"AuditFixtureTests has no tests of its own, and the imports (errno, select, time) are placed slightly out of order. Both are harmless.\"\n    }\n  ],\n  \"approval_condition\": \"No blocking findings. The remaining items are optional hardening.\"\n}\n```",
+  "ttft_ms": 2385,
+  "type": "result",
+  "duration_ms": 58741,
+  "uuid": "f997ce4a-bb41-4acb-a585-0b9837626ffb",
+  "ttft_stream_ms": 1974,
+  "time_to_request_ms": 212,
+  "first_content_frame_ms": 1974,
+  "queued_turn_count": 0,
+  "result_index": 0
+}

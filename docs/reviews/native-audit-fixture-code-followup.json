@@ -1,0 +1,87 @@
+{
+  "duration_api_ms": 27500,
+  "stop_reason": "end_turn",
+  "session_id": "31e36079-cec8-4aa9-98b6-32305000560e",
+  "total_cost_usd": 0.1967663,
+  "usage": {
+    "input_tokens": 10,
+    "cache_creation_input_tokens": 37104,
+    "cache_read_input_tokens": 189303,
+    "output_tokens": 2940,
+    "output_tokens_details": {
+      "thinking_tokens": 813
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 37104,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 10,
+      "outputTokens": 2940,
+      "cacheReadInputTokens": 189303,
+      "cacheCreationInputTokens": 37104,
+      "webSearchRequests": 0,
+      "costUSD": 0.1967663,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 813,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "subagent_stats": {
+    "spawned": 0,
+    "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+    },
+    "started_in_background": 0,
+    "max_depth": 0,
+    "spawned_by_subagents": 0,
+    "completed": 0,
+    "failed": 0,
+    "killed": {
+      "parent": 0,
+      "user": 0,
+      "system": 0
+    },
+    "refused": {
+      "depth_limit": 0,
+      "concurrency_limit": 0,
+      "budget": 0
+    },
+    "by_type": {}
+  },
+  "safety_stops": 0,
+  "is_error": false,
+  "num_turns": 7,
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "```json\n{\n  \"verdict\": \"APPROVE\",\n  \"scope\": \"tools/test_marmish_native_validation.py only: launch_fixture, test_invalid_readiness_descriptors_are_closed, test_cleanup_wait_timeout_closes_pipes_and_propagates, and their interaction with class cleanup\",\n  \"blocking_findings\": [],\n  \"analysis\": {\n    \"launch_fixture_descriptor_assertions\": \"The two assertGreater calls are now inside the try. A failure closes both pipe fds before re-raising, and Popen is never reached. A Popen failure takes the same path. After a successful Popen, write_fd is closed in the parent. read_fd is closed in the finally around _await_audit_fixture, and cleanup() runs first on a readiness failure. I found no leak or double-close path.\",\n    \"test_invalid_readiness_descriptors_are_closed\": \"The test forces pipe() to return (0, 1), so assertGreater(read_fd, 2) fails. os.close is patched, so the real stdin and stdout are never closed. The test asserts exactly close(0) then close(1), and that Popen is not called. The assertion is sound.\",\n    \"test_cleanup_wait_timeout_closes_pipes_and_propagates\": \"The test takes the registered cleanup closure from self._cleanups[-1][0] and patches child.wait to raise TimeoutExpired. The child is killed first, because returncode is still None. TimeoutExpired propagates, and the finally block closes the stdin and stdout pipes. The test then reaps the killed child with the saved real wait(timeout=5), in its own finally. When the framework later runs the same cleanup, returncode is set and stream.close() is idempotent. The class-level fixture_cleanup_incomplete check sees returncode not None, so the two do not conflict.\",\n    \"interaction_with_class_cleanup\": \"launch_fixture registers the child in fixture_children and cleanup is LIFO. The timeout test leaves no live child behind. It would trip the class guard fixture_cleanup_incomplete only if the real reap failed, which is the intended fail-closed behavior.\"\n  },\n  \"non_blocking_notes\": [\n    \"The invalid-descriptor test fails on read_fd only. Because assertGreater(read_fd, 2) fails first, the write_fd assertion is not exercised separately. Closing both fds is still asserted.\",\n    \"The timeout test reads self._cleanups[-1][0], which is a private unittest attribute. It works on Python 3.12 and may be fragile across versions. Both points are acceptable and not worth blocking on.\"\n  ],\n  \"validation\": {\n    \"focused_four_tests\": \"4 run, OK (the two new tests plus the existing readiness-failure and Popen-failure tests)\",\n    \"full_module\": \"35 run, OK (run with PYTHONPATH=. because python -I drops the script directory from sys.path)\",\n    \"side_effects\": \"No leftover marmish-audit temp directories in /tmp and no stray fixture processes. git status is unchanged. I made no edits, git mutations, or provider, keychain or network operations.\"\n  }\n}\n```",
+  "ttft_ms": 2324,
+  "type": "result",
+  "duration_ms": 28676,
+  "uuid": "4fb1c684-e207-49dd-a212-07d52490ca01",
+  "ttft_stream_ms": 1939,
+  "time_to_request_ms": 183,
+  "first_content_frame_ms": 1939,
+  "queued_turn_count": 0,
+  "result_index": 0
+}

@@ -1,0 +1,87 @@
+{
+  "duration_api_ms": 30153,
+  "stop_reason": "end_turn",
+  "session_id": "3c0a6f06-78c6-4029-8788-16f5055d1604",
+  "total_cost_usd": 0.2206897,
+  "usage": {
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 43819,
+    "cache_read_input_tokens": 52757,
+    "output_tokens": 4013,
+    "output_tokens_details": {
+      "thinking_tokens": 2031
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 43819,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 4,
+      "outputTokens": 4013,
+      "cacheReadInputTokens": 52757,
+      "cacheCreationInputTokens": 43819,
+      "webSearchRequests": 0,
+      "costUSD": 0.2206897,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 2031,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "subagent_stats": {
+    "spawned": 0,
+    "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+    },
+    "started_in_background": 0,
+    "max_depth": 0,
+    "spawned_by_subagents": 0,
+    "completed": 0,
+    "failed": 0,
+    "killed": {
+      "parent": 0,
+      "user": 0,
+      "system": 0
+    },
+    "refused": {
+      "depth_limit": 0,
+      "concurrency_limit": 0,
+      "budget": 0
+    },
+    "by_type": {}
+  },
+  "safety_stops": 0,
+  "is_error": false,
+  "num_turns": 4,
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "```json\n{\n  \"verdict\": \"APPROVE\",\n  \"scope\": \"docs/phases/native-audit-fixture.md (incl. Review refinement), docs/reviews/native-audit-fixture-plan-initial.json, tools/test_marmish_native_validation.py. Read-only. Nothing executed, no network or provider activity.\",\n  \"prior_required_changes\": {\n    \"readiness_failure_cleanup\": \"Resolved. Cleanup is registered before the readiness wait and invoked immediately on failure. The failure is triggered deterministically by patching the readiness wait. The assertions are specified: child reaped, readiness fd EBADF, stdin/stdout pipes closed.\",\n    \"bounded_readiness\": \"Resolved. It uses select with a monotonic 5s deadline and reads at most 2 bytes until EOF. Timeout, EOF without R, and wrong bytes have fixed categories. Liveness is then checked with poll() is None, non-zombie state, and exact /proc/PID/exe. pass_fds is explicit and close_fds stays true.\",\n    \"compile_strategy\": \"Resolved. The argv, flags and failure categories are named. It compiles once per class into a 0700 directory and copies to the exact role basenames. The C program checks its fd argument strictly and exits nonzero on write/close failure.\",\n    \"advisory_items\": \"Wait-timeout propagation, close-on-timeout, and retaining the directory when cleanup is uncertain are all now explicit.\"\n  },\n  \"findings\": [\n    {\n      \"severity\": \"low\",\n      \"blocking\": false,\n      \"area\": \"compile environment\",\n      \"summary\": \"'Environment only PATH' does not say which PATH value.\",\n      \"suggestion\": \"State that the ambient PATH is passed through and that the compiler is invoked by the absolute path from shutil.which. Existing tests hardcode '/usr/bin:/bin', and copying that would miss a CI toolchain on a pinned PATH, so cc's own as/ld lookup could fail.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"blocking\": false,\n      \"area\": \"compiler error mapping\",\n      \"summary\": \"_bounded raises generic SmokeError categories (native_operation_failed/timeout/output_limit), not fixture_compile_failed.\",\n      \"suggestion\": \"Say the helper catches SmokeError from _bounded, including timeout and the stdout cap, and re-raises it as fixture_compile_failed through self.fail. Otherwise a compile timeout surfaces under a different category.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"blocking\": false,\n      \"area\": \"missing-compiler test\",\n      \"summary\": \"If the compile runs in setUpClass, a test that patches shutil.which to None would fail the class itself.\",\n      \"suggestion\": \"Make the compile a standalone helper that takes the compiler lookup. The fail-closed test then calls it directly with the patched lookup, outside setUpClass.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"blocking\": false,\n      \"area\": \"EBADF assertion\",\n      \"summary\": \"The EBADF check on a saved fd number could false-fail if the number is reused.\",\n      \"suggestion\": \"Capture the fd number from the launch helper and assert immediately after cleanup, with nothing opened in between. Alternatively wrap os.close to record the closed fds. Also assert that the readiness fd is greater than 2, so it cannot collide with the child's fd0/fd1/fd2 setup.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"blocking\": false,\n      \"area\": \"zombie state parse\",\n      \"summary\": \"The non-zombie check parses /proc/PID/stat.\",\n      \"suggestion\": \"Parse the state field after rpartition(')') so a comm containing spaces or parentheses cannot break it. Reading the State: line from /proc/PID/status would also work.\"\n    },\n    {\n      \"severity\": \"info\",\n      \"blocking\": false,\n      \"area\": \"noexec temp directory\",\n      \"summary\": \"A noexec temp mount would make the exec fail.\",\n      \"suggestion\": \"Consider naming a distinct fixture_exec_failed category. This is not needed for CI.\"\n    },\n    {\n      \"severity\": \"info\",\n      \"blocking\": false,\n      \"area\": \"C source\",\n      \"summary\": \"A single pause() call is enough, since no signal handlers are installed.\",\n      \"suggestion\": \"Use `for (;;) pause();` for robustness.\"\n    }\n  ],\n  \"validation\": {\n    \"production_unchanged\": \"Confirmed in design scope. Only tools/test_marmish_native_validation.py changes.\",\n    \"negative_checks_preserved\": \"The design keeps the fd0 pipe, environment-leak, missing-worker/wrong-executable, identity-change, and bridge private-pipe checks. The fixture never reads fd0 or writes fd1, so those checks stay meaningful.\",\n    \"scope_of_current_tests\": \"The file still contains the /bin/sleep fixtures at lines 169-171, 173-183 and 370-372. This is expected for a design review, since nothing has been implemented.\",\n    \"not_run\": \"No tests or compiler were run.\"\n  },\n  \"approval_condition\": \"Approved. Fold the low items into implementation. None need another design round.\"\n}\n```",
+  "ttft_ms": 1249,
+  "type": "result",
+  "duration_ms": 30447,
+  "uuid": "3fa1cded-106b-4dcd-9596-db49f205f6f3",
+  "ttft_stream_ms": 895,
+  "time_to_request_ms": 181,
+  "first_content_frame_ms": 895,
+  "queued_turn_count": 0,
+  "result_index": 0
+}
