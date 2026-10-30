@@ -174,10 +174,10 @@ index 08f3a532..e7d7516e 100644
      }
 diff --git a/crates/cli/src/marmish_bootstrap.rs b/crates/cli/src/marmish_bootstrap.rs
 new file mode 100644
-index 00000000..d129d04d
+index 00000000..753f3183
 --- /dev/null
 +++ b/crates/cli/src/marmish_bootstrap.rs
-@@ -0,0 +1,437 @@
+@@ -0,0 +1,494 @@
 +//! Marmish-only, one-shot anonymous-pipe injection. Never contacts a host vault.
 +use crate::{Cli, CliOutput, Command, ImportNsec, SecretStoreKind, WnError};
 +use marmot_account::{
@@ -501,9 +501,11 @@ index 00000000..d129d04d
 +        assert!(!store.has_secret_for_label(&store.public).unwrap());
 +        assert!(store.has_secret_for_account_id(&store.public).unwrap());
 +        assert!(!store.has_secret_for_account_id(&"ab".repeat(32)).unwrap());
-+        assert!(store
-+            .write_secret(&account, &store.load_secret(&account).unwrap())
-+            .is_ok());
++        assert!(
++            store
++                .write_secret(&account, &store.load_secret(&account).unwrap())
++                .is_ok()
++        );
 +        assert!(store.write_secret(&account, &Keys::generate()).is_err());
 +        // Opposite scalars share the x-only public identity, but are distinct keys.
 +        let opposite = Keys::new(
@@ -600,6 +602,53 @@ index 00000000..d129d04d
 +    }
 +    #[test]
 +    fn metadata_and_setup_recovery() {
++        use std::os::unix::{fs::PermissionsExt, process::CommandExt};
++        use std::process::{Command as Process, Stdio};
++        const NAME: &str = "marmish_bootstrap::tests::metadata_and_setup_recovery";
++        const MARKER: &str = "MARMISH_METADATA_TEST_MASK";
++        let mask = match std::env::var(MARKER) {
++            Ok(value) => {
++                let mask = libc::mode_t::from_str_radix(&value, 8).unwrap();
++                assert!(matches!(mask, 0o002 | 0o022 | 0o077));
++                assert_eq!(unsafe { libc::umask(mask) }, mask);
++                mask
++            }
++            Err(std::env::VarError::NotPresent) => {
++                for mask in [0o002, 0o022, 0o077] {
++                    let mut command = Process::new(std::env::current_exe().unwrap());
++                    command
++                        .args([NAME, "--exact", "--test-threads=1"])
++                        .env_clear()
++                        .env(MARKER, format!("{mask:o}"))
++                        .stdin(Stdio::null())
++                        .stdout(Stdio::piped())
++                        .stderr(Stdio::null());
++                    unsafe {
++                        command.pre_exec(move || {
++                            libc::umask(mask);
++                            Ok(())
++                        });
++                    }
++                    let mut child = command.spawn().unwrap();
++                    let deadline = Instant::now() + Duration::from_secs(10);
++                    while child.try_wait().unwrap().is_none() {
++                        if Instant::now() >= deadline {
++                            let _ = child.kill();
++                            child.wait().unwrap();
++                            panic!("metadata mode child timed out");
++                        }
++                        std::thread::sleep(Duration::from_millis(10));
++                    }
++                    let output = child.wait_with_output().unwrap();
++                    assert!(output.status.success(), "metadata mode child failed");
++                    let report = std::str::from_utf8(&output.stdout).unwrap();
++                    assert!(report.contains(&format!("test {NAME} ... ok")));
++                    assert!(report.contains("test result: ok. 1 passed; 0 failed;"));
++                }
++                return;
++            }
++            Err(_) => panic!("invalid metadata mode test marker"),
++        };
 +        let store = Arc::new(InjectedStore::from_frame(&frame()).unwrap());
 +        let temp = tempfile::tempdir().unwrap();
 +        validate_metadata(temp.path(), &store).unwrap();
@@ -611,6 +660,14 @@ index 00000000..d129d04d
 +        assert!(!home.account_dir(&store.public).join("secret.json").exists());
 +        validate_metadata(temp.path(), &store).unwrap();
 +        assert!(home.import_nostr_account_idempotent(&secret).is_ok());
++        let record = home.account_dir(&store.public).join("account.json");
++        let permissions = std::fs::metadata(&record).unwrap().permissions();
++        let expected_mode = if mask == 0o077 { 0o600 } else { 0o644 };
++        assert_eq!(permissions.mode() & 0o777, expected_mode);
++        std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o664)).unwrap();
++        assert!(validate_metadata(temp.path(), &store).is_err());
++        std::fs::set_permissions(&record, permissions).unwrap();
++        validate_metadata(temp.path(), &store).unwrap();
 +        std::fs::create_dir(temp.path().join("accounts").join("other")).unwrap();
 +        assert!(validate_metadata(temp.path(), &store).is_err());
 +    }
@@ -630,3 +687,22 @@ index d026a94b..049cfb20 100644
      pub(crate) fn into_inner(self) -> Zeroizing<String> {
          self.0
      }
+diff --git a/crates/marmot-account/src/io.rs b/crates/marmot-account/src/io.rs
+index 22f135f1..c25bd718 100644
+--- a/crates/marmot-account/src/io.rs
++++ b/crates/marmot-account/src/io.rs
+@@ -173,9 +173,12 @@ fn create_temp_file(
+         options.write(true).create_new(true);
+ 
+         #[cfg(unix)]
+-        if mode == FileMode::Private {
++        {
+             use std::os::unix::fs::OpenOptionsExt;
+-            options.mode(0o600);
++            options.mode(match mode {
++                FileMode::Private => 0o600,
++                FileMode::Public => 0o644,
++            });
+         }
+ 
+         match options.open(&temp_path) {
