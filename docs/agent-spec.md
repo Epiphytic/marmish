@@ -35,6 +35,29 @@ startup-guard probes. The [self-hosted proof design](phases/managed-runtime-self
 adds explicit authenticated-helper selection, bounded cancellation reporting and
 an independent canonical-master proof job. Actual native results and runner-group
 policy remain required; queued jobs provide no acceptance evidence.
+The newer [hosted run 41141651561](validation/managed-runtime-native-41141651561.md)
+passed all three installer jobs and the executable packaging cases preceding
+full-suite validation. Both Linux suites ran 478 tests with 7 skips and failed the same two
+required namespace tests; macOS again reached its 900-second full-suite child
+deadline after both exact restricted-startup probes passed. All three reports
+record complete cleanup and unchanged monitored home metadata. This remains
+failed matrix acceptance, independent of local passes or queued self-hosted jobs.
+
+The [reviewed progress-diagnostics increment](phases/managed-runtime-test-progress.md)
+is implemented in the disposable managed test harness: verbose suite progress,
+bounded private failure capture and sanitized last-observed test hints improve
+timeout reports while preserving production deadlines and acceptance gates.
+This changes test diagnostics only, not the production installer or runtime.
+[Integrated and final test-only code reviews](reviews/managed-runtime-test-progress-code.md)
+approved publication. Local Linux AMD64
+[Trial17](validation/managed-runtime-selfhosted-trial17.md) passed on the final
+source: 495 tools tests, 7 reported skips, exit 0, 495 observed starts, enforced
+offline network namespace, complete cleanup, unchanged monitored home metadata
+and no unmet executable cases. The 79-test focused file also passed normally
+and through a symlinked path. Independent final-evidence review approved these
+local results for publication. Progress identifiers are spoofable hints, not evidence
+that a named test caused a timeout. Native three-platform acceptance and the
+independent macOS confinement failure remain open under the evidence above.
 
 ## Purpose and intended product
 

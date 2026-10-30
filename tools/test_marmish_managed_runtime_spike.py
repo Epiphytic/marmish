@@ -891,5 +891,344 @@ class SelfHostedRuntimeTests(unittest.TestCase):
                 spike.install_interrupt_handlers(timeout)
 
 
+class ProgressDiagnosticTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+
+    def test_prefix_parser_partial_docstrings_crlf_noise_suffix_and_owner_validation(self):
+        raw = (b'noise\n'*20001 + b'partial:test_first (test_module.Suite.test_first) ... ok\r\n'
+               b'test_doc (test_module.Suite.test_doc)\r\nprivate docstring\n'
+               b'test_bad (test_module..Suite.test_bad) ... ok\n'
+               b'test_other (test_module.Suite.test_mismatch) ... ok\n'
+               b'test_hidden (not_test.Suite.test_hidden) ... ok\n'
+               b'test_final (test_module.Suite.test_final) ... ' + b'private-command-token/'*10000)
+        result = spike.suite_output_diagnostics(raw)
+        self.assertEqual(result['started_count'], 3)
+        self.assertEqual(result['last_started_test'], {'method':'test_final','class':'test_module.Suite.test_final'})
+        self.assertNotIn('private', json.dumps(result))
+        self.assertIsNone(result['count'])
+        self.assertIsNone(result['skipped'])
+
+    def test_last_complete_summary_and_status_win_and_bound_numbers(self):
+        raw = (b'Ran 999 tests in 0.1s\nOK (skipped=999)\n'
+               b'Ran 7 tests in 1.25s\r\nFAILED (failures=1, errors=2, skipped=3)\r\n')
+        result = spike.suite_output_diagnostics(raw)
+        self.assertEqual((result['count'], result['skipped']), (7, 3))
+        self.assertEqual(spike.suite_output_diagnostics(b'Ran 1 test in 0.1s')['count'], 1)
+        self.assertIsNone(spike.suite_output_diagnostics(b'Ran 12345678 tests in 0.1s\n')['count'])
+        self.assertIsNone(spike.suite_output_diagnostics(b'OK (skipped=12345678)\n')['skipped'])
+        self.assertEqual(spike.suite_output_diagnostics(raw + b'OK\n')['skipped'], 0)
+        for incomplete in (b'OK\n', b'OK (skipped=3)\nRan 7 tests in 1s\n'):
+            self.assertIsNone(spike.suite_output_diagnostics(incomplete)['skipped'])
+        self.assertEqual(spike.suite_output_diagnostics(b'')['progress_capture'], 'empty')
+        self.assertEqual(spike.suite_output_diagnostics(None)['progress_capture'], 'unavailable')
+        self.assertEqual(spike.suite_output_diagnostics(object()), spike.suite_output_defaults())
+
+    def test_parser_full_two_mebibyte_adversarial_buffers_finish_promptly(self):
+        import time
+        for unit in (b'test_test_'*30, b'\ntest_' + b'a'*127 + b' ', b' test_' + b'a'*127 + b' '):
+            raw = (unit * ((2 << 20)//len(unit)+1))[:2 << 20]
+            started = time.monotonic()
+            result = spike.suite_output_diagnostics(raw)
+            self.assertLess(time.monotonic()-started, 2)
+            self.assertEqual(result['started_count'], 0)
+
+    def test_failure_capture_short_pread_preserves_shared_offset_and_empty_unavailable(self):
+        import tempfile
+        with tempfile.TemporaryFile() as output:
+            output.write(b'abcdef'); output.flush()
+            holder = spike.FailureCapture()
+            pread = spike.os.pread
+            with patch.object(spike.os, 'pread', side_effect=lambda fd,n,offset:pread(fd,min(n,2),offset)):
+                spike.capture_failed_output(output.fileno(), holder)
+            self.assertEqual(holder.data, b'abcdef')
+            self.assertEqual(output.tell(), 6)
+            unavailable = spike.FailureCapture()
+            with patch.object(spike.os, 'pread', side_effect=OSError('private read error')):
+                spike.capture_failed_output(output.fileno(), unavailable)
+            self.assertIsNone(unavailable.data)
+            empty = spike.FailureCapture()
+            output.truncate(0)
+            spike.capture_failed_output(output.fileno(), empty)
+            self.assertEqual(empty.data, b'')
+
+    def test_real_child_timeout_has_bounded_progress_without_exposing_bytes(self):
+        import sys
+        env = spike.environment(self.root)
+        holder = spike.FailureCapture()
+        code = ('import sys,time;sys.stdout.write("test_one (test_fixture.Suite.test_one) ... ok\\n'
+                'private-command/token/path\\ntest_two (test_fixture.Suite.test_two) ... ");'
+                'sys.stdout.flush();time.sleep(30)')
+        with self.assertRaisesRegex(spike.Refused, '^child_timeout$'):
+            spike.run([sys.executable, '-I', '-c', code], env, timeout=3, failure_capture=holder)
+        result = spike.suite_output_diagnostics(holder.data)
+        self.assertEqual(result['last_started_test']['method'], 'test_two')
+        self.assertEqual(result['started_count'], 2)
+        self.assertNotIn('private-command', json.dumps(result))
+        self.assertLessEqual(len(holder.data), 2 << 20)
+
+    def test_cwd_popen_and_read_failures_leave_holder_unavailable_and_keep_original_timeout(self):
+        env = spike.environment(self.root)
+        holder = spike.FailureCapture()
+        with self.assertRaisesRegex(spike.Refused, 'child_cwd_refused'):
+            spike.run(['/bin/true'], env, cwd='relative', failure_capture=holder)
+        self.assertIsNone(holder.data)
+        with patch.object(spike.subprocess, 'Popen', side_effect=FileNotFoundError):
+            with self.assertRaises(FileNotFoundError):
+                spike.run(['/nonexistent'], env, failure_capture=holder)
+        self.assertIsNone(holder.data)
+        with patch.object(spike.os, 'pread', side_effect=OSError('private error')):
+            with self.assertRaisesRegex(spike.Refused, '^child_timeout$'):
+                spike.run(['/bin/sleep','30'], env, timeout=.01, failure_capture=holder)
+        self.assertIsNone(holder.data)
+
+    def test_output_limit_capture_is_first_two_mebibytes_and_success_does_not_fill_holder(self):
+        import sys
+        env = spike.environment(self.root)
+        holder = spike.FailureCapture()
+        code = 'import os,time;os.write(1,b"x"*(3<<20));time.sleep(30)'
+        with self.assertRaisesRegex(spike.Refused, '^child_output_limit$'):
+            spike.run([sys.executable,'-I','-c',code],env,timeout=3,failure_capture=holder)
+        self.assertEqual(len(holder.data), 2 << 20)
+        clean = spike.FailureCapture()
+        self.assertEqual(spike.run(['/bin/echo','ok'],env,capture=True,failure_capture=clean), (0,b'ok\n'))
+        self.assertIsNone(clean.data)
+
+    def suite_report(self, invoke, failure_log=None):
+        report = {'assertions': []}
+        env = spike.environment(self.root)
+        with patch.object(spike, 'test_compiler_directory', return_value=self.root), \
+                patch.object(spike, 'linux_namespace_preflight'), \
+                patch.object(spike, 'test_supervisor', side_effect=lambda value:dict(value, MARMISH_TEST_SUPERVISOR='fixture-only')), \
+                patch.object(spike, 'run', side_effect=invoke):
+            spike.full_tools_acceptance(self.root/'python',env,self.root,report,failure_log)
+        return report
+
+    def test_full_suite_verbose_contract_and_observed_final_summary(self):
+        def invoke(command, env, **kwargs):
+            self.assertEqual(command, [self.root/'python', '-I', '-B', '-m', 'unittest',
+                                      'discover', '-s', spike.REPO/'tools', '-p', 'test_*.py', '-v'])
+            self.assertEqual(kwargs['timeout'], 900)
+            self.assertIs(kwargs['capture'], True)
+            self.assertIsInstance(kwargs['failure_capture'], spike.FailureCapture)
+            expected = spike.environment(self.root)
+            expected['PATH'] = str(self.root) + ':' + str(self.root) + ':/usr/bin:/bin:/usr/sbin:/sbin'
+            expected['MARMISH_TEST_SUPERVISOR'] = 'fixture-only'
+            self.assertEqual(env, expected)
+            return 0,b'test_ok (test_fixture.Suite.test_ok) ... ok\nRan 1 test in 0.1s\nOK\n'
+        report = self.suite_report(invoke)
+        self.assertEqual(report['full_tools_tests']['count'],1)
+        self.assertEqual(report['full_tools_tests']['skipped'],0)
+        self.assertEqual(report['full_tools_tests']['started_count'],1)
+
+    def test_actual_timeout_wires_progress_to_report_and_never_writes_failure_log(self):
+        import sys
+        real_run = spike.run
+        report = {'assertions': []}
+        env = spike.environment(self.root)
+        log = self.root/'must-not-exist'
+        captures = []
+        def invoke(command, child_env, **kwargs):
+            self.assertEqual(kwargs['timeout'],900)
+            captures.append(kwargs['failure_capture'])
+            code = ('import sys,time;sys.stdout.write("secret/path/token\\n'
+                    'test_blocking (test_fixture.Suite.test_blocking) ... ");sys.stdout.flush();time.sleep(30)')
+            return real_run([sys.executable,'-I','-c',code],child_env,timeout=3,
+                            capture=kwargs['capture'],failure_capture=kwargs['failure_capture'])
+        with patch.object(spike,'test_compiler_directory',return_value=self.root), \
+                patch.object(spike,'linux_namespace_preflight'), \
+                patch.object(spike,'test_supervisor',side_effect=lambda value:dict(value)), \
+                patch.object(spike,'run',side_effect=invoke):
+            with self.assertRaisesRegex(spike.Refused,'^child_timeout$'):
+                spike.full_tools_acceptance(self.root/'python',env,self.root,report,log)
+        result=report['full_tools_tests']
+        self.assertEqual(result['last_started_test']['method'],'test_blocking')
+        self.assertIsNone(result['exit_code']); self.assertIsNone(result['count']); self.assertIsNone(result['skipped'])
+        self.assertNotIn('secret',json.dumps(report)); self.assertFalse(log.exists())
+        self.assertIsNone(captures[0].data)
+
+    def test_parser_fault_preserves_timeout_and_async_interrupt_is_not_swallowed(self):
+        report = {'assertions': []}
+        env = spike.environment(self.root)
+        for parse_error, expected in [(ValueError('private parser error'),'child_timeout'),
+                                      (spike.Refused('total_timeout'),'total_timeout'),
+                                      (KeyboardInterrupt(),None)]:
+            with self.subTest(error=type(parse_error).__name__), \
+                    patch.object(spike,'test_compiler_directory',return_value=self.root), \
+                    patch.object(spike,'linux_namespace_preflight'), \
+                    patch.object(spike,'test_supervisor',side_effect=lambda value:dict(value)), \
+                    patch.object(spike,'run',side_effect=spike.Refused('child_timeout')), \
+                    patch.object(spike,'suite_output_diagnostics',side_effect=parse_error):
+                if expected is None:
+                    with self.assertRaises(KeyboardInterrupt):
+                        spike.full_tools_acceptance(self.root/'python',env,self.root,report)
+                else:
+                    with self.assertRaisesRegex(spike.Refused,'^'+expected+'$'):
+                        spike.full_tools_acceptance(self.root/'python',env,self.root,report)
+                self.assertEqual(report['full_tools_tests']['last_started_test'],None)
+                self.assertNotIn('private',json.dumps(report))
+
+    def test_signal_during_capture_keeps_observer_cleanup_guard(self):
+        env = spike.environment(self.root)
+        from types import SimpleNamespace
+        observer = SimpleNamespace(observed=False)
+        for error in (spike.Refused('interrupted'),spike.Refused('total_timeout'),KeyboardInterrupt()):
+            with self.subTest(error=type(error).__name__), \
+                    patch.object(spike,'total_bytes',return_value=0), \
+                    patch.object(spike.os,'pread',side_effect=error), \
+                    patch.object(spike,'require_group_gone') as gone:
+                try:
+                    spike.run(['/bin/sleep','30'],env,timeout=.01,monitor=self.root,
+                              observer=observer,failure_capture=spike.FailureCapture())
+                except (spike.Refused,KeyboardInterrupt) as actual:
+                    self.assertIs(actual,error)
+                else:self.fail('interrupt was swallowed')
+                gone.assert_called_once()
+
+    def test_interrupts_survive_all_wrappers_and_other_observer_errors_stay_fixed(self):
+        from types import SimpleNamespace
+        for category in ('interrupted','total_timeout'):
+            error=spike.Refused(category)
+            def refuse(*args,**kwargs):raise error
+            for operation in (lambda:spike.native_probe(self.root,{},1),
+                              lambda:spike.namespace_probe([],{}),
+                              lambda:spike.observe_entry(refuse,self.root,None),
+                              lambda:spike.expect_refusal('other',refuse)):
+                with self.subTest(category=category),patch.object(spike,'run',side_effect=error):
+                    with self.assertRaises(spike.Refused) as caught:operation()
+                    self.assertIs(caught.exception,error)
+        def broken(*args):raise ValueError('private')
+        with self.assertRaisesRegex(spike.Refused,'^interruption_observer_failed$'):
+            spike.observe_entry(broken,self.root,None)
+
+    def test_deep_provenance_json_has_fixed_refusal(self):
+        binary=self.root/'helper/bin/bwrap';binary.parent.mkdir(parents=True)
+        binary.write_bytes(b'fixture');binary.chmod(0o700)
+        provenance=binary.parent.parent/'provenance.json'
+        nested = b'['*30000+b'0'+b']'*30000
+        self.assertLess(len(nested), 64 << 10)
+        with self.assertRaises(RecursionError):
+            json.loads(nested)
+        provenance.write_bytes(nested)
+        pair={'MARMISH_BWRAP':str(binary),'MARMISH_BWRAP_SHA256':spike.digest(binary)}
+        with patch.object(spike,'bwrap_executable',return_value=binary):
+            with self.assertRaisesRegex(spike.Refused,'^bwrap_provenance_invalid$'):
+                spike.helper_provenance(pair)
+
+    def isolated_python(self, code, timeout=10):
+        import subprocess,sys
+        return subprocess.run([sys.executable,'-I','-B','-c',
+                               'import sys;sys.path.insert(0,'+repr(str(spike.REPO/'tools'))+');'+code],
+                              stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=timeout).returncode
+
+    def test_nonzero_prior_timer_and_handler_are_restored_in_isolated_process(self):
+        code=('import signal,time;import marmish_managed_runtime_spike as s;'
+              'handler=lambda *a:None;signal.signal(signal.SIGALRM,handler);'
+              'signal.setitimer(signal.ITIMER_REAL,10);state=s.install_interrupt_handlers(20);'
+              'time.sleep(.05);s.restore_interrupt_handlers(state);'
+              'remaining=signal.getitimer(signal.ITIMER_REAL)[0];signal.setitimer(signal.ITIMER_REAL,0);'
+              'assert 0<remaining<10;assert signal.getsignal(signal.SIGALRM) is handler')
+        self.assertEqual(self.isolated_python(code),0)
+
+    def test_real_signals_propagate_wrappers_and_restore_handlers(self):
+        code='''
+import os,signal
+import marmish_managed_runtime_spike as s
+from pathlib import Path
+from unittest.mock import patch
+old={number:signal.getsignal(number) for number in (signal.SIGTERM,signal.SIGALRM)}
+for number,category in ((signal.SIGTERM,'interrupted'),(signal.SIGALRM,'total_timeout')):
+    state=s.install_interrupt_handlers(10)
+    def deliver(*a,**k):os.kill(os.getpid(),number)
+    try:
+        for operation in (lambda:s.native_probe(Path('/fixture'),{},1),lambda:s.namespace_probe([],{}),
+                          lambda:s.observe_entry(deliver,Path('/fixture'),None),lambda:s.expect_refusal('other',deliver)):
+            with patch.object(s,'run',side_effect=deliver):
+                try:operation()
+                except s.Refused as error:assert str(error)==category
+                else:raise AssertionError('interrupt swallowed')
+    finally:s.restore_interrupt_handlers(state)
+assert all(signal.getsignal(number)==handler for number,handler in old.items())
+'''
+        self.assertEqual(self.isolated_python(code),0)
+
+    def test_restored_caller_signal_can_interrupt_best_effort_report_window(self):
+        report=self.root/'best-effort-report.json'
+        code='''
+import signal,time
+import marmish_managed_runtime_spike as s
+from pathlib import Path
+report=Path(REPORT)
+def handler(*args):raise KeyboardInterrupt()
+signal.signal(signal.SIGALRM,handler)
+signal.setitimer(signal.ITIMER_REAL,.2)
+s.initialize_helper=lambda *a:None
+s.proof=lambda *a:None
+s.TARGETS={(s.platform.system(),s.platform.machine()):'x86_64-unknown-linux-gnu'}
+actual_euid=s.os.geteuid
+first_euid=[True]
+def fixture_euid():
+    if first_euid:
+        first_euid.clear()
+        return actual_euid() or 1001
+    return actual_euid()
+s.os.geteuid=fixture_euid
+calls=[]
+def snapshot(*a):
+    calls.append(1)
+    if len(calls)>1:time.sleep(1)
+    return {}
+s.home_snapshot=snapshot
+try:s.main(['--report',str(report)])
+except KeyboardInterrupt:pass
+else:raise AssertionError('caller timer did not interrupt emission')
+finally:signal.setitimer(signal.ITIMER_REAL,0)
+assert signal.getsignal(signal.SIGALRM) is handler
+assert not report.exists()
+'''.replace('REPORT',repr(str(report)))
+        self.assertEqual(self.isolated_python(code),0)
+
+    def test_owned_grandchild_writer_is_killed_after_leader_exit_and_reaped(self):
+        code='''
+import ctypes,os,platform,time
+from pathlib import Path
+import marmish_managed_runtime_spike as s
+if platform.system()=='Linux':assert ctypes.CDLL(None).prctl(36,1,0,0,0)==0
+root=Path(ROOT)
+command=r"""import os,time
+from pathlib import Path
+read,write=os.pipe()
+pid=os.fork()
+if pid:
+    os.close(write);os.read(read,1);Path(MARKER).write_text(str(pid))
+    if MODE:time.sleep(30)
+    os._exit(0)
+os.close(read);os.write(1,b'writer started\\n');os.write(write,b'x');os.close(write)
+while True:os.write(1,b'test_writer (test_fixture.Suite.test_writer) ... private\\n');time.sleep(.01)
+""".replace('MARKER',repr(str(root/'writer.pid')))
+holder=s.FailureCapture()
+try:
+    status,raw=s.run([os.sys.executable,'-I','-c',command],s.environment(root),capture=True,timeout=3,failure_capture=holder)
+except s.Refused as error:
+    assert MODE and str(error)=='child_timeout'
+    assert holder.data and len(holder.data)<=2<<20
+    assert s.suite_output_diagnostics(holder.data)['last_started_test']['method']=='test_writer'
+else:
+    assert not MODE and status==0 and holder.data is None
+pid=int((root/'writer.pid').read_text())
+if platform.system()=='Linux':
+    waited,status=os.waitpid(pid,0);assert waited==pid and os.WIFSIGNALED(status)
+deadline=time.monotonic()+2
+while time.monotonic()<deadline:
+    try:os.kill(pid,0)
+    except ProcessLookupError:break
+    time.sleep(.01)
+else:raise AssertionError('owned writer survived')
+'''.replace('ROOT',repr(str(self.root)))
+        for timeout_mode in (False, True):
+            with self.subTest(timeout=timeout_mode):
+                self.assertEqual(self.isolated_python(code.replace('MODE',repr(timeout_mode))),0)
+
+
 if __name__=='__main__':
     unittest.main()

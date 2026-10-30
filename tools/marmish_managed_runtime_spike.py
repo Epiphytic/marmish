@@ -107,7 +107,7 @@ def helper_provenance(pair):
                     for key, pattern in patterns.items()) and len(result['version']) <= 64
                 and result['executable_sha256'] == pair['MARMISH_BWRAP_SHA256'], 'bwrap_provenance_invalid')
         return result
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, RecursionError):
         raise Refused('bwrap_provenance_invalid') from None
 
 
@@ -206,6 +206,10 @@ def observe_entry(observer, path, info):
     try:
         observer(path, info)
         return observer.observed
+    except Refused as error:
+        if str(error) in ('interrupted', 'total_timeout'):
+            raise
+        raise Refused('interruption_observer_failed') from None
     except Exception:
         raise Refused('interruption_observer_failed') from None
 
@@ -247,10 +251,10 @@ def require_group_gone(pid):
 
 
 def run(command, env, *, timeout=120, monitor=None, limit=1 << 30, capture=False,
-        cwd=None, observer=None):
+        cwd=None, observer=None, failure_capture=None):
     selected = checked_cwd(env, cwd)
     return _run_process(command, env, timeout=timeout, monitor=monitor, limit=limit,
-                        capture=capture, cwd=selected, observer=observer)
+                        capture=capture, cwd=selected, observer=observer, failure_capture=failure_capture)
 
 
 def interrupt_observed(child, observer, deadline):
@@ -268,8 +272,29 @@ def interrupt_observed(child, observer, deadline):
     return True
 
 
+class FailureCapture:
+    def __init__(self):
+        self.data = None
+
+
+def capture_failed_output(descriptor, holder):
+    chunks = []
+    offset = 0
+    try:
+        while offset < 2 << 20:
+            chunk = os.pread(descriptor, min(65536, (2 << 20) - offset), offset)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            offset += len(chunk)
+        data = b''.join(chunks)
+    except (OSError, ValueError):
+        return
+    holder.data = data
+
+
 def _run_process(command, env, *, timeout=120, monitor=None, limit=1 << 30, capture=False,
-                 cwd, observer=None):
+                 cwd, observer=None, failure_capture=None):
     """Bounded private output; terminate/reap owned process group on every failure."""
     require(observer is None or monitor is not None, 'interruption_monitor_required')
     with tempfile.TemporaryFile() as output:
@@ -278,6 +303,7 @@ def _run_process(command, env, *, timeout=120, monitor=None, limit=1 << 30, capt
                                  start_new_session=True, cwd=cwd)
         deadline = time.monotonic() + timeout
         observation_deadline = min(deadline, time.monotonic() + 10)
+        completed = False
         try:
             while child.poll() is None:
                 require(time.monotonic() < deadline, 'child_timeout')
@@ -293,6 +319,7 @@ def _run_process(command, env, *, timeout=120, monitor=None, limit=1 << 30, capt
             require(os.fstat(output.fileno()).st_size <= 2 << 20, 'child_output_limit')
             output.seek(0)
             data = output.read(2 << 20) if capture else b''
+            completed = True
             return child.returncode, data
         finally:
             # The leader may have exited while an owned descendant remains.
@@ -301,8 +328,12 @@ def _run_process(command, env, *, timeout=120, monitor=None, limit=1 << 30, capt
             except ProcessLookupError:
                 pass
             child.wait()
-            if observer is not None:
-                require_group_gone(child.pid)
+            try:
+                if not completed and failure_capture is not None:
+                    capture_failed_output(output.fileno(), failure_capture)
+            finally:
+                if observer is not None:
+                    require_group_gone(child.pid)
 
 
 def download(url, destination, limit, env):
@@ -566,6 +597,8 @@ def expect_refusal(category, operation):
     try:
         operation()
     except Refused as error:
+        if str(error) in ('interrupted', 'total_timeout'):
+            raise
         require(str(error) == category, 'negative_wrong_refusal')
         return
     raise Refused('negative_accepted')
@@ -682,6 +715,8 @@ def native_probe(app_root, env, index, cwd=None):
     except OSError:
         result['category'] = 'spawn_failed'
     except Refused as error:
+        if str(error) in ('interrupted', 'total_timeout'):
+            raise
         require(str(error) in ('child_timeout', 'child_output_limit'), 'native_probe_internal_failure')
         result['category'] = str(error)
     return result
@@ -782,6 +817,8 @@ def namespace_probe(command, env):
     except OSError:
         result['category'] = 'spawn_failed'
     except Refused as error:
+        if str(error) in ('interrupted', 'total_timeout'):
+            raise
         require(str(error) in ('child_timeout', 'child_output_limit'), 'namespace_probe_internal_failure')
         result['category'] = str(error)
     return result
@@ -822,17 +859,73 @@ def linux_namespace_preflight(env, report):
         'unshare_preparation_bwrap': namespace_probe([*outer, '/bin/sh', '-c', preparation, 'marmish-probe', *bwrap], env)}
 
 
+PROGRESS_PREFIX = re.compile(
+    rb'(?<![A-Za-z0-9_.])(test_[A-Za-z0-9_]{1,127}) \(([A-Za-z0-9_.]{1,255})\)(?= \.\.\.|\r?$)', re.M)
+SUITE_SUMMARY = re.compile(rb'^Ran ([0-9]{1,7}) tests? in [0-9]{1,7}(?:\.[0-9]{1,9})?s\r?$', re.M)
+STATUS_DETAIL = rb'(?:failures|errors|skipped|expected failures|unexpected successes)=[0-9]{1,7}'
+SUITE_STATUS = re.compile(rb'^(?:OK|FAILED)(?: \(' + STATUS_DETAIL + rb'(?:, ' + STATUS_DETAIL + rb')*\))?\r?$', re.M)
+
+
+def suite_output_defaults():
+    return {'progress_format': 'unittest_verbose_prefix_v1', 'last_started_test': None,
+            'started_count': 0, 'progress_capture': 'unavailable', 'count': None, 'skipped': None}
+
+
+def suite_output_diagnostics(raw):
+    result = suite_output_defaults()
+    if not isinstance(raw, bytes):
+        return result
+    raw = raw[:2 << 20]
+    result['progress_capture'] = 'available' if raw else 'empty'
+    for match in PROGRESS_PREFIX.finditer(raw):
+        method, owner = (value.decode('ascii') for value in match.groups())
+        components = owner.split('.')
+        if (owner.startswith('test_') and owner.endswith('.' + method)
+                and all(re.fullmatch('[A-Za-z_][A-Za-z0-9_]*', name) for name in components)):
+            result['last_started_test'] = {'method': method, 'class': owner}
+            result['started_count'] = min(result['started_count'] + 1, 2097152)
+    summary_end = None
+    for match in SUITE_SUMMARY.finditer(raw):
+        result['count'] = int(match[1])
+        summary_end = match.end()
+    status = None
+    for match in SUITE_STATUS.finditer(raw):
+        if summary_end is not None and match.start() > summary_end:
+            status = match[0]
+    if status is not None:
+        skipped = re.search(rb'\bskipped=([0-9]{1,7})(?=[,)])', status)
+        result['skipped'] = int(skipped[1]) if skipped else 0
+    return result
+
+
+def guarded_suite_diagnostics(raw):
+    try:
+        return suite_output_diagnostics(raw)
+    except (TypeError, ValueError, OverflowError):
+        return suite_output_defaults()
+
+
 def full_tools_acceptance(interpreter, env, root, report, failure_log=None):
     report['stage'] = 'full_tools'
     compiler = test_compiler_directory()
     test_env = dict(env, PATH=str(interpreter.parent) + ':' + str(compiler) + ':/usr/bin:/bin:/usr/sbin:/sbin')
     linux_namespace_preflight(test_env, report)
     test_env = test_supervisor(test_env)
-    status, raw = run([interpreter, '-I', '-B', '-m', 'unittest', 'discover', '-s', REPO / 'tools', '-p', 'test_*.py', '-q'],
-                      test_env, timeout=900, capture=True)
-    count = re.search(rb'Ran ([0-9]+) tests?', raw)
-    skipped = re.search(rb'skipped=([0-9]+)', raw)
-    report['full_tools_tests'] = {'top_level_and_path_children': 'managed_interpreter', 'compiler': 'existing_host_toolchain_test_only', 'exit_code': status, 'count': int(count[1]) if count else None, 'skipped': int(skipped[1]) if skipped else 0}
+    report['full_tools_tests'] = {'top_level_and_path_children': 'managed_interpreter',
+                                  'compiler': 'existing_host_toolchain_test_only', 'exit_code': None,
+                                  **suite_output_defaults()}
+    status, raw = None, None
+    holder = FailureCapture()
+    try:
+        status, raw = run([interpreter, '-I', '-B', '-m', 'unittest', 'discover', '-s', REPO / 'tools', '-p', 'test_*.py', '-v'],
+                          test_env, timeout=900, capture=True, failure_capture=holder)
+    finally:
+        try:
+            diagnostics = guarded_suite_diagnostics(raw if raw is not None else holder.data)
+            report['full_tools_tests'] = {**report['full_tools_tests'], 'exit_code': status, **diagnostics}
+        finally:
+            holder.data = None
+            del holder
     if status != 0:
         # Only source-defined unittest identifiers may enter the uploaded report.
         failures = re.findall(rb'^(?:FAIL|ERROR): (test_[A-Za-z0-9_]+|setUpClass|tearDownClass) \((test_[A-Za-z0-9_.]+)\)(?: \([^\r\n]*\))?$', raw, re.MULTILINE)
