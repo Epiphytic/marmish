@@ -207,6 +207,12 @@ independent unconfined shim received the exact 72-byte frame, then exited 70
 during lifetime cleanup. That status does not identify which cleanup operation
 failed. The broader Seatbelt spike, full native frontend acceptance and
 cross-platform live jobs remain pending; these provider results do not close them.
+The [reviewed lifetime diagnostic increment](phases/native-lifetime-diagnostics.md)
+now emits fixed operation/errno records after final cleanup attempts, and the
+bootstrap test accepts only a closed, bounded diagnostic schema. Its portable
+cleanup harness and full offline Python suite passed (250 tests, five Darwin
+skips). Actual native cause identification awaits the new runner result.
+
 
 [Native run 39982966090](validation/native-run-39982966090.json), at commit
 `fccfddc`, passed the Linux AMD64 namespace prerequisite, 131 Rust workspace

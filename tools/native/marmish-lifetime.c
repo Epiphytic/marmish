@@ -20,27 +20,7 @@ static double elapsed(void) {
     return (double)mach_continuous_time() * (double)scale.numer / (double)scale.denom / 1000000000.0;
 }
 
-/* Observe without reaping: the leader holds its pid/pgid until final signals. */
-static int exited(pid_t child) {
-    siginfo_t info;
-    memset(&info, 0, sizeof(info));
-    if (waitid(P_PID, (id_t)child, &info, WEXITED | WNOHANG | WNOWAIT) < 0) {
-        if (errno == EINTR) return 0;
-        return -1;
-    }
-    return info.si_pid == child;
-}
-
-static int finish(pid_t child) {
-    /* ESRCH is fine; no group may remain. Never signal after reaping. */
-    int failed = kill(-child, SIGKILL) < 0 && errno != ESRCH;
-    if (kill(child, SIGKILL) < 0 && errno != ESRCH) failed = 1;
-    int status;
-    while (waitpid(child, &status, 0) < 0) {
-        if (errno != EINTR) return 70;
-    }
-    return failed ? 70 : (WIFEXITED(status) ? WEXITSTATUS(status) : 0);
-}
+#include "marmish-lifetime-cleanup.h"
 
 int main(int argc, char **argv) {
     if (argc < 4) return 64;

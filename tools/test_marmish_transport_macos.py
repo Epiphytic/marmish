@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 import platform
+import select
+import time
 import socket
 import subprocess
 import sys
@@ -20,6 +22,57 @@ import build_mdk
 import marmish_mdk_build as build
 import marmish_transport_macos as native
 from marmish_transport_sandbox import SandboxError
+
+
+LIFETIME_STAGES = ('waitid', 'kill_group', 'kill_leader', 'waitpid')
+
+
+def parse_lifetime_diagnostics(raw):
+    """Only fixed native records may reach a failing test's assertion output."""
+    try:
+        if len(raw) > 4096 or b'\r' in raw or (raw and not raw.endswith(b'\n')):
+            raise ValueError()
+        lines = raw.split(b'\n')[:-1] if raw else []
+        if len(lines) > 5:
+            raise ValueError()
+        records = []
+        previous = -1
+        counts = {}
+        for line in lines:
+            record = json.loads(line, object_pairs_hook=build.strict_object)
+            if (not isinstance(record, dict)
+                    or set(record) != {'outcome', 'category', 'stage', 'errno'}
+                    or record['outcome'] != 'failed'
+                    or record['category'] != 'native_lifetime_failed'
+                    or record['stage'] not in LIFETIME_STAGES
+                    or (record['errno'] is not None and
+                        (type(record['errno']) is not int or not 1 <= record['errno'] <= 4095))):
+                raise ValueError()
+            stage = record['stage']
+            rank = LIFETIME_STAGES.index(stage)
+            counts[stage] = counts.get(stage, 0) + 1
+            if rank < previous or counts[stage] > (2 if stage == 'waitid' else 1):
+                raise ValueError()
+            previous = rank
+            records.append(record)
+        return records
+    except (ValueError, TypeError, UnicodeError):
+        raise AssertionError('native_lifetime_diagnostic_invalid') from None
+
+
+def read_lifetime_diagnostics(stream, timeout=2):
+    deadline = time.monotonic() + timeout
+    raw = bytearray()
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([stream], [], [], remaining)[0]:
+            raise AssertionError('native_lifetime_diagnostic_invalid')
+        block = os.read(stream.fileno(), 4097 - len(raw))
+        if not block:
+            return parse_lifetime_diagnostics(bytes(raw))
+        raw.extend(block)
+        if len(raw) > 4096:
+            raise AssertionError('native_lifetime_diagnostic_invalid')
 
 
 class SocksTests(unittest.TestCase):
@@ -430,7 +483,7 @@ class NativeLifetimeTests(unittest.TestCase):
             try:
                 child = subprocess.Popen([str(helper), str(reader), str(os.getpid()), str(stub),
                                           'stdin', str(report)], pass_fds=(reader,), stdin=bootstrap_reader,
-                                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                          start_new_session=True)
             finally:
                 os.close(reader)
@@ -441,13 +494,17 @@ class NativeLifetimeTests(unittest.TestCase):
                 # character device before reporting PID/granting child execution.
                 os.write(writer, b'G')
                 self.assertEqual(self.await_file(report), 72)
-                self.assertEqual(child.wait(timeout=5), 0)
+                result = child.wait(timeout=5)
+                records = read_lifetime_diagnostics(child.stderr)
+                self.assertEqual(result, 0, json.dumps(records, sort_keys=True))
+                self.assertEqual(records, [], json.dumps(records, sort_keys=True))
             finally:
                 os.close(writer)
                 if child.poll() is None:
                     child.kill()
                     child.wait()
                 child.stdout.close()
+                child.stderr.close()
 
     def test_gate_signal_reset_natural_exit_and_term_ignoring_descendant(self):
         with tempfile.TemporaryDirectory(prefix='marmish-lifetime-test-') as directory:
