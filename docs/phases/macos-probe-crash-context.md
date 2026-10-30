@@ -69,3 +69,57 @@ Native evidence must identify the failing runtime operation before designing a
 minimal production fix; any fix still requires the complete native allowed/denied
 matrix and real Marmot command acceptance. If this remains inconclusive, record
 that honestly and design a further bounded investigation without guessing grants.
+
+## Native follow-up: rejected path attribution
+
+Run 41130088901 passes the unconfined control and reproduces SIGABRT. One new
+candidate matches the owned PID but fails the exact executable-path check, so
+no facts were extracted. OS path redaction or aliasing is a hypothesis, not an
+established cause. Retain strict failure until additional attribution is proven.
+
+After build_probe succeeds and before either child, read the owned thin Mach-O
+header directly with O_NOFOLLOW, require regular current-UID ownership, and read
+at most 4096 bytes. Parse a 64-bit little-endian header for current platform.machine()
+(arm64 or x86_64), bounded load-command count and lengths wholly inside that read,
+and exactly one correctly sized LC_UUID command with a non-nil UUID. Invalid or
+unsupported formats fail with a fixed category; no external tool or raw UUID is
+exported, and UUID failure never downgrades attribution.
+
+After exact new-candidate PID matching, classify procPath using fixed facts only:
+prefix enum private_tmp/tmp/users/other; component count capped at 8; literal-star
+component count capped at 8; exact unique basename match; procName match; alias match;
+and UUID-image match. UUID binds the build, not the run: the run binding remains
+the exact Popen PID, pre-spawn new-file snapshot, unique random basename and the
+20-second collection window. Do not call UUID alone proof of process ownership.
+
+Exact paths remain accepted. An alias may match only for an absolute bounded path
+with strict resolution equal to the owned probe. For potential OS-redacted paths,
+require a string <=4096 chars, absolute, no NUL/empty/dot/dotdot components and
+exactly one component equal to `*` (never embedded stars). Only the exact literal
+forms `/private/tmp/*/BASENAME`, `/tmp/*/BASENAME`,
+`/private/tmp/*/control/BASENAME`, `/tmp/*/control/BASENAME` are candidates: these
+represent either a collapsed middle or a redacted fixture component in our known
+topology, not an assertion that either representation has yet been observed.
+Before accepting one, also require procName equal to the unique probe basename,
+and exactly one usedImages entry whose name equals that basename. If its path is
+present it must end in /BASENAME; its arch must equal our parsed architecture;
+its UUID must be a non-nil UUID string equal to the owned Mach-O UUID. These
+conditions authorize diagnostic extraction only and never alter product policy.
+The next native report records fixed path-shape facts and whether this validated
+candidate was accepted, so actual OS representation is established from evidence.
+Other patterns stay rejected. Record attribution probe_exact/probe_alias/
+probe_uuid_redacted/sandbox_exec_exact, never path or UUID text.
+
+Offline tests cover exact/alias/redacted UUID success, wrong/missing/nil UUID,
+wrong procName/basename/PID/arch, duplicate usedImages names, unexpected patterns,
+multiple/embedded stars, dotdot/oversized paths, malformed/oversized/duplicate UUID
+load commands and unsupported Mach-O formats. Assert no raw path/UUID in reports.
+Re-review this extension with Claude before implementation, then integrated code
+and rerun native diagnosis. No permission change may pre-empt the evidence.
+
+UUID/header parse failure is fatal before either child: exact and alias branches
+never run without a valid UUID. Reject fat/universal and non-little-endian64 magic;
+compare CPU type only, not subtype. Incomplete load commands within the 4096-byte
+read are a fixed failure. Compare UUID objects parsed from raw LC_UUID bytes and
+the crash-report string, case-insensitively. Alias checks use read-only strict
+realpath resolution; no exception text is exported.

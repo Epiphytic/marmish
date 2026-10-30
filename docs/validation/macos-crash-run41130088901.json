@@ -1,0 +1,41 @@
+{
+  "architecture": "arm64",
+  "cases": [
+    {
+      "category": "completed",
+      "exit_code": 0,
+      "id": "read_control",
+      "signal": null,
+      "stderr": "",
+      "stderr_truncated": false,
+      "timeout": false
+    },
+    {
+      "category": "completed",
+      "exit_code": -6,
+      "id": "read_confined",
+      "signal": 6,
+      "stderr": "",
+      "stderr_truncated": false,
+      "timeout": false
+    }
+  ],
+  "compiler_flags": [
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-O2",
+    "-mmacosx-version-min=15.0"
+  ],
+  "context": {
+    "candidate_count": 1,
+    "category": "candidate_path_rejected"
+  },
+  "failure": null,
+  "ok": false,
+  "platform": "Darwin",
+  "probe_source_sha256": "47977b39f2496f3f614125a78e3e174c8a9de2d8321ee0d87632d20962e7ce17",
+  "profile_sha256": "14b1ab31a589f3f52b7b2ff93fadb35d26139c1a5cb154a0fdb50ed90a310d9a",
+  "reports_baseline": "available",
+  "schema": 1
+}

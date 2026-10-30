@@ -8,10 +8,12 @@ from pathlib import Path
 import platform
 import socket
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 import marmish_macos_probe_diagnostic as base
 
@@ -29,44 +31,61 @@ def bounded(value, redactions, limit):
     return base.redact_stderr(raw, redactions)[0][:limit]
 
 
-def extract(payload, redactions):
+def extract_named_fields(source, prefix, fields, redactions):
     result = {}
-    exception = payload.get('exception', {})
-    termination = payload.get('termination', {})
-    for source, field, limit in ((exception, 'type', 256), (exception, 'signal', 128),
-                                 (termination, 'namespace', 256), (termination, 'indicator', 256)):
-        if isinstance(source, dict):
+    if isinstance(source, dict):
+        for field, limit in fields:
             value = bounded(source.get(field), redactions, limit)
             if value is not None:
-                result[('exception_' if source is exception else 'termination_') + field] = value
-    if isinstance(termination, dict):
-        code = termination.get('code')
-        if type(code) is int and -(2 ** 63) <= code < 2 ** 64:
-            result['termination_code'] = code
-        else:
-            value = bounded(code, redactions, 128)
-            if value is not None:
-                result['termination_code'] = value
-        details = termination.get('details')
-        if isinstance(details, list):
-            details = '\n'.join(item for item in details[:6] if isinstance(item, str) and len(item) <= 65536)
-        value = bounded(details, redactions, 1024)
+                result[prefix + field] = value
+    return result
+
+
+def extract_termination(termination, redactions):
+    result = extract_named_fields(termination, 'termination_',
+                                  (('namespace', 256), ('indicator', 256)), redactions)
+    if not isinstance(termination, dict):
+        return result
+    code = termination.get('code')
+    if type(code) is int and -(2 ** 63) <= code < 2 ** 64:
+        result['termination_code'] = code
+    else:
+        value = bounded(code, redactions, 128)
         if value is not None:
-            result['termination_details'] = value
-    asi = payload.get('asi', {})
-    result['asi'] = []
-    if isinstance(asi, dict):
-        for library in ASI_KEYS:
-            values = asi.get(library, [])
-            if isinstance(values, str):
-                values = [values]
-            if isinstance(values, list):
-                for value in values:
-                    if len(result['asi']) == 6:
-                        break
-                    text = bounded(value, redactions, 1024)
-                    if text is not None:
-                        result['asi'].append({'library': library, 'value': text})
+            result['termination_code'] = value
+    details = termination.get('details')
+    if isinstance(details, list):
+        details = '\n'.join(item for item in details[:6] if isinstance(item, str) and len(item) <= 65536)
+    value = bounded(details, redactions, 1024)
+    if value is not None:
+        result['termination_details'] = value
+    return result
+
+
+def extract_asi(asi, redactions):
+    result = []
+    if not isinstance(asi, dict):
+        return result
+    for library in ASI_KEYS:
+        values = asi.get(library, [])
+        if isinstance(values, str):
+            values = [values]
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            text = bounded(value, redactions, 1024)
+            if text is not None:
+                result.append({'library': library, 'value': text})
+            if len(result) == 6:
+                return result
+    return result
+
+
+def extract_crash_facts(payload, redactions):
+    result = extract_named_fields(payload.get('exception'), 'exception_',
+                                  (('type', 256), ('signal', 128)), redactions)
+    result.update(extract_termination(payload.get('termination'), redactions))
+    result['asi'] = extract_asi(payload.get('asi'), redactions)
     result['frames'] = extract_frames(payload, redactions)
     return result
 
@@ -122,7 +141,103 @@ def snapshot(directory, name):
         os.close(fd)
 
 
-def read_context(fd, name, pid, probe, redactions):
+def parse_macho_uuid(raw, architecture):
+    cpu = {'arm64': 0x0100000c, 'x86_64': 0x01000007}.get(architecture)
+    if not 32 <= len(raw) <= 4096 or cpu is None:
+        raise ValueError('probe_uuid_invalid')
+    magic, cpu_type, _, _, count, size, _, _ = struct.unpack_from('<8I', raw)
+    if magic != 0xfeedfacf or cpu_type != cpu or not 1 <= count <= 128 or size > len(raw) - 32:
+        raise ValueError('probe_uuid_invalid')
+    cursor, found, end = 32, [], 32 + size
+    for _ in range(count):
+        if cursor + 8 > end:
+            raise ValueError('probe_uuid_invalid')
+        command, length = struct.unpack_from('<2I', raw, cursor)
+        if length < 8 or length % 8 or cursor + length > end:
+            raise ValueError('probe_uuid_invalid')
+        if command == 0x1b:
+            if length != 24:
+                raise ValueError('probe_uuid_invalid')
+            found.append(uuid.UUID(bytes=raw[cursor + 8:cursor + 24]))
+        cursor += length
+    if cursor != end or len(found) != 1 or found[0].int == 0:
+        raise ValueError('probe_uuid_invalid')
+    return found[0], architecture
+
+
+def read_owned_uuid(probe):
+    fd = os.open(probe, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            raise ValueError('probe_uuid_invalid')
+        raw = os.read(fd, 4096)
+    finally:
+        os.close(fd)
+    return parse_macho_uuid(raw, platform.machine())
+
+
+def uuid_image_matches(payload, probe, identity):
+    images = payload.get('usedImages')
+    if not isinstance(images, list):
+        return False
+    matching = [image for image in images if isinstance(image, dict) and image.get('name') == probe.name]
+    if len(matching) != 1:
+        return False
+    image = matching[0]
+    path = image.get('path')
+    if 'path' in image and (not isinstance(path, str) or len(path) > 4096 or not path.endswith('/' + probe.name)):
+        return False
+    if (image.get('arch') != identity[1] or not isinstance(image.get('uuid'), str)
+            or len(image['uuid']) > 64):
+        return False
+    try:
+        image_uuid = uuid.UUID(image['uuid'])
+    except ValueError:
+        return False
+    return image_uuid.int != 0 and image_uuid == identity[0]
+
+
+def path_shape(payload, probe, identity):
+    value = payload.get('procPath')
+    path = value if isinstance(value, str) and len(value) <= 4096 else ''
+    parts = path.split('/')[1:] if path.startswith('/') else []
+    prefix = next((label for start, label in (('/private/tmp', 'private_tmp'), ('/tmp', 'tmp'), ('/Users', 'users'))
+                   if path == start or path.startswith(start + '/')), 'other')
+    return {'prefix': prefix, 'component_count': min(len(parts), 8),
+            'star_component_count': min(parts.count('*'), 8),
+            'basename_match': bool(parts) and parts[-1] == probe.name,
+            'proc_name_match': payload.get('procName') == probe.name,
+            'alias_match': False, 'uuid_image_match': uuid_image_matches(payload, probe, identity)}
+
+
+def attribute_executable(payload, probe, identity):
+    shape = path_shape(payload, probe, identity)
+    value = payload.get('procPath')
+    if value == str(probe):
+        return 'probe_exact', shape
+    if value == '/usr/bin/sandbox-exec':
+        return 'sandbox_exec_exact', shape
+    if not isinstance(value, str) or len(value) > 4096 or not value.startswith('/') or '\x00' in value:
+        return None, shape
+    parts = value.split('/')[1:]
+    if any(part in ('', '.', '..') for part in parts):
+        return None, shape
+    if '*' not in value:
+        try:
+            shape['alias_match'] = Path(value).resolve(strict=True) == probe.resolve(strict=True)
+        except (OSError, ValueError, RuntimeError):
+            pass
+        if shape['alias_match']:
+            return 'probe_alias', shape
+    patterns = ('/private/tmp/*/', '/tmp/*/', '/private/tmp/*/control/', '/tmp/*/control/')
+    if (value in [prefix + probe.name for prefix in patterns] and shape['proc_name_match']
+            and shape['uuid_image_match']):
+        return 'probe_uuid_redacted', shape
+    return None, shape
+
+
+def read_context(fd, name, pid, probe, redactions, identity):
     try:
         child = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
     except OSError:
@@ -156,32 +271,31 @@ def read_context(fd, name, pid, probe, redactions):
         return {'category': 'candidate_invalid'}
     if type(payload.get('pid')) is not int or payload['pid'] != pid:
         return {'category': 'candidate_pid_rejected'}
-    executable = payload.get('procPath')
-    if executable not in (str(probe), '/usr/bin/sandbox-exec'):
-        return {'category': 'candidate_path_rejected'}
-    return {'category': 'matched', 'executable': 'probe' if executable == str(probe) else 'sandbox_exec',
-            'facts': extract(payload, redactions)}
+    attribution, shape = attribute_executable(payload, probe, identity)
+    if attribution is None:
+        return {'category': 'candidate_path_rejected', 'path_shape': shape}
+    return {'category': 'matched', 'executable': 'sandbox_exec' if attribution == 'sandbox_exec_exact' else 'probe',
+            'attribution': attribution, 'path_shape': shape, 'facts': extract_crash_facts(payload, redactions)}
 
 
-def wait_context(directory, name, before, pid, probe, redactions):
+def wait_context(directory, name, before, pid, probe, redactions, identity):
     deadline = time.monotonic() + 20
     seen = set()
     result = {'category': 'context_timed_out', 'candidate_count': 0}
     while True:
         fd, category = open_reports(directory)
         if fd is None:
-            result['category'] = category
+            result = {'category': category, 'candidate_count': len(seen)}
         else:
             try:
                 new = candidates(fd, name) - before
                 seen.update(new)
                 result['candidate_count'] = len(seen)
                 if len(seen) > 8:
-                    result['category'] = 'candidate_limit'
-                    return result
+                    return {'category': 'candidate_limit', 'candidate_count': len(seen)}
                 for candidate in sorted(new):
-                    context = read_context(fd, candidate, pid, probe, redactions)
-                    result.update(context)
+                    context = read_context(fd, candidate, pid, probe, redactions, identity)
+                    result = {'candidate_count': len(seen), **context}
                     if context['category'] == 'matched':
                         return result
             finally:
@@ -228,6 +342,11 @@ def collect(root, report):
         report['failure'] = base.build_probe(probe)
         if report['failure'] is not None:
             return
+        try:
+            identity = read_owned_uuid(probe)
+        except (OSError, ValueError):
+            report['failure'] = {'category': 'probe_uuid_invalid', 'exit_code': None}
+            return
         redactions = base.replacements_for(root)
         control = run_child('read_control', [str(probe), 'read', '/dev/null'], redactions)
         directory = Path.home() / 'Library/Logs/DiagnosticReports'
@@ -236,7 +355,7 @@ def collect(root, report):
         report['reports_baseline'] = baseline
         report['context'] = {'category': 'not_sigabrt', 'candidate_count': 0}
         if confined['signal'] == 6:
-            report['context'] = wait_context(directory, name, before, confined['pid'], probe, redactions)
+            report['context'] = wait_context(directory, name, before, confined['pid'], probe, redactions, identity)
         if not base.succeeded(control):
             confined['category'] = 'control_invalid'
         # PIDs are used for selecting owned crash context, never exported.

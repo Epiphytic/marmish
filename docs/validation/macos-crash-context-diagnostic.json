@@ -11,5 +11,17 @@
     "all Bash syntax checks"
   ],
   "quality_disposition": "Generic extract symbol collision with unchanged marmish_ci_bwrap.py; new parsing complexity reviewed; deliberate Popen variant required for child PID instead of subprocess.run helper. CLI/test fixture boilerplate duplicates, unittest-discovery dead-code and workflow length are assessed by code review rather than changing production abstractions.",
-  "native_acceptance": "pending"
+  "native_acceptance": {
+    "source": "dcca0458091185bdb5c7c1e0a894267c0ec7feb1",
+    "run": "https://github.com/Epiphytic/marmish/actions/runs/41130088901",
+    "status": "failure: control pass / confined SIGABRT",
+    "context": "one ownedPID candidate, exactpath rejected; no crash facts exported",
+    "cause": "unestablished"
+  },
+  "uuid_extension_offline_tests": {
+    "run": 63,
+    "passed": 57,
+    "skipped_native_only": 6
+  },
+  "uuid_extension_quality": "One major test-class length finding; diagnostic fact extraction split into semantic helpers. New bounded parser/attribution code reviewed independently; no production contract changed."
 }
