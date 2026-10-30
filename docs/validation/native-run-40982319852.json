@@ -1,0 +1,145 @@
+{
+  "run_id": 40982319852,
+  "sha": "4e528f113b41ddc71a513ee9af7481945f692669",
+  "created_at": "2026-10-30T00:51:43Z",
+  "status": "completed",
+  "conclusion": "failure",
+  "jobs": [
+    {
+      "id": 123825073839,
+      "name": "native (linux-x64, self-hosted, Linux, X64, bel-ci)",
+      "status": "completed",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Native disposable macOS keychain acceptance",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Native unconfined shim handoff",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Native prerequisite spike",
+          "conclusion": "success"
+        },
+        {
+          "name": "Native offline tests",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build pinned native daemon and executables",
+          "conclusion": "success"
+        },
+        {
+          "name": "Remove owned Bubblewrap prefix",
+          "conclusion": "success"
+        }
+      ],
+      "validation": {
+        "python_tools": {
+          "total": 258,
+          "skipped": 5,
+          "outcome": "passed"
+        },
+        "python_key_integration": {
+          "total": 21,
+          "outcome": "passed"
+        },
+        "rust_workspace": "passed",
+        "clippy_and_fmt": "passed",
+        "pinned_daemon_bootstrap_tests": 3,
+        "owned_cleanup": "success"
+      }
+    },
+    {
+      "id": 123825074134,
+      "name": "native (linux-arm64, self-hosted, Linux, ARM64, laptop-ci)",
+      "status": "completed",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "name": "Native disposable macOS keychain acceptance",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Native unconfined shim handoff",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Native prerequisite spike",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Native offline tests",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Build pinned native daemon and executables",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Remove owned Bubblewrap prefix",
+          "conclusion": "success"
+        }
+      ],
+      "fixed_diagnostic": {
+        "outcome": "failed",
+        "error": "userns_denied_private_bwrap"
+      }
+    },
+    {
+      "id": 123825074221,
+      "name": "native (macos-arm64, self-hosted, macOS, ARM64, laptop-ci)",
+      "status": "completed",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "name": "Native disposable macOS keychain acceptance",
+          "conclusion": "success"
+        },
+        {
+          "name": "Native unconfined shim handoff",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Native prerequisite spike",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Native offline tests",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Build pinned native daemon and executables",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Remove owned Bubblewrap prefix",
+          "conclusion": "skipped"
+        }
+      ],
+      "fixed_diagnostics": [
+        {
+          "outcome": "failed",
+          "category": "native_lifetime_failed",
+          "stage": "kill_group",
+          "errno": 1
+        }
+      ]
+    },
+    {
+      "id": 123828029290,
+      "name": "live",
+      "status": "completed",
+      "conclusion": "skipped",
+      "steps": []
+    }
+  ],
+  "assignment": "Linux x64 started within three seconds. ARM64 and macOS waited more than five minutes behind the sequential matrix; user notified. Both subsequently assigned.",
+  "limits": [
+    "This run validates the deterministic Linux fixture correction, not the subsequently uncommitted macOS cleanup fix.",
+    "No native full frontend/default-keychain acceptance or live cross-platform interoperability is established.",
+    "Historical K3 live reports retain their recorded source digests; this test-fixture correction was not run in those sessions."
+  ]
+}

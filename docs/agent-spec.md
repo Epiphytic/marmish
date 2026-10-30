@@ -222,7 +222,11 @@ missing during inspection; the audit correctly refused an unreadable executable.
 deterministic [test-fixture replacement](phases/native-audit-fixture.md) now uses
 a compiled, readiness-synchronized process with bounded owned cleanup. Production
 audit behavior is unchanged. It passed 258 offline Python tests (five Darwin
-skips) and independent Claude reviews; fresh runner validation remains pending.
+skips) and independent Claude reviews. [Run 40982319852](validation/native-run-40982319852.json)
+then passed the Linux AMD64 job, including those tests, 21 key-integration tests,
+the pinned daemon build and three bootstrap tests. ARM64 still refused its
+namespace prerequisite; macOS again passed explicit-Keychain acceptance and
+reproduced the group cleanup error before the proposed fix.
 Historical K3 reports remain bound to their recorded files and source digests.
 
 
