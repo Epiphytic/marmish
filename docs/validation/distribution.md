@@ -54,3 +54,27 @@ and matched Git exactly (SHA256
 A supported restart of the existing user's Radicle node resolved stalled
 replication; no identity, storage or configuration was replaced. New source
 and installer publication must be verified separately after committing them.
+
+## Runner assignment fallback
+
+The initial self-hosted native workflow
+[40999071717](https://github.com/Epiphytic/marmish/actions/runs/40999071717)
+remained queued on all three targets beyond five minutes. The user was notified.
+The original distribution dispatch
+[40999081519](https://github.com/Epiphytic/marmish/actions/runs/40999081519)
+was cancelled and verified completed/cancelled with zero jobs. Do not rerun that
+superseded workflow revision. Existing self-hosted validation remains intact.
+
+Claude approved the [hosted fallback design](../reviews/distribution-hosted-design-final.json)
+and [implementation](../reviews/distribution-hosted-code.json). Standard native
+GitHub-hosted VMs use Ubuntu 24.04 x86_64/aarch64 and macOS 15 aarch64. There are
+no namespace-policy edits or ambient Keychain tests. Hosted ARM64 installation
+is not confined runtime validation. The full local tools suite passed 331 tests
+with 7 skips; Claude's focused distribution suite passed 69 tests.
+
+A local Linux AMD64 build from reviewed source `4a78fb3` passed compilation,
+all three pinned daemon bootstrap tests, staged provenance verification,
+launcher smoke and static prerequisite diagnosis. Archive SHA256 was
+`be1ec5c1c09e26b9e5aca6a89eca17f4d8a5281200caeae7227c14b2f541bf38`.
+This development archive is not a published release; installed live acceptance
+was still running when this fallback increment was committed.

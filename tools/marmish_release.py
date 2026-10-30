@@ -19,8 +19,8 @@ from marmish_installed import (DARWIN_NATIVE, NATIVE, TARGETS, VERSION_PATTERN,
 REPO = Path(__file__).resolve().parent.parent
 LIMITATIONS = {
     'x86_64-unknown-linux-gnu': ['Experimental noninteractive prototype; no interactive shell or multi-device support.'],
-    'aarch64-unknown-linux-gnu': ['Runtime confinement not validated: native runner denies nested user namespaces.'],
-    'aarch64-apple-darwin': ['Runtime confinement not validated: confined broker preflight aborts (SIGABRT).',
+    'aarch64-unknown-linux-gnu': ['Confined ARM64 execution is not validated in this distribution; earlier self-hosted runner checks denied nested user namespaces.'],
+    'aarch64-apple-darwin': ['Confined ARM64 execution is not validated in this distribution; earlier self-hosted broker preflight checks aborted (SIGABRT).',
                              'Ad-hoc signed, not notarized; upgrades may require renewed Keychain access.'],
 }
 

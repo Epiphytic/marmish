@@ -12,9 +12,9 @@ on:
         type: boolean
 permissions:
   contents: read
-# The ARM64 Linux and macOS runners share hardware with native validation.
+# Distribution runs on independent disposable hosted VMs.
 concurrency:
-  group: marmish-native-validation
+  group: marmish-experimental-distribution
   cancel-in-progress: false
 jobs:
   build:
@@ -22,21 +22,19 @@ jobs:
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 3
       matrix:
         include:
           - platform: linux-x64
             target: x86_64-unknown-linux-gnu
-            labels: [self-hosted, Linux, X64, bel-ci]
+            runner: ubuntu-24.04
           - platform: linux-arm64
             target: aarch64-unknown-linux-gnu
-            labels: [self-hosted, Linux, ARM64, laptop-ci]
+            runner: ubuntu-24.04-arm
           - platform: macos-arm64
             target: aarch64-apple-darwin
-            labels: [self-hosted, macOS, ARM64, laptop-ci]
-    runs-on:
-      group: epiphytic-ci
-      labels: ${{ matrix.labels }}
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
     env:
       RELEASE_VERSION: ${{ inputs.version }}
       MACOSX_DEPLOYMENT_TARGET: '15.0'
@@ -48,9 +46,32 @@ jobs:
         run: python3 -c 'import os,re; assert re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-experimental\.(0|[1-9][0-9]*)", os.environ["RELEASE_VERSION"])'
       - name: Set private build output location
         run: echo "RELEASE_OUTPUT=$RUNNER_TEMP/marmish-distribution-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-${{ matrix.platform }}" >> "$GITHUB_ENV"
+      - name: Record disposable runner disk headroom
+        run: df -h "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
+      - name: Install only missing Ubuntu prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          packages=(build-essential pkg-config perl git bubblewrap iproute2 util-linux ca-certificates binutils)
+          missing_packages=()
+          for package in "${packages[@]}"; do
+            if [ "$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)" != 'install ok installed' ]; then
+              missing_packages+=("$package")
+            fi
+          done
+          if [ "${#missing_packages[@]}" -gt 0 ]; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends "${missing_packages[@]}"
+          fi
+          dpkg-query -W -f='${binary:Package} ${Version}\n' "${packages[@]}"
+          bwrap_version=$(dpkg-query -W -f='${Version}' bubblewrap)
+          dpkg --compare-versions "$bwrap_version" ge '0.9.0-1ubuntu0.3'
       - name: Ensure native Python
         run: sh tools/bootstrap_ci_python.sh
-      - name: Restore trusted build caches
+      - name: Verify the native target
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+        run: PYTHONPATH=tools python3 -c 'import os; from marmish_installed import target; assert target() == os.environ["EXPECTED_TARGET"]'
+      - name: Restore trusted hosted distribution caches
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
@@ -58,10 +79,9 @@ jobs:
             ${{ runner.temp }}/marmish-cargo
             ${{ runner.temp }}/marmish-mdk-target
             target
-          key: distribution-${{ matrix.platform }}-rust1.97.1-${{ hashFiles('Cargo.lock', 'patches/mdk/**', 'tools/build_mdk.py', 'tools/marmish_release*.py') }}
+          key: hosted-distribution-${{ matrix.platform }}-rust1.97.1-${{ hashFiles('Cargo.lock', 'patches/mdk/**', 'tools/build_mdk.py', 'tools/marmish_release*.py') }}
           restore-keys: |
-            distribution-${{ matrix.platform }}-rust1.97.1-
-            native-${{ matrix.platform }}-rust1.97.1-
+            hosted-distribution-${{ matrix.platform }}-rust1.97.1-
       - name: Bootstrap pinned toolchain without publication credentials
         run: |
           mkdir -m 700 "$RELEASE_OUTPUT"
@@ -75,9 +95,6 @@ jobs:
           PYTHONPATH=tools python3 -m unittest test_marmish_release test_marmish_release_licenses test_marmish_install test_marmish_publish
       - name: Build complete native distribution and notices
         run: python3 tools/marmish_release.py build --version "$RELEASE_VERSION" --output "$RELEASE_OUTPUT"
-      - name: Acquire owned Bubblewrap for installed Linux AMD64 execution
-        if: matrix.platform == 'linux-x64'
-        run: python3 tools/marmish_ci_bwrap.py bootstrap --state "$RELEASE_OUTPUT/bwrap-state"
       - name: Install and validate the native archive
         run: |
           archive="$RELEASE_OUTPUT/marmish-$RELEASE_VERSION-${{ matrix.target }}.tar.gz"
@@ -100,12 +117,6 @@ jobs:
             ${{ env.RELEASE_OUTPUT }}/installed-e2e.json
           if-no-files-found: error
           retention-days: 14
-      - name: Remove owned Bubblewrap after acceptance cleanup
-        if: always() && matrix.platform == 'linux-x64'
-        run: |
-          if [ -f "$RELEASE_OUTPUT/bwrap-state" ]; then
-            python3 tools/marmish_ci_bwrap.py cleanup --state "$RELEASE_OUTPUT/bwrap-state"
-          fi
   publish:
     if: inputs.publish && github.ref == 'refs/heads/master'
     needs: build

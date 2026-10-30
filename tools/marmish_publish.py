@@ -2,6 +2,7 @@
 """Aggregate exact native build outputs before creating an experimental release."""
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -79,7 +80,12 @@ def aggregate(inputs, output, version, source):
 
 
 def release_notes(records, source):
+    run_id = os.environ.get('GITHUB_RUN_ID', '')
+    if not re.fullmatch('[1-9][0-9]{0,19}', run_id):
+        raise ValueError('invalid_publication_run')
+    run_url = 'https://github.com/' + REPOSITORY + '/actions/runs/' + run_id
     lines = ['Experimental noninteractive Marmish prototype.', '', 'Source: `' + source + '`.', '',
+             'Native GitHub-hosted builds. Originating workflow run: ' + run_url, '',
              'Linux AMD64: installed client/server commands executed through Marmot, including literal shell characters.',
              'Linux ARM64 and macOS ARM64: native builds, provenance and installation checks only; confined execution remains unvalidated.', '',
              'Python 3.11+ and platform confinement prerequisites are required. Run `marmish --doctor`.',
@@ -132,8 +138,19 @@ def refuse_existing_release(tag):
     raise ValueError('release_inventory_too_large')
 
 
+def verify_master_source(source):
+    result = subprocess.run(['git', 'ls-remote', '--exit-code',
+        'https://github.com/' + REPOSITORY + '.git', 'refs/heads/master'],
+        capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise ValueError('release_master_unavailable')
+    if result.stdout.split() != [source, 'refs/heads/master']:
+        raise ValueError('release_master_source_mismatch')
+
+
 def publish(output, version, source, records):
     tag = 'v' + version
+    verify_master_source(source)
     refuse_existing_release(tag)
     verify_remote_tag(tag, source, required=False)
     notes = output.parent / 'release-notes.md'
@@ -156,6 +173,7 @@ def publish(output, version, source, records):
                 raise ValueError('published_asset_digest_mismatch')
     # GitHub may defer creating a new tag until the draft is published.
     verify_remote_tag(tag, source, required=False)
+    verify_master_source(source)
     subprocess.run(['gh', 'release', 'edit', tag, '--repo', REPOSITORY,
                     '--draft=false', '--prerelease'], check=True)
     verify_remote_tag(tag, source, required=True)

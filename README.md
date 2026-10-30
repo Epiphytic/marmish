@@ -7,12 +7,14 @@ Source: [GitHub](https://github.com/Epiphytic/marmish) ·
 ## Experimental binary installation
 
 The distribution targets Linux AMD64, Linux ARM64 and macOS ARM64 (macOS 15+).
-The first binary publication and Iris replication are pending; this section
-describes the reviewed installation contract until release evidence is recorded.
-Linux AMD64 command execution is validated; ARM64 Linux confinement is currently
-blocked by runner namespace policy, and macOS confinement by a broker abort.
-Successful building or installation does not establish working confined execution
-on those two platforms. Intel macOS is not included.
+The first binary publication is pending. The installer source has been verified
+through Iris; release validation is tracked in [the distribution report](docs/validation/distribution.md).
+Linux AMD64 prototype command execution is validated. ARM64 Linux and macOS
+confined execution are not validated in this distribution. Earlier self-hosted
+validation found a Linux ARM64 namespace-policy failure and a macOS broker abort;
+these are not observations from hosted packaging jobs. Successful building or
+installation does not establish working confined execution on those platforms.
+Intel macOS is not included.
 
 Install as your normal user with Python 3.11+ and curl:
 

@@ -1,6 +1,7 @@
 """Publication gates reject mixed builds and missing installed execution proof."""
 import json
 import hashlib
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -17,6 +18,9 @@ SOURCE = 'a' * 40
 
 class PublicationTests(unittest.TestCase):
     def setUp(self):
+        environment = patch.dict(os.environ, {'GITHUB_RUN_ID': '12345'})
+        environment.start()
+        self.addCleanup(environment.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.base = Path(self.temporary.name)
         self.inputs = self.base / 'inputs'
@@ -114,6 +118,7 @@ class PublicationTests(unittest.TestCase):
         output = self.base / 'output'
         output.mkdir()
         with patch.object(publication, 'verify_remote_tag'), \
+                patch.object(publication, 'verify_master_source'), \
                 patch.object(publication, 'refuse_existing_release'), \
                 patch.object(publication.subprocess, 'run') as run:
             run.side_effect = [None, RuntimeError('upload failed')]
@@ -126,7 +131,8 @@ class PublicationTests(unittest.TestCase):
     def test_leftover_draft_refused_before_any_release_mutation(self):
         result = subprocess.CompletedProcess([], 0,
             stdout=json.dumps([{'tag_name': 'v' + VERSION, 'draft': True}]))
-        with patch.object(publication.subprocess, 'run', return_value=result) as run:
+        with patch.object(publication, 'verify_master_source'), \
+                patch.object(publication.subprocess, 'run', return_value=result) as run:
             with self.assertRaisesRegex(ValueError, 'release_already_exists'):
                 publication.publish(self.base / 'output', VERSION, SOURCE, {})
             self.assertEqual(run.call_count, 1)
@@ -135,14 +141,67 @@ class PublicationTests(unittest.TestCase):
 
     def test_inventory_api_error_refused_before_any_release_mutation(self):
         result = subprocess.CompletedProcess([], 1, stdout='', stderr='API failure')
-        with patch.object(publication.subprocess, 'run', return_value=result) as run:
+        with patch.object(publication, 'verify_master_source'), \
+                patch.object(publication.subprocess, 'run', return_value=result) as run:
             with self.assertRaisesRegex(ValueError, 'release_inventory_unavailable'):
                 publication.publish(self.base / 'output', VERSION, SOURCE, {})
             self.assertEqual(run.call_count, 1)
         self.assertFalse((self.base / 'release-notes.md').exists())
 
+    def test_stale_master_refuses_before_release_mutation(self):
+        result = subprocess.CompletedProcess([], 0,
+            stdout='b' * 40 + '\trefs/heads/master\n')
+        with patch.object(publication.subprocess, 'run', return_value=result) as run:
+            with self.assertRaisesRegex(ValueError, 'release_master_source_mismatch'):
+                publication.publish(self.base / 'output', VERSION, SOURCE, {})
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(run.call_args.args[0][:2], ['git', 'ls-remote'])
+        self.assertFalse((self.base / 'release-notes.md').exists())
+
+    def test_master_advance_during_upload_keeps_release_draft(self):
+        output = self.base / 'output'
+        output.mkdir()
+        with patch.object(publication, 'verify_master_source',
+                side_effect=[None, ValueError('release_master_source_mismatch')]) as master, \
+                patch.object(publication, 'refuse_existing_release'), \
+                patch.object(publication, 'verify_remote_tag'), \
+                patch.object(publication.subprocess, 'run') as run:
+            with self.assertRaisesRegex(ValueError, 'release_master_source_mismatch'):
+                publication.publish(output, VERSION, SOURCE, {})
+            self.assertEqual(master.call_count, 2)
+            self.assertEqual([call.args[0][2] for call in run.call_args_list],
+                             ['create', 'upload', 'download'])
+
+    def test_release_notes_identify_hosted_build_and_fixed_run_url(self):
+        with patch.dict(os.environ, {'GITHUB_RUN_ID': '12345',
+                'GITHUB_SERVER_URL': 'https://untrusted.invalid',
+                'GITHUB_REPOSITORY': 'injected/repository'}):
+            notes = publication.release_notes({}, SOURCE)
+        self.assertIn('Native GitHub-hosted builds', notes)
+        self.assertIn('https://github.com/Epiphytic/marmish/actions/runs/12345', notes)
+        self.assertNotIn('untrusted.invalid', notes)
+        for run_id in ('', '123\nInjected Markdown', '../123', '0'):
+            with patch.dict(os.environ, {'GITHUB_RUN_ID': run_id}):
+                with self.assertRaisesRegex(ValueError, 'invalid_publication_run'):
+                    publication.release_notes({}, SOURCE)
+
 
 class ReleaseTagTests(unittest.TestCase):
+    def test_master_guard_requires_exact_ref_and_available_remote(self):
+        cases = [(0, SOURCE + '\trefs/heads/master\n', None),
+            (2, '', 'release_master_unavailable'),
+            (1, '', 'release_master_unavailable'),
+            (0, SOURCE + '\trefs/heads/other\n', 'release_master_source_mismatch'),
+            (0, SOURCE + '\trefs/heads/master\nextra', 'release_master_source_mismatch')]
+        for code, stdout, error in cases:
+            with self.subTest(code=code, stdout=stdout), patch.object(publication.subprocess,
+                    'run', return_value=subprocess.CompletedProcess([], code, stdout=stdout)):
+                if error:
+                    with self.assertRaisesRegex(ValueError, error):
+                        publication.verify_master_source(SOURCE)
+                else:
+                    publication.verify_master_source(SOURCE)
+
     def test_release_inventory_checks_later_pages_and_exact_tags(self):
         first = [{'tag_name': 'v' + VERSION + '-other'}] * 100
         responses = [subprocess.CompletedProcess([], 0, stdout=json.dumps(first)),

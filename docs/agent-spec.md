@@ -33,7 +33,10 @@ GitHub (`https://github.com/Epiphytic/marmish`) and Radicle
 and release tags must push to both, with independent replication verification.
 Native build/offline installation success must be reported separately from
 runtime command acceptance: ARM64 Linux namespace policy and the macOS confined
-broker abort remain known blockers. See Beads `marmish-ic3` for publication state;
+broker abort were observed on earlier self-hosted runners. Hosted ARM64 packaging
+does not validate confined execution or establish those same failures there.
+The distribution workflow uses native GitHub-hosted VMs as the reviewed fallback
+when self-hosted jobs are unassigned. See Beads `marmish-ic3` for publication state;
 do not infer actual published assets or Iris replication from these interfaces.
 
 Marmish carries asynchronous remote commands and resumable shells over the

@@ -201,3 +201,46 @@ These refinements supersede any less-specific wording above.
   they passed. release.json, installer output and release notes name experimental
   status and the exact target runtime limitation. No Intel macOS artifact is
   implied by macOS ARM64 support.
+
+## Hosted-runner fallback after assignment failure
+
+The initial dispatch waited over five minutes with all self-hosted native jobs
+unassigned; the user was notified. To complete this explicitly authorized public
+binary release, distribution builds may use standard GitHub-hosted native VMs:
+`ubuntu-24.04` (x86_64), `ubuntu-24.04-arm` (aarch64), and `macos-15` (aarch64).
+GitHub documents these as native standard public-repository runners. Existing
+self-hosted native validation remains unchanged, including its known failures.
+Use a separate distribution concurrency group because these VMs do not share
+self-hosted hardware; run the three independent builds concurrently. Keep all
+build, provenance, license, installer and installed Linux AMD64 Marmot acceptance
+gates unchanged. No provider/keychain tests use a runner's ambient keychain.
+
+Edit the existing release.yml: use plain hosted runs-on labels, max-parallel 3,
+and concurrency group marmish-experimental-distribution. Publish still needs all
+three build jobs from that same dispatch and exact source. Before any release
+mutation, and again before publishing the draft, require GitHub master to equal
+the dispatch source commit; this prevents the older queued workflow revision
+from being published by the new publisher. Cancel and verify cancellation of the
+superseded pending distribution dispatch before dispatching the new revision;
+leave self-hosted native validation queued for its intended runners. No automatic
+reuse of an old dispatch's artifacts or publication is allowed.
+
+Install only missing system build/runtime prerequisites on disposable Ubuntu VMs
+with their documented sudo facilities (Bubblewrap, iproute2, util-linux,
+CA certificates and binutils), and log installed package versions. Hosted Linux
+acceptance uses the product-default /usr/bin/bwrap from the authenticated Ubuntu
+package manager, without private Bubblewrap overrides. Remove private acquisition
+and cleanup steps from this hosted-only workflow. If namespace/confinement probes
+fail, the live job fails and no release is published; never change sysctl,
+AppArmor or namespace policy. No production host configuration changes are part
+of this fallback. Build jobs still receive no publication credentials.
+
+Use a hosted-distribution cache prefix with no restore fallback to self-hosted
+native/distribution caches. Restore only on trusted master. Record free disk
+space before builds and retain 90-minute job bounds. Record actual measured glibc
+requirements. Release notes identify native GitHub-hosted builds and the run URL.
+Reword release limitations to say ARM64 confined execution is not validated in
+this distribution; namespace/SIGABRT observations refer explicitly to earlier
+self-hosted evidence, not unperformed hosted runtime tests. Update user-facing
+installation text consistently. Commit and push the reviewed increment to both
+source homes before dispatching it.
