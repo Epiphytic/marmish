@@ -190,6 +190,14 @@ attempt at the same SHA. See [the validation design](phases/platform-validation.
 Only trusted master pushes execute this workflow. macOS AMD64 runtime support
 remains unvalidated without a corresponding native runner.
 
+Native prerequisite failures now report fixed sanitized operation stages and
+bounded errno/subprocess status, preserving the first failure through cleanup.
+The macOS unconfined shim handoff runs separately before the broad spike; it
+provides no Seatbelt proof. Missing checkout never invokes stale cleanup scripts,
+and offline failure/cancellation still retains its private prefix. See the
+[diagnostic correction](phases/native-diagnostics.md) for offline checks and
+remaining native gates.
+
 [Native run 39982966090](validation/native-run-39982966090.json), at commit
 `fccfddc`, passed the Linux AMD64 namespace prerequisite, 131 Rust workspace
 tests, clippy/formatting, Python checks (172 total, four Darwin-only skips),
@@ -230,7 +238,7 @@ Native platform acceptance still requires the workflow results.
 
 ### Storage, retention and bounds
 
-Use SQLCipher for engine state and retained stdout/stderr. The colocated private
+Use SQLCipher for engine state and retained stdout/stderr. In file-storage mode, a colocated private
 master key permits unattended detached-worker recovery; obtaining both the key
 and data defeats this at-rest protection. Frontend session metadata and retry
 journals are private 0600 JSON, not encrypted databases. Outstanding journals
@@ -289,8 +297,10 @@ K1 adds the host-side `marmish-vault` library and bounded private-stdio
 non-overwriting creation, readback and metadata-only listing. It distinguishes
 absent, uninitialized, locked/denied, missing and ambiguous results. See
 [the K1 contract](phases/keychain-vault.md) and [validation](validation/keychain-vault.md).
-Linux actual-provider tests run an isolated owned GNOME Keyring; macOS native
-execution remains a separate gate. K2 integrates native selection and multiple named Nostr keys. For a new profile,
+Linux actual-provider tests run an isolated owned GNOME Keyring. Disposable
+explicit-keychain provider acceptance also passed on native macOS ARM; default
+frontend and confined-daemon runtime execution remain separate pending gates.
+K2 integrates native selection and multiple named Nostr keys. For a new profile,
 `--key-storage auto` selects the native backend when present; only an absent
 backend selects files with an announcement. Locked, denied, uninitialized or
 broken services fail closed. Existing file profiles remain files until explicit
@@ -325,7 +335,8 @@ reset. Keep the journal; these are explicit recovery limits.
 Python private RPC copies are not a full memory-erasure guarantee. Authorized
 commands run as the local user and can access that user's services.
 
-See [the K2 contract](phases/keychain-integration.md). Integrated code review and
-real native-provider Marmot validation are in progress; macOS runtime remains a
+See [the K2 contract](phases/keychain-integration.md) and
+[approved Linux integration review](reviews/keychain-k2-code-followup.json).
+K2 is committed as `ed4271c`. Real native-provider Marmot validation is in progress; macOS runtime remains a
 separate pending gate. Do not interpret implemented paths as a live acceptance
 claim until linked validation evidence is published.

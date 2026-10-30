@@ -28,6 +28,7 @@ jobs:
       labels: ${{ matrix.labels }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        id: checkout
         with:
           persist-credentials: false
       - name: Ensure user-local Python 3.11 or newer
@@ -55,6 +56,10 @@ jobs:
         if: runner.os == 'macOS'
         timeout-minutes: 6
         run: cargo test --locked -p marmish-vault --test native_vault -- --ignored --test-threads=1
+      - name: Native unconfined shim handoff
+        if: runner.os == 'macOS'
+        timeout-minutes: 2
+        run: PYTHONPATH=tools python3 -m unittest test_marmish_transport_macos.NativeLifetimeTests.test_bootstrap_child_reads_exact_frame_parent_uses_devnull
       - name: Native prerequisite spike
         run: |
           python3 --version
@@ -87,8 +92,22 @@ jobs:
       - name: Remove owned Bubblewrap prefix
         if: always() && runner.os == 'Linux'
         run: |
-          test '${{ steps.offline.outcome }}' != failure
-          test '${{ steps.offline.outcome }}' != cancelled
+          if [ '${{ steps.checkout.outcome }}' != success ]; then
+            if [ -e "$RUNNER_TEMP/bwrap-state" ] || [ -L "$RUNNER_TEMP/bwrap-state" ]; then
+              echo '{"outcome":"failed","category":"cleanup_retained_unverified"}'
+            else
+              echo '{"outcome":"failed","category":"cleanup_not_initialized"}'
+            fi
+            exit 1
+          fi
+          if [ '${{ steps.offline.outcome }}' = failure ]; then
+            echo '{"outcome":"failed","category":"cleanup_retained_test_failure"}'
+            exit 1
+          fi
+          if [ '${{ steps.offline.outcome }}' = cancelled ]; then
+            echo '{"outcome":"failed","category":"cleanup_retained_cancellation"}'
+            exit 1
+          fi
           python3 tools/marmish_ci_bwrap.py cleanup --state "$RUNNER_TEMP/bwrap-state"
   live:
     if: github.ref == 'refs/heads/master'
@@ -114,6 +133,7 @@ jobs:
       labels: ${{ matrix.labels }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        id: checkout
         with:
           persist-credentials: false
       - name: Start suspend-inclusive live job budget
@@ -174,7 +194,16 @@ jobs:
       - name: Clean owned processes and private profiles
         if: always()
         timeout-minutes: 3
-        run: python3 tools/marmish_interop.py cleanup --state "$RUNNER_TEMP/interop-state"
+        run: |
+          if [ '${{ steps.checkout.outcome }}' != success ]; then
+            if [ -e "$RUNNER_TEMP/interop-state" ] || [ -L "$RUNNER_TEMP/interop-state" ]; then
+              echo '{"outcome":"failed","category":"cleanup_retained_unverified"}'
+            else
+              echo '{"outcome":"failed","category":"cleanup_not_initialized"}'
+            fi
+            exit 1
+          fi
+          python3 tools/marmish_interop.py cleanup --state "$RUNNER_TEMP/interop-state"
       - name: Publish sanitized validation evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -186,6 +215,14 @@ jobs:
       - name: Remove owned Bubblewrap prefix after verified private cleanup
         if: always() && runner.os == 'Linux'
         run: |
+          if [ '${{ steps.checkout.outcome }}' != success ]; then
+            if [ -e "$RUNNER_TEMP/bwrap-state" ] || [ -L "$RUNNER_TEMP/bwrap-state" ]; then
+              echo '{"outcome":"failed","category":"cleanup_retained_unverified"}'
+            else
+              echo '{"outcome":"failed","category":"cleanup_not_initialized"}'
+            fi
+            exit 1
+          fi
           test ! -e "$RUNNER_TEMP/interop-state"
           if [ '${{ steps.e2e.outcome }}' != skipped ]; then
             python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["local_cleanup"] == "complete"' "$RUNNER_TEMP/public-results/native.json"

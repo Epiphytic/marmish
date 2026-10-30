@@ -658,7 +658,32 @@ class DarwinConfinedDaemon:
                 else:
                     raise SandboxError('daemon_home_in_use')
 
-    def _preflight(self):
+    def _preflight(self, diagnostic=None):
+        failed = False
+        def notify(event, label, error=None, exit_code=None):
+            if diagnostic is not None:
+                diagnostic(event, 'preflight_' + label, error, exit_code)
+        @contextlib.contextmanager
+        def operation(label):
+            nonlocal failed
+            notify('begin', label)
+            try:
+                yield
+            except Exception as error:
+                failed = True
+                notify('failed', label, error)
+                raise
+        def cleanup(label, action):
+            nonlocal failed
+            notify('begin', label)
+            try:
+                action()
+            except Exception as error:
+                prior = failed
+                failed = True
+                notify('cleanup_failed', label, error)
+                if diagnostic is None or not prior:
+                    raise
         probe = self._directory / 'marmish-probe'
         def invoke(arguments, confined):
             command = self._command(probe, *arguments) if confined else [str(probe), *map(str, arguments)]
@@ -666,53 +691,72 @@ class DarwinConfinedDaemon:
                                   stderr=subprocess.DEVNULL, timeout=5, close_fds=True,
                                   env={'PATH': '/usr/bin:/bin'}).returncode
         def check(label, allowed, *arguments, reset=None):
-            if invoke(arguments, False) != 0:
-                raise SandboxError('native_control_' + label)
+            with operation(label + '_control'):
+                status = invoke(arguments, False)
+                if status != 0:
+                    error = SandboxError('native_control_' + label)
+                    notify('failed', label + '_control', error, status)
+                    raise error
             if reset:
-                reset()
-            if invoke(arguments, True) != (0 if allowed else 2):
-                raise SandboxError('native_probe_' + label)
+                with operation(label + '_reset'):
+                    reset()
+            with operation(label + '_confined'):
+                status = invoke(arguments, True)
+                if status != (0 if allowed else 2):
+                    error = SandboxError('native_probe_' + label)
+                    notify('failed', label + '_confined', error, status)
+                    raise error
         check('broker', True, 'tcp', '127.0.0.1', self._broker.address[1])
         private = self.home / 'private-probe'
-        private.write_bytes(b'owned confinement probe')
+        with operation('home_fixture'):
+            private.write_bytes(b'owned confinement probe')
         check('home_read', True, 'read', private)
         check('home_write', True, 'write', private)
         check('rpc_staging', True, 'unix-staged', self.home, 's')
-        with tempfile.TemporaryDirectory(prefix='md-', dir='/private/tmp') as outside:
-            sentinel = Path(outside).resolve() / 'sentinel'
-            sentinel.write_bytes(b'owned confinement probe')
+        with operation('outside_create'):
+            outside_directory = tempfile.TemporaryDirectory(prefix='md-', dir='/private/tmp')
+            outside = outside_directory.name
+        try:
+            with operation('outside_fixture'):
+                sentinel = Path(outside).resolve() / 'sentinel'
+                sentinel.write_bytes(b'owned confinement probe')
             check('outside_read', False, 'read', sentinel)
             check('outside_write', False, 'write', sentinel)
-            with socket.socket() as denied:
+            with operation('tcp_fixture'), socket.socket() as denied:
                 denied.bind(('127.0.0.1', 0))
                 denied.listen(4)
                 check('other_tcp', False, 'tcp', '127.0.0.1', denied.getsockname()[1])
                 check('udp', False, 'udp', '127.0.0.1', denied.getsockname()[1])
-            with socket.socket(socket.AF_UNIX) as denied:
+            with operation('unix_fixture'), socket.socket(socket.AF_UNIX) as denied:
                 path = Path(outside).resolve() / 'socket'
                 denied.bind(str(path))
                 denied.listen(4)
                 check('other_unix', False, 'unix', path)
-            bind = Path(outside).resolve() / 'bind'
+            with operation('unix_fixture'):
+                bind = Path(outside).resolve() / 'bind'
             check('other_unix_bind', False, 'unix-bind', bind, reset=bind.unlink)
-            with socket.socket(socket.AF_INET6) as denied:
+            with operation('ipv6_fixture'), socket.socket(socket.AF_INET6) as denied:
                 denied.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
                 denied.bind(('::1', self._broker.address[1]))
                 denied.listen(4)
                 check('ipv6', False, 'tcp', '::1', self._broker.address[1])
-        interfaces = subprocess.run(['/sbin/ifconfig', '-a'], check=True, stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL, timeout=5)
-        if len(interfaces.stdout) > 65536:
-            raise SandboxError('native_interface_probe_failed')
-        addresses = re.findall(rb'\binet (\d+\.\d+\.\d+\.\d+)\b', interfaces.stdout)
-        addresses = [v.decode('ascii') for v in addresses if not ipaddress.ip_address(v.decode('ascii')).is_loopback]
-        if not addresses:
-            raise SandboxError('native_interface_probe_unavailable')
-        with socket.socket() as denied:
+        finally:
+            cleanup('outside_cleanup', outside_directory.cleanup)
+        with operation('interfaces'):
+            interfaces = subprocess.run(['/sbin/ifconfig', '-a'], check=True, stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL, timeout=5)
+            if len(interfaces.stdout) > 65536:
+                raise SandboxError('native_interface_probe_failed')
+            addresses = re.findall(rb'\binet (\d+\.\d+\.\d+\.\d+)\b', interfaces.stdout)
+            addresses = [v.decode('ascii') for v in addresses if not ipaddress.ip_address(v.decode('ascii')).is_loopback]
+            if not addresses:
+                raise SandboxError('native_interface_probe_unavailable')
+        with operation('interface_fixture'), socket.socket() as denied:
             denied.bind((addresses[0], 0))
             denied.listen(4)
             check('interface', False, 'tcp', addresses[0], denied.getsockname()[1])
-        target = next(iter(self._broker.allowed))
+        with operation('dns_fixture'):
+            target = next(iter(self._broker.allowed))
         check('dns', False, 'dns', target[0])
         # Destructive controls use fresh owned sentinels, restored before sandboxing.
         record_probe = self._control / '.marmish-probe-record'
@@ -720,16 +764,19 @@ class DarwinConfinedDaemon:
         binary = self._directory / 'immutable-program'
         try:
             for label, destination in (('record', record_probe), ('config', config), ('binary', binary)):
-                content = probe.read_bytes() if label == 'binary' else b'owned immutable sentinel'
+                with operation('control_fixture'):
+                    content = probe.read_bytes() if label == 'binary' else b'owned immutable sentinel'
                 def restore(p=destination, data=content):
                     p.write_bytes(data)
                     p.chmod(0o700 if label == 'binary' else 0o600)
-                restore()
+                with operation('control_fixture'):
+                    restore()
                 for mode in ('write', 'truncate', 'unlink'):
                     check('control_' + label + '_' + mode, False, mode, destination,
                           reset=restore)
                 replacement = self.home / 'replacement'
-                replacement.write_bytes(b'owned replacement')
+                with operation('control_fixture'):
+                    replacement.write_bytes(b'owned replacement')
                 def reset_rename(p=destination):
                     restore()
                     replacement.write_bytes(b'owned replacement')
@@ -745,8 +792,10 @@ class DarwinConfinedDaemon:
             for path in (record_probe, config, binary, self.home / 'replacement',
                          self._directory / 'restricted.ack', self._directory / 'restricted.ack.tmp',
                          self._directory / 'restricted.ack.other', private):
-                with contextlib.suppress(FileNotFoundError):
-                    path.unlink()
+                def remove(p=path):
+                    with contextlib.suppress(FileNotFoundError):
+                        p.unlink()
+                cleanup('files_cleanup', remove)
 
     def start(self):
         if self.process:
