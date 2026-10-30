@@ -1,0 +1,157 @@
+{
+  "run_id": 40985573347,
+  "sha": "c5c6f46f737a34be21c3407cfc498ac90e5613f2",
+  "created_at": "2026-10-30T01:23:35Z",
+  "status": "completed",
+  "conclusion": "failure",
+  "jobs": [
+    {
+      "id": 123835682473,
+      "name": "native (linux-x64, self-hosted, Linux, X64, bel-ci)",
+      "status": "completed",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Native disposable macOS keychain acceptance",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Native unconfined shim handoff",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Native prerequisite spike",
+          "conclusion": "success"
+        },
+        {
+          "name": "Native offline tests",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build pinned native daemon and executables",
+          "conclusion": "success"
+        },
+        {
+          "name": "Remove owned Bubblewrap prefix",
+          "conclusion": "success"
+        }
+      ],
+      "validation": {
+        "python_tools": {
+          "total": 262,
+          "skipped": 7,
+          "outcome": "passed"
+        },
+        "python_key_integration": {
+          "total": 21,
+          "outcome": "passed"
+        },
+        "rust_workspace_clippy_fmt": "passed",
+        "pinned_daemon_bootstrap_tests": 3,
+        "owned_cleanup": "success"
+      }
+    },
+    {
+      "id": 123835682588,
+      "name": "native (macos-arm64, self-hosted, macOS, ARM64, laptop-ci)",
+      "status": "completed",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "name": "Native disposable macOS keychain acceptance",
+          "conclusion": "success"
+        },
+        {
+          "name": "Native unconfined shim handoff",
+          "conclusion": "success"
+        },
+        {
+          "name": "Native prerequisite spike",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Native offline tests",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Build pinned native daemon and executables",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Remove owned Bubblewrap prefix",
+          "conclusion": "skipped"
+        }
+      ],
+      "native_unconfined_tests": {
+        "total": 3,
+        "outcome": "passed",
+        "seconds": 0.856,
+        "tests": [
+          "NativeLifetimeTests.test_bootstrap_child_reads_exact_frame_parent_uses_devnull",
+          "NativeLifetimeTests.test_native_zombie_group_proof",
+          "NativeStorageTests.test_opened_private_directory_filesystem"
+        ]
+      },
+      "storage_gate": "Passed descriptor-based directory/APFS/local checks and retained fsync, fullfsync, exclusive rename/collision and directory-fsync operations; these execute before broker preflight.",
+      "fixed_diagnostic": {
+        "outcome": "failed",
+        "category": "native_probe_broker",
+        "stage": "preflight_broker_confined",
+        "errno": null,
+        "exit_code": -6
+      }
+    },
+    {
+      "id": 123835683237,
+      "name": "native (linux-arm64, self-hosted, Linux, ARM64, laptop-ci)",
+      "status": "completed",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "name": "Native disposable macOS keychain acceptance",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Native unconfined shim handoff",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Native prerequisite spike",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Native offline tests",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Build pinned native daemon and executables",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Remove owned Bubblewrap prefix",
+          "conclusion": "success"
+        }
+      ],
+      "fixed_diagnostic": {
+        "outcome": "failed",
+        "error": "userns_denied_private_bwrap"
+      }
+    },
+    {
+      "id": 123838568405,
+      "name": "live",
+      "status": "completed",
+      "conclusion": "skipped",
+      "steps": []
+    }
+  ],
+  "assignment": "Linux started promptly. ARM64 and macOS queued more than five minutes behind sequential matrix; user notified; both later assigned.",
+  "remaining_gates": [
+    "macOS confined broker probe abort (signal 6); exact cause not established",
+    "macOS confined native daemon/bootstrap and full frontend",
+    "default-keychain frontend acceptance with dedicated disposable owned account/VM",
+    "Linux ARM nested namespace prerequisite",
+    "same-SHA Linux/macOS live interoperability"
+  ],
+  "scope": "Observed actual CI/logs. No ambient keychain mutation, default-keychain acceptance or native end-to-end claim. Passing storage steps are ordered program evidence, not a second standalone invocation."
+}

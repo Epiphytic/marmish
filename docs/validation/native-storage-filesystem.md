@@ -25,3 +25,10 @@ pending: the pre-spike workflow must pass the actual system-header helper's APFS
 metadata and open-error fixture, followed by the full retained durability gate.
 The synthetic header test does not establish Darwin ABI compatibility. The exact
 reason for the historical diskutil exit 1 remains unproven.
+
+Native followup: [run 40985573347](native-run-40985573347.json), at `c5c6f46`,
+passed all three targeted macOS tests, including the actual system-header storage
+fixture. The broader spike then passed the descriptor-based gate and every
+retained durability operation before stopping at `preflight_broker_confined`
+with signal 6. That separate confinement failure remains unresolved; this run
+does not establish full macOS frontend or default-keychain acceptance.

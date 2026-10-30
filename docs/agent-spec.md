@@ -229,8 +229,12 @@ exact prior cause is unproven. A reviewed [descriptor-based correction](phases/n
 now checks the opened private directory with system `fstatfs`, requiring APFS
 and `MNT_LOCAL`, matching the engine. Directory-metadata refusals and native-call
 errors have distinct fixed diagnostics. Existing durability probes remain in
-place. Offline Python passed 262 tests (seven native skips); actual native
-acceptance of this correction is pending. Linux AMD64 passed all offline and
+place. Offline Python passed 262 tests (seven native skips).
+[Run 40985573347](validation/native-run-40985573347.json) then passed all three
+targeted macOS tests and the retained storage durability gate. The next confined
+broker probe exited on signal 6 (`preflight_broker_confined`); its exact cause is
+not established. Full confinement/frontend acceptance remains pending.
+Linux AMD64 passed all offline and
 pinned-build checks; ARM64 still refused namespaces. See
 [offline evidence](validation/native-zombie-groups.md).
 The same run exposed three Linux audit fixtures whose executable links were
@@ -397,6 +401,9 @@ actual daemon/worker/helper process audits. The offline Python suite passed 247
 tests with five Darwin-specific skips. See [K3 validation](validation/keychain-native.md)
 and its linked code reviews and retained successful/failed runtime reports.
 macOS explicit-Keychain provider tests and corrected unconfined shim/group tests
-passed in run 40983389092. The broader probe stops at `storage_diskutil` exit 1.
-Default frontend and confined runtime gates remain pending. Linux acceptance
-does not establish those gates.
+passed in run 40983389092. Run 40985573347 additionally passed native filesystem
+and durability checks after the descriptor-based correction. The broader probe
+now stops at `preflight_broker_confined` with signal 6. Default-keychain frontend
+acceptance requires a dedicated disposable account/VM; confined runtime and
+same-SHA interoperability remain pending. Linux acceptance does not establish
+those gates.
