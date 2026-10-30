@@ -244,3 +244,14 @@ this distribution; namespace/SIGABRT observations refer explicitly to earlier
 self-hosted evidence, not unperformed hosted runtime tests. Update user-facing
 installation text consistently. Commit and push the reviewed increment to both
 source homes before dispatching it.
+
+### macOS temporary-path correction
+
+The first hosted macOS offline run exposed `/var` versus `/private/var` aliases.
+Canonicalize trusted checkout roots before comparing resolved Cargo manifest
+paths in license collection; preserve rejection of genuinely external local
+dependencies and escaping license symlinks. Use canonical temporary-directory
+paths in package/install test fixtures so expected absolute helpers match runtime
+resolution and the installer can retain its symlink-component rejection. Do not
+relax installer path validation. Add an aliased-checkout regression test runnable
+on Linux and macOS, retain external-escape negatives, and rerun native jobs.

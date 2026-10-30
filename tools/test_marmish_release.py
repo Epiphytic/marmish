@@ -66,7 +66,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_layout_is_complete_and_strict(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root, record = fixture(Path(temporary))
+            root, record = fixture(Path(temporary).resolve())
             self.assertEqual(installed.validate_record(record), record)
             record['files']['tools/test_fixture.py'] = {'sha256': 'a' * 64, 'mode': 420}
             with self.assertRaises(ValueError):
@@ -78,7 +78,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_installed_defaults_absolute_and_tamper_detection(self):
         with tempfile.TemporaryDirectory(prefix='marmish space $ ` ') as temporary:
-            root, _ = fixture(Path(temporary))
+            root, _ = fixture(Path(temporary).resolve())
             with patch.object(installed, '__file__', str(root / 'tools/marmish_installed.py')):
                 defaults = installed.installed_defaults()
                 self.assertEqual(defaults['keychain_helper'], root / 'libexec/marmish/marmish-keychain')
@@ -89,7 +89,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_symlink_assets_and_writable_ancestor_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root, _ = fixture(Path(temporary))
+            root, _ = fixture(Path(temporary).resolve())
             with patch.object(installed, '__file__', str(root / 'tools/marmish_installed.py')):
                 binary = root / 'libexec/marmish/marmish-keychain'
                 data = binary.read_bytes()
@@ -111,7 +111,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_frontend_help_imports_are_isolated(self):
         with tempfile.TemporaryDirectory(prefix='marmish space $ ` ') as temporary:
-            parent = Path(temporary)
+            parent = Path(temporary).resolve()
             root, _ = fixture(parent)
             decoy = parent / 'decoy'
             decoy.mkdir()
@@ -159,7 +159,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_archive_deterministic_ustar_modes_and_allowlist(self):
         with tempfile.TemporaryDirectory() as temporary:
-            parent = Path(temporary)
+            parent = Path(temporary).resolve()
             root, record = fixture(parent)
             a, b = parent / 'a.tar.gz', parent / 'b.tar.gz'
             release.archive(root, a)
@@ -173,7 +173,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_stager_verifies_the_packaged_tree_and_normalizes_private_umask(self):
         with tempfile.TemporaryDirectory() as temporary:
-            parent = Path(temporary)
+            parent = Path(temporary).resolve()
             source, original = fixture(parent)
             runtime = parent / 'runtime'
             runtime.mkdir()
@@ -199,7 +199,7 @@ class ReleaseTests(unittest.TestCase):
         from test_marmish_install import load_installer
         installer = load_installer()
         with tempfile.TemporaryDirectory(prefix="marmish integration space '$ ") as temporary:
-            parent = Path(temporary)
+            parent = Path(temporary).resolve()
             root, record = fixture(parent)
             archive = parent / 'release.tar.gz'
             release.archive(root, archive)
@@ -229,7 +229,7 @@ class ReleaseTests(unittest.TestCase):
         for name in rejected:
             self.assertFalse(installed.valid_library(name), name)
         with tempfile.TemporaryDirectory() as temporary:
-            root, record = fixture(Path(temporary))
+            root, record = fixture(Path(temporary).resolve())
             record['prerequisites']['shared_libraries'] = ['/tmp/evil.so']
             (root / 'release.json').write_text(json.dumps(record))
             with patch.object(installed, '__file__', str(root / 'tools/marmish_installed.py')), \
@@ -241,7 +241,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_doctor_corrupt_manifest_has_fixed_sanitized_error(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root, _ = fixture(Path(temporary))
+            root, _ = fixture(Path(temporary).resolve())
             (root / 'release.json').write_text('private diagnostic sentinel invalid JSON')
             with patch.object(installed, '__file__', str(root / 'tools/marmish_installed.py')):
                 report = installed.doctor()
@@ -254,7 +254,7 @@ class ReleaseTests(unittest.TestCase):
         manifest = {'source_commit': 'a' * 40, 'target': installed.target()}
         digest = 'b' * 64
         with tempfile.TemporaryDirectory() as temporary:
-            evidence = Path(temporary) / 'installed-e2e.json'
+            evidence = Path(temporary).resolve() / 'installed-e2e.json'
             cases = [subprocess.TimeoutExpired(['secret command'], 960, output='private sentinel'),
                      subprocess.CompletedProcess([], 0, 'non-JSON private sentinel'),
                      subprocess.CompletedProcess([], 1, '{"outcome":"failed","secret":"private sentinel"}'),
@@ -277,7 +277,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_glibc_patch_version_is_preserved(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root, record = fixture(Path(temporary))
+            root, record = fixture(Path(temporary).resolve())
             with patch.object(release, 'output', side_effect=lambda command:
                               '(NEEDED) Shared library: [libc.so.6]' if '-d' in command
                               else 'Name: GLIBC_2.2.5 Name: GLIBC_2.2.3'):
@@ -289,7 +289,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_shared_library_and_glibc_measurement(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             (root / 'libexec/marmish').mkdir(parents=True)
             (root / 'libexec/marmish/wnd').touch()
             with patch.object(release, 'output', side_effect=[' (NEEDED) Shared library: [libc.so.6]\n',

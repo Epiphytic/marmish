@@ -78,3 +78,17 @@ launcher smoke and static prerequisite diagnosis. Archive SHA256 was
 `be1ec5c1c09e26b9e5aca6a89eca17f4d8a5281200caeae7227c14b2f541bf38`.
 This development archive is not a published release; installed live acceptance
 was still running when this fallback increment was committed.
+
+## macOS canonical temporary paths
+
+Hosted dispatch [41000261841](https://github.com/Epiphytic/marmish/actions/runs/41000261841)
+assigned all three runners promptly. Its macOS offline tests exposed four
+failures from `/var` versus `/private/var` temporary-directory aliases. Test
+fixtures now resolve their roots; the license helper also canonicalizes its
+root before containment checks. Installer symlink rejection remains unchanged.
+An alias regression reproduced the failure before the fix and now passes,
+including external dependency and escaping license-symlink rejection. Claude
+approved the [design](../reviews/distribution-macos-path-design.json) and
+[code](../reviews/distribution-macos-path-code.json): 71 focused tests passed.
+The complete local tools suite passed 333 tests with 7 skips. Native macOS
+validation requires the next dispatch; this evidence does not claim it passed.

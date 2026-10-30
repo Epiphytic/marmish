@@ -170,6 +170,7 @@ def _notice_files(directory):
 
 
 def _package_notices(package, root):
+    root = root.resolve()
     directory = Path(package['manifest_path']).parent.resolve()
     paths = {path: str(path.relative_to(directory)) for path in _notice_files(directory)}
     if package.get('license_file'):

@@ -13,7 +13,7 @@ class LicenseCollectionTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='marmish-license-test-')
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         (self.root / 'LICENSE').write_text('Original project license and copyright\n')
         (self.root / 'Cargo.lock').write_text('version = 4\n[[package]]\nname="marmish-engine"\nversion="0.1.0"\n')
         self.package = {'id': 'engine', 'name': 'marmish-engine', 'version': '0.1.0',
@@ -91,6 +91,45 @@ class LicenseCollectionTests(unittest.TestCase):
         (nested / 'LICENSE').symlink_to('/etc/passwd')
         with self.assertRaisesRegex(RuntimeError, 'external_license_text'):
             licenses._package_notices(package, self.root)
+
+    def test_aliased_checkout_preserves_native_notices_and_containment(self):
+        alias = self.root / 'checkout-alias'
+        alias.symlink_to(self.root, target_is_directory=True)
+        nested = self.root / 'crate'
+        (nested / 'sqlcipher').mkdir(parents=True)
+        (nested / 'sqlcipher/LICENSE').write_text('Original SQLCipher notice\n')
+        (nested / 'LICENSE').symlink_to('../LICENSE')
+        package = dict(self.package, name='libsqlite3-sys',
+                       manifest_path=str(alias / 'crate/Cargo.toml'))
+        paths = licenses._package_notices(package, alias)
+        self.assertIn((self.root / 'LICENSE', 'LICENSE'), paths)
+        self.assertIn('sqlcipher/LICENSE', [relative for _, relative in paths])
+        with tempfile.TemporaryDirectory(prefix='marmish-external-license-') as external:
+            outside = Path(external).resolve()
+            (outside / 'LICENSE').write_text('Outside checkout license\n')
+            external_package = dict(self.package, manifest_path=str(outside / 'Cargo.toml'))
+            with self.assertRaisesRegex(RuntimeError, 'external_local_dependency'):
+                licenses._package_notices(external_package, alias)
+            (nested / 'LICENSE').unlink()
+            (nested / 'LICENSE').symlink_to(outside / 'LICENSE')
+            with self.assertRaisesRegex(RuntimeError, 'external_license_text'):
+                licenses._package_notices(package, alias)
+
+    def test_collect_normalizes_aliased_checkout_at_metadata_boundary(self):
+        alias = self.root / 'checkout-alias'
+        alias.symlink_to(self.root, target_is_directory=True)
+        with patch.object(licenses, '_metadata', return_value=self.metadata()) as metadata, \
+                patch.object(licenses.subprocess, 'check_output', return_value='1' * 40 + '\n'):
+            licenses.collect(alias, self.root / 'alias-output', 'marmish')
+            licenses.collect(self.root, self.root / 'real-output', 'marmish')
+        self.assertEqual(metadata.call_args_list,
+                         [unittest.mock.call(self.root), unittest.mock.call(self.root)])
+        outputs = [self.root / name / 'marmish' for name in ('alias-output', 'real-output')]
+        snapshots = [{str(path.relative_to(output)): path.read_bytes()
+                      for path in output.rglob('*') if path.is_file()} for output in outputs]
+        self.assertEqual(snapshots[0], snapshots[1])
+        for output in outputs:
+            licenses.validate_graph(output)
 
     def test_upstream_fallback_is_immutable_and_records_original_bytes(self):
         (self.root / 'LICENSE').unlink()
