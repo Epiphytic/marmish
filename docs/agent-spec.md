@@ -11,7 +11,25 @@ concrete commands.
 
 ### Experimental distribution increment
 
-The experimental release
+The latest release is
+[v0.1.0-experimental.2](https://github.com/Epiphytic/marmish/releases/tag/v0.1.0-experimental.2),
+built from debug source `f609b6ccdc9302aeec661a2ae3692d3ef68b86fa` in native
+workflow `41121755202`, attempt 1. All three archives passed build and installation
+checks; macOS/Linux ARM64 runtime confinement remains unvalidated. The hosted
+AMD64 live check failed namespace startup, independently confirmed as permission
+denied. Exact-archive local acceptance first passed eight assertions then failed
+`message_not_published` with complete cleanup; its cause is unestablished. A single
+fresh-state full rerun with the same archive and relays passed all 15 assertions
+in 204.864 seconds with complete cleanup. Both attempts and the failed hosted
+report remain in [the publication evidence](validation/debug-distribution-publication.json).
+Claude approved the artifacts and publication after correcting the provenance
+field and retracting an inferred prohibition on full acceptance reruns. The
+strict publisher was unchanged; public asset bytes, qualified release body and
+GitHub/Radicle tag were verified. The Iris installer selects experimental.2, and
+installed client/server debug-doctor records were observed. This adds diagnostics,
+not a fix for the unresolved macOS `native_probe_broker` failure.
+
+The previous experimental release
 [v0.1.0-experimental.1](https://github.com/Epiphytic/marmish/releases/tag/v0.1.0-experimental.1)
 was published from source `2a7e723eb8f980cda8a10f6d1e541d077cc15698`, using native
 build artifacts from workflow run `41003542761`, attempt 1. Linux AMD64 and ARM64

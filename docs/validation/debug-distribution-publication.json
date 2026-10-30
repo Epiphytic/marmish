@@ -1,0 +1,544 @@
+{
+  "version": "0.1.0-experimental.2",
+  "source_commit": "f609b6ccdc9302aeec661a2ae3692d3ef68b86fa",
+  "workflow_run": 41121755202,
+  "workflow_attempt": 1,
+  "workflow_conclusion": "failure",
+  "publication": "published_and_public_bytes_verified",
+  "archives": [
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "source_commit": "f609b6ccdc9302aeec661a2ae3692d3ef68b86fa",
+      "archive_sha256": "c409afda196314a3033049e21e64339594445eebd4afa3bbbbda0b7d3f6c6f0c",
+      "strict_archive_verification": "passed",
+      "files": [
+        {
+          "path": "tools/marmish_app.py",
+          "sha256": "75277fbac496eca1c2f0e073087055d1613bc912a2c0a0ff9adadd2065b10548",
+          "matches_frozen_source": true
+        },
+        {
+          "path": "tools/marmish_transport_macos.py",
+          "sha256": "59a594fa1b3ec9ae16ef4e4e5bb4408ceddc16c7ce28ff9d338fca6df8ce0430",
+          "matches_frozen_source": true
+        }
+      ],
+      "artifact_id": 13010610975,
+      "artifact_name": "distribution-41121755202-1-x86_64-unknown-linux-gnu",
+      "artifact_zip_sha256": "66f263d1baaf6d1e8af12d9427afb747410d3b0d54cfabb75b6a25411b1f9ab1"
+    },
+    {
+      "target": "aarch64-unknown-linux-gnu",
+      "source_commit": "f609b6ccdc9302aeec661a2ae3692d3ef68b86fa",
+      "archive_sha256": "90e5c44ef9235c0825ec59ecded8909a6f76642f7a8461d8f3418a2f5ef70be6",
+      "strict_archive_verification": "passed",
+      "files": [
+        {
+          "path": "tools/marmish_app.py",
+          "sha256": "75277fbac496eca1c2f0e073087055d1613bc912a2c0a0ff9adadd2065b10548",
+          "matches_frozen_source": true
+        },
+        {
+          "path": "tools/marmish_transport_macos.py",
+          "sha256": "59a594fa1b3ec9ae16ef4e4e5bb4408ceddc16c7ce28ff9d338fca6df8ce0430",
+          "matches_frozen_source": true
+        }
+      ],
+      "artifact_id": 13008643932,
+      "artifact_name": "distribution-41121755202-1-aarch64-unknown-linux-gnu",
+      "artifact_zip_sha256": "0f1053388b32f7dd6d9a2d896467494b4234bd05df408aa4a07b2d5e02361d1b"
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "source_commit": "f609b6ccdc9302aeec661a2ae3692d3ef68b86fa",
+      "archive_sha256": "340b6f4f5a870cb33ae1d77b5f9c4891453a70b3f329094ffbacf1df3fbb264e",
+      "strict_archive_verification": "passed",
+      "files": [
+        {
+          "path": "tools/marmish_app.py",
+          "sha256": "75277fbac496eca1c2f0e073087055d1613bc912a2c0a0ff9adadd2065b10548",
+          "matches_frozen_source": true
+        },
+        {
+          "path": "tools/marmish_transport_macos.py",
+          "sha256": "59a594fa1b3ec9ae16ef4e4e5bb4408ceddc16c7ce28ff9d338fca6df8ce0430",
+          "matches_frozen_source": true
+        }
+      ],
+      "artifact_id": 13010296181,
+      "artifact_name": "distribution-41121755202-1-aarch64-apple-darwin",
+      "artifact_zip_sha256": "12f1af09714b6751ac143c193478367ae64abbe4f0ddfadc4fac82db775f33a0"
+    }
+  ],
+  "jobs": [
+    {
+      "id": 124289296806,
+      "name": "build (macos-arm64, aarch64-apple-darwin, macos-15)",
+      "status": "completed",
+      "conclusion": "success",
+      "runner_name": "GitHub Actions 1000007126",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Validate experimental version",
+          "conclusion": "success"
+        },
+        {
+          "name": "Set private build output location",
+          "conclusion": "success"
+        },
+        {
+          "name": "Record disposable runner disk headroom",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install only missing Ubuntu prerequisites",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Observe hosted Linux namespace permissions",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Ensure native Python",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify the native target",
+          "conclusion": "success"
+        },
+        {
+          "name": "Restore trusted hosted distribution caches",
+          "conclusion": "success"
+        },
+        {
+          "name": "Bootstrap pinned toolchain without publication credentials",
+          "conclusion": "success"
+        },
+        {
+          "name": "Offline distribution tests",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build complete native distribution and notices",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install and validate the native archive",
+          "conclusion": "success"
+        },
+        {
+          "name": "Upload archives and public acceptance evidence",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Restore trusted hosted distribution caches",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 124289297037,
+      "name": "build (linux-arm64, aarch64-unknown-linux-gnu, ubuntu-24.04-arm)",
+      "status": "completed",
+      "conclusion": "success",
+      "runner_name": "GitHub Actions 1000007127",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Validate experimental version",
+          "conclusion": "success"
+        },
+        {
+          "name": "Set private build output location",
+          "conclusion": "success"
+        },
+        {
+          "name": "Record disposable runner disk headroom",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install only missing Ubuntu prerequisites",
+          "conclusion": "success"
+        },
+        {
+          "name": "Observe hosted Linux namespace permissions",
+          "conclusion": "success"
+        },
+        {
+          "name": "Ensure native Python",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify the native target",
+          "conclusion": "success"
+        },
+        {
+          "name": "Restore trusted hosted distribution caches",
+          "conclusion": "success"
+        },
+        {
+          "name": "Bootstrap pinned toolchain without publication credentials",
+          "conclusion": "success"
+        },
+        {
+          "name": "Offline distribution tests",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build complete native distribution and notices",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install and validate the native archive",
+          "conclusion": "success"
+        },
+        {
+          "name": "Upload archives and public acceptance evidence",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Restore trusted hosted distribution caches",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 124289297102,
+      "name": "build (linux-x64, x86_64-unknown-linux-gnu, ubuntu-24.04)",
+      "status": "completed",
+      "conclusion": "failure",
+      "runner_name": "GitHub Actions 1000007125",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Validate experimental version",
+          "conclusion": "success"
+        },
+        {
+          "name": "Set private build output location",
+          "conclusion": "success"
+        },
+        {
+          "name": "Record disposable runner disk headroom",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install only missing Ubuntu prerequisites",
+          "conclusion": "success"
+        },
+        {
+          "name": "Observe hosted Linux namespace permissions",
+          "conclusion": "success"
+        },
+        {
+          "name": "Ensure native Python",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify the native target",
+          "conclusion": "success"
+        },
+        {
+          "name": "Restore trusted hosted distribution caches",
+          "conclusion": "success"
+        },
+        {
+          "name": "Bootstrap pinned toolchain without publication credentials",
+          "conclusion": "success"
+        },
+        {
+          "name": "Offline distribution tests",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build complete native distribution and notices",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install and validate the native archive",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Upload archives and public acceptance evidence",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Restore trusted hosted distribution caches",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 124299308130,
+      "name": "publish",
+      "status": "completed",
+      "conclusion": "skipped",
+      "runner_name": null,
+      "steps": []
+    }
+  ],
+  "hosted_namespace_probe": {
+    "available": true,
+    "permission_denied": true,
+    "returncode": 1,
+    "settings": {
+      "apparmor_restrict_unprivileged_userns": 1,
+      "max_user_namespaces": 58121,
+      "unprivileged_userns_clone": 1
+    },
+    "success": false,
+    "timed_out": false
+  },
+  "hosted_live_report": {
+    "diagnostic": {
+      "assertions": [],
+      "error": "namespace_start_failed",
+      "format": 1,
+      "local_cleanup": "complete",
+      "stage": "identity_setup"
+    },
+    "distribution_archive_sha256": "c409afda196314a3033049e21e64339594445eebd4afa3bbbbda0b7d3f6c6f0c",
+    "distribution_source_commit": "f609b6ccdc9302aeec661a2ae3692d3ef68b86fa",
+    "error": "installed_live_command_failed",
+    "outcome": "failed",
+    "target": "x86_64-unknown-linux-gnu"
+  },
+  "fallback_qualification": {
+    "linux_arm64_native_build_install": "passed",
+    "macos_arm64_native_build_install": "passed",
+    "amd64_native_build": "passed",
+    "amd64_installed_smoke": "passed",
+    "amd64_reinstall_and_help": "completed_before_live_failure_by_frozen_acceptance_control_flow",
+    "hosted_live": "failed_identity_setup_namespace_start_failed",
+    "independent_namespace_probe": "permission_denied",
+    "local_live": "passed_all_15_assertions_on_fresh_state_retry",
+    "host_namespace_policy_changed": false
+  },
+  "hosted_failure_preserved_outside_inputs": true,
+  "local_attempts": [
+    {
+      "diagnostic": {
+        "assertions": [
+          "live_additive_default_and_per_key_denials_path_and_shell_refusal",
+          "policy_denials_create_no_job_and_preserve_token_for_allowed_execution",
+          "literal_argv_spaces_unicode_quotes_newline_dollar_backticks_leading_dash_nonutf8",
+          "separate_binary_stderr_and_nonzero_exit",
+          "exact_admitted_retry_and_status_first_retry_execute_once_conflict_rejected",
+          "byte_exact_binary_stdin_stdout_stderr_eof",
+          "live_cancellation_reports_signal_and_remains_queryable",
+          "live_stale_challenge_wrong_group_and_chat_payload_never_execute"
+        ],
+        "error": "message_not_published",
+        "format": 1,
+        "local_cleanup": "complete",
+        "stage": "unauthorized_and_ordinary_invitations"
+      },
+      "distribution_archive_sha256": "c409afda196314a3033049e21e64339594445eebd4afa3bbbbda0b7d3f6c6f0c",
+      "distribution_source_commit": "f609b6ccdc9302aeec661a2ae3692d3ef68b86fa",
+      "error": "installed_live_command_failed",
+      "outcome": "failed",
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    {
+      "assertions": [
+        "live_additive_default_and_per_key_denials_path_and_shell_refusal",
+        "policy_denials_create_no_job_and_preserve_token_for_allowed_execution",
+        "literal_argv_spaces_unicode_quotes_newline_dollar_backticks_leading_dash_nonutf8",
+        "separate_binary_stderr_and_nonzero_exit",
+        "exact_admitted_retry_and_status_first_retry_execute_once_conflict_rejected",
+        "byte_exact_binary_stdin_stdout_stderr_eof",
+        "live_cancellation_reports_signal_and_remains_queryable",
+        "live_stale_challenge_wrong_group_and_chat_payload_never_execute",
+        "live_ordinary_room_and_unallowlisted_identity_invites_remain_unaccepted",
+        "frontend_disconnect_does_not_cancel_running_worker",
+        "persisted_mls_room_and_command_output_recovered_after_frontend_restart",
+        "previous_boot_valid_control_frame_rejected_after_restart",
+        "fresh_independent_mls_group_configurable_retention_same_principal_reattach",
+        "actual_client_and_server_cli_processes_execute_command_via_marmot",
+        "installed_launchers_and_bundled_defaults_preserve_special_character_argv"
+      ],
+      "bubblewrap": null,
+      "distribution_archive_sha256": "c409afda196314a3033049e21e64339594445eebd4afa3bbbbda0b7d3f6c6f0c",
+      "distribution_source_commit": "f609b6ccdc9302aeec661a2ae3692d3ef68b86fa",
+      "duration_seconds": 204.864,
+      "groups": [
+        "d6de1cbcd5a4b617c46f54280733b2af",
+        "e5e6fba7ef6d454507c9363ad9c905d5"
+      ],
+      "limitations": [
+        "prototype_single_device",
+        "relay_retention_is_not_guaranteed_erasure",
+        "same_principal_can_reattach_across_sessions"
+      ],
+      "local_cleanup": "complete",
+      "outcome": "passed",
+      "platform": "linux",
+      "public_identities": {
+        "client": "13cf8ae42247676f3212afe90f0181a58db80f125532d04156342d2e12582b61",
+        "server": "2feebc5934187064b829bd308f4c358f6405d73888a9714802beef5170a66850"
+      },
+      "python": "3.12.3",
+      "relays": [
+        "wss://relay.eu.whitenoise.chat/",
+        "wss://relay.us.whitenoise.chat/"
+      ],
+      "stage": "complete",
+      "target": "x86_64-unknown-linux-gnu",
+      "wnd_manifest": {
+        "architecture": "x86_64",
+        "bootstrap_patch_sha256": "c7ce4f29e248fcb56fe2b83bbc694d6ca544bd6475de03cf928bfc879fc4e43b",
+        "bootstrap_protocol": 1,
+        "bootstrap_tests": "marmish_bootstrap::tests:passed",
+        "cargo_lock_sha256": "d8a5367e49427c79f354b0611902808de9b92abbe173eb82ed6864d01e488a71",
+        "clean_checkout": true,
+        "codesign": null,
+        "deployment_target": null,
+        "helpers": {},
+        "patch_sha256": null,
+        "platform": "linux",
+        "relay_fixture_sha256": null,
+        "restricted_protocol": null,
+        "revision": "37c248a11239e108afc9bd4ee62b8f60542012e3",
+        "rust": "1.97.1",
+        "rustc_version": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+        "sha256": "851286008014b336487530725837b4f93d40d622cd3bbe172acef1d8f15df9b9",
+        "source": "https://github.com/liamhelmer-bel/mdk.git",
+        "source_guard_sha256": "4fcbdc579804d43b38ab4103c6053cfcbdc0018434bc2f8fb3fbb5cf9f382619",
+        "target": "x86_64-unknown-linux-gnu",
+        "transport_tests": null,
+        "version": 2
+      },
+      "wnd_sha256": "851286008014b336487530725837b4f93d40d622cd3bbe172acef1d8f15df9b9"
+    }
+  ],
+  "published_report_operator_provenance": {
+    "execution_origin": "local_linux_amd64_host",
+    "hosted_failure_category": "namespace_start_failed",
+    "source_commit": "f609b6ccdc9302aeec661a2ae3692d3ef68b86fa",
+    "workflow_attempt": 1,
+    "workflow_run": 41121755202
+  },
+  "release_url": "https://github.com/Epiphytic/marmish/releases/tag/v0.1.0-experimental.2",
+  "public_assets": [
+    {
+      "name": "installed-e2e.json",
+      "sha256": "cd823001409adc8f0f8f0342346b0c8403e406e8ebd5c42345ae81341da45cdc",
+      "bytes": 3384,
+      "public_download_verified": true
+    },
+    {
+      "name": "marmish-0.1.0-experimental.2-aarch64-apple-darwin.release.json",
+      "sha256": "266fbd001216b6d0e4190e5d06b404d3eaeea14219ce87e951208ee180d0d0a3",
+      "bytes": 87332,
+      "public_download_verified": true
+    },
+    {
+      "name": "marmish-0.1.0-experimental.2-aarch64-apple-darwin.tar.gz",
+      "sha256": "340b6f4f5a870cb33ae1d77b5f9c4891453a70b3f329094ffbacf1df3fbb264e",
+      "bytes": 32602938,
+      "public_download_verified": true
+    },
+    {
+      "name": "marmish-0.1.0-experimental.2-aarch64-unknown-linux-gnu.release.json",
+      "sha256": "457fd03dbe1e17c8cfb66dd16952518286054f665a8d7a29ef02bf95497edb75",
+      "bytes": 98950,
+      "public_download_verified": true
+    },
+    {
+      "name": "marmish-0.1.0-experimental.2-aarch64-unknown-linux-gnu.tar.gz",
+      "sha256": "90e5c44ef9235c0825ec59ecded8909a6f76642f7a8461d8f3418a2f5ef70be6",
+      "bytes": 38451852,
+      "public_download_verified": true
+    },
+    {
+      "name": "marmish-0.1.0-experimental.2-x86_64-unknown-linux-gnu.release.json",
+      "sha256": "b7b87b1d379042dadd73cea8373e747dbf2f0d4db8ce0747510ccd22f33742de",
+      "bytes": 98904,
+      "public_download_verified": true
+    },
+    {
+      "name": "marmish-0.1.0-experimental.2-x86_64-unknown-linux-gnu.tar.gz",
+      "sha256": "c409afda196314a3033049e21e64339594445eebd4afa3bbbbda0b7d3f6c6f0c",
+      "bytes": 37259100,
+      "public_download_verified": true
+    },
+    {
+      "name": "SHA256SUMS",
+      "sha256": "fc17033578213bc15bf969e66f9e327e39ea12b7054e94c2ccb1e6ca522711d7",
+      "bytes": 859,
+      "public_download_verified": true
+    }
+  ],
+  "release_body_qualification": "read_back_exactly_matches_reviewed_notes; hosted CI publish skipped; both local attempts disclosed; cause of first publication failure unestablished",
+  "radicle_tag": {
+    "tag": "v0.1.0-experimental.2",
+    "source_commit": "f609b6ccdc9302aeec661a2ae3692d3ef68b86fa",
+    "iris_public_delegate_ref_verified": true
+  },
+  "public_installer_checks": {
+    "iris_installer_matches_frozen_source": true,
+    "default_selected_version": "0.1.0-experimental.2",
+    "fresh_install": "passed",
+    "client_debug_doctor": "passed",
+    "server_debug_doctor": "passed",
+    "reinstall": "passed",
+    "owned_uninstall": "passed",
+    "identity_or_keychain_access": false
+  },
+  "native_installer_tests": {
+    "run": 41121735996,
+    "platforms": [
+      "macos-15",
+      "ubuntu-24.04-arm",
+      "ubuntu-24.04"
+    ],
+    "outcome": "passed",
+    "scope": "offline installer and quickstart controlling-terminal tests; not native MDK confinement"
+  }
+}

@@ -6,13 +6,13 @@ Source: [GitHub](https://github.com/Epiphytic/marmish) ·
 
 ## Experimental binary installation
 
-[v0.1.0-experimental.1](https://github.com/Epiphytic/marmish/releases/tag/v0.1.0-experimental.1)
+[v0.1.0-experimental.2](https://github.com/Epiphytic/marmish/releases/tag/v0.1.0-experimental.2)
 is available for Linux AMD64, Linux ARM64 and macOS ARM64 (macOS 15+).
 Both Linux archives require glibc 2.39 or newer. All three passed native build
 and installation checks. The exact Linux AMD64 release archive passed all 15
 installed command tests locally through Marmot; the hosted runner denied the
-required namespace operation. See [the distribution report](docs/validation/distribution.md)
-for source, archive bindings and publication verification status. ARM64 Linux and macOS
+required namespace operation. See [the debug release evidence](docs/validation/debug-distribution-publication.json)
+for source, archive bindings, the initial failed local attempt and publication verification. ARM64 Linux and macOS
 confined execution are not validated in this distribution. Earlier self-hosted
 validation found a Linux ARM64 namespace-policy failure and a macOS broker abort;
 these are not observations from hosted packaging jobs. Successful building or
@@ -35,8 +35,8 @@ succeeds. Debug diagnostics are enabled here temporarily to help diagnose setup
 failures. They report stages and numeric failure details to stderr, excluding
 private keys, credentials and command contents. The installer forwards debug mode
 through `MARMISH_DEBUG=1`; older archives, including experimental.1, ignore it and
-retain category-only runtime errors. Detailed runtime diagnostics require an
-archive built with debug support; updating the installer alone does not add them.
+retain category-only runtime errors. Detailed runtime diagnostics are included in experimental.2 and newer; updating
+the installer alone does not add them to an older binary.
 
 Setup needs a foreground terminal. Choose `server` on the remote machine
 and `client` on the connecting machine, using the same explicit relay URL.
@@ -59,7 +59,7 @@ paths. The runtime limitations above still apply.
 The script is served from Radicle through Iris and downloads complete native
 archives and `SHA256SUMS` from [GitHub Releases](https://github.com/Epiphytic/marmish/releases).
 It selects an experimental prerelease; pin one with `sh install.sh --version
-0.1.0-experimental.1` after downloading the script. For an immutable installer,
+0.1.0-experimental.2` after downloading the script. For an immutable installer,
 replace `head` in the Iris URL with a full reviewed commit SHA. Mutable `head`
 trusts the script currently served by Iris; same-release checksums detect
 corruption and are not independent signatures.
