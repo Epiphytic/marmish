@@ -1,4 +1,6 @@
 """Offline release layout, isolated frontend and parser contract tests."""
+import ast
+import collections
 import contextlib
 import io
 import json
@@ -14,6 +16,86 @@ from unittest.mock import patch
 import marmish_app
 import marmish_installed as installed
 import marmish_release as release
+
+
+def diagnostic_source_modules():
+    """Map the harness's local import closure without importing those modules."""
+    base = Path(__file__).resolve().parent
+    modules, pending = {}, ['marmish_e2e']
+    while pending:
+        name = pending.pop()
+        path = base / (name + '.py')
+        if name in modules or not path.is_file():
+            continue
+        tree = modules[name] = ast.parse(path.read_text())
+        pending.extend(local_import_names(tree))
+    return modules
+
+
+def local_import_names(tree):
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            yield from (item.name.split('.')[0] for item in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            yield node.module.split('.')[0]
+
+
+def called_name(node):
+    if isinstance(node.func, ast.Name):
+        return node.func.id
+    if isinstance(node.func, ast.Attribute):
+        return node.func.attr
+    return ''
+
+
+class DiagnosticErrors(ast.NodeVisitor):
+    """Collect fixed categories and fingerprint dynamic propagation separately."""
+    def __init__(self, module):
+        self.module = module
+        self.errors = set()
+        self.dynamic = collections.Counter()
+
+    def record(self, category, label):
+        if category is None:
+            return
+        if isinstance(category, ast.Constant) and isinstance(category.value, str):
+            self.errors.add(category.value)
+            return
+        key = self.module + ':' + label + ':' + ast.dump(category, include_attributes=False)
+        self.dynamic[key] += 1
+
+    def visit_Call(self, node):
+        name = called_name(node)
+        if name in ('require', 'SmokeError', 'RpcError', 'SandboxError'):
+            position = 1 if name == 'require' else 0
+            category = (node.args[position] if len(node.args) > position else
+                        next((item.value for item in node.keywords
+                              if item.arg in ('category', 'message', 'error')), None))
+            self.record(category, name)
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node):
+        if node.name == 'require':
+            defaults = list(zip(node.args.args[-len(node.args.defaults):], node.args.defaults))
+            defaults += list(zip(node.args.kwonlyargs, node.args.kw_defaults))
+            for argument, default in defaults:
+                if argument.arg in ('category', 'message', 'error'):
+                    self.record(default, 'require_default')
+        self.generic_visit(node)
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+
+def e2e_literal_vocabulary(tree, call):
+    values = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or called_name(node) != call:
+            continue
+        if not (node.args and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)):
+            raise AssertionError('nonliteral E2E ' + call)
+        values.add(node.args[0].value)
+    return values
 
 
 class StopBeforeProfile(Exception):
@@ -274,6 +356,116 @@ class ReleaseTests(unittest.TestCase):
             result = json.loads(evidence.read_text())
             self.assertEqual(result['distribution_archive_sha256'], digest)
             self.assertEqual(result['assertions'], ['checked'])
+
+
+    def test_failure_diagnostic_validates_fields_and_preserves_failure_binding(self):
+        import marmish_release_acceptance as acceptance
+        manifest = {'source_commit': 'a' * 40, 'target': installed.target()}
+        assertion = 'installed_launchers_and_bundled_defaults_preserve_special_character_argv'
+        report = {'outcome': 'passed', 'stage': 'identity_setup',
+                  'error': 'namespace_start_failed', 'assertions': [assertion, assertion],
+                  'local_cleanup': 'complete', 'distribution_source_commit': 'forged',
+                  'distribution_archive_sha256': 'forged', 'target': 'forged',
+                  'stdout': 'private sentinel', 'stderr': 'private sentinel'}
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary).resolve() / 'installed-e2e.json'
+            with patch.object(acceptance.subprocess, 'run', return_value=
+                    subprocess.CompletedProcess([], 1, json.dumps(report))):
+                with self.assertRaisesRegex(ValueError, '^installed_live_acceptance_failed$'):
+                    acceptance.live_acceptance(['ignored'], manifest, 'b' * 64, evidence)
+            result = json.loads(evidence.read_text())
+            self.assertEqual(result, {'outcome': 'failed', 'error': 'installed_live_command_failed',
+                'distribution_source_commit': manifest['source_commit'],
+                'distribution_archive_sha256': 'b' * 64, 'target': manifest['target'],
+                'diagnostic': {'format': 1, 'stage': 'identity_setup',
+                    'error': 'namespace_start_failed', 'assertions': [assertion],
+                    'local_cleanup': 'complete'}})
+            self.assertNotIn('sentinel', evidence.read_text())
+        from test_marmish_publish import PublicationTests
+        fixture = PublicationTests()
+        fixture.setUp()
+        try:
+            fixture.report.write_text(json.dumps(result))
+            with self.assertRaisesRegex(ValueError, '^invalid_installed_live_evidence$'):
+                fixture.aggregate()
+        finally:
+            fixture.tearDown()
+            fixture.doCleanups()
+
+    def test_failure_diagnostic_rejects_arbitrary_values_without_type_errors(self):
+        import marmish_release_acceptance as acceptance
+        assertion = next(iter(acceptance.DIAGNOSTIC_ASSERTIONS))
+        secret = 'S' * 60
+        for value in (None, secret, {}, [], 23, True):
+            with self.subTest(value_type=type(value).__name__):
+                result = acceptance.failure_diagnostic({'stage': value, 'error': value,
+                    'local_cleanup': value, 'assertions': [{}, [], 3, secret, assertion, assertion]})
+                self.assertEqual(result, {'format': 1, 'stage': 'unknown',
+                    'error': 'unrecognized_error', 'local_cleanup': 'unknown',
+                    'assertions': [assertion]})
+                self.assertNotIn(secret, json.dumps(result))
+        for value in (None, {}, assertion, [assertion] * 65):
+            self.assertEqual(acceptance.failure_diagnostic({'assertions': value})['assertions'], [])
+        manifest = {'source_commit': 'a' * 40, 'target': installed.target()}
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary).resolve() / 'installed-e2e.json'
+            report = {'outcome': 'failed', 'stage': secret, 'error': secret,
+                      'assertions': [secret], 'local_cleanup': secret, 'secret': secret}
+            with patch.object(acceptance.subprocess, 'run', return_value=
+                    subprocess.CompletedProcess([], 0, json.dumps(report))):
+                with self.assertRaises(ValueError):
+                    acceptance.live_acceptance(['ignored'], manifest, 'b' * 64, evidence)
+            self.assertNotIn(secret, evidence.read_text())
+
+    def test_diagnostic_frozen_vocabularies_cover_source_and_reviewed_dynamic_calls(self):
+        import marmish_release_acceptance as acceptance
+        modules = diagnostic_source_modules()
+        errors, dynamic = set(), collections.Counter()
+        for name, tree in modules.items():
+            collector = DiagnosticErrors(name)
+            collector.visit(tree)
+            errors.update(collector.errors)
+            dynamic.update(collector.dynamic)
+        self.assertEqual(set(modules), acceptance.DIAGNOSTIC_MODULES)
+        self.assertFalse(errors - acceptance.DIAGNOSTIC_ERRORS)
+        # Existing dynamic propagation is intentionally not telemetry authorization.
+        # Exact structural fingerprints/counts make each new dynamic category call
+        # an explicit review event without depending on unrelated source line shifts.
+        reviewed_dynamic = {"marmish_app:SmokeError:Name(id='error', ctx=Load())": 1,
+ "marmish_e2e:SmokeError:Name(id='category', ctx=Load())": 1,
+ "marmish_keys:SmokeError:Subscript(value=Name(id='response', ctx=Load()), slice=Constant(value='error'), ctx=Load())": 1,
+ "marmish_native_validation:SmokeError:Subscript(value=Name(id='response', ctx=Load()), slice=Constant(value='error'), ctx=Load())": 1,
+ "marmish_protocol:SmokeError:Name(id='error', ctx=Load())": 1,
+ "marmish_rpc:RpcError:Call(func=Name(id='str', ctx=Load()), args=[Name(id='error', ctx=Load())], keywords=[])": 1,
+ "marmish_rpc:RpcError:Name(id='category', ctx=Load())": 1,
+ "marmish_transport_macos:SandboxError:BinOp(left=Constant(value='native_control_'), op=Add(), right=Name(id='label', ctx=Load()))": 1,
+ "marmish_transport_macos:SandboxError:BinOp(left=Constant(value='native_probe_'), op=Add(), right=Name(id='label', ctx=Load()))": 1,
+ "mdk_smoke:SmokeError:Name(id='category', ctx=Load())": 1}
+        self.assertEqual(dict(dynamic), reviewed_dynamic)
+    def test_diagnostic_stages_and_assertions_cover_e2e_literals(self):
+        import marmish_release_acceptance as acceptance
+        tree = diagnostic_source_modules()['marmish_e2e']
+        stages = e2e_literal_vocabulary(tree, 'checkpoint') | {'setup', 'complete'}
+        assertions = e2e_literal_vocabulary(tree, 'passed')
+        self.assertFalse(stages - acceptance.DIAGNOSTIC_STAGES)
+        self.assertFalse(assertions - acceptance.DIAGNOSTIC_ASSERTIONS)
+        file_assertions = {'actual_client_and_server_cli_processes_execute_command_via_marmot',
+ 'byte_exact_binary_stdin_stdout_stderr_eof',
+ 'exact_admitted_retry_and_status_first_retry_execute_once_conflict_rejected',
+ 'fresh_independent_mls_group_configurable_retention_same_principal_reattach',
+ 'frontend_disconnect_does_not_cancel_running_worker',
+ 'installed_launchers_and_bundled_defaults_preserve_special_character_argv',
+ 'literal_argv_spaces_unicode_quotes_newline_dollar_backticks_leading_dash_nonutf8',
+ 'live_additive_default_and_per_key_denials_path_and_shell_refusal',
+ 'live_cancellation_reports_signal_and_remains_queryable',
+ 'live_ordinary_room_and_unallowlisted_identity_invites_remain_unaccepted',
+ 'live_stale_challenge_wrong_group_and_chat_payload_never_execute',
+ 'persisted_mls_room_and_command_output_recovered_after_frontend_restart',
+ 'policy_denials_create_no_job_and_preserve_token_for_allowed_execution',
+ 'previous_boot_valid_control_frame_rejected_after_restart',
+ 'separate_binary_stderr_and_nonzero_exit'}
+        self.assertEqual(len(file_assertions), 15)
+        self.assertLessEqual(file_assertions, acceptance.DIAGNOSTIC_ASSERTIONS)
 
     def test_glibc_patch_version_is_preserved(self):
         with tempfile.TemporaryDirectory() as temporary:

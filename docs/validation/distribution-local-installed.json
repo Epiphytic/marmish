@@ -1,0 +1,29 @@
+{
+  "assertions": [
+    "live_additive_default_and_per_key_denials_path_and_shell_refusal",
+    "policy_denials_create_no_job_and_preserve_token_for_allowed_execution",
+    "literal_argv_spaces_unicode_quotes_newline_dollar_backticks_leading_dash_nonutf8",
+    "separate_binary_stderr_and_nonzero_exit",
+    "exact_admitted_retry_and_status_first_retry_execute_once_conflict_rejected",
+    "byte_exact_binary_stdin_stdout_stderr_eof",
+    "live_cancellation_reports_signal_and_remains_queryable",
+    "live_stale_challenge_wrong_group_and_chat_payload_never_execute",
+    "live_ordinary_room_and_unallowlisted_identity_invites_remain_unaccepted",
+    "frontend_disconnect_does_not_cancel_running_worker",
+    "persisted_mls_room_and_command_output_recovered_after_frontend_restart",
+    "previous_boot_valid_control_frame_rejected_after_restart",
+    "fresh_independent_mls_group_configurable_retention_same_principal_reattach",
+    "actual_client_and_server_cli_processes_execute_command_via_marmot",
+    "installed_launchers_and_bundled_defaults_preserve_special_character_argv"
+  ],
+  "distribution_archive_sha256": "be1ec5c1c09e26b9e5aca6a89eca17f4d8a5281200caeae7227c14b2f541bf38",
+  "distribution_source_commit": "4a78fb335917b0d8d59cc2ee549c216f9a37ef14",
+  "duration_seconds": 212.392,
+  "error": null,
+  "harness_source_commit": "2b34b00913eadda24028b56adcfd253cb33f2656",
+  "local_cleanup": "complete",
+  "outcome": "passed",
+  "stage": "complete",
+  "target": "x86_64-unknown-linux-gnu",
+  "validation_scope": "local installed development archive; not evidence for published artifacts"
+}

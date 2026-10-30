@@ -255,3 +255,84 @@ paths in package/install test fixtures so expected absolute helpers match runtim
 resolution and the installer can retain its symlink-component rejection. Do not
 relax installer path validation. Add an aliased-checkout regression test runnable
 on Linux and macOS, retain external-escape negatives, and rerun native jobs.
+
+
+### Failed installed-acceptance diagnostics
+
+The first hosted Linux x86_64 archive built and installed successfully, then its
+live child returned failure after approximately 12 seconds. Acceptance currently
+replaces the child report with `installed_live_command_failed`, losing the stage
+and fixed error category needed to distinguish host confinement failure from a
+transport or installed-default regression. A separate local direct installed
+rerun passed all 15 file-storage assertions in 212.392 seconds; this does not
+explain or override the hosted failure. Keep publication blocked on the native
+hosted live gate.
+
+Limit this increment to `tools/marmish_release_acceptance.py`, focused tests in
+`tools/test_marmish_release.py`, and sanitized review/validation documentation.
+Do not alter the product, confinement policy, installer, workflow gates, relays,
+timeouts, or live harness behavior. Root obtains independent Claude approval of
+this design before implementation and reviews the completed change before push.
+
+On the existing nonzero-child or non-passed-outcome branch, keep outer
+`outcome=failed` and `error=installed_live_command_failed`, preserving the existing
+source commit, archive SHA256 and target bindings supplied by acceptance. Add a
+nested `diagnostic` object containing only `format=1`, `stage`, `error`,
+`assertions`, and `local_cleanup`. Cleanup accepts only `complete` or `incomplete`;
+missing or invalid cleanup values become `unknown`. Never copy the child's top-level fields or bindings. A child with
+`outcome=passed` and a nonzero exit remains a failed acceptance. Success still
+requires both zero exit and child outcome passed; diagnostic content cannot
+change that predicate. Malformed/nonobject JSON and process failures retain
+their existing fixed failure categories.
+
+Validate diagnostic fields independently, accepting only exact strings in
+source-controlled frozen vocabularies. The stage vocabulary is the literal
+checkpoint names in the current E2E source plus `setup` and `complete`; unknown,
+missing or nonstring stages become `unknown`. The assertion vocabulary contains every literal passed to `passed()` in the
+current E2E source, including the 15 file-storage installed-E2E assertions and
+native-only assertions. Accept only a list of at
+most 64 entries, filter to exact known strings, deduplicate while retaining
+order, and otherwise emit an empty list. Do not infer that a listed assertion
+passed independently of the child report or promote these diagnostics to release
+acceptance evidence.
+
+The error vocabulary is the frozen union of all reachable literal categories,
+not just E2E and sandbox errors. Inspect `require()` call literals and default
+category arguments plus `SmokeError`, `RpcError` and `SandboxError` constructor
+literals in the E2E, `mdk_smoke`, RPC, app, protocol, key storage, native-validation,
+transport/sandbox, installed-layout, bootstrap, MDK-manifest and platform helpers
+reached by the harness. Include the explicit fixed report categories
+`bwrap_provenance_unavailable`, `transport_failure` and
+`local_io_or_schema_failure`. The implementation records the exact module list
+and static string union for review; conservatively include the locally imported
+helper closure when a category's reachability is uncertain. Store these finite
+sets as hard-coded Python constants, with no runtime source scanning, network
+lookup, arbitrary upstream text or regex-only acceptance. Missing, nonstring or
+unrecognized errors become `unrecognized_error`.
+
+Add offline AST drift tests over that explicit local module list. Collect literal
+categories passed to `require`, `SmokeError`, `RpcError` and `SandboxError`,
+including named/default category arguments where used, and require them to be
+members of the frozen error set. Separately collect every E2E `checkpoint()` and
+`passed()` literal and require membership in the frozen stage/assertion sets.
+The tests run from source; installed acceptance never parses Python source to
+expand its vocabulary. A new literal requires an intentional reviewed constant
+update. Dynamic RPC error text remains unrecognized even if it contains only
+alphanumeric characters. Test an arbitrary 60-character alphanumeric token and
+verify that it is absent from the entire written evidence.
+
+Keep unknown fields, exception text, stdout/stderr, paths, identities, relay
+responses, command contents and credentials out of failure evidence. Retain no
+raw output even when JSON contains extra fields.
+
+Focused offline tests cover a failed well-formed child with recognized stage,
+error and assertions; missing/unknown/malicious diagnostic values; malformed list
+shape and oversize list; deduplication; cleanup finite-value validation; AST
+vocabulary drift; the 60-character secret sentinel; forged source/archive/target/outcome
+fields; a nonzero exit with child outcome passed; and unchanged timeout,
+non-JSON and successful behavior. Verify failure still raises after writing
+sanitized evidence and that the existing aggregate publisher rejects it. After
+review, commit and push both source homes and dispatch one fresh same-commit
+three-target workflow. Only its all-target installation gates and Linux x86_64
+installed live pass can authorize publishing those artifacts. If it fails,
+inspect the new sanitized category before proposing a production fix.

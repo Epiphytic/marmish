@@ -92,3 +92,35 @@ approved the [design](../reviews/distribution-macos-path-design.json) and
 [code](../reviews/distribution-macos-path-code.json): 71 focused tests passed.
 The complete local tools suite passed 333 tests with 7 skips. Native macOS
 validation requires the next dispatch; this evidence does not claim it passed.
+
+## Installed live validation and safe failure diagnosis
+
+The local installed development archive from source `4a78fb3` passed a direct
+rerun of all 15 installed E2E assertions in 212.392 seconds, including actual
+client/server command execution, literal/non-UTF8 argv, binary streams,
+authorization denials, cancellation, disconnect continuation, restart recovery
+and replay rejection. Cleanup completed. The harness was source `2b34b00`;
+[the sanitized report](distribution-local-installed.json) binds both revisions
+and the archive SHA256. This is not evidence for a different published archive.
+The first local attempt reached its failure deadline; its generic report did
+not preserve enough information for retrospective diagnosis.
+
+Hosted dispatch `41000261841` completed: Linux ARM64 native build and installer
+acceptance passed; Linux AMD64 compilation and the three daemon bootstrap tests
+passed, but installed live acceptance failed immediately. macOS failed the
+previously documented temporary-path fixtures. Publication was skipped.
+Corrected dispatch `41000985026` was cancelled before job assignment so the next
+run can include useful failure diagnostics. No release was published by either.
+
+Claude approved the diagnostic design and implementation in the linked
+`distribution-diagnostics-*` reviews. Failed acceptance now preserves only
+finite stage/error/assertion/cleanup fields, with acceptance-owned source and
+archive bindings. Tests cover malicious values and forged success; real
+publication validation rejects the failure evidence. All 75 focused tests and
+the complete 337-test tools suite passed locally (7 skips). The AST test's
+initial complexity/nesting finding was fixed with focused collectors. Remaining
+Ripwire findings are aggregate unittest class length, the required static error
+vocabulary, and unittest/visitor callbacks it cannot see dynamically; these are
+accepted with the focused review, rather than splitting classes to hide size.
+Hosted startup failure remains unclassified until the next diagnostic run;
+namespace policy is a hypothesis, not a validated conclusion.
