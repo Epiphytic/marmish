@@ -40,3 +40,32 @@ jobs:
           path: ${{ steps.report.outputs.path }}
           if-no-files-found: error
           retention-days: 7
+      - name: Prepare private owned-crash report directory
+        id: crash_report
+        if: always()
+        shell: bash
+        run: |
+          umask 077
+          report_dir=$(mktemp -d "$RUNNER_TEMP/marmish-crash-diagnostic.XXXXXX")
+          printf 'path=%s/report.json\n' "$report_dir" >> "$GITHUB_OUTPUT"
+      - name: Inspect owned synthetic probe crash
+        id: crash_diagnostic
+        if: always()
+        shell: bash
+        env:
+          REPORT_PATH: ${{ steps.crash_report.outputs.path }}
+        run: |
+          umask 077
+          if ! command -v python3 >/dev/null 2>&1; then
+            (set -o noclobber; printf '%s\n' '{"schema":1,"failure":{"category":"python_missing","exit_code":null},"cases":[],"ok":false}' > "$REPORT_PATH")
+            exit 1
+          fi
+          python3 tools/marmish_macos_crash_diagnostic.py --output "$REPORT_PATH"
+      - name: Preserve bounded owned-crash context
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: macos-owned-probe-crash-context
+          path: ${{ steps.crash_report.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7

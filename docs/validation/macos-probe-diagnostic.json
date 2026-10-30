@@ -20,5 +20,14 @@
     "exit_code": 2,
     "findings": "Three duplication matches on standard unittest temporary-directory setUp against existing tests; new-symbol dead-code findings are dynamic unittest discovery, plus test-class length. No production symbol changed. Reviewed as test-fixture/discovery artifacts; no shared fixture abstraction added for five lines."
   },
-  "native_acceptance": "pending manual hosted macos-15 run"
+  "native_acceptance": {
+    "run": "https://github.com/Epiphytic/marmish/actions/runs/41129112655",
+    "source": "09bb37f35a41669f197dc8e0bc0feb85d5218e30",
+    "runner": "hosted macos-15 arm64",
+    "conclusion": "failure expected: reproduced SIGABRT",
+    "controls": "read and TCP pass",
+    "confined": "read, TCP and system true all SIGABRT -6",
+    "stderr": "empty in all cases",
+    "interpretation": "General confined startup failure reproduced; cause remains unestablished"
+  }
 }

@@ -91,7 +91,13 @@ completes. The log establishes the failing boundary, not its cause. The
 [diagnostic increment](phases/macos-probe-abort.md) specifies a manual hosted
 macOS reproduction using the exact production sandbox profile and native probe,
 with bounded stderr from disposable, secret-free fixtures. It changes no
-production permissions or runtime acceptance gates.
+production permissions or runtime acceptance gates. Hosted ARM64 macOS run
+[41129112655](https://github.com/Epiphytic/marmish/actions/runs/41129112655)
+passes both unconfined controls, while confined read, TCP and system true all
+abort with signal 6 and empty stderr. This reproduces a general confined startup
+failure; the cause remains unestablished. A separately reviewed
+[owned probe crash-context diagnostic](phases/macos-probe-crash-context.md)
+selects only the synthetic child PID/path and extracts bounded allowlisted facts.
 
 The installer retains prior versions and all identity/keychain/command state;
 uninstall removes only owned launchers/bookkeeping. It does not modify host

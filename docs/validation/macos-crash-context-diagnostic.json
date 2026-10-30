@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "scope": "Diagnostic-only owned synthetic macOS crash context; no production changes",
+  "offline_tests": {
+    "run": 56,
+    "passed": 50,
+    "skipped_native_only": 6
+  },
+  "workflow_checks": [
+    "YAML contract assertions",
+    "all Bash syntax checks"
+  ],
+  "quality_disposition": "Generic extract symbol collision with unchanged marmish_ci_bwrap.py; new parsing complexity reviewed; deliberate Popen variant required for child PID instead of subprocess.run helper. CLI/test fixture boilerplate duplicates, unittest-discovery dead-code and workflow length are assessed by code review rather than changing production abstractions.",
+  "native_acceptance": "pending"
+}
