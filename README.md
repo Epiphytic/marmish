@@ -27,6 +27,9 @@ curl --proto '=https' --tlsv1.2 -fsSL \
 marmish --doctor
 ```
 
+Continue with [first-run setup](#first-run-with-installed-binaries) to create
+your local identity and authorize a client npub.
+
 The script is served from Radicle through Iris and downloads complete native
 archives and `SHA256SUMS` from [GitHub Releases](https://github.com/Epiphytic/marmish/releases).
 It selects an experimental prerelease; pin one with `sh install.sh --version
@@ -71,6 +74,65 @@ Asynchronous remote commands and resumable shells over Marmot, using explicitly 
 The current Linux prototype runs noninteractive commands over Marmot. Commands continue running after client disconnection. Interactive PTY/tmux sessions, takeover and simultaneous read-only attachments follow in later phases. Application messages default to a configurable 24-hour retention policy. Destination syntax is `npub@relay`, also accepting a hexadecimal Nostr public key; aliases and SRV discovery are later work. Relays must always be explicitly selected.
 
 See [the phased build plan](docs/build-plan.md). Beads tracks implementation and review work. The prototype uses a bounded adapter to a hash-pinned MDK daemon and the `marmish-engine` library for durable same-user jobs, detached workers, ordered stdin, bounded output, cancellation and replay protection. It is an experimental single-device command transport, not a production remote-shell release. See [prototype validation and limits](docs/validation/phase-2b-prototype.md) and the earlier [MDK compatibility report](docs/mdk-compatibility.md).
+
+## First run with installed binaries
+
+Run as your normal Unix user. On **each machine**, choose the same explicit
+relay URL and initialize a local identity:
+
+```sh
+printf 'Relay URL (wss://your-relay.example/): '
+IFS= read -r RELAY
+IDENTITY="$HOME/.marmish/default"
+marmish -i "$IDENTITY" --relay "$RELAY" --key-storage auto --init
+```
+
+For a new profile, initialization generates the local Nostr key and prints its
+hexadecimal public identifier as JSON: `{"account":"…"}`. Copy that public
+identifier when configuring the other endpoint; an `npub` is accepted too. Keep
+using the same identity directory
+to reuse the key and saved sessions. `~/.marmish/default` is a convention in this
+quickstart; the CLI still requires `-i`. If client and server run on one machine,
+choose separate identity directories because a profile allows only one active
+frontend.
+
+`auto` is already the default: it stores keys in macOS Keychain or Linux Secret
+Service when available. Only a proven absent backend selects private files,
+with a notice on stderr; a locked, denied, uninitialized or failed keychain stops
+setup. Linux native
+storage needs an initialized persistent Secret Service collection. Installation
+itself does not create identities or access the keychain; setup needs your
+explicit relay selection.
+
+On the **server**, enter the client's public identity and start the server in
+the foreground:
+
+```sh
+printf 'Client public identity to allow (npub or hex): '
+IFS= read -r CLIENT_NPUB_OR_HEX
+marmishd -i "$IDENTITY" --relay "$RELAY" \
+  --allow "$CLIENT_NPUB_OR_HEX" --cwd "$HOME"
+```
+
+Repeat `--allow` for additional client identities. These permissions apply to
+this server invocation; supply them again on restart. Authorized commands run as
+this Unix user in the selected directory. Keep the server running; interactive
+shells remain future work.
+
+On the **client**, enter the server's public identity printed during its setup
+and run a command:
+
+```sh
+printf 'Server public identity (npub or hex): '
+IFS= read -r SERVER_NPUB_OR_HEX
+marmish -i "$IDENTITY" --relay "$RELAY" -u "$SERVER_NPUB_OR_HEX" "$RELAY" -- \
+  /usr/bin/printf '%s\n' 'Hello through Marmot'
+```
+
+Here `-u` selects the remote Nostr identity, and the destination is the explicit
+relay URL. The equivalent destination form is `npub@relay-host`. Arguments after
+`--` are literal command arguments. The platform runtime limitations above still
+apply; successful installation or `--doctor` alone does not prove confinement.
 
 ## Run the command prototype
 
