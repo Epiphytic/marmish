@@ -27,3 +27,10 @@ The workflow's unconfined step invokes both native test names explicitly. A
 workflow assertion checks the combined command and its position before the
 broad prerequisite. Independent Sonnet design and completed-code reviews are
 stored under `docs/reviews/native-lifetime-zombie-*`.
+
+Actual native followup: [run 40983389092](native-run-40983389092.json), at
+`84882c7`, passed both targeted macOS tests in 0.637 seconds, including the
+positive/negative group proof and original exact bootstrap handoff. The same
+job passed explicit-Keychain provider tests, then stopped in the separate
+`storage_diskutil` prerequisite with subprocess exit 1. Broader confinement and
+default-keychain frontend acceptance are still pending.

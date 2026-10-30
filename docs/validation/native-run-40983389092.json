@@ -1,0 +1,156 @@
+{
+  "run_id": 40983389092,
+  "sha": "84882c7d6b3509eb9425cdacbd3382ad686d6f9b",
+  "created_at": "2026-10-30T01:02:10Z",
+  "status": "completed",
+  "conclusion": "failure",
+  "jobs": [
+    {
+      "id": 123828564895,
+      "name": "native (linux-arm64, self-hosted, Linux, ARM64, laptop-ci)",
+      "status": "completed",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "name": "Native disposable macOS keychain acceptance",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Native unconfined shim handoff",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Native prerequisite spike",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Native offline tests",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Build pinned native daemon and executables",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Remove owned Bubblewrap prefix",
+          "conclusion": "success"
+        }
+      ],
+      "fixed_diagnostic": {
+        "outcome": "failed",
+        "error": "userns_denied_private_bwrap"
+      }
+    },
+    {
+      "id": 123828564968,
+      "name": "native (linux-x64, self-hosted, Linux, X64, bel-ci)",
+      "status": "completed",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Native disposable macOS keychain acceptance",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Native unconfined shim handoff",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Native prerequisite spike",
+          "conclusion": "success"
+        },
+        {
+          "name": "Native offline tests",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build pinned native daemon and executables",
+          "conclusion": "success"
+        },
+        {
+          "name": "Remove owned Bubblewrap prefix",
+          "conclusion": "success"
+        }
+      ],
+      "validation": {
+        "python_tools": {
+          "total": 260,
+          "skipped": 6,
+          "outcome": "passed"
+        },
+        "python_key_integration": {
+          "total": 21,
+          "outcome": "passed"
+        },
+        "rust_workspace_clippy_fmt": "passed",
+        "pinned_daemon_bootstrap_tests": 3,
+        "owned_cleanup": "success"
+      }
+    },
+    {
+      "id": 123828565574,
+      "name": "native (macos-arm64, self-hosted, macOS, ARM64, laptop-ci)",
+      "status": "completed",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "name": "Native disposable macOS keychain acceptance",
+          "conclusion": "success"
+        },
+        {
+          "name": "Native unconfined shim handoff",
+          "conclusion": "success"
+        },
+        {
+          "name": "Native prerequisite spike",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Native offline tests",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Build pinned native daemon and executables",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Remove owned Bubblewrap prefix",
+          "conclusion": "skipped"
+        }
+      ],
+      "native_unconfined_tests": {
+        "total": 2,
+        "outcome": "passed",
+        "seconds": 0.637,
+        "tests": [
+          "NativeLifetimeTests.test_bootstrap_child_reads_exact_frame_parent_uses_devnull",
+          "NativeLifetimeTests.test_native_zombie_group_proof"
+        ],
+        "scope": "Actual 72-byte bootstrap, fd0 devnull and cleanup; native zombie-only and live/unrelated proof cases. No Seatbelt proof."
+      },
+      "fixed_diagnostic": {
+        "outcome": "failed",
+        "category": "native_subprocess_failed",
+        "stage": "storage_diskutil",
+        "errno": null,
+        "exit_code": 1
+      }
+    },
+    {
+      "id": 123831550972,
+      "name": "live",
+      "status": "completed",
+      "conclusion": "skipped",
+      "steps": []
+    }
+  ],
+  "assignment": "Linux x64 started promptly; ARM64 and macOS queued more than five minutes behind sequential matrix. User notified; both later assigned.",
+  "remaining_gates": [
+    "macOS storage_diskutil prerequisite refusal (marmish-3cq); exact cause not established",
+    "macOS broader Seatbelt/confined native bootstrap",
+    "default-keychain frontend acceptance with dedicated owned account/VM (marmish-d84.4)",
+    "Linux ARM nested namespace prerequisite",
+    "same-SHA live Linux/macOS interoperability"
+  ],
+  "scope": "Read-only actual CI/log observation. No ambient keychain changes or default-keychain acceptance inferred. Zombie cleanup correction passed its actual native tests; later prerequisite failure retained."
+}

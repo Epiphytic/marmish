@@ -220,8 +220,14 @@ accepted unconditionally. The reviewed [group-state correction](phases/native-li
 accepts only group SIGKILL EPERM after a bounded two-snapshot libproc proof of a
 same-identity zombie-only original group, while the direct-child leader remains
 unreaped. Live, uncertain, truncated or changed groups retain exit 70. Portable
-proof/cleanup harnesses and 260 Python tests passed (six Darwin skips); actual
-native acceptance remains pending. See [offline evidence](validation/native-zombie-groups.md).
+proof/cleanup harnesses and 260 Python tests passed (six Darwin skips).
+[Run 40983389092](validation/native-run-40983389092.json) then passed both actual
+macOS unconfined tests: exact bootstrap handoff and positive/negative zombie-group
+proof. Disposable explicit-Keychain acceptance passed too. The broader spike
+now stops at `storage_diskutil` (subprocess exit 1), before Seatbelt checks; the
+exact cause remains under investigation. Linux AMD64 passed all offline and
+pinned-build checks; ARM64 still refused namespaces. See
+[offline evidence](validation/native-zombie-groups.md).
 The same run exposed three Linux audit fixtures whose executable links were
 missing during inspection; the audit correctly refused an unreadable executable. A
 deterministic [test-fixture replacement](phases/native-audit-fixture.md) now uses
@@ -385,6 +391,7 @@ locked-profile refusal, identity/output recovery, migration preservation and
 actual daemon/worker/helper process audits. The offline Python suite passed 247
 tests with five Darwin-specific skips. See [K3 validation](validation/keychain-native.md)
 and its linked code reviews and retained successful/failed runtime reports.
-macOS explicit-Keychain provider tests passed, while the same CI job failed
-on shim cleanup (exit 70). Default frontend and confined runtime gates remain
-pending. Linux acceptance does not establish those gates.
+macOS explicit-Keychain provider tests and corrected unconfined shim/group tests
+passed in run 40983389092. The broader probe stops at `storage_diskutil` exit 1.
+Default frontend and confined runtime gates remain pending. Linux acceptance
+does not establish those gates.
