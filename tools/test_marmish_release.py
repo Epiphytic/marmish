@@ -40,6 +40,14 @@ def local_import_names(tree):
             yield node.module.split('.')[0]
 
 
+
+def stable_ast_dump(node):
+    options = {'include_attributes': False}
+    if sys.version_info >= (3, 13):
+        options['show_empty'] = True
+    return ast.dump(node, **options)
+
+
 def called_name(node):
     if isinstance(node.func, ast.Name):
         return node.func.id
@@ -61,7 +69,7 @@ class DiagnosticErrors(ast.NodeVisitor):
         if isinstance(category, ast.Constant) and isinstance(category.value, str):
             self.errors.add(category.value)
             return
-        key = self.module + ':' + label + ':' + ast.dump(category, include_attributes=False)
+        key = self.module + ':' + label + ':' + stable_ast_dump(category)
         self.dynamic[key] += 1
 
     def visit_Call(self, node):
@@ -416,6 +424,12 @@ class ReleaseTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     acceptance.live_acceptance(['ignored'], manifest, 'b' * 64, evidence)
             self.assertNotIn(secret, evidence.read_text())
+
+    def test_diagnostic_ast_dump_preserves_empty_fields_across_python_versions(self):
+        node = ast.parse('str(error)', mode='eval').body
+        expected = ("Call(func=Name(id='str', ctx=Load()), "
+                    "args=[Name(id='error', ctx=Load())], keywords=[])")
+        self.assertEqual(stable_ast_dump(node), expected)
 
     def test_diagnostic_frozen_vocabularies_cover_source_and_reviewed_dynamic_calls(self):
         import marmish_release_acceptance as acceptance

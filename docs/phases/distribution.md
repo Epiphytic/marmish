@@ -336,3 +336,177 @@ review, commit and push both source homes and dispatch one fresh same-commit
 three-target workflow. Only its all-target installation gates and Linux x86_64
 installed live pass can authorize publishing those artifacts. If it fails,
 inspect the new sanitized category before proposing a production fix.
+
+### Python-version-stable AST drift fingerprints
+
+The second hosted macOS run failed the offline diagnostic vocabulary drift test,
+so this run does not qualify for any local-execution publication fallback. The
+same failure is reproducible locally with the already-installed CPython 3.14.7;
+the default CPython 3.12.3 test passes. CPython 3.13+ `ast.dump` omits empty list
+fields by default, changing the reviewed `RpcError(str(error))` fingerprint by
+removing `keywords=[]`. Explicit `show_empty=True` on CPython 3.14 reproduces the
+existing reviewed fingerprint exactly. This is a test representation issue, not
+a reason to relax the error vocabulary or dynamic-call drift gate.
+
+After independent Claude design approval, change only
+`tools/test_marmish_release.py`: introduce one focused stable AST dump helper
+that always passes `include_attributes=False`, adds `show_empty=True` only when
+`sys.version_info >= (3, 13)`, and otherwise uses the existing pre-3.13 argument
+set. Route the single diagnostic dynamic-category fingerprint dump through it.
+Preserve the exact reviewed structural strings and counts, literal vocabularies,
+module closure and all production behavior. Do not catch arbitrary TypeError,
+regenerate fingerprints for each interpreter, or ignore mismatches. Add a golden
+regression for the nested `str(error)` call including its empty `keywords=[]`,
+and retain the full real-source drift test as the integration check.
+
+Run the focused distribution suite using already-installed CPython 3.11, 3.12
+and 3.14, with no downloads, live tests or builds. Obtain independent Claude code
+review, commit/push the correction and reviewed plans to both source homes, and
+dispatch a fresh three-target same-source native distribution. Record the exact
+full source commit and run ID/attempt in Beads and validation evidence. No failed
+macOS offline gate is replaced by local Linux evidence. Only after every native
+offline/build/installation gate passes can the following conditional fallback be
+considered for a separately confirmed hosted Linux namespace-policy failure.
+
+### Conditional local execution gate for a hosted namespace-policy failure
+
+This is a narrow procedural exception to the preceding hosted-live requirement,
+subject to independent Claude design approval before use. It applies only to the
+native distribution from a future fully recorded frozen source/run. Before
+using it, record the full 40-character source commit, originating workflow run ID
+and attempt in Beads and the reviewed validation record; use that exact identity
+throughout every step below. The current run with a failed macOS offline test
+does not qualify. The exception is inactive unless the hosted
+Linux x86_64 diagnostic identifies a namespace/confinement startup failure and
+bounded read-only host evidence confirms that the hosted namespace policy caused
+it. The namespace-start category alone does not establish that cause. Record the
+exact sanitized startup failure category and, where runner access/logs permit,
+the fixed sysctl integer values and the owned namespace probe described below.
+A failed probe explicitly reporting EPERM/EACCES, together with the same hosted
+live namespace-start failure, establishes that the host denies the namespace
+operation required by the current product. It does not identify AppArmor as the
+specific cause. Record unavailable settings/log access honestly; do not infer an
+exact policy culprit from timing, a restrictive setting alone or a generic
+namespace failure. If permission denial is not established, the cause remains
+ambiguous and this exception stays inactive. An unclassified failure, transport failure, product defect, missing native
+installation proof or incomplete cleanup does not qualify. Do not weaken or
+change host confinement, AppArmor, namespace settings or workflow `needs` gates.
+
+Before a new dispatch, independently review a workflow-only observation step
+immediately after Ubuntu prerequisite installation. It prints one finite JSON
+record with integer-or-null values read from only these fixed paths:
+`/proc/sys/kernel/apparmor_restrict_unprivileged_userns`,
+`/proc/sys/kernel/unprivileged_userns_clone`, and
+`/proc/sys/user/max_user_namespaces`. Read bounded ASCII decimal input, reject
+noninteger/oversized values to null, and emit no arbitrary file contents. Run
+only `/usr/bin/unshare --user --map-root-user --net /usr/bin/true` with a
+10-second subprocess timeout and a fixed C locale. Capture its output privately;
+print only return code or null, success, timeout, and a known-permission-denial
+boolean recognizing the C-locale EPERM/EACCES messages. Never print raw stdout,
+stderr or exception text. Treat an unavailable executable/read/probe as an
+explicit unavailable/null observation; the observation step exits successfully
+and cannot block compilation or satisfy the existing live acceptance gate.
+The short-lived owned probe exits with its namespace; no settings, capabilities,
+AppArmor profiles or namespace policy are changed. Require explicit independent
+design approval before editing `.github/workflows/release.yml` to add this step.
+Its only purpose is honest bounded host evidence for the conditional trigger,
+not an execution fallback or alternative success test. The Linux-only step sets
+`continue-on-error: true` and a one-minute step timeout; unexpected observation
+failures therefore do not fail the build. The subprocess receives only a fixed
+minimal PATH and C locale, uses stdin/stdout DEVNULL and a private temporary
+stderr file read to at most 4096 bytes for known denial classification. Each
+fixed sysctl read is at most 65 bytes and accepts only at most 20 decimal digits
+plus an optional newline. Emit the finite JSON to stdout and
+`GITHUB_STEP_SUMMARY` only, with no artifact or private stderr upload. Summary
+write failure is ignored. The existing real installed live gate is unchanged.
+
+Wait for the originating workflow run/attempt and every build job to terminate.
+Verify from the exact job logs and artifacts that all three native builds,
+locked provenance/license collection, offline distribution checks, staged
+binary smoke checks and native installer/help/idempotence checks passed. The
+hosted x86_64 combined acceptance step may have failed only in its subsequent
+live confinement startup; verify that its preceding native installation checks
+completed. Both ARM64 native installation jobs must have succeeded. The full
+local x86_64 acceptance below must additionally pass installation, live command
+execution and marker-owned uninstall. Preserve the hosted failed report as
+separate failure evidence; never relabel a failed job or workflow as successful.
+
+Download precisely the three target artifacts from that single terminated
+run/attempt. Record run ID, attempt, source SHA, artifact names/IDs and available
+GitHub artifact digest metadata; verify downloaded artifact bytes against that
+metadata using the documented artifact digest semantics. Require the run head
+SHA and every embedded/sidecar manifest to equal the frozen source. Construct a
+new private inputs directory containing exactly one original archive and sidecar
+per target. Do not rebuild, repackage, substitute an earlier local archive or mix
+artifacts from another run/attempt. Preserve an immutable downloaded copy and
+compute each original archive SHA256. A missing artifact or unverifiable source
+is a blocker, not permission to fill the gap.
+
+Use a clean checkout or isolated clean worktree at the exact frozen source SHA
+to run both acceptance and publication, including the checkout installer imported
+by acceptance. Require no executable/source edits; the existing build cleanliness
+contract may exclude only known Beads metadata, never other changes. On a local
+Linux x86_64 host whose ordinary product confinement already works, first verify
+that the archive-recorded glibc and shared-library prerequisites are fulfilled
+using its installed doctor checks. Preserve that bounded prerequisite result.
+Run the unchanged `marmish_release_acceptance.py` against the downloaded x86_64
+archive using a newly owned private prefix and the explicit EU/US WhiteNoise
+relay URLs. Run no overlapping live test and use disposable file-backed keys.
+Require exit zero, the actual installed CLI assertion, all 15 file-storage E2E
+assertions, `local_cleanup=complete`, and the normal install/help/idempotence/
+uninstall checks. Verify the generated live report's source SHA, exact archive
+SHA256 and `wnd_sha256` against the downloaded manifest/payload. A prior direct
+E2E pass is diagnostic only and cannot replace this full archive acceptance.
+A local failure leaves publication blocked.
+
+Preserve that original acceptance report. In the clean aggregate inputs copy,
+add only a separate `operator_provenance` object to the passed report, identifying
+`execution_origin=local-linux-x64`, the originating workflow run ID/attempt and
+its source SHA, and the hosted namespace failure category. Do not change any
+acceptance-generated field, assertion, digest or outcome; verify an exact diff
+showing only this added object. This metadata is an explicit trusted-operator
+attribution, not a cryptographic host attestation or a new security predicate.
+The original unchanged publisher must still independently enforce source/archive/
+wnd digest binding, successful installed command execution and complete cleanup.
+Keep exactly one `installed-e2e.json` in aggregate inputs. The preserved failed
+hosted report remains outside that inputs tree.
+
+Run the existing strict publisher locally with the frozen source, selected
+version, clean inputs, a new output directory and `GITHUB_RUN_ID` set to the
+verified originating run. Do not call its lower-level functions to bypass
+aggregation. Audit the aggregate archive set, manifests, evidence and SHA256SUMS
+before invoking publication; use a fresh output directory for a second CLI
+invocation because aggregation refuses an existing output. The unchanged
+publication path creates a draft, uploads the exact validated aggregate,
+downloads and hashes every asset, checks current master and tag identity, then
+makes the experimental prerelease visible. The skipped CI publish job stays
+skipped; local publication is a separately reviewed operator action under the
+user's release authorization.
+
+Existing generated notes truthfully say the binaries are native GitHub-hosted
+builds and Linux commands executed through Marmot, without claiming that live
+execution occurred on GitHub. Before visibility, the uploaded validation JSON
+already carries explicit local execution attribution. Immediately after publish,
+edit only the release body to add the same local-host qualification and exact
+originating hosted namespace failure category; this is mandatory and must be
+recorded in Beads. Preserve source, run URL, limitations, assets, prerelease
+status and tag. No deferred body edit is needed to make a
+false claim true. Keep the ARM64/macOS runtime limitations explicit.
+
+Verify GitHub master and the Radicle source branch still equal the frozen source
+before publication. Preserve the publisher's two fresh GitHub-master checks and
+all tag checks. Commit the approved design and any test correction before dispatching the
+qualifying future workflow. Once that workflow source is frozen, do not commit
+subsequent validation/review records before publishing its already-built
+artifacts: that would advance master and must correctly fail source freshness.
+Record all operator actions in Beads while source stays frozen, and ensure
+executable source is unchanged. Do not commit tracked Beads exports, including
+`.beads/interactions.jsonl`, before publication: that also advances master and
+must fail freshness even when the change contains no executable code.
+After publication, verify the GitHub release tag resolves to that exact source,
+then publish/verify the same tag at Radicle without forcing any conflicting ref.
+Finally commit and push the reviewed documentation/specification/validation
+record to both homes, linking original failed hosted evidence and the new local
+archive acceptance evidence honestly. If source changes before release visibility,
+abandon this exception for these artifacts and perform a fresh reviewed build;
+never bypass the freshness guard.

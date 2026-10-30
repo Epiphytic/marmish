@@ -65,6 +65,57 @@ jobs:
           dpkg-query -W -f='${binary:Package} ${Version}\n' "${packages[@]}"
           bwrap_version=$(dpkg-query -W -f='${Version}' bubblewrap)
           dpkg --compare-versions "$bwrap_version" ge '0.9.0-1ubuntu0.3'
+      - name: Observe hosted Linux namespace permissions
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        timeout-minutes: 1
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import tempfile
+
+          paths = {
+              'apparmor_restrict_unprivileged_userns': '/proc/sys/kernel/apparmor_restrict_unprivileged_userns',
+              'unprivileged_userns_clone': '/proc/sys/kernel/unprivileged_userns_clone',
+              'max_user_namespaces': '/proc/sys/user/max_user_namespaces',
+          }
+          settings = {}
+          for name, path in paths.items():
+              try:
+                  with open(path, 'rb') as source:
+                      raw = source.read(65)
+                  settings[name] = int(raw) if re.fullmatch(rb'[0-9]{1,20}\n?', raw) else None
+              except (OSError, ValueError):
+                  settings[name] = None
+          report = {'settings': settings, 'available': True, 'returncode': None,
+                    'success': False, 'timed_out': False, 'permission_denied': False}
+          try:
+              with tempfile.TemporaryFile() as errors:
+                  result = subprocess.run(
+                      ['/usr/bin/unshare', '--user', '--map-root-user', '--net', '/usr/bin/true'],
+                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=errors,
+                      env={'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}, timeout=10)
+                  errors.seek(0)
+                  diagnostic = errors.read(4096)
+              report.update(returncode=result.returncode, success=result.returncode == 0,
+                            permission_denied=(b'Operation not permitted' in diagnostic
+                                               or b'Permission denied' in diagnostic))
+          except subprocess.TimeoutExpired:
+              report['timed_out'] = True
+          except OSError:
+              report['available'] = False
+          text = json.dumps(report, sort_keys=True)
+          print(text)
+          try:
+              with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a') as summary:
+                  summary.write('```json\n' + text + '\n```\n')
+          except (KeyError, OSError):
+              pass
+          PY
       - name: Ensure native Python
         run: sh tools/bootstrap_ci_python.sh
       - name: Verify the native target

@@ -124,3 +124,24 @@ vocabulary, and unittest/visitor callbacks it cannot see dynamically; these are
 accepted with the focused review, rather than splitting classes to hide size.
 Hosted startup failure remains unclassified until the next diagnostic run;
 namespace policy is a hypothesis, not a validated conclusion.
+
+## Cross-version test fingerprints and namespace observation
+
+Dispatch `41002528506` fixed the earlier macOS temporary-path fixtures but
+exposed a Python 3.14 difference in the new AST drift test: `ast.dump` omits
+empty fields by default from Python 3.13. The exact failure was reproduced
+locally on 3.14. A test-only helper enables `show_empty=True` on 3.13+ and
+preserves every reviewed fingerprint and count. All 76 focused distribution
+tests passed independently on Python 3.11.15, 3.12.3 and 3.14.7. The full tools
+suite passed 338 tests with 7 skips. Claude approved the design and code in
+[the AST/fallback review](../reviews/distribution-ast-fallback-design.json) and
+[the compatibility/probe review](../reviews/distribution-ast-probe-design-code.json).
+
+Claude also approved [the implemented observational workflow step](../reviews/distribution-probe-code.json).
+It logs bounded numeric namespace settings and a fixed ten-second `unshare`
+probe with finite permission-denial output. It changes no host setting, is
+non-gating and does not replace the real live diagnostic. The next dispatch
+will exercise it; no hosted namespace-policy cause is claimed yet. The
+conditional exact-archive local-validation procedure is documented and reviewed;
+it remains inactive until its specific native-build/install and denial
+conditions are proven for one frozen source and run. No release exists yet.
