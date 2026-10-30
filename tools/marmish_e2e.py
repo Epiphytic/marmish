@@ -57,8 +57,9 @@ class Harness:
                                wnd_manifest=getattr(self.args, 'wnd_manifest', None))
 
     def common_args(self, name):
-        args = ['--key-storage', self.storage, '-i', str(self.root / name), '--wnd', str(self.args.wnd),
-                '--wnd-sha256', self.args.wnd_sha256]
+        args = ['--key-storage', self.storage, '-i', str(self.root / name)]
+        if not getattr(self.args, 'installed_root', None):
+            args += ['--wnd', str(self.args.wnd), '--wnd-sha256', self.args.wnd_sha256]
         if self.args.key_name_prefix and self.storage != 'files':
             args += ['--key-name', self.args.key_name_prefix + '-' + name]
         if self.args.keychain_helper:
@@ -67,9 +68,15 @@ class Harness:
             args += ['--key-catalog', str(self.args.key_catalog)]
         for relay in self.args.relay:
             args += ['--relay', relay]
-        if getattr(self.args, 'wnd_manifest', None):
+        if getattr(self.args, 'wnd_manifest', None) and not getattr(self.args, 'installed_root', None):
             args += ['--wnd-manifest', str(self.args.wnd_manifest)]
         return args
+
+    def frontend_command(self, server=False):
+        name = 'marmishd' if server else 'marmish'
+        if getattr(self.args, 'installed_root', None):
+            return [str(self.args.installed_root / 'bin' / name)]
+        return [sys.executable, str(Path(__file__).with_name(name + '.py'))]
 
     def check_locked_restarts(self):
         self.checkpoint('locked_frontend_refusal')
@@ -374,15 +381,15 @@ class Harness:
 
     def start_server(self):
         self.checkpoint('server_start')
-        script = Path(__file__).with_name('marmishd.py')
         policy = self.root / 'command-policy.json'
         save_json(policy, {'version': 1, 'defaults': {'allow_exec': ['/**'],
                   'deny_exec': [str(Path('/usr/bin/false').resolve())]}, 'keys': [
                   {'principal': self.client_identity,
                    'restrictions': {'deny_exec': [str(Path('/usr/bin/true').resolve())]}}]})
-        self.server = subprocess.Popen([sys.executable, str(script), *self.common_args('server'),
-            '--allow', self.client_identity, '--bridge', str(self.args.bridge),
-            '--worker', str(self.args.worker), '--cwd', str(self.cwd),
+        helpers = ([] if getattr(self.args, 'installed_root', None) else
+                   ['--bridge', str(self.args.bridge), '--worker', str(self.args.worker)])
+        self.server = subprocess.Popen([*self.frontend_command(server=True), *self.common_args('server'),
+            '--allow', self.client_identity, *helpers, '--cwd', str(self.cwd),
             '--command-policy', str(policy), '--allow-shell'],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             start_new_session=True, env={'PATH': '/usr/bin:/usr/sbin:/bin:/sbin', 'LANG': 'C', **execution_marker(), **bwrap_environment(), **native_environment(),
@@ -638,16 +645,20 @@ class Harness:
             self.passed('fresh_independent_mls_group_configurable_retention_same_principal_reattach')
         self.checkpoint('cli_process')
         target = self.server_identity + '@' + self.args.relay[0].removeprefix('wss://').rstrip('/')
-        result = subprocess.run([sys.executable, str(Path(__file__).with_name('marmish.py')),
+        cli_payload = 'marmish cli ; $(false) $HOME `false` "quotes" \'single\' \\ / ** *\nsecond line'
+        result = subprocess.run([*self.frontend_command(),
             *self.common_args('client'), '--timeout', '120', target, '--',
-            '/usr/bin/printf', '%s\n', 'marmish cli e2e'],
+            '/usr/bin/printf', '%s\n', cli_payload],
             input=b'', stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             timeout=min(150, max(1, self.deadline - continuous_time())),
             env={'PATH': '/usr/bin:/usr/sbin:/bin:/sbin', 'LANG': 'C', **execution_marker(), **bwrap_environment(), **native_environment(),
                 **({key: os.environ[key] for key in ('RUNNER_TRACKING_ID',) if key in os.environ})})
-        require(result.returncode == 0 and result.stdout == b'marmish cli e2e\n' and result.stderr == b'',
+        require(result.returncode == 0 and result.stdout == (cli_payload + '\n').encode()
+                and result.stderr == b'',
                 'cli_process_failed')
         self.passed('actual_client_and_server_cli_processes_execute_command_via_marmot')
+        if getattr(self.args, 'installed_root', None):
+            self.passed('installed_launchers_and_bundled_defaults_preserve_special_character_argv')
         self.check_native_storage()
         self.report.update(outcome='passed', stage='complete')
 
@@ -661,6 +672,8 @@ def main(argv=None, *, report_sink=None):
     parser.add_argument('--wnd-manifest', type=Path)
     parser.add_argument('--bridge', type=Path, required=True)
     parser.add_argument('--worker', type=Path, required=True)
+    parser.add_argument('--installed-root', type=Path,
+                        help='exercise installed CLI launchers and bundled helper defaults')
     parser.add_argument('--timeout', type=int, default=900)
     parser.add_argument('--key-storage', choices=('files', 'auto', 'native'), default='files')
     parser.add_argument('--keychain-helper', type=Path)
@@ -668,6 +681,8 @@ def main(argv=None, *, report_sink=None):
     parser.add_argument('--key-name-prefix')
     parser.add_argument('--migrate-acceptance', action='store_true')
     args = parser.parse_args(argv)
+    if args.installed_root:
+        args.installed_root = args.installed_root.resolve(strict=True)
     require(60 <= args.timeout <= 900, 'invalid_timeout')
     require((args.key_storage == 'files' and not args.migrate_acceptance) or
             active_context() is not None, 'owned_native_context_required')

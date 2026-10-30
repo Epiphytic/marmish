@@ -1,0 +1,129 @@
+name: Experimental native distribution
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Experimental version, e.g. 0.1.0-experimental.1'
+        required: true
+        type: string
+      publish:
+        description: 'Publish the verified artifacts as an experimental prerelease'
+        default: false
+        type: boolean
+permissions:
+  contents: read
+# The ARM64 Linux and macOS runners share hardware with native validation.
+concurrency:
+  group: marmish-native-validation
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.ref == 'refs/heads/master'
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - platform: linux-x64
+            target: x86_64-unknown-linux-gnu
+            labels: [self-hosted, Linux, X64, bel-ci]
+          - platform: linux-arm64
+            target: aarch64-unknown-linux-gnu
+            labels: [self-hosted, Linux, ARM64, laptop-ci]
+          - platform: macos-arm64
+            target: aarch64-apple-darwin
+            labels: [self-hosted, macOS, ARM64, laptop-ci]
+    runs-on:
+      group: epiphytic-ci
+      labels: ${{ matrix.labels }}
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Validate experimental version
+        run: python3 -c 'import os,re; assert re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-experimental\.(0|[1-9][0-9]*)", os.environ["RELEASE_VERSION"])'
+      - name: Set private build output location
+        run: echo "RELEASE_OUTPUT=$RUNNER_TEMP/marmish-distribution-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-${{ matrix.platform }}" >> "$GITHUB_ENV"
+      - name: Ensure native Python
+        run: sh tools/bootstrap_ci_python.sh
+      - name: Restore trusted build caches
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ${{ runner.temp }}/marmish-toolchain
+            ${{ runner.temp }}/marmish-cargo
+            ${{ runner.temp }}/marmish-mdk-target
+            target
+          key: distribution-${{ matrix.platform }}-rust1.97.1-${{ hashFiles('Cargo.lock', 'patches/mdk/**', 'tools/build_mdk.py', 'tools/marmish_release*.py') }}
+          restore-keys: |
+            distribution-${{ matrix.platform }}-rust1.97.1-
+            native-${{ matrix.platform }}-rust1.97.1-
+      - name: Bootstrap pinned toolchain without publication credentials
+        run: |
+          mkdir -m 700 "$RELEASE_OUTPUT"
+          python3 tools/marmish_ci.py bootstrap --destination "$RUNNER_TEMP/marmish-toolchain"
+          echo "$RUNNER_TEMP/marmish-toolchain/bin" >> "$GITHUB_PATH"
+          echo "CARGO_HOME=$RUNNER_TEMP/marmish-cargo" >> "$GITHUB_ENV"
+          echo "MARMISH_MDK_TARGET_DIR=$RUNNER_TEMP/marmish-mdk-target" >> "$GITHUB_ENV"
+          echo "MARMISH_NATIVE_TOOLCHAIN=1" >> "$GITHUB_ENV"
+      - name: Offline distribution tests
+        run: |
+          PYTHONPATH=tools python3 -m unittest test_marmish_release test_marmish_release_licenses test_marmish_install test_marmish_publish
+      - name: Build complete native distribution and notices
+        run: python3 tools/marmish_release.py build --version "$RELEASE_VERSION" --output "$RELEASE_OUTPUT"
+      - name: Acquire owned Bubblewrap for installed Linux AMD64 execution
+        if: matrix.platform == 'linux-x64'
+        run: python3 tools/marmish_ci_bwrap.py bootstrap --state "$RELEASE_OUTPUT/bwrap-state"
+      - name: Install and validate the native archive
+        run: |
+          archive="$RELEASE_OUTPUT/marmish-$RELEASE_VERSION-${{ matrix.target }}.tar.gz"
+          if [ '${{ matrix.platform }}' = linux-x64 ]; then
+            python3 tools/marmish_release_acceptance.py --archive "$archive" --version "$RELEASE_VERSION" \
+              --prefix "$RELEASE_OUTPUT/installed runtime" --live \
+              --relay wss://relay.eu.whitenoise.chat/ --relay wss://relay.us.whitenoise.chat/
+          else
+            python3 tools/marmish_release_acceptance.py --archive "$archive" --version "$RELEASE_VERSION" \
+              --prefix "$RELEASE_OUTPUT/installed runtime"
+          fi
+      - name: Upload archives and public acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: distribution-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}
+          path: |
+            ${{ env.RELEASE_OUTPUT }}/*.tar.gz
+            ${{ env.RELEASE_OUTPUT }}/*.release.json
+            ${{ env.RELEASE_OUTPUT }}/installed-e2e.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove owned Bubblewrap after acceptance cleanup
+        if: always() && matrix.platform == 'linux-x64'
+        run: |
+          if [ -f "$RELEASE_OUTPUT/bwrap-state" ]; then
+            python3 tools/marmish_ci_bwrap.py cleanup --state "$RELEASE_OUTPUT/bwrap-state"
+          fi
+  publish:
+    if: inputs.publish && github.ref == 'refs/heads/master'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: distribution-${{ github.run_id }}-${{ github.run_attempt }}-*
+          path: release-inputs
+      - name: Validate aggregate and publish experimental assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/marmish_publish.py --version "$RELEASE_VERSION" --source "$GITHUB_SHA" --inputs release-inputs --output release-output --publish

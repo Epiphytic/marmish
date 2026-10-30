@@ -602,19 +602,24 @@ class Server:
 
 
 def common(parser):
+    from marmish_installed import DoctorAction, installed_defaults
+    defaults = installed_defaults()
+    parser.add_argument('--doctor', nargs=0, action=DoctorAction,
+                        help='report static platform prerequisites without accessing keys')
     parser.add_argument('-i', '--identity', required=True, type=Path,
                         help='private persistent local identity directory')
     parser.add_argument('--relay', action='append', required=True, help='explicit wss root URL')
     parser.add_argument('--key-storage', choices=('auto', 'native', 'files'), default='auto')
     parser.add_argument('--key-name', help='local named Nostr key bound to this profile')
-    parser.add_argument('--keychain-helper', type=Path, help='absolute native helper executable')
+    parser.add_argument('--keychain-helper', type=Path, default=defaults.get('keychain_helper'), help='absolute native helper executable')
     parser.add_argument('--key-catalog', type=Path, help='private named-key catalog path')
     parser.add_argument('--migrate-keys-to-native', action='store_true',
                         help='migrate existing keys, preserving identity and encrypted state')
-    parser.add_argument('--wnd', required=True, type=Path)
-    parser.add_argument('--wnd-sha256', required=True)
-    parser.add_argument('--wnd-manifest', type=Path,
+    parser.add_argument('--wnd', required=not defaults, type=Path, default=defaults.get('wnd'))
+    parser.add_argument('--wnd-sha256', required=not defaults, default=defaults.get('wnd_sha256'))
+    parser.add_argument('--wnd-manifest', type=Path, default=defaults.get('wnd_manifest'),
                         help='daemon build manifest (macOS defaults to <wnd>.manifest.json)')
+    return defaults
 
 
 def exit_code(status):
@@ -691,10 +696,10 @@ def client_main(argv=None):
 
 def server_main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    common(parser)
+    defaults = common(parser)
     parser.add_argument('--allow', action='append', required=True)
-    parser.add_argument('--bridge', required=True, type=Path)
-    parser.add_argument('--worker', required=True, type=Path)
+    parser.add_argument('--bridge', required=not defaults, type=Path, default=defaults.get('bridge'))
+    parser.add_argument('--worker', required=not defaults, type=Path, default=defaults.get('worker'))
     parser.add_argument('--cwd', required=True, type=Path)
     parser.add_argument('--allow-shell', action='store_true')
     parser.add_argument('--command-policy', type=Path,

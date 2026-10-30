@@ -9,6 +9,33 @@ concrete commands.
 
 ## Purpose and intended product
 
+### Experimental distribution increment
+
+The distribution design is [recorded here](phases/distribution.md). Complete
+runtime archives target Linux x86_64/aarch64 and macOS aarch64; Intel macOS is
+excluded. The self-contained `scripts/install.sh` is intended to be fetched from
+Iris at `https://iris.radicle.network/raw/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/head/scripts/install.sh`
+and installs GitHub Release archives with bounded downloads, checksums, strict
+USTAR/payload verification and user-owned immutable version directories. Version
+launchers use isolated Python imports; parser defaults supply absolute bundled
+helpers without changing explicit relays, identities or authorization. Native
+keychain discovery does not fall back to PATH for the installed default.
+
+The installer retains prior versions and all identity/keychain/command state;
+uninstall removes only owned launchers/bookkeeping. It does not modify host
+namespace policy. `--doctor` is read-only static prerequisite diagnosis. Both
+dependency graphs include full license notices and exact source provenance.
+Cargo CLI publication is deferred because the current workspace does not contain
+the Python application and its SQLCipher patch is not inherited by consumers.
+
+GitHub (`https://github.com/Epiphytic/marmish`) and Radicle
+(`rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg`) are both source homes. Completed increments
+and release tags must push to both, with independent replication verification.
+Native build/offline installation success must be reported separately from
+runtime command acceptance: ARM64 Linux namespace policy and the macOS confined
+broker abort remain known blockers. See Beads `marmish-ic3` for publication state;
+do not infer actual published assets or Iris replication from these interfaces.
+
 Marmish carries asynchronous remote commands and resumable shells over the
 Marmot protocol, using MDK for Nostr identity, MLS groups and encrypted messages.
 It has a server application that supervises an MDK daemon and authorizes remote

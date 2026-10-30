@@ -58,6 +58,22 @@ the user changes it.
    push, and record the commit, branch, review and test evidence in Beads before
    closing the task. Do not rewrite history to fabricate earlier phase commits.
 
+### Source publication to GitHub and Radicle
+
+Every completed change must be committed and pushed to both GitHub (`origin`,
+https://github.com/Epiphytic/marmish) and Radicle (`rad`,
+rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg). Push the explicit branch and any release tags
+to both remotes. Verify their refs, synchronize Radicle with Iris, and verify
+external availability before reporting both mirrors current. If either push or
+replication fails, record the partial publication in Beads and tell the user;
+do not silently treat one successful push as completion. Preserve existing
+history and exclude private runtime state and secrets from both sources.
+
+The user's 2026-10-29 distribution request (Beads `marmish-ic3`) explicitly
+authorizes creating this public Radicle repository and publishing experimental
+binary releases for Linux AMD64/ARM64 and macOS ARM64. This scoped authorization
+does not authorize unrelated deployments or future release initiatives.
+
 Scale the plan and review to the change. Small documentation corrections do not
 require inventing a new implementation phase. Deployment, release publication
 and third-party messaging require their own authorization; commit/push authority

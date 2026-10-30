@@ -1,5 +1,16 @@
 # Marmish build plan
 
+## Prototype distribution extension
+
+The [distribution design](phases/distribution.md) adds three reviewed increments:
+public Radicle/Iris source availability, complete native runtime archives with
+safe user-local installation, and native release automation/publication for
+Linux AMD64, Linux ARM64 and macOS ARM64. Initial installation uses the script
+route; Cargo CLI publication requires a separate dependency/packaging design.
+Release assets remain experimental and report existing native runtime blockers.
+The installer is served from Iris by default and downloads checksummed GitHub
+Release archives. Both source remotes must receive completed increments.
+
 Marmish provides asynchronous remote command execution and resumable interactive shells over Marmot. The first release runs noninteractive commands; a subsequent release adds PTYs and tmux. A disconnected client does not stop a command. All network traffic uses explicitly configured relay URLs; there is no public relay fallback.
 
 ## Requirements and defaults
@@ -42,7 +53,7 @@ Beads is the source of truth for task state, dependencies, review findings, and 
 
 Before each phase, write a detailed phase plan with file/module boundaries, interface contracts, acceptance checks, dependencies, and exclusions. Review it with Claude in a fresh session. Resolve blocking findings and record dispositions. Delegate implementation to agents with disjoint file ownership and an agreed interface; integrate centrally. Review the complete phase code with Claude Code in `--permission-mode auto`, allowing local test execution and inspection. Incorporate useful changes, rerun affected checks, and request another review when substantive findings require it. Record exact reviewer identity, revision/diff, commands, results, and remaining limitations. Reviewers are independent of the author; all blocking findings and dispositions are recorded in Beads. No phase closes with unresolved blocking findings. After the completed-code review, incorporated changes and all required checks pass, audit the exact staged diff and ignore rules for secrets, disposable identity/key files, MDK homes/databases, logs and transient test output. Stage only intended source, design and sanitized evidence artifacts, commit the reviewed phase or increment, and push it to the configured project remote. The user explicitly authorized these phase-completion commits and pushes. Record the commit, remote/branch and successful push evidence in Beads. Preserve the actual repository history: earlier work that was not committed separately remains an honestly described baseline or combined commit; do not rewrite history to fabricate one commit per earlier phase.
 
-The user has requested this iterative execution workflow. Git commits and pushes after the above gates are authorized; deployment, release publishing and third-party messages are not authorized by this plan. The user subsequently explicitly authorized bounded live transport tests on selected official White Noise public relays using disposable test identities; public infrastructure remains absent from defaults. A genuine upstream blocker pauses its dependent work while independent phases may proceed.
+The user has requested this iterative execution workflow. Git commits and pushes after the above gates are authorized. The user's 2026-10-29 distribution request additionally authorizes experimental binary release publication and a public Radicle mirror (Beads `marmish-ic3`); unrelated deployment and third-party messages still require their own authorization. The user also explicitly authorized bounded live transport tests on selected official White Noise public relays using disposable test identities; public infrastructure remains absent from defaults. A genuine upstream blocker pauses its dependent work while independent phases may proceed.
 
 ## Phases and exit criteria
 

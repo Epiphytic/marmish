@@ -1,5 +1,66 @@
 # Marmish
 
+Source: [GitHub](https://github.com/Epiphytic/marmish) ·
+[Radicle](https://radicle.network/nodes/iris.radicle.network/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg)
+(`rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg`).
+
+## Experimental binary installation
+
+The distribution targets Linux AMD64, Linux ARM64 and macOS ARM64 (macOS 15+).
+The first binary publication and Iris replication are pending; this section
+describes the reviewed installation contract until release evidence is recorded.
+Linux AMD64 command execution is validated; ARM64 Linux confinement is currently
+blocked by runner namespace policy, and macOS confinement by a broker abort.
+Successful building or installation does not establish working confined execution
+on those two platforms. Intel macOS is not included.
+
+Install as your normal user with Python 3.11+ and curl:
+
+```sh
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://iris.radicle.network/raw/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/head/scripts/install.sh | sh
+marmish --doctor
+```
+
+The script is served from Radicle through Iris and downloads complete native
+archives and `SHA256SUMS` from [GitHub Releases](https://github.com/Epiphytic/marmish/releases).
+It selects an experimental prerelease; pin one with `sh install.sh --version
+0.1.0-experimental.1` after downloading the script. For an immutable installer,
+replace `head` in the Iris URL with a full reviewed commit SHA. Mutable `head`
+trusts the script currently served by Iris; same-release checksums detect
+corruption and are not independent signatures.
+
+By default, versions live under `~/.local/share/marmish/versions` and launchers
+under `~/.local/bin`; add that directory to PATH if needed. `--prefix /absolute/path`
+uses that prefix's `bin/` for launchers. Paths containing spaces and shell
+characters are supported. The installer refuses root, unsafe destinations,
+unrelated existing launchers and corrupt archives. It does not edit shell
+profiles, identities or keychains. Reinstalling identical bytes is safe;
+upgrades retain old version trees, and running processes keep their old paths.
+There is no automatic state downgrade. `sh install.sh --uninstall` removes only
+installer-owned launchers and bookkeeping, retaining versions and user state.
+
+Installed `marmish` and `marmishd` supply their bundled daemon, manifest, native
+keychain helper, bridge and worker paths. Keep specifying identity, relays and
+server authorization/cwd as in the examples below; explicit helper overrides
+remain supported. `--doctor` reports static prerequisites without accessing
+keys or proving confinement. Linux needs Bubblewrap, util-linux/unshare,
+iproute2, `/usr/bin/python3` 3.11+, CA certificates and working unprivileged
+user/network/PID namespaces. Each archive records its measured minimum glibc and
+shared libraries; installation checks those requirements. macOS builds are
+ad-hoc signed, without Developer ID signing or notarization; upgrades may need
+renewed Keychain permission and fail closed if access is denied.
+
+This release uses script installation. `cargo install marmish` is not available:
+the application frontends are Python and the current pinned SQLCipher patch
+needs a separate source-distribution design. Building the Rust workspace alone
+does not install the complete application. The release workflow does not use a
+registry token for incomplete crate publication.
+
+Marmish is [MIT licensed](LICENSE); complete runtime archives include original
+dependency license texts, native dependency notices and pinned source references
+for both Marmish and MDK. See the [distribution design](docs/phases/distribution.md).
+
 Asynchronous remote commands and resumable shells over Marmot, using explicitly configured relays.
 
 The current Linux prototype runs noninteractive commands over Marmot. Commands continue running after client disconnection. Interactive PTY/tmux sessions, takeover and simultaneous read-only attachments follow in later phases. Application messages default to a configurable 24-hour retention policy. Destination syntax is `npub@relay`, also accepting a hexadecimal Nostr public key; aliases and SRV discovery are later work. Relays must always be explicitly selected.

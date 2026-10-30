@@ -39,6 +39,8 @@ id_ed25519
 
 # Build products and local analysis/cache data
 target/
+/dist/
+/release-output/
 /.ripwire_quality_baseline
 .cache/
 .pytest_cache/

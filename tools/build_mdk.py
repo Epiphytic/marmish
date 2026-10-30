@@ -54,6 +54,8 @@ def run_bootstrap_tests(source, selector, environment):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--licenses-output', type=Path,
+                        help='collect original notices from the exact locked MDK dependency graph')
     args = parser.parse_args()
     output = args.output.absolute()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -105,6 +107,9 @@ def main():
         run_bootstrap_tests(source, selector, environment)
         if digest(source / 'Cargo.lock') != lock_hash:
             raise RuntimeError('source_lock_changed')
+        if args.licenses_output is not None:
+            from marmish_release_licenses import collect
+            collect(source, args.licenses_output.absolute(), 'mdk')
         with (target_dir / 'release/wnd').open('rb') as src, output.open('xb') as dst:
             shutil.copyfileobj(src, dst)
         output.chmod(0o755)
