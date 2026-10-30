@@ -461,7 +461,7 @@ A local failure leaves publication blocked.
 
 Preserve that original acceptance report. In the clean aggregate inputs copy,
 add only a separate `operator_provenance` object to the passed report, identifying
-`execution_origin=local-linux-x64`, the originating workflow run ID/attempt and
+`execution_origin=local_linux_amd64_host`, the originating workflow run ID/attempt and
 its source SHA, and the hosted namespace failure category. Do not change any
 acceptance-generated field, assertion, digest or outcome; verify an exact diff
 showing only this added object. This metadata is an explicit trusted-operator

@@ -1,0 +1,112 @@
+{
+  "assets": [
+    {
+      "name": "installed-e2e.json",
+      "sha256": "03c76ad21a65bc72ecbcab7762d326a8f09762fd2774811689e3e62d48cb5662",
+      "unauthenticated_public_download_matches_uploaded_bytes": true
+    },
+    {
+      "name": "marmish-0.1.0-experimental.1-aarch64-apple-darwin.release.json",
+      "sha256": "09b4c715cab8ddc3c3a5eb61e990a0455f5c6517dd0fafa920d18a5f19bb2a08",
+      "unauthenticated_public_download_matches_uploaded_bytes": true
+    },
+    {
+      "name": "marmish-0.1.0-experimental.1-aarch64-apple-darwin.tar.gz",
+      "sha256": "2b1ea2c6455d31a948bb51f0a71e8d47b13cd43f0397323ffeb5d46456369715",
+      "unauthenticated_public_download_matches_uploaded_bytes": true
+    },
+    {
+      "name": "marmish-0.1.0-experimental.1-aarch64-unknown-linux-gnu.release.json",
+      "sha256": "b14188b1b3a73ec8395a7b6829de27514e5891e558a36ada186b6c9ee20d03ff",
+      "unauthenticated_public_download_matches_uploaded_bytes": true
+    },
+    {
+      "name": "marmish-0.1.0-experimental.1-aarch64-unknown-linux-gnu.tar.gz",
+      "sha256": "0b5a2c415561503410b34b3770b776f03edf4b6d4f28fbb611884736915255fe",
+      "unauthenticated_public_download_matches_uploaded_bytes": true
+    },
+    {
+      "name": "marmish-0.1.0-experimental.1-x86_64-unknown-linux-gnu.release.json",
+      "sha256": "6e10cefdaec4c92eb43e699988fec17c7736fd751262b169c1a3aed365e638a7",
+      "unauthenticated_public_download_matches_uploaded_bytes": true
+    },
+    {
+      "name": "marmish-0.1.0-experimental.1-x86_64-unknown-linux-gnu.tar.gz",
+      "sha256": "c8af156ec02cc9fd679cfeb2040bc0d0862093e5c3d925ec28e6208153bf783f",
+      "unauthenticated_public_download_matches_uploaded_bytes": true
+    },
+    {
+      "name": "SHA256SUMS",
+      "sha256": "013fd9eb2e459f2dfb29cc5c83d4adfc3c6c7ebba3fc67f222c84cc980851bc6",
+      "unauthenticated_public_download_matches_uploaded_bytes": true
+    }
+  ],
+  "cargo_cli_note": "Script installation selected; Python frontends and pinned SQLCipher patch require a separate Cargo source-distribution design.",
+  "cargo_cli_publication": false,
+  "format": 1,
+  "hosted_x64_job_url": "https://github.com/Epiphytic/marmish/actions/runs/41003542761/job/123894019825",
+  "hosted_x64_pre_live_checks_basis": "The native build step passed. The live_acceptance failure follows successful real install, staged smoke/doctor, idempotent reinstallation and both help invocations in the unchanged acceptance function. Hosted uninstall was not reached; complete acceptance including uninstall passed locally.",
+  "installer_sha256": "331e48e6f80ff7a5bbd79f62179bc0a0c4b7c9d36e8efa497508b768fb3ed35e",
+  "installer_url": "https://iris.radicle.network/raw/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/head/scripts/install.sh",
+  "iris_commit_pinned_installer_verification": {
+    "bytes": 27980,
+    "http_status": 200,
+    "matches_git_bytes": true,
+    "sha256": "331e48e6f80ff7a5bbd79f62179bc0a0c4b7c9d36e8efa497508b768fb3ed35e",
+    "url": "https://iris.radicle.network/raw/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/2a7e723eb8f980cda8a10f6d1e541d077cc15698/scripts/install.sh"
+  },
+  "iris_public_refs_verification": {
+    "delegate": true,
+    "http_status": 200,
+    "master": "2a7e723eb8f980cda8a10f6d1e541d077cc15698",
+    "namespace": "z6MknZcHiEzRTkoVsxUQk9JFTEavtayuxCSBe8dwEeekDBHx",
+    "note": "Canonical project refs omit tags; delegate remote refs expose the signed namespace.",
+    "release_tag": "2a7e723eb8f980cda8a10f6d1e541d077cc15698",
+    "url": "https://iris.radicle.network/api/v1/repos/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/remotes"
+  },
+  "public_install": {
+    "checks": [
+      "unauthenticated_public_download_all_eight_assets_byte_identical",
+      "SHA256SUMS_all_seven_entries_passed",
+      "Iris_installer_bytes_match_source",
+      "default_release_selection",
+      "real_public_install_path_spaces_semicolon_literal_dollar",
+      "both_installed_help",
+      "static_doctor",
+      "idempotent_public_reinstall",
+      "owned_uninstall_retains_versions"
+    ],
+    "format": 1,
+    "installer_origin": "Iris mutable head; exact bytes matched frozen release source",
+    "outcome": "passed",
+    "release": "v0.1.0-experimental.1",
+    "runtime_limit": "Full live commands validated separately on the exact same AMD64 archive; ARM/macOS confined runtime unvalidated.",
+    "selection": "default experimental-prerelease selection, no --version override",
+    "source_commit": "2a7e723eb8f980cda8a10f6d1e541d077cc15698"
+  },
+  "published_installed_evidence_operator_provenance": {
+    "artifact_id": 12954982964,
+    "artifact_zip_sha256": "2f87b280c23d867fea5b4921c8287bb21249c9fd65ecf70dbbf6778229a743f5",
+    "execution_origin": "local_linux_amd64_host",
+    "hosted_live_failure": "namespace_start_failed",
+    "hosted_namespace_probe_permission_denied": true,
+    "note": "Exact GitHub-hosted-built archive tested locally; original hosted failed report retained separately. No host namespace policy changed.",
+    "record_type": "trusted_operator_record_not_attestation",
+    "validation_checkout": "2a7e723eb8f980cda8a10f6d1e541d077cc15698",
+    "validation_checkout_clean": true,
+    "workflow_attempt": 1,
+    "workflow_run": 41003542761
+  },
+  "radicle_iris_in_sync_signature": "2bae93b",
+  "radicle_repository": "rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg",
+  "radicle_signer": "z6MknZcHiEzRTkoVsxUQk9JFTEavtayuxCSBe8dwEeekDBHx",
+  "release_body_local_execution_qualification_verified": true,
+  "release_is_public_prerelease": true,
+  "release_url": "https://github.com/Epiphytic/marmish/releases/tag/v0.1.0-experimental.1",
+  "source_commit": "2a7e723eb8f980cda8a10f6d1e541d077cc15698",
+  "tag": "v0.1.0-experimental.1",
+  "tag_target": "2a7e723eb8f980cda8a10f6d1e541d077cc15698",
+  "tag_verified_github": true,
+  "tag_verified_radicle_signer_namespace": true,
+  "version": "0.1.0-experimental.1"
+}

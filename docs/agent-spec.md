@@ -11,6 +11,26 @@ concrete commands.
 
 ### Experimental distribution increment
 
+The experimental release
+[v0.1.0-experimental.1](https://github.com/Epiphytic/marmish/releases/tag/v0.1.0-experimental.1)
+was published from source `2a7e723eb8f980cda8a10f6d1e541d077cc15698`, using native
+build artifacts from workflow run `41003542761`, attempt 1. Linux AMD64 and ARM64
+archives require glibc 2.39; macOS ARM64 requires macOS 15+. All three passed
+native installation checks. Hosted Linux AMD64 live execution failed at
+`identity_setup` with `namespace_start_failed`; an independent owned `unshare`
+probe returned a permission denial. This establishes denial of the required
+namespace operation, without establishing a specific AppArmor cause. Under the
+reviewed fallback, the exact downloaded Linux AMD64 archive passed all 15
+installed Marmot command assertions in 198.025 seconds on a clean local checkout
+of that source, with complete cleanup, idempotent installation and owned
+uninstall. The originating workflow remains failed; its CI publish job was
+skipped. The unchanged strict publisher was run locally and verified uploaded
+asset bytes by readback. The release body explicitly attributes live acceptance
+to the local Linux host. Independent public downloads, Iris default installation,
+reinstallation, uninstall and GitHub/Radicle tag verification also passed; see
+[the publication evidence](validation/distribution-publication.json) and
+[the distribution validation report](validation/distribution.md).
+
 The distribution design is [recorded here](phases/distribution.md). Complete
 runtime archives target Linux x86_64/aarch64 and macOS aarch64; Intel macOS is
 excluded. The self-contained `scripts/install.sh` is intended to be fetched from
@@ -110,9 +130,10 @@ Evidence: [live report](validation/phase-2b-e2e.json),
 
 Use the explicitly hash-pinned installed `wnd` daemon through bounded private
 Unix JSON RPC. Application payloads never enter OS process arguments or
-environment variables. The observed daemon hash is recorded in the README;
-exact binary-to-source provenance is not established. The sibling MDK checkout
-was inspected as evidence, not treated as a clean dependency to modify silently.
+environment variables. The historical prototype daemon's exact binary-to-source
+provenance was not established; its sibling MDK checkout was inspected as
+evidence. Release archives instead include the clean pinned build's source,
+patch, lockfile and executable provenance manifest, verified before execution.
 
 The daemon runs in private user/network/PID namespaces. An outer namespace
 enables loopback and unprivileged port 443; the inner environment drops all

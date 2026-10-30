@@ -6,10 +6,13 @@ Source: [GitHub](https://github.com/Epiphytic/marmish) ·
 
 ## Experimental binary installation
 
-The distribution targets Linux AMD64, Linux ARM64 and macOS ARM64 (macOS 15+).
-The first binary publication is pending. The installer source has been verified
-through Iris; release validation is tracked in [the distribution report](docs/validation/distribution.md).
-Linux AMD64 prototype command execution is validated. ARM64 Linux and macOS
+[v0.1.0-experimental.1](https://github.com/Epiphytic/marmish/releases/tag/v0.1.0-experimental.1)
+is available for Linux AMD64, Linux ARM64 and macOS ARM64 (macOS 15+).
+Both Linux archives require glibc 2.39 or newer. All three passed native build
+and installation checks. The exact Linux AMD64 release archive passed all 15
+installed command tests locally through Marmot; the hosted runner denied the
+required namespace operation. See [the distribution report](docs/validation/distribution.md)
+for source, archive bindings and publication verification status. ARM64 Linux and macOS
 confined execution are not validated in this distribution. Earlier self-hosted
 validation found a Linux ARM64 namespace-policy failure and a macOS broker abort;
 these are not observations from hosted packaging jobs. Successful building or

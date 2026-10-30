@@ -1,5 +1,83 @@
 # Experimental distribution validation
 
+## Published release and exact-archive acceptance
+
+[v0.1.0-experimental.1](https://github.com/Epiphytic/marmish/releases/tag/v0.1.0-experimental.1)
+is published from source `2a7e723eb8f980cda8a10f6d1e541d077cc15698`. All binaries
+come from [workflow 41003542761](https://github.com/Epiphytic/marmish/actions/runs/41003542761),
+attempt 1. The native macOS ARM64 and Linux ARM64 build/installation jobs passed.
+Linux AMD64 compilation, daemon bootstrap, staged smoke, installation, help and
+reinstallation passed, followed by a hosted live startup failure
+([AMD64 job and logs](https://github.com/Epiphytic/marmish/actions/runs/41003542761/job/123894019825)). The workflow
+conclusion is failure and its CI publication job was skipped; it is not a
+successful hosted runtime run.
+
+The hosted diagnostic reported `namespace_start_failed` at `identity_setup`,
+with complete cleanup. The independent fixed user/network namespace probe
+returned exit 1 and a known permission-denial result. Its read-only settings
+were `apparmor_restrict_unprivileged_userns=1`, `unprivileged_userns_clone=1` and
+`max_user_namespaces=58121`. These observations establish denial of the namespace
+operation the product requires, not the specific policy responsible. No host
+namespace or security policy was changed. See [the hosted evidence](distribution-hosted-2a7e723.json).
+
+The approved conditional procedure used the exact downloaded Linux AMD64
+archive on a local Linux AMD64 host, with acceptance and the installer from a
+clean checkout of the same frozen source. Static doctor checks passed; local
+glibc was 2.39, matching the archive's minimum, and the required namespace probe
+succeeded. Full installed acceptance passed all 15 Marmot assertions in 198.025
+seconds, with complete private-state cleanup. It covered literal special and
+non-UTF8 argv, separate binary streams, additive authorization restrictions,
+cancellation, retry/conflict handling, negative frames/invites, disconnect
+continuation, restart recovery, replay rejection, fresh MLS sessions and actual
+installed CLI execution. Real installation, help, idempotent reinstallation and
+marker-owned uninstall also passed. See [the original passed report](distribution-installed-2a7e723.json)
+and [Claude's final artifact/evidence approval](../reviews/distribution-artifact-evidence.json).
+The preserved hosted failure remains separate from this local pass. The public
+release's `installed-e2e.json` asset adds only `operator_provenance` to the
+original passed report. Its SHA256 is
+`03c76ad21a65bc72ecbcab7762d326a8f09762fd2774811689e3e62d48cb5662`.
+That attribution is also copied into [the publication record](distribution-publication.json);
+it does not change an acceptance claim or constitute host attestation.
+
+Exact original archive SHA256 values:
+
+| Target | SHA256 |
+| --- | --- |
+| Linux AMD64 | `c8af156ec02cc9fd679cfeb2040bc0d0862093e5c3d925ec28e6208153bf783f` |
+| Linux ARM64 | `0b5a2c415561503410b34b3770b776f03edf4b6d4f28fbb611884736915255fe` |
+| macOS ARM64 | `2b1ea2c6455d31a948bb51f0a71e8d47b13cd43f0397323ffeb5d46456369715` |
+
+The original strict publisher aggregated those three same-run/source archives,
+verified their payloads and the local report's source/archive/daemon bindings,
+created an experimental draft, uploaded its assets and verified every uploaded
+byte by downloading and hashing it before visibility. The mandatory immediate
+release-body update explicitly names local Linux acceptance and the hosted
+namespace failure category. Both Linux archives require glibc 2.39; macOS ARM64
+requires macOS 15+. Neither ARM64 native installation result establishes confined
+command execution; the earlier self-hosted runtime failures remain historical.
+Intel macOS and Cargo application installation are not included.
+
+Independent unauthenticated downloads of all eight public assets matched the
+uploaded bytes; all seven `SHA256SUMS` entries passed. The Iris `head` installer
+matched Git exactly, selected this prerelease without a version override and
+successfully installed into a path containing spaces, a semicolon and a literal
+`$HOME`. Both installed help commands, static doctor, idempotent public reinstall
+and owned uninstall retaining versions passed. This public installation smoke
+does not repeat or replace the separate exact-archive live acceptance above.
+
+GitHub and the Radicle delegate namespace both expose release tag
+`v0.1.0-experimental.1` at the exact source commit. The public
+[Iris remote refs API](https://iris.radicle.network/api/v1/repos/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/remotes)
+independently confirmed the delegate's tag and source branch. Canonical project
+refs omit tags; the signed delegate namespace exposes them. The commit-pinned
+Iris installer also returned HTTP 200 with exact Git bytes, SHA256
+`331e48e6f80ff7a5bbd79f62179bc0a0c4b7c9d36e8efa497508b768fb3ed35e`.
+See [the publication evidence](distribution-publication.json) for asset hashes,
+installer checks and source/tag verification.
+
+The sections below preserve the chronological implementation and failed-run
+record. Earlier pending statements describe their recorded point in time.
+
 ## Reviewed implementation
 
 The distribution design and independent Claude reviews are recorded in
@@ -39,7 +117,7 @@ with historical JSON fields and the existing e2e harness size. Archive validatio
 is intentionally explicit and bounded; strict parsing is shared by installation
 and publication rather than independently reimplemented.
 
-## Publication status
+## Initial publication status (historical)
 
 No native binary release has been validated or published at the time of this
 implementation record. Linux AMD64 installed command execution is a publication
@@ -140,8 +218,10 @@ suite passed 338 tests with 7 skips. Claude approved the design and code in
 Claude also approved [the implemented observational workflow step](../reviews/distribution-probe-code.json).
 It logs bounded numeric namespace settings and a fixed ten-second `unshare`
 probe with finite permission-denial output. It changes no host setting, is
-non-gating and does not replace the real live diagnostic. The next dispatch
-will exercise it; no hosted namespace-policy cause is claimed yet. The
-conditional exact-archive local-validation procedure is documented and reviewed;
-it remains inactive until its specific native-build/install and denial
-conditions are proven for one frozen source and run. No release exists yet.
+non-gating and does not replace the real live diagnostic. At the time of this
+increment, the next dispatch had not exercised it and no
+hosted namespace-policy cause was established. The conditional exact-archive
+local-validation procedure was documented and reviewed but remained inactive
+until its native-build/install and denial conditions were proven for one frozen
+source and run. No release existed at that point. See the published-release
+section above for subsequent evidence.

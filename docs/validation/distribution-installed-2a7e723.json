@@ -1,0 +1,71 @@
+{
+  "assertions": [
+    "live_additive_default_and_per_key_denials_path_and_shell_refusal",
+    "policy_denials_create_no_job_and_preserve_token_for_allowed_execution",
+    "literal_argv_spaces_unicode_quotes_newline_dollar_backticks_leading_dash_nonutf8",
+    "separate_binary_stderr_and_nonzero_exit",
+    "exact_admitted_retry_and_status_first_retry_execute_once_conflict_rejected",
+    "byte_exact_binary_stdin_stdout_stderr_eof",
+    "live_cancellation_reports_signal_and_remains_queryable",
+    "live_stale_challenge_wrong_group_and_chat_payload_never_execute",
+    "live_ordinary_room_and_unallowlisted_identity_invites_remain_unaccepted",
+    "frontend_disconnect_does_not_cancel_running_worker",
+    "persisted_mls_room_and_command_output_recovered_after_frontend_restart",
+    "previous_boot_valid_control_frame_rejected_after_restart",
+    "fresh_independent_mls_group_configurable_retention_same_principal_reattach",
+    "actual_client_and_server_cli_processes_execute_command_via_marmot",
+    "installed_launchers_and_bundled_defaults_preserve_special_character_argv"
+  ],
+  "bubblewrap": null,
+  "distribution_archive_sha256": "c8af156ec02cc9fd679cfeb2040bc0d0862093e5c3d925ec28e6208153bf783f",
+  "distribution_source_commit": "2a7e723eb8f980cda8a10f6d1e541d077cc15698",
+  "duration_seconds": 198.025,
+  "groups": [
+    "dd2aad1aa3ced937a807ca61c36164bd",
+    "a720d2b40e676085d08b78aa43733060"
+  ],
+  "limitations": [
+    "prototype_single_device",
+    "relay_retention_is_not_guaranteed_erasure",
+    "same_principal_can_reattach_across_sessions"
+  ],
+  "local_cleanup": "complete",
+  "outcome": "passed",
+  "platform": "linux",
+  "public_identities": {
+    "client": "3ab1ae60d9f87f4345beeca62b58c7f23a2eb2d826628d5892460534bfffee7f",
+    "server": "7dbfd1872be89b76de6ca5cd884fd7f22426fadccb73df2cc7c8182b5512a99b"
+  },
+  "python": "3.12.3",
+  "relays": [
+    "wss://relay.eu.whitenoise.chat/",
+    "wss://relay.us.whitenoise.chat/"
+  ],
+  "stage": "complete",
+  "target": "x86_64-unknown-linux-gnu",
+  "wnd_manifest": {
+    "architecture": "x86_64",
+    "bootstrap_patch_sha256": "c7ce4f29e248fcb56fe2b83bbc694d6ca544bd6475de03cf928bfc879fc4e43b",
+    "bootstrap_protocol": 1,
+    "bootstrap_tests": "marmish_bootstrap::tests:passed",
+    "cargo_lock_sha256": "d8a5367e49427c79f354b0611902808de9b92abbe173eb82ed6864d01e488a71",
+    "clean_checkout": true,
+    "codesign": null,
+    "deployment_target": null,
+    "helpers": {},
+    "patch_sha256": null,
+    "platform": "linux",
+    "relay_fixture_sha256": null,
+    "restricted_protocol": null,
+    "revision": "37c248a11239e108afc9bd4ee62b8f60542012e3",
+    "rust": "1.97.1",
+    "rustc_version": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "sha256": "92788764b406ff6643405b78c5d29d203eed658eafa665b82d74b4d23b229d5f",
+    "source": "https://github.com/liamhelmer-bel/mdk.git",
+    "source_guard_sha256": "4fcbdc579804d43b38ab4103c6053cfcbdc0018434bc2f8fb3fbb5cf9f382619",
+    "target": "x86_64-unknown-linux-gnu",
+    "transport_tests": null,
+    "version": 2
+  },
+  "wnd_sha256": "92788764b406ff6643405b78c5d29d203eed658eafa665b82d74b4d23b229d5f"
+}

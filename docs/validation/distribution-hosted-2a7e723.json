@@ -1,0 +1,103 @@
+{
+  "artifacts": [
+    {
+      "archive_sha256": "2b1ea2c6455d31a948bb51f0a71e8d47b13cd43f0397323ffeb5d46456369715",
+      "artifact_id": 12955810354,
+      "artifact_name": "distribution-41003542761-1-aarch64-apple-darwin",
+      "artifact_zip_digest": "sha256:a8369af3796d23790efaeca35a0a4ff6faa81f1c327ef7069007694c0d11f3c9",
+      "artifact_zip_digest_verified": true,
+      "source_commit": "2a7e723eb8f980cda8a10f6d1e541d077cc15698",
+      "target": "aarch64-apple-darwin"
+    },
+    {
+      "archive_sha256": "0b5a2c415561503410b34b3770b776f03edf4b6d4f28fbb611884736915255fe",
+      "artifact_id": 12954807720,
+      "artifact_name": "distribution-41003542761-1-aarch64-unknown-linux-gnu",
+      "artifact_zip_digest": "sha256:f9f87eaf56bc9e503c0628eaeeefb70a7f9e6d6e8c50729652ef3a50c769af8b",
+      "artifact_zip_digest_verified": true,
+      "source_commit": "2a7e723eb8f980cda8a10f6d1e541d077cc15698",
+      "target": "aarch64-unknown-linux-gnu"
+    },
+    {
+      "archive_sha256": "c8af156ec02cc9fd679cfeb2040bc0d0862093e5c3d925ec28e6208153bf783f",
+      "artifact_id": 12954982964,
+      "artifact_name": "distribution-41003542761-1-x86_64-unknown-linux-gnu",
+      "artifact_zip_digest": "sha256:2f87b280c23d867fea5b4921c8287bb21249c9fd65ecf70dbbf6778229a743f5",
+      "artifact_zip_digest_verified": true,
+      "source_commit": "2a7e723eb8f980cda8a10f6d1e541d077cc15698",
+      "target": "x86_64-unknown-linux-gnu"
+    }
+  ],
+  "format": 1,
+  "hosted_acceptance": {
+    "aarch64-apple-darwin": {
+      "checks": [
+        "real_installer",
+        "installed_help",
+        "staged_provenance",
+        "idempotence",
+        "marker_owned_uninstall_retains_versions"
+      ],
+      "distribution_archive_sha256": "2b1ea2c6455d31a948bb51f0a71e8d47b13cd43f0397323ffeb5d46456369715",
+      "installed_live": false,
+      "outcome": "passed",
+      "source_commit": "2a7e723eb8f980cda8a10f6d1e541d077cc15698",
+      "target": "aarch64-apple-darwin"
+    },
+    "aarch64-unknown-linux-gnu": {
+      "checks": [
+        "real_installer",
+        "installed_help",
+        "staged_provenance",
+        "idempotence",
+        "marker_owned_uninstall_retains_versions"
+      ],
+      "distribution_archive_sha256": "0b5a2c415561503410b34b3770b776f03edf4b6d4f28fbb611884736915255fe",
+      "installed_live": false,
+      "outcome": "passed",
+      "source_commit": "2a7e723eb8f980cda8a10f6d1e541d077cc15698",
+      "target": "aarch64-unknown-linux-gnu"
+    },
+    "x86_64-unknown-linux-gnu": {
+      "diagnostic": {
+        "assertions": [],
+        "error": "namespace_start_failed",
+        "format": 1,
+        "local_cleanup": "complete",
+        "stage": "identity_setup"
+      },
+      "distribution_archive_sha256": "c8af156ec02cc9fd679cfeb2040bc0d0862093e5c3d925ec28e6208153bf783f",
+      "distribution_source_commit": "2a7e723eb8f980cda8a10f6d1e541d077cc15698",
+      "error": "installed_live_command_failed",
+      "outcome": "failed",
+      "target": "x86_64-unknown-linux-gnu"
+    }
+  },
+  "hosted_namespace_probe": {
+    "available": true,
+    "permission_denied": true,
+    "returncode": 1,
+    "settings": {
+      "apparmor_restrict_unprivileged_userns": 1,
+      "max_user_namespaces": 58121,
+      "unprivileged_userns_clone": 1
+    },
+    "success": false,
+    "timed_out": false
+  },
+  "local_prerequisites": {
+    "architecture": "x86_64",
+    "archive_glibc_minimum": "2.39",
+    "glibc": "2.39",
+    "note": "Static doctor does not prove runtime confinement; live acceptance recorded separately.",
+    "python": "3.12.3",
+    "static_doctor_all_checks_passed": true,
+    "unshare_user_net_exit": 0
+  },
+  "publication_job": "skipped",
+  "source_commit": "2a7e723eb8f980cda8a10f6d1e541d077cc15698",
+  "workflow_attempt": 1,
+  "workflow_conclusion": "failure",
+  "workflow_run": 41003542761,
+  "workflow_url": "https://github.com/Epiphytic/marmish/actions/runs/41003542761"
+}
