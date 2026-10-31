@@ -78,8 +78,14 @@ review finding about cleanup inside unrelated except blocks. Final narrow review
 checks. Local [Trial18 managed packaging proof](validation/managed-runtime-selfhosted-trial18.md)
 passed all ten assertions and 505 tests with 8 skips, with enforced offline
 network isolation, complete cleanup and unchanged monitored home metadata.
-Native rerun remains pending; no three-target or production-installer acceptance
-is inferred from the local pass.
+The subsequent [hosted run 41147817435](validation/managed-runtime-native-41147817435.md)
+passed installer and focused packaging contracts on all three targets. The macOS
+full suite now exited promptly, reporting 504 tests, 32 skips and eight failure
+entries; no full-suite timeout occurred. Both Linux suites ran 505 tests with
+8 skips and failed the same two required namespace checks. All reports retained
+complete cleanup and unchanged monitored home metadata. The macOS failure names
+localize further investigation but do not establish exception causes. Three-target
+and production-installer acceptance remain pending.
 All three reports from hosted run 41143960720 retained complete cleanup and
 unchanged monitored home metadata.
 The separate [owned macOS denial diagnostic](phases/macos-owned-denial-diagnostic.md)
