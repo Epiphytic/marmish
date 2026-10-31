@@ -219,3 +219,27 @@ Final root quality recheck after the useful code refinements: exit 2, 37 rows,
 17 gating, 2 minor and 18 new-symbol findings; PR-context exit 0. The earlier
 34-row result remains historical, not the final count. No suppression or
 baseline change was used; the same real fixture-growth/duplication costs apply.
+
+## Measured native follow-up
+
+After independent final code approval, source e5a636d1026978b5c539c898795e554d32118eac
+was published to GitHub and Radicle and verified through Iris. Actual local
+[Trial19](../validation/managed-runtime-selfhosted-trial19.md) passed 513 tools
+tests with 8 skips and all ten executable cases, enforced Linux offline
+isolation, complete cleanup and unchanged monitored home metadata.
+[Hosted run 41150264034](../validation/managed-runtime-native-41150264034.md)
+passed all three installer jobs and the actual macOS managed proof: 513 tests,
+32 skips, all ten assertions, offline retention reached, cleanup complete and
+unchanged monitored home metadata. Darwin records uv-offline behavior without
+independently enforced OS network denial. The native suite counts, unchanged skip count and source skip conditions
+support the inference that the SDK fixture compiled and passed. The report
+does not list individual skipped tests. The eight prior failure entries and summary hang are
+absent; this establishes the bounded fixture-repair outcome, not every inferred
+cause of those earlier failures.
+
+Both hosted Linux suites ran 513 tests with 8 skips and failed the same two
+mandatory namespace cases; their later offline-retention gates were not reached.
+Overall native matrix acceptance remains failed. Suitable self-hosted results
+are still required for parent phase0; the production uv installer and unified
+service are not implemented, and configured macOS confinement SIGABRT remains
+independently unresolved. No gate was relaxed to obtain the macOS packaging pass.

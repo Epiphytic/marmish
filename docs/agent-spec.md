@@ -96,9 +96,17 @@ while retaining real filesystem and deterministic set-ID rejection coverage.
 Independent design approval preceded implementation. Local affected tests passed
 normally and through a symlink (69 tests, no skips); full tools passed 513 tests
 with 8 skips, and five bounded mutations were detected. [Final integrated code review](reviews/managed-runtime-native-portability-code.md)
-approved publication and independently repeated these checks. Native rerun
-remains pending; these local results establish no native
-three-platform acceptance or configured macOS confinement success.
+approved publication and independently repeated these checks. The subsequent [hosted run 41150264034](validation/managed-runtime-native-41150264034.md)
+passed all three installer jobs and the actual macOS managed proof: 513 tests,
+32 skips, all ten assertions, offline retention reached, cleanup complete and
+unchanged monitored home metadata. Darwin records uv-offline behavior only,
+without independent OS network-denial enforcement. Both hosted Linux suites ran
+513 tests with 8 skips and failed the same two mandatory namespace checks.
+Local [Trial19](validation/managed-runtime-selfhosted-trial19.md) passed all ten
+assertions and 513 tests with 8 skips, with enforced Linux offline isolation,
+complete cleanup and unchanged monitored home metadata. Three-platform
+acceptance remains pending suitable self-hosted results; the existing macOS
+configured-confinement SIGABRT is still separate and unresolved.
 The separate [owned macOS denial diagnostic](phases/macos-owned-denial-diagnostic.md)
 has an approved detailed design, with no implementation or native-format evidence
 yet; it does not relax confinement or resolve the historical configured SIGABRT.
