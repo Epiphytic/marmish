@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -154,18 +155,12 @@ int main(int argc, char **argv) {
                 self.assertEqual(writes, int(bool(expected)))
 
 
-class ZombieGroupProofTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        compiler = shutil.which('cc') or shutil.which('clang')
-        if not compiler:
-            raise unittest.SkipTest('portable group contract harness requires C compiler')
-        cls.directory = tempfile.TemporaryDirectory(prefix='marmish-group-harness-')
-        cls.addClassCleanup(cls.directory.cleanup)
-        root = Path(cls.directory.name)
-        (root / 'sys').mkdir()
-        (root / 'sys/proc.h').write_text('#define SZOMB 5\n')
-        (root / 'libproc.h').write_text('''
+def group_fixture_headers(root, platform):
+    if platform == 'darwin':
+        return
+    (root / 'sys').mkdir()
+    (root / 'sys/proc.h').write_text('#define SZOMB 5\n')
+    (root / 'libproc.h').write_text('''
 #ifndef TEST_LIBPROC_H
 #define TEST_LIBPROC_H
 #include <stdint.h>
@@ -179,6 +174,32 @@ struct proc_bsdinfo {
 };
 #endif
 ''')
+
+
+class GroupHeaderSelectionTests(unittest.TestCase):
+    def test_darwin_uses_sdk_and_linux_uses_synthetic_headers(self):
+        for platform in ('darwin', 'linux'):
+            with self.subTest(platform=platform), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                group_fixture_headers(root, platform)
+                if platform == 'darwin':
+                    self.assertEqual(list(root.iterdir()), [])
+                else:
+                    self.assertTrue((root / 'sys/proc.h').is_file())
+                    self.assertTrue((root / 'libproc.h').is_file())
+                    self.assertIn('Test data shape only', (root / 'libproc.h').read_text())
+
+
+class ZombieGroupProofTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        compiler = shutil.which('cc') or shutil.which('clang')
+        if not compiler:
+            raise unittest.SkipTest('portable group contract harness requires C compiler')
+        cls.directory = tempfile.TemporaryDirectory(prefix='marmish-group-harness-')
+        cls.addClassCleanup(cls.directory.cleanup)
+        root = Path(cls.directory.name)
+        group_fixture_headers(root, sys.platform)
         source = root / 'group.c'
         source.write_text(r'''
 #include <sys/types.h>
@@ -190,6 +211,7 @@ struct proc_bsdinfo {
 #include <string.h>
 #include <unistd.h>
 #include <libproc.h>
+#include <sys/proc.h>
 static int mode, infos, lists, checks, leaders, peers;
 static uid_t fake_uid(void) { return mode == 28 ? 0 : 1001; }
 static uid_t fake_euid(void) { return mode == 29 ? 1002 : fake_uid(); }
@@ -276,7 +298,7 @@ int main(int argc, char **argv) {
         header = Path(fixture.native.__file__).parent / 'native'
         subprocess.run([compiler, '-Wall', '-Wextra', '-Werror', '-I', str(root), '-I', str(header),
                         str(source), '-o', str(cls.executable)], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15)
 
     def test_complete_bounded_group_and_native_identity_contract(self):
         native_errors = {1: errno.EPERM, 4: errno.ESRCH, 14: errno.EACCES, 15: errno.EIO,

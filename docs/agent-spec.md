@@ -88,6 +88,17 @@ localize further investigation but do not establish exception causes. Three-targ
 and production-installer acceptance remain pending.
 All three reports from hosted run 41143960720 retained complete cleanup and
 unchanged monitored home metadata.
+The subsequent [native fixture portability repair](phases/managed-runtime-native-portability.md)
+is limited to three test modules: real Darwin SDK headers replace incompatible
+synthetic headers on Darwin, report lifecycle tests isolate Linux admission and
+stderr scanning, and sandbox validation tests isolate preceding prerequisites
+while retaining real filesystem and deterministic set-ID rejection coverage.
+Independent design approval preceded implementation. Local affected tests passed
+normally and through a symlink (69 tests, no skips); full tools passed 513 tests
+with 8 skips, and five bounded mutations were detected. [Final integrated code review](reviews/managed-runtime-native-portability-code.md)
+approved publication and independently repeated these checks. Native rerun
+remains pending; these local results establish no native
+three-platform acceptance or configured macOS confinement success.
 The separate [owned macOS denial diagnostic](phases/macos-owned-denial-diagnostic.md)
 has an approved detailed design, with no implementation or native-format evidence
 yet; it does not relax confinement or resolve the historical configured SIGABRT.

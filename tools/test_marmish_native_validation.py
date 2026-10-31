@@ -407,10 +407,20 @@ class ProcessAuditTests(AuditFixtureTests):
                 audit_tree(child.pid, [])
 
 
+class PlatformSys:
+    def __init__(self, platform):
+        self.platform = platform
+
+    def __getattr__(self, name):
+        return getattr(sys, name)
+
+
 class FinalReportTests(unittest.TestCase):
-    def invoke(self, *, teardown=False, retained=False, secret_report=False):
+    def invoke(self, *, teardown=False, retained=False, secret_report=False,
+               e2e_failure=False, platform='linux'):
         import contextlib
         import io
+        import signal
         import types
         import marmish_native_validation as validation
         context = unittest.mock.Mock()
@@ -419,25 +429,56 @@ class FinalReportTests(unittest.TestCase):
         context.secret_values = [b'x' * 32]
         context.private_state_retained = retained
         context.cleanup_complete = False
+        context.retain_private_state.side_effect = lambda: setattr(context, 'private_state_retained', True)
         context.__enter__ = unittest.mock.Mock(return_value=context)
+        events = []
+        output = io.StringIO()
         def close(*_):
+            self.assertEqual(output.getvalue(), '')
+            events.append('exit')
             if teardown:
                 raise SmokeError('native_cleanup_incomplete')
-            context.cleanup_complete = not retained
+            context.cleanup_complete = not context.private_state_retained
         context.__exit__ = unittest.mock.Mock(side_effect=close)
         def e2e(_argv, *, report_sink):
+            events.append('e2e')
+            if e2e_failure:
+                raise SmokeError('fixture_e2e_failure')
             report_sink.append({'outcome': 'passed', 'assertions': ['checked'],
                                 **({'bad': 'x' * 32} if secret_report else {})})
             return 0
-        output = io.StringIO()
-        with patch.object(validation, 'NativeLinuxContext', return_value=context), \
+        def scan(secrets):
+            self.assertIs(secrets, context.secret_values)
+            self.assertEqual(events, ['e2e'])
+            events.append('scan')
+            return {'private_stderr_scanned': True}
+        saved = dict(os.environ)
+        handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+        admission = (patch.object(validation, 'sys', PlatformSys(platform))
+                     if platform is not None else contextlib.nullcontext())
+        with admission, patch.object(validation, 'NativeLinuxContext', return_value=context), \
+                patch.object(validation, 'scan_owned_stderr', side_effect=scan) as scanner, \
+                patch.object(validation.subprocess, 'Popen') as spawn, \
                 patch.dict(sys.modules, {'marmish_e2e': types.SimpleNamespace(main=e2e)}), \
                 contextlib.redirect_stdout(output):
             result = validation.main(['--helper', sys.executable])
+            spawn.assert_not_called()
+            if secret_report or e2e_failure:
+                scanner.assert_not_called()
+                self.assertEqual(events, ['e2e', 'exit'])
+            else:
+                scanner.assert_called_once_with(context.secret_values)
+                self.assertEqual(events, ['e2e', 'scan', 'exit'])
+        self.assertEqual(dict(os.environ), saved)
+        for sig, handler in handlers.items():
+            self.assertIs(signal.getsignal(sig), handler)
         import json
         lines = output.getvalue().splitlines()
         self.assertEqual(len(lines), 1)
-        return result, json.loads(lines[0])
+        report = json.loads(lines[0])
+        if not secret_report and not e2e_failure:
+            self.assertIs(report['private_stderr_scanned'], True)
+        return result, report
 
     def test_report_emitted_only_after_successful_teardown(self):
         code, report = self.invoke()
@@ -459,6 +500,12 @@ class FinalReportTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertNotIn('bad', report)
 
+    def test_e2e_failure_does_not_scan_or_emit_a_success_report(self):
+        code, report = self.invoke(e2e_failure=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(report['outcome'], 'failed')
+        self.assertNotIn('private_stderr_scanned', report)
+
     def test_private_regular_log_scan_has_no_offset_side_effect(self):
         import marmish_native_validation as validation
         with tempfile.TemporaryFile() as log:
@@ -478,16 +525,73 @@ class FinalReportTests(unittest.TestCase):
     def test_setup_signal_restores_handlers_and_emits_one_failure(self):
         import contextlib
         import io
+        import json
         import signal
         import marmish_native_validation as validation
-        before = signal.getsignal(signal.SIGTERM)
+        handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+        saved = dict(os.environ)
+        context = unittest.mock.Mock(cleanup_complete=False, private_state_retained=False)
+        def interrupted():
+            for sig in handlers:
+                self.assertIs(signal.getsignal(sig), validation._interrupt)
+            validation._interrupt(signal.SIGTERM, None)
+        context.__enter__ = unittest.mock.Mock(side_effect=interrupted)
+        context.__exit__ = unittest.mock.Mock()
         output = io.StringIO()
-        with patch.object(validation.NativeLinuxContext, '__enter__',
-                          side_effect=lambda: validation._interrupt(signal.SIGTERM, None)), \
+        with patch.object(validation, 'sys', PlatformSys('linux')), \
+                patch.object(validation, 'NativeLinuxContext', return_value=context), \
+                patch.object(validation, 'scan_owned_stderr') as scanner, \
+                patch.object(validation.subprocess, 'Popen') as spawn, \
                 contextlib.redirect_stdout(output):
-            self.assertEqual(validation.main(['--helper', str(Path(sys.executable).resolve())]), 1)
-        self.assertEqual(signal.getsignal(signal.SIGTERM), before)
-        self.assertEqual(len(output.getvalue().splitlines()), 1)
+            self.assertEqual(validation.main(['--helper', sys.executable]), 1)
+            scanner.assert_not_called()
+            spawn.assert_not_called()
+            context.__exit__.assert_not_called()
+        for sig, handler in handlers.items():
+            self.assertIs(signal.getsignal(sig), handler)
+        self.assertEqual(dict(os.environ), saved)
+        lines = output.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(json.loads(lines[0])['category'], 'native_cleanup_incomplete')
+
+
+class NativeAdmissionTests(unittest.TestCase):
+    def check_refusal(self, platform=None):
+        import contextlib
+        import io
+        import json
+        import signal
+        import marmish_native_validation as validation
+        saved = dict(os.environ)
+        handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+        output = io.StringIO()
+        admission = (patch.object(validation, 'sys', PlatformSys(platform))
+                     if platform is not None else contextlib.nullcontext())
+        with admission, patch.object(validation, 'NativeLinuxContext') as context, \
+                patch.object(validation, 'scan_owned_stderr') as scanner, \
+                patch.object(validation.tempfile, 'mkdtemp') as allocate, \
+                patch.object(validation.subprocess, 'Popen') as spawn, \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(validation.main(['--helper', sys.executable]), 2)
+            for operation in (context, scanner, allocate, spawn):
+                operation.assert_not_called()
+        self.assertEqual(dict(os.environ), saved)
+        for sig, handler in handlers.items():
+            self.assertIs(signal.getsignal(sig), handler)
+        self.assertEqual(json.loads(output.getvalue()), {
+            'outcome': 'pending', 'platform': platform or sys.platform,
+            'scope': 'native_default_keychain', 'category': 'dedicated_account_required'})
+
+    def test_simulated_darwin_keeps_pending_admission(self):
+        self.check_refusal('darwin')
+
+    def test_actual_platform_preserves_admission(self):
+        if sys.platform.startswith('linux'):
+            code, report = FinalReportTests().invoke(platform=None)
+            self.assertEqual(code, 0)
+            self.assertEqual(report['outcome'], 'passed')
+        else:
+            self.check_refusal()
 
 
 @unittest.skipUnless(sys.platform.startswith('linux'), 'Linux owned processes')

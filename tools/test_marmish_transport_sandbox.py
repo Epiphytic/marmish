@@ -19,6 +19,21 @@ from unittest.mock import patch, Mock
 import marmish_transport_sandbox as sandbox
 
 
+def fixed_confinement_tool(name):
+    if name not in ('unshare', 'ip', 'sysctl'):
+        raise AssertionError('unexpected_confinement_tool')
+    return '/fixture/' + name
+
+
+@contextlib.contextmanager
+def validation_prerequisites():
+    with patch.object(sandbox, 'validated_bwrap', return_value=Path('/fixture/bwrap')), \
+            patch.object(sandbox.shutil, 'which', side_effect=fixed_confinement_tool), \
+            patch.object(sandbox.subprocess, 'Popen') as spawn:
+        yield spawn
+        spawn.assert_not_called()
+
+
 class ValidationTests(unittest.TestCase):
     def test_buffered_stream_finishes_request_before_forwarding_half_close(self):
         client, left = socket.socketpair()
@@ -98,28 +113,57 @@ class ValidationTests(unittest.TestCase):
                 sandbox.canonical_relays(values)
 
     def test_hash_and_home_permissions_fail_closed(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
+        with tempfile.TemporaryDirectory(dir='/tmp') as temp, validation_prerequisites():
+            root = Path(temp).resolve()
             binary = root / 'wnd'
             binary.write_bytes(b'not executable')
             daemon = sandbox.ConfinedDaemon(root / 'home', binary, ['wss://relay.example/'], '0' * 64)
-            with self.assertRaisesRegex(sandbox.SandboxError, 'daemon_hash_mismatch'):
+            self.addCleanup(daemon.close)
+            with self.assertRaisesRegex(sandbox.SandboxError, '^daemon_hash_mismatch$'):
                 daemon.start()
             self.assertIsNone(daemon.process)
             os.chmod(daemon.home, 0o755)
-            with self.assertRaisesRegex(sandbox.SandboxError, 'unsafe_private_path'):
+            with self.assertRaisesRegex(sandbox.SandboxError, '^unsafe_private_path$'):
                 daemon.start()
-            daemon.close()
+            self.assertIsNone(daemon.process)
 
     def test_home_symlink_is_rejected(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
+        with tempfile.TemporaryDirectory(dir='/tmp') as temp, validation_prerequisites():
+            root = Path(temp).resolve()
             (root / 'real').mkdir(mode=0o700)
             (root / 'alias').symlink_to(root / 'real')
             daemon = sandbox.ConfinedDaemon(root / 'alias', Path('/bin/true'),
                                             ['wss://relay.example/'], '0' * 64)
-            with self.assertRaisesRegex(sandbox.SandboxError, 'unsafe_private_path'):
+            self.addCleanup(daemon.close)
+            with self.assertRaisesRegex(sandbox.SandboxError, '^unsafe_private_path$'):
                 daemon.start()
+            self.assertIsNone(daemon.process)
+
+    def test_platform_prerequisites_precede_hash_and_private_checks(self):
+        with tempfile.TemporaryDirectory(dir='/tmp') as temp:
+            root = Path(temp).resolve()
+            daemon = sandbox.ConfinedDaemon(root / 'home', root / 'missing',
+                                            ['wss://relay.example/'], '0' * 64)
+            self.addCleanup(daemon.close)
+            with patch.object(sandbox, 'validated_bwrap',
+                              side_effect=sandbox.SandboxError('unsafe_bwrap_path')), \
+                    patch.object(sandbox, '_private', side_effect=AssertionError('private check')), \
+                    patch.object(sandbox.subprocess, 'Popen') as spawn:
+                with self.assertRaisesRegex(sandbox.SandboxError, '^unsafe_bwrap_path$'):
+                    daemon.start()
+                spawn.assert_not_called()
+            def missing_tool(name):
+                fixed_confinement_tool(name)
+                return None
+            with patch.object(sandbox, 'validated_bwrap', return_value=Path('/fixture/bwrap')), \
+                    patch.object(sandbox.shutil, 'which', side_effect=missing_tool), \
+                    patch.object(sandbox, '_private', side_effect=AssertionError('private check')), \
+                    patch.object(sandbox.subprocess, 'Popen') as spawn:
+                with self.assertRaisesRegex(sandbox.SandboxError, '^missing_confinement_tool$'):
+                    daemon.start()
+                spawn.assert_not_called()
+            self.assertFalse(daemon.home.exists())
+            self.assertIsNone(daemon.process)
 
 
 class BwrapSelectionTests(unittest.TestCase):
@@ -172,11 +216,21 @@ class BwrapSelectionTests(unittest.TestCase):
             self.assertEqual([call.args[0] for call in opened.call_args_list], ['/', 'usr', 'bin', 'bwrap'])
 
     def test_file_modes_symlinks_and_untrusted_ancestors_fail_closed(self):
-        for mode in (0o600, 0o775, 0o4755, 0o2755):
+        for mode in (0o600, 0o775):
             with self.subTest(mode=mode):
                 self.binary.chmod(mode)
+                self.assertEqual(stat.S_IMODE(self.binary.stat().st_mode), mode)
                 with self.assertRaises(sandbox.SandboxError):
                     self.selected()
+        for mode in (0o4755, 0o2755):
+            with self.subTest(special_mode=mode):
+                self.binary.chmod(mode)
+                actual = stat.S_IMODE(self.binary.stat().st_mode)
+                if sys.platform.startswith('linux'):
+                    self.assertEqual(actual, mode)
+                if actual == mode:
+                    with self.assertRaisesRegex(sandbox.SandboxError, '^unsafe_bwrap_executable$'):
+                        self.selected()
         self.binary.chmod(0o700)
         self.root.chmod(0o777)
         with self.assertRaises(sandbox.SandboxError):
@@ -196,6 +250,51 @@ class BwrapSelectionTests(unittest.TestCase):
         os.mkfifo(self.environment['MARMISH_BWRAP'], 0o700)
         with self.assertRaises(sandbox.SandboxError):
             self.selected()
+
+    def test_set_id_bits_rejected_before_access_or_hash(self):
+        original = sandbox.os.fstat
+        identity = self.binary.stat()
+        observed = []
+        for bit in (stat.S_ISUID, stat.S_ISGID):
+            def metadata(fd):
+                info = original(fd)
+                if (info.st_dev, info.st_ino) == (identity.st_dev, identity.st_ino):
+                    fields = list(info)
+                    fields[stat.ST_MODE] |= bit
+                    observed.append(bit)
+                    return os.stat_result(fields)
+                return info
+            with self.subTest(bit=bit), patch.object(sandbox.os, 'fstat', side_effect=metadata), \
+                    patch.object(sandbox.os, 'access', side_effect=AssertionError('access reached')), \
+                    patch.object(sandbox.hashlib, 'file_digest', side_effect=AssertionError('hash reached')):
+                with self.assertRaisesRegex(sandbox.SandboxError, '^unsafe_bwrap_executable$'):
+                    self.selected()
+        self.assertEqual(observed, [stat.S_ISUID, stat.S_ISGID])
+
+    def test_cleared_special_bits_still_have_deterministic_rejection_coverage(self):
+        original = Path.chmod
+        def clearing(path, mode, *args, **kwargs):
+            return original(path, mode & ~(stat.S_ISUID | stat.S_ISGID), *args, **kwargs)
+        with patch.object(sys.modules[__name__], 'sys', SimpleNamespace(platform='darwin')), \
+                patch.object(Path, 'chmod', clearing):
+            self.test_file_modes_symlinks_and_untrusted_ancestors_fail_closed()
+            self.environment['MARMISH_BWRAP'] = str(self.binary)
+            self.test_set_id_bits_rejected_before_access_or_hash()
+
+    def test_linux_cleared_special_bits_fail_the_required_real_mode_check(self):
+        original = Path.chmod
+        def clearing(path, mode, *args, **kwargs):
+            return original(path, mode & ~(stat.S_ISUID | stat.S_ISGID), *args, **kwargs)
+        case = BwrapSelectionTests('test_file_modes_symlinks_and_untrusted_ancestors_fail_closed')
+        result = unittest.TestResult()
+        with patch.object(sys.modules[__name__], 'sys', SimpleNamespace(platform='linux')), \
+                patch.object(Path, 'chmod', clearing):
+            case.run(result)
+        self.assertEqual(result.testsRun, 1)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(len(result.failures), 2)
+        self.assertEqual(result.skipped, [])
+        self.assertFalse(result.wasSuccessful())
 
     def test_ownership_uses_supervisor_euid_before_mapping(self):
         supervisor_uid = os.geteuid() or 1001
