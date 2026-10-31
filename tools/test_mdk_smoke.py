@@ -25,6 +25,15 @@ MESSAGE = "04" * 32
 RELAYS = ["wss://relay.example/"]
 
 
+@contextlib.contextmanager
+def simulated_linux_admission():
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch.object(smoke, 'sys', SimpleNamespace(platform='linux')))
+        if not hasattr(smoke.os, 'WNOWAIT'):
+            stack.enter_context(patch.object(smoke.os, 'WNOWAIT', 0, create=True))
+        yield
+
+
 def identity(account=A):
     return {"account_id": account, "npub": account, "local_signing": True,
             "key_package": {"published": True, "bytes": 32},
@@ -373,7 +382,9 @@ class EntrypointTests(unittest.TestCase):
                 root.mkdir(mode=0o700)
                 return str(root)
             real_rmtree = smoke.shutil.rmtree
-            with patch.object(smoke.tempfile, "mkdtemp", side_effect=create_root), \
+            with simulated_linux_admission(), \
+                    patch.object(smoke.os, "waitid", create=True) as waitid, \
+                    patch.object(smoke.tempfile, "mkdtemp", side_effect=create_root), \
                     patch.object(smoke, "Processes", return_value=manager), \
                     patch.object(smoke, "exchange", side_effect=exchange), \
                     patch.object(smoke.shutil, "rmtree", side_effect=(
@@ -381,6 +392,7 @@ class EntrypointTests(unittest.TestCase):
                     patch.object(smoke.subprocess, "Popen") as spawn, \
                     contextlib.redirect_stdout(output):
                 code = smoke.main(args)
+            waitid.assert_not_called()
             close.assert_called_once_with()
             remove.assert_called_once_with(root)
             spawn.assert_not_called()
@@ -437,12 +449,74 @@ class EntrypointTests(unittest.TestCase):
         args = ["--live", "--wn", "/secret/wn", "--wnd", "/secret/wnd", "--wn-sha256", "0"*64,
                 "--wnd-sha256", "0"*64, "--relay", "wss://secret@bad"]
         output = io.StringIO()
-        with patch.object(smoke.subprocess, "Popen") as spawn, contextlib.redirect_stdout(output):
+        with simulated_linux_admission(), \
+                patch.object(smoke.os, "waitid", create=True) as waitid, \
+                patch.object(smoke, "Processes") as processes, \
+                patch.object(smoke, "exchange") as exchange, \
+                patch.object(smoke.subprocess, "Popen") as spawn, \
+                contextlib.redirect_stdout(output):
             self.assertEqual(smoke.main(args), 1)
             spawn.assert_not_called()
+            processes.assert_not_called()
+            exchange.assert_not_called()
+            waitid.assert_not_called()
         value = json.loads(output.getvalue())
         self.assertEqual(value["error"], "invalid_relay")
         self.assertNotIn("secret", output.getvalue())
+
+
+class AdmissionSimulationTests(unittest.TestCase):
+    def test_simulation_preserves_existing_wnowait_and_restores_missing_attribute(self):
+        original_sys = smoke.sys
+        for present in (False, True):
+            sentinel = object()
+            local_os = SimpleNamespace(WNOWAIT=sentinel) if present else SimpleNamespace()
+            with self.subTest(present=present), patch.object(smoke, 'os', local_os):
+                with simulated_linux_admission():
+                    self.assertEqual(smoke.sys.platform, 'linux')
+                    self.assertTrue(hasattr(local_os, 'WNOWAIT'))
+                    if present:
+                        self.assertIs(local_os.WNOWAIT, sentinel)
+                self.assertEqual(hasattr(local_os, 'WNOWAIT'), present)
+                if present:
+                    self.assertIs(local_os.WNOWAIT, sentinel)
+                self.assertIs(smoke.sys, original_sys)
+
+
+class DarwinAdmissionTests(unittest.TestCase):
+    def check_darwin_refusal(self, *, simulated):
+        args = ["--live", "--wn", "/fake/wn", "--wnd", "/fake/wnd", "--wn-sha256", "0"*64,
+                "--wnd-sha256", "0"*64, "--relay", RELAYS[0]]
+        handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+        saved_umask = os.umask(0o077)
+        os.umask(saved_umask)
+        output = io.StringIO()
+        admission = (patch.object(smoke, 'sys', SimpleNamespace(platform='darwin'))
+                     if simulated else contextlib.nullcontext())
+        with admission, patch.object(smoke.subprocess, 'Popen') as spawn, \
+                patch.object(smoke.tempfile, 'mkdtemp') as allocate, \
+                patch.object(smoke, 'Processes') as processes, \
+                patch.object(smoke, 'exchange') as exchange, \
+                patch.object(smoke.os, 'waitid', create=True) as waitid, \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(smoke.main(args), 1)
+            for operation in (spawn, allocate, processes, exchange, waitid):
+                operation.assert_not_called()
+        report = json.loads(output.getvalue())
+        self.assertEqual(report['error'], 'unsupported_platform')
+        self.assertEqual(report['outcome'], 'failed')
+        self.assertEqual(report['local_cleanup'], 'complete')
+        for sig, handler in handlers.items():
+            self.assertIs(signal.getsignal(sig), handler)
+        self.assertEqual(os.umask(saved_umask), saved_umask)
+
+    def test_simulated_darwin_refusal_preserves_process_state(self):
+        self.check_darwin_refusal(simulated=True)
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'actual Darwin smoke admission')
+    def test_actual_darwin_refusal_preserves_process_state(self):
+        # No platform or WNOWAIT admission patch: production sees actual Darwin.
+        self.check_darwin_refusal(simulated=False)
 
 
 if __name__ == "__main__":

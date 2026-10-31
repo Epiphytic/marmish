@@ -59,6 +59,33 @@ local results for publication. Progress identifiers are spoofable hints, not evi
 that a named test caused a timeout. Native three-platform acceptance and the
 independent macOS confinement failure remain open under the evidence above.
 
+The subsequent [hosted run 41143960720](validation/managed-runtime-native-41143960720.md)
+passed installer/PTY and focused packaging contracts on all three platforms.
+Both Linux full suites ran 495 tests with 7 skips and failed the same required
+namespace gates. macOS reported a 494-test summary with 30 skips, then the
+interpreter remained alive until the 900-second deadline. Its final prefix hint
+was a smoke cleanup test, not proof that this test hung. A bounded local
+reproduction identified a test-fixture defect: a missing Linux-only `/proc` read
+after listener-thread startup bypassed cleanup and kept Python alive after its
+summary. The [test-only repair plan](phases/managed-runtime-fixture-portability.md)
+is implemented in the two affected test modules after independent design approval.
+The real fixture and injected failures share cleanup, including listener/thread
+startup errors; Linux namespace tests remain required on Linux. Smoke fixtures
+simulate admission locally and separately prove unchanged Darwin refusal. Local
+affected modules passed normally and through a symlink (48 tests, 1 skip each);
+the full suite passed 505 tests with 8 skips after incorporating an initial code
+review finding about cleanup inside unrelated except blocks. Final narrow review approved publication and independently repeated these
+checks. Local [Trial18 managed packaging proof](validation/managed-runtime-selfhosted-trial18.md)
+passed all ten assertions and 505 tests with 8 skips, with enforced offline
+network isolation, complete cleanup and unchanged monitored home metadata.
+Native rerun remains pending; no three-target or production-installer acceptance
+is inferred from the local pass.
+All three reports from hosted run 41143960720 retained complete cleanup and
+unchanged monitored home metadata.
+The separate [owned macOS denial diagnostic](phases/macos-owned-denial-diagnostic.md)
+has an approved detailed design, with no implementation or native-format evidence
+yet; it does not relax confinement or resolve the historical configured SIGABRT.
+
 ## Purpose and intended product
 
 ### Experimental distribution increment

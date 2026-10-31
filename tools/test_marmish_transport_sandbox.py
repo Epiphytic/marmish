@@ -1,14 +1,18 @@
 """Offline confinement contracts; all remote fixtures use host loopback only."""
+import contextlib
 import hashlib
 import json
 import os
 from pathlib import Path
 import socket
 import stat
+import subprocess
+import sys
 import tempfile
 import threading
 import time
 from marmish_platform import continuous_time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch, Mock
 
@@ -265,39 +269,60 @@ class BwrapSelectionTests(unittest.TestCase):
         self.assertFalse(any(key.startswith('MARMISH_BWRAP') for key in launch.call_args.kwargs['env']))
 
 
-class NamespaceTests(unittest.TestCase):
-    def test_approved_bridge_decoy_denial_capabilities_and_cleanup(self):
-        # This is a required test: unsupported namespaces fail, not silently skip.
-        with tempfile.TemporaryDirectory(prefix='marmish-ns-test-') as temp:
-            root = Path(temp)
-            fixture = socket.socket()
-            fixture.bind(('127.0.0.1', 0))
-            fixture.listen(8)
-            fixture.settimeout(.1)
-            decoy = socket.socket()
-            decoy.bind(('127.0.0.1', 0))
-            decoy.listen(8)
-            decoy.settimeout(.1)
-            stop = threading.Event()
-            counts = {'approved': 0, 'decoy': 0}
-            def serve(listener, category):
-                while not stop.is_set():
-                    try:
-                        stream, _ = listener.accept()
-                    except socket.timeout:
-                        continue
-                    except OSError:
-                        return
-                    counts[category] += 1
-                    with stream:
-                        if category == 'approved':
-                            stream.sendall(b'offline-fixture')
-            threads = [threading.Thread(target=serve, args=(fixture, 'approved')),
-                       threading.Thread(target=serve, args=(decoy, 'decoy'))]
-            for thread in threads:
-                thread.start()
-            fake = root / 'wnd'
-            fake.write_text('''#!/usr/bin/python3
+def stop_and_join(stop, threads):
+    stop.set()
+    deadline = continuous_time() + 1
+    first_error = None
+    for thread in threads:
+        try:
+            thread.join(max(0, deadline - continuous_time()))
+            if thread.is_alive():
+                raise AssertionError('namespace_fixture_thread_alive')
+        except BaseException as error:
+            if first_error is None:
+                first_error = error
+    if first_error is not None:
+        raise first_error
+
+
+@contextlib.contextmanager
+def namespace_fixture(root):
+    cleanup = []
+    original_error = False
+    try:
+        fixture = socket.socket()
+        cleanup.append(fixture.close)
+        fixture.bind(('127.0.0.1', 0))
+        fixture.listen(8)
+        fixture.settimeout(.1)
+        decoy = socket.socket()
+        cleanup.append(decoy.close)
+        decoy.bind(('127.0.0.1', 0))
+        decoy.listen(8)
+        decoy.settimeout(.1)
+        stop = threading.Event()
+        counts = {'approved': 0, 'decoy': 0}
+        def serve(listener, category):
+            while not stop.is_set():
+                try:
+                    stream, _ = listener.accept()
+                except socket.timeout:
+                    continue
+                except OSError:
+                    return
+                counts[category] += 1
+                with stream:
+                    if category == 'approved':
+                        stream.sendall(b'offline-fixture')
+        threads = [threading.Thread(target=serve, args=(fixture, 'approved')),
+                   threading.Thread(target=serve, args=(decoy, 'decoy'))]
+        started = []
+        cleanup.append(lambda: stop_and_join(stop, started))
+        for thread in threads:
+            thread.start()
+            started.append(thread)
+        fake = root / 'wnd'
+        fake.write_text('''#!/usr/bin/python3
 import json,os,pathlib,socket,subprocess,time
 caps={line.split(':')[0]:line.split(':')[1].strip() for line in pathlib.Path('/proc/self/status').read_text().splitlines() if line.startswith(('CapEff:','CapPrm:','CapInh:','CapAmb:','CapBnd:'))}
 assert set(caps.values())=={'0000000000000000'}
@@ -319,22 +344,194 @@ child=subprocess.Popen(['/bin/sh','-c','while :; do echo tick >> /state/ticks; s
 s=socket.socket(socket.AF_UNIX);s.bind('/state/s');s.listen()
 while True:time.sleep(1)
 '''.replace('DECOY_PORT', str(decoy.getsockname()[1])))
-            fake.chmod(0o700)
-            digest = hashlib.sha256(fake.read_bytes()).hexdigest()
-            daemon = sandbox.ConfinedDaemon(root / 'home', fake, ['wss://approved.invalid/'], digest)
-            destinations = []
-            def fixed_resolve(target, deadline):
-                destinations.append(target)
-                self.assertEqual(target, ('approved.invalid', 443))
-                return [(socket.AF_INET, '127.0.0.1')]
-            # Keep the externally configured relay port443 in every broker
-            # request; map only the synthetic TCP fixture at the final dial.
-            def fixture_connect(broker, target):
-                rows = broker._resolve(target, continuous_time() + 5)
-                self.assertEqual(rows, [(socket.AF_INET, '127.0.0.1')])
-                return socket.create_connection(fixture.getsockname(), timeout=1)
-            host_threshold = Path('/proc/sys/net/ipv4/ip_unprivileged_port_start').read_text()
+        fake.chmod(0o700)
+        digest = hashlib.sha256(fake.read_bytes()).hexdigest()
+        daemon = sandbox.ConfinedDaemon(root / 'home', fake, ['wss://approved.invalid/'], digest)
+        cleanup.append(daemon.close)
+        host_threshold = Path('/proc/sys/net/ipv4/ip_unprivileged_port_start').read_text()
+        yield SimpleNamespace(fixture=fixture, decoy=decoy, threads=threads,
+                              counts=counts, daemon=daemon, fake=fake, digest=digest,
+                              host_threshold=host_threshold)
+    except BaseException:
+        original_error = True
+        raise
+    finally:
+        first_error = None
+        for close in reversed(cleanup):
             try:
+                close()
+            except BaseException as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None and not original_error:
+            raise first_error
+
+
+class FixtureCleanupTests(unittest.TestCase):
+    def check_setup_failure(self, failure, *, cleanup_failure=False):
+        listeners, workers = [], []
+        real_socket, real_thread = socket.socket, threading.Thread
+        real_read = Path.read_text
+        expected = RuntimeError('fixture_' + failure)
+        def make_socket(*args, **kwargs):
+            if failure == 'second_listener' and listeners:
+                raise expected
+            listener = real_socket(*args, **kwargs)
+            listeners.append(listener)
+            return listener
+        def make_thread(*args, **kwargs):
+            worker = real_thread(*args, **kwargs)
+            if failure == 'second_thread' and workers:
+                worker.start = Mock(side_effect=expected)
+            workers.append(worker)
+            return worker
+        def read(path, *args, **kwargs):
+            if path == Path('/proc/sys/net/ipv4/ip_unprivileged_port_start'):
+                raise expected
+            return real_read(path, *args, **kwargs)
+        started = continuous_time()
+        with tempfile.TemporaryDirectory(prefix='marmish-fixture-cleanup-') as temp, \
+                patch.object(socket, 'socket', side_effect=make_socket), \
+                patch.object(threading, 'Thread', side_effect=make_thread), \
+                patch.object(Path, 'read_text', read), \
+                patch.object(sandbox.ConfinedDaemon, 'start') as spawn, \
+                patch.object(sandbox.ConfinedDaemon, 'close', side_effect=(
+                    OSError('fixture_cleanup_failure') if cleanup_failure else None)):
+            with self.assertRaises(RuntimeError) as caught:
+                with namespace_fixture(Path(temp)):
+                    self.fail('injected setup failure must precede yield')
+            self.assertIs(caught.exception, expected)
+            spawn.assert_not_called()
+        self.assertLess(continuous_time() - started, 3)
+        self.assertTrue(all(listener.fileno() == -1 for listener in listeners))
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+        self.assertTrue(all(not worker.daemon for worker in workers))
+        if failure == 'second_listener':
+            self.assertEqual(len(listeners), 1)
+            self.assertEqual(workers, [])
+        else:
+            self.assertEqual(len(listeners), 2)
+            self.assertEqual(len(workers), 2)
+            self.assertIsNotNone(workers[0].ident)
+            if failure == 'second_thread':
+                self.assertIsNone(workers[1].ident)
+            else:
+                self.assertIsNotNone(workers[1].ident)
+
+    def test_proc_read_failure_closes_workers_and_listeners(self):
+        self.check_setup_failure('proc_read')
+
+    def test_cleanup_failure_preserves_setup_error_and_closes_remaining_resources(self):
+        self.check_setup_failure('proc_read', cleanup_failure=True)
+
+    def test_successful_fixture_inside_unrelated_except_propagates_cleanup_failure(self):
+        expected = OSError('fixture_cleanup_failure')
+        real_read = Path.read_text
+        def read(path, *args, **kwargs):
+            if path == Path('/proc/sys/net/ipv4/ip_unprivileged_port_start'):
+                return '0'
+            return real_read(path, *args, **kwargs)
+        with tempfile.TemporaryDirectory(prefix='marmish-fixture-except-') as temp, \
+                patch.object(Path, 'read_text', read), \
+                patch.object(sandbox.ConfinedDaemon, 'start') as spawn, \
+                patch.object(sandbox.ConfinedDaemon, 'close', side_effect=expected):
+            try:
+                raise LookupError('unrelated_outer_exception')
+            except LookupError:
+                with self.assertRaises(OSError) as caught:
+                    with namespace_fixture(Path(temp)) as owned:
+                        self.assertEqual(owned.host_threshold, '0')
+                self.assertIs(caught.exception, expected)
+            spawn.assert_not_called()
+            self.assertTrue(all(not worker.is_alive() for worker in owned.threads))
+            self.assertEqual(owned.fixture.fileno(), -1)
+            self.assertEqual(owned.decoy.fileno(), -1)
+
+    def test_second_thread_start_failure_joins_only_started_worker(self):
+        self.check_setup_failure('second_thread')
+
+    def test_second_listener_failure_closes_first_without_starting_workers(self):
+        self.check_setup_failure('second_listener')
+
+    def test_injected_failure_subprocess_exits_after_unittest_summary(self):
+        tools = str(Path(__file__).resolve().parent)
+        source = (
+            'import sys,unittest;sys.path.insert(0,' + repr(tools) + ');'
+            'import test_marmish_transport_sandbox as tests;'
+            'suite=unittest.TestSuite([tests.FixtureCleanupTests('
+            '"test_proc_read_failure_closes_workers_and_listeners")]);'
+            'result=unittest.TextTestRunner(verbosity=2).run(suite);'
+            'print("fixture_expected_proc_failure_verified" if result.wasSuccessful() else '
+            '"fixture_regression_failed",flush=True);'
+            'sys.exit(0 if result.wasSuccessful() else 1)'
+        )
+        # Keep the child in this process group so the outer proof can kill it too.
+        child = subprocess.Popen([sys.executable, '-I', '-B', '-c', source],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, close_fds=True)
+        try:
+            output, _ = child.communicate(timeout=15)
+            self.assertEqual(child.returncode, 0)
+            self.assertIn(b'Ran 1 test', output)
+            self.assertIn(b'fixture_expected_proc_failure_verified', output)
+            self.assertNotIn(b'fixture_regression_failed', output)
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=3)
+
+    def test_namespace_classification_keeps_linux_required(self):
+        expected = not sys.platform.startswith('linux')
+        self.assertEqual(getattr(NamespaceTests, '__unittest_skip__', False), expected)
+        if expected:
+            self.assertEqual(NamespaceTests.__unittest_skip_why__, NAMESPACE_REASON)
+        for name in unittest.defaultTestLoader.getTestCaseNames(NamespaceTests):
+            self.assertFalse(getattr(getattr(NamespaceTests, name), '__unittest_skip__', False))
+        # Re-evaluate the actual class definition's decorator on each platform;
+        # no namespace method executes during this classification check.
+        import ast
+        tree = ast.parse(Path(__file__).read_text())
+        definition = next(node for node in tree.body
+                          if isinstance(node, ast.ClassDef) and node.name == 'NamespaceTests')
+        self.assertFalse(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                             and node.func.attr == 'skipTest' for node in ast.walk(definition)))
+        for platform, skipped in [('linux', False), ('linux2', False), ('darwin', True)]:
+            with self.subTest(platform=platform):
+                scope = {'sys': SimpleNamespace(platform=platform), 'unittest': unittest,
+                         'NAMESPACE_REASON': NAMESPACE_REASON}
+                code = compile(ast.Module(body=[definition], type_ignores=[]), __file__, 'exec')
+                exec(code, scope)
+                classified = scope['NamespaceTests']
+                self.assertEqual(getattr(classified, '__unittest_skip__', False), skipped)
+                if skipped:
+                    self.assertEqual(classified.__unittest_skip_why__, NAMESPACE_REASON)
+
+
+NAMESPACE_REASON = 'Linux network namespace confinement contract'
+
+
+@unittest.skipUnless(sys.platform.startswith('linux'), NAMESPACE_REASON)
+class NamespaceTests(unittest.TestCase):
+    def test_approved_bridge_decoy_denial_capabilities_and_cleanup(self):
+        # This is a required test: unsupported namespaces fail, not silently skip.
+        with tempfile.TemporaryDirectory(prefix='marmish-ns-test-') as temp:
+            root = Path(temp)
+            with namespace_fixture(root) as owned:
+                fixture, decoy = owned.fixture, owned.decoy
+                daemon, counts = owned.daemon, owned.counts
+                fake, digest = owned.fake, owned.digest
+                host_threshold = owned.host_threshold
+                destinations = []
+                def fixed_resolve(target, deadline):
+                    destinations.append(target)
+                    self.assertEqual(target, ('approved.invalid', 443))
+                    return [(socket.AF_INET, '127.0.0.1')]
+                # Keep the externally configured relay port443 in every broker
+                # request; map only the synthetic TCP fixture at the final dial.
+                def fixture_connect(broker, target):
+                    rows = broker._resolve(target, continuous_time() + 5)
+                    self.assertEqual(rows, [(socket.AF_INET, '127.0.0.1')])
+                    return socket.create_connection(fixture.getsockname(), timeout=1)
                 with patch.object(sandbox._Broker, '_resolve', side_effect=fixed_resolve), \
                      patch.object(sandbox._Broker, '_connect', fixture_connect):
                     with daemon:
@@ -356,13 +553,6 @@ while True:time.sleep(1)
                 self.assertEqual(counts, {'approved': 1, 'decoy': 0})
                 self.assertEqual(destinations, [('approved.invalid', 443)])
                 self.assertEqual(host_threshold, Path('/proc/sys/net/ipv4/ip_unprivileged_port_start').read_text())
-            finally:
-                daemon.close()
-                stop.set()
-                fixture.close()
-                decoy.close()
-                for thread in threads:
-                    thread.join(1)
 
     def test_startup_failure_releases_lock_and_private_resources(self):
         with tempfile.TemporaryDirectory(prefix='marmish-ns-fail-') as temp:
@@ -372,6 +562,7 @@ while True:time.sleep(1)
             binary.chmod(0o700)
             daemon = sandbox.ConfinedDaemon(root / 'home', binary, ['wss://approved.invalid/'],
                                             hashlib.sha256(binary.read_bytes()).hexdigest())
+            self.addCleanup(daemon.close)
             started = continuous_time()
             with self.assertRaisesRegex(sandbox.SandboxError, 'namespace_start_failed'):
                 daemon.start()
