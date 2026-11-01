@@ -1,0 +1,38 @@
+{
+  "reviewer_models": [
+    "claude-opus-5-5"
+  ],
+  "mode": "Claude Code --permission-mode auto, read-only integrated design/documentation review",
+  "review": {
+    "verdict": "APPROVED",
+    "verdict_scope": "High-level phased design only. Detailed designs for increments A, B and C, each with its own Claude review, are still required before any code. No implementation, live result or native acceptance is approved or implied.",
+    "documentation_verdict": "NOT APPROVED as written. One factual sentence about queued runs is wrong (D1) and must be corrected before commit. That one-sentence fix doesn't need another design review.",
+    "b2_correction_acknowledged": "Accepted, and my earlier B2 was wrong. In crates/marmish-engine/src/policy.rs, every effective layer must allow the executable (`allowed = allow_exec.is_none()`, OR across that layer's patterns, then deny if any layer fails). Layers therefore intersect, and a default deny-all can't be overridden per key. The revised scheme is correct: defaults allow exactly the three fixture paths, and each key's layer allows only its own path. require_canonical_exec also justifies using canonical /private/tmp paths on macOS.",
+    "findings_disposition": {
+      "B1_release_vs_candidate": "RESOLVED. A run on experimental.2 validates only that archive. Exact count is asserted with no admission-control claim, and the doc confirms marmishd has no --max-commands flag. Future flags are gated on a matching published archive or the candidate lane. Known macOS native_probe_broker and Linux namespace failures are expected and reported.",
+      "B2_authenticated_receipts": "RESOLVED as a gated baseline. MdkRpc.history rows carry an authenticated `from`, direction and plaintext frame, so the baseline is plausible. Phase B has an explicit stop condition if the row fields can't bind peer, group, invocation and outcome, and the doc correctly says local observation is not external attestation.",
+      "B3_fixture_provenance": "RESOLVED. Fixtures are built from the harness SHA, staged in three fixed roles outside PRIVATE_PREFIX, with separate digests and no client-chosen role or path.",
+      "B4_scheduling": "RESOLVED in design, apart from the queued-run sentence in D1. The workflow is manual and master-only, shares the native concurrency group, has a barrier before server start, and has concrete budgets (75/15/10/30/8). Not treating a shared laptop-ci label as proof of a shared host or of concurrency capacity is correct.",
+      "B5_client_serialization_and_shutdown": "RESOLVED. Commands run serially with --timeout 300 and a watchdog within 18 minutes. Clients always publish a terminal artifact, servers stop on all three artifacts or the cap, and receipts are published before waiting on the local server.",
+      "B6_installer_provenance": "RESOLVED. Installer bytes are scripts/install.sh at GITHUB_SHA. The installed release.json is compared byte-for-byte with the resolved one, every payload file is rehashed, ownership marker and launcher bytes are checked, and the doc no longer claims to measure the deleted archive. Runner-home paths are sanitized.",
+      "nonblocking_prior": "All seven earlier nonblocking items are carried into the doc: rate limits, no --debug on live frontends, pagination, uninstall keeps versions, unauthorized-principal coverage, pair-specific receipts, expected first-run failures."
+    },
+    "blocking_documentation_corrections": [
+      {
+        "id": "D1",
+        "location": "docs/phases/installed-nine-pair-interop.md, Scheduling: 'A run queued behind another workflow is not silently cancelled.'",
+        "finding": "This is wrong for a shared concurrency group. `cancel-in-progress: false` only protects the running run. GitHub allows one pending run per group, and a newer run entering the group cancels the older pending one. A master push of native-validation can therefore cancel a queued nine-pair dispatch, and the reverse can also happen.",
+        "correction": "Replace it with: 'A pending run can be superseded by a newer run entering the shared concurrency group. That shows as cancelled, never green, and the operator re-dispatches it. Only the running run is protected by cancel-in-progress: false.'"
+      }
+    ],
+    "nonblocking_suggestions": [
+      "Wording: agent-spec.md says 'Independent policy-bound authenticated server receipts', and the Increment C row says 'independent server receipts'. The design itself says server observation is not independent attestation. Use 'separate server-side' instead.",
+      "Wording: build-plan.md cites 'the existing authenticated server observation contracts' as if they were settled. Say 'existing MDK history observation, subject to the phase-B field verification gate'.",
+      "Clarity: 'Clients issue exactly their one test command to each server' sits next to the policy cross-execution denial probes. State that denial probes are separate denied requests, never executions, which is what the exact-count rule assumes.",
+      "Budget detail: the 30-minute window includes startup and the client window is 18 minutes. Phase A or B should state a server readiness budget of about 5 minutes after the barrier, so the earliest server still has room for artifact delivery and drain.",
+      "Rendezvous: the existing schema requires the fixture path to end in '/f/main'. The three-role extension (f/<client-platform>/main) should be listed as an explicit schema change in the Increment A detailed design.",
+      "Review record: docs/reviews/installed-nine-pair-design-initial.json keeps my incorrect B2 wording. Record this follow-up review, including the B2 correction, next to it so the audit trail shows the fix."
+    ],
+    "verification_basis": "Read the revised design, the git diff of build-plan.md and agent-spec.md, tools/marmish_policy.py, crates/marmish-engine/src/policy.rs evaluation, and MdkRpc.history/_message in tools/marmish_rpc.py. Facts already checked in the first review were reused without re-reading. Read-only; no edits, no live tests."
+  }
+}

@@ -1,5 +1,18 @@
 # Marmish build plan
 
+## Installed three-platform live acceptance
+
+The [nine-pair design](phases/installed-nine-pair-interop.md), Beads
+`marmish-360`, extends live validation to Linux AMD64, Linux ARM64 and macOS
+ARM64 on both client and server axes. Every platform must execute the actual
+install script and run its installed launchers. The proposed increments cover
+installation/public rendezvous, bounded authenticated command execution and
+delivery-safe shutdown, then independent nine-pair rollup and native evidence.
+This is planned work; existing installation and confinement failures remain
+visible and are not waived. See the detailed design for release-versus-installer
+provenance and existing MDK history observation, subject to phase-B field
+verification.
+
 ## Prototype distribution extension
 
 The [distribution design](phases/distribution.md) adds three reviewed increments:

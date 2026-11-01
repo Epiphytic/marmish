@@ -1,0 +1,58 @@
+{
+  "reviewer_models": [
+    "claude-opus-5-5"
+  ],
+  "mode": "Claude Code --permission-mode auto, read-only design review",
+  "review": {
+    "verdict": "NOT APPROVED",
+    "scope": "Read-only design review of docs/phases/installed-nine-pair-interop.md against scripts/install.sh, tools/marmish_app.py (client/server CLI), tools/marmish_rendezvous.py, tools/marmish_interop.py, tools/marmish_transport.py, .github/workflows/native-validation.yml and the v0.1.0-experimental.2 tag. No files edited, no live runs.",
+    "summary": "The direction is sound. It handles confinement, token isolation, the difference between installer and application source, deadlines that account for suspend, and the rule that relay publication is not success. Some parts can't be built as written: they assume interfaces that the frozen published release lacks, an installer cross-check the real script can't support, and scheduling that will collide with the existing native workflow.",
+    "blocking": [
+      {
+        "id": "B1",
+        "area": "current release vs candidate",
+        "finding": "Increment B requires stopping admission after three commands, delivery-safe draining and an authenticated observation interface. The frozen lane can only use a published release (newest is v0.1.0-experimental.2). That release has no admission-limit flag and no observation interface, and a CI supervisor can only SIGTERM marmishd (tools/marmish_app.py server_main). Any new marmishd flag or diagnostic interface is application code that can't reach the installed lane until a separately authorized publication. That creates a cycle the document doesn't resolve.",
+        "correction": "Split Increment B into B1 and B2. B1 runs on the frozen published release. There, the 30-minute cap is enforced by the supervisor sending SIGTERM after all receipts arrive or the hard cap is reached. 'Three commands' becomes a checked assertion: exactly three unique admitted invocations, and any fourth is a failure. It is not admission control. B2 covers any marmishd admission/observation interface and is accepted only on the first published release (or the reviewed candidate lane) that contains it. State explicitly that a pass on experimental.2 says nothing about master. Also state that the open macOS native_probe_broker failure in experimental.2 is the expected first-run outcome."
+      },
+      {
+        "id": "B2",
+        "area": "authenticated receipts",
+        "finding": "The document leaves principal binding as a fully open interface. The existing contract already supports it: --command-policy takes per-key allow_exec/deny_exec restrictions (policy() in marmish_interop.py), and the supervisor already observes membership through the server's MDK RPC socket (running_rpc and observe_intruder). Without a baseline, Increment B can't be designed without new application code, which leads straight back to B1.",
+        "correction": "Make this the baseline. Default policy denies everything. Each expected client principal gets an exclusive allow_exec for a distinct fixture path, such as f/<client-platform>/main. The fixture writes a per-pair receipt with O_EXCL into a pair-specific file under the server cwd, containing challenge, invocation, argv and stdin digests. Because the server's policy engine admitted that path only for that key, the receipt proves the authenticated principal. Check membership with the existing MDK RPC observation. Add new interfaces only if this proves insufficient, and gate them under B1's B2 lane."
+      },
+      {
+        "id": "B3",
+        "area": "fixture provenance",
+        "finding": "The installed release doesn't ship the test fixture (EXECUTABLES in install.sh). The existing fixture is built from source into the CI bundle, and the rendezvous schema requires it under /tmp/mci-*/f/main. The document says 'narrow fixture executable' and 'no source substitution' but never says where the fixture comes from, what its digest is, or how confinement allows it to execute.",
+        "correction": "Build the fixture from the harness GITHUB_SHA during the bounded preparation phase. Put it in an owned 0700 root outside PRIVATE_PREFIX and publish its sha256 in the public record, labelled as harness provenance, separate from application provenance. Give its path rules for both macOS and Bubblewrap. Client-side byte and exit checks may use the same fixture, so there is a single executable contract."
+      },
+      {
+        "id": "B4",
+        "area": "scheduling",
+        "finding": "The document sets no trigger, workflow placement or concurrency group. On every master push, native-validation.yml runs `native` (90 min, max-parallel 1) and `managed-proof` (60 min) at the same time on these same three runners. The nine-pair jobs would routinely blow the five-minute assignment budget, or start some server windows while another platform is still queued. Linux ARM64 and macOS ARM64 also both carry the laptop-ci label and have never run concurrently in the existing `live` job.",
+        "correction": "Make the workflow master-only workflow_dispatch, or have it run after native-validation completes. Share the `marmish-native-validation` concurrency group (cancel-in-progress: false). Add an explicit start barrier: no server launches until all three 'installed + identity-ready' records exist within a fixed pairing budget. Document the shared laptop host: keep caffeinate and the host_suspended drift check on both laptop-ci jobs. Give concrete numbers: assignment 5 min, install/prep 15, pairing 10, server window 30 including drain, cleanup/report 8, job timeout-minutes of about 75, wall-clock only."
+      },
+      {
+        "id": "B5",
+        "area": "client execution and delivery-safe shutdown",
+        "finding": "One client identity can run only one transport at a time. A second process on the same profile fails with daemon_home_in_use (acquire_profile_home_lock). So each platform's three client commands are sequential, and the client --timeout of up to 900 s each can exceed the 30-minute server window. The document also doesn't require a client to publish a receipt when a pair fails. In that case every server idles until the hard cap.",
+        "correction": "State that the three client commands run serially in a fixed order, with a per-command --timeout of about 300 s or less, and that the total fits inside the server window minus the drain reservation. Each client always publishes exactly one terminal receipt artifact covering all three pairs: received, failed with a category, or timed out. Servers stop on the earliest of all three receipts or the hard cap. Any receipt that isn't 'received' still fails acceptance."
+      },
+      {
+        "id": "B6",
+        "area": "installer provenance",
+        "finding": "'Cross-check downloaded bytes against the resolved digests' can't be done with the real script. install_release downloads into a TemporaryDirectory that is deleted on exit and never reports the archive digest. The document also doesn't say whether the installer bytes come from the repository at GITHUB_SHA or from Iris.",
+        "correction": "Installer bytes are scripts/install.sh at the run's GITHUB_SHA. The resolve job records that blob's sha256, and each platform job checks it before running `sh`. The resolve job also downloads each target archive, records its SHA256SUMS line and the bytes of the embedded release.json, including source_commit. After installation, the platform job compares versions/<v>-<target>/release.json byte-for-byte, re-hashes every payload file against it, and checks .marmish-install.json and the launcher bytes. Record which python3 was used (path and version). Keep the separate Iris check as stated."
+      }
+    ],
+    "nonblocking": [
+      "Rendezvous: generalize ROLES to three platforms with new stage names rather than overloading linux/macos. Check total_count or paginate past per_page=100. Have the rollup use download-artifact by exact name rather than the API.",
+      "Keep an unauthorized-principal negative check per server. The existing schema's `intruder` field and pending-confirmation assertion would otherwise be lost.",
+      "Don't pass --debug to the live marmish/marmishd commands, because it would break the exact stderr comparison. Installer --debug is harmless here.",
+      "Use pair-specific receipt files: three clients share one server cwd, and the existing single cwd/peer-completed file would collide.",
+      "Cleanup: reuse remove_engine_state through the installed bridge with the exact engine policy. Note that the installer's --uninstall keeps versions/, so the owned private prefix root must be removed after verified process exit, using process_identity rather than killing by name.",
+      "The installer's GitHub API calls are unauthenticated (60/hour per IP), and the laptop runners probably share an IP. Expect bounded retries and record http_status from the --debug failure record.",
+      "Write down the expected first-run outcome per platform: the Linux AMD64 namespace denial and the macOS native_probe_broker failure remain open, so a red 3x3 grid is the expected honest result."
+    ]
+  }
+}

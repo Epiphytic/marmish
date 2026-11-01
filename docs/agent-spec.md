@@ -7,6 +7,16 @@ status and dependencies, [AGENTS.md](../AGENTS.md) for the build workflow,
 [the build plan](build-plan.md) for phases and [the README](../README.md) for
 concrete commands.
 
+The proposed [installed nine-pair acceptance design](phases/installed-nine-pair-interop.md)
+requires actual script installation on Linux AMD64, Linux ARM64 and macOS ARM64,
+then installed client/server command execution across all nine platform pairs.
+Three concurrent jobs each host a server and client; public artifacts exchange
+identities/readiness without waiting for running jobs to finish. Separate
+policy-bound authenticated server receipts and client output/exit validation
+are required,
+with bounded server lifetime and delivery-safe shutdown. This is design only;
+the new matrix is not implemented. Current native confinement blockers and the production uv installer remain separate.
+
 ## Intended managed setup and unified service
 
 The [reviewed proposal](phases/native-setup-unified-daemon.md), Beads marmish-x6z,
