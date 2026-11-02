@@ -75,6 +75,21 @@ def read_lifetime_diagnostics(stream, timeout=2):
             raise AssertionError('native_lifetime_diagnostic_invalid')
 
 
+class ProfileBoundaryTests(unittest.TestCase):
+    def test_exact_empirically_validated_root_directory_rule(self):
+        raw = native.PROFILE.encode('utf-8')
+        rule = b'(allow file-read-data (literal "/"))\n'
+        self.assertTrue(raw.endswith(rule))
+        self.assertEqual(raw.count(rule), 1)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),
+                         '28cec5d90d4610b27c11f9c064978ab92cba051631c7a991bb27f74b335ccc68')
+        self.assertEqual(hashlib.sha256(raw[:-len(rule)]).hexdigest(),
+                         '14b1ab31a589f3f52b7b2ff93fadb35d26139c1a5cb154a0fdb50ed90a310d9a')
+        self.assertNotIn(b'(subpath "/")', raw)
+        self.assertNotIn(b'file-map-executable', raw)
+        self.assertNotIn(b'(allow default)', raw)
+
+
 class SocksTests(unittest.TestCase):
     def negotiate(self, request, allowed=None):
         left, right = socket.socketpair()

@@ -283,6 +283,8 @@ def _execution_marker():
 # The bootstrap uses only inherited anonymous fd0, not a filesystem endpoint.
 # Do not broaden vnode/network permissions for it. Native injected startup and
 # lifetime tests remain the acceptance gate for the inherited-pipe path.
+# Native loader matrix requires reading only the root directory itself.
+# Evidence and boundary: docs/phases/macos-root-loader-fix.md.
 PROFILE = '''(version 1)
 (deny default)
 (allow process-exec (literal (param "EXEC")))
@@ -298,6 +300,7 @@ PROFILE = '''(version 1)
 (allow network-outbound (remote ip (param "BROKER")))
 (allow network-bind (local unix-socket (subpath (param "HOME"))))
 (allow network-inbound (local unix-socket (subpath (param "HOME"))))
+(allow file-read-data (literal "/"))
 '''
 
 

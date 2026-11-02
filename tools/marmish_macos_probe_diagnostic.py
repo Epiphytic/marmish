@@ -20,6 +20,7 @@ SOURCE = ROOT / 'tools/native/marmish-probe.c'
 FLAGS = ['-Wall', '-Wextra', '-Werror', '-O2', '-mmacosx-version-min=15.0']
 LIMIT = 4096
 MATRIX_LIMIT = 512
+LOADER_BASE_SHA256 = '14b1ab31a589f3f52b7b2ff93fadb35d26139c1a5cb154a0fdb50ed90a310d9a'
 REPORT_LIMIT = 65536
 # Diagnostic-only fixed permissions; production never imports these additions.
 LOADER_RULES = (
@@ -145,14 +146,26 @@ def collect_cases(daemon, probe, redactions):
     return results
 
 
-def loader_profiles():
+def loader_base_profile():
+    """Keep the historical A/B baseline out of production profile selection."""
     from marmish_transport_macos import PROFILE
+    raw = PROFILE.encode('utf-8')
+    root_rule = LOADER_RULES[0][1].encode('utf-8')
+    if raw.endswith(root_rule):
+        raw = raw[:-len(root_rule)]
+    if hashlib.sha256(raw).hexdigest() != LOADER_BASE_SHA256:
+        raise ValueError('loader_base_profile_changed')
+    return raw
+
+
+def loader_profiles():
+    base = loader_base_profile()
     for mask in range(8):
         selected = [(name, rule) for bit, (name, rule) in enumerate(LOADER_RULES)
                     if mask & (1 << bit)]
         yield ('+'.join(name for name, _ in selected) or 'baseline',
                [name for name, _ in selected],
-               (PROFILE + ''.join(rule for _, rule in selected)).encode('utf-8'))
+               base + ''.join(rule for _, rule in selected).encode('utf-8'))
 
 
 def matrix_case(case_id, command, redactions, control):
@@ -267,7 +280,8 @@ def diagnose_native(output, report):
                 listener.listen(32)
                 daemon, profile = make_fixture(root, listener.getsockname())
                 matrix = report.get('mode') == 'loader-matrix'
-                report['base_profile_sha256' if matrix else 'profile_sha256'] = hashlib.sha256(profile.read_bytes()).hexdigest()
+                report['base_profile_sha256' if matrix else 'profile_sha256'] = hashlib.sha256(
+                    loader_base_profile() if matrix else profile.read_bytes()).hexdigest()
                 report['probe_source_sha256'] = hashlib.sha256(SOURCE.read_bytes()).hexdigest()
                 probe = daemon._directory / 'marmish-probe'
                 report['failure'] = build_probe(probe)

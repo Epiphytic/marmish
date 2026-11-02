@@ -198,8 +198,9 @@ class LoaderMatrixTests(unittest.TestCase):
     def test_fixed_profiles_and_unchanged_production_inputs(self):
         profiles = list(diagnostic.loader_profiles())
         self.assertEqual(len(profiles), 8)
-        self.assertEqual(profiles[0], ('baseline', [], PROFILE.encode()))
-        self.assertEqual(hashlib.sha256(PROFILE.encode()).hexdigest(),
+        self.assertEqual(profiles[0], ('baseline', [], diagnostic.loader_base_profile()))
+        self.assertEqual(profiles[1][2], PROFILE.encode())
+        self.assertEqual(hashlib.sha256(diagnostic.loader_base_profile()).hexdigest(),
                          '14b1ab31a589f3f52b7b2ff93fadb35d26139c1a5cb154a0fdb50ed90a310d9a')
         self.assertEqual(hashlib.sha256(diagnostic.SOURCE.read_bytes()).hexdigest(),
                          '47977b39f2496f3f614125a78e3e174c8a9de2d8321ee0d87632d20962e7ce17')
@@ -207,8 +208,21 @@ class LoaderMatrixTests(unittest.TestCase):
         self.assertEqual(len({raw for _, _, raw in profiles}), 8)
         self.assertIn(b'(allow file-read-data (literal "/"))', profiles[1][2])
         self.assertNotIn(b'(subpath "/")', profiles[-1][2])
-        self.assertEqual(profiles[-1][2], PROFILE.encode() +
+        self.assertEqual(profiles[-1][2], diagnostic.loader_base_profile() +
                          ''.join(rule for _, rule in diagnostic.LOADER_RULES).encode())
+
+    def test_historical_base_accepts_only_exact_old_and_new_profiles(self):
+        historical = diagnostic.loader_base_profile()
+        root = diagnostic.LOADER_RULES[0][1]
+        for text in (historical.decode(), historical.decode() + root):
+            with patch('marmish_transport_macos.PROFILE', text):
+                self.assertEqual(diagnostic.loader_base_profile(), historical)
+        for text in (PROFILE + root, root + historical.decode(), PROFILE + '\n',
+                     historical.decode().replace('(deny default)', '(allow default)')):
+            with self.subTest(text_digest=hashlib.sha256(text.encode()).hexdigest()), \
+                    patch('marmish_transport_macos.PROFILE', text):
+                with self.assertRaisesRegex(ValueError, '^loader_base_profile_changed$'):
+                    diagnostic.loader_base_profile()
 
     def matrix(self, *, baseline=-6, negatives=2, controls=0, positive=0,
                stderr=''):
@@ -226,7 +240,7 @@ class LoaderMatrixTests(unittest.TestCase):
                 outside = args[-1] == str(self.root / 'outside/synthetic')
                 tcp_negative = args[0] == 'tcp' and args[-1] != '12345'
                 code = negatives if outside or tcp_negative else positive
-                if raw == PROFILE.encode():
+                if raw == diagnostic.loader_base_profile():
                     code = baseline
             else:
                 code = controls
@@ -331,26 +345,37 @@ class LoaderMatrixTests(unittest.TestCase):
         self.assertEqual(report['controls'], [])
         self.assertFalse(report['baseline_reproduced'])
 
-    def test_native_matrix_build_failure_writes_report_before_cleanup(self):
+    def test_native_matrix_build_failure_and_drift_report_before_cleanup(self):
         native = self.root / 'native'
-        native.mkdir()
         @contextlib.contextmanager
         def fixture(**kwargs):
+            native.mkdir()
             try:
                 yield str(native)
             finally:
                 self.assertTrue(self.output.exists())
                 import shutil
                 shutil.rmtree(native)
-        with patch.object(diagnostic.platform, 'system', return_value='Darwin'), \
-                patch.object(diagnostic.os, 'geteuid', return_value=1000), \
-                patch.object(diagnostic.tempfile, 'TemporaryDirectory', side_effect=fixture), \
-                patch.object(diagnostic, 'build_probe', return_value={'category': 'sign_failed', 'exit_code': 1}):
-            self.assertEqual(diagnostic.diagnose(self.output, loader_matrix=True), 1)
-        report = json.loads(self.output.read_text())
-        self.assertEqual(report['failure']['category'], 'sign_failed')
-        self.assertEqual(report['variants'], [])
-        self.assertFalse(native.exists())
+        for drift in (False, True):
+            with self.subTest(drift=drift), contextlib.ExitStack() as stack:
+                stack.enter_context(patch.object(diagnostic.platform, 'system', return_value='Darwin'))
+                stack.enter_context(patch.object(diagnostic.os, 'geteuid', return_value=1000))
+                stack.enter_context(patch.object(diagnostic.tempfile, 'TemporaryDirectory', side_effect=fixture))
+                build = stack.enter_context(patch.object(diagnostic, 'build_probe',
+                    return_value={'category': 'sign_failed', 'exit_code': 1}))
+                if drift:
+                    stack.enter_context(patch('marmish_transport_macos.PROFILE', PROFILE + '\n'))
+                self.assertEqual(diagnostic.diagnose(self.output, loader_matrix=True), 1)
+                report = json.loads(self.output.read_text())
+                self.assertEqual(report['failure']['category'], 'fixture_failed' if drift else 'sign_failed')
+                self.assertEqual(report['variants'], [])
+                if drift:
+                    build.assert_not_called()
+                    self.assertIsNone(report['base_profile_sha256'])
+                else:
+                    self.assertEqual(report['base_profile_sha256'], diagnostic.LOADER_BASE_SHA256)
+                self.assertFalse(native.exists())
+                self.output.unlink()
 
 
 if __name__ == '__main__':

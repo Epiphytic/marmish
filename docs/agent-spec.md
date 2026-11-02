@@ -142,8 +142,17 @@ complete cleanup and unchanged monitored home metadata. Three-platform
 acceptance remains pending suitable self-hosted results; the existing macOS
 configured-confinement SIGABRT is still separate and unresolved.
 The separate [owned macOS denial diagnostic](phases/macos-owned-denial-diagnostic.md)
-has an approved detailed design, with no implementation or native-format evidence
-yet; it does not relax confinement or resolve the historical configured SIGABRT.
+is implemented. Its [native failure evidence](validation/macos-loader-41396357778/)
+shows confined dyld startup aborting, including for a system executable. The
+[eight-variant native loader matrix](validation/macos-loader-41397862711/)
+isolated a minimal repair: allowing `file-read-data` on the literal `/` directory
+passes the selected read/TCP probes while forbidden reads, writes and an
+unselected loopback endpoint stay denied. The
+[production repair](phases/macos-root-loader-fix.md) adds only that rule and keeps
+the full application preflight. This synthetic probe evidence does not establish
+actual MDK startup, installed identity creation or nine-pair command acceptance.
+The published experimental.2 archive still contains the earlier profile. A new
+verified archive is required before the installed matrix can validate this fix.
 
 ## Purpose and intended product
 
