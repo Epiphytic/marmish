@@ -1,0 +1,38 @@
+{
+  "verdict": "APPROVED",
+  "reviewer": {
+    "model": "claude-opus-5-5",
+    "harness": "Claude Code (Agent SDK), auto mode",
+    "fresh_context": true,
+    "independent_of_author": true
+  },
+  "design": "docs/phases/linux-namespace-permission-classifier.md",
+  "design_approval": "/tmp/marmish-linux-permission-design.raw.json (APPROVED, claude-opus-5-5)",
+  "scope": [
+    "tools/marmish_ci_bwrap.py uncommitted diff (+7/-3)",
+    "tools/test_marmish_ci_bwrap.py +2 tests",
+    "docs/validation/linux-namespace-arm-41400361937.json"
+  ],
+  "blockers": [],
+  "confirmations": [
+    "run(): denied = body in (two exact byte lines); tuple membership is exact bytes ==, applied to the bounded body after the existing size require; no trimming, substring, decode or regex",
+    "ToolFailure: args, str and repr stay 'bwrap_tool_failed'; vars() is exactly {returncode, permission_denied}; the attribute is stored as `is True`, defaults to False and is never given raw output; the test asserts all of this",
+    "diagnostic_probe: permission_denied only when stage=='unshare' and type(code) is int and code==1 and attr is True; matching output with rc2, -9 or True, or flag values 1 or 'SECRET', or a later stage, all stay nonzero_exit (tested)",
+    "The rest of the stage row is unchanged: rc and signal bounds, launch_failed, the allowed RuntimeError set, internal_failure, categories and cleanup",
+    "probe() contract kept: ToolFailure(1, permission_denied=True) still maps to userns_denied_private_bwrap (tested)",
+    "No fallback and no env change: build_environment is passed through by identity (assertIs env), LANG is not changed, and the frozen require/SandboxError categories are untouched",
+    "Rejected-variant coverage: missing newline, prefix, suffix, two lines, trailing NUL, leading 0xff, empty, sentinel; 'SECRET' is absent from the JSON report",
+    "Validation JSON parses; it records the observed reason nonzero_exit (rc1, no signal) and states it makes no permission or host-policy claim and holds no raw output, as the design requires",
+    "No workflow or production files are in this diff; permission_denied adds exactly one plain-data reason value; the workflow test does not consume reasons",
+    "Adopted design-review notes are all present: default False, store is-True, env unchanged, probe category unchanged, rc2/negative/later-stage negatives"
+  ],
+  "non_blocking_notes": [
+    "A raised ToolFailure.__traceback__ references run()'s frame, whose locals include body and argv. argv was already there before this change. diagnostic_probe and probe() discard the exception (from None) and never serialize tracebacks, so nothing reaches args, repr or the report. Acceptable as-is; optional hardening would be `del body` before raise"
+  ],
+  "tests": {
+    "tools/test_marmish_ci_bwrap.py": "31 passed, 77 subtests",
+    "tools/test_linux_namespace_diagnostic_workflow.py": "3 passed",
+    "tools/test_marmish_ci.py + test_marmish_installed_fixture.py": "32 passed, 1 skipped, 24 subtests",
+    "tools/test_marmish_release.py + test_marmish_installed_state.py (nonzero_exit vocabulary consumers)": "64 passed, 40 subtests"
+  }
+}

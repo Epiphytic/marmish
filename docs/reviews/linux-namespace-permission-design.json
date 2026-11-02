@@ -1,0 +1,48 @@
+{
+  "verdict": "APPROVED",
+  "reviewer": {
+    "model": "claude-opus-5-5",
+    "harness": "Claude Code (Agent SDK)",
+    "fresh_context": true,
+    "independent_of_author": true,
+    "permission_mode": "auto"
+  },
+  "design": "docs/phases/linux-namespace-permission-classifier.md",
+  "inspected": [
+    "tools/marmish_ci_bwrap.py:ToolFailure(221-225)",
+    "tools/marmish_ci_bwrap.py:run(228-251)",
+    "tools/marmish_ci_bwrap.py:diagnostic_probe(365-408)",
+    "tools/test_marmish_ci_bwrap.py:NamespaceDiagnosticTests(470+)",
+    "docs/phases/linux-namespace-diagnostic.md:B2-B3",
+    ".github/workflows/linux-namespace-diagnostic.yml",
+    "tools/test_linux_namespace_diagnostic_workflow.py"
+  ],
+  "blockers": [],
+  "confirmations": [
+    "run() holds `body` (at most limit+1 bytes, already size-checked) before the returncode check at line 244, so a whole-output equality test there adds no new read and no new limit",
+    "ToolFailure today keeps args/str as 'bwrap_tool_failed' and only a bounded returncode; adding one strict-bool attribute keeps the existing str() checks working for probe() and runtime_version()",
+    "diagnostic_probe catches ToolFailure separately from the generic RuntimeError branch, so restricting the mapping to stage=='unshare' and type(code) is int and code==1 and attr is True fits cleanly; the bwrap stages stay nonzero_exit",
+    "No consumer reads the stage reason: the workflow only runs diagnostic-probe and the workflow test doesn't check reasons, so adding a reason value breaks nothing downstream",
+    "Both lines match util-linux's err(EXIT_FAILURE, _(\"unshare failed\")) format of '<prog>: unshare failed: <strerror>\\n' when argv0 is /usr/bin/unshare. EPERM and EACCES map to the two strerror strings, and the error comes before exec, so no other output is expected",
+    "Not inferring host policy (AppArmor, capabilities, sysctl) is honest; translated or unknown output correctly stays nonzero_exit"
+  ],
+  "non_blocking_notes": [
+    "N1: state that the B3 stage-reason set from linux-namespace-diagnostic.md is extended by exactly one value, permission_denied, and that no require()/SandboxError literal or frozen-vocabulary module is added, consistent with B2",
+    "N2: say what the attribute holds by default: False when the output doesn't match or isn't passed. Have the constructor store `value is True`, so any non-bool or truthy non-True input becomes False and never raises inside run()'s finally path",
+    "N3: the classifier depends on build_environment's locale. If it doesn't pin LC_ALL=C/LANG=C, translated hosts will stay nonzero_exit. That is acceptable and honest, but add a one-line test asserting the classifier does not change the environment",
+    "N4: add a test that ToolFailure(1, permission_denied=True) still has str()=='bwrap_tool_failed', so probe() keeps producing 'userns_denied_private_bwrap' unchanged",
+    "N5: include a test where the matching output comes with rc!=1 (for example 2 or -9) and from the one_bwrap stage, and both still report nonzero_exit"
+  ],
+  "scope_check": {
+    "source_files": [
+      "tools/marmish_ci_bwrap.py",
+      "tools/test_marmish_ci_bwrap.py"
+    ],
+    "no_workflow_change": true,
+    "no_native_execution": true,
+    "no_network": true,
+    "no_raw_output_in_exception_or_report": true,
+    "existing_repr_category_limits_unchanged": true
+  },
+  "authorization": "Design approved for reviewed implementation, as the parent authorized. Code changes still need the separate post-implementation review before close. Publication and native dispatch remain with the parent."
+}

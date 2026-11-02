@@ -1,0 +1,20 @@
+{
+  "kind": "linux-namespace-native-evidence",
+  "source": "d004b191de597d1598b5d8b6567270290909aaf7",
+  "workflow_run": 41400361937,
+  "job": 125130666393,
+  "platform": "linux-arm64",
+  "runner_started_utc": "2026-11-02T06:30:47Z",
+  "result_utc": "2026-11-02T06:31:40Z",
+  "bootstrap": "passed",
+  "diagnostic": {
+    "category": "stage_failed",
+    "kind": "linux-namespace-diagnostic",
+    "schema": 1,
+    "stages": [
+      {"stage": "unshare", "outcome": "fail", "reason": "nonzero_exit", "returncode": 1, "signal": null}
+    ]
+  },
+  "owned_bubblewrap_cleanup": "passed",
+  "limits": "No Bubblewrap stage ran. The result identifies the first failing tested command configuration, not a denied syscall or host policy. Raw child output was not published or retained in the report."
+}

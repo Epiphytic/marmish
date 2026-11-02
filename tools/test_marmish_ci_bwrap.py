@@ -555,6 +555,49 @@ class NamespaceDiagnosticTests(unittest.TestCase):
         self.assertEqual(len(report['stages']), 3)
         self.assertNotIn('SECRET', json.dumps(report))
 
+    def test_exact_permission_lines_only_reduce_to_boolean(self):
+        lines = (b'unshare: unshare failed: Operation not permitted\n',
+                 b'unshare: unshare failed: Permission denied\n')
+        cases = [(body, True) for body in lines]
+        cases += [(body, False) for body in (lines[0][:-1], b'SECRET' + lines[0],
+            lines[0] + b'SECRET', lines[0] + lines[1], lines[0] + b'\x00',
+            b'\xff' + lines[0], b'', b'SECRET')]
+        for body, expected in cases:
+            with self.subTest(body=body):
+                child = Mock(returncode=1)
+                child.poll.return_value = 1
+                def launch(*args, **kwargs):
+                    kwargs['stdout'].write(body)
+                    return child
+                environment = {'LANG': 'fixture_locale', 'PATH': '/usr/bin'}
+                with tempfile.TemporaryDirectory() as temporary, \
+                        patch.object(bwrap.subprocess, 'Popen', side_effect=launch) as popen, \
+                        patch.object(bwrap, 'build_environment', return_value=environment), \
+                        patch.object(bwrap.os, 'killpg'), self.assertRaises(bwrap.ToolFailure) as caught:
+                    bwrap.run(['/usr/bin/unshare'], root=Path(temporary))
+                error = caught.exception
+                self.assertIs(error.permission_denied, expected)
+                self.assertEqual(error.args, ('bwrap_tool_failed',))
+                self.assertEqual(repr(error), "ToolFailure('bwrap_tool_failed')")
+                self.assertEqual(set(vars(error)), {'returncode', 'permission_denied'})
+                self.assertIs(popen.call_args.kwargs['env'], environment)
+
+    def test_permission_reason_requires_first_stage_rc_one_and_exact_boolean(self):
+        for code, flag, preceding, expected in ((1, True, [], 'permission_denied'),
+                (2, True, [], 'nonzero_exit'), (-9, True, [], 'nonzero_exit'),
+                (1, True, [b''], 'nonzero_exit'), (1, 1, [], 'nonzero_exit'),
+                (1, 'SECRET', [], 'nonzero_exit'), (True, True, [], 'nonzero_exit')):
+            with self.subTest(code=code, flag=flag, preceding=preceding):
+                error = bwrap.ToolFailure(code, permission_denied=flag)
+                report, _ = self.invoke([*preceding, error])
+                self.assertEqual(report['stages'][-1]['reason'], expected)
+                self.assertNotIn('SECRET', json.dumps(report))
+        self.assertIs(bwrap.ToolFailure(1).permission_denied, False)
+        with patch.object(bwrap, 'checked_selection', return_value=Path('/private/bwrap')), \
+                patch.object(bwrap, 'run', side_effect=bwrap.ToolFailure(1, permission_denied=True)):
+            with self.assertRaisesRegex(RuntimeError, '^userns_denied_private_bwrap$'):
+                bwrap.probe()
+
     def test_real_runner_raises_compatible_numeric_error_with_mocked_child(self):
         child = Mock(returncode=7)
         child.poll.return_value = 7

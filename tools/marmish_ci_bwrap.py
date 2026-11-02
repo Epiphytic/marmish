@@ -220,9 +220,10 @@ def digest(path):
 
 class ToolFailure(RuntimeError):
     """Existing fixed category with a bounded numeric subprocess status."""
-    def __init__(self, returncode):
+    def __init__(self, returncode, *, permission_denied=False):
         super().__init__('bwrap_tool_failed')
         self.returncode = returncode if type(returncode) is int and -255 <= returncode <= 255 else None
+        self.permission_denied = permission_denied is True
 
 
 def run(argv, *, root, timeout=30, limit=1024 * 1024, env=None, cwd=None):
@@ -242,7 +243,10 @@ def run(argv, *, root, timeout=30, limit=1024 * 1024, env=None, cwd=None):
             body = output.read(limit + 1)
             require(len(body) <= limit, 'bwrap_tool_output_oversized')
             if child.returncode != 0:
-                raise ToolFailure(child.returncode)
+                denied = body in (b'unshare: unshare failed: Operation not permitted\n',
+                                  b'unshare: unshare failed: Permission denied\n')
+                del body  # Do not retain captured bytes in the failure traceback frame.
+                raise ToolFailure(child.returncode, permission_denied=denied)
             return body
         finally:
             # A producer may leave descendants even after its leader exits.
@@ -389,7 +393,8 @@ def diagnostic_probe():
                     run([*prefix, *(args * count), '/usr/bin/true'], root=Path(temporary), timeout=30)
                 except ToolFailure as error:
                     code = error.returncode
-                    row.update(reason='nonzero_exit', returncode=code if type(code) is int and -255 <= code <= 255 else None,
+                    reason = 'permission_denied' if stage == 'unshare' and type(code) is int and code == 1 and error.permission_denied is True else 'nonzero_exit'
+                    row.update(reason=reason, returncode=code if type(code) is int and -255 <= code <= 255 else None,
                                signal=-code if type(code) is int and -64 <= code < 0 else None)
                 except OSError:
                     row.update(reason='launch_failed', returncode=None)

@@ -1,0 +1,22 @@
+{
+  "verdict": "APPROVED",
+  "reviewer": {
+    "model": "claude-opus-5-5",
+    "harness": "Claude Code (Agent SDK), auto mode",
+    "fresh_context": false,
+    "independent_of_author": true
+  },
+  "scope": "tools/marmish_ci_bwrap.py run(): one added line `del body` before raise ToolFailure, plus the design-doc appendix",
+  "blockers": [],
+  "confirmations": [
+    "Delta from the previously approved diff is exactly +1 line (bwrap diff now +8/-3, was +7/-3); the test file is unchanged (+43)",
+    "denied is computed from body before the del, so classification semantics are unchanged",
+    "The del runs only in the returncode!=0 branch; the success path still returns body; the finally block (killpg, wait) never references body, so there is no NameError and lifecycle is unchanged",
+    "argv, env, cwd, timeout, limit, the storage checks and the TemporaryFile context manager are unchanged; the output file still closes when the with block exits",
+    "The run() frame referenced by the failure traceback no longer holds the captured bytes; argv is still a frame local, as before, and is never serialized",
+    "Doc appendix accurately describes the change and makes no extra claims"
+  ],
+  "tests": {
+    "tools/test_marmish_ci_bwrap.py (reviewer re-run)": "31 passed, 77 subtests"
+  }
+}
