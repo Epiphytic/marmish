@@ -1,7 +1,8 @@
 use core_foundation::base::TCFType;
-use marmish_vault::{Error, KeyRef, Label, Purpose, Secret, Vault};
+use marmish_vault::{Error, KeyRef, Label, Namespace, Purpose, Secret, Vault};
 use security_framework::os::macos::keychain::{CreateOptions, SecKeychain};
-use std::os::unix::fs::PermissionsExt;
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -9,6 +10,7 @@ use std::time::{Duration, Instant};
 
 const ROOT: &str = "MARMISH_VAULT_MAC_TEST_ROOT";
 const LOAD_MODE: &str = "MARMISH_VAULT_MAC_TEST_LOAD";
+const REPORT: &str = "MARMISH_VAULT_MAC_REPORT";
 const CASE: &str = "macos::disposable_keychain_round_trip_lock_and_restart";
 
 #[link(name = "Security", kind = "framework")]
@@ -30,14 +32,17 @@ impl Drop for OwnedKeychain {
 
 fn restart_load(root: &Path, report: &str) {
     let keychain = SecKeychain::open(root.join("owned.keychain-db")).expect("open owned keychain");
-    let reference = KeyRef::new(1, Purpose::Nostr, &"11".repeat(32)).unwrap();
-    let outcome = match Vault::open_keychain(&keychain).and_then(|vault| vault.load(&reference)) {
-        Ok(secret) => {
-            assert!(secret.as_bytes() == &[0xa5; 32]);
+    let vault = Vault::open_keychain_namespaced(&keychain, Namespace::MarmishV2).unwrap();
+    let nostr = KeyRef::new(2, Purpose::Nostr, &"11".repeat(32)).unwrap();
+    let storage = KeyRef::new(2, Purpose::Sqlcipher, &"22".repeat(32)).unwrap();
+    let outcome = match (vault.load(&nostr), vault.load(&storage)) {
+        (Ok(nostr), Ok(storage)) => {
+            assert!(nostr.as_bytes() == &[0x11; 32]);
+            assert!(storage.as_bytes() == &[0x22; 32]);
             "ok"
         }
-        Err(Error::LockedOrDenied) => "locked_or_denied",
-        Err(error) => panic!("owned keychain restart failed: {}", error.category()),
+        (Err(Error::LockedOrDenied), Err(Error::LockedOrDenied)) => "locked_or_denied",
+        _ => panic!("owned keychain restart failed or mixed outcomes"),
     };
     // The report contains a fixed category, never native diagnostics or key bytes.
     std::fs::write(root.join(report), outcome).unwrap();
@@ -70,6 +75,7 @@ fn restart_check(root: &Path, executable: &Path, report: &str) {
 }
 
 fn disposable_checks(root: &Path) {
+    let original_ui = SecKeychain::user_interaction_allowed().unwrap();
     let path = root.join("owned.keychain-db");
     let keychain = CreateOptions::new()
         .password("marmish-disposable-test-only")
@@ -82,6 +88,7 @@ fn disposable_checks(root: &Path) {
         .unlock(Some("marmish-disposable-test-only"))
         .expect("unlock owned keychain");
     let vault = Vault::open_keychain(&owned.0).expect("select owned keychain");
+    assert!(!SecKeychain::user_interaction_allowed().unwrap());
     vault.probe().unwrap();
     let nostr = KeyRef::new(1, Purpose::Nostr, &"11".repeat(32)).unwrap();
     let storage = KeyRef::new(1, Purpose::Sqlcipher, &"22".repeat(32)).unwrap();
@@ -117,6 +124,54 @@ fn disposable_checks(root: &Path) {
         .iter()
         .any(|item| item.key_ref == storage && item.label.as_str() == "second name"));
 
+    let native = Vault::open_keychain_namespaced(&owned.0, Namespace::MarmishV2).unwrap();
+    native.probe().unwrap();
+    assert!(native.list().unwrap().is_empty());
+    let entries = [
+        (0x11, Purpose::Nostr, "alpha identity"),
+        (0x22, Purpose::Sqlcipher, "alpha storage"),
+        (0x33, Purpose::Nostr, "beta identity"),
+        (0x44, Purpose::Sqlcipher, "beta storage"),
+    ];
+    for (byte, purpose, label) in entries {
+        let reference = KeyRef::new(2, purpose, &format!("{byte:02x}").repeat(32)).unwrap();
+        native
+            .create(
+                &reference,
+                &Label::new(label).unwrap(),
+                &Secret::from_bytes([byte; 32]),
+            )
+            .unwrap();
+        assert!(native.load(&reference).unwrap().as_bytes() == &[byte; 32]);
+        assert!(matches!(vault.load(&reference), Err(Error::Malformed)));
+    }
+    let native_items = native.list().unwrap();
+    assert_eq!(native_items.len(), 4);
+    for (byte, purpose, label) in entries {
+        let reference = KeyRef::new(2, purpose, &format!("{byte:02x}").repeat(32)).unwrap();
+        assert!(native_items
+            .iter()
+            .any(|item| item.key_ref == reference && item.label.as_str() == label));
+    }
+    let native_nostr = KeyRef::new(2, Purpose::Nostr, &"11".repeat(32)).unwrap();
+    let native_missing = KeyRef::new(2, Purpose::Nostr, &"55".repeat(32)).unwrap();
+    assert!(matches!(native.load(&nostr), Err(Error::Malformed)));
+    assert!(matches!(native.load(&native_missing), Err(Error::Missing)));
+    assert!(matches!(
+        native.create(
+            &native_nostr,
+            &Label::new("replacement").unwrap(),
+            &Secret::from_bytes([0; 32])
+        ),
+        Err(Error::Exists)
+    ));
+    assert!(native.load(&native_nostr).unwrap().as_bytes() == &[0x11; 32]);
+    assert!(vault.load(&nostr).unwrap().as_bytes() == &[0xa5; 32]);
+    assert!(vault.load(&storage).unwrap().as_bytes() == &[0x5a; 32]);
+    let legacy_items = vault.list().unwrap();
+    assert_eq!(legacy_items.len(), 2);
+    assert!(items.iter().all(|item| legacy_items.contains(item)));
+
     // Use this test executable as an explicit-keychain harness: the production
     // helper intentionally has no way to select a disposable/default override.
     let executable = std::env::current_exe().unwrap();
@@ -131,11 +186,25 @@ fn disposable_checks(root: &Path) {
     );
     assert!(matches!(vault.probe(), Err(Error::LockedOrDenied)));
     assert!(matches!(vault.load(&nostr), Err(Error::LockedOrDenied)));
+    assert!(matches!(native.probe(), Err(Error::LockedOrDenied)));
+    assert!(matches!(
+        native.load(&native_nostr),
+        Err(Error::LockedOrDenied)
+    ));
+    assert!(matches!(
+        native.create(
+            &native_missing,
+            &Label::new("must not create").unwrap(),
+            &secret
+        ),
+        Err(Error::LockedOrDenied)
+    ));
     assert!(matches!(
         vault.create(&missing, &Label::new("must not create").unwrap(), &secret),
         Err(Error::LockedOrDenied)
     ));
     drop(vault);
+    assert!(!SecKeychain::user_interaction_allowed().unwrap());
     // Unlock only this owned keychain so cleanup never needs user interaction.
     owned
         .0
@@ -149,6 +218,12 @@ fn disposable_checks(root: &Path) {
             .len(),
         2
     );
+    assert_eq!(native.list().unwrap().len(), 4);
+    drop(native);
+    assert_eq!(
+        SecKeychain::user_interaction_allowed().unwrap(),
+        original_ui
+    );
     assert_eq!(
         unsafe { SecKeychainDelete(owned.0.as_concrete_TypeRef().cast()) },
         0
@@ -156,6 +231,40 @@ fn disposable_checks(root: &Path) {
     owned.1 = true;
     drop(owned);
     std::fs::write(root.join("complete"), b"ok").unwrap();
+}
+
+fn write_report(path: &Path, restart: &str, replacement: &str) {
+    assert!(path.is_absolute());
+    for outcome in [restart, replacement] {
+        assert!(matches!(outcome, "ok" | "locked_or_denied"));
+    }
+    let bytes = serde_json::to_vec(&serde_json::json!({
+        "schema": 1,
+        "provider": "macos-selected-keychain",
+        "namespace": "marmish-v2",
+        "same_process": "pass",
+        "lock_denial": "pass",
+        "restart": restart,
+        "replacement": replacement,
+        "cleanup": "pass"
+    }))
+    .unwrap();
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .unwrap();
+    if file
+        .write_all(&bytes)
+        .and_then(|()| file.sync_all())
+        .is_err()
+    {
+        drop(file);
+        std::fs::remove_file(path).unwrap();
+        panic!("provider report write failed");
+    }
 }
 
 #[test]
@@ -178,6 +287,7 @@ fn disposable_keychain_round_trip_lock_and_restart() {
         .args(["--exact", CASE, "--ignored", "--nocapture"])
         .env(ROOT, directory.path())
         .env_remove(LOAD_MODE)
+        .env_remove(REPORT)
         .stdin(Stdio::null());
     unsafe {
         command.pre_exec(|| {
@@ -225,4 +335,15 @@ fn disposable_keychain_round_trip_lock_and_restart() {
         std::fs::read(directory.path().join("complete")).unwrap(),
         b"ok"
     );
+    let restart = std::fs::read_to_string(directory.path().join("restart.out")).unwrap();
+    let replacement = std::fs::read_to_string(directory.path().join("replacement.out")).unwrap();
+    for outcome in [&restart, &replacement] {
+        assert!(matches!(outcome.as_str(), "ok" | "locked_or_denied"));
+    }
+    // Report success only after the owned keychain was deleted and its complete
+    // private filesystem root was removed. Children never receive this path.
+    directory.close().unwrap();
+    if let Some(path) = std::env::var_os(REPORT) {
+        write_report(Path::new(&path), &restart, &replacement);
+    }
 }

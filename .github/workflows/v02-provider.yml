@@ -1,0 +1,97 @@
+name: v0.2 macOS selected keychain provider
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-provider:
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.97.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: v02-macos-provider
+      - name: Build the exact provider test executable
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          cargo test --locked --release -p marmish-vault --test native_vault \
+            --no-run --message-format=json > "$RUNNER_TEMP/provider-build.jsonl"
+          jq -ser '
+            [.[] | select(.reason == "compiler-artifact" and
+              .target.name == "native_vault" and .profile.test == true and
+              .executable != null) | .executable] | unique |
+            if length == 1 then .[0] else error("expected one provider test executable") end
+          ' "$RUNNER_TEMP/provider-build.jsonl" > "$RUNNER_TEMP/provider-executable"
+          test -x "$(cat "$RUNNER_TEMP/provider-executable")"
+      - name: Vault unit tests
+        timeout-minutes: 2
+        run: cargo test --locked --release -p marmish-vault --lib
+      - name: Qualify the v2 provider on an owned disposable keychain
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir "$RUNNER_TEMP/provider-public"
+          env -u MARMISH_VAULT_MAC_TEST_ROOT -u MARMISH_VAULT_MAC_TEST_LOAD \
+            MARMISH_VAULT_MAC_REPORT="$RUNNER_TEMP/provider-public/provider.json" \
+            cargo test --locked --release -p marmish-vault --test native_vault -- \
+            --exact macos::disposable_keychain_round_trip_lock_and_restart \
+            --ignored --nocapture --test-threads=1
+      - name: Validate finite report and classify test signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          jq -e '
+            type == "object" and
+            (keys == ["cleanup", "lock_denial", "namespace", "provider", "replacement", "restart", "same_process", "schema"]) and
+            .schema == 1 and .provider == "macos-selected-keychain" and
+            .namespace == "marmish-v2" and .same_process == "pass" and
+            .lock_denial == "pass" and .cleanup == "pass" and
+            (.restart == "ok" or .restart == "locked_or_denied") and
+            (.replacement == "ok" or .replacement == "locked_or_denied")
+          ' "$RUNNER_TEMP/provider-public/provider.json" > /dev/null
+          signing=other
+          if codesign -dv "$(cat "$RUNNER_TEMP/provider-executable")" \
+            > "$RUNNER_TEMP/provider-signing-private" 2>&1; then
+            if grep -q 'linker-signed' "$RUNNER_TEMP/provider-signing-private"; then
+              signing=linker-signed
+            elif grep -q '^Signature=adhoc$' "$RUNNER_TEMP/provider-signing-private"; then
+              signing=adhoc
+            fi
+          fi
+          jq -n --arg kind "$signing" --arg source "$GITHUB_SHA" \
+            '{schema:1,signing_kind:$kind,source_sha:$source}' \
+            > "$RUNNER_TEMP/provider-public/signing.json"
+          {
+            echo '### macOS v2 provider'
+            echo 'Explicitly selected, owned, disposable keychain only.'
+            echo 'Default keychain selection, production helper ACL identity and interactive prompts remain unverified.'
+            echo 'A locked_or_denied restart or replacement is not cross-process access proof.'
+            echo '```json'
+            cat "$RUNNER_TEMP/provider-public/provider.json"
+            cat "$RUNNER_TEMP/provider-public/signing.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish sanitized provider evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v02-macos-provider-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/provider-public/provider.json
+            ${{ runner.temp }}/provider-public/signing.json
+          if-no-files-found: error
+          retention-days: 7

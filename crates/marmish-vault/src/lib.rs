@@ -173,9 +173,16 @@ impl Vault {
     pub fn open_keychain(
         keychain: &security_framework::os::macos::keychain::SecKeychain,
     ) -> Result<Self, Error> {
+        Self::open_keychain_namespaced(keychain, Namespace::Legacy)
+    }
+    #[cfg(target_os = "macos")]
+    pub fn open_keychain_namespaced(
+        keychain: &security_framework::os::macos::keychain::SecKeychain,
+        namespace: Namespace,
+    ) -> Result<Self, Error> {
         Ok(Self {
-            namespace: Namespace::Legacy,
-            provider: Provider::open_keychain(keychain, Namespace::Legacy)?,
+            namespace,
+            provider: Provider::open_keychain(keychain, namespace)?,
         })
     }
     fn check_reference(&self, reference: &KeyRef) -> Result<(), Error> {
