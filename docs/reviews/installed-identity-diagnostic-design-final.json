@@ -1,0 +1,42 @@
+{
+  "verdict": "APPROVED",
+  "scope_reviewed": [
+    "tools/marmish_installed_state.py: IdentityError (l.881), initialize_identity (l.888), failure_diagnostic (l.55)",
+    "tools/marmish_release_acceptance.py: DIAGNOSTIC_ERRORS (l.23) and module top level",
+    "tools/marmish_app.py: guarded_main stderr contract (l.883-896)",
+    "tools/marmish_installed_ci.py: identity-stage failure path into failure_diagnostic (l.256-265)",
+    "tools/test_marmish_installed_state.py: FiniteDiagnostics and the existing IdentityError tests"
+  ],
+  "prior_findings": {
+    "B1": "Resolved. The revision drops the hand-picked sandbox-literal allowlist and reuses the frozen, already-reviewed DIAGNOSTIC_ERRORS. That set contains both frontend fallbacks the installed launcher can print (`transport_failure`, `local_io_or_schema_failure`), as well as daemon_exited, invalid_bootstrap, unsafe_private_path and others.",
+    "N1": "Adopted. Empty stderr maps to 'none' and anything unknown or malformed maps to 'other'. Neither sentinel is in DIAGNOSTIC_ERRORS, so they can't be confused with a real category.",
+    "N2": "Adopted. The cleanup_incomplete returned-result case is labeled as a mocked, defensive-only test."
+  },
+  "verification_notes": [
+    "Frontend contract matches: guarded_main writes exactly one line, `print('marmish: ' + category, file=sys.stderr)`, so the exact-bytes whole-line check `b'marmish: ' + cat + b'\\n'` is correct. If MARMISH_DEBUG lines or a pre-guard traceback are present, the result is correctly 'other'.",
+    "DIAGNOSTIC_ERRORS has 354 entries, all matching [a-z0-9_]+. 'identity_init_failed', 'none' and 'other' are not members.",
+    "marmish_release_acceptance only imports stdlib modules (argparse, hashlib, json, pathlib, subprocess, sys, types) and only assigns constants at top level. Its __main__ is guarded, so a function-local import has no side effects. The workflow runs tools from the repo checkout, so the module is importable.",
+    "The positional IdentityError(result) call sites and the existing test_identity_error_preserves_only_numeric_diagnostic (-6 gives signal 6) stay compatible with the new keyword-only `reason`.",
+    "marmish_installed_ci still sees str(error) == 'identity_init_failed', so the public installation-result `error` is unchanged. Nothing in the repo parses `installed-failure` stderr JSON with a strict key set, so adding the nested `identity` object breaks no consumer."
+  ],
+  "blocking_findings": [],
+  "non_blocking_notes": [
+    {
+      "id": "N3",
+      "summary": "Gate the nested object with `type(error) is IdentityError`, not hasattr or duck typing. Then a non-IdentityError SmokeError that happens to carry similar attributes can never emit `identity`. Add a test for this: a SmokeError subclass or plain object with returncode/signal attributes gets no nested object."
+    },
+    {
+      "id": "N4",
+      "summary": "When reason is timed_out, returncode will usually be -9 and signal 9 from the harness's own kill, which says nothing about the cause. The reason ordering already makes this clear. Keep the implementation from adding any interpretation, and consider a test asserting timed_out takes precedence while the signal still reports 9."
+    },
+    {
+      "id": "N5",
+      "summary": "If the function-local import inside IdentityError.__init__ ever raised, the identity failure would turn into a non-SmokeError and the public category would change. The risk is negligible because the module is in-repo and stdlib-only. Still, keep the import and the frontend_category computation simple and free of other failure modes, and don't wrap them in a broad except that could hide errors."
+    }
+  ],
+  "reviewer": {
+    "agent": "Claude Code independent reviewer",
+    "model": "claude-opus-5-5",
+    "permission_mode": "auto"
+  }
+}

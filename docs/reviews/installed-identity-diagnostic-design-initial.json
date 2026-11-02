@@ -1,0 +1,25 @@
+{
+  "verdict": "CHANGES_REQUIRED",
+  "blocking_findings": [
+    {
+      "id": "B1",
+      "title": "The frontend_category allowlist leaves out most categories the frontend can actually print, so the new field will usually say \"other\" and won't explain the identity_server failure",
+      "evidence": [
+        "In pinned f609b6, tools/marmish_app.py:883-898 (guarded_main) prints `marmish: <category>` for SmokeError, RpcError and SandboxError, not just SandboxError. It also prints the fixed fallbacks `marmish: transport_failure` (when a category fails its ASCII/alnum/length check) and `marmish: local_io_or_schema_failure` (for OSError/ValueError/TypeError/KeyError/AttributeError). Both exit with 125.",
+        "The proposed allowlist has only the 22 SandboxError literals from tools/marmish_transport_sandbox.py. Any `--init` failure from RPC, key storage, the app or MDK smoke checks would show up as `other`. That includes schema_mismatch, the key_* and native_* categories, and local_io_or_schema_failure. A 254 ms failure is at least as likely to come from those paths as from namespace or bwrap setup.",
+        "The project already decided this vocabulary rule in f609b6 docs/phases/distribution.md:299-312. The error vocabulary is the frozen union of every reachable literal category from require/SmokeError/RpcError/SandboxError, plus transport_failure, local_io_or_schema_failure and bwrap_provenance_unavailable. It is stored as hard-coded constants and checked offline by AST drift tests. That reviewed constant already exists as DIAGNOSTIC_ERRORS in tools/marmish_release_acceptance.py (around line 30-100, used at :160)."
+      ],
+      "required_change": "Build frontend_category from the existing reviewed frozen set, either DIAGNOSTIC_ERRORS or a shared constant extracted from it. Keep the matching as strict as proposed: the exact bytes `marmish: CATEGORY\\n`, one line only, and the category must be a member of the set. Anything else stays `other`. Change the provenance test to check membership in that frozen set (or that it is a superset of the pinned sandbox literals plus the two fixed fallbacks), and include a positive test for `marmish: local_io_or_schema_failure\\n` and `marmish: transport_failure\\n`. Do not add regex-only acceptance or runtime source scanning."
+    }
+  ],
+  "non_blocking_notes": [
+    "N1: Report empty stderr as its own value (e.g. frontend_category `none` when stderr == b'') instead of folding it into `other`. With returncode, that tells 'frontend printed nothing' (e.g. a signal or an exit before guarded_main) apart from 'printed something unrecognised, such as a Python traceback with rc 1'. It is still a closed vocabulary.",
+    "N2: The cleanup_incomplete reason can't come from the result in practice. run_bounded only returns after it sets cleanup='complete'; a failed cleanup raises SmokeError('cleanup_incomplete') instead of returning. Keeping the reason in the order is harmless, but its test should be described as a mocked defensive case.",
+    "N3: The precedence order (timeout, then output_limit, then cleanup, then nonzero, with parse/schema failures as invalid_identity_output), rejecting bool returncodes, the [-255,255] range, signal derived only for -64<=rc<0, and re-validating attributes inside failure_diagnostic all look right. Adding only IdentityError to the error_type allowlist and emitting the nested object only for real IdentityError instances keeps the top-level schema unchanged at both callers (marmish_installed_state.py:1083 and marmish_installed_ci.py:265)."
+  ],
+  "reviewer": {
+    "agent": "Claude Code independent reviewer",
+    "model": "claude-opus-5-5",
+    "permission_mode": "auto"
+  }
+}

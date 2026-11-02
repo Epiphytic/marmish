@@ -60,15 +60,31 @@ def failure_diagnostic(error, *, stage, category):
     reason = error.args[0] if isinstance(error, SmokeError) and len(error.args) == 1 else None
     name = type(error).__name__
     code = getattr(error, 'errno', None)
-    print(json.dumps({'kind': 'installed-failure',
+    value = {'kind': 'installed-failure',
           'stage': stage if type(stage) is str and stage in DIAGNOSTIC_STAGES else 'other',
           'category': category if type(category) is str and category in DIAGNOSTIC_REASONS | {
               'internal_failure', 'barrier_timeout', 'artifact_network_failed',
               'artifact_listing_unstable'} else 'internal_failure',
           'reason': reason if type(reason) is str and reason in DIAGNOSTIC_REASONS else 'other',
-          'error_type': name if name in types else 'other',
-          'errno': code if type(code) is int and 0 <= code <= 65535 else None},
-          sort_keys=True), file=sys.stderr)
+          'error_type': name if name in types | {'IdentityError'} else 'other',
+          'errno': code if type(code) is int and 0 <= code <= 65535 else None}
+    if type(error) is IdentityError:
+        from marmish_release_acceptance import DIAGNOSTIC_ERRORS
+        facts = {}
+        for key, allowed in (
+                ('reason', IDENTITY_FAILURE_REASONS),
+                ('cleanup', frozenset({'complete', 'incomplete'})),
+                ('frontend_category', DIAGNOSTIC_ERRORS | {'none'})):
+            item = getattr(error, 'identity_' + key, None)
+            facts[key] = item if type(item) is str and item in allowed else 'other'
+        returned = getattr(error, 'returncode', None)
+        facts['returncode'] = returned if type(returned) is int and -255 <= returned <= 255 else None
+        facts['signal'] = -returned if type(returned) is int and -64 <= returned < 0 else None
+        for key in ('timed_out', 'output_limited'):
+            item = getattr(error, 'identity_' + key, None)
+            facts[key] = item if type(item) is bool else None
+        value['identity'] = facts
+    print(json.dumps(value, sort_keys=True), file=sys.stderr)
 
 
 def _canonical(value):
@@ -828,11 +844,34 @@ def interpreter_info(state):
     return {'implementation': 'cpython', 'version': version, 'path_class': classification}
 
 
+IDENTITY_FAILURE_REASONS = frozenset({
+    'nonzero_exit', 'timed_out', 'output_limited', 'cleanup_incomplete',
+    'invalid_identity_output',
+})
+
+
+
 class IdentityError(SmokeError):
-    def __init__(self, result=None):
+    def __init__(self, result=None, *, reason='invalid_identity_output'):
         super().__init__('identity_init_failed')
-        self.returncode = result.get('returncode') if result else None
-        self.signal = -self.returncode if self.returncode is not None and self.returncode < 0 else None
+        from marmish_release_acceptance import DIAGNOSTIC_ERRORS
+        result = result if type(result) is dict else {}
+        code = result.get('returncode')
+        self.returncode = code if type(code) is int and -255 <= code <= 255 else None
+        self.signal = -code if type(code) is int and -64 <= code < 0 else None
+        self.identity_reason = reason if type(reason) is str and reason in IDENTITY_FAILURE_REASONS else 'other'
+        for key in ('timed_out', 'output_limited'):
+            item = result.get(key)
+            setattr(self, 'identity_' + key, item if type(item) is bool else None)
+        cleanup = result.get('cleanup')
+        self.identity_cleanup = cleanup if type(cleanup) is str and cleanup in ('complete', 'incomplete') else 'other'
+        stderr = result.get('stderr')
+        self.identity_frontend_category = 'none' if type(stderr) is bytes and stderr == b'' else 'other'
+        if type(stderr) is bytes:
+            for category in DIAGNOSTIC_ERRORS:
+                if stderr == b'marmish: ' + category.encode('ascii') + b'\n':
+                    self.identity_frontend_category = category
+                    break
 
 
 def initialize_identity(state, name, *, timeout):
@@ -848,14 +887,17 @@ def initialize_identity(state, name, *, timeout):
     result = run_bounded(args, state, timeout=timeout, output_limit=65536, runtime=True)
     if (result['returncode'] != 0 or result['timed_out'] or result['output_limited']
             or result['cleanup'] != 'complete'):
-        raise IdentityError(result)
+        reason = ('timed_out' if result['timed_out'] else
+                  'output_limited' if result['output_limited'] else
+                  'cleanup_incomplete' if result['cleanup'] != 'complete' else 'nonzero_exit')
+        raise IdentityError(result, reason=reason)
     try:
         value = strict_json(result['stdout'])
         require(isinstance(value, dict) and set(value) == {'account'}
                 and isinstance(value['account'], str) and _HEX.fullmatch(value['account']),
                 'identity_init_failed')
     except (RpcError, ValueError, SmokeError, TypeError):
-        raise IdentityError(result) from None
+        raise IdentityError(result, reason='invalid_identity_output') from None
     other_name = 'client' if name == 'server' else 'server'
     other = load_json(Path(state['registry']) / ('identity-' + other_name + '.json'))
     require(other is None or other['account'] != value['account'], 'identity_duplicate')

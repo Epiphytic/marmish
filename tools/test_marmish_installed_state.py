@@ -75,6 +75,80 @@ class InstallerHandoff(unittest.TestCase):
 
 
 class FiniteDiagnostics(unittest.TestCase):
+    def identity_diagnostic(self, result, *, reason='nonzero_exit', mutate=None):
+        failure = state.IdentityError(result, reason=reason)
+        if mutate:
+            mutate(failure)
+        with patch('sys.stderr', new_callable=io.StringIO) as output:
+            state.failure_diagnostic(failure, stage='identity_server', category='identity_init_failed')
+        self.assertNotIn('SECRET', output.getvalue())
+        return json.loads(output.getvalue())
+
+    def test_identity_category_uses_frozen_vocabulary_and_exact_entire_stderr(self):
+        from marmish_release_acceptance import DIAGNOSTIC_ERRORS
+        for category in DIAGNOSTIC_ERRORS:
+            value = self.identity_diagnostic({'stderr': b'marmish: ' + category.encode() + b'\n'})
+            self.assertEqual(value['identity']['frontend_category'], category)
+        for raw, expected in [(b'', 'none'), (b'SECRET', 'other'),
+                              (b'marmish: SECRET\n', 'other'),
+                              (b'marmish: transport_failure\nSECRET', 'other'),
+                              ('marmish: transport_failure\n', 'other')]:
+            self.assertEqual(self.identity_diagnostic({'stderr': raw})['identity']['frontend_category'], expected)
+
+    def test_identity_reason_precedence_includes_defensive_mocked_cleanup_case(self):
+        base = {'returncode': 125, 'timed_out': False, 'output_limited': False,
+                'cleanup': 'complete', 'stdout': b'{"wrong":1}', 'stderr': b''}
+        cases = [({'timed_out': True, 'output_limited': True, 'returncode': -9}, 'timed_out'),
+                 ({'output_limited': True, 'cleanup': 'incomplete'}, 'output_limited'),
+                 ({'cleanup': 'incomplete'}, 'cleanup_incomplete'),
+                 ({}, 'nonzero_exit'), ({'returncode': 0}, 'invalid_identity_output')]
+        for changes, reason in cases:
+            with self.subTest(reason=reason), patch.object(state.os.path, 'lexists', return_value=False), patch.object(state, 'run_bounded', return_value={**base, **changes}), patch.object(state, 'start_caffeinate'):
+                with self.assertRaises(state.IdentityError) as caught:
+                    state.initialize_identity({'root': '/unused', 'prefix': '/unused'}, 'server', timeout=1)
+            self.assertEqual(caught.exception.identity_reason, reason)
+            if reason == 'timed_out':
+                self.assertEqual(caught.exception.signal, 9)
+
+    def test_identity_numeric_types_and_attribute_revalidation_never_echo_objects(self):
+        for code, expected, number in [(-6, -6, 6), (-64, -64, 64), (-65, -65, None),
+                                        (255, 255, None), (256, None, None),
+                                        (True, None, None), ('SECRET', None, None)]:
+            facts = self.identity_diagnostic({'returncode': code})['identity']
+            self.assertEqual((facts['returncode'], facts['signal']), (expected, number))
+        def mutate(error):
+            error.identity_reason = ['SECRET']
+            error.identity_cleanup = {'SECRET': True}
+            error.identity_frontend_category = 'SECRET'
+            error.identity_timed_out = 'SECRET'
+            error.identity_output_limited = 1
+            error.returncode = True
+            error.signal = 123
+        value = self.identity_diagnostic({'stderr': b'SECRET'}, mutate=mutate)
+        self.assertEqual(value['error_type'], 'IdentityError')
+        self.assertEqual(value['identity'], dict(reason='other', cleanup='other',
+            frontend_category='other', timed_out=None, output_limited=None,
+            returncode=None, signal=None))
+        failure = SmokeError('identity_init_failed')
+        failure.returncode, failure.signal = -6, 6
+        with patch('sys.stderr', new_callable=io.StringIO) as output:
+            state.failure_diagnostic(failure, stage='identity_server', category='identity_init_failed')
+        self.assertNotIn('identity', json.loads(output.getvalue()))
+
+    def test_identity_error_keeps_only_selected_facts_and_handles_absent_result(self):
+        expected = {'returncode', 'signal', 'identity_reason', 'identity_cleanup',
+                    'identity_timed_out', 'identity_output_limited', 'identity_frontend_category'}
+        for supplied in (None, b'SECRET', {'stdout': b'SECRET', 'stderr': b'SECRET',
+                                          'argv': ['SECRET']}):
+            failure = state.IdentityError(supplied)
+            self.assertEqual(set(vars(failure)), expected)
+            self.assertEqual(failure.args, ('identity_init_failed',))
+            self.assertEqual(failure.identity_reason, 'invalid_identity_output')
+            self.assertEqual(failure.identity_frontend_category, 'other')
+            self.assertIsNone(failure.returncode)
+            self.assertIsNone(failure.signal)
+            self.assertNotIn('SECRET', repr(vars(failure)))
+
     def test_only_allowlisted_reason_and_stage_are_emitted(self):
         for failure, reason in [(SmokeError('unsafe_state_file'), 'unsafe_state_file'),
                                 (SmokeError('/private/SECRET'), 'other'),

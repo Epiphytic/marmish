@@ -1,0 +1,53 @@
+{
+  "verdict": "APPROVED",
+  "scope_reviewed": [
+    "tools/marmish_installed_state.py: failure_diagnostic (l.55-87), IDENTITY_FAILURE_REASONS (l.897), IdentityError (l.903-923), initialize_identity failure construction (l.926-950)",
+    "tools/test_marmish_installed_state.py: FiniteDiagnostics (l.77-162)",
+    "Dependencies read: run_bounded return shape (l.876-878), marmish_installed_ci.py failure path (l.255-265), existing identity tests (state l.333, l.361; ci l.65)"
+  ],
+  "design_conformance": {
+    "reasons": "Matches. The five reasons are exact. Precedence is timed_out > output_limited > cleanup_incomplete > nonzero_exit, and parse or schema failures give invalid_identity_output. An unknown reason gives 'other'. str(error) is still 'identity_init_failed', so the CI category and the public `error` are unchanged.",
+    "frontend_category": "Matches. It uses the frozen DIAGNOSTIC_ERRORS through a function-local import and leaves that module unchanged. The check is exact whole-bytes equality with b'marmish: ' + cat + b'\\n'. Empty bytes give 'none'. A str, None, an unknown category or extra lines give 'other'.",
+    "numeric": "Matches. returncode must be an exact int (bool is rejected) in [-255, 255], otherwise null. signal is derived only when -64 <= returncode < 0. In failure_diagnostic it is re-derived from returncode, so a supplied error.signal is never trusted.",
+    "flags_cleanup": "Matches. timed_out and output_limited must be exact bools, otherwise null. cleanup must be complete or incomplete, otherwise 'other'.",
+    "no_result_stored": "Verified in-process: vars(IdentityError(...)) contains exactly {identity_cleanup, identity_frontend_category, identity_output_limited, identity_reason, identity_timed_out, returncode, signal}. args is ('identity_init_failed',) and there is no cause or context. stdout, stderr and argv are not retained.",
+    "extraction": "The nested `identity` object is gated on `type(error) is IdentityError` (prior N3). Every attribute is type-, range- and membership-checked again before it is serialized, so arbitrary objects can't be echoed. All other top-level keys are unchanged.",
+    "compatibility": "Positional IdentityError(result) still works, and the existing -6 \u2192 signal 6 test passes. One intended change: error_type for identity failures is now 'IdentityError' instead of 'other'. The design authorized this, and no repo consumer parses error_type from installed-failure output."
+  },
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "id": "R1",
+      "summary": "No test pins the 'no result stored' guarantee. A future edit that adds e.g. self.result = result would pass every current test. Suggest asserting set(vars(failure)) equals the seven-attribute set in FiniteDiagnostics."
+    },
+    {
+      "id": "R2",
+      "summary": "IdentityError() with no result, or with a non-dict result, is untested. It currently gives reason='invalid_identity_output', frontend_category='other' and nulls, which is correct but not pinned."
+    },
+    {
+      "id": "R3",
+      "summary": "Minor: without stderr bytes, frontend_category is 'other', not 'none'. That is fine because 'none' means stderr was present and empty, but consider writing that distinction in the docstring or test name."
+    },
+    {
+      "id": "R4",
+      "summary": "Optional simplification: the 354-entry loop could be a prefix/suffix check plus a set lookup. The current loop is obviously exact-match and the cost is negligible, so keep it if clarity is preferred."
+    }
+  ],
+  "tests_actually_run": {
+    "command": "python3 -m pytest -q -p no:cacheprovider tools/test_marmish_installed_state.py::FiniteDiagnostics tools/test_marmish_installed_state.py::InstalledStateTests::test_identity_requires_account_and_distinct_profiles tools/test_marmish_installed_state.py::InstalledStateTests::test_identity_error_preserves_only_numeric_diagnostic tools/test_marmish_installed_ci.py::InstalledOrchestrationTests::test_duplicate_local_identities_never_publish_readiness",
+    "result": "8 passed, 8 subtests passed in 0.14s",
+    "also": "In-process python3 -I checks: the IdentityError attribute set, default construction, bogus reason \u2192 'other', and a non-dict result \u2192 returncode None.",
+    "not_run": "The full state suite (it has real subprocess and process-scan tests), native tests, CI and network."
+  },
+  "reviewer": {
+    "agent": "Claude Code independent reviewer",
+    "model": "claude-opus-5-5",
+    "permission_mode": "auto"
+  },
+  "post_review_validation": {
+    "changes": "Added regression test for exactly seven retained finite attributes, absent/non-dict results, and exclusion of raw result fields; production source unchanged after review.",
+    "command": "python3 -m pytest -q -p no:cacheprovider tools/test_marmish_installed_state.py::FiniteDiagnostics tools/test_marmish_installed_state.py::InstalledStateTests::test_identity_requires_account_and_distinct_profiles tools/test_marmish_installed_state.py::InstalledStateTests::test_identity_error_preserves_only_numeric_diagnostic tools/test_marmish_installed_ci.py::InstalledOrchestrationTests::test_duplicate_local_identities_never_publish_readiness",
+    "result": "9 passed, 8 subtests passed (0.14s)",
+    "python_compilation": "passed"
+  }
+}
