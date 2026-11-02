@@ -1,0 +1,49 @@
+{
+  "bootstrap_seconds": 29.667,
+  "dependency_preparation_seconds": 6.261,
+  "compiler": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "source_absent": true,
+  "marker_absent": true,
+  "cleanup": {
+    "outcome": "incomplete",
+    "checks": {
+      "frontend_absent": null,
+      "mdk_absent": null,
+      "workers_absent": null,
+      "caffeinate_absent": null,
+      "engine_cleanup_ready": null,
+      "uninstall_complete": null,
+      "root_removed": null
+    },
+    "error": "cleanup_incomplete",
+    "duration_ns": 9168787
+  },
+  "bootstrap_cleanup": {
+    "kind": "bootstrap-cleanup",
+    "outcome": "absent",
+    "error": null
+  },
+  "total_seconds": 35.972,
+  "cleanup_retry": {
+    "outcome": "complete",
+    "checks": {
+      "frontend_absent": true,
+      "mdk_absent": true,
+      "workers_absent": true,
+      "caffeinate_absent": true,
+      "engine_cleanup_ready": true,
+      "uninstall_complete": true,
+      "root_removed": true
+    },
+    "error": null,
+    "duration_ns": 236865511
+  },
+  "cleanup_failure_diagnostic": {
+    "category": "cleanup_incomplete",
+    "errno": null,
+    "error_type": "SmokeError",
+    "kind": "installed-failure",
+    "reason": "cleanup_incomplete",
+    "stage": "cleanup_native"
+  }
+}

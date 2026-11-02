@@ -204,13 +204,23 @@ def _compile(state, constants, deadline, *, stage='build'):
     return config['version']
 
 
-def prepare_dependencies(state, *, deadline, toolchain_source):
+def prepare_dependencies(state, *, deadline, toolchain_source, consume_source=False):
     """Fetch locked public crates then warm privately before identity creation."""
     from marmish_installed_state import run_bounded, write_private
     deadline = dependency_deadline(state, deadline)
     root = Path(state['root'])
     compiler = root / 'compiler'
+    if consume_source:
+        from marmish_installed_bootstrap import _bootstrap_owner, cleanup_bootstrap
+        from marmish_platform import canonical_state_path
+        expected = canonical_state_path(Path(state['state_file']).parent / 'bootstrap/toolchain')
+        if canonical_state_path(toolchain_source) != expected or _bootstrap_owner(expected, state['ctx']) is None:
+            raise ValueError('toolchain_source_unowned')
     executables = _copy_toolchain(toolchain_source, compiler, deadline=deadline)
+    if consume_source:
+        result = cleanup_bootstrap(toolchain_source, state['ctx'])
+        if result['outcome'] != 'complete':
+            raise ValueError('toolchain_source_cleanup_failed')
     home = root / 'cargo-home'
     home.mkdir(mode=0o700)
     _no_cargo_config(home)

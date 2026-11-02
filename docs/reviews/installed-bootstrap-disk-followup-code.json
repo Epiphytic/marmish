@@ -1,0 +1,34 @@
+{
+  "verdict": "APPROVED",
+  "reviewer": "claude-opus-5-5 (Claude Code, independent fresh-context review, read-only)",
+  "scope": [
+    "Follow-up fixes after docs/reviews/installed-bootstrap-disk-code.json approval only",
+    "tools/marmish_installed_ci.py: prepare() try/except around prepare_dependencies (consume_source passthrough); ERRORS additions; main() --consume-toolchain + parser.error before context()",
+    "tools/test_marmish_installed_ci.py: test_consume_requires_source_at_argument_boundary, test_consumption_failures_keep_finite_public_categories",
+    "docs/validation/installed-bootstrap-disk-local.json cleanup_failure_diagnostic vs docs/validation/installed-bootstrap-disk.md lines 30-37",
+    "Read for integration context: marmish_installed_fixture.prepare_dependencies, marmish_installed_bootstrap._owned_bootstrap_paths/_bootstrap_owner/cleanup_bootstrap, marmish_installed_ci.main exception mapping, marmish_installed_state.failure_diagnostic/DIAGNOSTIC_*/cleanup_state/_native_cleanup"
+  ],
+  "tests": [
+    "PYTHONPATH=tools python3 -m unittest test_marmish_installed_ci -q -> Ran 17 tests, OK (expected sanitized diagnostic line on stderr from an existing negative test)"
+  ],
+  "blockers": [],
+  "nonblockers": [
+    {
+      "id": "stderr-diagnostic-masks-new-categories",
+      "location": "tools/marmish_installed_state.py:39-47 (DIAGNOSTIC_REASONS); tools/marmish_installed_ci.py:267-276",
+      "detail": "installation-result.json now keeps error=toolchain_source_unowned / toolchain_source_cleanup_failed, because they are SmokeError and in ERRORS. The stderr installed-failure line still shows category=internal_failure, reason=other, error_type=SmokeError, stage=verify, because the two names are not in DIAGNOSTIC_REASONS and report['stage'] is still 'verify' when prepare_dependencies runs. This is safe (finite, sanitized) and matches the stated intent that only the public categories are kept. Adding the two names to DIAGNOSTIC_REASONS would let stderr show them too. Optional."
+    },
+    {
+      "id": "test-coverage-narrow",
+      "location": "tools/test_marmish_installed_ci.py:76-96",
+      "detail": "The category test injects only RuntimeError, not the ValueError the fixture actually raises. Both go through the same except tuple, so the behaviour is equivalent. Neither of these is asserted: (a) another ValueError/RuntimeError (e.g. fixture_toolchain_invalid) is re-raised unchanged, not turned into SmokeError; (b) main maps the SmokeError to report.error end-to-end. Code inspection confirms both: the bare `raise` keeps the original, and main uses str(error) when it is a SmokeError in ERRORS."
+    },
+    {
+      "id": "prose-precision",
+      "location": "docs/validation/installed-bootstrap-disk.md:30",
+      "detail": "The cited diagnostic proves stage=cleanup_native with reason=cleanup_incomplete. On Linux that stage is _clean_linux, which ends in the _process_absent check, so 'failed at its process scan' is consistent with the evidence. Strictly, the stage-level diagnostic narrows the failure to native cleanup, not to the scan call itself. Acceptable as worded alongside 'transient cause was not established'."
+    }
+  ],
+  "summary": "The fixes hold on the actual integrated paths. prepare() turns only the exact strings toolchain_source_unowned and toolchain_source_cleanup_failed from ValueError/RuntimeError into SmokeError, with `from None`. Every other exception is re-raised unchanged and sanitized by main's existing mapping (stage 'verify' -> install_verify_failed, otherwise internal_failure). The two categories are in ERRORS, so they reach the public installation-result.json. main calls parser.error for --consume-toolchain without --toolchain-source right after parse_args, before context(), state, or report work: exit 2, no traceback, verified by the test asserting context is not called. The ownership check and the copy-then-cleanup order in prepare_dependencies are unchanged, and cleanup still requires outcome 'complete'. The local validation JSON now keeps a finite cleanup_failure_diagnostic (stage cleanup_native, reason cleanup_incomplete, error_type SmokeError, errno null) supporting the prose. cleanup_retry is still complete with root_removed true, and bootstrap_cleanup is absent. Nothing outside the stated scope changed.",
+  "mode": "auto"
+}

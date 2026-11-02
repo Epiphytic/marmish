@@ -1,0 +1,53 @@
+{
+  "verdict": "APPROVED",
+  "reviewer": "claude-opus-5-5 (Claude Code auto mode, independent, read-only)",
+  "scope": [
+    "tools/marmish_ci.py: _bootstrap_components, _selected_bootstrap_member, _bootstrap_inventory, _bootstrap_space, _extract_bootstrap, bootstrap",
+    "tools/marmish_installed_bootstrap.py (untracked, full file)",
+    "tools/marmish_installed_fixture.py prepare_dependencies consume_source",
+    "tools/marmish_installed_ci.py ERRORS, prepare, main --consume-toolchain",
+    ".github/workflows/installed-interop.yml bootstrap-owned / prepare --consume-toolchain / always cleanup-bootstrap ordering",
+    "tools/test_marmish_ci.py BootstrapDisk, OwnedBootstrap, CiTests delta; tools/test_marmish_installed_fixture.py consumption test",
+    "docs/validation/installed-bootstrap-disk.md, installed-bootstrap-archive-inventory.json, installed-bootstrap-disk-local.json",
+    "Read for context only: marmish_installed_state _directory_fd/_file_bytes/_new_json/read_private/write_private/public_directory, marmish_platform.canonical_state_path"
+  ],
+  "tests_run": [
+    "PYTHONPATH=tools python3 -m unittest test_marmish_ci.CiTests test_marmish_ci.BootstrapDisk test_marmish_ci.OwnedBootstrap test_marmish_installed_fixture.CompilerPreparation test_marmish_installed_ci test_marmish_release.ReleaseTests.test_diagnostic_frozen_vocabularies_cover_source_and_reviewed_dynamic_calls -q -> Ran 39, OK (skipped=1, the Darwin-only alias test)",
+    "yaml.safe_load(.github/workflows/installed-interop.yml) -> ok (actionlint not installed)"
+  ],
+  "blockers": [],
+  "nonblockers": [
+    {
+      "id": "new-error-categories-unreachable",
+      "location": "tools/marmish_installed_fixture.py:217,223; tools/marmish_installed_ci.py:28,225",
+      "detail": "prepare_dependencies raises ValueError and _bootstrap_owner raises RuntimeError. main maps an exception to its own category only when it is a SmokeError, so toolchain_source_unowned and toolchain_source_cleanup_failed are recorded as internal_failure, with diagnostic reason 'other'. The new require() in main runs before the report try block, so it ends in an uncaught traceback with no installation-result.json. Both cases still fail closed. If you want the specific categories, raise them with require()/SmokeError, or wrap the consume path; for the CLI check, use parser.error."
+    },
+    {
+      "id": "mkdir-record-gap-noncrash",
+      "location": "tools/marmish_installed_bootstrap.py:95-102",
+      "detail": "If write_private fails after the os.mkdir, without a crash, the empty unrecorded root is left behind. The final cleanup then refuses it, so the job fails closed. That matches the design, but you could os.rmdir(root.name, dir_fd=parent) on that specific error to avoid a spurious cleanup failure."
+    },
+    {
+      "id": "rmtree-identity-under-held-fd",
+      "location": "tools/marmish_installed_bootstrap.py:74-76",
+      "detail": "The revalidation walks the path again instead of using the held parent fd, and rmtree(root.name, dir_fd=parent) never compares the inode it deletes with the recorded identity. Only a hostile same-user rename race could exploit this, which the existing private-state contract already accepts. Optional hardening: compare _root_identity(os.stat(root.name, dir_fd=parent, follow_symlinks=False)) with the record just before rmtree. This is not an actual bug."
+    },
+    {
+      "id": "evidence-wording-first-cleanup",
+      "location": "docs/validation/installed-bootstrap-disk.md:30-31 vs installed-bootstrap-disk-local.json cleanup",
+      "detail": "The prose says the first cleanup 'failed at its process scan'. The retained JSON shows all seven checks null, a duration of 9.2 ms and a generic cleanup_incomplete, which does not by itself show the failing stage. Either cite the evidence that locates it at the process scan, or say only that the first attempt failed conservatively with cleanup_incomplete. Root cause is correctly not claimed."
+    },
+    {
+      "id": "darwin-alias-test-linux-skip",
+      "location": "tools/test_marmish_ci.py OwnedBootstrap.test_darwin_tmp_alias_uses_one_canonical_record",
+      "detail": "The alias test is skipped on Linux, so local runs never exercise the /tmp to /private/tmp record equality. A mocked canonical_state_path variant would cover it before the native macOS run."
+    },
+    {
+      "id": "untracked-helper",
+      "location": "tools/marmish_installed_bootstrap.py",
+      "detail": "The helper is still untracked. It must be added in the same commit as the workflow, fixture and test changes that import it."
+    }
+  ],
+  "summary": "The implementation matches the approved design. Generic marmish_ci keeps its boundary and caller contract, and the selective two-pass extraction is strict and deterministic with correct block-rounded budgeting and finite logs. Ownership deletion is scoped to the recorded current-job bootstrap subtree, using no-follow fd walks, private-mode checks, identity and context validation, and fd-based rmtree; all four record/root states are handled. Source consumption happens only after a verified copy, and the always() cleanup covers bootstrap and prepare failures before the report upload. The remaining notes are about diagnostic precision, evidence wording, test coverage and optional hardening against hostile same-user races; none is a correctness defect. Native macOS success and the root cause of the first cleanup failure are not established and were not inferred.",
+  "mode": "auto"
+}

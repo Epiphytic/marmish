@@ -1,6 +1,7 @@
 """User-local, digest-pinned native CI toolchain and public build bundles."""
 import argparse
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -75,6 +76,76 @@ def download(url, expected):
     return body
 
 
+BOOTSTRAP_RESERVE = 128 * 1024 * 1024
+
+
+def _bootstrap_components(target):
+    return ('rustc', 'cargo', 'rust-std-' + target, 'clippy-preview', 'rustfmt-preview')
+
+
+def _selected_bootstrap_member(member, target):
+    name = member.name.rstrip('/') if member.isdir() else member.name
+    parts = name.split('/')
+    root = 'rust-' + RUST + '-' + target
+    if (not name or '\\' in name or '\x00' in name or
+            any(part in ('', '.', '..') for part in parts) or parts[0] != root):
+        raise RuntimeError('invalid_bootstrap_archive')
+    selected = (len(parts) == 1 or
+                len(parts) == 2 and member.isfile() or
+                len(parts) >= 2 and parts[1] in _bootstrap_components(target))
+    if selected and not (member.isdir() or member.isfile()):
+        raise RuntimeError('invalid_bootstrap_archive')
+    if len(parts) == 1 and not member.isdir():
+        raise RuntimeError('invalid_bootstrap_archive')
+    return selected
+
+
+def _bootstrap_inventory(payload, target, block):
+    selected, required = set(), {'install.sh', 'components', 'rust-installer-version'}
+    required |= {name + '/manifest.in' for name in _bootstrap_components(target)}
+    allocated = 0
+    with tarfile.open(fileobj=io.BytesIO(payload), mode='r|xz') as source:
+        for member in source:
+            if not _selected_bootstrap_member(member, target):
+                continue
+            if member.name in selected or len(selected) >= 20000:
+                raise RuntimeError('invalid_bootstrap_archive')
+            selected.add(member.name)
+            relative = '/'.join(member.name.rstrip('/').split('/')[1:])
+            if member.isfile():
+                required.discard(relative)
+                allocated += ((member.size + block - 1) // block) * block
+            else:
+                allocated += block
+    if required or allocated > 2 * 1024**3:
+        raise RuntimeError('invalid_bootstrap_archive')
+    return allocated
+
+
+def _bootstrap_space(path, required, selected_bytes, stage):
+    info = os.statvfs(path)
+    free = info.f_bavail * info.f_frsize
+    print(json.dumps({'kind': 'bootstrap-disk', 'stage': stage,
+                      'free_bytes': free, 'total_bytes': info.f_blocks * info.f_frsize,
+                      'required_bytes': required, 'selected_allocated_bytes': selected_bytes},
+                     sort_keys=True), file=sys.stderr, flush=True)
+    if free < required:
+        raise RuntimeError('insufficient_bootstrap_space')
+
+
+def _extract_bootstrap(payload, target, work):
+    block = os.statvfs(work).f_frsize
+    if block <= 0:
+        raise RuntimeError('invalid_bootstrap_filesystem')
+    allocated = _bootstrap_inventory(payload, target, block)
+    _bootstrap_space(work, allocated * 2 + BOOTSTRAP_RESERVE, allocated, 'extraction')
+    with tarfile.open(fileobj=io.BytesIO(payload), mode='r|xz') as source:
+        for member in source:
+            if _selected_bootstrap_member(member, target):
+                source.extract(member, work, filter='data')
+    _bootstrap_space(work, allocated + BOOTSTRAP_RESERVE, allocated, 'installation')
+
+
 def bootstrap(destination):
     capabilities()
     refuse_api_tokens()
@@ -99,15 +170,11 @@ def bootstrap(destination):
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.marmish-rust-', dir=destination.parent) as temporary:
         work = Path(temporary)
-        archive = work / 'rust.tar.xz'
-        archive.write_bytes(payload)
-        with tarfile.open(archive) as source:
-            source.extractall(work, filter='data')
+        _extract_bootstrap(payload, target, work)
         source_root = work / ('rust-' + RUST + '-' + target)
         installed = work / 'installed'
         checked(['sh', str(source_root / 'install.sh'), '--prefix=' + str(installed),
-                 '--disable-ldconfig', '--components=rustc,cargo,rust-std-' + target +
-                 ',clippy-preview,rustfmt-preview'])
+                 '--disable-ldconfig', '--components=' + ','.join(_bootstrap_components(target))])
         version = subprocess.check_output([installed / 'bin/rustc', '--version'],
                                            text=True, env=build_environment())
         if not version.startswith('rustc ' + RUST + ' '):

@@ -110,6 +110,46 @@ class CompilerPreparation(unittest.TestCase):
             for directory in (root/'f', root/'f/linux-x64', root/'r'):
                 self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
 
+    def test_consumption_requires_verified_copy_and_current_owned_source(self):
+        from types import SimpleNamespace
+        import marmish_installed_bootstrap as owned
+        ctx = dict(run='123', attempt='1', sha='a'*40)
+        for fails in (False, True):
+            with self.subTest(copy_fails=fails), tempfile.TemporaryDirectory() as temporary:
+                harness = Path(temporary).resolve()
+                source = harness / 'bootstrap/toolchain'
+                with patch.object(owned, 'bootstrap', side_effect=lambda path: path.mkdir(mode=0o700)):
+                    owned.bootstrap_owned(source, ctx)
+                root = harness / 'private'
+                root.mkdir(mode=0o700)
+                value = dict(root=str(root), state_file=str(harness/'state'), ctx=ctx,
+                             role='linux-x64', preparation_deadline=fixture.continuous_time()+900)
+                def copied(*args, **kwargs):
+                    self.assertTrue(source.exists())
+                    if fails:
+                        raise ValueError('copy failed')
+                    (root/'compiler').mkdir(mode=0o700)
+                    return {}
+                def version(argv, *args, **kwargs):
+                    self.assertFalse(source.exists())
+                    return dict(returncode=0, timed_out=False, output_limited=False,
+                                cleanup='complete', stdout=(Path(argv[0]).name+' 1.97.1 test').encode())
+                with patch.object(fixture, '_copy_toolchain', side_effect=copied), \
+                        patch('marmish_installed_state.run_bounded', side_effect=version), \
+                        patch.object(fixture, '_compile', return_value='compiler'):
+                    if fails:
+                        with self.assertRaisesRegex(ValueError, 'copy failed'):
+                            fixture.prepare_dependencies(value, deadline=value['preparation_deadline'],
+                                toolchain_source=source, consume_source=True)
+                        self.assertTrue(source.exists())
+                        self.assertEqual(owned.cleanup_bootstrap(source, ctx)['outcome'], 'complete')
+                    else:
+                        self.assertEqual(fixture.prepare_dependencies(value,
+                            deadline=value['preparation_deadline'], toolchain_source=source,
+                            consume_source=True), 'compiler')
+                        self.assertFalse(source.exists())
+                        self.assertEqual(owned.cleanup_bootstrap(source, ctx)['outcome'], 'absent')
+
     def test_managed_copy_rejects_links_and_changed_payload(self):
         from marmish_ci import RUST, MANIFEST_SHA256
         with tempfile.TemporaryDirectory() as temporary:

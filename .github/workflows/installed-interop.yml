@@ -66,13 +66,13 @@ jobs:
           echo "MARMISH_INSTALLED_ROOT=$parent" >> "$GITHUB_ENV"
       - name: Bootstrap pinned compiler before disposable runtime state
         timeout-minutes: 6
-        run: python3 tools/marmish_ci.py bootstrap --destination "$RUNNER_TEMP/marmish-toolchain-${{ github.run_id }}-${{ github.run_attempt }}"
+        run: python3 tools/marmish_installed_bootstrap.py bootstrap-owned --destination "$MARMISH_INSTALLED_ROOT/bootstrap/toolchain"
       - name: Execute real install script and verify every installed payload
         id: installation
         timeout-minutes: 17
         run: >-
           python3 tools/marmish_installed_ci.py prepare
-          --toolchain-source "$RUNNER_TEMP/marmish-toolchain-${{ github.run_id }}-${{ github.run_attempt }}"
+          --toolchain-source "$MARMISH_INSTALLED_ROOT/bootstrap/toolchain" --consume-toolchain
           --pin-dir "$RUNNER_TEMP/release-pin"
           --state "$MARMISH_INSTALLED_ROOT/state" --role '${{ matrix.platform }}'
       - name: Initialize two fresh identities through installed launcher
@@ -188,6 +188,12 @@ jobs:
             exit 1
           fi
           python3 tools/marmish_ci_bwrap.py cleanup --state "$RUNNER_TEMP/installed-bwrap-state"
+      - name: Remove only this job's recorded bootstrap files
+        if: always() && steps.checkout.outcome == 'success'
+        run: >-
+          python3 tools/marmish_installed_bootstrap.py cleanup-bootstrap
+          --destination "$MARMISH_INSTALLED_ROOT/bootstrap/toolchain"
+          --report "$MARMISH_INSTALLED_ROOT/state.public/bootstrap-cleanup.json"
       - name: Preserve sanitized prerequisite and final cleanup reports
         if: always() && steps.checkout.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

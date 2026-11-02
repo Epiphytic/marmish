@@ -1,0 +1,89 @@
+{
+  "verdict": "APPROVED",
+  "reviewer": "claude-opus-5-5 (independent, read-only)",
+  "scope_checked": [
+    "docs/phases/installed-bootstrap-disk.md",
+    "tools/marmish_ci.py capabilities/download/valid_toolchain/bootstrap/main",
+    "tools/marmish_installed_fixture.py _copy_toolchain/prepare_dependencies",
+    "tools/marmish_installed_ci.py prepare/main",
+    "tools/marmish_installed_state.py _directory_fd/_file_bytes/_new_json/write_private/public_directory/create_state/load_state/cleanup_state",
+    "tools/marmish_platform.py canonical_state_path",
+    ".github/workflows/installed-interop.yml (bootstrap/prepare/cleanup steps); other bootstrap callers in native-validation.yml and release.yml",
+    "/tmp/marmish-full-41397651278-mac.log",
+    "/tmp/marmish-rust-darwin-install-sh, /tmp/marmish-rust-darwin-components"
+  ],
+  "evidence_confirmed": [
+    "The ENOSPC happens in bootstrap, not in the private copy. install.sh (marmish_ci.py:108) failed with fcopyfile ENOSPC while installing rust-std, after rustc and cargo were done, inside $RUNNER_TEMP/.marmish-rust-*/installed. The traceback goes through main:232 -> bootstrap:108 -> checked:48.",
+    "Current code writes the archive to disk (marmish_ci.py:102-103) and then runs a full extractall (marmish_ci.py:105). So the design's peak of archive + full tree + install (~2.64 GB) and its estimate of ~1.18 GB after selective extraction both follow from the given inventory.",
+    "The official install.sh needs only these from the source tree: $src_dir/components (line 869), the install.sh file itself, which it copies as the uninstaller (line 724), and $src_dir/<component>/manifest.in plus that component's files (lines 519-633). It checks --components against the components file (lines 890-904) and never touches unselected component directories. The components file lists all 11 components, so leaving it unmodified is correct. Selective extraction therefore fits the unchanged installer contract.",
+    "download() already holds up to 400 MiB in memory (marmish_ci.py:71-75), so parsing in memory adds no new trust or size surface.",
+    "Generic consumers (native-validation.yml:52,283 and release.yml:139) call only `bootstrap --destination $RUNNER_TEMP/marmish-toolchain`. If the installer's output and file_hashes stay unchanged, the .marmish-toolchain.json schema and valid_toolchain stay compatible.",
+    "Today prepare_dependencies has one caller (marmish_installed_ci.py:112-114), so defaulting consume_source=False keeps that caller working.",
+    "The state root is /tmp/mci-* (create_state, marmish_installed_state.py:246), not under $MARMISH_INSTALLED_ROOT. state_file.parent is the mktemp -d harness parent, so a 0700 check through _directory_fd(private=True) is the right 'already-owned' gate.",
+    "shutil.rmtree(name, dir_fd=parent) under a held parent fd is already the cleanup_state pattern (marmish_installed_state.py:1108-1115). Reusing it for cleanup_bootstrap is consistent."
+  ],
+  "blockers": [],
+  "nonblockers": [
+    {
+      "id": "canonical-path-equality",
+      "detail": "On macOS, $MARMISH_INSTALLED_ROOT is /tmp/marmish-harness-*. marmish_ci.main resolves the destination to /private/tmp/... (Path.resolve), and canonical_state_path maps it to /private/tmp/... through a different route. Specify that the sidecar 'path', the bootstrap-owned basename/parent checks, the prepare check 'source == state_file.parent/bootstrap/toolchain' and cleanup_bootstrap all compare canonical_state_path forms. Never compare raw argv against a resolved path, or the Darwin job will fail closed on its first run. Add a test with the /tmp alias."
+    },
+    {
+      "id": "ownership-state-table",
+      "detail": "The design defines record+dir (remove), no record+dir (refuse) and no record+no dir (not-started). It does not define record present + bootstrap dir absent. That state is reachable after a crash between the absence proof and sidecar unlink, or by rerunning after prepare consumed the source. Define it explicitly: validate the record's format/kind/context/path, confirm the recorded path is absent, then remove the verified sidecar. Report this as a distinct outcome such as 'already-removed'. After consumption, the final always() cleanup will also see no record and no dir; calling that 'not-started' would mislead the evidence. Consider 'absent' or a consumed marker in the finite log."
+    },
+    {
+      "id": "record-path-vs-identity",
+      "detail": "The record stores 'path' plus the bootstrap device/inode/uid, and cleanup_bootstrap takes the toolchain destination. State that the recorded path is the toolchain destination, the recorded identity is its 'bootstrap' parent, and the deleted subtree is that whole bootstrap directory. The subtree includes any leftover .marmish-rust-* TemporaryDirectory from a killed step, which is what makes the timeout-kill case recoverable."
+    },
+    {
+      "id": "always-step-condition",
+      "detail": "In the failed job, the existing live_ci cleanup step exits 1 when prepare never ran (log line 164-170). The new cleanup-bootstrap step must not be gated on steps.cleanup.outcome the way the bwrap removal step is. Use `always() && steps.checkout.outcome == 'success'`, and place it before 'Preserve sanitized prerequisite and final cleanup reports' so its finite JSON is uploaded. Its own failure must still fail the job."
+    },
+    {
+      "id": "filesystem-relocation",
+      "detail": "Moving bootstrap from $RUNNER_TEMP to /tmp/marmish-harness-* also moves the 1.18 GB bootstrap peak onto /tmp. On macOS that is the same APFS container. On Linux self-hosted runners /tmp may be a size-limited tmpfs, which already holds /tmp/mci-*/compiler. State this, and make the preflight statvfs the actual destination parent (bootstrap dir) using f_bavail*f_frsize, so a Linux regression shows up as the finite insufficient_bootstrap_space error, not a new ENOSPC."
+    },
+    {
+      "id": "block-rounding-in-budget",
+      "detail": "Summing tar member sizes undercounts real allocation, because thousands of small rlib/rmeta/manifest files each round up to a block. Count required bytes per regular member as ceil(size/f_frsize)*f_frsize (or add a per-file allowance), plus the installer's extra files (uninstall.sh copy, manifest-*, install.log). Otherwise the 128 MiB reserve silently absorbs the rounding."
+    },
+    {
+      "id": "single-pass-decompression",
+      "detail": "tarfile random-access over xz (r:xz on BytesIO) runs getmembers() as a full 1.85 GB decompression. Extracting afterwards seeks backward, which restarts LZMA from offset 0, and out-of-order per-member extract calls can restart it repeatedly. That is CPU risk against the 6-minute bootstrap step timeout. Prefer one streaming pass (r|xz): validate every member's name, extract the selected ones with filter='data', and check required-component presence at the end. Alternatively, make one extractall(members=<archive-ordered list>) call. Preflight needs selected sizes before writing; either take them from a first streaming pass (two decompressions total, same as today) or document the cost."
+    },
+    {
+      "id": "selection-by-path-parts",
+      "detail": "Select by exact PurePosixPath parts: parts[0]=='rust-1.97.1-<target>' and parts[1] in the five component names, or a flat root file when len(parts)==2. A startswith prefix test would let names like 'rustc-dev' or 'rust-std-<target>x' through. Validate names (absolute, '..', empty or '.' parts, NUL, backslash) on all members, not only selected ones."
+    },
+    {
+      "id": "link-inventory-all-targets",
+      "detail": "Rejecting links in selected trees is stricter than data_filter, and it applies to the generic bootstrap used by release.yml and native-validation.yml on x86_64 and aarch64 Linux as well as Darwin. Before landing, record a member-type inventory (zero sym/hard links and only dir/reg types in the selected trees) for all three pinned target archives, not only Darwin and the x86_64 Linux real run. These archives are digest-pinned and fetchable off-runner, so this is not a native probe."
+    },
+    {
+      "id": "error-categories",
+      "detail": "prepare maps unknown exception strings to internal_failure (marmish_installed_ci.py:258-263). If source-ownership validation or proof of source deletion fails, add explicit finite categories to ERRORS (e.g. toolchain_source_unowned, toolchain_source_cleanup_failed) so evidence tells them apart from copy failures. insufficient_bootstrap_space and bootstrap-owned failures come from marmish_ci.py; give them the same finite, path-free JSON line, not just a traceback."
+    },
+    {
+      "id": "mode-verification",
+      "detail": "bootstrap-owned should mkdir 'bootstrap' with dir_fd on the held harness-parent fd, then fstat it to verify uid==euid and mode 0700. It should not rely on the process umask, because the bootstrap step does not set umask 077 (only the harness-creation step's shell does). The sidecar should go through write_private/_new_json, which gives exclusive-create, no-follow, 0600 and fsync."
+    },
+    {
+      "id": "process-boundary-honesty",
+      "detail": "The design is right to scope this to file-removal proof. Note one residual case: if a step timeout kills Python while install.sh/cp survive, install.sh's mkdir -p of absolute paths could recreate bootstrap/... after the absence proof. Keep the claim limited to owned-path removal at cleanup time, as written, and do not claim process absence."
+    },
+    {
+      "id": "optional-further-reduction",
+      "detail": "Optional, not needed for this change: deleting each extracted component tree right after the installer finishes would lower the peak further, but only with per-component install.sh invocations, which changes installer usage. Keeping a single unchanged invocation is the better call here."
+    }
+  ],
+  "test_plan_additions": [
+    "Darwin /tmp -> /private/tmp alias equality for the bootstrap-owned, prepare consume and cleanup-bootstrap paths.",
+    "Record present + dir absent; record from another run/attempt/sha; record whose path is the bootstrap dir instead of the toolchain; harness parent with mode 0750.",
+    "Prefix-confusion member names (rustc-dev/, rust-std-<target>x/) are not selected; traversal and absolute paths in unselected members are rejected.",
+    "Budget test with block rounding at the exact boundary (required == available passes, available == required-1 fails), with finite JSON keys asserted and no paths.",
+    "Workflow lint/test: the cleanup-bootstrap step runs when prepare and live cleanup both fail, and its record is in state.public before upload."
+  ],
+  "summary": "The design matches the code and the failure evidence. The ENOSPC is inside bootstrap's install.sh copy, and the official installer reads only the components file, install.sh and the selected <component>/manifest.in trees, so selective in-memory extraction keeps the unchanged five-component install and the generic manifest contract. Ownership and consumption reuse the existing fail-closed state helpers without broad deletes or claims about past leaks. No blockers. Before implementation, specify canonical path comparison, the record-present/dir-absent state, the always() step condition, and block-rounded budgeting on the actual destination filesystem.",
+  "mode": "auto"
+}

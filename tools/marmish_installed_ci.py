@@ -25,6 +25,7 @@ from marmish_installed_state import (
 
 REPO = Path(__file__).resolve().parent.parent
 ERRORS = frozenset({
+    'toolchain_source_unowned', 'toolchain_source_cleanup_failed',
     'pin_unavailable', 'pin_invalid', 'release_resolve_failed',
     'installer_refused', 'installer_timeout', 'installer_output_limit',
     'install_verify_failed', 'identity_init_failed', 'barrier_timeout',
@@ -110,8 +111,14 @@ def prepare(args, ctx, pin, report):
     register_installed(state, verified['root'])
     if getattr(args, 'toolchain_source', None) is not None:
         from marmish_installed_fixture import prepare_dependencies
-        prepare_dependencies(state, deadline=state['preparation_deadline'],
-                             toolchain_source=args.toolchain_source)
+        try:
+            prepare_dependencies(state, deadline=state['preparation_deadline'],
+                                 toolchain_source=args.toolchain_source,
+                                 consume_source=getattr(args, 'consume_toolchain', False))
+        except (ValueError, RuntimeError) as failure:
+            if str(failure) in {'toolchain_source_unowned', 'toolchain_source_cleanup_failed'}:
+                raise SmokeError(str(failure)) from None
+            raise
     report['installation'] = verified['installation']
     report['interpreter'] = interpreter_info(state)
     report.update(outcome='passed', error=None, cleanup='incomplete')
@@ -218,7 +225,10 @@ def main():
     parser.add_argument('--role', choices=tuple(ROLE_TARGETS))
     parser.add_argument('--peers', type=Path)
     parser.add_argument('--toolchain-source', type=Path)
+    parser.add_argument('--consume-toolchain', action='store_true')
     args = parser.parse_args()
+    if args.consume_toolchain and args.toolchain_source is None:
+        parser.error('--consume-toolchain requires --toolchain-source')
     ctx = context()
     if args.operation == 'resolve':
         resolve_release(REPO, args.pin_dir, ctx, version=VERSION)

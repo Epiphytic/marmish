@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import marmish_ci as ci
+import marmish_installed_bootstrap as owned
 
 CONTEXT = {'run': '123', 'attempt': '1', 'sha': 'a' * 40}
 
@@ -124,8 +125,11 @@ class CiTests(unittest.TestCase):
         manifest = '[pkg.rust.target.' + target + ']\nxz_url="https://static.rust-lang.org/archive"\nxz_hash="digest"\n'
         payload = io.BytesIO()
         with tarfile.open(fileobj=payload, mode='w:xz') as archive:
-            info = tarfile.TarInfo('rust-' + ci.RUST + '-' + target + '/install.sh')
-            archive.addfile(info, io.BytesIO())
+            metadata = ['install.sh', 'components', 'rust-installer-version']
+            metadata.extend(component + '/manifest.in' for component in ci._bootstrap_components(target))
+            for name in metadata:
+                info = tarfile.TarInfo('rust-' + ci.RUST + '-' + target + '/' + name)
+                archive.addfile(info, io.BytesIO())
         def install(command):
             prefix = Path(next(value.split('=', 1)[1] for value in command if value.startswith('--prefix=')))
             (prefix / 'bin').mkdir(parents=True)
@@ -191,3 +195,154 @@ class ShellBootstrapTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class BootstrapDisk(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+        self.target = 'aarch64-apple-darwin'
+
+    def archive(self, extra=None, omit=None):
+        root = 'rust-' + ci.RUST + '-' + self.target
+        files = {'install.sh': b'installer', 'components': b'components',
+                 'rust-installer-version': b'3'}
+        files.update({name + '/manifest.in': b'file:payload' for name in ci._bootstrap_components(self.target)})
+        files.update({name + '/payload': b'payload' for name in ci._bootstrap_components(self.target)})
+        files['rust-docs/not-selected'] = b'D' * 3000
+        files['rustc-dev/not-selected'] = b'D' * 3000
+        files['rust-std-' + self.target + 'x/not-selected'] = b'D' * 3000
+        if omit:
+            files.pop(omit)
+        result = io.BytesIO()
+        with tarfile.open(fileobj=result, mode='w:xz') as archive:
+            for name, raw in files.items():
+                info = tarfile.TarInfo(root + '/' + name)
+                info.size = len(raw)
+                archive.addfile(info, io.BytesIO(raw))
+            if extra:
+                info = tarfile.TarInfo(extra[0])
+                info.type = extra[1]
+                info.linkname = root + '/cargo/payload'
+                archive.addfile(info)
+        return result.getvalue()
+
+    def test_selective_stream_extraction_skips_unrequested_components(self):
+        with patch.object(ci, '_bootstrap_space') as space:
+            ci._extract_bootstrap(self.archive(), self.target, self.root)
+        root = self.root / ('rust-' + ci.RUST + '-' + self.target)
+        self.assertTrue((root / 'rustc/payload').is_file())
+        self.assertFalse((root / 'rust-docs').exists())
+        self.assertFalse((root / 'rustc-dev').exists())
+        self.assertFalse((root / ('rust-std-' + self.target + 'x')).exists())
+        self.assertEqual(space.call_count, 2)
+        self.assertFalse((self.root / 'rust.tar.xz').exists())
+
+    def test_bad_names_unselected_traversal_links_and_missing_metadata_refused(self):
+        root = 'rust-' + ci.RUST + '-' + self.target
+        cases = [(root + '/rust-docs/../outside', tarfile.REGTYPE),
+                 ('/absolute', tarfile.REGTYPE), (root + '/cargo/link', tarfile.SYMTYPE),
+                 (root + '/rustc/link', tarfile.LNKTYPE), (root + '/rustc//bad', tarfile.REGTYPE)]
+        for extra in cases:
+            with self.subTest(extra=extra), self.assertRaisesRegex(RuntimeError, 'invalid_bootstrap_archive'):
+                ci._bootstrap_inventory(self.archive(extra=extra), self.target, 4096)
+        with self.assertRaisesRegex(RuntimeError, 'invalid_bootstrap_archive'):
+            ci._bootstrap_inventory(self.archive(omit='rustc/manifest.in'), self.target, 4096)
+
+    def test_budget_uses_available_blocks_and_emits_only_finite_counts(self):
+        from types import SimpleNamespace
+        info = SimpleNamespace(f_bavail=100, f_frsize=4096, f_blocks=200)
+        for required, passes in ((409600, True), (409601, False)):
+            with patch.object(ci.os, 'statvfs', return_value=info), \
+                    patch.object(ci.sys, 'stderr', new_callable=io.StringIO) as stderr:
+                if passes:
+                    ci._bootstrap_space(self.root, required, 8192, 'extraction')
+                else:
+                    with self.assertRaisesRegex(RuntimeError, 'insufficient_bootstrap_space'):
+                        ci._bootstrap_space(self.root, required, 8192, 'extraction')
+                record = json.loads(stderr.getvalue())
+            self.assertEqual(set(record), {'kind', 'stage', 'free_bytes', 'total_bytes',
+                                          'required_bytes', 'selected_allocated_bytes'})
+            self.assertNotIn(str(self.root), json.dumps(record))
+        self.assertEqual(ci._bootstrap_inventory(self.archive(), self.target, 4096), 13 * 4096)
+
+
+class OwnedBootstrap(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.harness = Path(self.temporary.name).resolve()
+        self.harness.chmod(0o700)
+        self.destination = self.harness / 'bootstrap/toolchain'
+        self.marker = self.harness / 'bootstrap-owner.json'
+
+    def create(self):
+        with patch.object(owned, 'bootstrap', side_effect=lambda path: path.mkdir(mode=0o700)):
+            owned.bootstrap_owned(self.destination, CONTEXT)
+
+    def test_current_owned_tree_removed_and_repeated_cleanup_is_absent(self):
+        self.create()
+        self.assertEqual(self.destination.parent.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(self.marker.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(owned.cleanup_bootstrap(self.destination, CONTEXT)['outcome'], 'complete')
+        self.assertFalse(self.marker.exists())
+        self.assertFalse(self.destination.parent.exists())
+        self.assertEqual(owned.cleanup_bootstrap(self.destination, CONTEXT)['outcome'], 'absent')
+
+    @unittest.skipUnless(ci.sys.platform == 'darwin', 'Darwin /tmp alias')
+    def test_darwin_tmp_alias_uses_one_canonical_record(self):
+        with tempfile.TemporaryDirectory(prefix='marmish-bootstrap-alias-', dir='/tmp') as temporary:
+            alias = Path(temporary) / 'bootstrap/toolchain'
+            with patch.object(owned, 'bootstrap', side_effect=lambda path: path.mkdir(mode=0o700)):
+                owned.bootstrap_owned(alias, CONTEXT)
+            marker = Path(temporary) / 'bootstrap-owner.json'
+            self.assertEqual(json.loads(marker.read_bytes())['destination'], str(alias.resolve()))
+            self.assertEqual(owned.cleanup_bootstrap(alias, CONTEXT)['outcome'], 'complete')
+
+    def test_record_present_directory_absent_is_verified_and_removed(self):
+        import shutil
+        self.create()
+        shutil.rmtree(self.destination.parent)
+        self.assertEqual(owned.cleanup_bootstrap(self.destination, CONTEXT)['outcome'], 'already-removed')
+        self.assertFalse(self.marker.exists())
+
+    def test_wrong_context_identity_path_and_symlinks_refused(self):
+        self.create()
+        original = json.loads(self.marker.read_bytes())
+        for record in (dict(original, context=dict(CONTEXT, attempt='2')),
+                       dict(original, destination=str(self.destination.parent)),
+                       dict(original, root_identity=dict(original['root_identity'], ino=0))):
+            self.marker.write_text(json.dumps(record))
+            with self.subTest(record=record), self.assertRaises(Exception):
+                owned.cleanup_bootstrap(self.destination, CONTEXT)
+            self.assertTrue(self.destination.exists())
+        self.marker.write_text(json.dumps(original))
+        alias = self.harness / 'bootstrap-alias'
+        alias.symlink_to(self.destination.parent)
+        with self.assertRaises(Exception):
+            owned.cleanup_bootstrap(alias / 'toolchain', CONTEXT)
+        alias.unlink()
+        self.marker.unlink()
+        self.marker.symlink_to(self.destination / 'unowned')
+        with self.assertRaises(Exception):
+            owned.cleanup_bootstrap(self.destination, CONTEXT)
+
+    def test_existing_unowned_or_unsafe_parent_never_deleted(self):
+        self.destination.parent.mkdir()
+        (self.destination.parent / 'keep').write_text('keep')
+        for action in (lambda: owned.bootstrap_owned(self.destination, CONTEXT),
+                       lambda: owned.cleanup_bootstrap(self.destination, CONTEXT)):
+            with self.assertRaises(Exception):
+                action()
+        self.assertEqual((self.destination.parent / 'keep').read_text(), 'keep')
+        self.harness.chmod(0o750)
+        with self.assertRaises(Exception):
+            owned.cleanup_bootstrap(self.destination, CONTEXT)
+
+    def test_failed_install_removes_only_current_owned_partial_tree(self):
+        with patch.object(owned, 'bootstrap', side_effect=RuntimeError('install failed')):
+            with self.assertRaisesRegex(RuntimeError, 'install failed'):
+                owned.bootstrap_owned(self.destination, CONTEXT)
+        self.assertFalse(self.destination.parent.exists())
+        self.assertFalse(self.marker.exists())

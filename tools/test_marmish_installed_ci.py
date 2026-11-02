@@ -62,6 +62,39 @@ class InstalledOrchestrationTests(unittest.TestCase):
                 verify.assert_not_called()
                 initialize.assert_not_called()
 
+    def test_consume_requires_source_at_argument_boundary(self):
+        argv = ['ci', 'prepare', '--pin-dir', str(self.args.pin_dir), '--consume-toolchain']
+        with patch('sys.argv', argv), patch.object(ci, 'context') as context, \
+                patch('sys.stderr', io.StringIO()) as error:
+            with self.assertRaises(SystemExit) as raised:
+                ci.main()
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn('--consume-toolchain requires --toolchain-source', error.getvalue())
+        self.assertNotIn('Traceback', error.getvalue())
+        context.assert_not_called()
+
+    def test_consumption_failures_keep_finite_public_categories(self):
+        self.args.toolchain_source = self.root / 'bootstrap/toolchain'
+        self.args.consume_toolchain = True
+        self.pin['targets'] = {'linux-x64': {'manifest_name': 'manifest.json'}}
+        self.args.pin_dir.mkdir()
+        (self.args.pin_dir / 'manifest.json').write_bytes(b'{}')
+        state = dict(root=str(self.root), prefix=str(self.root / 'install'),
+                     installer=str(self.root / 'install.sh'),
+                     installer_sha256=self.pin['installer_sha256'], preparation_deadline=100)
+        verified = {'root': self.root / 'install', 'installation': {}}
+        result = dict(returncode=0, timed_out=False, output_limited=False, cleanup='complete')
+        for category in ('toolchain_source_unowned', 'toolchain_source_cleanup_failed'):
+            with self.subTest(category=category), \
+                    patch.object(ci, 'native_target', return_value=ci.ROLE_TARGETS['linux-x64']), \
+                    patch.object(ci, 'create_state', return_value=state), \
+                    patch.object(ci, 'measure', side_effect=[result, verified]), \
+                    patch.object(ci, 'read_private', return_value=(ci.REPO / 'scripts/install.sh').read_bytes()), \
+                    patch.object(ci, 'register_installed'), \
+                    patch('marmish_installed_fixture.prepare_dependencies', side_effect=RuntimeError(category)):
+                with self.assertRaisesRegex(SmokeError, '^' + category + '$'):
+                    ci.prepare(self.args, CTX, self.pin, ci.initial_report(CTX, 'linux-x64'))
+
     def test_duplicate_local_identities_never_publish_readiness(self):
         state = {'root': str(self.root), 'output': str(self.root / 'public'),
                  'preparation_deadline': ci.clock_sample()['continuous_ns'] / 1e9 + 60}

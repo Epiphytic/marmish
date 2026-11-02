@@ -1,0 +1,54 @@
+{
+  "manifest_sha256": "03569b1886ceb5c05276b50c8431ab111de944cd6140fe1fa7d821dd8e0f29cf",
+  "rust": "1.97.1",
+  "targets": [
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "archive_sha256": "88f28fa9af20594179f85d6df67078dfd6fa93e2f6da5e1e9b0ac4997988ca4f",
+      "compressed_bytes": 201303968,
+      "expanded_bytes": 1703882335,
+      "selected_bytes": 652654742,
+      "selected_types": {
+        "regular": 173,
+        "directory": 44,
+        "symlink": 0,
+        "hardlink": 0,
+        "other": 0
+      },
+      "total_members": 67277,
+      "inspection_seconds": 14.808
+    },
+    {
+      "target": "aarch64-unknown-linux-gnu",
+      "archive_sha256": "9a7a2c336b4787f1b72f6bab7c35d5b7af2fd03cbd39b4fc721466a70d402a7d",
+      "compressed_bytes": 175976652,
+      "expanded_bytes": 1588225157,
+      "selected_bytes": 572841555,
+      "selected_types": {
+        "regular": 172,
+        "directory": 44,
+        "symlink": 0,
+        "hardlink": 0,
+        "other": 0
+      },
+      "total_members": 67330,
+      "inspection_seconds": 22.476
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "archive_sha256": "c9748cc86107734a2a024069908a895de7caa2d37062fb641eef9f756938ace2",
+      "compressed_bytes": 204675456,
+      "expanded_bytes": 1849029532,
+      "selected_bytes": 588861566,
+      "selected_types": {
+        "regular": 172,
+        "directory": 44,
+        "symlink": 0,
+        "hardlink": 0,
+        "other": 0
+      },
+      "total_members": 67339,
+      "inspection_seconds": 16.574
+    }
+  ]
+}
