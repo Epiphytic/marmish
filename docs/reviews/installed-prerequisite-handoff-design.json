@@ -1,0 +1,22 @@
+{
+  "reviewer": "Claude Code",
+  "model": "claude-opus-5-5",
+  "permission_mode": "auto",
+  "session_id": "185f5afb-1d5a-4553-86db-fce476ee15b6",
+  "scope": "Phase A pinned installer handoff and finite prerequisite diagnostics amendment; state create/read/copy/cleanup boundary, CI prepare/main/cleanup, release pin verification and focused tests",
+  "verdict": "APPROVED",
+  "blocking_findings": [],
+  "conclusion": "The paired hash-pinned immutable bytes handoff preserves the pinned installer binding and removes the reread gap. Strict default/private-state checks and uninstall rehash remain. Exact allowlisted reasons, exception classes and bounded errno preserve diagnostic secrecy without altering cleanup result schemas.",
+  "suggestions": [
+    "Validate the handoff before filesystem mutation or process snapshot.",
+    "Use bounded nofollow regular-file reads in prepare and the private reader after installation.",
+    "Read back and hash the exact private installer copy.",
+    "Map a digest mismatch to install_verify_failed.",
+    "Keep stage/reason diagnostics on stderr, outside unchanged public records.",
+    "Preserve cleanup checkpoints for outer load errors and unexpected exception classes.",
+    "Describe the Linux source ancestry/file-mode diagnosis as a hypothesis until finite diagnostics confirm it.",
+    "Keep existing public stage values.",
+    "The macOS install-stage failure remains out of scope; finite reasons must identify it on a later run."
+  ],
+  "validation": "Read-only actual Claude review before implementation; no native/live/networked tests or file edits."
+}

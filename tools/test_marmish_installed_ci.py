@@ -1,6 +1,9 @@
 """Orchestration trust boundaries; live acceptance still requires native jobs."""
 import hashlib
 import json
+import io
+import os
+import shutil
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -85,13 +88,36 @@ class InstalledOrchestrationTests(unittest.TestCase):
                 str(self.args.pin_dir), '--role', self.args.role]
         with patch('sys.argv', argv), patch.object(ci, 'context', return_value=CTX), \
                 patch.object(ci, 'load_pin', return_value=self.pin), \
-                patch.object(ci, 'prepare', side_effect=RuntimeError('SECRET sentinel')):
+                patch.object(ci, 'prepare', side_effect=RuntimeError('SECRET sentinel')), \
+                patch('sys.stderr', new_callable=io.StringIO) as diagnostics:
             self.assertEqual(ci.main(), 1)
         raw = (ci.public_directory(self.args.state) / 'installation-result.json').read_text()
         self.assertNotIn('SECRET', raw)
+        self.assertNotIn('SECRET', diagnostics.getvalue())
+        diagnostic = json.loads(diagnostics.getvalue())
+        self.assertEqual(diagnostic['error_type'], 'RuntimeError')
+        self.assertIsNone(diagnostic['errno'])
         record = json.loads(raw)
         self.assertEqual(record['error'], 'internal_failure')
         self.assertEqual(record['outcome'], 'failed')
+
+    def test_failure_diagnostic_omits_filename_and_unlisted_exception_class(self):
+        class PrivateFailure(Exception):
+            pass
+        for error, name, code in ((OSError(13, 'SECRET', '/private/SECRET'), 'PermissionError', 13),
+                                  (PrivateFailure('SECRET'), 'other', None)):
+            with self.subTest(name=name):
+                argv = ['ci', 'prepare', '--state', str(self.args.state), '--pin-dir',
+                        str(self.args.pin_dir), '--role', self.args.role]
+                with patch('sys.argv', argv), patch.object(ci, 'context', return_value=CTX), \
+                        patch.object(ci, 'load_pin', return_value=self.pin), \
+                        patch.object(ci, 'prepare', side_effect=error), \
+                        patch('sys.stderr', new_callable=io.StringIO) as diagnostics:
+                    self.assertEqual(ci.main(), 1)
+                self.assertNotIn('SECRET', diagnostics.getvalue())
+                record = json.loads(diagnostics.getvalue())
+                self.assertEqual(record['error_type'], name)
+                self.assertEqual(record['errno'], code)
 
     def test_absent_pin_has_explicit_null_binding_and_never_starts_install(self):
         argv = ['ci', 'prepare', '--state', str(self.args.state), '--pin-dir',
@@ -147,6 +173,70 @@ class InstalledOrchestrationTests(unittest.TestCase):
             with self.assertRaisesRegex(SmokeError, 'artifact_invalid'):
                 ci.barrier(self.args, CTX, self.pin, report)
         self.assertEqual(report['stage'], 'barrier')
+
+
+    def test_prepare_forwards_exact_pinned_bytes_from_writable_checkout(self):
+        (self.root / 'scripts').mkdir(mode=0o775)
+        raw = b'#!/bin/sh\nexit 0\n'
+        installer = self.root / 'scripts/install.sh'
+        installer.write_bytes(raw)
+        installer.chmod(0o664)
+        self.pin['installer_sha256'] = hashlib.sha256(raw).hexdigest()
+        result = dict(returncode=1, timed_out=False, output_limited=False,
+                      cleanup='complete', stdout=b'', stderr=b'')
+        with patch.object(ci, 'REPO', self.root), \
+                patch.object(ci, 'native_target', return_value=ci.ROLE_TARGETS[self.args.role]), \
+                patch.object(ci, 'create_state', wraps=ci.create_state) as create, \
+                patch.object(ci, 'run_bounded', return_value=result):
+            with self.assertRaisesRegex(SmokeError, 'installer_refused'):
+                ci.prepare(self.args, CTX, self.pin, ci.initial_report(CTX, self.args.role))
+        state = ci.load_state(self.args.state)
+        self.addCleanup(lambda: shutil.rmtree(state['root'], ignore_errors=True))
+        self.assertEqual(create.call_args.kwargs, {'installer_bytes': raw,
+                         'installer_sha256': self.pin['installer_sha256']})
+        self.assertEqual(ci.read_private(state['installer']), raw)
+
+    def test_prepare_refuses_symlink_and_fifo_sources_before_state_or_child(self):
+        (self.root / 'scripts').mkdir()
+        installer = self.root / 'scripts/install.sh'
+        outside = self.root / 'outside'
+        outside.write_bytes(b'#!/bin/sh\n')
+        installer.symlink_to(outside)
+        with patch.object(ci, 'REPO', self.root), patch.object(ci, 'create_state') as create, \
+                patch.object(ci, 'run_bounded') as child:
+            with self.assertRaises(OSError):
+                ci.prepare(self.args, CTX, self.pin, ci.initial_report(CTX, self.args.role))
+            installer.unlink()
+            os.mkfifo(installer, 0o600)
+            with self.assertRaises(ValueError):
+                ci.prepare(self.args, CTX, self.pin, ci.initial_report(CTX, self.args.role))
+            create.assert_not_called()
+            child.assert_not_called()
+
+    def test_prepare_failure_keeps_finite_reason_independent_of_coarse_category(self):
+        argv = ['ci', 'prepare', '--state', str(self.args.state), '--pin-dir',
+                str(self.args.pin_dir), '--role', self.args.role]
+        with patch('sys.argv', argv), patch.object(ci, 'context', return_value=CTX), \
+                patch.object(ci, 'load_pin', return_value=self.pin), \
+                patch.object(ci, 'prepare', side_effect=SmokeError('unsafe_state_path')), \
+                patch('sys.stderr', new_callable=io.StringIO) as output:
+            self.assertEqual(ci.main(), 1)
+        diagnostic = json.loads(output.getvalue())
+        self.assertEqual(diagnostic['reason'], 'unsafe_state_path')
+        self.assertEqual(diagnostic['category'], 'internal_failure')
+
+    def test_cleanup_load_diagnostic_and_public_schema_stay_finite(self):
+        with patch.object(ci, 'load_state', side_effect=SmokeError('unsafe_state_file')), \
+                patch('sys.stderr', new_callable=io.StringIO) as output:
+            self.args.state.touch(mode=0o600)
+            self.assertEqual(ci.cleanup(self.args, CTX, None), 1)
+        diagnostic = json.loads(output.getvalue())
+        self.assertEqual(diagnostic['stage'], 'cleanup_load')
+        self.assertEqual(diagnostic['reason'], 'unsafe_state_file')
+        public = ci.public_directory(self.args.state) / 'cleanup-result.json'
+        record = json.loads(public.read_bytes())
+        self.assertEqual(set(record), {'format', 'kind', 'run', 'attempt', 'sha', 'pin_sha256',
+                                      'role', 'outcome', 'checks', 'error', 'duration_ns'})
 
 
 if __name__ == '__main__':

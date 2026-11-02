@@ -35,6 +35,39 @@ _HEX = re.compile('[0-9a-f]{64}')
 _MAX_PROCESSES = 4096
 _PRIVATE_LIMIT = 1024 * 1024
 _DIGEST_CACHE = {}
+DIAGNOSTIC_REASONS = frozenset({
+    'unsafe_state_path', 'unsafe_state_file', 'state_exists', 'invalid_state',
+    'state_identity_changed', 'process_identity_changed', 'invalid_process',
+    'invalid_executable', 'invalid_identity', 'identity_exists', 'identity_duplicate',
+    'identity_init_failed', 'interpreter_failed', 'operation_timeout',
+    'process_scan_preflight_failed', 'caffeinate_failed', 'clock_invalid',
+    'cleanup_incomplete', 'uninstall_failed', 'install_verify_failed',
+    'installer_refused', 'installer_timeout', 'installer_output_limit', 'artifact_invalid',
+})
+DIAGNOSTIC_STAGES = frozenset({
+    'pin', 'install', 'verify', 'identity_server', 'identity_client', 'barrier',
+    'cleanup_load', 'cleanup_validate', 'cleanup_caffeinate', 'cleanup_native',
+    'cleanup_frontends', 'cleanup_runtime', 'cleanup_uninstall', 'cleanup_final', 'cleanup_remove',
+})
+
+
+def failure_diagnostic(error, *, stage, category):
+    """Emit fixed diagnostic vocabulary, never exception messages or paths."""
+    types = {'AttributeError', 'ChildProcessError', 'PermissionError', 'FileNotFoundError',
+             'OSError', 'RuntimeError', 'ValueError', 'TypeError', 'KeyError', 'SmokeError',
+             'SandboxError', 'KeyboardInterrupt'}
+    reason = error.args[0] if isinstance(error, SmokeError) and len(error.args) == 1 else None
+    name = type(error).__name__
+    code = getattr(error, 'errno', None)
+    print(json.dumps({'kind': 'installed-failure',
+          'stage': stage if type(stage) is str and stage in DIAGNOSTIC_STAGES else 'other',
+          'category': category if type(category) is str and category in DIAGNOSTIC_REASONS | {
+              'internal_failure', 'barrier_timeout', 'artifact_network_failed',
+              'artifact_listing_unstable'} else 'internal_failure',
+          'reason': reason if type(reason) is str and reason in DIAGNOSTIC_REASONS else 'other',
+          'error_type': name if name in types else 'other',
+          'errno': code if type(code) is int and 0 <= code <= 65535 else None},
+          sort_keys=True), file=sys.stderr)
 
 
 def _canonical(value):
@@ -175,7 +208,12 @@ def public_directory(state_file):
     return output
 
 
-def create_state(state_file, ctx, pin_sha256, role):
+def create_state(state_file, ctx, pin_sha256, role, *, installer_bytes=None, installer_sha256=None):
+    require((installer_bytes is None) == (installer_sha256 is None), 'invalid_state')
+    if installer_bytes is not None:
+        require(type(installer_bytes) is bytes and 0 < len(installer_bytes) <= _PRIVATE_LIMIT and
+                isinstance(installer_sha256, str) and _HEX.fullmatch(installer_sha256), 'invalid_state')
+        require(hashlib.sha256(installer_bytes).hexdigest() == installer_sha256, 'install_verify_failed')
     state_file = canonical_state_path(state_file)
     require(set(ctx) == {'run', 'attempt', 'sha'} and
             all(isinstance(ctx[key], str) and re.fullmatch('[1-9][0-9]*', ctx[key])
@@ -198,12 +236,14 @@ def create_state(state_file, ctx, pin_sha256, role):
         for name in ('home', 'tmp', 'registry', 'home/config', 'home/data', 'home/cache', 'home/runtime'):
             (root / name).mkdir(mode=0o700)
         installer = Path(__file__).resolve().parents[1] / 'scripts/install.sh'
-        raw = _file_bytes(installer, private=False)
+        raw = _file_bytes(installer, private=False) if installer_bytes is None else installer_bytes
         fd = os.open(root / 'install.sh', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, 'wb') as copy:
             copy.write(raw)
             copy.flush()
             os.fsync(copy.fileno())
+        copied_digest = hashlib.sha256(_file_bytes(root / 'install.sh')).hexdigest()
+        require(copied_digest == hashlib.sha256(raw).hexdigest(), 'install_verify_failed')
         started = clock_sample()
         now = started['continuous_ns'] / 1_000_000_000
         state = {'format': 1, 'ctx': dict(ctx), 'pin_sha256': pin_sha256, 'role': role,
@@ -213,7 +253,7 @@ def create_state(state_file, ctx, pin_sha256, role):
                  'registry': str(root / 'registry'), 'output': str(output),
                  'output_identity': _root_identity(output.stat()),
                  'installer': str(root / 'install.sh'),
-                 'installer_sha256': hashlib.sha256(raw).hexdigest(),
+                 'installer_sha256': copied_digest,
                  'repo': str(Path(__file__).resolve().parents[1]),
                  'python': str(Path(sys.executable).absolute()),
                  'execution_id': 'marmish-installed:' + secrets.token_hex(24),
@@ -892,14 +932,19 @@ def cleanup_state(state, *, runtime_cleanup=None):
     started = clock_sample()
     checks = {name: None for name in CHECKS}
     error = 'cleanup_incomplete'
+    stage = 'cleanup_validate'
     try:
         _validate_state(state)
+        stage = 'cleanup_caffeinate'
         _stop_caffeinate(state)
+        stage = 'cleanup_native'
         _native_cleanup(state)
+        stage = 'cleanup_frontends'
         for record in _registry_records(state, 'child-'):
             require(_process_absent(record['identity']), 'cleanup_incomplete')
         checks['frontend_absent'] = checks['caffeinate_absent'] = True
         checks['mdk_absent'] = True
+        stage = 'cleanup_runtime'
         if runtime_cleanup is not None:
             result = runtime_cleanup(state)
             require(isinstance(result, dict) and result.get('workers_absent') is True
@@ -908,6 +953,7 @@ def cleanup_state(state, *, runtime_cleanup=None):
             require(all(not (Path(state['root']) / name / 'engine').exists()
                         for name in ('server', 'client')), 'cleanup_incomplete')
         checks['workers_absent'] = checks['engine_cleanup_ready'] = True
+        stage = 'cleanup_uninstall'
         prefix = Path(state['prefix'])
         marker = prefix / '.marmish-install.json'
         if os.path.lexists(marker):
@@ -922,6 +968,7 @@ def cleanup_state(state, *, runtime_cleanup=None):
                         (marker, prefix / 'current', prefix / 'bin/marmish', prefix / 'bin/marmishd')),
                 'uninstall_failed')
         checks['uninstall_complete'] = True
+        stage = 'cleanup_final'
         _native_cleanup(state)
         _validate_state(state)
         pointer = Path(state['state_file'])
@@ -931,6 +978,7 @@ def cleanup_state(state, *, runtime_cleanup=None):
                 'state_identity_changed')
         root = Path(state['root'])
         parent = _directory_fd(root.parent)
+        stage = 'cleanup_remove'
         try:
             current = os.stat(root.name, dir_fd=parent, follow_symlinks=False)
             require(_root_identity(current) == state['root_identity'], 'state_identity_changed')
@@ -941,8 +989,10 @@ def cleanup_state(state, *, runtime_cleanup=None):
         pointer.unlink()
         checks['root_removed'] = True
         error = None
-    except (OSError, SmokeError, SandboxError, ValueError, KeyError) as failure:
+    except (OSError, SmokeError, SandboxError, ValueError, KeyError, TypeError, AttributeError,
+            RuntimeError) as failure:
         if isinstance(failure, SmokeError) and str(failure) == 'uninstall_failed':
             error = 'uninstall_failed'
+        failure_diagnostic(failure, stage=stage, category=error)
     return {'outcome': 'complete' if error is None else 'incomplete', 'checks': checks,
             'error': error, 'duration_ns': elapsed(started, clock_sample())['elapsed_ns']}

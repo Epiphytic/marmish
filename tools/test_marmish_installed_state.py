@@ -1,5 +1,6 @@
 """Ownership and real subprocess tests for installed CI's private boundary."""
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,91 @@ from unittest.mock import patch
 import marmish_installed_state as state
 from mdk_smoke import SmokeError
 from test_marmish_install import archive_bytes, load_installer, VERSION, TARGET
+
+
+class InstallerHandoff(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.base = Path(self.temporary.name).resolve()
+        self.pointer = self.base / 'pointer.json'
+        self.ctx = {'run': '123', 'attempt': '2', 'sha': 'a' * 40}
+        self.raw = b'#!/bin/sh\nexit 0\n'
+        self.digest = hashlib.sha256(self.raw).hexdigest()
+
+    def test_verified_handoff_skips_unsafe_checkout_but_default_remains_strict(self):
+        checkout = self.base / 'checkout'
+        (checkout / 'tools').mkdir(parents=True)
+        (checkout / 'scripts').mkdir()
+        (checkout / 'scripts/install.sh').write_bytes(self.raw)
+        checkout.chmod(0o775)
+        with patch.object(state, '__file__', str(checkout / 'tools/state.py')):
+            with self.assertRaisesRegex(SmokeError, 'unsafe_state_path'):
+                state.create_state(self.pointer, self.ctx, 'b' * 64, 'linux-x64')
+            self.assertFalse(self.pointer.exists())
+            value = state.create_state(self.pointer, self.ctx, 'b' * 64, 'linux-x64',
+                installer_bytes=self.raw, installer_sha256=self.digest)
+        self.addCleanup(lambda: shutil.rmtree(value['root'], ignore_errors=True))
+        self.assertEqual(state.load_state(self.pointer), value)
+        self.assertEqual(state.read_private(value['installer']), self.raw)
+        self.assertEqual(value['installer_sha256'], self.digest)
+        self.assertEqual(Path(value['installer']).stat().st_mode & 0o777, 0o600)
+
+    def test_invalid_handoff_rejected_before_snapshot_or_any_root_allocation(self):
+        cases = [dict(installer_bytes=self.raw), dict(installer_sha256=self.digest),
+                 dict(installer_bytes=b'', installer_sha256=self.digest),
+                 dict(installer_bytes=bytearray(self.raw), installer_sha256=self.digest),
+                 dict(installer_bytes=self.raw, installer_sha256='0' * 64),
+                 dict(installer_bytes=self.raw, installer_sha256='A' * 64),
+                 dict(installer_bytes=b'x' * (state._PRIVATE_LIMIT + 1), installer_sha256=self.digest)]
+        for options in cases:
+            with self.subTest(keys=tuple(options)), patch.object(state, '_snapshot_unreadable') as snapshot, \
+                    patch.object(state.tempfile, 'mkdtemp') as allocate:
+                with self.assertRaises(SmokeError):
+                    state.create_state(self.pointer, self.ctx, 'b' * 64, 'linux-x64', **options)
+                snapshot.assert_not_called()
+                allocate.assert_not_called()
+        self.assertFalse(self.pointer.exists())
+        self.assertFalse(self.pointer.with_name('pointer.json.public').exists())
+
+    def test_copy_digest_is_read_back_before_pointer_is_persisted(self):
+        original = state._file_bytes
+        def corrupted(path, *args, **kwargs):
+            if Path(path).name == 'install.sh':
+                return b'corrupted'
+            return original(path, *args, **kwargs)
+        with patch.object(state, '_file_bytes', side_effect=corrupted):
+            with self.assertRaisesRegex(SmokeError, 'install_verify_failed'):
+                state.create_state(self.pointer, self.ctx, 'b' * 64, 'linux-x64',
+                    installer_bytes=self.raw, installer_sha256=self.digest)
+        self.assertFalse(self.pointer.exists())
+
+
+class FiniteDiagnostics(unittest.TestCase):
+    def test_only_allowlisted_reason_and_stage_are_emitted(self):
+        for failure, reason in [(SmokeError('unsafe_state_file'), 'unsafe_state_file'),
+                                (SmokeError('/private/SECRET'), 'other'),
+                                (RuntimeError('SECRET'), 'other')]:
+            with self.subTest(reason=reason), patch('sys.stderr', new_callable=io.StringIO) as output:
+                state.failure_diagnostic(failure, stage=['SECRET'], category={'SECRET': 1})
+                value = json.loads(output.getvalue())
+            self.assertEqual(value['reason'], reason)
+            self.assertEqual(value['stage'], 'other')
+            self.assertEqual(value['category'], 'internal_failure')
+            self.assertNotIn('SECRET', output.getvalue())
+
+    def test_cleanup_stage_retained_for_unknown_exception_without_changing_public_schema(self):
+        private = {'root': '/not-used'}
+        with patch.object(state, '_validate_state'), \
+                patch.object(state, '_stop_caffeinate', side_effect=TypeError('SECRET')), \
+                patch('sys.stderr', new_callable=io.StringIO) as output:
+            result = state.cleanup_state(private)
+        self.assertEqual(set(result), {'outcome', 'checks', 'error', 'duration_ns'})
+        self.assertEqual(result['outcome'], 'incomplete')
+        value = json.loads(output.getvalue())
+        self.assertEqual(value['stage'], 'cleanup_caffeinate')
+        self.assertEqual(value['reason'], 'other')
+        self.assertNotIn('SECRET', output.getvalue())
 
 
 class InstalledStateTests(unittest.TestCase):

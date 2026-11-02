@@ -635,3 +635,46 @@ Failures emit only finite exception type and bounded numeric errno to aid macOS
 triage. The unchanged public report excludes exception text. Failed cleanup
 retains the private state; the separate `/tmp` pointer parent and sanitized public
 reports also remain for inspection on self-hosted runners after each attempt.
+
+### Pinned installer handoff and finite prerequisite diagnostics amendment
+
+Native run 41393857657 failed before installation on both Linux architectures.
+The suspected cause is the installer source read: `prepare` had already hashed
+the checkout installer against the immutable release pin, but `create_state`
+reread it through the private-state ancestry and file-mode policy. The source
+file or its checkout ancestors may legitimately be group writable; finite
+diagnostics will distinguish the precise check on the next run. Preserve that strict
+default reader and every private pointer/root/file/process/cleanup check.
+Instead add optional keyword-only `installer_bytes` and `installer_sha256` to
+`create_state`; both must be supplied together, with exact nonempty `bytes`
+bounded by the existing private-file limit and a lowercase SHA256 digest.
+Rehash the supplied bytes against that digest before creating state or copying
+them, and record the actual digest of the exact private copy. `prepare` passes
+only its already pin-checked bytes and the pin's expected installer digest.
+The default call retains the existing strict checkout read. Reject malformed,
+partial, oversized or digest-mismatched handoffs before persisting a pointer.
+Uninstall continues using the immutable private copy with its existing rehash.
+
+Failure diagnostics gain a finite allowlisted `reason` alongside finite
+exception type, numeric errno, stage and coarse category. Unknown exception
+messages/reasons, private paths, argv, command output and credentials never
+appear. Add cleanup checkpoints with fixed stage names so failures identify
+validation, caffeinate, native/frontend absence, runtime cleanup, uninstall or
+final removal without changing public report schemas or relaxing fail-closed
+cleanup. Known errors may retain their finite category; unknown errors retain
+the existing coarse fallback. Tests cover writable source ancestry with a
+correct handoff, unchanged strict defaults, all invalid handoffs, pinned CI
+argument forwarding, tampering/private-state checks and sanitized cleanup
+stage/reason diagnostics. Independent Claude design approval precedes code;
+independent Claude code review follows targeted offline tests. No native jobs
+or existing private runner state are used in this increment.
+
+The amendment received independent actual Claude
+[design approval](../reviews/installed-prerequisite-handoff-design.json) and
+[code approval](../reviews/installed-prerequisite-handoff-code.json). Both the
+author and reviewer ran the 44 focused offline state/orchestration tests; all
+passed. The implementation also uses the existing bounded nofollow regular-file
+reader for the source, hashes a strict private readback of the copy, and retains
+cleanup checkpoints for unexpected exception classes. These checks do not
+establish a successful native install or fix the separate macOS process-group
+lifecycle failure.

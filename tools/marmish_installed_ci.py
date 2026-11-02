@@ -3,16 +3,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 from pathlib import Path
 import signal
-import sys
 import time
 
 from mdk_smoke import SmokeError, require
 from marmish_installed import strict_json, target as native_target
 from marmish_installed_release import (
-    VERSION, ROLE_TARGETS, canonical_bytes, load_pin, resolve_release,
+    VERSION, ROLE_TARGETS, MAX_MANIFEST, _read_regular, canonical_bytes, load_pin, resolve_release,
     verify_installed,
 )
 from marmish_installed_rendezvous import (
@@ -22,7 +20,7 @@ from marmish_installed_rendezvous import (
 from marmish_installed_state import (
     cleanup_state, clock_sample, create_state, elapsed, initialize_identity,
     interpreter_info, load_state, public_directory, register_installed,
-    run_bounded,
+    run_bounded, read_private, failure_diagnostic,
 )
 
 REPO = Path(__file__).resolve().parent.parent
@@ -87,11 +85,12 @@ def remaining(state, deadline, cap):
 
 
 def prepare(args, ctx, pin, report):
-    installer_raw = (REPO / 'scripts/install.sh').read_bytes()
+    installer_raw = _read_regular(REPO / 'scripts/install.sh', MAX_MANIFEST)
     require(hashlib.sha256(installer_raw).hexdigest() == pin['installer_sha256'],
             'install_verify_failed')
     require(native_target() == ROLE_TARGETS[args.role], 'install_verify_failed')
-    state = create_state(args.state, ctx, pin_digest(pin), args.role)
+    state = create_state(args.state, ctx, pin_digest(pin), args.role,
+                         installer_bytes=installer_raw, installer_sha256=pin['installer_sha256'])
     require(state['installer_sha256'] == pin['installer_sha256'],
             'install_verify_failed')
     result = measure(report, 'install', lambda: run_bounded(
@@ -103,7 +102,7 @@ def prepare(args, ctx, pin, report):
     require(not result['output_limited'], 'installer_output_limit')
     require(result['returncode'] == 0 and result['cleanup'] == 'complete',
             'installer_refused')
-    require(hashlib.sha256(Path(state['installer']).read_bytes()).hexdigest() ==
+    require(hashlib.sha256(read_private(Path(state['installer']))).hexdigest() ==
             pin['installer_sha256'], 'install_verify_failed')
     manifest = (args.pin_dir / pin['targets'][args.role]['manifest_name']).read_bytes()
     verified = measure(report, 'verify', lambda: verify_installed(
@@ -194,7 +193,8 @@ def cleanup(args, ctx, digest):
                     'cleanup_incomplete')
             record['pin_sha256'] = state['pin_sha256']
             record.update(cleanup_state(state, runtime_cleanup=None))
-    except Exception:
+    except Exception as failure:
+        failure_diagnostic(failure, stage='cleanup_load', category='cleanup_incomplete')
         record.update(outcome='incomplete', checks=checks,
                       error='cleanup_incomplete',
                       duration_ns=max(0, clock_sample()['continuous_ns'] -
@@ -257,15 +257,7 @@ def main():
         report.update(outcome='failed', error=category)
         # Finite diagnostics distinguish platform failures without exposing argv,
         # command output, private paths or exception messages.
-        allowed_types = {'AttributeError', 'ChildProcessError', 'PermissionError',
-                         'FileNotFoundError', 'OSError', 'RuntimeError', 'ValueError',
-                         'TypeError', 'KeyError', 'SmokeError', 'KeyboardInterrupt'}
-        name = type(error).__name__
-        code = getattr(error, 'errno', None)
-        print(json.dumps({'kind': 'installed-failure', 'stage': report['stage'],
-              'category': category, 'error_type': name if name in allowed_types else 'other',
-              'errno': code if type(code) is int and 0 <= code <= 65535 else None},
-              sort_keys=True), file=sys.stderr)
+        failure_diagnostic(error, stage=report['stage'], category=category)
     write_record(report_path, report)
     return 0 if report['outcome'] == 'passed' else 1
 
