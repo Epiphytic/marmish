@@ -934,10 +934,46 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
     fn setup() -> (tempfile::TempDir, Journal) {
-        let temp = tempfile::tempdir().unwrap();
-        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let temp = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+            .unwrap();
         let j = Journal::open(&temp.path().join("journal.db"), &[7; 32], &"ab".repeat(32)).unwrap();
         (temp, j)
+    }
+    #[test]
+    fn symlink_ancestors_and_immediate_parent_are_rejected() {
+        use std::os::unix::fs::{DirBuilderExt, symlink};
+
+        let (temp, journal) = setup();
+        drop(journal);
+        let real = temp.path().join("real");
+        let child = real.join("child");
+        fs::DirBuilder::new().mode(0o700).create(&real).unwrap();
+        fs::DirBuilder::new().mode(0o700).create(&child).unwrap();
+        let alias = temp.path().join("alias");
+        let alias2 = temp.path().join("alias2");
+        symlink(&real, &alias).unwrap();
+        symlink(&child, &alias2).unwrap();
+
+        let through_ancestor = alias.join("child/journal.db");
+        assert!(matches!(
+            Journal::open(&through_ancestor, &[7; 32], &"ab".repeat(32)),
+            Err(Error::Storage("journal"))
+        ));
+        let path = child.join("journal.db");
+        let metadata = fs::symlink_metadata(&path).unwrap();
+        assert!(metadata.is_file());
+        assert_eq!(metadata.len(), 0);
+        assert_eq!(metadata.mode() & 0o777, 0o600);
+        let journal = Journal::open(&path, &[7; 32], &"ab".repeat(32)).unwrap();
+        drop(journal);
+        let journal = Journal::open(&path, &[7; 32], &"ab".repeat(32)).unwrap();
+        drop(journal);
+        assert!(matches!(
+            Journal::open(&alias2.join("journal.db"), &[7; 32], &"ab".repeat(32)),
+            Err(Error::Storage("journal_path"))
+        ));
     }
     fn message() -> Envelope {
         Envelope::message(
