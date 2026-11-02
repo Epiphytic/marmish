@@ -1,0 +1,214 @@
+{
+  "format": 1,
+  "run": "41395347740",
+  "attempt": "1",
+  "sha": "ad0b67cf528be0345a603df00a7ef578471e5887",
+  "run_url": "https://github.com/Epiphytic/marmish/actions/runs/41395347740",
+  "outcome": "failed",
+  "all_roles_assigned_within_five_minutes": true,
+  "relays": [
+    "wss://relay.eu.whitenoise.chat/",
+    "wss://relay.us.whitenoise.chat/"
+  ],
+  "transport_sample_count": 0,
+  "roles": {
+    "linux-arm64": {
+      "outcome": "failed",
+      "stage": "identity_server",
+      "error": "identity_init_failed",
+      "installation": {
+        "archive_sha256": "90e5c44ef9235c0825ec59ecded8909a6f76642f7a8461d8f3418a2f5ef70be6",
+        "installer_sha256": "eac417b4748f0252adef82fe18c1260ef744523ec0ed6b624927dc6b803d0768",
+        "manifest_sha256": "457fd03dbe1e17c8cfb66dd16952518286054f665a8d7a29ef02bf95497edb75",
+        "source_commit": "f609b6ccdc9302aeec661a2ae3692d3ef68b86fa",
+        "target": "aarch64-unknown-linux-gnu",
+        "version": "0.1.0-experimental.2"
+      },
+      "interpreter": {
+        "implementation": "cpython",
+        "path_class": "system",
+        "version": [
+          3,
+          12,
+          3
+        ]
+      },
+      "timing": {
+        "clock": "continuous+monotonic",
+        "stages": {
+          "identity_server": {
+            "active_ns": 254138651,
+            "clock_valid": true,
+            "elapsed_ns": 254139609,
+            "suspended_ns": 958
+          },
+          "install": {
+            "active_ns": 5820256630,
+            "clock_valid": true,
+            "elapsed_ns": 5820257713,
+            "suspended_ns": 1083
+          },
+          "verify": {
+            "active_ns": 62813707,
+            "clock_valid": true,
+            "elapsed_ns": 62812331,
+            "suspended_ns": 0
+          }
+        },
+        "unit": "ns"
+      },
+      "cleanup": {
+        "attempt": "1",
+        "checks": {
+          "caffeinate_absent": true,
+          "engine_cleanup_ready": true,
+          "frontend_absent": true,
+          "mdk_absent": true,
+          "root_removed": true,
+          "uninstall_complete": true,
+          "workers_absent": true
+        },
+        "duration_ns": 219778115,
+        "error": null,
+        "format": 1,
+        "kind": "cleanup-result",
+        "outcome": "complete",
+        "pin_sha256": "ca4be69540aa899414d9739f7945941e619dece88ac280aa74ccb4a6ac24f8eb",
+        "role": "linux-arm64",
+        "run": "41395347740",
+        "sha": "ad0b67cf528be0345a603df00a7ef578471e5887"
+      }
+    },
+    "macos-arm64": {
+      "outcome": "failed",
+      "stage": "install",
+      "error": "internal_failure",
+      "installation": null,
+      "interpreter": null,
+      "timing": {
+        "clock": "continuous+monotonic",
+        "stages": {
+          "install": {
+            "active_ns": 5182864750,
+            "clock_valid": true,
+            "elapsed_ns": 5182862459,
+            "suspended_ns": 0
+          }
+        },
+        "unit": "ns"
+      },
+      "cleanup": {
+        "attempt": "1",
+        "checks": {
+          "caffeinate_absent": true,
+          "engine_cleanup_ready": true,
+          "frontend_absent": true,
+          "mdk_absent": true,
+          "root_removed": null,
+          "uninstall_complete": null,
+          "workers_absent": true
+        },
+        "duration_ns": 43514583,
+        "error": "cleanup_incomplete",
+        "format": 1,
+        "kind": "cleanup-result",
+        "outcome": "incomplete",
+        "pin_sha256": "ca4be69540aa899414d9739f7945941e619dece88ac280aa74ccb4a6ac24f8eb",
+        "role": "macos-arm64",
+        "run": "41395347740",
+        "sha": "ad0b67cf528be0345a603df00a7ef578471e5887"
+      }
+    },
+    "linux-x64": {
+      "installation": {
+        "archive_sha256": "c409afda196314a3033049e21e64339594445eebd4afa3bbbbda0b7d3f6c6f0c",
+        "installer_sha256": "eac417b4748f0252adef82fe18c1260ef744523ec0ed6b624927dc6b803d0768",
+        "manifest_sha256": "b7b87b1d379042dadd73cea8373e747dbf2f0d4db8ce0747510ccd22f33742de",
+        "source_commit": "f609b6ccdc9302aeec661a2ae3692d3ef68b86fa",
+        "target": "x86_64-unknown-linux-gnu",
+        "version": "0.1.0-experimental.2"
+      },
+      "interpreter": {
+        "implementation": "cpython",
+        "path_class": "system",
+        "version": [
+          3,
+          14,
+          4
+        ]
+      },
+      "timing": {
+        "clock": "continuous+monotonic",
+        "stages": {
+          "identity_client": {
+            "active_ns": 2315905189,
+            "clock_valid": true,
+            "elapsed_ns": 2315905049,
+            "suspended_ns": 0
+          },
+          "identity_server": {
+            "active_ns": 2362240301,
+            "clock_valid": true,
+            "elapsed_ns": 2362245640,
+            "suspended_ns": 5339
+          },
+          "install": {
+            "active_ns": 3985350746,
+            "clock_valid": true,
+            "elapsed_ns": 3985351728,
+            "suspended_ns": 982
+          },
+          "verify": {
+            "active_ns": 74054923,
+            "clock_valid": true,
+            "elapsed_ns": 74054411,
+            "suspended_ns": 0
+          }
+        },
+        "unit": "ns"
+      },
+      "outcome": "failed",
+      "stage": "barrier",
+      "cleanup": {
+        "attempt": "1",
+        "checks": {
+          "caffeinate_absent": true,
+          "engine_cleanup_ready": true,
+          "frontend_absent": true,
+          "mdk_absent": true,
+          "root_removed": true,
+          "uninstall_complete": true,
+          "workers_absent": true
+        },
+        "duration_ns": 219304296,
+        "error": null,
+        "format": 1,
+        "kind": "cleanup-result",
+        "outcome": "complete",
+        "pin_sha256": "ca4be69540aa899414d9739f7945941e619dece88ac280aa74ccb4a6ac24f8eb",
+        "role": "linux-x64",
+        "run": "41395347740",
+        "sha": "ad0b67cf528be0345a603df00a7ef578471e5887"
+      },
+      "error": "barrier_timeout"
+    }
+  },
+  "notes": [
+    "Successful individual setup stages are reported separately from overall acceptance.",
+    "Linux ARM64 identity failure cause was not retained; complete cleanup passed.",
+    "macOS owned process absence checks passed; uninstall and root removal were not proven.",
+    "No remote command ran. Command latency and throughput metrics have zero samples.",
+    "Linux AMD64 initialized both identities, then timed out at the all-three barrier because peer prerequisites failed; final cleanup complete.",
+    "Final cleanup-result is authoritative; installation-result cleanup is a provisional snapshot written before final cleanup.",
+    "Clock samples are taken sequentially; sub-10-microsecond active/elapsed differences reflect clock-read skew and are not evidence of actual suspension."
+  ],
+  "runner_assignment_evidence": {
+    "source": "GitHub Actions run/job metadata",
+    "created_at": "2026-11-02T05:40:02Z",
+    "platform_started_at": {
+      "linux-x64": "2026-11-02T05:42:12Z",
+      "linux-arm64": "2026-11-02T05:43:01Z",
+      "macos-arm64": "2026-11-02T05:42:12Z"
+    }
+  }
+}

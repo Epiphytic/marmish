@@ -1,0 +1,61 @@
+{
+  "format": 1,
+  "run": "41393857657",
+  "attempt": "1",
+  "sha": "595edf62857fdf6e6d15d2735f1a062bff1900a5",
+  "outcome": "failed",
+  "all_roles_assigned_within_five_minutes": true,
+  "transport_sample_count": 0,
+  "run_url": "https://github.com/Epiphytic/marmish/actions/runs/41393857657",
+  "roles": {
+    "linux-x64": {
+      "outcome": "failed",
+      "stage": "pin",
+      "category": "internal_failure",
+      "identity_initialized": false,
+      "cleanup": "not-started",
+      "timing": {
+        "clock": "continuous+monotonic",
+        "stages": {},
+        "unit": "ns"
+      }
+    },
+    "linux-arm64": {
+      "outcome": "failed",
+      "stage": "pin",
+      "category": "internal_failure",
+      "identity_initialized": false,
+      "cleanup": "not-started",
+      "timing": {
+        "clock": "continuous+monotonic",
+        "stages": {},
+        "unit": "ns"
+      }
+    },
+    "macos-arm64": {
+      "outcome": "failed",
+      "stage": "install",
+      "category": "internal_failure",
+      "identity_initialized": false,
+      "cleanup": "incomplete",
+      "timing": {
+        "clock": "continuous+monotonic",
+        "stages": {
+          "install": {
+            "active_ns": 5789199875,
+            "clock_valid": true,
+            "elapsed_ns": 5789198542,
+            "suspended_ns": 0
+          }
+        },
+        "unit": "ns"
+      }
+    }
+  },
+  "notes": [
+    "Release resolution passed. All runners started within five minutes.",
+    "The private /tmp pointer parent passed validation; Linux then failed before installer invocation. The strict checkout installer path is under investigation.",
+    "macOS failed during bounded installer execution; the finite diagnostic identifies SmokeError but does not yet distinguish its internal reason. Owned process absence checks passed; uninstall and root removal remain unproven.",
+    "No remote command ran. Transport sample count is zero and no latency or throughput is inferred from failed installation time."
+  ]
+}

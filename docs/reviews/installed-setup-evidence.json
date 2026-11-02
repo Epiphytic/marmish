@@ -1,0 +1,59 @@
+{
+  "reviewer": "Claude Code",
+  "model": "claude-opus-5-5",
+  "permission_mode": "auto",
+  "scope": "Setup evidence compared with native artifacts",
+  "review": {
+    "verdict": "APPROVED",
+    "scope": "Evidence docs only: docs/validation/installed-prerequisites-41393857657.json, installed-prerequisites-41395347740.json, installed-prerequisites-41395347740.md. Compared with /tmp/marmish-a2-public-records and /tmp/marmish-a3-{arm-result,macos-result,x64-final,linux-identity}. Read-only: I ran no tests or process scans, changed no files and opened no private state.",
+    "blockers": [],
+    "confirmed": {
+      "a2_41393857657_json": "Matches the A2 artifacts exactly. Both Linux roles failed at stage 'pin' with internal_failure, empty timing stages, and cleanup 'not-started' (all checks null, duration 0). macOS failed at 'install': elapsed_ns 5789198542, active_ns 5789199875, suspended 0. Its cleanup is 'incomplete': the five owned-process checks are true and root_removed/uninstall_complete are null, which matches the note 'uninstall and root removal remain unproven'. Transport sample count is 0.",
+      "a3_41395347740_json": "Checked field by field. For all three roles the cleanup, timing, installation, interpreter, stage, error, outcome, sha and run fields equal the downloaded installation-result.json and cleanup-result.json values. The linux-x64 timing and relays also equal the identity-ready record. The two copies of the identity-ready record (linux-identity and x64-final/identity-ready) are byte-identical. The installer, archive and manifest digests and source_commit f609b6c match the A2 release-pin record.json for the same 0.1.0-experimental.2 release.",
+      "unit_conversions": "All conversions are correct and use elapsed_ns: x64 install 3985351728 ns = 3.985 s; x64 server identity 2362245640 = 2.362 s; x64 client identity 2315905049 = 2.316 s; ARM install 5820257713 = 5.820 s; ARM server-identity failure 254139609 = 254 ms; macOS install failure 5182862459 = 5.183 s.",
+      "failed_vs_successful": "Handled honestly. The table lists only stages that completed. The three failed-stage durations (ARM identity_server, macOS install, x64 barrier, which has no timing) appear only in the prose and are stated to be excluded. Overall outcome is 'failed' for every role.",
+      "sample_counts": "Each table row shows 1 sample. transport_sample_count is 0 in both JSONs. The docs explicitly say no percentile can be inferred and no relay latency or throughput is claimed.",
+      "cleanup": "Both Linux roles show all 7 checks true, outcome complete and error null. macOS shows 5 checks true, 2 null, outcome incomplete and error cleanup_incomplete. The docs report this accurately and do not claim the later Darwin fix is validated by this run.",
+      "secrets": "No secrets in the docs. The identity-ready artifact contains client and server hex identifiers and a nonce. The docs do not copy them, and a grep for those values and for nsec/secret/token/key/nonce found nothing."
+    },
+    "findings": [
+      {
+        "severity": "should-fix",
+        "file": "docs/validation/installed-prerequisites-41395347740.md",
+        "issue": "The phrase 'These are setup measurements, including owned subprocess cleanup' is ambiguous and the artifacts do not support it. Final cleanup is timed separately in cleanup-result duration_ns (ARM 219.778 ms, x64 219.304 ms, macOS 43.515 ms) and is not inside the stage elapsed_ns values. A reader could think the table figures include final cleanup.",
+        "suggestion": "Say that per-stage times cover only work inside each stage, and that final cleanup is timed separately (optionally listing the three durations)."
+      },
+      {
+        "severity": "minor",
+        "file": "docs/validation/installed-prerequisites-41395347740.md",
+        "issue": "The 'verify' stage succeeded on both Linux roles (ARM 62.812 ms, x64 74.054 ms) but is missing from the successful-operation table, even though the table looks like a complete list.",
+        "suggestion": "Add the two rows, or state that verify is omitted from the table."
+      },
+      {
+        "severity": "minor",
+        "file": "docs/validation/installed-prerequisites-41395347740.json",
+        "issue": "In installation-result.json, the linux-arm64 and linux-x64 'cleanup' field reads 'incomplete', but the final cleanup-result reads 'complete'. The evidence correctly uses the final cleanup-result, but it never explains the discrepancy, so someone re-checking against the raw artifact could think it is an error.",
+        "suggestion": "Add a note that the cleanup field in installation-result is a snapshot from before final cleanup, and that cleanup-result is the source of truth."
+      },
+      {
+        "severity": "minor",
+        "file": "both JSONs",
+        "issue": "In 5 of 9 stages, elapsed_ns is slightly smaller than active_ns, by 140 to 2291 ns (e.g. ARM verify, x64 identity_client, x64 verify, both macOS installs), and suspended_ns is clamped to 0. Where suspended_ns is non-zero (958, 1083, 982, 5339 ns), the values look like clock-read skew, not real suspension. None of this affects the 3-decimal figures, and the docs make no suspension claim.",
+        "suggestion": "Optionally note that differences under 10 \u00b5s between the clocks are read skew."
+      },
+      {
+        "severity": "minor",
+        "file": "both JSONs / md",
+        "issue": "These artifacts cannot verify 'all_roles_assigned_within_five_minutes': true, because they contain no job timestamps. The same applies to the A2 notes about the '/tmp pointer parent' and 'SmokeError'. Those facts must come from the run logs or job metadata.",
+        "suggestion": "Name the source of these claims, e.g. GitHub job start times, so they can be traced."
+      },
+      {
+        "severity": "minor",
+        "file": "both JSONs",
+        "issue": "The two JSONs use different field names and shapes: A2 has 'category' and a 'cleanup' string, while A3 has 'error' and a 'cleanup' object. A3 also has no release-pin artifact of its own in the downloaded set; its digests are linked to the release only through matching A2 values and the embedded pin_sha256 ca4be695\u2026",
+        "suggestion": "Acceptable for frozen historical evidence. Consider a short format note, or including the A3 release-pin record digest."
+      }
+    ],
+    "transport_claims": "None made. Both documents state that no remote command ran and that latency and throughput have zero samples."
+  }
+}
