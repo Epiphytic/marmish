@@ -1,0 +1,87 @@
+{
+  "schema": 1,
+  "source_binding": "uncommitted reviewed-script snapshot; run identifiers are local fixture binding only",
+  "binary_sha256": "a27ba1a284cf6658c88fce0d67680d09b2f3c5d85790dfa1948a5f435771b542",
+  "script_sha256": "e0e7f2f58a5189e516df344bbc41170cdffa8347fd7b9b8c1f2e7ee0a8adeca2",
+  "serve_exit": 0,
+  "native": {
+    "category": null,
+    "cleanup_ok": true,
+    "elapsed_ms": 84030,
+    "error": null,
+    "ok": true,
+    "phase": "v0.2-phase1",
+    "platform": "linux",
+    "protocol": "marmish-foundation/2",
+    "relay_count": 1,
+    "route": "always",
+    "runtime_cleanup_ok": true,
+    "samples": [
+      {
+        "bytes": 0,
+        "bytes_per_second": null,
+        "milliseconds": 44922,
+        "sha256": "",
+        "stage": "activation_cold"
+      },
+      {
+        "bytes": 66,
+        "bytes_per_second": 25,
+        "milliseconds": 2620,
+        "sha256": "75ca6ae85a4c66ef6c19afcad7a472b5512dea41ba1a6149a39367e5ebbea6c4",
+        "stage": "alice_to_bob"
+      },
+      {
+        "bytes": 66,
+        "bytes_per_second": 26,
+        "milliseconds": 2500,
+        "sha256": "75ca6ae85a4c66ef6c19afcad7a472b5512dea41ba1a6149a39367e5ebbea6c4",
+        "stage": "bob_to_alice"
+      },
+      {
+        "bytes": 0,
+        "bytes_per_second": null,
+        "milliseconds": 19716,
+        "sha256": "",
+        "stage": "restart_activation_warm"
+      },
+      {
+        "bytes": 66,
+        "bytes_per_second": 24,
+        "milliseconds": 2651,
+        "sha256": "75ca6ae85a4c66ef6c19afcad7a472b5512dea41ba1a6149a39367e5ebbea6c4",
+        "stage": "restart_alice_to_bob"
+      },
+      {
+        "bytes": 66,
+        "bytes_per_second": 28,
+        "milliseconds": 2293,
+        "sha256": "75ca6ae85a4c66ef6c19afcad7a472b5512dea41ba1a6149a39367e5ebbea6c4",
+        "stage": "restart_bob_to_alice"
+      }
+    ],
+    "schema": 1,
+    "stage": "completed",
+    "state_cleanup_ok": true,
+    "target": "x86_64"
+  },
+  "cleanup": {
+    "schema": 1,
+    "run_id": 20261102,
+    "run_attempt": 1,
+    "source_sha": "668ea74af911b521ab4e94fdf819bbfe800e7ed2",
+    "relay_children_reaped": true,
+    "private_state_removed": true,
+    "readiness_native_cleanup_ok": true,
+    "supervisor_reaped_by_this_step": false
+  },
+  "readiness": {
+    "schema": 1,
+    "run_id": 20261102,
+    "run_attempt": 1,
+    "source_sha": "668ea74af911b521ab4e94fdf819bbfe800e7ed2",
+    "ready": true,
+    "readiness": "native_encrypted_foundation",
+    "relay_url": "ws://ydlbdocjj7xmkjrk3nzglmuopq2btbrex65g2yqkf6twx3wem55n33id.onion/relay"
+  }
+}

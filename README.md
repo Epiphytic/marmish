@@ -9,6 +9,11 @@ Source: [GitHub](https://github.com/Epiphytic/marmish) ·
 Marmish is being rebuilt in native Rust using upstream MDK and embedded Arti,
 targeting Tor endpoint support and no mandatory namespace/broker layer. See the
 [v0.2 plan](docs/v0.2-plan.md). The new binaries are not released yet.
+Native encrypted-message/restart validation and measured round-trip latency are
+recorded in [the foundation evidence](docs/validation/v0.2/native-foundation.md).
+The current foundation has independent code approval and passing Linux AMD64
+direct and Arti checks. Remote commands and the hosted platform matrix remain
+pending; this is not yet a usable v0.2 remote shell release.
 
 The Python implementation and the v0.1 instructions below are retained as a
 legacy protocol reference and interoperability fixture. v0.1 development is

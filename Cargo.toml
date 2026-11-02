@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/marmish-core", "crates/marmish-mdk", "crates/marmish-engine", "crates/marmish-prototype", "crates/marmish-vault"]
+members = ["crates/marmish-core", "crates/marmish-mdk", "crates/marmish-engine", "crates/marmish-prototype", "crates/marmish-vault", "crates/marmish-native"]
 resolver = "2"
 
 [workspace.package]
@@ -21,10 +21,16 @@ url = "2"
 rusqlite = { version = "=0.40.1", default-features = false, features = ["bundled-sqlcipher-vendored-openssl"] }
 sha2 = "=0.10.9"
 getrandom = "=0.3.4"
-zeroize = "=1.8.2"
+zeroize = "=1.9.1"
 
 hkdf = "=0.12.4"
 hmac = "=0.12.1"
 
 [patch.crates-io]
 libsqlite3-sys = { git = "https://github.com/rusqlite/rusqlite.git", rev = "5ae7fdf83085c595fd54f977b3a56ccacabaf16b" }
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.dev.package.libsqlite3-sys]
+opt-level = 3

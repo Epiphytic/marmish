@@ -6,8 +6,79 @@ The user replaced the v0.1 architecture on 2026-11-02. The authoritative active
 design is [the v0.2 plan](v0.2-plan.md), Beads `marmish-7nw`. It specifies native
 Rust, upstream MDK, embedded Arti, no mandatory OS namespace/broker and no Python
 runtime. The Python implementation remains available solely as a legacy protocol
-reference and optional cross-version test fixture. v0.2 implementation and
-validation are pending; historical results below do not establish v0.2 support.
+reference and optional cross-version test fixture. The phase-1 native foundation
+has independent integrated code approval; hosted phase gates remain pending.
+A Linux AMD64 release build
+passed real two-identity encrypted direct-relay and onion-through-Arti exchange, durable receipts,
+binary byte preservation, conflicting-ID rejection and encrypted restart; see
+[the scoped evidence and timings](validation/v0.2/native-foundation.md).
+Recovery, route validation, retention/capacity, duplicate-session refusal and
+canonical receipt checks have passing production-API regressions and fresh
+direct/onion live repeats. [The actual round-5 code review](reviews/v0.2-native-code-r5.md)
+approves the integrated offline scope and independently passes 91 native tests
+(90 repository tests plus its additional regression) and 11 vault/helper tests.
+Hosted platforms, remote commands and release acceptance remain pending.
+Historical results below do not establish v0.2 support.
+
+### Native foundation implemented, pending final phase acceptance
+
+`crates/marmish-native` contains the native `marmish` and `marmishd` binaries;
+build them with `cargo build --locked --release -p marmish-native --bins`.
+The resolved production graph uses audited upstream MDK and injected SDK
+WebSocket transport, with one explicit relay ceiling shared by discovery,
+publication and recovery. `--tor auto` routes onion relays through embedded
+Arti and ordinary secure relays directly; `always` routes all relays through
+Arti, while `off` rejects onion relays. No failure changes the configured route.
+There are no public relay defaults.
+
+Named identities exclusively lock private v2 profiles. An atomic manifest records
+random provider references before creating secrets; Ready profiles cannot silently
+regenerate missing keys. Nostr and SQLCipher roots are independent, with separate
+HKDF contexts for native MDK and application-journal databases. Native keychains
+use a separate v2 namespace. Auto can select private file storage only when a
+fresh profile's keychain is unavailable; locked, denied, corrupt or uninitialized
+providers fail closed. Linux defaults to `$XDG_DATA_HOME/marmish/v2` or
+`~/.local/share/marmish/v2`; macOS defaults to
+`~/Library/Application Support/Marmish/v2`. An explicit `--state-dir` overrides
+the profile root, and `-i` currently selects a named identity.
+
+The daemon serializes account operations behind bounded same-UID Unix IPC.
+Current commands initialize identities, run the daemon, query status, open a
+conversation, and send/read foundation payloads. `foundation-check` owns disposable
+Alice/Bob profiles and verifies encrypted binary messages, durable encrypted
+receipts, conflicting-ID rejection, restart and cleanup. This is not a remote
+command or shell interface. Foundation payloads are limited to 16 KiB; the strict
+canonical envelope binds sender, recipient, session, application ID and receipt
+digest to authenticated MLS metadata. Rooms require the dedicated v2 purpose,
+exactly two allowed accounts, one leaf per account, and the authenticated creator
+as sole administrator. Trust-relevant changes revoke accepted rooms.
+
+The native journal records definitely unsubmitted intents separately from
+prepared/ambiguous submissions. It never retries an ambiguous send by creating
+fresh ciphertext. Notification loss pauses publication at the actual transport
+boundary, including retained frozen targets, while exact native work is retained.
+Resuming requires upstream history admitted-and-placed completion with an unchanged
+loss generation. Temporary operational failures preserve trust; definite authority
+changes revoke it. Expected capacity backpressure preserves pending work without
+acknowledgment, and a valid room beyond the 64-room limit is rejected individually.
+Default one-day configurable retention currently prunes local journal payloads;
+it does not promise relay deletion or advertise group retention semantics.
+
+The independently approved [retention amendment](phases/v0.2-phase1-retention.md)
+introduces the fresh `marmish-foundation/2` test protocol, timestamp-bound IDs,
+a persisted seven-day replay floor and transactional collection after both the
+retry horizon and payload TTL expire. Native publication obligations protect
+their metadata. Per-room capacity and fair pending-event attempts prevent one
+full room from blocking every other room. This implementation has integrated
+code approval and passing offline regressions; its deliberately small foundation limits do not
+define the future command protocol's retry or streaming guarantees.
+
+Hosted native platform validation, remote commands and unified client/server role
+configuration, setup/install, full cross-platform command interoperability,
+bulk-throughput measurement and release publication remain subsequent acceptance
+work. Legacy wire compatibility is separately evaluated; no old database or MLS
+state is imported. Consult the evidence above and Beads before treating any phase
+as complete.
 
 The remainder of this document records the v0.1 implementation. Its mandatory
 confinement, daemon-RPC and packaging decisions are historical, not instructions

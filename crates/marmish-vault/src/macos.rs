@@ -1,4 +1,4 @@
-use crate::{Error, KeyRef, Label, Metadata, Purpose, Secret};
+use crate::{Error, KeyRef, Label, Metadata, Namespace, Purpose, Secret};
 use core_foundation::{
     base::{CFType, CFTypeRef, TCFType},
     boolean::CFBoolean,
@@ -76,6 +76,7 @@ impl Drop for UiLease {
 
 pub(super) struct Provider {
     keychain: SecKeychain,
+    namespace: Namespace,
     _ui: UiLease,
 }
 fn status(code: i32) -> Error {
@@ -90,22 +91,30 @@ fn status(code: i32) -> Error {
 fn native(error: security_framework::base::Error) -> Error {
     status(error.code())
 }
-fn service(purpose: Purpose) -> String {
-    format!("marmish.v1.{}", purpose.as_str())
+fn service(namespace: Namespace, purpose: Purpose) -> String {
+    format!("marmish.v{}.{}", namespace.version(), purpose.as_str())
 }
 unsafe fn key(value: CFStringRef) -> CFString {
     // Framework string constants have static lifetime and are retained here.
     unsafe { CFString::wrap_under_get_rule(value) }
 }
 impl Provider {
-    pub(super) fn open_default() -> Result<Self, Error> {
+    pub(super) fn open_default(namespace: Namespace) -> Result<Self, Error> {
         let ui = UiLease::acquire()?;
         let keychain = SecKeychain::default().map_err(native)?;
-        Ok(Self { keychain, _ui: ui })
+        Ok(Self {
+            keychain,
+            namespace,
+            _ui: ui,
+        })
     }
-    pub(super) fn open_keychain(keychain: &SecKeychain) -> Result<Self, Error> {
+    pub(super) fn open_keychain(
+        keychain: &SecKeychain,
+        namespace: Namespace,
+    ) -> Result<Self, Error> {
         Ok(Self {
             keychain: keychain.clone(),
+            namespace,
             _ui: UiLease::acquire()?,
         })
     }
@@ -134,7 +143,7 @@ impl Provider {
             .keychains(std::slice::from_ref(&self.keychain))
             .class(ItemClass::generic_password())
             .case_insensitive(Some(false))
-            .service(&service(purpose))
+            .service(&service(self.namespace, purpose))
             .load_attributes(!data)
             .load_data(data);
         if !data {
@@ -169,7 +178,7 @@ impl Provider {
                 (key(kSecUseKeychain), self.keychain.as_CFType()),
                 (
                     key(kSecAttrService),
-                    CFString::new(&service(reference.purpose())).as_CFType(),
+                    CFString::new(&service(self.namespace, reference.purpose())).as_CFType(),
                 ),
                 (
                     key(kSecAttrAccount),
@@ -269,11 +278,16 @@ impl Provider {
             }
             for item in items {
                 let attrs = item.simplify_dict().ok_or(Error::BackendFailure)?;
-                if attrs.get("svce").map(String::as_str) != Some(service(purpose).as_str()) {
+                if attrs.get("svce").map(String::as_str)
+                    != Some(service(self.namespace, purpose).as_str())
+                {
                     return Err(Error::Malformed);
                 }
-                let reference =
-                    KeyRef::new(1, purpose, attrs.get("acct").ok_or(Error::Malformed)?)?;
+                let reference = KeyRef::new(
+                    self.namespace.version(),
+                    purpose,
+                    attrs.get("acct").ok_or(Error::Malformed)?,
+                )?;
                 if !seen.insert(reference.clone()) {
                     return Err(Error::Ambiguous);
                 }
@@ -289,6 +303,21 @@ impl Provider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn namespaces_have_disjoint_service_names() {
+        assert_eq!(
+            service(Namespace::Legacy, Purpose::Nostr),
+            "marmish.v1.nostr"
+        );
+        assert_eq!(
+            service(Namespace::MarmishV2, Purpose::Nostr),
+            "marmish.v2.nostr"
+        );
+        assert_eq!(
+            service(Namespace::MarmishV2, Purpose::Sqlcipher),
+            "marmish.v2.sqlcipher"
+        );
+    }
     #[test]
     fn native_errors_are_sanitized() {
         for code in [-25308, -25293, -128] {

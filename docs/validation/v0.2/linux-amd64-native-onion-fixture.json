@@ -1,0 +1,85 @@
+{
+  "schema": 1,
+  "source_binding": "uncommitted local immutable script/binary snapshots; run identifiers only fixture binding",
+  "binary_sha256": "cdc0e1f0096a507b0272cb3bd3490049db9228e27052be5c3347629b3ab5c7f6",
+  "script_sha256": "ff3844c97d8a692954a03ffc745d4779eff7ae2fa4d253eb9df31f806b143269",
+  "serve_exit": 0,
+  "readiness_observed": true,
+  "native": {
+    "category": null,
+    "cleanup_ok": true,
+    "elapsed_ms": 62310,
+    "error": null,
+    "ok": true,
+    "phase": "v0.2-phase1",
+    "platform": "linux",
+    "protocol": "marmish-foundation/1",
+    "relay_count": 1,
+    "route": "always",
+    "runtime_cleanup_ok": true,
+    "samples": [
+      {
+        "bytes": 0,
+        "bytes_per_second": null,
+        "milliseconds": 27838,
+        "sha256": "",
+        "stage": "activation_cold"
+      },
+      {
+        "bytes": 66,
+        "bytes_per_second": 33,
+        "milliseconds": 1990,
+        "sha256": "75ca6ae85a4c66ef6c19afcad7a472b5512dea41ba1a6149a39367e5ebbea6c4",
+        "stage": "alice_to_bob"
+      },
+      {
+        "bytes": 66,
+        "bytes_per_second": 35,
+        "milliseconds": 1834,
+        "sha256": "75ca6ae85a4c66ef6c19afcad7a472b5512dea41ba1a6149a39367e5ebbea6c4",
+        "stage": "bob_to_alice"
+      },
+      {
+        "bytes": 0,
+        "bytes_per_second": null,
+        "milliseconds": 16005,
+        "sha256": "",
+        "stage": "restart_activation_warm"
+      },
+      {
+        "bytes": 66,
+        "bytes_per_second": 26,
+        "milliseconds": 2508,
+        "sha256": "75ca6ae85a4c66ef6c19afcad7a472b5512dea41ba1a6149a39367e5ebbea6c4",
+        "stage": "restart_alice_to_bob"
+      },
+      {
+        "bytes": 66,
+        "bytes_per_second": 31,
+        "milliseconds": 2099,
+        "sha256": "75ca6ae85a4c66ef6c19afcad7a472b5512dea41ba1a6149a39367e5ebbea6c4",
+        "stage": "restart_bob_to_alice"
+      }
+    ],
+    "schema": 1,
+    "stage": "completed",
+    "state_cleanup_ok": true,
+    "target": "x86_64"
+  },
+  "cleanup": {
+    "schema": 1,
+    "run_id": 20261102,
+    "run_attempt": 2,
+    "source_sha": "668ea74af911b521ab4e94fdf819bbfe800e7ed2",
+    "relay_children_reaped": true,
+    "private_state_removed": true,
+    "readiness_native_cleanup_ok": true,
+    "supervisor_reaped_by_this_step": false
+  },
+  "supervisor_reaped_by_owned_parent": true,
+  "owned_outer_root_removed": true,
+  "retained_files": [
+    "final-public.json",
+    "ready-public.json"
+  ]
+}

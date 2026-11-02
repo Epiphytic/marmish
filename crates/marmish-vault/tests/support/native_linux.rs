@@ -1,7 +1,7 @@
 #![cfg(target_os = "linux")]
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use marmish_vault::{Error, KeyRef, Label, Purpose, Secret, Vault};
+use marmish_vault::{Error, KeyRef, Label, Namespace, Purpose, Secret, Vault};
 use std::io::Write;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
@@ -149,6 +149,7 @@ fn isolated_checks(root: &Path) {
         std::thread::sleep(Duration::from_millis(25));
     };
     round_trip(&vault);
+    v2_named_keys_are_separate_from_legacy(&vault);
     let service =
         secret_service::blocking::SecretService::connect(secret_service::EncryptionType::Dh)
             .unwrap();
@@ -202,6 +203,36 @@ fn round_trip(vault: &Vault) {
     assert!(!String::from_utf8(serde_json::to_vec(&listed).unwrap())
         .unwrap()
         .contains(&STANDARD.encode(secret.as_bytes())));
+}
+
+fn v2_named_keys_are_separate_from_legacy(legacy: &Vault) {
+    let native = Vault::open_namespaced(Namespace::MarmishV2).unwrap();
+    native.probe().unwrap();
+    assert!(native.list().unwrap().is_empty());
+    let colliding = KeyRef::new(2, Purpose::Nostr, &"11".repeat(32)).unwrap();
+    assert!(matches!(native.load(&colliding), Err(Error::Missing)));
+    for (byte, purpose, label) in [
+        (0x11, Purpose::Nostr, "alpha identity"),
+        (0x22, Purpose::Sqlcipher, "alpha storage"),
+        (0x33, Purpose::Nostr, "beta identity"),
+        (0x44, Purpose::Sqlcipher, "beta storage"),
+    ] {
+        let reference = KeyRef::new(2, purpose, &format!("{byte:02x}").repeat(32)).unwrap();
+        native
+            .create(
+                &reference,
+                &Label::new(label).unwrap(),
+                &Secret::from_bytes([byte; 32]),
+            )
+            .unwrap();
+        assert_eq!(native.load(&reference).unwrap().as_bytes(), &[byte; 32]);
+        assert!(matches!(legacy.load(&reference), Err(Error::Malformed)));
+    }
+    assert_eq!(native.list().unwrap().len(), 4);
+    assert_eq!(legacy.list().unwrap().len(), 2);
+    let old = KeyRef::new(1, Purpose::Nostr, &"11".repeat(32)).unwrap();
+    assert!(matches!(native.load(&old), Err(Error::Malformed)));
+    assert_eq!(legacy.load(&old).unwrap().as_bytes(), &[0xa5; 32]);
 }
 
 fn ambiguity_and_bounds(vault: &Vault, service: &secret_service::blocking::SecretService<'_>) {
@@ -286,7 +317,7 @@ fn locked_checks(vault: &Vault, service: &secret_service::blocking::SecretServic
         .unwrap();
     assert_eq!(
         found.locked.len() + found.unlocked.len(),
-        129,
+        133,
         "locked create must not publish an item"
     );
 }

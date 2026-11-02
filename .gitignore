@@ -29,6 +29,12 @@ engine.key
 id_rsa
 id_ed25519
 **/jobs/*/credential
+# Native v0.2 profile metadata, provider files and Tor state
+profile.json
+owner.lock
+arti-state/
+arti-cache/
+**/keys/
 
 # SQLite/SQLCipher databases and all journal modes, including hot sidecars
 *.db-*

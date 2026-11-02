@@ -3,6 +3,28 @@
 use std::fmt;
 use zeroize::Zeroizing;
 
+pub mod helper;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Namespace {
+    Legacy,
+    MarmishV2,
+}
+impl Namespace {
+    pub fn version(self) -> u8 {
+        match self {
+            Self::Legacy => 1,
+            Self::MarmishV2 => 2,
+        }
+    }
+    pub(crate) fn version_str(self) -> &'static str {
+        match self {
+            Self::Legacy => "1",
+            Self::MarmishV2 => "2",
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -34,12 +56,13 @@ impl Purpose {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyRef {
+    version: u8,
     purpose: Purpose,
     id: String,
 }
 impl KeyRef {
     pub fn new(version: u8, purpose: Purpose, id: &str) -> Result<Self, Error> {
-        if version != 1
+        if !matches!(version, 1 | 2)
             || id.len() != 64
             || !id
                 .bytes()
@@ -48,12 +71,13 @@ impl KeyRef {
             return Err(Error::Malformed);
         }
         Ok(Self {
+            version,
             purpose,
             id: id.into(),
         })
     }
     pub fn version(&self) -> u8 {
-        1
+        self.version
     }
     pub fn purpose(&self) -> Purpose {
         self.purpose
@@ -132,12 +156,17 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 pub struct Vault {
+    namespace: Namespace,
     provider: Provider,
 }
 impl Vault {
     pub fn open_default() -> Result<Self, Error> {
+        Self::open_namespaced(Namespace::Legacy)
+    }
+    pub fn open_namespaced(namespace: Namespace) -> Result<Self, Error> {
         Ok(Self {
-            provider: Provider::open_default()?,
+            namespace,
+            provider: Provider::open_default(namespace)?,
         })
     }
     #[cfg(target_os = "macos")]
@@ -145,16 +174,26 @@ impl Vault {
         keychain: &security_framework::os::macos::keychain::SecKeychain,
     ) -> Result<Self, Error> {
         Ok(Self {
-            provider: Provider::open_keychain(keychain)?,
+            namespace: Namespace::Legacy,
+            provider: Provider::open_keychain(keychain, Namespace::Legacy)?,
         })
+    }
+    fn check_reference(&self, reference: &KeyRef) -> Result<(), Error> {
+        if reference.version() == self.namespace.version() {
+            Ok(())
+        } else {
+            Err(Error::Malformed)
+        }
     }
     pub fn probe(&self) -> Result<(), Error> {
         self.provider.probe()
     }
     pub fn create(&self, key_ref: &KeyRef, label: &Label, secret: &Secret) -> Result<(), Error> {
+        self.check_reference(key_ref)?;
         self.provider.create(key_ref, label, secret)
     }
     pub fn load(&self, key_ref: &KeyRef) -> Result<Secret, Error> {
+        self.check_reference(key_ref)?;
         self.provider.load(key_ref)
     }
     pub fn list(&self) -> Result<Vec<Metadata>, Error> {

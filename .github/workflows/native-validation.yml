@@ -1,8 +1,6 @@
-name: Native platform and Marmot validation
+name: Legacy v0.1 platform and Marmot validation
+# Historical fixture only. v0.2 validation lives in v02-native.yml.
 on:
-  push:
-    branches: [master]
-    paths-ignore: ['docs/**', 'README.md', 'AGENTS.md', '.beads/**']
   workflow_dispatch:
 permissions:
   contents: read

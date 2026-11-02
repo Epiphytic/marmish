@@ -1,0 +1,227 @@
+name: v0.2 native foundation
+# Artifact rendezvous binds every job to run_attempt: use Re-run all jobs, not failed jobs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      direct_relay:
+        description: Explicit secure direct relay URL (no default)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: marmish-v02-native
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: never
+  GH_REPO: ${{ github.repository }}
+
+jobs:
+  onion-owner:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Begin bounded owner budget
+        run: echo "V02_OWNER_BEGIN=$(date +%s)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.97.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: v02-onion-owner
+      - name: Build native production binaries
+        run: cargo build --locked --release -p marmish-native --bins
+      - uses: actions/checkout@v4
+        with:
+          repository: Epiphytic/deaddrop
+          ref: b38b2841b081952dc7728da391fe0e26fc7c6181
+          path: .native-deaddrop
+          persist-credentials: false
+      - name: Build only the pinned native relay
+        working-directory: .native-deaddrop
+        run: |
+          test "$(git rev-parse HEAD)" = b38b2841b081952dc7728da391fe0e26fc7c6181
+          cargo build --locked --release -p deaddrop-server --bin deaddrop --target-dir "$RUNNER_TEMP/deaddrop-target"
+      - name: Start owned native relay and prove encrypted onion readiness
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          root=$(mktemp -d "$RUNNER_TEMP/marmish-v02-owner.XXXXXXXX")
+          printf 'V02_OWNER_ROOT=%s\n' "$root" >> "$GITHUB_ENV"
+          remaining=$((V02_OWNER_BEGIN+1730-$(date +%s)))
+          (( remaining > 90 ))
+          if (( remaining > 1500 )); then remaining=1500; fi
+          # Supervisor owns and reaps relay/driver children; no process-wide env overrides.
+          nohup bash scripts/v02-onion-fixture.sh serve \
+            "$RUNNER_TEMP/deaddrop-target/release/deaddrop" "$GITHUB_WORKSPACE/target/release/marmish" \
+            "$root" "$root/readiness.json" "$RUN_ID" "$RUN_ATTEMPT" "$SOURCE_SHA" "$remaining" \
+            > "$root/supervisor-private.log" 2>&1 < /dev/null &
+          supervisor=$!
+          printf '%s\n' "$supervisor" > "$root/supervisor.pid"
+          until_at=$((SECONDS+remaining-65))
+          if (( until_at > SECONDS+840 )); then until_at=$((SECONDS+840)); fi
+          until test -f "$root/readiness.json"; do
+            if test -f "$root/cleanup.json" || ! kill -0 "$supervisor" 2>/dev/null || (( SECONDS >= until_at )); then exit 1; fi
+            sleep 2
+          done
+          mkdir -p "$RUNNER_TEMP/v02-owner-public"
+          cp "$root/readiness.json" "$RUNNER_TEMP/v02-owner-public/readiness.json"
+      - name: Publish immutable readiness while owner remains alive
+        uses: actions/upload-artifact@v4
+        with:
+          name: v02-onion-ready-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/v02-owner-public/readiness.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Wait for all three bound terminal client outcomes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          remaining=$((V02_OWNER_BEGIN+1650-$(date +%s)))
+          (( remaining > 0 ))
+          if (( remaining > 1500 )); then remaining=1500; fi
+          bash scripts/v02-onion-fixture.sh wait-clients \
+            "$RUNNER_TEMP/v02-owner-public/clients.json" "$RUN_ID" "$RUN_ATTEMPT" "$SOURCE_SHA" "$remaining"
+      - name: Stop owned supervisor and validate exact-child cleanup
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "${V02_OWNER_ROOT:-}" || exit 0
+          root=$V02_OWNER_ROOT
+          test -d "$root" && test ! -L "$root" && test -O "$root"
+          # Private sentinel requests cleanup; never signal a PID loaded from a later step.
+          : > "$root/stop"
+          until_at=$((SECONDS+65))
+          until test -f "$root/cleanup.json"; do
+            (( SECONDS < until_at )) || exit 1
+            sleep 1
+          done
+          mkdir -p "$RUNNER_TEMP/v02-owner-public"
+          cp "$root/cleanup.json" "$RUNNER_TEMP/v02-owner-public/cleanup.json"
+          jq -e '.schema==1 and .relay_children_reaped==true and .private_state_removed==true' "$root/cleanup.json"
+          rm -rf -- "$root"
+      - name: Publish finite owner outcomes only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v02-owner-outcome-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/v02-owner-public/cleanup.json
+            ${{ runner.temp }}/v02-owner-public/clients.json
+          if-no-files-found: warn
+          retention-days: 1
+
+  native:
+    # Deliberately no needs:onion-owner; readiness is available before owner exit.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-amd64
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            platform: linux-arm64
+            arch: aarch64
+          - runner: macos-15
+            platform: macos
+            arch: native
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.97.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: v02-${{ matrix.platform }}
+      - name: Native offline tests and release binaries
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if test "$EXPECTED_ARCH" != native; then test "$(uname -m)" = "$EXPECTED_ARCH"; fi
+          uname -m
+          cargo test --locked --release -p marmish-native -p marmish-vault -- --test-threads=1
+          cargo build --locked --release -p marmish-native --bins
+          mkdir -p "$RUNNER_TEMP/v02-public"
+          cargo tree --locked -p marmish-native -e normal,build,features > "$RUNNER_TEMP/v02-public/dependencies.txt"
+          if awk '/test-support|test-policy-overrides|unreleased-device-pairing|marmot-wasm-probe|Epiphytic\/mdk/ {bad=1} END {exit !bad}' "$RUNNER_TEMP/v02-public/dependencies.txt"; then exit 1; fi
+          shasum -a 256 Cargo.lock > "$RUNNER_TEMP/v02-public/cargo-lock.sha256"
+          rustc -Vv > "$RUNNER_TEMP/v02-public/rustc.txt"
+      - name: Actual direct encrypted-message foundation flow
+        timeout-minutes: 12
+        env:
+          DIRECT_RELAY: ${{ inputs.direct_relay }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # Native policy validates the explicit URL; no shell evaluation or public default.
+          test -n "$DIRECT_RELAY"
+          env -u GH_TOKEN -u GITHUB_TOKEN -u ACTIONS_RUNTIME_TOKEN target/release/marmish --relay "$DIRECT_RELAY" --tor off foundation-check > "$RUNNER_TEMP/v02-public/direct.json"
+          jq -e '.schema==1 and .protocol=="marmish-foundation/2" and .phase=="v0.2-phase1" and .ok==true and .cleanup_ok==true and .runtime_cleanup_ok==true and .state_cleanup_ok==true and .route=="off"' "$RUNNER_TEMP/v02-public/direct.json"
+      - name: Obtain exact-run onion endpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          bash scripts/v02-onion-fixture.sh await-readiness \
+            "$RUNNER_TEMP/v02-public/readiness.json" "$RUN_ID" "$RUN_ATTEMPT" "$SOURCE_SHA" 1200
+      - name: Actual Arti encrypted-message foundation flow
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          relay=$(jq -er .relay_url "$RUNNER_TEMP/v02-public/readiness.json")
+          env -u GH_TOKEN -u GITHUB_TOKEN -u ACTIONS_RUNTIME_TOKEN target/release/marmish --relay "$relay" --tor always foundation-check > "$RUNNER_TEMP/v02-public/onion.json"
+          jq -e '.schema==1 and .protocol=="marmish-foundation/2" and .phase=="v0.2-phase1" and .ok==true and .cleanup_ok==true and .runtime_cleanup_ok==true and .state_cleanup_ok==true and .route=="always"' "$RUNNER_TEMP/v02-public/onion.json"
+      - name: Create bound terminal outcome, including failed setup
+        if: always()
+        env:
+          RESULT: ${{ job.status }}
+          PLATFORM: ${{ matrix.platform }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/v02-public" "$RUNNER_TEMP/v02-terminal"
+          jq -n --arg result "$RESULT" --arg platform "$PLATFORM" --argjson run "$RUN_ID" --argjson attempt "$RUN_ATTEMPT" --arg sha "$SOURCE_SHA" \
+            '{schema:1,run_id:$run,run_attempt:$attempt,source_sha:$sha,platform:$platform,ok:($result=="success")}' > "$RUNNER_TEMP/v02-terminal/terminal.json"
+      - name: Publish immutable terminal outcome
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v02-terminal-${{ matrix.platform }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/v02-terminal/terminal.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Publish sanitized native evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v02-native-${{ matrix.platform }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/v02-public/
+          if-no-files-found: warn
+          retention-days: 3

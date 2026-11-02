@@ -1,4 +1,4 @@
-use crate::{Error, KeyRef, Label, Metadata, Purpose, Secret};
+use crate::{Error, KeyRef, Label, Metadata, Namespace, Purpose, Secret};
 use secret_service::{
     blocking::{Item, SecretService},
     EncryptionType,
@@ -8,6 +8,7 @@ use zeroize::Zeroizing;
 
 pub(super) struct Provider {
     service: SecretService<'static>,
+    namespace: Namespace,
 }
 fn bus_error(error: zbus::Error) -> Error {
     match error {
@@ -61,17 +62,17 @@ fn native(error: secret_service::Error) -> Error {
 fn attributes(reference: &KeyRef) -> HashMap<&str, &str> {
     HashMap::from([
         ("application", "marmish"),
-        ("version", "1"),
+        ("version", if reference.version() == 1 { "1" } else { "2" }),
         ("purpose", reference.purpose().as_str()),
         ("id", reference.id()),
     ])
 }
 impl Provider {
-    pub(super) fn open_default() -> Result<Self, Error> {
+    pub(super) fn open_default(namespace: Namespace) -> Result<Self, Error> {
         let connection = zbus::blocking::Connection::session().map_err(bus_error)?;
         let service =
             SecretService::connect_with_existing(EncryptionType::Dh, connection).map_err(native)?;
-        Ok(Self { service })
+        Ok(Self { service, namespace })
     }
     pub(super) fn probe(&self) -> Result<(), Error> {
         let collection = self.service.get_default_collection().map_err(|e| match e {
@@ -151,7 +152,7 @@ impl Provider {
             .service
             .search_items(HashMap::from([
                 ("application", "marmish"),
-                ("version", "1"),
+                ("version", self.namespace.version_str()),
             ]))
             .map_err(native)?;
         if found.unlocked.len() + found.locked.len() > 128 {
@@ -162,7 +163,11 @@ impl Provider {
         for item in found.unlocked.into_iter().chain(found.locked) {
             let attrs = item.get_attributes().map_err(native)?;
             let purpose = Purpose::parse(attrs.get("purpose").ok_or(Error::Malformed)?)?;
-            let reference = KeyRef::new(1, purpose, attrs.get("id").ok_or(Error::Malformed)?)?;
+            let reference = KeyRef::new(
+                self.namespace.version(),
+                purpose,
+                attrs.get("id").ok_or(Error::Malformed)?,
+            )?;
             if !seen.insert(reference.clone()) {
                 return Err(Error::Ambiguous);
             }
@@ -177,6 +182,15 @@ impl Provider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn namespaces_use_disjoint_exact_attributes() {
+        let legacy = KeyRef::new(1, Purpose::Nostr, &"a".repeat(64)).unwrap();
+        let native = KeyRef::new(2, Purpose::Nostr, &"a".repeat(64)).unwrap();
+        assert_eq!(attributes(&legacy)["version"], "1");
+        assert_eq!(attributes(&native)["version"], "2");
+        assert_ne!(attributes(&legacy), attributes(&native));
+        assert_eq!(attributes(&native).len(), 4);
+    }
     #[test]
     fn uncertain_errors_never_mean_unavailable() {
         assert_eq!(
