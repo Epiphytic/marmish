@@ -89,8 +89,10 @@ class DriverBoundary(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.base = Path(self.temporary.name)
+        installer = b'#!/bin/sh\nexit 0\n'
         self.state = state_api.create_state(self.base / 'state.json',
-            {'run': '123', 'attempt': '2', 'sha': 'a' * 40}, 'b' * 64, runtime.ROLES[0])
+            {'run': '123', 'attempt': '2', 'sha': 'a' * 40}, 'b' * 64, runtime.ROLES[0],
+            installer_bytes=installer, installer_sha256=hashlib.sha256(installer).hexdigest())
         self.root = Path(self.state['root'])
         self.addCleanup(lambda: shutil.rmtree(self.root, ignore_errors=True))
         self.pin, self.records = successful_records()

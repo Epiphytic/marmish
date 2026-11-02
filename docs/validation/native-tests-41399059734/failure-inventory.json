@@ -1,0 +1,239 @@
+{
+  "run_url": "https://github.com/Epiphytic/marmish/actions/runs/41399059734",
+  "job_id": 125127202519,
+  "source_commit": "6f6d42c60c73bc5ef2f8e2f6e61b17216c14b0a5",
+  "platform": "Linux AMD64",
+  "python": "3.14.4",
+  "tests": 733,
+  "errors": 43,
+  "failures": 2,
+  "skipped": 8,
+  "cases": [
+    {
+      "outcome": "error",
+      "test": "test_busy_native_worker_guard_never_removes_engine_or_claims_absence (test_marmish_installed_runtime.DriverBoundary.test_busy_native_worker_guard_never_removes_engine_or_claims_absence)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_client_cleanup_is_scoped_to_new_client_markers_and_proves_profile_lock (test_marmish_installed_runtime.DriverBoundary.test_client_cleanup_is_scoped_to_new_client_markers_and_proves_profile_lock)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_client_cleanup_rejects_live_frontend_before_native_recovery (test_marmish_installed_runtime.DriverBoundary.test_client_cleanup_rejects_live_frontend_before_native_recovery)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_failed_probe_executes_no_command (test_marmish_installed_runtime.DriverBoundary.test_failed_probe_executes_no_command)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_lifetime_alarm_uses_serve_deadline_and_masks_report_cleanup (test_marmish_installed_runtime.DriverBoundary.test_lifetime_alarm_uses_serve_deadline_and_masks_report_cleanup)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_missing_server_records_produce_three_explicit_failed_client_slots (test_marmish_installed_runtime.DriverBoundary.test_missing_server_records_produce_three_explicit_failed_client_slots)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_native_setup_failure_publishes_all_three_failed_slots (test_marmish_installed_runtime.DriverBoundary.test_native_setup_failure_publishes_all_three_failed_slots)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_owned_supervisor_graceful_sigint_and_identity_record (test_marmish_installed_runtime.DriverBoundary.test_owned_supervisor_graceful_sigint_and_identity_record)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_pair_calls_only_cold_status_and_one_exact_byte_command (test_marmish_installed_runtime.DriverBoundary.test_pair_calls_only_cold_status_and_one_exact_byte_command)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_receipt_reconciliation_uses_native_receipt_directory_and_canonical_digest (test_marmish_installed_runtime.DriverBoundary.test_receipt_reconciliation_uses_native_receipt_directory_and_canonical_digest)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_rpc_failure_is_published_with_finite_native_category (test_marmish_installed_runtime.DriverBoundary.test_rpc_failure_is_published_with_finite_native_category)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_waiter_allows_bounded_terminal_report_after_live_cap (test_marmish_installed_runtime.DriverBoundary.test_waiter_allows_bounded_terminal_report_after_live_cap)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_watchdog_recovered_client_can_continue_without_claiming_pair_success (test_marmish_installed_runtime.DriverBoundary.test_watchdog_recovered_client_can_continue_without_claiming_pair_success)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_watchdog_requires_cleanup_and_skips_remaining_pairs_if_unproven (test_marmish_installed_runtime.DriverBoundary.test_watchdog_requires_cleanup_and_skips_remaining_pairs_if_unproven)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_compile_scope_cannot_be_requested_for_runtime_or_other_worker (test_marmish_installed_state.CompileScopes.test_compile_scope_cannot_be_requested_for_runtime_or_other_worker)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_reserved_session_accepts_unregistered_fork_and_exec (test_marmish_installed_state.CompileScopes.test_reserved_session_accepts_unregistered_fork_and_exec)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_session_group_and_exact_leader_fences (test_marmish_installed_state.CompileScopes.test_session_group_and_exact_leader_fences)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_setsid_escape_refused_and_global_cleanup_never_signals_it (test_marmish_installed_state.CompileScopes.test_setsid_escape_refused_and_global_cleanup_never_signals_it)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_timeout_keeps_reserved_group_and_finishes_cleanup (test_marmish_installed_state.CompileScopes.test_timeout_keeps_reserved_group_and_finishes_cleanup)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_actual_installer_uninstall_removes_verified_fixture (test_marmish_installed_state.InstalledStateTests.test_actual_installer_uninstall_removes_verified_fixture)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_actual_outer_bwrap_bind_argv_authenticates (test_marmish_installed_state.InstalledStateTests.test_actual_outer_bwrap_bind_argv_authenticates)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_binary_io_concurrent_drain_and_real_exit (test_marmish_installed_state.InstalledStateTests.test_binary_io_concurrent_drain_and_real_exit)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_caffeinate_is_owned_tracked_and_stopped (test_marmish_installed_state.InstalledStateTests.test_caffeinate_is_owned_tracked_and_stopped)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_changed_installer_reports_uninstall_failed_and_retains_root (test_marmish_installed_state.InstalledStateTests.test_changed_installer_reports_uninstall_failed_and_retains_root)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_cleanup_empty_state_removes_root_and_retains_public (test_marmish_installed_state.InstalledStateTests.test_cleanup_empty_state_removes_root_and_retains_public)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_cleanup_refuses_changed_output_and_preserves_private_root (test_marmish_installed_state.InstalledStateTests.test_cleanup_refuses_changed_output_and_preserves_private_root)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_cleanup_refuses_engine_without_authenticated_ready (test_marmish_installed_state.InstalledStateTests.test_cleanup_refuses_engine_without_authenticated_ready)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_cleanup_refuses_unowned_partial_install_launchers (test_marmish_installed_state.InstalledStateTests.test_cleanup_refuses_unowned_partial_install_launchers)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_combined_output_limit_and_deadline (test_marmish_installed_state.InstalledStateTests.test_combined_output_limit_and_deadline)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_engine_cleanup_callback_requires_both_positive_proofs (test_marmish_installed_state.InstalledStateTests.test_engine_cleanup_callback_requires_both_positive_proofs)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_environment_scrubs_ambient_credentials (test_marmish_installed_state.InstalledStateTests.test_environment_scrubs_ambient_credentials)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_identity_error_preserves_only_numeric_diagnostic (test_marmish_installed_state.InstalledStateTests.test_identity_error_preserves_only_numeric_diagnostic)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_identity_requires_account_and_distinct_profiles (test_marmish_installed_state.InstalledStateTests.test_identity_requires_account_and_distinct_profiles)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_inner_bind_inode_checks_and_real_proc_file (test_marmish_installed_state.InstalledStateTests.test_inner_bind_inode_checks_and_real_proc_file)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_mac_interrupted_before_control_record_is_incomplete (test_marmish_installed_state.InstalledStateTests.test_mac_interrupted_before_control_record_is_incomplete)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_replaced_process_identity_is_absent_and_never_signaled (test_marmish_installed_state.InstalledStateTests.test_replaced_process_identity_is_absent_and_never_signaled)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_roundtrip_private_immutable_state_and_external_output (test_marmish_installed_state.InstalledStateTests.test_roundtrip_private_immutable_state_and_external_output)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_runtime_timeout_uses_sigint_before_termination (test_marmish_installed_state.InstalledStateTests.test_runtime_timeout_uses_sigint_before_termination)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_setsid_grandchild_is_authenticated_and_stopped (test_marmish_installed_state.InstalledStateTests.test_setsid_grandchild_is_authenticated_and_stopped)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_snapshot_excludes_only_exact_preexisting_unreadable_identity (test_marmish_installed_state.InstalledStateTests.test_snapshot_excludes_only_exact_preexisting_unreadable_identity)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_suspend_and_regressing_clocks_fail_comparability (test_marmish_installed_state.InstalledStateTests.test_suspend_and_regressing_clocks_fail_comparability)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_symlink_hardlink_and_mode_are_rejected (test_marmish_installed_state.InstalledStateTests.test_symlink_hardlink_and_mode_are_rejected)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "error",
+      "test": "test_unreadable_same_uid_scan_refuses_cleanup (test_marmish_installed_state.InstalledStateTests.test_unreadable_same_uid_scan_refuses_cleanup)",
+      "category": "unsafe_state_path"
+    },
+    {
+      "outcome": "fail",
+      "test": "test_compiler_resolves_rustup_without_inheriting_ambient_environment (test_marmish_managed_runtime_spike.ManagedRuntimeTests.test_compiler_resolves_rustup_without_inheriting_ambient_environment)",
+      "category": "assertion_failure"
+    },
+    {
+      "outcome": "fail",
+      "test": "test_deep_provenance_json_has_fixed_refusal (test_marmish_managed_runtime_spike.ProgressDiagnosticTests.test_deep_provenance_json_has_fixed_refusal)",
+      "category": "assertion_failure"
+    }
+  ],
+  "category_source": "Categories transcribed from private native job log; raw tracebacks and environment values excluded."
+}

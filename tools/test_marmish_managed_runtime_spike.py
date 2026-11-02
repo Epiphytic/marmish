@@ -237,12 +237,20 @@ class ManagedRuntimeTests(unittest.TestCase):
         compiler.parent.mkdir(parents=True)
         compiler.write_bytes(b'fixture')
         compiler.chmod(0o700)
-        with patch.object(spike.shutil, 'which', return_value=str(shim)), \
-                patch.object(spike, 'compiler_lookup', return_value=(0, str(compiler).encode())) as lookup:
-            self.assertEqual(spike.test_compiler_directory(), compiler.parent)
-        command, env = lookup.call_args.args
-        self.assertEqual(command, shim)
-        self.assertEqual(set(env), {'HOME', 'PATH', 'LANG', 'LC_ALL'})
+        for optional in ({}, {'RUSTUP_HOME': '/fixture/rustup'},
+                         {'CARGO_HOME': '/fixture/cargo'},
+                         {'RUSTUP_HOME': '/fixture/rustup', 'CARGO_HOME': '/fixture/cargo'}):
+            ambient = {'HOME': str(self.root), 'UNRELATED_SECRET': 'must-not-forward', **optional}
+            with self.subTest(optional=tuple(optional)), \
+                    patch.dict(spike.os.environ, ambient, clear=True), \
+                    patch.object(spike.shutil, 'which', return_value=str(shim)), \
+                    patch.object(spike, 'compiler_lookup',
+                                 return_value=(0, str(compiler).encode())) as lookup:
+                self.assertEqual(spike.test_compiler_directory(), compiler.parent)
+            command, env = lookup.call_args.args
+            self.assertEqual(command, shim)
+            self.assertEqual(env, {'HOME': str(self.root), 'PATH': '/usr/bin:/bin',
+                                   'LANG': 'C', 'LC_ALL': 'C', **optional})
 
     def test_direct_compiler_ignores_unrelated_rustup(self):
         compiler = self.root / 'toolchain/bin/rustc'
@@ -1107,13 +1115,19 @@ class ProgressDiagnosticTests(unittest.TestCase):
         provenance=binary.parent.parent/'provenance.json'
         nested = b'['*30000+b'0'+b']'*30000
         self.assertLess(len(nested), 64 << 10)
-        with self.assertRaises(RecursionError):
-            json.loads(nested)
         provenance.write_bytes(nested)
         pair={'MARMISH_BWRAP':str(binary),'MARMISH_BWRAP_SHA256':spike.digest(binary)}
         with patch.object(spike,'bwrap_executable',return_value=binary):
             with self.assertRaisesRegex(spike.Refused,'^bwrap_provenance_invalid$'):
                 spike.helper_provenance(pair)
+            with patch.object(spike.json, 'loads', side_effect=RecursionError('private')) as loads:
+                with self.assertRaisesRegex(spike.Refused,'^bwrap_provenance_invalid$'):
+                    spike.helper_provenance(pair)
+                loads.assert_called_once_with(nested)
+            with patch.object(spike.json, 'loads', return_value=[]) as loads:
+                with self.assertRaisesRegex(spike.Refused,'^bwrap_provenance_invalid$'):
+                    spike.helper_provenance(pair)
+                loads.assert_called_once_with(nested)
 
     def isolated_python(self, code, timeout=10):
         import subprocess,sys

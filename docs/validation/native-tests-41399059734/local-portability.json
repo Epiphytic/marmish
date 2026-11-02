@@ -1,0 +1,53 @@
+{
+  "scope": "local unit-test portability, not native hosted or transport acceptance",
+  "base_commit": "61a13adfad02dec39c20dd12e20224ed2d9e3bc9",
+  "source": "shared isolated initiative worktree; sibling dependencies frozen and identical in both disposable copies",
+  "fixture": "faithful tracked and non-ignored source copy, explicit chmod 0775, private parent; module paths unchanged; optional Rust settings exported",
+  "runs": [
+    {
+      "python": "3.12.3",
+      "checkout_mode": "0775",
+      "exit_code": 1,
+      "baseline": true,
+      "dependency_manifest_sha256": "985bd108e5c9c15206c39d50fe0171beb06914b2b9eca5351e37af27c00fd120",
+      "label": "before",
+      "tests": 141,
+      "errors": 43,
+      "failures": 1,
+      "skipped": 0
+    },
+    {
+      "python": "3.12.3",
+      "checkout_mode": "0775",
+      "exit_code": 0,
+      "baseline": false,
+      "dependency_manifest_sha256": "985bd108e5c9c15206c39d50fe0171beb06914b2b9eca5351e37af27c00fd120",
+      "label": "after",
+      "tests": 141,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0
+    }
+  ],
+  "reviewed_test_sha256": {
+    "tools/test_marmish_installed_state.py": "756f9d8e0615fc1bcba2aec4996f0e7116459bb976973e788c31f0a6e0ffbebe",
+    "tools/test_marmish_installed_runtime.py": "62fe72e8eeb837867f33e3c47645d900c6a3e7dafa5784124666d2d28c48d4cd",
+    "tools/test_marmish_managed_runtime_spike.py": "0a7408dd03e67e481d49657392484bc3b1212ca56b1a949c0fba583b8d5f4564"
+  },
+  "additional_checks": [
+    "Rust environment case passes with RUSTUP_HOME and CARGO_HOME absent; four hermetic optional-setting cases",
+    "Deep JSON actual decoder, forced RecursionError, and decoded-list branches all refuse with fixed category",
+    "Scoped git diff --check passed"
+  ],
+  "quality": "Whole-tree ripwire quality-delta returned 2 for shared-tree findings. Owned changes add only minor existing test-class length and short-horizon churn; no production refactor performed.",
+  "independent_review": {
+    "verdict": "APPROVED",
+    "review": "../../reviews/native-test-fixture-portability-code.json",
+    "reproduced_before_and_after": true,
+    "intermittent_failure": {
+      "test": "test_engine_cleanup_callback_requires_both_positive_proofs",
+      "category": "cleanup_incomplete",
+      "observation": "One initial unset-Rust full-module run failed with null cleanup checks; five isolated reruns and two full-module reruns passed. Attribution remains a separate investigation."
+    }
+  }
+}

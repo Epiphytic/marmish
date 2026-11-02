@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import marmish_installed_state as state
 from mdk_smoke import SmokeError
-from test_marmish_install import archive_bytes, load_installer, VERSION, TARGET
+from test_marmish_install import archive_bytes, load_installer, INSTALLER, VERSION, TARGET
 
 
 class InstallerHandoff(unittest.TestCase):
@@ -181,8 +181,11 @@ class InstalledStateTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.base = Path(self.temporary.name).resolve()
         self.pointer = self.base / 'pointer.json'
+        self.installer = INSTALLER.read_bytes()
+        self.installer_sha256 = hashlib.sha256(self.installer).hexdigest()
         self.state = state.create_state(self.pointer,
-            {'run': '123', 'attempt': '2', 'sha': 'a' * 40}, 'b' * 64, 'linux-x64')
+            {'run': '123', 'attempt': '2', 'sha': 'a' * 40}, 'b' * 64, 'linux-x64',
+            installer_bytes=self.installer, installer_sha256=self.installer_sha256)
         self.root = Path(self.state['root'])
         self.addCleanup(lambda: shutil.rmtree(self.root, ignore_errors=True))
 
@@ -198,8 +201,9 @@ class InstalledStateTests(unittest.TestCase):
         self.assertNotIn(self.root, Path(self.state['output']).parents)
         self.assertEqual(hashlib.sha256(Path(self.state['installer']).read_bytes()).hexdigest(),
                          self.state['installer_sha256'])
-        with self.assertRaises(SmokeError):
-            state.create_state(self.pointer, self.state['ctx'], 'b' * 64, 'linux-x64')
+        with self.assertRaisesRegex(SmokeError, '^state_exists$'):
+            state.create_state(self.pointer, self.state['ctx'], 'b' * 64, 'linux-x64',
+                installer_bytes=self.installer, installer_sha256=self.installer_sha256)
         raw = (self.root / 'state.json').read_bytes()
         (self.root / 'state.json').write_bytes(raw + b' ')
         with self.assertRaises(SmokeError):
