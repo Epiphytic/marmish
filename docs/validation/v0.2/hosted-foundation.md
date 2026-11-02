@@ -99,3 +99,32 @@ reaped, private state removed and readiness cleanup true, observed the macOS
 terminal failure, and correctly failed the rollup. The overall run is failed.
 These remain tiny-message measurements, not bulk throughput or percentiles,
 and do not test remote commands, installation or the nine command pairs.
+
+## Bounded recovery-check correction
+
+The [reviewed amendment](../../phases/v0.2-phase1-recovery-check.md) changes only
+the foundation-check driver and its test dependency. Join and exchange waits
+give each peer a turn bounded by 15 seconds and the original fixed deadline.
+Recoverable tick errors preserve progress; initial submission remains one-shot,
+and success still requires exact received bytes and a durable sender receipt.
+Finite additive diagnostics distinguish the active operation, last recoverable
+role/label and terminal transport label without exposing raw errors or state.
+This does not establish the cause of the earlier macOS failure.
+
+The focused offline suite passed **13/13**, including nine new scripted
+recovery/schema tests. Native/vault all-target Clippy with warnings denied,
+formatting and diff checks passed. Cargo.lock is unchanged. The static quality
+delta returned exit 2: `execute` grew from 154 to 173 lines as call sites gained
+explicit message/progress structs and diagnostics; it also flagged new private
+types/tests as unreachable and similarity between two scripted tests. Those
+types and tests are compiled and exercised, and the test cases cover distinct
+join and message paths. This tradeoff is recorded without a suppression or
+baseline change; the static check is not reported as passing.
+
+Claude's first completed-code review approved the implementation and independently
+passed all **99** then-current native library tests. Its useful suggestion to
+clear stale recovery diagnostics between stages was incorporated with an
+additional scripted regression. The [follow-up code review](../../reviews/v0.2-native-recovery-code-r2.md)
+approved that correction and independently passed all 13 focused tests and
+strict Clippy/format/diff checks. A fresh full hosted run remains required. The failed
+run above is preserved; no platform acceptance follows from offline tests.

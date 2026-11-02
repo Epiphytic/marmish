@@ -60,6 +60,13 @@ digest to authenticated MLS metadata. Rooms require the dedicated v2 purpose,
 exactly two allowed accounts, one leaf per account, and the authenticated creator
 as sole administrator. Trust-relevant changes revoke accepted rooms.
 
+The [reviewed recovery-check amendment](phases/v0.2-phase1-recovery-check.md)
+lets both owners progress through recoverable tick errors using bounded turns
+within the original fixed join/exchange deadlines. It keeps initial sends
+one-shot and records finite, stage-local diagnostic labels. Its focused offline
+checks and independent code review passed; a fresh hosted matrix must still
+qualify this increment. Earlier failed reports remain preserved.
+
 The native journal records definitely unsubmitted intents separately from
 prepared/ambiguous submissions. It never retries an ambiguous send by creating
 fresh ciphertext. Notification loss pauses publication at the actual transport

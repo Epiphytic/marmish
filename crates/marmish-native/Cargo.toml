@@ -56,3 +56,4 @@ transport-nostr-peeler = { git = "https://github.com/marmot-protocol/mdk", rev =
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio = { version = "1", features = ["test-util"] }
