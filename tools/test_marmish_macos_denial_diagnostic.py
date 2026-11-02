@@ -238,11 +238,11 @@ class ProcessTests(unittest.TestCase):
             child.wait = reap
             return child
         def kill(*args):
-            events.append('kill')
+            events.append('kill' if args[1] else 'probe')
             return real_kill(*args)
         with tempfile.TemporaryDirectory() as root, patch.object(diagnostic.subprocess, 'Popen', side_effect=spawn), patch.object(diagnostic.os, 'killpg', side_effect=kill):
             diagnostic.run_private(['/usr/bin/true'], root)
-        self.assertEqual(events, ['kill', 'reap'])
+        self.assertEqual(events, ['kill', 'reap', 'probe'])
 
     def test_interruption_and_observation_failure_cleanup_owned_group(self):
         real_popen = subprocess.Popen
@@ -540,6 +540,54 @@ class GateTests(unittest.TestCase):
                 output = Path(root) / 'report.json'
                 diagnostic.diagnose(output)
                 self.assertEqual(json.loads(output.read_text())['python_minor'], expected)
+
+
+class DarwinZombieTests(unittest.TestCase):
+    def run_mock(self, signals, observations=None, wait_error=None):
+        child = SimpleNamespace(pid=1234, returncode=None)
+        def wait(**_kwargs):
+            if wait_error:
+                raise wait_error
+            child.returncode = 1
+            return 1
+        child.wait = wait
+        status = SimpleNamespace(si_pid=1234, si_code=os.CLD_EXITED, si_status=1)
+        calls = []
+        def kill(pid, number):
+            calls.append((number, child.returncode))
+            error = next(signals)
+            if error:
+                raise error
+        with tempfile.TemporaryDirectory() as root, patch.object(diagnostic.sys, 'platform', 'darwin'), patch.object(diagnostic.subprocess, 'Popen', return_value=child), patch.object(diagnostic, 'observe', side_effect=observations or [status] * 4), patch.object(diagnostic.os, 'killpg', side_effect=kill), patch.object(diagnostic.time, 'monotonic', side_effect=[0, 0, 0, 3, 3]), patch.object(diagnostic.time, 'sleep'):
+            return diagnostic.run_private(['/unused'], root), calls
+
+    def test_zombie_eperm_then_esrch_and_no_signals_after_reap(self):
+        result, calls = self.run_mock(iter([OSError(errno.EPERM, SECRET), OSError(errno.ESRCH, SECRET)]))
+        self.assertEqual(result['exit_code'], 1)
+        self.assertEqual(calls, [(signal.SIGKILL, None), (0, 1)])
+
+    def test_surviving_and_permission_denied_group_have_finite_failure(self):
+        for error in (None, OSError(errno.EPERM, SECRET)):
+            with self.subTest(error=error), self.assertRaises(diagnostic.CleanupFailed) as caught:
+                self.run_mock(iter([OSError(errno.EPERM, SECRET), error]))
+            self.assertEqual(caught.exception.facts['reason'], 'group_survived')
+            self.assertEqual(caught.exception.facts['errno_class'], 'permission_denied' if error else 'none')
+            self.assertNotIn(SECRET, json.dumps(caught.exception.facts))
+
+    def test_eperm_without_repeatable_exit_never_succeeds(self):
+        good = SimpleNamespace(si_pid=1234, si_code=os.CLD_EXITED, si_status=1)
+        bad = SimpleNamespace(si_pid=1234, si_code=os.CLD_EXITED, si_status=2)
+        for observations in ([good, good, None], [good, good, good, bad],
+                             [good, good, OSError(errno.ECHILD, SECRET)], [good, good, bad, bad]):
+            with self.subTest(observations=observations), self.assertRaises(diagnostic.CleanupFailed) as caught:
+                self.run_mock(iter([OSError(errno.EPERM, SECRET)]), observations=observations)
+            self.assertEqual(caught.exception.facts['reason'], 'group_signal_failed')
+
+    def test_eacces_never_deferred_and_wait_failure_remains_fatal(self):
+        for signals, failure, reason in [([OSError(errno.EACCES, SECRET)], None, 'group_signal_failed'), ([OSError(errno.EPERM, SECRET)], subprocess.TimeoutExpired('private', 2), 'leader_wait_timeout')]:
+            with self.subTest(reason=reason), self.assertRaises(diagnostic.CleanupFailed) as caught:
+                self.run_mock(iter(signals), wait_error=failure)
+            self.assertEqual(caught.exception.facts['reason'], reason)
 
 
 if __name__ == '__main__':

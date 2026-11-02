@@ -43,7 +43,7 @@ class CleanupFailed(Exception):
     """Owned process cleanup could not be established; carries no private text."""
 
     def __init__(self, reason, error, stage, signal_attempted, process):
-        if (reason not in ('group_signal_failed', 'leader_wait_timeout', 'leader_wait_failed')
+        if (reason not in ('group_signal_failed', 'group_survived', 'leader_wait_timeout', 'leader_wait_failed')
                 or stage not in ('waiting', 'exit_observed_unconfirmed', 'exit_confirmed', 'observation_failed')
                 or type(signal_attempted) is not bool
                 or process not in ('preflight', 'control', 'confined', 'query', 'unspecified')):
@@ -252,6 +252,20 @@ def observation_key(status):
     return status.si_pid, status.si_code, status.si_status
 
 
+def confirmed_exit(child):
+    if child.returncode is not None:
+        raise ValueError('observation_reaped')
+    first = observe(child)
+    second = observe(child) if first is not None else None
+    if first is None or second is None or observation_key(first) != observation_key(second):
+        raise ValueError('observation_not_repeatable')
+    code = observed_exit(child, first)
+    observed_exit(child, second)
+    if child.returncode is not None:
+        raise ValueError('observation_reaped')
+    return code
+
+
 def run_private(command, root, timeout=5, stdout_cap=OUT_CAP, stderr_cap=ERR_CAP,
                 capture_stdout=True, *, process='unspecified'):
     """Keep the leader unreaped until its owned process group has been killed."""
@@ -320,6 +334,17 @@ def run_private(command, root, timeout=5, stdout_cap=OUT_CAP, stderr_cap=ERR_CAP
                         pass
                     except OSError as error:
                         signal_error = error
+                        if sys.platform == 'darwin' and error.errno == errno.EPERM:
+                            try:
+                                confirmed = confirmed_exit(child)
+                                if expected_exit is not None and confirmed != expected_exit:
+                                    raise ValueError('observation_status_changed')
+                                expected_exit = confirmed
+                            except (OSError, AttributeError, NotImplementedError, ValueError):
+                                pass
+                            else:
+                                observation_stage = 'exit_confirmed'
+                                signal_error = None
                 try:
                     code = child.wait(timeout=2)
                 except subprocess.TimeoutExpired as error:
@@ -331,6 +356,20 @@ def run_private(command, root, timeout=5, stdout_cap=OUT_CAP, stderr_cap=ERR_CAP
                 if signal_error is not None:
                     raise CleanupFailed('group_signal_failed', signal_error, observation_stage,
                                         signal_attempted, process) from None
+                if can_signal:
+                    deadline = time.monotonic() + 2
+                    while True:
+                        last_error = None
+                        try:
+                            os.killpg(child.pid, 0)
+                        except OSError as error:
+                            if error.errno == errno.ESRCH:
+                                break
+                            last_error = error
+                        if time.monotonic() >= deadline:
+                            raise CleanupFailed('group_survived', last_error, observation_stage,
+                                                signal_attempted, process) from None
+                        time.sleep(.02)
                 if not can_signal or expected_exit is not None and code != expected_exit:
                     # Popen's ECHILD fallback can manufacture zero. Never
                     # promote that value, or an observation mismatch, to pass.

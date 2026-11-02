@@ -5,6 +5,7 @@ launchers, and cleanup refuses uncertain ownership. Public reports are emitted
 by the orchestrator after this module has finished deleting private state.
 """
 import contextlib
+import errno
 import hashlib
 import json
 import math
@@ -340,11 +341,43 @@ def register_installed(state, installed_root):
 _exited = Processes.exited
 
 
+def _confirmed_exit(child):
+    """Prove the parent still owns the same unreaped exited leader."""
+    require(child.returncode is None, 'process_identity_changed')
+    try:
+        first = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        if first is None:
+            return None
+        second = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except OSError:
+        raise SmokeError('process_identity_changed') from None
+    key = lambda status: (status.si_pid, status.si_code, status.si_status)
+    require(second is not None and key(first) == key(second) and first.si_pid == child.pid
+            and child.returncode is None and type(first.si_status) is int,
+            'process_identity_changed')
+    if first.si_code == os.CLD_EXITED and 0 <= first.si_status <= 255:
+        return first.si_status
+    require(first.si_code in (os.CLD_KILLED, os.CLD_DUMPED)
+            and 1 <= first.si_status < signal.NSIG, 'process_identity_changed')
+    return -first.si_status
+
+
 def _signal_group(child, identity, number):
-    require(child.returncode is None and process_identity(child.pid) == identity and
-            os.getpgid(child.pid) == child.pid, 'process_identity_changed')
-    with contextlib.suppress(ProcessLookupError):
+    expected = _confirmed_exit(child) if sys.platform == 'darwin' else None
+    if expected is None:
+        require(child.returncode is None and process_identity(child.pid) == identity and
+                os.getpgid(child.pid) == child.pid, 'process_identity_changed')
+    try:
         os.killpg(child.pid, number)
+    except ProcessLookupError:
+        pass
+    except OSError as error:
+        if sys.platform != 'darwin' or error.errno != errno.EPERM:
+            raise
+        # A live leader can exit between its identity check and killpg.
+        expected = _confirmed_exit(child)
+        require(expected is not None, 'cleanup_incomplete')
+    return expected
 
 
 def _wait_exit(child, seconds):
@@ -656,17 +689,21 @@ def _finish_child(child, identity, *, interrupted, runtime):
     if not _exited(child):
         _signal_group(child, identity, signal.SIGTERM)
         _wait_exit(child, 1)
-    _signal_group(child, identity, signal.SIGKILL)
+    expected = _signal_group(child, identity, signal.SIGKILL)
     require(_wait_exit(child, 2), 'cleanup_incomplete')
     code = child.wait(timeout=1)
+    require(expected is None or code == expected, 'cleanup_incomplete')
     # A group must disappear after the reserved leader is reaped. Never signal
     # that numeric group again: it may now belong to another process.
     deadline = continuous_time() + 2
     while continuous_time() < deadline:
         try:
             os.killpg(child.pid, 0)
-        except ProcessLookupError:
-            return code
+        except OSError as error:
+            if error.errno == errno.ESRCH:
+                return code
+            if error.errno != errno.EPERM:
+                raise
         time.sleep(.02)
     raise SmokeError('cleanup_incomplete')
 

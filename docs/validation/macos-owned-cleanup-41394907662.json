@@ -1,0 +1,42 @@
+{
+  "format": 1,
+  "run": "41394907662",
+  "sha": "3bb7bb700c6897a6546f6ff2942b124e9afe5b6e",
+  "run_url": "https://github.com/Epiphytic/marmish/actions/runs/41394907662",
+  "outcome": "failed",
+  "report": {
+    "architecture": "arm64",
+    "cases": [],
+    "crash_attribution": "unavailable",
+    "driver": "marmish-owned-denial-v1",
+    "failure": {
+      "category": "cleanup_failed",
+      "errno_class": "permission_denied",
+      "observation_stage": "exit_confirmed",
+      "process": "preflight",
+      "reason": "group_signal_failed",
+      "signal_attempted": true
+    },
+    "log": {
+      "category": "not_queried",
+      "denials": [],
+      "format_shape": {
+        "keysets": [],
+        "leading_text": false,
+        "timestamp_parse": "not_observed",
+        "top_level": "other",
+        "trailing_summary": false
+      },
+      "matched_count": null,
+      "query_exit_code": null,
+      "query_signal": null
+    },
+    "ok": false,
+    "platform": "Darwin",
+    "probe_source_sha256": null,
+    "profile_sha256": null,
+    "python_minor": "3.15",
+    "schema": 1
+  },
+  "interpretation": "Owned preflight reached a confirmed exit; its reserved-group signal failed with a permission category before any confinement probe or unified-log query. No transport measurement was made."
+}

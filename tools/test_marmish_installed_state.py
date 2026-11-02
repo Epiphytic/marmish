@@ -437,5 +437,85 @@ class InstalledStateTests(unittest.TestCase):
             state._same_bound_file(identity, str(python).lstrip('/'), script)
 
 
+class DarwinZombieCleanup(unittest.TestCase):
+    def status(self, **changes):
+        return SimpleNamespace(**dict(dict(si_pid=4321, si_code=os.CLD_EXITED, si_status=7), **changes))
+
+    def test_confirmed_zombie_then_absent_preserves_code(self):
+        import errno, signal
+        child = SimpleNamespace(pid=4321, returncode=None)
+        calls = []
+        def wait(**_kwargs):
+            child.returncode = 7
+            return 7
+        child.wait = wait
+        def kill(pid, number):
+            calls.append((number, child.returncode))
+            raise OSError(errno.EPERM if number else errno.ESRCH, 'private')
+        with patch.object(state.sys, 'platform', 'darwin'), patch.object(state.os, 'waitid', return_value=self.status()), patch.object(state, '_exited', return_value=True), patch.object(state.os, 'killpg', side_effect=kill), patch.object(state, 'continuous_time', return_value=0), patch.object(state, 'process_identity') as identity, patch.object(state.os, 'getpgid') as group:
+            self.assertEqual(state._finish_child(child, {}, interrupted=False, runtime=False), 7)
+        self.assertEqual(calls, [(signal.SIGKILL, None), (0, 7)])
+        identity.assert_not_called()
+        group.assert_not_called()
+
+    def test_live_to_exit_race_is_confirmed_after_permission_error(self):
+        import errno, signal
+        child = SimpleNamespace(pid=4321, returncode=None)
+        with patch.object(state.sys, 'platform', 'darwin'), patch.object(state.os, 'waitid', side_effect=[None, self.status(), self.status()]), patch.object(state, 'process_identity', return_value={}), patch.object(state.os, 'getpgid', return_value=4321), patch.object(state.os, 'killpg', side_effect=OSError(errno.EPERM, 'private')):
+            self.assertEqual(state._signal_group(child, {}, signal.SIGKILL), 7)
+
+    def test_unconfirmed_reaped_mismatch_live_wrong_errno_and_platform_fail(self):
+        import errno, signal
+        for platform, returned, statuses, number in [
+            ('darwin', 7, [], errno.EPERM),
+            ('darwin', None, [self.status(), None], errno.EPERM),
+            ('darwin', None, [self.status(), self.status(si_status=8)], errno.EPERM),
+            ('darwin', None, [self.status(si_pid=9), self.status(si_pid=9)], errno.EPERM),
+            ('darwin', None, [None, None], errno.EPERM),
+            ('darwin', None, [self.status(), self.status()], errno.EACCES),
+            ('linux', None, [], errno.EPERM)]:
+            child = SimpleNamespace(pid=4321, returncode=returned)
+            with self.subTest(platform=platform, number=number, statuses=statuses), patch.object(state.sys, 'platform', platform), patch.object(state.os, 'waitid', side_effect=statuses), patch.object(state, 'process_identity', return_value={}), patch.object(state.os, 'getpgid', return_value=4321), patch.object(state.os, 'killpg', side_effect=OSError(number, 'private')):
+                with self.assertRaises((SmokeError, OSError)):
+                    state._signal_group(child, {}, signal.SIGKILL)
+
+    def test_surviving_or_unobservable_group_fails_finitely_after_reap(self):
+        import errno
+        for error in (None, OSError(errno.EPERM, 'private')):
+            child = SimpleNamespace(pid=4321, returncode=None)
+            def wait(**_kwargs):
+                child.returncode = 7
+                return 7
+            child.wait = wait
+            with self.subTest(error=error), patch.object(state, '_signal_group', return_value=7), patch.object(state, '_exited', return_value=True), patch.object(state.os, 'killpg', side_effect=error) as kill, patch.object(state, 'continuous_time', side_effect=[0, 0, 0, 3]), patch.object(state.time, 'sleep'):
+                with self.assertRaisesRegex(SmokeError, 'cleanup_incomplete'):
+                    state._finish_child(child, {}, interrupted=False, runtime=False)
+                self.assertTrue(all(call.args[1] == 0 for call in kill.call_args_list))
+
+    def test_final_status_mismatch_or_wait_failure_never_probes_group(self):
+        import subprocess
+        for returned in (8, subprocess.TimeoutExpired('private', 1)):
+            child = SimpleNamespace(pid=4321, returncode=None)
+            def wait(**_kwargs):
+                if isinstance(returned, Exception):
+                    raise returned
+                child.returncode = returned
+                return returned
+            child.wait = wait
+            with self.subTest(returned=returned), patch.object(state, '_signal_group', return_value=7), patch.object(state, '_exited', return_value=True), patch.object(state.os, 'killpg') as kill:
+                with self.assertRaises((SmokeError, subprocess.TimeoutExpired)):
+                    state._finish_child(child, {}, interrupted=False, runtime=False)
+                kill.assert_not_called()
+
+
+    def test_observation_failure_is_finite_and_never_signals(self):
+        import errno, signal
+        child = SimpleNamespace(pid=4321, returncode=None)
+        with patch.object(state.sys, 'platform', 'darwin'), patch.object(state.os, 'waitid', side_effect=OSError(errno.ECHILD, 'private')), patch.object(state.os, 'killpg') as kill:
+            with self.assertRaisesRegex(SmokeError, '^process_identity_changed$'):
+                state._signal_group(child, {}, signal.SIGKILL)
+            kill.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()
