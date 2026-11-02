@@ -1,0 +1,563 @@
+{
+  "architecture": "arm64",
+  "base_profile_sha256": "14b1ab31a589f3f52b7b2ff93fadb35d26139c1a5cb154a0fdb50ed90a310d9a",
+  "baseline_reproduced": true,
+  "compiler_flags": [
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-O2",
+    "-mmacosx-version-min=15.0"
+  ],
+  "controls": [
+    {
+      "category": "completed",
+      "control": "self",
+      "exit_code": 0,
+      "id": "read_control",
+      "signal": null,
+      "stderr": "",
+      "stderr_truncated": false,
+      "timeout": false
+    },
+    {
+      "category": "completed",
+      "control": "self",
+      "exit_code": 0,
+      "id": "tcp_control",
+      "signal": null,
+      "stderr": "",
+      "stderr_truncated": false,
+      "timeout": false
+    },
+    {
+      "category": "completed",
+      "control": "self",
+      "exit_code": 0,
+      "id": "outside_read_control",
+      "signal": null,
+      "stderr": "",
+      "stderr_truncated": false,
+      "timeout": false
+    },
+    {
+      "category": "completed",
+      "control": "self",
+      "exit_code": 0,
+      "id": "outside_write_control",
+      "signal": null,
+      "stderr": "",
+      "stderr_truncated": false,
+      "timeout": false
+    },
+    {
+      "category": "completed",
+      "control": "self",
+      "exit_code": 0,
+      "id": "unselected_tcp_control",
+      "signal": null,
+      "stderr": "",
+      "stderr_truncated": false,
+      "timeout": false
+    }
+  ],
+  "failure": null,
+  "mode": "loader-matrix",
+  "ok": true,
+  "platform": "Darwin",
+  "probe_source_sha256": "47977b39f2496f3f614125a78e3e174c8a9de2d8321ee0d87632d20962e7ce17",
+  "schema": 2,
+  "variants": [
+    {
+      "cases": [
+        {
+          "category": "completed",
+          "control": "read_control",
+          "exit_code": -6,
+          "id": "read_confined",
+          "signal": 6,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "tcp_control",
+          "exit_code": -6,
+          "id": "tcp_confined",
+          "signal": 6,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "outside_read_control",
+          "exit_code": -6,
+          "id": "outside_read_confined",
+          "signal": 6,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "outside_write_control",
+          "exit_code": -6,
+          "id": "outside_write_confined",
+          "signal": 6,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "unselected_tcp_control",
+          "exit_code": -6,
+          "id": "unselected_tcp_confined",
+          "signal": 6,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        }
+      ],
+      "classification": "loader_abort",
+      "factors": [],
+      "id": "baseline",
+      "ok": false,
+      "profile_sha256": "14b1ab31a589f3f52b7b2ff93fadb35d26139c1a5cb154a0fdb50ed90a310d9a"
+    },
+    {
+      "cases": [
+        {
+          "category": "completed",
+          "control": "read_control",
+          "exit_code": 0,
+          "id": "read_confined",
+          "signal": null,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "tcp_control",
+          "exit_code": 0,
+          "id": "tcp_confined",
+          "signal": null,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "outside_read_control",
+          "exit_code": 2,
+          "id": "outside_read_confined",
+          "signal": null,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "outside_write_control",
+          "exit_code": 2,
+          "id": "outside_write_confined",
+          "signal": null,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "unselected_tcp_control",
+          "exit_code": 2,
+          "id": "unselected_tcp_confined",
+          "signal": null,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        }
+      ],
+      "classification": "passed",
+      "factors": [
+        "root"
+      ],
+      "id": "root",
+      "ok": true,
+      "profile_sha256": "28cec5d90d4610b27c11f9c064978ab92cba051631c7a991bb27f74b335ccc68"
+    },
+    {
+      "cases": [
+        {
+          "category": "completed",
+          "control": "read_control",
+          "exit_code": -6,
+          "id": "read_confined",
+          "signal": 6,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "tcp_control",
+          "exit_code": -6,
+          "id": "tcp_confined",
+          "signal": 6,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "outside_read_control",
+          "exit_code": -6,
+          "id": "outside_read_confined",
+          "signal": 6,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "outside_write_control",
+          "exit_code": -6,
+          "id": "outside_write_confined",
+          "signal": 6,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "unselected_tcp_control",
+          "exit_code": -6,
+          "id": "unselected_tcp_confined",
+          "signal": 6,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        }
+      ],
+      "classification": "loader_abort",
+      "factors": [
+        "map"
+      ],
+      "id": "map",
+      "ok": false,
+      "profile_sha256": "2537a11f32e5d93c2c4dbb265588cf3484578cd4e8c8173a797a663e2677ac0a"
+    },
+    {
+      "cases": [
+        {
+          "category": "completed",
+          "control": "read_control",
+          "exit_code": 0,
+          "id": "read_confined",
+          "signal": null,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "tcp_control",
+          "exit_code": 0,
+          "id": "tcp_confined",
+          "signal": null,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "outside_read_control",
+          "exit_code": 2,
+          "id": "outside_read_confined",
+          "signal": null,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "outside_write_control",
+          "exit_code": 2,
+          "id": "outside_write_confined",
+          "signal": null,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "unselected_tcp_control",
+          "exit_code": 2,
+          "id": "unselected_tcp_confined",
+          "signal": null,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        }
+      ],
+      "classification": "passed",
+      "factors": [
+        "root",
+        "map"
+      ],
+      "id": "root+map",
+      "ok": true,
+      "profile_sha256": "601fe3b9256a3ae6c963419c8f14f3041e7b74331bc360a59468f209673b8db1"
+    },
+    {
+      "cases": [
+        {
+          "category": "completed",
+          "control": "read_control",
+          "exit_code": -6,
+          "id": "read_confined",
+          "signal": 6,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "tcp_control",
+          "exit_code": -6,
+          "id": "tcp_confined",
+          "signal": 6,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "outside_read_control",
+          "exit_code": -6,
+          "id": "outside_read_confined",
+          "signal": 6,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "outside_write_control",
+          "exit_code": -6,
+          "id": "outside_write_confined",
+          "signal": 6,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "unselected_tcp_control",
+          "exit_code": -6,
+          "id": "unselected_tcp_confined",
+          "signal": 6,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        }
+      ],
+      "classification": "loader_abort",
+      "factors": [
+        "cryptex"
+      ],
+      "id": "cryptex",
+      "ok": false,
+      "profile_sha256": "539f07349c3b0c834fe20a1fed07d142d3bb9a17a7103bc321f767b77c1fe8ee"
+    },
+    {
+      "cases": [
+        {
+          "category": "completed",
+          "control": "read_control",
+          "exit_code": 0,
+          "id": "read_confined",
+          "signal": null,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "tcp_control",
+          "exit_code": 0,
+          "id": "tcp_confined",
+          "signal": null,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "outside_read_control",
+          "exit_code": 2,
+          "id": "outside_read_confined",
+          "signal": null,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "outside_write_control",
+          "exit_code": 2,
+          "id": "outside_write_confined",
+          "signal": null,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "unselected_tcp_control",
+          "exit_code": 2,
+          "id": "unselected_tcp_confined",
+          "signal": null,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        }
+      ],
+      "classification": "passed",
+      "factors": [
+        "root",
+        "cryptex"
+      ],
+      "id": "root+cryptex",
+      "ok": true,
+      "profile_sha256": "7ce843f4173a17adcb1e34433ec6ce9efd660a45acc6a8744bf2d1b312a15dcb"
+    },
+    {
+      "cases": [
+        {
+          "category": "completed",
+          "control": "read_control",
+          "exit_code": -6,
+          "id": "read_confined",
+          "signal": 6,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "tcp_control",
+          "exit_code": -6,
+          "id": "tcp_confined",
+          "signal": 6,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "outside_read_control",
+          "exit_code": -6,
+          "id": "outside_read_confined",
+          "signal": 6,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "outside_write_control",
+          "exit_code": -6,
+          "id": "outside_write_confined",
+          "signal": 6,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "unselected_tcp_control",
+          "exit_code": -6,
+          "id": "unselected_tcp_confined",
+          "signal": 6,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        }
+      ],
+      "classification": "loader_abort",
+      "factors": [
+        "map",
+        "cryptex"
+      ],
+      "id": "map+cryptex",
+      "ok": false,
+      "profile_sha256": "5bc0c24e6bb1713c2291535273998db48dd1162ed8c4d15c5a63a2a91e1ae5e1"
+    },
+    {
+      "cases": [
+        {
+          "category": "completed",
+          "control": "read_control",
+          "exit_code": 0,
+          "id": "read_confined",
+          "signal": null,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "tcp_control",
+          "exit_code": 0,
+          "id": "tcp_confined",
+          "signal": null,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "outside_read_control",
+          "exit_code": 2,
+          "id": "outside_read_confined",
+          "signal": null,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "outside_write_control",
+          "exit_code": 2,
+          "id": "outside_write_confined",
+          "signal": null,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        },
+        {
+          "category": "completed",
+          "control": "unselected_tcp_control",
+          "exit_code": 2,
+          "id": "unselected_tcp_confined",
+          "signal": null,
+          "stderr": "",
+          "stderr_truncated": false,
+          "timeout": false
+        }
+      ],
+      "classification": "passed",
+      "factors": [
+        "root",
+        "map",
+        "cryptex"
+      ],
+      "id": "root+map+cryptex",
+      "ok": true,
+      "profile_sha256": "849c53320597530adbd7939c74f154b7c9679f832dcfba3fbcabc5b0994b53ac"
+    }
+  ]
+}

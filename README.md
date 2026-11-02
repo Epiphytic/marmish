@@ -23,6 +23,9 @@ Measured setup timings are published in [the installation baseline](docs/validat
 with [machine-readable results](docs/validation/installed-setup-baseline.json).
 Additional [native setup measurements](docs/validation/installed-prerequisites-41395347740.md)
 record successful Linux installation/identity stages and the remaining failures.
+The [first integrated native matrix report](docs/validation/installed-nine-pair-41397651278/)
+publishes JSON and Markdown, further setup timings and the failed prerequisites.
+It reached no remote commands, so transport metrics remain null with zero samples.
 The installed interoperability workflow records command latency, first-output time
 and verified payload transfer rates per client/server platform pair. Only
 successfully verified commands contribute performance samples.

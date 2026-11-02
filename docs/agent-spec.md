@@ -151,8 +151,16 @@ unselected loopback endpoint stay denied. The
 [production repair](phases/macos-root-loader-fix.md) adds only that rule and keeps
 the full application preflight. This synthetic probe evidence does not establish
 actual MDK startup, installed identity creation or nine-pair command acceptance.
+The [subsequent source-profile probes](validation/macos-rootfix-41399133227/)
+pass all five normal cases; that workflow remains failed solely because the
+historical denial diagnostic reports no SIGABRT to inspect. No full application
+preflight or identity acceptance is inferred from those probes.
 The published experimental.2 archive still contains the earlier profile. A new
 verified archive is required before the installed matrix can validate this fix.
+The [first integrated installed run](validation/installed-nine-pair-41397651278/)
+failed before commands: Linux ARM64 identity startup failed, macOS exhausted disk
+while bootstrapping Rust, and AMD64 timed out at the identity barrier. Its
+reviewed setup timings and nine null transport cells are preserved explicitly.
 
 ## Purpose and intended product
 

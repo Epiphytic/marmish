@@ -1,0 +1,46 @@
+{
+  "conclusion": "failure",
+  "created_at": "2026-11-02T06:04:16Z",
+  "head_sha": "9a694963c253071900532d3d1fc9f5489d82d878",
+  "html_url": "https://github.com/Epiphytic/marmish/actions/runs/41397651278",
+  "id": 41397651278,
+  "jobs": [
+    {
+      "conclusion": "success",
+      "id": 125122719888,
+      "name": "resolve",
+      "started_at": "2026-11-02T06:05:32Z",
+      "status": "completed"
+    },
+    {
+      "conclusion": "failure",
+      "id": 125122784576,
+      "name": "platform (macos-arm64, self-hosted, macOS, ARM64, laptop-ci)",
+      "started_at": "2026-11-02T06:06:31Z",
+      "status": "completed"
+    },
+    {
+      "conclusion": "failure",
+      "id": 125122784582,
+      "name": "platform (linux-arm64, self-hosted, Linux, ARM64, laptop-ci)",
+      "started_at": "2026-11-02T06:05:51Z",
+      "status": "completed"
+    },
+    {
+      "conclusion": "failure",
+      "id": 125122784735,
+      "name": "platform (linux-x64, self-hosted, Linux, X64, bel-ci)",
+      "started_at": "2026-11-02T06:05:51Z",
+      "status": "completed"
+    },
+    {
+      "conclusion": "failure",
+      "id": 125126187226,
+      "name": "rollup",
+      "started_at": "2026-11-02T06:16:49Z",
+      "status": "completed"
+    }
+  ],
+  "run_attempt": 1,
+  "status": "completed"
+}

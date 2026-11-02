@@ -1,0 +1,58 @@
+{
+  "reviewer": "Claude Code",
+  "model": "claude-opus-5-5",
+  "permission_mode": "auto",
+  "review": {
+    "verdict": "APPROVED",
+    "scope": "docs/validation/installed-nine-pair-41397651278 only (read-only; no tests, no network, no edits)",
+    "blockers": [],
+    "findings": [
+      {
+        "severity": "minor",
+        "file": "docs/validation/installed-nine-pair-41397651278/README.md",
+        "line": 4,
+        "summary": "The claim 'All three platform runners were assigned within five minutes of dispatch' cannot be checked against archived evidence.",
+        "detail": "Nothing in the archive records a dispatch timestamp. The local logs only show runner start times: ARM at 2026-11-02T06:05:51Z and macOS at 06:06:32Z. No local x64 job log was supplied, so the x64 runner start time is also unknown. Either cite the Actions run metadata or soften the sentence."
+      },
+      {
+        "severity": "info",
+        "file": "docs/validation/installed-nine-pair-41397651278/linux-x64/",
+        "summary": "Two linux-x64 prerequisite files are not archived (peers.json.status.json and identity-ready/record.json).",
+        "detail": "This is consistent with the README, which only claims to preserve the installation and final cleanup reports. It is noted for completeness only."
+      }
+    ],
+    "evidence": {
+      "byte_identity": {
+        "nine-pair.json": "cmp-identical to /tmp/marmish-nine-pair-41397651278-rollup/nine-pair.json (sha256 9f72d077\u20267b5e)",
+        "nine-pair.md": "cmp-identical to rollup (sha256 cd7369bf\u2026a2fd81)",
+        "linux-arm64/installation-result.json": "cmp-identical to prereq linux-arm64 artifact",
+        "linux-arm64/cleanup-result.json": "cmp-identical",
+        "linux-x64/installation-result.json": "cmp-identical",
+        "linux-x64/cleanup-result.json": "cmp-identical",
+        "macos-arm64/cleanup-result.json": "cmp-identical"
+      },
+      "readme_timings": {
+        "x64 install": "elapsed_ns 3729040216 = 3.729040216 s",
+        "x64 verify": "75301633 = 0.075301633 s",
+        "x64 identity_server": "2365546353 = 2.365546353 s",
+        "x64 identity_client": "2307373194 = 2.307373194 s",
+        "arm install": "6434030637 = 6.434030637 s",
+        "arm verify": "61442219 = 0.061442219 s",
+        "arm failed identity_server": "265866240 = 0.265866240 s; correctly left out of the success table",
+        "cleanup": "x64 duration_ns 269534471 = 0.269534471 s; arm 254234278 = 0.254234278 s",
+        "clock": "Stage clock is 'continuous+monotonic'; elapsed_ns is the continuous (suspend-inclusive) clock, so the README wording is accurate. Every row satisfies suspended_ns = max(0, elapsed - active) (ARM verify active > elapsed gives 0). All samples = 1, and the README disclaims percentiles and platform comparison."
+      },
+      "failed_cells": "All 9 cells: status failed, category required_evidence_invalid, metrics null, payload null, samples cold_status 0 and command 0; sample_count 0. The markdown table shows only '\u2014'. The README says this is missing evidence, not zero latency or nine observed failures.",
+      "no_command_execution_claims": "The rollup errors show every client-result and server-result as record_missing, plus identity_barrier_invalid. The README says the run 'failed before any remote command' and makes no claim that any command ran.",
+      "cleanup_meanings": "Both Linux final cleanups have outcome complete with all 7 checks true. The installation records' 'cleanup: incomplete' is stage-local and is not presented as final. macOS cleanup is not-started, with checks null and duration_ns 0. The README explicitly says this does not prove cleanup of the compiler bootstrap.",
+      "source_and_archives": "Both installation records give source_commit f609b6cc\u2026, version 0.1.0-experimental.2, harness sha 9a694963\u2026, and installer eac417b4\u2026. Their archive and manifest sha256 values match rollup.targets for linux-arm64 (90e5c44e\u2026 / 457fd03d\u2026) and linux-x64 (c409afda\u2026 / b7b87b1d\u2026). Commit f609b6cc exists locally, and the docs/agent-spec.md link target exists.",
+      "arm_diagnostic": "/tmp/marmish-a4-arm-job.log line 177, parsed fields only: category identity_init_failed, stage identity_server, frontend_category namespace_start_failed, reason nonzero_exit, returncode 125, timed_out false, output_limited false, signal null, cleanup complete. This matches the README.",
+      "mac_enospc": "/tmp/marmish-full-41397651278-mac.log lines 133-137: 'cp: \u2026/lib/rustlib/aarch64-apple-darwin/lib/lib*.rlib|rmeta: fcopyfile failed: No space left on device' during the standard-library copy. This matches the README. The runner path appears only in the local log, not in the archive.",
+      "secrets_and_paths": "Grep of the archive for /home/, /Users/, runner/, _work, /tmp/, ghp_/gho_/github_pat, nsec1, PRIVATE KEY, token, secret and password found nothing. The only URLs are the public run/commit URLs and the two relay URLs."
+    }
+  },
+  "dispositions": {
+    "minor": "Added closed public Actions run-summary.json with created_at, platform started_at and links, supporting within5minute scheduling claim.",
+    "info": "Intentionally preserve only stated installation/final-cleanup records; no other artifact preservation claim."
+  }
+}
