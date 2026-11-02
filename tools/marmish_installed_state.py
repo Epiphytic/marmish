@@ -456,6 +456,21 @@ def _snapshot_unreadable(before_start):
     return result
 
 
+def _compile_scopes(state):
+    return {record['execution_id']: record for record in _registry_records(state, 'compile-')}
+
+
+def _verify_compile_member(identity, scope):
+    leader = scope['identity']
+    require(leader is not None and process_identity(leader['pid']) == leader,
+            'cleanup_incomplete')
+    raw = _read_proc(Path('/proc') / str(identity['pid']) / 'stat')
+    fields = raw[raw.rfind(b')') + 2:].split()
+    require(int(fields[2]) == int(fields[3]) == leader['pid'] and
+            process_identity(identity['pid']) == identity and
+            process_identity(leader['pid']) == leader, 'cleanup_incomplete')
+
+
 def _linux_scan(state, marker=None):
     """Exact unique marker, then immutable executable/argument authentication."""
     entries = [path for path in Path('/proc').iterdir() if path.name.isdecimal()]
@@ -463,6 +478,7 @@ def _linux_scan(state, marker=None):
     markers = {marker} if marker else {state['execution_id']} | {
         record['execution_id'] for record in _registry_records(state, 'child-')}
     needles = {b'EPIPHYTIC_EXECUTION_ID=' + value.encode() for value in markers}
+    scopes = _compile_scopes(state)
     found = []
     for path in entries:
         try:
@@ -480,7 +496,16 @@ def _linux_scan(state, marker=None):
             argv = _read_proc(path / 'cmdline').rstrip(b'\0').split(b'\0')
             executable = Path(os.readlink(path / 'exe'))
             require(process_identity(identity['pid']) == identity, 'cleanup_incomplete')
-            _verify_process(state, identity, executable, argv)
+            matching = [value for value in markers if
+                        b'EPIPHYTIC_EXECUTION_ID=' + value.encode() in env.split(b'\0')]
+            compile_markers = [value for value in matching if value in scopes]
+            if compile_markers:
+                # Global cleanup does not own the unreaped compiler leader. It
+                # must never authenticate through the runtime artifact registry.
+                require(marker is not None and len(compile_markers) == 1, 'cleanup_incomplete')
+                _verify_compile_member(identity, scopes[compile_markers[0]])
+            else:
+                _verify_process(state, identity, executable, argv)
             found.append(identity)
         except (FileNotFoundError, SmokeError):
             require(_linux_dead(path), 'cleanup_incomplete')
@@ -724,12 +749,22 @@ def _finish_child(child, identity, *, interrupted, runtime):
     raise SmokeError('cleanup_incomplete')
 
 
-def run_bounded(argv, state, *, timeout, output_limit, runtime, stdin=b''):
+def run_bounded(argv, state, *, timeout, output_limit, runtime, stdin=b'', build_scope=False):
     _validate_state(state)
     require(isinstance(argv, list) and argv and all(isinstance(arg, (str, bytes)) for arg in argv)
             and type(output_limit) is int and 0 < output_limit <= 4 * 1024 * 1024
             and isinstance(stdin, bytes) and math.isfinite(timeout) and timeout > 0,
             'invalid_process')
+    require(type(build_scope) is bool and not (build_scope and runtime), 'invalid_process')
+    source_hash = None
+    if build_scope:
+        from marmish_installed_fixture import SOURCE, source_sha256
+        worker = Path(__file__).resolve().with_name('marmish_installed_fixture.py')
+        require(argv == [state['python'], '-I', '-B', str(worker), '--compile-worker'], 'invalid_process')
+        config = strict_json(stdin)
+        require(isinstance(config, dict) and config.get('stage') in ('fetch', 'build') and
+                config.get('source_sha256') == source_sha256(), 'invalid_process')
+        source_hash = source_sha256()
     started = clock_sample()
     deadline = min(continuous_time() + timeout, state['overall_deadline'])
     require(continuous_time() < deadline, 'operation_timeout')
@@ -737,6 +772,11 @@ def run_bounded(argv, state, *, timeout, output_limit, runtime, stdin=b''):
     marker = state['execution_id'] + ':' + token
     env = child_environment(state, runtime=runtime)
     env['EPIPHYTIC_EXECUTION_ID'] = marker
+    scope_path = Path(state['registry']) / ('compile-' + token + '.json')
+    if build_scope:
+        scope = {'execution_id': marker, 'identity': None, 'source_sha256': source_hash,
+                 'deadline': deadline, 'stage': config['stage']}
+        _new_json(scope_path, scope)
     child = subprocess.Popen(argv, cwd=state['home'], env=env,
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              close_fds=True, start_new_session=True)
@@ -746,6 +786,9 @@ def run_bounded(argv, state, *, timeout, output_limit, runtime, stdin=b''):
         record = {'identity': identity, 'runtime': runtime, 'finished': False,
                   'cleanup': None, 'execution_id': marker}
         _new_json(record_path, record)
+        if build_scope:
+            scope['identity'] = identity
+            save_json(scope_path, scope)
     except BaseException:
         # Popen's new session leader is still unreaped, reserving this PGID.
         with contextlib.suppress(ProcessLookupError):
@@ -780,7 +823,7 @@ def run_bounded(argv, state, *, timeout, output_limit, runtime, stdin=b''):
                 if runtime and sys.platform == 'darwin':
                     control_verified |= _mac_control_evidence(state, argv)
                 if sys.platform.startswith('linux') and continuous_time() >= next_scan:
-                    _observe_linux(state, marker)
+                    (_linux_scan if build_scope else _observe_linux)(state, marker)
                     next_scan = continuous_time() + .5
                 for key, _events in selector.select(min(.1, max(0, deadline - continuous_time()))):
                     if key.data == 'stdin':
@@ -810,7 +853,14 @@ def run_bounded(argv, state, *, timeout, output_limit, runtime, stdin=b''):
                     break
         code = _finish_child(child, identity, interrupted=timed_out or output_limited, runtime=runtime)
         if sys.platform.startswith('linux'):
-            _clean_linux(state, marker)
+            if build_scope:
+                require(not _linux_scan(state, marker), 'cleanup_incomplete')
+                time.sleep(.05)
+                require(not _linux_scan(state, marker), 'cleanup_incomplete')
+            else:
+                _clean_linux(state, marker)
+        if build_scope:
+            require(source_sha256() == source_hash, 'cleanup_incomplete')
         cleanup = 'complete'
     finally:
         if child.returncode is None:
@@ -848,7 +898,6 @@ IDENTITY_FAILURE_REASONS = frozenset({
     'nonzero_exit', 'timed_out', 'output_limited', 'cleanup_incomplete',
     'invalid_identity_output',
 })
-
 
 
 class IdentityError(SmokeError):

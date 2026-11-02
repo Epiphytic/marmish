@@ -1,0 +1,169 @@
+{
+  "verdict": "BLOCKED_CHANGES_REQUIRED",
+  "model": "claude-opus-5-5",
+  "scope": {
+    "reviewed": [
+      "tools/installed-fixture/{Cargo.toml,Cargo.lock,src/main.rs}",
+      "tools/marmish_installed_fixture.py",
+      "tools/marmish_installed_observer.py",
+      "tools/marmish_installed_runtime.py",
+      "tools/marmish_installed_terminal.py",
+      "tools/marmish_installed_live_ci.py",
+      "tools/marmish_nine_pair.py",
+      "tools/test_marmish_installed_{fixture,observer,runtime,terminal,live_ci}.py",
+      "tools/test_marmish_nine_pair.py",
+      "/tmp/marmish-installed-workflow-bc.yml (planned wiring)",
+      "README.md measurement-link diff"
+    ],
+    "read_only_dependencies": [
+      "marmish_installed_state.py (run_bounded/_finish_child/cleanup_state/read_private)",
+      "marmish_installed_rendezvous.py",
+      "marmish_app.py Client submit/retry/wait",
+      "marmishd + engine policy.rs + bridge error codes"
+    ],
+    "excluded": [
+      "macOS owned-denial diagnostic",
+      "Phase-A prerequisite code (approved)",
+      "native/transport/credential/dispatch/push execution"
+    ],
+    "against": [
+      "docs/phases/installed-nine-pair-bc.md",
+      "docs/reviews/installed-nine-pair-bc-design-final.json (APPROVED, N1-N3)"
+    ]
+  },
+  "tests": {
+    "command": "python3 -m pytest tools/test_marmish_installed_{observer,terminal,live_ci,runtime}.py tools/test_marmish_nine_pair.py tools/test_marmish_installed_fixture.py::PairVectors --deselect DriverBoundary::test_owned_supervisor_graceful_sigint_and_identity_record",
+    "result": "65 passed, 1 deselected, 117 subtests passed (2.14s)",
+    "not_run": [
+      "DriverBoundary::test_owned_supervisor_graceful_sigint_and_identity_record (live /proc scan + signals; excluded per no-live-process-scan constraint)",
+      "NativeFixture (cargo build; native)",
+      "workflow (no dispatch)"
+    ]
+  },
+  "blocking": [
+    {
+      "id": "B0",
+      "area": "native compile",
+      "finding": "The fixture compile hits the strict external compiler boundary. The design refinement is still open, so there is no native evidence of any kind.",
+      "fix": "Resolve the boundary design, then rerun native validation."
+    },
+    {
+      "id": "B1",
+      "area": "fixture build wiring",
+      "where": "tools/marmish_installed_fixture.py:100 prepare_dependencies (no callers); /tmp workflow 'Bootstrap native compiler' step sets CARGO_HOME=$RUNNER_TEMP/marmish-cargo (fresh)",
+      "finding": "_compile runs `cargo build --locked --offline` against an empty CARGO_HOME, and no step fetches or prebuilds libc/serde_json/sha2. The build fails on every platform even after B0 is solved, and the failure looks like native-failed.",
+      "fix": "Before the barrier, run a bounded `cargo fetch --locked` (call prepare_dependencies) into the same CARGO_HOME, outside the live window. Test that build_fixture runs with an offline-ready CARGO_HOME."
+    },
+    {
+      "id": "B2",
+      "area": "process ownership / profile lock",
+      "where": "tools/marmish_installed_runtime.py run_clients 147-170, run_client_pair 108-144",
+      "finding": "After a watchdog timeout or a cleanup other than complete on one pair, the loop continues to the next server. It stops only on category cleanup_incomplete. On macOS the MDK daemon runs in its own session, which _finish_child's group kill does not reach, so it can outlive the invocation and still hold the profile lock. The design requires skipping the remaining pairs unless native cleanup proves the lock is free.",
+      "fix": "After any timed_out or non-complete result, run native cleanup (lock-free proof). If the proof fails, mark the remaining slots skipped with a finite category. Add a test where the first pair times out."
+    },
+    {
+      "id": "B3",
+      "area": "deadlines / evidence loss",
+      "where": "runtime run_clients deadline min(given, now+1080, overall-150); per-invoke watchdog remaining+8; _finish_child SIGINT 5s + TERM 1s + KILL 2s + group 2s; workflow clients step timeout-minutes: 18",
+      "finding": "The client budget is exactly 1080 s, but the watchdog grace and teardown time come on top of it. The step's 18-minute cap can kill Python before client-result.json is written, so the run publishes no client evidence. The 120 s delivery reserve and the deadline\u22121200 readiness cutoff are also not subtracted on the client side (live_ci clients passes live_deadline straight through).",
+      "fix": "Set the client deadline to step budget \u2212 (max teardown + watchdog grace + write margin) and subtract the delivery reserve. Raise the step timeout or derive it from the deadline. Add a timing-arithmetic test."
+    },
+    {
+      "id": "B4",
+      "area": "per-pair reconciliation honesty",
+      "where": "runtime _reconcile_server 562-586",
+      "finding": "observer.proofs() needs all 3 pairs complete, and the exact receipt-set equality runs before the per-slot loop. One failed pair raises and marks all 3 server slots observer-failed, so successful cells are mis-attributed. The design requires honest per-pair status.",
+      "fix": "Validate the proof and receipt per slot. Report extra or unknown receipts as a separate whole-report failure, without overwriting slots that verified correctly. Add a 2-of-3 test."
+    }
+  ],
+  "nonblocking": [
+    {
+      "id": "N1",
+      "area": "observer sampling",
+      "where": "observer DaemonObserver._tick require(now-last_tick<=1); runtime MdkRpc(timeout=2); up to 9 RPCs/tick",
+      "finding": "The 1 s gap limit is shorter than one allowed RPC timeout. A slow local RPC hard-fails the whole observer and gives a false observer-failed. High priority before native runs.",
+      "fix": "Base the gap limit on the history-window overlap proof (the real loss check), or set it to \u2265 RPC timeout \u00d7 RPCs per tick plus margin."
+    },
+    {
+      "id": "N2",
+      "area": "lifetime/signal handling",
+      "where": "runtime main 817-849, serve 616-709",
+      "finding": "setitimer(1800) starts before serve's `began`, so SIGALRM arrives before the loop deadline. It is reported as observer-failed instead of lifetime-cap. A signal raised inside `finally` can drop the server report or abort the daemon close. The supervisor record always says cleanup='complete'.",
+      "fix": "Arm the timer from the same start instant plus margin and block signals during finally. Set the cleanup field from the actual _finish_child result."
+    },
+    {
+      "id": "N3",
+      "area": "terminal adapter / cyclic shutdown",
+      "where": "terminal.wait_reports (needs all 3 server-ready records), validate_report (payload must equal expected)",
+      "finding": "failure_client_report has payload=None, so validate_report rejects it. If any peer fails, its failure report is never delivered and every server waits until the lifetime cap, which defeats the design goal of avoiding cyclic shutdown.",
+      "fix": "Accept validated failure reports (status failed, payload/metrics null) and deliver them."
+    },
+    {
+      "id": "N4",
+      "area": "cleanup claims",
+      "where": "runtime cleanup_runtime 712-738; check_policy 243-281",
+      "finding": "workers_absent is set from engine cleanup_ready alone, with no owned worker-identity absence check. check_policy verifies that receipts are absent but not that workers are absent.",
+      "fix": "Record the identities of fixture workers that ran and prove each one absent, or rename the check to what it actually proves."
+    },
+    {
+      "id": "N5",
+      "area": "metrics",
+      "where": "runtime command_metrics 73-88",
+      "finding": "command_wall_seconds is measured through run_bounded's post-exit cleanup and scans, so harness overhead is folded into the measurement. The ns\u2192s conversion, sample counts and the \u00d71000 Markdown ms conversion are otherwise consistent.",
+      "fix": "Take the timestamp at child exit, or document the metric as including teardown."
+    },
+    {
+      "id": "N6",
+      "area": "result provenance",
+      "where": "nine_pair JSON output",
+      "finding": "Each cell lacks the fixture digest, there are no payload or metric definitions, and the harness commit URL is missing (only run_url).",
+      "fix": "Add fixture sha256 per cell, a definitions block and the commit URL."
+    },
+    {
+      "id": "N7",
+      "area": "gates/layout",
+      "where": "tools/installed-fixture (standalone [workspace]); multiple python modules",
+      "finding": "The fixture is outside the root workspace, so the required `cargo clippy --workspace -D warnings` and the tests never check it. The layout differs from the design (crates/marmish-interop-fixture).",
+      "fix": "Add an explicit clippy/test invocation for the fixture manifest, or record the layout deviation in the design."
+    },
+    {
+      "id": "N8",
+      "area": "fixture edge cases",
+      "where": "installed-fixture/src/main.rs",
+      "finding": "The receipt is created (O_EXCL) before argv/stdin are validated, so a rejected invocation leaves an empty receipt. Reconciliation still fails closed. Tests don't cover role/path mismatch or argv[0] mismatch, and the alarm test raises SIGALRM by hand instead of checking that the 120 s alarm is set.",
+      "fix": "Validate before creating the receipt, or keep it and test that an empty receipt is rejected. Add the missing vectors."
+    },
+    {
+      "id": "N9",
+      "area": "fixture build hygiene",
+      "where": "fixture.build_fixture",
+      "finding": "executable.parent.mkdir(parents=True) creates intermediate directories with the umask mode instead of an explicit 0700.",
+      "fix": "Create each level with mode=0o700 and verify it."
+    },
+    {
+      "id": "N10",
+      "area": "workflow wiring",
+      "where": "/tmp workflow",
+      "finding": "The compiler bootstrap runs after the identity barrier, which pushes back entry to the live window. server_barrier checks only `< live_deadline`, not the deadline\u22121200 readiness cutoff.",
+      "fix": "Move the bootstrap and the fetch from B1 before the barrier, and enforce readiness_deadline in server_barrier."
+    },
+    {
+      "id": "N11",
+      "area": "observer gap check",
+      "finding": "The overlap check uses set intersection, while the existing History check uses `ids[0] in seen`. They are equivalent under insertion ordering. A note only."
+    }
+  ],
+  "verified_ok": [
+    "Exactly 3 commands per client role. The command path is token\u2192submit with no status-first step (marmish_app 496-500). Only the probe sends status, the observer counts it as a probe, and unexpected_submissions fails closed.",
+    "Authenticated journal proof: kind 30100 with tag [marmish,v1], `from` checked against direction, request/response correlated by request id, windows checked for overlap.",
+    "Binary vectors: argv includes \\xff, $(id) and an embedded newline; stdin is 8192 bytes; stdout is 65536 bytes plus magic and length-prefixed argv; stderr is the reversed stdin. Streams are rebuilt and compared byte for byte.",
+    "Default and per-key policy layers intersect (policy.rs). The 6 cross-role submits expect command_denied and an unlisted token expects unauthorized, matching bridge codes lib.rs:617/620 (design N3).",
+    "Cancel can only come from the client (design N2). The 120 s fixture alarm sits within the cleanup_ready window of \u2265130 s (design N1).",
+    "Token isolation: GITHUB_TOKEN is popped in the adapters and live_ci, a redirect never gets the token, and api.github.com redirects are refused.",
+    "Artifact binding: ZIP size, entry and digest checks, canonical-byte equality and inbox mode 0700.",
+    "The cleanup-result schema matches Phase A, and engine policy v1 matches files storage.",
+    "README links docs/validation/installed-setup-baseline.{md,json} (both exist). No nine-pair result is claimed."
+  ],
+  "native_acceptance": "NOT ACCEPTED \u2014 B0 open and no live evidence.",
+  "permission_mode": "auto"
+}

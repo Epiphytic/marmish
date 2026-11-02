@@ -415,3 +415,43 @@ record native blockers; C's acceptance requires nine actual successful pairs in
 one attempt. Commit/push reviewed source and sanitized evidence to both configured
 remotes and verify publication; never close the overall task on mocked or partial
 matrix evidence.
+
+## Implementation layout and measurement interpretation
+
+The execution module is split into `marmish_installed_runtime.py` (credential-free
+supervisor/client driver), `marmish_installed_observer.py` (authenticated evidence)
+and `marmish_installed_live_ci.py` (finite Actions operations).
+`marmish_installed_terminal.py` is the isolated credential-bearing delivery adapter.
+These replace the suggested single `marmish_installed_interop.py` entrypoint above;
+the workflow records the concrete operation arguments. No application code is
+imported to perform acceptance operations in place of installed launchers.
+
+The fixture lives in the standalone `tools/installed-fixture` workspace, rather
+than the initially proposed application workspace crate. It remains an unpublished
+test executable with its own pinned Cargo.lock. Validation must explicitly run
+`cargo test --locked --manifest-path tools/installed-fixture/Cargo.toml` and
+`cargo clippy --locked --manifest-path tools/installed-fixture/Cargo.toml --all-targets -- -D warnings`;
+the application's workspace checks do not cover this manifest.
+
+Command and cold-status wall durations include the bounded harness process cleanup
+and absence scans. They measure conservative complete user operations. First-output
+and output-drain intervals use actual pipe observations. JSON carries metric
+definitions, each verified fixture digest, and the harness commit URL; Markdown
+describes the overhead. No performance percentiles are inferred from one sample
+per platform pair. The initial integrated code review and resulting corrections
+are recorded in `docs/reviews/installed-nine-pair-bc-code-initial.json`.
+
+The five-minute readiness cutoff intentionally covers the full server barrier,
+including all peer builds and readiness delivery, from each local server start.
+A later peer does not extend that bound. The separate live cap remains 30 minutes;
+the waiter permits another 30 seconds for bounded frontend close and terminal
+report writing before stopping the exact supervisor. This grace accepts no work.
+
+Workflow step timeouts are outer guards rather than additive work allocations.
+The private state's 75-minute overall deadline bounds preparation, identity
+rendezvous and live execution. A 100-minute job envelope also budgets for the
+pre-state toolchain bootstrap and Bubblewrap acquisition (six minutes each),
+the cleanup step's separate eight-minute outer bound, runner setup and final
+evidence upload. It does not extend the state's deadline or server lifetime.
+Cleanup uses the phase-A report path, including a not-started result and finite
+diagnostics, with supervisor shutdown before the shared cleanup callback.

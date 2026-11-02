@@ -29,7 +29,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    timeout-minutes: 75
+    timeout-minutes: 100
     strategy:
       fail-fast: false
       max-parallel: 3
@@ -64,11 +64,15 @@ jobs:
           umask 077
           parent=$(mktemp -d /tmp/marmish-harness-XXXXXXXX)
           echo "MARMISH_INSTALLED_ROOT=$parent" >> "$GITHUB_ENV"
+      - name: Bootstrap pinned compiler before disposable runtime state
+        timeout-minutes: 6
+        run: python3 tools/marmish_ci.py bootstrap --destination "$RUNNER_TEMP/marmish-toolchain-${{ github.run_id }}-${{ github.run_attempt }}"
       - name: Execute real install script and verify every installed payload
         id: installation
-        timeout-minutes: 15
+        timeout-minutes: 17
         run: >-
           python3 tools/marmish_installed_ci.py prepare
+          --toolchain-source "$RUNNER_TEMP/marmish-toolchain-${{ github.run_id }}-${{ github.run_attempt }}"
           --pin-dir "$RUNNER_TEMP/release-pin"
           --state "$MARMISH_INSTALLED_ROOT/state" --role '${{ matrix.platform }}'
       - name: Initialize two fresh identities through installed launcher
@@ -103,14 +107,77 @@ jobs:
           --pin-dir "$RUNNER_TEMP/release-pin"
           --state "$MARMISH_INSTALLED_ROOT/state" --role '${{ matrix.platform }}'
           --peers "$MARMISH_INSTALLED_ROOT/state.public/peers.json"
-      # Phase B extends these jobs here. This increment validates prerequisites;
-      # reaching the barrier does not claim nine-pair command acceptance.
+      - name: Start installed server with three restricted principals
+        id: server
+        timeout-minutes: 6
+        run: >-
+          python3 tools/marmish_installed_live_ci.py start-server
+          --pin-dir "$RUNNER_TEMP/release-pin" --state "$MARMISH_INSTALLED_ROOT/state"
+          --role '${{ matrix.platform }}' --identities "$MARMISH_INSTALLED_ROOT/state.public/peers.json"
+      - name: Publish server readiness while the server remains running
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: installed-interop-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.platform }}-server-ready
+          path: ${{ env.MARMISH_INSTALLED_ROOT }}/state.public/server-ready/record.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Isolated token-bearing server rendezvous
+        timeout-minutes: 6
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python3 tools/marmish_installed_rendezvous.py wait
+          --pin-dir "$RUNNER_TEMP/release-pin" --state "$MARMISH_INSTALLED_ROOT/state"
+          --stage server-ready --timeout 300
+          --identities "$MARMISH_INSTALLED_ROOT/state.public/peers.json"
+          --output "$MARMISH_INSTALLED_ROOT/state.public/servers.json"
+      - name: Require all three servers before commands
+        id: servers
+        timeout-minutes: 6
+        if: always() && steps.server.outcome == 'success'
+        run: >-
+          python3 tools/marmish_installed_live_ci.py server-barrier
+          --pin-dir "$RUNNER_TEMP/release-pin" --state "$MARMISH_INSTALLED_ROOT/state"
+          --role '${{ matrix.platform }}' --peers "$MARMISH_INSTALLED_ROOT/state.public/servers.json"
+      - name: Execute and measure commands against every installed server
+        id: clients
+        if: always() && steps.servers.outcome == 'success'
+        timeout-minutes: 18
+        run: >-
+          python3 tools/marmish_installed_live_ci.py clients
+          --pin-dir "$RUNNER_TEMP/release-pin" --state "$MARMISH_INSTALLED_ROOT/state"
+          --role '${{ matrix.platform }}'
+      - name: Publish terminal client evidence while servers remain running
+        if: always() && steps.servers.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: installed-interop-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.platform }}-client-result
+          path: ${{ env.MARMISH_INSTALLED_ROOT }}/state.public/client-result/record.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Deliver peer terminal reports to the running local server
+        if: always() && steps.servers.outcome == 'success'
+        timeout-minutes: 30
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python3 tools/marmish_installed_terminal.py
+          --pin-dir "$RUNNER_TEMP/release-pin" --state "$MARMISH_INSTALLED_ROOT/state"
+          --identities "$MARMISH_INSTALLED_ROOT/state.public/peers.json"
+          --servers "$MARMISH_INSTALLED_ROOT/state.public/servers.json"
+      - name: Require server execution receipts and authenticated observations
+        if: always() && steps.server.outcome == 'success'
+        timeout-minutes: 32
+        run: >-
+          python3 tools/marmish_installed_live_ci.py await-server
+          --pin-dir "$RUNNER_TEMP/release-pin" --state "$MARMISH_INSTALLED_ROOT/state"
+          --role '${{ matrix.platform }}'
       - name: Prove owned process cleanup and uninstall disposable installation
         id: cleanup
         if: always() && steps.checkout.outcome == 'success'
         timeout-minutes: 8
         run: >-
-          python3 tools/marmish_installed_ci.py cleanup
+          python3 tools/marmish_installed_live_ci.py cleanup
           --pin-dir "$RUNNER_TEMP/release-pin"
           --state "$MARMISH_INSTALLED_ROOT/state" --role '${{ matrix.platform }}'
       - name: Remove owned Bubblewrap after process cleanup
@@ -127,5 +194,44 @@ jobs:
         with:
           name: installed-interop-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.platform }}-prerequisite-result
           path: ${{ env.MARMISH_INSTALLED_ROOT }}/state.public
+          if-no-files-found: error
+          retention-days: 14
+  rollup:
+    needs: [resolve, platform]
+    if: always() && github.repository == 'Epiphytic/marmish' && github.ref == 'refs/heads/master' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Download immutable release pin
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: installed-interop-${{ github.run_id }}-${{ github.run_attempt }}-release-pin
+          path: ${{ runner.temp }}/release-pin
+      - name: Download final sanitized platform records
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: installed-interop-${{ github.run_id }}-${{ github.run_attempt }}-*-prerequisite-result
+          path: ${{ runner.temp }}/records
+      - name: Reconcile nine pairs and calculate verified measurements
+        run: >-
+          python3 tools/marmish_nine_pair.py --pin-dir "$RUNNER_TEMP/release-pin"
+          --records "$RUNNER_TEMP/records" --json "$RUNNER_TEMP/nine-pair.json"
+          --markdown "$RUNNER_TEMP/nine-pair.md"
+      - name: Publish measurement summary even on failure
+        if: always()
+        run: cat "$RUNNER_TEMP/nine-pair.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve sanitized measurement artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: installed-interop-${{ github.run_id }}-${{ github.run_attempt }}-nine-pair
+          path: |
+            ${{ runner.temp }}/nine-pair.json
+            ${{ runner.temp }}/nine-pair.md
           if-no-files-found: error
           retention-days: 14

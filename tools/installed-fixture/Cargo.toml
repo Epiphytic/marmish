@@ -1,0 +1,13 @@
+[package]
+name = "marmish-installed-fixture"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.97"
+publish = false
+
+[workspace]
+
+[dependencies]
+libc = "0.2"
+serde_json = "1"
+sha2 = "=0.10.9"

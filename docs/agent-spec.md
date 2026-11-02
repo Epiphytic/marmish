@@ -18,14 +18,28 @@ with bounded server lifetime and delivery-safe shutdown. The
 [phase A implementation](phases/installed-nine-pair-a.md) supplies release pinning,
 actual installer execution, full installed-tree verification, disposable identity
 initialization, bounded credential-isolated public rendezvous and final cleanup
-reports. Its workflow is prerequisite-only until the
-[reviewed B/C design](phases/installed-nine-pair-bc.md) is integrated; passing the
-identity barrier does not establish nine-pair command acceptance. Current native
+reports. The integrated
+[B/C harness](phases/installed-nine-pair-bc.md) adds a bounded server supervisor,
+native fixed-role fixtures, authenticated history observation, client-terminal
+delivery and strict nine-pair reconciliation. The fixture has a separate,
+unpublished locked workspace; its [compiler boundary](phases/installed-nine-pair-compiler.md)
+copies a pinned toolchain into private state and warms dependencies before
+identity initialization. Its [local compiler proof](validation/installed-compiler-local.md)
+passed all three role variants on Linux AMD64; this is not cross-platform or
+transport acceptance. Passing the identity barrier does not establish nine-pair
+command acceptance. Current native
 confinement blockers and the production uv installer remain separate.
 Measured [setup-only timings](validation/installed-setup-baseline.md) cover actual
 installation and release verification, with explicit scope and one-sample limits.
 Live command latency, first output and verified-payload goodput require actual
 installed transport execution; missing or failed samples are never zero latency.
+The rollup emits JSON and Markdown with exact byte counts, per-pair sample counts,
+source/asset identities and timing definitions. Command wall and cold-status time
+include harness process-cleanup and absence checks. Effective download goodput is
+verified stdout plus stderr bytes divided by complete command wall time;
+output-drain goodput uses first-to-last local output timing. These are local
+elapsed measurements, not one-way network latency. Failed or unverified pairs
+have null metrics and zero samples; one observation does not establish percentiles.
 
 ## Intended managed setup and unified service
 

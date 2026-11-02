@@ -1,0 +1,87 @@
+{
+  "reviewer": "Claude Code",
+  "model": "claude-opus-5-5",
+  "permission_mode": "auto",
+  "review": {
+    "verdict": "APPROVED",
+    "reviewer": "Claude Code",
+    "model": "claude-opus-5-5",
+    "scope": "Nonblocking followups after docs/reviews/installed-nine-pair-bc-code-approved.json, for source publication and native execution only. This does not claim nine-pair acceptance.",
+    "initial_blockers": {
+      "B0": "Still resolved. The compile worker argv now uses -I -B (marmish_installed_fixture.py:197), and run_bounded's exact-argv check matches (marmish_installed_state.py:763). It has independent approval in installed-compiler-isolated-code.json (APPROVED).",
+      "B1": "Still resolved. prepare calls prepare_dependencies within preparation_deadline when --toolchain-source is given. The workflow bootstraps the pinned toolchain before the state exists and passes the same path to prepare.",
+      "B2": "Unchanged and still resolved. The watchdog/skip tests pass.",
+      "B3": "Still resolved. client_deadline still subtracts watchdog (8 s), teardown (28 s), write (10 s) and the 120 s delivery reserve. The clients step is still 18 min. The new await margin is on the server side only and does not change the client budget.",
+      "B4": "Unchanged and still resolved. The per-slot reconciliation tests pass."
+    },
+    "followups_verified": {
+      "N1": "Kept as intended behaviour, not a code change. The phase doc now states that the five-minute readiness cutoff covers the whole server barrier from local server start, and that a later peer does not extend it. The server-barrier step now has timeout-minutes: 6 (closes N7).",
+      "N2": "Fixed. runtime.await_server waits until min(deadline+30, overall_deadline-120) before stop_supervisor (runtime.py:887). Worst case is 1800 + 30 + 12 s of the stop ladder, about 1842 s, which is under the 32-minute (1920 s) step timeout. The supervisor's itimer is at deadline+1, inside the grace. A behavioural test covers both sides: at deadline+5 the report is accepted without stopping, and at deadline+31 with no report it stops and raises 'deadline'.",
+      "N4": "Fixed. live_ci.cleanup delegates to marmish_installed_ci.cleanup with before_cleanup=stop_supervisor and runtime_cleanup=cleanup_runtime. Missing state gives not-started with duration 0 and no supervisor or uninstall call. pin_sha256 is filled from the loaded state. Any failure goes through failure_diagnostic and is recorded as incomplete/cleanup_incomplete. If the supervisor's state is uncertain, uninstall is deliberately skipped (tested).",
+      "N5": "Fixed (see B0).",
+      "N6": "Fixed. README and agent-spec now say wall time includes harness teardown, define the goodput denominators, add the one-sample/no-percentile and not-one-way-latency caveats, and state that failed pairs get null metrics. All linked docs exist.",
+      "N8": "Partly addressed. Job timeout is now 90 min, and the doc says step timeouts are outer guards and the state's 4500 s overall deadline is the real bound. See F1 for what remains.",
+      "identity_diagnostic": "Independently approved in installed-identity-diagnostic-code.json (APPROVED). Not re-reviewed beyond confirming it does not interact with these followups."
+    },
+    "blockers": [],
+    "findings": [
+      {
+        "id": "F1",
+        "severity": "nonblocking",
+        "file": ".github/workflows/installed-interop.yml",
+        "line": 32,
+        "finding": "The 90-minute envelope reasoning only budgets for the 6-minute bootstrap. Bubblewrap acquisition (also up to 6 minutes) runs before the state exists too. Cleanup can start as late as about overall_deadline-108 s and is limited only by its own 8-minute step timeout, and uninstall/native cleanup are not capped by overall_deadline. In the pathological case (both pre-state steps hit their caps and cleanup uses its full step), the job reaches about 95 minutes, and the final upload of state.public could be cut off. The result fails closed (the rollup sees missing records), and in practice the job finishes well inside 90 minutes.",
+        "fix": "Raise the job timeout to 100, or add Bubblewrap and post-deadline cleanup to the documented critical path (phase doc, 'Workflow step timeouts are outer guards')."
+      },
+      {
+        "id": "F2",
+        "severity": "nonblocking",
+        "file": "tools/marmish_installed_ci.py",
+        "line": 199,
+        "finding": "A failure in before_cleanup (stop_supervisor) is recorded with failure_diagnostic stage='cleanup_load'. The finite diagnostic therefore does not separate 'state could not be loaded' from 'supervisor would not stop'.",
+        "fix": "Track a stage variable as cleanup_state does ('cleanup_load', then 'cleanup_supervisor' before the before_cleanup call) and pass it to failure_diagnostic. Add the new stage to the diagnostic's allowed set if it has one."
+      },
+      {
+        "id": "F3",
+        "severity": "nonblocking (maintainability)",
+        "file": "tools/marmish_installed_runtime.py",
+        "line": 586,
+        "finding": "From the quality-delta report: _running_rpc is a copy of marmish_interop.running_rpc. The only differences are timeout=2 instead of 10 and taking state rather than root. Unlike the other flagged duplicates, both have the same trust boundary and contract.",
+        "fix": "Add a keyword timeout=10 to marmish_interop.running_rpc and call running_rpc(Path(state['root']), timeout=2) here. Leave it as is if importing marmish_interop is undesirable in the supervisor."
+      }
+    ],
+    "quality_delta_triage": "The other gating rows are not meaningful regressions. read_public/read_record have different error categories and size limits; _hex/_uint/_keys/_secret are small validators at different trust boundaries; the run_bounded complexity and churn come from the approved compile-scope verification branch; the serve/worker/storage rows are Rust symbols that did not change; the workflow 'platform' verbosity comes from the added B/C steps; the test-class verbosity is in new test classes.",
+    "tests": {
+      "run": [
+        {
+          "command": "python3 -m pytest -q tools/test_marmish_installed_{runtime,live_ci,observer,terminal,state,fixture}.py tools/test_marmish_nine_pair.py --deselect DriverBoundary::test_owned_supervisor_graceful_sigint_and_identity_record -k 'not NativeFixture'",
+          "result": "128 passed, 7 deselected, 154 subtests passed (7.85 s)"
+        },
+        {
+          "command": "python3 -m pytest -q tools/test_marmish_installed_state.py tools/test_marmish_installed_ci.py",
+          "result": "59 passed, 48 subtests passed (5.01 s)"
+        },
+        {
+          "command": "yaml.safe_load(.github/workflows/installed-interop.yml); git diff --check",
+          "result": "parses; no whitespace errors"
+        }
+      ],
+      "not_run": [
+        "actionlint: not installed locally; fetching it with 'go run \u2026@v1.7.7' was denied by the permission classifier",
+        "NativeFixture (cargo build) and the live supervisor SIGINT test: excluded, as they are native or live process scans",
+        "No live relay, native CI or private state was used"
+      ]
+    }
+  },
+  "dispositions": {
+    "F1": "Adopted exact recommended 100-minute outer envelope; phase doc budgets six-minute bootstrap plus six-minute Bubblewrap, 75-minute state, eight-minute cleanup and setup/upload. Server remains capped at30min.",
+    "F2": "Deferred: existing cleanup_load category is finite and cleanup remains fail-closed; dedicated supervisor-stage vocabulary is optional diagnostic refinement.",
+    "F3": "Deferred: keep standalone installed supervisor independent of the older source interop harness imports; duplication acknowledged and bounded.",
+    "initial_N3": "Deferred fail-closed startup-timeout robustness; global exact-identity cleanup remains required.",
+    "initial_N9": "Deferred anomaly isolation; fresh invocation/fixed fixture flow does not generate those errors, and unexpected messages fail acceptance."
+  },
+  "parent_validation": {
+    "affected_runtime_ci_live": "47 tests +33subtests passed",
+    "actionlint": "v1.7.7 passed; parent installed cached /tmp/actionlint for subsequent reviews"
+  }
+}

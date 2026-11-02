@@ -19,6 +19,19 @@ these are not observations from hosted packaging jobs. Successful building or
 installation does not establish working confined execution on those platforms.
 Intel macOS is not included.
 
+Measured setup timings are published in [the installation baseline](docs/validation/installed-setup-baseline.md),
+with [machine-readable results](docs/validation/installed-setup-baseline.json).
+Additional [native setup measurements](docs/validation/installed-prerequisites-41395347740.md)
+record successful Linux installation/identity stages and the remaining failures.
+The installed interoperability workflow records command latency, first-output time
+and verified payload transfer rates per client/server platform pair. Only
+successfully verified commands contribute performance samples.
+Command wall time includes harness teardown; effective download speed divides
+verified stdout and stderr bytes by that time. First-output and output-drain
+timings use local pipe observations. Each platform pair supplies one sample,
+which does not establish percentiles or one-way network latency. Full definitions
+are included in the workflow's JSON and Markdown results.
+
 ### Copy-and-paste quickstart
 
 Run these commands on both machines as your normal Unix user with Python 3.11+

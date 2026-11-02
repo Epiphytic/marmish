@@ -511,6 +511,110 @@ class InstalledStateTests(unittest.TestCase):
             state._same_bound_file(identity, str(python).lstrip('/'), script)
 
 
+if __name__ == '__main__':
+    unittest.main()
+
+
+@unittest.skipUnless(sys.platform.startswith('linux'), 'Linux compile marker proof')
+class CompileScopes(unittest.TestCase):
+    setUp = InstalledStateTests.setUp
+
+    def compiler(self, source):
+        path = self.root / 'fake-cargo'
+        path.write_text('#!' + sys.executable + '\n' + source)
+        path.chmod(0o700)
+        return str(path)
+
+    def compile(self, source, *, timeout=3):
+        import marmish_installed_fixture as fixture
+        cargo = self.compiler(source)
+        config = {'stage': 'fetch', 'source_sha256': fixture.source_sha256(),
+                  'cargo': cargo, 'rustc': cargo, 'rustdoc': cargo, 'constants': {},
+                  'cargo_home': str(self.root / 'cargo-home'), 'target': str(self.root / 'target'),
+                  'triple': 'x86_64-unknown-linux-gnu', 'linker': '/usr/bin/cc'}
+        return state.run_bounded([self.state['python'], '-I', '-B', str(Path(fixture.__file__).resolve()),
+                                  '--compile-worker'], self.state, timeout=timeout,
+                                 output_limit=8192, runtime=False,
+                                 stdin=json.dumps(config).encode(), build_scope=True)
+
+    def test_reserved_session_accepts_unregistered_fork_and_exec(self):
+        result = self.compile('import os,time\npid=os.fork()\nif pid==0:\n time.sleep(.7);os._exit(0)\nos.waitpid(pid,0)\nprint("compiled")\n')
+        self.assertEqual(result['returncode'], 0)
+        self.assertEqual(result['stdout'], b'compiled\n')
+        self.assertEqual(result['cleanup'], 'complete')
+        self.assertFalse(state._registry_records(self.state, 'artifact-'))
+        self.assertFalse(state._registry_records(self.state, 'observed-'))
+        self.assertFalse(state._linux_scan(self.state))
+
+    def test_session_group_and_exact_leader_fences(self):
+        leader = {'pid': 123, 'start': 1, 'boot': 'boot'}
+        scope = {'identity': leader}
+        for pgrp, sid in ((123, 123), (124, 123), (123, 124)):
+            raw = f'123 (compiler worker) S 1 {pgrp} {sid} 0'.encode()
+            with self.subTest(pgrp=pgrp, sid=sid), \
+                    patch.object(state, 'process_identity', return_value=leader), \
+                    patch.object(state, '_read_proc', return_value=raw):
+                if pgrp == sid == 123:
+                    state._verify_compile_member(leader, scope)
+                else:
+                    with self.assertRaises(SmokeError):
+                        state._verify_compile_member(leader, scope)
+        with patch.object(state, 'process_identity', return_value=dict(leader, start=2)):
+            with self.assertRaises(SmokeError):
+                state._verify_compile_member(leader, scope)
+
+    def test_compile_scope_cannot_be_requested_for_runtime_or_other_worker(self):
+        import marmish_installed_fixture as fixture
+        worker = str(Path(fixture.__file__).resolve())
+        for runtime, argv in [(True, [self.state['python'], '-I', '-B', worker, '--compile-worker']),
+                              (False, [sys.executable, '-c', 'pass']),
+                              (False, [self.state['python'], worker, '--compile-worker']),
+                              (False, [self.state['python'], '-I', worker, '--compile-worker']),
+                              (False, [self.state['python'], '-B', worker, '--compile-worker'])]:
+            with self.subTest(runtime=runtime, argv=argv), self.assertRaises(SmokeError), \
+                    patch.object(state.subprocess, 'Popen') as spawn:
+                state.run_bounded(argv, self.state, timeout=1, output_limit=100,
+                                  runtime=runtime, build_scope=True)
+            spawn.assert_not_called()
+        self.assertFalse(state._registry_records(self.state, 'child-'))
+
+    def test_timeout_keeps_reserved_group_and_finishes_cleanup(self):
+        result = self.compile('import time\ntime.sleep(30)\n', timeout=.2)
+        self.assertTrue(result['timed_out'])
+        self.assertEqual(result['cleanup'], 'complete')
+        self.assertFalse(state._linux_scan(self.state))
+
+    def test_setsid_escape_refused_and_global_cleanup_never_signals_it(self):
+        import time
+        escaped = self.root / 'escape-pid'
+        source = ('import os,time\npid=os.fork()\nif pid==0:\n os.setsid()\n'
+                  f' open({str(escaped)!r},"w").write(str(os.getpid()))\n'
+                  ' time.sleep(30);os._exit(0)\ntime.sleep(30)\n')
+        identity = None
+        try:
+            with self.assertRaisesRegex(SmokeError, 'cleanup_incomplete'):
+                self.compile(source)
+            pid = int(escaped.read_text())
+            identity = state.process_identity(pid)
+            with patch.object(state, '_pidfd_signal') as send:
+                with self.assertRaisesRegex(SmokeError, 'cleanup_incomplete'):
+                    state._clean_linux(self.state)
+                result = state.cleanup_state(self.state)
+                self.assertEqual(result['outcome'], 'incomplete')
+                self.assertIsNot(result['checks']['root_removed'], True)
+                send.assert_not_called()
+            self.assertEqual(state.process_identity(pid), identity)
+            self.assertTrue(self.root.exists())
+        finally:
+            if escaped.exists():
+                pid = int(escaped.read_text())
+                identity = identity or state.process_identity(pid)
+                state._pidfd_signal(identity, __import__('signal').SIGKILL)
+                until = time.monotonic() + 3
+                while not state._process_absent(identity) and time.monotonic() < until:
+                    time.sleep(.02)
+
+
 class DarwinZombieCleanup(unittest.TestCase):
     def status(self, **changes):
         return SimpleNamespace(**dict(dict(si_pid=4321, si_code=os.CLD_EXITED, si_status=7), **changes))
@@ -589,7 +693,3 @@ class DarwinZombieCleanup(unittest.TestCase):
             with self.assertRaisesRegex(SmokeError, '^process_identity_changed$'):
                 state._signal_group(child, {}, signal.SIGKILL)
             kill.assert_not_called()
-
-
-if __name__ == '__main__':
-    unittest.main()

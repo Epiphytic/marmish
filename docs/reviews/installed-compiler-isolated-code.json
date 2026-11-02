@@ -1,0 +1,24 @@
+{
+  "verdict": "APPROVED",
+  "scope": "N5 follow-up only: the compiler worker now runs under python -I -B. Files: tools/marmish_installed_fixture.py (the isolated argv at line 197 and the __main__ sys.path bootstrap at lines 12-13), tools/marmish_installed_state.py (the exact build_scope argv allowlist at line 763), and the matching CompilerPreparation and CompileScopes tests. The earlier integrated B/C approval is a separate review. This review makes no claims about unrelated fixes.",
+  "blocking_findings": [],
+  "verification": {
+    "isolated_argv": "_compile builds the launch as [state['python'], '-I', '-B', <resolved fixture path>, '--compile-worker'] and sets build_scope=True (fixture.py:197).",
+    "allowlist": "When build_scope is set, run_bounded only accepts an argv equal to [state['python'], '-I', '-B', <resolved worker>, '--compile-worker'] (state.py:763). It checks this before writing any scope or registry entry and before Popen. It rejects build_scope with runtime=True earlier, at line 755. Because the match is exact, a missing -I or -B, flags in a different order, an extra flag, or a different interpreter or script are all rejected.",
+    "import_bootstrap": "Under -I, Python leaves the script directory off sys.path and ignores PYTHONPATH. The `if __name__ == '__main__'` guard adds Path(__file__).resolve().parent to sys.path, which is the fixed checkout's tools directory. The module-level imports (marmish_installed_release, marmish_platform) come after this, and so do the later imports of marmish_installed_state. The bootstrap only runs for direct execution, so normal imports are unchanged. No module in tools/*.py shares a name with a standard-library module (checked against sys.stdlib_module_names), so the sys.path[0] insert does not shadow anything today.",
+    "no_bytecode": "-B is required by the exact allowlist. The probe below confirmed that tools/__pycache__ listing and mtimes did not change."
+  },
+  "test_evidence": {
+    "unit": "PYTHONPATH=tools python3 -m unittest test_marmish_installed_fixture.CompilerPreparation.test_compile_launch_requires_isolated_no_bytecode_python test_marmish_installed_fixture.CompilerPreparation.test_worker_explicit_environment_ignores_ambient_compiler_credentials test_marmish_installed_state.CompileScopes.test_compile_scope_cannot_be_requested_for_runtime_or_other_worker -q -> Ran 3 tests in 0.057s, OK (exit 0). The CompileScopes test covers runtime=True, a foreign -c argv, no flags, -I only, and -B only. Each is rejected with SmokeError, Popen is never called, and no child registry records are left.",
+    "entrypoint_probe": "From a fresh empty temporary cwd: PYTHONPATH=/nonexistent timeout 20 python3 -I -B <checkout>/tools/marmish_installed_fixture.py --invalid </dev/null -> exit 125. The fixed-checkout imports resolved under isolation even with a bogus PYTHONPATH and a foreign cwd. No config was read and no child process ran. tools/__pycache__ was unchanged."
+  },
+  "non_blocking_notes": [
+    "The bootstrap puts tools/ at sys.path[0]. Any lazily imported standard-library module would therefore be shadowed if a file with the same name were later added to tools/. There is no such collision today. Appending to sys.path instead would remove this risk, but the directory is the trusted fixed checkout, so this is optional."
+  ],
+  "constraints_honored": "Read-only. I made no edits, ran no native subprocess tests or process scans, and ran only the three authorized tests plus the one bounded probe.",
+  "reviewer": "Claude Code",
+  "mode": "auto",
+  "models": [
+    "claude-opus-5-5"
+  ]
+}

@@ -1,0 +1,124 @@
+{
+  "reviewer": "Claude Code",
+  "model": "claude-opus-5-5",
+  "permission_mode": "auto",
+  "scope": "Integrated B/C code before nonblocking followups",
+  "review": {
+    "verdict": "APPROVED",
+    "scope": "Integrated working tree of ci/nine-pair-interop (tracked diff plus untracked new files)",
+    "initial_blockers": {
+      "B0": "Resolved for the compiler boundary. Compile-only build_scope in run_bounded (marmish_installed_state.py: _compile_scopes, _verify_compile_member, compile branch of _linux_scan). Escapes found by a global scan fail closed without signalling. Two empty post-cleanup scans required, source hash rechecked, pinned 1.97.1 toolchain copied with lstat checks and hash verification, scrubbed execve env. Local Linux proof is in docs/validation/installed-compiler-local.md. Native macOS/ARM64 toolchain copy is still a separate acceptance item, as that doc says.",
+      "B1": "Resolved. marmish_installed_ci.prepare calls prepare_dependencies (locked fetch, then offline warm build) before identities, inside the 625 s preparation reserve.",
+      "B2": "Resolved. run_client_pair calls _client_cleanup on any status other than received (Linux per-marker clean; Darwin recover plus cleanup_control; non-blocking profile lock). If cleanup fails the category becomes cleanup_incomplete, and run_clients stops and marks the remaining slots skipped.",
+      "B3": "Resolved. client_deadline = min(now+1034, server_deadline-166, overall-196). Server deadline = min(began+1800, overall-150). Lifetime itimer at deadline+1. Signals masked in finally. Arithmetic checked against the workflow step timeouts.",
+      "B4": "Resolved. Per-slot try/except in _reconcile_server (marmish_installed_runtime.py:619-643), then require(actual <= expected_paths). Covered by a 2-of-3 test."
+    },
+    "blockers": [],
+    "nonblocking": [
+      {
+        "id": "N1",
+        "file": "tools/marmish_installed_live_ci.py",
+        "line": 65,
+        "finding": "server_barrier stops waiting for peers at readiness_deadline = min(began+300, deadline-1200). That is stricter than the design's deadline-1200, so one slow peer build can fail the barrier falsely.",
+        "fix": "Use deadline-1200 (or document began+300 as the intended bound) and add a test at that boundary."
+      },
+      {
+        "id": "N2",
+        "file": "tools/marmish_installed_runtime.py",
+        "line": 878,
+        "finding": "await_server calls stop_supervisor exactly at the live deadline. serve's own itimer fires at deadline+1, and daemon.close can take about 15 s, so the supervisor can be interrupted or SIGKILLed during close and server-result.json can be lost (fails closed as 'deadline').",
+        "fix": "Wait until deadline + ~30 s shutdown margin before calling stop_supervisor, and keep the workflow step's 30-minute timeout above that."
+      },
+      {
+        "id": "N3",
+        "file": "tools/marmish_installed_runtime.py",
+        "line": 849,
+        "finding": "On launch timeout, _finish_child(interrupted=True) SIGKILLs the supervisor after about 6 s, which can orphan marmishd in its own session. The later cleanup scan catches this, so it fails closed.",
+        "fix": "Optionally run stop_supervisor's INT/TERM ladder before the KILL."
+      },
+      {
+        "id": "N4",
+        "file": "tools/marmish_installed_live_ci.py",
+        "line": 126,
+        "finding": "live_ci.cleanup has regressed against marmish_installed_ci.cleanup. It has no 'not-started' outcome when state was never created, pin_sha256 stays null on early failure, and it records no failure_diagnostic.",
+        "fix": "Reuse marmish_installed_ci.cleanup's not-started and diagnostic logic, or delegate to it after stop_supervisor."
+      },
+      {
+        "id": "N5",
+        "file": "tools/marmish_installed_fixture.py",
+        "line": 192,
+        "finding": "The compile worker is launched as [python, worker, '--compile-worker'] without -I/-B, so the interpreter honours PYTHON* env and user site-packages, and writes bytecode. The env is controlled by the runner, so this is defence-in-depth only.",
+        "fix": "Add -I -B and update run_bounded's exact-argv check (marmish_installed_state.py) to match."
+      },
+      {
+        "id": "N6",
+        "file": "README.md",
+        "line": 22,
+        "finding": "The README now links the metrics but does not state the per-metric definitions, whether teardown time is included, or the one-sample-per-cell caveat. Those exist only in METRIC_DEFINITIONS and the nine-pair phase doc.",
+        "fix": "Add a short caveat paragraph pointing at METRIC_DEFINITIONS."
+      },
+      {
+        "id": "N7",
+        "file": ".github/workflows/installed-interop.yml",
+        "line": 134,
+        "finding": "The 'Require all three servers before commands' (server-barrier) step has no timeout-minutes. It relies on its internal deadline only.",
+        "fix": "Add timeout-minutes: 6."
+      },
+      {
+        "id": "N8",
+        "file": ".github/workflows/installed-interop.yml",
+        "line": 32,
+        "finding": "The step timeouts sum to more than the 75-minute job timeout in the worst case. The always() cleanup still runs inside the job budget, but a job-level timeout would skip later evidence uploads.",
+        "fix": "Document the critical path, or trim the deliver/await timeouts so their sum plus cleanup fits within 75 minutes."
+      },
+      {
+        "id": "N9",
+        "file": "tools/marmish_installed_observer.py",
+        "line": 211,
+        "finding": "Any error reply other than hello/token, stale_challenge or the probe's not_found (including the client-tolerated input_closed and invalid_token) raises observer_operation_failed. DaemonObserver.tick (around line 407) then marks the whole observer failed, which fails all nine slots. This is not reachable in a correct run (fresh invocation, request-ID-preserving retransmit, fixture consumes stdin to EOF), but one anomaly takes down every pair.",
+        "fix": "Optionally isolate failures per pair for non-security anomalies, and keep whole-server failure for unexpected submissions or binding conflicts."
+      }
+    ],
+    "excluded": [
+      "Darwin owned-process cleanup: already approved in docs/reviews/macos-zombie-group-code-final.json",
+      "Worker-absence contract: verified against release f609b6c crates/marmish-engine/src/cleanup.rs terminal()/acquire and Engine::into_cleanup; cleanup_runtime relies on these and adds no new API."
+    ],
+    "tests": [
+      {
+        "cmd": "python3 -m pytest (from tools/) test_marmish_installed_observer.py test_marmish_installed_terminal.py test_marmish_installed_live_ci.py test_marmish_nine_pair.py, plus runtime ReportContracts and fixture PairVectors/CompilerPreparation",
+        "result": "69 passed, 120 subtests passed (1.96 s)"
+      },
+      {
+        "cmd": "test_marmish_installed_runtime.py DriverBoundary",
+        "result": "13 passed (0.98 s)"
+      },
+      {
+        "cmd": "test_marmish_installed_state.py",
+        "result": "40 passed, 26 subtests (4.85 s)"
+      },
+      {
+        "cmd": "test_marmish_installed_fixture.py NativeFixture",
+        "result": "6 passed, 4 subtests (2.63 s)"
+      },
+      {
+        "cmd": "ci + release + rendezvous + macos_denial test suites",
+        "result": "68 passed, 113 subtests"
+      },
+      {
+        "cmd": "cargo test --locked --offline --manifest-path tools/installed-fixture/Cargo.toml (from repo root)",
+        "result": "1 passed (timeout_is_armed_for_120_seconds)"
+      },
+      {
+        "cmd": "cargo clippy --locked --offline --manifest-path tools/installed-fixture/Cargo.toml --all-targets -- -D warnings",
+        "result": "clean"
+      },
+      {
+        "cmd": "workflow YAML parse",
+        "result": "parses"
+      },
+      {
+        "note": "Subprocess tests were run serially. No live relay or native CI was run. actionlint and pyflakes were not available."
+      }
+    ]
+  }
+}

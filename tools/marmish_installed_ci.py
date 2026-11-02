@@ -108,6 +108,10 @@ def prepare(args, ctx, pin, report):
     verified = measure(report, 'verify', lambda: verify_installed(
         Path(state['prefix']), pin, manifest, args.role))
     register_installed(state, verified['root'])
+    if getattr(args, 'toolchain_source', None) is not None:
+        from marmish_installed_fixture import prepare_dependencies
+        prepare_dependencies(state, deadline=state['preparation_deadline'],
+                             toolchain_source=args.toolchain_source)
     report['installation'] = verified['installation']
     report['interpreter'] = interpreter_info(state)
     report.update(outcome='passed', error=None, cleanup='incomplete')
@@ -176,7 +180,7 @@ def barrier(args, ctx, pin, report):
     report.update(outcome='passed', stage='barrier', error=None)
 
 
-def cleanup(args, ctx, digest):
+def cleanup(args, ctx, digest, *, before_cleanup=None, runtime_cleanup=None):
     output = public_directory(args.state)
     record = envelope(ctx, args.role, digest, 'cleanup-result')
     checks = {key: None for key in (
@@ -192,7 +196,9 @@ def cleanup(args, ctx, digest):
             require(state['ctx'] == ctx and state['role'] == args.role,
                     'cleanup_incomplete')
             record['pin_sha256'] = state['pin_sha256']
-            record.update(cleanup_state(state, runtime_cleanup=None))
+            if before_cleanup is not None:
+                before_cleanup(state)
+            record.update(cleanup_state(state, runtime_cleanup=runtime_cleanup))
     except Exception as failure:
         failure_diagnostic(failure, stage='cleanup_load', category='cleanup_incomplete')
         record.update(outcome='incomplete', checks=checks,
@@ -211,6 +217,7 @@ def main():
     parser.add_argument('--pin-dir', type=Path, required=True)
     parser.add_argument('--role', choices=tuple(ROLE_TARGETS))
     parser.add_argument('--peers', type=Path)
+    parser.add_argument('--toolchain-source', type=Path)
     args = parser.parse_args()
     ctx = context()
     if args.operation == 'resolve':
