@@ -2,6 +2,7 @@
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 import io
+import errno
 import json
 import os
 from pathlib import Path
@@ -12,7 +13,7 @@ import tempfile
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import uuid
 
 import marmish_macos_denial_diagnostic as diagnostic
@@ -167,6 +168,44 @@ class CollectionTests(unittest.TestCase):
 
 
 class ProcessTests(unittest.TestCase):
+    def test_cleanup_reason_errno_stage_and_precedence_are_finite(self):
+        status = SimpleNamespace(si_pid=1234, si_code=os.CLD_EXITED, si_status=1)
+        for number, classification in ((errno.EPERM, 'permission_denied'),
+                (errno.EACCES, 'permission_denied'), (errno.ECHILD, 'no_child'),
+                (errno.EINVAL, 'invalid'), (errno.EIO, 'other'), (None, 'other')):
+            child = SimpleNamespace(pid=1234, wait=Mock(return_value=1))
+            with tempfile.TemporaryDirectory() as root, patch.object(diagnostic.subprocess, 'Popen', return_value=child), patch.object(diagnostic, 'observe', return_value=status), patch.object(diagnostic.os, 'killpg', side_effect=OSError(number, SECRET)):
+                with self.assertRaises(diagnostic.CleanupFailed) as caught:
+                    diagnostic.run_private(['/unused'], root, process='preflight')
+            self.assertEqual(caught.exception.facts, {'category': 'cleanup_failed',
+                'reason': 'group_signal_failed', 'errno_class': classification,
+                'observation_stage': 'exit_confirmed', 'signal_attempted': True,
+                'process': 'preflight'})
+            self.assertNotIn(SECRET, str(caught.exception))
+            child.wait.assert_called_once_with(timeout=2)
+        for observation, stage, attempted in (([None], 'waiting', True),
+                ([status, KeyboardInterrupt()], 'exit_observed_unconfirmed', False),
+                ([status, status], 'exit_confirmed', True),
+                ([OSError(errno.ECHILD, SECRET)], 'observation_failed', False),
+                ([SimpleNamespace(si_pid=0, si_code=os.CLD_EXITED, si_status=1)], 'observation_failed', False)):
+            for error, reason, classification in ((subprocess.TimeoutExpired(SECRET, 2), 'leader_wait_timeout', 'none'),
+                    (OSError(errno.ECHILD, SECRET), 'leader_wait_failed', 'no_child'),
+                    (subprocess.SubprocessError(SECRET), 'leader_wait_failed', 'none')):
+                child = SimpleNamespace(pid=1234, wait=Mock(side_effect=error))
+                with tempfile.TemporaryDirectory() as root, patch.object(diagnostic.subprocess, 'Popen', return_value=child), patch.object(diagnostic, 'observe', side_effect=observation), patch.object(diagnostic.os, 'killpg', side_effect=PermissionError(errno.EPERM, SECRET)) as kill, patch.object(diagnostic.time, 'sleep', side_effect=KeyboardInterrupt):
+                    with self.assertRaises(diagnostic.CleanupFailed) as caught:
+                        diagnostic.run_private(['/unused'], root, process='preflight')
+                facts = caught.exception.facts
+                self.assertEqual((facts['reason'], facts['errno_class'], facts['observation_stage'], facts['signal_attempted']),
+                                 (reason, classification, stage, attempted))
+                self.assertEqual(kill.call_count, int(attempted))
+                self.assertNotIn(SECRET, json.dumps(facts))
+        for field, value in (('reason', SECRET), ('stage', SECRET), ('process', SECRET), ('signal_attempted', 1)):
+            arguments = dict(reason='group_signal_failed', error=OSError(SECRET), stage='waiting', signal_attempted=True, process='preflight')
+            arguments[field] = value
+            with self.assertRaises(ValueError):
+                diagnostic.CleanupFailed(**arguments)
+
     def test_real_success_timeout_output_limit_and_private_capture(self):
         with tempfile.TemporaryDirectory() as root:
             result = diagnostic.run_private([sys.executable, '-c', 'print("owned")'], root)
@@ -446,6 +485,28 @@ class GateTests(unittest.TestCase):
             with patch.object(diagnostic, 'diagnose', side_effect=OSError(SECRET)), redirect_stdout(stdout), redirect_stderr(stderr):
                 self.assertEqual(diagnostic.main(['--output', str(output)]), 1)
             self.assertNotIn(SECRET, stdout.getvalue() + stderr.getvalue() + output.read_text())
+
+    def test_fixture_cleanup_preserves_prior_process_and_observation_failures(self):
+        process_failure = diagnostic.CleanupFailed('group_signal_failed',
+            PermissionError(errno.EPERM, SECRET), 'exit_confirmed', True, 'preflight')
+        for prior in (None, {'category': 'query_observation_unsupported'}, process_failure):
+            with tempfile.TemporaryDirectory() as root:
+                owned = Mock(name=str(Path(root) / 'fixture'))
+                owned.name = str(Path(root) / 'fixture')
+                Path(owned.name).mkdir()
+                owned.cleanup.side_effect = OSError(errno.EIO, SECRET)
+                def collect(_root, report):
+                    if isinstance(prior, Exception):
+                        raise prior
+                    report['failure'] = prior
+                output = Path(root) / 'report.json'
+                with patch.object(diagnostic.platform, 'system', return_value='Darwin'), patch.object(diagnostic.os, 'geteuid', return_value=1000), patch.object(diagnostic.tempfile, 'TemporaryDirectory', return_value=owned), patch.object(diagnostic, 'collect', side_effect=collect):
+                    self.assertEqual(diagnostic.diagnose(output), 1)
+                report = json.loads(output.read_text())
+                self.assertEqual(report['failure'], process_failure.facts if prior is process_failure else prior or {'category': 'cleanup_failed'})
+                self.assertEqual(report['fixture_cleanup'], {'reason': 'fixture_cleanup_failed', 'errno_class': 'other'})
+                self.assertFalse(report['ok'])
+                self.assertNotIn(SECRET, output.read_text())
 
     def test_sigterm_runs_owned_process_and_fixture_cleanup(self):
         original = tempfile.TemporaryDirectory

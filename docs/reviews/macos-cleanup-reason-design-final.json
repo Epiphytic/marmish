@@ -1,0 +1,38 @@
+{
+  "verdict": "APPROVED",
+  "initial_verdict_preserved": true,
+  "blocking_findings": [],
+  "resolved": {
+    "B1": "Fixture cleanup OSError goes into a separate top-level fixture_cleanup {reason, errno_class}. An existing failure object (process CleanupFailed facts, query_observation_unsupported, fixture_failed, build_probe failures) is never replaced; failure={category:cleanup_failed} is set only when there was no earlier failure. failure.process tells preflight apart from the control, confined and query runs. observation_supported() catches only (OSError, ValueError, SubprocessError), so CleanupFailed still reaches diagnose().",
+    "B2": "Each stage is assigned at a fixed point. waiting covers timeout, output_limit, fstat OSError leading to launch_failed, and interruption before any exit is seen. exit_observed_unconfirmed is set right after the first non-None observe() and is kept if an interruption arrives between observations. exit_confirmed is set only after the identical second observation and observed_exit(repeated) succeed, not inferred from expected_exit. observation_failed is set in the existing handlers. signal_attempted is recorded at the killpg call, so ECHILD/ValueError (not signalled) can be told apart from other OSError/AttributeError/NotImplementedError (signalled) when the reason is leader_wait_*."
+  },
+  "lifecycle_unchanged": "Yes for processes: can_signal, killpg, wait(timeout=2), the order of raises and the result categories are untouched. The only behaviour change is in reporting: diagnose's finally no longer overwrites report['failure']. That keeps the first failure and remains fail-closed (ok=false, exit 1).",
+  "nonblocking_findings": [
+    {
+      "id": "F1",
+      "finding": "Combined failures now report the first failure's category instead of cleanup_failed. The original appendix sentence 'failure.category remains cleanup_failed' only holds when there was no earlier failure. The correction overrides it, but the appendix could say so explicitly. No workflow or tool reads this script's cleanup_failed."
+    },
+    {
+      "id": "F2",
+      "finding": "A fixture-only failure={category:cleanup_failed} carries none of the process fields (reason, errno_class, observation_stage, signal_attempted, process). The rule 'Other failure categories have none of these fields' doesn't literally cover this case. Add a test that asserts the bare form appears together with fixture_cleanup."
+    },
+    {
+      "id": "F3",
+      "finding": "Consider having the constructor also check that fields agree with each other: leader_wait_timeout should imply errno_class=none, group_signal_failed should imply signal_attempted=true, and an observation_stage of exit_confirmed or waiting should imply signal_attempted=true. This catches mis-wired raises at test time and costs no privacy."
+    },
+    {
+      "id": "F4",
+      "finding": "Read the stage table as 'the last assignment wins'. An observed_exit ValueError after the first observation moves the stage from exit_observed_unconfirmed to observation_failed in the handler. Tests should cover both the interrupted case (stays unconfirmed) and the invalid-status case (becomes observation_failed)."
+    },
+    {
+      "id": "F5",
+      "finding": "Pass the process tag through as a keyword argument defaulting to 'unspecified', and add no new broad except clauses on the way. Any intermediate catch of Exception would hide CleanupFailed. The intended loss of the secondary signal error is acceptable for a narrow first discriminator, and so is the uninstrumented BaseException during the final wait."
+    }
+  ],
+  "scope_check": "Limited to finite instrumentation: no new native workflow, probe or log query, and no exported numeric errno, exception text, PID or path.",
+  "reviewer": {
+    "agent": "Claude Code independent design reviewer",
+    "model": "claude-opus-5-5",
+    "permission_mode": "auto"
+  }
+}

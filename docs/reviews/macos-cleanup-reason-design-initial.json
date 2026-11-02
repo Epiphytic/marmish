@@ -1,0 +1,70 @@
+{
+  "verdict": "NOT_APPROVED",
+  "blocking_findings": [
+    {
+      "id": "B1",
+      "area": "precedence",
+      "location": "tools/marmish_macos_denial_diagnostic.py:426-431",
+      "finding": "The amendment does not say what happens when the fixture-directory cleanup fails after an earlier failure. The diagnose() finally block replaces report['failure'] with {'category':'cleanup_failed'} every time owned.cleanup() raises OSError. That erases an earlier process cleanup reason, query_observation_unsupported (preflight returned False), and fixture_failed. So the native result (cleanup_failed, profile_sha256 null) could come from two different paths: (a) CleanupFailed inside the /usr/bin/false preflight's run_private, or (b) the preflight returned unsupported or make_fixture raised, and then the TemporaryDirectory cleanup failed. The amendment assumes path (a) without showing it, and as written the new fields would still let fixture_cleanup_failed erase a process reason.",
+      "required_change": "State the precedence explicitly. A fixture_cleanup_failed reason must not overwrite an earlier process cleanup reason or an earlier failure category. Keep the first failure and record the fixture cleanup separately as a finite value, for example failure.prior_category from the existing failure enum, or a separate fixture_cleanup {reason, errno_class} object. Add tests that combine preflight-unsupported with fixture cleanup failure, and process CleanupFailed with fixture cleanup failure."
+    },
+    {
+      "id": "B2",
+      "area": "observation_stage accuracy",
+      "location": "tools/marmish_macos_denial_diagnostic.py:254-284",
+      "finding": "The three stage values have no mapping to the code's actual states, and some states would be mislabeled: (1) KeyboardInterrupt (SIGTERM) arriving between the first and second waitid observation, when can_signal is False and expected_exit is set, would read as 'waiting' even though group signaling was withheld after an exit was seen. (2) A non-ECHILD OSError or AttributeError/NotImplementedError still signals the group, but ECHILD and ValueError skip the signal, and both report 'observation_failed'. For leader_wait_* reasons, you can't tell whether killpg ran. (3) An os.fstat OSError inside the loop exits through the outer 'except OSError' as launch_failed while a child is still alive, and its stage is undefined. (4) An implementer could reasonably infer exit_confirmed from expected_exit is not None, which is set before the second observation is confirmed.",
+      "required_change": "Track the stage in an explicit local variable, set at fixed points. exit_confirmed is assigned only after the second observed_exit(child, repeated) succeeds (the current line 273). Define the value for an interrupted or unconfirmed first observation, either a fourth value such as exit_observed_unconfirmed or a documented mapping. Also export a finite signal_attempted boolean, derived from can_signal at cleanup, so leader_wait failures can be read. Include a stage mapping table in the appendix and an injection test for each row."
+    }
+  ],
+  "nonblocking_findings": [
+    {
+      "id": "N1",
+      "area": "precedence / information loss",
+      "finding": "Keeping the rule that wait failure supersedes signal failure throws away the killpg errno class when both fail, for example an EPERM killpg on a live leader followed by a 2-second wait timeout. Without changing the lifecycle, record a separate finite group_signal outcome (not_attempted/ok/no_such_process/failed plus its errno_class) while failure.reason keeps the current precedence."
+    },
+    {
+      "id": "N2",
+      "area": "call-site attribution",
+      "finding": "run_private is called for the preflight, control, confined and query runs. You can only infer which one failed from side effects (profile_sha256 null, length of cases). Add a finite process enum preflight|control|confined|query so 'stopped in /usr/bin/false preflight' comes from a recorded field rather than an inference."
+    },
+    {
+      "id": "N3",
+      "area": "loop exit cause",
+      "finding": "'waiting' covers timeout, output_limit, interruption and fstat errors. run_private's result['category'] is already a finite enum (completed/timeout/output_limit/observation_failed/launch_failed). Attaching it to CleanupFailed as run_category would separate these cases with no privacy cost."
+    },
+    {
+      "id": "N4",
+      "area": "enum completeness",
+      "finding": "Define the classifier precisely. errno_class 'none' should mean no OSError was involved (TimeoutExpired or other SubprocessError). An OSError whose errno is None should be 'other', or the spec should name a value for it. For fixture cleanup, consider not_empty (ENOTEMPTY/EEXIST), busy (EBUSY) and missing (ENOENT). An ENOTEMPTY would point to a surviving descendant writing into the fixture, which is relevant to the descendant-cleanup concern."
+    },
+    {
+      "id": "N5",
+      "area": "schema",
+      "finding": "Say where the fields live (failure.reason / failure.errno_class / failure.observation_stage). Say whether they are absent or null for other failure categories. Say whether the driver tag moves from marmish-owned-denial-v1 to v2 or schema 1 stays with additive fields. The workflow's python_missing fallback reports and the existing tests that assert failure.category should keep passing."
+    },
+    {
+      "id": "N6",
+      "area": "uncovered paths (note only, no lifecycle change requested)",
+      "finding": "A KeyboardInterrupt or other BaseException during child.wait(timeout=2) escapes as fixture_failed without a reason. A CleanupFailed raised inside run_private's finally can also hide an in-flight KeyboardInterrupt. The appendix should state that these stay uninstrumented so a fixture_failed result isn't misread."
+    },
+    {
+      "id": "N7",
+      "area": "privacy / test construction",
+      "finding": "Build CleanupFailed only from allowlisted enum values: validate in the constructor and keep 'from None' so no OSError is chained. Linux kill(2) does not reproduce Darwin's EPERM on a group whose only members are zombies, so tests must inject killpg errors (EPERM/EACCES/ECHILD/EINVAL/other/ESRCH-swallowed). Assert that no numeric errno, strerror, PID or path appears in the report or on stderr."
+    },
+    {
+      "id": "N8",
+      "area": "discriminator value",
+      "finding": "The design does give a clean test of the EPERM hypothesis: reason=group_signal_failed, errno_class=permission_denied and observation_stage=exit_confirmed together match the XNU killpg1 zombie-exclusion hypothesis. Keeping this outcome reported as a failure, rather than ignoring EPERM, is the right call."
+    }
+  ],
+  "reviewer": {
+    "agent": "Claude Code independent design reviewer",
+    "model": "claude-opus-5-5",
+    "permission_mode": "auto"
+  },
+  "author_dispositions": {
+    "B1": "Appendix correction preserves prior failure and records fixture cleanup separately.",
+    "B2": "Appendix correction specifies four explicit stages, assignment points and signal_attempted boolean."
+  }
+}

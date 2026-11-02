@@ -42,6 +42,24 @@ CRYPTEX = re.compile(r'(?:/System/Volumes/Preboot/Cryptexes/OS|/System/Cryptexes
 class CleanupFailed(Exception):
     """Owned process cleanup could not be established; carries no private text."""
 
+    def __init__(self, reason, error, stage, signal_attempted, process):
+        if (reason not in ('group_signal_failed', 'leader_wait_timeout', 'leader_wait_failed')
+                or stage not in ('waiting', 'exit_observed_unconfirmed', 'exit_confirmed', 'observation_failed')
+                or type(signal_attempted) is not bool
+                or process not in ('preflight', 'control', 'confined', 'query', 'unspecified')):
+            raise ValueError('cleanup_fact_invalid')
+        super().__init__()
+        self.facts = {'category': 'cleanup_failed', 'reason': reason,
+            'errno_class': cleanup_errno(error), 'observation_stage': stage,
+            'signal_attempted': signal_attempted, 'process': process}
+
+
+def cleanup_errno(error):
+    if not isinstance(error, OSError):
+        return 'none'
+    return {errno.EPERM: 'permission_denied', errno.EACCES: 'permission_denied',
+            errno.ECHILD: 'no_child', errno.EINVAL: 'invalid'}.get(error.errno, 'other')
+
 
 def terminate(_signum, _frame):
     # Reuse the owned-group and fixture cleanup path without printing a traceback.
@@ -235,7 +253,7 @@ def observation_key(status):
 
 
 def run_private(command, root, timeout=5, stdout_cap=OUT_CAP, stderr_cap=ERR_CAP,
-                capture_stdout=True):
+                capture_stdout=True, *, process='unspecified'):
     """Keep the leader unreaped until its owned process group has been killed."""
     result = {'exit_code': None, 'signal': None, 'category': 'completed',
               'pid': None, 'start': None, 'end': None, 'elapsed': None,
@@ -243,6 +261,7 @@ def run_private(command, root, timeout=5, stdout_cap=OUT_CAP, stderr_cap=ERR_CAP
     child = None
     can_signal = True
     expected_exit = None
+    observation_stage = 'waiting'
     with tempfile.TemporaryFile(dir=root) as out, tempfile.TemporaryFile(dir=root) as err:
         try:
             result['start'] = datetime.now(timezone.utc)
@@ -261,6 +280,7 @@ def run_private(command, root, timeout=5, stdout_cap=OUT_CAP, stderr_cap=ERR_CAP
                 try:
                     status = observe(child)
                     if status is not None:
+                        observation_stage = 'exit_observed_unconfirmed'
                         # A returned exit is not proof WNOWAIT was honoured.
                         # Withhold group signaling until the same zombie can
                         # be observed a second time without consuming it.
@@ -271,12 +291,15 @@ def run_private(command, root, timeout=5, stdout_cap=OUT_CAP, stderr_cap=ERR_CAP
                             raise ValueError('observation_not_repeatable')
                         observed_exit(child, repeated)
                         can_signal = True
+                        observation_stage = 'exit_confirmed'
                 except OSError as error:
+                    observation_stage = 'observation_failed'
                     if error.errno == errno.ECHILD:
                         can_signal = False
                     result['category'] = 'observation_failed'
                     break
                 except (AttributeError, NotImplementedError, ValueError):
+                    observation_stage = 'observation_failed'
                     result['category'] = 'observation_failed'
                     break
                 if status is not None:
@@ -287,20 +310,27 @@ def run_private(command, root, timeout=5, stdout_cap=OUT_CAP, stderr_cap=ERR_CAP
         finally:
             if child is not None:
                 # Never poll/wait before this signal; PID cannot be reused while unreaped.
-                cleanup_failed = False
+                signal_error = None
+                signal_attempted = False
                 if can_signal:
                     try:
+                        signal_attempted = True
                         os.killpg(child.pid, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
-                    except OSError:
-                        cleanup_failed = True
+                    except OSError as error:
+                        signal_error = error
                 try:
                     code = child.wait(timeout=2)
-                except (OSError, subprocess.SubprocessError):
-                    raise CleanupFailed from None
-                if cleanup_failed:
-                    raise CleanupFailed
+                except subprocess.TimeoutExpired as error:
+                    raise CleanupFailed('leader_wait_timeout', error, observation_stage,
+                                        signal_attempted, process) from None
+                except (OSError, subprocess.SubprocessError) as error:
+                    raise CleanupFailed('leader_wait_failed', error, observation_stage,
+                                        signal_attempted, process) from None
+                if signal_error is not None:
+                    raise CleanupFailed('group_signal_failed', signal_error, observation_stage,
+                                        signal_attempted, process) from None
                 if not can_signal or expected_exit is not None and code != expected_exit:
                     # Popen's ECHILD fallback can manufacture zero. Never
                     # promote that value, or an observation mismatch, to pass.
@@ -324,7 +354,7 @@ def observation_supported(root):
     if not all(hasattr(os, name) for name in ('waitid', 'WNOWAIT', 'WEXITED', 'WNOHANG', 'P_PID')):
         return False
     try:
-        result = run_private(['/usr/bin/false'], root, timeout=2, capture_stdout=False)
+        result = run_private(['/usr/bin/false'], root, timeout=2, capture_stdout=False, process='preflight')
         return result['category'] == 'completed' and result['exit_code'] == 1
     except (OSError, ValueError, subprocess.SubprocessError):
         return False
@@ -337,7 +367,7 @@ def public_status(case_id, private):
 
 def query_logs(root, name, pid, window):
     try:
-        private = run_private(query_command(name, pid, window), root)
+        private = run_private(query_command(name, pid, window), root, process='query')
     except (OSError, ValueError, subprocess.SubprocessError):
         return log_result('query_failed')
     result = parse_denials(private['stdout'], name, pid, window)
@@ -370,14 +400,14 @@ def collect(root, report):
         if report['failure'] is not None:
             return
         identity = crash.read_owned_uuid(probe)
-        control = run_private([str(probe), 'read', '/dev/null'], root, capture_stdout=False)
+        control = run_private([str(probe), 'read', '/dev/null'], root, capture_stdout=False, process='control')
         report['cases'] = [public_status('read_control', control)]
         if not base.succeeded(control):
             report['log']['category'] = 'control_invalid'
             return
         directory = Path.home() / 'Library/Logs/DiagnosticReports'
         before, _ = crash.snapshot(directory, name)
-        confined = run_private(daemon._command(probe, 'read', '/dev/null'), root, capture_stdout=False)
+        confined = run_private(daemon._command(probe, 'read', '/dev/null'), root, capture_stdout=False, process='confined')
         report['cases'].append(public_status('read_confined', confined))
         if confined['category'] != 'completed' or confined['signal'] != signal.SIGABRT:
             report['log']['category'] = 'not_sigabrt'
@@ -419,16 +449,19 @@ def diagnose(output):
             if root == output.resolve() or root in output.resolve().parents:
                 raise ValueError('report_outside_fixture_required')
             collect(root, report)
-        except CleanupFailed:
-            report['failure'] = {'category': 'cleanup_failed'}
+        except CleanupFailed as error:
+            report['failure'] = error.facts
         except (OSError, ValueError, AssertionError, ImportError, subprocess.SubprocessError, KeyboardInterrupt):
             report['failure'] = {'category': 'fixture_failed'}
         finally:
             if owned is not None:
                 try:
                     owned.cleanup()
-                except OSError:
-                    report['failure'] = {'category': 'cleanup_failed'}
+                except OSError as error:
+                    report['fixture_cleanup'] = {'reason': 'fixture_cleanup_failed',
+                                                 'errno_class': cleanup_errno(error)}
+                    if report['failure'] is None:
+                        report['failure'] = {'category': 'cleanup_failed'}
         if report['failure'] is not None:
             report['ok'] = False
     base.write_report(output, report)

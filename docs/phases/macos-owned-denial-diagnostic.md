@@ -310,3 +310,80 @@ The diagnostic intentionally remains a failed step even if a useful candidate is
 collected after SIGABRT: inspect `log.category` in its sanitized artifact. A green
 step is not the success criterion. Native observation and log formats remain
 unvalidated until a hosted run supplies evidence.
+
+## Cleanup reason instrumentation amendment (2026-11-01)
+
+Native run 41393860384 stopped before compilation with `cleanup_failed` on
+Darwin ARM64/Python 3.15. Add finite facts to distinguish the existing cleanup
+branches; do not change process observation, group signaling, reaping, budgets,
+production permissions, or workflow behavior. `failure.category` remains
+`cleanup_failed` and `ok` remains false. For process cleanup failures export
+`reason` as `group_signal_failed`, `leader_wait_timeout`, or
+`leader_wait_failed`; `errno_class` as `permission_denied` (EPERM/EACCES),
+`no_child` (ECHILD), `invalid` (EINVAL), `other`, or `none`; and
+`observation_stage` as `waiting`, `exit_confirmed`, or `observation_failed`.
+The latter records whether two identical terminal observations were confirmed
+before cleanup. Fixture directory cleanup uses `fixture_cleanup_failed`,
+`observation_stage=not_applicable`, and the same errno classifier. No numeric
+errno, exception type/text, PID, path, command, output or other native data is
+exported. Preserve current precedence: a leader-wait failure supersedes a
+prior group-signal failure. Keep the existing owned `/usr/bin/false` preflight
+as the minimal native discriminator before compilation; unit tests inject each
+cleanup branch and prove the exported allowlist and unchanged fail-closed gate.
+A Darwin zombie-only process group may produce EPERM when signaled: current
+Apple XNU killpg1 excludes SZOMB members and returns EPERM if no eligible member
+is found (bsd/kern/kern_sig.c). This is a hypothesis pending native errno facts,
+not permission to ignore EPERM or weaken descendant cleanup.
+Independent Claude design approval is required before implementing this appendix.
+
+### Amendment review correction
+
+The initial instrumentation design review was NOT_APPROVED (Claude opus5.5;
+`docs/reviews/macos-cleanup-reason-design-initial.json`). It correctly noted
+that fixture cleanup may have erased an earlier failure; the native branch is
+therefore not yet established. The following precise rules supersede the
+precedence/stage ambiguity above. Schema 1 and driver v1 remain additive.
+
+Process `CleanupFailed` exports only `failure.category=cleanup_failed`,
+`failure.reason`, `failure.errno_class`, `failure.observation_stage`,
+`failure.signal_attempted` (boolean), and `failure.process` from
+`preflight|control|confined|query|unspecified` (the last is for direct wrapper
+callers). Constructor enum validation rejects any other value. Other failure
+categories have none of these fields. errno `none` means the source exception
+is not OSError; an OSError without numeric errno maps to `other`. Preserve
+existing wait-over-signal failure precedence without recording a secondary
+signal error; that narrow limitation is explicit.
+
+| Assignment point | observation_stage |
+| --- | --- |
+| Before first terminal observation, including timeout, fstat failure or interruption | waiting |
+| Immediately after first non-None observation, before any identity/status validation | exit_observed_unconfirmed |
+| Only after identical second observation and successful repeated status validation | exit_confirmed |
+| Existing caught observation exception handlers | observation_failed |
+
+Record `signal_attempted` immediately before the existing group signal call;
+record false if that call is withheld. These facts do not change can_signal.
+An interruption between observations retains exit_observed_unconfirmed.
+BaseException during final wait remains the existing generic fixture_failed
+path; this amendment does not promise instrumentation of every cancellation.
+
+If fixture cleanup raises OSError, record a separate optional top-level
+`fixture_cleanup={reason:fixture_cleanup_failed,errno_class:CLASS}`. Preserve
+any existing failure object unchanged; if none exists, also set
+`failure={category:cleanup_failed}`. Do not replace process facts or an earlier
+query_observation_unsupported/fixture_failed with directory cleanup facts.
+Tests inject combined failures, all stage rows, allowed errno classes, and
+ensure raw private sentinel exception text never reaches reports. No new
+native workflow is needed: the existing owned false preflight is sufficient.
+
+Actual Claude opus5.5 follow-up design review APPROVED this amendment; see
+`docs/reviews/macos-cleanup-reason-design-final.json`. The first-failure rule
+overrides the earlier generic category statement. A fixture-only failure has
+bare `failure={category:cleanup_failed}` plus `fixture_cleanup`, without process
+fields. Stage assignments use the last applicable row; caught invalid status
+therefore becomes observation_failed, while interruption stays unconfirmed.
+
+Actual Claude opus5.5 code review APPROVED the instrumentation; see
+`docs/reviews/macos-cleanup-reason-code-final.json`. Offline validation passed
+61 diagnostic tests and 3 workflow tests. Native errno evidence is still pending;
+no process lifecycle or confinement change is included.

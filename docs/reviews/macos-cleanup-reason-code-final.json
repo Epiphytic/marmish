@@ -1,0 +1,73 @@
+{
+  "verdict": "APPROVED",
+  "review_type": "code",
+  "scope": {
+    "files": [
+      "tools/marmish_macos_denial_diagnostic.py",
+      "tools/test_marmish_macos_denial_diagnostic.py",
+      "docs/phases/macos-owned-denial-diagnostic.md (cleanup reason amendment + correction appendix)",
+      "docs/reviews/macos-cleanup-reason-design-initial.json",
+      "docs/reviews/macos-cleanup-reason-design-final.json"
+    ],
+    "excluded": "Other installed/nine-pair work in the tree was not reviewed. I only grepped the installed-interop.yml diff to confirm it has no denial-diagnostic references (there are none)."
+  },
+  "reviewer": {
+    "agent": "Claude Code independent code reviewer",
+    "model": "claude-opus-5-5",
+    "permission_mode": "auto"
+  },
+  "checks": {
+    "lifecycle_unchanged": "PASS. can_signal is set and cleared exactly as before. The killpg call, the ProcessLookupError swallow, child.wait(timeout=2) and the order of raises (wait failure before signal failure) are the same. The post-wait observation_failed and exit_code logic, the fstat and output caps, the timeouts and the sleep cadence are unchanged. signal_attempted=True is set inside the try just before killpg and does not affect can_signal. TimeoutExpired is caught before its SubprocessError parent, so the old single except clause is only split for labelling, and both branches still raise CleanupFailed from None.",
+    "no_production_or_workflow_change": "PASS. All in-scope changes are in a diagnostic tool and its tests. No workflow, confinement profile or production code is touched by this change.",
+    "privacy": "PASS. CleanupFailed.facts holds only the category, three checked enums (reason, stage, process), a strict bool (signal_attempted) and errno_class from a fixed five-value mapping. fixture_cleanup holds only a constant reason and errno_class. Every raise uses 'from None', and super().__init__() takes no arguments, so str(exception) is empty. No numeric errno, exception text, PID, path or command is exported. Tests check that a SECRET sentinel string never appears in the facts, the exception text or the written report.",
+    "first_failure_preserved": "PASS. diagnose() no longer overwrites report['failure'] when cleaning up the fixture directory. If the failure field is still None it is set to {category: cleanup_failed}; ok stays false and the exit code stays 1. observation_supported() and query_logs() catch only (OSError, ValueError, SubprocessError), so CleanupFailed still reaches diagnose(). The test covers three combinations: no prior failure (bare cleanup_failed plus fixture_cleanup), a prior query_observation_unsupported, and a prior process CleanupFailed.",
+    "explicit_stage_mapping": "PASS. observation_stage starts as 'waiting'. It becomes 'exit_observed_unconfirmed' right after the first non-None observe(), before the identity and status checks. It becomes 'exit_confirmed' only after the second observed_exit(repeated) succeeds. Both existing except handlers set 'observation_failed'. The last assignment wins, so an invalid first status becomes observation_failed, while an interrupt between the two observations stays unconfirmed. An fstat OSError leaves the stage at 'waiting' and the category at launch_failed. All of this matches the correction table.",
+    "finite_tags_and_errno": "PASS. The process tag is a keyword-only argument defaulting to 'unspecified'. Call sites pass preflight, control, confined and query. errno classes: EPERM and EACCES map to permission_denied, ECHILD to no_child, EINVAL to invalid, any other OSError (including errno None) to other, and anything that is not an OSError to none. Each of these is tested, and the constructor rejects values outside the allowed sets.",
+    "initial_review_preserved": "PASS. The initial review JSON keeps verdict NOT_APPROVED and all of B1, B2 and N1\u2013N8. The final review JSON is APPROVED and has initial_verdict_preserved=true."
+  },
+  "blocking_findings": [],
+  "nonblocking_findings": [
+    {
+      "id": "C1",
+      "area": "test coverage",
+      "location": "tools/test_marmish_macos_denial_diagnostic.py:171",
+      "finding": "Process-tag routing is only tested for 'preflight'. No test checks that collect()/query_logs() pass control, confined or query. The wiring is trivial, but a mocked collect-path test raising CleanupFailed from each call would lock it in."
+    },
+    {
+      "id": "C2",
+      "area": "test coverage",
+      "location": "tools/test_marmish_macos_denial_diagnostic.py:489",
+      "finding": "The correction names fixture_failed as a prior failure to preserve when fixture cleanup also fails. No test covers that combination. It goes through the same code path as the tested ones, so the risk is low."
+    },
+    {
+      "id": "C3",
+      "area": "review record provenance",
+      "location": "docs/reviews/macos-cleanup-reason-design-initial.json",
+      "finding": "The initial review JSON has an appended 'dispositions' object, which reads as author annotations added to the reviewer's record. Consider labelling it as author dispositions, or moving it into the appendix or the final record, so the reviewer's original output stays unaltered."
+    },
+    {
+      "id": "C4",
+      "area": "optional hardening",
+      "location": "tools/marmish_macos_denial_diagnostic.py:45",
+      "finding": "Design suggestion F3 was not implemented: the constructor does not check that fields agree with each other (for example, group_signal_failed should imply signal_attempted=true, and leader_wait_timeout should imply errno_class=none). This is acceptable because F3 was optional."
+    }
+  ],
+  "tests": {
+    "commands": [
+      "PYTHONPATH=tools python3 -m unittest test_marmish_macos_denial_diagnostic",
+      "PYTHONPATH=tools python3 -m unittest <cleanup_reason ProcessTests + fixture_cleanup_preserves GateTests> -v"
+    ],
+    "result": "25/25 OK (0.75s), and the 2 targeted new tests OK, on Linux with Python 3.12, offline. No native probes, log queries, real-process scans, CI dispatch, edits, commits or pushes were done."
+  },
+  "author_dispositions": {
+    "C1": "Reviewed fixed callsite wiring is explicit; no extra implementation-mirroring tests added for the nonblocking observation.",
+    "C2": "Existing first-failure preservation branches are covered with both process and observation failures; no behavior change needed.",
+    "C3": "Renamed the clearly author-supplied initial-review metadata to author_dispositions; reviewer findings and verdict preserved.",
+    "C4": "Optional cross-field checks omitted; fixed internal raise sites already satisfy invariants and stage tests cover them."
+  },
+  "author_validation": {
+    "diagnostic_suite": "61 tests passed",
+    "workflow_suite": "3 tests passed",
+    "quality_delta": "Executed; reports parameter/verbosity increases in wrapper and test class sizes, plus unrelated concurrent changes. Retained explicit bounded diagnostic branches rather than refactoring lifecycle during instrumentation."
+  }
+}
