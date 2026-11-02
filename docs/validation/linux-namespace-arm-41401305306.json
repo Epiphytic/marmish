@@ -1,0 +1,25 @@
+{
+  "kind": "linux-namespace-native-evidence",
+  "source": "61a13adfad02dec39c20dd12e20224ed2d9e3bc9",
+  "workflow_run": 41401305306,
+  "attempt": 1,
+  "job": 125133510631,
+  "platform": "linux-arm64",
+  "dispatch_utc": "2026-11-02T06:39:35Z",
+  "runner_started_utc": "2026-11-02T06:39:38Z",
+  "result_utc": "2026-11-02T06:40:29Z",
+  "job_completed_utc": "2026-11-02T06:40:32Z",
+  "bootstrap": "passed",
+  "diagnostic": {
+    "category": "stage_failed",
+    "kind": "linux-namespace-diagnostic",
+    "schema": 1,
+    "stages": [
+      {"stage": "unshare", "outcome": "fail", "reason": "nonzero_exit", "returncode": 1, "signal": null}
+    ]
+  },
+  "owned_bubblewrap_cleanup": "passed",
+  "artifact": null,
+  "evidence_channel": "finite JSON in diagnostic job log; no artifact uploaded",
+  "limits": "Neither exact English permission line matched. No Bubblewrap stage ran. This proves the tested unshare configuration failed on this runner at this time; it does not prove namespace permission denial, a specific syscall failure, AppArmor policy or sysctl cause. Raw child output was not published or retained in the report."
+}

@@ -1,0 +1,47 @@
+{
+  "verdict": "APPROVED",
+  "blockers": [],
+  "reviewer_model": "claude-opus-5-5",
+  "scope": "tools/marmish_ci_bwrap.py diagnostic_probe (single hunk); tools/test_marmish_ci_bwrap.py NamespaceDiagnosticTests; docs/phases/linux-namespace-diagnostic.md supersession pointer; docs/phases/linux-namespace-primitives.md; docs/validation/linux-namespace-arm-41401305306.json",
+  "code": {
+    "diff_confined_to_diagnostic_probe": true,
+    "run_ToolFailure_matcher_unchanged": true,
+    "production_transport_unchanged": true,
+    "linux-namespace-diagnostic.yml_unchanged": true,
+    "marmish_ci.build_environment_and_refuse_api_tokens_unchanged": true,
+    "six_stages_exact_order": [
+      "control",
+      "user_namespace",
+      "root_mapping",
+      "unshare",
+      "one_bwrap",
+      "two_bwrap"
+    ],
+    "last_three_argv_same_expression_as_prior": true,
+    "timeout_per_stage": 10,
+    "env": "new dict(build_environment(),LANG=C,LC_ALL=C), child only; os.environ not mutated; nonempty so run's `env or` fallback never applies",
+    "token_refusal_first": true,
+    "stop_after_first_failure": true,
+    "permission_denied": "only user_namespace/root_mapping/unshare with int rc==1 and permission_denied is True; reuses the existing two whole-line matches; no new messages; control and bwrap stages cannot map",
+    "privacy": "rows hold only fixed reasons and bounded ints; exception text and output never published",
+    "budget": "DEADLINE=inf in diagnostic mode; worst case 6x(10s+5s reap)=90s, under the 120s step; stopping at the first failure allows at most one timeout; tempdir teardown, then separate 3-min owned cleanup with always()"
+  },
+  "evidence_private_verification": {
+    "run_json": "id 41401305306, attempt 1, workflow_dispatch, head_sha 61a13adf..., created 06:39:35Z, conclusion failure: matches",
+    "job_json": "id 125133510631, started 06:39:38Z, completed 06:40:32Z; bootstrap step success, diagnostic step failure, owned-prefix cleanup success: matches",
+    "log": "diagnostic JSON line at 06:40:29Z is identical to the committed stages (unshare/fail/nonzero_exit/rc1/signal null); bootstrap JSON shows architecture arm64; source SHA appears 3x; workflow labels ARM64; no upload step in workflow",
+    "limits_text": "accurate; claims no cause"
+  },
+  "tests_run_offline_mocked": {
+    "test_marmish_ci_bwrap": "32 OK (NamespaceDiagnosticTests 11 OK, including the in-invoke parent-env-unchanged assertion)",
+    "test_marmish_ci_bwrap+test_marmish_managed_runtime_spike+test_marmish_ci": "129 OK, 1 skipped",
+    "test_linux_namespace_diagnostic_workflow": "3 OK",
+    "test_marmish_release+installed_release+release_licenses": "40 OK"
+  },
+  "non_blocking_notes": [
+    "job.json carries no run_id or head_sha; the job is tied to the run only by fitting inside the run's time window and by the source SHA in the log",
+    "test_stop_at_each_primitive subtests do not assert category=='stage_failed' or the failing stage name per index (stage names are covered elsewhere)",
+    "the working tree mixes uncommitted bootstrap-owned changes (marmish_ci.py, installed-interop.yml, installed_* and several tests, untracked bootstrap docs and tool); the root should stage only the scoped files, which do not depend on those changes"
+  ],
+  "edits_native_network_ci_commits": "none"
+}

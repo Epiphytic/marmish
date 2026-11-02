@@ -1,0 +1,57 @@
+{
+  "verdict": "APPROVED",
+  "reviewer": {
+    "model": "claude-opus-5-5",
+    "harness": "Claude Code (Agent SDK)",
+    "fresh_context": true,
+    "independent_of_author": true,
+    "permission_mode": "auto"
+  },
+  "design": "docs/phases/linux-namespace-primitives.md",
+  "evidence": "docs/validation/linux-namespace-arm-41401305306.json",
+  "source": "61a13adfad02dec39c20dd12e20224ed2d9e3bc9",
+  "run": 41401305306,
+  "attempt": 1,
+  "inspected": [
+    "tools/marmish_ci_bwrap.py:ToolFailure(221-226)",
+    "tools/marmish_ci_bwrap.py:run(229-256)",
+    "tools/marmish_ci_bwrap.py:diagnostic_probe(369-413)",
+    "tools/marmish_ci_bwrap.py:main(553-566)",
+    "tools/marmish_ci.py:build_environment(37-43)",
+    "tools/test_marmish_ci_bwrap.py:NamespaceDiagnosticTests",
+    "tools/test_marmish_ci_bwrap.py:test_diagnostic_reports_first_failure_without_private_path",
+    "docs/phases/linux-namespace-diagnostic.md",
+    "docs/phases/linux-namespace-permission-classifier.md",
+    "docs/reviews/linux-namespace-permission-design.json",
+    ".github/workflows/linux-namespace-diagnostic.yml",
+    "/tmp/marmish-linux-namespace-41401305306-job.json (private, fields only)",
+    "/tmp/marmish-linux-namespace-41401305306.log (only the single linux-namespace-diagnostic JSON line selected)"
+  ],
+  "blockers": [],
+  "evidence_confirmations": [
+    "Exactly one linux-namespace-diagnostic JSON line in the private log, and it equals the published diagnostic object: category stage_failed, schema 1, one stage unshare, outcome fail, reason nonzero_exit, returncode 1, signal null",
+    "The log-line timestamp equals result_utc 06:40:29Z",
+    "Private job metadata matches the published job id 125133510631, started_at 06:39:38Z, completed_at 06:40:32Z and conclusion failure; the 3s dispatch-to-start claim is consistent with dispatch 06:39:35Z",
+    "Step outcomes match: Python and authenticated Bubblewrap bootstrap succeeded, the diagnostic step failed, and owned-prefix cleanup succeeded",
+    "'Neither exact English permission line matched' is correctly inferred: stage was unshare and rc was int 1, so the existing mapping would have produced permission_denied if ToolFailure.permission_denied had been True",
+    "'No Bubblewrap stage ran' is correct because stop-first-failure applies at the unshare stage",
+    "The run id, attempt and source SHA are not in the private job file; these were taken from the author's prior fetch as instructed and not independently re-verified here"
+  ],
+  "design_confirmations": [
+    "run() already accepts an explicit env (env or build_environment()), so one explicit diagnostic env dict built from build_environment() plus LANG=C and LC_ALL=C needs no runner or production change and never mutates os.environ",
+    "build_environment() does not pass LANGUAGE, and gettext ignores LANGUAGE under the C locale, so LC_ALL=C plus LANG=C fully removes locale ambiguity for the existing whole-line matcher",
+    "Stages 4-6 equal prefix+args*count for count 0..2 with today's exact prefix/args, so they stay byte-for-byte; two_bwrap still equals probe()",
+    "The time bound is conservative: any timeout or reap failure ends the run, so the worst case is at most 5 sub-10s passes plus one 10s+5s failure, under the stated 90s; about 30s remains in the 2-minute step for Python start, checked_selection (no subprocess), report output and teardown of the local temp dir; DEADLINE stays inf in diagnostic mode; the separate 3-minute cleanup step and the 18-minute job bound are unchanged",
+    "The permission mapping is extended only to the three absolute /usr/bin/unshare stages, with rc exactly int 1 and the attribute exactly True; control and Bubblewrap stages cannot map; no new matcher, substring or path logic; raw output never reaches attributes (body is deleted before raise; ToolFailure vars are only returncode and permission_denied)",
+    "The interpretation limits are sound and draw no host-policy inference. Example: when an unprivileged userns is restricted, unshare(2) can succeed while the uid_map write fails with a message the matcher rejects; that correctly yields user_namespace pass, root_mapping fail, nonzero_exit, attributed only to the added mapping configuration",
+    "No consumer parses stage names or reasons (the workflow only runs diagnostic-probe and its test does not inspect the report), so the new stage names are schema-compatible",
+    "The token refusal stays first, and the selection_missing/selection_invalid/setup_failed/cleanup_failed categories are unchanged"
+  ],
+  "nonblocking_notes": [
+    "The design sentence 'This proves configuration failure, not a permission denial' can be read as proving the absence of a denial; suggest 'and does not prove a permission denial', matching the evidence JSON limits",
+    "docs/phases/linux-namespace-diagnostic.md still describes three stages at 30s; add a one-line pointer that linux-namespace-primitives.md supersedes the stage list and timeout for diagnostic_probe",
+    "Tests to update: test_exact_cumulative_commands_and_success (6 argv, timeout 10, env), test_temp_cleanup_error_is_distinct_from_setup (6 stages), test_first_failure_stops_and_numeric_status_is_closed (now fails at user_namespace), test_permission_reason_requires_first_stage_rc_one_and_exact_boolean (preceding [b''] now lands on user_namespace and should expect permission_denied; add control/one_bwrap/two_bwrap cases expecting nonzero_exit even with flag True)",
+    "Suggest the env test also asserts the same env content is used on every stage call and that os.environ is identical before and after, including when LANG/LC_ALL were set to non-C values beforehand",
+    "The workflow step name still says 'cumulative'; the control/primitive stages make that slightly inaccurate, but leaving it is acceptable given the unchanged-workflow scope"
+  ]
+}

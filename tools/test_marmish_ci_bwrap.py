@@ -473,7 +473,9 @@ class NamespaceDiagnosticTests(unittest.TestCase):
                 patch.object(bwrap, 'refuse_api_tokens'), \
                 patch.object(bwrap, 'checked_selection', return_value=Path('/private/bwrap')), \
                 patch.object(bwrap, 'run', side_effect=failure) as run:
+            before = dict(os.environ)
             report = bwrap.diagnostic_probe()
+            self.assertEqual(dict(os.environ), before)
         return report, run
 
     def test_exact_cumulative_commands_and_success(self):
@@ -483,9 +485,32 @@ class NamespaceDiagnosticTests(unittest.TestCase):
         args = ['/private/bwrap', '--unshare-user', '--unshare-net', '--unshare-pid',
                 '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev']
         self.assertEqual([call.args[0] for call in run.call_args_list],
-                         [[*prefix, *(args * n), '/usr/bin/true'] for n in range(3)])
-        self.assertTrue(all(call.kwargs['timeout'] == 30 for call in run.call_args_list))
-        self.assertEqual([row['stage'] for row in report['stages']], ['unshare', 'one_bwrap', 'two_bwrap'])
+                         [['/usr/bin/true'], ['/usr/bin/unshare', '--user', '/usr/bin/true'],
+                          ['/usr/bin/unshare', '--user', '--map-root-user', '/usr/bin/true'],
+                          *[[*prefix, *(args * n), '/usr/bin/true'] for n in range(3)]])
+        self.assertTrue(all(call.kwargs['timeout'] == 10 for call in run.call_args_list))
+        self.assertEqual([row['stage'] for row in report['stages']],
+                         ['control', 'user_namespace', 'root_mapping', 'unshare', 'one_bwrap', 'two_bwrap'])
+
+    def test_stop_at_each_primitive_and_locale_is_child_only(self):
+        for index in range(6):
+            with self.subTest(index=index):
+                report, run = self.invoke([b''] * index + [bwrap.ToolFailure(1)])
+                self.assertEqual(run.call_count, index + 1)
+                self.assertEqual(len(report['stages']), index + 1)
+                self.assertEqual(report['stages'][-1]['outcome'], 'fail')
+        selected = {'LANG': 'other_locale', 'LC_ALL': 'other_locale', 'PATH': '/usr/bin', 'HOME': '/fixture'}
+        with patch.dict(os.environ, {'LANG': 'parent_locale', 'LC_ALL': 'parent_locale'}, clear=True):
+            before = dict(os.environ)
+            with patch.object(bwrap, 'build_environment', return_value=selected):
+                report, run = self.invoke()
+            self.assertEqual(dict(os.environ), before)
+        expected = dict(selected, LANG='C', LC_ALL='C')
+        self.assertEqual(selected['LANG'], 'other_locale')
+        self.assertEqual(selected['LC_ALL'], 'other_locale')
+        self.assertEqual(report['category'], 'complete')
+        for call in run.call_args_list:
+            self.assertEqual(call.kwargs['env'], expected)
 
     def test_first_failure_stops_and_numeric_status_is_closed(self):
         for code in (1, 129, -6, -64, -65, 255, -255, True, 256, 'SECRET'):
@@ -552,7 +577,7 @@ class NamespaceDiagnosticTests(unittest.TestCase):
         with patch.object(bwrap.tempfile, 'TemporaryDirectory', return_value=temporary):
             report, _ = self.invoke()
         self.assertEqual(report['category'], 'cleanup_failed')
-        self.assertEqual(len(report['stages']), 3)
+        self.assertEqual(len(report['stages']), 6)
         self.assertNotIn('SECRET', json.dumps(report))
 
     def test_exact_permission_lines_only_reduce_to_boolean(self):
@@ -582,11 +607,14 @@ class NamespaceDiagnosticTests(unittest.TestCase):
                 self.assertEqual(set(vars(error)), {'returncode', 'permission_denied'})
                 self.assertIs(popen.call_args.kwargs['env'], environment)
 
-    def test_permission_reason_requires_first_stage_rc_one_and_exact_boolean(self):
-        for code, flag, preceding, expected in ((1, True, [], 'permission_denied'),
-                (2, True, [], 'nonzero_exit'), (-9, True, [], 'nonzero_exit'),
-                (1, True, [b''], 'nonzero_exit'), (1, 1, [], 'nonzero_exit'),
-                (1, 'SECRET', [], 'nonzero_exit'), (True, True, [], 'nonzero_exit')):
+    def test_permission_reason_requires_unshare_primitive_rc_one_and_exact_boolean(self):
+        for code, flag, preceding, expected in ((1, True, [b''], 'permission_denied'),
+                (1, True, [b'', b''], 'permission_denied'),
+                (1, True, [b'', b'', b''], 'permission_denied'),
+                (2, True, [b''], 'nonzero_exit'), (-9, True, [b''], 'nonzero_exit'),
+                (1, True, [], 'nonzero_exit'), (1, True, [b''] * 4, 'nonzero_exit'),
+                (1, True, [b''] * 5, 'nonzero_exit'), (1, 1, [b''], 'nonzero_exit'),
+                (1, 'SECRET', [b''], 'nonzero_exit'), (True, True, [b''], 'nonzero_exit')):
             with self.subTest(code=code, flag=flag, preceding=preceding):
                 error = bwrap.ToolFailure(code, permission_denied=flag)
                 report, _ = self.invoke([*preceding, error])

@@ -385,15 +385,22 @@ def diagnostic_probe():
         prefix = ['/usr/bin/unshare', '--user', '--map-root-user', '--net']
         args = [executable, '--unshare-user', '--unshare-net', '--unshare-pid',
                 '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev']
+        environment = dict(build_environment(), LANG='C', LC_ALL='C')
+        commands = [('control', ['/usr/bin/true']),
+                    ('user_namespace', ['/usr/bin/unshare', '--user', '/usr/bin/true']),
+                    ('root_mapping', ['/usr/bin/unshare', '--user', '--map-root-user', '/usr/bin/true'])]
+        commands += [(stage, [*prefix, *(args * count), '/usr/bin/true'])
+                     for count, stage in enumerate(('unshare', 'one_bwrap', 'two_bwrap'))]
         allowed = {'bwrap_tool_timeout', 'bwrap_tool_output_oversized', 'bwrap_metadata_oversized'}
         with tempfile.TemporaryDirectory(prefix='marmish-bwrap-probe-') as temporary:
-            for count, stage in enumerate(('unshare', 'one_bwrap', 'two_bwrap')):
+            for stage, command in commands:
                 row = {'stage': stage, 'outcome': 'pass', 'reason': 'pass', 'returncode': 0, 'signal': None}
                 try:
-                    run([*prefix, *(args * count), '/usr/bin/true'], root=Path(temporary), timeout=30)
+                    run(command, root=Path(temporary), timeout=10, env=environment)
                 except ToolFailure as error:
                     code = error.returncode
-                    reason = 'permission_denied' if stage == 'unshare' and type(code) is int and code == 1 and error.permission_denied is True else 'nonzero_exit'
+                    denied = stage in ('user_namespace', 'root_mapping', 'unshare') and type(code) is int and code == 1 and error.permission_denied is True
+                    reason = 'permission_denied' if denied else 'nonzero_exit'
                     row.update(reason=reason, returncode=code if type(code) is int and -255 <= code <= 255 else None,
                                signal=-code if type(code) is int and -64 <= code < 0 else None)
                 except OSError:

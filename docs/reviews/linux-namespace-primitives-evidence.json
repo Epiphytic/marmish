@@ -1,0 +1,24 @@
+{
+  "evidence_verdict": "APPROVED",
+  "code_approval": "APPROVED (unchanged)",
+  "blockers": [],
+  "reviewer_model": "claude-opus-5-5",
+  "job_json_private": {
+    "id": 125133510631,
+    "run_id": 41401305306,
+    "run_url": "https://api.github.com/repos/Epiphytic/marmish/actions/runs/41401305306",
+    "started_at": "2026-11-02T06:39:38Z",
+    "completed_at": "2026-11-02T06:40:32Z",
+    "conclusion": "failure",
+    "steps": "identical to prior: bootstrap success, diagnostic failure, owned-prefix cleanup success"
+  },
+  "linkage": "job 125133510631 now ties directly to run 41401305306 via API run_id and run_url (repo Epiphytic/marmish); this matches run.json id, attempt 1 and head_sha 61a13adf; the prior non-blocking note about the job-run link is resolved",
+  "committed_evidence_consistent": true,
+  "source_tests_docs_unchanged": "diffstat for marmish_ci_bwrap.py (13), test_marmish_ci_bwrap.py (46) and linux-namespace-diagnostic.md (3) is the same as at code approval; no new tracked changes",
+  "remaining_non_blocking": [
+    "job.json has no head_sha or run_attempt; source and attempt come from run.json, so this is not needed",
+    "stage only the scoped files; unrelated bootstrap-owned changes are still in the tree"
+  ],
+  "edits_native_network_ci_tests": "none",
+  "reviewer_permission_mode": "auto"
+}

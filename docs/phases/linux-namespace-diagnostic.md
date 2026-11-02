@@ -140,3 +140,6 @@ Claude initial and final code reviews approved. The combined release suite
 previously had55passes79subtests and one import-closure gate failure from
 concurrent bootstrap-owned imports in marmish_ci.py; its owner must repair and
 rerun the gate before integration. No native diagnostic has run for this change.
+
+The stage list and per-stage timeout above are superseded by the reviewed
+[primitive localization design](linux-namespace-primitives.md).
