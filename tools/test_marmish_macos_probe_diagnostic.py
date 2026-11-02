@@ -188,6 +188,170 @@ class ProbeDiagnosticTests(unittest.TestCase):
             diagnostic.main([])
         self.assertEqual(error.exception.code, 2)
 
+class LoaderMatrixTests(unittest.TestCase):
+    def setUp(self):
+        self.workspace = tempfile.TemporaryDirectory()
+        self.addCleanup(self.workspace.cleanup)
+        self.root = Path(self.workspace.name)
+        self.output = self.root / 'report.json'
+
+    def test_fixed_profiles_and_unchanged_production_inputs(self):
+        profiles = list(diagnostic.loader_profiles())
+        self.assertEqual(len(profiles), 8)
+        self.assertEqual(profiles[0], ('baseline', [], PROFILE.encode()))
+        self.assertEqual(hashlib.sha256(PROFILE.encode()).hexdigest(),
+                         '14b1ab31a589f3f52b7b2ff93fadb35d26139c1a5cb154a0fdb50ed90a310d9a')
+        self.assertEqual(hashlib.sha256(diagnostic.SOURCE.read_bytes()).hexdigest(),
+                         '47977b39f2496f3f614125a78e3e174c8a9de2d8321ee0d87632d20962e7ce17')
+        self.assertEqual(profiles[-1][1], ['root', 'map', 'cryptex'])
+        self.assertEqual(len({raw for _, _, raw in profiles}), 8)
+        self.assertIn(b'(allow file-read-data (literal "/"))', profiles[1][2])
+        self.assertNotIn(b'(subpath "/")', profiles[-1][2])
+        self.assertEqual(profiles[-1][2], PROFILE.encode() +
+                         ''.join(rule for _, rule in diagnostic.LOADER_RULES).encode())
+
+    def matrix(self, *, baseline=-6, negatives=2, controls=0, positive=0,
+               stderr=''):
+        daemon, profile = diagnostic.make_fixture(self.root, ('127.0.0.1', 12345))
+        probe = daemon._directory / 'marmish-probe'
+        seen = []
+        def invoke(command, **kwargs):
+            confined = command[0] == '/usr/bin/sandbox-exec'
+            if confined:
+                self.assertEqual(command[command.index('-f') + 1], str(profile))
+                raw = profile.read_bytes()
+                seen.append(raw)
+                args = command[command.index('-f') + 3:]
+                self.assertEqual(command, daemon._command(probe, *args))
+                outside = args[-1] == str(self.root / 'outside/synthetic')
+                tcp_negative = args[0] == 'tcp' and args[-1] != '12345'
+                code = negatives if outside or tcp_negative else positive
+                if raw == PROFILE.encode():
+                    code = baseline
+            else:
+                code = controls
+            kwargs['stderr'].write(stderr.encode())
+            return SimpleNamespace(returncode=code)
+        with patch.object(diagnostic.subprocess, 'run', side_effect=invoke) as run:
+            report = diagnostic.collect_loader_matrix(daemon, probe, [])
+        self.assertEqual(run.call_count, 45)
+        self.assertEqual(len(seen), 40)
+        for index, (_, _, raw) in enumerate(diagnostic.loader_profiles()):
+            self.assertEqual(seen[index * 5:(index + 1) * 5], [raw] * 5)
+        target = self.root / 'outside/synthetic'
+        self.assertEqual(target.read_bytes(), b'marmish synthetic outside fixture\n')
+        self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn(daemon.home, target.parents)
+        self.assertNotIn(daemon._directory, target.parents)
+        return report
+
+    def test_matrix_exact_success_with_negative_controls(self):
+        report = self.matrix()
+        self.assertTrue(report['ok'])
+        self.assertTrue(report['baseline_reproduced'])
+        self.assertEqual(report['variants'][0]['classification'], 'loader_abort')
+        self.assertEqual(report['variants'][1]['classification'], 'passed')
+        self.assertEqual([case['exit_code'] for case in report['variants'][1]['cases']], [0, 0, 2, 2, 2])
+        self.assertTrue(all(case['exit_code'] == 0 for case in report['controls']))
+        self.assertEqual(report['variants'][1]['profile_sha256'],
+                         hashlib.sha256(list(diagnostic.loader_profiles())[1][2]).hexdigest())
+
+    def test_baseline_pass_cannot_credit_factors(self):
+        report = self.matrix(baseline=0)
+        self.assertFalse(report['baseline_reproduced'])
+        self.assertFalse(report['ok'])
+
+    def test_negative_crash_or_access_never_counts_as_denial(self):
+        for code in (-6, 0, 1):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as directory:
+                self.root = Path(directory)
+                report = self.matrix(negatives=code)
+                self.assertFalse(report['ok'])
+                self.assertTrue(all(not variant['ok'] for variant in report['variants']))
+
+    def test_invalid_controls_continue_all_variants_fail_closed(self):
+        report = self.matrix(controls=2)
+        self.assertFalse(report['ok'])
+        self.assertTrue(all(case['category'] == 'control_invalid'
+                            for variant in report['variants'] for case in variant['cases']))
+
+    def test_all_loader_failures_remain_reported(self):
+        report = self.matrix(positive=-6)
+        self.assertFalse(report['ok'])
+        self.assertTrue(report['baseline_reproduced'])
+        self.assertEqual([v['classification'] for v in report['variants']], ['loader_abort'] * 8)
+
+    def test_maximum_stderr_utf8_and_escaping_report_bounds(self):
+        for index, stderr in enumerate(('雪' * 1400, '\n\t' * 2500)):
+            with self.subTest(index=index), tempfile.TemporaryDirectory() as directory:
+                self.root = Path(directory)
+                report = self.matrix(stderr=stderr)
+                report.update({'schema': 2, 'mode': 'loader-matrix'})
+                cases = report['controls'] + [c for v in report['variants'] for c in v['cases']]
+                self.assertEqual(len(cases), 45)
+                self.assertTrue(all(c['stderr_truncated'] for c in cases))
+                self.assertTrue(all(len(c['stderr'].encode()) <= 512 for c in cases))
+                output = self.root / 'report.json'
+                diagnostic.write_report(output, report)
+                self.assertLessEqual(output.stat().st_size, 65536)
+                self.assertEqual(json.loads(output.read_text())['ok'], report['ok'])
+
+    def test_oversized_report_fixed_fallback_and_exclusive_write(self):
+        report = {'schema': 2, 'mode': 'loader-matrix', 'ok': True, 'private': '雪' * 65536}
+        diagnostic.write_report(self.output, report)
+        self.assertEqual(report, {'schema': 2, 'mode': 'loader-matrix', 'ok': False,
+                                 'failure': {'category': 'report_too_large', 'exit_code': None}})
+        self.assertLessEqual(self.output.stat().st_size, 65536)
+        self.assertNotIn('private', self.output.read_text())
+        self.assertEqual(self.output.stat().st_mode & 0o777, 0o600)
+        with self.assertRaises(FileExistsError):
+            diagnostic.write_report(self.output, report)
+
+    def test_default_oversize_fallback_preserves_report_kind(self):
+        report = {'schema': 1, 'ok': True, 'private': 'x' * 65536}
+        diagnostic.write_report(self.output, report)
+        self.assertEqual(report, {'schema': 1, 'ok': False,
+                                 'failure': {'category': 'report_too_large', 'exit_code': None}})
+        self.assertNotIn('mode', json.loads(self.output.read_text()))
+
+    def test_timeout_cannot_satisfy_exit_or_abort(self):
+        case = {'category': 'completed', 'exit_code': -6, 'signal': 6, 'timeout': True}
+        self.assertFalse(diagnostic.exact_exit(case, -6))
+        self.assertFalse(diagnostic.loader_abort([case, case]))
+
+    def test_opt_in_cli_and_refusal_schema(self):
+        with patch.object(diagnostic, 'diagnose', return_value=1) as diagnose:
+            self.assertEqual(diagnostic.main(['--loader-matrix', '--output', str(self.output)]), 1)
+        diagnose.assert_called_once_with(self.output.absolute(), loader_matrix=True)
+        with patch.object(diagnostic.platform, 'system', return_value='Linux'):
+            self.assertEqual(diagnostic.diagnose(self.output, loader_matrix=True), 1)
+        report = json.loads(self.output.read_text())
+        self.assertEqual(report['schema'], 2)
+        self.assertEqual(report['variants'], [])
+        self.assertEqual(report['controls'], [])
+        self.assertFalse(report['baseline_reproduced'])
+
+    def test_native_matrix_build_failure_writes_report_before_cleanup(self):
+        native = self.root / 'native'
+        native.mkdir()
+        @contextlib.contextmanager
+        def fixture(**kwargs):
+            try:
+                yield str(native)
+            finally:
+                self.assertTrue(self.output.exists())
+                import shutil
+                shutil.rmtree(native)
+        with patch.object(diagnostic.platform, 'system', return_value='Darwin'), \
+                patch.object(diagnostic.os, 'geteuid', return_value=1000), \
+                patch.object(diagnostic.tempfile, 'TemporaryDirectory', side_effect=fixture), \
+                patch.object(diagnostic, 'build_probe', return_value={'category': 'sign_failed', 'exit_code': 1}):
+            self.assertEqual(diagnostic.diagnose(self.output, loader_matrix=True), 1)
+        report = json.loads(self.output.read_text())
+        self.assertEqual(report['failure']['category'], 'sign_failed')
+        self.assertEqual(report['variants'], [])
+        self.assertFalse(native.exists())
+
 
 if __name__ == '__main__':
     unittest.main()

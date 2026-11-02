@@ -1,0 +1,42 @@
+{
+  "architecture": "arm64",
+  "cases": [
+    {
+      "category": "completed",
+      "exit_code": 0,
+      "id": "read_control",
+      "signal": null,
+      "timeout": false
+    },
+    {
+      "category": "completed",
+      "exit_code": -6,
+      "id": "read_confined",
+      "signal": 6,
+      "timeout": false
+    }
+  ],
+  "crash_attribution": "probe_uuid_redacted",
+  "driver": "marmish-owned-denial-v1",
+  "failure": null,
+  "log": {
+    "category": "no_owned_denial",
+    "denials": [],
+    "format_shape": {
+      "keysets": [],
+      "leading_text": false,
+      "timestamp_parse": "not_observed",
+      "top_level": "array",
+      "trailing_summary": false
+    },
+    "matched_count": 0,
+    "query_exit_code": 0,
+    "query_signal": null
+  },
+  "ok": false,
+  "platform": "Darwin",
+  "probe_source_sha256": "47977b39f2496f3f614125a78e3e174c8a9de2d8321ee0d87632d20962e7ce17",
+  "profile_sha256": "14b1ab31a589f3f52b7b2ff93fadb35d26139c1a5cb154a0fdb50ed90a310d9a",
+  "python_minor": "3.15",
+  "schema": 1
+}
