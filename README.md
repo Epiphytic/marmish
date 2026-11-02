@@ -4,7 +4,18 @@ Source: [GitHub](https://github.com/Epiphytic/marmish) ·
 [Radicle](https://radicle.network/nodes/iris.radicle.network/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg)
 (`rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg`).
 
-## Experimental binary installation
+## v0.2 development
+
+Marmish is being rebuilt in native Rust using upstream MDK and embedded Arti,
+targeting Tor endpoint support and no mandatory namespace/broker layer. See the
+[v0.2 plan](docs/v0.2-plan.md). The new binaries are not released yet.
+
+The Python implementation and the v0.1 instructions below are retained as a
+legacy protocol reference and interoperability fixture. v0.1 development is
+stopped; its results do not establish v0.2 support. v0.2 uses fresh on-disk formats;
+no migration from experimental v0.1 state is planned.
+
+## Legacy v0.1 experimental binary installation
 
 [v0.1.0-experimental.2](https://github.com/Epiphytic/marmish/releases/tag/v0.1.0-experimental.2)
 is available for Linux AMD64, Linux ARM64 and macOS ARM64 (macOS 15+).

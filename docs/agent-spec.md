@@ -1,5 +1,22 @@
 # Marmish agent specification
 
+## Active v0.2 direction
+
+The user replaced the v0.1 architecture on 2026-11-02. The authoritative active
+design is [the v0.2 plan](v0.2-plan.md), Beads `marmish-7nw`. It specifies native
+Rust, upstream MDK, embedded Arti, no mandatory OS namespace/broker and no Python
+runtime. The Python implementation remains available solely as a legacy protocol
+reference and optional cross-version test fixture. v0.2 implementation and
+validation are pending; historical results below do not establish v0.2 support.
+
+The remainder of this document records the v0.1 implementation. Its mandatory
+confinement, daemon-RPC and packaging decisions are historical, not instructions
+to recreate them in v0.2. Retain useful behavioral contracts and test vectors
+under the reviewed v0.2 plan. Do not silently reuse legacy databases or claim
+state migration based only on wire compatibility. The user explicitly permits
+breaking on-disk compatibility: there is no installed base. Fresh v0.2 formats
+are intentional; no v0.1 profile, database or key-reference migration is required.
+
 This is the implementation and design handoff for agents working in this repo.
 The validated prototype baseline is commit `a6700b4`. Subsequent changes must
 update this specification when they change behavior. Use Beads for live task

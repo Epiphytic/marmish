@@ -1,5 +1,14 @@
 # Marmish build plan
 
+## Active plan: v0.2
+
+The user's 2026-11-02 reset replaces the active architecture with the
+[native Rust v0.2 plan](v0.2-plan.md), tracked by Beads `marmish-7nw`.
+v0.1 development and its experimental.3 candidate are stopped. The sections
+below are historical v0.1 plans and evidence, retained for protocol comparison;
+their Python, daemon-RPC and mandatory confinement requirements do not apply
+to the rewrite. Python remains an optional legacy interoperability fixture.
+
 ## Installed three-platform live acceptance
 
 The [nine-pair design](phases/installed-nine-pair-interop.md), Beads

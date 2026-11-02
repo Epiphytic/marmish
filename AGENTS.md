@@ -1,5 +1,26 @@
 # Working on Marmish
 
+## Active direction: v0.2, native Rust
+
+The user reset the architecture on 2026-11-02. Stop v0.1 implementation and
+release work. Read [the v0.2 plan](docs/v0.2-plan.md) before making changes;
+it supersedes the legacy architecture requirements below and in older specs.
+v0.2 uses upstream mainline MDK, embedded Arti and native Rust application,
+daemon, CLI and setup tooling. Do not add a Python/uv runtime, private MDK fork,
+`wnd` subprocess, WASM/browser layer or mandatory namespace/broker dependency.
+Keep the Python implementation available as an isolated optional protocol
+compatibility fixture; it must not become a v0.2 runtime dependency. Preserve
+existing wire semantics unless a reviewed protocol change explicitly says
+otherwise. Source compatibility, wire compatibility and storage migration are
+separate claims and require separate evidence. The user permits breaking
+on-disk compatibility because there is no installed base. Use fresh v0.2 formats;
+do not add legacy storage migration work to preserve experimental state.
+
+The user explicitly authorized building and publishing the new v0.2 release.
+The phased Claude-review, Beads, validation and dual-mirror rules still apply.
+Do not resume cancelled v0.1 work or publish its cancelled experimental.3
+candidate while implementing the replacement.
+
 Read [the agent specification](docs/agent-spec.md) before planning or changing
 behavior. It records what works, intended capabilities, design decisions and
 known limits. Consult [the build plan](docs/build-plan.md) for phase boundaries,
