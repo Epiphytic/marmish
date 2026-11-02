@@ -1,0 +1,95 @@
+{
+  "blocking_findings": [
+    {
+      "id": "B1",
+      "issue": "The fixture is a workspace member that bakes in role/context/receipt constants with Rust env!. env! is a compile error when the variable is unset. native-validation.yml runs `cargo test --workspace --locked` and `cargo clippy --workspace --all-targets --locked -- -D warnings`, and the repo commit gate requires workspace clippy to pass. Adding the member as designed breaks the existing native validation and every commit.",
+      "required_change": "Use option_env! and fail closed: if any constant is missing, the fixture exits 125 with no output and no receipt. Workspace test/clippy then compiles a binary that cannot run. Alternatively, exclude the crate from the workspace and give it its own pinned lock that cannot drift. Also state that the release/publish tooling never packages the crate (`publish = false`)."
+    },
+    {
+      "id": "B2",
+      "issue": "The exactly-three count relies on 'its reply is successful accepted admission' and 'no other accepted invocation'. In the .2 server, Server._tick_group dispatches to the engine first and then calls rpc.send. If send raises RpcError, the row is still marked seen and skipped. The engine may have admitted and run the command with no outgoing row in history. Separately, a second run of the same role's fixture hits the O_EXCL refusal and exits 125 with no receipt, so the supervisor has no trace of it. Counting replies plus receipts can therefore miss a fourth execution.",
+      "required_change": "Count admissions from incoming requests, not replies. Any authenticated, schema-valid incoming `submit` for any invocation other than the expected one is a possible admission and fails the run. Byte-identical retransmits of the expected submit are allowed. An expected submit with no matching reply also fails the run. Optionally, have the fixture create a fixed second O_EXCL `duplicate` marker on refused re-entry, so a repeat run leaves evidence on disk. Add offline tests for a submit with no reply and for a duplicate fixture entry."
+    },
+    {
+      "id": "B3",
+      "issue": "The cross-role denial check says to use 'the real installed bridge policy evaluator where available'. No such operation exists. Bridge dispatch (crates/marmish-prototype/src/lib.rs) supports only init, token, submit, status, cancel, begin_input, write_stdin, stdin_eof, read_output, maintain and cleanup_ready. The parent requires a side-effect-free cross-execution denial check, plus unauthorized-principal coverage, before live executions are counted. 'Where available' leaves both unimplemented.",
+      "required_change": "Pick one concrete mechanism. Recommended: before marmishd starts, launch a throwaway installed marmish-engine-bridge on a separate scratch state root and cwd, with the identical generated policy and allowlist. For each client principal, call token and then submit with each other role's fixture path, and expect command_denied. Also confirm that an unlisted principal fails authorize. Prove no receipt or worker was created, then remove the scratch state with cleanup_ready. If you instead accept offline-only coverage, say so explicitly and get it approved against the parent's requirement."
+    },
+    {
+      "id": "B4",
+      "issue": "Rollup acceptance requires 'proven cleanup', but no artifact carries it. The server report includes a 'cleanup/lifetime verdict', yet uninstall and owned-root removal happen after it. Phase A copies public reports out of the root before removal. So no defined record proves that uninstall, root removal and the final process-absence checks succeeded, and C cannot validate final cleanup.",
+      "required_change": "Define a fixed-schema final cleanup record: either A's installation-result with stage=cleanup, or a new cleanup-result kind. It covers engine cleanup_ready, absence of the frontend, MDK daemons and workers, caffeinate stop, uninstall exit, and root removal. Write it outside the root after removal and upload it in an if: always() step. C requires exactly three such records. Missing or incomplete records fail the matrix."
+    }
+  ],
+  "models": [
+    "claude-opus-5-5"
+  ],
+  "nonblocking_findings": [
+    {
+      "id": "N1",
+      "issue": "History volume and completeness proof. Each poll returns at most 4096 bytes per stream, so the about 65.8 KB of stdout takes 17+ polls. The command produces about 60-80 rows plus about 4-6 for the probe, which normally stays under the 100-row window.",
+      "suggestion": "After the last client report arrives and before TERM, do one final history read. A final window under 100 rows is complete history for a fresh room and counts as primary evidence. Exclude recorded_at/received_at from the row-conflict digest so timestamp changes don't false-fail. Run show_group/members when a room is discovered and at a slower cadence, not on every 1 s tick."
+    },
+    {
+      "id": "N2",
+      "issue": "Expected protocol noise is not listed. The server discards rows already present when it joins a room, so an early hello can go unanswered. The client retransmits every 8 s, re-sends hello about every 40 s, and also sends token, begin_input and stdin_eof. stale_challenge errors can occur.",
+      "suggestion": "List the allowed operations, and state that unanswered non-submit requests and error replies to non-admitting operations are tolerated. Correlation stays strict for submit, input, poll and the probe status."
+    },
+    {
+      "id": "N3",
+      "issue": "When the server quarantines a room, it removes it from server_groups in profile.json. A room enrolled and quarantined between two observer reads would never be seen.",
+      "suggestion": "Fail if profile.json shows any server_quarantine entry, server_quarantine_full, or a server_pending entry for an unexpected principal."
+    },
+    {
+      "id": "N4",
+      "issue": "The client's MDK daemon runs in its own session (start_new_session in marmish_transport_sandbox/macos). The CLI has no SIGTERM handler, so a watchdog kill of the CLI's process group can leave the daemon orphaned, holding the shared client profile lock.",
+      "suggestion": "Have the watchdog send SIGINT first, so KeyboardInterrupt runs Profile.__exit__ and closes the transport. After any watchdog kill, skip the remaining pairs (or prove the profile-home lock is free) and report cleanup_incomplete if needed."
+    },
+    {
+      "id": "N5",
+      "issue": "The pair constants depend on identity-ready digests, so the fixture can only be built after the barrier. Three builds per host then count against the 5-minute server-readiness bound.",
+      "suggestion": "Prebuild the dependencies with --locked --offline during preparation, so the post-barrier work is only three rebuilds of the small fixture crate. Record build durations."
+    },
+    {
+      "id": "N6",
+      "issue": "The fixture's 45 s alarm covers stdin delivery, which takes four sequential relay exchanges (begin_input, two write_stdin, stdin_eof), each with an 8 s retransmit interval. That risks timeouts on slow relays.",
+      "suggestion": "Use roughly 120 s. It stays well inside the 300 s pair budget and the engine cleanup retry window."
+    },
+    {
+      "id": "N7",
+      "issue": "The parent asks for milliseconds; B names its metrics *_seconds. The byte metrics say 'including framing where applicable', which is ambiguous.",
+      "suggestion": "Align units with the parent, or state the conversion. Define the byte counts as exact fixture payload bytes, excluding protocol, base64 and MLS framing."
+    },
+    {
+      "id": "N8",
+      "issue": "The client's wait for all three server-ready records has no explicit bound, and the client can't know remote servers' deadlines.",
+      "suggestion": "Bound the client's start by its local server's deadline minus the 18-minute allowance and a delivery reserve. State that a remote server stopping at its deadline shows up as an honest pair failure."
+    },
+    {
+      "id": "N9",
+      "issue": "The child environment sets LANG=C. Getting argv bytes like 0xff through unchanged depends on Python's C-locale coercion to UTF-8 (Linux) or its UTF-8 filesystem encoding (macOS), with surrogateescape, inside the installed launcher.",
+      "suggestion": "Keep the planned native round-trip test, but run it through the actual installed launcher, not the harness interpreter."
+    }
+  ],
+  "permission_mode": "auto",
+  "reviewer": "Claude Code",
+  "scope": [
+    "docs/phases/installed-nine-pair-bc.md",
+    "shared phase A and parent interfaces"
+  ],
+  "validation": [
+    "`git diff v0.1.0-experimental.2 HEAD` shows no changes to tools/marmish_app.py, marmish_protocol.py, marmish_rpc.py, marmish_policy.py, marmish_transport.py or crates/, so the current source is the .2 runtime contract.",
+    "MdkRpc.history uses Messages List with limit 100 (latest window, oldest first). Rows carry direction sent/received and a from field. The underlying command also accepts after/before cursors that the wrapper doesn't use.",
+    "The Dispatcher reads output with limit 4096 per stream per poll. Frames are capped at 32 KiB, and replies are cached per (group, peer, request id), so retransmits get byte-identical replies.",
+    "Client.submit calls token and then submit. send_input sends 4096-byte chunks after begin_input, then stdin_eof. wait polls until state is exited and both streams are closed with full cursors. exit_code maps a code-7 outcome to exit 7. guarded_main turns SmokeError('not_found') into exit 125 with stderr 'marmish: not_found'.",
+    "Server._tick_group sends a reply only after dispatching to the engine, and silently skips an RpcError from send. This is the basis for B2.",
+    "The bridge op set has no policy-evaluation operation. This is the basis for B3.",
+    "The engine output spool cap (8 MiB per stream) easily covers the 65.5 KB workload.",
+    "In file key-storage mode, profile.json (including server_groups) is plain owned JSON.",
+    "The policy schema (defaults/keys/restrictions with allow_exec) supports the planned per-key intersection.",
+    "marmish_interop.running_rpc already queries the running server's MDK socket concurrently, so the observer pattern has a precedent.",
+    "native-validation.yml runs cargo test and clippy across the whole workspace. This is the basis for B1.",
+    "No files were modified and no live tests were run."
+  ],
+  "verdict": "NOT_APPROVED"
+}

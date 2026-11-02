@@ -1,0 +1,53 @@
+{
+  "verdict": "APPROVED",
+  "blocking_findings": [],
+  "resolved_previous_findings": {
+    "B1": "Fixed. tools/marmish_installed_state.py _transport_configs/_verify_transport_process authenticate the real ConfinedDaemon tree: unshare argv, outer python argv, bwrap bind pairs and last-5 argv, the inner sandbox.py/config.json/wnd bind inodes plus exe inode, and the ip/sysctl children with a recursively verified parent. Checked against marmish_transport_sandbox.py (unshare argv 400-401, bwrap args 538-559, wnd argv 609-615), its marmish-confinement-* TMPDIR placement, and the matching MARMISH_BWRAP env from marmish_ci_bwrap.py:442.",
+    "B2": "Fixed. create_state snapshots exact pid/boot_id/start identities of unreadable same-UID processes before spawning anything. _linux_scan tolerates PermissionError only for those exact identities, so PID reuse or a changed start time is rejected (test_snapshot_excludes_only_exact_preexisting_unreadable_identity). Workable and secure: it fails closed on new ambiguity and never excludes by name.",
+    "B3": "Fixed. On macOS, an uncertain runtime child without control_verified makes cleanup incomplete. _recover + cleanup_control are followed by absence checks for every recorded native-* identity.",
+    "B4": "Fixed. caffeinate -dimsu is spawned in its own session, recorded with its identity, and stopped TERM then KILL with an identity recheck before each signal. Stopping it is the first step of cleanup_state.",
+    "B5": "Fixed. Once the context is trusted, rendezvous main always writes a sanitized adapter-result status (outcome/error from a closed set). The workflow barrier runs if: always() && steps.identity.outcome == 'success'. marmish_installed_ci.py:150-176 requires that status file with an exact envelope and re-raises the adapter's error category. A missing status file or one with extra or wrong fields becomes artifact_invalid. The own identity record must be canonical-byte-equal to the peer copy (line 171), and the installer copy is rehashed after install (lines 105-106)."
+  },
+  "useful_nonblocking_findings": [
+    {
+      "file": "tools/test_marmish_installed_state.py",
+      "line": 315,
+      "finding": "Mocked coverage only. The transport proof tests capture _outer's bwrap argv and patch _bound_matches/_same_bound_file. No test authenticates a live unshare\u2192bwrap\u2192inner\u2192wnd tree, so the inside-the-namespace /proc/PID/root and /proc/PID/exe inode checks are unproven on real processes. Recommend an opt-in local integration test (real ConfinedDaemon with a /bin/true wnd, no network) before or alongside Phase B. The first real Phase B workflow run must be treated as the real proof."
+    },
+    {
+      "file": "tools/marmish_installed_state.py",
+      "line": 420,
+      "finding": "Lines 420-428 are dead code: the unshare branch and the selected-bwrap branch both just raise, as does the fallthrough. The bwrap branch also calls marmish_ci_bwrap.environment() and imports validated_bwrap without using either. Replace it all with a single raise to avoid misleading readers and needless env parsing during cleanup."
+    },
+    {
+      "file": "tools/marmish_installed_state.py",
+      "line": 853,
+      "finding": "There is a small TOCTOU window in _stop_caffeinate between the identity check and os.kill. By the time cleanup runs, caffeinate is no longer a child (it was spawned in the earlier identity step), so pidfd_open is not available on macOS and the window can't be fully closed. The risk is low; document it as accepted."
+    },
+    {
+      "file": "tools/marmish_installed_state.py",
+      "line": null,
+      "finding": "The pre-spawn snapshot means any same-UID unreadable process that appears mid-run makes cleanup report incomplete. Examples are a new ssh login (sshd/ssh-agent) or a restarted systemd --user. This is correct fail-closed behaviour, but on shared runners it can cause spurious cleanup_incomplete results. Document it in the runbook so operators avoid interactive logins during installed runs."
+    },
+    {
+      "file": "tools/marmish_installed_ci.py",
+      "line": 155,
+      "finding": "The barrier checks type(status['format']) is int but not format == 1, unlike the other envelope checks. Tighten it for consistency."
+    },
+    {
+      "file": "tools/marmish_installed_state.py",
+      "line": null,
+      "finding": "On Linux, caffeinate_absent=True in the cleanup report is vacuous. Consider null/not_applicable so the sanitized report doesn't claim a check that never ran. Also, caffeinate -s only prevents system sleep on AC power; note that the laptop runner should stay on AC."
+    }
+  ],
+  "tests_run": [
+    "cd tools && python3 -m unittest test_marmish_installed_release test_marmish_installed_state test_marmish_installed_rendezvous test_marmish_installed_ci -> Ran 58 tests, OK (Linux; macOS-only and darwin-patched paths exercised only via mocks)",
+    "cd tools && python3 -m unittest test_marmish_install test_marmish_interop test_marmish_release test_marmish_release_licenses -> OK (the test's own temp-prefix uninstall message appeared; root's private installer prefix was not touched)",
+    "No transport started, no files edited, no publishing or credentials used."
+  ],
+  "reviewer": "Claude Code",
+  "permission_mode": "auto",
+  "models": [
+    "claude-opus-5-5"
+  ]
+}

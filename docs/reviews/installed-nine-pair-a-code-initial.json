@@ -1,0 +1,119 @@
+{
+  "blocking_findings": [
+    {
+      "detail": "marmish --init starts ConfinedDaemon (marmish_app.py:256-262). Through bwrap this runs '/usr/bin/python3 /sandbox.py --inner /config.json', '/wnd', and short-lived /usr/sbin/ip and sysctl children (marmish_transport_sandbox.py:536-559), all with the marker. None of these is accepted: '/sandbox.py' and '/wnd' are bind paths, not registered artifact paths. The periodic scan in run_bounded (line 508-509) then raises cleanup_incomplete. Reproduced offline: a marker-bearing /usr/bin/python3 grandchild with an unregistered script makes run_bounded raise SmokeError('cleanup_incomplete'). The tests only use a registered fixture .py and never the actual sandbox shape. Fix: authenticate the inner command via the bound config and sandbox digest, map /wnd to the verified wnd digest, and add a fixed allowlist for ip/sysctl under an authenticated parent. Test against the real ConfinedDaemon argv.",
+      "file": "tools/marmish_installed_state.py",
+      "id": "B1",
+      "line": 360,
+      "summary": "_verify_process rejects the real Linux transport process tree, so production identity initialization aborts."
+    },
+    {
+      "detail": "On this host the unreadable same-UID processes are systemd --user, (sd-pam), ssh-agent and sshd sessions. The configured runners are self-hosted ('laptop-ci', 'bel-ci'; workflow lines 39-43), where such processes are likely. Then every Linux run_bounded fails about 0.5 s in, gets reported as 'internal_failure' (ci.py:229-234), cleanup is always incomplete, and state is retained. No preflight proves the runner is clean. Security: refusing is correct; ignoring unreadable processes would be unsafe, since a run's own daemon could set PR_SET_DUMPABLE=0. Workable and secure alternative: in create_state, snapshot the identities (pid, boot, start) of unreadable same-UID processes. Exclude only those whose start time predates state creation, which is what the test fixture does but production doesn't. Refuse any new unreadable process, and add an explicit preflight error category.",
+      "file": "tools/marmish_installed_state.py",
+      "id": "B2",
+      "line": 346,
+      "summary": "An unreadable same-UID /proc environ raises PermissionError in every scan, including the in-flight scan during the installer run."
+    },
+    {
+      "detail": "_native_cleanup does nothing if control_dir is absent, and cleanup_control deletes a control dir that has no run record. Lines 632-633 then set frontend_absent, mdk_absent and caffeinate_absent to true unconditionally. On macOS, run_bounded only kills the frontend process group, so sandbox-exec daemons in a new session escape it. The design requires cleanup_incomplete here unless the registry proves the processes absent (installed-nine-pair-a.md:516-522). There are no macOS tests for a setsid grandchild, a reaped-leader race, or a timeout during init.",
+      "file": "tools/marmish_installed_state.py",
+      "id": "B3",
+      "line": 604,
+      "summary": "macOS cleanup fails open when a launch was interrupted before a control record existed."
+    },
+    {
+      "detail": "The design requires caffeinate to start before identity initialization, with its PID tracked in a private child record and stopped through owned cleanup. Neither is implemented. The macOS runner is a laptop: a suspend longer than 5 s during the 10-minute barrier invalidates clocks, and the cleanup check is unverified (state.py:632).",
+      "file": ".github/workflows/installed-interop.yml",
+      "id": "B4",
+      "line": 69,
+      "summary": "No supervised macOS sleep assertion, yet cleanup reports caffeinate_absent=true without checking anything."
+    },
+    {
+      "detail": "The adapter prints only a generic 'rendezvous_failed'. The barrier step has no if: always() (workflow lines 93-98), so it is skipped. The uploaded installation-result then stays outcome=passed with no barrier stage. The categories barrier_timeout, artifact_network_failed, artifact_listing_unstable and artifact_invalid (from the adapter) can't be produced, contradicting 'Every failure emits a bounded sanitized installation-result report'. Fix: run the barrier with always() and map a missing or failed adapter output to the finite category, or have the adapter write a sanitized private status.",
+      "file": "tools/marmish_installed_rendezvous.py",
+      "id": "B5",
+      "line": 419,
+      "summary": "Adapter failures never reach the sanitized installation-result report."
+    }
+  ],
+  "models": [
+    "claude-opus-5-5"
+  ],
+  "plan_conformance": {
+    "bounded_process": "Leader-reserved group signaling, SIGINT-first for runtime, combined output cap and continuous-clock deadline conform. The Linux descendant verifier is incomplete for the real sandbox (B1) and unworkable alongside pre-existing unreadable processes (B2).",
+    "installed_verification": "Conforms: exact tree, modes, nlink, marker, current link, launchers, raw manifest and full payload; validate_manifest only on the matching host.",
+    "macos_recovery": "Reuses authenticated _recover and cleanup_control under the lock. Missing the interrupted-launch proof, caffeinate supervision, and the required macOS tests (B3, B4).",
+    "private_state": "Mostly conforms: O_NOFOLLOW directory walk, identity revalidation, immutable pointer hash.",
+    "release_resolution_and_pin": "Conforms: fixed version constant, installer hashed before helper load, schema-only foreign resolve, transient retries classified from the exception cause, canonical pin, strict load_pin.",
+    "rendezvous_http": "Conforms: credential sent only over a pipe, no token on redirect, parent-enforced total deadline with tested slow-drip, strict paging and restart, mandatory digest, duplicate refusal.",
+    "reports": "Finite categories and no raw text in reports, which is good. Barrier and artifact categories are unreachable, and uninstall_failed is never emitted.",
+    "scope_claims": "Correctly framed as prerequisite-only; there is no nine-pair, latency or native-success claim.",
+    "workflow": "Guards, pinned actions, permissions, concurrency, matrix and always() cleanup conform. Missing caffeinate; the barrier step is skipped on adapter failure (B5)."
+  },
+  "scope": "Phase A integrated new modules, tests and prerequisite-only workflow",
+  "tests_run": [
+    "python3 -m unittest test_marmish_installed_release test_marmish_installed_state test_marmish_installed_rendezvous test_marmish_installed_ci -> 48 tests OK",
+    "python3 -m unittest test_marmish_install test_marmish_interop test_marmish_release test_marmish_release_licenses -> 79 tests OK",
+    "Workflow YAML parse OK (actionlint unavailable)",
+    "Offline probe (temp script, since removed): run_bounded with a marker-bearing /usr/bin/python3 grandchild running an unregistered script -> SmokeError('cleanup_incomplete'), confirming B1",
+    "Enumerated same-UID unreadable /proc environ on this host: systemd --user, (sd-pam), ssh-agent, 3x sshd"
+  ],
+  "useful_nonblocking_findings": [
+    {
+      "file": "tools/marmish_installed_state.py",
+      "line": 675,
+      "summary": "cleanup_state always reports error='cleanup_incomplete'; the design requires 'uninstall_failed' when uninstall fails (require at line 650 is discarded)."
+    },
+    {
+      "file": "tools/marmish_installed_state.py",
+      "line": 349,
+      "summary": "Scan race: if a matched process exits between reading environ and process_identity or readlink, it raises SmokeError or fails the not-exists check. This makes _clean_linux rescans flaky while signaled processes are dying. Treat a vanished or zombie identity as absent."
+    },
+    {
+      "file": "tools/marmish_installed_state.py",
+      "line": 320,
+      "summary": "_process_absent checks only that /proc/PID exists, ignoring identity. PID reuse gives a spurious 'incomplete'; compare process_identity instead."
+    },
+    {
+      "file": "tools/marmish_installed_state.py",
+      "line": 365,
+      "summary": "Each scan re-hashes every matched executable (up to 512 MiB, including the Python binary) every 0.5 s. Cache by (dev, ino, size, mtime)."
+    },
+    {
+      "file": "tools/marmish_installed_state.py",
+      "line": 388,
+      "summary": "The bwrap check only requires ROOT as a substring of any argument. Acceptable given the authenticated executable, but weak; pin the config path argument instead."
+    },
+    {
+      "file": "tools/marmish_installed_release.py",
+      "line": 247,
+      "summary": "verify_installed re-hashes the checkout installer, not ROOT/install.sh. The design says to recheck the verified copy after use; it is only rehashed later, before uninstall."
+    },
+    {
+      "file": "tools/marmish_installed_ci.py",
+      "line": 151,
+      "summary": "The barrier doesn't check that peers[role] is byte-identical to this job's own published identity-ready record."
+    },
+    {
+      "file": "tools/marmish_installed_rendezvous.py",
+      "line": 253,
+      "summary": "child.wait(timeout=2) can raise TimeoutExpired, which neither _request_process nor main() catches, so it surfaces as a traceback."
+    },
+    {
+      "file": "tools/marmish_installed_state.py",
+      "line": 180,
+      "summary": "create_state accepts leading-zero run/attempt values ('[0-9]+'), unlike validate_context ('[1-9]...')."
+    },
+    {
+      "file": ".github/workflows/installed-interop.yml",
+      "line": 60,
+      "summary": "'Re-run failed jobs' changes run_attempt, so the pin artifact name no longer matches and the result is pin_unavailable. Fails closed; document that a full re-run is required."
+    },
+    {
+      "file": "tools/test_marmish_installed_state.py",
+      "line": 27,
+      "summary": "The test isolation of pre-existing unreadable identities is sound and fails closed, but production has no equivalent (see B2)."
+    }
+  ],
+  "verdict": "NOT_APPROVED"
+}

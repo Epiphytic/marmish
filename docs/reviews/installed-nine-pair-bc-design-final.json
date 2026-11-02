@@ -1,0 +1,41 @@
+{
+  "blocking_findings": [],
+  "models": [
+    "claude-opus-5-5"
+  ],
+  "nonblocking_findings": [
+    {
+      "id": "N1",
+      "issue": "Raising the fixture alarm to 120 s outlasts the 65-second cleanup_ready retry window used by the existing two-host harness (marmish_interop.service). If the server stops early after receiving a failure report, a still-running fixture can make engine cleanup report incomplete when waiting longer would have succeeded.",
+      "suggestion": "Make the bounded cleanup_ready retry window at least as long as the 120 s fixture alarm plus a margin, taken from the reserved cleanup time and not from the server lifetime."
+    },
+    {
+      "id": "N2",
+      "issue": "The design says to 'use authenticated cancellation where available', and cancel is listed as an allowed operation during failure cleanup. Only a client can send cancel over Marmot. The server-side supervisor cannot use the engine directly while marmishd holds its state root.",
+      "suggestion": "Say that the server supervisor relies on the fixture alarm plus cleanup_ready retries, and that cancel can only come from the owning client's CLI during client-side failure cleanup."
+    },
+    {
+      "id": "N3",
+      "issue": "The scratch-bridge check expects command_denied for cross-role submits and an authorization failure for an unlisted principal's token request. The exact engine error code for the unlisted principal is not named.",
+      "suggestion": "Pin both error codes in the offline tests: run the locked engine source, then confirm them on the first native run. Treat any other error, or success, as abort-readiness."
+    }
+  ],
+  "permission_mode": "auto",
+  "reviewer": "Claude Code",
+  "scope": [
+    "docs/phases/installed-nine-pair-bc.md",
+    "shared parent and phase interfaces"
+  ],
+  "validation": [
+    "Fixture: option_env! with fail-closed exit 125 and no side effects, publish = false, and an offline-test case for an unconfigured build. Workspace-wide cargo test/clippy in native-validation.yml can compile it.",
+    "Counting: any authenticated, schema-valid incoming submit naming another invocation fails, whether or not it got a reply. An expected submit with no successful reply fails. This covers the case where Server._tick_group dispatches and then send raises RpcError.",
+    "Policy check: a separate installed marmish-engine-bridge instance on its own scratch state root runs token then submit for six cross-role paths (expecting command_denied), plus an unlisted-principal token request (expecting failure). It then checks that no worker or receipt exists and removes the state via cleanup_ready. This uses only existing bridge operations (init, token, submit, cleanup_ready).",
+    "Cleanup: the cleanup-result schema in B (seven checks, all true for acceptance, written outside ROOT after uninstall and root removal, uploaded with if: always()) exactly matches phase A. A's uninstall goes through `install.sh --uninstall --prefix`, which exists in scripts/install.sh. C requires exactly three cleanup records.",
+    "Watchdog: client CLIs get SIGINT first (5 s in A), which matches client_main having no SIGTERM handler and the MDK daemon running in its own session (start_new_session in marmish_transport_sandbox and marmish_transport_macos). After escalation, the remaining pairs are skipped unless the profile lock is proven free.",
+    "Observer: the allowed operations match OPS plus hello in marmish_protocol. Tolerating unanswered early hellos matches the server discarding rows that already exist when it joins a room. The row digest excludes recorded_at/received_at. The final history read and the quarantine/pending checks fit the plain JSON in profile.json (file key storage) and the server_groups/server_quarantine/server_pending keys.",
+    "Budgets: the 1800 s deadline starts at live-phase entry and includes the five-minute build, policy-check and readiness window. The client's readiness cutoff is 1800 \u2212 1080 \u2212 120 s = 600 s. Three pairs at 300 s each plus margins stay at or under 18 minutes. Nothing compares clocks across hosts.",
+    "Measurements: byte counts exclude Marmish JSON, base64, MLS and relay framing. Seconds fields are converted from nanoseconds, and the human-readable table shows milliseconds, consistent with the parent design.",
+    "No files were modified and no live tests were run."
+  ],
+  "verdict": "APPROVED"
+}

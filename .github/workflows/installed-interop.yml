@@ -1,0 +1,126 @@
+name: Installed three-platform Marmot interoperability
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: marmish-native-validation
+  cancel-in-progress: false
+jobs:
+  resolve:
+    if: github.repository == 'Epiphytic/marmish' && github.ref == 'refs/heads/master' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Freeze published release and exact installer provenance
+        run: python3 tools/marmish_installed_ci.py resolve --pin-dir "$RUNNER_TEMP/release-pin"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: installed-interop-${{ github.run_id }}-${{ github.run_attempt }}-release-pin
+          path: ${{ runner.temp }}/release-pin
+          if-no-files-found: error
+          retention-days: 14
+  platform:
+    needs: resolve
+    if: github.repository == 'Epiphytic/marmish' && github.ref == 'refs/heads/master' && github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      actions: read
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - platform: linux-x64
+            labels: [self-hosted, Linux, X64, bel-ci]
+          - platform: linux-arm64
+            labels: [self-hosted, Linux, ARM64, laptop-ci]
+          - platform: macos-arm64
+            labels: [self-hosted, macOS, ARM64, laptop-ci]
+    runs-on:
+      group: epiphytic-ci
+      labels: ${{ matrix.labels }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        id: checkout
+        with:
+          persist-credentials: false
+      - name: Ensure harness and launcher Python 3.11 or newer
+        run: sh tools/bootstrap_ci_python.sh
+      - name: Acquire authenticated rootless Bubblewrap
+        if: runner.os == 'Linux'
+        timeout-minutes: 6
+        run: python3 tools/marmish_ci_bwrap.py bootstrap --state "$RUNNER_TEMP/installed-bwrap-state"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: installed-interop-${{ github.run_id }}-${{ github.run_attempt }}-release-pin
+          path: ${{ runner.temp }}/release-pin
+      - name: Execute real install script and verify every installed payload
+        id: installation
+        timeout-minutes: 15
+        run: >-
+          python3 tools/marmish_installed_ci.py prepare
+          --pin-dir "$RUNNER_TEMP/release-pin"
+          --state "$RUNNER_TEMP/installed-state" --role '${{ matrix.platform }}'
+      - name: Initialize two fresh identities through installed launcher
+        id: identity
+        timeout-minutes: 11
+        run: >-
+          python3 tools/marmish_installed_ci.py identity-ready
+          --pin-dir "$RUNNER_TEMP/release-pin"
+          --state "$RUNNER_TEMP/installed-state" --role '${{ matrix.platform }}'
+      - name: Publish public identities while this job is running
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: installed-interop-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.platform }}-identity-ready
+          path: ${{ runner.temp }}/installed-state.public/identity-ready/record.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Isolated token-bearing three-peer artifact adapter
+        id: adapter
+        timeout-minutes: 11
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python3 tools/marmish_installed_rendezvous.py wait
+          --pin-dir "$RUNNER_TEMP/release-pin"
+          --state "$RUNNER_TEMP/installed-state"
+          --stage identity-ready --timeout 600
+          --output "$RUNNER_TEMP/installed-state.public/peers.json"
+      - name: Require all three installed identities before live launch
+        if: always() && steps.identity.outcome == 'success'
+        run: >-
+          python3 tools/marmish_installed_ci.py barrier
+          --pin-dir "$RUNNER_TEMP/release-pin"
+          --state "$RUNNER_TEMP/installed-state" --role '${{ matrix.platform }}'
+          --peers "$RUNNER_TEMP/installed-state.public/peers.json"
+      # Phase B extends these jobs here. This increment validates prerequisites;
+      # reaching the barrier does not claim nine-pair command acceptance.
+      - name: Prove owned process cleanup and uninstall disposable installation
+        id: cleanup
+        if: always() && steps.checkout.outcome == 'success'
+        timeout-minutes: 8
+        run: >-
+          python3 tools/marmish_installed_ci.py cleanup
+          --pin-dir "$RUNNER_TEMP/release-pin"
+          --state "$RUNNER_TEMP/installed-state" --role '${{ matrix.platform }}'
+      - name: Remove owned Bubblewrap after process cleanup
+        if: always() && runner.os == 'Linux' && steps.checkout.outcome == 'success'
+        run: |
+          if [ '${{ steps.cleanup.outcome }}' != success ]; then
+            echo '{"outcome":"failed","category":"cleanup_retained_unverified"}'
+            exit 1
+          fi
+          python3 tools/marmish_ci_bwrap.py cleanup --state "$RUNNER_TEMP/installed-bwrap-state"
+      - name: Preserve sanitized prerequisite and final cleanup reports
+        if: always() && steps.checkout.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: installed-interop-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.platform }}-prerequisite-result
+          path: ${{ runner.temp }}/installed-state.public
+          if-no-files-found: error
+          retention-days: 14

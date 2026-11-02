@@ -1,0 +1,112 @@
+{
+  "blocking_findings": [
+    {
+      "id": "B1",
+      "issue": "Resolve cannot reuse installer validate_manifest across targets. validate_manifest always calls validate_prerequisites, which compares the host's glibc and ctypes.CDLL-loads each listed shared library (scripts/install.sh:317-332). The darwin manifest's shared_libraries are otool paths under /usr/lib and /System/Library (tools/marmish_release.py:69-90), so validating all three archives on one host fails at least for macOS, and a linux-arm64 check on an x64 host proves nothing. The design also never says which runner the resolve job uses.",
+      "required_change": "Name the resolve job's runner. Give resolve a host-independent manifest check: exact field set, format/experimental, version/target, source_commit, payload set equals extracted files, per-file sha256/mode, and prerequisites shape via the installer's valid_library/version_tuple checks, but no CDLL or host-glibc check. Run the full validate_manifest, prerequisites included, only in verify_installed on the matching platform. Add an offline test that resolves a darwin-target fixture on Linux."
+    },
+    {
+      "id": "B2",
+      "issue": "The exact installed prefix layout is not defined, and parts of it contradict the real installer. installation_lock leaves PREFIX/.marmish-install.lock (O_CREAT, 0600, never removed). PREFIX/current is a relative symlink, yet the text says 'Reject symlinks'. The versions/ and bin/ directories and their modes are not stated. 'Reject unexpected files' therefore either fails every real install or gets loosened during implementation.",
+      "required_change": "Write out the exact PREFIX=ROOT/install tree verify_installed accepts: PREFIX (0700, owned); .marmish-install.json (regular, nlink 1, 0600, fields {format:1, version, target, launcher_dir: str(PREFIX/'bin')}); .marmish-install.lock (regular, owned, 0600, empty); current symlink with readlink exactly 'versions/marmish-VERSION-TARGET'; bin/ holding exactly marmish and marmishd (0755, bytes == launcher_bytes(PREFIX/versions/..., name)); versions/ (0700) holding exactly one directory. That version root (0755) holds release.json (0644, byte-equal to the sidecar) plus exactly the manifest payload files with their modes, and exactly the directories those files imply (0755). Nothing else is allowed, including leftover .marmish-stage-*, .marmish-current-* or .marmish-write-* entries. Use lstat everywhere and test each rule."
+    },
+    {
+      "id": "B3",
+      "issue": "Subprocess cleanup and orphan handling are not concrete enough for the real runtime. `marmish --init` starts the confined daemon in a new session: Linux via unshare/outer python with start_new_session=True (marmish_transport_sandbox.py:399-406), macOS via marmish-lifetime with start_new_session=True (marmish_transport_macos.py:818). Killing the frontend's process group (killpg) never reaches those processes. If the frontend is SIGKILLed on timeout they can be orphaned, and only macOS has a .marmish-run.json control record. Separately, recording the leader's identity does not make killpg safe once the leader has been reaped (its PID/PGID can be reused), and the design does not order a graceful stop so the frontend's ConfinedDaemon.__exit__ can run.",
+      "required_change": "Specify the order: TERM the frontend group first, wait with a bounded deadline for a graceful exit, then KILL. Only signal the group while the leader is unreaped (waitid WNOWAIT, or a zombie holding the PGID); otherwise prove the group is empty by enumeration before any signal. Name how each platform finds new-session descendants, e.g. a per-run execution marker plus an owned-UID /proc scan for exe under ROOT/install (Linux, reusing native_validation's /proc audit patterns), and the .marmish-run.json daemon/shim identities with process_identity checks and cleanup_control on ROOT/{server,client}/mdk (macOS). Any process that can't be verified or stopped \u2192 cleanup=incomplete with state retained. Add offline tests for a setsid grandchild, a reaped-leader race and timeout-during-init."
+    },
+    {
+      "id": "B4",
+      "issue": "HTTP deadlines aren't strictly enforced as claimed. marmish_rendezvous.request has a fixed timeout=15, which is a per-socket-operation timeout with no total bound, and a single response.read(limit+1). A server that drips bytes can hold one listing or ZIP read far past the absolute barrier deadline, so 'capped by remaining deadline' can't be met by reusing request unchanged. archive() also skips the digest check when 'digest' is missing, and the existing size check does not enforce integer type.",
+      "required_change": "Add a bounded request wrapper for the new adapter. Set the socket timeout to min(15, remaining), read in chunks, and check the continuous-clock deadline and byte limit after each chunk. Keep the fixed API origin, the redirect-host allowlist and no token on redirects. Require an exact 'sha256:<hex64>' digest, integer non-boolean id and size_in_bytes, and name in every artifact entry. Test slow-drip bodies on both the listing and the redirected download."
+    },
+    {
+      "id": "B5",
+      "issue": "Parent latency section (new text): three cold session-plus-status probes per client are added, but the parent's bounded command plan only covers three serial commands with --timeout 300 inside an 18-minute budget and a 30-minute server window. The probes have no timeout, no budget share and no failure semantics, so the worst case can exceed the server window and the cyclic-shutdown reasoning.",
+      "required_change": "In the parent, give each probe an explicit per-invocation timeout and fit probes plus commands inside the existing 18-minute client budget, or resize that budget and the server window. State that probes run in the same fixed serial order, are excluded from the exactly-three execution count, and that a failed probe is recorded per cell without inventing timing values (and whether the command still runs)."
+    },
+    {
+      "id": "B6",
+      "issue": "Cleanup is inconsistent with the parent. The parent requires running the actual installer uninstall after process/worker cleanup is proven, then removing the owned root. Phase A only says cleanup 'may remove the entire fresh owned test root'.",
+      "required_change": "Make cleanup_state, after process-absence proof, run `/bin/sh CHECKOUT/scripts/install.sh --uninstall --prefix ROOT/install` through run_bounded with the scrubbed environment and the pin-verified installer bytes. Require success, or record a finite failure category, then remove the root. Skip uninstall only when no installer-owned marker exists, and record that case."
+    }
+  ],
+  "models": [
+    "claude-opus-5-5"
+  ],
+  "nonblocking_findings": [
+    {
+      "id": "N1",
+      "issue": "marmish_release_acceptance.installer() re-reads scripts/install.sh with read_text, separately from the hashed bytes. /bin/sh also re-reads the checkout file at exec time, so there is a hash-then-use gap.",
+      "suggestion": "Load the helper module from the exact bytes already hashed, and execute a verified copy inside the 0700 ROOT, or re-hash after the child exits."
+    },
+    {
+      "id": "N2",
+      "issue": "Retry classification is underspecified. The installer's download() wraps every network error in InstallError with one message and opens files 'xb'. The parent says to keep bounded retries for installer rate limits, but phase A only retries in resolve.",
+      "suggestion": "Classify resolve errors via InstallError.__cause__ (an HTTPError code, or URLError/TimeoutError), and give each retry a fresh path. Optionally retry the installer subprocess only when its --debug 'failed' record shows stage release_metadata/archive_download with http_status 429/5xx and the prefix is still untouched, within the 15-minute preparation deadline."
+    },
+    {
+      "id": "N3",
+      "issue": "The 'absolute drift over five seconds' rule is ambiguous: continuous minus monotonic is just suspension. Suspend detection also depends on the monotonic clock excluding sleep on macOS.",
+      "suggestion": "Define it as clock_valid=false when suspended_ns > 5e9 or any delta is negative. Assert time.get_clock_info('monotonic').implementation excludes sleep on each platform (or read mach_absolute_time / CLOCK_MONOTONIC directly), and test it."
+    },
+    {
+      "id": "N4",
+      "issue": "The bootstrap stage happens in an earlier workflow step, before state and before the harness Python exists.",
+      "suggestion": "Reuse the existing tools/marmish_ci_clock.py sample-file pattern as the bootstrap start, or drop the bootstrap stage from phase A."
+    },
+    {
+      "id": "N5",
+      "issue": "The 'finite reviewed constants' failure vocabulary isn't listed, and neither is its source.",
+      "suggestion": "List phase A's categories, e.g. installer_refused/installer_timeout/installer_output_limit with debug stage and http_status, install_verify_failed, identity_init_failed with exit code or signal, barrier_timeout, cleanup_incomplete. Map them only from the installer's fixed-schema debug 'failed' record and from return codes."
+    },
+    {
+      "id": "N6",
+      "issue": "It isn't explicit that identity initialization counts as 'runtime' for the Bubblewrap selection, yet --init starts ConfinedDaemon.",
+      "suggestion": "State that initialize_identity uses runtime=True and forwards only MARMISH_BWRAP/MARMISH_BWRAP_SHA256 from marmish_ci_bwrap.environment()."
+    },
+    {
+      "id": "N7",
+      "issue": "Treating any cross-page duplicate or total_count change as fatal turns a normal concurrent-upload snapshot shift into a hard failure.",
+      "suggestion": "Restart the whole listing within the deadline when the snapshot is inconsistent. Fail only when a consistent snapshot holds duplicate names with distinct IDs. Optionally filter with the endpoint's name= parameter."
+    },
+    {
+      "id": "N8",
+      "issue": "Workflow details: the adapter needs `actions: read`, and the owner/lifetime of macOS caffeinate across steps isn't specified.",
+      "suggestion": "Grant `actions: read` only on the platform job (the adapter is a step there). Track caffeinate as an owned process in state, or bind it to the supervising PID (`caffeinate -w`)."
+    },
+    {
+      "id": "N9",
+      "issue": "The server-ready fixtures validator doesn't tie all three paths to one root.",
+      "suggestion": "Require all three fixture paths to share the sending server's single ROOT, with exactly ROOT/f/<role>/main for each role."
+    },
+    {
+      "id": "N10",
+      "issue": "The installation-result schema assumes a pin, but pin download or validation can fail first.",
+      "suggestion": "Allow pin_sha256 null only together with a fixed pin-failure error category."
+    },
+    {
+      "id": "N11",
+      "issue": "Parent latency: with a payload of a few hundred bytes, the bytes/second figure mostly measures latency.",
+      "suggestion": "Name it 'effective end-to-end rate' in the table, and publish payload bytes beside it, which is already required."
+    }
+  ],
+  "permission_mode": "auto",
+  "reviewer": "Claude Code",
+  "scope": [
+    "docs/phases/installed-nine-pair-a.md",
+    "docs/phases/installed-nine-pair-interop.md latency addition"
+  ],
+  "validation": [
+    "Read docs/phases/installed-nine-pair-a.md in full, and the parent docs/phases/installed-nine-pair-interop.md plus its uncommitted latency diff.",
+    "Checked scripts/install.sh: argument handling, PREFIX/bin launcher dir, limits (512 MiB/1536 MiB/4096 files/2 MiB manifest), release_metadata/release_assets/download/verify_checksum/inflate/extract_ustar/validate_manifest/validate_prerequisites, installation_lock (persistent lock file), read_installation, launcher_bytes (absolute version root), publish_installation (relative current symlink, marker via json.dumps sort_keys), uninstall (keeps versions), InstallerDiagnostics fixed-schema failure records.",
+    "Confirmed the darwin prerequisites come from otool (tools/marmish_release.py:69-90), so validate_prerequisites can't succeed cross-host.",
+    "Checked marmish_release_acceptance.installer() loads the embedded Python by re-reading the file.",
+    "Checked marmish_platform.continuous_time (float seconds; CLOCK_BOOTTIME / mach_continuous_time) and process_identity (pid/boot/start).",
+    "Checked that marmish_app --init prints only {account} and starts ConfinedDaemon. Both transports launch the daemon with start_new_session=True; only macOS writes a .marmish-run.json control record; Linux propagates EPIPHYTIC_EXECUTION_ID into bwrap.",
+    "Checked marmish_rendezvous.request (fixed 15 s timeout, single bounded read, NoRedirect), archive (redirect allowlist, token-free redirect, digest check optional), read_zip (65536/8192, one entry, no ZIP64 extra, no encryption), and the unpaged two-role wait/validate.",
+    "Checked marmish_ci_bwrap.environment()/MARMISH_BWRAP(_SHA256) forwarding and the native-validation workflow pattern (bootstrap_ci_python.sh, bwrap bootstrap, shared concurrency group, runner labels).",
+    "No files modified and no live or network tests run."
+  ],
+  "verdict": "NOT_APPROVED"
+}

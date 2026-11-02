@@ -8,10 +8,14 @@ ARM64 on both client and server axes. Every platform must execute the actual
 install script and run its installed launchers. The proposed increments cover
 installation/public rendezvous, bounded authenticated command execution and
 delivery-safe shutdown, then independent nine-pair rollup and native evidence.
-This is planned work; existing installation and confinement failures remain
-visible and are not waived. See the detailed design for release-versus-installer
-provenance and existing MDK history observation, subject to phase-B field
-verification.
+Phase A implements the actual-installer prerequisites and public rendezvous;
+the workflow currently stops at its identity barrier. Its detailed plan and the
+B/C execution/reconciliation plan have independent Claude design approval.
+Existing installation and confinement failures remain visible and are not
+waived. See the detailed designs for release-versus-installer provenance,
+authenticated MDK observation and the latency/goodput measurement definitions.
+The setup-only baseline is published under `docs/validation/`; it is not a
+successful command or nine-pair result.
 
 ## Prototype distribution extension
 

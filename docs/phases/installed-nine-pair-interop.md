@@ -253,6 +253,37 @@ state. Never delete uncertain live engine state or indiscriminately kill users'
 processes. Cancellation/SIGKILL can prevent cleanup and reporting; missing proof
 is failure, with owned uncertain state retained under the existing policy.
 
+## Latency and speed evidence
+
+The user additionally requires measured performance from the installed live
+matrix, published with its validation evidence. Record installation and identity
+preparation separately from transport measurements. For each ordered platform
+pair, measure a cold authenticated session-plus-status round trip (which admits
+no command), then the single fixture command's elapsed time, first-output time,
+validated stdin/stdout/stderr byte counts and end-to-end transfer rate. Detailed
+phase design must prove how these measurements and the status probe bind to
+authenticated history before implementation.
+
+For each pair in the existing fixed serial order, the probe and fixture command
+share one 300-second budget; pass the remaining whole seconds to each CLI
+invocation and enforce an external watchdog. All three pairs, including process
+termination margins, must still fit the 18-minute client allowance. Probes admit
+no command and never increment the exactly-three execution count. A failed or
+timed-out probe records that cell's failure and skips its fixture command;
+continue other pairs only while the existing overall/server deadlines permit.
+Failed cells have no successful performance values.
+
+Use one local suspend-inclusive clock for elapsed measurements; never subtract
+timestamps from different machines to claim one-way latency. Report milliseconds
+and bytes/second with exact interval definitions, payload sizes, sample counts,
+relay set, platform pair and source/archive provenance. One fixture command per
+pair means one command sample per cell; do not manufacture percentiles or call
+protocol frames independent command samples. End-to-end effective throughput
+includes framing, polling and execution overhead and is not a raw relay capacity
+measurement. A failed or incomplete transfer has no successful throughput value.
+Publish sanitized machine-readable measurements and a readable table under
+`docs/validation/`, retaining failures and the methodology beside the results.
+
 ## Rollup and validation
 
 Require exactly three distinct platform installation records, three server

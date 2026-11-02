@@ -1,0 +1,45 @@
+{
+  "blocking_findings": [],
+  "models": [
+    "claude-opus-5-5"
+  ],
+  "nonblocking_findings": [
+    {
+      "id": "N1",
+      "issue": "The reuse section (lines 79-83) still says to reuse `marmish_rendezvous.request`, `archive` and `read_zip`, and only bars reusing the validator, listing and expiry checks. Line 414 now says not to reuse `request`/`archive` unchanged and adds `request_bounded` plus a per-exchange worker. The later section is clearly the governing one, but the two passages disagree.",
+      "suggestion": "Edit lines 79-83 to say only `read_zip` is reused unchanged and that HTTP goes through `request_bounded` in a worker subprocess."
+    },
+    {
+      "id": "N2",
+      "issue": "Uninstall cleanup says to record `not-installed` when no marker exists (line 531). But the cleanup outcome set is `complete`/`incomplete`/`not-started`, and `checks.uninstall_complete` only allows true/false/null, so `not-installed` has no defined field.",
+      "suggestion": "Say that no marker plus verified absence of launchers/current/marker sets `uninstall_complete=true`, or add `not-installed` explicitly to the schema."
+    },
+    {
+      "id": "N3",
+      "issue": "Line 322 hard-codes the expected clock name for macOS as mach_absolute_time. Any CPython build that reports a different, still suspend-excluding implementation would make phase A refuse the clock even though it is valid. Failing closed is safe but brittle.",
+      "suggestion": "Keep a small reviewed allow-list of suspend-excluding implementation strings per platform, and test that each listed value is accepted."
+    },
+    {
+      "id": "N4",
+      "issue": "On macOS, a timeout during `--init` before `.marmish-run.json` exists will almost always end as cleanup incomplete. The harness registry does not record the daemon/shim PIDs that the frontend starts itself.",
+      "suggestion": "No design change needed. Make sure the report and phase C treat this as a retained-state failure, not an unknown outcome."
+    }
+  ],
+  "permission_mode": "auto",
+  "reviewer": "Claude Code",
+  "scope": [
+    "docs/phases/installed-nine-pair-a.md",
+    "shared parent and phase interfaces"
+  ],
+  "validation": [
+    "B1 resolved: resolve runs on GitHub-hosted ubuntu-24.04 and does schema-only `marmish_installed.validate_record` checks (lines 75-110; no ctypes there, which only appears in `_doctor`) plus the `marmish_publish.verify_archive` pattern (strict inflate/extract_ustar, no platform probes). The embedded `validate_manifest` is forbidden for foreign targets and kept for same-platform verification. An offline test resolves a Darwin fixture on Linux. Transient errors are classified via `InstallError.__cause__`, with a fresh directory per retry.",
+    "B2 resolved: the tree at lines 177-198 matches the real installer. That covers the 0700 prefix; the persistent `.marmish-install.lock`, which `installation_lock` creates with O_CREAT and never removes; the relative `current` link to `versions/marmish-V-T` checked by `read_installation`; the 0700 `bin` created by `owned_directory`; launcher bytes from `launcher_bytes` with the absolute version root; the 0700 `versions` directory; the 0755 version root; release.json at 0644 from `payload_mode`; nlink=1 from `regular_owned`; the exact marker fields; and rejection of leftover temporary entries.",
+    "B3 resolved: the leader stays unreaped via `waitid(WNOWAIT)`, the same pattern as `mdk_smoke.Processes.exited`, through the final process-group signal. Shutdown is TERM, a 5-second wait for `ConfinedDaemon.__exit__`, then KILL. A reaped leader never authorizes a signal. Linux finds daemons started in new sessions (confirmed at `marmish_transport_sandbox.py:399-406` and `marmish_transport_macos.py:818`) through a unique EPIPHYTIC_EXECUTION_ID (already propagated into bwrap at sandbox line 558) and a bounded /proc scan, then signals verified identities via pidfd. macOS uses `.marmish-run.json` daemon/shim identities plus `cleanup_control`. Every ambiguous case fails closed to cleanup incomplete, and the required tests are listed.",
+    "B4 resolved: `request_bounded` runs each HTTP exchange in a worker subprocess. The parent enforces a total deadline on the continuous clock and a bounded response pipe, which addresses the fixed per-read 15 s timeout in `marmish_rendezvous.request`. Reads are 64 KiB chunks with `min(15, remaining)` timeouts. The token travels only over a private pipe and is never sent on redirects. The digest is mandatory and id/size must be non-boolean integers. Unstable listings restart up to three times, and a consistent snapshot with duplicate names fails. Slow-drip tests are required.",
+    "B5 resolved in the parent: the probe and fixture command share 300 s per pair, which across three pairs is 15 min inside the 18-minute client allowance. Each CLI call gets the remaining seconds plus an external watchdog. Probes never count toward the exactly-three executions. A failed probe marks the cell failed with no performance values and skips that pair's command.",
+    "B6 resolved: after process absence is proven, the verified installer copy is rehashed and the actual `install.sh --uninstall --prefix ROOT/install` runs through `run_bounded` with a 30 s cap. Launchers, current and marker must be gone; the root is then removed. Unsafe markers fail. Failure records `uninstall_failed` and keeps state. A final `cleanup-result` is written outside ROOT, consistent with the parent's uninstall requirement.",
+    "Also verified: `ROOT/install.sh` is a verified 0600 copy used both to load the helper and to run the installer, closing the hash-then-execute gap. `initialize_identity` explicitly uses runtime=True with only `marmish_ci_bwrap.environment()` values. The phase A failure vocabulary is listed. The bootstrap timing stage was dropped. Fixture roots must be one shared root. `actions: read` is scoped to platform jobs, and caffeinate has its own tracked record.",
+    "No files modified and no live tests run."
+  ],
+  "verdict": "APPROVED"
+}

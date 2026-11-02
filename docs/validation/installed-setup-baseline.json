@@ -1,0 +1,82 @@
+{
+  "application_source": "f609b6ccdc9302aeec661a2ae3692d3ef68b86fa",
+  "format": 1,
+  "harness_changes": "Phase A uncommitted integration under independent review",
+  "harness_source": "39b4f5a77fa2971856329a3588681456104e9d3a",
+  "installer_sha256": "eac417b4748f0252adef82fe18c1260ef744523ec0ed6b624927dc6b803d0768",
+  "kind": "installed-setup-baseline",
+  "limitations": [
+    "Setup timings only; no command latency or transfer throughput sample.",
+    "One local observation; not a latency distribution or platform comparison.",
+    "Static doctor checks do not validate runtime confinement."
+  ],
+  "linux_x64_install": {
+    "cleanup": "complete",
+    "doctor": {
+      "result": {
+        "checks": {
+          "bwrap": true,
+          "ca_certificates": true,
+          "glibc_minimum": true,
+          "ip": true,
+          "library:ld-linux-x86-64.so.2": true,
+          "library:libc.so.6": true,
+          "library:libgcc_s.so.1": true,
+          "library:libm.so.6": true,
+          "nsswitch": true,
+          "python_3_11": true,
+          "sysctl": true,
+          "system_python_3_11": true,
+          "unshare": true
+        },
+        "note": "Static prerequisites only; confinement and keychain providers were not tested.",
+        "ok": true
+      },
+      "returncode": 0
+    },
+    "elapsed_seconds": 4.317208150999704,
+    "platform": "linux-x64",
+    "returncode": 0,
+    "scope": "actual-script-install-only",
+    "transport_tested": false,
+    "uninstall_returncode": 0,
+    "version": "0.1.0-experimental.2"
+  },
+  "release_resolution": {
+    "checksums_sha256": "fc17033578213bc15bf969e66f9e327e39ea12b7054e94c2ccb1e6ca522711d7",
+    "elapsed_ns": 8927777618,
+    "format": 1,
+    "installer_sha256": "eac417b4748f0252adef82fe18c1260ef744523ec0ed6b624927dc6b803d0768",
+    "operation": "resolve_published_release",
+    "outcome": "passed",
+    "pin_sha256": "bf4dc5c5785dfb7d5a237111bb801d05847382937fa28b16dcc40c68d7656977",
+    "source_commit": "f609b6ccdc9302aeec661a2ae3692d3ef68b86fa",
+    "targets": {
+      "linux-arm64": {
+        "archive_name": "marmish-0.1.0-experimental.2-aarch64-unknown-linux-gnu.tar.gz",
+        "archive_sha256": "90e5c44ef9235c0825ec59ecded8909a6f76642f7a8461d8f3418a2f5ef70be6",
+        "manifest_name": "linux-arm64.release.json",
+        "manifest_sha256": "457fd03dbe1e17c8cfb66dd16952518286054f665a8d7a29ef02bf95497edb75",
+        "target": "aarch64-unknown-linux-gnu"
+      },
+      "linux-x64": {
+        "archive_name": "marmish-0.1.0-experimental.2-x86_64-unknown-linux-gnu.tar.gz",
+        "archive_sha256": "c409afda196314a3033049e21e64339594445eebd4afa3bbbbda0b7d3f6c6f0c",
+        "manifest_name": "linux-x64.release.json",
+        "manifest_sha256": "b7b87b1d379042dadd73cea8373e747dbf2f0d4db8ce0747510ccd22f33742de",
+        "target": "x86_64-unknown-linux-gnu"
+      },
+      "macos-arm64": {
+        "archive_name": "marmish-0.1.0-experimental.2-aarch64-apple-darwin.tar.gz",
+        "archive_sha256": "340b6f4f5a870cb33ae1d77b5f9c4891453a70b3f329094ffbacf1df3fbb264e",
+        "manifest_name": "macos-arm64.release.json",
+        "manifest_sha256": "266fbd001216b6d0e4190e5d06b404d3eaeea14219ce87e951208ee180d0d0a3",
+        "target": "aarch64-apple-darwin"
+      }
+    },
+    "version": "0.1.0-experimental.2"
+  },
+  "samples": 1,
+  "transport_tested": false,
+  "version": "0.1.0-experimental.2"
+}
