@@ -19,6 +19,11 @@ successful command or nine-pair result.
 
 ## Prototype distribution extension
 
+The [experimental runtime refresh](phases/installed-runtime-refresh.md), Beads
+`marmish-2t0`, applies the existing verified distribution procedure to the reviewed
+macOS loader repair before retesting installed platform interoperability. New
+source or synthetic probe success does not validate the existing release archive.
+
 The [distribution design](phases/distribution.md) adds three reviewed increments:
 public Radicle/Iris source availability, complete native runtime archives with
 safe user-local installation, and native release automation/publication for

@@ -1,0 +1,74 @@
+{
+  "reviewer": "Claude Code",
+  "model": "claude-opus-5-5",
+  "review": {
+    "verdict": "CHANGES_REQUIRED",
+    "blocking_findings": [
+      {
+        "id": "B1",
+        "title": "No defined publication route when the hosted run passes, because step 2 dispatches with publication disabled",
+        "location": "docs/phases/installed-runtime-refresh.md steps 2-4",
+        "detail": "Step 2 dispatches release.yml with publish=false. In release.yml the publish job runs only when `inputs.publish && github.ref == 'refs/heads/master'`, so a publish=false run can never publish from CI. Step 3 covers only a hosted AMD64 failure caused purely by namespace denial. Step 4 then says to 'invoke the existing publisher CLI', locally. distribution.md allows local invocation of the publisher only inside the conditional namespace exception (\"local publication is a separately reviewed operator action\"). If every hosted gate passes, including the hosted live test, the design gives no approved way to publish. That leaves room for an unreviewed local publication of the hosted artifacts. That route would bypass the CI publish job, and its use of GITHUB_RUN_ID and the attribution in the release notes has never been reviewed.",
+        "required_change": "State the two cases explicitly. (a) If all hosted gates pass, publish only through a fresh dispatch from the same frozen master with publish=true. That run produces new archives, reruns every gate, and leaves the publish=false run's artifacts unpublished. Alternatively, dispatch with publish=true from the start and rely on the `needs` gate to skip publish on failure, as with experimental.2. (b) Run the publisher CLI locally only when the distribution.md namespace exception is active. Any other failure leaves publication blocked."
+      }
+    ],
+    "nonblocking_findings": [
+      {
+        "id": "N1",
+        "title": "Spell out when the namespace exception becomes active",
+        "detail": "'Fails solely because its host denies the namespace boundary' should name the distribution.md threshold: the owned unshare probe reports EPERM/EACCES (permission_denied=true) and the hosted live run fails at namespace start in the same run. Before the route is used, the 40-character source SHA, run ID and attempt must be recorded in Beads and in the validation record. A generic namespace failure, a restrictive sysctl value alone, or an unavailable probe keeps the exception inactive. The design inherits all of this by reference, but restating it prevents drift."
+      },
+      {
+        "id": "N2",
+        "title": "Master freeze while other agents work concurrently",
+        "detail": "Other agents are editing the macOS profile and compiler/probe designs right now. 'Keep master frozen until this publication finishes' needs a concrete coordination step, such as a Beads note or lock agreed with those workstreams. The publisher's two fresh-master checks fail safe. But master can advance between draft creation and visibility, leaving a draft behind. Then refuse_existing_release (which also sees drafts) blocks reuse of v0.1.0-experimental.3. State that this case means a fresh reviewed build, possibly as experimental.4, and is never handled by deleting drafts or bypassing the freshness guard."
+      },
+      {
+        "id": "N3",
+        "title": "No evidence commits between freeze and publication",
+        "detail": "Step 1's macOS diagnostic evidence and review records must be committed before the source is frozen, or held until after publication. The same holds for tracked Beads exports such as .beads/interactions.jsonl. Either kind of commit advances master and must fail the freshness check (distribution.md)."
+      },
+      {
+        "id": "N4",
+        "title": "How tags are created",
+        "detail": "Step 5 says 'push the release tag to both GitHub and Radicle'. On GitHub the publisher creates the tag through the draft release; there is no manual tag push beforehand. Afterwards, check that the tag resolves to the exact source, then push the same tag to Radicle without forcing any conflicting ref."
+      },
+      {
+        "id": "N5",
+        "title": "Reference the goodput definitions",
+        "detail": "'The two defined goodput rates' should cite docs/agent-spec.md: effective download goodput and output-drain goodput. These metrics come from the later nine-pair run tracked in marmish-0po, not from this refresh, so keep them separate from the refresh acceptance criteria."
+      },
+      {
+        "id": "N6",
+        "title": "Design-approval evidence",
+        "detail": "Under the shared-queue protocol, an implementation design needs approval from an independent reviewer and then from a human. The release authorization for experimental.3 does exist: distribution.md records the user's experimental-release authorization, and bead marmish-2t0's description covers it. Record the human approval of this design in Beads before step 2."
+      },
+      {
+        "id": "N7",
+        "title": "Secret handling for the local route",
+        "detail": "Add that the disposable keys, private prefix and temporary inputs are deleted after the evidence is captured. Raw private stderr and the publication token must never appear in /tmp evidence copied into docs/validation, or in logs."
+      }
+    ],
+    "evidence": [
+      "release.yml: workflow_dispatch inputs `version` (validated against the experimental pattern) and `publish` (default false); build runs only on refs/heads/master on hosted ubuntu-24.04, ubuntu-24.04-arm and macos-15; the publish job's condition is `inputs.publish && github.ref == 'refs/heads/master'` and it calls marmish_publish.py --source $GITHUB_SHA --publish.",
+      "release.yml already contains the Linux-only 'Observe hosted Linux namespace permissions' step with continue-on-error, which the exception's evidence threshold depends on.",
+      "tools/marmish_publish.py: aggregate() checks the version/SHA pattern and binds each record's target, version and source_commit, and refuses an existing output directory; publish() runs verify_master_source twice, refuse_existing_release (drafts included), verify_remote_tag before and after, creates a draft prerelease, downloads and hashes every asset, then sets draft=false; release_notes requires GITHUB_RUN_ID.",
+      "distribution.md 'Conditional local execution gate': exact-archive download from one run/attempt, clean worktree at the frozen SHA, unchanged acceptance CLI, disposable file-backed keys, new private prefix, explicit EU/US relays, all 15 assertions, local_cleanup=complete, source/archive/wnd digest checks, a single added operator_provenance object verified by exact diff, unchanged publisher, mandatory release-body qualification, no commits while frozen, and abandoning the artifacts if source changes.",
+      "docs/reviews/distribution-artifact-evidence.json and distribution-publication.json (APPROVED) show this local route was already reviewed and used for source 2a7e723 / run 41003542761 (experimental.2).",
+      "Local tags: v0.1.0-experimental.1 and v0.1.0-experimental.2 exist; experimental.3 does not exist locally (remote and draft state not checked).",
+      "Bead marmish-2t0 is IN_PROGRESS and its description matches this scope.",
+      "Consistent with the existing gates: exact-archive provenance from one run/attempt, no relaxing of confinement or publisher gates, failures preserved, macOS/ARM64 runtime claims tied to actual installed evidence, the version pin changed only after publication, and no identities, SQLCipher keys or runner paths in evidence.",
+      "No native, hosted or live results were observed or run in this review; no files were edited."
+    ]
+  },
+  "dispositions": {
+    "B1": "Use publish=true initially with unchanged needs gate; local route exclusively namespace exception.",
+    "N1": "Added exact same-run EPERM/EACCES and live namespace-start evidence threshold.",
+    "N2": "Added recorded coordinated freeze and fresh version/build if stale draft remains.",
+    "N3": "Hold all tracked evidence and Beads commits during freeze.",
+    "N4": "Publisher creates GitHub tag; verify then mirror to Radicle.",
+    "N5": "Explicit agent-spec definitions and later matrix-only scope.",
+    "N6": "Shared-queue human-design requirement applies to queue pickup; this is direct user work with explicit ongoing phased implementation and experimental distribution authorization recorded in AGENTS.md. No new permission flow is required.",
+    "N7": "Added owned-state cleanup and publication-credential isolation."
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "reviewer": "Claude Code",
+  "model": "claude-opus-5-5",
+  "permission_mode": "auto",
+  "review": {
+    "reviewer": "Claude Code",
+    "model": "claude-opus-5-5",
+    "subject": "docs/phases/installed-runtime-refresh.md (revised) vs docs/reviews/installed-runtime-refresh-design-initial.json",
+    "verdict": "APPROVED",
+    "blocking_findings": [],
+    "nonblocking_findings": [
+      {
+        "id": "R1",
+        "title": "The master freeze also covers the CI route; the plan text places it as if it were local-only",
+        "location": "installed-runtime-refresh.md:43-51",
+        "detail": "'Keep master frozen ... Agree that freeze ... record it in Beads before dispatch' follows 'Only when the namespace exception is active, invoke the existing publisher CLI', so it reads as part of the local route. The CI publish job runs marmish_publish.py --source $GITHUB_SHA, which calls verify_master_source before creating the draft and again before making the release visible (marmish_publish.py:153,176). If master advances during the hosted build of up to 90 minutes, CI publication fails freshness; if it advances between the two checks, a draft is left behind. Move the freeze, coordination, commit hold and stale-draft rules into step 2 so they clearly apply from dispatch through visibility on either route."
+      },
+      {
+        "id": "R2",
+        "title": "Step 5 tag sentence is garbled",
+        "location": "installed-runtime-refresh.md:54-56",
+        "detail": "'push the release tag created by the publisher on GitHub resolves to the frozen source, then push...' merges two clauses. The leftover first 'push' contradicts N4 (no manual GitHub tag push). Suggested wording: 'verify that the GitHub tag created by the publisher resolves to the frozen source, then push that same tag to Radicle without forcing conflicting refs'."
+      },
+      {
+        "id": "R3",
+        "title": "State that this plan is the approval for reusing the local exception on experimental.3",
+        "location": "installed-runtime-refresh.md:5-8,27-40; distribution.md 'Conditional local execution gate'",
+        "detail": "distribution.md writes the exception for 'a future fully recorded frozen source/run' (singular) and makes it 'subject to independent Claude design approval before use'; it was used for experimental.2. Say explicitly that this reviewed plan authorizes at most one further use of it, bound to the single recorded experimental.3 source/run/attempt. Otherwise a reader could treat the route as standing permission."
+      },
+      {
+        "id": "R4",
+        "title": "Rule out 'Re-run failed jobs' as a recovery",
+        "location": "installed-runtime-refresh.md:23-26",
+        "detail": "With publish=true, rerunning failed jobs creates attempt 2. Its publish job downloads only distribution-<run>-<attempt 2>-* artifacts, while aggregate() loops over every target in TARGETS, so publication fails safely. A rerun x86_64 job that passes on a different host would still mix attempts and erase the single-attempt namespace evidence. State that a hosted failure is never retried by rerun; recovery is the step 3 exception or a fresh reviewed dispatch."
+      },
+      {
+        "id": "R5",
+        "title": "Spell out what happens if the build passes but CI publication fails",
+        "location": "installed-runtime-refresh.md:18-22",
+        "detail": "The plan covers a passing hosted run and a namespace-denied run. It does not say what to do if all builds pass but the CI publish job itself fails (freshness, existing release/draft, API or asset-hash error). That case does not activate the namespace exception, so local publication stays forbidden. State that it blocks publication and leads only to a fresh reviewed build, possibly under a new version, never a local publisher retry."
+      },
+      {
+        "id": "R6",
+        "title": "N6: record the user's authorization for this specific release in Beads",
+        "location": "AGENTS.md:72-79; bead marmish-2t0",
+        "detail": "AGENTS.md scopes the marmish-ic3 authorization to experimental Linux AMD64/ARM64 and macOS ARM64 releases, but says it 'does not authorize unrelated deployments or future release initiatives' and that 'release publication ... require[s] their own authorization'. The disposition cites AGENTS.md alone, which is weaker than it claims. The user's direct statement for this review confirms the existing release authorization applies. Record that statement, with its date, in marmish-2t0 before dispatch so the experimental.3 authorization can be traced. I agree the shared-queue human design-approval step does not apply, because queue pickup is not in use."
+      },
+      {
+        "id": "R7",
+        "title": "Hosted pass publishes before any operator audit",
+        "location": "installed-runtime-refresh.md:18-26,41",
+        "detail": "With publish=true, the step 2 inspection and the step 4 audit happen after a passing CI publication, not before it. This is acceptable because the unchanged publisher enforces aggregate, manifest, digest and cleanup binding, and the step 5 checks happen after visibility. State it as an explicit tradeoff, and say that the step 4 original-vs-aggregate audit is a pre-publication gate only on the local route."
+      }
+    ],
+    "disposition_assessment": {
+      "B1": "Resolved. publish=true from dispatch; the unchanged needs gate skips publish on any build failure; local publisher only under the exception (lines 20-22, 43-44).",
+      "N1": "Resolved. Same-run permission_denied=true EPERM/EACCES plus live namespace-start failure; sysctl/generic/unavailable insufficient; SHA/run/attempt recorded first (lines 35-39).",
+      "N2": "Resolved in substance (coordinated freeze recorded in Beads, abandon on advance, no draft deletion or freshness bypass, possible new version). Placement issue: see R1.",
+      "N3": "Resolved (lines 48-49), matching distribution.md's ban on commits while frozen, including .beads/interactions.jsonl.",
+      "N4": "Intent resolved; wording garbled: see R2.",
+      "N5": "Resolved. docs/agent-spec.md:38-40 defines effective download goodput and output-drain goodput; metrics are scoped to the later matrix run and kept out of refresh acceptance (lines 66-77).",
+      "N6": "Acceptable given the user's direct statement for this review; traceability gap: see R6.",
+      "N7": "Resolved (lines 80-84): owned-state cleanup, credentials isolated from build/test children and evidence."
+    },
+    "evidence": [
+      "release.yml:171-191: the publish job has `if: inputs.publish && github.ref == 'refs/heads/master'` and `needs: build`. Because the `if` has no status function, GitHub adds an implicit success(), so any failed build matrix leg skips publish.",
+      "release.yml:186: the publish job downloads only distribution-${run_id}-${run_attempt}-*. marmish_publish.py:48 aggregates over sorted(TARGETS). A rerun attempt cannot assemble a mixed-attempt set.",
+      "release.yml:68-118: the Linux namespace observation step (continue-on-error, 1-minute timeout, fixed unshare probe, permission_denied boolean) supplies the evidence threshold the plan names.",
+      "marmish_publish.py:83 reads GITHUB_RUN_ID; verify_master_source is called at :153 and :176; refuse_existing_release at :154. These are the guards the plan says to preserve.",
+      "distribution.md 'Conditional local execution gate': this plan inherits it by reference. Exact single-run/attempt artifacts, both ARM64 installation jobs successful, clean worktree at the frozen SHA, glibc doctor prerequisite, unchanged acceptance CLI, disposable keys, new prefix, explicit EU/US relays, 15 assertions, local_cleanup=complete, digest binding, operator_provenance added only and checked by exact diff, unchanged publisher with GITHUB_RUN_ID set to the originating run, mandatory release-body qualification, frozen-source rules, Radicle tag mirroring without forcing. The revised steps 3-5 are consistent with it.",
+      "docs/agent-spec.md:34-40 defines effective download goodput and output-drain goodput.",
+      "AGENTS.md:10-14 phased authorization; AGENTS.md:72-79 scoped experimental release authorization and its 'future release initiatives' limitation.",
+      "Local tags v0.1.0-experimental.1 and v0.1.0-experimental.2 exist; experimental.3 does not exist locally. Remote, draft and Radicle tag state were not checked (no network).",
+      "Bead marmish-2t0 is IN_PROGRESS and its description matches the plan's scope.",
+      "No native, hosted or live results were run or observed; no files were edited."
+    ]
+  },
+  "dispositions": {
+    "R1": "Moved coordinated freeze, all-commit hold and stale-draft rules into step2 for both routes.",
+    "R2": "Corrected tag sentence: verify publisher-created GitHub tag, then mirror to Radicle.",
+    "R3": "Limited additional local exception to one recorded experimental.3 source/run/attempt.",
+    "R4": "Explicitly forbid failed-job reruns/mixed attempts.",
+    "R5": "Nonnamespace build or any CI publication failure blocks; fresh reviewed build required.",
+    "R6": "Beads records the original user distribution request and ongoing build/validate/fix instruction. This is its necessary patch correction, not a new unrelated release initiative; no new user statement is fabricated.",
+    "R7": "Distinguished automated hosted previsibility gates from subsequent operator audit."
+  }
+}
