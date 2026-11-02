@@ -1,0 +1,127 @@
+{
+  "blocking_findings": [
+    {
+      "design_clause": "'confirm non-reaping exit observation with an owned new-session /usr/bin/true preflight' and 'never signal a possibly reused PGID after poll/wait has reaped it'",
+      "detail": "The preflight passes if the result is category 'completed' and exit_code 0. Suppose observe() actually reaps the child, i.e. WNOWAIT is not honoured. Then killpg gets ESRCH, which is swallowed as ProcessLookupError. Popen.wait() then gets ECHILD, which CPython turns into returncode 0. So the preflight reports success either way; /usr/bin/true exits 0, which is the same value the ECHILD fallback produces. In the same situation the main path signals a PGID whose leader has already been reaped, which the design forbids. It also records a confined SIGABRT as exit 0. collect() then chooses 'not_sigabrt' and sets ok = base.succeeded(confined) = True, so the workflow step looks like it passed.",
+      "evidence": "Local simulation with a patched reaping observe() (no native behaviour is claimed): preflight_supported_despite_reaping=True; a child that sends itself SIGABRT was reported as completed/exit 0/signal None; killpg hit ESRCH on the reaped leader twice; /usr/bin/false was reported as exit 0.",
+      "id": "B1",
+      "locations": [
+        "tools/marmish_macos_denial_diagnostic.py:290-291 (observation_supported)",
+        "tools/marmish_macos_denial_diagnostic.py:241-251 and 256-273 (run_private observe \u2192 killpg \u2192 wait)"
+      ],
+      "required_fix": "Make the preflight able to tell the two cases apart. For example, use a child with a distinctive nonzero exit (/usr/bin/false \u2192 1, or sh -c 'exit 7'). Also, after a non-None observe(), verify that the leader is still unreaped: a second WNOWAIT observation must return the same si_pid/si_status, and the final wait() code must match the observed si_code/si_status. Any mismatch should be query_observation_unsupported during the preflight, and cleanup_failed/query_failed at run time. Add a unit test with a reaping observe() that must yield query_observation_unsupported and no compile.",
+      "title": "The non-reaping preflight cannot detect a waitid that ignores WNOWAIT and reaps the child"
+    },
+    {
+      "design_clause": "'A workflow agent owns only a separately reviewed addition ... independent private preparation/run steps' (concurrency is not part of the authorized addition)",
+      "detail": "The group changed from 'marmish-macos-probe-diagnostic' to the shared 'marmish-native-validation'. The only design that mentions the shared group is installed-nine-pair-interop.md, and it covers the new installed-interop workflow, not this hosted macos-15 diagnostic. In a shared group with cancel-in-progress: false, GitHub keeps only one pending run. Dispatching this diagnostic can therefore silently cancel a pending native-validation or installed-interop run, and vice versa, even though this job uses a hosted runner and doesn't compete for self-hosted slots. The workflow test now locks the change in. It also mixes nine-pair scope into the denial increment.",
+      "id": "B2",
+      "locations": [
+        ".github/workflows/macos-probe-diagnostic.yml:7",
+        "tools/test_marmish_macos_denial_workflow.py:21"
+      ],
+      "required_fix": "Revert to group 'marmish-macos-probe-diagnostic' and update the test assertion, or get a reviewed design amendment that justifies the shared group and accepts the pending-run cancellation behaviour.",
+      "title": "Unreviewed concurrency-group change in the diagnostic workflow"
+    }
+  ],
+  "disposition_status": "Corrected blocking findings; independent follow-up code review pending. Initial NOT_APPROVED verdict preserved.",
+  "dispositions": {
+    "B1": "Preflight now uses distinctive /usr/bin/false exit 1. Every terminal observation requires a repeated WNOWAIT with the same PID/code/status; failed proof disables group signaling. Final wait must match the observed exit; mismatches cannot manufacture exit zero. Reaping-observer regression tests prove preflight refusal before compile and no group signal.",
+    "B2": "Restored original marmish-macos-probe-diagnostic concurrency and updated workflow assertion.",
+    "N1": "Added finite python_minor (3.11 through 3.20, otherwise other). No interpreter minimum or native success inferred.",
+    "N2": "Confined exit zero retains ok=false with not_sigabrt because no candidate evidence was collected.",
+    "N3": "Retained strict private stderr cap and fail-closed behavior; oversized probe stderr can remain inconclusive. No production preflight or permissions changed.",
+    "N4": "Control and confined test PIDs/times now differ. Tests assert confined PID, owned probe, UUID identity, snapshot, and rounded query window arguments.",
+    "N5": "Observation mismatches map to preflight query_observation_unsupported; actual inability to establish process cleanup remains the more conservative outer cleanup_failed outcome.",
+    "N6": "Deny counter now requires canonical [1-9][0-9]{0,8}; leading zero rejection is tested.",
+    "N7": "Generic fixture_failed for invalid owned Mach-O identity retained; fails closed before child/query.",
+    "N8": "Budget comparison remains explanatory only, not native timing evidence. Ten-minute workflow limit unchanged; measured native durations still required.",
+    "N9": "CLI temporarily handles SIGTERM via the existing KeyboardInterrupt cleanup path, restores its previous handler, and tests actual owned-child termination and private fixture removal."
+  },
+  "native_behavior": "Not validated. Nothing here claims Darwin waitid/WNOWAIT behaviour, the log CLI or JSON format, kernel denial message syntax, or the runner's Python version. B1 is a design-conformance defect shown by local simulation, not native evidence.",
+  "nonblocking_findings": [
+    {
+      "detail": "Whether os.waitid exists depends on the CPython version. Upstream 3.12 Modules/posixmodule.c guards waitid support with '#if defined(HAVE_WAITID) && !defined(__APPLE__)'; 3.13 and main use plain HAVE_WAITID. I checked public source only; the runner's python3 version is unverified. With Python 3.12 or older the run fails closed with query_observation_unsupported (safe, but no evidence). The report doesn't record the Python minor version, so that outcome would be hard to diagnose. Consider exporting a finite python_minor field, or require \u22653.13 in a reviewed amendment. Once B1 is fixed, the preflight is what guards against Darwin waitid semantics.",
+      "id": "N1",
+      "location": "tools/marmish_macos_denial_diagnostic.py:286-288; .github/workflows/macos-probe-diagnostic.yml:87-91"
+    },
+    {
+      "detail": "When the confined child passes (exit 0), the report has ok=True with log category not_sigabrt. The design says 'Diagnostic success means useful candidate evidence was collected', and no candidate was collected in this case. Consider keeping ok=False, or document that ok here means only 'confined passed'. The test at test file :351-353 doesn't assert ok.",
+      "id": "N2",
+      "location": "tools/marmish_macos_denial_diagnostic.py:345-347"
+    },
+    {
+      "detail": "The 4096-byte stderr cap is enforced on the control and confined probe runs as a kill condition and as a post-exit category. A SIGABRT with more than 4 KiB of dyld stderr would be labelled not_sigabrt instead of being attributed. The prior drivers truncate stderr without changing the category. I found no prior evidence of truncated probe stderr, so the risk is low, but this differs from 'preserving the prior ... kill/reap behavior'.",
+      "id": "N3",
+      "location": "tools/marmish_macos_denial_diagnostic.py:336, 343 (stderr_cap=ERR_CAP applies to probe children)"
+    },
+    {
+      "detail": "GateTests give control and confined the same PID and window, and never assert the arguments passed to wait_context or query_logs. A regression that queried with control['pid'], or passed the wrong identity or probe, would still pass. Use distinct PIDs and assert the call arguments (confined PID, owned probe, identity, computed window).",
+      "id": "N4",
+      "location": "tools/test_marmish_macos_denial_diagnostic.py:288-318"
+    },
+    {
+      "detail": "A CleanupFailed raised during the preflight surfaces as the outer cleanup_failed, not query_observation_unsupported as the design lists for 'preflight ... exception'. That is arguably more accurate, but it's an undocumented deviation; record it or align it.",
+      "id": "N5",
+      "location": "tools/marmish_macos_denial_diagnostic.py:290-293, 384-385"
+    },
+    {
+      "detail": "The deny counter regex accepts leading zeros (e.g. deny(01)). The design says only 'positive integer of 1\u20139 decimal digits'. Consider [1-9][0-9]{0,8} for a canonical form.",
+      "id": "N6",
+      "location": "tools/marmish_macos_denial_diagnostic.py:32"
+    },
+    {
+      "detail": "A read_owned_uuid failure becomes the generic outer fixture_failed, whereas the crash driver uses the specific probe_uuid_invalid. It fails closed with no leak; the more specific enum would help triage.",
+      "id": "N7",
+      "location": "tools/marmish_macos_denial_diagnostic.py:335, 386-387"
+    },
+    {
+      "detail": "The timing-budget assertion compares constants, so it can never fail and doesn't check the YAML. The real worst case I computed is about 370 s of serial driver time plus checkout and uploads, under the 600 s limit. The denial driver's post-compilation budget (7+7+~21+7 \u2248 42 s) fits the 45 s design cap.",
+      "id": "N8",
+      "location": "tools/test_marmish_macos_denial_workflow.py:59-61"
+    },
+    {
+      "detail": "Cancellation is covered for SIGINT/KeyboardInterrupt only. On a runner SIGTERM, the owned group could outlive Python until the job ends. That's acceptable on a disposable hosted runner; noted for completeness.",
+      "id": "N9",
+      "location": "tools/marmish_macos_denial_diagnostic.py (no SIGTERM handler)"
+    }
+  ],
+  "reviewer": {
+    "agent": "Claude Code (independent fresh-context reviewer)",
+    "date": "2026-11-01",
+    "model": "claude-opus-5-5 (Opus 5.5)"
+  },
+  "scope": {
+    "approved_design": "docs/phases/macos-owned-denial-diagnostic.md (the requested 'macos-denied-operation-diagnostic.md' does not exist; this is the matching approved plan for Beads marmish-cjy.3, committed in 20c76f1)",
+    "contracts_inspected_read_only": [
+      "tools/marmish_macos_crash_diagnostic.py (snapshot, read_owned_uuid, path_shape, attribute_executable, read_context, wait_context)",
+      "tools/marmish_macos_probe_diagnostic.py (ENV, build_probe, make_fixture, succeeded, write_report, replacements_for)",
+      "docs/phases/installed-nine-pair-interop.md:36-42 (where the concurrency group comes from)"
+    ],
+    "out_of_scope": "All other uncommitted nine-pair files, including installed-interop.yml. I made no edits, ran no live native or unified-log queries, used no credentials, dispatched no CI and pushed nothing.",
+    "reviewed_files": [
+      "tools/marmish_macos_denial_diagnostic.py",
+      "tools/test_marmish_macos_denial_diagnostic.py",
+      ".github/workflows/macos-probe-diagnostic.yml (uncommitted diff vs HEAD)",
+      "tools/test_marmish_macos_denial_workflow.py"
+    ]
+  },
+  "source_evidence_sha256": "10a475105c1abdb3c0817ab9a5b88f270d74d1656b91ecc1267c5afa5b1dda50",
+  "validation_performed": [
+    "python3 -m unittest -v test_marmish_macos_denial_diagnostic test_marmish_macos_denial_workflow (Python 3.12.3, Linux): 22 tests, all OK in 0.49 s.",
+    "Local simulation with a reaping observe() patched in, using benign children only (/usr/bin/true, /usr/bin/false, sh self-SIGABRT), for B1.",
+    "Read-only fetch of public CPython Modules/posixmodule.c (3.12, 3.13, main) to check the waitid build guards, for N1.",
+    "Searched repo docs/validation: no prior evidence of truncated probe stderr (N3), and the concurrency-group origin is installed-nine-pair-interop.md (B2)."
+  ],
+  "verdict": "NOT_APPROVED",
+  "verified_conformant": [
+    "Identity attribution: the Mach-O UUID is read before either child. Query only proceeds if the context is 'matched' with executable=='probe' and path_shape.uuid_image_match is True; sandbox_exec_exact, a missing or false UUID match, and timeouts all give owned_crash_unavailable with no query.",
+    "The pre-spawn crash snapshot, the confined Popen PID and the unique mp-[0-9a-f]{8} basename are all used. PID, timestamps, name and window are never exported. public_status and crash_attribution emit enums only.",
+    "Query argv: absolute /usr/bin/log, no shell, name and PID validated (range 1..2^31-1, rejects bool), fixed UTC second-rounded window, predicate limited to the kernel process plus the exact 'Sandbox: NAME(PID) deny(' token.",
+    "Clock: wall time between 0 and 7 s, wall vs monotonic difference \u22641 s, rounded window \u22649 s. Records are revalidated inclusively against the rounded window with a strict timestamp grammar (re.ASCII, numeric offset only, 1\u20136 fractional digits).",
+    "Closed sanitization: strict UTF-8, duplicate-key and NaN/Infinity rejection, depth \u226432, RecursionError handled. Any rejected record invalidates the whole collection (format_unknown, empty denials, null count). Precedence order output_limit > record_limit > format_unknown > matching_limit > operation_unknown matches the design. Operation and target are exported only as fixed enums; format_shape is finite.",
+    "Process cleanup ordering: new session, closed fds, fixed ENV, 0600 TemporaryFile captures under the 0700 fixture, monitoring every \u226425 ms, killpg before wait on every path including KeyboardInterrupt. This holds as long as WNOWAIT is honoured (see B1).",
+    "Report: 0600 O_EXCL|O_NOFOLLOW report outside the fixture, fixture cleaned up, console output limited to a fixed string, a found denial keeps ok=False.",
+    "Workflow: workflow_dispatch only, contents: read, macos-15, timeout-minutes 10, SHA-pinned checkout and upload-artifact, persist-credentials false, umask 077 private mktemp directory, all three new steps run with if: always(), exactly one report path per artifact with no wildcards, no sudo, secrets, log configuration or cache."
+  ]
+}

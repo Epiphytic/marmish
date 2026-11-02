@@ -304,3 +304,9 @@ crash evidence is appropriately conservative; whether the initial target enums
 are useful while sufficiently private; and whether 256 KiB/128 records/five
 seconds fit the ten-minute workflow. Any incompatible CLI/JSON contract must
 fail closed or receive a reviewed design amendment, not an implementation guess.
+
+Implementation review: see `docs/reviews/macos-owned-denial-code-final.json`.
+The diagnostic intentionally remains a failed step even if a useful candidate is
+collected after SIGABRT: inspect `log.category` in its sanitized artifact. A green
+step is not the success criterion. Native observation and log formats remain
+unvalidated until a hosted run supplies evidence.

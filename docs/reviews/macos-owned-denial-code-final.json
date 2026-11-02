@@ -1,0 +1,80 @@
+{
+  "verdict": "APPROVED",
+  "scope": {
+    "approved_design": "docs/phases/macos-owned-denial-diagnostic.md (Beads marmish-cjy.3)",
+    "prior_review": "docs/reviews/macos-owned-denial-code-initial.json (initial NOT_APPROVED verdict kept; dispositions for B1, B2 and N1\u2013N9 checked against the code)",
+    "reviewed_files": [
+      "tools/marmish_macos_denial_diagnostic.py",
+      "tools/test_marmish_macos_denial_diagnostic.py",
+      ".github/workflows/macos-probe-diagnostic.yml (uncommitted diff: 28 lines added, none removed)",
+      "tools/test_marmish_macos_denial_workflow.py"
+    ],
+    "out_of_scope": "All other worktree changes. I made no edits, ran no live or unified-log queries, ran nothing natively, used no credentials, dispatched no CI and pushed nothing."
+  },
+  "blocking_findings": [],
+  "resolved_blockers": [
+    {
+      "id": "B1",
+      "status": "resolved",
+      "evidence": [
+        "The preflight now runs /usr/bin/false and requires category 'completed' with exit_code == 1 (marmish_macos_denial_diagnostic.py:327-328). The ECHILD fallback, which manufactures exit 0, can no longer pass it.",
+        "When the first observation returns, can_signal is set to False before anything else (:267). Signalling is re-enabled only after a second WNOWAIT observation returns the same (si_pid, si_code, si_status) and observed_exit() validates it (:268-273). ECHILD, a missing repeat, a mismatch or an invalid status all leave can_signal False, so killpg is skipped (:291).",
+        "The final wait() code must equal the observed exit. Otherwise, or when can_signal is False, the category becomes observation_failed and exit_code/signal stay None (:304-307). A manufactured 0 can no longer become a pass.",
+        "My earlier simulation, re-run with the same reaping observer: preflight=False; a self-SIGABRT child gives observation_failed/None/None; zero killpg calls. With the real observer on Linux: preflight=True and self-SIGABRT gives completed/-6/6.",
+        "Regression tests: test_reaping_observation_is_unsupported_and_never_signals_reused_group checks that collect() returns query_observation_unsupported, the log stays not_queried, build_probe is not called and killpg is not called. test_repeat_observation_identity_status_and_final_wait_must_match changes si_pid, si_status and si_code one at a time, plus the final wait status."
+      ]
+    },
+    {
+      "id": "B2",
+      "status": "resolved",
+      "evidence": "The workflow diff no longer touches concurrency; the group stays 'marmish-macos-probe-diagnostic' with cancel-in-progress false. test_marmish_macos_denial_workflow.py:21 asserts the original group."
+    }
+  ],
+  "incorporated_nonblocking_verified": {
+    "N1_python_minor": "A finite enum: '3.11' through '3.20', otherwise 'other' (:404-405). Tested for 3.13, 4.99 and 3.10.",
+    "N2_ok_false": "collect() never sets ok, so a confined exit 0 keeps ok=false with not_sigabrt. Tested.",
+    "N4_distinct_pids": "The control run uses PID+77 and a start 60 s earlier. Tests assert the wait_context arguments (DiagnosticReports directory, snapshot, confined PID, owned probe path, redactions, UUID identity) and the query_logs arguments (root, name, confined PID, the confined run's rounded window).",
+    "N6_canonical_counter": "DENIAL deny group is now [1-9][0-9]{0,8} (:32); a deny(01) rejection test was added.",
+    "N9_sigterm": "main() installs a SIGTERM handler that raises KeyboardInterrupt into the existing cleanup path and restores the previous handler in finally. A test checks that the owned child is SIGKILLed, the fixture is removed, a fixture_failed report is written and the original handler is back.",
+    "N3_N5_N7_N8": "Retained by documented choice; all fail closed and none affects attribution or privacy."
+  },
+  "nonblocking_findings": [
+    {
+      "id": "R1",
+      "location": "tools/marmish_macos_denial_diagnostic.py:267-268, 279-281, 291",
+      "detail": "Suppose the first observation is consumed correctly but observed_exit() rejects it, or the repeat mismatches for some reason other than reaping. can_signal stays False even though the leader may still be an unreaped zombie. The group is then never SIGKILLed, and only the leader is reaped. That is conservative and matches the design's rule against signalling a possibly reused group, but descendants of the probe could outlive the run on a disposable runner. If you want this tightened, an optional refinement is to re-enable signalling only when a repeat observation exists and matches, keeping it disabled on ECHILD or None."
+    },
+    {
+      "id": "R2",
+      "location": "tools/marmish_macos_denial_diagnostic.py:426-434, 442-449",
+      "detail": "A SIGTERM that arrives during run_private's finally cleanup, owned.cleanup() or write_report raises KeyboardInterrupt outside the caught region. It then escapes main(), and Python prints a default traceback with checkout file paths and line numbers, though no captured or private host data. Rare, but it goes against the 'no tracebacks' intent. Optionally catch KeyboardInterrupt in main() and print the fixed sanitized line."
+    },
+    {
+      "id": "R3",
+      "location": "tools/marmish_macos_denial_diagnostic.py:357-398, 435",
+      "detail": "Since ok is now always False, the diagnostic step always exits 1, and runs show red even when a useful candidate was collected. That is consistent with the design ('Confined SIGABRT keeps report ok=false'). Operators need to read log.category rather than step status; worth stating in the run notes."
+    },
+    {
+      "id": "R4",
+      "location": "tools/test_marmish_macos_denial_workflow.py:59-61",
+      "detail": "The budget assertion still compares constants only, as the disposition acknowledges. Native timing must still be measured on the hosted run."
+    }
+  ],
+  "validation_performed": [
+    "python3 -m unittest test_marmish_macos_denial_diagnostic test_marmish_macos_denial_workflow (Python 3.12.3, Linux), run 3 times in a row: 26 tests, all OK each time (~0.73 s).",
+    "Re-ran the B1 simulation with a reaping waitid observer, using benign local children only: preflight refused, no killpg, no manufactured exit 0. Control run with the real observer: preflight passes and SIGABRT is reported as -6/6.",
+    "Checked the workflow diff: only the three if: always() denial steps were added. Permissions, runner, timeout, pins, checkout credentials and the original concurrency group are unchanged.",
+    "pyflakes isn't installed here, so no lint was run."
+  ],
+  "native_behavior": "Not validated. Nothing here claims Darwin waitid/WNOWAIT semantics, the runner's Python version (3.12 and older lack os.waitid on macOS and will fail closed with query_observation_unsupported), the log CLI or JSON format, or kernel denial syntax. Those remain for the separately authorized hosted diagnostic run.",
+  "reviewer": {
+    "agent": "Claude Code (independent follow-up code reviewer)",
+    "model": "claude-opus-5-5 (Opus 5.5)",
+    "date": "2026-11-01"
+  },
+  "permission_mode": "auto",
+  "models": [
+    "claude-opus-5-5",
+    "claude-haiku-5-5"
+  ]
+}
