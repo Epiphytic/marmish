@@ -58,3 +58,44 @@ its rollup. Its cleanup report records relay children reaped, private state
 removed and native readiness cleanup true. The cleanup step explicitly does not
 claim to reap its own still-running supervisor; that process exits separately.
 No v0.2 release was published by this workflow.
+
+## Rerun after the macOS path fixture correction
+
+[Run 41519670193](https://github.com/Epiphytic/marmish/actions/runs/41519670193),
+attempt 1, tested `112bb3a330f9ef909599fbe1abbb435ed5cc06aa`. All runners began
+within a minute. Both Linux jobs passed completely. macOS passed **91 native
+tests, 8 vault tests, 2 helper tests**, the release build and the direct flow.
+Its journal fixture failure is resolved. The selected-keychain provider was
+ignored in this matrix and [qualified separately](macos-v2-provider.md).
+
+| Runner | Route | Result | Total | Cold activation | First A→B / B→A | Warm activation |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| Linux AMD64 | Direct | Pass | 14.424 s | 152 ms | 343 / 348 ms | 395 ms |
+| Linux AMD64 | Arti onion | Pass | 71.377 s | 23,024 ms | 1,789 / 2,137 ms | 20,232 ms |
+| Linux ARM64 | Direct | Pass | 10.092 s | 666 ms | 348 / 351 ms | 478 ms |
+| Linux ARM64 | Arti onion | Pass | 56.207 s | 22,933 ms | 1,477 / 1,780 ms | 16,879 ms |
+| macOS ARM64 | Direct | Pass | 6.099 s | 536 ms | 390 / 356 ms | 602 ms |
+| macOS ARM64 | Arti onion | **Fail** | 105.258 s | 28,485 ms | 1,857 / 1,543 ms | 36,730 ms |
+
+Reports: [AMD64 direct](hosted-41519670193-linux-amd64-direct.json),
+[AMD64 onion](hosted-41519670193-linux-amd64-onion.json),
+[ARM64 direct](hosted-41519670193-linux-arm64-direct.json),
+[ARM64 onion](hosted-41519670193-linux-arm64-onion.json),
+[macOS direct](hosted-41519670193-macos-direct.json),
+[macOS onion failure](hosted-41519670193-macos-onion.json).
+
+The macOS onion report proves initial encrypted exchanges and warm restart
+activation succeeded, then records a `transport` error during
+`restart_alice_to_bob`. It does not identify the underlying transport label.
+The 105.258-second total is below the overall deadline; the exchange also had
+its own 120-second budget. Source inspection found that the check propagates
+the first owner tick transport error, whereas the daemon retries recoverable
+transport errors and per-turn timeouts. That mismatch warrants a bounded driver
+correction and another full matrix, but does not prove which transport failure
+occurred in this run. No macOS Tor acceptance is claimed.
+
+All native reports recorded cleanup true. The owner recorded relay children
+reaped, private state removed and readiness cleanup true, observed the macOS
+terminal failure, and correctly failed the rollup. The overall run is failed.
+These remain tiny-message measurements, not bulk throughput or percentiles,
+and do not test remote commands, installation or the nine command pairs.

@@ -1,0 +1,10 @@
+{
+  "cleanup": "pass",
+  "lock_denial": "pass",
+  "namespace": "marmish-v2",
+  "provider": "macos-selected-keychain",
+  "replacement": "ok",
+  "restart": "ok",
+  "same_process": "pass",
+  "schema": 1
+}

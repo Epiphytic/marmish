@@ -18,6 +18,13 @@ direct/onion live repeats. [The actual round-5 code review](reviews/v0.2-native-
 approves the integrated offline scope and independently passes 91 native tests
 (90 repository tests plus its additional regression) and 11 vault/helper tests.
 Hosted platforms, remote commands and release acceptance remain pending.
+The macOS v2 provider has passed a separate
+[owned disposable-keychain gate](validation/v0.2/macos-v2-provider.md), including
+both identity and storage secrets across restart and copied-executable
+replacement. This does not qualify default-keychain selection or the production
+helper's ACL identity. The transport rerun passed both Linux architectures and
+macOS direct flow, but failed the macOS post-restart Arti exchange; full phase
+acceptance remains open.
 Historical results below do not establish v0.2 support.
 
 ### Native foundation implemented, pending final phase acceptance

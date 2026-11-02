@@ -7,9 +7,14 @@ default-keychain selection and native daemon are unchanged. The
 [completed code](../../reviews/v0.2-native-macos-provider-code-r1.md) have actual
 independent Claude Code Opus 5.5 approval in auto permission mode.
 
-**Hosted provider behavior is pending, not passed.** The manual
-`v02-provider.yml` workflow must run at the published amendment commit. Its report
-proves only behavior on an explicitly selected, owned, disposable keychain:
+The manual [provider run 41522398761](https://github.com/Epiphytic/marmish/actions/runs/41522398761)
+**passed** at source `be6c379ee8bfa0e8aa96a82f7988eaacbe5ca4a8`.
+The [provider report](hosted-41522398761-macos-provider.json) records both
+`restart: ok` and `replacement: ok`; the
+[signing report](hosted-41522398761-macos-signing.json) records `linker-signed`.
+Both v2 secrets loaded across the test-process restart and copied-executable
+replacement in this gate. Its report proves only behavior on an explicitly
+selected, owned, disposable keychain:
 four v2 identity/storage references, legacy isolation, exact secrets and labels,
 duplicate/missing handling, lock denial, UI restoration and owned-state cleanup.
 Restart and copied-executable replacement each report `ok` only when both the
