@@ -627,3 +627,11 @@ identity-checked shutdown has the platform's small check-to-signal race because
 macOS has no pidfd interface. Linux reports caffeinate absence vacuously because
 it never starts that macOS-only process. The first actual confined native launch
 still has to validate the sandbox-tree authentication against real processes.
+
+Native run 41392981650 found unsafe group-writable runner temporary ancestors on
+both Linux platforms. The workflow now creates its pointer parent directly under
+`/tmp` using `mktemp -d` and mode 0700; it preserves all strict ancestry checks.
+Failures emit only finite exception type and bounded numeric errno to aid macOS
+triage. The unchanged public report excludes exception text. Failed cleanup
+retains the private state; the separate `/tmp` pointer parent and sanitized public
+reports also remain for inspection on self-hosted runners after each attempt.

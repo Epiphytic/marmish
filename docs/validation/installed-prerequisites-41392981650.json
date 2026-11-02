@@ -1,0 +1,38 @@
+{
+  "format": 1,
+  "run": "41392981650",
+  "attempt": "1",
+  "sha": "db01fd664a1299b555bec5bdc06df231420113bc",
+  "outcome": "failed",
+  "all_roles_assigned_within_five_minutes": true,
+  "transport_sample_count": 0,
+  "roles": {
+    "linux-x64": {
+      "outcome": "failed",
+      "stage": "prepare",
+      "category": "unsafe_state_path",
+      "identity_initialized": false,
+      "cleanup": "report-unavailable"
+    },
+    "linux-arm64": {
+      "outcome": "failed",
+      "stage": "prepare",
+      "category": "unsafe_state_path",
+      "identity_initialized": false,
+      "cleanup": "report-unavailable"
+    },
+    "macos-arm64": {
+      "outcome": "failed",
+      "stage": "install",
+      "category": "internal_failure",
+      "identity_initialized": false,
+      "cleanup": "incomplete"
+    }
+  },
+  "run_url": "https://github.com/Epiphytic/marmish/actions/runs/41392981650",
+  "notes": [
+    "Release resolution passed. Linux runner temporary directory ancestors are group writable; use a fresh owned private pointer parent directly under /tmp.",
+    "macOS retained incomplete state; installed child exception type was not captured. Add finite diagnostic type and errno without exception text.",
+    "No native transport latency or throughput was measured."
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "verdict": "APPROVED",
+  "blockers": [],
+  "nonblockers": [
+    {
+      "file": ".github/workflows/installed-interop.yml",
+      "line": 62,
+      "finding": "Leftover folders on self-hosted runners: the runner deletes $RUNNER_TEMP after each job, but it never deletes /tmp/marmish-harness-*. Each run leaves the 0700 parent behind with state.public (sanitized), plus the state pointer file whenever cleanup did not complete. Suggest a final always() step, after the upload, that deletes the parent only when cleanup succeeded and keeps it otherwise as evidence."
+    },
+    {
+      "file": ".github/workflows/installed-interop.yml",
+      "line": 110,
+      "finding": "If checkout succeeds but the pointer-parent step does not run or fails, MARMISH_INSTALLED_ROOT is empty. Cleanup then gets --state /state, cannot create /state.public, and fails without writing a cleanup-result. The upload also looks at /state.public. This fails safely, but the report shows a missing artifact instead of 'not-started'. Consider adding `env.MARMISH_INSTALLED_ROOT != ''` to the cleanup/upload conditions, or a sanitized message when it is empty."
+    },
+    {
+      "file": "tools/marmish_installed_ci.py",
+      "line": 258,
+      "finding": "No test covers the new stderr diagnostic. Suggest extending test_unknown_exception_text_never_enters_public_failure_report to capture stderr and check three things: 'SECRET' and the path are absent; an OSError with errno and filename prints only the errno; an exception type not on the allowlist prints 'other'."
+    },
+    {
+      "file": "tools/marmish_installed_ci.py",
+      "line": 258,
+      "finding": "The diagnostic records only the harness exception type and errno. For the macOS install-stage internal_failure, it tells apart harness exceptions (for example a PermissionError with errno) but not failures inside the installer child process. That fits a finite diagnostic, but the next native run may still need the child's returncode/timed_out/output_limited flags, which are already sanitized, to pin the cause down."
+    },
+    {
+      "file": "docs/validation/installed-prerequisites-41392981650.json",
+      "line": 1,
+      "finding": "The file says macOS cleanup was 'incomplete' at the install stage, but the Linux roles have no cleanup field. Add it so all roles are reported the same way, assuming Linux reported cleanup not-started or complete."
+    }
+  ],
+  "tests": [
+    "git diff HEAD on the three scoped files reviewed; the other uncommitted files were not looked at",
+    "cd tools && python3 -m unittest test_marmish_installed_ci test_marmish_installed_state test_marmish_installed_rendezvous test_marmish_installed_release -> Ran 58 tests, OK",
+    "Parsed the evidence file with json.load -> OK",
+    "stat /tmp -> drwxrwxrwt root (passes the ancestry check)",
+    "actionlint: not on PATH on this host, so not re-run here",
+    "No edits, live runs, transport, push, or credentials"
+  ],
+  "permission_mode": "auto",
+  "models": [
+    "claude-opus-5-5"
+  ]
+}

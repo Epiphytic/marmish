@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import signal
+import sys
 import time
 
 from mdk_smoke import SmokeError, require
@@ -254,6 +255,17 @@ def main():
                         else 'install_verify_failed' if report['stage'] == 'verify'
                         else 'internal_failure')
         report.update(outcome='failed', error=category)
+        # Finite diagnostics distinguish platform failures without exposing argv,
+        # command output, private paths or exception messages.
+        allowed_types = {'AttributeError', 'ChildProcessError', 'PermissionError',
+                         'FileNotFoundError', 'OSError', 'RuntimeError', 'ValueError',
+                         'TypeError', 'KeyError', 'SmokeError', 'KeyboardInterrupt'}
+        name = type(error).__name__
+        code = getattr(error, 'errno', None)
+        print(json.dumps({'kind': 'installed-failure', 'stage': report['stage'],
+              'category': category, 'error_type': name if name in allowed_types else 'other',
+              'errno': code if type(code) is int and 0 <= code <= 65535 else None},
+              sort_keys=True), file=sys.stderr)
     write_record(report_path, report)
     return 0 if report['outcome'] == 'passed' else 1
 
