@@ -218,6 +218,13 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+class ToolFailure(RuntimeError):
+    """Existing fixed category with a bounded numeric subprocess status."""
+    def __init__(self, returncode):
+        super().__init__('bwrap_tool_failed')
+        self.returncode = returncode if type(returncode) is int and -255 <= returncode <= 255 else None
+
+
 def run(argv, *, root, timeout=30, limit=1024 * 1024, env=None, cwd=None):
     """Bound the complete process group, output and owned metadata storage."""
     with tempfile.TemporaryFile() as output:
@@ -234,7 +241,8 @@ def run(argv, *, root, timeout=30, limit=1024 * 1024, env=None, cwd=None):
             output.seek(0)
             body = output.read(limit + 1)
             require(len(body) <= limit, 'bwrap_tool_output_oversized')
-            require(child.returncode == 0, 'bwrap_tool_failed')
+            if child.returncode != 0:
+                raise ToolFailure(child.returncode)
             return body
         finally:
             # A producer may leave descendants even after its leader exits.
@@ -352,6 +360,52 @@ def probe():
             if str(error) == 'bwrap_tool_failed':
                 raise RuntimeError('userns_denied_private_bwrap') from None
             raise
+
+
+def diagnostic_probe():
+    """Keyless cumulative probe; never publish child output or exception text."""
+    from marmish_transport_sandbox import SandboxError
+    report = {'schema': 1, 'kind': 'linux-namespace-diagnostic',
+              'category': 'setup_failed', 'stages': []}
+    try:
+        refuse_api_tokens()
+        if not all(key in os.environ for key in ('MARMISH_BWRAP', 'MARMISH_BWRAP_SHA256')):
+            report['category'] = 'selection_missing'
+            return report
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                executable = str(checked_selection())
+        except SandboxError:
+            report['category'] = 'selection_invalid'
+            return report
+        prefix = ['/usr/bin/unshare', '--user', '--map-root-user', '--net']
+        args = [executable, '--unshare-user', '--unshare-net', '--unshare-pid',
+                '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev']
+        allowed = {'bwrap_tool_timeout', 'bwrap_tool_output_oversized', 'bwrap_metadata_oversized'}
+        with tempfile.TemporaryDirectory(prefix='marmish-bwrap-probe-') as temporary:
+            for count, stage in enumerate(('unshare', 'one_bwrap', 'two_bwrap')):
+                row = {'stage': stage, 'outcome': 'pass', 'reason': 'pass', 'returncode': 0, 'signal': None}
+                try:
+                    run([*prefix, *(args * count), '/usr/bin/true'], root=Path(temporary), timeout=30)
+                except ToolFailure as error:
+                    code = error.returncode
+                    row.update(reason='nonzero_exit', returncode=code if type(code) is int and -255 <= code <= 255 else None,
+                               signal=-code if type(code) is int and -64 <= code < 0 else None)
+                except OSError:
+                    row.update(reason='launch_failed', returncode=None)
+                except Exception as error:
+                    reason = str(error) if type(error) is RuntimeError else None
+                    row.update(reason=reason if reason in allowed else 'internal_failure', returncode=None)
+                if row['reason'] != 'pass':
+                    row['outcome'] = 'fail'
+                report['stages'].append(row)
+                if row['outcome'] == 'fail':
+                    report['category'] = 'stage_failed'
+                    return report
+        report['category'] = 'complete'
+    except Exception:
+        report['category'] = 'cleanup_failed' if report['stages'] else 'setup_failed'
+    return report
 
 
 def runtime_version(executable, root):
@@ -492,9 +546,13 @@ def cleanup(state):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('bootstrap', 'probe', 'cleanup'))
+    parser.add_argument('operation', choices=('bootstrap', 'probe', 'diagnostic-probe', 'cleanup'))
     parser.add_argument('--state', type=Path)
     args = parser.parse_args()
+    if args.operation == 'diagnostic-probe':
+        report = diagnostic_probe()
+        print(json.dumps(report, sort_keys=True))
+        return 0 if report['category'] == 'complete' else 1
     try:
         {'bootstrap': lambda: bootstrap(args.state), 'probe': probe,
          'cleanup': lambda: cleanup(args.state)}[args.operation]()

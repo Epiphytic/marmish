@@ -1,0 +1,23 @@
+{
+  "verdict": "CHANGES_REQUIRED",
+  "reviewer": {
+    "agent": "Claude Code independent design reviewer",
+    "model": "claude-opus-5-5",
+    "permission_mode": "auto"
+  },
+  "blockers": [
+    {
+      "id": "B1",
+      "finding": "Require both explicit Bubblewrap selection variables before stages; validated_bwrap otherwise permits systemdefault."
+    },
+    {
+      "id": "B2",
+      "finding": "New report reasons must be plain data, avoiding frozen require/SandboxError vocabulary changes; include releasevocabulary gate."
+    },
+    {
+      "id": "B3",
+      "finding": "List closed reasons including launch and TimeoutExpired handling; define singleJSONstdout and suppress checked_selection diagnosticline."
+    }
+  ],
+  "disposition": "All amended in design appendix and approved by subsequent actual Claude review."
+}

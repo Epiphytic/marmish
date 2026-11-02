@@ -1,0 +1,51 @@
+{
+  "scope": {
+    "reviewed": [
+      "tools/marmish_ci_bwrap.py: latest diagnostic_probe, the rest of the diff unchanged since the prior review",
+      "tools/test_marmish_ci_bwrap.py: NamespaceDiagnosticTests, now 8 tests",
+      "docs/phases/linux-namespace-diagnostic.md: N2 refinement appendix"
+    ],
+    "basis": "/tmp/marmish-linux-namespace-code.raw.json (prior APPROVED) plus the approved design",
+    "unchanged": "workflow, workflow test, runner lifecycle, production transport",
+    "mode": "auto; read-only; focused offline mocked tests only"
+  },
+  "verdict": "APPROVED",
+  "blockers": [],
+  "resolved": {
+    "N1": "NamespaceDiagnosticTests is now at line 470, before the main guard at line 569. Running the file directly now runs all tests and returns OK.",
+    "N2": "The outer except now returns cleanup_failed when any stage was attempted, otherwise setup_failed. The inner stage handler already catches every Exception, so the only thing that can reach the outer except after a stage is the TemporaryDirectory __exit__. Stage rows are kept; main returns 1 for any category other than complete; no exception text is copied. The appendix documents this, and it stays inside the design's fixed-category model.",
+    "N3": "test_token_refusal_never_launches_or_discloses runs the real refuse_api_tokens with GITHUB_TOKEN=SECRET and no MARMISH_BWRAP* set. It gets setup_failed rather than selection_missing, which proves the token check runs first. It also asserts stages is empty, no secret text in the report, and that run() is never called."
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "nit",
+      "area": "test-coverage",
+      "file": "tools/test_marmish_ci_bwrap.py:549",
+      "summary": "The cleanup-failure test only covers the case where all stages pass. No test covers a stage failure followed by a temp-directory removal failure. In that case cleanup_failed replaces stage_failed, but the failed row is still in stages.",
+      "impact": "Matches the documented 'after any stage attempts' rule. The failing stage can still be read from the rows. Not blocking."
+    }
+  ],
+  "tests": {
+    "run": [
+      {
+        "cmd": "cd tools && python3 -m unittest test_marmish_ci_bwrap.NamespaceDiagnosticTests -v",
+        "result": "Ran 8, OK"
+      },
+      {
+        "cmd": "cd tools && python3 test_marmish_ci_bwrap.py",
+        "result": "OK (direct execution now includes the diagnostic tests)"
+      }
+    ],
+    "not_run": "test_marmish_release. Its existing closure failure comes from the sibling edits and the root is handling it. This is not reported as a pass."
+  },
+  "reviewer": {
+    "agent": "Claude Code independent actual code reviewer (final narrow follow-up)",
+    "model": "claude-opus-5-5",
+    "permission_mode": "auto",
+    "edits": "none",
+    "native_execution": "none",
+    "network": "none",
+    "ci_dispatch": "none"
+  }
+}

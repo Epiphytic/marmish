@@ -1,0 +1,42 @@
+{
+  "verdict": "APPROVED",
+  "blockers": [],
+  "resolved": {
+    "B1": "refuse_api_tokens() runs at setup; MARMISH_BWRAP and MARMISH_BWRAP_SHA256 are both required before validated_bwrap(), so the silent /usr/bin/bwrap default (marmish_transport_sandbox.py:58) can't be used; a missing input gives selection_missing with zero run() calls",
+    "B2": "new categories are data constants only and the subclass keeps the literal bwrap_tool_failed, so DiagnosticErrors (test_marmish_release.py:59-92) sees no new literal and DIAGNOSTIC_ERRORS is unchanged; test_marmish_release is listed as an affected check",
+    "B3": "closed stage reasons, setup categories and top-level categories are listed; OSError maps to launch_failed, other Exceptions including TimeoutExpired map to internal_failure, and no exception message is copied; the bwrap_validation line is captured; exactly one stdout JSON line, bypassing main()'s generic handler; positive codes including 128+n are never treated as signals; BaseException is not caught",
+    "notes": "refuse_api_tokens, positive-code rule, exception str/args/repr test, workflow string, shell-syntax and token-expression tests: all adopted"
+  },
+  "implementation_conditions_non_blocking": [
+    "SandboxError subclasses RuntimeError (marmish_transport_sandbox.py:48): catch it before generic handlers and map it to selection_invalid; OSError or other failures during selection or temp-root setup map to setup_failed",
+    "setup failures return a nonzero CLI status, like stage_failed; only category complete returns 0",
+    "the existing probe() contract and test_caps_and_probe_actual_absolute_chain stay byte-for-byte unchanged"
+  ],
+  "scope": [
+    "tools/marmish_ci_bwrap.py: new RuntimeError subclass in run() with a bounded returncode attribute; new diagnostic-probe operation",
+    "tools/test_marmish_ci_bwrap.py",
+    "new .github/workflows/linux-namespace-diagnostic.yml and its offline contract test",
+    "no production transport changes, no vocabulary module changes, installed-interop untouched"
+  ],
+  "validation": [
+    "mocked subprocess tests only: exact cumulative argv for unshare, one_bwrap, two_bwrap; stops at first failure; finite returncode in -255..255; signal derived only from -64..-1",
+    "secret sentinels in injected launch, timeout and selection exceptions never appear in output",
+    "no run() calls when selection inputs are absent",
+    "workflow: workflow_dispatch only, repo/ref guard, group epiphytic-ci with labels [self-hosted, Linux, ARM64, laptop-ci], contents:read at workflow and job level, pinned checkout with id checkout and persist-credentials false, step and job timeouts, failed-checkout cleanup categories, distinct state path, non-cancelling concurrency, no continue-on-error, no secrets or tokens, no upload-artifact, sh -n passes on every run block",
+    "affected checks: test_marmish_ci_bwrap, the new workflow test, test_marmish_managed_workflow, test_marmish_release",
+    "no native execution, network access or CI dispatch during implementation or review"
+  ],
+  "reviewer": {
+    "agent": "Claude Code independent design reviewer (fresh re-review of the amended design)",
+    "model": "claude-opus-5-5",
+    "permission_mode": "auto",
+    "inputs": [
+      "docs/phases/linux-namespace-diagnostic.md incl. Followup review dispositions",
+      "/tmp/marmish-linux-namespace-design-final.raw.json (prior CHANGES_REQUIRED review)",
+      "tools/marmish_ci_bwrap.py",
+      "tools/marmish_transport_sandbox.py",
+      "tools/test_marmish_release.py"
+    ],
+    "edits": "none"
+  }
+}

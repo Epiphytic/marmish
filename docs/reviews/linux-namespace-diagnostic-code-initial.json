@@ -1,0 +1,85 @@
+{
+  "scope": {
+    "reviewed": [
+      "tools/marmish_ci_bwrap.py (diff: ToolFailure, run() nonzero path, diagnostic_probe, main dispatch)",
+      "tools/test_marmish_ci_bwrap.py (added NamespaceDiagnosticTests only)",
+      ".github/workflows/linux-namespace-diagnostic.yml (new)",
+      "tools/test_linux_namespace_diagnostic_workflow.py (new)"
+    ],
+    "against": [
+      "docs/phases/linux-namespace-diagnostic.md (incl. B1-B3 dispositions)",
+      "/tmp/marmish-linux-namespace-design-approved.raw.json"
+    ],
+    "excluded": "sibling edits in marmish_ci.py, marmish_installed_ci.py, marmish_installed_fixture.py, installed-interop.yml; runner lifecycle unchanged by design",
+    "mode": "auto; read-only; mocked offline tests only; no native probes, network or CI"
+  },
+  "verdict": "APPROVED",
+  "blockers": [],
+  "findings": [
+    {
+      "id": "N1",
+      "severity": "non-blocking",
+      "area": "test-coverage",
+      "file": "tools/test_marmish_ci_bwrap.py:470",
+      "summary": "NamespaceDiagnosticTests is defined after `if __name__ == '__main__': unittest.main()`.",
+      "impact": "Running the file directly (`python3 tools/test_marmish_ci_bwrap.py`) exits before the 6 new tests are defined, so they are skipped. CI is not affected: native-validation.yml:86 uses `unittest discover`, which collects them. Move the class above the main guard."
+    },
+    {
+      "id": "N2",
+      "severity": "non-blocking",
+      "area": "diagnostic-precision",
+      "file": "tools/marmish_ci_bwrap.py:405-407",
+      "summary": "The outer `except Exception` runs after stages too. If TemporaryDirectory cleanup raises after a stage result, the category is overwritten to setup_failed while the stage rows stay in the report.",
+      "impact": "The output is still fixed, finite and nonzero with no text leaked. But it breaks the design wording 'setup error ... no stage attempts' and can hide a stage_failed or complete category. Possible fix: capture the category before leaving the with-block, or only map to setup_failed when stages is empty."
+    },
+    {
+      "id": "N3",
+      "severity": "non-blocking",
+      "area": "test-coverage",
+      "summary": "Every diagnostic test patches out refuse_api_tokens. Nothing checks that a present GITHUB_TOKEN etc. gives setup_failed with zero run() calls and no token text in the output.",
+      "impact": "The code path is correct by inspection: RuntimeError goes to the outer except, giving setup_failed. Only the regression guard is missing."
+    },
+    {
+      "id": "N4",
+      "severity": "nit",
+      "area": "simplification",
+      "file": "tools/marmish_ci_bwrap.py:392",
+      "summary": "diagnostic_probe checks the returncode range again although ToolFailure.__init__ already bounds it. Harmless, and arguably extra protection if ToolFailure is built elsewhere."
+    }
+  ],
+  "contracts_verified": {
+    "privacy": "Report keys are only schema, kind, category, stages[stage, outcome, reason, returncode, signal]. No stdout/stderr, argv, env, path or exception text. Allowlisted RuntimeError categories need an exact `type is RuntimeError` match; anything else becomes internal_failure. checked_selection's bwrap_validation line is suppressed with redirect_stdout. main prints exactly one JSON line and skips the generic handler.",
+    "safety": "refuse_api_tokens runs first. Both MARMISH_BWRAP and MARMISH_BWRAP_SHA256 are required before validation; if either is missing, run() is never called. No shell, sudo, sysctl, fallback binary or default /usr/bin/bwrap. BaseException is not caught: KeyboardInterrupt and SystemExit pass through.",
+    "exact_chains": "Stages are prefix+true, prefix+1\u00d7args+true, prefix+2\u00d7args+true, with /usr/bin/unshare --user --map-root-user --net. The bwrap args match probe() exactly, so two_bwrap equals the existing probe argv. Each stage has a 30s timeout and uses run()'s existing output and storage bounds and build_environment() default. Stops at the first failure. Signal is set only for -64..-1; positive codes, including 128+n, are never treated as signals.",
+    "compatibility": "ToolFailure subclasses RuntimeError with str 'bwrap_tool_failed' and args ('bwrap_tool_failed',). The existing `str(error) == 'bwrap_tool_failed'` handlers at lines 360, 417 and 472 behave the same. probe(), the bootstrap and cleanup dispatch, and the success bytes are unchanged. No new literals are passed to require/SandboxError, and the helper's only new imports are stdlib io and a lazy marmish_transport_sandbox import that checked_selection already uses.",
+    "cleanup": "The stage loop runs inside TemporaryDirectory, so cleanup happens on every return path. The run() finally still calls killpg and wait(5). The workflow cleanup step has if: always(); on failed checkout it refuses unchecked source, uses -e/-L to choose cleanup_retained_unverified or cleanup_not_initialized, and exits 1. Otherwise it runs the existing ownership-checked cleanup on the distinct state path.",
+    "workflow": "workflow_dispatch only, with repo, ref and event guard. runs-on group epiphytic-ci with labels [self-hosted, Linux, ARM64, laptop-ci]. contents:read at both workflow and job level. Pinned checkout with id checkout and persist-credentials:false. Step timeouts 2/5/6/2/3 sum to the 18-minute job timeout; three 30s stages fit the 2-minute step. Non-cancelling concurrency group marmish-linux-namespace-diagnostic. No continue-on-error, secrets, tokens or upload-artifact. MARMISH_BWRAP* arrive through bootstrap's GITHUB_ENV write (line 496), the same pattern as native-validation. The one expression in a run block is steps.checkout.outcome, a fixed vocabulary, matching the existing pattern."
+  },
+  "tests": {
+    "run": [
+      {
+        "cmd": "cd tools && python3 -m unittest test_marmish_ci_bwrap test_linux_namespace_diagnostic_workflow test_marmish_managed_workflow",
+        "result": "Ran 36, OK"
+      },
+      {
+        "cmd": "python3 -m unittest test_marmish_ci_bwrap.NamespaceDiagnosticTests -v",
+        "result": "Ran 6, OK (subtests included)"
+      },
+      {
+        "cmd": "python3 -m unittest test_marmish_release",
+        "result": "Ran 20, FAILED (failures=1): test_diagnostic_frozen_vocabularies_cover_source_and_reviewed_dynamic_calls"
+      }
+    ],
+    "honest_limitation": "The release-vocabulary closure failure is real and not fixed. The extra closure modules (marmish_installed_state, marmish_installed_release, marmish_installed_fixture and related modules) come in through sibling marmish_ci.py, marmish_installed_ci.py and marmish_installed_fixture.py edits. marmish_ci_bwrap imports marmish_ci for refuse_api_tokens/build_environment, so the helper's closure picks them up transitively. The helper diff adds no local-module dependency beyond the already-frozen marmish_transport_sandbox. This is not a pass for test_marmish_release: it must be resolved with the sibling changes, or by publishing the helper separately from them, before release gating.",
+    "reported_by_caller": "55 passed, 79 subtests, plus 1 existing release-vocabulary closure failure. This matches what I saw above: the same single failure, attributed to the sibling changes."
+  },
+  "reviewer": {
+    "agent": "Claude Code independent actual code reviewer",
+    "model": "claude-opus-5-5",
+    "permission_mode": "auto",
+    "edits": "none",
+    "native_execution": "none",
+    "network": "none",
+    "ci_dispatch": "none"
+  }
+}

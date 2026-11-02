@@ -1,0 +1,36 @@
+{
+  "verdict": "CHANGES_REQUIRED",
+  "blockers": [
+    {
+      "id": "B1-redundant-evidence",
+      "summary": "The design never says what this dispatch tells us that existing runs don't.",
+      "detail": "native-validation.yml's `native` job runs on every non-docs push to master. Its matrix includes linux-arm64 on [self-hosted, Linux, ARM64, laptop-ci]. It already runs the same `marmish_ci_bwrap.py bootstrap` and then `marmish_ci_bwrap.py probe` (lines 37-40, 78). The design must cite the latest ARM run of that probe (run id, commit, time compared with failed run 41397651278). It must also say what the new dispatch adds, for example a check of runner state close in time to the installed failure. Otherwise the expected result is a pass that rules out nothing new. State the decision rule in advance: pass -> go to the stage-level installed diagnostic; fail -> the runner's prerequisite has regressed since the last native pass."
+    },
+    {
+      "id": "B2-stage-honesty",
+      "summary": "The difference between the probe and installed startup is described only as an environment difference. The command lines and stages also differ.",
+      "detail": "Installed ConfinedDaemon.start (marmish_transport_sandbox.py:397-431) runs `unshare` found through the exact PATH /usr/bin:/usr/sbin:/bin, with env {PATH, LANG, EPIPHYTIC_EXECUTION_ID} only. Under it runs system `/usr/bin/python3 sandbox.py --outer`, which runs `ip link set lo up` and `sysctl -w net.ipv4.ip_unprivileged_port_start=0` inside the network namespace. It then execs private bwrap with --uid 0 --gid 0 --cap-drop ALL --die-with-parent --new-session --clearenv. That bwrap binds /usr, /etc/ssl/certs, /etc/nsswitch.conf, the hosts/resolv/bridges files in the private TMPDIR, the state home and /wnd. Finally the inner stage runs `_self_test`. stderr goes to DEVNULL, and `namespace_start_failed` covers both a process exit before READY and any OSError/ValueError from `_prepare` (marmish_app.guarded_main maps either to rc 125). The probe runs none of these stages. It runs only `/usr/bin/unshare --user --map-root-user --net` around two nested `bwrap --unshare-user --unshare-net --unshare-pid --ro-bind / / --proc --dev`, with the runner's build_environment() (runner HOME/TMPDIR/PATH, not child_environment's private HOME/TMPDIR/XDG). The doc must list these differences. A pass then only shows that userns+netns creation and nested private-bwrap startup work on this host. Also: the probe discards its output and maps every nonzero exit to `userns_denied_private_bwrap`. That name is the existing category, not proof that user namespaces were denied, and a failure can't tell unshare, outer bwrap and inner bwrap apart."
+    },
+    {
+      "id": "B3-runner-targeting-exactness",
+      "summary": "Matching the runner labels alone is not enough. Specify the runner group as well.",
+      "detail": "Specify `runs-on: {group: epiphytic-ci, labels: [self-hosted, Linux, ARM64, laptop-ci]}` exactly as installed-interop.yml:44-46 and native-validation.yml:27-29 do. The offline contract tests must assert the group and the exact label list. Note that the laptop-ci label is shared with the macOS ARM64 runner."
+    }
+  ],
+  "notes": [
+    "Confinement: no weakening. No sudo, sysctl, AppArmor or host-policy change. The probe's `--ro-bind / /` runs inside unshare+bwrap user and network namespaces and only runs /usr/bin/true.",
+    "Keyless: bootstrap() calls refuse_api_tokens() and probe() does not. The tests should assert that no step `env` or `with` contains GITHUB_TOKEN, github.token or secrets.*. They should also assert permissions are exactly {contents: read} at workflow and job level, and that there is no `actions: read`.",
+    "Cleanup: give checkout `id: checkout`. Run cleanup with `if: always() && steps.checkout.outcome == 'success'`. Copy native-validation's check for a failed checkout: `cleanup_retained_unverified` if the state path exists, otherwise `cleanup_not_initialized`, then exit 1. If bootstrap fails it removes its own files, and cleanup sees no state file and returns 0, which is correct. Cleanup must not hide a probe failure: no continue-on-error on any step.",
+    "Bounds: bootstrap step timeout-minutes 6 (matching the existing steps), probe step timeout-minutes 2, plus a small job-level timeout-minutes. Use a distinct state path (for example $RUNNER_TEMP/namespace-diagnostic-bwrap-state).",
+    "Guards: a job-level `if: github.repository == 'Epiphytic/marmish' && github.ref == 'refs/heads/master' && github.event_name == 'workflow_dispatch'`, and the only trigger is `on: workflow_dispatch`. Pin checkout to the same SHA (11d5960a...) with persist-credentials: false.",
+    "Concurrency: a separate non-cancelling group is acceptable. One self-hosted runner agent runs one job at a time, and the random-named /tmp prefixes can't collide. Coordinator dispatch discipline must still keep it away from a live installed run on the same laptop host. Say this explicitly as a coordinator responsibility, not a workflow guarantee.",
+    "Scope: the installed-interop paragraph should say it is out of scope for this increment and its tests (parent-owned optional step). The parent should note that if the probe goes into installed-interop, a probe failure will stop the job before identity generation and change the reported first-failure category.",
+    "Evidence: rc 125 is marmish_app.guarded_main's generic exit for any SandboxError category, so it says nothing namespace-specific. The doc's statement that the transport category also covers preparation I/O is correct and should stay.",
+    "Future discriminator (not required here): a keyless one that actually exercises the installed start path would run ConfinedDaemon's outer/inner stages under child_environment(runtime=True), reporting which stage failed and with stderr capped. That is the separate reviewed diagnostic the doc already defers to."
+  ],
+  "reviewer": {
+    "agent": "Claude Code independent reviewer",
+    "model": "claude-opus-5-5",
+    "permission_mode": "auto"
+  }
+}

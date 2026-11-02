@@ -1,0 +1,45 @@
+name: Linux keyless namespace diagnostic
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: marmish-linux-namespace-diagnostic
+  cancel-in-progress: false
+jobs:
+  diagnostic:
+    if: github.repository == 'Epiphytic/marmish' && github.ref == 'refs/heads/master' && github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+    runs-on:
+      group: epiphytic-ci
+      labels: [self-hosted, Linux, ARM64, laptop-ci]
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        id: checkout
+        timeout-minutes: 2
+        with:
+          persist-credentials: false
+      - name: Ensure user-local Python 3.11 or newer
+        timeout-minutes: 5
+        run: sh tools/bootstrap_ci_python.sh
+      - name: Acquire authenticated rootless Bubblewrap
+        timeout-minutes: 6
+        run: python3 tools/marmish_ci_bwrap.py bootstrap --state "$RUNNER_TEMP/namespace-diagnostic-bwrap-state"
+      - name: Diagnose keyless cumulative namespace stages
+        timeout-minutes: 2
+        run: python3 tools/marmish_ci_bwrap.py diagnostic-probe
+      - name: Remove owned Bubblewrap prefix
+        if: always()
+        timeout-minutes: 3
+        run: |
+          if [ '${{ steps.checkout.outcome }}' != success ]; then
+            if [ -e "$RUNNER_TEMP/namespace-diagnostic-bwrap-state" ] || [ -L "$RUNNER_TEMP/namespace-diagnostic-bwrap-state" ]; then
+              echo '{"outcome":"failed","category":"cleanup_retained_unverified"}'
+            else
+              echo '{"outcome":"failed","category":"cleanup_not_initialized"}'
+            fi
+            exit 1
+          fi
+          python3 tools/marmish_ci_bwrap.py cleanup --state "$RUNNER_TEMP/namespace-diagnostic-bwrap-state"

@@ -465,5 +465,106 @@ class BwrapTests(unittest.TestCase):
             os.close(parent)
 
 
+
+
+class NamespaceDiagnosticTests(unittest.TestCase):
+    def invoke(self, failure=None):
+        with patch.dict(os.environ, {'MARMISH_BWRAP': '/private/bwrap', 'MARMISH_BWRAP_SHA256': 'a' * 64}, clear=True), \
+                patch.object(bwrap, 'refuse_api_tokens'), \
+                patch.object(bwrap, 'checked_selection', return_value=Path('/private/bwrap')), \
+                patch.object(bwrap, 'run', side_effect=failure) as run:
+            report = bwrap.diagnostic_probe()
+        return report, run
+
+    def test_exact_cumulative_commands_and_success(self):
+        report, run = self.invoke()
+        self.assertEqual(report['category'], 'complete')
+        prefix = ['/usr/bin/unshare', '--user', '--map-root-user', '--net']
+        args = ['/private/bwrap', '--unshare-user', '--unshare-net', '--unshare-pid',
+                '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev']
+        self.assertEqual([call.args[0] for call in run.call_args_list],
+                         [[*prefix, *(args * n), '/usr/bin/true'] for n in range(3)])
+        self.assertTrue(all(call.kwargs['timeout'] == 30 for call in run.call_args_list))
+        self.assertEqual([row['stage'] for row in report['stages']], ['unshare', 'one_bwrap', 'two_bwrap'])
+
+    def test_first_failure_stops_and_numeric_status_is_closed(self):
+        for code in (1, 129, -6, -64, -65, 255, -255, True, 256, 'SECRET'):
+            with self.subTest(code=code):
+                error = bwrap.ToolFailure(code)
+                self.assertEqual(str(error), 'bwrap_tool_failed')
+                self.assertEqual(error.args, ('bwrap_tool_failed',))
+                self.assertEqual(repr(error), "ToolFailure('bwrap_tool_failed')")
+                report, run = self.invoke([b'', error])
+                self.assertEqual(run.call_count, 2)
+                row = report['stages'][-1]
+                self.assertEqual(row['outcome'], 'fail')
+                self.assertEqual(row['returncode'], code if type(code) is int and -255 <= code <= 255 else None)
+                self.assertEqual(row['signal'], -code if type(code) is int and -64 <= code < 0 else None)
+                self.assertNotIn('SECRET', json.dumps(report))
+
+    def test_exception_text_never_published(self):
+        for error, reason in ((OSError('SECRET'), 'launch_failed'),
+                (subprocess.TimeoutExpired(['SECRET'], 5), 'internal_failure'),
+                (RuntimeError('SECRET'), 'internal_failure'),
+                (RuntimeError('bwrap_tool_timeout'), 'bwrap_tool_timeout'),
+                (RuntimeError('bwrap_tool_output_oversized'), 'bwrap_tool_output_oversized'),
+                (RuntimeError('bwrap_metadata_oversized'), 'bwrap_metadata_oversized')):
+            with self.subTest(reason=reason):
+                report, run = self.invoke(error)
+                self.assertEqual(run.call_count, 1)
+                self.assertEqual(report['stages'][0]['reason'], reason)
+                self.assertNotIn('SECRET', json.dumps(report))
+
+    def test_missing_selection_never_executes(self):
+        for env in ({}, {'MARMISH_BWRAP': '/private/bwrap'}, {'MARMISH_BWRAP_SHA256': 'a' * 64}):
+            with patch.dict(os.environ, env, clear=True), patch.object(bwrap, 'refuse_api_tokens'), \
+                    patch.object(bwrap, 'run') as run:
+                self.assertEqual(bwrap.diagnostic_probe()['category'], 'selection_missing')
+                run.assert_not_called()
+
+    def test_setup_failure_single_json_line_and_status(self):
+        from marmish_transport_sandbox import SandboxError
+        for error, category in ((SandboxError('SECRET'), 'selection_invalid'), (OSError('SECRET'), 'setup_failed')):
+            output = io.StringIO()
+            def reject():
+                print('SECRET')
+                raise error
+            with patch.dict(os.environ, {'MARMISH_BWRAP': '/x', 'MARMISH_BWRAP_SHA256': 'a' * 64}, clear=True), \
+                    patch.object(bwrap, 'refuse_api_tokens'), patch.object(bwrap, 'checked_selection', side_effect=reject), \
+                    patch.object(sys, 'argv', ['helper', 'diagnostic-probe']), contextlib.redirect_stdout(output):
+                self.assertEqual(bwrap.main(), 1)
+            self.assertEqual(len(output.getvalue().splitlines()), 1)
+            self.assertEqual(json.loads(output.getvalue())['category'], category)
+            self.assertNotIn('SECRET', output.getvalue())
+
+    def test_token_refusal_never_launches_or_discloses(self):
+        with patch.dict(os.environ, {'GITHUB_TOKEN': 'SECRET'}, clear=True), patch.object(bwrap, 'run') as run:
+            report = bwrap.diagnostic_probe()
+        self.assertEqual(report['category'], 'setup_failed')
+        self.assertEqual(report['stages'], [])
+        self.assertNotIn('SECRET', json.dumps(report))
+        run.assert_not_called()
+
+    def test_temp_cleanup_error_is_distinct_from_setup(self):
+        temporary = Mock()
+        temporary.__enter__ = Mock(return_value='/private/temp')
+        temporary.__exit__ = Mock(side_effect=OSError('SECRET'))
+        with patch.object(bwrap.tempfile, 'TemporaryDirectory', return_value=temporary):
+            report, _ = self.invoke()
+        self.assertEqual(report['category'], 'cleanup_failed')
+        self.assertEqual(len(report['stages']), 3)
+        self.assertNotIn('SECRET', json.dumps(report))
+
+    def test_real_runner_raises_compatible_numeric_error_with_mocked_child(self):
+        child = Mock(returncode=7)
+        child.poll.return_value = 7
+        with tempfile.TemporaryDirectory() as temporary, patch.object(bwrap.subprocess, 'Popen', return_value=child), \
+                patch.object(bwrap.os, 'killpg'), self.assertRaises(bwrap.ToolFailure) as caught:
+            bwrap.run(['/usr/bin/true'], root=Path(temporary))
+        self.assertEqual(caught.exception.returncode, 7)
+        self.assertEqual(str(caught.exception), 'bwrap_tool_failed')
+        child.wait.assert_called_once_with(timeout=5)
+
+
 if __name__ == '__main__':
     unittest.main()
