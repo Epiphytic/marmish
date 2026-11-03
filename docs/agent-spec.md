@@ -140,7 +140,17 @@ phase's actor/engine/storage boundaries and crash-recovery contracts; it is a
 design, not implemented command support. An
 [independently approved scheduling amendment](reviews/v0.2-scheduling-design-r2.md)
 allows isolated, test-only codec/configuration work while Phase 1 remains open;
-engine/store/service integration and command activation still require its acceptance. The approved
+engine/store/service integration and command activation still require its acceptance.
+The isolated `command_wire` and `command_config` modules now have passing offline
+tests, but are declared only under `cfg(test)`: production binaries expose neither
+command execution nor this configuration yet. The codec implements the fresh
+canonical command protocol, strict bounds and byte-preserving arguments, stdin
+and output. Configuration loading enforces private-file ownership, bounded input,
+explicit relay ceilings and aliases, and preserves additive raw policy layers.
+Execution-policy compilation and authenticated command admission remain gated;
+structural configuration validation grants no execution authority. See
+[the isolated-component validation](validation/v0.2/command-components.md).
+The approved
 [destination and SRV supplement](phases/v0.2-phase2-destinations.md) defines
 explicit relay selection and bounded CLI-side SRV confirmation against the
 profile relay ceiling; it is also unimplemented. The approved

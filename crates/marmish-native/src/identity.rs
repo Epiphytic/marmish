@@ -465,14 +465,14 @@ fn private_dir(path: &Path) -> Result<()> {
     }
     check_dir(path)
 }
-fn check_dir(path: &Path) -> Result<()> {
+pub(crate) fn check_dir(path: &Path) -> Result<()> {
     let m = fs::symlink_metadata(path)?;
     if !m.is_dir() || m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o777 != 0o700 {
         return Err(Error::Identity("unsafe_profile_path"));
     }
     Ok(())
 }
-fn open_private(path: &Path, create: bool) -> Result<File> {
+pub(crate) fn open_private(path: &Path, create: bool) -> Result<File> {
     let f = OpenOptions::new()
         .read(true)
         .write(create)

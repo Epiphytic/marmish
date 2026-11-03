@@ -81,3 +81,20 @@ turn ended with the remaining activation timeout. This identifies where the
 check stopped; it does not establish the underlying Tor network cause. All
 native cleanup flags and owned relay reaping/private-state removal passed.
 Readiness was false. No deadline, route or acceptance requirement was relaxed.
+
+All three platforms completed offline tests, release builds and direct encrypted
+message checks before their unavailable onion-endpoint waits were cancelled.
+The terminal artifacts are failed/cancelled outcomes, not completed Tor cells.
+The direct reports preserve their passing subset:
+
+| Platform / report | Total native time | Cold activation | Warm activation | A→B / B→A before restart; A→B / B→A after restart |
+| --- | ---: | ---: | ---: | --- |
+| [Linux AMD64](hosted-41574835843-linux-amd64-direct.json) | 16.746 s | 381 ms | 654 ms | 377 / 382 ms; 832 / 391 ms |
+| [Linux ARM64](hosted-41574835843-linux-arm64-direct.json) | 11.537 s | 855 ms | 995 ms | 443 / 443 ms; 866 / 443 ms |
+| [macOS](hosted-41574835843-macos-direct.json) | 9.244 s | 982 ms | 1067 ms | 501 / 438 ms; 866 / 452 ms |
+
+Each exchange carries a 66-byte payload and verifies its application receipt. All direct
+reports have `ok`, native/runtime/state cleanup true, and both directions pass
+after restart. These are single small-message observations, not remote commands
+or a bulk-throughput benchmark. Source/run/attempt bindings were validated
+against the complete downloaded artifacts.
