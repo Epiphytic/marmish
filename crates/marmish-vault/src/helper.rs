@@ -17,6 +17,177 @@ enum WirePurpose {
     Sqlcipher,
 }
 
+/// UI policy is selected only by the dedicated hidden helper entrypoint.
+#[derive(Clone, Copy)]
+pub enum AuthorizationMode {
+    Interactive,
+    Verify,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum AuthorizationCategory {
+    #[cfg(any(not(target_os = "macos"), test))]
+    Unsupported,
+    Malformed,
+    BackendFailure,
+    #[cfg(any(target_os = "macos", test))]
+    InteractionNotAllowed,
+    #[cfg(any(target_os = "macos", test))]
+    AuthenticationFailed,
+    #[cfg(any(target_os = "macos", test))]
+    UserCancelled,
+    #[cfg(any(target_os = "macos", test))]
+    Missing,
+    #[cfg(any(target_os = "macos", test))]
+    Uninitialized,
+    #[cfg(any(target_os = "macos", test))]
+    KeychainLocked,
+    #[cfg(any(target_os = "macos", test))]
+    Ambiguous,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum AuthorizationPurpose {
+    Provider,
+    #[cfg(any(target_os = "macos", test))]
+    Nostr,
+    #[cfg(any(target_os = "macos", test))]
+    Sqlcipher,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct AuthorizationFailure {
+    pub(super) category: AuthorizationCategory,
+    pub(super) purpose: AuthorizationPurpose,
+}
+
+impl AuthorizationFailure {
+    fn provider(category: AuthorizationCategory) -> Self {
+        Self {
+            category,
+            purpose: AuthorizationPurpose::Provider,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum AuthorizationNamespace {
+    MarmishV2,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthorizationRequest {
+    version: u8,
+    namespace: AuthorizationNamespace,
+    nostr: Reference,
+    sqlcipher: Reference,
+}
+
+fn parse_authorization(reader: impl Read) -> Result<[KeyRef; 2], AuthorizationFailure> {
+    let malformed = || AuthorizationFailure::provider(AuthorizationCategory::Malformed);
+    let mut bytes = Zeroizing::new(Vec::with_capacity(REQUEST_LIMIT + 1));
+    reader
+        .take((REQUEST_LIMIT + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| malformed())?;
+    if bytes.len() > REQUEST_LIMIT {
+        return Err(malformed());
+    }
+    let request: AuthorizationRequest = serde_json::from_slice(&bytes).map_err(|_| malformed())?;
+    let AuthorizationNamespace::MarmishV2 = request.namespace;
+    if request.version != 1 {
+        return Err(malformed());
+    }
+    let nostr = request.nostr.validated().map_err(|_| malformed())?;
+    let sqlcipher = request.sqlcipher.validated().map_err(|_| malformed())?;
+    if nostr.version() != 2
+        || sqlcipher.version() != 2
+        || nostr.purpose() != Purpose::Nostr
+        || sqlcipher.purpose() != Purpose::Sqlcipher
+    {
+        return Err(malformed());
+    }
+    Ok([nostr, sqlcipher])
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum AuthorizationResponse {
+    Success {
+        version: u8,
+        ok: bool,
+        result: AuthorizationEmpty,
+    },
+    Failure {
+        version: u8,
+        ok: bool,
+        error: AuthorizationCategory,
+        purpose: AuthorizationPurpose,
+    },
+}
+
+#[derive(Serialize)]
+struct AuthorizationEmpty {}
+
+fn encode_authorization(
+    result: Result<(), AuthorizationFailure>,
+) -> Result<Zeroizing<Vec<u8>>, Error> {
+    let response = match result {
+        Ok(()) => AuthorizationResponse::Success {
+            version: 1,
+            ok: true,
+            result: AuthorizationEmpty {},
+        },
+        Err(failure) => AuthorizationResponse::Failure {
+            version: 1,
+            ok: false,
+            error: failure.category,
+            purpose: failure.purpose,
+        },
+    };
+    serialize_response(&response, REQUEST_LIMIT)
+}
+
+fn execute_authorization(
+    references: [KeyRef; 2],
+    mode: AuthorizationMode,
+) -> Result<(), AuthorizationFailure> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::macos::authorize_existing(&references, mode)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (references, mode);
+        Err(AuthorizationFailure::provider(
+            AuthorizationCategory::Unsupported,
+        ))
+    }
+}
+
+/// Authorize/read only the two validated existing v2 references. Never emits secrets.
+pub fn run_authorization(mode: AuthorizationMode) -> ExitCode {
+    let watchdog = match mode {
+        AuthorizationMode::Interactive => Duration::from_secs(120),
+        AuthorizationMode::Verify => Duration::from_secs(15),
+    };
+    let result = harden_with_watchdog(watchdog)
+        .map_err(|_| AuthorizationFailure::provider(AuthorizationCategory::BackendFailure))
+        .and_then(|()| parse_authorization(std::io::stdin().lock()))
+        .and_then(|references| execute_authorization(references, mode));
+    let success = result.is_ok();
+    match encode_authorization(result) {
+        Ok(bytes) if std::io::stdout().lock().write_all(&bytes).is_ok() && success => {
+            ExitCode::SUCCESS
+        }
+        _ => ExitCode::FAILURE,
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Reference {
@@ -255,16 +426,24 @@ fn encode(result: Result<Output, Error>) -> Result<Zeroizing<Vec<u8>>, Error> {
             error: error.category(),
         },
     };
+    serialize_response(&response, RESPONSE_LIMIT)
+}
+
+fn serialize_response(response: &impl Serialize, cap: usize) -> Result<Zeroizing<Vec<u8>>, Error> {
     let mut bytes =
-        Zeroizing::new(serde_json::to_vec(&response).map_err(|_| Error::BackendFailure)?);
+        Zeroizing::new(serde_json::to_vec(response).map_err(|_| Error::BackendFailure)?);
     bytes.push(b'\n');
-    if bytes.len() > RESPONSE_LIMIT {
+    if bytes.len() > cap {
         return Err(Error::BackendFailure);
     }
     Ok(bytes)
 }
 
 fn harden() -> Result<(), Error> {
+    harden_with_watchdog(Duration::from_secs(15))
+}
+
+fn harden_with_watchdog(watchdog: Duration) -> Result<(), Error> {
     std::panic::set_hook(Box::new(|_| {
         eprintln!("marmish-keychain: backend_failure");
     }));
@@ -277,8 +456,8 @@ fn harden() -> Result<(), Error> {
     }
     std::thread::Builder::new()
         .name("keychain-watchdog".into())
-        .spawn(|| {
-            std::thread::sleep(Duration::from_secs(15));
+        .spawn(move || {
+            std::thread::sleep(watchdog);
             std::process::exit(124);
         })
         .map_err(|_| Error::BackendFailure)?;
@@ -303,6 +482,125 @@ pub fn run() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn authorization_fixture() -> String {
+        format!(
+            r#"{{"version":1,"namespace":"marmish-v2","nostr":{{"version":2,"purpose":"nostr","id":"{}"}},"sqlcipher":{{"version":2,"purpose":"sqlcipher","id":"{}"}}}}"#,
+            "a".repeat(64),
+            "b".repeat(64)
+        )
+    }
+
+    #[test]
+    fn authorization_request_is_closed_and_exactly_two_v2_purposes() {
+        let input = authorization_fixture();
+        let parsed = parse_authorization(input.as_bytes()).unwrap();
+        assert_eq!(
+            parsed[0],
+            KeyRef::new(2, Purpose::Nostr, &"a".repeat(64)).unwrap()
+        );
+        assert_eq!(
+            parsed[1],
+            KeyRef::new(2, Purpose::Sqlcipher, &"b".repeat(64)).unwrap()
+        );
+        let malformed = AuthorizationFailure::provider(AuthorizationCategory::Malformed);
+        for invalid in [
+            input.replacen("\"version\":1", "\"version\":2", 1),
+            input.replacen("\"version\":1", "\"version\":1,\"version\":1", 1),
+            input.replace("marmish-v2", "legacy"),
+            input.replacen("\"version\":2", "\"version\":1", 1),
+            input.replacen("\"purpose\":\"nostr\"", "\"purpose\":\"sqlcipher\"", 1),
+            input.replacen("\"purpose\":\"sqlcipher\"", "\"purpose\":\"nostr\"", 1),
+            input.replacen(
+                "\"purpose\":\"nostr\"",
+                "\"purpose\":\"nostr\",\"purpose\":\"nostr\"",
+                1,
+            ),
+            input.replacen("\"id\":", "\"extra\":true,\"id\":", 1),
+            input.replacen(
+                "\"version\":1",
+                "\"version\":1,\"secret\":\"private-marker\"",
+                1,
+            ),
+            input.replacen("\"version\":1", "\"version\":1,\"interactive\":true", 1),
+            input.replacen("\"version\":1", "\"version\":1,\"action\":\"create\"", 1),
+            input.replace(&"a".repeat(64), &"A".repeat(64)),
+            input.replace(&"a".repeat(64), &"a".repeat(63)),
+            format!("{input}{input}"),
+            format!("{input}x"),
+            "{}".into(),
+            "x".repeat(REQUEST_LIMIT + 1),
+        ] {
+            assert_eq!(parse_authorization(invalid.as_bytes()), Err(malformed));
+        }
+        // Ordinary load protocol cannot enable interactive authorization.
+        assert!(parse(input.as_bytes()).is_err());
+        assert!(parse(br#"{"version":1,"action":"authorize"}"#.as_slice()).is_err());
+    }
+
+    #[test]
+    fn response_cap_includes_the_required_newline() {
+        assert_eq!(serialize_response(&"x", 4).unwrap().as_slice(), b"\"x\"\n");
+        assert!(matches!(
+            serialize_response(&"x", 3),
+            Err(Error::BackendFailure)
+        ));
+    }
+
+    #[test]
+    fn authorization_responses_never_include_secret_or_reference_data() {
+        assert_eq!(
+            encode_authorization(Ok(())).unwrap().as_slice(),
+            b"{\"version\":1,\"ok\":true,\"result\":{}}\n"
+        );
+        let cases = [
+            (AuthorizationCategory::Unsupported, "unsupported"),
+            (AuthorizationCategory::Malformed, "malformed"),
+            (AuthorizationCategory::BackendFailure, "backend_failure"),
+            (
+                AuthorizationCategory::InteractionNotAllowed,
+                "interaction_not_allowed",
+            ),
+            (
+                AuthorizationCategory::AuthenticationFailed,
+                "authentication_failed",
+            ),
+            (AuthorizationCategory::UserCancelled, "user_cancelled"),
+            (AuthorizationCategory::Missing, "missing"),
+            (AuthorizationCategory::Uninitialized, "uninitialized"),
+            (AuthorizationCategory::KeychainLocked, "keychain_locked"),
+            (AuthorizationCategory::Ambiguous, "ambiguous"),
+        ];
+        for (category, literal) in cases {
+            for (purpose, purpose_literal) in [
+                (AuthorizationPurpose::Provider, "provider"),
+                (AuthorizationPurpose::Nostr, "nostr"),
+                (AuthorizationPurpose::Sqlcipher, "sqlcipher"),
+            ] {
+                let bytes =
+                    encode_authorization(Err(AuthorizationFailure { category, purpose })).unwrap();
+                let expected = format!(
+                    "{{\"version\":1,\"ok\":false,\"error\":\"{literal}\",\"purpose\":\"{purpose_literal}\"}}\n"
+                );
+                assert_eq!(bytes.as_slice(), expected.as_bytes());
+                assert!(bytes.len() <= REQUEST_LIMIT);
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn authorization_on_other_platforms_never_opens_a_provider() {
+        for mode in [AuthorizationMode::Interactive, AuthorizationMode::Verify] {
+            let refs = parse_authorization(authorization_fixture().as_bytes()).unwrap();
+            assert_eq!(
+                execute_authorization(refs, mode),
+                Err(AuthorizationFailure::provider(
+                    AuthorizationCategory::Unsupported
+                ))
+            );
+        }
+    }
 
     #[test]
     fn derive_nostr_is_stateless_and_validates_scalars() {

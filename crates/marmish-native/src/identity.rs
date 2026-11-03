@@ -13,7 +13,10 @@ use std::{
     },
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 use zeroize::Zeroizing;
@@ -113,12 +116,21 @@ impl ProfileLease {
         if let Some(m) = &manifest {
             validate_manifest(m, name)?;
         }
-        let profile_id = manifest
-            .as_ref()
-            .map(|m| m.profile_id.clone())
-            .unwrap_or(random_hex(16)?);
+        Self::from_locked(root, name, lock, manifest)
+    }
+
+    fn from_locked(
+        root: PathBuf,
+        name: &str,
+        lock: File,
+        manifest: Option<Manifest>,
+    ) -> Result<Self> {
+        let profile_id = match &manifest {
+            Some(manifest) => manifest.profile_id.clone(),
+            None => random_hex(16)?,
+        };
         let runtime =
-            std::env::temp_dir().join(format!("mr2-{}-{}", unsafe { libc::geteuid() }, profile_id));
+            std::env::temp_dir().join(format!("mr2-{}-{profile_id}", unsafe { libc::geteuid() }));
         if runtime.as_os_str().as_encoded_bytes().len() + 10 >= 104 {
             return Err(Error::Identity("runtime_path_too_long"));
         }
@@ -135,6 +147,75 @@ impl ProfileLease {
             runtime,
         })
     }
+    /// Open only an existing ready Keychain profile, without creating state.
+    pub(crate) fn acquire_existing(base: &Path, name: &str) -> Result<Self> {
+        validate_name(name)?;
+        check_dir(base)?;
+        let root = base.canonicalize()?.join(name);
+        check_dir(&root)?;
+        let lock = open_private(&root.join("owner.lock"), false)?;
+        lock.try_lock_exclusive()
+            .map_err(|_| Error::Identity("profile_in_use"))?;
+        let manifest = read_manifest(&root.join("profile.json"))?
+            .ok_or(Error::Identity("missing_manifest"))?;
+        validate_manifest(&manifest, name)?;
+        if manifest.phase != Phase::Ready {
+            return Err(Error::Identity("profile_not_ready"));
+        }
+        if manifest.backend != Backend::Keychain {
+            return Err(Error::Identity("keychain_profile_required"));
+        }
+        Self::from_locked(root, name, lock, Some(manifest))
+    }
+
+    fn authorization_request(&self) -> Result<Zeroizing<Vec<u8>>> {
+        let m = self
+            .manifest
+            .as_ref()
+            .ok_or(Error::Identity("missing_manifest"))?;
+        validate_manifest(m, &self.name)?;
+        if m.phase != Phase::Ready || m.backend != Backend::Keychain {
+            return Err(Error::Identity("keychain_profile_required"));
+        }
+        use marmish_vault::{KeyRef, Purpose};
+        KeyRef::new(2, Purpose::Nostr, &m.nostr_ref)
+            .map_err(|_| Error::Identity("invalid_manifest"))?;
+        KeyRef::new(2, Purpose::Sqlcipher, &m.sqlcipher_ref)
+            .map_err(|_| Error::Identity("invalid_manifest"))?;
+        serde_json::to_vec(&serde_json::json!({
+            "version":1,"namespace":"marmish-v2",
+            "nostr":{"version":2,"purpose":"nostr","id":m.nostr_ref},
+            "sqlcipher":{"version":2,"purpose":"sqlcipher","id":m.sqlcipher_ref}
+        }))
+        .map(Zeroizing::new)
+        .map_err(|_| Error::Identity("invalid_helper_request"))
+    }
+
+    pub(crate) fn authorize_keychain(
+        &self,
+        helper: &Path,
+        start: Instant,
+        cancel: &AtomicBool,
+    ) -> Result<()> {
+        let request = self.authorization_request()?;
+        for (kind, deadline) in [
+            (HelperKind::Authorize, start + Duration::from_secs(105)),
+            (HelperKind::Verify, start + Duration::from_secs(120)),
+        ] {
+            if cancel.load(Ordering::SeqCst) {
+                return Err(Error::Identity("keychain_authorize_interrupted"));
+            }
+            let (bytes, status) =
+                controlled_helper_exchange(helper, &request, deadline, kind, Some(cancel))
+                    .map_err(|error| match error {
+                        Error::Io(_) => Error::Identity("keychain_authorize_helper_failed"),
+                        error => error,
+                    })?;
+            authorization_response(&bytes, status, kind)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn setup_snapshot(&self) -> SetupSnapshot {
         SetupSnapshot {
             ready: self
@@ -723,7 +804,40 @@ impl Provider for NativeProvider<'_> {
         self.call("create", Some(p), Some(id), Some(s)).map(|_| ())
     }
 }
+#[derive(Clone, Copy)]
+enum HelperKind {
+    Ordinary,
+    Authorize,
+    Verify,
+}
+impl HelperKind {
+    fn argument(self) -> &'static str {
+        match self {
+            Self::Ordinary => "_vault-helper",
+            Self::Authorize => "_vault-authorize",
+            Self::Verify => "_vault-verify-authorization",
+        }
+    }
+}
+struct OwnedHelper(std::process::Child);
+impl Drop for OwnedHelper {
+    fn drop(&mut self) {
+        // Also runs on unwinding: an unfinished provider must never outlive us.
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
 fn helper_exchange(path: &Path, request: &[u8], deadline: Instant) -> Result<Zeroizing<Vec<u8>>> {
+    controlled_helper_exchange(path, request, deadline, HelperKind::Ordinary, None)
+        .map(|(bytes, _)| bytes)
+}
+fn controlled_helper_exchange(
+    path: &Path,
+    request: &[u8],
+    deadline: Instant,
+    kind: HelperKind,
+    cancel: Option<&AtomicBool>,
+) -> Result<(Zeroizing<Vec<u8>>, std::process::ExitStatus)> {
     if !path.is_absolute() || request.len() > HELPER_LIMIT {
         return Err(Error::Identity("invalid_helper"));
     }
@@ -732,7 +846,7 @@ fn helper_exchange(path: &Path, request: &[u8], deadline: Instant) -> Result<Zer
     }
     let mut command = Command::new(path);
     command
-        .arg("_vault-helper")
+        .arg(kind.argument())
         .env_clear()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -742,8 +856,9 @@ fn helper_exchange(path: &Path, request: &[u8], deadline: Instant) -> Result<Zer
             command.env(name, value);
         }
     }
-    let mut child = command.spawn()?;
-    let result = (|| {
+    let mut owned = OwnedHelper(command.spawn()?);
+    let child = &mut owned.0;
+    let mut result = (|| {
         let mut input = Some(child.stdin.take().ok_or(Error::Identity("helper_pipe"))?);
         let mut output = child.stdout.take().ok_or(Error::Identity("helper_pipe"))?;
         for fd in [input.as_ref().unwrap().as_raw_fd(), output.as_raw_fd()] {
@@ -758,6 +873,9 @@ fn helper_exchange(path: &Path, request: &[u8], deadline: Instant) -> Result<Zer
         let mut eof = false;
         let mut status = None;
         loop {
+            if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+                return Err(Error::Identity("keychain_authorize_interrupted"));
+            }
             if Instant::now() >= deadline {
                 return Err(Error::Timeout);
             }
@@ -792,19 +910,113 @@ fn helper_exchange(path: &Path, request: &[u8], deadline: Instant) -> Result<Zer
                 status = child.try_wait()?;
             }
             if let (true, Some(status)) = (eof, status) {
-                if !status.success() && bytes.is_empty() {
+                if matches!(kind, HelperKind::Ordinary) && !status.success() && bytes.is_empty() {
                     return Err(Error::Identity("keychain_failed"));
                 }
-                return Ok(bytes);
+                return Ok((bytes, status));
             }
             std::thread::sleep(Duration::from_millis(2));
         }
     })();
     if result.is_err() {
+        if !matches!(kind, HelperKind::Ordinary)
+            && let Ok(Some(status)) = child.try_wait()
+        {
+            if status.code() == Some(124) {
+                result = Err(Error::Timeout);
+            } else if status.code().is_none() {
+                result = Err(Error::Identity("keychain_authorize_interrupted"));
+            }
+        }
         let _ = child.kill();
     }
     let _ = child.wait();
     result
+}
+
+fn authorization_response(
+    bytes: &[u8],
+    status: std::process::ExitStatus,
+    kind: HelperKind,
+) -> Result<()> {
+    if status.code() == Some(124) {
+        return Err(Error::Timeout);
+    }
+    if status.code().is_none() {
+        return Err(Error::Identity("keychain_authorize_interrupted"));
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Empty {}
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Success {
+        version: u8,
+        ok: bool,
+        result: Empty,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Failure {
+        version: u8,
+        ok: bool,
+        error: String,
+        purpose: String,
+    }
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Response {
+        Success(Success),
+        Failure(Failure),
+    }
+    let r: Response =
+        serde_json::from_slice(bytes).map_err(|_| Error::Identity("invalid_helper_response"))?;
+    let r = match r {
+        Response::Success(r) => {
+            let _ = r.result;
+            return if r.version == 1 && r.ok && status.success() {
+                Ok(())
+            } else {
+                Err(Error::Identity("invalid_helper_response"))
+            };
+        }
+        Response::Failure(r) if r.version == 1 && !r.ok && !status.success() => r,
+        _ => return Err(Error::Identity("invalid_helper_response")),
+    };
+    let purpose = match r.purpose.as_str() {
+        "nostr" => "nostr",
+        "sqlcipher" => "sqlcipher",
+        "provider" => "provider",
+        _ => return Err(Error::Identity("invalid_helper_response")),
+    };
+    let verify = matches!(kind, HelperKind::Verify);
+    // Every user-facing value is a closed static label, never provider text.
+    let label = match (verify, Some(r.error.as_str())) {
+        (false, Some("interaction_not_allowed")) => "keychain_authorize_interaction_not_allowed",
+        (false, Some("authentication_failed")) => "keychain_authorize_authentication_failed",
+        (false, Some("user_cancelled")) => "keychain_authorize_user_cancelled",
+        (false, Some("missing")) => "keychain_authorize_missing",
+        (false, Some("uninitialized")) => "keychain_authorize_uninitialized",
+        (false, Some("keychain_locked")) => "keychain_authorize_keychain_locked",
+        (false, Some("ambiguous")) => "keychain_authorize_ambiguous",
+        (false, Some("malformed")) => "keychain_authorize_malformed",
+        (false, Some("backend_failure")) => "keychain_authorize_backend_failure",
+        (true, Some("interaction_not_allowed")) => "keychain_verify_interaction_not_allowed",
+        (true, Some("authentication_failed")) => "keychain_verify_authentication_failed",
+        (true, Some("user_cancelled")) => "keychain_verify_user_cancelled",
+        (true, Some("missing")) => "keychain_verify_missing",
+        (true, Some("uninitialized")) => "keychain_verify_uninitialized",
+        (true, Some("keychain_locked")) => "keychain_verify_keychain_locked",
+        (true, Some("ambiguous")) => "keychain_verify_ambiguous",
+        (true, Some("malformed")) => "keychain_verify_malformed",
+        (true, Some("backend_failure")) => "keychain_verify_backend_failure",
+        _ => return Err(Error::Identity("invalid_helper_response")),
+    };
+    eprintln!("marmish: keychain purpose={purpose}");
+    if Some(r.error.as_str()) == Some("keychain_locked") {
+        eprintln!("Unlock the default Keychain explicitly, then rerun keychain-authorize.");
+    }
+    Err(Error::Identity(label))
 }
 
 #[cfg(test)]
@@ -1251,6 +1463,307 @@ mod tests {
                 Some(&[1; 32])
             ),
             Err(Error::Identity("invalid_helper_request"))
+        ));
+    }
+    fn tree(path: &Path) -> Vec<(PathBuf, u32, Vec<u8>)> {
+        fn visit(path: &Path, out: &mut Vec<(PathBuf, u32, Vec<u8>)>) {
+            let metadata = fs::symlink_metadata(path).unwrap();
+            out.push((
+                path.to_owned(),
+                metadata.mode(),
+                if metadata.is_file() {
+                    fs::read(path).unwrap()
+                } else {
+                    Vec::new()
+                },
+            ));
+            if metadata.is_dir() {
+                let mut paths = fs::read_dir(path)
+                    .unwrap()
+                    .map(|e| e.unwrap().path())
+                    .collect::<Vec<_>>();
+                paths.sort();
+                for path in paths {
+                    visit(&path, out);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        visit(path, &mut out);
+        out
+    }
+    #[test]
+    fn authorization_existing_only_never_creates_or_rewrites_profile() {
+        let mut f = Fixture::new();
+        let before = tree(f.base.path());
+        assert!(ProfileLease::acquire_existing(f.base.path(), "absent").is_err());
+        assert_eq!(tree(f.base.path()), before);
+        drop(f.lease("no-manifest"));
+        let before = tree(f.base.path());
+        assert!(matches!(
+            ProfileLease::acquire_existing(f.base.path(), "no-manifest"),
+            Err(Error::Identity("missing_manifest"))
+        ));
+        assert_eq!(tree(f.base.path()), before);
+        let mut lease = f.lease("alice");
+        let before = tree(f.base.path());
+        assert!(matches!(
+            ProfileLease::acquire_existing(f.base.path(), "alice"),
+            Err(Error::Identity("profile_in_use"))
+        ));
+        assert_eq!(tree(f.base.path()), before);
+        lease
+            .prepare_with(BackendChoice::Keychain, &mut Fake::default())
+            .unwrap();
+        f.remember(&lease);
+        lease.manifest.as_mut().unwrap().phase = Phase::Ready;
+        atomic_json(
+            &lease.root.join("profile.json"),
+            lease.manifest.as_ref().unwrap(),
+        )
+        .unwrap();
+        let root = lease.root.clone();
+        drop(lease);
+        let before = tree(f.base.path());
+        let existing = ProfileLease::acquire_existing(f.base.path(), "alice").unwrap();
+        let request: serde_json::Value =
+            serde_json::from_slice(&existing.authorization_request().unwrap()).unwrap();
+        assert_eq!(
+            request["nostr"]["id"],
+            existing.manifest.as_ref().unwrap().nostr_ref
+        );
+        assert_eq!(
+            request["sqlcipher"]["id"],
+            existing.manifest.as_ref().unwrap().sqlcipher_ref
+        );
+        drop(existing);
+        assert_eq!(tree(f.base.path()), before);
+        for (phase, backend, expected) in [
+            (Phase::Initializing, Backend::Keychain, "profile_not_ready"),
+            (Phase::Ready, Backend::Files, "keychain_profile_required"),
+        ] {
+            let mut manifest = read_manifest(&root.join("profile.json")).unwrap().unwrap();
+            manifest.phase = phase;
+            manifest.backend = backend;
+            atomic_json(&root.join("profile.json"), &manifest).unwrap();
+            let before = tree(f.base.path());
+            assert!(
+                matches!(ProfileLease::acquire_existing(f.base.path(), "alice"),Err(Error::Identity(label)) if label == expected)
+            );
+            assert_eq!(tree(f.base.path()), before);
+        }
+        fs::set_permissions(root.join("owner.lock"), fs::Permissions::from_mode(0o644)).unwrap();
+        let before = tree(f.base.path());
+        assert!(matches!(
+            ProfileLease::acquire_existing(f.base.path(), "alice"),
+            Err(Error::Identity("unsafe_profile_file"))
+        ));
+        assert_eq!(tree(f.base.path()), before);
+    }
+    #[test]
+    fn authorization_response_requires_closed_schema_and_matching_exit() {
+        use std::os::unix::process::ExitStatusExt;
+        let ok = std::process::ExitStatus::from_raw(0);
+        let fail = std::process::ExitStatus::from_raw(256);
+        let success = br#"{"version":1,"ok":true,"result":{}}"#;
+        assert!(authorization_response(success, ok, HelperKind::Authorize).is_ok());
+        assert!(authorization_response(success, fail, HelperKind::Authorize).is_err());
+        for bytes in [
+            br#"{"version":1,"ok":true,"result":{},"error":null}"#.as_slice(),
+            br#"{"version":1,"ok":true,"result":{"secret":"secret"}}"#,
+            br#"{"version":1,"ok":true,"ok":true,"result":{}}"#,
+            br#"{"version":1,"ok":false,"error":"raw-provider-message","purpose":"provider"}"#,
+            br#"{"version":1,"ok":false,"error":"missing","purpose":"arbitrary-secret"}"#,
+            br#"{"version":1,"ok":false,"error":"missing","purpose":"nostr","ui":true}"#,
+        ] {
+            assert!(matches!(
+                authorization_response(bytes, fail, HelperKind::Authorize),
+                Err(Error::Identity("invalid_helper_response"))
+            ));
+        }
+        let denied =
+            br#"{"version":1,"ok":false,"error":"interaction_not_allowed","purpose":"nostr"}"#;
+        assert!(matches!(
+            authorization_response(denied, fail, HelperKind::Verify),
+            Err(Error::Identity("keychain_verify_interaction_not_allowed"))
+        ));
+        assert!(matches!(
+            authorization_response(
+                b"",
+                std::process::ExitStatus::from_raw(124 << 8),
+                HelperKind::Authorize
+            ),
+            Err(Error::Timeout)
+        ));
+        assert!(matches!(
+            authorization_response(
+                b"",
+                std::process::ExitStatus::from_raw(libc::SIGTERM),
+                HelperKind::Authorize
+            ),
+            Err(Error::Identity("keychain_authorize_interrupted"))
+        ));
+    }
+    fn helper_fixture(root: &Path, body: &str) -> PathBuf {
+        let path = root.join("helper");
+        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        path
+    }
+    #[test]
+    fn authorization_fresh_process_sequence_uses_identical_frozen_refs_and_stops_on_failure() {
+        let mut f = Fixture::new();
+        let mut lease = f.lease("alice");
+        lease
+            .prepare_with(BackendChoice::Keychain, &mut Fake::default())
+            .unwrap();
+        f.remember(&lease);
+        lease.manifest.as_mut().unwrap().phase = Phase::Ready;
+        atomic_json(
+            &lease.root.join("profile.json"),
+            lease.manifest.as_ref().unwrap(),
+        )
+        .unwrap();
+        let scripts = Fixture::new();
+        let trace = scripts.base.path().join("trace");
+        let helper = helper_fixture(
+            scripts.base.path(),
+            &format!(
+                r#"IFS= read -r request
+printf '%s\n%s\n' "$1" "$request" >> '{}'
+printf '%s' '{{"version":1,"ok":true,"result":{{}}}}'"#,
+                trace.display()
+            ),
+        );
+        lease
+            .authorize_keychain(&helper, Instant::now(), &AtomicBool::new(false))
+            .unwrap();
+        let trace_text = fs::read_to_string(&trace).unwrap();
+        let lines = trace_text.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[0], "_vault-authorize");
+        assert_eq!(lines[2], "_vault-verify-authorization");
+        assert_eq!(lines[1], lines[3]);
+        fs::remove_file(&trace).unwrap();
+        helper_fixture(
+            scripts.base.path(),
+            &format!(
+                r#"IFS= read -r request
+printf '%s\n' "$1" >> '{}'
+printf '%s' '{{"version":1,"ok":false,"error":"missing","purpose":"nostr"}}'
+exit 1"#,
+                trace.display()
+            ),
+        );
+        assert!(matches!(
+            lease.authorize_keychain(&helper, Instant::now(), &AtomicBool::new(false)),
+            Err(Error::Identity("keychain_authorize_missing"))
+        ));
+        assert_eq!(fs::read_to_string(trace).unwrap(), "_vault-authorize\n");
+    }
+    #[test]
+    fn authorization_cancel_and_timeout_reap_real_owned_child() {
+        let scripts = Fixture::new();
+        let pid_path = scripts.base.path().join("pid");
+        let helper = helper_fixture(
+            scripts.base.path(),
+            &format!(
+                "printf '%s' $$ > '{}'\nexec /bin/sleep 30",
+                pid_path.display()
+            ),
+        );
+        for cancelled in [false, true] {
+            let cancel = Arc::new(AtomicBool::new(false));
+            let signal = cancel.clone();
+            let trigger = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(30));
+                if cancelled {
+                    signal.store(true, Ordering::SeqCst);
+                }
+            });
+            let started = Instant::now();
+            let result = controlled_helper_exchange(
+                &helper,
+                b"{}",
+                started + Duration::from_millis(if cancelled { 1000 } else { 80 }),
+                HelperKind::Authorize,
+                Some(&cancel),
+            );
+            trigger.join().unwrap();
+            if cancelled {
+                assert!(matches!(
+                    result,
+                    Err(Error::Identity("keychain_authorize_interrupted"))
+                ));
+            } else {
+                assert!(matches!(result, Err(Error::Timeout)));
+            }
+            assert!(started.elapsed() < Duration::from_secs(2));
+            let pid = fs::read_to_string(&pid_path)
+                .unwrap()
+                .parse::<i32>()
+                .unwrap();
+            assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ESRCH)
+            );
+        }
+        // A consumed original interactive budget may not be renewed on entry.
+        let mut f = Fixture::new();
+        let mut lease = f.lease("alice");
+        lease
+            .prepare_with(BackendChoice::Keychain, &mut Fake::default())
+            .unwrap();
+        f.remember(&lease);
+        lease.manifest.as_mut().unwrap().phase = Phase::Ready;
+        atomic_json(
+            &lease.root.join("profile.json"),
+            lease.manifest.as_ref().unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            lease.authorize_keychain(
+                &helper,
+                Instant::now() - Duration::from_secs(106),
+                &AtomicBool::new(false)
+            ),
+            Err(Error::Timeout)
+        ));
+    }
+    #[test]
+    fn authorization_owned_exchange_rejects_oversize_and_interrupted_children() {
+        let scripts = Fixture::new();
+        let helper = helper_fixture(
+            scripts.base.path(),
+            "IFS= read -r request
+i=0; while [ $i -lt 9000 ]; do printf x; i=$((i + 1)); done",
+        );
+        assert!(matches!(
+            controlled_helper_exchange(
+                &helper,
+                b"{}",
+                Instant::now() + Duration::from_secs(2),
+                HelperKind::Authorize,
+                None
+            ),
+            Err(Error::Identity("helper_oversize"))
+        ));
+        helper_fixture(scripts.base.path(), "kill -TERM $$");
+        assert!(matches!(
+            controlled_helper_exchange(
+                &helper,
+                b"{}",
+                Instant::now() + Duration::from_secs(2),
+                HelperKind::Authorize,
+                None
+            )
+            .and_then(|(bytes, status)| authorization_response(
+                &bytes,
+                status,
+                HelperKind::Authorize
+            )),
+            Err(Error::Identity("keychain_authorize_interrupted"))
         ));
     }
 }

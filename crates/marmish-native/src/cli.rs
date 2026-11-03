@@ -8,7 +8,7 @@ use crate::{
     ipc::{self, Request},
     transport::{RelayPolicy, RouteMode, TransportLimits},
 };
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use std::{
     ffi::{OsStr, OsString},
     path::PathBuf,
@@ -41,6 +41,8 @@ impl From<Backend> for BackendChoice {
 struct Args {
     #[arg(skip)]
     trailing: Option<Vec<OsString>>,
+    #[arg(skip)]
+    authorize_disallowed: bool,
     #[arg(long, global = true)]
     debug: bool,
     #[arg(long, global = true)]
@@ -103,6 +105,8 @@ struct SelectArgs {
 
 #[derive(Subcommand)]
 enum FrontendCommand {
+    /// Ask macOS for access to this existing profile, then verify without UI.
+    KeychainAuthorize,
     /// Print this binary's native version, build target and source commit.
     ReleaseInfo,
     /// Install a verified v0.2 bundle or select an already installed version.
@@ -230,6 +234,13 @@ async fn run(
     daemon_binary: bool,
     layout: &crate::native_layout::ExecutableLayout,
 ) -> Result<u8> {
+    if matches!(args.command, Some(FrontendCommand::KeychainAuthorize)) {
+        let started = std::time::Instant::now();
+        if daemon_binary || args.authorize_disallowed {
+            return Err(Error::Invalid("keychain_authorize_arguments"));
+        }
+        return keychain_authorize(&args, layout, started).await;
+    }
     if args.command.is_none() && daemon_binary {
         args.command = Some(FrontendCommand::Daemon);
     }
@@ -738,6 +749,63 @@ async fn run_command(args: &Args, state: &std::path::Path) -> Result<u8> {
     .await
 }
 
+async fn keychain_authorize(
+    args: &Args,
+    layout: &crate::native_layout::ExecutableLayout,
+    started: std::time::Instant,
+) -> Result<u8> {
+    if !cfg!(target_os = "macos") {
+        return Err(Error::Identity("keychain_authorize_unsupported"));
+    }
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal()
+        || !std::io::stderr().is_terminal()
+        || unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) } != unsafe { libc::getpgrp() }
+    {
+        return Err(Error::Identity("keychain_authorize_foreground_required"));
+    }
+    // Register all streams before a worker can launch a helper. Retain them
+    // across both phases so a signal in the inter-helper gap is not lost.
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut terminate = signal(SignalKind::terminate())?;
+    let mut hangup = signal(SignalKind::hangup())?;
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let worker_cancel = cancel.clone();
+    let base = state_dir(args.state_dir.clone())?;
+    let name = args.identity.clone();
+    let helper = layout.helper.clone();
+    eprintln!(
+        "macOS may ask for consent for two existing Marmish items. Persistent background access depends on your own OS authorization choice; Allow once does not guarantee future access."
+    );
+    let mut worker = tokio::task::spawn_blocking(move || {
+        let lease = crate::identity::ProfileLease::acquire_existing(&base, &name)?;
+        lease.authorize_keychain(&helper, started, &worker_cancel)
+    });
+    let result = tokio::select! {
+        result = &mut worker => result,
+        _ = interrupt.recv() => { cancel.store(true, std::sync::atomic::Ordering::SeqCst); worker.await },
+        _ = terminate.recv() => { cancel.store(true, std::sync::atomic::Ordering::SeqCst); worker.await },
+        _ = hangup.recv() => { cancel.store(true, std::sync::atomic::Ordering::SeqCst); worker.await },
+    }.map_err(|_| Error::Identity("keychain_authorize_worker"))?;
+    if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(Error::Identity("keychain_authorize_interrupted"));
+    }
+    result?;
+    println!("Keychain access verified for this profile.");
+    Ok(0)
+}
+
+fn authorization_disallowed(matches: &clap::ArgMatches) -> bool {
+    // Derive groups also have CommandLine sources; inspect actual arguments,
+    // rather than accidentally treating the enclosing Args group as a flag.
+    Args::command().get_arguments().any(|arg| {
+        let id = arg.get_id().as_str();
+        matches.value_source(id) == Some(clap::parser::ValueSource::CommandLine)
+            && !matches!(id, "debug" | "state_dir" | "identity")
+    })
+}
+
 fn usage_exit_code(error: &clap::Error) -> u8 {
     if matches!(
         error.kind(),
@@ -753,19 +821,33 @@ pub fn main(daemon_binary: bool) -> ExitCode {
     let raw = std::env::args_os().collect::<Vec<_>>();
     // The provider helper has its own private protocol; validate its canonical
     // executable before entering it, without parsing public CLI arguments.
-    if raw.get(1).map(OsString::as_os_str) == Some(OsStr::new("_vault-helper")) {
+    let helper_action = raw.get(1).map(OsString::as_os_str);
+    if matches!(helper_action, Some(value) if value == OsStr::new("_vault-helper") || value == OsStr::new("_vault-authorize") || value == OsStr::new("_vault-verify-authorization"))
+    {
         if let Err(error) = crate::validate_executable_layout() {
             eprintln!("marmish: {error}");
             return ExitCode::from(255);
         }
-        return marmish_vault::helper::run();
+        return match helper_action {
+            Some(value) if value == OsStr::new("_vault-authorize") => {
+                marmish_vault::helper::run_authorization(
+                    marmish_vault::helper::AuthorizationMode::Interactive,
+                )
+            }
+            Some(value) if value == OsStr::new("_vault-verify-authorization") => {
+                marmish_vault::helper::run_authorization(
+                    marmish_vault::helper::AuthorizationMode::Verify,
+                )
+            }
+            _ => marmish_vault::helper::run(),
+        };
     }
     let trailing = raw
         .iter()
         .position(|v| v == OsStr::new("--"))
         .map(|i| raw[i + 1..].to_vec());
-    let mut args = match Args::try_parse_from(raw) {
-        Ok(args) => args,
+    let matches = match Args::command().try_get_matches_from(raw) {
+        Ok(matches) => matches,
         Err(error) => {
             let code = usage_exit_code(&error);
             let _ = error.print();
@@ -775,6 +857,12 @@ pub fn main(daemon_binary: bool) -> ExitCode {
             return ExitCode::from(code);
         }
     };
+    let authorize_disallowed = authorization_disallowed(&matches);
+    let mut args = match Args::from_arg_matches(&matches) {
+        Ok(args) => args,
+        Err(_) => return ExitCode::from(255),
+    };
+    args.authorize_disallowed = authorize_disallowed;
     args.trailing = trailing;
     let failure_code = if command_action(&args) { 255 } else { 1 };
     // Parsing needs no provider or private state. Canonical layout validation
@@ -947,5 +1035,83 @@ mod tests {
             Args::try_parse_from(["marmish", "status"]).unwrap().command,
             Some(FrontendCommand::Status)
         ));
+    }
+    #[test]
+    fn authorization_explicit_global_allowlist_rejects_defaults_in_both_positions() {
+        for options in [
+            vec!["--key-storage", "auto"],
+            vec!["--retention-seconds", "86400"],
+            vec!["--wait-seconds", "180"],
+            vec!["--tor", "off"],
+            vec!["--socket", "/unused"],
+            vec!["--relay", "wss://relay.example/"],
+            vec!["--new-session"],
+        ] {
+            for after in [false, true] {
+                let mut raw = vec!["marmish"];
+                if !after {
+                    raw.extend(options.iter().copied());
+                }
+                raw.push("keychain-authorize");
+                if after {
+                    raw.extend(options.iter().copied());
+                }
+                let matches = Args::command().try_get_matches_from(raw).unwrap();
+                assert!(
+                    authorization_disallowed(&matches),
+                    "{options:?} after={after}"
+                );
+            }
+        }
+        for raw in [
+            vec!["marmish", "keychain-authorize"],
+            vec![
+                "marmish",
+                "--debug",
+                "-i",
+                "named",
+                "--state-dir",
+                "/unused",
+                "keychain-authorize",
+            ],
+            vec!["marmish", "keychain-authorize", "--debug", "-i", "named"],
+        ] {
+            let matches = Args::command().try_get_matches_from(raw).unwrap();
+            assert!(
+                !authorization_disallowed(&matches),
+                "{:?}",
+                matches
+                    .ids()
+                    .map(|id| (id.as_str(), matches.value_source(id.as_str())))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+    #[tokio::test]
+    async fn authorization_frontend_and_non_mac_rejection_precede_profile_access() {
+        let root = tempfile::tempdir().unwrap();
+        let layout = crate::native_layout::ExecutableLayout {
+            helper: root.path().join("missing"),
+            worker: root.path().join("missing-worker"),
+        };
+        let args = Args::try_parse_from(["marmishd", "keychain-authorize"]).unwrap();
+        assert!(matches!(
+            run(args, true, &layout).await,
+            Err(Error::Invalid("keychain_authorize_arguments"))
+        ));
+        if !cfg!(target_os = "macos") {
+            let args = Args::try_parse_from([
+                "marmish",
+                "--state-dir",
+                root.path().to_str().unwrap(),
+                "keychain-authorize",
+            ])
+            .unwrap();
+            assert!(matches!(
+                run(args, false, &layout).await,
+                Err(Error::Identity("keychain_authorize_unsupported"))
+            ));
+        }
+        assert!(root.path().read_dir().unwrap().next().is_none());
     }
 }

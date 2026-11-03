@@ -180,6 +180,27 @@ Stop the existing daemon before restarting it. Rerunning first-time quickstart
 against an existing configuration can report `config_exists`; use `setup --update`
 when intentionally changing setup.
 
+The next corrective version adds macOS `keychain-authorize` (not available in
+0.2.1). If an unlocked Keychain still produces `identity: locked_or_denied`,
+stop that profile's daemon and run this from a foreground macOS terminal:
+
+```sh
+marmish --debug keychain-authorize
+marmishd --debug
+```
+
+Use the same `-i NAME` and `--state-dir DIR` on both commands if configured.
+macOS may ask permission to read each of the two existing Marmish items. Choose
+persistent access in the OS dialog if you want background operation; a one-time
+allowance may fail the subsequent check. Marmish verifies both items again in a
+fresh process with prompts disabled before reporting success. It preserves the
+identity and storage backend, and does not start the daemon or connect to relays.
+The command reports finite failure categories and the affected item purpose;
+ordinary daemon errors remain less specific. Stop a running daemon first to
+avoid `profile_in_use`. Linux does not support this macOS recovery command.
+Interactive consent and recovery of the reported user failure still require
+real macOS validation; unattended CI cannot approve a macOS consent dialog.
+
 ## Retention
 
 New room application messages default to a one-day lifetime; configure it when

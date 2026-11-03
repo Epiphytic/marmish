@@ -445,6 +445,23 @@ pending. The public installer now pins 0.2.1.
 
 The canonical credential-helper correction (`marmish-far`) makes managed and ordinary sibling `marmish`, `marmishd` and worker entrypoints select validated same-version `marmish` for provider operations. Exact downloaded standalone CLI behavior is preserved. This fixes an inconsistent helper identity; reported macOS Keychain denial causation and full daemon startup remain pending actual pre/post-fix macOS qualification. No ACL or file-fallback policy changes. See [design](phases/v0.2-canonical-credential-helper.md).
 
+The next corrective increment adds explicit foreground macOS
+`marmish [-i NAME] [--state-dir DIR] keychain-authorize`; it is not in the
+published 0.2.1 assets. See the independently reviewed
+[authorization design](phases/v0.2.2-keychain-authorize.md). It requires an
+existing ready Keychain profile and its exclusive ownership lease. It reads
+only that profile's exact two v2 credential references through the canonical
+helper, requests native consent, and then verifies access in a fresh helper
+with prompts disabled. It creates no profile or keys, changes no backend,
+rewrites no ACL, opens no database and contacts no relay. Persistent consent is
+the user's OS choice. The ordinary helper and daemon remain noninteractive.
+Success proves current credential access for this helper, not database health,
+identity binding, another binary version's access or full daemon operation.
+INT/TERM/HUP cancel the owned helper; a shared 120-second active-time deadline
+reserves the final 15 seconds for verification. SIGKILL cleanup relies on the
+helper watchdog. Interactive macOS consent and recovery of the user's denial
+remain qualification requirements, separate from offline test success.
+
 ### macOS provider supervisor correction (offline reviewed, native pending)
 
 Candidate 41698628787 macOS stopped in offline supervisor tests; real Keychain qualification was skipped, so it supplies no provider or helper-custody verdict. The bounded correction canonicalizes lifecycle fixture paths and handles an initial owned-child group EPERM only by exact-child reap plus a fresh ESRCH proof; unknown or denied cleanup stays red. Linux provider23/HTTPS24 offline checks and independent [code review](reviews/v0.2.1-macos-provider-supervisor-code-r1.md) pass. Native macOS offline tests and actual disposable Keychain qualification remain pending. See [sanitized evidence](validation/v0.2.1/macos-provider-supervisor.md) and [approved design](phases/v0.2.1-macos-provider-supervisor.md).

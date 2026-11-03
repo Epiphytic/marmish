@@ -441,6 +441,7 @@ fn alias_name(value: &str) -> bool {
                 | "uninstall"
                 | "install-status"
                 | "release-info"
+                | "keychain-authorize"
                 | "daemon"
                 | "status"
                 | "commands"
@@ -747,6 +748,7 @@ mod tests {
             "with space",
             "é",
             &"a".repeat(65),
+            "keychain-authorize",
             "command-evidence",
             "command-cleanup-status",
             "command-local-cancel",

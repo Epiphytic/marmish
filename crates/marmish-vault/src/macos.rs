@@ -1,3 +1,6 @@
+use crate::helper::{
+    AuthorizationCategory, AuthorizationFailure, AuthorizationMode, AuthorizationPurpose,
+};
 use crate::{Error, KeyRef, Label, Metadata, Namespace, Purpose, Secret};
 use core_foundation::{
     base::{CFType, CFTypeRef, TCFType},
@@ -20,6 +23,7 @@ use zeroize::Zeroizing;
 // reference is necessary for safe rollback; no search-based deletion is used.
 #[link(name = "Security", kind = "framework")]
 unsafe extern "C" {
+    fn SecKeychainSetUserInteractionAllowed(allowed: u8) -> i32;
     fn SecKeychainGetStatus(keychain: *mut c_void, status: *mut u32) -> i32;
     fn SecItemAdd(attributes: CFDictionaryRef, result: *mut CFTypeRef) -> i32;
     fn SecKeychainItemDelete(item: *mut c_void) -> i32;
@@ -77,7 +81,123 @@ impl Drop for UiLease {
 pub(super) struct Provider {
     keychain: SecKeychain,
     namespace: Namespace,
-    _ui: UiLease,
+    _ui: Option<UiLease>,
+}
+
+#[derive(Clone, Copy)]
+enum DetailedFailure {
+    Native(i32),
+    Local(Error),
+    Locked,
+}
+impl DetailedFailure {
+    fn ordinary(self) -> Error {
+        match self {
+            Self::Native(code) => status(code),
+            Self::Local(error) => error,
+            Self::Locked => Error::LockedOrDenied,
+        }
+    }
+
+    fn authorization(self, purpose: AuthorizationPurpose) -> AuthorizationFailure {
+        let category = match self {
+            Self::Native(-25308) => AuthorizationCategory::InteractionNotAllowed,
+            Self::Native(-25293) => AuthorizationCategory::AuthenticationFailed,
+            Self::Native(-128) => AuthorizationCategory::UserCancelled,
+            Self::Native(-25300) | Self::Local(Error::Missing) => AuthorizationCategory::Missing,
+            Self::Native(-25307) => AuthorizationCategory::Uninitialized,
+            Self::Locked => AuthorizationCategory::KeychainLocked,
+            Self::Local(Error::Ambiguous) => AuthorizationCategory::Ambiguous,
+            Self::Local(Error::Malformed) => AuthorizationCategory::Malformed,
+            _ => AuthorizationCategory::BackendFailure,
+        };
+        AuthorizationFailure { category, purpose }
+    }
+}
+
+/// Private to the dedicated fresh helper; never used by ordinary Vault constructors.
+struct AuthorizationUi {
+    previous: bool,
+    active: bool,
+}
+impl AuthorizationUi {
+    fn set(mode: AuthorizationMode) -> Result<Self, DetailedFailure> {
+        let previous = SecKeychain::user_interaction_allowed()
+            .map_err(|error| DetailedFailure::Native(error.code()))?;
+        let guard = Self {
+            previous,
+            active: true,
+        };
+        let allowed = matches!(mode, AuthorizationMode::Interactive);
+        // SAFETY: this process-local Security flag accepts a Boolean, and the
+        // dedicated operation holds UI_STATE until checked restoration finishes.
+        let code = unsafe { SecKeychainSetUserInteractionAllowed(u8::from(allowed)) };
+        if code != 0 {
+            return Err(DetailedFailure::Native(code));
+        }
+        Ok(guard)
+    }
+
+    fn restore(mut self) -> Result<(), DetailedFailure> {
+        // SAFETY: restores the exact prior Boolean in this isolated helper.
+        let code = unsafe { SecKeychainSetUserInteractionAllowed(u8::from(self.previous)) };
+        if code != 0 {
+            return Err(DetailedFailure::Local(Error::BackendFailure));
+        }
+        self.active = false;
+        Ok(())
+    }
+}
+impl Drop for AuthorizationUi {
+    fn drop(&mut self) {
+        if self.active {
+            // Best effort on unwind or failed explicit restoration. A failed
+            // checked restoration can never produce a successful response.
+            unsafe { SecKeychainSetUserInteractionAllowed(u8::from(self.previous)) };
+        }
+    }
+}
+
+pub(super) fn authorize_existing(
+    references: &[KeyRef; 2],
+    mode: AuthorizationMode,
+) -> Result<(), AuthorizationFailure> {
+    let provider_error =
+        |error: DetailedFailure| error.authorization(AuthorizationPurpose::Provider);
+    let state = UI_STATE
+        .lock()
+        .map_err(|_| provider_error(DetailedFailure::Local(Error::BackendFailure)))?;
+    if state.is_some() {
+        return Err(provider_error(DetailedFailure::Local(
+            Error::BackendFailure,
+        )));
+    }
+    let ui = AuthorizationUi::set(mode).map_err(provider_error)?;
+    let result = (|| {
+        let keychain = SecKeychain::default()
+            .map_err(|error| provider_error(DetailedFailure::Native(error.code())))?;
+        // The sole no-lease constructor: UI_STATE is held and this dedicated
+        // helper performs no other Vault operations or native credential writes.
+        let provider = Provider {
+            keychain,
+            namespace: Namespace::MarmishV2,
+            _ui: None,
+        };
+        for reference in references {
+            let purpose = match reference.purpose() {
+                Purpose::Nostr => AuthorizationPurpose::Nostr,
+                Purpose::Sqlcipher => AuthorizationPurpose::Sqlcipher,
+            };
+            let secret = provider
+                .load_detailed(reference)
+                .map_err(|error| error.authorization(purpose))?;
+            drop(secret);
+        }
+        Ok(())
+    })();
+    ui.restore().map_err(provider_error)?;
+    drop(state);
+    result
 }
 fn status(code: i32) -> Error {
     match code {
@@ -105,7 +225,7 @@ impl Provider {
         Ok(Self {
             keychain,
             namespace,
-            _ui: ui,
+            _ui: Some(ui),
         })
     }
     pub(super) fn open_keychain(
@@ -115,19 +235,22 @@ impl Provider {
         Ok(Self {
             keychain: keychain.clone(),
             namespace,
-            _ui: UiLease::acquire()?,
+            _ui: Some(UiLease::acquire()?),
         })
     }
     pub(super) fn probe(&self) -> Result<(), Error> {
+        self.probe_detailed().map_err(DetailedFailure::ordinary)
+    }
+    fn probe_detailed(&self) -> Result<(), DetailedFailure> {
         let mut bits = 0;
         // SAFETY: the retained keychain and writable output pointer outlive call.
         let code =
             unsafe { SecKeychainGetStatus(self.keychain.as_concrete_TypeRef().cast(), &mut bits) };
         if code != 0 {
-            return Err(status(code));
+            return Err(DetailedFailure::Native(code));
         }
         if bits & 1 == 0 {
-            Err(Error::LockedOrDenied)
+            Err(DetailedFailure::Locked)
         } else {
             Ok(())
         }
@@ -138,6 +261,15 @@ impl Provider {
         reference: Option<&KeyRef>,
         data: bool,
     ) -> Result<Vec<SearchResult>, Error> {
+        self.query_detailed(purpose, reference, data)
+            .map_err(DetailedFailure::ordinary)
+    }
+    fn query_detailed(
+        &self,
+        purpose: Purpose,
+        reference: Option<&KeyRef>,
+        data: bool,
+    ) -> Result<Vec<SearchResult>, DetailedFailure> {
         let mut query = ItemSearchOptions::new();
         query
             .keychains(std::slice::from_ref(&self.keychain))
@@ -157,7 +289,7 @@ impl Provider {
         match query.search() {
             Ok(items) => Ok(items),
             Err(e) if e.code() == -25300 => Ok(Vec::new()),
-            Err(e) => Err(native(e)),
+            Err(e) => Err(DetailedFailure::Native(e.code())),
         }
     }
     fn add(
@@ -239,16 +371,20 @@ impl Provider {
         Ok(())
     }
     pub(super) fn load(&self, reference: &KeyRef) -> Result<Secret, Error> {
-        self.probe()?;
+        self.load_detailed(reference)
+            .map_err(DetailedFailure::ordinary)
+    }
+    fn load_detailed(&self, reference: &KeyRef) -> Result<Secret, DetailedFailure> {
+        self.probe_detailed()?;
         match self
-            .query(reference.purpose(), Some(reference), false)?
+            .query_detailed(reference.purpose(), Some(reference), false)?
             .len()
         {
-            0 => return Err(Error::Missing),
+            0 => return Err(DetailedFailure::Local(Error::Missing)),
             1 => (),
-            _ => return Err(Error::Ambiguous),
+            _ => return Err(DetailedFailure::Local(Error::Ambiguous)),
         }
-        let items = self.query(reference.purpose(), Some(reference), true)?;
+        let items = self.query_detailed(reference.purpose(), Some(reference), true)?;
         // Own and zeroize every data result, including duplicate/error paths.
         let mut buffers = Vec::new();
         let mut unexpected = false;
@@ -259,12 +395,12 @@ impl Provider {
             }
         }
         if unexpected {
-            return Err(Error::BackendFailure);
+            return Err(DetailedFailure::Local(Error::BackendFailure));
         }
         match buffers.len() {
-            0 => Err(Error::Missing),
-            1 => Secret::from_slice(&buffers[0]),
-            _ => Err(Error::Ambiguous),
+            0 => Err(DetailedFailure::Local(Error::Missing)),
+            1 => Secret::from_slice(&buffers[0]).map_err(DetailedFailure::Local),
+            _ => Err(DetailedFailure::Local(Error::Ambiguous)),
         }
     }
 
@@ -329,5 +465,94 @@ mod tests {
         for code in [-1, -50, -25291] {
             assert_eq!(status(code), Error::BackendFailure);
         }
+    }
+
+    #[test]
+    fn authorization_keeps_native_failures_distinct_without_changing_ordinary_errors() {
+        let cases = [
+            (
+                -25308,
+                AuthorizationCategory::InteractionNotAllowed,
+                Error::LockedOrDenied,
+            ),
+            (
+                -25293,
+                AuthorizationCategory::AuthenticationFailed,
+                Error::LockedOrDenied,
+            ),
+            (
+                -128,
+                AuthorizationCategory::UserCancelled,
+                Error::LockedOrDenied,
+            ),
+            (-25300, AuthorizationCategory::Missing, Error::Missing),
+            (
+                -25307,
+                AuthorizationCategory::Uninitialized,
+                Error::Uninitialized,
+            ),
+            (
+                -99999,
+                AuthorizationCategory::BackendFailure,
+                Error::BackendFailure,
+            ),
+        ];
+        for (code, category, ordinary) in cases {
+            let detailed = DetailedFailure::Native(code);
+            assert_eq!(detailed.ordinary(), ordinary);
+            assert_eq!(
+                detailed
+                    .authorization(AuthorizationPurpose::Provider)
+                    .category,
+                category
+            );
+        }
+        assert_eq!(
+            DetailedFailure::Locked
+                .authorization(AuthorizationPurpose::Provider)
+                .category,
+            AuthorizationCategory::KeychainLocked
+        );
+        assert_eq!(DetailedFailure::Locked.ordinary(), Error::LockedOrDenied);
+        for (error, category) in [
+            (Error::Missing, AuthorizationCategory::Missing),
+            (Error::Ambiguous, AuthorizationCategory::Ambiguous),
+            (Error::Malformed, AuthorizationCategory::Malformed),
+        ] {
+            assert_eq!(
+                DetailedFailure::Local(error)
+                    .authorization(AuthorizationPurpose::Sqlcipher)
+                    .category,
+                category
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_ui_lease_disables_ui_and_authorization_restores_exact_prior_policy() {
+        let before = SecKeychain::user_interaction_allowed().unwrap();
+        let ordinary = UiLease::acquire().unwrap();
+        assert!(!SecKeychain::user_interaction_allowed().unwrap());
+        // Interactive authorization refuses an active ordinary lease, before
+        // default-Keychain lookup or any item access.
+        let refs = [
+            KeyRef::new(2, Purpose::Nostr, &"a".repeat(64)).unwrap(),
+            KeyRef::new(2, Purpose::Sqlcipher, &"b".repeat(64)).unwrap(),
+        ];
+        assert!(authorize_existing(&refs, AuthorizationMode::Interactive).is_err());
+        assert!(!SecKeychain::user_interaction_allowed().unwrap());
+        drop(ordinary);
+        assert_eq!(SecKeychain::user_interaction_allowed().unwrap(), before);
+        let state = UI_STATE.lock().unwrap();
+        for mode in [AuthorizationMode::Interactive, AuthorizationMode::Verify] {
+            let guard = AuthorizationUi::set(mode).unwrap_or_else(|_| panic!("UI policy"));
+            assert_eq!(
+                SecKeychain::user_interaction_allowed().unwrap(),
+                matches!(mode, AuthorizationMode::Interactive)
+            );
+            guard.restore().unwrap_or_else(|_| panic!("UI restoration"));
+            assert_eq!(SecKeychain::user_interaction_allowed().unwrap(), before);
+        }
+        drop(state);
     }
 }
