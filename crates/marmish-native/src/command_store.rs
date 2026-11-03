@@ -4058,7 +4058,7 @@ mod tests {
     use super::*;
     use crate::command_evidence::PublishedEvidence;
     use crate::command_wire::{Disposition, InputStatus, OutputStatus, ResponseResult};
-    use std::{fs, os::unix::fs::PermissionsExt};
+    use std::fs;
     const NOW: u64 = 1_000_000;
     fn id(sequence: u16) -> Id {
         let mut id = [0; 16];
@@ -4067,10 +4067,7 @@ mod tests {
         id
     }
     fn setup() -> (tempfile::TempDir, Journal) {
-        let tmp = tempfile::Builder::new()
-            .permissions(fs::Permissions::from_mode(0o700))
-            .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
-            .unwrap();
+        let tmp = super::super::private_test_directory();
         let mut journal = Journal::open(
             &tmp.path().join("journal.db"),
             &[7; 32],
@@ -5781,8 +5778,7 @@ mod tests {
     }
     #[test]
     fn client_response_projection_binds_frozen_request_and_conflicts_atomically() {
-        let tmp = tempfile::tempdir().unwrap();
-        fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let tmp = super::super::private_test_directory();
         let mut j = Journal::open(
             &tmp.path().join("journal.db"),
             &[7; 32],
@@ -5922,8 +5918,7 @@ mod tests {
         assert!(j.command_evidence(None, 65).is_err());
     }
     fn client_setup() -> (tempfile::TempDir, Journal, Owner) {
-        let tmp = tempfile::tempdir().unwrap();
-        fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let tmp = super::super::private_test_directory();
         let journal = Journal::open(
             &tmp.path().join("journal.db"),
             &[7; 32],

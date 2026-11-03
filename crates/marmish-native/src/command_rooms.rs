@@ -163,10 +163,8 @@ impl Journal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
     fn setup() -> (tempfile::TempDir, Journal) {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let root = super::super::private_test_directory();
         let journal =
             Journal::open(&root.path().join("journal"), &[4; 32], &"01".repeat(32)).unwrap();
         (root, journal)

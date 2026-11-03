@@ -945,8 +945,7 @@ mod tests {
         AuthenticatedCommandContext::test_fixture([2; 32], [1; 32], vec![3; 32], id(1), direction)
     }
     fn setup(denied: bool) -> (tempfile::TempDir, Journal, CommandService) {
-        let tmp = tempfile::tempdir().unwrap();
-        fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let tmp = crate::journal::private_test_directory();
         let policy = if denied {
             json!({"version":1,"defaults":{"allow_exec":[]}})
         } else {

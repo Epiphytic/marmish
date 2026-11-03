@@ -956,14 +956,25 @@ impl Journal {
 }
 
 #[cfg(test)]
+pub(crate) fn private_test_directory() -> tempfile::TempDir {
+    private_test_directory_in(&std::env::temp_dir())
+}
+
+#[cfg(test)]
+pub(crate) fn private_test_directory_in(parent: &Path) -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    // Resolve the existing allocation parent, never a database leaf.
+    tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir_in(parent.canonicalize().unwrap())
+        .unwrap()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
     fn setup() -> (tempfile::TempDir, Journal) {
-        let temp = tempfile::Builder::new()
-            .permissions(fs::Permissions::from_mode(0o700))
-            .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
-            .unwrap();
+        let temp = private_test_directory();
         let j = Journal::open(&temp.path().join("journal.db"), &[7; 32], &"ab".repeat(32)).unwrap();
         (temp, j)
     }
@@ -1000,6 +1011,34 @@ mod tests {
             Journal::open(&alias2.join("journal.db"), &[7; 32], &"ab".repeat(32)),
             Err(Error::Storage("journal_path"))
         ));
+    }
+    #[test]
+    fn canonical_test_parent_preserves_database_symlink_refusal() {
+        use std::os::unix::fs::{DirBuilderExt, symlink};
+
+        let outer = private_test_directory();
+        let real = outer.path().join("real");
+        fs::DirBuilder::new().mode(0o700).create(&real).unwrap();
+        let alias = outer.path().join("alias");
+        symlink(&real, &alias).unwrap();
+        let temp = private_test_directory_in(&alias);
+        let path = temp.path().to_path_buf();
+        assert_eq!(path.parent(), Some(real.as_path()));
+        assert_eq!(path, path.canonicalize().unwrap());
+        let metadata = fs::symlink_metadata(&path).unwrap();
+        assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
+        assert_eq!(metadata.mode() & 0o777, 0o700);
+        let database = path.join("journal.db");
+        drop(Journal::open(&database, &[7; 32], &"ab".repeat(32)).unwrap());
+        drop(Journal::open(&database, &[7; 32], &"ab".repeat(32)).unwrap());
+        let linked_database = path.join("linked.db");
+        symlink(&database, &linked_database).unwrap();
+        assert!(matches!(
+            Journal::open(&linked_database, &[7; 32], &"ab".repeat(32)),
+            Err(Error::Storage("journal_path"))
+        ));
+        drop(temp);
+        assert!(!path.exists());
     }
     fn message() -> Envelope {
         Envelope::message(
