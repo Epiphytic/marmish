@@ -1565,7 +1565,7 @@ pub(super) mod tests {
         let encoded = serde_json::to_string(result.samples[0].handle.as_ref().unwrap()).unwrap();
         let mut signal =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
-        for (detach_exit, wait_body, good, known) in [
+        for (case, (detach_exit, wait_body, good, known)) in [
             (
                 0,
                 "printf '\\000\\377'; printf '\\376\\001' >&2; exit 7",
@@ -1575,7 +1575,10 @@ pub(super) mod tests {
             (254, "exit 7", false, false),
             (0, "printf wrong >&2; exit 7", false, true),
             (0, "/bin/sleep 1; exit 7", false, true),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let script = format!(
                 "#!/bin/sh\nif [ \"$1\" = submit ]; then\n/bin/cat >/dev/null\nprintf s >> calls\nprintf '%s\\n' 'marmish handle: {encoded}' >&2\n/bin/sleep 0.03\nexit {detach_exit}\nfi\nprintf w >> calls\nfound=0\nfor arg; do [ \"$arg\" = --relay ] && exit 99; [ \"$arg\" = '{encoded}' ] && found=1; done\n[ \"$found\" = 1 ] || exit 98\n{wait_body}\n"
             );
@@ -1605,7 +1608,42 @@ pub(super) mod tests {
                     &mut signal,
                 )
                 .await;
-            assert_eq!(output.is_ok(), known);
+            if output.is_ok() != known {
+                // Failure-only diagnostic; preserve the original call-marker evidence.
+                let marker = fs::read(w.join("calls")).ok();
+                let replay = execute(
+                    w,
+                    &["submit".into()],
+                    &environment,
+                    vec![0, 255],
+                    Instant::now() + Duration::from_secs(3),
+                    std::future::pending(),
+                )
+                .await;
+                match replay {
+                    Ok(replay) => eprintln!(
+                        "fixture case={case} replay status={:?} stdout={:?} stderr={:?}",
+                        replay.status,
+                        &replay.stdout[..replay.stdout.len().min(512)],
+                        &replay.stderr[..replay.stderr.len().min(512)]
+                    ),
+                    Err(error) => eprintln!("fixture case={case} replay error={error:?}"),
+                }
+                match marker {
+                    Some(bytes) => fs::write(w.join("calls"), bytes).unwrap(),
+                    None => {
+                        if w.join("calls").exists() {
+                            fs::remove_file(w.join("calls")).unwrap();
+                        }
+                    }
+                }
+            }
+            assert_eq!(
+                output.is_ok(),
+                known,
+                "fixture case={case} outer_error={:?}",
+                output.as_ref().err()
+            );
             if let Ok(output) = output {
                 assert_eq!(output.outcome.is_ok(), good);
                 assert_eq!(output.locator.encode().unwrap(), encoded.as_bytes());
@@ -1679,7 +1717,13 @@ pub(super) mod tests {
         )
         .await
         .unwrap();
-        assert!(output.status.success());
+        assert!(
+            output.status.success(),
+            "copied printf status={:?} stdout={:?} stderr={:?}",
+            output.status,
+            &output.stdout[..output.stdout.len().min(512)],
+            &output.stderr[..output.stderr.len().min(512)]
+        );
         assert_eq!(output.stdout, b"binary:ok");
         assert!(output.stderr.is_empty());
         // An expired deadline does not even spawn a missing executable.
