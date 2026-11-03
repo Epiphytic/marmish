@@ -20,6 +20,7 @@ name = "marmish-worker"
 path = "src/bin/marmish-worker.rs"
 
 [dependencies]
+hickory-resolver = { version = "=0.26.3", default-features = false, features = ["tokio", "system-config"] }
 base64.workspace = true
 getrandom.workspace = true
 hkdf.workspace = true

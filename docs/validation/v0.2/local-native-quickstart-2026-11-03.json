@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "kind": "installed_quickstart_pty",
+  "ok": true,
+  "key_storage": "file",
+  "network_activation": false,
+  "python_in_runtime_path": false,
+  "owned_state_removed": true,
+  "role": "both",
+  "inbound_enabled": false,
+  "prompts_completed": 5,
+  "identity_created": true,
+  "repeat_same_identity": true,
+  "repeat_owner_opened": false,
+  "stop_complete": true,
+  "elapsed_ms": 39383,
+  "scope": "Local AMD64 debug candidate fixture only; not release qualification or keychain evidence",
+  "notice_inventory": "Component fixture only, not production license inventory",
+  "other_target_pins": "Unused test-only zero pins; production render requires all three verified manifests",
+  "assets_compiled_commit_metadata": "36b09b78524aec60f54fd2c288557e67776dd846",
+  "build_provenance": "Uncommitted reviewed component working tree, not an immutable release source build"
+}

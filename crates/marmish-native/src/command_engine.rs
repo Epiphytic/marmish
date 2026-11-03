@@ -18,7 +18,9 @@ use std::{
 use zeroize::Zeroizing;
 
 const CAPACITY: usize = 64;
+#[cfg(test)]
 const OPEN_OBSERVER: Duration = Duration::from_secs(30);
+#[cfg(test)]
 const OP_OBSERVER: Duration = Duration::from_secs(15);
 type Key = ([u8; 32], [u8; 32], [u8; 16]);
 fn key(k: &InvocationKey) -> Key {
@@ -58,6 +60,7 @@ pub(crate) enum QueueBusy {
 struct Registration {
     id: [u8; 16],
     revision: u64,
+    #[cfg(test)]
     started: Instant,
     completed: bool,
 }
@@ -83,12 +86,13 @@ pub(crate) struct CommandEngine {
     thread: Option<JoinHandle<()>>,
     readiness: Readiness,
     cleanup: CleanupState,
+    #[cfg(test)]
     opened: Instant,
     stopping: bool,
 }
 impl CommandEngine {
-    /// Returns after spawning, never after opening storage. A 30s observer expiry
-    /// leaves this exact handle/thread registered; it does not permit reopening.
+    /// Returns after spawning, never after opening storage. The actor retains
+    /// this exact handle until its thread joins; observation never permits reopening.
     pub fn start(settings: EngineSettings, recovery: Vec<RecoveryRecord>) -> Result<Self> {
         if recovery.len() > 32 {
             return Err(Error::Invalid("engine_recovery_limit"));
@@ -130,6 +134,7 @@ impl CommandEngine {
             thread: Some(thread),
             readiness: Readiness::Opening,
             cleanup: CleanupState::Open,
+            #[cfg(test)]
             opened: Instant::now(),
             stopping: false,
         })
@@ -156,12 +161,14 @@ impl CommandEngine {
         self.collect();
         self.readiness
     }
+    #[cfg(test)]
     pub fn open_observer_expired(&self) -> bool {
         self.readiness == Readiness::Opening && self.opened.elapsed() >= OPEN_OBSERVER
     }
     pub fn observation_pending(&self) -> bool {
         !self.registered.is_empty()
     }
+    #[cfg(test)]
     pub fn observer_expired(&self, k: &InvocationKey) -> bool {
         self.registered
             .get(&key(k))
@@ -189,6 +196,7 @@ impl CommandEngine {
         let reg = Registration {
             id: op.id.0,
             revision: op.revision,
+            #[cfg(test)]
             started: Instant::now(),
             completed: false,
         };
@@ -295,6 +303,7 @@ impl CommandEngine {
             thread: Some(worker),
             readiness: Readiness::Ready,
             cleanup: CleanupState::Open,
+            #[cfg(test)]
             opened: Instant::now(),
             stopping: false,
         }
@@ -822,6 +831,10 @@ fn observed(
         s.input.health,
         engine::InputHealth::Gap | engine::InputHealth::Uncertain
     ) && !matches!(op.ledger.feeder, FeederState::Complete)
+        && !(s.state == engine::InvocationState::Exited
+            && op.ledger.stdin_length == 0
+            && s.input.accepted == 0
+            && s.input.delivered == 0)
     {
         status.warning = Some(wire::Warning::InputFailed);
     }
@@ -994,7 +1007,6 @@ mod tests {
             revision: 7,
             engine_known: false,
             ledger: OperationLedgerSnapshot {
-                admission: wire::Admission::Dispatching,
                 stdin_length: 0,
                 feeder: FeederState::NeverBegun,
                 warning: None,
@@ -1033,6 +1045,7 @@ mod tests {
                 thread: None,
                 readiness: Readiness::Ready,
                 cleanup: CleanupState::Open,
+                #[cfg(test)]
                 opened: Instant::now(),
                 stopping: false,
             },
@@ -1286,12 +1299,7 @@ mod tests {
             e,
             vec![RecoveryRecord {
                 key: op.key,
-                owner: op.owner,
-                revision: op.revision,
                 engine_known: true,
-                ledger: op.ledger,
-                dispatch: None,
-                stdin: None,
             }],
         );
         assert!(!w.can_dispatch(&other));
@@ -1462,6 +1470,31 @@ mod tests {
                 Err(engine::EngineError::RecoveryUncertain)
             ));
             assert_eq!(calls, oversized_call + 1);
+        }
+    }
+    #[test]
+    fn exited_empty_input_does_not_warn_or_fabricate_eof() {
+        for length in [0, 4] {
+            for health in [
+                engine::InputHealth::Closed,
+                engine::InputHealth::Gap,
+                engine::InputHealth::Uncertain,
+            ] {
+                let mut op = operation(1, EngineOperation::Observe);
+                op.ledger.stdin_length = length;
+                let mut s = input_status(0, 0, health);
+                s.state = engine::InvocationState::Exited;
+                let EngineObservation::Found { status, .. } =
+                    observed(s, &op, WorkerState::Exited, ObservationKind::Found)
+                else {
+                    panic!("found")
+                };
+                assert!(!status.input.eof_sent);
+                assert!(status.warning.is_none() == (length == 0));
+                if length != 0 {
+                    assert!(status.warning == Some(wire::Warning::StdinUnconsumed));
+                }
+            }
         }
     }
     #[test]

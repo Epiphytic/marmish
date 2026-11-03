@@ -44,9 +44,29 @@ bounded engine operations and explicit local output consumption. Payload expiry
 is separate from replay facts and native publication obligations. Ordinary
 disconnect and owner stop do not cancel admitted commands.
 
-Phase 2 remains open: public command CLI/IPC, restart while running, authenticated
-remote conflict/replay validation, command-count/uptime limits and installed
-cross-platform direct command acceptance are unfinished or unvalidated. Working
+Phase 2 remains open. Public command CLI/IPC, explicit SRV resolution, Finish-based
+command-count drain and uptime limits, cached administrative evidence/cleanup,
+and native offline setup/install transactions are implemented in the current
+working increment. The CLI, SRV, root IPC, Finish/limits and installer components
+have independent code approvals; final integration validation remains in progress.
+The [local integration suite](validation/v0.2/native-integration-2026-11-03.md)
+passed 299 native and 100 engine unit tests plus engine/vault integration checks.
+A [real public CLI exchange](validation/v0.2/public-cli-cat-2026-11-03.json)
+ran a canonical remote executable through two Rust daemons and an explicit direct
+relay, preserving 61 bytes of literal/Unicode stdin/output with exit 0 in 5044 ms.
+This is one Linux AMD64 observation using file-backed disposable keys, without
+installation, protected state removal or cross-platform qualification. A separate
+empty-stdin short-command test exposed an InputFailed warning despite correct
+output; the correction has focused passing regressions. A subsequent live repeat
+exposed a separate client ordering race: an early Poll NotFound stopped the client
+before delivery. The corrected client waits for authenticated admission before
+polling; a [fresh live regression](validation/v0.2/public-cli-admission-regression.md)
+passed with exact 61-byte literal/Unicode argv output and exit zero in 3228 ms.
+Strict Clippy over every native target also passed. These local tests do not
+substitute for the installed cross-platform matrix.
+Restart while running, authenticated
+remote conflict/replay validation, command-count/uptime integration and installed
+cross-platform direct command acceptance remain unfinished or unvalidated. Working
 Tor commands are deferred to v0.3. [The local Arti command attempts](validation/v0.2/local-command-arti-2026-11-02.md)
 failed; their actual cleanup results are preserved. No v0.2 release or native installer is accepted. The direct command
 timings are individual observations, not sustained throughput or RTT benchmarks.
@@ -84,8 +104,9 @@ providers fail closed. Linux defaults to `$XDG_DATA_HOME/marmish/v2` or
 the profile root, and `-i` currently selects a named identity.
 
 The daemon serializes account operations behind bounded same-UID Unix IPC.
-Current commands initialize identities, run the daemon, query status, open a
-conversation, and send/read foundation payloads. `foundation-check` owns disposable
+The accepted foundation commands initialize identities, run the daemon, query
+status, open a conversation, and send/read foundation payloads. The in-progress
+public command increment described above is not yet release-qualified. `foundation-check` owns disposable
 Alice/Bob profiles and verifies encrypted binary messages, durable encrypted
 receipts, conflicting-ID rejection, restart and cleanup. This is not a remote
 command or shell interface. Foundation payloads are limited to 16 KiB; the strict

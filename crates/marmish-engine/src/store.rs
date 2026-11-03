@@ -440,11 +440,12 @@ fn logical_now(conn: &Connection) -> Result<u64> {
 }
 
 // Inspect existing authenticated state before any schema or orphan recovery mutation.
+pub(crate) const ENGINE_FORMAT: i64 = 1;
 fn validate_frontend_schema(conn: &Connection, root: &StateRoot) -> Result<()> {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(db_error)?;
-    if version != 0 && version != 1 {
+    if version != 0 && version != ENGINE_FORMAT {
         return Err(EngineError::StorageFailure);
     }
     if version == 0 {

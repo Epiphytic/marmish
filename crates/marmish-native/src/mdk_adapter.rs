@@ -3,6 +3,8 @@
 mod command_adapter;
 #[path = "command_check.rs"]
 pub(crate) mod command_check;
+#[path = "command_local.rs"]
+pub(crate) mod command_local;
 #[path = "command_runtime.rs"]
 mod command_runtime;
 use crate::foundation::{self, Body, Envelope};

@@ -4,6 +4,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest as _, Sha256};
 
+pub(crate) const COMMAND_FORMAT: u32 = 1;
 pub(crate) const PROTOCOL: &str = "marmish-command/1";
 pub(crate) const KIND: u64 = 30100;
 pub(crate) const TAG: [&str; 2] = ["marmish", "command/1"];
@@ -38,6 +39,7 @@ pub(crate) enum Op {
     Status,
     Poll,
     Cancel,
+    Finish,
 }
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum RequestOp {
@@ -54,6 +56,13 @@ pub(crate) enum RequestOp {
     Cancel {
         invocation: Id,
     },
+    Finish {
+        invocation: Id,
+        submit_sha256: Digest,
+        terminal_sha256: Digest,
+        stdout_cursor: u64,
+        stderr_cursor: u64,
+    },
 }
 impl RequestOp {
     pub fn op(&self) -> Op {
@@ -62,6 +71,7 @@ impl RequestOp {
             Self::Status { .. } => Op::Status,
             Self::Poll { .. } => Op::Poll,
             Self::Cancel { .. } => Op::Cancel,
+            Self::Finish { .. } => Op::Finish,
         }
     }
     pub fn invocation(&self) -> Id {
@@ -69,7 +79,8 @@ impl RequestOp {
             Self::Submit(s) => s.invocation,
             Self::Status { invocation }
             | Self::Poll { invocation, .. }
-            | Self::Cancel { invocation } => *invocation,
+            | Self::Cancel { invocation }
+            | Self::Finish { invocation, .. } => *invocation,
         }
     }
 }
@@ -100,6 +111,9 @@ pub(crate) enum ResponseResult {
         stderr: Chunk,
     },
     Cancel(Status),
+    Finish {
+        finished: bool,
+    },
 }
 impl ResponseResult {
     pub fn op(&self) -> Op {
@@ -108,12 +122,14 @@ impl ResponseResult {
             Self::Status(_) => Op::Status,
             Self::Poll { .. } => Op::Poll,
             Self::Cancel(_) => Op::Cancel,
+            Self::Finish { .. } => Op::Finish,
         }
     }
-    pub fn status(&self) -> &Status {
+    pub fn status(&self) -> Option<&Status> {
         match self {
-            Self::Submit { status, .. } | Self::Poll { status, .. } => status,
-            Self::Status(s) | Self::Cancel(s) => s,
+            Self::Submit { status, .. } | Self::Poll { status, .. } => Some(status),
+            Self::Status(s) | Self::Cancel(s) => Some(s),
+            Self::Finish { .. } => None,
         }
     }
 }
@@ -293,6 +309,23 @@ struct PollBody {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct FinishBody {
+    #[serde(with = "hex16")]
+    invocation: Id,
+    stderr_cursor: u64,
+    stdout_cursor: u64,
+    #[serde(with = "hex32")]
+    submit_sha256: Digest,
+    #[serde(with = "hex32")]
+    terminal_sha256: Digest,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FinishResult {
+    finished: bool,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ResponseBody {
     #[serde(deserialize_with = "required_nullable")]
     error: Option<WireError>,
@@ -420,6 +453,24 @@ pub(crate) fn encode_request(r: &Request) -> Result<Vec<u8>> {
                 max_bytes: *max_bytes,
             })?
         }
+        RequestOp::Finish {
+            invocation,
+            submit_sha256,
+            terminal_sha256,
+            stdout_cursor,
+            stderr_cursor,
+        } => {
+            if *stdout_cursor > MAX_CURSOR || *stderr_cursor > MAX_CURSOR {
+                return Err(invalid());
+            }
+            value(&FinishBody {
+                invocation: *invocation,
+                submit_sha256: *submit_sha256,
+                terminal_sha256: *terminal_sha256,
+                stdout_cursor: *stdout_cursor,
+                stderr_cursor: *stderr_cursor,
+            })?
+        }
     };
     write(&r.binding, r.id, r.op.op(), MessageType::Request, b)
 }
@@ -434,6 +485,16 @@ pub(crate) fn decode_request(bytes: &[u8]) -> Result<Request> {
         Op::Cancel => RequestOp::Cancel {
             invocation: body::<InvocationBody>(w.body)?.invocation,
         },
+        Op::Finish => {
+            let p: FinishBody = body(w.body)?;
+            RequestOp::Finish {
+                invocation: p.invocation,
+                submit_sha256: p.submit_sha256,
+                terminal_sha256: p.terminal_sha256,
+                stdout_cursor: p.stdout_cursor,
+                stderr_cursor: p.stderr_cursor,
+            }
+        }
         Op::Poll => {
             let p: PollBody = body(w.body)?;
             RequestOp::Poll {
@@ -506,8 +567,16 @@ fn validate_error(e: &WireError) -> Result<()> {
     Ok(())
 }
 fn result_value(r: &ResponseResult) -> Result<serde_json::Value> {
-    validate_status(r.status())?;
+    if let Some(status) = r.status() {
+        validate_status(status)?;
+    }
     match r {
+        ResponseResult::Finish { finished } => {
+            if !finished {
+                return Err(invalid());
+            }
+            value(&FinishResult { finished: true })
+        }
         ResponseResult::Submit {
             disposition,
             status,
@@ -604,6 +673,9 @@ pub(crate) fn decode_response(bytes: &[u8]) -> Result<Response> {
                     status: p.status,
                 }
             }
+            Op::Finish => ResponseResult::Finish {
+                finished: body::<FinishResult>(v)?.finished,
+            },
             Op::Status => ResponseResult::Status(body::<StatusResult>(v)?.status),
             Op::Cancel => ResponseResult::Cancel(body::<StatusResult>(v)?.status),
             Op::Poll => {
@@ -648,6 +720,39 @@ pub(crate) fn submit_digest(group: &[u8], binding: &Binding, s: &Submit) -> Resu
     }
     h.update((s.stdin.len() as u32).to_be_bytes());
     h.update(&s.stdin);
+    Ok(h.finalize().into())
+}
+/// Fingerprint only immutable terminal outcome/stream facts, never mutable
+/// retained-byte counts, cancellation or credit state. Group is authenticated out of band.
+pub(crate) fn finish_digest(
+    group: &[u8],
+    binding: &Binding,
+    submit: &Digest,
+    status: &Status,
+) -> Result<Digest> {
+    validate_status(status)?;
+    if binding.client == binding.server
+        || !status.engine_known
+        || status.state != State::Exited
+        || !status.stdout.closed
+        || !status.stderr.closed
+        || status.outcome.is_none()
+    {
+        return Err(Error::Invalid("command_finish_terminal"));
+    }
+    let length: u32 = group.len().try_into().map_err(|_| invalid())?;
+    let projection = serde_json::json!({
+        "client": hex::encode(binding.client), "server": hex::encode(binding.server),
+        "session": hex::encode(binding.session), "invocation": hex::encode(status.invocation),
+        "submit_sha256": hex::encode(submit), "outcome": status.outcome,
+        "stdout": {"produced": status.stdout.produced, "gaps": status.stdout.gaps},
+        "stderr": {"produced": status.stderr.produced, "gaps": status.stderr.gaps}
+    });
+    let mut h = Sha256::new();
+    h.update(b"marmish-command/1/finish\0");
+    h.update(length.to_be_bytes());
+    h.update(group);
+    h.update(serde_json::to_vec(&projection).map_err(|_| invalid())?);
     Ok(h.finalize().into())
 }
 pub(crate) fn request_digest(canonical: &[u8]) -> Digest {
@@ -795,6 +900,84 @@ mod tests {
         let mut v: serde_json::Value = serde_json::from_slice(bytes).unwrap();
         f(&mut v);
         serde_json::to_vec(&v).unwrap()
+    }
+    #[test]
+    fn finish_wire_is_closed_canonical_and_statusless() {
+        let r = request(RequestOp::Finish {
+            invocation: [0x55; 16],
+            submit_sha256: [0x77; 32],
+            terminal_sha256: [0x88; 32],
+            stdout_cursor: 3,
+            stderr_cursor: 0,
+        });
+        request_roundtrip(r.clone());
+        assert!(r.op.op() == Op::Finish && r.op.invocation() == [0x55; 16]);
+        let bytes = encode_request(&r).unwrap();
+        for changed in [
+            mutate(&bytes, |v| {
+                v["body"]["stdout_cursor"] = serde_json::json!(u64::MAX)
+            }),
+            mutate(&bytes, |v| v["body"]["extra"] = serde_json::json!(true)),
+            mutate(&bytes, |v| {
+                v["body"]["terminal_sha256"] = serde_json::json!("AA".repeat(32))
+            }),
+            mutate(&bytes, |v| {
+                v["body"].as_object_mut().unwrap().remove("submit_sha256");
+            }),
+        ] {
+            assert!(decode_request(&changed).is_err());
+        }
+        let success = response(ResponseResult::Finish { finished: true });
+        response_roundtrip(success.clone());
+        assert!(success.result.as_ref().ok().unwrap().status().is_none());
+        let b = encode_response(&success).unwrap();
+        assert!(
+            decode_response(&mutate(&b, |v| v["body"]["result"]["finished"] =
+                serde_json::json!(false)))
+            .is_err()
+        );
+        assert!(encode_response(&response(ResponseResult::Finish { finished: false })).is_err());
+    }
+    #[test]
+    fn finish_digest_independent_vector_and_immutable_projection() {
+        let b = Binding {
+            client: [0x11; 32],
+            server: [0x22; 32],
+            session: [0x33; 16],
+        };
+        let mut s = status();
+        s.engine_known = true;
+        s.state = State::Exited;
+        s.stdout.closed = true;
+        s.stderr.closed = true;
+        s.stdout.produced = 3;
+        s.outcome = Some(Outcome {
+            kind: OutcomeKind::Code,
+            value: Some(7),
+        });
+        let digest = finish_digest(b"abc", &b, &[0x77; 32], &s).unwrap();
+        // Independently computed using sorted compact JSON plus the documented byte prefix.
+        assert_eq!(
+            hex::encode(digest),
+            "cdde59759c08cfc84ce104b697ce2fc70797934deb376117e91b6f9f04fa0a01"
+        );
+        s.stdout.retained = 3;
+        s.cancel_requested = true;
+        s.authority_valid = false;
+        s.input.accepted = 2;
+        assert!(finish_digest(b"abc", &b, &[0x77; 32], &s).unwrap() == digest);
+        assert!(finish_digest(b"abd", &b, &[0x77; 32], &s).unwrap() != digest);
+        s.stdout.gaps.push(Gap {
+            start: 0,
+            end: Some(2),
+            reason: GapReason::Expired,
+        });
+        assert!(finish_digest(b"abc", &b, &[0x77; 32], &s).unwrap() != digest);
+        s.state = State::Lost;
+        assert!(finish_digest(b"abc", &b, &[0x77; 32], &s).is_err());
+        s.state = State::Exited;
+        s.outcome = None;
+        assert!(finish_digest(b"abc", &b, &[0x77; 32], &s).is_err());
     }
     #[test]
     fn normative_digest_and_request_identity() {

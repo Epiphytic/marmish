@@ -18,6 +18,7 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+pub(crate) const PROFILE_FORMAT: u8 = 2;
 const MANIFEST_LIMIT: u64 = 8192;
 const HELPER_LIMIT: usize = 8192;
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -71,6 +72,11 @@ impl IdentityMaterial {
     pub fn device_slot(&self) -> &[u8; 16] {
         &self.slot
     }
+}
+pub(crate) struct SetupSnapshot {
+    pub ready: bool,
+    pub public_key: Option<PublicKey>,
+    pub backend: Option<BackendChoice>,
 }
 /// One lifetime lock, held before any key provider/database/network operation.
 pub struct ProfileLease {
@@ -128,6 +134,19 @@ impl ProfileLease {
             name: name.to_owned(),
             runtime,
         })
+    }
+    pub(crate) fn setup_snapshot(&self) -> SetupSnapshot {
+        SetupSnapshot {
+            ready: self
+                .manifest
+                .as_ref()
+                .is_some_and(|m| m.phase == Phase::Ready),
+            public_key: self.public_key(),
+            backend: self.manifest.as_ref().map(|m| match m.backend {
+                Backend::Keychain => BackendChoice::Keychain,
+                Backend::Files => BackendChoice::File,
+            }),
+        }
     }
     pub fn root(&self) -> &Path {
         &self.root
@@ -192,7 +211,7 @@ impl ProfileLease {
                 },
             };
             let m = Manifest {
-                format: 2,
+                format: PROFILE_FORMAT,
                 profile_id: self.profile_id.clone(),
                 name: self.name.clone(),
                 transaction: random_hex(16)?,
@@ -271,7 +290,7 @@ impl ProfileLease {
             root: PathBuf,
         }
         let expected = Binding {
-            format: 2,
+            format: PROFILE_FORMAT,
             profile_id: self.profile_id.clone(),
             root: self.root.clone(),
         };
@@ -353,7 +372,7 @@ impl ProfileLease {
         atomic_json(&self.root.join("profile.json"), m)
     }
 }
-fn validate_name(name: &str) -> Result<()> {
+pub(crate) fn validate_name(name: &str) -> Result<()> {
     if name.is_empty()
         || name.len() > 64
         || !name
@@ -402,8 +421,10 @@ pub fn socket_path_for(base: &Path, name: &str) -> Result<PathBuf> {
     Ok(socket)
 }
 fn validate_manifest(m: &Manifest, name: &str) -> Result<()> {
-    if m.format != 2
-        || m.name != name
+    if m.format != PROFILE_FORMAT {
+        return Err(Error::Storage("incompatible_state"));
+    }
+    if m.name != name
         || !valid_hex(&m.profile_id, 16)
         || !valid_hex(&m.transaction, 16)
         || !valid_hex(&m.nostr_ref, 32)

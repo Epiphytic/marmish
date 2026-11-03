@@ -155,7 +155,7 @@ fn private(meta: &Metadata, owner: u32, directory: bool) -> Result<()> {
     }
     Ok(())
 }
-fn ancestor(meta: &Metadata, owner: u32) -> Result<()> {
+pub(crate) fn ancestor(meta: &Metadata, owner: u32) -> Result<()> {
     #[allow(clippy::useless_conversion)] // Darwin mode_t is u16, Linux u32.
     let sticky_system = meta.uid() == 0 && meta.mode() & u32::from(libc::S_ISVTX) != 0;
     if !meta.is_dir()

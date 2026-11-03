@@ -1,0 +1,192 @@
+name: v0.2 native release candidates
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Reviewed full source commit to build (40 lowercase hex; no tag promotion)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marmish-v02-candidates
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: never
+  MARMISH_NATIVE_TOOLCHAIN: '1'
+
+jobs:
+  package:
+    if: github.ref == 'refs/heads/master'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            signing: none
+            minimum: glibc=2.39
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            signing: none
+            minimum: glibc=2.39
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            signing: adhoc
+            minimum: macos=15.0
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      MARMISH_BUILD_COMMIT: ${{ inputs.source_commit }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_commit }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify immutable source and native target
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$MARMISH_BUILD_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$MARMISH_BUILD_COMMIT"
+          git merge-base --is-ancestor "$MARMISH_BUILD_COMMIT" refs/remotes/origin/master
+          case "$EXPECTED_TARGET:$(uname -s):$(uname -m)" in
+            x86_64-unknown-linux-gnu:Linux:x86_64|aarch64-unknown-linux-gnu:Linux:aarch64|aarch64-apple-darwin:Darwin:arm64) ;;
+            *) exit 1 ;;
+          esac
+      - uses: dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920 # 1.97.1
+        with:
+          toolchain: 1.97.1
+          components: clippy
+      - name: Set qualified macOS deployment minimum
+        if: runner.os == 'macOS'
+        run: echo 'MACOSX_DEPLOYMENT_TARGET=15.0' >> "$GITHUB_ENV"
+      - name: Verify native components
+        run: |
+          cargo test --locked -p marmish-engine -p marmish-native -p marmish-vault
+          cargo clippy --locked -p marmish-native --all-targets -- -D warnings
+      - name: Build final native executables
+        run: cargo build --locked --release -p marmish-native --bins
+      - name: Ad hoc sign final macOS executables before hashing
+        if: runner.os == 'macOS'
+        run: |
+          for binary in marmish marmishd marmish-worker; do
+            codesign --force --sign - "target/release/$binary"
+            codesign --verify --strict "target/release/$binary"
+          done
+      - name: Inspect final dependency allowlists and qualified ABI baselines
+        run: |
+          python3 -m unittest discover -s tools -p test_marmish_native_inspection.py
+          sh scripts/v02-inspect-native.sh "$GITHUB_WORKSPACE/target/release"
+      - name: Collect locked production license texts (CI tooling only)
+        run: |
+          python3 -m unittest discover -s tools -p test_marmish_native_licenses.py
+          python3 tools/marmish_native_licenses.py --root "$GITHUB_WORKSPACE" \
+            --work-dir "$RUNNER_TEMP/native-licenses" --output "$RUNNER_TEMP/THIRD-PARTY-LICENSES"
+      - name: Package verified immutable candidate assets
+        env:
+          SIGNING: ${{ matrix.signing }}
+          MINIMUM: ${{ matrix.minimum }}
+        run: |
+          mkdir "$RUNNER_TEMP/package-input"
+          # Cargo links target binaries into deps/. Copy fixed names to unlink the
+          # packaging inputs while retaining the final signed bytes for probing.
+          for binary in marmish marmishd marmish-worker; do
+            cp "target/release/$binary" "$RUNNER_TEMP/package-input/$binary"
+          done
+          target/release/marmish-release-tool package --input-dir "$RUNNER_TEMP/package-input" \
+            --output-dir "$RUNNER_TEMP/native-assets" --licenses "$RUNNER_TEMP/THIRD-PARTY-LICENSES" \
+            --signing "$SIGNING" --minimum "$MINIMUM"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: v02-candidate-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-assets/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve host render tool separately (never an install asset)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: v02-render-tool-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/release/marmish-release-tool
+          if-no-files-found: error
+          retention-days: 14
+  render:
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: v02-candidate-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: assets
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: v02-render-tool-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tool
+      - name: Verify complete provenance tuple and render three pinned manifests
+        run: |
+          chmod 0555 tool/marmish-release-tool
+          tool/marmish-release-tool render --assets-dir "$PWD/assets" --output "$PWD/install.sh"
+          sh -n install.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: v02-pinned-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}
+          path: install.sh
+          if-no-files-found: error
+          retention-days: 14
+  install-quickstart:
+    needs: render
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: v02-candidate-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate-assets
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: v02-pinned-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate-bootstrap
+      - name: Exercise actual bootstrap and installed interactive setup under a PTY
+        run: |
+          # Python is a CI-only supervisor. Runtime children receive a utility-only
+          # PATH and cannot invoke Python, uv, Cargo or rustc. No network activates.
+          python3 tools/marmish_native_quickstart_check.py \
+            --bootstrap "$PWD/candidate-bootstrap/install.sh" \
+            --assets-dir "$PWD/candidate-assets" \
+            --report "$RUNNER_TEMP/quickstart.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: v02-quickstart-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/quickstart.json
+          if-no-files-found: error
+          retention-days: 14
+# Re-run all jobs together: artifact bindings include the run attempt.
+# This creates workflow candidate artifacts only (not a public release). Public release/tag creation and
+# scripts/install.sh cutover require successful installed cross-platform qualification.
+# Asset manifest commit is reviewed source A; publishing the rendered pinned bootstrap
+# later in source B deliberately avoids a self-referential source hash.

@@ -15,9 +15,9 @@ use tokio::{
 const FRAME_LIMIT: usize = 65_536;
 const IO_TIMEOUT: Duration = Duration::from_secs(15);
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
-pub enum Request {
+pub(crate) enum Request {
     Status {},
     OpenConversation {
         peer: String,
@@ -31,14 +31,36 @@ pub enum Request {
         after: Option<u64>,
         limit: usize,
     },
+    CommandEvidence { after: Option<u64>, limit: u32 },
+    CommandCleanupStatus {},
+    CommandLocalCancel { cursor: u64 },
+    CommandPrepareCleanup {},
+    CommandPrepare { remote: String, relays: Vec<String> },
+    CommandSubmit { remote: String, relays: Vec<String>, session: String, request_id: String, submit: crate::command_wire::Submit },
+    CommandStatus { handle: crate::command_client::CommandHandle, request_id: String },
+    CommandCancel { handle: crate::command_client::CommandHandle, request_id: String },
+    CommandPoll { handle: crate::command_client::CommandHandle, request_id: String, stdout_cursor: u64, stderr_cursor: u64, max_bytes: u32 },
+    CommandResponse { handle: crate::command_client::CommandHandle, request_id: String },
+    CommandCursors { handle: crate::command_client::CommandHandle },
+    CommandUnconsumed { handle: crate::command_client::CommandHandle, limit: usize },
+    CommandInvocations { after: Option<u64>, limit: usize },
+    CommandConsume { handle: crate::command_client::CommandHandle, request_id: String, response_sha256: String, expected_cursors: Option<crate::command_local::Cursors> },
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+impl Request {
+    pub(crate) fn is_command(&self) -> bool {
+        !matches!(self, Self::Status {} | Self::OpenConversation {..} | Self::Send {..} | Self::Received {..})
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Response {
     pub ok: bool,
     pub result: Option<serde_json::Value>,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) command: Option<crate::command_local::LocalResult>,
 }
 
 impl Response {
@@ -48,6 +70,7 @@ impl Response {
                 ok: true,
                 result: Some(value),
                 error: None,
+                command: None,
             },
             Err(_) => Self::failure("response_encoding"),
         }
@@ -58,13 +81,18 @@ impl Response {
             ok: false,
             result: None,
             error: Some(category.to_owned()),
+            command: None,
         }
+    }
+    pub(crate) fn command(result: crate::command_local::LocalResult) -> Self {
+        Self {ok:true,result:None,error:None,command:Some(result)}
     }
 }
 
-pub struct Pending {
+pub(crate) struct Pending {
     pub request: Request,
     pub respond: oneshot::Sender<Response>,
+    pub deadline: tokio::time::Instant,
 }
 
 /// Binds only inside a private directory owned by this user. The profile lease
@@ -122,7 +150,7 @@ async fn write_frame(stream: &mut UnixStream, value: &impl Serialize) -> Result<
     Ok(())
 }
 
-pub async fn request(path: &Path, request: &Request) -> Result<Response> {
+pub(crate) async fn request(path: &Path, request: &Request) -> Result<Response> {
     tokio::time::timeout(Duration::from_secs(180), async {
         let mut stream = UnixStream::connect(path).await?;
         verify_peer(&stream)?;
@@ -133,9 +161,33 @@ pub async fn request(path: &Path, request: &Request) -> Result<Response> {
     .map_err(|_| Error::Timeout)?
 }
 
+/// One absolute budget for connect, request IO and the actor's response. Failure
+/// after sending Submit is ambiguous; its provisional handle remains recoverable.
+pub(crate) async fn command_request(path: &Path, request: &Request) -> Result<crate::command_local::LocalResult> {
+    if !request.is_command() {return Err(Error::Invalid("command_local_operation"));}
+    tokio::time::timeout(IO_TIMEOUT, async {
+        let mut stream = UnixStream::connect(path).await?;
+        verify_peer(&stream)?;
+        write_frame(&mut stream, request).await?;
+        let response: Response = read_frame(&mut stream).await?;
+        if let Some(result) = response.command {
+            if !response.ok || response.result.is_some() || response.error.is_some() {
+                return Err(Error::Invalid("command_local_response"));
+            }
+            return Ok(result);
+        }
+        if response.ok || response.result.is_some() {return Err(Error::Invalid("command_local_response"));}
+        match response.error.as_deref() {
+            Some("busy") => Ok(crate::command_local::LocalResult::LocalBusy),
+            Some("operation_uncertain") => Err(Error::Timeout),
+            _ => Err(Error::Invalid("command_local_response")),
+        }
+    }).await.map_err(|_| Error::Timeout)?
+}
+
 /// The caller owns the listener task and cancels/joins it on shutdown. At most
 /// 64 clients may hold connections; a full owner queue returns busy immediately.
-pub async fn serve(
+pub(crate) async fn serve(
     listener: UnixListener,
     queue: mpsc::Sender<Pending>,
     status: watch::Receiver<Response>,
@@ -159,15 +211,19 @@ pub async fn serve(
                 let status = status.clone();
                 tasks.spawn(async move {
                     let _permit = permit;
+                    let exchange_deadline = tokio::time::Instant::now() + IO_TIMEOUT;
                     let result = tokio::time::timeout(IO_TIMEOUT, read_frame::<Request>(&mut stream)).await;
+                    let command = matches!(&result,Ok(Ok(request)) if request.is_command());
                     let response = match result {
                         Ok(Ok(Request::Status {})) => status.borrow().clone(),
                         Ok(Ok(request)) => {
+                            let command = request.is_command();
+                            let deadline = if command {exchange_deadline - Duration::from_millis(100)} else {tokio::time::Instant::now() + Duration::from_secs(150)};
                             let (respond, receiver) = oneshot::channel();
-                            if queue.try_send(Pending { request, respond }).is_err() {
+                            if queue.try_send(Pending { request, respond, deadline }).is_err() {
                                 Response::failure("busy")
                             } else {
-                                match tokio::time::timeout(Duration::from_secs(150), receiver).await {
+                                match tokio::time::timeout_at(deadline, receiver).await {
                                     Ok(Ok(response)) => response,
                                     _ => Response::failure("operation_uncertain"),
                                 }
@@ -175,7 +231,8 @@ pub async fn serve(
                         }
                         _ => Response::failure("invalid_request"),
                     };
-                    let _ = tokio::time::timeout(IO_TIMEOUT, write_frame(&mut stream, &response)).await;
+                    let write_deadline = if command {exchange_deadline} else {tokio::time::Instant::now() + IO_TIMEOUT};
+                    let _ = tokio::time::timeout_at(write_deadline, write_frame(&mut stream, &response)).await;
                 });
             }
             _ = tasks.join_next(), if !tasks.is_empty() => {}
@@ -186,6 +243,28 @@ pub async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_requests_are_closed_and_reject_duplicate_fields() {
+        for body in [
+            r#"{"operation":"command_prepare","remote":"00","remote":"11","relays":[]}"#,
+            r#"{"operation":"command_prepare","remote":"00","relays":[],"extra":0}"#,
+            r#"{"operation":"command_invocations","after":true,"limit":1}"#,
+            r#"{"operation":"command_invocations","after":null,"limit":-1}"#,
+        ] { assert!(serde_json::from_str::<Request>(body).is_err(),"{body}"); }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn command_exchange_has_one_absolute_deadline() {
+        let directory=tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(),std::fs::Permissions::from_mode(0o700)).unwrap();
+        let socket=directory.path().join("s");let listener=bind(&socket).unwrap();
+        let server=tokio::spawn(async move {let (_socket,_)=listener.accept().await.unwrap();std::future::pending::<()>().await;});
+        let started=tokio::time::Instant::now();
+        assert!(matches!(command_request(&socket,&Request::CommandInvocations {after:None,limit:1}).await,Err(Error::Timeout)));
+        assert_eq!(tokio::time::Instant::now()-started,IO_TIMEOUT);
+        server.abort();let _=server.await;
+    }
 
     #[tokio::test]
     async fn oversize_frame_is_rejected_before_body_allocation() {
@@ -222,6 +301,7 @@ mod tests {
                     limit: 1,
                 },
                 respond,
+                deadline: tokio::time::Instant::now() + IO_TIMEOUT,
             })
             .ok()
             .unwrap();

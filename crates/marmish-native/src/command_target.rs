@@ -82,7 +82,14 @@ pub(crate) fn parse(
                     .ok_or_else(|| invalid("unknown_alias"))?;
                 return Ok(TargetSelection {
                     remote: alias.remote,
-                    source: RelaySource::Configured,
+                    source: RelaySource::Explicit(
+                        alias
+                            .relays
+                            .urls()
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect(),
+                    ),
                 });
             }
         },
@@ -199,7 +206,9 @@ fn relay_url(value: &str) -> Result<String> {
             return Err(invalid("invalid_destination"));
         }
         // URL's legacy integer/octal/short-IPv4 parser is not HOST grammar.
-        if host.bytes().all(|v| v.is_ascii_digit() || v == b'.')
+        let parsed = url::Host::parse(host).map_err(|_| invalid("invalid_destination"))?;
+        if (host.bytes().all(|v| v.is_ascii_digit() || v == b'.')
+            || matches!(parsed, url::Host::Ipv4(_)))
             && host.parse::<std::net::Ipv4Addr>().is_err()
         {
             return Err(invalid("invalid_destination"));
@@ -236,7 +245,8 @@ pub(crate) fn finalize(
         relays: selected.urls().iter().map(ToString::to_string).collect(),
     })
 }
-pub(crate) fn resolve(
+#[cfg(test)]
+fn resolve(
     config: &CommandConfig,
     destination: Option<&str>,
     user: Option<&str>,
@@ -287,6 +297,9 @@ mod tests {
     fn identity_alias_and_equivalent_explicit_urls_share_exact_policy() {
         let c = config(&["wss://relay.example/"], "auto");
         let inline = format!("{}@relay.example", npub());
+        let alias = parse(&c, Some("remote"), None, &[], &[]).unwrap();
+        assert!(matches!(alias.source, RelaySource::Explicit(ref urls)
+            if urls == &["wss://relay.example/"]));
         for target in [
             resolve(&c, Some(&inline), None, &[]),
             resolve(&c, Some("remote"), None, &[]),
@@ -397,6 +410,8 @@ mod tests {
             "a b",
             "a\\b",
             "127.1",
+            "0x7f.1",
+            "2130706433",
             "010.0.0.1",
             "host?x",
             "host#x",

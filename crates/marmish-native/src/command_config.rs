@@ -15,6 +15,7 @@ use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+pub(crate) const CONFIG_FORMAT: u32 = 1;
 const MAX_CONFIG: u64 = 1024 * 1024;
 const DAY: u64 = 86400;
 
@@ -80,12 +81,18 @@ impl CommandConfig {
         if bytes.len() as u64 > MAX_CONFIG {
             return Err(Error::Invalid("config_size"));
         }
+        Self::from_bytes(&bytes)
+    }
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() as u64 > MAX_CONFIG {
+            return Err(Error::Invalid("config_size"));
+        }
         let raw: RawConfig =
-            serde_json::from_slice(&bytes).map_err(|_| Error::Invalid("config_schema"))?;
+            serde_json::from_slice(bytes).map_err(|_| Error::Invalid("config_schema"))?;
         Self::normalize(raw)
     }
     fn normalize(raw: RawConfig) -> Result<Self> {
-        if raw.version != 1 {
+        if raw.version != CONFIG_FORMAT {
             return Err(Error::Invalid("config_version"));
         }
         let mode: RouteMode = raw.tor.parse()?;
@@ -267,8 +274,29 @@ impl CommandConfig {
     pub(crate) fn aliases(&self) -> &BTreeMap<String, AliasTarget> {
         &self.aliases
     }
+    #[cfg(test)]
     pub(crate) fn cwd(&self) -> &Path {
         &self.cwd
+    }
+    pub(crate) fn apply_limit_overrides(
+        &mut self,
+        overrides: crate::command_limits::LimitOverrides,
+    ) -> Result<()> {
+        let maximum = overrides.max_commands.or(self.limits.max_commands);
+        let uptime = overrides
+            .max_uptime
+            .or(self.limits.max_uptime)
+            .or_else(|| maximum.map(|_| crate::command_limits::MAX_UPTIME));
+        if maximum.is_some_and(|n| n.get() > i64::MAX as u64)
+            || uptime.is_some_and(|d| d.is_zero() || d > crate::command_limits::MAX_UPTIME)
+            || (maximum.is_some()
+                && (self.role == Role::Client || self.execution_clients.is_empty()))
+        {
+            return Err(Error::Invalid("command_limits"));
+        }
+        self.limits.max_commands = maximum;
+        self.limits.max_uptime = uptime;
+        Ok(())
     }
     pub(crate) fn limits(&self) -> &CommandLimits {
         &self.limits
@@ -405,6 +433,33 @@ fn accounts(values: Vec<String>) -> Result<BTreeSet<Account>> {
 }
 fn alias_name(value: &str) -> bool {
     !value.is_empty()
+        && !matches!(
+            value,
+            "init"
+                | "setup"
+                | "install"
+                | "uninstall"
+                | "install-status"
+                | "release-info"
+                | "daemon"
+                | "status"
+                | "commands"
+                | "command-status"
+                | "wait"
+                | "output"
+                | "cancel"
+                | "open-conversation"
+                | "send"
+                | "received"
+                | "foundation-check"
+                | "command-check"
+                | "command-evidence"
+                | "command-cleanup-status"
+                | "command-local-cancel"
+                | "command-prepare-cleanup"
+                | "help"
+                | "_vault-helper"
+        )
         && value.len() <= 64
         && value.as_bytes()[0].is_ascii_alphabetic()
         && value
@@ -549,6 +604,57 @@ mod tests {
         }
     }
     #[test]
+    fn launch_overrides_merge_before_effective_limit_validation() {
+        use crate::command_limits::{LimitOverrides, MAX_UPTIME};
+        let fixture = Fixture::new();
+        let mut value = document();
+        value["execution_clients"] = json!(["11".repeat(32)]);
+        let mut config = fixture.load(&value).unwrap();
+        config
+            .apply_limit_overrides(LimitOverrides {
+                max_commands: NonZeroU64::new(3),
+                max_uptime: None,
+            })
+            .unwrap();
+        assert_eq!(config.limits().max_uptime, Some(MAX_UPTIME));
+        config
+            .apply_limit_overrides(LimitOverrides {
+                max_commands: None,
+                max_uptime: Some(Duration::from_secs(15)),
+            })
+            .unwrap();
+        assert_eq!(config.limits().max_commands.unwrap().get(), 3);
+        assert_eq!(config.limits().max_uptime, Some(Duration::from_secs(15)));
+        let mut no_grants = fixture.load(&document()).unwrap();
+        assert!(
+            no_grants
+                .apply_limit_overrides(LimitOverrides {
+                    max_commands: NonZeroU64::new(1),
+                    max_uptime: None
+                })
+                .is_err()
+        );
+        assert!(no_grants.limits().max_commands.is_none());
+        value["role"] = json!("client");
+        let mut client = fixture.load(&value).unwrap();
+        assert!(
+            client
+                .apply_limit_overrides(LimitOverrides {
+                    max_commands: NonZeroU64::new(1),
+                    max_uptime: None
+                })
+                .is_err()
+        );
+        assert!(
+            client
+                .apply_limit_overrides(LimitOverrides {
+                    max_commands: None,
+                    max_uptime: Some(Duration::ZERO)
+                })
+                .is_err()
+        );
+    }
+    #[test]
     fn required_fields_defaults_and_all_getters() {
         let fixture = Fixture::new();
         let config = fixture.load(&document()).unwrap();
@@ -634,7 +740,18 @@ mod tests {
         assert_eq!(target.relays.urls(), config.relay_policy().urls());
         value["aliases"]["Remote_1"]["relays"] = json!(["wss://other.example/"]);
         assert!(fixture.load(&value).is_err());
-        for name in ["", "1bad", "npub@host", "with space", "é", &"a".repeat(65)] {
+        for name in [
+            "",
+            "1bad",
+            "npub@host",
+            "with space",
+            "é",
+            &"a".repeat(65),
+            "command-evidence",
+            "command-cleanup-status",
+            "command-local-cancel",
+            "command-prepare-cleanup",
+        ] {
             assert!(!alias_name(name));
         }
         let mut value = document();

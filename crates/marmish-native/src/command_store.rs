@@ -77,17 +77,11 @@ impl Owner {
     pub(crate) fn group(&self) -> &[u8] {
         &self.group
     }
-    pub(crate) fn transport_group(&self) -> &[u8] {
-        &self.transport
-    }
     pub(crate) fn binding(&self) -> &Binding {
         &self.binding
     }
     pub(crate) fn uid(&self) -> u32 {
         self.uid
-    }
-    pub(crate) fn authority(&self) -> Digest {
-        self.authority
     }
     pub(crate) fn server_side(&self) -> bool {
         self.server_side
@@ -177,7 +171,6 @@ pub(crate) enum FeederState {
 }
 #[derive(Clone)]
 pub(crate) struct OperationLedgerSnapshot {
-    pub admission: Admission,
     pub stdin_length: u32,
     pub feeder: FeederState,
     pub warning: Option<Warning>,
@@ -228,6 +221,7 @@ pub(crate) enum WorkerState {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OperationalFailure {
     Unavailable,
+    #[cfg(test)]
     Timeout,
     Storage,
     Uncertain,
@@ -302,7 +296,6 @@ pub(crate) struct InvocationRecord {
 impl InvocationRecord {
     pub(crate) fn ledger(&self) -> OperationLedgerSnapshot {
         OperationLedgerSnapshot {
-            admission: self.admission,
             stdin_length: self.stdin_length,
             feeder: self.feeder.clone(),
             warning: self.warning,
@@ -332,12 +325,7 @@ impl InvocationRecord {
 }
 pub(crate) struct RecoveryRecord {
     pub key: InvocationKey,
-    pub owner: Owner,
-    pub revision: u64,
     pub engine_known: bool,
-    pub ledger: OperationLedgerSnapshot,
-    pub dispatch: Option<Submit>,
-    pub stdin: Option<Vec<u8>>,
 }
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct PublicationKey {
@@ -370,20 +358,20 @@ impl PreparedCommandPublication {
 pub(crate) enum PublicationState {
     Unsubmitted,
     Prepared,
+    #[cfg(test)]
     Published,
-    Uncertain,
+    #[cfg(test)]
     Invalidated,
-    Expired,
 }
 impl PublicationState {
     fn text(self) -> &'static str {
         match self {
             Self::Unsubmitted => "unsubmitted",
             Self::Prepared => "prepared",
+            #[cfg(test)]
             Self::Published => "published",
-            Self::Uncertain => "uncertain",
+            #[cfg(test)]
             Self::Invalidated => "invalidated",
-            Self::Expired => "expired",
         }
     }
 }
@@ -424,13 +412,13 @@ pub(crate) struct CommandProjection {
     pub response: Option<PreparedCommandPublication>,
 }
 pub(crate) struct ProjectedRequest {
-    pub request_id: Id,
+    #[cfg(test)]
     pub key: InvocationKey,
+    #[cfg(test)]
     pub existing: bool,
 }
 pub(crate) struct ProjectedResponse {
-    pub request_id: Id,
-    pub key: InvocationKey,
+    #[cfg(test)]
     pub existing: bool,
 }
 #[derive(Clone, PartialEq, Eq)]
@@ -512,6 +500,25 @@ fn blob32(bytes: Vec<u8>) -> Result<Digest> {
         .map_err(|_| invalid("command_storage_encoding"))
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct CommandClientFinishState {
+    pub confirmed: bool,
+    #[cfg(test)]
+    pub attempts: u8,
+}
+#[derive(Default, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FinishFacts {
+    client_finished: bool,
+    fingerprint: Option<Digest>,
+    cursors: Option<(u64, u64)>,
+    attempts: u8,
+    latest_request: Option<Id>,
+    #[serde(default)]
+    latest_busy: bool,
+    #[serde(default)]
+    confirmed: bool,
+}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Facts {
@@ -526,6 +533,8 @@ struct Facts {
     worker: WorkerState,
     observed_seq: u64,
     uncertain: bool,
+    #[serde(default)]
+    finish: FinishFacts,
 }
 impl Facts {
     fn new(refusal: Option<WireError>) -> Self {
@@ -545,6 +554,7 @@ impl Facts {
             worker: WorkerState::Unknown,
             observed_seq: 0,
             uncertain: false,
+            finish: FinishFacts::default(),
         }
     }
     fn from_record(r: &InvocationRecord) -> Self {
@@ -560,15 +570,16 @@ impl Facts {
             worker: r.worker,
             observed_seq: r.observed_seq,
             uncertain: r.uncertain,
+            finish: FinishFacts::default(),
         }
     }
 }
 impl Journal {
     pub(crate) fn command_init(&mut self) -> Result<()> {
-        self.conn.execute_batch("CREATE TABLE IF NOT EXISTS command_replay_state(id INTEGER PRIMARY KEY CHECK(id=1),floor INTEGER NOT NULL CHECK(floor>=0),sequence INTEGER NOT NULL CHECK(sequence>=0),admitted INTEGER NOT NULL DEFAULT 0,payload_cursor INTEGER NOT NULL DEFAULT 0);
+        self.conn.execute_batch("CREATE TABLE IF NOT EXISTS command_replay_state(id INTEGER PRIMARY KEY CHECK(id=1),floor INTEGER NOT NULL CHECK(floor>=0),sequence INTEGER NOT NULL CHECK(sequence>=0),admitted INTEGER NOT NULL DEFAULT 0,finished INTEGER NOT NULL DEFAULT 0 CHECK(finished>=0),payload_cursor INTEGER NOT NULL DEFAULT 0);
         INSERT OR IGNORE INTO command_replay_state(id,floor,sequence) VALUES(1,0,0);
         CREATE TABLE IF NOT EXISTS command_settings(id INTEGER PRIMARY KEY CHECK(id=1),settings BLOB NOT NULL);
-        CREATE TABLE IF NOT EXISTS command_invocations(cursor INTEGER PRIMARY KEY AUTOINCREMENT,k BLOB NOT NULL UNIQUE,server BLOB NOT NULL,principal BLOB NOT NULL,invocation BLOB NOT NULL,owner BLOB NOT NULL,submit BLOB,stdin_length INTEGER NOT NULL CHECK(stdin_length BETWEEN 0 AND 16384),stdout_delivered INTEGER NOT NULL DEFAULT 0,stderr_delivered INTEGER NOT NULL DEFAULT 0,digest BLOB NOT NULL,facts BLOB NOT NULL,active INTEGER NOT NULL,created INTEGER NOT NULL,operation BLOB,operation_revision INTEGER,operation_kind TEXT,operation_request BLOB,server_side INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS command_invocations(cursor INTEGER PRIMARY KEY AUTOINCREMENT,k BLOB NOT NULL UNIQUE,server BLOB NOT NULL,principal BLOB NOT NULL,invocation BLOB NOT NULL,owner BLOB NOT NULL,submit BLOB,stdin_length INTEGER NOT NULL CHECK(stdin_length BETWEEN 0 AND 16384),stdout_delivered INTEGER NOT NULL DEFAULT 0,stderr_delivered INTEGER NOT NULL DEFAULT 0,digest BLOB NOT NULL,facts BLOB NOT NULL,active INTEGER NOT NULL,created INTEGER NOT NULL,operation BLOB,operation_revision INTEGER,operation_kind TEXT,operation_request BLOB,server_side INTEGER NOT NULL,submit_request_id BLOB,submit_request_digest BLOB,CHECK(server_side=1 OR (submit_request_id IS NOT NULL AND length(submit_request_id)=16 AND submit_request_digest IS NOT NULL AND length(submit_request_digest)=32)));
         CREATE INDEX IF NOT EXISTS command_active ON command_invocations(server_side,active,principal);
         CREATE TABLE IF NOT EXISTS command_requests(group_id BLOB NOT NULL,request_id BLOB NOT NULL,principal BLOB NOT NULL,k BLOB NOT NULL,owner BLOB NOT NULL,authority_valid INTEGER NOT NULL DEFAULT 1,request BLOB NOT NULL,digest BLOB NOT NULL,op TEXT NOT NULL,response_id TEXT,client INTEGER NOT NULL,projected INTEGER NOT NULL DEFAULT 0,received_response BLOB,response_digest BLOB,local_consumed INTEGER NOT NULL DEFAULT 0,slot_state TEXT NOT NULL DEFAULT 'pending',failed_attempts INTEGER NOT NULL DEFAULT 0,slot_operation BLOB,slot_revision INTEGER,created INTEGER NOT NULL,PRIMARY KEY(group_id,request_id));
         CREATE TABLE IF NOT EXISTS command_publications(group_id BLOB NOT NULL,event_id TEXT NOT NULL,request_id BLOB NOT NULL,request_digest BLOB NOT NULL,session BLOB NOT NULL,client BLOB NOT NULL,server BLOB NOT NULL,wire BLOB NOT NULL,native BLOB NOT NULL,state TEXT NOT NULL,PRIMARY KEY(group_id,event_id));
@@ -576,6 +587,41 @@ impl Journal {
         CREATE TABLE IF NOT EXISTS command_outgoing_sources(row_id INTEGER PRIMARY KEY AUTOINCREMENT,group_id BLOB NOT NULL,native_id BLOB NOT NULL,event_id TEXT NOT NULL,acked INTEGER NOT NULL DEFAULT 0,invalidated INTEGER NOT NULL DEFAULT 0,quarantined INTEGER NOT NULL DEFAULT 0,evidence BLOB NOT NULL,UNIQUE(group_id,native_id));
         CREATE TABLE IF NOT EXISTS command_early_invalidations(group_id BLOB NOT NULL,native_id BLOB NOT NULL,PRIMARY KEY(group_id,native_id));
         CREATE TABLE IF NOT EXISTS command_queued_bindings(group_id BLOB NOT NULL,intent BLOB NOT NULL,event_id TEXT NOT NULL,PRIMARY KEY(group_id,intent));") .map_err(db)?;
+        let columns: Vec<String> = {
+            let mut stmt = self
+                .conn
+                .prepare("PRAGMA table_info(command_replay_state)")
+                .map_err(db)?;
+            stmt.query_map([], |row| row.get(1))
+                .map_err(db)?
+                .collect::<rusqlite::Result<_>>()
+                .map_err(db)?
+        };
+        if !columns.iter().any(|name| name == "finished") {
+            let tx = self.conn.transaction().map_err(db)?;
+            tx.execute_batch("ALTER TABLE command_replay_state ADD COLUMN finished INTEGER NOT NULL DEFAULT 0 CHECK(finished>=0)").map_err(db)?;
+            tx.commit().map_err(db)?;
+        }
+        // Schemas 3/4 predate durable local Submit-handle metadata. Nullable
+        // additions preserve old rows without guessing an original request ID.
+        let columns: Vec<String> = {
+            let mut stmt = self
+                .conn
+                .prepare("PRAGMA table_info(command_invocations)")
+                .map_err(db)?;
+            stmt.query_map([], |row| row.get(1))
+                .map_err(db)?
+                .collect::<rusqlite::Result<_>>()
+                .map_err(db)?
+        };
+        let tx = self.conn.transaction().map_err(db)?;
+        if !columns.iter().any(|n| n == "submit_request_id") {
+            tx.execute_batch("ALTER TABLE command_invocations ADD COLUMN submit_request_id BLOB CHECK(submit_request_id IS NULL OR length(submit_request_id)=16)").map_err(db)?;
+        }
+        if !columns.iter().any(|n| n == "submit_request_digest") {
+            tx.execute_batch("ALTER TABLE command_invocations ADD COLUMN submit_request_digest BLOB CHECK(submit_request_digest IS NULL OR length(submit_request_digest)=32)").map_err(db)?;
+        }
+        tx.commit().map_err(db)?;
         // A new engine frontend cannot resume an old input generation. Preserve
         // uncertain launch facts; only the feeder is failed, never replayed.
         let keys = self.command_keys("WHERE server_side=1 AND active=1", ACTIVE_GLOBAL + 1)?;
@@ -650,29 +696,9 @@ impl Journal {
         keys.into_iter()
             .map(|key| {
                 let r = self.command_get(&key)?.ok_or(invalid("command_record"))?;
-                let dispatch = (!r.engine_known
-                    && r.admission == Admission::Accepted
-                    && r.refusal.is_none()
-                    && r.authority_valid)
-                    .then(|| r.submit.clone())
-                    .flatten();
-                let stdin = matches!(r.feeder, FeederState::NeverBegun)
-                    .then(|| r.submit.as_ref().map(|s| s.stdin.clone()))
-                    .flatten();
                 Ok(RecoveryRecord {
                     key: r.key,
-                    owner: r.owner,
-                    revision: r.revision,
                     engine_known: r.engine_known,
-                    ledger: OperationLedgerSnapshot {
-                        admission: r.admission,
-                        stdin_length: r.stdin_length,
-                        feeder: r.feeder,
-                        warning: r.warning,
-                        authority_valid: r.authority_valid,
-                    },
-                    dispatch,
-                    stdin,
                 })
             })
             .collect()
@@ -790,6 +816,19 @@ impl Journal {
             freshness(&tx, plan.request.id, now)?;
             insert_slot(&tx, &plan.owner, &plan.request, &bytes, false, now)?;
         }
+        if !existing && matches!(plan.request.op, RequestOp::Finish { .. }) {
+            let result = finish_result(&tx, &plan.owner, &plan.request)?;
+            let response = plan
+                .response
+                .as_ref()
+                .ok_or(invalid("command_finish_response"))?;
+            if wire::decode_response(&response.encoded_wire)?.result != result {
+                return Err(invalid("command_finish_response"));
+            }
+            if result == Ok(wire::ResponseResult::Finish { finished: true }) {
+                commit_finished(&tx, &plan.owner, &plan.request)?;
+            }
+        }
         attach_source(&tx, &plan.source, plan.request.id)?;
         if let Some(response) = &plan.response {
             insert_publication(&tx, response)?;
@@ -797,8 +836,9 @@ impl Journal {
         }
         tx.commit().map_err(db)?;
         Ok(ProjectedRequest {
-            request_id: plan.request.id,
+            #[cfg(test)]
             key,
+            #[cfg(test)]
             existing,
         })
     }
@@ -834,9 +874,20 @@ impl Journal {
                 if r.digest != digest {
                     return Err(invalid("command_invocation_conflict"));
                 }
+                check_original_submit(&tx, &key, request.id)?;
             } else {
                 freshness(&tx, submit.invocation, now)?;
-                insert_invocation(&tx, owner, submit, digest, None, now)?;
+                insert_invocation_with_client_request(
+                    &tx,
+                    owner,
+                    submit,
+                    digest,
+                    None,
+                    InvocationAdmission {
+                        now,
+                        client_request: Some((request.id, wire::request_digest(&bytes))),
+                    },
+                )?;
             }
         } else {
             check_record_owner(current.as_ref().ok_or(invalid("command_not_found"))?, owner)?;
@@ -898,39 +949,39 @@ impl Journal {
         if projected != 0 {
             tx.commit().map_err(db)?;
             return Ok(ProjectedResponse {
-                request_id: response.id,
-                key,
+                #[cfg(test)]
                 existing: true,
             });
         }
         if let Ok(result) = &response.result {
-            let status = result.status();
-            if status.invocation != key.invocation {
-                return Err(invalid("command_response_binding"));
+            if let Some(status) = result.status() {
+                if status.invocation != key.invocation {
+                    return Err(invalid("command_response_binding"));
+                }
+                record.engine_known |= status.engine_known;
+                let mut status = status.clone();
+                status.engine_known = record.engine_known;
+                record.authority_valid &= status.authority_valid;
+                status.authority_valid = record.authority_valid;
+                record.admission = if record.engine_known {
+                    Admission::Engine
+                } else {
+                    status.admission
+                };
+                status.admission = record.admission;
+                record.status = Some(status.clone());
+                record.warning = status.warning;
+                record.feeder = if status.input.eof_sent {
+                    FeederState::Complete
+                } else if matches!(
+                    status.input.health,
+                    InputHealth::Gap | InputHealth::Uncertain
+                ) {
+                    FeederState::Failed
+                } else {
+                    record.feeder
+                };
             }
-            record.engine_known |= status.engine_known;
-            let mut status = status.clone();
-            status.engine_known = record.engine_known;
-            record.authority_valid &= status.authority_valid;
-            status.authority_valid = record.authority_valid;
-            record.admission = if record.engine_known {
-                Admission::Engine
-            } else {
-                status.admission
-            };
-            status.admission = record.admission;
-            record.status = Some(status.clone());
-            record.warning = status.warning;
-            record.feeder = if status.input.eof_sent {
-                FeederState::Complete
-            } else if matches!(
-                status.input.health,
-                InputHealth::Gap | InputHealth::Uncertain
-            ) {
-                FeederState::Failed
-            } else {
-                record.feeder
-            };
         } else if let Err(error) = &response.result
             && response.op == Op::Submit
         {
@@ -941,12 +992,32 @@ impl Journal {
         }
         record.revision = increment(record.revision)?;
         save_record(&tx, &record)?;
+        if response.op == Op::Finish {
+            let mut f = facts(&tx, &record.key)?;
+            if f.finish.latest_request == Some(response.id) {
+                f.finish.confirmed |= matches!(
+                    response.result,
+                    Ok(wire::ResponseResult::Finish { finished: true })
+                );
+                f.finish.latest_busy = matches!(
+                    response.result,
+                    Err(WireError {
+                        code: ErrorCode::Busy,
+                        ..
+                    })
+                );
+                tx.execute(
+                    "UPDATE command_invocations SET facts=?2 WHERE k=?1",
+                    params![key_bytes(&record.key), encode(&f)?],
+                )
+                .map_err(db)?;
+            }
+        }
         tx.execute("UPDATE command_requests SET projected=1,received_response=?3,response_digest=?4,slot_state='answered' WHERE group_id=?1 AND request_id=?2",params![source.group,response.id.as_slice(),response_bytes,sha(&response_bytes).as_slice()]).map_err(db)?;
         tx.commit().map_err(db)?;
         Ok(ProjectedResponse {
-            request_id: response.id,
-            key,
-            existing: projected != 0,
+            #[cfg(test)]
+            existing: false,
         })
     }
 }
@@ -954,6 +1025,72 @@ impl Journal {
 pub(crate) struct ClientDelivery {
     pub stdout: u64,
     pub stderr: u64,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClientSlotState {
+    Absent,
+    Pending,
+    Answered,
+    Consumed,
+}
+pub(crate) struct ClientInvocation {
+    pub cursor: u64,
+    pub owner: Owner,
+    pub invocation: Id,
+    #[cfg(test)]
+    pub submit_request_id: Id,
+    pub submit_request_sha256: Digest,
+    pub created: u64,
+    pub admission: Admission,
+    pub state: Option<State>,
+    #[cfg(test)]
+    pub engine_known: bool,
+    pub authority_valid: bool,
+    pub refusal: Option<ErrorCode>,
+}
+pub(crate) struct ClientInvocationPage {
+    pub entries: Vec<ClientInvocation>,
+    pub next: Option<u64>,
+}
+fn check_original_submit(conn: &Connection, key: &InvocationKey, id: Id) -> Result<()> {
+    let original: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT submit_request_id FROM command_invocations WHERE k=?1",
+            [key_bytes(key)],
+            |r| r.get(0),
+        )
+        .map_err(db)?;
+    let original = original.ok_or(invalid("command_legacy_handle_unavailable"))?;
+    if original != id {
+        return Err(invalid("command_submit_request_conflict"));
+    }
+    Ok(())
+}
+
+fn client_invocation(conn: &Connection, record: InvocationRecord) -> Result<ClientInvocation> {
+    let (request,digest,created): (Option<Vec<u8>>,Option<Vec<u8>>,u64) = conn.query_row("SELECT submit_request_id,submit_request_digest,created FROM command_invocations WHERE k=?1 AND server_side=0", [key_bytes(&record.key)], |r|Ok((r.get(0)?,r.get(1)?,sql_u64(r,2)?))).map_err(db)?;
+    let request = request.ok_or(invalid("command_legacy_handle_unavailable"))?;
+    let digest = digest.ok_or(invalid("command_legacy_handle_unavailable"))?;
+    if request.len() != 16 {
+        return Err(invalid("command_record"));
+    }
+    #[cfg(test)]
+    let submit_request_id = request.try_into().map_err(|_| invalid("command_record"))?;
+    Ok(ClientInvocation {
+        cursor: record.cursor,
+        owner: record.owner,
+        invocation: record.key.invocation,
+        #[cfg(test)]
+        submit_request_id,
+        submit_request_sha256: blob32(digest)?,
+        created,
+        admission: record.admission,
+        state: record.status.map(|s| s.state),
+        #[cfg(test)]
+        engine_known: record.engine_known,
+        authority_valid: record.authority_valid,
+        refusal: record.refusal.map(|r| r.code),
+    })
 }
 fn client_record(conn: &Connection, owner: &Owner, invocation: Id) -> Result<InvocationRecord> {
     if owner.server_side {
@@ -993,10 +1130,10 @@ fn decode_client_response(bytes: &[u8], slot: &PendingCommandRequest) -> Result<
         || response.binding != slot.owner.binding
         || response.op != slot.request.op.op()
         || response.request_sha256 != slot.digest
-        || response
-            .result
-            .as_ref()
-            .is_ok_and(|r| r.status().invocation != slot.request.op.invocation())
+        || response.result.as_ref().is_ok_and(|r| {
+            r.status()
+                .is_some_and(|s| s.invocation != slot.request.op.invocation())
+        })
     {
         return Err(invalid("command_response_binding"));
     }
@@ -1063,6 +1200,80 @@ impl Journal {
         }
         Ok(true)
     }
+    /// Call `command_client_invocation` with the validated handle first. After
+    /// slot retirement, this owner/request lookup cannot identify the invocation
+    /// whose retained authority must be checked before returning `Absent`.
+    pub(crate) fn command_client_slot_state(
+        &self,
+        owner: &Owner,
+        id: Id,
+    ) -> Result<ClientSlotState> {
+        if owner.server_side {
+            return Err(invalid("command_owner"));
+        }
+        check_local_binding(&self.conn, owner)?;
+        if self
+            .command_room(owner.group())?
+            .is_some_and(|room| room.revoked)
+        {
+            return Err(invalid("command_authority_revoked"));
+        }
+        let Some(slot) = load_request(&self.conn, owner.group(), id.as_slice())? else {
+            return Ok(ClientSlotState::Absent);
+        };
+        client_record(&self.conn, owner, slot.request.op.invocation())?;
+        if slot.owner != *owner || !slot_authority(&self.conn, owner.group(), id)? {
+            return Err(invalid("command_owner"));
+        }
+        let (projected, consumed): (bool,bool) = self.conn.query_row("SELECT projected,local_consumed FROM command_requests WHERE group_id=?1 AND request_id=?2 AND client=1", params![owner.group(),id.as_slice()], |r| Ok((r.get(0)?,r.get(1)?))).map_err(db)?;
+        Ok(if consumed {
+            ClientSlotState::Consumed
+        } else if projected {
+            ClientSlotState::Answered
+        } else {
+            ClientSlotState::Pending
+        })
+    }
+    pub(crate) fn command_client_invocation(
+        &self,
+        owner: &Owner,
+        invocation: Id,
+    ) -> Result<ClientInvocation> {
+        let record = client_record(&self.conn, owner, invocation)?;
+        client_invocation(&self.conn, record)
+    }
+    pub(crate) fn command_client_invocations(
+        &self,
+        after: Option<u64>,
+        max: usize,
+    ) -> Result<ClientInvocationPage> {
+        let sql_max = limit(max)?;
+        let mut statement = self.conn.prepare("SELECT k FROM command_invocations WHERE server_side=0 AND cursor>?1 ORDER BY cursor LIMIT ?2").map_err(db)?;
+        let keys = statement
+            .query_map(params![bound(after.unwrap_or(0))?, sql_max + 1], |r| {
+                r.get::<_, Vec<u8>>(0)
+            })
+            .map_err(db)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db)?;
+        let more = keys.len() > max;
+        let entries: Result<Vec<_>> = keys
+            .into_iter()
+            .take(max)
+            .map(|key| {
+                let record = load_record(&self.conn, &key_from_bytes(&key)?)?
+                    .ok_or(invalid("command_record"))?;
+                if record.owner.server_side {
+                    return Err(invalid("command_owner"));
+                }
+                check_local_binding(&self.conn, &record.owner)?;
+                client_invocation(&self.conn, record)
+            })
+            .collect();
+        let entries = entries?;
+        let next = more.then(|| entries.last().expect("nonempty page").cursor);
+        Ok(ClientInvocationPage { entries, next })
+    }
     pub(crate) fn command_client_cursors(
         &self,
         owner: &Owner,
@@ -1121,6 +1332,143 @@ impl Journal {
         }
         Ok(result)
     }
+    pub(crate) fn command_client_request_invocation(
+        &self,
+        owner: &Owner,
+        id: Id,
+    ) -> Result<Option<Id>> {
+        let Some(slot) = load_request(&self.conn, owner.group(), id.as_slice())? else {
+            return Ok(None);
+        };
+        client_record(&self.conn, owner, slot.request.op.invocation())?;
+        if slot.owner != *owner || !slot_authority(&self.conn, owner.group(), id)? {
+            return Err(invalid("command_owner"));
+        }
+        Ok(Some(slot.request.op.invocation()))
+    }
+    pub(crate) fn command_client_finish_state(
+        &self,
+        owner: &Owner,
+        invocation: Id,
+    ) -> Result<CommandClientFinishState> {
+        let record = client_record(&self.conn, owner, invocation)?;
+        let finish = facts(&self.conn, &record.key)?.finish;
+        Ok(CommandClientFinishState {
+            confirmed: finish.confirmed,
+            #[cfg(test)]
+            attempts: finish.attempts,
+        })
+    }
+    pub(crate) fn command_finish_result(
+        &self,
+        owner: &Owner,
+        request: &Request,
+    ) -> Result<std::result::Result<wire::ResponseResult, WireError>> {
+        finish_result(&self.conn, owner, request)
+    }
+    pub(crate) fn command_admission_budget(&self) -> Result<CommandAdmissionBudget> {
+        admission_budget(&self.conn)
+    }
+    pub(crate) fn command_publications_terminal(&self) -> Result<bool> {
+        let n: i64 = self.conn.query_row("SELECT COUNT(*) FROM command_publications WHERE state NOT IN ('published','invalidated','expired')", [], |r| r.get(0)).map_err(db)?;
+        Ok(n == 0)
+    }
+    /// Drain proof uses durable native acknowledgements, never relay acceptance.
+    pub(crate) fn command_sources_all_acknowledged(&self) -> Result<bool> {
+        let pending:bool=self.conn.query_row("SELECT EXISTS(SELECT 1 FROM command_incoming_sources WHERE acked=0) OR EXISTS(SELECT 1 FROM command_outgoing_sources WHERE acked=0 OR quarantined=1) OR EXISTS(SELECT 1 FROM command_early_invalidations) OR EXISTS(SELECT 1 FROM command_queued_bindings)",[],|row|row.get(0)).map_err(db)?;
+        Ok(!pending)
+    }
+    pub(crate) fn command_finish_candidate(
+        &self,
+        owner: &Owner,
+        id: Id,
+        response_sha256: Digest,
+        expected: Option<ClientDelivery>,
+        new_id: Id,
+    ) -> Result<Option<Request>> {
+        finish_candidate(&self.conn, owner, id, response_sha256, expected, new_id)
+    }
+    /// The exact final Poll consumption and prepared Finish publication share one commit.
+    pub(crate) fn command_consume_and_finish(
+        &mut self,
+        owner: &Owner,
+        id: Id,
+        response_sha256: Digest,
+        expected: Option<ClientDelivery>,
+        publication: Option<&PreparedCommandPublication>,
+        now: u64,
+    ) -> Result<(ClientDelivery, Option<Id>)> {
+        let tx = self.conn.transaction().map_err(db)?;
+        let candidate = finish_candidate(
+            &tx,
+            owner,
+            id,
+            response_sha256,
+            expected,
+            publication.map_or([0; 16], |p| p.request_id),
+        )?;
+        if candidate.is_some() != publication.is_some() {
+            return Err(invalid("command_finish_preparation"));
+        }
+        if let Some(request) = candidate.as_ref() {
+            let p = publication.ok_or(invalid("command_finish_preparation"))?;
+            p.validate(owner.local())?;
+            if p.key.group != owner.group
+                || p.binding != owner.binding
+                || p.request_id != request.id
+                || p.encoded_wire != wire::encode_request(request)?
+                || p.request_sha256 != wire::request_digest(&p.encoded_wire)
+            {
+                return Err(invalid("command_publication_binding"));
+            }
+            freshness(&tx, request.id, now)?;
+        }
+        let (current, bad) = consume_response_in(&tx, owner, id, response_sha256, expected)?;
+        let mut finish_id = None;
+        if let Some(request) = candidate {
+            insert_slot(
+                &tx,
+                owner,
+                &request,
+                &wire::encode_request(&request)?,
+                true,
+                now,
+            )?;
+            insert_publication(
+                &tx,
+                publication.ok_or(invalid("command_finish_preparation"))?,
+            )?;
+            let key = owner.key(request.op.invocation());
+            let mut f = facts(&tx, &key)?;
+            f.finish.attempts = f
+                .finish
+                .attempts
+                .checked_add(1)
+                .filter(|n| *n <= 4)
+                .ok_or(invalid("command_finish_attempts"))?;
+            f.finish.latest_request = Some(request.id);
+            f.finish.latest_busy = false;
+            tx.execute(
+                "UPDATE command_invocations SET facts=?2 WHERE k=?1",
+                params![key_bytes(&key), encode(&f)?],
+            )
+            .map_err(db)?;
+            finish_id = Some(request.id);
+        }
+        if finish_id.is_none() {
+            let slot = load_request(&tx, owner.group(), id.as_slice())?
+                .ok_or(invalid("command_response_retired"))?;
+            let finish = facts(&tx, &owner.key(slot.request.op.invocation()))?.finish;
+            if !finish.confirmed && !finish.latest_busy {
+                finish_id = finish.latest_request;
+            }
+        }
+        tx.commit().map_err(db)?;
+        if bad {
+            return Err(invalid("command_output_cursor_invalid"));
+        }
+        Ok((current, finish_id))
+    }
     pub(crate) fn command_consume_response(
         &mut self,
         owner: &Owner,
@@ -1129,72 +1477,8 @@ impl Journal {
         expected: Option<ClientDelivery>,
     ) -> Result<ClientDelivery> {
         let tx = self.conn.transaction().map_err(db)?;
-        let slot = load_request(&tx, owner.group(), id.as_slice())?
-            .ok_or(invalid("command_response_retired"))?;
-        let record = client_record(&tx, owner, slot.request.op.invocation())?;
-        if slot.owner != *owner || !slot_authority(&tx, owner.group(), id)? {
-            return Err(invalid("command_owner"));
-        }
-        type Received = (Vec<u8>, Vec<u8>, bool);
-        let row:Option<Received>=tx.query_row("SELECT received_response,response_digest,local_consumed FROM command_requests WHERE group_id=?1 AND request_id=?2 AND client=1 AND projected=1",params![owner.group(),id.as_slice()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(db)?;
-        let (bytes, digest, consumed) = row.ok_or(invalid("command_response_pending"))?;
-        if digest != response_sha256 || sha(&bytes) != response_sha256 {
-            return Err(invalid("command_response_conflict"));
-        }
-        let mut current = delivery(&tx, &record.key)?;
-        match &slot.request.op {
-            RequestOp::Poll {
-                stdout_cursor,
-                stderr_cursor,
-                ..
-            } => {
-                let start = ClientDelivery {
-                    stdout: *stdout_cursor,
-                    stderr: *stderr_cursor,
-                };
-                if expected != Some(start) || (!consumed && current != start) {
-                    return Err(invalid("command_cursor_stale"));
-                }
-            }
-            _ if expected.is_some() => return Err(invalid("command_cursor_stale")),
-            _ => {}
-        }
-        if consumed {
-            return Ok(current);
-        }
-        let response = decode_client_response(&bytes, &slot)?;
-        let mut invalid_cursor = false;
-        if let Ok(wire::ResponseResult::Poll {
-            status,
-            stdout,
-            stderr,
-        }) = &response.result
-        {
-            if !chunk_progress(stdout, current.stdout, &status.stdout.gaps)
-                || !chunk_progress(stderr, current.stderr, &status.stderr.gaps)
-            {
-                invalid_cursor = true;
-            } else {
-                current = ClientDelivery {
-                    stdout: stdout.next_cursor,
-                    stderr: stderr.next_cursor,
-                };
-            }
-        }
-        tx.execute(
-            "UPDATE command_invocations SET stdout_delivered=?2,stderr_delivered=?3 WHERE k=?1",
-            params![
-                key_bytes(&record.key),
-                bound(current.stdout)?,
-                bound(current.stderr)?
-            ],
-        )
-        .map_err(db)?;
-        tx.execute(
-            "UPDATE command_requests SET local_consumed=1 WHERE group_id=?1 AND request_id=?2",
-            params![owner.group(), id.as_slice()],
-        )
-        .map_err(db)?;
+        let (current, invalid_cursor) =
+            consume_response_in(&tx, owner, id, response_sha256, expected)?;
         tx.commit().map_err(db)?;
         if invalid_cursor {
             return Err(invalid("command_output_cursor_invalid"));
@@ -1203,10 +1487,172 @@ impl Journal {
     }
 }
 
+fn consume_response_in(
+    conn: &Connection,
+    owner: &Owner,
+    id: Id,
+    response_sha256: Digest,
+    expected: Option<ClientDelivery>,
+) -> Result<(ClientDelivery, bool)> {
+    let slot = load_request(conn, owner.group(), id.as_slice())?
+        .ok_or(invalid("command_response_retired"))?;
+    let record = client_record(conn, owner, slot.request.op.invocation())?;
+    if slot.owner != *owner || !slot_authority(conn, owner.group(), id)? {
+        return Err(invalid("command_owner"));
+    }
+    type Received = (Vec<u8>, Vec<u8>, bool);
+    let row:Option<Received>=conn.query_row("SELECT received_response,response_digest,local_consumed FROM command_requests WHERE group_id=?1 AND request_id=?2 AND client=1 AND projected=1",params![owner.group(),id.as_slice()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(db)?;
+    let (bytes, digest, consumed) = row.ok_or(invalid("command_response_pending"))?;
+    if digest != response_sha256 || sha(&bytes) != response_sha256 {
+        return Err(invalid("command_response_conflict"));
+    }
+    let mut current = delivery(conn, &record.key)?;
+    match &slot.request.op {
+        RequestOp::Poll {
+            stdout_cursor,
+            stderr_cursor,
+            ..
+        } => {
+            let start = ClientDelivery {
+                stdout: *stdout_cursor,
+                stderr: *stderr_cursor,
+            };
+            if expected != Some(start) || (!consumed && current != start) {
+                return Err(invalid("command_cursor_stale"));
+            }
+        }
+        _ if expected.is_some() => return Err(invalid("command_cursor_stale")),
+        _ => {}
+    }
+    if consumed {
+        return Ok((current, false));
+    }
+    let response = decode_client_response(&bytes, &slot)?;
+    let mut invalid_cursor = false;
+    if let Ok(wire::ResponseResult::Poll {
+        status,
+        stdout,
+        stderr,
+    }) = &response.result
+    {
+        if !chunk_progress(stdout, current.stdout, &status.stdout.gaps)
+            || !chunk_progress(stderr, current.stderr, &status.stderr.gaps)
+        {
+            invalid_cursor = true;
+        } else {
+            current = ClientDelivery {
+                stdout: stdout.next_cursor,
+                stderr: stderr.next_cursor,
+            };
+        }
+    }
+    conn.execute(
+        "UPDATE command_invocations SET stdout_delivered=?2,stderr_delivered=?3 WHERE k=?1",
+        params![
+            key_bytes(&record.key),
+            bound(current.stdout)?,
+            bound(current.stderr)?
+        ],
+    )
+    .map_err(db)?;
+    conn.execute(
+        "UPDATE command_requests SET local_consumed=1 WHERE group_id=?1 AND request_id=?2",
+        params![owner.group(), id.as_slice()],
+    )
+    .map_err(db)?;
+    Ok((current, invalid_cursor))
+}
+fn finish_candidate(
+    conn: &Connection,
+    owner: &Owner,
+    id: Id,
+    response_sha256: Digest,
+    expected: Option<ClientDelivery>,
+    new_id: Id,
+) -> Result<Option<Request>> {
+    let slot = load_request(conn, owner.group(), id.as_slice())?
+        .ok_or(invalid("command_response_retired"))?;
+    let record = client_record(conn, owner, slot.request.op.invocation())?;
+    if slot.owner != *owner || !slot_authority(conn, owner.group(), id)? {
+        return Err(invalid("command_owner"));
+    }
+    let RequestOp::Poll {
+        stdout_cursor,
+        stderr_cursor,
+        ..
+    } = slot.request.op
+    else {
+        return Ok(None);
+    };
+    let row:Option<(Vec<u8>,Vec<u8>,bool)>=conn.query_row("SELECT received_response,response_digest,local_consumed FROM command_requests WHERE group_id=?1 AND request_id=?2 AND client=1 AND projected=1",params![owner.group(),id.as_slice()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(db)?;
+    let (bytes, digest, consumed) = row.ok_or(invalid("command_response_pending"))?;
+    if digest != response_sha256 || sha(&bytes) != response_sha256 {
+        return Err(invalid("command_response_conflict"));
+    }
+    if consumed {
+        return Ok(None);
+    }
+    let current = delivery(conn, &record.key)?;
+    if expected
+        != Some(ClientDelivery {
+            stdout: stdout_cursor,
+            stderr: stderr_cursor,
+        })
+        || current != expected.unwrap_or_default()
+    {
+        return Err(invalid("command_cursor_stale"));
+    }
+    let response = decode_client_response(&bytes, &slot)?;
+    let Ok(wire::ResponseResult::Poll {
+        status,
+        stdout,
+        stderr,
+    }) = response.result
+    else {
+        return Ok(None);
+    };
+    if !chunk_progress(&stdout, current.stdout, &status.stdout.gaps)
+        || !chunk_progress(&stderr, current.stderr, &status.stderr.gaps)
+    {
+        return Ok(None);
+    }
+    if stdout.next_cursor != status.stdout.produced || stderr.next_cursor != status.stderr.produced
+    {
+        return Ok(None);
+    }
+    let terminal_sha256 =
+        match wire::finish_digest(owner.group(), owner.binding(), &record.digest, &status) {
+            Ok(d) => d,
+            Err(_) => return Ok(None),
+        };
+    let f = facts(conn, &record.key)?;
+    if f.finish.attempts >= 4 {
+        return Ok(None);
+    }
+    if f.finish.latest_request.is_some() && !f.finish.latest_busy {
+        return Ok(None);
+    }
+    let others:i64=conn.query_row("SELECT COUNT(*) FROM command_requests WHERE k=?1 AND client=1 AND request_id!=?2 AND (projected=0 OR local_consumed=0)",params![key_bytes(&record.key),id.as_slice()],|r|r.get(0)).map_err(db)?;
+    if others != 0 {
+        return Ok(None);
+    }
+    Ok(Some(Request {
+        binding: owner.binding().clone(),
+        id: new_id,
+        op: RequestOp::Finish {
+            invocation: record.key.invocation,
+            submit_sha256: record.digest,
+            terminal_sha256,
+            stdout_cursor: stdout.next_cursor,
+            stderr_cursor: stderr.next_cursor,
+        },
+    }))
+}
+
 fn increment(n: u64) -> Result<u64> {
     n.checked_add(1)
         .filter(|v| *v <= i64::MAX as u64)
-        .ok_or(invalid("command_counter"))
+        .ok_or(Error::Storage("command_counter"))
 }
 fn key_from_bytes(b: &[u8]) -> Result<InvocationKey> {
     if b.len() != 80 {
@@ -1290,14 +1736,22 @@ fn load_record(conn: &Connection, key: &InvocationKey) -> Result<Option<Invocati
     })
     .transpose()
 }
+fn facts(conn: &Connection, key: &InvocationKey) -> Result<Facts> {
+    let bytes: Vec<u8> = conn
+        .query_row(
+            "SELECT facts FROM command_invocations WHERE k=?1",
+            [key_bytes(key)],
+            |r| r.get(0),
+        )
+        .map_err(db)?;
+    decode(&bytes)
+}
 fn save_record(conn: &Connection, r: &InvocationRecord) -> Result<()> {
+    let mut updated = Facts::from_record(r);
+    updated.finish = facts(conn, &r.key)?.finish;
     conn.execute(
         "UPDATE command_invocations SET facts=?2,active=?3 WHERE k=?1",
-        params![
-            key_bytes(&r.key),
-            encode(&Facts::from_record(r))?,
-            r.active()
-        ],
+        params![key_bytes(&r.key), encode(&updated)?, r.active()],
     )
     .map_err(db)?;
     Ok(())
@@ -1318,6 +1772,34 @@ fn insert_invocation(
     refusal: Option<WireError>,
     now: u64,
 ) -> Result<()> {
+    insert_invocation_with_client_request(
+        conn,
+        owner,
+        submit,
+        digest,
+        refusal,
+        InvocationAdmission {
+            now,
+            client_request: None,
+        },
+    )
+}
+struct InvocationAdmission {
+    now: u64,
+    client_request: Option<(Id, Digest)>,
+}
+fn insert_invocation_with_client_request(
+    conn: &Connection,
+    owner: &Owner,
+    submit: &Submit,
+    digest: Digest,
+    refusal: Option<WireError>,
+    admission: InvocationAdmission,
+) -> Result<()> {
+    let InvocationAdmission {
+        now,
+        client_request,
+    } = admission;
     let limits = store_limits(conn)?;
     if count(conn, "SELECT count(*) FROM command_invocations", None)? >= limits.retained_global
         || count(
@@ -1348,7 +1830,7 @@ fn insert_invocation(
     if owner.server_side && active {
         reserve_credit(conn, &limits)?;
     }
-    conn.execute("INSERT INTO command_invocations(k,server,principal,invocation,owner,submit,digest,facts,active,created,server_side,stdin_length) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",params![key_bytes(&owner.key(submit.invocation)),owner.binding.server.as_slice(),owner.binding.client.as_slice(),submit.invocation.as_slice(),owner.encode()?,encode(submit)?,digest.as_slice(),encode(&facts)?,active,bound(now)?,owner.server_side,submit.stdin.len() as i64]).map_err(db)?;
+    conn.execute("INSERT INTO command_invocations(k,server,principal,invocation,owner,submit,digest,facts,active,created,server_side,stdin_length,submit_request_id,submit_request_digest) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",params![key_bytes(&owner.key(submit.invocation)),owner.binding.server.as_slice(),owner.binding.client.as_slice(),submit.invocation.as_slice(),owner.encode()?,encode(submit)?,digest.as_slice(),encode(&facts)?,active,bound(now)?,owner.server_side,submit.stdin.len() as i64,client_request.as_ref().map(|(id,_)|id.as_slice()),client_request.as_ref().map(|(_,digest)|digest.as_slice())]).map_err(db)?;
     Ok(())
 }
 fn check_record_owner(r: &InvocationRecord, owner: &Owner) -> Result<()> {
@@ -1413,6 +1895,7 @@ fn op_text(op: wire::Op) -> &'static str {
         wire::Op::Status => "status",
         wire::Op::Poll => "poll",
         wire::Op::Cancel => "cancel",
+        wire::Op::Finish => "finish",
     }
 }
 fn insert_slot(
@@ -1572,33 +2055,153 @@ fn store_limits(conn: &Connection) -> Result<StoreLimits> {
         .map_err(db)?;
     decode(&bytes)
 }
-fn reserve_credit(conn: &Connection, limits: &StoreLimits) -> Result<()> {
-    if let Some(max) = limits.max_commands {
-        let admitted = conn
-            .query_row(
-                "SELECT admitted FROM command_replay_state WHERE id=1",
-                [],
-                |r| sql_u64(r, 0),
-            )
-            .map_err(db)?;
-        let mut statement = conn
-            .prepare(
-                "SELECT facts FROM command_invocations WHERE server_side=1 AND active=1 LIMIT 33",
-            )
-            .map_err(db)?;
-        let rows = statement
-            .query_map([], |r| r.get::<_, Vec<u8>>(0))
-            .map_err(db)?;
-        let mut reserved = 0u64;
-        for row in rows {
-            let facts: Facts = decode(&row.map_err(db)?)?;
-            if !facts.engine_known && facts.refusal.is_none() {
-                reserved = increment(reserved)?;
-            }
+pub(crate) struct CommandAdmissionBudget {
+    pub maximum: Option<u64>,
+    pub admitted: u64,
+    pub reserved: u64,
+    pub finished: u64,
+}
+impl CommandAdmissionBudget {
+    pub(crate) fn exhausted(&self) -> bool {
+        self.maximum.is_some_and(|n| self.admitted >= n)
+    }
+    pub(crate) fn reserved_full(&self) -> bool {
+        self.maximum
+            .is_some_and(|n| self.admitted.saturating_add(self.reserved) >= n)
+    }
+}
+fn admission_budget(conn: &Connection) -> Result<CommandAdmissionBudget> {
+    let limits = store_limits(conn)?;
+    let (admitted, finished) = conn
+        .query_row(
+            "SELECT admitted,finished FROM command_replay_state WHERE id=1",
+            [],
+            |r| Ok((sql_u64(r, 0)?, sql_u64(r, 1)?)),
+        )
+        .map_err(db)?;
+    let mut statement = conn
+        .prepare("SELECT facts FROM command_invocations WHERE server_side=1 AND active=1 LIMIT 33")
+        .map_err(db)?;
+    let rows = statement
+        .query_map([], |r| r.get::<_, Vec<u8>>(0))
+        .map_err(db)?;
+    let mut reserved = 0;
+    for row in rows {
+        let f: Facts = decode(&row.map_err(db)?)?;
+        if !f.engine_known && f.refusal.is_none() {
+            reserved = increment(reserved)?;
         }
-        if admitted.saturating_add(reserved) >= max {
-            return Err(invalid("command_admission_closed"));
-        }
+    }
+    Ok(CommandAdmissionBudget {
+        maximum: limits.max_commands,
+        admitted,
+        reserved,
+        finished,
+    })
+}
+fn finish_error(code: ErrorCode) -> std::result::Result<wire::ResponseResult, WireError> {
+    Err(WireError { code, detail: None })
+}
+fn finish_result(
+    conn: &Connection,
+    owner: &Owner,
+    request: &Request,
+) -> Result<std::result::Result<wire::ResponseResult, WireError>> {
+    let RequestOp::Finish {
+        invocation,
+        submit_sha256,
+        terminal_sha256,
+        stdout_cursor,
+        stderr_cursor,
+    } = &request.op
+    else {
+        return Err(invalid("command_finish_request"));
+    };
+    check_request_owner(request, owner)?;
+    let key = owner.key(*invocation);
+    let Some(record) = load_record(conn, &key)? else {
+        return Ok(finish_error(ErrorCode::NotFound));
+    };
+    check_record_owner(&record, owner)?;
+    if !record.authority_valid {
+        return Err(invalid("command_authority_revoked"));
+    }
+    if record.digest != *submit_sha256 {
+        return Ok(finish_error(ErrorCode::InvocationConflict));
+    }
+    let f = facts(conn, &key)?;
+    if f.finish.client_finished {
+        return Ok(
+            if f.finish.fingerprint == Some(*terminal_sha256)
+                && f.finish.cursors == Some((*stdout_cursor, *stderr_cursor))
+            {
+                Ok(wire::ResponseResult::Finish { finished: true })
+            } else {
+                finish_error(ErrorCode::InvocationConflict)
+            },
+        );
+    }
+    if !record.engine_known {
+        return Ok(match record.refusal {
+            Some(e) => Err(e),
+            None => finish_error(ErrorCode::InvalidRequest),
+        });
+    }
+    let Some(status) = record.status.as_ref() else {
+        return Ok(finish_error(ErrorCode::ResultExpired));
+    };
+    let fingerprint =
+        match wire::finish_digest(owner.group(), owner.binding(), submit_sha256, status) {
+            Ok(d) => d,
+            Err(_) => return Ok(finish_error(ErrorCode::InvalidRequest)),
+        };
+    if *stdout_cursor != status.stdout.produced || *stderr_cursor != status.stderr.produced {
+        return Ok(finish_error(ErrorCode::InvalidRequest));
+    }
+    if fingerprint != *terminal_sha256 {
+        return Ok(finish_error(ErrorCode::Busy));
+    }
+    Ok(Ok(wire::ResponseResult::Finish { finished: true }))
+}
+fn commit_finished(conn: &Connection, owner: &Owner, request: &Request) -> Result<()> {
+    let RequestOp::Finish {
+        invocation,
+        terminal_sha256,
+        stdout_cursor,
+        stderr_cursor,
+        ..
+    } = &request.op
+    else {
+        return Err(invalid("command_finish_request"));
+    };
+    let key = owner.key(*invocation);
+    let mut f = facts(conn, &key)?;
+    if f.finish.client_finished {
+        return Ok(());
+    }
+    f.finish.client_finished = true;
+    f.finish.fingerprint = Some(*terminal_sha256);
+    f.finish.cursors = Some((*stdout_cursor, *stderr_cursor));
+    conn.execute(
+        "UPDATE command_invocations SET facts=?2 WHERE k=?1",
+        params![key_bytes(&key), encode(&f)?],
+    )
+    .map_err(db)?;
+    if conn
+        .execute(
+            "UPDATE command_replay_state SET finished=finished+1 WHERE id=1 AND finished<admitted",
+            [],
+        )
+        .map_err(db)?
+        != 1
+    {
+        return Err(Error::Storage("command_counter"));
+    }
+    Ok(())
+}
+fn reserve_credit(conn: &Connection, _limits: &StoreLimits) -> Result<()> {
+    if admission_budget(conn)?.reserved_full() {
+        return Err(invalid("command_admission_closed"));
     }
     Ok(())
 }
@@ -1646,6 +2249,7 @@ impl Journal {
             .map_err(db)?;
         Ok(())
     }
+    #[cfg(test)]
     pub(crate) fn command_requests(
         &self,
         key: &InvocationKey,
@@ -1665,17 +2269,6 @@ impl Journal {
                 load_request(&self.conn, &group, &id)?.ok_or(invalid("command_record"))
             })
             .collect()
-    }
-    pub(crate) fn command_pending_requests(
-        &self,
-        key: &InvocationKey,
-        max: usize,
-    ) -> Result<Vec<PendingCommandRequest>> {
-        Ok(self
-            .command_requests(key, max)?
-            .into_iter()
-            .filter(|r| r.response.is_none())
-            .collect())
     }
     pub(crate) fn command_begin_operation(
         &mut self,
@@ -2269,6 +2862,7 @@ impl Journal {
         };
         Ok(SourcePage { rows: result, next })
     }
+    #[cfg(test)]
     pub(crate) fn command_publication_bindings(
         &self,
         key: &PublicationKey,
@@ -2363,6 +2957,7 @@ impl Journal {
         }
         tx.commit().map_err(db)
     }
+    #[cfg(test)]
     pub(crate) fn command_revoke_group(&mut self, group: &[u8]) -> Result<()> {
         let tx = self.conn.transaction().map_err(db)?;
         revoke_group_in(&tx, group)?;
@@ -3089,7 +3684,19 @@ pub(crate) fn project_completion(
                 CommittedDecision::KnownFound
             }
         }
-        EngineObservation::Failed(_) => {
+        EngineObservation::Failed(failure) => {
+            // Report only a closed local category; engine error text and command
+            // material never enter diagnostics. All categories retain uncertainty.
+            crate::diagnostics::event(
+                "command_observation",
+                match failure {
+                    OperationalFailure::Unavailable => "unavailable",
+                    OperationalFailure::Storage => "storage",
+                    OperationalFailure::Uncertain => "uncertain",
+                    #[cfg(test)]
+                    OperationalFailure::Timeout => "timeout",
+                },
+            );
             record.uncertain = true;
             record.worker = WorkerState::Unknown;
             CommittedDecision::StillUncertain
@@ -3108,7 +3715,15 @@ pub(crate) fn project_completion(
             let mut status = status.clone();
             status.authority_valid = record.authority_valid;
             status.admission = Admission::Engine;
-            if current
+            let empty_input_exited = status.state == State::Exited
+                && record.stdin_length == 0
+                && status.input.accepted == 0
+                && status.input.delivered == 0;
+            if empty_input_exited {
+                // Completing an empty immutable input needs no EOF acceptance
+                // proof once the process has exited. Preserve eof_sent as observed.
+                record.feeder = FeederState::Complete;
+            } else if current
                 && let EngineObservation::Input {
                     generation, credit, ..
                 } = &completion.result
@@ -3548,6 +4163,7 @@ mod tests {
                 },
             },
             RequestOp::Cancel { .. } => ResponseResult::Cancel(s),
+            RequestOp::Finish { .. } => ResponseResult::Finish { finished: true },
         };
         Response {
             binding: request.binding.clone(),
@@ -3636,6 +4252,639 @@ mod tests {
         )
     }
 
+    fn exited_status(request: &Request) -> Status {
+        let mut s = status(request);
+        s.engine_known = true;
+        s.admission = Admission::Engine;
+        s.state = State::Exited;
+        s.stdout.closed = true;
+        s.stderr.closed = true;
+        s.outcome = Some(wire::Outcome {
+            kind: wire::OutcomeKind::Code,
+            value: Some(7),
+        });
+        s
+    }
+    fn finish_request(j: &Journal, key: &InvocationKey, seq: u16) -> Request {
+        let r = j.command_get(key).unwrap().unwrap();
+        let s = r.status.as_ref().unwrap();
+        Request {
+            binding: r.owner.binding.clone(),
+            id: id(seq),
+            op: RequestOp::Finish {
+                invocation: key.invocation,
+                submit_sha256: r.digest,
+                terminal_sha256: wire::finish_digest(
+                    r.owner.group(),
+                    r.owner.binding(),
+                    &r.digest,
+                    s,
+                )
+                .unwrap(),
+                stdout_cursor: s.stdout.produced,
+                stderr_cursor: s.stderr.produced,
+            },
+        }
+    }
+    fn finish_projection(j: &Journal, request: Request) -> CommandProjection {
+        let mut p = projection(request);
+        let result = j.command_finish_result(&p.owner, &p.request).unwrap();
+        let mut r = response(&p.request);
+        r.result = result.clone();
+        p.response = Some(publication(&p.owner, &r));
+        p.decision = match result {
+            Ok(_) => AdmissionDecision::Existing,
+            Err(e) => AdmissionDecision::Refused(e),
+        };
+        p
+    }
+    #[test]
+    fn finish_is_durable_idempotent_and_never_recounts_revocation() {
+        let (tmp, mut j) = setup();
+        let (_, key) = admitted(&mut j, 1);
+        fact(&mut j, &key, State::Exited);
+        let mut r = j.command_get(&key).unwrap().unwrap();
+        r.status = Some(exited_status(&submit(1)));
+        save_record(&j.conn, &r).unwrap();
+        let p = finish_projection(&j, finish_request(&j, &key, 200));
+        j.command_project_request(&p, NOW).unwrap();
+        assert_eq!(j.command_admission_budget().unwrap().finished, 1);
+        let retry = CommandProjection {
+            owner: p.owner.clone(),
+            source: p.source.clone(),
+            request: p.request.clone(),
+            decision: AdmissionDecision::Existing,
+            response: None,
+        };
+        assert!(j.command_project_request(&retry, NOW).unwrap().existing);
+        let second = finish_projection(&j, finish_request(&j, &key, 201));
+        j.command_project_request(&second, NOW).unwrap();
+        assert_eq!(j.command_admission_budget().unwrap().finished, 1);
+        let mut conflict = finish_request(&j, &key, 202);
+        if let RequestOp::Finish {
+            terminal_sha256, ..
+        } = &mut conflict.op
+        {
+            terminal_sha256[0] ^= 1;
+        }
+        let conflict = finish_projection(&j, conflict);
+        assert!(matches!(
+            wire::decode_response(&conflict.response.as_ref().unwrap().encoded_wire)
+                .unwrap()
+                .result,
+            Err(WireError {
+                code: ErrorCode::InvocationConflict,
+                ..
+            })
+        ));
+        j.command_project_request(&conflict, NOW).unwrap();
+        j.command_revoke_group(owner().group()).unwrap();
+        assert_eq!(j.command_admission_budget().unwrap().finished, 1);
+        drop(j);
+        let j = Journal::open(
+            &tmp.path().join("journal.db"),
+            &[7; 32],
+            &hex::encode([2; 32]),
+        )
+        .unwrap();
+        assert_eq!(j.command_admission_budget().unwrap().finished, 1);
+    }
+    #[test]
+    fn finish_preparation_failure_rolls_back_and_forged_claim_is_not_counted() {
+        let (_tmp, mut j) = setup();
+        let (_, key) = admitted(&mut j, 1);
+        fact(&mut j, &key, State::Exited);
+        let mut r = j.command_get(&key).unwrap().unwrap();
+        r.status = Some(exited_status(&submit(1)));
+        save_record(&j.conn, &r).unwrap();
+        let mut request = finish_request(&j, &key, 200);
+        if let RequestOp::Finish {
+            terminal_sha256, ..
+        } = &mut request.op
+        {
+            terminal_sha256[0] ^= 1;
+        }
+        let mut p = finish_projection(&j, request);
+        assert!(matches!(
+            wire::decode_response(&p.response.as_ref().unwrap().encoded_wire)
+                .unwrap()
+                .result,
+            Err(WireError {
+                code: ErrorCode::Busy,
+                ..
+            })
+        ));
+        let before = totals(&j);
+        let mut forged = response(&p.request);
+        forged.result = Ok(ResponseResult::Finish { finished: true });
+        p.response = Some(publication(&p.owner, &forged));
+        assert!(j.command_project_request(&p, NOW).is_err());
+        assert_eq!(totals(&j), before);
+        assert_eq!(j.command_admission_budget().unwrap().finished, 0);
+    }
+    #[test]
+    fn client_final_poll_consumption_and_finish_are_one_commit() {
+        let (tmp, mut j, owner) = client_setup();
+        let request = submit(1);
+        let answer = response(&request);
+        client_exchange(&mut j, &owner, &request, &answer);
+        let sha = j
+            .command_client_response(&owner, request.id)
+            .unwrap()
+            .unwrap()
+            .1;
+        j.command_consume_response(&owner, request.id, sha, None)
+            .unwrap();
+        let poll = Request {
+            binding: owner.binding.clone(),
+            id: id(300),
+            op: RequestOp::Poll {
+                invocation: id(1),
+                stdout_cursor: 0,
+                stderr_cursor: 0,
+                max_bytes: 8192,
+            },
+        };
+        let mut answer = response(&poll);
+        let mut terminal = exited_status(&poll);
+        terminal.stdout.produced = 3;
+        terminal.stdout.retained = 3;
+        answer.result = Ok(ResponseResult::Poll {
+            status: terminal,
+            stdout: Chunk {
+                bytes: b"abc".to_vec(),
+                next_cursor: 3,
+            },
+            stderr: Chunk {
+                bytes: vec![],
+                next_cursor: 0,
+            },
+        });
+        client_exchange(&mut j, &owner, &poll, &answer);
+        let sha = j
+            .command_client_response(&owner, poll.id)
+            .unwrap()
+            .unwrap()
+            .1;
+        let candidate = j
+            .command_finish_candidate(
+                &owner,
+                poll.id,
+                sha,
+                Some(ClientDelivery::default()),
+                id(301),
+            )
+            .unwrap()
+            .unwrap();
+        let encoded = wire::encode_request(&candidate).unwrap();
+        let mut outgoing = crate::mdk_adapter::prepare_command_publication(
+            owner.group(),
+            owner.binding.clone(),
+            candidate.id,
+            wire::request_digest(&encoded),
+            encoded,
+            owner.local(),
+        )
+        .unwrap();
+        let before = totals(&j);
+        outgoing.request_sha256[0] ^= 1;
+        assert!(
+            j.command_consume_and_finish(
+                &owner,
+                poll.id,
+                sha,
+                Some(ClientDelivery::default()),
+                Some(&outgoing),
+                NOW
+            )
+            .is_err()
+        );
+        assert_eq!(totals(&j), before);
+        assert_eq!(j.command_client_cursors(&owner, id(1)).unwrap().stdout, 0);
+        outgoing.request_sha256[0] ^= 1;
+        let (delivery, finish) = j
+            .command_consume_and_finish(
+                &owner,
+                poll.id,
+                sha,
+                Some(ClientDelivery::default()),
+                Some(&outgoing),
+                NOW,
+            )
+            .unwrap();
+        assert_eq!(delivery.stdout, 3);
+        assert_eq!(finish, Some(id(301)));
+        assert_eq!(
+            j.command_client_request_invocation(&owner, id(301))
+                .unwrap(),
+            Some(id(1))
+        );
+        assert_eq!(
+            facts(&j.conn, &owner.key(id(1))).unwrap().finish.attempts,
+            1
+        );
+        drop(j);
+        let mut j = Journal::open(
+            &tmp.path().join("journal.db"),
+            &[7; 32],
+            &hex::encode([1; 32]),
+        )
+        .unwrap();
+        let (delivery, finish) = j
+            .command_consume_and_finish(
+                &owner,
+                poll.id,
+                sha,
+                Some(ClientDelivery::default()),
+                None,
+                NOW,
+            )
+            .unwrap();
+        assert_eq!(delivery.stdout, 3);
+        assert_eq!(finish, Some(id(301)));
+        assert_eq!(
+            facts(&j.conn, &owner.key(id(1)))
+                .unwrap()
+                .finish
+                .latest_request,
+            Some(id(301))
+        );
+        let pending = j.command_client_finish_state(&owner, id(1)).unwrap();
+        assert!(!pending.confirmed);
+        assert_eq!(pending.attempts, 1);
+        let answer = response(&candidate);
+        let incoming = publication(&owner, &answer);
+        j.command_project_response(
+            &CommandSource {
+                group: owner.group.clone(),
+                native_id: vec![99],
+                app_event_id: incoming.key.app_event_id,
+                author: owner.binding.server,
+                authority_metadata: b"auth".to_vec(),
+            },
+            &answer,
+            NOW,
+        )
+        .unwrap();
+        assert!(
+            j.command_client_finish_state(&owner, id(1))
+                .unwrap()
+                .confirmed
+        );
+    }
+    #[test]
+    fn schema_four_upgrade_preserves_counter_and_defaults_finish_facts() {
+        let (tmp, mut j) = setup();
+        let (_, key) = admitted(&mut j, 1);
+        fact(&mut j, &key, State::Running);
+        let mut f: serde_json::Value =
+            serde_json::from_slice(&encode(&facts(&j.conn, &key).unwrap()).unwrap()).unwrap();
+        f.as_object_mut().unwrap().remove("finish");
+        j.conn
+            .execute(
+                "UPDATE command_invocations SET facts=?2 WHERE k=?1",
+                params![key_bytes(&key), serde_json::to_vec(&f).unwrap()],
+            )
+            .unwrap();
+        // Actual schema-4 shape, not a current table with just its version changed.
+        j.conn.execute_batch("ALTER TABLE command_invocations RENAME TO old_invocations;
+            CREATE TABLE command_invocations(cursor INTEGER PRIMARY KEY AUTOINCREMENT,k BLOB NOT NULL UNIQUE,server BLOB NOT NULL,principal BLOB NOT NULL,invocation BLOB NOT NULL,owner BLOB NOT NULL,submit BLOB,stdin_length INTEGER NOT NULL CHECK(stdin_length BETWEEN 0 AND 16384),stdout_delivered INTEGER NOT NULL DEFAULT 0,stderr_delivered INTEGER NOT NULL DEFAULT 0,digest BLOB NOT NULL,facts BLOB NOT NULL,active INTEGER NOT NULL,created INTEGER NOT NULL,operation BLOB,operation_revision INTEGER,operation_kind TEXT,operation_request BLOB,server_side INTEGER NOT NULL);
+            INSERT INTO command_invocations SELECT cursor,k,server,principal,invocation,owner,submit,stdin_length,stdout_delivered,stderr_delivered,digest,facts,active,created,operation,operation_revision,operation_kind,operation_request,server_side FROM old_invocations;
+            DROP TABLE old_invocations;
+            ALTER TABLE command_replay_state DROP COLUMN finished; PRAGMA user_version=4;").unwrap();
+        drop(j);
+        let mut j = Journal::open(
+            &tmp.path().join("journal.db"),
+            &[7; 32],
+            &hex::encode([2; 32]),
+        )
+        .unwrap();
+        let b = j.command_admission_budget().unwrap();
+        assert_eq!(b.admitted, 1);
+        assert_eq!(b.finished, 0);
+        assert!(!facts(&j.conn, &key).unwrap().finish.client_finished);
+        assert!(matches!(
+            check_original_submit(&j.conn, &key, id(101)),
+            Err(Error::Invalid("command_legacy_handle_unavailable"))
+        ));
+        let (_, fresh) = admitted(&mut j, 2);
+        assert!(j.command_get(&fresh).unwrap().is_some());
+        drop(j);
+        let j = Journal::open(
+            &tmp.path().join("journal.db"),
+            &[7; 32],
+            &hex::encode([2; 32]),
+        )
+        .unwrap();
+        assert_eq!(j.command_admission_budget().unwrap().admitted, 1);
+        assert!(j.command_get(&fresh).unwrap().is_some());
+    }
+    #[test]
+    fn busy_finish_repoll_has_four_persisted_attempts_and_never_returns_stale_busy_id() {
+        let (tmp, mut j, owner) = client_setup();
+        let request = submit(1);
+        client_exchange(&mut j, &owner, &request, &response(&request));
+        let sha = j
+            .command_client_response(&owner, request.id)
+            .unwrap()
+            .unwrap()
+            .1;
+        j.command_consume_response(&owner, request.id, sha, None)
+            .unwrap();
+        for attempt in 0..=4u16 {
+            let poll = Request {
+                binding: owner.binding.clone(),
+                id: id(300 + attempt * 2),
+                op: RequestOp::Poll {
+                    invocation: id(1),
+                    stdout_cursor: 0,
+                    stderr_cursor: 0,
+                    max_bytes: 8192,
+                },
+            };
+            let mut answer = response(&poll);
+            answer.result = Ok(ResponseResult::Poll {
+                status: exited_status(&poll),
+                stdout: Chunk {
+                    bytes: vec![],
+                    next_cursor: 0,
+                },
+                stderr: Chunk {
+                    bytes: vec![],
+                    next_cursor: 0,
+                },
+            });
+            let (poll_source, poll_publication) = client_exchange(&mut j, &owner, &poll, &answer);
+            let sha = j
+                .command_client_response(&owner, poll.id)
+                .unwrap()
+                .unwrap()
+                .1;
+            let candidate = j
+                .command_finish_candidate(
+                    &owner,
+                    poll.id,
+                    sha,
+                    Some(ClientDelivery::default()),
+                    id(301 + attempt * 2),
+                )
+                .unwrap();
+            if attempt == 4 {
+                assert!(candidate.is_none());
+                assert!(
+                    j.command_consume_and_finish(
+                        &owner,
+                        poll.id,
+                        sha,
+                        Some(ClientDelivery::default()),
+                        None,
+                        NOW
+                    )
+                    .unwrap()
+                    .1
+                    .is_none()
+                );
+                break;
+            }
+            let finish = candidate.unwrap();
+            let encoded = wire::encode_request(&finish).unwrap();
+            let pub_ = crate::mdk_adapter::prepare_command_publication(
+                owner.group(),
+                owner.binding.clone(),
+                finish.id,
+                wire::request_digest(&encoded),
+                encoded,
+                owner.local(),
+            )
+            .unwrap();
+            assert_eq!(
+                j.command_consume_and_finish(
+                    &owner,
+                    poll.id,
+                    sha,
+                    Some(ClientDelivery::default()),
+                    Some(&pub_),
+                    NOW
+                )
+                .unwrap()
+                .1,
+                Some(finish.id)
+            );
+            assert_eq!(
+                j.command_consume_and_finish(
+                    &owner,
+                    poll.id,
+                    sha,
+                    Some(ClientDelivery::default()),
+                    None,
+                    NOW
+                )
+                .unwrap()
+                .1,
+                Some(finish.id)
+            );
+            let mut busy = response(&finish);
+            busy.result = Err(WireError {
+                code: ErrorCode::Busy,
+                detail: None,
+            });
+            client_exchange(&mut j, &owner, &finish, &busy);
+            let sha = j
+                .command_client_response(&owner, finish.id)
+                .unwrap()
+                .unwrap()
+                .1;
+            j.command_consume_and_finish(&owner, finish.id, sha, None, None, NOW)
+                .unwrap();
+            client_settle(&mut j, &poll_source, &poll_publication);
+            j.command_maintain(NOW, &CommandProtection::default())
+                .unwrap();
+            // Restart cannot reset the retry allowance or resurrect a consumed Busy.
+            drop(j);
+            j = Journal::open(
+                &tmp.path().join("journal.db"),
+                &[7; 32],
+                &hex::encode([1; 32]),
+            )
+            .unwrap();
+            assert_eq!(
+                j.command_client_finish_state(&owner, id(1))
+                    .unwrap()
+                    .attempts,
+                u8::try_from(attempt + 1).unwrap()
+            );
+        }
+    }
+    #[test]
+    fn finish_requires_final_valid_poll_and_no_other_client_work() {
+        let (_tmp, mut j, owner) = client_setup();
+        let submit = submit(1);
+        client_exchange(&mut j, &owner, &submit, &response(&submit));
+        let submit_sha = j
+            .command_client_response(&owner, submit.id)
+            .unwrap()
+            .unwrap()
+            .1;
+        let poll = Request {
+            binding: owner.binding.clone(),
+            id: id(300),
+            op: RequestOp::Poll {
+                invocation: id(1),
+                stdout_cursor: 0,
+                stderr_cursor: 0,
+                max_bytes: 8192,
+            },
+        };
+        let mut answer = response(&poll);
+        answer.result = Ok(ResponseResult::Poll {
+            status: exited_status(&poll),
+            stdout: Chunk {
+                bytes: vec![],
+                next_cursor: 0,
+            },
+            stderr: Chunk {
+                bytes: vec![],
+                next_cursor: 0,
+            },
+        });
+        client_exchange(&mut j, &owner, &poll, &answer);
+        let sha = j
+            .command_client_response(&owner, poll.id)
+            .unwrap()
+            .unwrap()
+            .1;
+        let candidate = |j: &Journal| {
+            j.command_finish_candidate(
+                &owner,
+                poll.id,
+                sha,
+                Some(ClientDelivery::default()),
+                id(400),
+            )
+            .unwrap()
+        };
+        assert!(candidate(&j).is_none()); // earlier Submit answer still unconsumed
+        j.command_consume_response(&owner, submit.id, submit_sha, None)
+            .unwrap();
+        assert!(candidate(&j).is_some());
+        let read = Request {
+            binding: owner.binding.clone(),
+            id: id(301),
+            op: RequestOp::Status { invocation: id(1) },
+        };
+        client_request(&mut j, &owner, &read);
+        assert!(candidate(&j).is_none()); // unanswered read blocks final claim
+        client_exchange(
+            &mut j,
+            &owner,
+            &read,
+            &Response {
+                result: Ok(ResponseResult::Status(exited_status(&read))),
+                ..response(&read)
+            },
+        );
+        assert!(candidate(&j).is_none()); // answered but unconsumed also blocks
+        let sha_read = j
+            .command_client_response(&owner, read.id)
+            .unwrap()
+            .unwrap()
+            .1;
+        assert!(
+            j.command_finish_candidate(&owner, read.id, sha_read, None, id(401))
+                .unwrap()
+                .is_none()
+        ); // Status cannot substitute for Poll
+        j.command_consume_response(&owner, read.id, sha_read, None)
+            .unwrap();
+        assert!(candidate(&j).is_some());
+        // Impossible chunk progress is durably consumed without advancing or
+        // preparing Finish, then reports the finite diagnostic to its caller.
+        let mut bad = answer;
+        if let Ok(ResponseResult::Poll { status, stdout, .. }) = &mut bad.result {
+            status.stdout.produced = 2;
+            status.stdout.retained = 2;
+            stdout.bytes = vec![1];
+            stdout.next_cursor = 2;
+        }
+        let bytes = wire::encode_response(&bad).unwrap();
+        let digest = wire::request_digest(&bytes);
+        j.conn.execute("UPDATE command_requests SET received_response=?2,response_digest=?3 WHERE request_id=?1",params![poll.id.as_slice(),bytes,digest.as_slice()]).unwrap();
+        assert!(
+            j.command_finish_candidate(
+                &owner,
+                poll.id,
+                digest,
+                Some(ClientDelivery::default()),
+                id(402)
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(matches!(
+            j.command_consume_and_finish(
+                &owner,
+                poll.id,
+                digest,
+                Some(ClientDelivery::default()),
+                None,
+                NOW
+            ),
+            Err(Error::Invalid("command_output_cursor_invalid"))
+        ));
+        assert!(j.command_client_cursors(&owner, id(1)).unwrap() == ClientDelivery::default());
+        assert!(
+            j.command_client_response(&owner, poll.id)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            j.command_client_finish_state(&owner, id(1))
+                .unwrap()
+                .attempts,
+            0
+        );
+    }
+    #[test]
+    fn count_drain_requires_terminal_publications_and_native_ack_proof() {
+        let (_tmp, mut j) = setup();
+        let (p, _) = admitted(&mut j, 1);
+        let ready = |j: &Journal| {
+            crate::command_limits::CountDrain {
+                maximum: Some(1),
+                admitted: 1,
+                reserved: 0,
+                finished: 1,
+                control_idle: true,
+                publications_terminal: j.command_publications_terminal().unwrap(),
+            }
+            .ready()
+        };
+        assert!(!ready(&j)); // prepared response
+        let publication = &p.response.as_ref().unwrap().key;
+        j.command_claim_publication(publication).unwrap();
+        assert!(!ready(&j)); // uncertain publication is not a delivery proof
+        j.conn
+            .execute("UPDATE command_publications SET state='published'", [])
+            .unwrap();
+        assert!(ready(&j));
+        assert!(!j.command_sources_all_acknowledged().unwrap());
+        j.command_record_native_acks(
+            &[SourceKey {
+                group: p.source.group.clone(),
+                native_id: p.source.native_id.clone(),
+            }],
+            &[],
+        )
+        .unwrap();
+        assert!(j.command_sources_all_acknowledged().unwrap());
+        j.conn
+            .execute(
+                "INSERT INTO command_early_invalidations VALUES(?1,?2)",
+                params![owner().group(), vec![99u8]],
+            )
+            .unwrap();
+        assert!(!j.command_sources_all_acknowledged().unwrap());
+    }
     #[test]
     fn admission_deduplicates_and_rolls_back_every_obligation() {
         let (_tmp, mut j) = setup();
@@ -3763,7 +5012,7 @@ mod tests {
         assert!(ack.decision == CommittedDecision::StillUncertain);
         let r = j.command_get(&key).unwrap().unwrap();
         assert!(r.uncertain && r.admission == Admission::Dispatching);
-        assert!(j.command_recovery().unwrap()[0].dispatch.is_none());
+        assert!(j.command_get(&key).unwrap().unwrap().admission == Admission::Dispatching);
         let op = j
             .command_begin_operation(&key, r.revision, EngineOperation::Observe)
             .unwrap();
@@ -3779,7 +5028,7 @@ mod tests {
             )
             .unwrap();
         assert!(ack.decision == CommittedDecision::DefinitelyUnsubmitted);
-        assert!(j.command_recovery().unwrap()[0].dispatch.is_some());
+        assert!(j.command_get(&key).unwrap().unwrap().admission == Admission::Accepted);
         fact(&mut j, &key, State::Running);
         let r = j.command_get(&key).unwrap().unwrap();
         let op = j
@@ -3841,7 +5090,7 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        assert!(j.command_recovery().unwrap()[0].dispatch.is_none());
+        assert!(!j.command_get(&key).unwrap().unwrap().authority_valid);
     }
     #[test]
     fn encrypted_reopen_preserves_dispatch_barrier_and_fails_old_input_generation() {
@@ -3861,13 +5110,62 @@ mod tests {
         j.command_init().unwrap();
         let r = j.command_get(&key).unwrap().unwrap();
         assert!(r.feeder == FeederState::Failed && r.warning == Some(Warning::InputFailed));
-        assert!(j.command_recovery().unwrap()[0].stdin.is_none());
+        assert!(matches!(
+            crate::command_engine::next_feeder_operation(&r).unwrap(),
+            Some(EngineOperation::Cancel)
+        ));
         assert!(
             !fs::read(tmp.path().join("journal.db"))
                 .unwrap()
                 .windows(8)
                 .any(|b| b == b"/bin/cat")
         );
+    }
+    #[test]
+    fn natural_exit_empty_stdin_completes_without_claiming_eof() {
+        for (length, health, expected) in [
+            (0, InputHealth::Closed, None),
+            (0, InputHealth::Gap, None),
+            (0, InputHealth::Uncertain, None),
+            (4, InputHealth::Closed, Some(Warning::StdinUnconsumed)),
+            (4, InputHealth::Gap, Some(Warning::InputFailed)),
+        ] {
+            let (_tmp, mut j) = setup();
+            let mut request = submit(1);
+            if let RequestOp::Submit(submit) = &mut request.op {
+                submit.stdin.truncate(length);
+            }
+            let plan = projection(request.clone());
+            let key = j.command_project_request(&plan, NOW).unwrap().key;
+            let r = j.command_get(&key).unwrap().unwrap();
+            let op = j
+                .command_begin_operation(&key, r.revision, EngineOperation::Observe)
+                .unwrap();
+            let mut status = exited_status(&request);
+            status.input.health = health;
+            j.command_commit_completion(
+                &EngineCompletion {
+                    operation: op.id,
+                    key: key.clone(),
+                    revision: op.revision,
+                    result: EngineObservation::Input {
+                        status,
+                        generation: None,
+                        credit: 0,
+                        worker: WorkerState::Exited,
+                    },
+                },
+                &[],
+            )
+            .unwrap();
+            let r = j.command_get(&key).unwrap().unwrap();
+            assert!(r.warning == expected);
+            assert!(r.status.as_ref().unwrap().warning == expected);
+            assert!(!r.status.as_ref().unwrap().input.eof_sent);
+            assert_eq!(r.status.as_ref().unwrap().input.accepted, 0);
+            assert_eq!(r.status.as_ref().unwrap().input.delivered, 0);
+            assert!(matches!(r.feeder, FeederState::Complete) == (length == 0));
+        }
     }
     #[test]
     fn feeder_registers_immutable_bytes_and_reconciles_without_replaying() {
@@ -4786,6 +6084,229 @@ mod tests {
         );
     }
     #[test]
+    fn client_locator_metadata_survives_slot_payload_gc_and_encrypted_reopen() {
+        use crate::command_client::CommandHandle;
+        let (tmp, mut journal, owner) = client_setup();
+        let request = submit(1);
+        assert!(
+            journal
+                .command_client_slot_state(&owner, request.id)
+                .unwrap()
+                == ClientSlotState::Absent
+        );
+        let bytes = wire::encode_request(&request).unwrap();
+        let outgoing = crate::mdk_adapter::prepare_command_publication(
+            owner.group(),
+            owner.binding.clone(),
+            request.id,
+            wire::request_digest(&bytes),
+            bytes.clone(),
+            owner.local(),
+        )
+        .unwrap();
+        journal
+            .command_submit_client(&owner, &request, &outgoing, NOW)
+            .unwrap();
+        assert!(
+            journal
+                .command_client_slot_state(&owner, request.id)
+                .unwrap()
+                == ClientSlotState::Pending
+        );
+        let entry = journal.command_client_invocation(&owner, id(1)).unwrap();
+        let handle = CommandHandle::from_invocation("default", &entry).unwrap();
+        handle
+            .validate_entry("default", owner.local(), &entry)
+            .unwrap();
+        assert!(
+            handle
+                .validate_entry("other", owner.local(), &entry)
+                .is_err()
+        );
+        assert!(handle.validate_entry("default", [9; 32], &entry).is_err());
+        assert_eq!(entry.submit_request_id, request.id);
+        assert_eq!(entry.submit_request_sha256, wire::request_digest(&bytes));
+        assert_ne!(
+            entry.submit_request_sha256,
+            journal
+                .command_get(&owner.key(id(1)))
+                .unwrap()
+                .unwrap()
+                .digest
+        );
+        let answer = response(&request);
+        let (source, outgoing) = client_exchange(&mut journal, &owner, &request, &answer);
+        assert!(
+            journal
+                .command_client_slot_state(&owner, request.id)
+                .unwrap()
+                == ClientSlotState::Answered
+        );
+        let mut wrong_owner = owner.clone();
+        wrong_owner.authority[0] ^= 1;
+        assert!(
+            journal
+                .command_client_slot_state(&wrong_owner, request.id)
+                .is_err()
+        );
+        let digest = journal
+            .command_client_response(&owner, request.id)
+            .unwrap()
+            .unwrap()
+            .1;
+        journal
+            .command_consume_response(&owner, request.id, digest, None)
+            .unwrap();
+        assert!(
+            journal
+                .command_client_slot_state(&owner, request.id)
+                .unwrap()
+                == ClientSlotState::Consumed
+        );
+        client_settle(&mut journal, &source, &outgoing);
+        journal
+            .command_maintain(NOW + 86401, &CommandProtection::default())
+            .unwrap();
+        assert!(
+            journal
+                .command_client_slot_state(&owner, request.id)
+                .unwrap()
+                == ClientSlotState::Absent
+        );
+        assert!(
+            journal
+                .command_get(&owner.key(id(1)))
+                .unwrap()
+                .unwrap()
+                .submit
+                .is_none()
+        );
+        drop(journal);
+        let mut journal = Journal::open(
+            &tmp.path().join("journal.db"),
+            &[7; 32],
+            &hex::encode(owner.local()),
+        )
+        .unwrap();
+        let page = journal.command_client_invocations(None, 64).unwrap();
+        assert_eq!(page.entries.len(), 1);
+        assert!(page.next.is_none());
+        assert_eq!(page.entries[0].submit_request_id, request.id);
+        assert_eq!(
+            page.entries[0].submit_request_sha256,
+            wire::request_digest(&bytes)
+        );
+        assert_eq!(page.entries[0].created, NOW);
+        assert!(page.entries[0].admission == Admission::Accepted);
+        assert!(page.entries[0].state == Some(State::Accepted));
+        assert!(!page.entries[0].engine_known);
+        assert!(page.entries[0].refusal.is_none());
+        handle
+            .validate_entry("default", owner.local(), &page.entries[0])
+            .unwrap();
+        assert!(CommandHandle::from_invocation("default", &page.entries[0]).unwrap() == handle);
+        let mut changed = request.clone();
+        changed.id = id(500);
+        let bytes = wire::encode_request(&changed).unwrap();
+        let changed_outgoing = crate::mdk_adapter::prepare_command_publication(
+            owner.group(),
+            owner.binding.clone(),
+            changed.id,
+            wire::request_digest(&bytes),
+            bytes,
+            owner.local(),
+        )
+        .unwrap();
+        assert!(matches!(
+            journal.command_submit_client(&owner, &changed, &changed_outgoing, NOW + 86401),
+            Err(Error::Invalid("command_submit_request_conflict"))
+        ));
+        assert!(
+            journal
+                .command_find_request(&owner, &changed)
+                .unwrap()
+                .is_none()
+        );
+        journal
+            .command_submit_client(&owner, &request, &outgoing, NOW + 86401)
+            .unwrap();
+        assert_eq!(
+            journal
+                .command_client_invocations(None, 64)
+                .unwrap()
+                .entries
+                .len(),
+            1
+        );
+        journal.command_revoke_group(owner.group()).unwrap();
+        let revoked = journal.command_client_invocations(None, 64).unwrap();
+        assert!(!revoked.entries[0].authority_valid);
+        assert!(
+            handle
+                .validate_entry("default", owner.local(), &revoked.entries[0])
+                .is_err()
+        );
+        assert!(journal.command_client_invocation(&owner, id(1)).is_err());
+        assert!(
+            journal
+                .command_client_slot_state(&owner, request.id)
+                .is_err()
+        );
+    }
+    #[test]
+    fn client_invocation_pages_are_client_only_stable_and_bounded() {
+        let (_tmp, mut journal, owner) = client_setup();
+        for sequence in 1..=3 {
+            let request = submit(sequence);
+            let bytes = wire::encode_request(&request).unwrap();
+            let publication = crate::mdk_adapter::prepare_command_publication(
+                owner.group(),
+                owner.binding.clone(),
+                request.id,
+                wire::request_digest(&bytes),
+                bytes,
+                owner.local(),
+            )
+            .unwrap();
+            journal
+                .command_submit_client(&owner, &request, &publication, NOW)
+                .unwrap();
+        }
+        let server_owner = Owner::from_context(&AuthenticatedCommandContext::test_fixture(
+            owner.local(),
+            [3; 32],
+            b"server-room".to_vec(),
+            id(0),
+            CommandDirection::Server,
+        ));
+        let payload = Submit {
+            invocation: id(4),
+            argv: vec![b"/bin/true".to_vec()],
+            stdin: vec![],
+        };
+        insert_invocation(&journal.conn, &server_owner, &payload, [3; 32], None, NOW).unwrap();
+        let mut after = None;
+        let mut seen = Vec::new();
+        loop {
+            let page = journal.command_client_invocations(after, 1).unwrap();
+            assert_eq!(page.entries.len(), 1);
+            seen.push(page.entries[0].invocation);
+            if page.next.is_none() {
+                break;
+            }
+            assert!(after.is_none_or(|cursor| page.next.unwrap() > cursor));
+            after = page.next;
+        }
+        assert!(seen == vec![id(1), id(2), id(3)]);
+        assert!(journal.command_client_invocations(None, 0).is_err());
+        assert!(journal.command_client_invocations(None, 65).is_err());
+        assert!(
+            journal
+                .command_client_invocations(Some(u64::MAX), 1)
+                .is_err()
+        );
+    }
+    #[test]
     fn answered_unretired_server_poll_defers_same_source_until_ack_and_maintenance() {
         let (_tmp, mut journal) = setup();
         let (_, key) = admitted(&mut journal, 1);
@@ -5056,8 +6577,13 @@ mod tests {
         .unwrap();
         let recovered = j.command_recovery().unwrap();
         assert_eq!(recovered.len(), 1);
-        assert!(recovered[0].dispatch.is_none());
-        assert!(recovered[0].stdin.is_none());
+        let row = j.command_get(&recovered[0].key).unwrap().unwrap();
+        assert!(row.engine_known && row.submit.is_none());
+        assert!(
+            crate::command_engine::next_feeder_operation(&row)
+                .unwrap()
+                .is_none()
+        );
         assert!(j.command_get(&key).unwrap().unwrap().uncertain);
         let mut duplicate = projection(plan.request.clone());
         duplicate.decision = AdmissionDecision::Existing;

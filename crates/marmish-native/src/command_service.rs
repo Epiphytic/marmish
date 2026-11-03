@@ -38,6 +38,7 @@ pub(crate) struct CommandService {
     recovery: Option<BTreeSet<InvocationKey>>,
     pending_cursor: usize,
     cleanup: Option<CleanupPreparation>,
+    lifetime: Option<std::sync::Arc<crate::command_limits::ServiceLifetime>>,
 }
 impl CommandService {
     pub(crate) fn new(config: CommandConfig, engine: Option<CommandEngine>) -> Self {
@@ -51,10 +52,37 @@ impl CommandService {
             recovery: None,
             pending_cursor: 0,
             cleanup: None,
+            lifetime: None,
         }
     }
-    pub(crate) fn config(&self) -> &CommandConfig {
-        &self.config
+    pub(crate) fn set_lifetime(
+        &mut self,
+        lifetime: std::sync::Arc<crate::command_limits::ServiceLifetime>,
+    ) {
+        self.lifetime = Some(lifetime);
+    }
+    pub(crate) fn lifetime(
+        &self,
+    ) -> Option<std::sync::Arc<crate::command_limits::ServiceLifetime>> {
+        self.lifetime.clone()
+    }
+    fn lifetime_expired(&self) -> Result<bool> {
+        self.lifetime.as_ref().map_or(Ok(false), |l| l.expired())
+    }
+    pub(crate) fn count_exit_ready(&self, journal: &Journal) -> Result<bool> {
+        let b = journal.command_admission_budget()?;
+        Ok(crate::command_limits::CountDrain {
+            maximum: b.maximum,
+            admitted: b.admitted,
+            reserved: b.reserved,
+            finished: b.finished,
+            control_idle: self.completion.is_none()
+                && self.ack.is_none()
+                && self.enqueued.is_empty()
+                && self.waiting.is_empty(),
+            publications_terminal: journal.command_publications_terminal()?,
+        }
+        .ready())
     }
     pub(crate) fn engine_mut(&mut self) -> Option<&mut CommandEngine> {
         self.engine.as_mut()
@@ -106,8 +134,16 @@ impl CommandService {
         let record = journal.command_get(&key)?;
         let (decision, response) = if old.is_some() {
             (AdmissionDecision::Existing, None)
+        } else if matches!(request.op, RequestOp::Finish { .. }) {
+            self.finish_response(journal, &owner, &request)?
         } else {
-            self.admission_response(&owner, &request, record.as_ref())?
+            let admission = self.admission_response(&owner, &request, record.as_ref())?;
+            // Only a new, policy-valid Submit can reserve the bounded budget.
+            if matches!(admission.0, AdmissionDecision::New) {
+                self.bounded_admission(journal, &owner, &request, admission)?
+            } else {
+                admission
+            }
         };
         journal.command_project_request(
             &CommandProjection {
@@ -119,6 +155,48 @@ impl CommandService {
             },
             now,
         )
+    }
+    fn finish_response(
+        &self,
+        journal: &Journal,
+        owner: &Owner,
+        request: &Request,
+    ) -> Result<(AdmissionDecision, Option<PreparedCommandPublication>)> {
+        let result = journal.command_finish_result(owner, request)?;
+        let decision = match &result {
+            Ok(_) => AdmissionDecision::Existing,
+            Err(e) => AdmissionDecision::Refused(e.clone()),
+        };
+        Ok((
+            decision,
+            Some(response_publication(owner, request, result)?),
+        ))
+    }
+    fn bounded_admission(
+        &self,
+        journal: &Journal,
+        owner: &Owner,
+        request: &Request,
+        admission: (AdmissionDecision, Option<PreparedCommandPublication>),
+    ) -> Result<(AdmissionDecision, Option<PreparedCommandPublication>)> {
+        if self.lifetime_expired()? {
+            return Err(Error::Invalid("command_admission_closed"));
+        }
+        let budget = journal.command_admission_budget()?;
+        if budget.reserved_full() && !budget.exhausted() {
+            return Err(Error::Invalid("command_admission_closed"));
+        }
+        if budget.exhausted() {
+            let error = WireError {
+                code: ErrorCode::QuotaExceeded,
+                detail: None,
+            };
+            return Ok((
+                AdmissionDecision::Refused(error.clone()),
+                Some(response_publication(owner, request, Err(error))?),
+            ));
+        }
+        Ok(admission)
     }
     fn admission_response(
         &self,
@@ -224,6 +302,44 @@ impl CommandService {
         )?;
         journal.command_submit_client(&owner, request, &publication, now)
     }
+    // The authenticated context and transaction owner stay separate from the
+    // exact consume/Finish inputs; changing either must not alter their binding.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn consume_client_response(
+        &self,
+        journal: &mut Journal,
+        ctx: &AuthenticatedCommandContext,
+        id: wire::Id,
+        response_sha256: wire::Digest,
+        expected: Option<crate::journal::ClientDelivery>,
+        finish_id: wire::Id,
+        now: u64,
+    ) -> Result<(crate::journal::ClientDelivery, Option<wire::Id>)> {
+        let owner = self.authorize(ctx, CommandDirection::Client)?;
+        let request =
+            journal.command_finish_candidate(&owner, id, response_sha256, expected, finish_id)?;
+        let publication = request
+            .map(|r| {
+                let encoded = wire::encode_request(&r)?;
+                prepare_command_publication(
+                    owner.group(),
+                    owner.binding().clone(),
+                    r.id,
+                    wire::request_digest(&encoded),
+                    encoded,
+                    owner.binding().client,
+                )
+            })
+            .transpose()?;
+        journal.command_consume_and_finish(
+            &owner,
+            id,
+            response_sha256,
+            expected,
+            publication.as_ref(),
+            now,
+        )
+    }
     /// One bounded actor turn; engine calls only touch nonblocking channels.
     pub(crate) fn poll_completions(&mut self, journal: &mut Journal, now: u64) -> Result<()> {
         let result = self.process_completions(journal, now);
@@ -272,6 +388,7 @@ impl CommandService {
         }
         if self.cleanup.is_some() {
             self.advance_cleanup(journal)?;
+            self.cleanup_snapshot();
             Ok(())
         } else {
             self.schedule(journal)
@@ -331,6 +448,33 @@ impl CommandService {
         }
         Ok(())
     }
+    /// Same-UID fixture control, bound to a retained server invocation key.
+    pub(crate) fn cancel_fixture_key(
+        &mut self,
+        journal: &mut Journal,
+        key: &InvocationKey,
+    ) -> Result<bool> {
+        if self.cleanup.is_some() {
+            return Err(Error::Invalid("server_draining"));
+        }
+        let row = journal
+            .command_get(key)?
+            .filter(|row| row.owner.server_side())
+            .ok_or(Error::Invalid("command_not_found"))?;
+        if !row.active() {
+            return Ok(false);
+        }
+        if !row.engine_known || row.uncertain {
+            return Err(Error::Storage("command_cleanup_busy"));
+        }
+        if self.engine.is_none() {
+            return Err(Error::Invalid("commands_disabled"));
+        }
+        let operation = register(journal, key, row.revision, None, EngineOperation::Cancel)?
+            .ok_or(Error::Storage("command_cleanup_busy"))?;
+        self.enqueue(operation);
+        Ok(true)
+    }
     pub(crate) fn begin_cleanup(&mut self, journal: &mut Journal) -> Result<u64> {
         if self.cleanup.is_some() {
             return Err(Error::Invalid("server_draining"));
@@ -362,6 +506,18 @@ impl CommandService {
             consuming: false,
         });
         Ok(fence)
+    }
+    /// Cached actor facts only: this never polls the engine or reconciles jobs.
+    pub(crate) fn cleanup_snapshot_readonly(&self) -> (CleanupState, Option<u64>) {
+        self.cleanup
+            .as_ref()
+            .map_or((CleanupState::Open, None), |p| (p.state, Some(p.fence)))
+    }
+    pub(crate) fn cleanup_observation_pending(&self) -> bool {
+        self.completion.is_some()
+            || self.ack.is_some()
+            || !self.enqueued.is_empty()
+            || !self.waiting.is_empty()
     }
     pub(crate) fn cleanup_snapshot(&mut self) -> (CleanupState, Option<u64>) {
         let Some(preparation) = self.cleanup.as_mut() else {
@@ -515,6 +671,14 @@ impl CommandService {
         self.try_operation(operation);
     }
     fn try_operation(&mut self, operation: OperationRecord) {
+        // A full queue preserves an unbegun Dispatch locally. Recheck on every
+        // attempt, including that waiting path. Clock errors fail closed.
+        if matches!(operation.operation, EngineOperation::Dispatch { .. })
+            && self.lifetime_expired().unwrap_or(true)
+        {
+            self.waiting.push_back(operation);
+            return;
+        }
         let retry = operation.clone();
         if self
             .engine
@@ -580,7 +744,7 @@ impl CommandService {
                         stderr_cursor,
                         max_bytes,
                     },
-                    RequestOp::Submit(_) => continue,
+                    RequestOp::Submit(_) | RequestOp::Finish { .. } => continue,
                 };
                 if let Some(operation) = register(
                     journal,
@@ -611,6 +775,9 @@ impl CommandService {
             {
                 EngineOperation::Observe
             } else if !record.engine_known && record.refusal.is_none() {
+                if self.lifetime_expired()? {
+                    continue;
+                }
                 EngineOperation::Dispatch {
                     submit: record
                         .submit
@@ -832,6 +999,295 @@ mod tests {
             authority_metadata: vec![9],
         }
     }
+    fn maximum(service: &mut CommandService, journal: &mut Journal, n: u64) {
+        service
+            .config
+            .apply_limit_overrides(crate::command_limits::LimitOverrides {
+                max_commands: std::num::NonZeroU64::new(n),
+                max_uptime: None,
+            })
+            .unwrap();
+        journal.command_configure(service.config.limits()).unwrap();
+    }
+    #[test]
+    fn reserved_capacity_defers_but_exhaustion_freezes_refusal_across_limit_raise() {
+        let (_tmp, mut journal, mut service) = setup(false);
+        maximum(&mut service, &mut journal, 1);
+        let first = request();
+        let key = service
+            .project_request(
+                &mut journal,
+                &context(CommandDirection::Server),
+                source(&first, 1),
+                first.clone(),
+                NOW,
+            )
+            .unwrap()
+            .key;
+        let mut second = first.clone();
+        second.id = id(4);
+        if let RequestOp::Submit(s) = &mut second.op {
+            s.invocation = id(5);
+        }
+        assert!(matches!(
+            service.project_request(
+                &mut journal,
+                &context(CommandDirection::Server),
+                source(&second, 2),
+                second.clone(),
+                NOW
+            ),
+            Err(Error::Invalid("command_admission_closed"))
+        ));
+        assert!(
+            journal
+                .command_find_request(
+                    &Owner::from_context(&context(CommandDirection::Server)),
+                    &second
+                )
+                .unwrap()
+                .is_none()
+        );
+        let record = journal.command_get(&key).unwrap().unwrap();
+        let operation = journal
+            .command_begin_operation(&key, record.revision, EngineOperation::Observe)
+            .unwrap();
+        let mut status = accepted_status(key.invocation, 3);
+        status.engine_known = true;
+        status.admission = Admission::Engine;
+        status.state = State::Running;
+        journal
+            .command_commit_completion(
+                &EngineCompletion {
+                    operation: operation.id,
+                    key: key.clone(),
+                    revision: operation.revision,
+                    result: EngineObservation::Found {
+                        status,
+                        worker: WorkerState::Running,
+                    },
+                },
+                &[],
+            )
+            .unwrap();
+        service
+            .project_request(
+                &mut journal,
+                &context(CommandDirection::Server),
+                source(&second, 2),
+                second.clone(),
+                NOW,
+            )
+            .unwrap();
+        let slot = journal
+            .command_find_request(
+                &Owner::from_context(&context(CommandDirection::Server)),
+                &second,
+            )
+            .unwrap()
+            .unwrap();
+        let response_key = slot.response.unwrap();
+        let frozen = journal
+            .command_publications(PublicationState::Unsubmitted, 64)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.key == response_key)
+            .unwrap();
+        let answer = wire::decode_response(&frozen.encoded_wire).unwrap();
+        assert!(matches!(
+            answer.result,
+            Err(WireError {
+                code: ErrorCode::QuotaExceeded,
+                ..
+            })
+        ));
+        maximum(&mut service, &mut journal, 2);
+        assert!(
+            service
+                .project_request(
+                    &mut journal,
+                    &context(CommandDirection::Server),
+                    source(&second, 3),
+                    second.clone(),
+                    NOW
+                )
+                .unwrap()
+                .existing
+        );
+        let mut third = second;
+        third.id = id(6);
+        if let RequestOp::Submit(s) = &mut third.op {
+            s.invocation = id(7);
+        }
+        let thirdkey = service
+            .project_request(
+                &mut journal,
+                &context(CommandDirection::Server),
+                source(&third, 4),
+                third,
+                NOW,
+            )
+            .unwrap()
+            .key;
+        assert!(journal.command_get(&thirdkey).unwrap().is_some());
+        assert_eq!(journal.command_admission_budget().unwrap().admitted, 1);
+        assert!(service.engine.is_none());
+    }
+    #[test]
+    fn uptime_defers_new_submit_and_keeps_queued_dispatch_outside_engine() {
+        let (_tmp, mut journal, mut service) = setup(false);
+        let request = request();
+        let key = service
+            .project_request(
+                &mut journal,
+                &context(CommandDirection::Server),
+                source(&request, 1),
+                request.clone(),
+                NOW,
+            )
+            .unwrap()
+            .key;
+        let row = journal.command_get(&key).unwrap().unwrap();
+        let operation = journal
+            .command_begin_operation(
+                &key,
+                row.revision,
+                EngineOperation::Dispatch {
+                    submit: row.submit.unwrap(),
+                },
+            )
+            .unwrap();
+        let (gate, rx) = std::sync::mpsc::channel();
+        service.engine = Some(CommandEngine::gated_stop_for_test(rx));
+        // Saturate the real bounded bridge queue, then preserve the exact Dispatch.
+        for n in 0..64u8 {
+            let mut fake = operation.clone();
+            fake.id = crate::journal::OperationId([n; 16]);
+            fake.key.invocation = [n; 16];
+            service
+                .engine
+                .as_mut()
+                .unwrap()
+                .try_enqueue(fake)
+                .ok()
+                .unwrap();
+        }
+        service.try_operation(operation.clone());
+        assert_eq!(service.waiting.len(), 1);
+        let lifetime = std::sync::Arc::new(
+            crate::command_limits::ServiceLifetime::start(Some(std::time::Duration::from_nanos(1)))
+                .unwrap(),
+        );
+        while !lifetime.expired().unwrap() {
+            std::hint::spin_loop();
+        }
+        service.set_lifetime(lifetime);
+        // Replace the saturated bridge with an empty, live bounded queue. Without
+        // the lifetime check the retry now enqueues successfully, so this tests
+        // the expiry gate rather than a second queue-full failure.
+        gate.send(()).unwrap();
+        service
+            .engine
+            .take()
+            .unwrap()
+            .shutdown(std::time::Instant::now() + std::time::Duration::from_secs(1))
+            .unwrap();
+        let (gate, rx) = std::sync::mpsc::channel();
+        service.engine = Some(CommandEngine::gated_stop_for_test(rx));
+        let retry = service.waiting.pop_front().unwrap();
+        service.try_operation(retry);
+        assert_eq!(service.waiting.len(), 1);
+        assert!(!service.enqueued.contains(&operation.id.0));
+        assert_eq!(journal.command_admission_budget().unwrap().reserved, 1);
+        let mut fresh = request;
+        fresh.id = id(8);
+        if let RequestOp::Submit(s) = &mut fresh.op {
+            s.invocation = id(9);
+        }
+        assert!(matches!(
+            service.project_request(
+                &mut journal,
+                &context(CommandDirection::Server),
+                source(&fresh, 3),
+                fresh,
+                NOW
+            ),
+            Err(Error::Invalid("command_admission_closed"))
+        ));
+        gate.send(()).unwrap();
+        service
+            .engine
+            .take()
+            .unwrap()
+            .shutdown(std::time::Instant::now() + std::time::Duration::from_secs(1))
+            .unwrap();
+    }
+    #[test]
+    fn expired_lifetime_does_not_register_fresh_dispatch() {
+        let (_tmp, mut journal, mut service) = setup(false);
+        let request = request();
+        let key = service
+            .project_request(
+                &mut journal,
+                &context(CommandDirection::Server),
+                source(&request, 1),
+                request,
+                NOW,
+            )
+            .unwrap()
+            .key;
+        let lifetime = std::sync::Arc::new(
+            crate::command_limits::ServiceLifetime::start(Some(std::time::Duration::from_nanos(1)))
+                .unwrap(),
+        );
+        while !lifetime.expired().unwrap() {
+            std::hint::spin_loop();
+        }
+        service.set_lifetime(lifetime);
+        let before = journal.command_get(&key).unwrap().unwrap();
+        service.schedule_active(&mut journal).unwrap();
+        let after = journal.command_get(&key).unwrap().unwrap();
+        assert!(after.admission == Admission::Accepted);
+        assert_eq!(after.revision, before.revision);
+        assert!(service.waiting.is_empty());
+        assert!(service.enqueued.is_empty());
+        assert_eq!(journal.command_admission_budget().unwrap().reserved, 1);
+    }
+    #[test]
+    fn finish_unknown_is_frozen_without_engine_admission() {
+        let (_tmp, mut journal, mut service) = setup(false);
+        let mut request = request();
+        request.op = RequestOp::Finish {
+            invocation: id(3),
+            submit_sha256: [4; 32],
+            terminal_sha256: [5; 32],
+            stdout_cursor: 0,
+            stderr_cursor: 0,
+        };
+        let projected = service
+            .project_request(
+                &mut journal,
+                &context(CommandDirection::Server),
+                source(&request, 1),
+                request.clone(),
+                NOW,
+            )
+            .unwrap();
+        assert!(journal.command_get(&projected.key).unwrap().is_none());
+        assert_eq!(journal.command_admission_budget().unwrap().admitted, 0);
+        let duplicate = service
+            .project_request(
+                &mut journal,
+                &context(CommandDirection::Server),
+                source(&request, 2),
+                request,
+                NOW,
+            )
+            .unwrap();
+        assert!(duplicate.key == projected.key);
+        assert!(!service.count_exit_ready(&journal).unwrap());
+        assert!(service.waiting.is_empty() && service.enqueued.is_empty());
+    }
     #[test]
     fn cleanup_requires_fresh_definitive_facts_and_closes_admission() {
         let (_tmp, mut journal, mut service) = setup(true);
@@ -905,6 +1361,98 @@ mod tests {
         );
         assert!(journal.command_get(&key).unwrap().unwrap().admission == Admission::Accepted);
         assert!(service.waiting.is_empty() && service.enqueued.is_empty());
+    }
+    #[test]
+    fn keyed_fixture_cancel_requires_known_server_and_registers_exact_key() {
+        let (_tmp, mut journal, mut service) = setup(false);
+        let req = request();
+        let key = service
+            .project_request(
+                &mut journal,
+                &context(CommandDirection::Server),
+                source(&req, 1),
+                req,
+                NOW,
+            )
+            .unwrap()
+            .key;
+        assert!(matches!(
+            service.cancel_fixture_key(&mut journal, &key),
+            Err(Error::Storage("command_cleanup_busy"))
+        ));
+        let mut missing = key.clone();
+        missing.invocation = id(99);
+        assert!(matches!(
+            service.cancel_fixture_key(&mut journal, &missing),
+            Err(Error::Invalid("command_not_found"))
+        ));
+        let row = journal.command_get(&key).unwrap().unwrap();
+        let op = journal
+            .command_begin_operation(&key, row.revision, EngineOperation::Observe)
+            .unwrap();
+        let mut status = accepted_status(key.invocation, 3);
+        status.engine_known = true;
+        status.admission = Admission::Engine;
+        status.state = State::Running;
+        journal
+            .command_commit_completion(
+                &EngineCompletion {
+                    operation: op.id,
+                    key: key.clone(),
+                    revision: op.revision,
+                    result: EngineObservation::Found {
+                        status,
+                        worker: WorkerState::Running,
+                    },
+                },
+                &[],
+            )
+            .unwrap();
+        assert!(matches!(
+            service.cancel_fixture_key(&mut journal, &key),
+            Err(Error::Invalid("commands_disabled"))
+        ));
+        let (gate, rx) = std::sync::mpsc::channel();
+        service.engine = Some(CommandEngine::gated_stop_for_test(rx));
+        assert!(service.cancel_fixture_key(&mut journal, &key).unwrap());
+        assert!(matches!(
+            service.cancel_fixture_key(&mut journal, &key),
+            Err(Error::Storage("command_cleanup_busy"))
+        ));
+        gate.send(()).unwrap();
+        service
+            .engine
+            .take()
+            .unwrap()
+            .shutdown(std::time::Instant::now() + std::time::Duration::from_secs(1))
+            .unwrap();
+    }
+    #[test]
+    fn keyed_fixture_cancel_terminal_is_noop_and_draining_denies_control() {
+        let (_tmp, mut journal, mut service) = setup(true);
+        let req = request();
+        let key = service
+            .project_request(
+                &mut journal,
+                &context(CommandDirection::Server),
+                source(&req, 1),
+                req,
+                NOW,
+            )
+            .unwrap()
+            .key;
+        assert!(!service.cancel_fixture_key(&mut journal, &key).unwrap());
+        assert!(service.enqueued.is_empty() && service.waiting.is_empty());
+        service.cleanup = Some(CleanupPreparation {
+            fence: 1,
+            cursor: None,
+            state: CleanupState::Draining,
+            consuming: false,
+        });
+        assert!(matches!(
+            service.cancel_fixture_key(&mut journal, &key),
+            Err(Error::Invalid("server_draining"))
+        ));
     }
     #[test]
     fn real_engine_cleanup_refreshes_refusal_before_consuming_guard() {

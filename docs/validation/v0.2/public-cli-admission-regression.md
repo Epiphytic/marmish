@@ -1,0 +1,9 @@
+# Public CLI admission race regression
+
+A fresh direct-route client/server run passed using the built native binaries, disposable file-backed identities and an explicitly selected relay. The CLI invoked `/usr/bin/printf` through the real Marmot command interface and returned exit 0 in 3,228 ms. All 61 output bytes matched the expected literal arguments, including dollar expansion syntax, command substitution syntax, backticks, quotes, backslash and Unicode. No shell expansion was requested.
+
+The [sanitized result](public-cli-admission-regression.json) records exactly one authenticated server invocation and one engine admission, natural exit 0, no output gaps and an exited worker. Local cleanup status reported zero active or uncertain jobs and zero running or unknown workers. Both daemons then completed ordinary joined engine/MDK/runtime shutdown. Ordinary shutdown reported `engine_quiesced:false`; this run does **not** claim guarded engine-state deletion, and private test state was retained.
+
+This validates the admission race correction: local queueing alone no longer allows the CLI to send an output Poll before an authenticated Submit admission response. The earlier run executed the command but froze a premature NotFound Poll response. See [CLI code review round 5](../../reviews/v0.2-command-cli-code-r5.md) and [round 6](../../reviews/v0.2-command-cli-code-r6.md). This is one direct-route Linux public-CLI regression, not cross-platform, Tor or complete Phase 2 acceptance.
+
+The final focused run passed 15 CLI tests and 4 destination tests; native debug binaries built successfully. The recorded baseline commit plus exact CLI source digest identifies the uncommitted reviewed fix used for this run; the integrating commit is recorded separately by the parent publication step.

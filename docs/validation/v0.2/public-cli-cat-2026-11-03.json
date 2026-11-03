@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "phase": "v0.2-public-cli-component",
+  "release_qualified": false,
+  "date": "2026-11-03",
+  "route": "off",
+  "explicit_relay": "wss://relay.us.whitenoise.chat/",
+  "platform": "x86_64-unknown-linux-gnu",
+  "installer_exercised": false,
+  "fresh_disposable_identities": true,
+  "provider": "file",
+  "command": "/usr/bin/cat",
+  "exit_code": 0,
+  "duration_ms": 5044,
+  "stdout_bytes": 61,
+  "stdout_sha256": "2a784f680af0c586a91033875b407f7911ebaf5e57e614c6b7e8303d3bdb267c",
+  "stdin_stdout_equal": true,
+  "shutdown": {
+    "client": {
+      "schema": 1,
+      "engine_quiesced": false,
+      "engine_stop_complete": true,
+      "mdk_stop_complete": true,
+      "runtime_cleanup_complete": true
+    },
+    "server": {
+      "schema": 1,
+      "engine_quiesced": false,
+      "engine_stop_complete": true,
+      "mdk_stop_complete": true,
+      "runtime_cleanup_complete": true
+    }
+  },
+  "protected_engine_removal": false,
+  "private_state_preserved": true,
+  "limitations": [
+    "One same-host direct public CLI exchange; not cross-platform or installer acceptance.",
+    "Empty stdin short-command InputFailed bug observed separately and fix pending.",
+    "No protected engine removal attempted from ordinary-stop reports."
+  ],
+  "reopened_owner_cleanup": {
+    "prepare_queued": true,
+    "cached_status": {
+      "active": 0,
+      "cleanup": "quiesced",
+      "engine_quiesced": true,
+      "final_seq": 14,
+      "observation_pending": false,
+      "uncertain": 0,
+      "worker_running": 0,
+      "worker_unknown": 0
+    },
+    "server_rows": 1,
+    "all_rows_fresh_after_fence": true,
+    "all_rows_authority_valid": true,
+    "all_workers_exited": true,
+    "joined_stop": {
+      "schema": 1,
+      "engine_quiesced": true,
+      "engine_stop_complete": true,
+      "mdk_stop_complete": true,
+      "runtime_cleanup_complete": true
+    }
+  }
+}

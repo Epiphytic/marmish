@@ -36,6 +36,8 @@ fn config(
     peer: String,
 ) -> Result<Config> {
     Ok(Config {
+        max_commands:None,
+        max_uptime:None,
         state_dir: root.to_owned(),
         identity: name.to_owned(),
         backend: BackendChoice::File,

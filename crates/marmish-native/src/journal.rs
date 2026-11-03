@@ -16,6 +16,9 @@ use std::path::Path;
 use std::time::Duration;
 use zeroize::Zeroizing;
 
+pub(crate) const JOURNAL_FORMAT: i64 = 5;
+pub(crate) const JOURNAL_SUPPORTED_FORMATS: &[i64] = &[0, 3, 4, 5];
+
 #[derive(Clone, Serialize)]
 pub struct Conversation {
     pub session: String,
@@ -135,7 +138,7 @@ impl Journal {
         let schema: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(db)?;
-        if !matches!(schema, 0 | 3 | 4) {
+        if !JOURNAL_SUPPORTED_FORMATS.contains(&schema) {
             return Err(Error::Storage("journal_schema"));
         }
         conn.execute_batch("PRAGMA temp_store=MEMORY; PRAGMA foreign_keys=ON; PRAGMA secure_delete=ON; PRAGMA synchronous=FULL; PRAGMA journal_mode=WAL;
@@ -168,7 +171,7 @@ impl Journal {
         journal.command_rooms_init()?;
         journal
             .conn
-            .execute_batch("PRAGMA user_version=4;")
+            .pragma_update(None, "user_version", JOURNAL_FORMAT)
             .map_err(db)?;
         Ok(journal)
     }

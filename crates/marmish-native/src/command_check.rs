@@ -96,6 +96,8 @@ fn write_config(
 }
 fn config(root: &Path, identity: &str, relays: &[String], mode: RouteMode) -> Result<Config> {
     Ok(Config {
+        max_commands: None,
+        max_uptime: None,
         state_dir: root.to_owned(),
         identity: identity.into(),
         backend: BackendChoice::File,

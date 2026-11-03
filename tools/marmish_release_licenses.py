@@ -22,7 +22,7 @@ REVIEWED_LICENSES = {
     'BSD-3-Clause', 'ISC', 'MPL-2.0', 'CC0-1.0', 'Unlicense', 'Zlib', 'BSL-1.0',
     'LLVM-exception', 'OpenSSL', 'CDLA-Permissive-2.0', '0BSD', 'MIT-0', 'WTFPL',
 }
-SOURCES = {'marmish': 'https://github.com/Epiphytic/marmish',
+SOURCES = {'native': 'https://github.com/Epiphytic/marmish', 'marmish': 'https://github.com/Epiphytic/marmish',
            'mdk': 'https://github.com/liamhelmer-bel/mdk'}
 NATIVE_NOTICES = {
     'libsqlite3-sys': ('sqlcipher/LICENSE',),
@@ -31,7 +31,7 @@ NATIVE_NOTICES = {
 }
 MAX_TEXT = 2 * 1024 * 1024
 MAX_TOTAL = 128 * 1024 * 1024
-ROOTS = {'marmish': {'marmish-engine', 'marmish-prototype', 'marmish-vault'},
+ROOTS = {'native': {'marmish-native'}, 'marmish': {'marmish-engine', 'marmish-prototype', 'marmish-vault'},
          'mdk': {'wn-cli'}}
 UPSTREAM_FILES = ('LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'LICENSE.txt',
                   'LICENSE.md', 'COPYING', 'NOTICE', 'COPYRIGHT')
@@ -248,15 +248,16 @@ def _package_record(package, root, graph_source, lock, texts):
             'MIT inherited from pinned MDK root LICENSE' if not package.get('license') else None}
 
 
-def _source_notice(graph_source, packages):
+def _source_notice(graph_source, packages, native=False):
     lines = ['Original dependency license texts accompany this file.',
         'Each manifest source URL identifies the exact source form used.',
         'Registry archives retain their Cargo.lock SHA256 checksums.',
         'Git sources identify full immutable commits.',
         'MPL-2.0 source remains available under MPL-2.0 at the listed source URL.',
         'No MPL dependency source files were modified by Marmish.',
-        'Marmish MDK patches are distributed in patches/mdk/ of the runtime bundle.',
         'Application source: ' + graph_source['url'] + ' commit ' + graph_source['revision'], '']
+    if not native:
+        lines.insert(6, 'Marmish MDK patches are distributed in patches/mdk/ of the runtime bundle.')
     for package in packages:
         source = package['source']
         lines.append(package['name'] + ' ' + package['version'] + ' (' + package['license'] + ')')
@@ -293,7 +294,7 @@ def collect(root: Path, output: Path, graph_name: str) -> None:
     manifest = {'format': 1, 'graph': graph_name, 'target': _target(), 'source': source,
         'cargo_lock_sha256': hashlib.sha256(lock_raw).hexdigest(), 'packages': packages}
     (destination / 'manifest.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
-    (destination / 'SOURCES.txt').write_text(_source_notice(source, packages))
+    (destination / 'SOURCES.txt').write_text(_source_notice(source, packages, graph_name == 'native'))
 
 
 def _validate_package(package, directory):
@@ -356,10 +357,12 @@ def validate_graph(directory: Path) -> None:
             actual.add(path.relative_to(directory).as_posix())
     if actual != expected:
         raise RuntimeError('unexpected_license_output')
-    if (directory / 'SOURCES.txt').read_text() != _source_notice(source, manifest['packages']):
+    if (directory / 'SOURCES.txt').read_text() != _source_notice(source, manifest['packages'], directory.name == 'native'):
         raise RuntimeError('invalid_license_source_notice')
 
 
 def validate(output: Path) -> None:
-    for graph in SOURCES:
+    # Preserve the legacy dual-graph validation entrypoint; native tooling uses
+    # validate_graph explicitly for its separate single production graph.
+    for graph in ('marmish', 'mdk'):
         validate_graph(output / graph)

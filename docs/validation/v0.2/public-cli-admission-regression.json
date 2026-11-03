@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "kind": "public-cli-direct-regression",
+  "baseline_commit": "36b09b78524aec60f54fd2c288557e67776dd846",
+  "command_cli_sha256": "1e58472fbc4bb49f9cb6490b4e7dc6fdfaa93ee7ba563a020e2a2eb882479d91",
+  "route": "off",
+  "actual_command": true,
+  "exit_code": 0,
+  "elapsed_ms": 3228,
+  "stdout_bytes": 61,
+  "literal_expected_equal": true,
+  "ledger": {
+    "invocations": 1,
+    "engine_admissions": 1,
+    "authority_valid": true,
+    "outcome": {
+      "kind": "code",
+      "value": 0
+    },
+    "stdout_bytes": 61,
+    "stderr_bytes": 0,
+    "stdout_gaps": 0,
+    "stderr_gaps": 0,
+    "worker_state": "exited"
+  },
+  "cleanup_status": {
+    "active": 0,
+    "cleanup": "open",
+    "engine_quiesced": false,
+    "final_seq": null,
+    "observation_pending": false,
+    "uncertain": 0,
+    "worker_running": 0,
+    "worker_unknown": 0
+  },
+  "client_stop": {
+    "schema": 1,
+    "engine_quiesced": false,
+    "engine_stop_complete": true,
+    "mdk_stop_complete": true,
+    "runtime_cleanup_complete": true
+  },
+  "server_stop": {
+    "schema": 1,
+    "engine_quiesced": false,
+    "engine_stop_complete": true,
+    "mdk_stop_complete": true,
+    "runtime_cleanup_complete": true
+  },
+  "engine_state_deleted": false,
+  "private_state_retained": true
+}

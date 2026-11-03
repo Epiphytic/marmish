@@ -55,6 +55,8 @@ target/
 .ruff_cache/
 .venv/
 venv/
+node_modules/
+.npmrc
 
 # Python developer tools
 __pycache__/

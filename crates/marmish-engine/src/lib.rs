@@ -24,6 +24,26 @@ use std::collections::HashMap;
 use std::time::Duration;
 pub use storage::{NativeBinding, ProvidedMaster};
 use store::{AccountSpec, BootTime, InputOwner, StartDecision, Store, WorkerCredential};
+pub const ENGINE_FORMAT: i64 = store::ENGINE_FORMAT;
+
+/// Validate a held directory using the same ancestor trust predicate as worker launch.
+pub fn validate_executable_directory(directory: &std::fs::File) -> Result<()> {
+    launcher::ancestor(
+        &directory.metadata().map_err(|_| EngineError::UnsafePath)?,
+        unsafe { libc::geteuid() },
+    )
+}
+
+/// Validate an existing directory against the same worker ancestor contract.
+pub fn validate_executable_ancestor(path: &std::path::Path) -> Result<()> {
+    let meta = std::fs::symlink_metadata(path).map_err(|_| EngineError::UnsafePath)?;
+    launcher::ancestor(&meta, unsafe { libc::geteuid() })
+}
+
+/// Validate a canonical executable using the engine worker trust contract.
+pub fn validate_executable_path(path: &std::path::Path) -> Result<std::path::PathBuf> {
+    launcher::trusted_worker_executable(path)
+}
 
 /// A single local frontend. Detached workers continue after this value is dropped.
 pub struct Engine {

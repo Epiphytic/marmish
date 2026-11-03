@@ -7,7 +7,14 @@ pub(crate) enum CommandEnvelope {
     Request(wire::Request),
     Response(wire::Response),
 }
-fn fixed_hex<const N: usize>(value: &str) -> Result<[u8; N]> {
+pub(super) fn fixed_hex<const N: usize>(value: &str) -> Result<[u8; N]> {
+    if value.len() != N * 2
+        || !value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(Error::Mdk("command_room_binding"));
+    }
     let bytes = hex::decode(value).map_err(|_| Error::Mdk("command_room_binding"))?;
     bytes
         .try_into()
