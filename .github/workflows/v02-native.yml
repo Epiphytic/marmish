@@ -113,6 +113,9 @@ jobs:
             sleep 1
           done
           mkdir -p "$RUNNER_TEMP/v02-owner-public"
+          jq -e --arg mode validate --argjson run "$GITHUB_RUN_ID" \
+            --argjson attempt "$GITHUB_RUN_ATTEMPT" --arg sha "$GITHUB_SHA" \
+            -f scripts/v02-owner-diagnostics.jq "$root/cleanup.json" > /dev/null
           cp "$root/cleanup.json" "$RUNNER_TEMP/v02-owner-public/cleanup.json"
           jq -e '.schema==1 and .relay_children_reaped==true and .private_state_removed==true' "$root/cleanup.json"
           rm -rf -- "$root"

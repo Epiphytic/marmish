@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "run_id": 41562508066,
+  "run_attempt": 1,
+  "source_sha": "bc75231530eb1fc4ef8db60d93c3528d5e9e71bd",
+  "relay_children_reaped": true,
+  "private_state_removed": true,
+  "readiness_native_cleanup_ok": false,
+  "supervisor_reaped_by_this_step": false
+}

@@ -2,6 +2,7 @@
 # Native-only, disposable CI relay fixture and closed public artifact rendezvous.
 set -Eeuo pipefail
 umask 077
+diagnostic_filter=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/v02-owner-diagnostics.jq
 fail() { printf '%s\n' 'v02 fixture: operation failed' >&2; exit 1; }
 number() { [[ $1 =~ ^[1-9][0-9]{0,11}$ ]]; }
 binding() { number "$run" && number "$attempt" && [[ $sha =~ ^[0-9a-f]{40}$ ]] || fail; }
@@ -46,17 +47,30 @@ validate_binding() {
   jq -e --argjson run "$run" --argjson attempt "$attempt" --arg sha "$sha" '
     .schema==1 and .run_id==$run and .run_attempt==$attempt and .source_sha==$sha' "$1" >/dev/null
 }
+# Diagnostic failures are deliberately isolated from child and private-state cleanup.
+owner_diagnostics() {
+  local log=$1 diagnostics='[]'
+  if [[ -f $log && ! -L $log ]]; then
+    diagnostics=$(tail -c 1048576 -- "$log" |
+      jq -Rn --arg mode extract --argjson run "$run" --argjson attempt "$attempt" --arg sha "$sha" -f "$diagnostic_filter") || diagnostics='[]'
+  fi
+  if ! printf '%s\n' "$diagnostics" | jq -se --arg mode events --argjson run "$run" --argjson attempt "$attempt" --arg sha "$sha" -f "$diagnostic_filter" >/dev/null 2>&1; then
+    diagnostics='[]'
+  fi
+  printf '%s\n' "$diagnostics"
+}
 serve() {
   [[ $# == 8 ]] || fail
   local relay=$1 marmish=$2 root=$3 ready=$4; run=$5; attempt=$6; sha=$7
   local lifetime=$8 work='' native_tmp='' relay_pid='' check_pid='' native_clean=false cleaned=false
+  local fixture_stage=allocate
   unset GH_TOKEN GITHUB_TOKEN ACTIONS_RUNTIME_TOKEN
   binding; number "$lifetime" && (( lifetime <= 1500 )) || fail
   [[ $relay == /* && -x $relay && $marmish == /* && -x $marmish && $root == /* && -d $root && ! -L $root && -O $root && $ready == "$root/readiness.json" ]] || fail
   [[ ! -e $root/stop && ! -e $ready && ! -e $root/cleanup.json ]] || fail
   chmod 700 "$root"
   cleanup() {
-    local status=$? pid until_at reaped=true
+    local status=$? pid until_at reaped=true diagnostics='[]'
     trap - EXIT ERR INT TERM
     for pid in "$check_pid" "$relay_pid"; do
       [[ -n $pid ]] || continue
@@ -71,13 +85,16 @@ serve() {
       wait "$pid" 2>/dev/null || true
       if kill -0 "$pid" 2>/dev/null; then reaped=false; fi
     done
+    if [[ -n $work ]]; then
+      diagnostics=$(owner_diagnostics "$work/native-private.log") || diagnostics='[]'
+    fi
     if [[ $reaped == true ]]; then
       [[ -z $work ]] || rm -rf -- "$work"
       [[ -z $native_tmp ]] || rm -rf -- "$native_tmp"
       if [[ ( -z $work || ! -e $work ) && ( -z $native_tmp || ! -e $native_tmp ) ]]; then cleaned=true; fi
     fi
-    jq -n --argjson run "$run" --argjson attempt "$attempt" --arg sha "$sha" --argjson reaped "$reaped" --argjson cleaned "$cleaned" --argjson native "$native_clean" \
-      '{schema:1,run_id:$run,run_attempt:$attempt,source_sha:$sha,relay_children_reaped:$reaped,private_state_removed:$cleaned,readiness_native_cleanup_ok:$native,supervisor_reaped_by_this_step:false}' > "$root/cleanup.json.tmp"
+    jq -n --argjson run "$run" --argjson attempt "$attempt" --arg sha "$sha" --argjson reaped "$reaped" --argjson cleaned "$cleaned" --argjson native "$native_clean" --arg stage "$fixture_stage" --argjson diagnostics "$diagnostics" \
+      '{schema:1,run_id:$run,run_attempt:$attempt,source_sha:$sha,fixture_stage:$stage,diagnostics:$diagnostics,relay_children_reaped:$reaped,private_state_removed:$cleaned,readiness_native_cleanup_ok:$native,supervisor_reaped_by_this_step:false}' > "$root/cleanup.json.tmp"
     mv "$root/cleanup.json.tmp" "$root/cleanup.json"
     [[ $reaped == true && $cleaned == true ]] || status=1
     exit "$status"
@@ -90,16 +107,19 @@ serve() {
   chmod 700 "$native_tmp"
   mkdir -m 700 "$work/relay"
   local end=$((SECONDS+lifetime)) startup=$((SECONDS+180)) url
+  fixture_stage=relay_start
   "$relay" relay --data-dir "$work/relay" > "$work/startup.json" 2> "$work/relay-private.log" & relay_pid=$!
   while [[ ! -s $work/startup.json ]]; do
     kill -0 "$relay_pid" 2>/dev/null || fail
     (( SECONDS < startup && SECONDS < end )) || fail
     [[ ! -e $root/stop ]] || fail; sleep 1
   done
+  fixture_stage=relay_endpoint
   [[ $(wc -c < "$work/startup.json") -le 4096 ]] || fail
   url=$(jq -er 'select(keys==["onion_url","relay_url"]) | .relay_url | select(type=="string" and test("^ws://[a-z2-7]{56}\\.onion/relay$"))' "$work/startup.json") || fail
   # Actual encrypted two-identity exchange/restart/receipt, not descriptor existence.
-  TMPDIR="$native_tmp" "$marmish" --relay "$url" --tor always foundation-check > "$work/native.json" 2> "$work/native-private.log" & check_pid=$!
+  fixture_stage=native_check
+  TMPDIR="$native_tmp" "$marmish" --debug --relay "$url" --tor always foundation-check > "$work/native.json" 2> "$work/native-private.log" & check_pid=$!
   local native_end=$((SECONDS+660)) check_status=0
   while kill -0 "$check_pid" 2>/dev/null; do
     (( SECONDS < native_end && SECONDS < end )) || fail
@@ -108,12 +128,14 @@ serve() {
   done
   wait "$check_pid" || check_status=$?; check_pid=''
   (( check_status == 0 )) || fail
+  fixture_stage=native_validate
   [[ $(wc -c < "$work/native.json") -le 65536 ]] || fail
   jq -e '.schema==1 and .protocol=="marmish-foundation/2" and .phase=="v0.2-phase1" and .ok==true and .cleanup_ok==true and .runtime_cleanup_ok==true and .state_cleanup_ok==true and .route=="always"' "$work/native.json" >/dev/null || fail
   native_clean=true
   jq -n --argjson run "$run" --argjson attempt "$attempt" --arg sha "$sha" --arg url "$url" \
     '{schema:1,run_id:$run,run_attempt:$attempt,source_sha:$sha,ready:true,readiness:"native_encrypted_foundation",relay_url:$url}' > "$ready.tmp"
   mv "$ready.tmp" "$ready"
+  fixture_stage=ready
   while (( SECONDS < end )); do
     [[ ! -e $root/stop ]] || exit 0
     kill -0 "$relay_pid" 2>/dev/null || fail; sleep 1

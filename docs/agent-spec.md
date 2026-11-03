@@ -76,7 +76,15 @@ success alone can represent a pending no-op. Startup retains three bounded turns
 and the original deadline, including queued restarts and early status waits.
 Opt-in finite connector/SDK diagnostics expose no raw error, URL or payload.
 Offline checks pass; actual hosted startup failure causes and platform acceptance
-remain unproven until the new exact-source matrix runs.
+remain unproven. Its exact-source matrix passed all three direct flows, but
+the onion owner failed before readiness; the remaining clients were cancelled.
+See the [preserved reports and measurements](validation/v0.2/hosted-foundation.md).
+
+The [owner diagnostic amendment](phases/v0.2-phase1-owner-diagnostics.md) retains
+only six finite fixture stages and at most 32 allowlisted stage/category pairs
+in cleanup artifacts, with strict source/run/attempt validation before publication.
+Raw private logs are removed. Extraction failure yields an empty array without
+interrupting cleanup; this does not change transport or readiness criteria.
 
 The native journal records definitely unsubmitted intents separately from
 prepared/ambiguous submissions. It never retries an ambiguous send by creating

@@ -1,5 +1,33 @@
 # Hosted native foundation: first observed run
 
+Latest observed run: [41562508066](https://github.com/Epiphytic/marmish/actions/runs/41562508066),
+attempt 1, source `bc75231530eb1fc4ef8db60d93c3528d5e9e71bd`, cannot pass: its
+owner failed before publishing onion readiness, about 80 s after fixture launch.
+All three platform direct checks passed. Once those results were available,
+the remaining clients were cancelled because the failed owner could no longer
+publish the endpoint. The run is failed/cancelled, not Tor acceptance.
+The [owner cleanup report](hosted-41562508066-owner-cleanup.json)
+proves relay children reaped and private state removed, but reports native
+readiness cleanup unproven. The fixture deleted its private check report/logs,
+so neither the failure stage nor the native cause is recoverable from published
+evidence. No claim that the startup amendment fixed prior failures follows.
+The [reviewed diagnostic amendment](../../phases/v0.2-phase1-owner-diagnostics.md)
+preserves only finite stages and allowlisted events in future owner cleanup
+reports. Earlier failed runs below remain unchanged.
+
+All three jobs passed their native, vault and helper release tests and release
+builds before their direct checks. Preserved direct reports:
+
+| Runner | Total | Cold activation | First A→B / B→A | Warm activation |
+| --- | ---: | ---: | ---: | ---: |
+| [Linux AMD64](hosted-41562508066-linux-amd64-direct.json) | 14.762 s | 812 ms | 406 / 407 ms | 797 ms |
+| [Linux ARM64](hosted-41562508066-linux-arm64-direct.json) | 11.433 s | 1,123 ms | 286 / 296 ms | 994 ms |
+| [macOS ARM64](hosted-41562508066-macos-direct.json) | 7.869 s | 918 ms | 428 / 426 ms | 1,046 ms |
+
+Each report records encrypted exchanges, receipts and restart with cleanup true.
+These fixed 66-byte receipt measurements are neither bulk throughput nor command
+execution, and the cancelled clients did not attempt the unavailable onion flow.
+
 [Run 41516397519](https://github.com/Epiphytic/marmish/actions/runs/41516397519),
 attempt 1, tested source `f99d95aa8af09f2133aac99b384ed19feaf249ab`.
 These are native encrypted-message checks, **not remote command, installer or
