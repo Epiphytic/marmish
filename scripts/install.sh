@@ -6,10 +6,10 @@ main() {
     umask 077
     LC_ALL=C
     export LC_ALL
-    version='0.2.0'
-    sha_amd64='91e122230fd174f6ad31cf68af980614cc122cb60f7a41a964ad9165dc03fe41'
-    sha_arm64='704579209ead3b1078bae92f13cdb7c48958df3ff59739c609da3ce0f12d01fb'
-    sha_macos='09527c95050be360ad7f8abe497d005913996ae69ed612bd4759d1d170df053a'
+    version='0.2.1'
+    sha_amd64='c00bbe606325f8e334e55880822660ef25d7764a87ef6525253ce7880a49f5ce'
+    sha_arm64='5196a3f792d535a330dc1a4371a976f7e8b34a5d2efb899006ca3cfc7f5f7b03'
+    sha_macos='f58fb6cc082f7450e864d06688453a57526b573c78054b2d342d8f1bf83fa13f'
     debug=no
     quickstart=no
     asset_dir=
