@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "bootstrap_commit": "7e3e74411bed8657e8b8f5b599b36c2b702fe5bd",
+  "bootstrap_sha256": "46b4f369792f4f4ea36726c24414c5cca2ef977fec61712d821a1b81f985367a",
+  "sources": [
+    {
+      "source": "iris",
+      "url": "https://iris.radicle.network/raw/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/head/scripts/install.sh",
+      "sha256": "46b4f369792f4f4ea36726c24414c5cca2ef977fec61712d821a1b81f985367a",
+      "verified": true,
+      "observed_at_utc": "2026-11-03T15:45:35.496889+00:00"
+    },
+    {
+      "source": "github",
+      "url": "https://raw.githubusercontent.com/Epiphytic/marmish/master/scripts/install.sh",
+      "sha256": "46b4f369792f4f4ea36726c24414c5cca2ef977fec61712d821a1b81f985367a",
+      "verified": true,
+      "observed_at_utc": "2026-11-03T15:45:35.196050+00:00"
+    }
+  ]
+}

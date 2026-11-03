@@ -1,983 +1,423 @@
-# Marmish agent specification
-
-## Active v0.2 direction
-
-The user's latest scope amendment defers working Tor command transport to v0.3:
-it is not a v0.2 release gate. Direct-relay installed command interoperability,
-recovery, authorization, cleanup and performance validation remain required.
-Retain accurate experimental Arti results and never fall back from Tor to direct
-networking. Installation must work independently through Radicle/Iris and GitHub;
-document both script URLs and use GitHub as the bootstrap backup. This concerns
-script downloads; archives/checksums may still depend on GitHub Releases. Validate both
-sources against the same reviewed bytes; do not infer Iris availability from a
-successful Radicle push. Existing Tor command modes remain experimental and
-unqualified for v0.2. See the overriding amendment in [the plan](v0.2-plan.md).
-
-The user replaced the v0.1 architecture on 2026-11-02. The authoritative active
-design is [the v0.2 plan](v0.2-plan.md), Beads `marmish-7nw`. It specifies native
-Rust, upstream MDK, embedded Arti, no mandatory OS namespace/broker and no Python
-runtime. The Python implementation remains available solely as a legacy protocol
-reference and optional comparison fixture. The user explicitly authorizes a
-v0.2 wire break as well as fresh on-disk formats; Rust↔Python wire interoperability
-and disk migration are not release requirements. The phase-1 native foundation
-has independent integrated code approval and complete hosted acceptance. The
-[independently reviewed attempt 41577006224](validation/v0.2/hosted-41577006224.md)
-passed direct and Arti encrypted exchanges, owner restart and cleanup on Linux
-AMD64, Linux ARM64 and macOS. Phase 1 is accepted; Phase 2 integration may proceed.
-A Linux AMD64 release build
-passed real two-identity encrypted direct-relay and onion-through-Arti exchange, durable receipts,
-binary byte preservation, conflicting-ID rejection and encrypted restart; see
-[the scoped evidence and timings](validation/v0.2/native-foundation.md).
-Recovery, route validation, retention/capacity, duplicate-session refusal and
-canonical receipt checks have passing production-API regressions and fresh
-direct/onion live repeats. [The actual round-5 code review](reviews/v0.2-native-code-r5.md)
-approves the integrated offline scope and independently passes 91 native tests
-(90 repository tests plus its additional regression) and 11 vault/helper tests.
-The Phase 2 internal Rust command path has a successful
-[fresh-key direct Marmot command run](validation/v0.2/local-command-direct-2026-11-02.md):
-literal special/non-UTF8 argv, 16 KiB binary stdin, independent stderr and exit 7,
-with actual engine quiescence, joined stops and private-state cleanup. The native
-`command-check` fixture exercises the production command owner/service/worker;
-it is not the public remote-command CLI. Commands use dedicated authenticated
-Current-profile rooms, a SQLCipher command ledger, immutable invocation digests,
-bounded engine operations and explicit local output consumption. Payload expiry
-is separate from replay facts and native publication obligations. Ordinary
-disconnect and owner stop do not cancel admitted commands.
-
-The native command CLI now implements explicit `--new-session` for new remote
-commands (including detached commands); handle operations and setup/administration
-reject the flag before state access. Ordinary commands keep a separate default
-room, including when the first room was explicitly fresh. The CLI freezes one
-preparation token across retries; the daemon generates and authenticates the actual
-independent MLS room/session. The SQLCipher journal format is now **6**, accepting
-existing formats 0, 3, 4 and 5 before upgrading. A durable exact-peer/normalized-relay
-creation fence permits one native creation attempt. An interrupted attempt with
-no accepted bound room returns `command_room_uncertain`; retries never recreate it.
-This is an application persistence rule, not a replay guarantee inferred from keys.
-The profile has 64 active command-room slots shared by default, fresh and inbound
-rooms, with no user-facing retirement operation. Successful fresh rooms consume
-those slots for the profile lifetime; total room metadata and permanent preparation
-markers each have separate 4096-row caps. Existing default reuse remains allowed
-at capacity. The [approved design](phases/v0.2-new-session.md) specifies the trust,
-60-second bounded preparation observation and creation fence. Focused offline
-Current-profile room, exact retry, selection, IPC and CLI tests pass; the updated
-installed recovery cohort remains an unexecuted final-source acceptance gate.
-
-All SQLCipher users cross one process-wide `marmish_engine::initialize_storage`
-barrier before their first SQLite call, including engine stores, the command
-journal, preflight, MDK and the Arti directory cache. This prevents the pinned
-SQLite initialization hook race observed in the
-[failed candidate](validation/v0.2/candidate-41620775751.md); the
-[reviewed correction](validation/v0.2/sqlcipher-startup.md) retains encryption
-and normal parallel test execution. Fresh hosted qualification remains required.
-
-The reviewed Darwin worker correction uses a separate exact owned-child BSD
-snapshot that includes unreaped zombies, including during post-spawn identity
-capture. Public live-process identity checks retain their existing behavior.
-Group-signal EPERM is accepted only after matching retained-child wait observations
-and two identical bounded snapshots prove every group member terminal; all other
-uncertainty fails closed. Production descriptor ceilings and CLOEXEC checks remain
-strict. The descriptor regression derives its test ceiling from ambient inherited
-FDs. [Local Linux checks](validation/v0.2/darwin-owned-child-local.md) passed;
-actual macOS engine tests and engine all-target Clippy remain required before
-qualifying the correction.
-
-Phase 2 remains open. Public command CLI/IPC, explicit SRV resolution, Finish-based
-command-count drain and uptime limits, cached administrative evidence/cleanup,
-and native offline setup/install transactions are implemented in the current
-working increment. The CLI, SRV, root IPC, Finish/limits and installer components
-have independent code approvals; final integration validation remains in progress.
-The [local integration suite](validation/v0.2/native-integration-2026-11-03.md)
-passed 299 native and 100 engine unit tests plus engine/vault integration checks.
-A [real public CLI exchange](validation/v0.2/public-cli-cat-2026-11-03.json)
-ran a canonical remote executable through two Rust daemons and an explicit direct
-relay, preserving 61 bytes of literal/Unicode stdin/output with exit 0 in 5044 ms.
-This is one Linux AMD64 observation using file-backed disposable keys, without
-installation, protected state removal or cross-platform qualification. A separate
-empty-stdin short-command test exposed an InputFailed warning despite correct
-output; the correction has focused passing regressions. A subsequent live repeat
-exposed a separate client ordering race: an early Poll NotFound stopped the client
-before delivery. The corrected client waits for authenticated admission before
-polling; a [fresh live regression](validation/v0.2/public-cli-admission-regression.md)
-passed with exact 61-byte literal/Unicode argv output and exit zero in 3228 ms.
-Strict Clippy over every native target also passed. These local tests do not
-substitute for the installed cross-platform matrix.
-The internal recovery fixture now has an independently approved
-[fresh direct restart test](validation/v0.2/local-command-recovery-direct-2026-11-03.md).
-The command continued across a joined server restart, retained the original
-invocation, proved exact gap-free output prefixes before completion, executed
-once, and returned the expected stdout, stderr and exit 7. Actual authenticated
-remote probes returned Existing for identical Submit content and InvocationConflict
-for changed content. Probe publications retained their real unknown application
-ownership rather than fabricated ACKs. The complete local fixture passed in
-19,872 ms with actual quiescence, joined stops and private-state cleanup. This is
-internal Linux AMD64 direct protocol evidence, not installed acceptance. Installed
-command-count/uptime exit, policy/recovery, actual default-auto keychains and
-cross-platform command acceptance remain unfinished or unvalidated. The
-[default-auto keychain qualification design](phases/v0.2-native-keychain-qualification.md)
-and [independent final code review](reviews/v0.2-native-keychain-code-r4.md)
-cover isolated real-provider CI jobs for all three platforms, including two
-named identities, reload and locked-provider refusal. The 26 offline supervisor
-and quickstart checks pass; the actual installed provider jobs have not yet
-qualified this implementation. The build-only installed-test driver also has
-reviewed common workflow support for separate matrix, autoexit, uptime,
-benchmark, recovery and policy waves. Its [offline checks](validation/v0.2/installed-local-offline.md)
-retain genuine failed results without qualifying them. These drivers are not
-shipped product executables and have not yet passed their three-platform hosted
-gates. Recovery and policy retain separate component review gates.
-Working
-Tor commands are deferred to v0.3. [The local Arti command attempts](validation/v0.2/local-command-arti-2026-11-02.md)
-failed; their actual cleanup results are preserved. No v0.2 release or native installer is accepted. The direct command
-timings are individual observations, not sustained throughput or RTT benchmarks.
-The macOS v2 provider has passed a separate
-[owned disposable-keychain gate](validation/v0.2/macos-v2-provider.md), including
-both identity and storage secrets across restart and copied-executable
-replacement. This does not qualify default-keychain selection or the production
-helper's ACL identity. Earlier hosted runs failed different direct/onion stages.
-Those remain failed observations; the complete accepted attempt above uses one
-source, run and attempt for every required cell. The historical amendment
-descriptions below record the failures and gates that existed at each increment,
-not the current Phase 1 status.
-Historical results below do not establish v0.2 support.
-
-### Native foundation implemented and accepted
-
-`crates/marmish-native` contains the native `marmish` and `marmishd` binaries;
-build them with `cargo build --locked --release -p marmish-native --bins`.
-The resolved production graph uses audited upstream MDK and injected SDK
-WebSocket transport, with one explicit relay ceiling shared by discovery,
-publication and recovery. `--tor auto` routes onion relays through embedded
-Arti and ordinary secure relays directly; `always` routes all relays through
-Arti, while `off` rejects onion relays. No failure changes the configured route.
-There are no public relay defaults.
-
-Named identities exclusively lock private v2 profiles. An atomic manifest records
-random provider references before creating secrets; Ready profiles cannot silently
-regenerate missing keys. Nostr and SQLCipher roots are independent, with separate
-HKDF contexts for native MDK and application-journal databases. Native keychains
-use a separate v2 namespace. Auto can select private file storage only when a
-fresh profile's keychain is unavailable; locked, denied, corrupt or uninitialized
-providers fail closed. Linux defaults to `$XDG_DATA_HOME/marmish/v2` or
-`~/.local/share/marmish/v2`; macOS defaults to
-`~/Library/Application Support/Marmish/v2`. An explicit `--state-dir` overrides
-the profile root, and `-i` currently selects a named identity.
-
-The daemon serializes account operations behind bounded same-UID Unix IPC.
-The accepted foundation commands initialize identities, run the daemon, query
-status, open a conversation, and send/read foundation payloads. The in-progress
-public command increment described above is not yet release-qualified. `foundation-check` owns disposable
-Alice/Bob profiles and verifies encrypted binary messages, durable encrypted
-receipts, conflicting-ID rejection, restart and cleanup. This is not a remote
-command or shell interface. Foundation payloads are limited to 16 KiB; the strict
-canonical envelope binds sender, recipient, session, application ID and receipt
-digest to authenticated MLS metadata. Rooms require the dedicated v2 purpose,
-exactly two allowed accounts, one leaf per account, and the authenticated creator
-as sole administrator. Trust-relevant changes revoke accepted rooms.
-
-The [reviewed recovery-check amendment](phases/v0.2-phase1-recovery-check.md)
-lets both owners progress through recoverable tick errors using bounded turns
-within the original fixed join/exchange deadlines. It keeps initial sends
-one-shot and records finite, stage-local diagnostic labels. Its focused offline
-checks and independent code review passed; a fresh hosted matrix must still
-qualify this increment. Earlier failed reports remain preserved.
-
-The [startup amendment](phases/v0.2-phase1-startup.md) requires an observed
-Connected relay before key-package publication or subscriptions. SDK connect
-success alone can represent a pending no-op. Startup retains three bounded turns
-and the original deadline, including queued restarts and early status waits.
-Opt-in finite connector/SDK diagnostics expose no raw error, URL or payload.
-Offline checks pass; actual hosted startup failure causes and platform acceptance
-remain unproven. Its exact-source matrix passed all three direct flows, but
-the onion owner failed before readiness; the remaining clients were cancelled.
-See the [preserved reports and measurements](validation/v0.2/hosted-foundation.md).
-
-The [owner diagnostic amendment](phases/v0.2-phase1-owner-diagnostics.md) retains
-only six finite fixture stages and at most 32 allowlisted stage/category pairs
-in cleanup artifacts, with strict source/run/attempt validation before publication.
-Raw private logs are removed. Extraction failure yields an empty array without
-interrupting cleanup; this does not change transport or readiness criteria.
-Its first hosted run retained evidence of a native 15-second timeout before an
-onion stream was obtained. All three platforms passed direct flow, but the
-owner failed readiness. The independently approved
-[route-aware timeout amendment](phases/v0.2-phase1-onion-timeouts.md) gives Tor
-stream acquisition up to 120 seconds and then a shared 15-second TLS/WebSocket
-budget, while direct connections retain their 15-second total. Startup keeps
-the original activation deadline; recovery observes an SDK-owned bounded dial
-across short actor turns. Per-relay SDK timeout and size limits are explicit.
-Source validation and a fresh hosted matrix must qualify the implementation;
-no Tor platform acceptance follows from diagnosing the timer.
-Its first exact-source hosted run passed all three direct flows, but the onion
-owner failed after both restarted owners connected successfully. A later Arti
-redial returned an error; the underlying error and final native operation were
-not retained. This differs from the earlier stream-acquisition timeout and does
-not establish a new cause. See the
-[preserved run 41569702092 evidence](validation/v0.2/hosted-foundation.md).
-The [finite native-outcome amendment](phases/v0.2-phase1-native-outcome.md)
-adds an independently validated, size-bounded summary of the native check to
-owner cleanup artifacts, including failed checks. Missing or malformed reports
-become null without interrupting cleanup. This changes neither native transport
-nor readiness and cannot reconstruct discarded reports from earlier runs. A local exact-source owned-onion run passed and retained its full finite outcome.
-The subsequent hosted owner check retained a warm-activation deadline failure
-after successful cold encrypted exchanges; Phase 1 remains open. See
-[the scoped local and hosted evidence](validation/v0.2/native-owner-outcome.md).
-
-The native journal records definitely unsubmitted intents separately from
-prepared/ambiguous submissions. It never retries an ambiguous send by creating
-fresh ciphertext. Notification loss pauses publication at the actual transport
-boundary, including retained frozen targets, while exact native work is retained.
-Resuming requires upstream history admitted-and-placed completion with an unchanged
-loss generation. Temporary operational failures preserve trust; definite authority
-changes revoke it. Expected capacity backpressure preserves pending work without
-acknowledgment, and a valid room beyond the 64-room limit is rejected individually.
-Default one-day configurable retention currently prunes local journal payloads;
-it does not promise relay deletion or advertise group retention semantics.
-
-The independently approved [retention amendment](phases/v0.2-phase1-retention.md)
-introduces the fresh `marmish-foundation/2` test protocol, timestamp-bound IDs,
-a persisted seven-day replay floor and transactional collection after both the
-retry horizon and payload TTL expire. Native publication obligations protect
-their metadata. Per-room capacity and fair pending-event attempts prevent one
-full room from blocking every other room. This implementation has integrated
-code approval and passing offline regressions; its deliberately small foundation limits do not
-define the future command protocol's retry or streaming guarantees.
-
-Remote commands and unified client/server role configuration, setup/install,
-full cross-platform command interoperability,
-bulk-throughput measurement and release publication remain subsequent acceptance
-work. Legacy comparison fixtures are optional; wire compatibility may break, and
-no old database or MLS state is imported. The approved
-[command interface supplement](phases/v0.2-phase2-interfaces.md) fixes the next
-phase's actor/engine/storage boundaries and crash-recovery contracts; it is a
-design, not implemented command support. An
-[independently approved scheduling amendment](reviews/v0.2-scheduling-design-r2.md)
-allowed isolated, test-only codec/configuration work while Phase 1 remained open.
-That integration prerequisite is now satisfied; Phase 2 execution acceptance is
-still required before claiming working native commands.
-The isolated `command_wire` and `command_config` modules now have passing offline
-tests, but are declared only under `cfg(test)`: production binaries expose neither
-command execution nor this configuration yet. The codec implements the fresh
-canonical command protocol, strict bounds and byte-preserving arguments, stdin
-and output. Configuration loading enforces private-file ownership, bounded input,
-explicit relay ceilings and aliases, and preserves additive raw policy layers.
-Execution-policy compilation and authenticated command admission remain gated;
-structural configuration validation grants no execution authority. See
-[the isolated-component validation](validation/v0.2/command-components.md).
-The approved
-[destination and SRV supplement](phases/v0.2-phase2-destinations.md) defines
-explicit relay selection and bounded CLI-side SRV confirmation against the
-profile relay ceiling; it is also unimplemented. The approved
-[acceptance interface amendment](phases/v0.2-phase2-acceptance-interfaces.md)
-specifies actor-authenticated evidence, bounded admission and guarded cleanup.
-The approved [native acceptance design](phases/v0.2-phase4.md) specifies actual
-installation, direct/Arti platform cells, exact-byte command checks and benchmark
-measurement. Neither document establishes implementation or passing acceptance.
-Consult the evidence above and Beads
-before treating any phase as complete.
-
-The remainder of this document records the v0.1 implementation. Its mandatory
-confinement, daemon-RPC and packaging decisions are historical, not instructions
-to recreate them in v0.2. Retain useful behavioral contracts and test vectors
-under the reviewed v0.2 plan. Do not silently reuse legacy databases or claim
-state migration based only on wire compatibility. The user explicitly permits
-breaking on-disk compatibility: there is no installed base. Fresh v0.2 formats
-are intentional; no v0.1 profile, database or key-reference migration is required.
-
-This is the implementation and design handoff for agents working in this repo.
-The validated prototype baseline is commit `a6700b4`. Subsequent changes must
-update this specification when they change behavior. Use Beads for live task
-status and dependencies, [AGENTS.md](../AGENTS.md) for the build workflow,
-[the build plan](build-plan.md) for phases and [the README](../README.md) for
-concrete commands.
-
-The reviewed [installed nine-pair acceptance design](phases/installed-nine-pair-interop.md)
-requires actual script installation on Linux AMD64, Linux ARM64 and macOS ARM64,
-then installed client/server command execution across all nine platform pairs.
-Three concurrent jobs each host a server and client; public artifacts exchange
-identities/readiness without waiting for running jobs to finish. Separate
-policy-bound authenticated server receipts and client output/exit validation
-are required,
-with bounded server lifetime and delivery-safe shutdown. The
-[phase A implementation](phases/installed-nine-pair-a.md) supplies release pinning,
-actual installer execution, full installed-tree verification, disposable identity
-initialization, bounded credential-isolated public rendezvous and final cleanup
-reports. The integrated
-[B/C harness](phases/installed-nine-pair-bc.md) adds a bounded server supervisor,
-native fixed-role fixtures, authenticated history observation, client-terminal
-delivery and strict nine-pair reconciliation. The fixture has a separate,
-unpublished locked workspace; its [compiler boundary](phases/installed-nine-pair-compiler.md)
-copies a pinned toolchain into private state and warms dependencies before
-identity initialization. Its [local compiler proof](validation/installed-compiler-local.md)
-passed all three role variants on Linux AMD64; this is not cross-platform or
-transport acceptance. Passing the identity barrier does not establish nine-pair
-command acceptance. Current native
-confinement blockers and the production uv installer remain separate.
-Measured [setup-only timings](validation/installed-setup-baseline.md) cover actual
-installation and release verification, with explicit scope and one-sample limits.
-Live command latency, first output and verified-payload goodput require actual
-installed transport execution; missing or failed samples are never zero latency.
-The rollup emits JSON and Markdown with exact byte counts, per-pair sample counts,
-source/asset identities and timing definitions. Command wall and cold-status time
-include harness process-cleanup and absence checks. Effective download goodput is
-verified stdout plus stderr bytes divided by complete command wall time;
-output-drain goodput uses first-to-last local output timing. These are local
-elapsed measurements, not one-way network latency. Failed or unverified pairs
-have null metrics and zero samples; one observation does not establish percentiles.
-
-## Intended managed setup and unified service
-
-The [reviewed proposal](phases/native-setup-unified-daemon.md), Beads marmish-x6z,
-plans uv-managed tested Python plus matching native helpers, a thin bootstrap,
-app-owned setup, and one daemon/identity serving both inbound and outbound work.
-Setup will accept c/s/b, default Both, and persistently disable inbound service
-without an authorized npub until explicitly re-enabled. These are intended
-capabilities, not implemented behavior. Python currently runs the application
-as well as the installer; uv packaging is not yet available. The proposal retains
-keychain/replay/policy/confinement gates and requires detailed reviews per phase.
-The disposable [packaging proof](phases/managed-runtime-spike.md) and
-[native installer workflow](../.github/workflows/installer-validation.yml)
-exercise the proposed interpreter alongside the existing installer/PTY gates.
-See [validation status](validation/managed-runtime-spike.md); packaging acceptance
-and the [production bootstrap](phases/managed-bootstrap.md) remain pending.
-These tests do not change the current installation command or release.
-Local Linux AMD64 [Trial16](validation/managed-runtime-selfhosted-trial16.md)
-passed all executable packaging cases, 478 tools tests with 7 reported skips,
-and enforced offline retention checks. A separate authenticated-helper smoke
-passed selection/provenance, namespace enforcement and owned cleanup; it is not
-a full helper-mode proof. Historical Trials13–15 retain earlier results and
-integration gaps. [Hosted run 41138717122](validation/managed-runtime-native-41138717122.md)
-passed all installer/PTY jobs, but both Linux managed suites failed namespace
-gates and macOS hit its full-suite deadline after passing both exact native
-startup-guard probes. The [self-hosted proof design](phases/managed-runtime-self-hosted.md)
-adds explicit authenticated-helper selection, bounded cancellation reporting and
-an independent canonical-master proof job. Actual native results and runner-group
-policy remain required; queued jobs provide no acceptance evidence.
-The newer [hosted run 41141651561](validation/managed-runtime-native-41141651561.md)
-passed all three installer jobs and the executable packaging cases preceding
-full-suite validation. Both Linux suites ran 478 tests with 7 skips and failed the same two
-required namespace tests; macOS again reached its 900-second full-suite child
-deadline after both exact restricted-startup probes passed. All three reports
-record complete cleanup and unchanged monitored home metadata. This remains
-failed matrix acceptance, independent of local passes or queued self-hosted jobs.
-
-The [reviewed progress-diagnostics increment](phases/managed-runtime-test-progress.md)
-is implemented in the disposable managed test harness: verbose suite progress,
-bounded private failure capture and sanitized last-observed test hints improve
-timeout reports while preserving production deadlines and acceptance gates.
-This changes test diagnostics only, not the production installer or runtime.
-[Integrated and final test-only code reviews](reviews/managed-runtime-test-progress-code.md)
-approved publication. Local Linux AMD64
-[Trial17](validation/managed-runtime-selfhosted-trial17.md) passed on the final
-source: 495 tools tests, 7 reported skips, exit 0, 495 observed starts, enforced
-offline network namespace, complete cleanup, unchanged monitored home metadata
-and no unmet executable cases. The 79-test focused file also passed normally
-and through a symlinked path. Independent final-evidence review approved these
-local results for publication. Progress identifiers are spoofable hints, not evidence
-that a named test caused a timeout. Native three-platform acceptance and the
-independent macOS confinement failure remain open under the evidence above.
-
-The subsequent [hosted run 41143960720](validation/managed-runtime-native-41143960720.md)
-passed installer/PTY and focused packaging contracts on all three platforms.
-Both Linux full suites ran 495 tests with 7 skips and failed the same required
-namespace gates. macOS reported a 494-test summary with 30 skips, then the
-interpreter remained alive until the 900-second deadline. Its final prefix hint
-was a smoke cleanup test, not proof that this test hung. A bounded local
-reproduction identified a test-fixture defect: a missing Linux-only `/proc` read
-after listener-thread startup bypassed cleanup and kept Python alive after its
-summary. The [test-only repair plan](phases/managed-runtime-fixture-portability.md)
-is implemented in the two affected test modules after independent design approval.
-The real fixture and injected failures share cleanup, including listener/thread
-startup errors; Linux namespace tests remain required on Linux. Smoke fixtures
-simulate admission locally and separately prove unchanged Darwin refusal. Local
-affected modules passed normally and through a symlink (48 tests, 1 skip each);
-the full suite passed 505 tests with 8 skips after incorporating an initial code
-review finding about cleanup inside unrelated except blocks. Final narrow review approved publication and independently repeated these
-checks. Local [Trial18 managed packaging proof](validation/managed-runtime-selfhosted-trial18.md)
-passed all ten assertions and 505 tests with 8 skips, with enforced offline
-network isolation, complete cleanup and unchanged monitored home metadata.
-The subsequent [hosted run 41147817435](validation/managed-runtime-native-41147817435.md)
-passed installer and focused packaging contracts on all three targets. The macOS
-full suite now exited promptly, reporting 504 tests, 32 skips and eight failure
-entries; no full-suite timeout occurred. Both Linux suites ran 505 tests with
-8 skips and failed the same two required namespace checks. All reports retained
-complete cleanup and unchanged monitored home metadata. The macOS failure names
-localize further investigation but do not establish exception causes. Three-target
-and production-installer acceptance remain pending.
-All three reports from hosted run 41143960720 retained complete cleanup and
-unchanged monitored home metadata.
-The subsequent [native fixture portability repair](phases/managed-runtime-native-portability.md)
-is limited to three test modules: real Darwin SDK headers replace incompatible
-synthetic headers on Darwin, report lifecycle tests isolate Linux admission and
-stderr scanning, and sandbox validation tests isolate preceding prerequisites
-while retaining real filesystem and deterministic set-ID rejection coverage.
-Independent design approval preceded implementation. Local affected tests passed
-normally and through a symlink (69 tests, no skips); full tools passed 513 tests
-with 8 skips, and five bounded mutations were detected. [Final integrated code review](reviews/managed-runtime-native-portability-code.md)
-approved publication and independently repeated these checks. The subsequent [hosted run 41150264034](validation/managed-runtime-native-41150264034.md)
-passed all three installer jobs and the actual macOS managed proof: 513 tests,
-32 skips, all ten assertions, offline retention reached, cleanup complete and
-unchanged monitored home metadata. Darwin records uv-offline behavior only,
-without independent OS network-denial enforcement. Both hosted Linux suites ran
-513 tests with 8 skips and failed the same two mandatory namespace checks.
-Local [Trial19](validation/managed-runtime-selfhosted-trial19.md) passed all ten
-assertions and 513 tests with 8 skips, with enforced Linux offline isolation,
-complete cleanup and unchanged monitored home metadata. Three-platform
-acceptance remains pending suitable self-hosted results; the existing macOS
-configured-confinement SIGABRT is still separate and unresolved.
-The separate [owned macOS denial diagnostic](phases/macos-owned-denial-diagnostic.md)
-is implemented. Its [native failure evidence](validation/macos-loader-41396357778/)
-shows confined dyld startup aborting, including for a system executable. The
-[eight-variant native loader matrix](validation/macos-loader-41397862711/)
-isolated a minimal repair: allowing `file-read-data` on the literal `/` directory
-passes the selected read/TCP probes while forbidden reads, writes and an
-unselected loopback endpoint stay denied. The
-[production repair](phases/macos-root-loader-fix.md) adds only that rule and keeps
-the full application preflight. This synthetic probe evidence does not establish
-actual MDK startup, installed identity creation or nine-pair command acceptance.
-The [subsequent source-profile probes](validation/macos-rootfix-41399133227/)
-pass all five normal cases; that workflow remains failed solely because the
-historical denial diagnostic reports no SIGABRT to inspect. No full application
-preflight or identity acceptance is inferred from those probes.
-The published experimental.2 archive still contains the earlier profile. A new
-verified archive is required before the installed matrix can validate this fix.
-The [first integrated installed run](validation/installed-nine-pair-41397651278/)
-failed before commands: Linux ARM64 identity startup failed, macOS exhausted disk
-while bootstrapping Rust, and AMD64 timed out at the identity barrier. Its
-reviewed setup timings and nine null transport cells are preserved explicitly.
-
-## Purpose and intended product
-
-### Experimental distribution increment
-
-The latest release is
-[v0.1.0-experimental.2](https://github.com/Epiphytic/marmish/releases/tag/v0.1.0-experimental.2),
-built from debug source `f609b6ccdc9302aeec661a2ae3692d3ef68b86fa` in native
-workflow `41121755202`, attempt 1. All three archives passed build and installation
-checks; macOS/Linux ARM64 runtime confinement remains unvalidated. The hosted
-AMD64 live check failed namespace startup, independently confirmed as permission
-denied. Exact-archive local acceptance first passed eight assertions then failed
-`message_not_published` with complete cleanup; its cause is unestablished. A single
-fresh-state full rerun with the same archive and relays passed all 15 assertions
-in 204.864 seconds with complete cleanup. Both attempts and the failed hosted
-report remain in [the publication evidence](validation/debug-distribution-publication.json).
-Claude approved the artifacts and publication after correcting the provenance
-field and retracting an inferred prohibition on full acceptance reruns. The
-strict publisher was unchanged; public asset bytes, qualified release body and
-GitHub/Radicle tag were verified. The Iris installer selects experimental.2, and
-installed client/server debug-doctor records were observed. This adds diagnostics,
-not a fix for the unresolved macOS `native_probe_broker` failure.
-
-The previous experimental release
-[v0.1.0-experimental.1](https://github.com/Epiphytic/marmish/releases/tag/v0.1.0-experimental.1)
-was published from source `2a7e723eb8f980cda8a10f6d1e541d077cc15698`, using native
-build artifacts from workflow run `41003542761`, attempt 1. Linux AMD64 and ARM64
-archives require glibc 2.39; macOS ARM64 requires macOS 15+. All three passed
-native installation checks. Hosted Linux AMD64 live execution failed at
-`identity_setup` with `namespace_start_failed`; an independent owned `unshare`
-probe returned a permission denial. This establishes denial of the required
-namespace operation, without establishing a specific AppArmor cause. Under the
-reviewed fallback, the exact downloaded Linux AMD64 archive passed all 15
-installed Marmot command assertions in 198.025 seconds on a clean local checkout
-of that source, with complete cleanup, idempotent installation and owned
-uninstall. The originating workflow remains failed; its CI publish job was
-skipped. The unchanged strict publisher was run locally and verified uploaded
-asset bytes by readback. The release body explicitly attributes live acceptance
-to the local Linux host. Independent public downloads, Iris default installation,
-reinstallation, uninstall and GitHub/Radicle tag verification also passed; see
-[the publication evidence](validation/distribution-publication.json) and
-[the distribution validation report](validation/distribution.md).
-
-The distribution design is [recorded here](phases/distribution.md). Complete
-runtime archives target Linux x86_64/aarch64 and macOS aarch64; Intel macOS is
-excluded. The self-contained `scripts/install.sh` is intended to be fetched from
-Iris at `https://iris.radicle.network/raw/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/head/scripts/install.sh`
-and installs GitHub Release archives with bounded downloads, checksums, strict
-USTAR/payload verification and user-owned immutable version directories. Version
-launchers use isolated Python imports; parser defaults supply absolute bundled
-helpers without changing explicit relays, identities or authorization. Native
-keychain discovery does not fall back to PATH for the installed default.
-
-The installer also supports opt-in `--quickstart`: after verified installation,
-it guides client/server selection, explicit relay entry, default profile
-initialization with native-keychain auto selection, and peer authorization or a
-test command. It uses the same Linux/macOS implementation and a foreground
-controlling terminal; ordinary installation remains noninteractive and does not
-access keys. Quickstart uses absolute installed launchers, preserves existing
-profiles, and stops on setup failure. Server authorization lasts for that
-foreground invocation only. Terminal prompts and owned child signal cleanup are
-covered by offline PTY tests. All 41 installer/setup tests passed on native
-Linux amd64, Linux arm64 and macOS arm64 in
-[run 41117893643](validation/installer-quickstart-native.json); these use fake
-frontends and do not establish native MDK confinement or change the platform
-acceptance limits above. See [the increment design](phases/installer-quickstart.md).
-
-The debug diagnostics increment adds opt-in `--debug` to the installer and both
-frontends, with fixed-schema stderr records and no raw exception/argv/env/key
-logging. Installer quickstart propagates `MARMISH_DEBUG=1` to its owned children;
-legacy archives ignore that setting. The README temporarily enables installer
-debug by default in its copy/paste command. Updated frontends report setup stages
-and Darwin native preflight status/signal; Linux reports setup stages only.
-`--debug` must precede `--doctor` because doctor exits during parsing. Debug
-does not bypass confinement or establish native acceptance; arbitrary remote
-stderr can imitate diagnostic text. See [the reviewed design](phases/debug-diagnostics.md),
-[validation evidence](validation/debug-diagnostics.json), and
-[code approval](reviews/debug-diagnostics-code-final.json).
-
-A real experimental.2 macOS ARM64 quickstart run passes the unconfined broker
-control and aborts the confined probe with SIGABRT (-6), before identity setup
-completes. The log establishes the failing boundary, not its cause. The
-[diagnostic increment](phases/macos-probe-abort.md) specifies a manual hosted
-macOS reproduction using the exact production sandbox profile and native probe,
-with bounded stderr from disposable, secret-free fixtures. It changes no
-production permissions or runtime acceptance gates. Hosted ARM64 macOS run
-[41129112655](https://github.com/Epiphytic/marmish/actions/runs/41129112655)
-passes both unconfined controls, while confined read, TCP and system true all
-abort with signal 6 and empty stderr. This reproduces a general confined startup
-failure; the cause remains unestablished. A separately reviewed
-[owned probe crash-context diagnostic](phases/macos-probe-crash-context.md)
-selects only the synthetic child PID/path and extracts bounded allowlisted facts.
-Hosted run [41132685757](https://github.com/Epiphytic/marmish/actions/runs/41132685757)
-matched the owned PID and Mach-O UUID through a reviewed redacted-path rule.
-The confined read aborted in dyld/libignition startup (namespace 0x23, code 2),
-before probe logic; the exact failing operation remains unknown. See
-[the evidence and investigation boundary](phases/macos-dyld-startup.md).
-This is diagnostic progress, not a production fix or a passing runtime gate.
-
-The installer retains prior versions and all identity/keychain/command state;
-uninstall removes only owned launchers/bookkeeping. It does not modify host
-namespace policy. `--doctor` is read-only static prerequisite diagnosis. Both
-dependency graphs include full license notices and exact source provenance.
-Cargo CLI publication is deferred because the current workspace does not contain
-the Python application and its SQLCipher patch is not inherited by consumers.
-
-GitHub (`https://github.com/Epiphytic/marmish`) and Radicle
-(`rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg`) are both source homes. Completed increments
-and release tags must push to both, with independent replication verification.
-Native build/offline installation success must be reported separately from
-runtime command acceptance: ARM64 Linux namespace policy and the macOS confined
-broker abort were observed on earlier self-hosted runners. Hosted ARM64 packaging
-does not validate confined execution or establish those same failures there.
-The distribution workflow uses native GitHub-hosted VMs as the reviewed fallback
-when self-hosted jobs are unassigned. See Beads `marmish-ic3` for publication state;
-do not infer actual published assets or Iris replication from these interfaces.
-
-Marmish carries asynchronous remote commands and resumable shells over the
-Marmot protocol, using MDK for Nostr identity, MLS groups and encrypted messages.
-It has a server application that supervises an MDK daemon and authorizes remote
-identities, and a client CLI intended to feel familiar to SSH users.
-
-The remote Nostr identity is the command-line user, not the relay. Canonical
-syntax is `marmish npub@relay`; aliases for npubs and explicitly configured
-relay/SRV discovery are intended. `-u` selects the remote identity. The current
-`-i` selects a persistent local identity directory; importing a supplied Nostr
-private key remains intended work. Both endpoints require an explicit relay set.
-There must be no default public White Noise relay or silent public fallback.
-Public relays have only been used as explicitly selected test infrastructure.
-
-Noninteractive commands come first. Interactive shells will use the target
-user's shell inside tmux, with native detach/resume. An occupied session must
-offer takeover, simultaneous read-only attachment, or a new independent session.
-Only one attachment may write; takeover must fence the old writer. Endpoint
-defaults are a five-minute keepalive and an eleven-minute timeout without fresh
-authenticated inbound endpoint traffic. These leases must not kill the session
-or command. Configurable keystroke batching is intended, with a hard maximum
-latency; adaptive batching should follow measurement. X11, port forwarding and
-file transfer are deferred beyond the initial release.
-
-An unprivileged server maps all authorized identities to its own Unix account.
-Configured Nostr-to-Unix-user mapping is intended for a later audited privilege
-boundary; network and MDK processing must remain unprivileged. Normative
-multi-device support must use the new Marmot specification once integrated into
-the selected MDK version. Do not copy MLS databases between devices as a
-substitute.
-
-## Implemented and tested baseline
-
-The validated prototype baseline is Linux-only, single-device and noninteractive.
-A native macOS implementation is under validation; its presence does not establish
-native runtime support until the runner checks below pass. Its
-entry points are `tools/marmish.py` and `tools/marmishd.py`; the Rust
-`marmish-engine-bridge` connects the frontend to `marmish-engine` and detached
-`marmish-worker` processes. The server refuses effective UID 0 and account
-switching. Authorized commands run as its local Unix user in configured cwd.
-
-Implemented behavior includes generated persistent identities, explicit relay
-URLs, a client allowlist, dedicated two-member Marmish rooms, default room reuse,
-`--new-session`, direct byte-preserving argv execution, explicit opt-in shell
-execution, separate binary stdin/stdout/stderr, EOF, exit code/signal, detach,
-status, wait, retry and cancellation. Commands survive either frontend exiting;
-workers persist output and outcome for reconnection. Service managers must
-preserve these workers across frontend restarts.
-
-A full real-relay run passed all twelve assertions in 168.471 seconds using
-fresh disposable server/client identities and an unapproved identity. It covered
-literal special characters and non-UTF-8 argv, binary streams, exit status,
-cancellation, duplicate/conflicting submissions, negative frames and invitations,
-both-frontends-stopped worker completion, restored MLS/output, previous-boot
-control replay rejection, fresh groups, configurable retention, and actual CLI
-processes. Full offline validation passed 82 Python and 96 Rust tests, workspace
-clippy and formatting. These are baseline results, not an evergreen assertion
-that future edits pass.
-
-Evidence: [live report](validation/phase-2b-e2e.json),
-[validation and limits](validation/phase-2b-prototype.md),
-[phase design](phases/phase-2b-prototype.md),
-[approved design review](reviews/phase-2b-plan-final.json),
-[completed-code approval](reviews/phase-2b-code-final.json), and
-[follow-up approval](reviews/phase-2b-code-followup.json).
-
-## Design decisions to preserve
-
-### Transport and authority
-
-Use the explicitly hash-pinned installed `wnd` daemon through bounded private
-Unix JSON RPC. Application payloads never enter OS process arguments or
-environment variables. The historical prototype daemon's exact binary-to-source
-provenance was not established; its sibling MDK checkout was inspected as
-evidence. Release archives instead include the clean pinned build's source,
-patch, lockfile and executable provenance manifest, verified before execution.
-
-The daemon runs in private user/network/PID namespaces. An outer namespace
-enables loopback and unprivileged port 443; the inner environment drops all
-capabilities before creating listeners and starting MDK. Fixed host brokers
-connect those listeners only to explicitly configured relay origins. MDK keeps
-end-to-end TLS/SNI verification. No external routes, ambient proxies, host socket
-directories or external DNS are available inside the daemon namespace. Fail
-closed when the isolation cannot be established. This enforces physical origins,
-not URL paths inside TLS. Current URLs are root-path `wss://` DNS origins.
-
-Authority comes from the authenticated MDK row's actual group, sender, direction,
-kind 30100 and Marmish version tag. Payload-claimed identities or display names
-never grant execution. Validate purpose and exact two-member membership. Rooms
-use name `marmish/v1/<session-id>` and description
-`marmish/v1 command transport`; ordinary DMs never authorize commands.
-
-### Sessions, freshness and recovery
-
-Reuse a saved conversation per remote identity and canonical relay set by
-default. Each explicit new session creates a fresh independent MDK MLS group;
-resumption preserves existing MLS state. This does not certify one-use
-KeyPackages or normative multi-device behavior. Fresh keys alone do not prevent
-application replay.
-
-Frames bind protocol, session, actual group, server/client identities and random
-request ID. A fresh hello obtains a boot-specific challenge valid for sixty
-seconds and bound to group/session/authenticated peer. Engine launch tokens last
-120 seconds in this prototype. Exact request duplicates are cached; conflicting
-content is rejected. Startup history is baselined as stale. Old valid control
-frames must not become new commands after restart.
-
-Durable invocation identity is scoped to server, authorized principal, target
-Unix account and invocation ID, across groups. The same authenticated principal
-can inspect its jobs from a new session. Endpoint identity is derived from the
-actual group. Separate MLS groups isolate transport context; they do not create
-separate engine ownership rights for the same principal.
-
-Before first submission, fsync a private journal containing the original argv,
-invocation, session and token. Retry queries status first. If absent, obtain a
-fresh token and submit the same invocation ID and original command; reconcile
-an admission race by querying status. Never silently allocate a new invocation.
-Existing reattachments must not replay stdin. A newly admitted retry may send
-stdin, but interrupted stdin is not a durable client-side replay stream.
-
-Persist launch state before process creation. Report uncertain launch or worker
-loss explicitly and never automatically rerun uncertain work. Output cursors,
-input generations/offsets and ordered EOF provide byte and retry boundaries;
-expired, truncated or uncertain output is an explicit gap. A client transport
-failure does not cancel a command or prove it never started.
-
-Persist invitation intent before acceptance, then reconcile MDK confirmation
-state after a timeout or restart; acceptance is not assumed idempotent.
-Transient RPC failures retry. Semantic room faults quarantine only that room,
-persistently. Bridge framing/I/O faults close the bridge and fail closed until
-restart rather than reading mismatched replies.
-
-### Additive command restrictions
-
-The command-policy increment adds optional server `--command-policy` JSON.
-`--allow` remains the authentication allowlist. Defaults and every per-key entry
-are cumulative: each present allow list must match and any deny match wins.
-An absent allow list is unconstrained; an empty one denies all. Entry ordering
-never grants an override. Patterns are anchored executable-path byte matches:
-`*` excludes slash, `**` includes slash, slash is literal, and backslash escapes
-only star or backslash. See [the approved design](phases/command-policy.md).
-
-Applicable restrictions require already canonical absolute argv[0], checked at
-admission and launch; they refuse explicit shell strings. This is executable
-selection, not argument filtering, interpreter confinement or inode pinning.
-The engine and transactional Store enforce policy before consuming a launch
-token or creating a job. Denial is the fixed `command_denied` category.
-Existing accepted retries precede current policy checks. Each job persists its
-canonical-path requirement; tightening policy does not revoke accepted jobs.
-Validation: [14-assertion real-relay report](validation/command-policy-e2e.json)
-and [checks and limits](validation/command-policy.md); 109 Rust and 87 Python
-tests passed for this increment.
-
-Config JSON version 2 prevents older binaries silently ignoring restrictions;
-new binaries accept version 1, with absent policy and job markers defaulted.
-The encrypted database schema version is unchanged.
-
-### Native platform increment under validation
-
-The native implementation separates Linux and Darwin process identities, clocks,
-descriptor enumeration, launch descriptor closure and filesystem durability.
-Darwin uses boot UUID plus process start identity, suspend-inclusive time, native
-Unix peer credentials, APFS exclusive publication and descriptor-relative storage.
-The Python transport factory selects Linux namespace confinement or native macOS
-Seatbelt confinement with an explicitly restricted SOCKS broker. Missing native
-primitives or provenance fail closed. No public relay defaults are introduced.
-
-Clean daemon builds pin upstream MDK source, lockfile and native executable hashes;
-macOS applies the maintained restricted-transport patch. Build provenance is
-verified before execution. See [the native design](phases/macos-platform.md).
-The local `cleanup_ready` bridge operation consumes the engine and closes
-SQLCipher before acknowledging readiness; an opaque guard holds frontend and job
-locks through owned test-state deletion. It is absent from the remote protocol.
-Failure to prove quiescence preserves state and reports incomplete cleanup.
-
-The [native validation workflow](../.github/workflows/native-validation.yml)
-uses the supplied Linux AMD64, Linux ARM64 and macOS ARM64 runners. It requires
-native isolation probes, offline tests, fresh pinned daemon builds, native real
-Marmot command tests and commands in both Linux/macOS directions in one run
-attempt at the same SHA. See [the validation design](phases/platform-validation.md).
-Only trusted master pushes execute this workflow. macOS AMD64 runtime support
-remains unvalidated without a corresponding native runner.
-
-Native prerequisite failures now report fixed sanitized operation stages and
-bounded errno/subprocess status, preserving the first failure through cleanup.
-The macOS unconfined shim handoff runs separately before the broad spike; it
-provides no Seatbelt proof. Missing checkout never invokes stale cleanup scripts,
-and offline failure/cancellation still retains its private prefix. See the
-[diagnostic correction](phases/native-diagnostics.md) for offline checks and
-remaining native gates.
-
-[Native run 40978430684](validation/native-run-40978430684.json), at `f1f3616`,
-passed Linux AMD64 validation, including all three required patched-daemon
-bootstrap tests and the metadata permission regression check. Linux ARM64
-refused its nested namespace prerequisite (`userns_denied_private_bwrap`).
-macOS ARM64 passed disposable explicit-Keychain provider acceptance; its
-independent unconfined shim received the exact 72-byte frame, then exited 70
-during lifetime cleanup. That status does not identify which cleanup operation
-failed. The broader Seatbelt spike, full native frontend acceptance and
-cross-platform live jobs remain pending; these provider results do not close them.
-The [reviewed lifetime diagnostic increment](phases/native-lifetime-diagnostics.md)
-now emits fixed operation/errno records after final cleanup attempts, and the
-bootstrap test accepts only a closed, bounded diagnostic schema. Its portable
-cleanup harness and full offline Python suite passed (250 tests, five Darwin
-skips). [Run 40980988449](validation/native-run-40980988449.json) then
-passed disposable macOS provider acceptance and identified `kill_group` errno 1
-(EPERM) after the 72-byte handoff. Broader native tests remain skipped. Apple
-kernel source makes a zombie-only process group a plausible cause; exact group
-state and the running kernel revision were not captured, so EPERM cannot be
-accepted unconditionally. The reviewed [group-state correction](phases/native-lifetime-zombie-groups.md)
-accepts only group SIGKILL EPERM after a bounded two-snapshot libproc proof of a
-same-identity zombie-only original group, while the direct-child leader remains
-unreaped. Live, uncertain, truncated or changed groups retain exit 70. Portable
-proof/cleanup harnesses and 260 Python tests passed (six Darwin skips).
-[Run 40983389092](validation/native-run-40983389092.json) then passed both actual
-macOS unconfined tests: exact bootstrap handoff and positive/negative zombie-group
-proof. Disposable explicit-Keychain acceptance passed too. The broader spike
-now stops at `storage_diskutil` (subprocess exit 1), before Seatbelt checks; the
-exact prior cause is unproven. A reviewed [descriptor-based correction](phases/native-storage-filesystem.md)
-now checks the opened private directory with system `fstatfs`, requiring APFS
-and `MNT_LOCAL`, matching the engine. Directory-metadata refusals and native-call
-errors have distinct fixed diagnostics. Existing durability probes remain in
-place. Offline Python passed 262 tests (seven native skips).
-[Run 40985573347](validation/native-run-40985573347.json) then passed all three
-targeted macOS tests and the retained storage durability gate. The next confined
-broker probe exited on signal 6 (`preflight_broker_confined`); its exact cause is
-not established. Full confinement/frontend acceptance remains pending.
-Linux AMD64 passed all offline and
-pinned-build checks; ARM64 still refused namespaces. See
-[offline evidence](validation/native-zombie-groups.md).
-The same run exposed three Linux audit fixtures whose executable links were
-missing during inspection; the audit correctly refused an unreadable executable. A
-deterministic [test-fixture replacement](phases/native-audit-fixture.md) now uses
-a compiled, readiness-synchronized process with bounded owned cleanup. Production
-audit behavior is unchanged. It passed 258 offline Python tests (five Darwin
-skips) and independent Claude reviews. [Run 40982319852](validation/native-run-40982319852.json)
-then passed the Linux AMD64 job, including those tests, 21 key-integration tests,
-the pinned daemon build and three bootstrap tests. ARM64 still refused its
-namespace prerequisite; macOS again passed explicit-Keychain acceptance and
-reproduced the group cleanup error before the proposed fix.
-Historical K3 reports remain bound to their recorded files and source digests.
-
-
-[Native run 39982966090](validation/native-run-39982966090.json), at commit
-`fccfddc`, passed the Linux AMD64 namespace prerequisite, 131 Rust workspace
-tests, clippy/formatting, Python checks (172 total, four Darwin-only skips),
-pinned daemon build, executable upload and owned Bubblewrap cleanup. Linux
-ARM64 and macOS ARM64 jobs remain queued without assigned runners. Their native
-checks and both live cross-platform directions remain pending; cross-compilation
-and Linux mocks are not substitutes for them.
-
-The first native Linux runner stopped before tests because Bubblewrap was absent.
-The reviewed CI refinement acquires a private executable from authenticated Ubuntu
-package metadata, checks reviewed version floors and hashes, and passes its
-absolute path through the sanitized frontends. The supervisor validates that path
-before entering namespaces. This changes no host policy: a kernel or AppArmor
-denial remains a hard failure, and successful acquisition alone proves neither
-confinement nor native support. See [the refinement design](phases/platform-validation.md#runner-refinement-rootless-linux-bubblewrap-prerequisite)
-and [the first-run evidence](validation/native-run-39904454063.json).
-
-A second runner attempt authenticated and ran Bubblewrap but rejected its
-service-managed ancestor path before namespaces; see [that evidence](validation/native-run-39907438883.json).
-The reviewed placement refinement uses a fixed trusted Linux `/tmp` parent,
-without relaxing the production validator. Prefixes are retained after uncertain cleanup, and no operator lifecycle
-cleanup mechanism is currently verified. A successful native acceptance run must
-complete its own cleanup; no host configuration is changed by Marmish. The local fresh-key
-[full real-relay retry](validation/rootless-bwrap-e2e-retry.json) passed all
-14 checks and completed cleanup. An earlier invitation-stage timeout is retained
-in [the failed-run record](validation/rootless-bwrap-e2e.json); the successful
-retry does not establish its cause or prove macOS interoperability. The
-[final placement E2E run](validation/bwrap-placement-e2e.json) also passed all
-14 checks in 211.453 seconds with complete owned cleanup; see the
-[increment validation](validation/bwrap-placement-increment.json) and
-[final code review](reviews/bwrap-placement-code-final.json).
-The next native attempt identified a group-writable `bin` directory under the
-runner's permissive umask. Its creation now explicitly requests mode `0700`,
-with a real-selector bootstrap regression and
-[actual signed acquisition/probe evidence under umask002](validation/bwrap-umask-local.json).
-Native platform acceptance still requires the workflow results.
-
-
-### Storage, retention and bounds
-
-Use SQLCipher for engine state and retained stdout/stderr. In file-storage mode, a colocated private
-master key permits unattended detached-worker recovery; obtaining both the key
-and data defeats this at-rest protection. Frontend session metadata and retry
-journals are private 0600 JSON, not encrypted databases. Outstanding journals
-contain command arguments and authorization tokens; completed waits or terminal
-status/cancel observations scrub them logically. This is not forensic erasure.
-The [storage design](phases/sqlcipher-storage.md) governs key publication,
-recovery and rejection of older plaintext roots.
-
-Conversation application messages default to one day of retention, configurable
-for new groups (currently 1–604800 seconds). This is separate from output,
-invocation replay records, MLS state and future tmux lifetime. Relay deletion is
-best effort; unread/deferred local messages and backups may outlive the policy.
-Schedule local expiry maintenance and distinguish deferral from erasure.
-
-Current bounds include 32 KiB application frames, 4096-byte stream chunks,
-256 KiB RPC requests, 4 MiB RPC responses, 32 active/pending rooms and 256
-quarantined rooms. Quarantine exhaustion blocks new enrollment until operator
-intervention. Engine output defaults to 8 MiB per stream and a one-day lifetime;
-replay records last at least 48 hours. Preserve independent replay protection
-when deleting output.
-
-MDK returns the newest 100 matching history rows oldest first. The seen-ID cache
-is bounded at 2048 per group. Detect missing window overlap as a history gap;
-do not use sender timestamps as arrival cursors. Delayed events that fall
-entirely outside that window cannot be detected by the current API. Stop-and-wait
-requests and eight-second retransmission recover missing replies within bounded
-client deadlines; they do not promise reliable unlimited history or high
-throughput.
-
-## Remaining scope and limits
-
-The working prototype does not close the production release gate. Strict broader
-URL policy, verified daemon build provenance, packaging and operational hardening
-remain distinct from the tested namespace origin boundary. Broker DNS results
-are not filtered to public-only addresses; operators select trusted origins.
-Commands themselves run outside the daemon sandbox with the server user's
-authority. This is not a command sandbox.
-
-PTY/tmux, attachment leases and takeover/readers, adaptive batching, identity
-aliases, SRV discovery, supplied-key import, multi-device conformance, privileged
-account mapping, X11, forwarding and file transfer are intended capabilities,
-not implemented claims. Preserve the phase dependencies in the build plan and
-use Beads to record the specific next work and blockers. Do not interpret an
-unavailable future MDK capability as evidence that the existing command
-prototype or explicit-relay tests cannot run.
-
-### Native named key storage extension
-
-Beads `marmish-d84` tracks native macOS Keychain and Linux Secret Service storage
-for Nostr private keys and per-root SQLCipher masters. The user requested multiple
-named keys and native storage by default when present. The reviewed phasing is
-[the keychain extension](build-plan.md#native-keychain-storage-extension).
-
-K1 adds the host-side `marmish-vault` library and bounded private-stdio
-`marmish-keychain` helper, with exact immutable references, display names,
-non-overwriting creation, readback and metadata-only listing. It distinguishes
-absent, uninitialized, locked/denied, missing and ambiguous results. See
-[the K1 contract](phases/keychain-vault.md) and [validation](validation/keychain-vault.md).
-Linux actual-provider tests run an isolated owned GNOME Keyring. Disposable
-explicit-keychain provider acceptance also passed on native macOS ARM; default
-frontend and confined-daemon runtime execution remain separate pending gates.
-K2 integrates native selection and multiple named Nostr keys. For a new profile,
-`--key-storage auto` selects the native backend when present; only an absent
-backend selects files with an announcement. Locked, denied, uninitialized or
-broken services fail closed. Existing file profiles remain files until explicit
-`--migrate-keys-to-native`; persisted native profiles never fall back. A durable
-nonsecret files-mode marker preserves fresh-profile retries. Native helper
-installation is required to establish availability in auto mode.
-
-`--key-name` selects a catalog entry bound exclusively to one local profile
-path/device/inode and random profile ID. Names cannot copy or adopt another
-profile's MLS state. The default catalog is platform-specific, configurable with
-`--key-catalog`; it contains Nostr references only. Each server engine has an
-independent native SQLCipher reference and strict public marker. Fresh references
-are journaled before creation and read back before profile publication.
-
-The host helper obtains keys through bounded private stdio. A source-guarded,
-manifest-v2 patched MDK consumes its Nostr bootstrap via a private inherited
-stdin pipe, verifies the expected public identity, and uses an immutable
-in-memory secret store. It cannot discover the host keychain from confinement.
-The engine receives a provided master over private bridge stdin; detached workers
-receive a fixed frame bound to job, root device/inode and native reference, then
-replace fd0 with `/dev/null`. Workers already running can finish while the
-keychain is locked; starting a new frontend still requires keychain access.
-
-Migration fences the profile/catalog/MDK home/engine and workers, authenticates
-existing encrypted state, creates native references, publishes both bindings,
-then removes legacy secret files. An active worker refuses migration. Committed
-cleanup is explicitly retryable; no identity or master is silently regenerated.
-Migration currently requires an initialized encrypted database and every retained
-job to be `Exited`; `Lost`/`UnknownLaunch` records refuse it. A fresh pending
-reference whose creation never happened fails closed on retry, with no automatic
-reset. Keep the journal; these are explicit recovery limits.
-Python private RPC copies are not a full memory-erasure guarantee. Authorized
-commands run as the local user and can access that user's services.
-
-See [the K2 contract](phases/keychain-integration.md) and
-[approved Linux integration review](reviews/keychain-k2-code-followup.json).
-K2 is committed as `ed4271c`; `9054f5a` corrects public MDK metadata creation
-under permissive umasks without weakening strict validation. Linux native-provider
-Marmot acceptance passed 20 fresh-profile assertions and 22 migration assertions
-on the final reviewed harness, using disposable keys and explicitly selected
-relays. Both reports record complete local/provider cleanup and exact source and
-executable digests. Checks include named/default native provisioning, separate
-SQLCipher storage, literal/binary command handling, disconnected worker completion,
-locked-profile refusal, identity/output recovery, migration preservation and
-actual daemon/worker/helper process audits. The offline Python suite passed 247
-tests with five Darwin-specific skips. See [K3 validation](validation/keychain-native.md)
-and its linked code reviews and retained successful/failed runtime reports.
-macOS explicit-Keychain provider tests and corrected unconfined shim/group tests
-passed in run 40983389092. Run 40985573347 additionally passed native filesystem
-and durability checks after the descriptor-based correction. The broader probe
-now stops at `preflight_broker_confined` with signal 6. Default-keychain frontend
-acceptance requires a dedicated disposable account/VM; confined runtime and
-same-SHA interoperability remain pending. Linux acceptance does not establish
-those gates.
-
-## Native synthetic version lifecycle gate
-
-The installed-checks harness implements a separate three-platform synthetic
-version lifecycle gate; it is not yet qualified by a hosted lifecycle run. It
-builds genuine, explicitly synthetic predecessor/incompatible variants and keeps
-the immutable candidate unchanged. Recovery preserves the original worker and
-engine across the B-to-A switch, proves the same completed invocation under A,
-then performs one sealed cleanup. A failure before that proof preserves the
-engine. The incompatible rollback checks all main database bytes and preexisting
-sidecars exactly; only previously absent private empty WAL and 32,768-byte SHM
-files may appear during read-only SQLite bookkeeping. No immutable mode or
-checkpoint is used. macOS provider upgrade denial remains a finite red outcome,
-with cleanup facts reported separately; ACLs are not broadened.
-
-See the [lifecycle design](phases/v0.2-installed-version-lifecycle.md),
-[approved rollback ordering](reviews/v0.2-lifecycle-rollback-order-design-r1.md),
-[WAL prerequisite evidence](validation/v0.2/lifecycle-wal-prerequisite.md), and
-[integrated review findings](reviews/v0.2-version-lifecycle-integrated-code-r1.md).
-The runtime records stage durations, command wall time, restart readiness and
-byte counts. Actual installed latency samples remain pending; offline test
-duration is not a product performance measurement.
+# Marmish native v0.2 agent specification
+
+The user explicitly authorized
+publishing native 0.2.0 before full platform qualification, with macOS testing
+still in progress and fixes planned for v0.2.1. This is not a claim that all
+acceptance gates passed. Source and distribution facts must match actual publication evidence.
+
+**Validation boundary:** baseline source
+`347cf799ae5baa9e577ded1a00566c7a6b99b933` passed product unit verification,
+native builds and ABI inspection on Linux AMD64, Linux ARM64 and macOS ARM64;
+macOS signing passed. The macOS installed-checks feature suite passed 426 tests
+and failed two benchmark child-process fixtures. The cause remains unproven.
+All-platform installed/full end-to-end, lifecycle and actual default-auto provider
+qualification remain pending. Descriptions below document implemented contracts,
+not a claim that each contract has final hosted validation on every target.
+
+
+Baseline run [41655210565](https://github.com/Epiphytic/marmish/actions/runs/41655210565)
+failed overall; its Linux jobs were cancelled after those product steps passed.
+
+## Scope and navigation
+
+Marmish executes explicitly authorized remote commands through authenticated,
+encrypted Marmot/MLS rooms. The native Rust CLI, daemon and dedicated worker
+replace the historical Python application for v0.2. Python sources remain a
+legacy reference; Python, uv, Node, Cargo, a browser and WASM are not required
+by installed product operation. Some repository qualification tools use Python
+or Node outside the product environment.
+
+The architectural plan is [v0.2-plan.md](v0.2-plan.md). Detailed contracts live in
+[Phase 2](phases/v0.2-phase2.md), its
+[interfaces](phases/v0.2-phase2-interfaces.md),
+[retention/ACK amendment](phases/v0.2-phase2-retention-and-ack.md),
+[server limits](phases/v0.2-phase2-server-limits.md), and
+[native installation](phases/v0.2-phase3-release-entrypoints.md).
+Beads tracks work and review dispositions; this document describes behavior.
+
+The supported release targets are Linux AMD64, Linux ARM64 and macOS ARM64.
+Current manifests declare glibc 2.39 for GNU/Linux and macOS 15.0 for Darwin.
+Other operating systems, architectures and older runtime platforms are not
+covered by those assets. Target availability is separate from full qualification. Darwin ad-hoc signing is not Developer ID signing or
+notarization; the actual manifest records the signing state.
+
+Direct relays are the intended v0.2 command route; full installed qualification
+is still pending for this initial release. Working Tor command
+transport is deferred to v0.3. Embedded Arti and its foundation evidence remain
+experimental command capabilities, with no direct-network fallback after a
+Tor failure. No PTY, tmux, interactive shell, Unix-login mapping, root execution
+service or general process sandbox is promised by this release.
+
+## Identity, ownership and local trust
+
+One named profile owns one Nostr identity, encrypted native state and one
+serialized MDK account owner. The same identity can be client, server or both.
+Separate named profiles have separate ownership leases and state. The local
+CLI talks to that owner; it does not concurrently open its MLS database.
+
+Private profiles, sockets, configuration and key material are owned by the
+current Unix UID. Socket authentication uses SO_PEERCRED on Linux and
+getpeereid on macOS, alongside an owner-only socket directory. Local IPC is a
+same-UID interface, not a new remote authentication mechanism. Root operation
+is refused. Installation and identity state use separate directory trees.
+
+`-i NAME` selects the local named identity. `-u ACCOUNT` selects a remote public
+Nostr identity or configured alias; it never selects a Unix account or imports
+a private key. Public destinations require the npub spelling; nsec and secret
+material are not destination syntax. Configuration accepts its reviewed public
+key forms without claiming that parsing alone authenticates a peer.
+
+Roles control capability, not identity creation. Client mode can initiate
+commands to trusted remotes; server mode can accept execution from granted
+clients; both permits each independently. A default both profile with no
+execution grants cannot accept commands. No engine is constructed when neither
+current nor retained historical principals require one.
+
+`trusted_remotes` authorizes outbound command-room relationships.
+`execution_clients` authorizes inbound command execution. Setup's `--trust` and
+`--grant` change these different sets; neither implies the other. Updates require
+explicit setup update semantics. Removing authority invalidates current cached
+responses/publications as required; it does not silently cancel a running job.
+A fresh unauthenticated message, ordinary DM, relay connection or relay receipt
+cannot grant command execution.
+
+## Keys and storage
+
+`--key-storage auto|keychain|file` selects native custody. Auto may choose file
+storage for a genuinely unavailable provider when creating a fresh identity.
+A configured keychain profile does not downgrade, regenerate keys or fall back
+to plaintext/file custody after locked, denied or erroneous provider access.
+Explicit keychain mode fails when the provider cannot satisfy its contract.
+
+macOS uses Keychain and Linux uses Secret Service through its real provider
+session; Linux hosts without an accessible provider can explicitly use file
+custody. Keychain-backed profiles retain references, not serialized secret
+copies. Named identities use distinct entries, including independent Nostr and
+SQLCipher material. Both product frontends embed the private vault-helper
+entrypoint; no separately installed helper executable is required.
+
+Secret-bearing engine, journal and MDK storage uses SQLCipher. One process-wide
+initialization barrier precedes all linked SQLite consumers, including Arti's
+cache. This addresses the reviewed parallel initialization race without
+serializing the test suite or weakening encryption. Private files, ownership,
+link/type checks and canonical path requirements remain enforced.
+
+Current format constants are profile 2, journal 6, engine 1, config 1 and commands
+1. Command tables share the journal's persisted compatibility gate; commands=1
+is not an independent database version check. Journal opening recognizes the
+implemented older native formats 0, 3, 4 and 5 before checked initialization and
+stamping 6. This does not promise migration of historical Python profiles.
+Newer unsupported formats fail preflight before ordinary owner opening.
+
+Read-only preflight can cause the pinned SQLite stack to create/open bounded
+WAL/SHM sidecars; it does not promise a byte-for-byte unchanged directory.
+Main encrypted database preservation and the exact permitted sidecar inventory
+are separately specified in the
+[version lifecycle design](phases/v0.2-installed-version-lifecycle.md).
+Never delete databases, change format markers or bypass checks to recover access.
+
+## Relay selection, destinations and routing
+
+Relays are explicit; there is no public default. A named profile freezes a
+canonical relay set and route policy. Selected command destinations must equal
+that exact set, not merely be a subset. CLI options cannot broaden or replace a
+live owner's connector policy. Aliases bind an exact remote npub and exact relay
+set, not a hostname-based authorization rule.
+
+Commands require the separator before argv, for example:
+
+```
+marmish -i client npub1...@relay.example -- /canonical/program literal-argument
+marmish -i client -u npub1... --relay wss://relay.example/ -- /canonical/program
+marmish -i client ALIAS -- /canonical/program
+```
+
+Bare hosts normalize to secure WebSocket URLs. Full URLs, IPv4 and bracketed
+IPv6 use the native parser. Conflicting inline, alias, --relay, --srv and -u
+sources fail rather than choosing one by precedence. Relay endpoints never
+choose or replace the authenticated remote Nostr identity.
+
+Explicit `srv:_SERVICE._tcp.DOMAIN` or repeated `--srv NAME` opts into bounded
+system-recursive DNS discovery in the CLI before IPC. The raw-query resolver
+accepts only matching SRV answers; it does not follow response-directed CNAME
+or additional-record target lookups. No search domains, public resolver default,
+implicit service guessing or periodic refresh is used. Resolution happens once
+under its original five-second budget, then its snapshot is discarded after
+selection. The resulting canonical relay set must still equal the profile set.
+See [destinations](phases/v0.2-phase2-destinations.md) and the overriding
+[raw-query correction](phases/v0.2-phase2-srv-raw-query.md).
+
+SRV is rejected before DNS for always-Tor mode and onion selectors. In auto mode,
+ordinary explicit SRV selection permits direct DNS as documented; it does not
+authorize onion name leakage. `.onion` names are never sent to system DNS.
+Tor auto routes ordinary relays directly and onion relays through Arti; always
+uses Arti for every relay, and off refuses onion endpoints. Route failure never
+changes the selected route. Mixed auto sets intentionally permit direct traffic.
+
+Relay publication confirms relay acceptance, not peer decryption, command
+admission, output consumption or process completion. Native source ACKs and
+frozen outgoing-event obligations are tracked independently of application TTL.
+
+## Command authentication and sessions
+
+Native `marmish-command/1` intentionally breaks legacy Python wire compatibility.
+Closed canonical request/response schemas bind protocol purpose, direction,
+client, server, session, operation and request identity. Actual MLS group bytes
+are authenticated out-of-band, not trusted from payload fields or confused
+with a transport identifier. Command rooms and foundation-test rooms have
+separate purpose records and quotas; cross-purpose reuse is rejected.
+
+The server checks current room authority and inbound grants before admission.
+Engine endpoint/principal ownership derives from the sealed authenticated
+context. Peer-supplied fields cannot supply a token, UID, arbitrary engine root
+or execution authority. Command replay uses timestamp-bound IDs, a durable
+seven-day replay floor and immutable invocation digests, not fresh-key intuition.
+
+Ordinary commands reuse a separate default command room. `--new-session` on a
+new submission requests an independent room and leaves default reuse unchanged.
+Handle operations, setup and administration reject that flag. The CLI freezes
+one preparation token across bounded retries; the daemon chooses the actual
+independent session and authenticates the room.
+
+An atomic encrypted-journal creation fence binds token, peer, exact normalized
+relay-set digest and session before one native create attempt. An interrupted
+attempt without an accepted room returns command_room_uncertain; retry does not
+create again or adopt an unproven orphan. A successful fresh room consumes an
+active slot. There are 64 active command rooms, 4096 lifetime room metadata rows
+and 4096 permanent preparation markers per profile, with no user room-retirement
+operation. Total metadata exhaustion refuses and terminally forgets the new
+unaccepted native group; it does not erase old obligations. Existing default
+reuse remains possible at capacity. See [new sessions](phases/v0.2-new-session.md).
+
+## Execution policy and process behavior
+
+A native command carries direct byte argv and one immutable finite stdin value.
+The server accepts the whole canonical argv/stdin digest durably before engine
+side effects. Argv is not shell-parsed. Shell requests are denied in native v0.2;
+authorized interpreters can nevertheless execute arbitrary code as the local
+Unix user. Execution policy is not a sandbox or resource-isolation promise.
+
+Executable paths must be absolute and canonical. A symlink spelling such as
+/bin on a platform where it aliases /usr/bin may be refused even when the
+canonical target is permitted. Filesystem canonical inspection occurs on the
+blocking engine owner, before token issuance, independently of pure policy
+matching. Cwd is fixed by config or the passwd home, with a minimal fixed
+execution environment and no shell, tilde or environment expansion.
+
+Default and every matching per-key restriction accumulate. Allows intersect,
+denies union, omitted allow adds no constraint, and an empty allow denies all.
+Repeated matching key entries add restrictions. Slash-aware globs match argv0:
+`*` excludes slash and `**` includes it. An effective /** baseline for omitted
+allow does not override explicit layers, grants or canonical-path checks.
+Configuration reload requires restart; no hot-reload authorization is promised.
+
+Engine calls run on a bounded blocking owner thread, not in MDK convergence.
+The actor registers operations durably, projects completion facts/outbox updates
+and acknowledges commits before advancing recovery barriers. An ambiguous
+Submit is reconciled by status before any possible retry; an engine-known job
+that later disappears is never redispatched as a new command.
+
+Stdin is at most 16 KiB, immutable and local EOF-delivered only after actual
+input progress reaches its length. There is no network streaming stdin or PTY.
+With a TTY, default stdin is empty; --stdin explicitly reads finite input, while
+--stdin-none forces empty. Non-TTY input defaults to reading through EOF under
+the finite bound. Withholding EOF does not make interpreter side effects atomic.
+An early exit with unconsumed nonempty input produces an input-failed diagnostic;
+a zero-input command need not receive fabricated EOF to have a valid outcome.
+
+## Handles, output and failure reporting
+
+Default submission waits for authenticated admission, then copies stdout and
+stderr bytes independently. --detach returns after durable server acceptance,
+prints the private canonical handle on stderr and leaves stdout empty. A normal
+successful attached command need not print a handle. `commands`, `command-status`,
+`wait`, `output` and `cancel` operate through bounded same-UID IPC and explicit
+selectors, including --handle and --handle-file.
+
+A handle binds profile, remote, session, invocation and original request SHA.
+It is not remote authority. Its whole-request SHA differs from the group-bound
+Submit digest used by the engine ledger and Finish. Read-only client invocation
+metadata exposes that latter digest separately; no raw MLS group is exposed.
+
+Output polling uses one outstanding combined bounded Poll and durable stdout/
+stderr cursors. CLI writes bytes before committing local response consumption.
+A crash in that interval may repeat bytes after restart; terminal output writes
+are not exactly once. Unread responses are not age-evicted simply to free quota.
+Explicit gaps, invalid chunks and uncertain outcomes are reported, not hidden.
+
+Known remote exit codes pass through; signal N maps to min(255,128+N).
+Local/transport/policy/input/output failures use 255; unknown launch/lost or
+ambiguous admission uses 254. Remote 254 and 255 remain valid remote outcomes;
+finite stderr diagnostics distinguish them. Timeout preserves the handle and
+reports pending rather than claiming remote termination. Ctrl-C detaches; only
+explicit cancel requests cancellation. Cancellation itself is not proof of exit.
+
+Ordinary client disconnect, daemon Stop and uptime exit do not cancel admitted
+workers. Restart resumes ledger/native reconciliation and output retrieval.
+Accepted-but-undispatched work may remain for recovery; Lost/UnknownLaunch is
+never converted to successful completion or safely rerunnable work by guesswork.
+
+## Limits, retention and automatic server exit
+
+Defaults are four active jobs per principal, 32 globally, 1024 retained
+invocations per principal and 10000 globally. Config may lower these within its
+validated bounds. Uncertain/unreconciled jobs retain active credit. Retained
+rows, pending requests, publications, rooms and native obligations have distinct
+finite limits; overload is explicit busy/quota backpressure, not dropped work.
+
+The final encoded command envelope is always at most 32768 bytes, including
+argv/stdin/metadata. Local IPC frames are at most 64 KiB. Output uses combined
+bounded pages; the default retained stream cap is 8 MiB each and aggregate
+engine spool cap is 512 MiB. OS pipes continue draining when storage caps cause
+gaps. A full output hash is unavailable when retention/gaps prevent proving it.
+
+Payload retention defaults to one day; the command replay horizon is seven days.
+Engine tombstone retention is fixed at two days. Expiring payload does not expire
+running/uncertain ownership, immutable replay facts or protected native bytes.
+Retirement requires the appropriate consumed-slot, source, publication and
+post-ACK native-absence proofs. Invalidations protect the affected command groups;
+no fabricated ACK or unfiltered-obligation deletion may satisfy cleanup.
+
+`--max-commands N` counts unique engine admissions, not retries, refused requests
+or provisional ledger reservations. Durable credits prevent overshoot. Reaching
+N closes new admission, while existing responses continue serving. Automatic
+exit additionally requires the authenticated client's durable Finish assertion
+for every counted admission and complete local/native drain predicates.
+
+Finish binds the original group Submit digest, authoritative terminal fingerprint
+and exact final gap-aware cursors. It cannot launch work, feed input, cancel or
+supply execution authority. Last-output consumption and frozen Finish creation
+are atomic. Busy fingerprints permit bounded fresh-Poll/Finish retries, at most
+four Finish attempts per invocation; replay reuses bytes and does not recount.
+Finish is a peer consumption assertion, not proof that a person read or fsynced
+output, and its response is not inferred from relay ACKs.
+
+`--max-uptime` accepts a positive duration through 30 minutes. If max-commands is
+set without an uptime, 30 minutes supplies the escape bound. The suspend-inclusive
+monotonic budget begins before identity/config/network startup and is checked
+inside admission/dispatch as well as the owner loop. Process restart does not
+reset durable admission counters; qualification restarts also preserve the
+original overall workload deadline. Revocation, missing Finish or offline native
+obligations may force uptime exit rather than count exit. Neither exit cancels
+workers or proves their absence. See [server limits](phases/v0.2-phase2-server-limits.md).
+
+## Installation, updates and operational cleanup
+
+The native bootstrap verifies a release-pinned manifest and all three product
+binaries plus licenses before calling Rust install. It uses fixed asset names,
+exact hashes/sizes/provenance and bounded HTTPS downloads; no archive extraction,
+manifest shell evaluation, unpinned latest lookup or legacy-version fallback.
+Native setup is offline and uses installed product entrypoints for identity,
+role, trust and grant configuration. Installation does not initialize identities.
+
+Versioned installations use owned receipts and checked filesystem transactions;
+selecting a retained version reverifies it. Uninstall removes owned launchers
+while preserving identity/config/database state and installed version contents.
+Rollback selection does not imply older binaries can read newer state. Unsupported
+formats refuse before profile opening; no compatibility marker is rewritten to
+force acceptance. Runtime requires the installed sibling marmish-worker.
+
+The release bootstrap is intended to be served byte-for-byte from Radicle/Iris
+and GitHub, with GitHub the independent script backup. Both routes may still
+need GitHub-hosted release assets. Availability of one mirror does not prove the
+other; source replication, HTTPS delivery and installed behavior need separate
+evidence. A native-bootstrap cutover and matching URL digests are required before
+the default script can be described as installing v0.2. Six-case HTTPS installer validation passed separately in run 41667214179 attempt 1; it is not inferred from source publication.
+
+Ordinary shutdown preserves jobs and durable native work. Hidden same-UID fixture
+cleanup is a separate irreversible draining lifecycle: close admission, refresh
+all ledger rows under an allocated fence, commit terminal/presence facts, consume
+the actual engine into its cleanup guard, retain the live owner/profile lease and
+original inode receipt through protected removal. Unknown, revoked or incomplete
+proofs fail cleanup. No-engine clients use honest engine-absence/empty-server-ledger
+and retained-directory proofs, never a fabricated engine guard or quiesced flag.
+No caller-supplied PID or filesystem path authorizes process-tree deletion.
+
+## Initial release and evidence status
+
+The user authorized the initial native 0.2.0 release with a prominent macOS
+full-testing-in-progress caveat; corrections are planned for v0.2.1. This
+changes publication timing, not the truth of pending acceptance results.
+
+Baseline candidate [41655210565](https://github.com/Epiphytic/marmish/actions/runs/41655210565),
+attempt 1, used source `347cf799ae5baa9e577ded1a00566c7a6b99b933`.
+Product verification, builds and ABI inspection passed on all three targets;
+macOS ad-hoc signing passed. The macOS isolated installed-tool suite reported
+426 passed and two failed local benchmark child-process fixtures. No actual
+cause is proven, and no claim of a corrected fixture or full macOS success is
+made. The uncommitted diagnostic work is excluded from initial release source.
+
+Release source `73ed2b41b64ecf614d245668e3ab3b2e5b753895` changes only release-workflow
+and initial-release documentation against baseline `347cf799ae5baa9e577ded1a00566c7a6b99b933`.
+Runtime, build, dependency and scripts trees are unchanged. Asset-build run
+41664164076 attempt 1 completed successfully. Keep actual manifests and build outcomes bound to their source. Do not
+relabel baseline tests as new-source tests or claim identical executable bytes:
+compiled metadata and build provenance differ.
+
+Earlier evidence remains useful within its recorded scope: foundation acceptance
+[hosted-41577006224](validation/v0.2/hosted-41577006224.md),
+[public CLI regression](validation/v0.2/public-cli-admission-regression.md),
+[internal direct recovery](validation/v0.2/local-command-recovery-direct-2026-11-03.md),
+and the [lifecycle component review](reviews/v0.2-version-lifecycle-integrated-code-r3.md).
+Component review is not hosted release qualification.
+
+The following full qualification remains pending unless a new independently
+bound result is explicitly recorded:
+
+- Installed matrix: nine directed platform pairs and exact bytes/exits.
+- Local installed cohorts: count/uptime exit, policy, recovery and new-session.
+- Benchmark: cold plus three warm samples on each target, with real latency and
+  goodput. No final-platform values or percentiles may be invented.
+- Version lifecycle: actual A/B/A loading, live-worker preservation, C refusal,
+  state/sidecar proofs and owned keychain lifecycle.
+- Providers: actual default-auto Linux and macOS native-provider qualification.
+
+HTTPS installer validation passed within its tested scope for both script sources across all three
+targets in run 41667214179 attempt 1; the pending list above does not include it.
+
+Actual release manifests bind source and immutable asset hashes. Record source
+mirror and installer-byte verification as their own evidence; do not infer
+installed qualification from publication.
+
+
+Every qualification report binds its own source, run/attempt, target,
+manifests/tooling and original deadlines. Partial results retain their failure
+and cleanup facts. Synthetic lifecycle variants are explicitly synthetic.
+Process exit or relay publication cannot substitute for exact-byte execution,
+authenticated origin, engine admission, terminal validity and owned cleanup.
+
+## Initial asset verification
+
+Asset-build run [41664164076](https://github.com/Epiphytic/marmish/actions/runs/41664164076),
+attempt 1, successfully built, inspected and packaged all three targets and
+rendered the native bootstrap from this release source. All 15 product assets
+were individually checked against their manifests. This caveated packaging run
+skipped product test reruns, installed-test tooling, provider qualification and
+quickstart jobs; its success is not full qualification. The exact rendered shell
+also installed Linux AMD64 from the artifact asset directory: release metadata
+matched source/version/formats `[2,6,1,1,1]`, and all four installed product files
+matched their expected hashes and modes. Public release and both installer URL cutovers have been verified. The local installed native protocol check passed, as described below.
+
+The installed Linux AMD64 direct-relay command check passed (exit 0), using the
+installed production owner, engine and worker with disposable identities. Total
+elapsed time was 19444 ms. Its running-command owner-restart/recovery case took
+6295 ms and verified exact recovered output, execution count one, identical-submit
+attachment and remote conflict refusal. Literal argv completed in 1590 ms;
+16 KiB binary stdin/output in 2778 ms (5896 output bytes/s); stderr plus exit 7
+in 1466 ms. Joined engine/MDK stops, engine quiescence, runtime cleanup and state
+cleanup all passed, with no retained state. This is one local installed native
+protocol check, not the public-CLI platform matrix, an OS restart test, or full
+benchmark/provider/lifecycle qualification.
+
+The [initial v0.2.0 prerelease](https://github.com/Epiphytic/marmish/releases/tag/v0.2.0)
+is public with all 15 product assets; server sizes and digests match the verified
+manifests. GitHub and Radicle tags both identify the release source. Bootstrap-only
+commit `7e3e74411bed8657e8b8f5b599b36c2b702fe5bd` changes only `scripts/install.sh`.
+Both public installer URLs were independently fetched and matched the rendered
+bootstrap SHA256 `46b4f369792f4f4ea36726c24414c5cca2ef977fec61712d821a1b81f985367a`.
+The two-source/three-platform HTTPS run [41667214179](https://github.com/Epiphytic/marmish/actions/runs/41667214179), attempt 1, passed its resolver, all six install/setup cells and rollup. This validates both script sources on all three targets within that test scope; it does not establish full command-matrix, provider or version-lifecycle qualification.
+
+A separate Linux AMD64 install downloaded the public release assets without an
+asset-directory override and passed (exit 0), selecting active generation 2
+with the same version, source and format tuple. See the
+[initial release evidence](validation/v0.2/initial-release.md) for exact reports and boundaries.

@@ -2,19 +2,52 @@
 
 ## Active plan: v0.2
 
-The user's 2026-11-02 reset replaces the active architecture with the
-[native Rust v0.2 plan](v0.2-plan.md), tracked by Beads `marmish-7nw`.
-v0.1 development and its experimental.3 candidate are stopped. The sections
-below are historical v0.1 plans and evidence, retained for protocol comparison;
-their Python, daemon-RPC and mandatory confinement requirements do not apply
-to the rewrite. Python remains an optional legacy protocol comparison fixture; v0.2 wire and
-on-disk compatibility may break.
+The user's 2026-11-02 reset selected the [native Rust v0.2 plan](v0.2-plan.md),
+tracked by Beads `marmish-7nw`. v0.1 development and experimental.3 were stopped.
+Their Python runtime, daemon RPC and mandatory confinement architecture are
+historical; they do not apply to the native product.
 
-The user's scope amendment defers working Tor commands to v0.3. v0.2 acceptance
-uses direct relays and retains the full installed platform matrix and recovery
-checks. Native setup must offer independently usable Radicle/Iris and GitHub
-installer URLs, with GitHub as the backup. This supersedes earlier Tor command
-gates; see [the active amendment](v0.2-plan.md#outcome).
+The user explicitly authorized the initial native **0.2.0 release with full macOS
+testing still in progress**. Corrections are planned for
+v0.2.1. Baseline source `347cf799ae5baa9e577ded1a00566c7a6b99b933` passed
+product unit verification, builds and ABI inspection on Linux AMD64, Linux ARM64
+and macOS ARM64; macOS ad-hoc signing passed. Its macOS installed-tool feature
+suite passed 426 tests and failed two local benchmark child-process fixtures,
+whose cause remains unproven. Full installed interoperability, lifecycle,
+real keychain-provider qualification remain pending.
+
+
+Baseline run [41655210565](https://github.com/Epiphytic/marmish/actions/runs/41655210565)
+failed overall; its Linux jobs were cancelled after those product steps passed.
+
+Release source is `73ed2b41b64ecf614d245668e3ab3b2e5b753895`; only release-workflow and
+initial-release documentation differ from baseline `347cf799ae5baa9e577ded1a00566c7a6b99b933`.
+Runtime, build, dependency and scripts trees are unchanged. Asset-build run
+[41664164076](https://github.com/Epiphytic/marmish/actions/runs/41664164076),
+attempt 1, completed successfully as a caveated packaging run. The actual asset
+manifest records its build source. Baseline test results are not new-source
+results, and unchanged source does not imply byte-identical binaries or provenance.
+
+See the [README](../README.md) for the native POSIX-shell/curl quickstart and its
+current validation caveat. Iris and GitHub provide independent script source
+URLs; release assets use GitHub Releases. Native installation/runtime require
+no Python, uv, Cargo or Rust compiler. Tor command qualification is optional,
+experimental v0.3 work. PTY/tmux, forwarding, multi-device conformance and
+privileged Unix-user mapping remain separate future scope.
+
+The original full-qualification exit criteria remain the validation target,
+not a statement that they passed before this initial publication. Continue
+bounded fixes, actual testing and reviewed evidence in v0.2.1; retain failures
+and label every result by its own source and platform. The phased workflow
+remains: detailed design and independent Claude approval, bounded agent
+implementation, appropriate tests, actual Claude auto code review, then reviewed
+commit/push to GitHub and Radicle with sanitized evidence and Beads handoff.
+
+## Historical v0.1 plans and evidence
+
+Everything below is historical v0.1 planning/evidence. Its installer, interpreter,
+key-storage flag spellings, daemon RPC, confinement and identity-barrier pipeline
+must not be used as native v0.2 installation or acceptance instructions.
 
 ## Installed three-platform live acceptance
 
@@ -200,3 +233,39 @@ precede each increment; the current macOS sandbox startup failure remains a
 separate release/runtime gate. See [the overall review](reviews/managed-install-unified-overall.md)
 for the nonempty engine contract, retained per-key restrictions, authoritative
 configuration/migration, policy-transition recovery, and bootstrap trust decisions.
+
+## Initial asset verification
+
+Asset-build run [41664164076](https://github.com/Epiphytic/marmish/actions/runs/41664164076),
+attempt 1, successfully built, inspected and packaged all three targets and
+rendered the native bootstrap from this release source. All 15 product assets
+were individually checked against their manifests. This caveated packaging run
+skipped product test reruns, installed-test tooling, provider qualification and
+quickstart jobs; its success is not full qualification. The exact rendered shell
+also installed Linux AMD64 from the artifact asset directory: release metadata
+matched source/version/formats `[2,6,1,1,1]`, and all four installed product files
+matched their expected hashes and modes. Public release and both installer URL cutovers have been verified. The local installed native protocol check passed, as described below.
+
+The installed Linux AMD64 direct-relay command check passed (exit 0), using the
+installed production owner, engine and worker with disposable identities. Total
+elapsed time was 19444 ms. Its running-command owner-restart/recovery case took
+6295 ms and verified exact recovered output, execution count one, identical-submit
+attachment and remote conflict refusal. Literal argv completed in 1590 ms;
+16 KiB binary stdin/output in 2778 ms (5896 output bytes/s); stderr plus exit 7
+in 1466 ms. Joined engine/MDK stops, engine quiescence, runtime cleanup and state
+cleanup all passed, with no retained state. This is one local installed native
+protocol check, not the public-CLI platform matrix, an OS restart test, or full
+benchmark/provider/lifecycle qualification.
+
+The [initial v0.2.0 prerelease](https://github.com/Epiphytic/marmish/releases/tag/v0.2.0)
+is public with all 15 product assets; server sizes and digests match the verified
+manifests. GitHub and Radicle tags both identify the release source. Bootstrap-only
+commit `7e3e74411bed8657e8b8f5b599b36c2b702fe5bd` changes only `scripts/install.sh`.
+Both public installer URLs were independently fetched and matched the rendered
+bootstrap SHA256 `46b4f369792f4f4ea36726c24414c5cca2ef977fec61712d821a1b81f985367a`.
+The two-source/three-platform HTTPS run [41667214179](https://github.com/Epiphytic/marmish/actions/runs/41667214179), attempt 1, passed its resolver, all six install/setup cells and rollup. This validates both script sources on all three targets within that test scope; it does not establish full command-matrix, provider or version-lifecycle qualification.
+
+A separate Linux AMD64 install downloaded the public release assets without an
+asset-directory override and passed (exit 0), selecting active generation 2
+with the same version, source and format tuple. See the
+[initial release evidence](validation/v0.2/initial-release.md) for exact reports and boundaries.

@@ -1,0 +1,305 @@
+{
+  "schema": 1,
+  "run": {
+    "conclusion": "success",
+    "created_at": "2026-11-03T15:27:58Z",
+    "event": "workflow_dispatch",
+    "head_branch": "master",
+    "head_sha": "73ed2b41b64ecf614d245668e3ab3b2e5b753895",
+    "html_url": "https://github.com/Epiphytic/marmish/actions/runs/41664164076",
+    "id": 41664164076,
+    "path": ".github/workflows/v02-release.yml",
+    "run_attempt": 1,
+    "status": "completed",
+    "updated_at": "2026-11-03T15:38:31Z"
+  },
+  "jobs": [
+    {
+      "id": 126014901755,
+      "name": "package (ubuntu-24.04-arm, aarch64-unknown-linux-gnu, none, glibc=2.39)",
+      "status": "completed",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify immutable source and native target",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify explicit caveated source equivalence",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920",
+          "conclusion": "success"
+        },
+        {
+          "name": "Set qualified macOS deployment minimum",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Verify native components",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Build final native executables",
+          "conclusion": "success"
+        },
+        {
+          "name": "Ad hoc sign final macOS executables before hashing",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Inspect final dependency allowlists and qualified ABI baselines",
+          "conclusion": "success"
+        },
+        {
+          "name": "Collect locked production license texts (CI tooling only)",
+          "conclusion": "success"
+        },
+        {
+          "name": "Package verified immutable candidate assets",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build isolated installed-test tools without changing product assets",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Preserve pinned installed-test tools separately",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "conclusion": "success"
+        },
+        {
+          "name": "Preserve host render tool separately (never an install asset)",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 126014902270,
+      "name": "package (ubuntu-24.04, x86_64-unknown-linux-gnu, none, glibc=2.39)",
+      "status": "completed",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify immutable source and native target",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify explicit caveated source equivalence",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920",
+          "conclusion": "success"
+        },
+        {
+          "name": "Set qualified macOS deployment minimum",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Verify native components",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Build final native executables",
+          "conclusion": "success"
+        },
+        {
+          "name": "Ad hoc sign final macOS executables before hashing",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Inspect final dependency allowlists and qualified ABI baselines",
+          "conclusion": "success"
+        },
+        {
+          "name": "Collect locked production license texts (CI tooling only)",
+          "conclusion": "success"
+        },
+        {
+          "name": "Package verified immutable candidate assets",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build isolated installed-test tools without changing product assets",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Preserve pinned installed-test tools separately",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "conclusion": "success"
+        },
+        {
+          "name": "Preserve host render tool separately (never an install asset)",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 126014902456,
+      "name": "package (macos-15, aarch64-apple-darwin, adhoc, macos=15.0)",
+      "status": "completed",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify immutable source and native target",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify explicit caveated source equivalence",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920",
+          "conclusion": "success"
+        },
+        {
+          "name": "Set qualified macOS deployment minimum",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify native components",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Build final native executables",
+          "conclusion": "success"
+        },
+        {
+          "name": "Ad hoc sign final macOS executables before hashing",
+          "conclusion": "success"
+        },
+        {
+          "name": "Inspect final dependency allowlists and qualified ABI baselines",
+          "conclusion": "success"
+        },
+        {
+          "name": "Collect locked production license texts (CI tooling only)",
+          "conclusion": "success"
+        },
+        {
+          "name": "Package verified immutable candidate assets",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build isolated installed-test tools without changing product assets",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Preserve pinned installed-test tools separately",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "conclusion": "success"
+        },
+        {
+          "name": "Preserve host render tool separately (never an install asset)",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 126021129785,
+      "name": "render",
+      "status": "completed",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify complete provenance tuple and render three pinned manifests",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 126021291192,
+      "name": "provider-qualification",
+      "status": "completed",
+      "conclusion": "skipped",
+      "steps": []
+    },
+    {
+      "id": 126021292366,
+      "name": "install-quickstart",
+      "status": "completed",
+      "conclusion": "skipped",
+      "steps": []
+    }
+  ],
+  "full_qualification": false
+}

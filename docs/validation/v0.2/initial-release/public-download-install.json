@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "ok": true,
+  "bootstrap_sha256": "46b4f369792f4f4ea36726c24414c5cca2ef977fec61712d821a1b81f985367a",
+  "source": "github",
+  "asset_directory_override": false,
+  "exit_code": 0,
+  "version": "0.2.0",
+  "target": "x86_64-unknown-linux-gnu",
+  "active": true,
+  "generation": 2,
+  "source_commit": "73ed2b41b64ecf614d245668e3ab3b2e5b753895",
+  "formats": [
+    2,
+    6,
+    1,
+    1,
+    1
+  ],
+  "uid_nonroot": true
+}

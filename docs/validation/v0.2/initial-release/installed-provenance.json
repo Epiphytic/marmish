@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "ok": true,
+  "version": "0.2.0",
+  "source_commit": "73ed2b41b64ecf614d245668e3ab3b2e5b753895",
+  "target": "x86_64-unknown-linux-gnu",
+  "formats": [
+    2,
+    6,
+    1,
+    1,
+    1
+  ],
+  "all_product_files_verified": true,
+  "uid_nonroot": true
+}

@@ -1,432 +1,241 @@
 # Marmish
 
+Run remote commands over Marmot's MLS-encrypted Nostr transport. Marmish v0.2
+uses native Rust clients and daemons, with one named Nostr identity per daemon.
+The same identity can send commands and accept authorized commands.
+
+**Initial native 0.2.0 release: macOS full testing is still in progress.**
+Product unit tests, native builds and ABI inspection passed on all three release
+platforms for baseline source `347cf799ae5baa9e577ded1a00566c7a6b99b933`;
+macOS signing also passed. Its macOS installed-tool feature suite passed 426
+tests and failed two local benchmark child-process fixtures. Their cause is not
+yet proven; fixes and further testing are planned for v0.2.1. All-platform
+installed end-to-end, version-lifecycle and real keychain-provider qualification
+remain pending. This release does not claim those checks passed.
+
 Source: [GitHub](https://github.com/Epiphytic/marmish) ·
 [Radicle](https://radicle.network/nodes/iris.radicle.network/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg)
 (`rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg`).
 
-## v0.2 development
 
-Marmish is being rebuilt in native Rust using upstream MDK and embedded Arti,
-targeting Tor endpoint support and no mandatory namespace/broker layer. See the
-[v0.2 plan](docs/v0.2-plan.md). The new binaries are not released yet.
-Native encrypted-message/restart validation and measured round-trip latency are
-recorded in [the foundation evidence](docs/validation/v0.2/native-foundation.md).
-The foundation passed [hosted direct and Arti checks on all three targets](docs/validation/v0.2/hosted-41577006224.md).
-The internal Rust command path also passed a [fresh-key direct Marmot run](docs/validation/v0.2/local-command-direct-2026-11-02.md),
-including literal arguments, binary stdin, stderr, exit codes and owned cleanup,
-with measured command completion and goodput. [Arti command attempts](docs/validation/v0.2/local-command-arti-2026-11-02.md)
-have not passed and are deferred to v0.3; Tor command support does not block
-v0.2. Existing Tor command modes remain experimental and unqualified for v0.2.
-The public Rust command CLI/IPC is implemented, and a
-[local running-job restart/replay check](docs/validation/v0.2/local-command-recovery-direct-2026-11-03.md)
-passed through Marmot. A [local native installer smoke](docs/validation/v0.2/local-native-installer-smoke.md)
-also passed without Python in PATH. Installed cross-platform command acceptance,
-default-auto keychains and public v0.2 installer publication remain pending;
-this is not yet a released v0.2 remote shell.
+Baseline run [41655210565](https://github.com/Epiphytic/marmish/actions/runs/41655210565)
+failed overall; its Linux jobs were cancelled after those product steps passed.
 
-The Python implementation and the v0.1 instructions below are retained as a
-legacy protocol reference and optional comparison fixture. v0.1 development is
-stopped; its results do not establish v0.2 support. v0.2 uses fresh on-disk formats;
-no migration from experimental v0.1 state is planned. Wire compatibility with
-v0.1 may also break; Rust↔Python interoperability is not a release gate.
+## Install and quickstart
 
-## Legacy v0.1 experimental binary installation
-
-[v0.1.0-experimental.2](https://github.com/Epiphytic/marmish/releases/tag/v0.1.0-experimental.2)
-is available for Linux AMD64, Linux ARM64 and macOS ARM64 (macOS 15+).
-Both Linux archives require glibc 2.39 or newer. All three passed native build
-and installation checks. The exact Linux AMD64 release archive passed all 15
-installed command tests locally through Marmot; the hosted runner denied the
-required namespace operation. See [the debug release evidence](docs/validation/debug-distribution-publication.json)
-for source, archive bindings, the initial failed local attempt and publication verification. ARM64 Linux and macOS
-confined execution are not validated in this distribution. Earlier self-hosted
-validation found a Linux ARM64 namespace-policy failure and a macOS broker abort;
-these are not observations from hosted packaging jobs. Successful building or
-installation does not establish working confined execution on those platforms.
-Intel macOS is not included.
-
-Measured setup timings are published in [the installation baseline](docs/validation/installed-setup-baseline.md),
-with [machine-readable results](docs/validation/installed-setup-baseline.json).
-Additional [native setup measurements](docs/validation/installed-prerequisites-41395347740.md)
-record successful Linux installation/identity stages and the remaining failures.
-The [first integrated native matrix report](docs/validation/installed-nine-pair-41397651278/)
-publishes JSON and Markdown, further setup timings and the failed prerequisites.
-It reached no remote commands, so transport metrics remain null with zero samples.
-The installed interoperability workflow records command latency, first-output time
-and verified payload transfer rates per client/server platform pair. Only
-successfully verified commands contribute performance samples.
-Command wall time includes harness teardown; effective download speed divides
-verified stdout and stderr bytes by that time. First-output and output-drain
-timings use local pipe observations. Each platform pair supplies one sample,
-which does not establish percentiles or one-way network latency. Full definitions
-are included in the workflow's JSON and Markdown results.
-
-### Copy-and-paste quickstart
-
-**Legacy v0.1 only. This script does not install Rust v0.2; its native quickstart is not available yet.**
-
-Run these commands on both machines as your normal Unix user with Python 3.11+
-and curl. Have the platform prerequisites described below in place; the installer
-does not install system tools, initialize a keychain service or enable namespaces.
+Run as your normal user, from a terminal:
 
 ```sh
-(curl --proto '=https' --tlsv1.2 --connect-timeout 10 --max-time 60 -fsSL https://iris.radicle.network/raw/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/head/scripts/install.sh -o marmish-install.sh ||
- curl --proto '=https' --tlsv1.2 --connect-timeout 10 --max-time 60 -fsSL https://raw.githubusercontent.com/Epiphytic/marmish/master/scripts/install.sh -o marmish-install.sh) &&
-sh marmish-install.sh --quickstart --debug
+curl --proto '=https' --tlsv1.2 -fsSL https://iris.radicle.network/raw/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/head/scripts/install.sh | sh -s -- --quickstart --debug
 ```
 
-This saves the installer as `marmish-install.sh` and runs it only if the download
-succeeds through Iris or its GitHub backup. Both URLs are standalone download
-options; if both fail, the script is not run. Debug diagnostics are enabled here temporarily to help diagnose setup
-failures. They report stages and numeric failure details to stderr, excluding
-private keys, credentials and command contents. The installer forwards debug mode
-through `MARMISH_DEBUG=1`; older archives, including experimental.1, ignore it and
-retain category-only runtime errors. Detailed runtime diagnostics are included in experimental.2 and newer; updating
-the installer alone does not add them to an older binary.
-
-Setup needs a foreground terminal. Choose `server` on the remote machine
-and `client` on the connecting machine, using the same explicit relay URL.
-Exchange the public account identifiers printed during initialization (`npub` or
-hex); start the server before submitting the client's peer prompt. The server
-stays in the foreground. Allowed clients can execute commands as that Unix user;
-authorization applies to the current server invocation and must be supplied again
-on restart. See [manual setup](#first-run-with-installed-binaries) for restarting
-without reinstalling and allowing multiple clients.
-
-Quickstart reuses `~/.marmish/default`; this is a setup convention, and the CLI
-still requires `-i`. Use manual setup with separate profiles for colocated client
-and server. Key storage uses the native keychain when available and files only
-when the backend is proven absent; locked or denied keychains fail closed. Setup
-stops on failure, retaining any completed installation or initialized profile.
-For installation alone without identity or keychain access, omit `--quickstart`.
-Add `~/.local/bin` to PATH for later commands, or use the printed absolute launcher
-paths. The runtime limitations above still apply.
-
-The script can be downloaded from Radicle through Iris or GitHub and downloads complete native
-archives and `SHA256SUMS` from [GitHub Releases](https://github.com/Epiphytic/marmish/releases).
-It selects an experimental prerelease; pin one with `sh install.sh --version
-0.1.0-experimental.2` after downloading the script. For an immutable installer,
-replace both Iris `head` and GitHub `master` in the command above with the same
-full reviewed commit SHA. Mutable URLs trust whichever script that source serves;
-a stale HTTP 200 response does not trigger fallback. These are two script sources,
-not independent archive hosts: archives/checksums still require GitHub Releases.
-The latest [download check](docs/validation/v0.2/installer-source-fallback.md)
-found both script URLs returning HTTP 200 with identical reviewed bytes. Iris
-immutable README retrieval separately returned HTTP 500; availability of one
-path does not establish availability of every source path. Same-release checksums detect
-corruption and are not independent signatures.
-
-By default, versions live under `~/.local/share/marmish/versions` and launchers
-under `~/.local/bin`; add that directory to PATH if needed. `--prefix /absolute/path`
-uses that prefix's `bin/` for launchers. Paths containing spaces and shell
-characters are supported. The installer refuses root, unsafe destinations,
-unrelated existing launchers and corrupt archives. It does not edit shell
-profiles. Plain installation does not access identities or keychains;
-`--quickstart` opts into identity initialization and guided command execution.
-Reinstalling identical bytes is safe;
-upgrades retain old version trees, and running processes keep their old paths.
-There is no automatic state downgrade. `sh install.sh --uninstall` removes only
-installer-owned launchers and bookkeeping, retaining versions and user state.
-
-Installed `marmish` and `marmishd` supply their bundled daemon, manifest, native
-keychain helper, bridge and worker paths. Keep specifying identity, relays and
-server authorization/cwd as in the examples below; explicit helper overrides
-remain supported. `--doctor` reports static prerequisites without accessing
-keys or proving confinement. Updated frontends support `--debug` (also
-`MARMISH_DEBUG=1`); use `marmish --debug --doctor` with the debug flag first
-because doctor exits during argument parsing. Debug output uses a fixed prefix
-and JSON schema. Stderr can also carry remote command output, so it is not an
-authenticated diagnostic channel. Linux reports setup stages; macOS additionally
-reports native preflight exit status and signals. Linux needs Bubblewrap,
-util-linux/unshare,
-iproute2, `/usr/bin/python3` 3.11+, CA certificates and working unprivileged
-user/network/PID namespaces. Each archive records its measured minimum glibc and
-shared libraries; installation checks those requirements. macOS builds are
-ad-hoc signed, without Developer ID signing or notarization; upgrades may need
-renewed Keychain permission and fail closed if access is denied.
-
-This release uses script installation. `cargo install marmish` is not available:
-the application frontends are Python and the current pinned SQLCipher patch
-needs a separate source-distribution design. Building the Rust workspace alone
-does not install the complete application. The release workflow does not use a
-registry token for incomplete crate publication.
-
-Marmish is [MIT licensed](LICENSE); complete runtime archives include original
-dependency license texts, native dependency notices and pinned source references
-for both Marmish and MDK. See the [distribution design](docs/phases/distribution.md).
-
-Asynchronous remote commands and resumable shells over Marmot, using explicitly configured relays.
-
-The current Linux prototype runs noninteractive commands over Marmot. Commands continue running after client disconnection. Interactive PTY/tmux sessions, takeover and simultaneous read-only attachments follow in later phases. Application messages default to a configurable 24-hour retention policy. Destination syntax is `npub@relay`, also accepting a hexadecimal Nostr public key; aliases and SRV discovery are later work. Relays must always be explicitly selected.
-
-See [the phased build plan](docs/build-plan.md). Beads tracks implementation and review work. The prototype uses a bounded adapter to a hash-pinned MDK daemon and the `marmish-engine` library for durable same-user jobs, detached workers, ordered stdin, bounded output, cancellation and replay protection. It is an experimental single-device command transport, not a production remote-shell release. See [prototype validation and limits](docs/validation/phase-2b-prototype.md) and the earlier [MDK compatibility report](docs/mdk-compatibility.md).
-
-## First run with installed binaries
-
-Run as your normal Unix user. On **each machine**, choose the same explicit
-relay URL and initialize a local identity:
+If Iris is unavailable, the same installer is available independently on GitHub:
 
 ```sh
-printf 'Relay URL (wss://your-relay.example/): '
-IFS= read -r RELAY
-IDENTITY="$HOME/.marmish/default"
-marmish -i "$IDENTITY" --relay "$RELAY" --key-storage auto --init
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/Epiphytic/marmish/master/scripts/install.sh | sh -s -- --quickstart --debug
 ```
 
-For a new profile, initialization generates the local Nostr key and prints its
-hexadecimal public identifier as JSON: `{"account":"…"}`. Copy that public
-identifier when configuring the other endpoint; an `npub` is accepted too. Keep
-using the same identity directory
-to reuse the key and saved sessions. `~/.marmish/default` is a convention in this
-quickstart; the CLI still requires `-i`. If client and server run on one machine,
-choose separate identity directories because a profile allows only one active
-frontend.
+The installer pins v0.2.0 and verifies its manifest and binary checksums. It does
+not select a legacy v0.1 release. The Iris and GitHub URLs are independent script sources; both are intended to
+serve the same pinned native bootstrap after cutover. Versioned binary assets
+are downloaded from GitHub Releases. See [Scope and validation](#scope-and-validation) for the evidence boundary. No Python, uv,
+Cargo or Rust compiler is needed to install or run it.
 
-`auto` is already the default: it stores keys in macOS Keychain or Linux Secret
-Service when available. Only a proven absent backend selects private files,
-with a notice on stderr; a locked, denied, uninitialized or failed keychain stops
-setup. Linux native
-storage needs an initialized persistent Secret Service collection. Plain
-installation does not create identities or access the keychain; `--quickstart`
-and manual initialization require your explicit relay selection.
+Supported binaries are Linux AMD64 and ARM64 (glibc 2.39 or newer), and macOS 15
+or newer on Apple Silicon. Use a native ARM64 terminal on macOS. The macOS
+binaries are ad-hoc signed, not notarized; upgrades may require renewed Keychain
+approval. Linux musl and Intel macOS binaries are not provided.
 
-On the **server**, enter the client's public identity and start the server in
-the foreground:
+Quickstart creates the `default` identity and asks for:
+
+- A role: enter `c`, `s` or `b`, then Return. Return alone selects **both**.
+- Your explicit relay URL(s), separated by spaces. No public relay is selected automatically.
+- Tor routing (`auto`, `always` or `off`): `always` routes all relays through Tor;
+  `off` refuses onion relays. Return selects experimental `auto`, which
+  connects directly to non-onion relays. Tor remains
+  experimental and is not a v0.2 release qualification claim.
+- Client npubs allowed to execute here. Leave this empty to disable inbound
+  execution, even when the role is **both**.
+- For client or both roles, trusted remote server npubs, separately from inbound client permissions.
+
+Only grant identities you trust to execute programs as your local Unix user.
+The initial command policy permits executable paths broadly; configure path
+restrictions in the private configuration before granting more limited access;
+see [command policy](docs/phases/command-policy.md). Defaults and matching per-key
+restrictions are additive; `*` does not cross `/`, while `**` does.
+
+The setup report prints your public `npub`, selected credential backend, and
+whether inbound execution is enabled. It does not print your private keys.
+Setup initializes local state and exits; it does not leave a server running.
+
+Launchers are installed in `~/.local/bin`. If necessary, add that directory to
+your shell's PATH. On a machine accepting commands, start the daemon and leave
+it running:
 
 ```sh
-printf 'Client public identity to allow (npub or hex): '
-IFS= read -r CLIENT_NPUB_OR_HEX
-marmishd -i "$IDENTITY" --relay "$RELAY" \
-  --allow "$CLIENT_NPUB_OR_HEX" --cwd "$HOME"
+marmishd
 ```
 
-Repeat `--allow` for additional client identities. These permissions apply to
-this server invocation; supply them again on restart. Authorized commands run as
-this Unix user in the selected directory. Keep the server running; interactive
-shells remain future work.
+This runs in the foreground using the configured `default` identity. On a client,
+the first command starts its local daemon automatically if needed. Configure
+service supervision separately if you want the server to start at login or boot.
 
-On the **client**, enter the server's public identity printed during its setup
-and run a command:
+## Connect to another identity
+
+Exchange the npubs printed by setup. On the server, grant the client's npub; on
+the client, trust the server's npub. These are independent permissions. For an
+existing configuration, stop its running daemon before changing setup:
 
 ```sh
-printf 'Server public identity (npub or hex): '
-IFS= read -r SERVER_NPUB_OR_HEX
-marmish -i "$IDENTITY" --relay "$RELAY" -u "$SERVER_NPUB_OR_HEX" "$RELAY" -- \
-  /usr/bin/printf '%s\n' 'Hello through Marmot'
+# On the server:
+marmish setup --update --grant CLIENT_NPUB
+marmishd
+
+# On the client:
+marmish setup --update --trust SERVER_NPUB
+marmish SERVER_NPUB@relay.example -- /usr/bin/printf '%s\n' 'Hello from Marmish'
 ```
 
-Here `-u` selects the remote Nostr identity, and the destination is the explicit
-relay URL. The equivalent destination form is `npub@relay-host`. Arguments after
-`--` are literal command arguments. The platform runtime limitations above still
-apply; successful installation or `--doctor` alone does not prove confinement.
+Replace `CLIENT_NPUB` and `SERVER_NPUB` with complete `npub1…` values and
+`relay.example` with your configured relay hostname. The relay selection must
+match the profile's complete configured relay set. A bare hostname means
+`wss://hostname/`; a full relay URL can include a path. For multiple configured
+relays, use `marmish -u SERVER_NPUB -- /absolute/program` to select the full
+configured set. Repeated `--relay` URLs may explicitly restate that exact set.
 
-## Run the command prototype
+The npub is the remote identity, not a Unix username; the host is a relay, not
+the remote machine. Always include `--` before an absolute executable path.
+Arguments are sent as separate literal arguments. Shell expansion and pipelines
+are not implicitly evaluated remotely. Pass `--stdin` to send up to 16 KiB of
+immutable input from stdin, or `--stdin-none` to send none. By default, piped
+input is read and terminal input is not.
 
-Build the worker and engine bridge with `cargo build --locked --workspace` using the prerequisites below. The Python tools need Python 3.11 or newer and the standard library. Run as a non-root Unix user. On each endpoint, install `bubblewrap`, util-linux `unshare`, iproute2 `ip` and `sysctl`; the current Linux layout expects `/usr/bin/python3`, `/usr/sbin/ip`, `/usr/sbin/sysctl` and `/etc/ssl/certs`. Unprivileged user, network and PID namespaces must be enabled by the host. Startup fails if the confinement checks cannot pass; it does not change host namespace policy.
-
-Build the pinned daemon with `python3 tools/build_mdk.py --output /absolute/private/build/wnd`.
-Native key storage requires this build's private bootstrap capability and provenance
-manifest on both platforms. The historical unpatched daemon is usable only with
-explicit `--key-storage files`; its old hash does not attest the new capability.
-Install `target/debug/marmish-keychain` at a stable private executable path on PATH
-(or alongside the Python entry point), or pass `--keychain-helper /absolute/path`.
-On Linux, native storage uses an already initialized persistent Secret Service
-collection. macOS uses the user's default legacy Keychain.
-Set these variables on each endpoint, choosing your relay and local daemon path. Repeat `--relay` for additional explicit URLs. Supported URLs are `wss://` DNS origins with an optional port and root path; there are no built-in public relays.
-
-```sh
-WND=/absolute/path/to/wnd
-WND_SHA256=PASTE_SHA256_FROM_WND_MANIFEST
-RELAY=wss://your-relay.example/
-```
-
-Generate an identity on the client, then generate the server identity on the remote host. Each command prints a public `account` identifier. Keep identity directory paths short enough for a Unix socket (the internal `mdk/s` path must fit within 100 bytes).
-
-```sh
-# Client host
-python3 tools/marmish.py -i "$HOME/.marmish/client" --relay "$RELAY" \
-  --wnd "$WND" --wnd-sha256 "$WND_SHA256" --init
-
-# Remote host
-python3 tools/marmish.py -i "$HOME/.marmish/server" --relay "$RELAY" \
-  --wnd "$WND" --wnd-sha256 "$WND_SHA256" --init
-```
-
-On the remote host, allow the client's public identity and choose an existing working directory. Commands execute as this server's local Unix account. The server refuses root and does not switch users.
-
-```sh
-CLIENT_NPUB_OR_HEX='paste-client-public-identity'
-python3 tools/marmishd.py -i "$HOME/.marmish/server" --relay "$RELAY" \
-  --wnd "$WND" --wnd-sha256 "$WND_SHA256" --allow "$CLIENT_NPUB_OR_HEX" \
-  --bridge "$PWD/target/debug/marmish-engine-bridge" \
-  --worker "$PWD/target/debug/marmish-worker" --cwd "$HOME"
-```
-
-From the client host, address the server's public identity at the explicitly configured relay host. Arguments following `--` are literal argv, with no shell interpretation. Binary stdin, stdout and stderr are supported separately; stdin from a terminal is treated as empty for this noninteractive prototype.
-
-```sh
-SERVER_NPUB_OR_HEX='paste-server-public-identity'
-TARGET="$SERVER_NPUB_OR_HEX@your-relay.example"
-python3 tools/marmish.py -i "$HOME/.marmish/client" --relay "$RELAY" \
-  --wnd "$WND" --wnd-sha256 "$WND_SHA256" "$TARGET" -- \
-  /usr/bin/printf '%s\n' 'literal spaces, $HOME and `id`'
-```
-
-The equivalent identity option is `-u "$SERVER_NPUB_OR_HEX" your-relay.example`. Here `-i` selects a persistent private identity **directory**, not an SSH key file. Importing a supplied Nostr secret key is not implemented. Preserve the directory to reuse its identity and session; only one frontend may use it at a time.
-
-Use `--detach` to return an invocation ID after submitting the command and sending stdin. The command keeps running if either frontend disconnects. Later, use the same identity and destination with `--status ID`, `--wait ID`, `--cancel ID` or `--retry ID`. Waiting reads retained output from the beginning and propagates the command's exit code or signal. Retry consults status before resubmitting the original invocation ID and argv; it never automatically allocates a replacement invocation. Its private journal is durable before the first submit. Interrupted stdin is not a durable client-side replay stream. A client timeout or transport error does not imply the command was cancelled.
-
-Each remote identity and canonical relay set reuses one saved conversation by default. `--new-session` creates a fresh independent MLS group; it can still inspect jobs belonging to the same authenticated principal. `--retention SECONDS` configures a new group's application-message policy (default 86400, accepted range 1–604800). Retention is best effort: relay copies, unread or deferred local messages and backups can outlive that duration. Engine output retention is a separate policy. Explicit shell execution uses `--shell-command` and requires the server's `--allow-shell` option.
-
-Engine state and retained output use SQLCipher as described below. The frontend's private 0600 JSON files hold session metadata and, while retry is needed, original command arguments and authorization tokens; these frontend files are not encrypted. Protect the whole identity directory and keep it out of source control. Completing a wait or observing terminal status with status/cancel removes command/token fields from its retry journal, without guaranteeing forensic erasure.
-
-## Local key storage
-
-New profiles default to `--key-storage auto`: use native Keychain on macOS or
-Secret Service on Linux when available. Only a proven absent backend selects
-private files, with a message on stderr. A locked, denied, uninitialized or failed
-keychain stops startup. `--key-storage native` requires native storage;
-`--key-storage files` explicitly selects file storage. Existing profiles retain
-their backend, and a saved native reference never falls back or regenerates a key.
-
-Use `--key-name work` (or another local name) when creating a native profile. Many
-names can coexist. A name remains bound to its original `-i` directory and Nostr
-identity; use that same directory to reopen it. A different profile cannot adopt
-that name or copy its MLS state. Without a name, Marmish generates a unique name.
-The private catalog is `$XDG_CONFIG_HOME/marmish/keys.json` on Linux (default
-`~/.config/marmish/keys.json`) or
-`~/Library/Application Support/Marmish/keys.json` on macOS. `--key-catalog PATH`
-selects an isolated catalog. Catalog and profile bindings contain public metadata
-and immutable random references, never the private keys. SQLCipher masters are
-separate random keys per engine root, independent of the Nostr key name.
-
-To migrate an existing profile, stop its frontend and wait for its commands to
-finish. Repeat its usual client or server invocation with
-`--migrate-keys-to-native`; server migration needs its usual bridge, worker,
-allowlist and cwd options. Migration preserves the Nostr identity, MLS rooms and
-SQLCipher master, verifies native readback, commits references, then removes the
-legacy key files. It refuses active workers and resumes interrupted cleanup on an
-explicit retry. Keep the same arguments and profile; do not delete the journal or
-keys to repair a failed migration. Unlink does not guarantee forensic erasure. Migration requires an initialized encrypted database and all retained jobs to
-be in the `exited` state. A `lost` or `unknown_launch` record refuses migration;
-there is currently no automatic acknowledgement or repair for such records.
-
-If fresh provisioning stops after reserving a reference but before creating its
-secret, restart fails closed rather than generating a different key. Preserve
-the pending journal for diagnosis; no automatic reset command is provided. A
-missing helper also stops auto selection (`key_helper_required`), because Marmish
-cannot establish that the native backend is absent without the helper.
-
-Detached workers receive keys through a bounded private pipe and keep running if
-the keychain locks or a frontend disconnects. A new frontend needs access to the
-same native entries to reopen state. Keep a separate secure key backup: losing a
-SQLCipher master loses the encrypted state. Keys pass through memory; this is not
-protection from the same Unix account or authorized arbitrary commands. Rebuilt
-macOS helpers may require renewed ACL authorization; install helpers at a stable
-location. Native macOS execution remains a pending validation gate.
-
-## Command restrictions
-
-On the server, `--allow` selects identities that may connect. Add
-`--command-policy /absolute/path/policy.json` to restrict their executable paths.
-The policy must be a private regular file owned by the server account, with no
-group or other write permission; symlinks are rejected. For example:
+Aliases are configured in the named profile's `config.json`, while its daemon is
+stopped. For example, add an entry to its existing `aliases` object:
 
 ```json
-{
-  "version": 1,
-  "defaults": {"allow_exec": ["/usr/bin/**"], "deny_exec": ["/usr/bin/sudo"]},
-  "keys": [
-    {"principal": "CLIENT_NPUB_OR_HEX", "restrictions": {"allow_exec": ["/usr/bin/printf"]}}
-  ]
-}
+"box": {"remote": "SERVER_NPUB", "relays": ["wss://relay.example/"]}
 ```
 
-Defaults and **every** entry for a key apply together. Each allow list must match;
-any deny match wins. Repeated entries add restrictions regardless of order.
-An omitted allow list adds no constraint; an empty one denies all commands.
-Policy entries must name identities already selected by `--allow`.
+The alias must include the profile's complete relay set. Then run
+`marmish box -- /usr/bin/printf '%s\n' hello`. Explicit DNS SRV selection is also
+available with `-u SERVER_NPUB --srv _nostr._tcp.relay.example`; this requires
+actual configured SRV records whose resolved relay set matches the profile.
+SRV discovery is unavailable for forced Tor and onion routes.
 
-Patterns match the entire absolute executable path, case sensitively. `*`
-matches bytes up to a `/`; `**` can cross `/`. Slashes remain literal, so
-`/usr/**/echo` does not match `/usr/echo`. Backslash escapes only a literal star
-or backslash. Other characters are literal. Restricted commands must supply an
-absolute, already canonical executable path: PATH lookup, relative paths and
-symlink aliases are refused. Resolve the executable on the server first.
+Commands continue after client disconnection or expiration of its wait. The
+client prints a durable command handle to stderr for detached or pending work; use `commands`,
+`command-status`, `wait`, `output` or `cancel` with an explicit selector to find,
+resume or cancel an invocation. `--wait-seconds` changes the observation wait;
+it does not cancel the remote job. `--detach` submits without waiting for output.
+Piped stdin is captured before submission; `--stdin-none` explicitly sends none.
 
-These rules select executables; they do not restrict arguments or sandbox their
-behavior. Allowing an interpreter, shell, `env` or a program that launches other
-programs grants those capabilities. Explicit shell-string requests are refused
-whenever applicable restrictions exist, even with `--allow-shell`. Policies are
-bounded and malformed policies prevent startup. Matching has a shared one-million-state
-budget; unusually large policies or paths can exhaust it and deny a command.
-Reload by restarting the server;
-accepted jobs and exact retries retain their original authority.
+Ordinary commands reuse a default command room for the remote identity. Add
+`--new-session` to a new command to create a separate authenticated MLS room;
+retries retain that preparation rather than creating another room. Each profile
+has 64 active command-room slots, shared by inbound, default and fresh rooms.
+There is currently no room-retirement command, so use the default room for
+ordinary work. There is also a lifetime limit of 4096 fresh-room preparation
+markers per profile and 4096 lifetime command-room metadata rows. These are separate from command handles, which identify
+individual invocations.
 
-The engine configuration now uses version 2. New binaries read version 1 roots;
-older binaries reject a version 2 root. Back up state before upgrading and do
-not downgrade binaries against the upgraded root.
+## Named identities and key storage
 
-## Native macOS validation
-
-The native macOS port is implemented but still awaiting runtime validation on the
-supplied runners. The supported baseline above remains the tested Linux
-prototype. The [native validation report](docs/validation/native-platform.md)
-separates local checks from required native evidence; AMD64 macOS has no confirmed
-native runner yet.
-
-For native development, build a clean pinned daemon and its provenance manifest:
+Use `-i NAME` consistently for setup, the daemon and commands:
 
 ```sh
-python3 tools/build_mdk.py --output /absolute/private/build/wnd
+marmish -i work setup --interactive
+marmishd -i work
 ```
 
-The output must not already exist. The script fetches the pinned MDK revision;
-it applies the maintained private-bootstrap patch on both platforms and the
-restricted-transport patch on macOS, builds the native
-helpers and signs the executables locally. It requires Rust 1.97.1, Python 3.11+
-and a native C toolchain. macOS additionally requires APFS, macOS 15 or newer,
-`sandbox-exec` and `codesign`. The manifest is `<wnd>.manifest.json`; macOS startup
-requires and verifies it, as does native key storage on Linux, with an optional
-explicit `--wnd-manifest PATH`.
-Use its recorded binary SHA with `--wnd-sha256`. Linux retains namespace isolation;
-macOS uses Seatbelt and a bounded SOCKS broker restricted to explicit relay origins.
-Failure to establish confinement prevents startup.
+Each named identity has separate configuration, encrypted state and credential
+references. The default `--key-storage auto` uses macOS Keychain or Linux Secret
+Service when available. For a new identity in auto mode, an unavailable provider permits private-file storage;
+a locked, denied or failing keychain does not silently switch backends. The
+chosen backend remains bound to that profile. Use `--key-storage keychain` to
+require the keychain, or `--key-storage file` explicitly for a new file-backed
+profile. Both the Nostr secret and the SQLCipher master key use that backend.
 
-The trusted-master CI workflow runs native prerequisite probes, offline checks,
-clean daemon builds, real Marmot commands with disposable identities and commands
-in both Linux/macOS directions. It uses explicit test relays; none becomes a
-public relay default for the application.
+Default profile roots are `~/.local/share/marmish/v2/NAME` on Linux (or
+`$XDG_DATA_HOME/marmish/v2/NAME`) and
+`~/Library/Application Support/Marmish/v2/NAME` on macOS. Override the root with
+`--state-dir`; keep profiles private and do not commit them. v0.2 uses fresh
+native state; legacy v0.1 on-disk profiles are not migrated by the installer.
 
-## Offline development
+The native installer also refuses to replace unmanaged launchers. If you installed
+v0.1, use its uninstaller or move its old `marmish` and `marmishd` launchers aside
+before installing v0.2. Keep legacy profiles separate; they are not adopted.
 
-Use the pinned Rust 1.97.1 toolchain. The SQLCipher build vendors OpenSSL and needs a C compiler, make and Perl. After preparing the dependency cache:
+## Retention
+
+New room application messages default to a one-day lifetime; configure it when
+starting the daemon with `marmishd --retention-seconds 86400`. This is separate
+from stored command payloads and output: the profile configuration's
+`limits.payload_retention` defaults to 86400 seconds and accepts 1–604800.
+Invocation tombstones retain replay facts separately for a fixed 172800 seconds. Relay
+expiry is not a guarantee that every relay or backup erases a message.
+
+## Scope and validation
+
+The implemented v0.2 feature set provides noninteractive remote execution, durable command recovery and
+explicit cancellation. Interactive terminals, tmux attachment, X11 forwarding,
+port forwarding and file transfer are future work. Embedded Arti/Tor support is
+experimental; working Tor command execution is deferred to v0.3 and is not
+a v0.2 qualification claim.
+
+Inspect the installed version with `marmish --version` and its source/target
+metadata with `marmish release-info`. Inspect the default managed installation with:
 
 ```sh
-cargo test --offline --locked --workspace
-cargo clippy --offline --locked --workspace --all-targets -- -D warnings
-cargo fmt --all -- --check
-cargo build --offline --locked --workspace
+marmish install-status --prefix "$HOME/.local/share/marmish-native" --bin-dir "$HOME/.local/bin"
 ```
 
-Observe an explicitly selected local executable without starting a daemon:
+Use `marmish --help` for command options.
+The old Python distribution's `--doctor` and namespace requirements do not apply
+to the native v0.2 distribution.
 
-```sh
-cargo run --offline --locked -p marmish-mdk --example probe -- /absolute/path/to/wn
-```
+The baseline test results above apply to source `347cf799…`. Release source
+`73ed2b41b64ecf614d245668e3ab3b2e5b753895` changes only release-workflow and
+initial-release documentation; runtime, build, dependency and scripts trees
+are unchanged. Asset-build run 41664164076 attempt 1 completed successfully. Release manifests identify the actual build source; neither source
+equality nor earlier tests establish byte-identical binaries or full installed qualification.
 
-The probe runs only `--version` with an empty environment. It does not approve the binary's provenance or enable network operations.
+Release manifests record the actual asset source and checksums. Source mirror
+availability, installer delivery and full installed qualification are separate
+observations; publication alone does not establish the pending test results.
 
-## Local command engine
+## Initial asset verification
 
-The underlying Rust API remains available independently of the prototype CLI. `EnginePolicy` requires a private absolute state directory, an explicitly selected trusted `marmish-worker` executable, a server identity, and an allowlist of principals. The frontend is responsible for authenticating that principal before calling `authorize`. Both frontend and worker refuse root and account switching.
+Asset-build run [41664164076](https://github.com/Epiphytic/marmish/actions/runs/41664164076),
+attempt 1, successfully built, inspected and packaged all three targets and
+rendered the native bootstrap from this release source. All 15 product assets
+were individually checked against their manifests. This caveated packaging run
+skipped product test reruns, installed-test tooling, provider qualification and
+quickstart jobs; its success is not full qualification. The exact rendered shell
+also installed Linux AMD64 from the artifact asset directory: release metadata
+matched source/version/formats `[2,6,1,1,1]`, and all four installed product files
+matched their expected hashes and modes. Public release and both installer URL cutovers have been verified. The local installed native protocol check passed, as described below.
 
-Commands run as the local Unix account with a fixed environment and account home as cwd unless server policy supplies another directory. Direct argv execution is the default; shell strings require explicit policy permission. Dropping or restarting the frontend leaves detached workers running. Service managers must preserve workers across frontend restarts; a unit configured to kill its entire control group would defeat this behavior. The embedding frontend must call `maintain` at least once a minute for bounded reconciliation and retention cleanup.
+The installed Linux AMD64 direct-relay command check passed (exit 0), using the
+installed production owner, engine and worker with disposable identities. Total
+elapsed time was 19444 ms. Its running-command owner-restart/recovery case took
+6295 ms and verified exact recovered output, execution count one, identical-submit
+attachment and remote conflict refusal. Literal argv completed in 1590 ms;
+16 KiB binary stdin/output in 2778 ms (5896 output bytes/s); stderr plus exit 7
+in 1466 ms. Joined engine/MDK stops, engine quiescence, runtime cleanup and state
+cleanup all passed, with no retained state. This is one local installed native
+protocol check, not the public-CLI platform matrix, an OS restart test, or full
+benchmark/provider/lifecycle qualification.
 
-Output defaults to 8 MiB per stream with a 24-hour lifetime. Reads report truncation, expiry, and uncertain output tails explicitly. Invocation replay records last at least 48 hours independently of output. Worker death or reboot can leave an uncertain result and surviving descendants; these jobs are never automatically executed again. Process groups do not contain descendants that deliberately create a new session. Private state and logical payload deletion provide no forensic secure-erasure guarantee.
+The [initial v0.2.0 prerelease](https://github.com/Epiphytic/marmish/releases/tag/v0.2.0)
+is public with all 15 product assets; server sizes and digests match the verified
+manifests. GitHub and Radicle tags both identify the release source. Bootstrap-only
+commit `7e3e74411bed8657e8b8f5b599b36c2b702fe5bd` changes only `scripts/install.sh`.
+Both public installer URLs were independently fetched and matched the rendered
+bootstrap SHA256 `46b4f369792f4f4ea36726c24414c5cca2ef977fec61712d821a1b81f985367a`.
+The two-source/three-platform HTTPS run [41667214179](https://github.com/Epiphytic/marmish/actions/runs/41667214179), attempt 1, passed its resolver, all six install/setup cells and rollup. This validates both script sources on all three targets within that test scope; it does not establish full command-matrix, provider or version-lifecycle qualification.
 
-The engine encrypts its state database and retained stdout/stderr with SQLCipher. The standalone file-backed engine API creates a private `engine.key`; the frontends instead supply the master from native storage when selected. Detached workers receive it over private stdin and do not reopen the keychain. Keep this key safe: losing it loses the stored data. For an encrypted-data-only backup, exclude `engine.key` and protect a separate key backup. Copying both the data and key provides no protection against whoever obtains that copy. Encryption does not protect against the same Unix account, child-created files, execution memory, swap or core dumps. Job names, file sizes, timestamps and execution-authority tokens remain outside content encryption. Output quotas count logical bytes; each stream database allows about twice its logical cap plus 256 KiB, with additional bounded rollback-journal space during writes.
-
-This unreleased storage format rejects older plaintext roots intact. Finish existing plaintext workers and preserve their old state directory before selecting a fresh encrypted root. There is no automatic migration, deletion or key replacement. Missing, malformed or incorrect keys fail closed; do not remove a key to reset a root containing jobs. See [the reviewed storage design](docs/phases/sqlcipher-storage.md) for recovery rules and limits.
-
-The separately built production/fault-worker test matrix is documented in [the phase 1 design](docs/phases/phase-1.md#fault-injection-build-and-acceptance-matrix). Fault injection is off by default and must remain disabled in production builds.
+A separate Linux AMD64 install downloaded the public release assets without an
+asset-directory override and passed (exit 0), selecting active generation 2
+with the same version, source and format tuple. See the
+[initial release evidence](docs/validation/v0.2/initial-release.md) for exact reports and boundaries.

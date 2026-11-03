@@ -1,0 +1,45 @@
+{
+  "baseline_source": "347cf799ae5baa9e577ded1a00566c7a6b99b933",
+  "run": 41655210565,
+  "attempt": 1,
+  "whole_run_qualified": false,
+  "jobs": [
+    {
+      "job_id": 125984172755,
+      "name": "package (ubuntu-24.04-arm, aarch64-unknown-linux-gnu, none, glibc=2.39)",
+      "job_conclusion": "cancelled",
+      "passed_steps": [
+        "Verify native components",
+        "Build final native executables",
+        "Inspect final dependency allowlists and qualified ABI baselines",
+        "Collect locked production license texts (CI tooling only)",
+        "Package verified immutable candidate assets"
+      ]
+    },
+    {
+      "job_id": 125984173218,
+      "name": "package (ubuntu-24.04, x86_64-unknown-linux-gnu, none, glibc=2.39)",
+      "job_conclusion": "cancelled",
+      "passed_steps": [
+        "Verify native components",
+        "Build final native executables",
+        "Inspect final dependency allowlists and qualified ABI baselines",
+        "Collect locked production license texts (CI tooling only)",
+        "Package verified immutable candidate assets"
+      ]
+    },
+    {
+      "job_id": 125984173554,
+      "name": "package (macos-15, aarch64-apple-darwin, adhoc, macos=15.0)",
+      "job_conclusion": "failure",
+      "passed_steps": [
+        "Verify native components",
+        "Build final native executables",
+        "Inspect final dependency allowlists and qualified ABI baselines",
+        "Collect locked production license texts (CI tooling only)",
+        "Package verified immutable candidate assets",
+        "Ad hoc sign final macOS executables before hashing"
+      ]
+    }
+  ]
+}
