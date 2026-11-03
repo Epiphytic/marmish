@@ -1,0 +1,10 @@
+{
+  "candidate_run": 41698628787,
+  "attempt": 1,
+  "source": "7c49c3785eab010bf017c1bb7f03511524312b95",
+  "version": "0.2.1",
+  "asset_count": 15,
+  "independent_render_equals_hosted": true,
+  "sh_syntax": true,
+  "bootstrap_sha256": "ce693bc2977f7473ce0dd0c9c510dc3e84b989644c61be06072837ced947a018"
+}

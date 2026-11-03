@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "source_commit": "7c49c3785eab010bf017c1bb7f03511524312b95",
+  "run_id": "41698628787",
+  "run_attempt": 1,
+  "candidate_conclusion": "failure",
+  "package_jobs": "all-three-success",
+  "render": "success",
+  "quickstart": "all-three-success",
+  "linux_provider": "both-success",
+  "macos_provider_job": "failure",
+  "macos_real_provider": "not-invoked",
+  "macos_provider_report_present": false,
+  "https_qualification": "blocked-by-existing-whole-candidate-success-guard",
+  "reports": [
+    {
+      "file": "quickstart-x86_64-unknown-linux-gnu.json",
+      "sha256": "72c576b96f533e9c74d95d447fac8518c85d2e76d242b832116ef08b7245904c",
+      "elapsed_ms": 5629,
+      "binding": "artifact-name-and-run-metadata",
+      "artifact_id": 13266068050
+    },
+    {
+      "file": "quickstart-aarch64-unknown-linux-gnu.json",
+      "sha256": "fb98d345d14b4dad99e7996c3f86739990b6d54fd288a42faee2e34228b5c9aa",
+      "elapsed_ms": 5613,
+      "binding": "artifact-name-and-run-metadata",
+      "artifact_id": 13267867953
+    },
+    {
+      "file": "quickstart-aarch64-apple-darwin.json",
+      "sha256": "94d02dfe22cd6fbf39e8dee224edce416c410b8e39939e7ca50b903bfe833302",
+      "elapsed_ms": 4812,
+      "binding": "artifact-name-and-run-metadata",
+      "artifact_id": 13267738232
+    },
+    {
+      "file": "provider-x86_64-unknown-linux-gnu.json",
+      "sha256": "ee86a58b8f87fa69a402067e1ab48d207086b6395e78ff950838333c0ecece4a",
+      "elapsed_ms": 19062,
+      "binding": "report-fields-and-artifact-name",
+      "artifact_id": 13268047713
+    },
+    {
+      "file": "provider-aarch64-unknown-linux-gnu.json",
+      "sha256": "f8ff1ee74a8c68988e9913277da5c04aaea12e597948ce21e88e1bea93ac841b",
+      "elapsed_ms": 17244,
+      "binding": "report-fields-and-artifact-name",
+      "artifact_id": 13267082757
+    }
+  ],
+  "macos_provider_job_id": 126176244958,
+  "macos_package_job_id": 126135726239
+}

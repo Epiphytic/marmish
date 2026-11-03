@@ -1,0 +1,8 @@
+{
+  "exit_code": 0,
+  "elapsed_ms": 19889,
+  "relay": "wss://relay.us.whitenoise.chat/",
+  "tor": "off",
+  "installed_binary_version": "0.2.1",
+  "source": "7c49c3785eab010bf017c1bb7f03511524312b95"
+}

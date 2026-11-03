@@ -1,0 +1,50 @@
+[
+  {
+    "binary": "marmish",
+    "release_info": {
+      "schema": 1,
+      "version": "0.2.1",
+      "target": "x86_64-unknown-linux-gnu",
+      "commit": "7c49c3785eab010bf017c1bb7f03511524312b95",
+      "formats": [
+        2,
+        6,
+        1,
+        1,
+        1
+      ]
+    }
+  },
+  {
+    "binary": "marmishd",
+    "release_info": {
+      "schema": 1,
+      "version": "0.2.1",
+      "target": "x86_64-unknown-linux-gnu",
+      "commit": "7c49c3785eab010bf017c1bb7f03511524312b95",
+      "formats": [
+        2,
+        6,
+        1,
+        1,
+        1
+      ]
+    }
+  },
+  {
+    "binary": "marmish-worker",
+    "release_info": {
+      "schema": 1,
+      "version": "0.2.1",
+      "target": "x86_64-unknown-linux-gnu",
+      "commit": "7c49c3785eab010bf017c1bb7f03511524312b95",
+      "formats": [
+        2,
+        6,
+        1,
+        1,
+        1
+      ]
+    }
+  }
+]

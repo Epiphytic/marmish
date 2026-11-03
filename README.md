@@ -4,22 +4,18 @@ Run remote commands over Marmot's MLS-encrypted Nostr transport. Marmish v0.2
 uses native Rust clients and daemons, with one named Nostr identity per daemon.
 The same identity can send commands and accept authorized commands.
 
-**Initial native 0.2.0 release: macOS full testing is still in progress.**
-Product unit tests, native builds and ABI inspection passed on all three release
-platforms for baseline source `347cf799ae5baa9e577ded1a00566c7a6b99b933`;
-macOS signing also passed. Its macOS installed-tool feature suite passed 426
-tests and failed two local benchmark child-process fixtures. Their cause is not
-yet proven; fixes and further testing are planned for v0.2.1. All-platform
-installed end-to-end, version-lifecycle and real keychain-provider qualification
-remain pending. This release does not claim those checks passed.
+**Native v0.2.1 corrective prerelease is available.** It adds automatic upgrades
+of recognized v0.1 launchers and fixes credential-helper selection. All three
+platforms passed native verification, packaging and file-backed quickstart checks;
+both Linux real-provider checks passed. macOS real Keychain qualification was
+not invoked because its supervisor tests failed. Full cross-platform command,
+provider and lifecycle qualification remains incomplete. This corrective release
+was explicitly authorized for out-of-band macOS testing.
 
 Source: [GitHub](https://github.com/Epiphytic/marmish) ·
 [Radicle](https://radicle.network/nodes/iris.radicle.network/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg)
 (`rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg`).
 
-
-Baseline run [41655210565](https://github.com/Epiphytic/marmish/actions/runs/41655210565)
-failed overall; its Linux jobs were cancelled after those product steps passed.
 
 ## Install and quickstart
 
@@ -35,9 +31,9 @@ If Iris is unavailable, the same installer is available independently on GitHub:
 curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/Epiphytic/marmish/master/scripts/install.sh | sh -s -- --quickstart --debug
 ```
 
-The installer pins v0.2.0 and verifies its manifest and binary checksums. It does
-not select a legacy v0.1 release. The Iris and GitHub URLs are independent script sources; both are intended to
-serve the same pinned native bootstrap after cutover. Versioned binary assets
+The installer pins v0.2.1 and verifies its manifest and binary checksums. It does
+not select a legacy v0.1 release. The Iris and GitHub URLs are independent script sources; both were verified to
+serve the same pinned native bootstrap. Versioned binary assets
 are downloaded from GitHub Releases. See [Scope and validation](#scope-and-validation) for the evidence boundary. No Python, uv,
 Cargo or Rust compiler is needed to install or run it.
 
@@ -45,8 +41,7 @@ The native 0.2.1 installer adds automatic upgrades of recognized v0.1 installer
 launchers. It verifies the old marker and exact wrappers, replaces the launchers,
 and retains the old runtime and launcher backups; private state is unchanged.
 Unrelated programs are refused rather than overwritten. Interrupted upgrades
-recover on the next installer invocation. The public bootstrap above still pins
-0.2.0 until matching 0.2.1 assets are published; it does not yet provide this fix.
+recover on the next installer invocation. The public bootstrap above selects the matching 0.2.1 assets.
 
 Supported binaries are Linux AMD64 and ARM64 (glibc 2.39 or newer), and macOS 15
 or newer on Apple Silicon. Use a native ARM64 terminal on macOS. The macOS
@@ -169,9 +164,21 @@ Default profile roots are `~/.local/share/marmish/v2/NAME` on Linux (or
 `--state-dir`; keep profiles private and do not commit them. v0.2 uses fresh
 native state; legacy v0.1 on-disk profiles are not migrated by the installer.
 
-The native installer also refuses to replace unmanaged launchers. If you installed
-v0.1, use its uninstaller or move its old `marmish` and `marmishd` launchers aside
-before installing v0.2. Keep legacy profiles separate; they are not adopted.
+The installer automatically upgrades recognized v0.1 launchers, retaining old
+runtimes and launcher backups. It refuses unrelated launchers. Legacy profiles
+remain separate and are not adopted.
+
+For an already configured installation, update the binaries without rerunning
+quickstart, then restart the daemon:
+
+```sh
+curl --proto '=https' --tlsv1.2 -fsSL https://iris.radicle.network/raw/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/head/scripts/install.sh | sh
+marmishd --debug
+```
+
+Stop the existing daemon before restarting it. Rerunning first-time quickstart
+against an existing configuration can report `config_exists`; use `setup --update`
+when intentionally changing setup.
 
 ## Retention
 
@@ -201,48 +208,33 @@ Use `marmish --help` for command options.
 The old Python distribution's `--doctor` and namespace requirements do not apply
 to the native v0.2 distribution.
 
-The baseline test results above apply to source `347cf799…`. Release source
-`73ed2b41b64ecf614d245668e3ab3b2e5b753895` changes only release-workflow and
-initial-release documentation; runtime, build, dependency and scripts trees
-are unchanged. Asset-build run 41664164076 attempt 1 completed successfully. Release manifests identify the actual build source; neither source
-equality nor earlier tests establish byte-identical binaries or full installed qualification.
+## Corrective release validation
 
-Release manifests record the actual asset source and checksums. Source mirror
-availability, installer delivery and full installed qualification are separate
-observations; publication alone does not establish the pending test results.
+The [v0.2.1 prerelease](https://github.com/Epiphytic/marmish/releases/tag/v0.2.1)
+contains 15 verified assets built from source
+`7c49c3785eab010bf017c1bb7f03511524312b95`. Candidate
+[41698628787](https://github.com/Epiphytic/marmish/actions/runs/41698628787), attempt 1,
+passed all three package jobs, render, all three file-backed PTY quickstarts and
+both Linux default-auto keychain jobs. macOS passed 351 default and 446 installed
+feature tests. Its provider job then failed offline supervisor tests before
+invoking real Keychain qualification, leaving the **overall workflow failed**.
+The reviewed supervisor correction landed after the immutable release source;
+it does not retroactively establish a passing Mac provider result.
 
-## Initial asset verification
+The existing whole-candidate-success guard prevents dispatching the six-case
+HTTPS qualification for this failed candidate; no guard was bypassed. Both
+public installer URLs were independently fetched and matched the rendered
+bootstrap. A separate Linux AMD64 install downloaded public release assets
+without an asset-directory override and passed in 10,285 ms.
 
-Asset-build run [41664164076](https://github.com/Epiphytic/marmish/actions/runs/41664164076),
-attempt 1, successfully built, inspected and packaged all three targets and
-rendered the native bootstrap from this release source. All 15 product assets
-were individually checked against their manifests. This caveated packaging run
-skipped product test reruns, installed-test tooling, provider qualification and
-quickstart jobs; its success is not full qualification. The exact rendered shell
-also installed Linux AMD64 from the artifact asset directory: release metadata
-matched source/version/formats `[2,6,1,1,1]`, and all four installed product files
-matched their expected hashes and modes. Public release and both installer URL cutovers have been verified. The local installed native protocol check passed, as described below.
+The installed Linux AMD64 direct-relay protocol check passed in 19,882 ms:
+running-command recovery 6,856 ms (one execution), literal argv 1,545 ms,
+16 KiB binary stdin/output 2,689 ms (6,092 output B/s), and stderr/exit 7 in
+1,713 ms. Joined engine/MDK stops, quiescence and local runtime/state cleanup
+passed. The probe reports `purpose_ownership_unknown=true`; this does not prove
+automatic probe-room deletion. These are single observations, not full public-CLI
+matrix, OS-restart or benchmark qualification.
 
-The installed Linux AMD64 direct-relay command check passed (exit 0), using the
-installed production owner, engine and worker with disposable identities. Total
-elapsed time was 19444 ms. Its running-command owner-restart/recovery case took
-6295 ms and verified exact recovered output, execution count one, identical-submit
-attachment and remote conflict refusal. Literal argv completed in 1590 ms;
-16 KiB binary stdin/output in 2778 ms (5896 output bytes/s); stderr plus exit 7
-in 1466 ms. Joined engine/MDK stops, engine quiescence, runtime cleanup and state
-cleanup all passed, with no retained state. This is one local installed native
-protocol check, not the public-CLI platform matrix, an OS restart test, or full
-benchmark/provider/lifecycle qualification.
-
-The [initial v0.2.0 prerelease](https://github.com/Epiphytic/marmish/releases/tag/v0.2.0)
-is public with all 15 product assets; server sizes and digests match the verified
-manifests. GitHub and Radicle tags both identify the release source. Bootstrap-only
-commit `7e3e74411bed8657e8b8f5b599b36c2b702fe5bd` changes only `scripts/install.sh`.
-Both public installer URLs were independently fetched and matched the rendered
-bootstrap SHA256 `46b4f369792f4f4ea36726c24414c5cca2ef977fec61712d821a1b81f985367a`.
-The two-source/three-platform HTTPS run [41667214179](https://github.com/Epiphytic/marmish/actions/runs/41667214179), attempt 1, passed its resolver, all six install/setup cells and rollup. This validates both script sources on all three targets within that test scope; it does not establish full command-matrix, provider or version-lifecycle qualification.
-
-A separate Linux AMD64 install downloaded the public release assets without an
-asset-directory override and passed (exit 0), selecting active generation 2
-with the same version, source and format tuple. See the
-[initial release evidence](docs/validation/v0.2/initial-release.md) for exact reports and boundaries.
+See [corrective release evidence](docs/validation/v0.2/corrective-release-0.2.1.md)
+for source, tag, bootstrap and finite reports. Historical
+[v0.2.0 results](docs/validation/v0.2/initial-release.md) remain separately labeled.

@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "operation": "public_release_install",
+  "ok": true,
+  "version": "0.2.1",
+  "source": "7c49c3785eab010bf017c1bb7f03511524312b95",
+  "target": "x86_64-unknown-linux-gnu",
+  "asset_dir_override": false,
+  "active_generation": 2,
+  "three_public_manifests_match": true,
+  "installed_four_asset_hashes_match": true,
+  "elapsed_ms": 10285
+}

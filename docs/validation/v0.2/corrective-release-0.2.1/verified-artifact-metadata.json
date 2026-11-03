@@ -1,0 +1,102 @@
+[
+  {
+    "id": 13267423491,
+    "node_id": "MDg6QXJ0aWZhY3QxMzI2NzQyMzQ5MQ==",
+    "name": "v02-render-tool-41698628787-1",
+    "size_in_bytes": 4949154,
+    "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13267423491",
+    "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13267423491/zip",
+    "expired": false,
+    "digest": "sha256:bff37e14a8dddc5b4833556483f588b024b25a7f2d8876972c82b0871c2b940e",
+    "created_at": "2026-11-03T20:11:25Z",
+    "updated_at": "2026-11-03T20:11:25Z",
+    "expires_at": "2026-11-17T20:11:24Z",
+    "workflow_run": {
+      "id": 41698628787,
+      "repository_id": 1429964286,
+      "head_repository_id": 1429964286,
+      "head_branch": "master",
+      "head_sha": "7c49c3785eab010bf017c1bb7f03511524312b95"
+    }
+  },
+  {
+    "id": 13266287865,
+    "node_id": "MDg6QXJ0aWZhY3QxMzI2NjI4Nzg2NQ==",
+    "name": "v02-pinned-bootstrap-41698628787-1",
+    "size_in_bytes": 3546,
+    "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13266287865",
+    "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13266287865/zip",
+    "expired": false,
+    "digest": "sha256:b6a1bb8a08879a578c7a66b02cb695e37cd48e994a0de068d6bf4d62885ea77f",
+    "created_at": "2026-11-03T20:11:38Z",
+    "updated_at": "2026-11-03T20:11:38Z",
+    "expires_at": "2026-11-17T20:11:38Z",
+    "workflow_run": {
+      "id": 41698628787,
+      "repository_id": 1429964286,
+      "head_repository_id": 1429964286,
+      "head_branch": "master",
+      "head_sha": "7c49c3785eab010bf017c1bb7f03511524312b95"
+    }
+  },
+  {
+    "id": 13266124128,
+    "node_id": "MDg6QXJ0aWZhY3QxMzI2NjEyNDEyOA==",
+    "name": "v02-candidate-x86_64-unknown-linux-gnu-41698628787-1",
+    "size_in_bytes": 53645426,
+    "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13266124128",
+    "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13266124128/zip",
+    "expired": false,
+    "digest": "sha256:60a4692b6b2998f3e0cec9a9e8b5e82b8d7495e4ccea9b587853bdd4e00e2858",
+    "created_at": "2026-11-03T20:11:23Z",
+    "updated_at": "2026-11-03T20:11:23Z",
+    "expires_at": "2026-11-17T20:11:18Z",
+    "workflow_run": {
+      "id": 41698628787,
+      "repository_id": 1429964286,
+      "head_repository_id": 1429964286,
+      "head_branch": "master",
+      "head_sha": "7c49c3785eab010bf017c1bb7f03511524312b95"
+    }
+  },
+  {
+    "id": 13265459094,
+    "node_id": "MDg6QXJ0aWZhY3QxMzI2NTQ1OTA5NA==",
+    "name": "v02-candidate-aarch64-unknown-linux-gnu-41698628787-1",
+    "size_in_bytes": 54232716,
+    "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13265459094",
+    "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13265459094/zip",
+    "expired": false,
+    "digest": "sha256:2e968b9ff3edfc2875af53ec185c8d45b0218f33c8a57f03b531319cc2f7ff2c",
+    "created_at": "2026-11-03T19:46:12Z",
+    "updated_at": "2026-11-03T19:46:12Z",
+    "expires_at": "2026-11-17T19:46:09Z",
+    "workflow_run": {
+      "id": 41698628787,
+      "repository_id": 1429964286,
+      "head_repository_id": 1429964286,
+      "head_branch": "master",
+      "head_sha": "7c49c3785eab010bf017c1bb7f03511524312b95"
+    }
+  },
+  {
+    "id": 13265453071,
+    "node_id": "MDg6QXJ0aWZhY3QxMzI2NTQ1MzA3MQ==",
+    "name": "v02-candidate-aarch64-apple-darwin-41698628787-1",
+    "size_in_bytes": 46079206,
+    "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13265453071",
+    "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13265453071/zip",
+    "expired": false,
+    "digest": "sha256:5b9f1b71def170ed7953d02b57c0b164bbccf4605f1681ab4f6b12a53eca4232",
+    "created_at": "2026-11-03T19:40:35Z",
+    "updated_at": "2026-11-03T19:40:35Z",
+    "expires_at": "2026-11-17T19:40:29Z",
+    "workflow_run": {
+      "id": 41698628787,
+      "repository_id": 1429964286,
+      "head_repository_id": 1429964286,
+      "head_branch": "master",
+      "head_sha": "7c49c3785eab010bf017c1bb7f03511524312b95"
+    }
+  }
+]

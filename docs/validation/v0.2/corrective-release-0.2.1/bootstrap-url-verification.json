@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "version": "0.2.1",
+  "source": "7c49c3785eab010bf017c1bb7f03511524312b95",
+  "bootstrap_commit": "22014b98a415ecf05b422ac2c754dc18b3311d46",
+  "bootstrap_sha256": "ce693bc2977f7473ce0dd0c9c510dc3e84b989644c61be06072837ced947a018",
+  "observed_utc": "2026-11-03T20:21:04.881663+00:00",
+  "iris_exact": true,
+  "github_exact": true,
+  "sh_syntax": true,
+  "urls": [
+    "https://iris.radicle.network/raw/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/head/scripts/install.sh",
+    "https://raw.githubusercontent.com/Epiphytic/marmish/master/scripts/install.sh"
+  ]
+}

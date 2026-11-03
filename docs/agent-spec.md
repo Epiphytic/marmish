@@ -1,22 +1,21 @@
 # Marmish native v0.2 agent specification
 
-The user explicitly authorized
-publishing native 0.2.0 before full platform qualification, with macOS testing
-still in progress and fixes planned for v0.2.1. This is not a claim that all
-acceptance gates passed. Source and distribution facts must match actual publication evidence.
+**Native v0.2.1 corrective prerelease is available.** It adds automatic upgrades
+of recognized v0.1 launchers and fixes credential-helper selection. All three
+platforms passed native verification, packaging and file-backed quickstart checks;
+both Linux real-provider checks passed. macOS real Keychain qualification was
+not invoked because its supervisor tests failed. Full cross-platform command,
+provider and lifecycle qualification remains incomplete. This corrective release
+was explicitly authorized for out-of-band macOS testing.
 
-**Validation boundary:** baseline source
-`347cf799ae5baa9e577ded1a00566c7a6b99b933` passed product unit verification,
-native builds and ABI inspection on Linux AMD64, Linux ARM64 and macOS ARM64;
-macOS signing passed. The macOS installed-checks feature suite passed 426 tests
-and failed two benchmark child-process fixtures. The cause remains unproven.
-All-platform installed/full end-to-end, lifecycle and actual default-auto provider
-qualification remain pending. Descriptions below document implemented contracts,
-not a claim that each contract has final hosted validation on every target.
-
-
-Baseline run [41655210565](https://github.com/Epiphytic/marmish/actions/runs/41655210565)
-failed overall; its Linux jobs were cancelled after those product steps passed.
+Release source is `7c49c3785eab010bf017c1bb7f03511524312b95`;
+bootstrap-only commit is `22014b98a415ecf05b422ac2c754dc18b3311d46`.
+Both public installer URLs serve the verified v0.2.1 bootstrap. The candidate's
+overall conclusion remains FAILURE and its macOS real-provider check was not
+invoked. Both Linux default-auto provider checks and all three file-backed
+quickstarts passed; full installed matrix/lifecycle qualification is incomplete.
+See [corrective publication evidence](validation/v0.2/corrective-release-0.2.1.md).
+The [0.2.0 evidence](validation/v0.2/initial-release.md) remains historical.
 
 ## Scope and navigation
 
@@ -50,7 +49,7 @@ service or general process sandbox is promised by this release.
 
 ## Native 0.2.1 launcher upgrades
 
-The development native installer automatically replaces recognized v0.1
+The native 0.2.1 installer automatically replaces recognized v0.1
 `0.1.0-experimental.N` launchers using the strict legacy marker, owned selector
 and exact regular wrapper bytes. It never executes an existing launcher.
 Receipt-owned native updates retain their existing behavior. Foreign files,
@@ -60,9 +59,9 @@ profile migration or automatic disk cleanup. Receipt generation determines
 rollback versus roll-forward after interruption, with recovery on the next
 installer invocation. Native uninstall removes native links, not the retained
 legacy backups. See the [reviewed design](phases/v0.2.1-native-legacy-upgrade.md).
-The published 0.2.0 bootstrap does not gain this behavior until updated binary
-assets and a matching bootstrap are published. Hosted migration tests on all
-three targets are still pending; local tests are not a platform qualification.
+The public bootstrap now selects 0.2.1 with this behavior. Native suites passed
+on all three release targets; actual user upgrade and real macOS provider
+qualification remain distinct observations.
 
 ## Identity, ownership and local trust
 
@@ -442,7 +441,7 @@ The installed lifecycle checker derives synthetic A/C versions from the frozen
 stable `0.2.N` candidate and matching native lock entry, rather than pinning
 `0.2.0`. See the [patch-version amendment](phases/v0.2-lifecycle-patch-versions.md).
 This changes qualification tooling only; hosted lifecycle qualification remains
-pending, and public release pins are unchanged.
+pending. The public installer now pins 0.2.1.
 
 The canonical credential-helper correction (`marmish-far`) makes managed and ordinary sibling `marmish`, `marmishd` and worker entrypoints select validated same-version `marmish` for provider operations. Exact downloaded standalone CLI behavior is preserved. This fixes an inconsistent helper identity; reported macOS Keychain denial causation and full daemon startup remain pending actual pre/post-fix macOS qualification. No ACL or file-fallback policy changes. See [design](phases/v0.2-canonical-credential-helper.md).
 
