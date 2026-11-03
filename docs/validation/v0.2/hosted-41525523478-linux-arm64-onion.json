@@ -1,0 +1,23 @@
+{
+  "category": "transport",
+  "cleanup_ok": true,
+  "diagnostic": {
+    "last_recoverable": null,
+    "operation": "activation",
+    "terminal_label": "other"
+  },
+  "elapsed_ms": 55821,
+  "error": "transport",
+  "ok": false,
+  "phase": "v0.2-phase1",
+  "platform": "linux",
+  "protocol": "marmish-foundation/2",
+  "relay_count": 1,
+  "route": "always",
+  "runtime_cleanup_ok": true,
+  "samples": [],
+  "schema": 1,
+  "stage": "activation_cold",
+  "state_cleanup_ok": true,
+  "target": "aarch64"
+}

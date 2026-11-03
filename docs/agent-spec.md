@@ -6,7 +6,9 @@ The user replaced the v0.1 architecture on 2026-11-02. The authoritative active
 design is [the v0.2 plan](v0.2-plan.md), Beads `marmish-7nw`. It specifies native
 Rust, upstream MDK, embedded Arti, no mandatory OS namespace/broker and no Python
 runtime. The Python implementation remains available solely as a legacy protocol
-reference and optional cross-version test fixture. The phase-1 native foundation
+reference and optional comparison fixture. The user explicitly authorizes a
+v0.2 wire break as well as fresh on-disk formats; Rust↔Python wire interoperability
+and disk migration are not release requirements. The phase-1 native foundation
 has independent integrated code approval; hosted phase gates remain pending.
 A Linux AMD64 release build
 passed real two-identity encrypted direct-relay and onion-through-Arti exchange, durable receipts,

@@ -128,3 +128,39 @@ additional scripted regression. The [follow-up code review](../../reviews/v0.2-n
 approved that correction and independently passed all 13 focused tests and
 strict Clippy/format/diff checks. A fresh full hosted run remains required. The failed
 run above is preserved; no platform acceptance follows from offline tests.
+
+## Recovery-driver run: startup failures remain open
+
+[Run 41525523478](https://github.com/Epiphytic/marmish/actions/runs/41525523478),
+attempt 1, tested `8a3c0a6e571917a4ee90c4022df410baf2b4330a`. All four jobs
+started within a minute. All three client platforms passed **100 native tests**,
+8 vault tests, their platform helper tests and the release build. Linux AMD64
+passed direct and Arti flows. Linux ARM64 passed direct flow, then failed during
+cold Arti activation. macOS failed during cold direct activation, so its onion
+step did not run. The overall run and owner rollup correctly failed.
+
+| Runner | Route | Result | Total | Cold activation | First A→B / B→A | Warm activation |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| Linux AMD64 | Direct | Pass | 17.507 s | 1,447 ms | 476 / 478 ms | 1,160 ms |
+| Linux AMD64 | Arti onion | Pass | 73.429 s | 27,725 ms | 2,556 / 1,911 ms | 18,439 ms |
+| Linux ARM64 | Direct | Pass | 11.018 s | 751 ms | 413 / 415 ms | 893 ms |
+| Linux ARM64 | Arti onion | **Fail** | 55.821 s | — | — | — |
+| macOS ARM64 | Direct | **Fail** | 48.871 s | — | — | — |
+
+Reports: [AMD64 direct](hosted-41525523478-linux-amd64-direct.json),
+[AMD64 onion](hosted-41525523478-linux-amd64-onion.json),
+[ARM64 direct](hosted-41525523478-linux-arm64-direct.json),
+[ARM64 onion failure](hosted-41525523478-linux-arm64-onion.json),
+[macOS direct failure](hosted-41525523478-macos-direct.json).
+Each failure records `activation_cold`, operation `activation`, category
+`transport`, terminal label `other`, and no completed samples. These occurred
+in the one-shot activation operation, before the amended tick driver. The
+precise underlying transport cause is not known from these reports. Neither
+the recovery amendment's effectiveness against the previous post-restart failure
+nor platform acceptance is established by this run.
+
+All five native reports recorded runtime/state/combined cleanup true. The owner
+recorded relay children reaped, private state removed and readiness cleanup true;
+its separate supervisor exit is not claimed as reaped by that cleanup step.
+The owner observed one successful and two failed client outcomes. These are
+tiny-message latency observations, not bulk-throughput or command acceptance.
