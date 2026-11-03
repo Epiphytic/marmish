@@ -24,9 +24,10 @@ The macOS v2 provider has passed a separate
 [owned disposable-keychain gate](validation/v0.2/macos-v2-provider.md), including
 both identity and storage secrets across restart and copied-executable
 replacement. This does not qualify default-keychain selection or the production
-helper's ACL identity. The transport rerun passed both Linux architectures and
-macOS direct flow, but failed the macOS post-restart Arti exchange; full phase
-acceptance remains open.
+helper's ACL identity. Hosted runs have passed both Linux architectures and
+macOS direct flow, but no full matrix has passed: one run failed the macOS
+post-restart Arti exchange, and the next failed ARM onion and macOS direct cold
+activation. These are separate observations; full phase acceptance remains open.
 Historical results below do not establish v0.2 support.
 
 ### Native foundation implemented, pending final phase acceptance
@@ -68,6 +69,14 @@ within the original fixed join/exchange deadlines. It keeps initial sends
 one-shot and records finite, stage-local diagnostic labels. Its focused offline
 checks and independent code review passed; a fresh hosted matrix must still
 qualify this increment. Earlier failed reports remain preserved.
+
+The [startup amendment](phases/v0.2-phase1-startup.md) requires an observed
+Connected relay before key-package publication or subscriptions. SDK connect
+success alone can represent a pending no-op. Startup retains three bounded turns
+and the original deadline, including queued restarts and early status waits.
+Opt-in finite connector/SDK diagnostics expose no raw error, URL or payload.
+Offline checks pass; actual hosted startup failure causes and platform acceptance
+remain unproven until the new exact-source matrix runs.
 
 The native journal records definitely unsubmitted intents separately from
 prepared/ambiguous submissions. It never retries an ambiguous send by creating

@@ -444,6 +444,7 @@ impl RelayConnector {
                 )
             }
             Route::Direct => {
+                crate::diagnostics::event("direct_connect", "begin");
                 #[cfg(test)]
                 self.0.direct_attempts.fetch_add(1, Ordering::Relaxed);
                 Box::new(
@@ -455,6 +456,7 @@ impl RelayConnector {
         };
         crate::diagnostics::event("relay_stream", "connected");
         let stream = if parsed.scheme() == "wss" {
+            crate::diagnostics::event("tls", "begin");
             tls_stream(stream, host).await?
         } else {
             stream
@@ -559,6 +561,32 @@ fn sdk_error(category: &'static str) -> nostr_sdk::error::Error {
     nostr_sdk::error::Error::transport(std::io::Error::other(category))
 }
 
+fn connector_error_label(error: &Error) -> &'static str {
+    match error {
+        Error::Timeout => "timeout",
+        Error::Io(_) => "io",
+        Error::Transport(label)
+            if matches!(
+                *label,
+                "proxy_forbidden"
+                    | "relay_not_configured"
+                    | "not_ready"
+                    | "shutdown"
+                    | "arti_not_ready"
+                    | "arti_connect"
+                    | "direct_connect"
+                    | "websocket_handshake"
+                    | "tls_configuration"
+                    | "tls_hostname"
+                    | "tls_verification"
+            ) =>
+        {
+            label
+        }
+        _ => "other",
+    }
+}
+
 fn from_native(message: NativeMessage) -> std::result::Result<Message, nostr_sdk::error::Error> {
     Ok(match message {
         NativeMessage::Text(value) => Message::Text(value.to_string()),
@@ -590,9 +618,10 @@ impl WebSocketTransport for RelayConnector {
         >,
     > {
         Box::pin(async move {
-            self.open_socket(url, proxy)
-                .await
-                .map_err(|_| sdk_error("relay_connect"))
+            self.open_socket(url, proxy).await.map_err(|error| {
+                crate::diagnostics::event("connector_failure", connector_error_label(&error));
+                sdk_error("relay_connect")
+            })
         })
     }
 }
@@ -600,6 +629,27 @@ impl WebSocketTransport for RelayConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connector_diagnostics_redact_unknown_errors() {
+        assert_eq!(connector_error_label(&Error::Timeout), "timeout");
+        assert_eq!(
+            connector_error_label(&Error::Transport("tls_verification")),
+            "tls_verification"
+        );
+        assert_eq!(
+            connector_error_label(&Error::Transport("private relay URL")),
+            "other"
+        );
+        assert_eq!(
+            connector_error_label(&Error::Io(std::io::Error::other("private path"))),
+            "io"
+        );
+        assert_eq!(
+            connector_error_label(&Error::Invalid("private input")),
+            "other"
+        );
+    }
 
     fn onion() -> String {
         let key = [7_u8; 32];

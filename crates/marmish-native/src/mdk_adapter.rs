@@ -56,6 +56,145 @@ type Runtime = AccountDeviceRuntime<PublicationGate, ExplicitRouting, Publisher>
 const PURPOSE: &str = "marmish/v2 identity transport";
 const PREFIX: &str = "marmish/v2/";
 
+// Startup owns only dialing/status observation; native publication begins after
+// this helper has observed Connected for every configured endpoint.
+#[async_trait]
+trait StartupRelay: Send {
+    fn status(&self) -> nostr_sdk::relay::RelayStatus;
+    async fn dial(
+        &mut self,
+        remaining: Duration,
+    ) -> std::result::Result<(), nostr_sdk::error::ErrorKind>;
+    async fn wait(&mut self, remaining: Duration);
+}
+struct SdkStartupRelay(nostr_sdk::relay::Relay);
+#[async_trait]
+impl StartupRelay for SdkStartupRelay {
+    fn status(&self) -> nostr_sdk::relay::RelayStatus {
+        self.0.status()
+    }
+    async fn dial(
+        &mut self,
+        remaining: Duration,
+    ) -> std::result::Result<(), nostr_sdk::error::ErrorKind> {
+        self.0
+            .try_connect()
+            .timeout(remaining)
+            .await
+            .map_err(|error| error.kind())
+    }
+    async fn wait(&mut self, remaining: Duration) {
+        self.0.wait_for_connection(remaining).await;
+    }
+}
+fn startup_status_label(status: nostr_sdk::relay::RelayStatus) -> &'static str {
+    use nostr_sdk::relay::RelayStatus::*;
+    match status {
+        Initialized => "initialized",
+        Pending => "pending",
+        Connecting => "connecting",
+        Connected => "connected",
+        Disconnected => "disconnected",
+        Terminated => "terminated",
+        Banned => "banned",
+        Sleeping => "sleeping",
+        Shutdown => "shutdown",
+    }
+}
+fn startup_error_label(kind: nostr_sdk::error::ErrorKind) -> &'static str {
+    use nostr_sdk::error::ErrorKind::*;
+    match kind {
+        Protocol => "protocol",
+        IO => "io",
+        Transport => "transport",
+        Database => "database",
+        Gossip => "gossip",
+        Policy => "policy",
+        Timeout => "timeout",
+        NotFound => "not_found",
+        Invalid => "invalid",
+        State => "state",
+        Rejected => "rejected",
+        Unsupported => "unsupported",
+        LimitExceeded => "limit_exceeded",
+        _ => "other",
+    }
+}
+fn startup_connected(relay: &impl StartupRelay, deadline: Instant) -> Result<bool> {
+    use nostr_sdk::relay::RelayStatus;
+    if Instant::now() >= deadline {
+        return Err(Error::Timeout);
+    }
+    let status = relay.status();
+    crate::diagnostics::event("relay_startup_status", startup_status_label(status));
+    if matches!(status, RelayStatus::Banned | RelayStatus::Shutdown) {
+        return Err(Error::Transport("relay_connect"));
+    }
+    Ok(status == RelayStatus::Connected)
+}
+async fn wait_startup_turn(
+    relay: &mut impl StartupRelay,
+    turn_end: Instant,
+    deadline: Instant,
+) -> Result<bool> {
+    if startup_connected(relay, deadline)? {
+        return Ok(true);
+    }
+    while matches!(
+        relay.status(),
+        nostr_sdk::relay::RelayStatus::Pending
+            | nostr_sdk::relay::RelayStatus::Connecting
+            | nostr_sdk::relay::RelayStatus::Disconnected
+            | nostr_sdk::relay::RelayStatus::Initialized
+    ) {
+        let remaining = turn_end.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        relay.wait(remaining).await;
+        if startup_connected(relay, deadline)? {
+            return Ok(true);
+        }
+        if matches!(
+            relay.status(),
+            nostr_sdk::relay::RelayStatus::Terminated | nostr_sdk::relay::RelayStatus::Sleeping
+        ) {
+            break;
+        }
+        // A lagged/closed SDK notification receiver can return early. Keep
+        // that pending state in its original turn without a busy loop.
+        tokio::time::sleep_until(turn_end.min(Instant::now() + Duration::from_millis(50))).await;
+    }
+    Ok(false)
+}
+async fn connect_startup_relay(relay: &mut impl StartupRelay, deadline: Instant) -> Result<()> {
+    for attempt in ["one", "two", "three"] {
+        if startup_connected(relay, deadline)? {
+            return Ok(());
+        }
+        let turn_end = deadline.min(Instant::now() + Duration::from_secs(15));
+        crate::diagnostics::event("relay_startup_attempt", attempt);
+        match relay
+            .dial(turn_end.saturating_duration_since(Instant::now()))
+            .await
+        {
+            Ok(()) => crate::diagnostics::event("relay_startup_result", "ok"),
+            Err(kind) => {
+                crate::diagnostics::event("relay_startup_result", "error");
+                crate::diagnostics::event("relay_startup_error", startup_error_label(kind));
+            }
+        }
+        if wait_startup_turn(relay, turn_end, deadline).await? {
+            return Ok(());
+        }
+    }
+    if Instant::now() >= deadline {
+        Err(Error::Timeout)
+    } else {
+        Err(Error::Transport("relay_connect"))
+    }
+}
+
 /// Fence every native publication, including replay-driven frozen fanouts.
 /// Returning a typed retryable failure preserves the exact native obligation.
 #[derive(Clone)]
@@ -910,25 +1049,13 @@ impl MdkOwner {
             .await
             .map_err(|_| Error::Timeout)?
             .map_err(|_| Error::Transport("add_relay"))?;
-            let mut connected = false;
-            for _ in 0..3 {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    break;
-                }
-                if self
-                    .client
-                    .try_connect_relay(endpoint.as_str(), remaining.min(Duration::from_secs(15)))
-                    .await
-                    .is_ok()
-                {
-                    connected = true;
-                    break;
-                }
-            }
-            if !connected {
-                return Err(Error::Transport("relay_connect"));
-            }
+            let relay = self
+                .client
+                .relay(endpoint.as_str())
+                .await
+                .map_err(|_| Error::Transport("relay_connect"))?
+                .ok_or(Error::Transport("relay_connect"))?;
+            connect_startup_relay(&mut SdkStartupRelay(relay), deadline).await?;
         }
         // Ordinary drain does not drive KeyPackage maintenance. Readiness
         // requires an actual acknowledged publication of this device's stable
@@ -2429,5 +2556,297 @@ mod scheduler_tests {
         assert!(cohort.is_empty());
         let next = select_pending(&mut cohort, &mut budget, std::iter::once((0, vec![0])));
         assert_eq!(next, vec![(0, vec![0])]);
+    }
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::*;
+    use nostr_sdk::{error::ErrorKind, relay::RelayStatus};
+
+    struct Step {
+        dial_time: Duration,
+        result: std::result::Result<(), ErrorKind>,
+        after_dial: RelayStatus,
+        after_wait: RelayStatus,
+        wait_time: Option<Duration>,
+    }
+    struct Script {
+        status: RelayStatus,
+        steps: VecDeque<Step>,
+        current: Option<Step>,
+        calls: usize,
+        waits: Vec<Duration>,
+    }
+    impl Script {
+        fn new(status: RelayStatus, steps: Vec<Step>) -> Self {
+            Self {
+                status,
+                steps: steps.into(),
+                current: None,
+                calls: 0,
+                waits: Vec::new(),
+            }
+        }
+    }
+    #[async_trait]
+    impl StartupRelay for Script {
+        fn status(&self) -> RelayStatus {
+            self.status
+        }
+        async fn dial(&mut self, remaining: Duration) -> std::result::Result<(), ErrorKind> {
+            let step = self.steps.pop_front().expect("unexpected additional dial");
+            assert!(step.dial_time <= remaining);
+            self.calls += 1;
+            tokio::time::sleep(step.dial_time).await;
+            self.status = step.after_dial;
+            let result = step.result;
+            self.current = Some(step);
+            result
+        }
+        async fn wait(&mut self, remaining: Duration) {
+            self.waits.push(remaining);
+            let step = self.current.as_ref().unwrap();
+            let duration = step.wait_time.unwrap_or(remaining);
+            assert!(duration <= remaining);
+            tokio::time::sleep(duration).await;
+            self.status = step.after_wait;
+        }
+    }
+    fn step(
+        result: std::result::Result<(), ErrorKind>,
+        after_dial: RelayStatus,
+        after_wait: RelayStatus,
+        wait_time: Option<Duration>,
+    ) -> Step {
+        Step {
+            dial_time: Duration::ZERO,
+            result,
+            after_dial,
+            after_wait,
+            wait_time,
+        }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn startup_pending_ok_and_queued_error_wait_before_admission() {
+        for result in [Ok(()), Err(ErrorKind::State)] {
+            let start = Instant::now();
+            let mut relay = Script::new(
+                RelayStatus::Initialized,
+                vec![step(
+                    result,
+                    RelayStatus::Pending,
+                    RelayStatus::Connected,
+                    Some(Duration::from_secs(4)),
+                )],
+            );
+            // Successful return is the publication/subscription admission gate.
+            connect_startup_relay(&mut relay, start + Duration::from_secs(120))
+                .await
+                .unwrap();
+            assert_eq!(relay.status, RelayStatus::Connected);
+            assert_eq!(relay.calls, 1);
+            assert_eq!(Instant::now() - start, Duration::from_secs(4));
+            assert_eq!(relay.waits, vec![Duration::from_secs(15)]);
+        }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn startup_noop_states_do_not_spin_or_admit() {
+        for status in [
+            RelayStatus::Pending,
+            RelayStatus::Connecting,
+            RelayStatus::Disconnected,
+        ] {
+            let start = Instant::now();
+            let mut relay = Script::new(
+                status,
+                (0..3).map(|_| step(Ok(()), status, status, None)).collect(),
+            );
+            assert!(matches!(
+                connect_startup_relay(&mut relay, start + Duration::from_secs(120)).await,
+                Err(Error::Transport("relay_connect"))
+            ));
+            assert_eq!(relay.calls, 3);
+            assert_eq!(relay.waits.len(), 3);
+            assert_eq!(Instant::now() - start, Duration::from_secs(45));
+        }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn startup_early_pending_wait_stays_in_its_turn() {
+        let start = Instant::now();
+        let mut relay = Script::new(
+            RelayStatus::Pending,
+            (0..3)
+                .map(|_| {
+                    step(
+                        Ok(()),
+                        RelayStatus::Pending,
+                        RelayStatus::Pending,
+                        Some(Duration::ZERO),
+                    )
+                })
+                .collect(),
+        );
+        assert!(matches!(
+            connect_startup_relay(&mut relay, start + Duration::from_secs(120)).await,
+            Err(Error::Transport("relay_connect"))
+        ));
+        assert_eq!(relay.calls, 3);
+        assert_eq!(Instant::now() - start, Duration::from_secs(45));
+    }
+    #[tokio::test(start_paused = true)]
+    async fn startup_original_deadline_is_never_extended() {
+        let start = Instant::now();
+        let mut relay = Script::new(
+            RelayStatus::Pending,
+            (0..2)
+                .map(|_| step(Ok(()), RelayStatus::Pending, RelayStatus::Pending, None))
+                .collect(),
+        );
+        assert!(matches!(
+            connect_startup_relay(&mut relay, start + Duration::from_secs(20)).await,
+            Err(Error::Timeout)
+        ));
+        assert_eq!(Instant::now() - start, Duration::from_secs(20));
+        assert_eq!(
+            relay.waits,
+            vec![Duration::from_secs(15), Duration::from_secs(5)]
+        );
+    }
+    #[tokio::test(start_paused = true)]
+    async fn startup_connected_needs_no_dial_and_terminal_states_refuse() {
+        for status in [
+            RelayStatus::Connected,
+            RelayStatus::Banned,
+            RelayStatus::Shutdown,
+        ] {
+            let mut relay = Script::new(status, vec![]);
+            let result =
+                connect_startup_relay(&mut relay, Instant::now() + Duration::from_secs(120)).await;
+            assert_eq!(result.is_ok(), status == RelayStatus::Connected);
+            assert_eq!(relay.calls, 0);
+            assert!(relay.waits.is_empty());
+        }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn startup_early_termination_allows_next_dial() {
+        let start = Instant::now();
+        let mut relay = Script::new(
+            RelayStatus::Initialized,
+            vec![
+                step(
+                    Err(ErrorKind::Transport),
+                    RelayStatus::Terminated,
+                    RelayStatus::Terminated,
+                    Some(Duration::ZERO),
+                ),
+                step(Ok(()), RelayStatus::Connected, RelayStatus::Connected, None),
+            ],
+        );
+        connect_startup_relay(&mut relay, start + Duration::from_secs(120))
+            .await
+            .unwrap();
+        assert_eq!(relay.calls, 2);
+        assert_eq!(Instant::now(), start);
+    }
+    #[tokio::test(start_paused = true)]
+    async fn startup_three_timed_dials_and_late_connected_are_bounded() {
+        let start = Instant::now();
+        let mut relay = Script::new(
+            RelayStatus::Initialized,
+            (0..3)
+                .map(|_| Step {
+                    dial_time: Duration::from_secs(15),
+                    ..step(
+                        Err(ErrorKind::Timeout),
+                        RelayStatus::Terminated,
+                        RelayStatus::Terminated,
+                        None,
+                    )
+                })
+                .collect(),
+        );
+        assert!(matches!(
+            connect_startup_relay(&mut relay, start + Duration::from_secs(120)).await,
+            Err(Error::Transport("relay_connect"))
+        ));
+        assert_eq!(Instant::now() - start, Duration::from_secs(45));
+        assert!(relay.waits.is_empty());
+        let mut late = Script::new(
+            RelayStatus::Pending,
+            vec![step(
+                Ok(()),
+                RelayStatus::Pending,
+                RelayStatus::Connected,
+                None,
+            )],
+        );
+        assert!(matches!(
+            connect_startup_relay(&mut late, Instant::now() + Duration::from_secs(5)).await,
+            Err(Error::Timeout)
+        ));
+    }
+    #[test]
+    fn startup_labels_are_finite() {
+        let errors = [
+            ErrorKind::Protocol,
+            ErrorKind::IO,
+            ErrorKind::Transport,
+            ErrorKind::Database,
+            ErrorKind::Gossip,
+            ErrorKind::Policy,
+            ErrorKind::Timeout,
+            ErrorKind::NotFound,
+            ErrorKind::Invalid,
+            ErrorKind::State,
+            ErrorKind::Rejected,
+            ErrorKind::Unsupported,
+            ErrorKind::LimitExceeded,
+            ErrorKind::Other,
+        ];
+        assert_eq!(
+            errors.map(startup_error_label),
+            [
+                "protocol",
+                "io",
+                "transport",
+                "database",
+                "gossip",
+                "policy",
+                "timeout",
+                "not_found",
+                "invalid",
+                "state",
+                "rejected",
+                "unsupported",
+                "limit_exceeded",
+                "other"
+            ]
+        );
+        let statuses = [
+            RelayStatus::Initialized,
+            RelayStatus::Pending,
+            RelayStatus::Connecting,
+            RelayStatus::Connected,
+            RelayStatus::Disconnected,
+            RelayStatus::Terminated,
+            RelayStatus::Banned,
+            RelayStatus::Sleeping,
+            RelayStatus::Shutdown,
+        ];
+        assert_eq!(
+            statuses.map(startup_status_label),
+            [
+                "initialized",
+                "pending",
+                "connecting",
+                "connected",
+                "disconnected",
+                "terminated",
+                "banned",
+                "sleeping",
+                "shutdown"
+            ]
+        );
     }
 }

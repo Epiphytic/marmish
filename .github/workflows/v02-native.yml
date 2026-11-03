@@ -176,7 +176,7 @@ jobs:
           set -Eeuo pipefail
           # Native policy validates the explicit URL; no shell evaluation or public default.
           test -n "$DIRECT_RELAY"
-          env -u GH_TOKEN -u GITHUB_TOKEN -u ACTIONS_RUNTIME_TOKEN target/release/marmish --relay "$DIRECT_RELAY" --tor off foundation-check > "$RUNNER_TEMP/v02-public/direct.json"
+          env -u GH_TOKEN -u GITHUB_TOKEN -u ACTIONS_RUNTIME_TOKEN target/release/marmish --debug --relay "$DIRECT_RELAY" --tor off foundation-check > "$RUNNER_TEMP/v02-public/direct.json"
           jq -e '.schema==1 and .protocol=="marmish-foundation/2" and .phase=="v0.2-phase1" and .ok==true and .cleanup_ok==true and .runtime_cleanup_ok==true and .state_cleanup_ok==true and .route=="off"' "$RUNNER_TEMP/v02-public/direct.json"
       - name: Obtain exact-run onion endpoint
         env:
@@ -194,7 +194,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           relay=$(jq -er .relay_url "$RUNNER_TEMP/v02-public/readiness.json")
-          env -u GH_TOKEN -u GITHUB_TOKEN -u ACTIONS_RUNTIME_TOKEN target/release/marmish --relay "$relay" --tor always foundation-check > "$RUNNER_TEMP/v02-public/onion.json"
+          env -u GH_TOKEN -u GITHUB_TOKEN -u ACTIONS_RUNTIME_TOKEN target/release/marmish --debug --relay "$relay" --tor always foundation-check > "$RUNNER_TEMP/v02-public/onion.json"
           jq -e '.schema==1 and .protocol=="marmish-foundation/2" and .phase=="v0.2-phase1" and .ok==true and .cleanup_ok==true and .runtime_cleanup_ok==true and .state_cleanup_ok==true and .route=="always"' "$RUNNER_TEMP/v02-public/onion.json"
       - name: Create bound terminal outcome, including failed setup
         if: always()

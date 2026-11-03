@@ -200,6 +200,11 @@ fn diagnostic_label(label: &'static str) -> &'static str {
                 | "recovery_subscription"
                 | "notification_loss"
                 | "group_state_unavailable"
+                | "add_relay"
+                | "relay_connect"
+                | "activate"
+                | "arti_initialization"
+                | "arti_bootstrap"
         )
     {
         label
@@ -979,6 +984,15 @@ mod tests {
     }
     #[test]
     fn diagnostic_schema_never_serializes_unknown_text() {
+        for label in [
+            "add_relay",
+            "relay_connect",
+            "activate",
+            "arti_initialization",
+            "arti_bootstrap",
+        ] {
+            assert_eq!(diagnostic_label(label), label);
+        }
         let mut d = Diagnostic::default();
         assert_eq!(
             serde_json::to_value(&d).unwrap(),
