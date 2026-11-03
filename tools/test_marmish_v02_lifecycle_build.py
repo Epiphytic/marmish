@@ -15,13 +15,13 @@ from unittest.mock import patch
 import marmish_v02_lifecycle_build as build
 
 
-def sources():
-    return dict(zip(build.SOURCE_FILES, (
+def sources(version="0.2.0"):
+    return {name: text.replace("0.2.0", version) for name, text in zip(build.SOURCE_FILES, (
         '[package]\nname = "marmish-native"\nversion = "0.2.0"\n\n[dependencies]\nkeep = "=1"\n',
         '[[package]]\nname = "marmish-native"\nversion = "0.2.0"\n\n[[package]]\nname = "keep"\nversion = "1"\nchecksum = "unchanged"\n',
         'pub(crate) const JOURNAL_FORMAT: i64 = 6;\n'
         'pub(crate) const JOURNAL_SUPPORTED_FORMATS: &[i64] = &[0, 3, 4, 5, 6];\n'
-        '// remaining journal code unchanged\n')))
+        '// remaining journal code unchanged\n'))}
 
 
 class PatchTests(unittest.TestCase):
@@ -36,6 +36,20 @@ class PatchTests(unittest.TestCase):
         self.assertEqual(c[build.SOURCE_FILES[2]], original[build.SOURCE_FILES[2]].replace(
             'i64 = 6;', 'i64 = 4;').replace('&[0, 3, 4, 5, 6]', '&[0, 3, 4]'))
         self.assertEqual(original, sources())
+
+    def test_stable_patch_versions_derive_exact_distinct_variants(self):
+        for version in ('0.2.0', '0.2.1', '0.2.12', '0.2.18446744073709551615'):
+            with self.subTest(version=version):
+                original = sources(version)
+                self.assertEqual(build.candidate_version(original), version)
+                for variant, suffix in (('a', '-rc.1'), ('c', '-rc.2')):
+                    changed, _ = build.patch_sources(original, variant)
+                    for name in build.SOURCE_FILES[:2]:
+                        self.assertEqual(changed[name].replace(version + suffix, version), original[name])
+        for version in ('0.2.01', '0.2.18446744073709551616', '0.2.100000000000000000000', '0.2.1-rc.1',
+                        '0.2.1+build', '0.3.1', '0.2.-1', '0.2.1\n'):
+            with self.subTest(invalid=version), self.assertRaises(build.Refused):
+                build.patch_sources(sources(version), 'a')
 
     def test_unexpected_version_duplicate_or_missing_declaration_refused(self):
         for name in build.SOURCE_FILES:
@@ -185,6 +199,12 @@ class FilesAndGitTests(unittest.TestCase):
         manifest.write_bytes(original.replace(b'journal=4', b'journal=6'))
         with self.assertRaisesRegex(build.Refused, 'variant_compiled_formats'):
             build.verify_assets(assets, '0.2.0-rc.2', 'a' * 40, target, self.root / 'format', [1, 4, 1, 1, 1])
+
+    def test_candidate_manifest_version_and_commit_must_match_source(self):
+        assets, target = self.fixture_assets(version='0.2.1', journal=6)
+        for version, commit in (('0.2.0', 'a' * 40), ('0.2.1', 'b' * 40)):
+            with self.subTest(version=version, commit=commit), self.assertRaises(build.Refused):
+                build.verify_assets(assets, version, commit, target, self.root / ('verify-' + version + commit[0]))
 
     def test_candidate_mutation_during_verification_refused(self):
         assets, target = self.fixture_assets(version='0.2.0', journal=6)

@@ -1,6 +1,7 @@
 """Offline supervisor contracts; real native provider success is a CI gate."""
 import json
 import signal
+import sys
 from pathlib import Path
 import subprocess
 import tempfile
@@ -107,14 +108,15 @@ class InstalledProviderSupervisor(unittest.TestCase):
 
 
 class LifecycleProviderSupervisor(unittest.TestCase):
-    def lifecycle_fixture(self, root):
+    def lifecycle_fixture(self, root, version="0.2.0"):
+        a_version = version + "-rc.1"
         a = root / 'a-assets'
         a.mkdir()
-        (a / 'marmish-0.2.0-rc.1-aarch64-apple-darwin').write_bytes(b'offline fixture')
-        manifest = a / 'marmish-0.2.0-rc.1-aarch64-apple-darwin.manifest'
+        (a / f'marmish-{a_version}-aarch64-apple-darwin').write_bytes(b'offline fixture')
+        manifest = a / f'marmish-{a_version}-aarch64-apple-darwin.manifest'
         manifest.write_bytes(b'offline pinned manifest')
         qualification = check.LifecycleQualification(root, root / 'bootstrap', root / 'b-assets',
-            a, check.digest(manifest))
+            a, check.digest(manifest), version)
         qualification.bins.mkdir()
         old, new = root / 'old-helper', root / 'new-helper'
         old.write_bytes(b'old actual path')
@@ -132,15 +134,15 @@ class LifecycleProviderSupervisor(unittest.TestCase):
         qualification.upgrade_reload = mock.Mock(side_effect=lambda public: qualification.reload('default', public))
         def execute(argv, *_arguments, **_keywords):
             if 'install' in argv:
-                version = argv[argv.index('--select') + 1] if '--select' in argv else '0.2.0-rc.1'
+                version = argv[argv.index('--select') + 1] if '--select' in argv else a_version
                 binary.unlink(missing_ok=True)
-                binary.symlink_to(old if version == '0.2.0-rc.1' else new)
+                binary.symlink_to(old if version == a_version else new)
             elif argv[0] == '/bin/sh':
                 binary.unlink()
                 binary.symlink_to(new)
             if argv[-1] == 'release-info':
-                version = '0.2.0-rc.1' if binary.resolve() == old else '0.2.0'
-                return 0, json.dumps({'version': version}).encode()
+                selected = a_version if binary.resolve() == old else qualification.b_version
+                return 0, json.dumps({'version': selected}).encode()
             return 0, b'{}'
         return qualification, execute, reloads, old, new
 
@@ -168,6 +170,39 @@ class LifecycleProviderSupervisor(unittest.TestCase):
                         qualification.provider.lock.assert_called_once()
                         qualification.provider.unlock.assert_called_once()
                         self.assertEqual(result['lifecycle_stage'], 'complete')
+
+    def test_derived_provider_versions_and_closed_argument_triplet(self):
+        self.assertFalse(check.lifecycle_arguments(None, None, None))
+        for version in ('0.2.0', '0.2.1', '0.2.12', '0.2.18446744073709551615'):
+            self.assertEqual(check.lifecycle_versions(version), (version, version + '-rc.1'))
+            with tempfile.TemporaryDirectory() as tmp:
+                qualification, execute, reloads, old, new = self.lifecycle_fixture(Path(tmp), version)
+                with mock.patch.object(check, 'execute', side_effect=execute):
+                    result = {}
+                    qualification.run(result)
+                self.assertTrue(result['lifecycle_upgrade_loaded'])
+                self.assertEqual(reloads, [old, new, new, old, new, new])
+        for args in ((Path('a'), None, None), (None, '0' * 64, None),
+                     (None, None, '0.2.1'), (Path('a'), '0' * 64, None)):
+            with self.assertRaises(check.Refused):
+                check.lifecycle_arguments(*args)
+        for version in ('0.2.01', '0.2.18446744073709551616', '0.2.100000000000000000000', '0.2.1-rc.1',
+                        '0.2.1+build', '0.3.1', '0.2.1\n'):
+            with self.subTest(version=version), self.assertRaises(check.Refused):
+                check.lifecycle_arguments(Path('a'), '0' * 64, version)
+
+    def test_invalid_lifecycle_cli_arguments_keep_finite_outer_failure(self):
+        for args in (['--lifecycle-b-version', '0.2.1'],
+                     ['--lifecycle-a-assets', '/unused', '--lifecycle-a-manifest-sha256', '0' * 64,
+                      '--lifecycle-b-version', '0.2.18446744073709551616']):
+            with tempfile.TemporaryDirectory() as tmp:
+                report = Path(tmp) / 'result.json'
+                run = subprocess.run([sys.executable, str(Path(check.__file__).resolve()),
+                    '--bootstrap', '/unused', '--assets-dir', '/unused', '--report', str(report),
+                    '--source-commit', 'a' * 40, *args], capture_output=True, timeout=5)
+                self.assertEqual(run.returncode, 1)
+                self.assertEqual(json.loads(report.read_bytes())['failure'],
+                                 'qualification_prerequisite_failed')
 
     def test_lifecycle_a_pin_checked_before_any_product_execution(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -256,7 +291,7 @@ class LifecycleProviderSupervisor(unittest.TestCase):
             bootstrap = root / 'bootstrap.sh'
             bootstrap.write_bytes(b'offline bootstrap fixture')
             directories = []
-            for version in ('0.2.0', '0.2.0-rc.1'):
+            for version in ('0.2.1', '0.2.1-rc.1'):
                 directory = root / version
                 directory.mkdir()
                 suffix = version + '-aarch64-apple-darwin'
@@ -266,7 +301,7 @@ class LifecycleProviderSupervisor(unittest.TestCase):
                 directories.append(directory)
             stage = None
             with self.assertRaisesRegex(RuntimeError, 'privileged copy failed'):
-                with check.staged_provider_inputs(bootstrap, *directories) as stage:
+                with check.staged_provider_inputs(bootstrap, *directories, lifecycle_b_version="0.2.1") as stage:
                     pins = json.loads((stage / 'input-pins.json').read_bytes())
                     self.assertEqual(len(pins), 13)
                     self.assertEqual(sum(name.startswith('assets/') for name in pins), 5)
@@ -276,7 +311,7 @@ class LifecycleProviderSupervisor(unittest.TestCase):
             self.assertFalse(stage.exists())
             (directories[1] / 'unexpected').touch()
             with self.assertRaisesRegex(check.Refused, 'lifecycle_asset_set'):
-                with check.staged_provider_inputs(bootstrap, *directories):
+                with check.staged_provider_inputs(bootstrap, *directories, lifecycle_b_version="0.2.1"):
                     self.fail('unexpected source accepted')
 
 

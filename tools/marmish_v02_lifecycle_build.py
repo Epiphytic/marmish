@@ -23,7 +23,7 @@ Refused, require, execute = checks.Refused, checks.require, checks.supervisor.ex
 FILES = checks.FILES
 SOURCE_FILES = ('crates/marmish-native/Cargo.toml', 'Cargo.lock',
                 'crates/marmish-native/src/journal.rs')
-VERSIONS = {'a': '0.2.0-rc.1', 'c': '0.2.0-rc.2'}
+VARIANTS = ('a', 'c')
 TARGETS = {'x86_64-unknown-linux-gnu': ('Linux', 'x86_64'),
            'aarch64-unknown-linux-gnu': ('Linux', 'aarch64'),
            'aarch64-apple-darwin': ('Darwin', 'arm64')}
@@ -56,13 +56,32 @@ def private(path):
     return path
 
 
+def candidate_version(original):
+    """Derive one canonical stable native package version, including lock parity."""
+    require(set(original) == set(SOURCE_FILES), 'variant_source_set')
+    found = re.findall(r'(?m)^\[package\]\nname = "marmish-native"\nversion = "([^"\n]+)"\n',
+                       original[SOURCE_FILES[0]])
+    require(len(found) == 1, 'variant_version_patch')
+    version = checks.version_value(found[0])
+    require('-' not in version and len(version) <= 43, 'variant_version_patch')
+    entries = re.findall(r'(?m)^\[\[package\]\]\nname = "marmish-native"\nversion = "([^"\n]+)"\n',
+                         original[SOURCE_FILES[1]])
+    require(entries == [version], 'variant_version_patch')
+    return version
+
+
+def variant_versions(version):
+    return {'a': version + '-rc.1', 'c': version + '-rc.2'}
+
+
 def patch_sources(original, variant):
     """Closed text replacements change only native package/version and C format."""
-    require(variant in VERSIONS and set(original) == set(SOURCE_FILES), 'variant_source_set')
+    require(variant in VARIANTS and set(original) == set(SOURCE_FILES), 'variant_source_set')
+    version = candidate_version(original)
     output = dict(original)
     for name, prefix in ((SOURCE_FILES[0], '[package]\n'), (SOURCE_FILES[1], '[[package]]\n')):
-        before = prefix + 'name = "marmish-native"\nversion = "0.2.0"\n'
-        after = prefix + 'name = "marmish-native"\nversion = "' + VERSIONS[variant] + '"\n'
+        before = prefix + 'name = "marmish-native"\nversion = "' + version + '"\n'
+        after = prefix + 'name = "marmish-native"\nversion = "' + variant_versions(version)[variant] + '"\n'
         require(output[name].count(before) == 1, 'variant_version_patch')
         output[name] = output[name].replace(before, after)
     journal = original[SOURCE_FILES[2]]
@@ -167,6 +186,7 @@ class Build:
         self.git('checkout', '--detach', self.options.source)
         self.original = {name: regular(self.clone / name, 1048576).decode('utf-8')
                          for name in SOURCE_FILES}
+        self.version = candidate_version(self.original)
         patch_sources(self.original, 'a')
         timestamp = self.git('show', '-s', '--format=%ct', self.options.source)
         require(re.fullmatch(r'[0-9]{1,12}', timestamp), 'variant_commit_time')
@@ -176,10 +196,6 @@ class Build:
                         GIT_COMMITTER_EMAIL='lifecycle@example.invalid',
                         GIT_AUTHOR_DATE='@' + timestamp + ' +0000',
                         GIT_COMMITTER_DATE='@' + timestamp + ' +0000')
-        self.stage = 'dependencies'
-        self.run([self.cargo, 'fetch', '--locked', '--manifest-path', self.clone / 'Cargo.toml'])
-        self.git('diff', '--quiet', 'HEAD', '--')
-        private(self.root / 'patches')
 
     def commit_variant(self, variant):
         self.git('checkout', '--detach', self.options.source)
@@ -206,6 +222,7 @@ class Build:
         return commit, self.git('rev-parse', 'HEAD^{tree}'), sha(patch)
 
     def compile_variant(self, variant):
+        version = variant_versions(self.version)[variant]
         self.stage = 'build_' + variant
         started = time.monotonic()
         commit, tree, patch_hash = self.commit_variant(variant)
@@ -232,37 +249,41 @@ class Build:
                         'variant_signing_kind')
         self.run(['/bin/sh', self.clone / 'scripts/v02-inspect-native.sh', inputs], cap=120)
         output = self.root / variant
-        license_path = self.options.candidate_assets / f'THIRD-PARTY-LICENSES-0.2.0-{self.options.target}'
+        license_path = self.options.candidate_assets / f'THIRD-PARTY-LICENSES-{self.version}-{self.options.target}'
         self.run([self.target / 'release/marmish-release-tool', 'package',
                   '--input-dir', inputs, '--output-dir', output, '--licenses', license_path,
                   '--signing', signing, '--minimum', minimum], cap=120)
         expected = list(self.candidate_formats)
         if variant == 'c':
             expected[1] = 4
-        formats, _ = verify_assets(output, VERSIONS[variant], commit, self.options.target,
+        formats, _ = verify_assets(output, version, commit, self.options.target,
                                    self.root / ('verify-' + variant), expected)
         for name in FILES[:-1]:
-            raw = self.run([output / f'{name}-{VERSIONS[variant]}-{self.options.target}',
+            raw = self.run([output / f'{name}-{version}-{self.options.target}',
                             'release-info'], cap=15)
-            checks.release_contract(json.loads(raw), {'version': VERSIONS[variant],
+            checks.release_contract(json.loads(raw), {'version': version,
                 'source_commit': commit}, self.options.target, formats)
-        return {'version': VERSIONS[variant], 'commit': commit, 'tree': tree,
+        return {'version': version, 'commit': commit, 'tree': tree,
                 'patch_sha256': patch_hash, 'manifest_sha256': checks.supervisor.digest(
-                    output / manifest_name(VERSIONS[variant], self.options.target)),
+                    output / manifest_name(version, self.options.target)),
                 'build_ms': int((time.monotonic() - started) * 1000), 'signing_kind': signing}
 
     def build(self):
-        formats, original = verify_assets(self.options.candidate_assets, '0.2.0',
+        self.prepare()
+        formats, original = verify_assets(self.options.candidate_assets, self.version,
             self.options.source, self.options.target, self.root / 'verify-b')
         require(formats[1] > 4, 'variant_candidate_format')
         self.candidate_formats = formats
-        self.prepare()
+        self.stage = 'dependencies'
+        self.run([self.cargo, 'fetch', '--locked', '--manifest-path', self.clone / 'Cargo.toml'])
+        self.git('diff', '--quiet', 'HEAD', '--')
+        private(self.root / 'patches')
         result = {'schema': 1, 'source_commit': self.options.source,
                   'target': self.options.target,
-                  'b_manifest_sha256': original[manifest_name('0.2.0', self.options.target)]}
-        for variant in VERSIONS:
+                  'b_manifest_sha256': original[manifest_name(self.version, self.options.target)]}
+        for variant in VARIANTS:
             result[variant] = self.compile_variant(variant)
-            require(inventory(self.options.candidate_assets, '0.2.0', self.options.target)
+            require(inventory(self.options.candidate_assets, self.version, self.options.target)
                     == original, 'candidate_assets_changed')
         require(self.options.deadline - time.time() >= 2100, 'lifecycle_runtime_budget')
         record = self.root / 'variants.json'

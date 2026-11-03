@@ -474,6 +474,14 @@ pub(super) struct Assets<'a> {
     pub(super) variants: &'a Path,
 }
 
+fn version_argument(ctx: &LifecycleContext) -> Result<(&'static str, OsString)> {
+    ctx.validate()?;
+    Ok((
+        "--lifecycle-b-version",
+        ctx.candidate.version.clone().into(),
+    ))
+}
+
 pub(super) async fn run(
     ctx: &LifecycleContext,
     source_root: &Path,
@@ -508,6 +516,7 @@ pub(super) async fn run(
             ctx.candidate.source_commit.clone().into(),
         ),
         ("--target", ctx.target.clone().into()),
+        version_argument(ctx)?,
         (
             "--lifecycle-a-assets",
             assets.variants.join("a").into_os_string(),
@@ -634,6 +643,20 @@ mod tests {
         )
         .unwrap()
     }
+    #[test]
+    fn provider_forwards_exact_validated_candidate_version() {
+        for version in ["0.2.0", "0.2.1", "0.2.12"] {
+            let mut ctx = context();
+            ctx.candidate.version = version.into();
+            let (flag, value) = version_argument(&ctx).unwrap();
+            assert_eq!(flag, "--lifecycle-b-version");
+            assert_eq!(value, OsString::from(version));
+        }
+        let mut ctx = context();
+        ctx.candidate.version = "0.2.1-rc.1".into();
+        assert!(version_argument(&ctx).is_err());
+    }
+
     fn valid_report(ctx: &LifecycleContext) -> serde_json::Value {
         serde_json::json!({"schema":1,"kind":"installed_auto_provider","ok":true,
             "source_commit":ctx.candidate.source_commit,"target":ctx.target,"lifecycle_stage":"complete",

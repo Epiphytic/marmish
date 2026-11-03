@@ -372,10 +372,28 @@ class Qualification:
         return tuple((directory / filename).read_bytes() for filename in ('profile.json', 'config.json'))
 
 
+def lifecycle_versions(version):
+    require(isinstance(version, str) and len(version) <= 43
+        and re.fullmatch(r'0\.2\.(0|[1-9][0-9]{0,19})', version)
+        and int(version[4:]) <= 18446744073709551615, 'lifecycle_arguments')
+    return version, version + '-rc.1'
+
+
+def lifecycle_arguments(a_assets, a_pin, b_version):
+    values = (a_assets, a_pin, b_version)
+    require(all(value is None for value in values) or all(value is not None for value in values),
+        'lifecycle_arguments')
+    if a_assets is not None:
+        require(re.fullmatch('[0-9a-f]{64}', a_pin), 'lifecycle_arguments')
+        lifecycle_versions(b_version)
+    return a_assets is not None
+
+
 class LifecycleQualification(Qualification):
     """Actual A/B helper processes; a denial never becomes an upgrade pass."""
-    def __init__(self, root, bootstrap, assets, a_assets, a_pin):
+    def __init__(self, root, bootstrap, assets, a_assets, a_pin, b_version):
         super().__init__(root, bootstrap, assets)
+        self.b_version, self.a_version = lifecycle_versions(b_version)
         self.a_assets, self.a_pin = a_assets, a_pin
 
     def select(self, version):
@@ -402,7 +420,7 @@ class LifecycleQualification(Qualification):
         manifests = list(self.a_assets.glob('*.manifest'))
         require(len(manifests) == 1 and digest(manifests[0]) == self.a_pin,
             'lifecycle_a_manifest_pin')
-        binaries = list(self.a_assets.glob('marmish-0.2.0-rc.1-*'))
+        binaries = list(self.a_assets.glob('marmish-' + self.a_version + '-*'))
         binaries = [path for path in binaries if not path.name.endswith('.manifest')]
         require(len(binaries) == 1, 'lifecycle_a_binary')
         executable = self.root / 'a-installer'
@@ -425,7 +443,7 @@ class LifecycleQualification(Qualification):
         execute(['/bin/sh', str(self.bootstrap), '--asset-dir', str(self.assets),
             '--prefix', str(self.prefix), '--bin-dir', str(self.bins)], self.environment, 60)
         _, raw = execute([str(self.bins / 'marmish'), 'release-info'], self.environment)
-        require(json.loads(raw).get('version') == '0.2.0', 'lifecycle_b_version')
+        require(json.loads(raw).get('version') == self.b_version, 'lifecycle_b_version')
         self.retained(old_helper, old_identity)
         result['lifecycle_stage'] = 'upgrade_reload'
         self.upgrade_reload(first['public_key'])
@@ -434,12 +452,12 @@ class LifecycleQualification(Qualification):
         require(self.items(2) == references, 'lifecycle_upgrade_items_changed')
         result['lifecycle_upgrade_loaded'] = True
         result['lifecycle_stage'] = 'rollback_reload'
-        self.select('0.2.0-rc.1')
+        self.select(self.a_version)
         self.retained(old_helper, old_identity, selected=True)
         self.reload('default', first['public_key'])
         self.retained(old_helper, old_identity, selected=True)
         require(self.manifest('default') == first, 'lifecycle_profile_changed')
-        self.select('0.2.0')
+        self.select(self.b_version)
         self.retained(old_helper, old_identity)
         self.reload('default', first['public_key'])
         require(self.manifest('default') == first, 'lifecycle_profile_changed')
@@ -466,7 +484,8 @@ class LifecycleQualification(Qualification):
 
 
 def inner(bootstrap, assets, report, pins=None, deadline_seconds=540,
-          lifecycle_a_assets=None, lifecycle_a_pin=None):
+          lifecycle_a_assets=None, lifecycle_a_pin=None, lifecycle_b_version=None):
+    lifecycle_arguments(lifecycle_a_assets, lifecycle_a_pin, lifecycle_b_version)
     if pins:
         staging = pins.parent
         values = json.loads(pins.read_bytes())
@@ -478,7 +497,7 @@ def inner(bootstrap, assets, report, pins=None, deadline_seconds=540,
     account = pwd.getpwuid(os.geteuid())
     root = Path(tempfile.mkdtemp(prefix='.marmish-provider-', dir=account.pw_dir))
     root.chmod(0o700)
-    qualification = (LifecycleQualification(root, bootstrap, assets, lifecycle_a_assets, lifecycle_a_pin)
+    qualification = (LifecycleQualification(root, bootstrap, assets, lifecycle_a_assets, lifecycle_a_pin, lifecycle_b_version)
         if lifecycle_a_assets else Qualification(root, bootstrap, assets))
     def expired(_signum, _frame):
         raise Refused('qualification_deadline')
@@ -518,7 +537,7 @@ def inner(bootstrap, assets, report, pins=None, deadline_seconds=540,
 
 
 @contextmanager
-def staged_provider_inputs(bootstrap, assets, lifecycle_a_assets=None):
+def staged_provider_inputs(bootstrap, assets, lifecycle_a_assets=None, lifecycle_b_version=None):
     """Pin the exact unprivileged inputs before copying into the owned account."""
     stage = Path(tempfile.mkdtemp(prefix='marmish-provider-stage-'))
     stage.chmod(0o755)
@@ -526,9 +545,10 @@ def staged_provider_inputs(bootstrap, assets, lifecycle_a_assets=None):
         pins = {}
         inputs = [('', [Path(__file__),
             Path(__file__).with_name('marmish_native_quickstart_check.py'), bootstrap])]
-        directories = [('assets', assets, '0.2.0')]
+        versions = lifecycle_versions(lifecycle_b_version) if lifecycle_a_assets else (None, None)
+        directories = [('assets', assets, versions[0])]
         if lifecycle_a_assets:
-            directories.append(('a-assets', lifecycle_a_assets, '0.2.0-rc.1'))
+            directories.append(('a-assets', lifecycle_a_assets, versions[1]))
         for directory, source_dir, version in directories:
             sources = list(source_dir.iterdir())
             if lifecycle_a_assets:
@@ -608,8 +628,9 @@ def provider_result_check(code, result, lifecycle):
 
 
 def mac_account(bootstrap, assets, report, lifecycle_a_assets=None, lifecycle_a_pin=None,
-                deadline_seconds=540):
+                deadline_seconds=540, lifecycle_b_version=None):
     """Outer privilege is restricted to staging and one newly owned OS account."""
+    lifecycle_arguments(lifecycle_a_assets, lifecycle_a_pin, lifecycle_b_version)
     environment = {'PATH': '/usr/bin:/bin:/usr/sbin:/sbin',
         'HOME': pwd.getpwuid(os.geteuid()).pw_dir, 'LC_ALL': 'C'}
     result = {'schema': 1, 'kind': 'installed_auto_provider', 'ok': False,
@@ -657,7 +678,7 @@ def mac_account(bootstrap, assets, report, lifecycle_a_assets=None, lifecycle_a_
             execute(['/usr/bin/sudo', '-n', '/bin/mkdir', '-m', '700', str(home)], environment)
             execute(['/usr/bin/sudo', '-n', '/usr/sbin/chown', str(uid) + ':-2', str(home)], environment)
             # Stage outside the runner's private HOME; rehash every copied input.
-            with staged_provider_inputs(bootstrap, assets, lifecycle_a_assets) as stage:
+            with staged_provider_inputs(bootstrap, assets, lifecycle_a_assets, lifecycle_b_version) as stage:
                 execute(['/usr/bin/sudo', '-n', '/bin/cp', '-R', str(stage), str(home / 'stage')], environment)
                 execute(['/usr/bin/sudo', '-n', '/bin/chmod', '-R', 'a+rX', str(home / 'stage')], environment)
             inner_report = home / 'provider-result.json'
@@ -677,7 +698,8 @@ def mac_account(bootstrap, assets, report, lifecycle_a_assets=None, lifecycle_a_
                 '--pins', str(home / 'stage/input-pins.json'), '--deadline-seconds', str(inner_budget)]
             if lifecycle:
                 argv += ['--lifecycle-a-assets', str(home / 'stage/a-assets'),
-                    '--lifecycle-a-manifest-sha256', lifecycle_a_pin]
+                    '--lifecycle-a-manifest-sha256', lifecycle_a_pin,
+                    '--lifecycle-b-version', lifecycle_b_version]
             code, _ = execute(argv, environment, remaining, success=False)
             _, raw = execute(['/usr/bin/sudo', '-n', '/bin/cat', str(inner_report)], environment)
             require(len(raw) <= 16384, 'owned_account_report_limit')
@@ -746,6 +768,7 @@ if __name__ == '__main__':
     parser.add_argument('--deadline-seconds', type=int, default=540, help=argparse.SUPPRESS)
     parser.add_argument('--lifecycle-a-assets', type=Path)
     parser.add_argument('--lifecycle-a-manifest-sha256')
+    parser.add_argument('--lifecycle-b-version')
     options = parser.parse_args()
     operation = mac_account if platform.system() == 'Darwin' and not options.inner else inner
     if options.inner:
@@ -754,13 +777,14 @@ if __name__ == '__main__':
             and 55000 <= account.pw_uid < 55100 and Path(account.pw_dir) == Path('/Users') / account.pw_name,
             'owned_account_context_required')
     try:
-        lifecycle = options.lifecycle_a_assets is not None
-        require(lifecycle == (options.lifecycle_a_manifest_sha256 is not None), 'lifecycle_arguments')
+        lifecycle = lifecycle_arguments(options.lifecycle_a_assets,
+            options.lifecycle_a_manifest_sha256, options.lifecycle_b_version)
         if lifecycle:
             require(platform.system() == 'Darwin'
                 and re.fullmatch('[0-9a-f]{64}', options.lifecycle_a_manifest_sha256), 'lifecycle_arguments')
         extra = ({'lifecycle_a_assets': options.lifecycle_a_assets.resolve(),
-            'lifecycle_a_pin': options.lifecycle_a_manifest_sha256} if lifecycle else {})
+            'lifecycle_a_pin': options.lifecycle_a_manifest_sha256,
+            'lifecycle_b_version': options.lifecycle_b_version} if lifecycle else {})
         if options.inner:
             require(options.pins is not None, 'staged_pins_required')
             code = inner(options.bootstrap.resolve(), options.assets_dir.resolve(), options.report.resolve(),

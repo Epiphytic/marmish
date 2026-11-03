@@ -421,3 +421,9 @@ A separate Linux AMD64 install downloaded the public release assets without an
 asset-directory override and passed (exit 0), selecting active generation 2
 with the same version, source and format tuple. See the
 [initial release evidence](validation/v0.2/initial-release.md) for exact reports and boundaries.
+
+The installed lifecycle checker derives synthetic A/C versions from the frozen
+stable `0.2.N` candidate and matching native lock entry, rather than pinning
+`0.2.0`. See the [patch-version amendment](phases/v0.2-lifecycle-patch-versions.md).
+This changes qualification tooling only; hosted lifecycle qualification remains
+pending, and public release pins are unchanged.

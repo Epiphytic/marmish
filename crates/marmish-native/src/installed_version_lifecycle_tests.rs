@@ -34,8 +34,40 @@ fn variants(ctx: &LifecycleContext) -> Variants {
         source_commit: ctx.candidate.source_commit.clone(),
         target: ctx.target.clone(),
         b_manifest_sha256: ctx.candidate.manifests[ctx.role().unwrap()].clone(),
-        a: variant("0.2.0-rc.1", '5'),
-        c: variant("0.2.0-rc.2", '6'),
+        a: variant(&format!("{}-rc.1", ctx.candidate.version), '5'),
+        c: variant(&format!("{}-rc.2", ctx.candidate.version), '6'),
+    }
+}
+
+#[test]
+fn stable_patch_versions_require_exact_derived_variants() {
+    for index in 0..3 {
+        for version in ["0.2.0", "0.2.1", "0.2.12", "0.2.18446744073709551615"] {
+            let mut ctx = context(index);
+            ctx.candidate.version = version.into();
+            ctx.validate().unwrap();
+            let valid = variants(&ctx);
+            valid.validate(&ctx).unwrap();
+            let mut wrong = valid.clone();
+            std::mem::swap(&mut wrong.a.version, &mut wrong.c.version);
+            assert!(wrong.validate(&ctx).is_err());
+            wrong = valid;
+            wrong.a.version = version.into();
+            assert!(wrong.validate(&ctx).is_err());
+        }
+    }
+    for version in [
+        "0.2.01",
+        "0.2.18446744073709551616",
+        "0.2.100000000000000000000",
+        "0.2.1-rc.1",
+        "0.2.1+build",
+        "0.3.1",
+        "0.2.1\n",
+    ] {
+        let mut ctx = context(0);
+        ctx.candidate.version = version.into();
+        assert!(ctx.validate().is_err());
     }
 }
 

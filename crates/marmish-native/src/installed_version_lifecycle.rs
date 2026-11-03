@@ -4,6 +4,10 @@ use crate::{Error, Result, foundation, native_manifest};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+fn stable_version(version: &str) -> bool {
+    version.len() <= 43 && !version.contains('-') && native_manifest::version(version)
+}
+
 fn bad() -> Error {
     Error::Invalid("installed_version_lifecycle")
 }
@@ -52,6 +56,7 @@ impl LifecycleContext {
         self.candidate.require_cohort("version-lifecycle")?;
         if self.schema != 1
             || self.kind != "version-lifecycle"
+            || !stable_version(&self.candidate.version)
             || !TARGETS.contains(&self.target.as_str())
             || !foundation::valid_hex(&self.variants_sha256, 64)
             || self.candidate.expires_at - self.candidate.created_at != 1800
@@ -102,9 +107,9 @@ impl Variants {
             || self.target != ctx.target
             || self.b_manifest_sha256
                 != *ctx.candidate.manifests.get(ctx.role()?).ok_or_else(bad)?
-            || self.a.version != "0.2.0-rc.1"
-            || self.c.version != "0.2.0-rc.2"
-            || ctx.candidate.version != "0.2.0"
+            || self.a.version != format!("{}-rc.1", ctx.candidate.version)
+            || self.c.version != format!("{}-rc.2", ctx.candidate.version)
+            || !stable_version(&ctx.candidate.version)
             || self.a.commit == self.c.commit
             || self.a.tree == self.c.tree
         {
