@@ -1331,7 +1331,9 @@ mod tests {
             )
             .unwrap();
         let alias = d.path().join("alias");
-        symlink("/bin/true", &alias).unwrap();
+        let executable = d.path().join("worker").canonicalize().unwrap();
+        assert!(executable.is_file());
+        symlink(&executable, &alias).unwrap();
         let op = operation(
             1,
             EngineOperation::Dispatch {

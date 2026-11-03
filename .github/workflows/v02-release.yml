@@ -87,7 +87,7 @@ jobs:
                 if (++n <= 512) print
               }'
           fi
-          cargo test --locked -p marmish-engine -p marmish-native -p marmish-vault
+          cargo test --locked --no-fail-fast -p marmish-engine -p marmish-native -p marmish-vault
           cargo clippy --locked -p marmish-native -p marmish-engine --all-targets -- -D warnings
       - name: Build final native executables
         run: |

@@ -597,7 +597,7 @@ fn partial_job_directories_are_reaped_before_maintenance_and_submission() {
     std::fs::create_dir(&partial).unwrap();
     std::fs::set_permissions(&partial, std::fs::Permissions::from_mode(0o700)).unwrap();
     let ctx = h.context(PRINCIPAL, 1);
-    let (id, _) = h.start(&ctx, 31, &exec(&[b"/bin/true"]));
+    let (id, _) = h.start(&ctx, 31, &exec(&[b"/usr/bin/true"]));
     assert!(!partial.exists());
     assert_eq!(h.finished(&ctx, id).outcome, Some(ExitOutcome::Code(0)));
 }
