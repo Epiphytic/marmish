@@ -40,13 +40,15 @@ case $(uname -s) in
     for binary in marmish marmishd marmish-worker; do
       file=$root/$binary
       minimum=$(otool -l "$file" | awk '$1=="cmd" {build=($2=="LC_BUILD_VERSION")} build && $1=="minos" {print $2}')
-      [ "$minimum" = 15.0 ] || { echo 'native inspection: unexpected Mach-O minimum' >&2; exit 1; }
+      [ "$minimum" = 15.0 ] || { printf 'native inspection: %s unexpected Mach-O minimum\n' "$binary" >&2; exit 1; }
       dependencies=$(otool -L "$file" | awk 'NR>1 {print $1}')
-      printf '%s\n' "$dependencies" | awk '$0=="/usr/lib/libSystem.B.dylib" {found=1} END {exit !found}'
+      printf '%s\n' "$dependencies" | awk '$0=="/usr/lib/libSystem.B.dylib" {found=1} END {exit !found}' || { printf 'native inspection: %s missing Mach-O libSystem dependency\n' "$binary" >&2; exit 1; }
       printf '%s\n' "$dependencies" | while IFS= read -r library; do
         case $library in
-          /usr/lib/libSystem.B.dylib|/usr/lib/libiconv.2.dylib|/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation|/System/Library/Frameworks/Security.framework/Versions/A/Security|/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration) ;;
-          *) echo 'native inspection: unqualified Mach-O dependency' >&2; exit 1 ;;
+          /usr/lib/libSystem.B.dylib|/usr/lib/libiconv.2.dylib|/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation|/System/Library/Frameworks/Security.framework/Versions/A/Security|/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration|/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit) ;;
+          *) display=$(printf '%s' "$library" | tr -c 'A-Za-z0-9_./@+-' '?' | cut -c 1-240)
+             printf 'native inspection: %s unqualified Mach-O dependency: %s\n' "$binary" "$display" >&2
+             exit 1 ;;
         esac
       done
       printf 'native inspection: %s macOS minimum 15.0 and qualified dependencies\n' "$binary"
