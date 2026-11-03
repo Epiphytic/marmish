@@ -230,6 +230,71 @@ jobs:
           path: ${{ runner.temp }}/quickstart.json
           if-no-files-found: error
           retention-days: 14
+  provider-qualification:
+    needs: render
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: v02-candidate-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate-assets
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: v02-pinned-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate-bootstrap
+      - name: Install only missing private Linux provider prerequisites
+        if: runner.os == 'Linux'
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages=()
+          test -x /usr/bin/dbus-daemon || packages+=(dbus-daemon)
+          test -x /usr/bin/dbus-send || packages+=(dbus-bin)
+          test -x /usr/bin/gnome-keyring-daemon || packages+=(gnome-keyring)
+          test -x /usr/bin/setpriv || packages+=(util-linux)
+          if ((${#packages[@]})); then
+            sudo -n apt-get update -qq
+            sudo -n apt-get install -y --no-install-recommends "${packages[@]}"
+          fi
+          dpkg-query -W -f='${Package}=${Version}\n' \
+            dbus-daemon dbus-bin gnome-keyring util-linux > "$RUNNER_TEMP/provider-packages.txt"
+      - name: Verify isolated provider supervisor contracts
+        run: python3 -m unittest discover -s tools -p test_marmish_native_keychain_check.py
+      - name: Qualify installed default-auto custody with disposable real providers
+        env:
+          MARMISH_BUILD_COMMIT: ${{ inputs.source_commit }}
+          EXPECTED_TARGET: ${{ matrix.target }}
+        run: |
+          python3 tools/marmish_native_keychain_check.py \
+            --bootstrap "$PWD/candidate-bootstrap/install.sh" \
+            --assets-dir "$PWD/candidate-assets" \
+            --target "$EXPECTED_TARGET" \
+            --source-commit "$MARMISH_BUILD_COMMIT" \
+            --package-versions "$RUNNER_TEMP/provider-packages.txt" \
+            --report "$RUNNER_TEMP/provider.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: v02-provider-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/provider.json
+          if-no-files-found: error
+          retention-days: 14
 # Re-run all jobs together: artifact bindings include the run attempt.
 # This creates workflow candidate artifacts only (not a public release). Public release/tag creation and
 # scripts/install.sh cutover require successful installed cross-platform qualification.

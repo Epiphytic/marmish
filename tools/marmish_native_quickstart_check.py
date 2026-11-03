@@ -26,14 +26,14 @@ DIALOG = (
 )
 
 
-def interactive(arguments, environment):
+def interactive(arguments, environment, timeout=240):
     child, master = pty.fork()
     if child == 0:
         os.execve('/bin/sh', ['/bin/sh', *arguments], environment)
     output = bytearray()
     next_prompt = 0
     status = None
-    deadline = time.monotonic() + 240
+    deadline = time.monotonic() + timeout
     try:
         while status is None:
             if time.monotonic() >= deadline or len(output) > 2 * 1024 * 1024:

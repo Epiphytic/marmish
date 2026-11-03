@@ -75,7 +75,13 @@ ownership rather than fabricated ACKs. The complete local fixture passed in
 19,872 ms with actual quiescence, joined stops and private-state cleanup. This is
 internal Linux AMD64 direct protocol evidence, not installed acceptance. Installed
 command-count/uptime exit, policy/recovery, actual default-auto keychains and
-cross-platform command acceptance remain unfinished or unvalidated. Working
+cross-platform command acceptance remain unfinished or unvalidated. The
+[default-auto keychain qualification design](phases/v0.2-native-keychain-qualification.md)
+and [independent final code review](reviews/v0.2-native-keychain-code-r4.md)
+cover isolated real-provider CI jobs for all three platforms, including two
+named identities, reload and locked-provider refusal. The 26 offline supervisor
+and quickstart checks pass; the actual installed provider jobs have not yet
+qualified this implementation. Working
 Tor commands are deferred to v0.3. [The local Arti command attempts](validation/v0.2/local-command-arti-2026-11-02.md)
 failed; their actual cleanup results are preserved. No v0.2 release or native installer is accepted. The direct command
 timings are individual observations, not sustained throughput or RTT benchmarks.
