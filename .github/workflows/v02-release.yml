@@ -1,8 +1,14 @@
 name: v0.2 native release candidates
+run-name: ${{ inputs.caveated_release && 'v0.2 initial CAVEATED release - full validation pending' || 'v0.2 native release candidates' }}
 
 on:
   workflow_dispatch:
     inputs:
+      caveated_release:
+        description: Initial v0.2 release with macOS full testing pending (not full qualification)
+        required: false
+        default: false
+        type: boolean
       source_commit:
         description: Reviewed full source commit to build (40 lowercase hex; no tag promotion)
         required: true
@@ -65,6 +71,36 @@ jobs:
             x86_64-unknown-linux-gnu:Linux:x86_64|aarch64-unknown-linux-gnu:Linux:aarch64|aarch64-apple-darwin:Darwin:arm64) ;;
             *) exit 1 ;;
           esac
+      - name: Verify explicit caveated source equivalence
+        if: inputs.caveated_release
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline=347cf799ae5baa9e577ded1a00566c7a6b99b933
+          test "$MARMISH_BUILD_COMMIT" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$MARMISH_BUILD_COMMIT"
+          test "$MARMISH_BUILD_COMMIT" != "$baseline"
+          git merge-base --is-ancestor "$baseline" "$MARMISH_BUILD_COMMIT"
+          git cat-file -e "$MARMISH_BUILD_COMMIT:docs/phases/v0.2-initial-caveated-release.md"
+          git diff --no-renames --name-only -z "$baseline" "$MARMISH_BUILD_COMMIT" > "$RUNNER_TEMP/caveated-paths"
+          while IFS= read -r -d '' changed; do
+            case "$changed" in
+              .github/workflows/v02-release.yml|docs/phases/v0.2-initial-caveated-release.md|docs/reviews/v0.2-initial-release-design-r[1-9].md|docs/reviews/v0.2-initial-release-code-r[1-9].md) ;;
+              *) echo 'caveated release: unreviewed product/source change' >&2; exit 1 ;;
+            esac
+            entry=$(git ls-tree "$MARMISH_BUILD_COMMIT" -- "$changed")
+            case "$entry" in
+              "100644 blob "*) ;;
+              *) echo 'caveated release: non-regular or deleted review path' >&2; exit 1 ;;
+            esac
+          done < "$RUNNER_TEMP/caveated-paths"
+          {
+            echo '## Initial caveated v0.2.0 release'
+            echo 'macOS full testing remains in progress; fixes follow in v0.2.1.'
+            echo 'Native default tests passed on equivalent runtime source347 in candidate41655210565 attempt1.'
+            echo 'Installed feature tests, full cohorts/lifecycle/provider qualification remain pending.'
+            echo 'This run builds new commit metadata; it is not full acceptance or byte-identical to the prior candidate.'
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920 # 1.97.1
         with:
           toolchain: 1.97.1
@@ -75,6 +111,7 @@ jobs:
           echo 'MACOSX_DEPLOYMENT_TARGET=15.0' >> "$GITHUB_ENV"
           echo 'RUST_TEST_THREADS=1' >> "$GITHUB_ENV"
       - name: Verify native components
+        if: ${{ !inputs.caveated_release }}
         run: |
           set -euo pipefail
           if [ "$(uname -s)" = Darwin ]; then
@@ -125,6 +162,7 @@ jobs:
             --output-dir "$RUNNER_TEMP/native-assets" --licenses "$RUNNER_TEMP/THIRD-PARTY-LICENSES" \
             --signing "$SIGNING" --minimum "$MINIMUM"
       - name: Build isolated installed-test tools without changing product assets
+        if: ${{ !inputs.caveated_release }}
         env:
           EXPECTED_TARGET: ${{ matrix.target }}
         shell: bash
@@ -159,6 +197,7 @@ jobs:
             --input-dir "$RUNNER_TEMP/tooling-input" --output-dir "$RUNNER_TEMP/installed-tools" \
             --harness-sha256 "$harness_sha256"
       - name: Preserve pinned installed-test tools separately
+        if: ${{ !inputs.caveated_release }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: v02-installed-tools-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -205,6 +244,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   install-quickstart:
+    if: ${{ !inputs.caveated_release }}
     needs: render
     strategy:
       fail-fast: false
@@ -247,6 +287,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   provider-qualification:
+    if: ${{ !inputs.caveated_release }}
     needs: render
     strategy:
       fail-fast: false
@@ -313,6 +354,8 @@ jobs:
           retention-days: 14
 # Re-run all jobs together: artifact bindings include the run attempt.
 # This creates workflow candidate artifacts only (not a public release). Public release/tag creation and
-# scripts/install.sh cutover require successful installed cross-platform qualification.
+# scripts/install.sh cutover normally require successful installed cross-platform qualification.
+# Explicit caveated_release follows docs/phases/v0.2-initial-caveated-release.md instead;
+# it never represents full qualification, and retains pending macOS/v0.2.1 gates.
 # Asset manifest commit is reviewed source A; publishing the rendered pinned bootstrap
 # later in source B deliberately avoids a self-referential source hash.
