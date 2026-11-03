@@ -228,7 +228,7 @@ fn zombie_members(group: i32) -> Result<Vec<ZombieIdentity>> {
             capacity,
         )
     };
-    if count <= 0 || count >= capacity || count as usize % size_of::<i32>() != 0 {
+    if count <= 0 || count >= capacity || !(count as usize).is_multiple_of(size_of::<i32>()) {
         return Err(EngineError::RecoveryUncertain);
     }
     let pids = &mut pids[..count as usize / size_of::<i32>()];
@@ -297,7 +297,7 @@ fn descriptors() -> Result<Vec<libc::proc_fdinfo>> {
         };
         if count <= 0
             || count as usize > bytes
-            || count as usize % size_of::<libc::proc_fdinfo>() != 0
+            || !(count as usize).is_multiple_of(size_of::<libc::proc_fdinfo>())
         {
             return Err(EngineError::UnsafePath);
         }
