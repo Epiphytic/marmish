@@ -60,17 +60,33 @@ struct ChildOwner {
 impl ChildOwner {
     fn signal(&self, signal: i32) -> Result<()> {
         if self.reaped
+            || self.child.id() != self.identity.pid as u32
             || launcher::process_identity(self.worker.pid)? != self.worker
-            || launcher::process_identity(self.identity.pid)? != self.identity
-            || unsafe { libc::getpgid(self.identity.pid) } != self.pgid
             || self.pgid != self.identity.pid
         {
             return Err(EngineError::RecoveryUncertain);
         }
-        if unsafe { libc::kill(-self.pgid, signal) } < 0
-            && std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+        #[cfg(target_os = "linux")]
+        if launcher::process_identity(self.identity.pid)? != self.identity
+            || unsafe { libc::getpgid(self.identity.pid) } != self.pgid
         {
             return Err(EngineError::RecoveryUncertain);
+        }
+        #[cfg(target_os = "macos")]
+        if crate::platform::owned_child_identity_and_group(self.identity.pid)?
+            != (self.identity.clone(), self.pgid)
+        {
+            return Err(EngineError::RecoveryUncertain);
+        }
+        if unsafe { libc::kill(-self.pgid, signal) } < 0 {
+            let errno = std::io::Error::last_os_error().raw_os_error();
+            #[cfg(target_os = "macos")]
+            if errno == Some(libc::EPERM) {
+                return crate::platform::owned_zombie_group(&self.identity, self.pgid);
+            }
+            if errno != Some(libc::ESRCH) {
+                return Err(EngineError::RecoveryUncertain);
+            }
         }
         Ok(())
     }
@@ -794,7 +810,7 @@ fn launch_claimed(
     let spawned = match launcher::spawn_child(&spec) {
         Ok(child) => child,
         Err(ChildSpawnError::NotStarted) => {
-            return retry(|| store.finish(job, worker, ExitOutcome::NotStarted))
+            return retry(|| store.finish(job, worker, ExitOutcome::NotStarted));
         }
         Err(ChildSpawnError::Uncertain) => {
             return retry(|| {
@@ -803,7 +819,7 @@ fn launch_claimed(
                     InvocationState::Launching,
                     InvocationState::UnknownLaunch,
                 )
-            })
+            });
         }
     };
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -827,7 +843,7 @@ fn mark_worker_failure(store: &mut Store, job: JobId) -> Result<()> {
             InvocationState::Launching => InvocationState::UnknownLaunch,
             InvocationState::Running => InvocationState::Lost,
             InvocationState::Exited | InvocationState::UnknownLaunch | InvocationState::Lost => {
-                return Ok(())
+                return Ok(());
             }
             InvocationState::Accepted => return Err(EngineError::RecoveryUncertain),
         };

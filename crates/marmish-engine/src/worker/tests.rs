@@ -89,6 +89,64 @@ fn unreaped_leader_reserves_group_for_pipe_holding_descendant_cleanup() {
     until(|| matches!(stdout.read(&mut buf), Ok(0)));
     assert_eq!(owner.reap().unwrap(), ExitOutcome::Code(0));
 }
+#[cfg(target_os = "macos")]
+#[test]
+fn darwin_owned_zombie_identity_and_terminal_group_are_exact() {
+    use crate::platform::{owned_child_identity_and_group, owned_zombie_group};
+    assert!(owned_child_identity_and_group(0).is_err());
+    assert!(owned_child_identity_and_group(std::process::id() as i32).is_err());
+    let (mut owner, _stdin, _stdout, _stderr) = owner(child(b"exec /bin/sleep 30"));
+    assert!(
+        owned_child_identity_and_group(owner.identity.pid).unwrap()
+            == (owner.identity.clone(), owner.pgid)
+    );
+    assert!(owned_zombie_group(&owner.identity, owner.pgid).is_err());
+    owner.signal(libc::SIGKILL).unwrap();
+    until(|| owner.exited().unwrap());
+    assert!(launcher::process_identity(owner.identity.pid).is_err());
+    assert!(
+        owned_child_identity_and_group(owner.identity.pid).unwrap()
+            == (owner.identity.clone(), owner.pgid)
+    );
+    let mut wrong = owner.identity.clone();
+    wrong.start_ticks += 1;
+    assert!(owned_zombie_group(&wrong, owner.pgid).is_err());
+    assert!(owned_zombie_group(&owner.identity, owner.pgid + 1).is_err());
+    // The EPERM exception is intentionally unavailable to UID zero.
+    if unsafe { libc::getuid() } != 0 {
+        owned_zombie_group(&owner.identity, owner.pgid).unwrap();
+    }
+    owner.signal(libc::SIGKILL).unwrap();
+    assert_eq!(owner.reap().unwrap(), ExitOutcome::Signal(libc::SIGKILL));
+    assert!(owned_child_identity_and_group(owner.identity.pid)
+        .map(|(identity, _)| identity != owner.identity)
+        .unwrap_or(true));
+    assert!(owned_zombie_group(&owner.identity, owner.pgid).is_err());
+}
+#[cfg(target_os = "macos")]
+#[test]
+fn darwin_terminal_group_proof_rejects_a_live_descendant() {
+    let (mut owner, stdin, _stdout, _stderr) = owner(child(b"/bin/sleep 30 & exit 0"));
+    drop(stdin);
+    until(|| owner.exited().unwrap());
+    assert!(crate::platform::owned_zombie_group(&owner.identity, owner.pgid).is_err());
+    owner.signal(libc::SIGKILL).unwrap();
+    assert_eq!(owner.reap().unwrap(), ExitOutcome::Code(0));
+}
+#[cfg(target_os = "macos")]
+#[test]
+fn darwin_fast_exit_spawn_retains_owned_identity_until_reap() {
+    let (mut owner, stdin, _stdout, _stderr) = owner(child(b"exit 0"));
+    drop(stdin);
+    until(|| owner.exited().unwrap());
+    assert!(
+        crate::platform::owned_child_identity_and_group(owner.identity.pid).unwrap()
+            == (owner.identity.clone(), owner.pgid)
+    );
+    owner.signal(libc::SIGKILL).unwrap();
+    assert_eq!(owner.reap().unwrap(), ExitOutcome::Code(0));
+}
+
 #[test]
 fn forged_identity_never_signals_and_drop_cleans_verified_child() {
     let (mut owner, _stdin, _stdout, _stderr) = owner(child(b"exec /bin/sleep 30"));

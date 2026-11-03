@@ -23,6 +23,14 @@ pub(crate) fn boot_time() -> Result<BootTime> {
 pub(crate) fn process_identity(pid: i32) -> Result<ProcessIdentity> {
     native::process_identity(pid)
 }
+#[cfg(target_os = "macos")]
+pub(crate) fn owned_child_identity_and_group(pid: i32) -> Result<(ProcessIdentity, i32)> {
+    native::owned_child_identity_and_group(pid)
+}
+#[cfg(target_os = "macos")]
+pub(crate) fn owned_zombie_group(identity: &ProcessIdentity, group: i32) -> Result<()> {
+    native::owned_zombie_group(identity, group)
+}
 pub(crate) fn lock_exclusive(file: &File) -> Result<()> {
     native::lock_exclusive(file)
 }

@@ -1121,7 +1121,17 @@ pub(crate) fn spawn_child(spec: &ChildSpec) -> std::result::Result<SpawnedChild,
     }
     let mut child = command.spawn().map_err(|_| ChildSpawnError::NotStarted)?;
     let pid = child.id() as i32;
-    let identity = match process_identity(pid) {
+    #[cfg(target_os = "linux")]
+    let captured = process_identity(pid);
+    #[cfg(target_os = "macos")]
+    let captured = platform::owned_child_identity_and_group(pid).and_then(|(identity, group)| {
+        if group == pid {
+            Ok(identity)
+        } else {
+            Err(EngineError::RecoveryUncertain)
+        }
+    });
+    let identity = match captured {
         Ok(identity) => identity,
         Err(_) => {
             discard_spawned_child(&mut child, pid);

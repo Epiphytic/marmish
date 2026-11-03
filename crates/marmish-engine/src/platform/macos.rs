@@ -126,7 +126,11 @@ fn continuous_millis(ticks: u64, numer: u32, denom: u32) -> Result<u64> {
     u64::try_from(u128::from(ticks) * u128::from(numer) / u128::from(denom) / 1_000_000)
         .map_err(|_| EngineError::StorageFailure)
 }
-pub(super) fn process_identity(pid: i32) -> Result<ProcessIdentity> {
+// Apple sys/proc_info.h: PROC_PGRP_ONLY. libc does not export this selector.
+const PROC_PGRP_ONLY: u32 = 2;
+const _: () = assert!(size_of::<libc::proc_bsdinfo>() == 136);
+
+fn bsd_info(pid: i32, include_zombie: bool) -> Result<libc::proc_bsdinfo> {
     if pid <= 0 {
         return Err(EngineError::WorkerUnavailable);
     }
@@ -135,7 +139,7 @@ pub(super) fn process_identity(pid: i32) -> Result<ProcessIdentity> {
         libc::proc_pidinfo(
             pid,
             libc::PROC_PIDTBSDINFO,
-            0,
+            u64::from(include_zombie),
             (&mut info as *mut libc::proc_bsdinfo).cast(),
             size_of::<libc::proc_bsdinfo>() as i32,
         )
@@ -147,12 +151,119 @@ pub(super) fn process_identity(pid: i32) -> Result<ProcessIdentity> {
     {
         return Err(EngineError::WorkerUnavailable);
     }
-    let start_ticks = process_start(info.pbi_start_tvsec, info.pbi_start_tvusec)?;
+    process_start(info.pbi_start_tvsec, info.pbi_start_tvusec)?;
+    Ok(info)
+}
+fn info_identity(info: &libc::proc_bsdinfo) -> Result<ProcessIdentity> {
     Ok(ProcessIdentity {
         boot_id: boot_id()?,
-        pid,
-        start_ticks,
+        pid: info.pbi_pid as i32,
+        start_ticks: process_start(info.pbi_start_tvsec, info.pbi_start_tvusec)?,
     })
+}
+pub(super) fn process_identity(pid: i32) -> Result<ProcessIdentity> {
+    info_identity(&bsd_info(pid, false)?)
+}
+pub(super) fn owned_child_identity_and_group(pid: i32) -> Result<(ProcessIdentity, i32)> {
+    let info = bsd_info(pid, true)?;
+    let group = i32::try_from(info.pbi_pgid).map_err(|_| EngineError::WorkerUnavailable)?;
+    if info.pbi_ppid != std::process::id() || group <= 0 {
+        return Err(EngineError::WorkerUnavailable);
+    }
+    Ok((info_identity(&info)?, group))
+}
+#[derive(PartialEq, Eq)]
+struct ZombieIdentity {
+    pid: u32,
+    parent: u32,
+    group: u32,
+    uid: u32,
+    ruid: u32,
+    seconds: u64,
+    micros: u64,
+}
+fn zombie_identity(pid: i32, group: i32) -> Result<ZombieIdentity> {
+    let info = bsd_info(pid, true)?;
+    if info.pbi_pgid != group as u32 || info.pbi_status != libc::SZOMB {
+        return Err(EngineError::RecoveryUncertain);
+    }
+    Ok(ZombieIdentity {
+        pid: info.pbi_pid,
+        parent: info.pbi_ppid,
+        group: info.pbi_pgid,
+        uid: info.pbi_uid,
+        ruid: info.pbi_ruid,
+        seconds: info.pbi_start_tvsec,
+        micros: info.pbi_start_tvusec,
+    })
+}
+fn held_exit(pid: i32) -> Result<(i32, i32, i32)> {
+    let mut info: libc::siginfo_t = unsafe { zeroed() };
+    if unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid as u32,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    } != 0
+        || unsafe { info.si_pid() } != pid
+        || !matches!(
+            info.si_code,
+            libc::CLD_EXITED | libc::CLD_KILLED | libc::CLD_DUMPED
+        )
+    {
+        return Err(EngineError::RecoveryUncertain);
+    }
+    Ok((pid, info.si_code, unsafe { info.si_status() }))
+}
+fn zombie_members(group: i32) -> Result<Vec<ZombieIdentity>> {
+    let mut pids = [0i32; 257];
+    let capacity = std::mem::size_of_val(&pids) as i32;
+    let count = unsafe {
+        libc::proc_listpids(
+            PROC_PGRP_ONLY,
+            group as u32,
+            pids.as_mut_ptr().cast(),
+            capacity,
+        )
+    };
+    if count <= 0 || count >= capacity || count as usize % size_of::<i32>() != 0 {
+        return Err(EngineError::RecoveryUncertain);
+    }
+    let pids = &mut pids[..count as usize / size_of::<i32>()];
+    pids.sort_unstable();
+    if pids[0] <= 0
+        || pids.windows(2).any(|p| p[0] == p[1])
+        || pids.iter().filter(|pid| **pid == group).count() != 1
+    {
+        return Err(EngineError::RecoveryUncertain);
+    }
+    pids.iter()
+        .map(|pid| zombie_identity(*pid, group))
+        .collect()
+}
+/// EPERM is acceptable only for an unchanged, entirely terminal owned group.
+/// This proof neither signals nor reaps; the held child reserves its PGID.
+pub(super) fn owned_zombie_group(identity: &ProcessIdentity, group: i32) -> Result<()> {
+    let uid = unsafe { libc::getuid() };
+    if group <= 1 || group != identity.pid || uid == 0 || uid != unsafe { libc::geteuid() } {
+        return Err(EngineError::RecoveryUncertain);
+    }
+    let exit = held_exit(group)?;
+    if owned_child_identity_and_group(group)? != (identity.clone(), group) {
+        return Err(EngineError::RecoveryUncertain);
+    }
+    let leader = zombie_identity(group, group)?;
+    let first = zombie_members(group)?;
+    if !first.iter().any(|member| member == &leader)
+        || first != zombie_members(group)?
+        || exit != held_exit(group)?
+        || leader != zombie_identity(group, group)?
+    {
+        return Err(EngineError::RecoveryUncertain);
+    }
+    Ok(())
 }
 fn process_start(seconds: u64, micros: u64) -> Result<u64> {
     if micros >= 1_000_000 {
@@ -554,33 +665,55 @@ mod tests {
                 Err(EngineError::WorkerUnavailable)
             ));
             assert_eq!(FD_CEILING, 65_536);
-            const TEST_CEILING: i32 = 64;
-            limit.rlim_cur = TEST_CEILING as u64;
-            assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) }, 0);
-            prepare_spawn().unwrap();
-            prepare_spawn_below(TEST_CEILING).unwrap();
-            limit.rlim_cur = TEST_CEILING as u64 + 1;
-            assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) }, 0);
             let file = File::open("/dev/null").unwrap();
-            let high =
-                unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD_CLOEXEC, TEST_CEILING) };
+            let baseline_max = descriptors()
+                .unwrap()
+                .iter()
+                .map(|entry| entry.proc_fd)
+                .max()
+                .unwrap_or(2);
+            let ceiling = baseline_max.checked_add(1).unwrap().max(64);
+            assert!(
+                ceiling < FD_CEILING - 1 && (ceiling as u64 + 1) <= limit.rlim_max,
+                "unsupported test budget: baseline={baseline_max}, ceiling={ceiling}, hard={}",
+                limit.rlim_max
+            );
+            let mut set_soft = |soft: u64| {
+                limit.rlim_cur = soft;
+                assert_eq!(
+                    unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) },
+                    0,
+                    "set limit: baseline={baseline_max}, ceiling={ceiling}, soft={soft}, hard={}",
+                    limit.rlim_max
+                );
+                let mut actual: libc::rlimit = unsafe { zeroed() };
+                assert_eq!(
+                    unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut actual) },
+                    0
+                );
+                assert_eq!(actual.rlim_cur, soft);
+            };
+            set_soft(ceiling as u64);
+            prepare_spawn().unwrap();
+            prepare_spawn_below(ceiling).unwrap();
+            set_soft(ceiling as u64 + 1);
+            let high = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD_CLOEXEC, ceiling) };
             assert_eq!(
-                high, TEST_CEILING,
+                high, ceiling,
                 "native runner cannot allocate test descriptor"
             );
             let high = unsafe { File::from_raw_fd(high) };
             assert!(matches!(
-                prepare_spawn_below(TEST_CEILING),
+                prepare_spawn_below(ceiling),
                 Err(EngineError::WorkerUnavailable)
             ));
-            limit.rlim_cur = 32;
-            assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) }, 0);
+            set_soft(ceiling as u64 - 1);
             assert!(matches!(
-                prepare_spawn_below(TEST_CEILING),
+                prepare_spawn_below(ceiling),
                 Err(EngineError::WorkerUnavailable)
             ));
             drop(high);
-            prepare_spawn_below(TEST_CEILING).unwrap();
+            prepare_spawn_below(ceiling).unwrap();
             prepare_spawn().unwrap();
             return;
         }

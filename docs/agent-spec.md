@@ -52,6 +52,17 @@ SQLite initialization hook race observed in the
 [reviewed correction](validation/v0.2/sqlcipher-startup.md) retains encryption
 and normal parallel test execution. Fresh hosted qualification remains required.
 
+The reviewed Darwin worker correction uses a separate exact owned-child BSD
+snapshot that includes unreaped zombies, including during post-spawn identity
+capture. Public live-process identity checks retain their existing behavior.
+Group-signal EPERM is accepted only after matching retained-child wait observations
+and two identical bounded snapshots prove every group member terminal; all other
+uncertainty fails closed. Production descriptor ceilings and CLOEXEC checks remain
+strict. The descriptor regression derives its test ceiling from ambient inherited
+FDs. [Local Linux checks](validation/v0.2/darwin-owned-child-local.md) passed;
+actual macOS engine tests and engine all-target Clippy remain required before
+qualifying the correction.
+
 Phase 2 remains open. Public command CLI/IPC, explicit SRV resolution, Finish-based
 command-count drain and uptime limits, cached administrative evidence/cleanup,
 and native offline setup/install transactions are implemented in the current
