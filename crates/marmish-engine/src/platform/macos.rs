@@ -483,33 +483,27 @@ mod tests {
         let alias = tmp.path().join("alias");
         std::os::unix::fs::symlink(tmp.path(), &alias).unwrap();
         let parent = open_directory(&alias.canonicalize().unwrap()).unwrap();
-        assert!(
-            ancestry_contains(
-                parent,
-                identity(&descriptor_stat(root.as_raw_fd()).unwrap())
-            )
-            .unwrap()
-        );
+        assert!(ancestry_contains(
+            parent,
+            identity(&descriptor_stat(root.as_raw_fd()).unwrap())
+        )
+        .unwrap());
         let child = tmp.path().join("MiXeD-case");
         std::fs::create_dir(&child).unwrap();
         let spelling = tmp.path().join("mixed-CASE");
         if spelling.is_dir() {
-            assert!(
-                ancestry_contains(
-                    open_directory(&spelling).unwrap(),
-                    identity(&descriptor_stat(root.as_raw_fd()).unwrap())
-                )
-                .unwrap()
-            );
+            assert!(ancestry_contains(
+                open_directory(&spelling).unwrap(),
+                identity(&descriptor_stat(root.as_raw_fd()).unwrap())
+            )
+            .unwrap());
         } else {
             // Case-sensitive APFS still checks membership by inode ancestry.
-            assert!(
-                ancestry_contains(
-                    open_directory(&child).unwrap(),
-                    identity(&descriptor_stat(root.as_raw_fd()).unwrap())
-                )
-                .unwrap()
-            );
+            assert!(ancestry_contains(
+                open_directory(&child).unwrap(),
+                identity(&descriptor_stat(root.as_raw_fd()).unwrap())
+            )
+            .unwrap());
         }
     }
     #[test]

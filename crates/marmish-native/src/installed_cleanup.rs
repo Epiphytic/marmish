@@ -1,7 +1,7 @@
 //! PID-bound local acceptance proofs. Artifacts cannot construct cleanup authority.
 use super::records;
 use crate::{Error, Result, ipc};
-use serde::{Deserialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -23,14 +23,17 @@ struct Status {
     uncertain: u32,
     worker_running: u32,
     worker_unknown: u32,
+    engine_present: bool,
     engine_quiesced: bool,
     observation_pending: bool,
     cleanup: String,
+    #[serde(deserialize_with = "required_nullable")]
     final_seq: Option<u64>,
 }
 impl Status {
     fn fence(&self) -> Result<u64> {
-        if self.active != 0
+        if !self.engine_present
+            || self.active != 0
             || self.uncertain != 0
             || self.worker_running != 0
             || self.worker_unknown != 0
@@ -43,15 +46,16 @@ impl Status {
         self.final_seq.filter(|v| *v > 0).ok_or_else(bad)
     }
 }
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Stream {
     produced: u64,
     closed: bool,
     gaps: u32,
+    #[serde(deserialize_with = "required_nullable")]
     sha256: Option<String>,
 }
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Evidence {
     cursor: u64,
@@ -60,7 +64,11 @@ struct Evidence {
     session: String,
     invocation: String,
     submit_sha256: String,
+    #[serde(deserialize_with = "required_nullable")]
     engine_admitted: Option<u8>,
+    #[serde(deserialize_with = "required_nullable")]
+    refusal: Option<crate::command_wire::ErrorCode>,
+    #[serde(deserialize_with = "required_nullable")]
     outcome: Option<crate::command_wire::Outcome>,
     stdout: Stream,
     stderr: Stream,
@@ -72,6 +80,7 @@ struct Evidence {
 #[serde(deny_unknown_fields)]
 struct Page {
     rows: Vec<Evidence>,
+    #[serde(deserialize_with = "required_nullable")]
     next: Option<u64>,
 }
 #[derive(Deserialize)]
@@ -101,12 +110,12 @@ fn peer(stream: &UnixStream, pid: u32) -> Result<()> {
     }
     Ok(())
 }
-pub(super) async fn request<T: DeserializeOwned>(
+async fn response(
     child: &mut Child,
     socket: &Path,
     request: &ipc::Request,
     deadline: Instant,
-) -> Result<T> {
+) -> Result<ipc::Response> {
     let pid = live(child)?;
     let result = tokio::time::timeout_at(
         deadline.min(Instant::now() + Duration::from_secs(15)),
@@ -133,10 +142,10 @@ pub(super) async fn request<T: DeserializeOwned>(
                     _ => bad(),
                 });
             }
-            if response.error.is_some() || response.command.is_some() {
+            if response.error.is_some() {
                 return Err(bad());
             }
-            serde_json::from_value(response.result.ok_or_else(bad)?).map_err(|_| bad())
+            Ok(response)
         },
     )
     .await
@@ -144,11 +153,236 @@ pub(super) async fn request<T: DeserializeOwned>(
     live(child)?;
     result
 }
+pub(super) fn required_nullable<'de, D, T>(
+    deserializer: D,
+) -> std::result::Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+pub(super) async fn request<T: DeserializeOwned>(
+    child: &mut Child,
+    socket: &Path,
+    request: &ipc::Request,
+    deadline: Instant,
+) -> Result<T> {
+    let response = response(child, socket, request, deadline).await?;
+    if response.command.is_some() {
+        return Err(bad());
+    }
+    serde_json::from_value(response.result.ok_or_else(bad)?).map_err(|_| bad())
+}
+pub(super) async fn command_request(
+    child: &mut Child,
+    socket: &Path,
+    request: &ipc::Request,
+    deadline: Instant,
+) -> Result<crate::command_local::LocalResult> {
+    let response = response(child, socket, request, deadline).await?;
+    if response.result.is_some() {
+        return Err(bad());
+    }
+    response.command.ok_or_else(bad)
+}
+/// Absence only; it never grants authority to remove an existing engine tree.
+pub(super) fn require_no_engine(profile: &Path) -> Result<()> {
+    crate::identity::check_dir(profile)?;
+    match std::fs::symlink_metadata(profile.join("commands")) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        _ => Err(bad()),
+    }
+}
+fn no_engine_status(status: &Status) -> Result<()> {
+    if status.engine_present
+        || status.active != 0
+        || status.uncertain != 0
+        || status.worker_running != 0
+        || status.worker_unknown != 0
+        || status.engine_quiesced
+        || status.observation_pending
+        || status.cleanup != "open"
+        || status.final_seq.is_some()
+    {
+        return Err(bad());
+    }
+    Ok(())
+}
+/// Only fresh no-grant profiles without a previous engine receipt may use this.
+/// Caller must repeat immediately before normal joined stop, then check absence.
+pub(super) async fn verify_no_engine(
+    child: &mut Child,
+    profile: &Path,
+    socket: &Path,
+    deadline: Instant,
+) -> Result<()> {
+    require_no_engine(profile)?;
+    let status: Status = request(
+        child,
+        socket,
+        &ipc::Request::CommandCleanupStatus {},
+        deadline,
+    )
+    .await?;
+    no_engine_status(&status)?;
+    let page: Page = request(
+        child,
+        socket,
+        &ipc::Request::CommandEvidence {
+            after: None,
+            limit: 64,
+        },
+        deadline,
+    )
+    .await?;
+    if !page.rows.is_empty() || page.next.is_some() {
+        return Err(bad());
+    }
+    let status: Status = request(
+        child,
+        socket,
+        &ipc::Request::CommandCleanupStatus {},
+        deadline,
+    )
+    .await?;
+    no_engine_status(&status)?;
+    require_no_engine(profile)
+}
+/// Retains the original owned directory inode; grants no deletion authority.
+pub(super) struct ProfileReceipt(std::fs::File);
+impl ProfileReceipt {
+    pub(super) fn capture(profile: &Path) -> Result<Self> {
+        use std::os::unix::fs::OpenOptionsExt;
+        crate::identity::check_dir(profile)?;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
+            .open(profile)?;
+        let receipt = Self(file);
+        receipt.verify(profile)?;
+        Ok(receipt)
+    }
+    pub(super) fn verify(&self, profile: &Path) -> Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        crate::identity::check_dir(profile)?;
+        let held = self.0.metadata()?;
+        let current = std::fs::symlink_metadata(profile)?;
+        if !current.is_dir() || held.dev() != current.dev() || held.ino() != current.ino() {
+            return Err(bad());
+        }
+        Ok(())
+    }
+}
+pub(super) async fn client_group_submit(
+    child: &mut Child,
+    socket: &Path,
+    handle: &crate::command_client::CommandHandle,
+    deadline: Instant,
+) -> Result<String> {
+    use crate::command_local::LocalResult;
+    let mut after = None;
+    let mut count = 0;
+    let mut found = None;
+    loop {
+        let LocalResult::Invocations { entries, next } = command_request(
+            child,
+            socket,
+            &ipc::Request::CommandInvocations { after, limit: 64 },
+            deadline,
+        )
+        .await?
+        else {
+            return Err(bad());
+        };
+        if entries.len() > 64 {
+            return Err(bad());
+        }
+        let mut previous = after.unwrap_or(0);
+        for entry in entries {
+            count += 1;
+            if count > 4096 || entry.cursor <= previous {
+                return Err(bad());
+            }
+            previous = entry.cursor;
+            track_client_entry(&entry, handle, &mut found)?;
+        }
+        if next.is_some_and(|n| n != previous || Some(n) == after || previous == after.unwrap_or(0))
+        {
+            return Err(bad());
+        }
+        if next.is_none() {
+            return found.ok_or_else(bad);
+        }
+        after = next;
+    }
+}
+fn track_client_entry(
+    entry: &crate::command_local::InvocationEntry,
+    handle: &crate::command_client::CommandHandle,
+    found: &mut Option<String>,
+) -> Result<()> {
+    if !records::hexadecimal(&entry.group_submit_sha256, 64)
+        || (entry.handle == *handle
+            && (!entry.authority_valid
+                || found.replace(entry.group_submit_sha256.clone()).is_some()))
+    {
+        return Err(bad());
+    }
+    Ok(())
+}
+#[cfg(test)]
 fn evidence(
     page: &Page,
     after: Option<u64>,
     fence: u64,
     actual: &mut BTreeMap<(String, String), (String, String)>,
+) -> Result<()> {
+    evidence_expected(page, after, fence, actual, None)
+}
+#[derive(Clone, Copy)]
+pub(super) enum ExpectedDisposition {
+    ExecutedFixture,
+    Refused(crate::command_wire::ErrorCode),
+}
+pub(super) type ExpectedRows = BTreeMap<(String, String), ((String, String), ExpectedDisposition)>;
+fn disposition_valid(row: &Evidence, disposition: ExpectedDisposition) -> bool {
+    match disposition {
+        ExpectedDisposition::ExecutedFixture => {
+            row.worker_state == crate::journal::WorkerState::Exited
+                && row.refusal.is_none()
+                && row.engine_admitted == Some(1)
+                && row.outcome.as_ref().is_some_and(|o| {
+                    o.value == Some(7) && o.kind == crate::command_wire::OutcomeKind::Code
+                })
+                && row.stdout.closed
+                && row.stderr.closed
+                && row.stdout.gaps == 0
+                && row.stderr.gaps == 0
+                && row.stdout.produced == 131072
+                && row.stderr.produced == 131072
+        }
+        ExpectedDisposition::Refused(code) => {
+            code == crate::command_wire::ErrorCode::CommandDenied
+                && row.refusal == Some(code)
+                && row.engine_admitted == Some(0)
+                && row.worker_state == crate::journal::WorkerState::Unknown
+                && row.outcome.is_none()
+                && [&row.stdout, &row.stderr].into_iter().all(|stream| {
+                    stream.produced == 0
+                        && stream.gaps == 0
+                        && !stream.closed
+                        && stream.sha256.is_none()
+                })
+        }
+    }
+}
+fn evidence_expected(
+    page: &Page,
+    after: Option<u64>,
+    fence: u64,
+    actual: &mut BTreeMap<(String, String), (String, String)>,
+    expected: Option<&ExpectedRows>,
 ) -> Result<()> {
     if page.rows.len() > 64 {
         return Err(bad());
@@ -162,18 +396,18 @@ fn evidence(
             || !records::hexadecimal(&row.group_sha256, 64)
             || !records::hexadecimal(&row.submit_sha256, 64)
             || !row.authority_valid
-            || row.worker_state != crate::journal::WorkerState::Exited
+            || !disposition_valid(
+                row,
+                match expected {
+                    Some(rows) => {
+                        rows.get(&(row.principal.clone(), row.invocation.clone()))
+                            .ok_or_else(bad)?
+                            .1
+                    }
+                    None => ExpectedDisposition::ExecutedFixture,
+                },
+            )
             || row.observed_seq < fence
-            || row.engine_admitted != Some(1)
-            || row.outcome.as_ref().is_none_or(|o| {
-                o.value != Some(7) || o.kind != crate::command_wire::OutcomeKind::Code
-            })
-            || !row.stdout.closed
-            || !row.stderr.closed
-            || row.stdout.gaps != 0
-            || row.stderr.gaps != 0
-            || row.stdout.produced != 131072
-            || row.stderr.produced != 131072
             || row
                 .stdout
                 .sha256
@@ -212,8 +446,12 @@ pub(in crate::mdk_adapter) struct OwnedCleanupGuard<'a> {
     final_seq: u64,
     expected: BTreeMap<(String, String), (String, String)>,
     deadline: Instant,
+    dispositions: Option<ExpectedRows>,
 }
 impl OwnedCleanupGuard<'_> {
+    pub(super) fn final_seq(&self) -> u64 {
+        self.final_seq
+    }
     pub(in crate::mdk_adapter) fn profile(&self) -> &Path {
         &self.profile
     }
@@ -248,7 +486,13 @@ impl OwnedCleanupGuard<'_> {
             if count > 4096 {
                 return Err(bad());
             }
-            evidence(&page, after, self.final_seq, &mut actual)?;
+            evidence_expected(
+                &page,
+                after,
+                self.final_seq,
+                &mut actual,
+                self.dispositions.as_ref(),
+            )?;
             after = page.next;
             if after.is_none() {
                 break;
@@ -269,6 +513,38 @@ pub(super) async fn prepare<'a>(
     profile: &Path,
     socket: &Path,
     expected: BTreeMap<(String, String), (String, String)>,
+    deadline: Instant,
+) -> Result<OwnedCleanupGuard<'a>> {
+    prepare_inner(child, profile, socket, expected, None, deadline).await
+}
+pub(super) async fn prepare_policy<'a>(
+    child: &'a mut Child,
+    profile: &Path,
+    socket: &Path,
+    rows: ExpectedRows,
+    deadline: Instant,
+) -> Result<OwnedCleanupGuard<'a>> {
+    if rows.len() != 5
+        || rows
+            .values()
+            .filter(|(_, d)| matches!(d, ExpectedDisposition::ExecutedFixture))
+            .count()
+            != 1
+    {
+        return Err(bad());
+    }
+    let expected = rows
+        .iter()
+        .map(|(k, (binding, _))| (k.clone(), binding.clone()))
+        .collect();
+    prepare_inner(child, profile, socket, expected, Some(rows), deadline).await
+}
+async fn prepare_inner<'a>(
+    child: &'a mut Child,
+    profile: &Path,
+    socket: &Path,
+    expected: BTreeMap<(String, String), (String, String)>,
+    dispositions: Option<ExpectedRows>,
     deadline: Instant,
 ) -> Result<OwnedCleanupGuard<'a>> {
     loop {
@@ -310,6 +586,7 @@ pub(super) async fn prepare<'a>(
                     final_seq,
                     expected,
                     deadline,
+                    dispositions,
                 };
                 guard.revalidate().await?;
                 return Ok(guard);
@@ -342,11 +619,17 @@ pub(super) async fn stop(child: &mut Child, deadline: Instant) -> Result<()> {
     Ok(())
 }
 pub(super) fn stop_report(stdout: &[u8]) -> Result<()> {
+    check_stop_report(stdout, true)
+}
+pub(super) fn no_engine_stop_report(stdout: &[u8]) -> Result<()> {
+    check_stop_report(stdout, false)
+}
+fn check_stop_report(stdout: &[u8], engine_quiesced: bool) -> Result<()> {
     let mut lines = stdout.split(|b| *b == b'\n').filter(|l| !l.is_empty());
     let report: Stop = serde_json::from_slice(lines.next().ok_or_else(bad)?).map_err(|_| bad())?;
     if lines.next().is_some()
         || report.schema != 1
-        || !report.engine_quiesced
+        || report.engine_quiesced != engine_quiesced
         || !report.engine_stop_complete
         || !report.mdk_stop_complete
         || !report.runtime_cleanup_complete
@@ -356,13 +639,142 @@ pub(super) fn stop_report(stdout: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Public evidence is checked through the same closed parser as live cleanup, but
+/// never creates a guard. The original client digest remains the expected value.
+pub(super) fn validate_policy_evidence(
+    rows: &[serde_json::Value],
+    fence: u64,
+    expected: &ExpectedRows,
+) -> Result<()> {
+    if rows.len() != 5 || fence == 0 {
+        return Err(bad());
+    }
+    let page: Page = serde_json::from_value(serde_json::json!({"rows": rows, "next": null}))
+        .map_err(|_| bad())?;
+    let mut actual = BTreeMap::new();
+    evidence_expected(&page, None, fence, &mut actual, Some(expected))?;
+    let wanted: BTreeMap<_, _> = expected
+        .iter()
+        .map(|(k, (v, _))| (k.clone(), v.clone()))
+        .collect();
+    if actual != wanted
+        || page
+            .rows
+            .iter()
+            .any(|r| r.group_sha256 != page.rows[0].group_sha256)
+    {
+        return Err(bad());
+    }
+    Ok(())
+}
+pub(super) async fn policy_evidence(
+    child: &mut Child,
+    socket: &Path,
+    fence: u64,
+    expected: &ExpectedRows,
+    deadline: Instant,
+) -> Result<Vec<serde_json::Value>> {
+    let mut after = None;
+    let mut rows = Vec::new();
+    loop {
+        let page: Page = request(
+            child,
+            socket,
+            &ipc::Request::CommandEvidence { after, limit: 64 },
+            deadline,
+        )
+        .await?;
+        let mut previous = after.unwrap_or(0);
+        for row in page.rows {
+            if row.cursor <= previous || rows.len() >= 5 {
+                return Err(bad());
+            }
+            previous = row.cursor;
+            rows.push(serde_json::to_value(row).map_err(|_| bad())?);
+        }
+        if page.next.is_some_and(|n| n != previous || Some(n) == after) {
+            return Err(bad());
+        }
+        after = page.next;
+        if after.is_none() {
+            break;
+        }
+    }
+    validate_policy_evidence(&rows, fence, expected)?;
+    Ok(rows)
+}
+/// Only cancel the one independently known possibly-executed policy invocation.
+/// Refusals and unknown ledger entries never acquire cancellation authority.
+pub(super) async fn cancel_policy_execution(
+    child: &mut Child,
+    socket: &Path,
+    expected: &ExpectedRows,
+    deadline: Instant,
+) -> Result<()> {
+    let mut after = None;
+    let mut count = 0;
+    let mut found = None;
+    loop {
+        let page: Page = request(
+            child,
+            socket,
+            &ipc::Request::CommandEvidence { after, limit: 64 },
+            deadline,
+        )
+        .await?;
+        let mut previous = after.unwrap_or(0);
+        for row in page.rows {
+            count += 1;
+            if count > 5 || row.cursor <= previous {
+                return Err(bad());
+            }
+            previous = row.cursor;
+            let (binding, disposition) = expected
+                .get(&(row.principal.clone(), row.invocation.clone()))
+                .ok_or_else(bad)?;
+            if binding != &(row.session.clone(), row.submit_sha256.clone()) {
+                return Err(bad());
+            }
+            if matches!(disposition, ExpectedDisposition::ExecutedFixture)
+                && found.replace(row.cursor).is_some()
+            {
+                return Err(bad());
+            }
+        }
+        if page.next.is_some_and(|n| n != previous || Some(n) == after) {
+            return Err(bad());
+        }
+        after = page.next;
+        if after.is_none() {
+            break;
+        }
+    }
+    if let Some(cursor) = found {
+        let queued: Queued = request(
+            child,
+            socket,
+            &ipc::Request::CommandLocalCancel { cursor },
+            deadline,
+        )
+        .await?;
+        if !queued.queued {
+            return Err(bad());
+        }
+    }
+    Ok(())
+}
+
 /// Best-effort explicit fixture cancellation, only actor-owned ledger cursors.
 pub(super) async fn cancel_fixture(
     child: &mut Child,
     socket: &Path,
     expected: &BTreeMap<(String, String), (String, String)>,
+    max_rows: usize,
     deadline: Instant,
 ) -> Result<()> {
+    if max_rows == 0 || max_rows > 4 {
+        return Err(bad());
+    }
     let mut after = None;
     let mut count = 0;
     loop {
@@ -375,7 +787,7 @@ pub(super) async fn cancel_fixture(
         .await?;
         for row in &page.rows {
             count += 1;
-            if count > 3 {
+            if count > max_rows {
                 return Err(bad());
             }
             if !expected.contains_key(&(row.principal.clone(), row.invocation.clone())) {
@@ -438,7 +850,7 @@ mod tests {
             .unwrap();
     }
     fn row() -> serde_json::Value {
-        serde_json::json!({"cursor":1,"principal":"a".repeat(64),"group_sha256":"b".repeat(64),"session":"c".repeat(32),"invocation":"d".repeat(32),"submit_sha256":"e".repeat(64),"engine_admitted":1,"outcome":{"kind":"code","value":7},"stdout":{"produced":131072,"closed":true,"gaps":0,"sha256":null},"stderr":{"produced":131072,"closed":true,"gaps":0,"sha256":null},"authority_valid":true,"worker_state":"exited","observed_seq":9})
+        serde_json::json!({"cursor":1,"principal":"a".repeat(64),"group_sha256":"b".repeat(64),"session":"c".repeat(32),"invocation":"d".repeat(32),"submit_sha256":"e".repeat(64),"engine_admitted":1,"refusal":null,"outcome":{"kind":"code","value":7},"stdout":{"produced":131072,"closed":true,"gaps":0,"sha256":null},"stderr":{"produced":131072,"closed":true,"gaps":0,"sha256":null},"authority_valid":true,"worker_state":"exited","observed_seq":9})
     }
     #[test]
     fn actor_evidence_requires_fresh_exact_terminal_fixture_facts() {
@@ -467,8 +879,215 @@ mod tests {
         assert!(evidence(&p, None, 9, &mut BTreeMap::new()).is_err());
     }
     #[test]
+    fn profile_receipt_rejects_replaced_directory_and_symlink() {
+        use std::os::unix::fs::{DirBuilderExt, symlink};
+        let root = tempfile::tempdir().unwrap();
+        let profile = root.path().join("client");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&profile)
+            .unwrap();
+        let receipt = ProfileReceipt::capture(&profile).unwrap();
+        receipt.verify(&profile).unwrap();
+        std::fs::rename(&profile, root.path().join("original")).unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&profile)
+            .unwrap();
+        assert!(receipt.verify(&profile).is_err());
+        std::fs::remove_dir(&profile).unwrap();
+        symlink(root.path().join("original"), &profile).unwrap();
+        assert!(receipt.verify(&profile).is_err());
+    }
+    #[test]
+    fn maximal_client_invocation_page_fits_actual_ipc_frame() {
+        use crate::{
+            command_local::{InvocationEntry, LocalResult},
+            command_wire,
+        };
+        let handle = serde_json::json!({"format":1,"profile":"a".repeat(64),"remote":"b".repeat(64),"session":"c".repeat(32),"invocation":"d".repeat(32),"submit_sha256":"e".repeat(64)});
+        let entry: InvocationEntry = serde_json::from_value(serde_json::json!({"handle":handle,"cursor":u64::MAX,"created":u64::MAX,"admission":"accepted","state":"unknown_launch","authority_valid":true,"refusal":"noncanonical_executable","group_submit_sha256":"f".repeat(64)})).unwrap();
+        let bytes = serde_json::to_vec(&ipc::Response::command(LocalResult::Invocations {
+            entries: vec![entry; 64],
+            next: Some(u64::MAX),
+        }))
+        .unwrap();
+        assert!(bytes.len() <= 65536);
+        let response: ipc::Response = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            matches!(response.command, Some(LocalResult::Invocations {entries,next:Some(u64::MAX)}) if entries.len()==64 && entries[0].refusal==Some(command_wire::ErrorCode::NoncanonicalExecutable))
+        );
+    }
+    #[test]
+    fn client_digest_selection_requires_exact_complete_handle_and_cached_projection() {
+        use crate::{command_client::CommandHandle, command_local::InvocationEntry};
+        let h = serde_json::json!({"format":1,"profile":"client","remote":"a".repeat(64),"session":"b".repeat(32),"invocation":"c".repeat(32),"submit_sha256":"d".repeat(64)});
+        let handle: CommandHandle = serde_json::from_value(h.clone()).unwrap();
+        let value = serde_json::json!({"handle":h,"cursor":1,"created":1,"admission":"accepted","state":null,"authority_valid":true,"refusal":null,"group_submit_sha256":"e".repeat(64)});
+        let entry: InvocationEntry = serde_json::from_value(value.clone()).unwrap();
+        let mut found = None;
+        track_client_entry(&entry, &handle, &mut found).unwrap();
+        assert_eq!(found, Some("e".repeat(64)));
+        assert!(track_client_entry(&entry, &handle, &mut found).is_err());
+        for (key, v) in [
+            ("profile", "other".to_string()),
+            ("remote", "1".repeat(64)),
+            ("session", "2".repeat(32)),
+            ("invocation", "3".repeat(32)),
+            ("submit_sha256", "4".repeat(64)),
+        ] {
+            let mut changed = value.clone();
+            changed["handle"][key] = v.into();
+            let e: InvocationEntry = serde_json::from_value(changed).unwrap();
+            let mut found = None;
+            track_client_entry(&e, &handle, &mut found).unwrap();
+            assert!(found.is_none());
+        }
+        let mut changed = value.clone();
+        changed["authority_valid"] = false.into();
+        assert!(
+            track_client_entry(
+                &serde_json::from_value(changed).unwrap(),
+                &handle,
+                &mut None
+            )
+            .is_err()
+        );
+        let mut changed = value.clone();
+        changed["group_submit_sha256"] = "E".repeat(64).into();
+        assert!(
+            track_client_entry(
+                &serde_json::from_value(changed).unwrap(),
+                &handle,
+                &mut None
+            )
+            .is_err()
+        );
+        let mut changed = value;
+        changed
+            .as_object_mut()
+            .unwrap()
+            .remove("group_submit_sha256");
+        assert!(serde_json::from_value::<InvocationEntry>(changed).is_err());
+    }
+    #[test]
+    fn no_engine_proof_is_explicit_and_nullable_fields_are_required() {
+        let value = serde_json::json!({"active":0,"uncertain":0,"worker_running":0,"worker_unknown":0,"engine_present":false,"engine_quiesced":false,"observation_pending":false,"cleanup":"open","final_seq":null});
+        no_engine_status(&serde_json::from_value(value.clone()).unwrap()).unwrap();
+        for (key, v) in [
+            ("engine_present", true.into()),
+            ("active", 1.into()),
+            ("uncertain", 1.into()),
+            ("worker_running", 1.into()),
+            ("worker_unknown", 1.into()),
+            ("engine_quiesced", true.into()),
+            ("observation_pending", true.into()),
+            ("final_seq", 1.into()),
+            ("cleanup", "quiesced".into()),
+        ] {
+            let mut changed = value.clone();
+            changed[key] = v;
+            assert!(no_engine_status(&serde_json::from_value(changed).unwrap()).is_err());
+        }
+        for key in ["engine_present", "final_seq"] {
+            let mut missing = value.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            assert!(serde_json::from_value::<Status>(missing).is_err());
+        }
+        let mut missing = row();
+        missing.as_object_mut().unwrap().remove("refusal");
+        assert!(serde_json::from_value::<Evidence>(missing).is_err());
+        let mut missing = row();
+        missing["stdout"].as_object_mut().unwrap().remove("sha256");
+        assert!(serde_json::from_value::<Evidence>(missing).is_err());
+        assert!(serde_json::from_value::<Page>(serde_json::json!({"rows":[]})).is_err());
+    }
+    #[test]
+    fn refused_policy_rows_require_exact_non_execution_facts() {
+        let mut value = row();
+        value["engine_admitted"] = 0.into();
+        value["refusal"] = "command_denied".into();
+        value["outcome"] = serde_json::Value::Null;
+        value["worker_state"] = "unknown".into();
+        for name in ["stdout", "stderr"] {
+            value[name] = serde_json::json!({"produced":0,"closed":false,"gaps":0,"sha256":null});
+        }
+        let disposition =
+            ExpectedDisposition::Refused(crate::command_wire::ErrorCode::CommandDenied);
+        let row: Evidence = serde_json::from_value(value.clone()).unwrap();
+        assert!(disposition_valid(&row, disposition));
+        assert!(!disposition_valid(
+            &row,
+            ExpectedDisposition::ExecutedFixture
+        ));
+        for (field, replacement) in [
+            ("engine_admitted", 1.into()),
+            ("refusal", "not_found".into()),
+            ("worker_state", "exited".into()),
+            ("outcome", serde_json::json!({"kind":"code","value":7})),
+        ] {
+            let mut changed = value.clone();
+            changed[field] = replacement;
+            assert!(!disposition_valid(
+                &serde_json::from_value(changed).unwrap(),
+                disposition
+            ));
+        }
+        for stream in ["stdout", "stderr"] {
+            for (field, replacement) in [
+                ("produced", 1.into()),
+                ("closed", true.into()),
+                ("gaps", 1.into()),
+                ("sha256", "a".repeat(64).into()),
+            ] {
+                let mut changed = value.clone();
+                changed[stream][field] = replacement;
+                assert!(!disposition_valid(
+                    &serde_json::from_value(changed).unwrap(),
+                    disposition
+                ));
+            }
+        }
+    }
+    #[test]
+    fn no_engine_stop_report_is_separate_and_joins_are_mandatory() {
+        let value = serde_json::json!({"schema":1,"engine_quiesced":false,"engine_stop_complete":true,"mdk_stop_complete":true,"runtime_cleanup_complete":true});
+        let bytes = serde_json::to_vec(&value).unwrap();
+        no_engine_stop_report(&bytes).unwrap();
+        assert!(stop_report(&bytes).is_err());
+        for key in [
+            "engine_stop_complete",
+            "mdk_stop_complete",
+            "runtime_cleanup_complete",
+        ] {
+            let mut v = value.clone();
+            v[key] = false.into();
+            assert!(no_engine_stop_report(&serde_json::to_vec(&v).unwrap()).is_err());
+        }
+        let mut v = value;
+        v["engine_quiesced"] = true.into();
+        assert!(no_engine_stop_report(&serde_json::to_vec(&v).unwrap()).is_err());
+        stop_report(&serde_json::to_vec(&v).unwrap()).unwrap();
+    }
+    #[test]
+    fn no_engine_absence_rejects_directory_file_and_symlink() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        require_no_engine(root.path()).unwrap();
+        let p = root.path().join("commands");
+        std::fs::write(&p, b"unexpected").unwrap();
+        assert!(require_no_engine(root.path()).is_err());
+        std::fs::remove_file(&p).unwrap();
+        symlink("missing", &p).unwrap();
+        assert!(require_no_engine(root.path()).is_err());
+        std::fs::remove_file(&p).unwrap();
+        std::fs::create_dir(&p).unwrap();
+        assert!(require_no_engine(root.path()).is_err());
+    }
+    #[test]
     fn cleanup_fence_needs_explicit_quiescence_and_nonzero_freshness() {
-        let mut value = serde_json::json!({"active":0,"uncertain":0,"worker_running":0,"worker_unknown":0,"engine_quiesced":true,"observation_pending":false,"cleanup":"quiesced","final_seq":3});
+        let mut value = serde_json::json!({"active":0,"uncertain":0,"worker_running":0,"worker_unknown":0,"engine_present":true,"engine_quiesced":true,"observation_pending":false,"cleanup":"quiesced","final_seq":3});
         assert_eq!(
             serde_json::from_value::<Status>(value.clone())
                 .unwrap()

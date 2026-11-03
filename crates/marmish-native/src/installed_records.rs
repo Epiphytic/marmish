@@ -46,6 +46,20 @@ pub(super) struct Context {
     pub expires_at: u64,
 }
 impl Context {
+    pub(super) fn require_cohort(&self, expected: &str) -> Result<()> {
+        self.cohort_lifetime()?;
+        if self.cohort != expected {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+    pub(super) fn cohort_lifetime(&self) -> Result<u64> {
+        match self.cohort.as_str() {
+            "matrix" => Ok(2220),
+            "autoexit" | "uptime" | "benchmark" | "recovery" | "policy" => Ok(3300),
+            _ => Err(invalid()),
+        }
+    }
     pub(super) fn validate(&self) -> Result<()> {
         if self.schema != 1
             || self.run_id == 0
@@ -61,9 +75,8 @@ impl Context {
             || !hexadecimal(&self.source_commit, 40)
             || !hexadecimal(&self.harness_sha256, 64)
             || self.roles.iter().map(String::as_str).ne(ROLES)
-            || self.cohort != "matrix"
             || self.expires_at <= self.created_at
-            || self.expires_at - self.created_at > 2220
+            || self.expires_at - self.created_at > self.cohort_lifetime()?
             || !crate::native_manifest::version(&self.version)
             || self.relays.is_empty()
             || self.relays.len() > 16
@@ -103,6 +116,26 @@ impl Context {
             self.cohort
         )
     }
+}
+pub(super) fn own_identity(workspace: &Path, ctx: &Context) -> Result<IdentityReady> {
+    let target = crate::native_manifest::compiled_release_metadata().target;
+    let index = TARGETS
+        .iter()
+        .position(|t| *t == target)
+        .ok_or_else(invalid)?;
+    let role = ROLES[index];
+    let bytes = read_bytes(
+        &workspace
+            .join("output")
+            .join(format!("{role}-identity-ready.json")),
+        65536,
+    )?;
+    let identity: IdentityReady = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    identity.validate(ctx, role)?;
+    if bytes != canonical(&identity)? {
+        return Err(invalid());
+    }
+    Ok(identity)
 }
 
 /// Authenticate both build-only executables before any candidate setup side effect.
@@ -459,6 +492,23 @@ pub(super) mod tests {
         );
         c.expires_at += 1;
         assert!(c.validate().is_err());
+    }
+    #[test]
+    fn local_contexts_keep_fixed_original_budgets_and_entrypoint_equality() {
+        for name in ["autoexit", "uptime", "benchmark", "recovery", "policy"] {
+            let mut c = ctx();
+            c.cohort = name.into();
+            c.expires_at = c.created_at + 3300;
+            c.validate().unwrap();
+            c.require_cohort(name).unwrap();
+            assert!(c.require_cohort("matrix").is_err());
+            c.expires_at += 1;
+            assert!(c.validate().is_err());
+        }
+        let mut c = ctx();
+        c.cohort = "unknown".into();
+        assert!(c.validate().is_err());
+        assert!(c.require_cohort("unknown").is_err());
     }
     #[test]
     fn duplicate_or_unknown_context_fields_fail() {

@@ -81,7 +81,13 @@ and [independent final code review](reviews/v0.2-native-keychain-code-r4.md)
 cover isolated real-provider CI jobs for all three platforms, including two
 named identities, reload and locked-provider refusal. The 26 offline supervisor
 and quickstart checks pass; the actual installed provider jobs have not yet
-qualified this implementation. Working
+qualified this implementation. The build-only installed-test driver also has
+reviewed common workflow support for separate matrix, autoexit, uptime,
+benchmark, recovery and policy waves. Its [offline checks](validation/v0.2/installed-local-offline.md)
+retain genuine failed results without qualifying them. These drivers are not
+shipped product executables and have not yet passed their three-platform hosted
+gates. Recovery and policy retain separate component review gates.
+Working
 Tor commands are deferred to v0.3. [The local Arti command attempts](validation/v0.2/local-command-arti-2026-11-02.md)
 failed; their actual cleanup results are preserved. No v0.2 release or native installer is accepted. The direct command
 timings are individual observations, not sustained throughput or RTT benchmarks.

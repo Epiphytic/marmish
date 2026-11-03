@@ -17,9 +17,12 @@ including literal arguments, binary stdin, stderr, exit codes and owned cleanup,
 with measured command completion and goodput. [Arti command attempts](docs/validation/v0.2/local-command-arti-2026-11-02.md)
 have not passed and are deferred to v0.3; Tor command support does not block
 v0.2. Existing Tor command modes remain experimental and unqualified for v0.2.
-Public command CLI/IPC, running-job
-restart/replay checks and installed cross-platform command acceptance remain
-pending; this is not yet a usable v0.2 remote shell release.
+The public Rust command CLI/IPC is implemented, and a
+[local running-job restart/replay check](docs/validation/v0.2/local-command-recovery-direct-2026-11-03.md)
+passed through Marmot. A [local native installer smoke](docs/validation/v0.2/local-native-installer-smoke.md)
+also passed without Python in PATH. Installed cross-platform command acceptance,
+default-auto keychains and public v0.2 installer publication remain pending;
+this is not yet a released v0.2 remote shell.
 
 The Python implementation and the v0.1 instructions below are retained as a
 legacy protocol reference and optional comparison fixture. v0.1 development is

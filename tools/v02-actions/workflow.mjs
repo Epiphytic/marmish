@@ -8,6 +8,12 @@ export const TARGETS = ['x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu',
 const TOOLS = ['marmish-installed-check', 'marmish-installed-fixture'];
 const SOURCE_PATHS = ['crates/marmish-native', 'Cargo.lock', 'tools/v02-actions', '.github/workflows/v02-installed.yml'];
 const hex = (s, n) => typeof s === 'string' && new RegExp(`^[0-9a-f]{${n}}$`).test(s);
+export function cohortLifetime(env) {
+  const name = env.TEST_COHORT ?? 'matrix';
+  const seconds = {matrix: 2220, autoexit: 3300, uptime: 3300, benchmark: 3300, recovery: 3300, policy: 3300}[name];
+  requireThat(Number.isSafeInteger(seconds), 'unsupported_cohort');
+  return {name, seconds};
+}
 function keys(object, expected) {
   requireThat(object && typeof object === 'object' && !Array.isArray(object)
     && Object.keys(object).sort().join() === [...expected].sort().join(), 'invalid_tooling_record');
@@ -18,6 +24,7 @@ export function sourceDigest(source) {
     {env: childEnvironment(process.env), maxBuffer: 2 * 1024 * 1024}));
 }
 export function candidateInputs(env) {
+  cohortLifetime(env);
   for (const key of ['CANDIDATE_RUN_ID', 'CANDIDATE_RUN_ATTEMPT']) {
     requireThat(/^[1-9][0-9]{0,15}$/.test(env[key] ?? ''), 'invalid_candidate_run');
   }
@@ -96,6 +103,7 @@ async function validateCandidate(env) {
 }
 async function resolve(env) {
   const c = candidateInputs(env);
+  const cohort = cohortLifetime(env);
   const harness = sourceDigest(c.source);
   const manifests = path.join(env.RESOLVE_ROOT, 'manifests');
   const tooling = path.join(env.RESOLVE_ROOT, 'tooling');
@@ -119,14 +127,15 @@ async function resolve(env) {
     '--run-attempt', env.GITHUB_RUN_ATTEMPT, '--candidate-run-id', c.run_id,
     '--candidate-run-attempt', c.run_attempt, '--source', c.source,
     '--harness-sha256', harness, '--manifests', manifests, '--tooling-manifests', tooling,
-    '--bootstrap', bootstrap, '--cohort', 'matrix', '--relay', c.relay,
-    '--expires-at', String(Math.floor(Date.now() / 1000) + 2220),
+    '--bootstrap', bootstrap, '--cohort', cohort.name, '--relay', c.relay,
+    '--expires-at', String(Math.floor(Date.now() / 1000) + cohort.seconds),
     '--output', path.join(output, 'context.json')];
   execFileSync(driver, args, {env: childEnvironment(env), timeout: 30_000,
     killSignal: 'SIGKILL', maxBuffer: 65536, stdio: ['ignore', 'pipe', 'pipe']});
 }
 export async function verifyContext(env) {
   const context = JSON.parse(await boundedFile(env.CONTEXT, 65536));
+  requireThat(context.cohort === cohortLifetime(env).name, 'workflow_cohort');
   requireThat(context.repository === env.GITHUB_REPOSITORY && context.source_commit === env.GITHUB_SHA
     && String(context.run_id) === env.GITHUB_RUN_ID && String(context.run_attempt) === env.GITHUB_RUN_ATTEMPT
     && context.harness_sha256 === sourceDigest(env.GITHUB_SHA), 'workflow_context');

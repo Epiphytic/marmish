@@ -1,7 +1,4 @@
 //! One actor owns the MDK handle, application journal, signer and relay plane.
-#[cfg(feature = "installed-checks")]
-#[path = "installed_check.rs"]
-pub(crate) mod installed_check;
 #[path = "command_adapter.rs"]
 mod command_adapter;
 #[path = "command_check.rs"]
@@ -10,6 +7,9 @@ pub(crate) mod command_check;
 pub(crate) mod command_local;
 #[path = "command_runtime.rs"]
 mod command_runtime;
+#[cfg(feature = "installed-checks")]
+#[path = "installed_check.rs"]
+pub(crate) mod installed_check;
 use crate::foundation::{self, Body, Envelope};
 use crate::identity::{IdentityMaterial, ProfileLease};
 pub use crate::journal::{Conversation, ReceivedMessage, SendStatus};

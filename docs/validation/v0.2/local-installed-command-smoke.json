@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "scope": "diagnostic-installed-native-command-check",
+  "date": "2026-11-03",
+  "target": "x86_64-unknown-linux-gnu",
+  "version": "0.2.0",
+  "reported_baseline_commit": "e8d630eb0eb9db15a4a726ec72d661736cac9103",
+  "dirty_source": true,
+  "release_qualification": false,
+  "bundle": "locally packaged stripped Rust debug executables",
+  "relay": "wss://relay.us.whitenoise.chat",
+  "tor": "off",
+  "path": "/nonexistent",
+  "exit_code": 0,
+  "ok": true,
+  "milliseconds": 20759,
+  "restart_while_running": true,
+  "replay_conflict": true,
+  "engine_quiesced": true,
+  "engine_stop_complete": true,
+  "mdk_stop_complete": true,
+  "runtime_cleanup": true,
+  "state_cleanup": true,
+  "state_retained": false,
+  "samples": [
+    {
+      "stage": "running_recovery",
+      "bytes": 27,
+      "stderr_bytes": 25,
+      "exit_code": 7,
+      "milliseconds": 8025,
+      "execution_count": 1,
+      "identical_submit_existing": true,
+      "local_identical_attach": true,
+      "local_conflict_refused": true,
+      "remote_conflict_refused": true,
+      "recovered_output_verified": true,
+      "restart_activation_ms": 630,
+      "restart_open_ms": 148,
+      "restart_stop_ms": 17
+    },
+    {
+      "stage": "literal_argv",
+      "bytes": 53,
+      "stderr_bytes": 0,
+      "exit_code": 0,
+      "milliseconds": 1593
+    },
+    {
+      "stage": "binary_stdin",
+      "bytes": 16384,
+      "stderr_bytes": 0,
+      "exit_code": 0,
+      "milliseconds": 2177,
+      "reported_integer_bytes_per_second": 7524
+    },
+    {
+      "stage": "stderr_exit",
+      "bytes": 0,
+      "stderr_bytes": 12,
+      "exit_code": 7,
+      "milliseconds": 1566
+    }
+  ],
+  "measurement_note": "Normalized from observed installed command-check stdout. Timings are existing internal-check stage scopes, not detached CLI matrix latency, RTT or percentile estimates. Integer goodput is the check reported output bytes divided by stage wall time.",
+  "limits": [
+    "one Linux AMD64 diagnostic bundle",
+    "internal command-check through installed product launcher",
+    "explicit file-key backend",
+    "not final immutable source",
+    "not public HTTPS installation",
+    "not nine-cell public CLI acceptance",
+    "not Tor qualification"
+  ]
+}

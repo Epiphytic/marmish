@@ -1,17 +1,27 @@
 //! Feature-gated build tooling. No installed runtime entry point dispatches here.
+#[path = "installed_autoexit.rs"]
+mod autoexit;
+#[path = "installed_benchmark.rs"]
+mod benchmark;
 #[path = "installed_cleanup.rs"]
 mod cleanup;
 #[path = "installed_fixture.rs"]
 mod fixture;
+#[path = "installed_local.rs"]
+mod local;
 pub(super) use cleanup::OwnedCleanupGuard;
 #[path = "installed_matrix.rs"]
 mod matrix;
+#[path = "installed_policy.rs"]
+mod policy;
 #[path = "installed_prepare.rs"]
 mod prepare;
 #[path = "installed_process.rs"]
 mod process;
 #[path = "installed_records.rs"]
 mod records;
+#[path = "installed_recovery.rs"]
+mod recovery;
 use crate::{Error, Result};
 use clap::{Parser, Subcommand};
 use records::{Context, ROLES, TARGETS};
@@ -31,6 +41,28 @@ struct Args {
 #[derive(Subcommand)]
 enum Command {
     ReleaseInfo,
+    Cohort {
+        #[arg(long)]
+        cohort: String,
+        #[arg(long)]
+        context: PathBuf,
+        #[arg(long)]
+        workspace: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    CohortRollup {
+        #[arg(long)]
+        cohort: String,
+        #[arg(long)]
+        context: PathBuf,
+        #[arg(long)]
+        records: PathBuf,
+        #[arg(long)]
+        cohort_result: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
     Run {
         #[arg(long)]
         context: PathBuf,
@@ -55,6 +87,8 @@ enum Command {
     },
     /// Install the exact candidate and create two fresh offline identities.
     Prepare {
+        #[arg(long)]
+        cohort: String,
         #[arg(long)]
         context: PathBuf,
         #[arg(long)]
@@ -93,7 +127,7 @@ struct ContextOptions {
     tooling_manifests: PathBuf,
     #[arg(long)]
     bootstrap: PathBuf,
-    #[arg(long, default_value = "matrix")]
+    #[arg(long)]
     cohort: String,
     #[arg(long = "relay", required = true)]
     relays: Vec<String>,
@@ -195,6 +229,19 @@ pub(crate) async fn entry() -> u8 {
         return release_info();
     }
     let result = match Args::parse().command {
+        Command::Cohort {
+            cohort,
+            context,
+            workspace,
+            output,
+        } => local::run(&cohort, &context, &workspace, &output).await,
+        Command::CohortRollup {
+            cohort,
+            context,
+            records,
+            cohort_result,
+            output,
+        } => local::rollup(&cohort, &context, &records, &cohort_result, &output),
         Command::Run {
             context,
             workspace,
@@ -221,6 +268,7 @@ pub(crate) async fn entry() -> u8 {
             return release_info();
         }
         Command::Prepare {
+            cohort,
             context,
             assets,
             bootstrap,
@@ -229,6 +277,7 @@ pub(crate) async fn entry() -> u8 {
             output,
         } => {
             prepare::run(prepare::Prepare {
+                cohort,
                 context,
                 assets,
                 bootstrap,

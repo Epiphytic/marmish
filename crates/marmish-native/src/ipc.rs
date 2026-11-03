@@ -31,25 +31,73 @@ pub(crate) enum Request {
         after: Option<u64>,
         limit: usize,
     },
-    CommandEvidence { after: Option<u64>, limit: u32 },
+    CommandEvidence {
+        after: Option<u64>,
+        limit: u32,
+    },
     CommandCleanupStatus {},
-    CommandLocalCancel { cursor: u64 },
+    CommandLocalCancel {
+        cursor: u64,
+    },
     CommandPrepareCleanup {},
-    CommandPrepare { remote: String, relays: Vec<String> },
-    CommandSubmit { remote: String, relays: Vec<String>, session: String, request_id: String, submit: crate::command_wire::Submit },
-    CommandStatus { handle: crate::command_client::CommandHandle, request_id: String },
-    CommandCancel { handle: crate::command_client::CommandHandle, request_id: String },
-    CommandPoll { handle: crate::command_client::CommandHandle, request_id: String, stdout_cursor: u64, stderr_cursor: u64, max_bytes: u32 },
-    CommandResponse { handle: crate::command_client::CommandHandle, request_id: String },
-    CommandCursors { handle: crate::command_client::CommandHandle },
-    CommandUnconsumed { handle: crate::command_client::CommandHandle, limit: usize },
-    CommandInvocations { after: Option<u64>, limit: usize },
-    CommandConsume { handle: crate::command_client::CommandHandle, request_id: String, response_sha256: String, expected_cursors: Option<crate::command_local::Cursors> },
+    CommandPrepare {
+        remote: String,
+        relays: Vec<String>,
+    },
+    CommandSubmit {
+        remote: String,
+        relays: Vec<String>,
+        session: String,
+        request_id: String,
+        submit: crate::command_wire::Submit,
+    },
+    CommandStatus {
+        handle: crate::command_client::CommandHandle,
+        request_id: String,
+    },
+    CommandCancel {
+        handle: crate::command_client::CommandHandle,
+        request_id: String,
+    },
+    CommandPoll {
+        handle: crate::command_client::CommandHandle,
+        request_id: String,
+        stdout_cursor: u64,
+        stderr_cursor: u64,
+        max_bytes: u32,
+    },
+    CommandResponse {
+        handle: crate::command_client::CommandHandle,
+        request_id: String,
+    },
+    CommandCursors {
+        handle: crate::command_client::CommandHandle,
+    },
+    CommandUnconsumed {
+        handle: crate::command_client::CommandHandle,
+        limit: usize,
+    },
+    CommandInvocations {
+        after: Option<u64>,
+        limit: usize,
+    },
+    CommandConsume {
+        handle: crate::command_client::CommandHandle,
+        request_id: String,
+        response_sha256: String,
+        expected_cursors: Option<crate::command_local::Cursors>,
+    },
 }
 
 impl Request {
     pub(crate) fn is_command(&self) -> bool {
-        !matches!(self, Self::Status {} | Self::OpenConversation {..} | Self::Send {..} | Self::Received {..})
+        !matches!(
+            self,
+            Self::Status {}
+                | Self::OpenConversation { .. }
+                | Self::Send { .. }
+                | Self::Received { .. }
+        )
     }
 }
 
@@ -85,7 +133,12 @@ impl Response {
         }
     }
     pub(crate) fn command(result: crate::command_local::LocalResult) -> Self {
-        Self {ok:true,result:None,error:None,command:Some(result)}
+        Self {
+            ok: true,
+            result: None,
+            error: None,
+            command: Some(result),
+        }
     }
 }
 
@@ -163,8 +216,13 @@ pub(crate) async fn request(path: &Path, request: &Request) -> Result<Response> 
 
 /// One absolute budget for connect, request IO and the actor's response. Failure
 /// after sending Submit is ambiguous; its provisional handle remains recoverable.
-pub(crate) async fn command_request(path: &Path, request: &Request) -> Result<crate::command_local::LocalResult> {
-    if !request.is_command() {return Err(Error::Invalid("command_local_operation"));}
+pub(crate) async fn command_request(
+    path: &Path,
+    request: &Request,
+) -> Result<crate::command_local::LocalResult> {
+    if !request.is_command() {
+        return Err(Error::Invalid("command_local_operation"));
+    }
     tokio::time::timeout(IO_TIMEOUT, async {
         let mut stream = UnixStream::connect(path).await?;
         verify_peer(&stream)?;
@@ -176,13 +234,17 @@ pub(crate) async fn command_request(path: &Path, request: &Request) -> Result<cr
             }
             return Ok(result);
         }
-        if response.ok || response.result.is_some() {return Err(Error::Invalid("command_local_response"));}
+        if response.ok || response.result.is_some() {
+            return Err(Error::Invalid("command_local_response"));
+        }
         match response.error.as_deref() {
             Some("busy") => Ok(crate::command_local::LocalResult::LocalBusy),
             Some("operation_uncertain") => Err(Error::Timeout),
             _ => Err(Error::Invalid("command_local_response")),
         }
-    }).await.map_err(|_| Error::Timeout)?
+    })
+    .await
+    .map_err(|_| Error::Timeout)?
 }
 
 /// The caller owns the listener task and cancels/joins it on shutdown. At most
@@ -251,19 +313,36 @@ mod tests {
             r#"{"operation":"command_prepare","remote":"00","relays":[],"extra":0}"#,
             r#"{"operation":"command_invocations","after":true,"limit":1}"#,
             r#"{"operation":"command_invocations","after":null,"limit":-1}"#,
-        ] { assert!(serde_json::from_str::<Request>(body).is_err(),"{body}"); }
+        ] {
+            assert!(serde_json::from_str::<Request>(body).is_err(), "{body}");
+        }
     }
 
     #[tokio::test(start_paused = true)]
     async fn command_exchange_has_one_absolute_deadline() {
-        let directory=tempfile::tempdir().unwrap();
-        std::fs::set_permissions(directory.path(),std::fs::Permissions::from_mode(0o700)).unwrap();
-        let socket=directory.path().join("s");let listener=bind(&socket).unwrap();
-        let server=tokio::spawn(async move {let (_socket,_)=listener.accept().await.unwrap();std::future::pending::<()>().await;});
-        let started=tokio::time::Instant::now();
-        assert!(matches!(command_request(&socket,&Request::CommandInvocations {after:None,limit:1}).await,Err(Error::Timeout)));
-        assert_eq!(tokio::time::Instant::now()-started,IO_TIMEOUT);
-        server.abort();let _=server.await;
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let socket = directory.path().join("s");
+        let listener = bind(&socket).unwrap();
+        let server = tokio::spawn(async move {
+            let (_socket, _) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let started = tokio::time::Instant::now();
+        assert!(matches!(
+            command_request(
+                &socket,
+                &Request::CommandInvocations {
+                    after: None,
+                    limit: 1
+                }
+            )
+            .await,
+            Err(Error::Timeout)
+        ));
+        assert_eq!(tokio::time::Instant::now() - started, IO_TIMEOUT);
+        server.abort();
+        let _ = server.await;
     }
 
     #[tokio::test]

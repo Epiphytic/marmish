@@ -4,7 +4,6 @@ use std::{
     ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     process::Stdio,
-    time::Duration,
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
@@ -21,7 +20,6 @@ pub(super) struct Output {
     pub status: std::process::ExitStatus,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
-    pub elapsed: Duration,
 }
 pub(super) fn command(
     executable: &Path,
@@ -98,7 +96,6 @@ pub(super) async fn run_input(
     if limit == 0 || limit > 1024 * 1024 || Instant::now() >= deadline {
         return Err(Error::Invalid("installed_child_limit"));
     }
-    let began = Instant::now();
     let mut cmd = command(executable, args, cwd, environment);
     if input.is_some() {
         cmd.stdin(Stdio::piped());
@@ -168,7 +165,6 @@ pub(super) async fn run_input(
         status,
         stdout: result.0.0,
         stderr: result.1.0,
-        elapsed: began.elapsed(),
     })
 }
 pub(super) fn args(values: &[&OsStr]) -> Vec<OsString> {
@@ -226,6 +222,7 @@ pub(super) fn utilities(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     #[tokio::test]
     async fn owned_children_preserve_bytes_and_bound_output_and_deadline() {
         let d = tempfile::tempdir().unwrap();

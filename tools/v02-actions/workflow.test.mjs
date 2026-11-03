@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {promises as fs} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {candidateInputs, checkRun, checkTooling, verifyTools, verifyContext, gather, sourceDigest, TARGETS} from './workflow.mjs';
+import {candidateInputs, checkRun, checkTooling, verifyTools, verifyContext, gather, sourceDigest, TARGETS, cohortLifetime} from './workflow.mjs';
+import {LOCAL_COHORTS} from './local.mjs';
 import {digest, ROLES} from './transport.mjs';
 import {execFileSync} from 'node:child_process';
 const source = 'a'.repeat(40), harness = 'b'.repeat(64);
@@ -12,6 +13,11 @@ const env = {CANDIDATE_RUN_ID:'12', CANDIDATE_RUN_ATTEMPT:'3', GITHUB_REPOSITORY
 const run = {id:12,run_attempt:3,status:'completed',conclusion:'success',path:'.github/workflows/v02-release.yml',
   event:'workflow_dispatch',head_branch:'master',head_repository:{full_name:'Epiphytic/marmish'},
   repository:{full_name:'Epiphytic/marmish'},head_sha:'c'.repeat(40)};
+test('closed cohort lifetimes preserve matrix and original local wave bounds', () => {
+  assert.deepEqual(cohortLifetime({}), {name:'matrix',seconds:2220});
+  for (const name of ['autoexit','uptime','benchmark','recovery','policy']) assert.deepEqual(cohortLifetime({TEST_COHORT:name}), {name,seconds:3300});
+  for (const name of ['unknown','constructor','__proto__','']) assert.throws(()=>cohortLifetime({TEST_COHORT:name}));
+});
 test('candidate inputs bind control source and require explicit direct relay', () => {
   assert.equal(candidateInputs(env).relay,'wss://relay.example/');
   for (const change of [{CANDIDATE_RUN_ID:'../1'},{CANDIDATE_RUN_ATTEMPT:'0'},{GITHUB_SHA:'c'.repeat(40)},
@@ -67,12 +73,13 @@ test('missing tooling pin or different candidate attempt fails before executing 
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'marmish-context-'));
   t.after(()=>fs.rm(directory,{recursive:true,force:true}));
   const sha=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
-  const context={repository:'Epiphytic/marmish',source_commit:sha,run_id:12,run_attempt:3,
+  const context={cohort:'matrix',repository:'Epiphytic/marmish',source_commit:sha,run_id:12,run_attempt:3,
     candidate_run_id:10,candidate_run_attempt:2,harness_sha256:sourceDigest(sha),bootstrap_sha256:harness};
   const file=path.join(directory,'context.json'); await fs.writeFile(file,JSON.stringify(context));
   const e={GITHUB_REPOSITORY:context.repository,GITHUB_SHA:sha,GITHUB_RUN_ID:'12',GITHUB_RUN_ATTEMPT:'3',
     CANDIDATE_RUN_ID:'10',CANDIDATE_RUN_ATTEMPT:'2',CONTEXT:file,ROLE:'linux-amd64',TOOLS_ROOT:directory};
   await assert.rejects(verifyContext(e),/context_pins/);
+  await assert.rejects(verifyContext({...e,TEST_COHORT:'benchmark'}),/workflow_cohort/);
   context.tooling_manifests={'linux-amd64':harness}; await fs.writeFile(file,JSON.stringify(context));
   await assert.rejects(verifyContext({...e,CANDIDATE_RUN_ATTEMPT:'1'}),/context_pins/);
 });
@@ -93,4 +100,27 @@ test('gather writes exact twelve role-prefixed records and refuses a missing art
   assert.ok(requested.every(r=>r.name.startsWith('v02-installed-12-3-aaaaaaaaaaaa-matrix-') && !r.basename.includes('linux')));
   await assert.rejects(gather({...e,RECORDS_ROOT:path.join(directory,'missing')},
     {list:async()=>[],download:async()=>null}),/record_missing/);
+});
+
+// Source parity supplements typed Rust tests: every advertised wave must route.
+test('workflow choices, JS routing and Rust routing advertise the same closed cohorts', async () => {
+  const root = new URL('../../', import.meta.url);
+  const read = name => fs.readFile(new URL(name, root), 'utf8');
+  const expected = ['matrix', 'autoexit', 'uptime', 'benchmark', 'recovery', 'policy'];
+  const yaml = await read('.github/workflows/v02-installed.yml');
+  const options = yaml.match(/options: \[([^\]]+)\]/)[1].split(',').map(s => s.trim());
+  assert.deepEqual(options, expected);
+  assert.deepEqual(LOCAL_COHORTS, expected.slice(1));
+  for (const name of expected) assert.equal(cohortLifetime({TEST_COHORT:name}).seconds,
+    name === 'matrix' ? 2220 : 3300);
+  const records = await read('crates/marmish-native/src/installed_records.rs');
+  const lifetime = records.split('fn cohort_lifetime')[1].split('pub(super) fn validate')[0];
+  const local = await read('crates/marmish-native/src/installed_local.rs');
+  const dispatch = local.split('match cohort {')[1].split('#[derive(Serialize)]')[0];
+  const rollup = local.split('pub(super) fn rollup')[1].split('let expected =')[0];
+  for (const name of expected) assert.ok(lifetime.includes(`"${name}"`), name);
+  for (const name of expected.slice(1)) {
+    assert.ok(dispatch.includes(`"${name}"`), `dispatch ${name}`);
+    assert.ok(rollup.includes(`"${name}"`), `rollup ${name}`);
+  }
 });

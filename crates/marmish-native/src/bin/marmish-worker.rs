@@ -12,11 +12,14 @@ fn main() -> std::process::ExitCode {
         eprintln!("marmish: worker_installation");
         return std::process::ExitCode::FAILURE;
     }
-    let arguments=std::env::args_os().skip(1).collect::<Vec<_>>();
-    if arguments==[std::ffi::OsString::from("release-info")] {
+    let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if arguments == [std::ffi::OsString::from("release-info")] {
         return match marmish_native::release_info() {
-            Ok(info)=>{println!("{info}");std::process::ExitCode::SUCCESS},
-            Err(_)=>std::process::ExitCode::FAILURE,
+            Ok(info) => {
+                println!("{info}");
+                std::process::ExitCode::SUCCESS
+            }
+            Err(_) => std::process::ExitCode::FAILURE,
         };
     }
     marmish_engine::worker_main(arguments)

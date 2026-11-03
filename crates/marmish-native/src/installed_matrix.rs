@@ -56,6 +56,7 @@ pub(super) struct Pair {
     nonce: String,
     vector: u8,
     handle: Handle,
+    group_submit_sha256: String,
     fixture: Fixture,
     argv_sha256: String,
     stdin_bytes: usize,
@@ -102,14 +103,14 @@ pub(super) struct Run {
     pub inbox: PathBuf,
     pub output: PathBuf,
 }
-struct Daemon {
-    child: Child,
+pub(super) struct Daemon {
+    pub(super) child: Child,
     out: JoinHandle<std::io::Result<(Vec<u8>, bool)>>,
     err: JoinHandle<std::io::Result<(Vec<u8>, bool)>>,
-    socket: PathBuf,
+    pub(super) socket: PathBuf,
 }
 impl Daemon {
-    fn start(
+    pub(super) fn start(
         workspace: &Path,
         name: &str,
         socket: PathBuf,
@@ -136,7 +137,17 @@ impl Daemon {
             socket,
         })
     }
-    async fn stop(self, deadline: Instant) -> Result<()> {
+    pub(super) async fn stop(self, deadline: Instant) -> Result<()> {
+        self.stop_inner(deadline, true).await
+    }
+    pub(super) async fn stop_no_engine(self, deadline: Instant) -> Result<()> {
+        self.stop_inner(deadline, false).await
+    }
+    /// Joined ordinary stop while running work survives; this grants no cleanup authority.
+    pub(super) async fn ordinary_stop(self, deadline: Instant) -> Result<()> {
+        self.stop_inner(deadline, false).await
+    }
+    async fn stop_inner(self, deadline: Instant, engine_quiesced: bool) -> Result<()> {
         let Self {
             mut child,
             out,
@@ -161,10 +172,19 @@ impl Daemon {
         if read.0.1 || read.1.1 {
             return Err(bad());
         }
-        cleanup::stop_report(&read.0.0)
+        if engine_quiesced {
+            cleanup::stop_report(&read.0.0)
+        } else {
+            cleanup::no_engine_stop_report(&read.0.0)
+        }
     }
 }
-fn base(workspace: &Path, name: &str, socket: &Path, relays: &[String]) -> Vec<OsString> {
+pub(super) fn base(
+    workspace: &Path,
+    name: &str,
+    socket: &Path,
+    relays: &[String],
+) -> Vec<OsString> {
     let mut a = vec![
         "--state-dir".into(),
         workspace.join("profiles").into_os_string(),
@@ -258,6 +278,7 @@ fn configure_value(
     if value["role"] != name
         || value["relays"] != serde_json::json!(ctx.relays)
         || value["tor"] != "off"
+        || value["command_policy"] != serde_json::json!({"version":1})
         || value["execution_clients"] != if server { &desired } else { &empty }.clone()
         || value["trusted_remotes"] != if server { &empty } else { &desired }.clone()
     {
@@ -356,7 +377,7 @@ fn budgets(remaining: u64) -> Result<(u64, u64)> {
         .ok_or_else(bad)?;
     Ok((uptime, work))
 }
-async fn ready(d: &mut Daemon, deadline: Instant) -> Result<()> {
+pub(super) async fn ready(d: &mut Daemon, deadline: Instant) -> Result<()> {
     loop {
         let value = cleanup::request::<serde_json::Value>(
             &mut d.child,
@@ -431,11 +452,12 @@ async fn wait_servers(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
-fn fixture_handle(stderr: &[u8], expected: &[u8], remote: &str) -> Result<Handle> {
+fn fixture_handle(stderr: &[u8], remote: &str) -> Result<(Handle, Vec<u8>)> {
     let rest = stderr.strip_prefix(b"marmish handle: ").ok_or_else(bad)?;
     let line = rest.iter().position(|b| *b == b'\n').ok_or_else(bad)?;
     let h: Handle = serde_json::from_slice(&rest[..line]).map_err(|_| bad())?;
-    if &rest[line + 1..] != expected
+    if !rest[line + 1..].is_empty()
+        || line > 1024
         || h.format != 1
         || h.profile != "client"
         || h.remote != remote
@@ -445,11 +467,76 @@ fn fixture_handle(stderr: &[u8], expected: &[u8], remote: &str) -> Result<Handle
     {
         return Err(bad());
     }
-    Ok(h)
+    Ok((h, rest[..line].to_vec()))
 }
 struct ClientEndpoint<'a> {
+    daemon: &'a mut Child,
     socket: &'a Path,
     environment: &'a Environment,
+}
+struct FixtureCommand {
+    handle: Handle,
+    encoded: Vec<u8>,
+    output: Result<process::Output>,
+    elapsed: Duration,
+}
+fn verify_wait(output: &process::Output, stdout: &[u8], stderr: &[u8]) -> Result<()> {
+    if output.status.code() != Some(7) || output.stdout != stdout || output.stderr != stderr {
+        return Err(bad());
+    }
+    Ok(())
+}
+// Keep both actual CLI children under one deadline and measure neither receipt nor cleanup.
+async fn fixture_command(
+    workspace: &Path,
+    local: (&Path, &Environment),
+    submit_args: &[OsString],
+    input: &[u8],
+    remote: &str,
+    deadline: Instant,
+) -> Result<FixtureCommand> {
+    let began = Instant::now();
+    let sample_deadline = deadline.min(began + Duration::from_secs(330));
+    let detached = process::run_input(
+        &workspace.join("bin/marmish"),
+        submit_args,
+        workspace,
+        local.1,
+        sample_deadline,
+        65536,
+        Some(input),
+    )
+    .await?;
+    if !detached.status.success() || !detached.stdout.is_empty() {
+        return Err(bad());
+    }
+    let (handle, encoded) = fixture_handle(&detached.stderr, remote)?;
+    let mut wait_args = base(workspace, "client", local.0, &[]);
+    wait_args.extend([
+        "--no-autostart".into(),
+        "--wait-seconds".into(),
+        "300".into(),
+        "wait".into(),
+        "--handle".into(),
+        String::from_utf8(encoded.clone())
+            .map_err(|_| bad())?
+            .into(),
+    ]);
+    let output = process::run(
+        &workspace.join("bin/marmish"),
+        &wait_args,
+        workspace,
+        local.1,
+        sample_deadline,
+        524288,
+    )
+    .await;
+    Ok(FixtureCommand {
+        handle,
+        encoded,
+        output,
+        elapsed: began.elapsed(),
+    })
 }
 async fn clients(
     o: &Run,
@@ -482,6 +569,7 @@ async fn clients(
         args.extend([
             "--no-autostart".into(),
             "--stdin".into(),
+            "--detach".into(),
             "--wait-seconds".into(),
             "300".into(),
             nostr::key::PublicKey::from_hex(&ids[server].server_account)
@@ -494,26 +582,29 @@ async fn clients(
         ]);
         let fixture_args = fixture::arguments(&nonce, vector)?;
         args.extend(fixture_args.clone());
-        let output = process::run_input(
-            &o.workspace.join("bin/marmish"),
-            &args,
+        let command = fixture_command(
             &o.workspace,
-            local.environment,
-            deadline.min(Instant::now() + Duration::from_secs(330)),
-            524288,
-            Some(&input),
+            (local.socket, local.environment),
+            &args,
+            &input,
+            &ids[server].server_account,
+            deadline,
         )
         .await?;
-        if output.status.code() != Some(7) || output.stdout != out {
-            return Err(bad());
-        }
-        let handle = fixture_handle(&output.stderr, &err, &ids[server].server_account)?;
+        // Query the independent cached admission digest after timing, even if wait failed.
+        let command_handle = crate::command_client::CommandHandle::decode(&command.encoded)?;
+        let group_submit_sha256 =
+            cleanup::client_group_submit(local.daemon, local.socket, &command_handle, deadline)
+                .await?;
+        let output = command.output?;
+        verify_wait(&output, &out, &err)?;
         result.pairs.push(Pair {
             client: role.into(),
             server: server.into(),
             nonce,
             vector,
-            handle,
+            handle: command.handle,
+            group_submit_sha256,
             fixture: ready.fixture.clone(),
             argv_sha256: fixture::argv_digest(Path::new(&ready.fixture.path), &fixture_args)?,
             stdin_bytes: input.len(),
@@ -523,7 +614,7 @@ async fn clients(
             stderr_bytes: err.len(),
             stderr_sha256: records::digest(&err),
             exit: 7,
-            wall_ns: u64::try_from(output.elapsed.as_nanos()).map_err(|_| bad())?,
+            wall_ns: u64::try_from(command.elapsed.as_nanos()).map_err(|_| bad())?,
         });
     }
     result.complete = true;
@@ -581,6 +672,8 @@ fn validate_client(
             || p.handle.format != 1
             || !records::hexadecimal(&p.handle.invocation, 32)
             || !records::hexadecimal(&p.handle.session, 32)
+            || !records::hexadecimal(&p.group_submit_sha256, 64)
+            || p.group_submit_sha256 == p.handle.submit_sha256
             || !records::hexadecimal(&p.handle.submit_sha256, 64)
         {
             return Err(bad());
@@ -618,6 +711,7 @@ struct Runtime {
     server: Option<Daemon>,
     client: Option<Daemon>,
     tree: Option<super::super::command_check::EngineTree>,
+    client_receipt: cleanup::ProfileReceipt,
 }
 impl Runtime {
     async fn close(
@@ -628,8 +722,9 @@ impl Runtime {
         deadline: Instant,
     ) -> (bool, bool, bool) {
         if cancel && let Some(server) = self.server.as_mut() {
-            let _ = cleanup::cancel_fixture(&mut server.child, &server.socket, &expected, deadline)
-                .await;
+            let _ =
+                cleanup::cancel_fixture(&mut server.child, &server.socket, &expected, 3, deadline)
+                    .await;
         }
         let engine = if let (Some(server), Some(tree)) = (self.server.as_mut(), self.tree.take()) {
             match cleanup::prepare(
@@ -647,8 +742,23 @@ impl Runtime {
         } else {
             false
         };
+        let client_profile = w.join("profiles/client");
+        let receipt_valid = self.client_receipt.verify(&client_profile).is_ok();
+        let client_proof = if receipt_valid && let Some(d) = self.client.as_mut() {
+            cleanup::verify_no_engine(&mut d.child, &client_profile, &d.socket, deadline)
+                .await
+                .is_ok()
+        } else {
+            false
+        };
         let client = match self.client.take() {
-            Some(d) => d.stop(deadline).await.is_ok(),
+            Some(d) => {
+                let stopped = d.stop_no_engine(deadline).await.is_ok();
+                client_proof
+                    && stopped
+                    && self.client_receipt.verify(&client_profile).is_ok()
+                    && cleanup::require_no_engine(&client_profile).is_ok()
+            }
             None => false,
         };
         let server = match self.server.take() {
@@ -661,6 +771,7 @@ impl Runtime {
 pub(super) async fn run(o: Run) -> Result<()> {
     let ctx: Context = records::read(&o.context, 65536)?;
     ctx.validate()?;
+    ctx.require_cohort("matrix")?;
     let ids = records::identities(&o.identities, &ctx)?;
     let i = TARGETS
         .iter()
@@ -726,6 +837,8 @@ pub(super) async fn run(o: Run) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         _ => return Err(bad()),
     }
+    cleanup::require_no_engine(&o.workspace.join("profiles/client"))?;
+    let client_receipt = cleanup::ProfileReceipt::capture(&o.workspace.join("profiles/client"))?;
     let mut random = [0; 8];
     getrandom::fill(&mut random).map_err(|_| Error::Identity("random"))?;
     let sockets = std::env::temp_dir()
@@ -742,6 +855,7 @@ pub(super) async fn run(o: Run) -> Result<()> {
         server: None,
         client: None,
         tree: None,
+        client_receipt,
     };
     let mut receipts = BTreeMap::new();
     let mut expected = BTreeMap::new();
@@ -760,6 +874,9 @@ pub(super) async fn run(o: Run) -> Result<()> {
         runtime.tree = Some(super::super::command_check::EngineTree::capture_path(
             &o.workspace.join("profiles/server"),
         )?);
+        runtime
+            .client_receipt
+            .verify(&o.workspace.join("profiles/client"))?;
         runtime.client = Some(Daemon::start(
             &o.workspace,
             "client",
@@ -769,6 +886,19 @@ pub(super) async fn run(o: Run) -> Result<()> {
             uptime,
         )?);
         ready(runtime.client.as_mut().ok_or_else(bad)?, deadline).await?;
+        {
+            runtime
+                .client_receipt
+                .verify(&o.workspace.join("profiles/client"))?;
+            let client = runtime.client.as_mut().ok_or_else(bad)?;
+            cleanup::verify_no_engine(
+                &mut client.child,
+                &o.workspace.join("profiles/client"),
+                &client.socket,
+                deadline,
+            )
+            .await?;
+        }
         let sr = ServerReady {
             schema: 1,
             kind: "server-ready".into(),
@@ -790,6 +920,7 @@ pub(super) async fn run(o: Run) -> Result<()> {
             role,
             &servers,
             ClientEndpoint {
+                daemon: &mut runtime.client.as_mut().ok_or_else(bad)?.child,
                 socket: &sockets.join("c"),
                 environment: &environment,
             },
@@ -817,7 +948,7 @@ pub(super) async fn run(o: Run) -> Result<()> {
                     ids[client].client_account.clone(),
                     p.handle.invocation.clone(),
                 ),
-                (p.handle.session.clone(), p.handle.submit_sha256.clone()),
+                (p.handle.session.clone(), p.group_submit_sha256.clone()),
             );
         }
         Ok::<_, Error>(())
@@ -874,6 +1005,7 @@ pub(super) fn rollup(
 ) -> Result<()> {
     let ctx: Context = records::read(context, 65536)?;
     ctx.validate()?;
+    ctx.require_cohort("matrix")?;
     let ids = records::matrix_identities(directory, &ctx)?;
     let mut servers = BTreeMap::new();
     for role in ROLES {
@@ -934,10 +1066,10 @@ pub(super) fn rollup(
     if matrix_result != "success" {
         return Err(Error::Invalid("installed_matrix_job"));
     }
-    let result = serde_json::json!({"schema":1,"scope":"installed-matrix","artifact_prefix":ctx.prefix(),"context_sha256":ctx.digest()?,"candidate_run_id":ctx.candidate_run_id,"candidate_run_attempt":ctx.candidate_run_attempt,"source_commit":ctx.source_commit,"matrix_job_result":matrix_result,"cells":cells,"passed_cells":9,"expected_cells":9,"sample_count":9,"samples_per_directed_pair":1,"metric_definitions":{"command_wall_ns":"Local monotonic CLI process lifetime including encrypted request, execution, output delivery and client shutdown; not network RTT","payload_bytes_per_second":"Validated stdout plus stderr bytes divided by command wall time; excludes stdin"},"pending_gates":["auto-exit","benchmark","recovery","policy","keychain","asset-publication","HTTPS"]});
+    let result = serde_json::json!({"schema":1,"scope":"installed-matrix","artifact_prefix":ctx.prefix(),"context_sha256":ctx.digest()?,"candidate_run_id":ctx.candidate_run_id,"candidate_run_attempt":ctx.candidate_run_attempt,"source_commit":ctx.source_commit,"matrix_job_result":matrix_result,"cells":cells,"passed_cells":9,"expected_cells":9,"sample_count":9,"samples_per_directed_pair":1,"metric_definitions":{"command_wall_ns":"Local monotonic detached-submit plus handle-wait lifetime including both CLI startups, encrypted request, execution, output delivery and Finish; excludes receipt validation and protected cleanup; not network RTT","payload_bytes_per_second":"Validated stdout plus stderr bytes divided by command wall time; excludes stdin"},"pending_gates":["auto-exit","benchmark","recovery","policy","keychain","asset-publication","HTTPS"]});
     records::write(&output.join("matrix-rollup.json"), &result)?;
     let mut markdown = String::from(
-        "# Installed native matrix\n\nScope: installed-matrix. Nine directed pairs, one sample per pair; no percentile estimates.\n\nCommand wall time is local monotonic CLI process lifetime including execution and encrypted output delivery; it is not network RTT. Speed is validated stdout plus stderr bytes divided by wall time, excluding stdin.\n\n| Client | Server | Samples | Wall (ms) | Output (bytes) | Speed (bytes/s) |\n| --- | --- | ---: | ---: | ---: | ---: |\n",
+        "# Installed native matrix\n\nScope: installed-matrix. Nine directed pairs, one sample per pair; no percentile estimates.\n\nCommand wall time spans detached submit plus handle wait, including both CLI startups, execution, encrypted output delivery and Finish, excluding independent receipt validation and protected cleanup; it is not network RTT. Speed is validated stdout plus stderr bytes divided by wall time, excluding stdin.\n\n| Client | Server | Samples | Wall (ms) | Output (bytes) | Speed (bytes/s) |\n| --- | --- | ---: | ---: | ---: | ---: |\n",
     );
     for cell in result["cells"].as_array().ok_or_else(bad)? {
         use std::fmt::Write;
@@ -960,6 +1092,276 @@ pub(super) fn rollup(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn test_handle() -> Handle {
+        Handle {
+            format: 1,
+            profile: "client".into(),
+            remote: "a".repeat(64),
+            session: "b".repeat(32),
+            invocation: "c".repeat(32),
+            submit_sha256: "d".repeat(64),
+        }
+    }
+
+    #[test]
+    fn detached_handle_requires_one_complete_line_and_preserves_encoding() {
+        let handle = test_handle();
+        let encoded = serde_json::to_vec(&handle).unwrap();
+        let mut line = b"marmish handle: ".to_vec();
+        line.extend_from_slice(&encoded);
+        line.push(b'\n');
+        let (_, observed) = fixture_handle(&line, &handle.remote).unwrap();
+        assert_eq!(observed, encoded);
+        for extra in [b"diagnostic\n".as_slice(), &line, b"\0"] {
+            let mut bad_line = line.clone();
+            bad_line.extend_from_slice(extra);
+            assert!(fixture_handle(&bad_line, &handle.remote).is_err());
+        }
+        assert!(fixture_handle(&line, &"f".repeat(64)).is_err());
+        assert!(fixture_handle(&line[..line.len() - 1], &handle.remote).is_err());
+        let duplicate = String::from_utf8(line.clone())
+            .unwrap()
+            .replace("\"format\":1", "\"format\":1,\"format\":1");
+        assert!(fixture_handle(duplicate.as_bytes(), &handle.remote).is_err());
+        let mut unknown = serde_json::to_value(&handle).unwrap();
+        unknown["unexpected"] = true.into();
+        assert!(serde_json::from_value::<Handle>(unknown).is_err());
+    }
+
+    #[tokio::test]
+    async fn owned_submit_once_then_wait_keeps_binary_stderr_and_original_deadline() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let w = root.path();
+        for name in ["bin", "home", "tmp", "utilities"] {
+            fs::create_dir(w.join(name)).unwrap();
+        }
+        let env = Environment {
+            home: w.join("home"),
+            temporary: w.join("tmp"),
+            utilities: w.join("utilities"),
+        };
+        let socket = w.join("unused.sock");
+        let local = (&socket as &Path, &env);
+        let handle = test_handle();
+        let encoded = serde_json::to_string(&handle).unwrap();
+        let stdout = b"raw\0stdout\xff\n";
+        let stderr = b"marmish handle: \0raw remote stderr\xff\n";
+        fs::write(w.join("stdout"), stdout).unwrap();
+        fs::write(w.join("stderr"), stderr).unwrap();
+        let script = format!(
+            r#"#!/bin/sh
+mode=submit
+handle=
+for arg do
+    if [ "$arg" = wait ]; then mode=wait; fi
+    if [ "$handle" = next ]; then handle=$arg; fi
+    if [ "$arg" = --handle ]; then handle=next; fi
+done
+if [ "$mode" = submit ]; then
+    [ ! -e submit-count ] || exit 90
+    : > submit-count
+    /bin/cat > input
+    /bin/sleep 0.03
+    printf '%s\n' 'marmish handle: {encoded}' >&2
+else
+    case " $* " in *" --relay "*) exit 91;; esac
+    [ "$handle" = '{encoded}' ] || exit 92
+    [ ! -e wait-count ] || exit 93
+    : > wait-count
+    /bin/sleep 0.03
+    /bin/cat stdout
+    /bin/cat stderr >&2
+    exit 7
+fi
+"#
+        );
+        let exe = w.join("bin/marmish");
+        fs::write(&exe, script).unwrap();
+        fs::set_permissions(&exe, fs::Permissions::from_mode(0o700)).unwrap();
+        let input = b"binary\0stdin\xff";
+        let args = [OsString::from("--detach")];
+        let observed = fixture_command(
+            w,
+            local,
+            &args,
+            input,
+            &handle.remote,
+            Instant::now() + Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        let output = observed.output.unwrap();
+        assert_eq!(output.status.code(), Some(7));
+        assert_eq!(output.stdout, stdout);
+        assert_eq!(output.stderr, stderr);
+        assert_eq!(fs::read(w.join("input")).unwrap(), input);
+        assert!(observed.elapsed >= Duration::from_millis(50));
+        assert!(w.join("submit-count").exists() && w.join("wait-count").exists());
+        // Remove prior sentinels so an accidental spawn cannot satisfy this assertion.
+        fs::remove_file(w.join("submit-count")).unwrap();
+        fs::remove_file(w.join("wait-count")).unwrap();
+        assert!(
+            fixture_command(w, local, &args, input, &handle.remote, Instant::now(),)
+                .await
+                .is_err()
+        );
+        assert!(!w.join("submit-count").exists());
+        assert!(!w.join("wait-count").exists());
+    }
+
+    #[tokio::test]
+    async fn failed_wait_retains_handle_and_second_child_cannot_renew_cutoff() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let w = root.path();
+        fs::create_dir(w.join("bin")).unwrap();
+        let env = Environment {
+            home: w.into(),
+            temporary: w.into(),
+            utilities: w.into(),
+        };
+        let socket = w.join("unused.sock");
+        let handle = test_handle();
+        let encoded = serde_json::to_vec(&handle).unwrap();
+        let line = String::from_utf8(encoded.clone()).unwrap();
+        let exe = w.join("bin/marmish");
+        for (detach_code, wait_code, pause) in [(0, 255, "0"), (1, 7, "0"), (0, 7, "0.15")] {
+            let script = format!(
+                r#"#!/bin/sh
+mode=submit
+for arg do [ "$arg" != wait ] || mode=wait; done
+if [ "$mode" = submit ]; then
+    /bin/cat >/dev/null
+    /bin/sleep {pause}
+    printf '%s\n' 'marmish handle: {line}' >&2
+    exit {detach_code}
+fi
+/bin/sleep {pause}
+exit {wait_code}
+"#
+            );
+            fs::write(&exe, script).unwrap();
+            fs::set_permissions(&exe, fs::Permissions::from_mode(0o700)).unwrap();
+            let started = Instant::now();
+            let result = fixture_command(
+                w,
+                (&socket, &env),
+                &["--detach".into()],
+                b"input",
+                &handle.remote,
+                started + Duration::from_millis(if pause == "0" { 5000 } else { 230 }),
+            )
+            .await;
+            if detach_code != 0 {
+                assert!(result.is_err());
+            } else {
+                let result = result.unwrap();
+                assert_eq!(result.encoded, encoded);
+                if pause == "0" {
+                    assert_eq!(result.output.unwrap().status.code(), Some(255));
+                } else {
+                    assert!(result.output.is_err());
+                    assert!(started.elapsed() < Duration::from_secs(2));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn wait_verification_rejects_wrong_exit_and_any_byte_or_diagnostic() {
+        use std::os::unix::process::ExitStatusExt;
+        let good = || process::Output {
+            status: std::process::ExitStatus::from_raw(7 << 8),
+            stdout: vec![0, 255],
+            stderr: vec![255, 0],
+        };
+        verify_wait(&good(), &[0, 255], &[255, 0]).unwrap();
+        for code in [0, 6, 254] {
+            let mut output = good();
+            output.status = std::process::ExitStatus::from_raw(code << 8);
+            assert!(verify_wait(&output, &[0, 255], &[255, 0]).is_err());
+        }
+        let mut output = good();
+        output.stdout[1] ^= 1;
+        assert!(verify_wait(&output, &[0, 255], &[255, 0]).is_err());
+        let mut output = good();
+        output.stderr[0] ^= 1;
+        assert!(verify_wait(&output, &[0, 255], &[255, 0]).is_err());
+        for diagnostic in [b"delivery_pending\n".as_slice(), b"marmish handle: {}\n"] {
+            let mut output = good();
+            output.stderr.splice(0..0, diagnostic.iter().copied());
+            assert!(verify_wait(&output, &[0, 255], &[255, 0]).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_or_uncertain_detach_never_starts_wait_child() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let w = root.path();
+        fs::create_dir(w.join("bin")).unwrap();
+        let env = Environment {
+            home: w.into(),
+            temporary: w.into(),
+            utilities: w.into(),
+        };
+        let socket = w.join("unused.sock");
+        let handle = test_handle();
+        let valid = format!(
+            "marmish handle: {}\n",
+            serde_json::to_string(&handle).unwrap()
+        );
+        let mut wrong = test_handle();
+        wrong.remote = "f".repeat(64);
+        let changed = format!(
+            "marmish handle: {}\n",
+            serde_json::to_string(&wrong).unwrap()
+        );
+        for (code, stdout, stderr, pause) in [
+            (1, "", valid.clone(), "0"),
+            (254, "", valid.clone(), "0"),
+            (0, "unexpected", valid.clone(), "0"),
+            (0, "", String::new(), "0"),
+            (0, "", "marmish handle: {}\n".into(), "0"),
+            (0, "", valid.repeat(2), "0"),
+            (0, "", format!("{valid}diagnostic\n"), "0"),
+            (0, "", changed, "0"),
+            (0, "", valid.clone(), "0.3"),
+        ] {
+            let script = format!(
+                r#"#!/bin/sh
+mode=submit
+for arg do [ "$arg" != wait ] || mode=wait; done
+if [ "$mode" = wait ]; then : > waited; exit 7; fi
+/bin/cat >/dev/null
+/bin/sleep {pause}
+printf '%s' '{stdout}'
+printf '%s' '{stderr}' >&2
+exit {code}
+"#
+            );
+            let exe = w.join("bin/marmish");
+            fs::write(&exe, script).unwrap();
+            fs::set_permissions(&exe, fs::Permissions::from_mode(0o700)).unwrap();
+            let deadline =
+                Instant::now() + Duration::from_millis(if pause == "0" { 5000 } else { 80 });
+            assert!(
+                fixture_command(
+                    w,
+                    (&socket, &env),
+                    &["--detach".into()],
+                    b"input",
+                    &handle.remote,
+                    deadline,
+                )
+                .await
+                .is_err()
+            );
+            assert!(!w.join("waited").exists());
+        }
+    }
+
     #[test]
     fn work_and_cleanup_are_inside_original_server_uptime() {
         for remaining in [1020, 1500, 2220] {
@@ -1091,6 +1493,19 @@ mod tests {
                 )
                 .is_err()
             );
+            let mut unexpected_policy = before.clone();
+            unexpected_policy["command_policy"]["defaults"] =
+                serde_json::json!({"deny_exec":["**"]});
+            assert!(
+                configure_value(
+                    unexpected_policy,
+                    name,
+                    &ctx,
+                    &peers,
+                    Path::new("/private/fixture/main")
+                )
+                .is_err()
+            );
             let mut wrong = before;
             wrong[if name == "server" {
                 "execution_clients"
@@ -1212,6 +1627,7 @@ mod tests {
                             invocation: format!("{:032x}", i + 1),
                             submit_sha256: "b".repeat(64),
                         },
+                        group_submit_sha256: "e".repeat(64),
                         fixture: f,
                         argv_sha256: e.argv_sha256,
                         stdin_bytes: e.stdin_bytes,
@@ -1284,6 +1700,13 @@ mod tests {
             .unwrap();
         }
         assert!(records::identities(&input, &ctx).is_err());
+        let red = |job_result| {
+            let fresh = tempfile::Builder::new()
+                .permissions(fs::Permissions::from_mode(0o700))
+                .tempdir()
+                .unwrap();
+            assert!(rollup(&context, &input, job_result, fresh.path()).is_err());
+        };
         rollup(&context, &input, "success", &output).unwrap();
         let result: serde_json::Value =
             records::read(&output.join("matrix-rollup.json"), 65536).unwrap();
@@ -1296,45 +1719,48 @@ mod tests {
             .unwrap()
             .contains("no percentile estimates")
         );
-        assert!(rollup(&context, &input, "failure", &output).is_err());
+        red("failure");
+        let client_path = input.join("linux-amd64-client-result.json");
+        let original = records::read_bytes(&client_path, 1048576).unwrap();
+        let request_digest = "b".repeat(64);
+        for wrong in [None, Some("invalid"), Some(request_digest.as_str())] {
+            let mut value: serde_json::Value = serde_json::from_slice(&original).unwrap();
+            if let Some(wrong) = wrong {
+                value["pairs"][0]["group_submit_sha256"] = wrong.into();
+            } else {
+                value["pairs"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("group_submit_sha256");
+            }
+            fs::remove_file(&client_path).unwrap();
+            records::write(&client_path, &value).unwrap();
+            red("success");
+        }
+        fs::remove_file(&client_path).unwrap();
+        records::write_raw(&client_path, &original).unwrap();
+        let fresh = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        rollup(&context, &input, "success", fresh.path()).unwrap();
         let mut unpinned = servers["linux-amd64"].clone();
         unpinned.fixture.sha256 = "0".repeat(64);
         assert!(validate_ready(&unpinned, &ctx, &ids, "linux-amd64").is_err());
         records::write(&input.join("unexpected.json"), &true).unwrap();
-        assert!(rollup(&context, &input, "success", &output).is_err());
+        red("success");
         fs::remove_file(input.join("unexpected.json")).unwrap();
         let missing = input.join("linux-amd64-server-result.json");
         let saved = records::read_bytes(&missing, 1048576).unwrap();
         fs::remove_file(&missing).unwrap();
-        assert!(rollup(&context, &input, "success", &output).is_err());
+        red("success");
         records::write_raw(&missing, &saved).unwrap();
         let path = input.join("linux-arm64-server-result.json");
         let mut failed: ServerResult = records::read(&path, 1048576).unwrap();
         failed.complete = false;
         fs::remove_file(&path).unwrap();
         records::write(&path, &failed).unwrap();
-        assert!(rollup(&context, &input, "success", &output).is_err());
-    }
-    #[test]
-    fn fixture_handle_requires_exact_raw_stderr_and_full_binding() {
-        let handle = Handle {
-            format: 1,
-            profile: "client".into(),
-            remote: "a".repeat(64),
-            session: "b".repeat(32),
-            invocation: "c".repeat(32),
-            submit_sha256: "d".repeat(64),
-        };
-        let mut stderr = b"marmish handle: ".to_vec();
-        stderr.extend(serde_json::to_vec(&handle).unwrap());
-        stderr.push(b'\n');
-        stderr.extend([0, 255, b'\n']);
-        assert!(fixture_handle(&stderr, &[0, 255, b'\n'], &"a".repeat(64)).is_ok());
-        assert!(fixture_handle(&stderr, &[0, 255], &"a".repeat(64)).is_err());
-        assert!(fixture_handle(&stderr, &[0, 255, b'\n'], &"e".repeat(64)).is_err());
-        let mut changed = serde_json::to_value(&handle).unwrap();
-        changed["unexpected"] = true.into();
-        assert!(serde_json::from_value::<Handle>(changed).is_err());
+        red("success");
     }
     #[test]
     fn nonce_receipt_binds_executable_arguments_and_streams() {

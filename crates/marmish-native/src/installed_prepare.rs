@@ -15,6 +15,7 @@ use std::{
 };
 use tokio::time::Instant;
 pub(super) struct Prepare {
+    pub cohort: String,
     pub context: PathBuf,
     pub assets: PathBuf,
     pub bootstrap: PathBuf,
@@ -48,6 +49,7 @@ fn directory(p: &std::path::Path) -> Result<()> {
 pub(super) async fn run(o: Prepare) -> Result<()> {
     let ctx: Context = records::read(&o.context, 65536)?;
     ctx.validate()?;
+    ctx.require_cohort(&o.cohort)?;
     let index = ROLES.iter().position(|r| *r == o.role).ok_or_else(bad)?;
     if super::now()? >= ctx.expires_at
         || !o.workspace.is_absolute()

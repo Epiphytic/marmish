@@ -1,7 +1,13 @@
-name: v0.2 native installed matrix
+name: v0.2 native installed qualification
 on:
   workflow_dispatch:
     inputs:
+      cohort:
+        description: One qualification wave; dispatch only after prior wave completes
+        type: choice
+        required: true
+        default: matrix
+        options: [matrix, autoexit, uptime, benchmark, recovery, policy]
       candidate_run_id:
         description: Successful native candidate run ID (rerun all jobs only)
         required: true
@@ -29,6 +35,7 @@ env:
   CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
   SOURCE_COMMIT: ${{ inputs.source_commit }}
   TEST_RELAY: ${{ inputs.relay }}
+  TEST_COHORT: ${{ inputs.cohort }}
 jobs:
   resolve:
     if: github.ref == 'refs/heads/master'
@@ -81,6 +88,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   matrix:
+    if: inputs.cohort == 'matrix'
     needs: resolve
     strategy:
       fail-fast: false
@@ -146,7 +154,7 @@ jobs:
       - name: Install using the pinned bootstrap and prepare offline identities
         shell: bash
         run: |
-          "$TOOLS_ROOT/marmish-installed-check" prepare --context "$CONTEXT" \
+          "$TOOLS_ROOT/marmish-installed-check" prepare --cohort matrix --context "$CONTEXT" \
             --assets "$RUNNER_TEMP/assets" --bootstrap "$BOOTSTRAP_ROOT/install.sh" \
             --workspace "$MARMISH_WORK" --role "$ROLE" --output "$MARMISH_WORK/output"
       - name: Exchange immutable identity records before enabling servers
@@ -186,7 +194,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
   rollup:
-    if: always() && needs.resolve.result == 'success'
+    if: always() && needs.resolve.result == 'success' && inputs.cohort == 'matrix'
     needs: [resolve, matrix]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -242,5 +250,165 @@ jobs:
         with:
           name: v02-installed-rollup-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/rollup/matrix-rollup.*
+          if-no-files-found: error
+          retention-days: 14
+  local:
+    if: inputs.cohort != 'matrix'
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            role: linux-amd64
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            role: linux-arm64
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-15
+            role: macos-arm64
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 65
+    env:
+      ROLE: ${{ matrix.role }}
+      TEST_ROLE: ${{ matrix.role }}
+      LANG: C
+    steps:
+      - name: Freeze local deadline and private canonical parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "JOB_DEADLINE_MS=$(( ( $(date +%s) + 3720 ) * 1000 ))" >> "$GITHUB_ENV"
+          case "$(uname -s)" in Darwin) parent=$(mktemp -d /private/tmp/mm.XXXXXX);; Linux) parent=$(mktemp -d /tmp/mm.XXXXXX);; *) exit 1;; esac
+          chmod 700 "$parent"
+          echo "CONTEXT=$RUNNER_TEMP/context/context.json" >> "$GITHUB_ENV"
+          echo "CONTEXT_FILE=$RUNNER_TEMP/context/context.json" >> "$GITHUB_ENV"
+          echo "TOOLS_ROOT=$RUNNER_TEMP/tools" >> "$GITHUB_ENV"
+          echo "BOOTSTRAP_ROOT=$RUNNER_TEMP/bootstrap" >> "$GITHUB_ENV"
+          echo "ASSETS_ROOT=$RUNNER_TEMP/assets" >> "$GITHUB_ENV"
+          echo "MARMISH_WORK=$parent/work" >> "$GITHUB_ENV"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install locked build-only coordinator dependencies
+        working-directory: tools/v02-actions
+        run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-installed-context-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/context
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-candidate-${{ matrix.target }}-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: ${{ runner.temp }}/assets
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-installed-tools-${{ matrix.target }}-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: ${{ runner.temp }}/tools
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-pinned-bootstrap-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: ${{ runner.temp }}/bootstrap
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify all executable bytes before probing or setup
+        run: node tools/v02-actions/workflow.mjs verify-context
+      - name: Supervise installed prepare and the selected local cohort
+        env:
+          LOCAL_MODE: run
+        run: node tools/v02-actions/local.mjs
+      - name: Require both finite public records
+        if: always()
+        shell: bash
+        run: |
+          test -f "$MARMISH_WORK/output/$ROLE-identity-ready.json"
+          test -f "$MARMISH_WORK/output/$ROLE-$TEST_COHORT-result.json"
+      - name: Preserve only the two finite public local records
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v02-installed-${{ inputs.cohort }}-${{ matrix.role }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.MARMISH_WORK }}/output/${{ matrix.role }}-identity-ready.json
+            ${{ env.MARMISH_WORK }}/output/${{ matrix.role }}-${{ inputs.cohort }}-result.json
+          if-no-files-found: error
+          retention-days: 14
+  local-rollup:
+    if: always() && needs.resolve.result == 'success' && inputs.cohort != 'matrix'
+    needs: [resolve, local]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ROLE: linux-amd64
+      LOCAL_RESULT: ${{ needs.local.result }}
+    steps:
+      - name: Set owned local rollup paths
+        run: |
+          echo "CONTEXT=$RUNNER_TEMP/context/context.json" >> "$GITHUB_ENV"
+          echo "TOOLS_ROOT=$RUNNER_TEMP/tools" >> "$GITHUB_ENV"
+          echo "BOOTSTRAP_ROOT=$RUNNER_TEMP/bootstrap" >> "$GITHUB_ENV"
+          echo "LOCAL_RECORDS_ROOT=$RUNNER_TEMP/roles" >> "$GITHUB_ENV"
+          echo "LOCAL_RECORDS_FLAT=$RUNNER_TEMP/records" >> "$GITHUB_ENV"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install locked build-only coordinator dependencies
+        working-directory: tools/v02-actions
+        run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-installed-context-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/context
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-installed-tools-x86_64-unknown-linux-gnu-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: ${{ runner.temp }}/tools
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-pinned-bootstrap-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: ${{ runner.temp }}/bootstrap
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-installed-${{ inputs.cohort }}-linux-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/roles/linux-amd64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-installed-${{ inputs.cohort }}-linux-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/roles/linux-arm64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-installed-${{ inputs.cohort }}-macos-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/roles/macos-arm64
+      - name: Verify tool pins and exact six public input files
+        env:
+          LOCAL_MODE: collect
+        run: |
+          node tools/v02-actions/workflow.mjs verify-context
+          node tools/v02-actions/local.mjs
+      - name: Strict native local cohort rollup
+        run: |
+          mkdir -m 700 "$RUNNER_TEMP/rollup"
+          "$TOOLS_ROOT/marmish-installed-check" cohort-rollup --cohort "$TEST_COHORT" \
+            --context "$CONTEXT" --records "$LOCAL_RECORDS_FLAT" \
+            --cohort-result "$LOCAL_RESULT" --output "$RUNNER_TEMP/rollup"
+      - name: Preserve finite local rollup
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v02-installed-${{ inputs.cohort }}-rollup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/rollup/cohort-rollup.json
+            ${{ runner.temp }}/rollup/cohort-rollup.md
           if-no-files-found: error
           retention-days: 14
