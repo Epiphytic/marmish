@@ -1226,7 +1226,7 @@ fi
         let encoded = serde_json::to_vec(&handle).unwrap();
         let line = String::from_utf8(encoded.clone()).unwrap();
         let exe = w.join("bin/marmish");
-        for (detach_code, wait_code, pause) in [(0, 255, "0"), (1, 7, "0"), (0, 7, "0.15")] {
+        for (detach_code, wait_code, pause) in [(0, 255, "0"), (1, 7, "0"), (0, 7, "1.2")] {
             let script = format!(
                 r#"#!/bin/sh
 mode=submit
@@ -1250,7 +1250,7 @@ exit {wait_code}
                 &["--detach".into()],
                 b"input",
                 &handle.remote,
-                started + Duration::from_millis(if pause == "0" { 5000 } else { 230 }),
+                started + Duration::from_millis(if pause == "0" { 5000 } else { 2000 }),
             )
             .await;
             if detach_code != 0 {
@@ -1261,8 +1261,8 @@ exit {wait_code}
                 if pause == "0" {
                     assert_eq!(result.output.unwrap().status.code(), Some(255));
                 } else {
-                    assert!(result.output.is_err());
-                    assert!(started.elapsed() < Duration::from_secs(2));
+                    assert!(matches!(result.output, Err(Error::Timeout)));
+                    assert!(started.elapsed() < Duration::from_secs(3));
                 }
             }
         }
