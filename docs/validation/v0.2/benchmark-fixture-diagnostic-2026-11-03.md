@@ -104,3 +104,44 @@ claimed; both exact tests still need an actual macOS run with reliable capture.
 Follow-up author validation: extracted actual YAML under bash -e -o pipefail passed14 provenance cases,5 probe-status cases (zero/nonzero/empty/nonnumeric/missing), and5 cargo/marker cases (first/second/both/neither failure101 and missing single-test marker). Both calls, exact statuses, both logs and aggregate result asserted. Exact old49d1314 YAML mutation fails the both-calls assertion (one call, exit101, nooutcomes), confirming the regression detects the bug. Local harness is uncommitted /tmp/marmish-y5r-errexit-guards.py. Actionlint1.7.7 and diffcheck PASS. No Cargo rerun: Rust/probe/production files unchanged. Scoped ripwire workflow quality-delta exit0: one minor verbosity81→87, gating0; change-check reports one changed workflow and no indexed tests, so the extracted Bash checks provide behavioral evidence.
 
 Completed-code review found one doc-only trailing blank line; corrected and full diffcheck PASS. Reviewer independently reproduced old-step onecall/101/nooutcomes versus newstep twocalls/aggregate1/exactstatuses, plus wrong if-not misfix rejection. Final local provenance cases15 include independently wrong fixed-baseline parent and original-baseline tree versus frozen-current-tree checks. Test step runs inherited -e; provenance guard explicitly enables -Eeuo itself. Actionlint again PASS; workflow source unchanged during these refinements.
+
+## Follow-up macOS diagnostic 41673137820
+
+Source9d285236fdf35f4c6fdd80fd028cf061dc41d5b5; created16:20:13UTC,
+started16:20:18UTC (5s), failed16:24:47UTC. Provenance, toolchain and all
+utility probes passed. Reliable capture retained both exact Rust test statuses101.
+First test compiled4m05s and ran0.40s: case3 outer Timeout before retained
+handle; fresh3s submit replay exited0. Second test compiled1.34s and ran0.04s:
+copied printf returned unix_wait_status(9), empty stdout/stderr. That is SIGKILL,
+not its2s deadline. No particular platform mechanism is established.
+
+Artifact13248573605 contains seven files, including both logs and outcomes.txt.
+ZIP11400bytes, SHA256803df7e1f15e058e6ec45aefd1f94ebcb6ac4bbdc7319dc5ad8a2c507f351552.
+Raw log/artifact remain outside repo under /tmp/marmish-y5r-macos-41673137820.
+The approved next correction changes only the test fixtures; a fresh full
+candidate must establish whether it resolves actual macOS execution.
+
+
+## Fixture correction local validation
+
+Actual design and completed code APPROVED; sessions and verbatim results are
+appended to existing design-r2/code-r1. Source changes are confined to the two
+benchmark test fixtures. No production deadline, cancellation, executable
+validation or diagnostic workflow changes.
+
+Using CARGO_TARGET_DIR=/home/openclaw/repos/marmish-v02/target, uid1001:
+
+- cargo test --offline --locked -p marmish-native --features installed-checks --lib installed_check::benchmark::tests -- --nocapture:10/10PASS,2.14s tests,24.35s compile.
+- cargo clippy --offline --locked -p marmish-native --features installed-checks --all-targets -- -D warnings:PASS.
+- rustfmt --edition2024 --check crates/marmish-native/src/installed_benchmark.rs and git diff --check:PASS.
+
+Logs remain /tmp/marmish-y5r-fixture-focused.log and
+/tmp/marmish-y5r-fixture-clippy.log. Scoped ripwire quality-delta used a disposable
+git snapshot containing exact HEAD/current benchmark file because direct file
+invocation lacks git baseline context. Exit0/gating0; two minor verbosity rows
+(test76→83lines; tests module579→582). Added lines retain and verify the old/new
+inode proof. Edit-check reports unchanged test signature. Single-file snapshot
+has no cross-module call graph, so it does not establish repository blast radius;
+exact diff inspection confirms every Rust hunk is within tests. No suppression or
+quality-baseline acknowledgment was added. Mac success is not claimed locally;
+the next immutable full candidate must execute the corrected fixtures there.

@@ -1565,16 +1565,17 @@ pub(super) mod tests {
         let encoded = serde_json::to_string(result.samples[0].handle.as_ref().unwrap()).unwrap();
         let mut signal =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
-        for (case, (detach_exit, wait_body, good, known)) in [
+        for (case, (detach_exit, wait_body, good, known, times_out)) in [
             (
                 0,
                 "printf '\\000\\377'; printf '\\376\\001' >&2; exit 7",
                 true,
                 true,
+                false,
             ),
-            (254, "exit 7", false, false),
-            (0, "printf wrong >&2; exit 7", false, true),
-            (0, "/bin/sleep 1; exit 7", false, true),
+            (254, "exit 7", false, false, false),
+            (0, "printf wrong >&2; exit 7", false, true, false),
+            (0, "/bin/sleep 10; exit 7", false, true, true),
         ]
         .into_iter()
         .enumerate()
@@ -1593,12 +1594,7 @@ pub(super) mod tests {
                 environment: &environment,
                 executable: &executable,
                 socket: Path::new("/private/socket"),
-                deadline: Instant::now()
-                    + Duration::from_millis(if wait_body.contains("sleep 1") {
-                        80
-                    } else {
-                        1000
-                    }),
+                deadline: Instant::now() + Duration::from_secs(if times_out { 2 } else { 1 }),
             };
             let output = client
                 .command(
@@ -1648,9 +1644,9 @@ pub(super) mod tests {
                 assert_eq!(output.outcome.is_ok(), good);
                 assert_eq!(output.locator.encode().unwrap(), encoded.as_bytes());
                 assert!(output.elapsed >= Duration::from_millis(30));
-                if wait_body.contains("sleep 1") {
+                if times_out {
                     assert!(matches!(output.outcome, Err(Error::Timeout)));
-                    assert!(output.elapsed < Duration::from_millis(500));
+                    assert!(output.elapsed < Duration::from_secs(3));
                 }
             }
             assert_eq!(
@@ -1706,7 +1702,14 @@ pub(super) mod tests {
             .await,
             Err(Error::Invalid("installed_interrupted"))
         ));
+        // Preserve the executed inode and create the next executable at a fresh path.
+        use std::os::unix::fs::MetadataExt;
+        let retired = w.join("bin/retired-sleep");
+        fs::rename(&executable, &retired).unwrap();
         fs::copy("/usr/bin/printf", &executable).unwrap();
+        let old = fs::metadata(&retired).unwrap();
+        let new = fs::metadata(&executable).unwrap();
+        assert_ne!((old.dev(), old.ino()), (new.dev(), new.ino()));
         let output = execute(
             w,
             &[OsString::from("binary:%s"), OsString::from("ok")],
