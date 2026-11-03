@@ -394,12 +394,16 @@ pub(super) fn verify_descriptors(_path: &Path, root: &File, jobs: &File) -> Resu
     Ok(())
 }
 pub(super) fn prepare_spawn() -> Result<()> {
+    prepare_spawn_below(FD_CEILING)
+}
+// The production ceiling is fixed; the parameter lets the isolated Darwin
+// regression exercise real inherited descriptors below kernel allocation caps.
+fn prepare_spawn_below(ceiling: i32) -> Result<()> {
     let mut limit: libc::rlimit = unsafe { zeroed() };
     if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0
-        || limit.rlim_cur > FD_CEILING as u64
-        || descriptors()?
-            .iter()
-            .any(|entry| entry.proc_fd >= FD_CEILING)
+        || ceiling <= 0
+        || limit.rlim_cur > ceiling as u64
+        || descriptors()?.iter().any(|entry| entry.proc_fd >= ceiling)
     {
         return Err(EngineError::WorkerUnavailable);
     }
@@ -479,27 +483,33 @@ mod tests {
         let alias = tmp.path().join("alias");
         std::os::unix::fs::symlink(tmp.path(), &alias).unwrap();
         let parent = open_directory(&alias.canonicalize().unwrap()).unwrap();
-        assert!(ancestry_contains(
-            parent,
-            identity(&descriptor_stat(root.as_raw_fd()).unwrap())
-        )
-        .unwrap());
+        assert!(
+            ancestry_contains(
+                parent,
+                identity(&descriptor_stat(root.as_raw_fd()).unwrap())
+            )
+            .unwrap()
+        );
         let child = tmp.path().join("MiXeD-case");
         std::fs::create_dir(&child).unwrap();
         let spelling = tmp.path().join("mixed-CASE");
         if spelling.is_dir() {
-            assert!(ancestry_contains(
-                open_directory(&spelling).unwrap(),
-                identity(&descriptor_stat(root.as_raw_fd()).unwrap())
-            )
-            .unwrap());
+            assert!(
+                ancestry_contains(
+                    open_directory(&spelling).unwrap(),
+                    identity(&descriptor_stat(root.as_raw_fd()).unwrap())
+                )
+                .unwrap()
+            );
         } else {
             // Case-sensitive APFS still checks membership by inode ancestry.
-            assert!(ancestry_contains(
-                open_directory(&child).unwrap(),
-                identity(&descriptor_stat(root.as_raw_fd()).unwrap())
-            )
-            .unwrap());
+            assert!(
+                ancestry_contains(
+                    open_directory(&child).unwrap(),
+                    identity(&descriptor_stat(root.as_raw_fd()).unwrap())
+                )
+                .unwrap()
+            );
         }
     }
     #[test]
@@ -545,18 +555,38 @@ mod tests {
             );
             limit.rlim_cur = FD_CEILING as u64 + 1;
             assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) }, 0);
-            assert!(prepare_spawn().is_err());
+            assert!(matches!(
+                prepare_spawn(),
+                Err(EngineError::WorkerUnavailable)
+            ));
+            assert_eq!(FD_CEILING, 65_536);
+            const TEST_CEILING: i32 = 64;
+            limit.rlim_cur = TEST_CEILING as u64;
+            assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) }, 0);
+            prepare_spawn().unwrap();
+            prepare_spawn_below(TEST_CEILING).unwrap();
+            limit.rlim_cur = TEST_CEILING as u64 + 1;
+            assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) }, 0);
             let file = File::open("/dev/null").unwrap();
-            let high = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD_CLOEXEC, FD_CEILING) };
-            assert!(
-                high >= FD_CEILING,
-                "native runner cannot allocate descriptor at scan ceiling"
+            let high =
+                unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD_CLOEXEC, TEST_CEILING) };
+            assert_eq!(
+                high, TEST_CEILING,
+                "native runner cannot allocate test descriptor"
             );
             let high = unsafe { File::from_raw_fd(high) };
-            limit.rlim_cur = 512;
+            assert!(matches!(
+                prepare_spawn_below(TEST_CEILING),
+                Err(EngineError::WorkerUnavailable)
+            ));
+            limit.rlim_cur = 32;
             assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) }, 0);
-            assert!(prepare_spawn().is_err());
+            assert!(matches!(
+                prepare_spawn_below(TEST_CEILING),
+                Err(EngineError::WorkerUnavailable)
+            ));
             drop(high);
+            prepare_spawn_below(TEST_CEILING).unwrap();
             prepare_spawn().unwrap();
             return;
         }

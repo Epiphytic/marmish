@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "kind": "macos_engine_qualification_repair",
+  "candidate": {
+    "run_id": 41607361180,
+    "source_commit": "cce02293def983c3297edf724effc8266e9835e8",
+    "macos_job_id": 125820444375,
+    "macos_conclusion": "failure",
+    "failed_step": "Verify native components",
+    "engine_tests": {
+      "passed": 39,
+      "failed": 66
+    },
+    "primary_observations": [
+      "store_create_frontend_unsafe_path",
+      "descriptor_verification_unsafe_path_after_storage_validation",
+      "descriptor_65536_allocation_failed"
+    ]
+  },
+  "diagnosis": {
+    "parallel_global_descriptor_fixture_interference": "concrete_mechanism_not_yet_confirmed_by_serial_run",
+    "darwin_kernel_descriptor_allocation_cap": "consistent_with_observed_failure_not_yet_measured",
+    "runtime_protections_relaxed": false
+  },
+  "repair": {
+    "production_descriptor_ceiling": 65536,
+    "test_real_descriptor_ceiling": 64,
+    "macos_test_threads": 1,
+    "tests_skipped": 0,
+    "public_api_changed": false
+  },
+  "offline_validation": {
+    "linux_engine_lib_passed": 100,
+    "linux_engine_lib_failed": 0,
+    "linux_engine_lib_ms": 21490,
+    "modern_actionlint": "pass",
+    "rustfmt": "pass",
+    "linux_engine_strict_clippy": "pass",
+    "ripwire_quality_delta": "reported_test_module_verbosity_142_to_168; retained_real_boundary_assertions; not_a_clean_gate"
+  },
+  "actual_darwin_repair_validation": "pending_fresh_immutable_candidate",
+  "release_qualified": false,
+  "review": "docs/reviews/v0.2-macos-engine-code-r1.md"
+}

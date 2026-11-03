@@ -71,9 +71,22 @@ jobs:
           components: clippy
       - name: Set qualified macOS deployment minimum
         if: runner.os == 'macOS'
-        run: echo 'MACOSX_DEPLOYMENT_TARGET=15.0' >> "$GITHUB_ENV"
+        run: |
+          echo 'MACOSX_DEPLOYMENT_TARGET=15.0' >> "$GITHUB_ENV"
+          echo 'RUST_TEST_THREADS=1' >> "$GITHUB_ENV"
       - name: Verify native components
         run: |
+          set -euo pipefail
+          if [ "$(uname -s)" = Darwin ]; then
+            ulimit -Sn
+            ulimit -Hn
+            /usr/sbin/sysctl kern.maxfilesperproc kern.maxfiles
+            # Only descriptor numbers/types; never emit paths or provider data.
+            /usr/sbin/lsof -a -p "$$" -F ft | awk '
+              /^f[0-9]+[a-z]*$/ || /^t(REG|DIR|CHR|FIFO|IPv4|IPv6|unix|KQUEUE|systm)$/ {
+                if (++n <= 512) print
+              }'
+          fi
           cargo test --locked -p marmish-engine -p marmish-native -p marmish-vault
           cargo clippy --locked -p marmish-native --all-targets -- -D warnings
       - name: Build final native executables
