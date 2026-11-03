@@ -41,6 +41,13 @@ serve the same pinned native bootstrap after cutover. Versioned binary assets
 are downloaded from GitHub Releases. See [Scope and validation](#scope-and-validation) for the evidence boundary. No Python, uv,
 Cargo or Rust compiler is needed to install or run it.
 
+The native 0.2.1 installer adds automatic upgrades of recognized v0.1 installer
+launchers. It verifies the old marker and exact wrappers, replaces the launchers,
+and retains the old runtime and launcher backups; private state is unchanged.
+Unrelated programs are refused rather than overwritten. Interrupted upgrades
+recover on the next installer invocation. The public bootstrap above still pins
+0.2.0 until matching 0.2.1 assets are published; it does not yet provide this fix.
+
 Supported binaries are Linux AMD64 and ARM64 (glibc 2.39 or newer), and macOS 15
 or newer on Apple Silicon. Use a native ARM64 terminal on macOS. The macOS
 binaries are ad-hoc signed, not notarized; upgrades may require renewed Keychain

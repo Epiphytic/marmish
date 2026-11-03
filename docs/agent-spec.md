@@ -48,6 +48,22 @@ experimental command capabilities, with no direct-network fallback after a
 Tor failure. No PTY, tmux, interactive shell, Unix-login mapping, root execution
 service or general process sandbox is promised by this release.
 
+## Native 0.2.1 launcher upgrades
+
+The development native installer automatically replaces recognized v0.1
+`0.1.0-experimental.N` launchers using the strict legacy marker, owned selector
+and exact regular wrapper bytes. It never executes an existing launcher.
+Receipt-owned native updates retain their existing behavior. Foreign files,
+symlinks and ambiguous ownership refuse without replacement. The old runtime,
+marker, private state and same-directory launcher backups remain; this is not
+profile migration or automatic disk cleanup. Receipt generation determines
+rollback versus roll-forward after interruption, with recovery on the next
+installer invocation. Native uninstall removes native links, not the retained
+legacy backups. See the [reviewed design](phases/v0.2.1-native-legacy-upgrade.md).
+The published 0.2.0 bootstrap does not gain this behavior until updated binary
+assets and a matching bootstrap are published. Hosted migration tests on all
+three targets are still pending; local tests are not a platform qualification.
+
 ## Identity, ownership and local trust
 
 One named profile owns one Nostr identity, encrypted native state and one

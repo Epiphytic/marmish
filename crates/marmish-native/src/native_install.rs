@@ -12,6 +12,8 @@ use std::path::{Component, Path, PathBuf};
 #[path = "native_install_fs.rs"]
 mod anchored;
 use anchored::Anchors;
+#[path = "native_install_legacy.rs"]
+mod legacy;
 
 const RECEIPT: &str = ".marmish-native-install.json";
 const TRANSACTION: &str = ".transaction.json";
@@ -91,6 +93,8 @@ struct Transaction {
     manifest_sha256: Option<String>,
     staging: Option<String>,
     created_launchers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy: Option<legacy::Legacy>,
 }
 #[cfg(test)]
 thread_local! { static FAULT: std::cell::RefCell<Option<&'static str>> = const { std::cell::RefCell::new(None) }; }
@@ -202,10 +206,14 @@ pub(crate) fn read_version(
     Ok((m, v))
 }
 fn atomic<T: Serialize>(ctx: &Anchors, root: &Path, name: &str, v: &T) -> Result<()> {
+    let mut bytes = serde_json::to_vec(v).map_err(|_| invalid("install_metadata"))?;
+    bytes.push(b'\n');
+    if bytes.len() > 8192 {
+        return Err(invalid("install_metadata"));
+    }
     let temp = root.join(format!("{name}.tmp-{}", random()?));
     let mut f = ctx.open(&temp, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL, 0o600)?;
-    serde_json::to_writer(&mut f, v).map_err(|_| invalid("install_metadata"))?;
-    f.write_all(b"\n")?;
+    f.write_all(&bytes)?;
     f.sync_all()?;
     ctx.rename(&temp, &root.join(name), false)?;
     sync(ctx, root)
@@ -283,6 +291,13 @@ fn validate_options(ctx: &Anchors, o: &InstallOptions) -> Result<()> {
     }
     Ok(())
 }
+fn launcher_conflict(path: &Path) -> Error {
+    eprintln!(
+        "marmish installer: conflicting launcher {}; preserve or remove this independently reviewed program, or select a different --bin-dir",
+        serde_json::to_string(path).unwrap_or_else(|_| "\"unrepresentable path\"".into())
+    );
+    invalid("unrelated_launcher")
+}
 fn link(path: &Path, target: &Path, allow_missing: bool) -> Result<bool> {
     match fs::symlink_metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && allow_missing => Ok(false),
@@ -292,7 +307,7 @@ fn link(path: &Path, target: &Path, allow_missing: bool) -> Result<bool> {
                 || m.uid() != unsafe { libc::geteuid() }
                 || fs::read_link(path)? != target
             {
-                return Err(invalid("unrelated_launcher"));
+                return Err(launcher_conflict(path));
             }
             Ok(true)
         }
@@ -307,7 +322,7 @@ fn validate_links(r: &Receipt, allow_missing: bool) -> Result<()> {
         if r.launchers.iter().any(|n| n == name) {
             link(&p, &launcher_target(r, name), allow_missing)?;
         } else if exists(&p)? {
-            return Err(invalid("unrelated_launcher"));
+            return Err(launcher_conflict(&p));
         }
     }
     Ok(())
@@ -412,6 +427,7 @@ fn cleanup_staging(ctx: &Anchors, prefix: &Path, tx: &Transaction) -> Result<()>
     sync(ctx, prefix)
 }
 fn validate_transaction(r: &Receipt, t: &Transaction) -> Result<()> {
+    legacy::validate_transaction(t)?;
     if t.format != 1
         || t.install_id != r.install_id
         || !hex16(&t.txid)
@@ -463,11 +479,11 @@ fn validate_transaction(r: &Receipt, t: &Transaction) -> Result<()> {
     }
     Ok(())
 }
-fn recover(ctx: &Anchors, r: &Receipt) -> Result<()> {
+fn recover(ctx: &Anchors, r: &Receipt) -> Result<bool> {
     let p = r.prefix.join(TRANSACTION);
     if !exists(&p)? {
         selector(&r.prefix, std::slice::from_ref(&r.active))?;
-        return Ok(());
+        return Ok(false);
     }
     let tx: Transaction = json(&p, 0o600, 8192)?;
     validate_transaction(r, &tx)?;
@@ -480,8 +496,13 @@ fn recover(ctx: &Anchors, r: &Receipt) -> Result<()> {
     if let Some(id) = desired {
         reverify(r, id)?;
     }
-    // Validate every potential launcher before changing any selector or entry.
+    // Validate the entire pair before any recovery mutation. Legacy wrappers
+    // must never reach the native-created-link unlink branch.
+    legacy::validate_recovery(r, &tx, previous)?;
     for name in LAUNCHERS {
+        if tx.legacy.as_ref().is_some_and(|v| v.contains(name)) {
+            continue;
+        }
         let path = r.bin_dir.join(name);
         if exists(&path)? {
             link(&path, &launcher_target(r, name), false)?;
@@ -494,6 +515,9 @@ fn recover(ctx: &Anchors, r: &Receipt) -> Result<()> {
         &tx.next_launchers
     };
     for name in LAUNCHERS {
+        if tx.legacy.as_ref().is_some_and(|v| v.contains(name)) {
+            continue;
+        }
         let p = r.bin_dir.join(name);
         if desired_names.iter().any(|n| n == name) {
             if !exists(&p)? {
@@ -503,10 +527,12 @@ fn recover(ctx: &Anchors, r: &Receipt) -> Result<()> {
             ctx.unlink(&p, false)?;
         }
     }
+    legacy::recover(ctx, r, &tx, previous)?;
     sync(ctx, &r.bin_dir)?;
     cleanup_staging(ctx, &r.prefix, &tx)?;
     ctx.unlink(&p, false)?;
-    sync(ctx, &r.prefix)
+    sync(ctx, &r.prefix)?;
+    Ok(previous && tx.legacy.is_some())
 }
 fn metadata_temps(ctx: &Anchors, prefix: &Path, initial: bool) -> Result<()> {
     for entry in fs::read_dir(prefix)? {
@@ -708,7 +734,7 @@ pub(crate) fn run(o: InstallOptions) -> Result<InstallReport> {
     if o.debug {
         eprintln!("marmish installer debug: stage=recovery");
     }
-    recover(ctx, &receipt)?;
+    let restored_legacy = recover(ctx, &receipt)?;
     metadata_temps(ctx, &o.prefix, false)?;
     let operation = match o.action {
         InstallAction::Install { .. } => Operation::Install,
@@ -717,7 +743,10 @@ pub(crate) fn run(o: InstallOptions) -> Result<InstallReport> {
         InstallAction::Uninstall => Operation::Uninstall,
     };
     if !matches!(o.action, InstallAction::Status) {
-        validate_links(&receipt, true)?;
+        let legacy_plan = legacy::discover(ctx, &o, &receipt)?;
+        if legacy_plan.is_none() {
+            validate_links(&receipt, true)?;
+        }
         let (next, hash) = match &o.action {
             InstallAction::Install {
                 manifest_sha256, ..
@@ -745,7 +774,11 @@ pub(crate) fn run(o: InstallOptions) -> Result<InstallReport> {
         };
         let mut created = Vec::new();
         for name in &next_launchers {
-            if !exists(&receipt.bin_dir.join(name))? {
+            if !exists(&receipt.bin_dir.join(name))?
+                || legacy_plan
+                    .as_ref()
+                    .is_some_and(|p| p.record.contains(name))
+            {
                 created.push(name.clone());
             }
         }
@@ -771,9 +804,12 @@ pub(crate) fn run(o: InstallOptions) -> Result<InstallReport> {
             manifest_sha256: hash,
             staging: incoming.as_ref().map(|_| format!(".staging-{txid}")),
             created_launchers: created,
+            legacy: legacy_plan.as_ref().map(|p| p.record.clone()),
         };
+        legacy::validate_destinations(&receipt, &tx)?;
         atomic(ctx, &receipt.prefix, TRANSACTION, &tx)?;
         fault("transaction")?;
+        legacy::prepare(ctx, &receipt, &tx)?;
         let versions = receipt.prefix.join("versions");
         if !exists(&versions)? {
             ctx.mkdir(&versions, 0o755)?;
@@ -818,7 +854,11 @@ pub(crate) fn run(o: InstallOptions) -> Result<InstallReport> {
         fault("commit")?;
         recover(ctx, &receipt)?;
     }
-    validate_links(&receipt, false)?;
+    // This Status just restored exact wrappers from a durable legacy transaction.
+    // They intentionally are not native receipt-owned links.
+    if !(restored_legacy && matches!(o.action, InstallAction::Status)) {
+        validate_links(&receipt, false)?;
+    }
     selector(&receipt.prefix, std::slice::from_ref(&receipt.active))?;
     if receipt.active.is_some() && !exists(&receipt.prefix.join("current"))? {
         return Err(invalid("install_recovery_required"));
@@ -846,6 +886,7 @@ pub(crate) fn run(o: InstallOptions) -> Result<InstallReport> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("native_install_legacy_tests.rs");
     struct Fixture {
         root: tempfile::TempDir,
         source: PathBuf,
