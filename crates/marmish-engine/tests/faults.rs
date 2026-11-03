@@ -3,6 +3,7 @@
 #[path = "support/executable.rs"]
 mod executable;
 use hkdf::Hkdf;
+use marmish_engine::initialize_storage;
 use rusqlite::{Connection, OpenFlags};
 use sha2::Sha256;
 use std::{

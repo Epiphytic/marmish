@@ -10,7 +10,12 @@ pub struct InstalledWorker {
 }
 
 pub fn private_tempdir() -> tempfile::TempDir {
-    let directory = tempfile::tempdir().unwrap();
+    private_tempdir_in(&std::env::temp_dir())
+}
+
+// Resolve only the existing fixture parent, never a database or private leaf.
+pub fn private_tempdir_in(parent: &Path) -> tempfile::TempDir {
+    let directory = tempfile::tempdir_in(parent.canonicalize().unwrap()).unwrap();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
     directory
 }

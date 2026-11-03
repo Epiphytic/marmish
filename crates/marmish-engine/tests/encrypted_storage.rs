@@ -97,11 +97,17 @@ print(json.dumps(result))
 }
 
 fn keyed_schema_count(path: &Path, raw_key: &[u8; 32]) -> rusqlite::Result<i64> {
+    let connection = keyed_connection(path, raw_key, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    connection.query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get(0))
+}
+
+fn keyed_connection(
+    path: &Path,
+    raw_key: &[u8; 32],
+    flags: OpenFlags,
+) -> rusqlite::Result<Connection> {
     initialize_storage().unwrap();
-    let connection = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-    )?;
+    let connection = Connection::open_with_flags(path, flags | OpenFlags::SQLITE_OPEN_NOFOLLOW)?;
     let mut representation = Zeroizing::new(Vec::with_capacity(67));
     representation.extend_from_slice(b"x'");
     for byte in raw_key {
@@ -116,7 +122,7 @@ fn keyed_schema_count(path: &Path, raw_key: &[u8; 32]) -> rusqlite::Result<i64> 
         rusqlite::ffi::sqlite3_key(connection.handle(), representation.as_ptr().cast(), 67)
     };
     assert_eq!(code, rusqlite::ffi::SQLITE_OK);
-    connection.query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get(0))
+    Ok(connection)
 }
 
 #[test]
@@ -267,5 +273,56 @@ fn bounded_prefix() -> Vec<Vec<u8>> {
             b"alarm 30; exec @ARGV or die \"exec failed\"".to_vec(),
             b"--".to_vec(),
         ]
+    }
+}
+
+#[test]
+fn canonical_fixture_parent_preserves_sqlite_symlink_refusal() {
+    use std::os::unix::fs::symlink;
+
+    let owner = executable::private_tempdir();
+    let actual = owner.path().join("actual");
+    std::fs::create_dir(&actual).unwrap();
+    std::fs::set_permissions(&actual, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let alias = owner.path().join("alias");
+    symlink(&actual, &alias).unwrap();
+    let fixture = executable::private_tempdir_in(&alias);
+    assert_eq!(fixture.path().parent(), Some(actual.as_path()));
+    assert_eq!(fixture.path(), fixture.path().canonicalize().unwrap());
+    let database = fixture.path().join("database.sqlite3");
+    let key = [0x31; 32];
+    let connection = keyed_connection(
+        &database,
+        &key,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
+    )
+    .unwrap();
+    connection
+        .execute_batch("CREATE TABLE secret(value BLOB)")
+        .unwrap();
+    drop(connection);
+    assert!(keyed_schema_count(&database, &key).unwrap() > 0);
+    assert!(keyed_schema_count(&database, &[0x42; 32]).is_err());
+    let unkeyed = Connection::open_with_flags(
+        &database,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .unwrap();
+    assert!(unkeyed
+        .query_row("SELECT count(*) FROM sqlite_master", [], |r| r
+            .get::<_, i64>(0))
+        .is_err());
+    drop(unkeyed);
+
+    let through_alias = alias
+        .join(fixture.path().file_name().unwrap())
+        .join("database.sqlite3");
+    let leaf_alias = fixture.path().join("database-link.sqlite3");
+    symlink(&database, &leaf_alias).unwrap();
+    for path in [&through_alias, &leaf_alias] {
+        let error = keyed_schema_count(path, &key).unwrap_err();
+        assert!(
+            matches!(error, rusqlite::Error::SqliteFailure(code, _) if code.extended_code == 1550)
+        );
     }
 }
