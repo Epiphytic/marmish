@@ -15,7 +15,9 @@ The foundation passed [hosted direct and Arti checks on all three targets](docs/
 The internal Rust command path also passed a [fresh-key direct Marmot run](docs/validation/v0.2/local-command-direct-2026-11-02.md),
 including literal arguments, binary stdin, stderr, exit codes and owned cleanup,
 with measured command completion and goodput. [Arti command attempts](docs/validation/v0.2/local-command-arti-2026-11-02.md)
-have not passed. Public command CLI/IPC, running-job
+have not passed and are deferred to v0.3; Tor command support does not block
+v0.2. Existing Tor command modes remain experimental and unqualified for v0.2.
+Public command CLI/IPC, running-job
 restart/replay checks and installed cross-platform command acceptance remain
 pending; this is not yet a usable v0.2 remote shell release.
 
@@ -65,12 +67,14 @@ and curl. Have the platform prerequisites described below in place; the installe
 does not install system tools, initialize a keychain service or enable namespaces.
 
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL https://iris.radicle.network/raw/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/head/scripts/install.sh -o marmish-install.sh &&
+(curl --proto '=https' --tlsv1.2 --connect-timeout 10 --max-time 60 -fsSL https://iris.radicle.network/raw/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/head/scripts/install.sh -o marmish-install.sh ||
+ curl --proto '=https' --tlsv1.2 --connect-timeout 10 --max-time 60 -fsSL https://raw.githubusercontent.com/Epiphytic/marmish/master/scripts/install.sh -o marmish-install.sh) &&
 sh marmish-install.sh --quickstart --debug
 ```
 
 This saves the installer as `marmish-install.sh` and runs it only if the download
-succeeds. Debug diagnostics are enabled here temporarily to help diagnose setup
+succeeds through Iris or its GitHub backup. Both URLs are standalone download
+options; if both fail, the script is not run. Debug diagnostics are enabled here temporarily to help diagnose setup
 failures. They report stages and numeric failure details to stderr, excluding
 private keys, credentials and command contents. The installer forwards debug mode
 through `MARMISH_DEBUG=1`; older archives, including experimental.1, ignore it and
@@ -95,12 +99,18 @@ For installation alone without identity or keychain access, omit `--quickstart`.
 Add `~/.local/bin` to PATH for later commands, or use the printed absolute launcher
 paths. The runtime limitations above still apply.
 
-The script is served from Radicle through Iris and downloads complete native
+The script can be downloaded from Radicle through Iris or GitHub and downloads complete native
 archives and `SHA256SUMS` from [GitHub Releases](https://github.com/Epiphytic/marmish/releases).
 It selects an experimental prerelease; pin one with `sh install.sh --version
 0.1.0-experimental.2` after downloading the script. For an immutable installer,
-replace `head` in the Iris URL with a full reviewed commit SHA. Mutable `head`
-trusts the script currently served by Iris; same-release checksums detect
+replace both Iris `head` and GitHub `master` in the command above with the same
+full reviewed commit SHA. Mutable URLs trust whichever script that source serves;
+a stale HTTP 200 response does not trigger fallback. These are two script sources,
+not independent archive hosts: archives/checksums still require GitHub Releases.
+The latest [download check](docs/validation/v0.2/installer-source-fallback.md)
+found both script URLs returning HTTP 200 with identical reviewed bytes. Iris
+immutable README retrieval separately returned HTTP 500; availability of one
+path does not establish availability of every source path. Same-release checksums detect
 corruption and are not independent signatures.
 
 By default, versions live under `~/.local/share/marmish/versions` and launchers

@@ -10,6 +10,12 @@ their Python, daemon-RPC and mandatory confinement requirements do not apply
 to the rewrite. Python remains an optional legacy protocol comparison fixture; v0.2 wire and
 on-disk compatibility may break.
 
+The user's scope amendment defers working Tor commands to v0.3. v0.2 acceptance
+uses direct relays and retains the full installed platform matrix and recovery
+checks. Native setup must offer independently usable Radicle/Iris and GitHub
+installer URLs, with GitHub as the backup. This supersedes earlier Tor command
+gates; see [the active amendment](v0.2-plan.md#outcome).
+
 ## Installed three-platform live acceptance
 
 The [nine-pair design](phases/installed-nine-pair-interop.md), Beads

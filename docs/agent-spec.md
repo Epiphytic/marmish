@@ -2,6 +2,17 @@
 
 ## Active v0.2 direction
 
+The user's latest scope amendment defers working Tor command transport to v0.3:
+it is not a v0.2 release gate. Direct-relay installed command interoperability,
+recovery, authorization, cleanup and performance validation remain required.
+Retain accurate experimental Arti results and never fall back from Tor to direct
+networking. Installation must work independently through Radicle/Iris and GitHub;
+document both script URLs and use GitHub as the bootstrap backup. This concerns
+script downloads; archives/checksums may still depend on GitHub Releases. Validate both
+sources against the same reviewed bytes; do not infer Iris availability from a
+successful Radicle push. Existing Tor command modes remain experimental and
+unqualified for v0.2. See the overriding amendment in [the plan](v0.2-plan.md).
+
 The user replaced the v0.1 architecture on 2026-11-02. The authoritative active
 design is [the v0.2 plan](v0.2-plan.md), Beads `marmish-7nw`. It specifies native
 Rust, upstream MDK, embedded Arti, no mandatory OS namespace/broker and no Python
@@ -34,9 +45,9 @@ is separate from replay facts and native publication obligations. Ordinary
 disconnect and owner stop do not cancel admitted commands.
 
 Phase 2 remains open: public command CLI/IPC, restart while running, authenticated
-remote conflict/replay validation, command-count/uptime limits, command execution
-over Arti and installed cross-platform command acceptance are unfinished or
-unvalidated. [The local Arti command attempts](validation/v0.2/local-command-arti-2026-11-02.md)
+remote conflict/replay validation, command-count/uptime limits and installed
+cross-platform direct command acceptance are unfinished or unvalidated. Working
+Tor commands are deferred to v0.3. [The local Arti command attempts](validation/v0.2/local-command-arti-2026-11-02.md)
 failed; their actual cleanup results are preserved. No v0.2 release or native installer is accepted. The direct command
 timings are individual observations, not sustained throughput or RTT benchmarks.
 The macOS v2 provider has passed a separate
