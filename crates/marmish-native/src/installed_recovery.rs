@@ -31,6 +31,7 @@ enum Failure {
     Stop,
     Reopen,
     Completion,
+    DefaultReuse,
     Interrupted,
     Cleanup,
 }
@@ -46,6 +47,18 @@ struct Sample {
     group_submit_sha256: Option<String>,
     #[serde(deserialize_with = "cleanup::required_nullable")]
     receipt: Option<serde_json::Value>,
+    #[serde(deserialize_with = "cleanup::required_nullable")]
+    server_group_sha256: Option<String>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DefaultReuse {
+    session: String,
+    local_account: String,
+    client_before: u8,
+    client_after: u8,
+    server_before: u8,
+    server_after: u8,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -65,6 +78,8 @@ pub(super) struct RecoveryResult {
     #[serde(deserialize_with = "cleanup::required_nullable")]
     context_remaining_seconds: Option<u64>,
     samples: Vec<Sample>,
+    #[serde(deserialize_with = "cleanup::required_nullable")]
+    default_reuse: Option<DefaultReuse>,
     #[serde(deserialize_with = "cleanup::required_nullable")]
     before_stop: Option<wire::Status>,
     #[serde(deserialize_with = "cleanup::required_nullable")]
@@ -110,7 +125,7 @@ fn nonce(ctx: &Context, id: &IdentityReady, index: u8) -> Result<String> {
 fn new_result(ctx: &Context, id: &IdentityReady, now: u64) -> Result<RecoveryResult> {
     let index = ROLES.iter().position(|r| *r == id.role).ok_or_else(bad)?;
     Ok(RecoveryResult {
-        schema: 1,
+        schema: 2,
         kind: "recovery-result".into(),
         context_sha256: ctx.digest()?,
         role: id.role.clone(),
@@ -131,9 +146,11 @@ fn new_result(ctx: &Context, id: &IdentityReady, now: u64) -> Result<RecoveryRes
                     handle: None,
                     group_submit_sha256: None,
                     receipt: None,
+                    server_group_sha256: None,
                 })
             })
             .collect::<Result<_>>()?,
+        default_reuse: None,
         before_stop: None,
         after_reopen: None,
         marker: None,
@@ -256,8 +273,11 @@ impl Client<'_> {
         ]);
         args
     }
-    async fn submit(&self, sample: &mut Sample, signal: &mut Signal) -> Result<PathBuf> {
+    fn submit_args(&self, sample: &Sample) -> Result<Vec<OsString>> {
         let mut args = matrix::base(self.workspace, "client", self.socket, &self.ctx.relays);
+        if sample.index == 1 {
+            args.push("--new-session".into());
+        }
         args.extend([
             "--no-autostart".into(),
             "--stdin".into(),
@@ -277,6 +297,10 @@ impl Client<'_> {
         } else {
             fixture::arguments(&sample.nonce, 1)?
         });
+        Ok(args)
+    }
+    async fn submit(&self, sample: &mut Sample, signal: &mut Signal) -> Result<PathBuf> {
+        let args = self.submit_args(sample)?;
         let (input, _, _) = fixture::bytes(&sample.nonce, sample.index)?;
         let output = self
             .call(
@@ -417,6 +441,156 @@ fn expected_receipt(executable: &Path, sample: &Sample, hash: &str) -> Result<se
         .map_err(|_| bad())
     }
 }
+fn bind_server_rows(
+    samples: &mut [Sample],
+    rows: &[cleanup::RecoveryRow],
+    principal: &str,
+) -> Result<()> {
+    if samples.len() != rows.len() || rows.len() > 2 {
+        return Err(bad());
+    }
+    let mut groups = std::collections::BTreeSet::new();
+    for sample in samples {
+        let h = sample.handle.as_ref().ok_or_else(bad)?;
+        let matches: Vec<_> = rows
+            .iter()
+            .filter(|r| r.invocation == hex::encode(h.invocation()))
+            .collect();
+        let [row] = matches.as_slice() else {
+            return Err(bad());
+        };
+        if row.principal != principal
+            || row.session != hex::encode(h.session())
+            || Some(&row.submit_sha256) != sample.group_submit_sha256.as_ref()
+            || !records::hexadecimal(&row.group_sha256, 64)
+            || !groups.insert(row.group_sha256.clone())
+        {
+            return Err(bad());
+        }
+        sample.server_group_sha256 = Some(row.group_sha256.clone());
+    }
+    Ok(())
+}
+async fn invocation_count(
+    child: &mut tokio::process::Child,
+    socket: &Path,
+    deadline: Instant,
+    handle: &CommandHandle,
+) -> Result<u8> {
+    let crate::command_local::LocalResult::Invocations { entries, next } =
+        cleanup::command_request(
+            child,
+            socket,
+            &crate::ipc::Request::CommandInvocations {
+                after: None,
+                limit: 64,
+            },
+            deadline,
+        )
+        .await?
+    else {
+        return Err(bad());
+    };
+    if next.is_some() || entries.len() != 1 || entries[0].handle != *handle {
+        return Err(bad());
+    }
+    Ok(1)
+}
+fn reuse_ready(
+    value: crate::command_local::LocalResult,
+    handle: &CommandHandle,
+    account: &str,
+) -> Result<bool> {
+    match value {
+        crate::command_local::LocalResult::LocalBusy => Ok(false),
+        crate::command_local::LocalResult::Ready {
+            session,
+            local_account,
+        } => {
+            if session != hex::encode(handle.session()) || local_account != account {
+                return Err(bad());
+            }
+            Ok(true)
+        }
+        _ => Err(bad()),
+    }
+}
+async fn default_reuse(
+    client: &Client<'_>,
+    runtime: &mut Runtime,
+    sample: &mut Sample,
+    signal: &mut Signal,
+) -> Result<DefaultReuse> {
+    let deadline = client
+        .deadline
+        .min(Instant::now() + Duration::from_secs(15));
+    let c = runtime.client.as_mut().ok_or_else(bad)?;
+    let client_before = invocation_count(
+        &mut c.child,
+        &c.socket,
+        deadline,
+        sample.handle.as_ref().ok_or_else(bad)?,
+    )
+    .await?;
+    let server = runtime.server.as_mut().ok_or_else(bad)?;
+    let before = cleanup::recovery_rows(&mut server.child, &server.socket, deadline).await?;
+    bind_server_rows(
+        std::slice::from_mut(sample),
+        &before,
+        &client.id.client_account,
+    )?;
+    let request = crate::ipc::Request::CommandPrepare {
+        remote: client.id.server_account.clone(),
+        relays: client.ctx.relays.clone(),
+        fresh: None,
+    };
+    let mut ready = false;
+    for attempt in 0..15 {
+        interrupt(signal).await?;
+        if Instant::now() >= deadline {
+            return Err(Error::Timeout);
+        }
+        let c = runtime.client.as_mut().ok_or_else(bad)?;
+        let value = cleanup::command_request(&mut c.child, &c.socket, &request, deadline).await?;
+        if reuse_ready(
+            value,
+            sample.handle.as_ref().ok_or_else(bad)?,
+            &client.id.client_account,
+        )? {
+            ready = true;
+            break;
+        }
+        if attempt < 14 {
+            tokio::select! {biased;_=signal.recv()=>return Err(Error::Invalid("installed_interrupted")),
+            _=tokio::time::sleep_until((Instant::now()+Duration::from_secs(1)).min(deadline))=>{}}
+        }
+    }
+    if !ready {
+        return Err(Error::Timeout);
+    }
+    let c = runtime.client.as_mut().ok_or_else(bad)?;
+    let client_after = invocation_count(
+        &mut c.child,
+        &c.socket,
+        deadline,
+        sample.handle.as_ref().ok_or_else(bad)?,
+    )
+    .await?;
+    let server = runtime.server.as_mut().ok_or_else(bad)?;
+    let after = cleanup::recovery_rows(&mut server.child, &server.socket, deadline).await?;
+    if records::canonical(&before)? != records::canonical(&after)? {
+        return Err(bad());
+    }
+    let handle = sample.handle.as_ref().ok_or_else(bad)?;
+    Ok(DefaultReuse {
+        session: hex::encode(handle.session()),
+        local_account: client.id.client_account.clone(),
+        client_before,
+        client_after,
+        server_before: before.len() as u8,
+        server_after: after.len() as u8,
+    })
+}
 fn cleanup_plan(unknown: bool, pending_binding: bool, failed: bool) -> (bool, bool) {
     let prepare = !unknown && !pending_binding;
     (prepare && failed, prepare)
@@ -449,7 +623,7 @@ impl Runtime {
         let changed = self
             .expected
             .values()
-            .any(|(previous, _)| *previous != session);
+            .any(|(previous, _)| *previous == session);
         if changed {
             self.unknown = true;
             return Err(bad());
@@ -716,6 +890,9 @@ async fn work(
     let binding = runtime.bind(&result.samples[0], id);
     outcome.and(binding)?;
     fixture::verify_recovery_marker(&executable, &result.samples[0].nonce, marker)?;
+    *stage = Failure::DefaultReuse;
+    result.default_reuse =
+        Some(default_reuse(&client, runtime, &mut result.samples[0], signal).await?);
     *stage = Failure::Submit;
     let file = match client.submit(&mut result.samples[1], signal).await {
         Ok(f) => f,
@@ -736,6 +913,9 @@ async fn work(
         .await;
     let binding = runtime.bind(&result.samples[1], id);
     outcome.and(binding)?;
+    let server = runtime.server.as_mut().ok_or_else(bad)?;
+    let rows = cleanup::recovery_rows(&mut server.child, &server.socket, deadline).await?;
+    bind_server_rows(&mut result.samples, &rows, &id.client_account)?;
     Ok(())
 }
 pub(super) async fn run(ctx: &Context, workspace: &Path, output: &Path) -> Result<()> {
@@ -801,7 +981,7 @@ pub(super) fn validate_record(r: &RecoveryResult, ctx: &Context, id: &IdentityRe
     ctx.require_cohort("recovery")?;
     id.validate(ctx, &id.role)?;
     let index = ROLES.iter().position(|v| *v == id.role).ok_or_else(bad)?;
-    if r.schema != 1
+    if r.schema != 2
         || r.kind != "recovery-result"
         || r.context_sha256 != ctx.digest()?
         || r.role != id.role
@@ -848,7 +1028,7 @@ pub(super) fn validate_record(r: &RecoveryResult, ctx: &Context, id: &IdentityRe
             }
             if let Some(previous) = first
                 && (previous.invocation() == handle.invocation()
-                    || previous.session() != handle.session())
+                    || previous.session() == handle.session())
             {
                 return Err(bad());
             }
@@ -886,6 +1066,33 @@ pub(super) fn validate_record(r: &RecoveryResult, ctx: &Context, id: &IdentityRe
             stopped = true;
         }
     }
+    if let Some(proof) = &r.default_reuse {
+        let first = r.samples[0].handle.as_ref().ok_or_else(bad)?;
+        if !r.samples[0].passed
+            || r.samples[0].server_group_sha256.is_none()
+            || proof.session != hex::encode(first.session())
+            || proof.local_account != id.client_account
+            || [
+                proof.client_before,
+                proof.client_after,
+                proof.server_before,
+                proof.server_after,
+            ] != [1; 4]
+        {
+            return Err(bad());
+        }
+    }
+    let mut groups = std::collections::BTreeSet::new();
+    for sample in &r.samples {
+        if let Some(group) = &sample.server_group_sha256
+            && (!sample.passed || !records::hexadecimal(group, 64) || !groups.insert(group))
+        {
+            return Err(bad());
+        }
+    }
+    if r.samples[1].handle.is_some() && r.default_reuse.is_none() {
+        return Err(bad());
+    }
     if let Some(before) = &r.before_stop {
         running(before, r.samples[0].handle.as_ref().ok_or_else(bad)?)?
             .then_some(())
@@ -896,27 +1103,33 @@ pub(super) fn validate_record(r: &RecoveryResult, ctx: &Context, id: &IdentityRe
             .then_some(())
             .ok_or_else(bad)?;
     }
+    if r.complete
+        && (r.context_remaining_seconds.is_none_or(|n| n < 2220)
+            || r.samples
+                .iter()
+                .any(|s| !s.passed || s.server_group_sha256.is_none())
+            || r.default_reuse.is_none()
+            || r.before_stop.is_none()
+            || r.after_reopen.is_none()
+            || r.marker.is_none()
+            || !r.marker_unchanged
+            || !r.ordinary_stop_joined
+            || r.restart_uptime_seconds.is_none()
+            || r.initial_ready_ns.is_none()
+            || r.ordinary_stop_ns.is_none()
+            || r.restart_ready_ns.is_none()
+            || r.final_seq.is_none()
+            || !r.engine_cleanup_complete
+            || !r.server_stop_complete
+            || !r.client_stop_complete)
+    {
+        return Err(bad());
+    }
     Ok(())
 }
 pub(super) fn validate(r: &RecoveryResult, ctx: &Context, id: &IdentityReady) -> Result<()> {
     validate_record(r, ctx, id)?;
-    if !r.complete
-        || r.context_remaining_seconds.is_none_or(|n| n < 2220)
-        || r.samples.iter().any(|s| !s.passed)
-        || r.before_stop.is_none()
-        || r.after_reopen.is_none()
-        || r.marker.is_none()
-        || !r.marker_unchanged
-        || !r.ordinary_stop_joined
-        || r.restart_uptime_seconds.is_none()
-        || r.initial_ready_ns.is_none()
-        || r.ordinary_stop_ns.is_none()
-        || r.restart_ready_ns.is_none()
-        || r.final_seq.is_none()
-        || !r.engine_cleanup_complete
-        || !r.server_stop_complete
-        || !r.client_stop_complete
-    {
+    if !r.complete {
         return Err(bad());
     }
     Ok(())
@@ -945,6 +1158,7 @@ pub(super) fn markdown_summary(r: &RecoveryResult) -> Result<String> {
         ("before_stop", serde_json::to_value(&r.before_stop)),
         ("after_reopen", serde_json::to_value(&r.after_reopen)),
         ("marker", serde_json::to_value(r.marker)),
+        ("default_reuse", serde_json::to_value(&r.default_reuse)),
         (
             "ordinary_stop_engine_quiesced",
             serde_json::to_value(r.ordinary_stop_engine_quiesced),
@@ -1003,15 +1217,24 @@ pub(super) mod tests {
         r.fixture_path = "/private/fixture/main".into();
         for sample in &mut r.samples {
             sample.handle = Some(CommandHandle::decode(&serde_json::to_vec(&serde_json::json!({
-                "format":1,"profile":"client","remote":id.server_account,"session":"1".repeat(32),
+                "format":1,"profile":"client","remote":id.server_account,"session":format!("{:032x}",sample.index+1),
                 "invocation":format!("{:032x}",sample.index+1),"submit_sha256":"2".repeat(64)
             })).unwrap()).unwrap());
-            sample.group_submit_sha256 = Some("3".repeat(64));
+            sample.group_submit_sha256 = Some(format!("{:064x}", sample.index + 3));
             sample.receipt = Some(
                 expected_receipt(Path::new(&r.fixture_path), sample, &r.fixture_sha256).unwrap(),
             );
             sample.passed = true;
+            sample.server_group_sha256 = Some(format!("{:064x}", sample.index + 1));
         }
+        r.default_reuse = Some(DefaultReuse {
+            session: hex::encode(r.samples[0].handle.as_ref().unwrap().session()),
+            local_account: id.client_account.clone(),
+            client_before: 1,
+            client_after: 1,
+            server_before: 1,
+            server_after: 1,
+        });
         let status = running_status(r.samples[0].handle.as_ref().unwrap());
         r.before_stop = Some(status.clone());
         r.after_reopen = Some(status);
@@ -1042,7 +1265,13 @@ pub(super) mod tests {
             assert!(validate(&r, &ctx, &id).is_err());
             let value = serde_json::to_value(&r).unwrap();
             assert!(value["samples"][0]["handle"].is_null());
-            for field in ["before_stop", "after_reopen", "marker", "final_seq"] {
+            for field in [
+                "before_stop",
+                "after_reopen",
+                "marker",
+                "final_seq",
+                "default_reuse",
+            ] {
                 let mut missing = value.clone();
                 missing.as_object_mut().unwrap().remove(field);
                 assert!(serde_json::from_value::<RecoveryResult>(missing).is_err());
@@ -1115,6 +1344,7 @@ pub(super) mod tests {
             }
             let changed: RecoveryResult = serde_json::from_value(changed).unwrap();
             assert!(validate(&changed, &ctx, &id).is_err());
+            assert!(validate_record(&changed, &ctx, &id).is_err());
         }
     }
     #[test]
@@ -1168,7 +1398,8 @@ pub(super) mod tests {
         assert!(runtime.bind(&r.samples[0], &id).is_err());
         assert!(runtime.unknown);
         let mut changed = serde_json::to_value(&r.samples[1]).unwrap();
-        changed["handle"]["session"] = "4".repeat(32).into();
+        changed["handle"]["session"] =
+            hex::encode(r.samples[0].handle.as_ref().unwrap().session()).into();
         let changed: Sample = serde_json::from_value(changed).unwrap();
         let mut runtime = Runtime::default();
         runtime.bind(&r.samples[0], &id).unwrap();
@@ -1190,5 +1421,144 @@ pub(super) mod tests {
         failed.failure = Some(Failure::Completion);
         failed.samples[0].passed = false;
         assert!(validate_record(&failed, &ctx, &id).is_err());
+    }
+    #[test]
+    fn new_session_schema_and_independent_bindings_are_required() {
+        let (ctx, id, r) = complete();
+        let value = serde_json::to_value(&r).unwrap();
+        for change in 0..10 {
+            let mut v = value.clone();
+            match change {
+                0 => v["schema"] = 1.into(),
+                1 => v["default_reuse"] = serde_json::Value::Null,
+                2 => v["default_reuse"]["session"] = "f".repeat(32).into(),
+                3 => v["default_reuse"]["client_after"] = 2.into(),
+                4 => v["default_reuse"]["server_after"] = 2.into(),
+                5 => {
+                    v["samples"][1]["handle"]["session"] =
+                        v["samples"][0]["handle"]["session"].clone()
+                }
+                6 => {
+                    v["samples"][1]["server_group_sha256"] =
+                        v["samples"][0]["server_group_sha256"].clone()
+                }
+                7 => v["samples"][1]["server_group_sha256"] = serde_json::Value::Null,
+                8 => v["default_reuse"]["local_account"] = "f".repeat(64).into(),
+                _ => v["samples"][1]["passed"] = false.into(),
+            }
+            let altered: RecoveryResult = serde_json::from_value(v).unwrap();
+            assert!(validate(&altered, &ctx, &id).is_err());
+            assert!(validate_record(&altered, &ctx, &id).is_err());
+        }
+        let mut missing = value;
+        missing["samples"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("server_group_sha256");
+        assert!(serde_json::from_value::<RecoveryResult>(missing).is_err());
+    }
+    #[test]
+    fn reuse_requires_exact_ready_binding_and_fresh_flag_only_on_second_submit() {
+        use crate::command_local::LocalResult;
+        let (ctx, id, r) = complete();
+        let h = r.samples[0].handle.as_ref().unwrap();
+        assert!(!reuse_ready(LocalResult::LocalBusy, h, &id.client_account).unwrap());
+        for change in 0..3 {
+            let value = LocalResult::Ready {
+                session: if change == 1 {
+                    "f".repeat(32)
+                } else {
+                    hex::encode(h.session())
+                },
+                local_account: if change == 2 {
+                    "f".repeat(64)
+                } else {
+                    id.client_account.clone()
+                },
+            };
+            assert_eq!(
+                reuse_ready(value, h, &id.client_account).is_ok(),
+                change == 0
+            );
+        }
+        assert!(
+            reuse_ready(
+                LocalResult::Failure {
+                    category: "command_room_pending".into(),
+                    handle: None
+                },
+                h,
+                &id.client_account
+            )
+            .is_err()
+        );
+        let env = Environment {
+            home: "/private/home".into(),
+            temporary: "/private/tmp".into(),
+            utilities: "/private/utilities".into(),
+        };
+        let client = Client {
+            workspace: Path::new("/private/work"),
+            ctx: &ctx,
+            id: &id,
+            env: &env,
+            executable: Path::new("/private/fixture/main"),
+            socket: Path::new("/private/socket"),
+            deadline: Instant::now(),
+        };
+        for sample in &r.samples {
+            let args = client.submit_args(sample).unwrap();
+            assert_eq!(
+                args.iter().filter(|a| *a == "--new-session").count(),
+                sample.index as usize
+            );
+            if sample.index == 1 {
+                let flag = args.iter().position(|a| a == "--new-session").unwrap();
+                let separator = args.iter().position(|a| a == "--").unwrap();
+                let destination = nostr::key::PublicKey::from_hex(&id.server_account)
+                    .unwrap()
+                    .to_bech32()
+                    .unwrap();
+                let target = args.iter().position(|a| a == destination.as_str()).unwrap();
+                assert!(flag < target && target < separator);
+            }
+        }
+    }
+    #[test]
+    fn server_rows_bind_independent_principal_session_group_and_submit_digest() {
+        let (_, id, r) = complete();
+        let rows: Vec<_> = r
+            .samples
+            .iter()
+            .map(|s| {
+                let h = s.handle.as_ref().unwrap();
+                cleanup::RecoveryRow {
+                    principal: id.client_account.clone(),
+                    invocation: hex::encode(h.invocation()),
+                    session: hex::encode(h.session()),
+                    group_sha256: s.server_group_sha256.clone().unwrap(),
+                    submit_sha256: s.group_submit_sha256.clone().unwrap(),
+                }
+            })
+            .collect();
+        for change in 0..7 {
+            let mut rows = rows.clone();
+            match change {
+                0 => {}
+                1 => rows[1].principal = "f".repeat(64),
+                2 => rows[1].session = rows[0].session.clone(),
+                3 => rows[1].group_sha256 = rows[0].group_sha256.clone(),
+                4 => rows[1].submit_sha256 = "f".repeat(64),
+                5 => rows.push(rows[0].clone()),
+                _ => rows[1].invocation = rows[0].invocation.clone(),
+            }
+            let mut samples =
+                serde_json::from_value::<Vec<Sample>>(serde_json::to_value(&r.samples).unwrap())
+                    .unwrap();
+            assert_eq!(
+                bind_server_rows(&mut samples, &rows, &id.client_account).is_ok(),
+                change == 0
+            );
+        }
     }
 }

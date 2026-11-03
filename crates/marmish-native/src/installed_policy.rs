@@ -455,6 +455,7 @@ async fn prepare_binding(
             &ipc::Request::CommandPrepare {
                 remote: identity.server_account.clone(),
                 relays: ctx.relays.clone(),
+                fresh: None,
             },
             end,
         )

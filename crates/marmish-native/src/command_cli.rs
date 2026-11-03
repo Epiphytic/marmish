@@ -47,6 +47,7 @@ pub(crate) enum Action {
         argv: Vec<OsString>,
         stdin: StdinMode,
         detach: bool,
+        new_session: bool,
         wait: Duration,
     },
     Commands {
@@ -66,6 +67,11 @@ pub(crate) enum Action {
         selection: Selection,
         wait: Duration,
     },
+}
+struct SubmissionTarget {
+    remote: Account,
+    relays: Vec<String>,
+    new_session: bool,
 }
 fn invalid(category: &'static str) -> Error {
     Error::Invalid(category)
@@ -1023,11 +1029,23 @@ impl Context {
             tokio::time::sleep_until((Instant::now() + Duration::from_secs(1)).min(deadline)).await;
         }
     }
-    async fn prepare(&self, remote: Account, relays: Vec<String>) -> Result<(Id, Account)> {
-        let deadline = Instant::now() + Duration::from_secs(15);
+    async fn prepare(
+        &self,
+        remote: Account,
+        relays: Vec<String>,
+        new_session: bool,
+    ) -> Result<(Id, Account)> {
+        let fresh = new_session.then(fresh_id).transpose()?.map(hex::encode);
+        let deadline = Instant::now()
+            + Duration::from_secs(if new_session {
+                crate::command_local::FRESH_PREPARE_SECONDS
+            } else {
+                15
+            });
         let request = Request::CommandPrepare {
             remote: hex::encode(remote),
             relays,
+            fresh,
         };
         let mut pause = Duration::from_millis(50);
         loop {
@@ -1037,6 +1055,16 @@ impl Context {
                     local_account,
                 } => return Ok((id(&session)?, account(&local_account)?)),
                 LocalResult::LocalBusy => {}
+                LocalResult::Failure { category, .. } => {
+                    return Err(invalid(match category.as_str() {
+                        "command_room_uncertain" => "command_room_uncertain",
+                        "command_room_capacity" => "command_room_capacity",
+                        "command_preparation_capacity" => "command_preparation_capacity",
+                        "command_preparation_binding" => "command_preparation_binding",
+                        "command_room_start_expired" => "command_room_start_expired",
+                        _ => "command_prepare",
+                    }));
+                }
                 _ => return Err(invalid("command_prepare")),
             }
             tokio::time::sleep_until((Instant::now() + pause).min(deadline)).await;
@@ -1048,13 +1076,17 @@ impl Context {
     }
     async fn submit(
         &self,
-        remote: Account,
-        relays: Vec<String>,
+        target: SubmissionTarget,
         argv: Vec<OsString>,
         stdin: StdinMode,
         detach: bool,
         wait: Duration,
     ) -> Result<u8> {
+        let SubmissionTarget {
+            remote,
+            relays,
+            new_session,
+        } = target;
         let stdin = read_stdin(
             libc::STDIN_FILENO,
             stdin,
@@ -1077,7 +1109,7 @@ impl Context {
             request_id,
             RequestOp::Submit(submit.clone()),
         )?;
-        let (session, local) = self.prepare(remote, relays.clone()).await?;
+        let (session, local) = self.prepare(remote, relays.clone(), new_session).await?;
         let prepared = prepare_operation(
             Binding {
                 session,
@@ -1161,10 +1193,21 @@ async fn run_inner(context: Context, action: Action) -> Result<u8> {
             argv,
             stdin,
             detach,
+            new_session,
             wait,
         } => {
             context
-                .submit(remote, relays, argv, stdin, detach, wait)
+                .submit(
+                    SubmissionTarget {
+                        remote,
+                        relays,
+                        new_session,
+                    },
+                    argv,
+                    stdin,
+                    detach,
+                    wait,
+                )
                 .await
         }
         Action::Commands { remote } => {
@@ -1525,6 +1568,61 @@ mod tests {
             },
             listener,
         )
+    }
+    #[tokio::test]
+    async fn fresh_preparation_freezes_token_across_busy_retries() {
+        let (_dir, context, listener) = socket_context();
+        let session = fresh_id().unwrap();
+        let server = tokio::spawn(serve_replies(
+            listener,
+            vec![
+                LocalResult::LocalBusy,
+                LocalResult::LocalBusy,
+                LocalResult::Ready {
+                    session: hex::encode(session),
+                    local_account: hex::encode([1; 32]),
+                },
+            ],
+        ));
+        assert_eq!(
+            context
+                .prepare([2; 32], vec!["wss://relay.example/".into()], true)
+                .await
+                .unwrap(),
+            (session, [1; 32])
+        );
+        let requests = server.await.unwrap();
+        let values = requests
+            .iter()
+            .map(|r| serde_json::to_value(r).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(values[0], values[1]);
+        assert_eq!(values[1], values[2]);
+        let token = values[0]["fresh"].as_str().unwrap();
+        assert_ne!(id(token).unwrap(), session);
+        assert!(wire::id_timestamp(id(token).unwrap()) > 0);
+    }
+    #[tokio::test]
+    async fn default_preparation_omits_token_and_uncertainty_is_finite() {
+        let (_dir, context, listener) = socket_context();
+        let server = tokio::spawn(serve_replies(
+            listener,
+            vec![LocalResult::Failure {
+                category: "command_room_uncertain".into(),
+                handle: None,
+            }],
+        ));
+        assert!(matches!(
+            context.prepare([2; 32], vec![], false).await,
+            Err(Error::Invalid("command_room_uncertain"))
+        ));
+        let values = server.await.unwrap();
+        assert!(
+            serde_json::to_value(&values[0])
+                .unwrap()
+                .get("fresh")
+                .is_none()
+        );
     }
     #[tokio::test]
     async fn submit_wait_does_not_poll_before_authenticated_admission() {

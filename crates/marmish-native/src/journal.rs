@@ -1,10 +1,13 @@
 //! Actor-owned encrypted application journal. Never opens the MDK database.
+#[path = "command_preparation.rs"]
+mod command_preparation;
 #[path = "command_rooms.rs"]
 mod command_rooms;
 #[path = "command_store.rs"]
 mod command_store;
 use crate::foundation::{Body, Envelope};
 use crate::{Error, Result};
+pub(crate) use command_preparation::*;
 pub(crate) use command_rooms::*;
 pub(crate) use command_store::*;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
@@ -16,8 +19,8 @@ use std::path::Path;
 use std::time::Duration;
 use zeroize::Zeroizing;
 
-pub(crate) const JOURNAL_FORMAT: i64 = 5;
-pub(crate) const JOURNAL_SUPPORTED_FORMATS: &[i64] = &[0, 3, 4, 5];
+pub(crate) const JOURNAL_FORMAT: i64 = 6;
+pub(crate) const JOURNAL_SUPPORTED_FORMATS: &[i64] = &[0, 3, 4, 5, 6];
 
 #[derive(Clone, Serialize)]
 pub struct Conversation {
@@ -170,6 +173,7 @@ impl Journal {
         let mut journal = Self { conn };
         journal.command_init()?;
         journal.command_rooms_init()?;
+        journal.command_preparations_init()?;
         journal
             .conn
             .pragma_update(None, "user_version", JOURNAL_FORMAT)

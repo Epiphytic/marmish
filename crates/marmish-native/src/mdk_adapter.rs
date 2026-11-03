@@ -830,6 +830,8 @@ pub struct MdkOwner {
     allowed: BTreeSet<String>,
     binding: OpenedAccountBinding,
     active: bool,
+    #[cfg(test)]
+    command_creation_test: Option<command_runtime::CreationTest>,
     retention: u64,
     welcome_retry: HashMap<Vec<u8>, (Instant, u8)>,
     reconnect_after: Instant,
@@ -989,6 +991,8 @@ impl MdkOwner {
                 public: material.public_key(),
             },
             active: false,
+            #[cfg(test)]
+            command_creation_test: None,
             retention: 86400,
             welcome_retry: HashMap::new(),
             reconnect_after: Instant::now(),

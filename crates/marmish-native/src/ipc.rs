@@ -43,6 +43,8 @@ pub(crate) enum Request {
     CommandPrepare {
         remote: String,
         relays: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fresh: Option<String>,
     },
     CommandSubmit {
         remote: String,
@@ -318,6 +320,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn preparation_fresh_is_optional_closed_and_roundtrips() {
+        let old = r#"{"operation":"command_prepare","remote":"00","relays":[]}"#;
+        let parsed: Request = serde_json::from_str(old).unwrap();
+        assert!(matches!(
+            parsed,
+            Request::CommandPrepare { fresh: None, .. }
+        ));
+        assert_eq!(
+            serde_json::to_value(parsed).unwrap(),
+            serde_json::from_str::<serde_json::Value>(old).unwrap()
+        );
+        let fresh = Request::CommandPrepare {
+            remote: "00".into(),
+            relays: vec![],
+            fresh: Some("11".into()),
+        };
+        assert!(matches!(
+            serde_json::from_slice::<Request>(&serde_json::to_vec(&fresh).unwrap()).unwrap(),
+            Request::CommandPrepare { fresh: Some(_), .. }
+        ));
+        for body in [
+            r#"{"operation":"command_prepare","remote":"00","relays":[],"fresh":true}"#,
+            r#"{"operation":"command_prepare","remote":"00","relays":[],"fresh":"a","fresh":"b"}"#,
+        ] {
+            assert!(serde_json::from_str::<Request>(body).is_err());
+        }
+    }
     #[tokio::test(start_paused = true)]
     async fn command_exchange_has_one_absolute_deadline() {
         let directory = tempfile::tempdir().unwrap();

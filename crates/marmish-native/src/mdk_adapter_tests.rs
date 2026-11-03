@@ -1819,3 +1819,662 @@ async fn command_invalidation_capacity_preserves_terminal_verdict_and_later_effe
             == later.key
     );
 }
+
+#[tokio::test]
+async fn new_session_current_rooms_keep_default_and_fresh_bindings_separate() {
+    use crate::command_local::LocalResult;
+    use crate::ipc::Request;
+    let mut f = Fixture::new(2);
+    let peer = f.materials[1].public_key().to_bytes();
+    let relays = vec!["wss://127.0.0.1:9/".to_string()];
+    let config = crate::command_config::CommandConfig::from_bytes(
+        &serde_json::to_vec(&serde_json::json!({"version":1,"role":"client","relays":relays,"tor":"off","trusted_remotes":[hex::encode(peer)],"execution_clients":[],"command_policy":{"version":1},"cwd":"/","limits":{},"aliases":{}})).unwrap(),
+    ).unwrap();
+    f.owners[0].commands = Some(crate::command_service::CommandService::new(config, None));
+    let current = now().unwrap();
+    let token = command_adapter::fixed_hex::<16>(
+        &foundation::fresh_id(current.saturating_sub(46)).unwrap(),
+    )
+    .unwrap();
+    let fresh_session = foundation::fresh_id(current).unwrap();
+    let digest = f.owners[0].command_relay_digest().unwrap();
+    assert!(matches!(
+        f.owners[0]
+            .journal
+            .command_begin_preparation(
+                token,
+                peer,
+                digest,
+                command_adapter::fixed_hex::<16>(&fresh_session).unwrap(),
+                current
+            )
+            .unwrap(),
+        crate::journal::PreparationStart::Created(_)
+    ));
+    let (fresh_group, _) = f
+        .join_with_route(
+            &[1],
+            RoomPurpose::Command.description(),
+            false,
+            fresh_session.clone(),
+            NostrRoutingV1::new([43; 32], relays.clone()).unwrap(),
+        )
+        .await;
+    let creator = f.owners[0].identity.clone();
+    let fresh_room = f.owners[0]
+        .accept_command_group(&fresh_group, &creator)
+        .unwrap();
+    f.owners[1]
+        .accept_command_group(&fresh_group, &creator)
+        .unwrap();
+    // The exact token is already past the first-enqueue start window, but
+    // the accepted room's still-pending native Welcome remains a delivery wait.
+    assert!(matches!(
+        f.owners[0]
+            .command_local(
+                "account0",
+                &Request::CommandPrepare {
+                    remote: hex::encode(peer),
+                    relays: relays.clone(),
+                    fresh: Some(hex::encode(token))
+                }
+            )
+            .unwrap(),
+        LocalResult::LocalBusy
+    ));
+    let key = crate::command_local::RoomKey {
+        remote: peer,
+        fresh: Some(token),
+    };
+    let mut queue = crate::command_local::RoomIntents::default();
+    queue.failed(key, Instant::now(), "command_room_creation");
+    assert!(matches!(
+        f.owners[0]
+            .command_enqueue_preparation(key, &mut queue, Instant::now())
+            .unwrap(),
+        LocalResult::LocalBusy
+    ));
+    assert!(queue.next(Instant::now()).is_none());
+    // The fixture delivered and ingested the real Welcome above; record its
+    // delivery in the native session, without claiming a relay-network test.
+    for (_, welcome) in f.owners[0]
+        .runtime
+        .outstanding_welcome_deliveries()
+        .unwrap()
+    {
+        f.owners[0]
+            .runtime
+            .session()
+            .mark_sent_welcome_delivered(&welcome.id)
+            .unwrap();
+    }
+    assert!(matches!(
+        f.owners[0]
+            .command_local(
+                "account0",
+                &Request::CommandPrepare {
+                    remote: hex::encode(peer),
+                    relays: relays.clone(),
+                    fresh: None
+                }
+            )
+            .unwrap(),
+        LocalResult::LocalBusy
+    ));
+    let (default_group, _) = f
+        .join_with_route(
+            &[1],
+            RoomPurpose::Command.description(),
+            false,
+            foundation::fresh_id(current).unwrap(),
+            NostrRoutingV1::new([44; 32], relays.clone()).unwrap(),
+        )
+        .await;
+    let default_room = f.owners[0]
+        .accept_command_group(&default_group, &creator)
+        .unwrap();
+    f.owners[1]
+        .accept_command_group(&default_group, &creator)
+        .unwrap();
+    for (_, welcome) in f.owners[0]
+        .runtime
+        .outstanding_welcome_deliveries()
+        .unwrap()
+    {
+        f.owners[0]
+            .runtime
+            .session()
+            .mark_sent_welcome_delivered(&welcome.id)
+            .unwrap();
+    }
+    assert_ne!(fresh_room.session, default_room.session);
+    assert_ne!(fresh_room.group, default_room.group);
+    assert_ne!(fresh_room.transport, default_room.transport);
+    for _ in 0..3 {
+        let room = f.owners[0]
+            .open_prepared_command_room(peer, Some(token), Instant::now() + Duration::from_secs(1))
+            .await
+            .unwrap();
+        assert_eq!(room.session, fresh_room.session);
+        match f.owners[0]
+            .command_local(
+                "account0",
+                &Request::CommandPrepare {
+                    remote: hex::encode(peer),
+                    relays: relays.clone(),
+                    fresh: None,
+                },
+            )
+            .unwrap()
+        {
+            LocalResult::Ready { session, .. } => {
+                assert_eq!(session, hex::encode(default_room.session))
+            }
+            _ => panic!("accepted Current default room must be ready"),
+        }
+        match f.owners[0]
+            .command_local(
+                "account0",
+                &Request::CommandPrepare {
+                    remote: hex::encode(peer),
+                    relays: relays.clone(),
+                    fresh: Some(hex::encode(token)),
+                },
+            )
+            .unwrap()
+        {
+            LocalResult::Ready { session, .. } => assert_eq!(session, fresh_session),
+            _ => panic!("accepted Current fresh room must be ready"),
+        }
+    }
+    // First Submit may target its independently prepared fresh room even though
+    // the ordinary room remains the default. Exact retry attaches to the same
+    // invocation rather than creating another command or room.
+    let submit = crate::command_wire::Submit {
+        argv: vec![b"/bin/true".to_vec()],
+        invocation: command_adapter::fixed_hex::<16>(
+            &foundation::fresh_id(now().unwrap()).unwrap(),
+        )
+        .unwrap(),
+        stdin: vec![],
+    };
+    let request = Request::CommandSubmit {
+        remote: hex::encode(peer),
+        relays: relays.clone(),
+        session: fresh_session,
+        request_id: foundation::fresh_id(now().unwrap()).unwrap(),
+        submit,
+    };
+    for _ in 0..2 {
+        assert!(matches!(
+            f.owners[0].command_local("account0", &request).unwrap(),
+            LocalResult::LocalQueued { .. }
+        ));
+    }
+    assert_eq!(
+        f.owners[0]
+            .journal
+            .command_client_invocations(None, 64)
+            .unwrap()
+            .entries
+            .len(),
+        1
+    );
+    assert_eq!(f.owners[0].journal.command_rooms().unwrap().len(), 2);
+    f.owners[0]
+        .journal
+        .command_revoke_room(fresh_group.as_slice())
+        .unwrap();
+    assert!(matches!(
+        f.owners[0]
+            .open_prepared_command_room(peer, Some(token), Instant::now() + Duration::from_secs(1))
+            .await,
+        Err(Error::Invalid("command_room_uncertain"))
+    ));
+    assert_eq!(f.owners[0].journal.command_rooms().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn new_session_interrupted_creation_is_uncertain_without_native_recreation() {
+    let mut f = Fixture::new(2);
+    let peer = f.materials[1].public_key().to_bytes();
+    let config=crate::command_config::CommandConfig::from_bytes(&serde_json::to_vec(&serde_json::json!({"version":1,"role":"client","relays":["wss://127.0.0.1:9/"],"tor":"off","trusted_remotes":[hex::encode(peer)],"execution_clients":[],"command_policy":{"version":1},"cwd":"/","limits":{},"aliases":{}})).unwrap()).unwrap();
+    f.owners[0].commands = Some(crate::command_service::CommandService::new(config, None));
+    let token =
+        command_adapter::fixed_hex::<16>(&foundation::fresh_id(now().unwrap()).unwrap()).unwrap();
+    let session =
+        command_adapter::fixed_hex::<16>(&foundation::fresh_id(now().unwrap()).unwrap()).unwrap();
+    let digest = f.owners[0].command_relay_digest().unwrap();
+    f.owners[0]
+        .journal
+        .command_begin_preparation(token, peer, digest, session, now().unwrap())
+        .unwrap();
+    for _ in 0..3 {
+        assert!(matches!(
+            f.owners[0]
+                .open_prepared_command_room(
+                    peer,
+                    Some(token),
+                    Instant::now() + Duration::from_secs(1)
+                )
+                .await,
+            Err(Error::Invalid("command_room_uncertain"))
+        ));
+        assert!(f.owners[0].journal.command_rooms().unwrap().is_empty());
+    }
+}
+
+impl Fixture {
+    async fn creation_probe(
+        &mut self,
+        stage: command_runtime::CreationStage,
+    ) -> ([u8; 32], [u8; 16]) {
+        let peer = self.materials[1].public_key().to_bytes();
+        let config = crate::command_config::CommandConfig::from_bytes(
+            &serde_json::to_vec(&serde_json::json!({"version":1,"role":"client","relays":["wss://127.0.0.1:9/"],"tor":"off","trusted_remotes":[hex::encode(peer)],"execution_clients":[],"command_policy":{"version":1},"cwd":"/","limits":{},"aliases":{}})).unwrap(),
+        ).unwrap();
+        let owner = &mut self.owners[1];
+        let mut package = owner
+            .runtime
+            .prepare_fresh_key_package(owner.routing.endpoints.clone())
+            .await
+            .unwrap();
+        let pending = owner
+            .storage
+            .key_package_lifecycle()
+            .unwrap()
+            .unwrap()
+            .pending_replacement
+            .unwrap();
+        package.source = Some(KeyPackageSource {
+            event_id: pending.signed_event.unwrap().id,
+        });
+        let owner = &mut self.owners[0];
+        owner.commands = Some(crate::command_service::CommandService::new(config, None));
+        owner.active = true;
+        if owner.forwarder.is_none() {
+            owner.forwarder = Some(tokio::spawn(std::future::pending()));
+        }
+        owner.command_creation_test = Some(command_runtime::CreationTest {
+            package: Some(package),
+            stage,
+            attempts: 0,
+        });
+        let token =
+            command_adapter::fixed_hex::<16>(&foundation::fresh_id(now().unwrap()).unwrap())
+                .unwrap();
+        (peer, token)
+    }
+}
+
+#[tokio::test]
+async fn new_session_real_creation_is_once_and_pending_welcome_ignores_queue_failures() {
+    use crate::command_local::{LocalResult, RoomIntents, RoomKey};
+    let mut f = Fixture::new(2);
+    let (peer, token) = f
+        .creation_probe(command_runtime::CreationStage::PendingWelcome)
+        .await;
+    let room = f.owners[0]
+        .open_prepared_command_room(peer, Some(token), Instant::now() + Duration::from_secs(5))
+        .await
+        .unwrap();
+    let relays = vec!["wss://127.0.0.1:9/".into()];
+    let request = crate::ipc::Request::CommandPrepare {
+        remote: hex::encode(peer),
+        relays,
+        fresh: Some(hex::encode(token)),
+    };
+    assert!(matches!(
+        f.owners[0].command_local("account0", &request).unwrap(),
+        LocalResult::LocalBusy
+    ));
+    let key = RoomKey {
+        remote: peer,
+        fresh: Some(token),
+    };
+    let mut queue = RoomIntents::default();
+    queue.failed(key, Instant::now(), "command_room_creation");
+    assert!(command_local::fresh_start_window(token, now().unwrap() + 46).is_err());
+    for _ in 0..3 {
+        assert!(matches!(
+            f.owners[0]
+                .command_enqueue_preparation(
+                    key,
+                    &mut queue,
+                    Instant::now() + Duration::from_secs(46)
+                )
+                .unwrap(),
+            LocalResult::LocalBusy
+        ));
+        assert_eq!(
+            f.owners[0]
+                .open_prepared_command_room(
+                    peer,
+                    Some(token),
+                    Instant::now() + Duration::from_secs(1)
+                )
+                .await
+                .unwrap()
+                .session,
+            room.session
+        );
+    }
+    assert!(
+        queue
+            .next(Instant::now() + Duration::from_secs(46))
+            .is_none()
+    );
+    assert_eq!(
+        f.owners[0].command_creation_test.as_ref().unwrap().attempts,
+        1
+    );
+    let (peer, second) = f
+        .creation_probe(command_runtime::CreationStage::PendingWelcome)
+        .await;
+    let other = f.owners[0]
+        .open_prepared_command_room(peer, Some(second), Instant::now() + Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert_ne!(room.session, other.session);
+    assert_ne!(room.group, other.group);
+    assert_ne!(room.transport, other.transport);
+}
+
+#[tokio::test]
+async fn new_session_real_creation_failure_fences_retry_and_preserves_preflight_absence() {
+    use command_runtime::CreationStage;
+    for stage in [
+        CreationStage::DiscoveryFailure,
+        CreationStage::ExpiredAfterDiscovery,
+        CreationStage::StartExpiredAfterDiscovery,
+        CreationStage::InterruptAfterFence,
+        CreationStage::NativeFailure,
+        CreationStage::MismatchedSession,
+    ] {
+        let mut f = Fixture::new(2);
+        let (peer, token) = f.creation_probe(stage).await;
+        assert!(
+            f.owners[0]
+                .open_prepared_command_room(
+                    peer,
+                    Some(token),
+                    Instant::now() + Duration::from_secs(5)
+                )
+                .await
+                .is_err()
+        );
+        let marker = f.owners[0]
+            .journal
+            .command_preparation(&token, &peer, &f.owners[0].command_relay_digest().unwrap())
+            .unwrap();
+        if matches!(
+            stage,
+            CreationStage::DiscoveryFailure
+                | CreationStage::ExpiredAfterDiscovery
+                | CreationStage::StartExpiredAfterDiscovery
+        ) {
+            assert!(marker.is_none());
+            assert_eq!(
+                f.owners[0].command_creation_test.as_ref().unwrap().attempts,
+                0
+            );
+        } else {
+            assert!(marker.is_some());
+            let attempts = f.owners[0].command_creation_test.as_ref().unwrap().attempts;
+            for _ in 0..3 {
+                assert!(matches!(
+                    f.owners[0]
+                        .open_prepared_command_room(
+                            peer,
+                            Some(token),
+                            Instant::now() + Duration::from_secs(1)
+                        )
+                        .await,
+                    Err(Error::Invalid("command_room_uncertain"))
+                ));
+            }
+            assert_eq!(
+                f.owners[0].command_creation_test.as_ref().unwrap().attempts,
+                attempts
+            );
+        }
+        assert!(f.owners[0].journal.command_rooms().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn new_session_runtime_capacity_and_current_authority_refuse_without_new_fence() {
+    use crate::command_local::LocalResult;
+    use crate::ipc::Request;
+    let mut f = Fixture::new(2);
+    let (peer, token) = f
+        .creation_probe(command_runtime::CreationStage::PendingWelcome)
+        .await;
+    let expired =
+        command_adapter::fixed_hex::<16>(&foundation::fresh_id(now().unwrap() - 46).unwrap())
+            .unwrap();
+    assert!(matches!(
+        f.owners[0]
+            .open_prepared_command_room(
+                peer,
+                Some(expired),
+                Instant::now() + Duration::from_secs(5)
+            )
+            .await,
+        Err(Error::Invalid("command_room_start_expired"))
+    ));
+    assert!(
+        f.owners[0]
+            .journal
+            .command_preparation(
+                &expired,
+                &peer,
+                &f.owners[0].command_relay_digest().unwrap()
+            )
+            .unwrap()
+            .is_none()
+    );
+    let mut full = crate::command_local::RoomIntents::default();
+    for n in 0..8 {
+        full.enqueue([n; 32], Instant::now());
+    }
+    assert!(matches!(
+        f.owners[0]
+            .command_enqueue_preparation(
+                crate::command_local::RoomKey {
+                    remote: peer,
+                    fresh: Some(token)
+                },
+                &mut full,
+                Instant::now()
+            )
+            .unwrap(),
+        LocalResult::LocalBusy
+    ));
+    assert!(
+        f.owners[0]
+            .journal
+            .command_preparation(&token, &peer, &f.owners[0].command_relay_digest().unwrap())
+            .unwrap()
+            .is_none()
+    );
+    let (group, _) = f
+        .join_with_route(
+            &[1],
+            RoomPurpose::Command.description(),
+            false,
+            foundation::fresh_id(now().unwrap()).unwrap(),
+            NostrRoutingV1::new([81; 32], vec!["wss://127.0.0.1:9/".into()]).unwrap(),
+        )
+        .await;
+    let creator = f.owners[0].identity.clone();
+    let default = f.owners[0].accept_command_group(&group, &creator).unwrap();
+    // Actual offline recipient ingestion happened in join_with_route.
+    for (_, welcome) in f.owners[0]
+        .runtime
+        .outstanding_welcome_deliveries()
+        .unwrap()
+    {
+        f.owners[0]
+            .runtime
+            .session()
+            .mark_sent_welcome_delivered(&welcome.id)
+            .unwrap();
+    }
+    let relays = vec!["wss://127.0.0.1:9/".to_string()];
+    let prepare = |remote: [u8; 32], relays: Vec<String>| Request::CommandPrepare {
+        remote: hex::encode(remote),
+        relays,
+        fresh: Some(hex::encode(token)),
+    };
+    assert!(
+        f.owners[0]
+            .command_local(
+                "account0",
+                &prepare(peer, vec!["wss://127.0.0.1:8/".into()])
+            )
+            .is_err()
+    );
+    assert!(
+        f.owners[0]
+            .command_local("account0", &prepare([77; 32], relays.clone()))
+            .is_err()
+    );
+    let service = f.owners[0].commands.take();
+    assert!(
+        f.owners[0]
+            .command_local("account0", &prepare(peer, relays.clone()))
+            .is_err()
+    );
+    let server_only = crate::command_config::CommandConfig::from_bytes(
+        &serde_json::to_vec(&serde_json::json!({"version":1,"role":"server","relays":relays,"tor":"off","trusted_remotes":[hex::encode(peer)],"execution_clients":[],"command_policy":{"version":1},"cwd":"/","limits":{},"aliases":{}})).unwrap(),
+    ).unwrap();
+    f.owners[0].commands = Some(crate::command_service::CommandService::new(
+        server_only,
+        None,
+    ));
+    assert!(matches!(
+        f.owners[0].command_local("account0", &prepare(peer, relays.clone())),
+        Err(Error::Invalid("command_unauthorized"))
+    ));
+    f.owners[0].commands = service;
+    // Fill quota metadata only. These rows never assert native authority; the
+    // authentic default sorts first, and quota refusal occurs before discovery.
+    for i in 1..64_u8 {
+        let mut filler = default.clone();
+        filler.group.push(i);
+        filler.transport.push(i);
+        filler.session =
+            command_adapter::fixed_hex::<16>(&foundation::fresh_id(now().unwrap()).unwrap())
+                .unwrap();
+        f.owners[0].journal.command_accept_room(&filler).unwrap();
+    }
+    assert!(matches!(
+        f.owners[0]
+            .open_prepared_command_room(peer, Some(token), Instant::now() + Duration::from_secs(5))
+            .await,
+        Err(Error::Invalid("command_room_capacity"))
+    ));
+    assert_eq!(
+        f.owners[0].command_creation_test.as_ref().unwrap().attempts,
+        0
+    );
+    assert!(
+        f.owners[0]
+            .journal
+            .command_preparation(&token, &peer, &f.owners[0].command_relay_digest().unwrap())
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        matches!(f.owners[0].command_local("account0",&Request::CommandPrepare{remote:hex::encode(peer),relays,fresh:None}).unwrap(),LocalResult::Ready{session,..} if session==hex::encode(default.session))
+    );
+}
+
+#[tokio::test]
+async fn new_session_first_submit_rejects_wrong_bindings_missing_and_nondefault_rooms() {
+    use crate::command_local::LocalResult;
+    use crate::ipc::Request;
+    let mut f = Fixture::new(2);
+    let (peer, _) = f
+        .creation_probe(command_runtime::CreationStage::PendingWelcome)
+        .await;
+    let creator = f.owners[0].identity.clone();
+    let mut rooms = Vec::new();
+    for route in [91, 92] {
+        let (group, _) = f
+            .join_with_route(
+                &[1],
+                RoomPurpose::Command.description(),
+                false,
+                foundation::fresh_id(now().unwrap()).unwrap(),
+                NostrRoutingV1::new([route; 32], vec!["wss://127.0.0.1:9/".into()]).unwrap(),
+            )
+            .await;
+        rooms.push(f.owners[0].accept_command_group(&group, &creator).unwrap());
+    }
+    for (_, welcome) in f.owners[0]
+        .runtime
+        .outstanding_welcome_deliveries()
+        .unwrap()
+    {
+        f.owners[0]
+            .runtime
+            .session()
+            .mark_sent_welcome_delivered(&welcome.id)
+            .unwrap();
+    }
+    let relays = vec!["wss://127.0.0.1:9/".to_string()];
+    let selected = f.owners[0]
+        .command_ready_room(peer, &relays)
+        .unwrap()
+        .unwrap();
+    let nondefault = rooms
+        .iter()
+        .find(|room| room.session != selected)
+        .unwrap()
+        .session;
+    let mut refused = vec![nondefault];
+    let digest = f.owners[0].command_relay_digest().unwrap();
+    for (bound_peer, bound_digest) in [(peer, digest), ([77; 32], digest), (peer, [88; 32])] {
+        let token =
+            command_adapter::fixed_hex::<16>(&foundation::fresh_id(now().unwrap()).unwrap())
+                .unwrap();
+        let session =
+            command_adapter::fixed_hex::<16>(&foundation::fresh_id(now().unwrap()).unwrap())
+                .unwrap();
+        f.owners[0]
+            .journal
+            .command_begin_preparation(token, bound_peer, bound_digest, session, now().unwrap())
+            .unwrap();
+        refused.push(session);
+    }
+    for session in refused {
+        let request = Request::CommandSubmit {
+            remote: hex::encode(peer),
+            relays: relays.clone(),
+            session: hex::encode(session),
+            request_id: foundation::fresh_id(now().unwrap()).unwrap(),
+            submit: crate::command_wire::Submit {
+                invocation: command_adapter::fixed_hex::<16>(
+                    &foundation::fresh_id(now().unwrap()).unwrap(),
+                )
+                .unwrap(),
+                argv: vec![b"/bin/true".to_vec()],
+                stdin: vec![],
+            },
+        };
+        assert!(f.owners[0].command_local("account0", &request).is_err());
+    }
+    assert!(
+        f.owners[0]
+            .journal
+            .command_client_invocations(None, 64)
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+    assert!(
+        matches!(f.owners[0].command_local("account0",&Request::CommandPrepare{remote:hex::encode(peer),relays,fresh:None}).unwrap(),LocalResult::Ready{session,..} if session==hex::encode(selected))
+    );
+}

@@ -437,6 +437,49 @@ fn evidence_expected(
     }
     Ok(())
 }
+/// Read-only terminal fixture bindings, never cleanup authority. Recovery admits
+/// exactly two jobs; a third row or a continuation is an explicit failure.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RecoveryRow {
+    pub principal: String,
+    pub invocation: String,
+    pub session: String,
+    pub group_sha256: String,
+    pub submit_sha256: String,
+}
+pub(super) async fn recovery_rows(
+    child: &mut Child,
+    socket: &Path,
+    deadline: Instant,
+) -> Result<Vec<RecoveryRow>> {
+    let page: Page = request(
+        child,
+        socket,
+        &ipc::Request::CommandEvidence {
+            after: None,
+            limit: 64,
+        },
+        deadline,
+    )
+    .await?;
+    if page.rows.len() > 2 || page.next.is_some() {
+        return Err(bad());
+    }
+    let mut actual = BTreeMap::new();
+    evidence_expected(&page, None, 0, &mut actual, None)?;
+    Ok(page
+        .rows
+        .into_iter()
+        .map(|r| RecoveryRow {
+            principal: r.principal,
+            invocation: r.invocation,
+            session: r.session,
+            group_sha256: r.group_sha256,
+            submit_sha256: r.submit_sha256,
+        })
+        .collect())
+}
 /// Private fields and constructor bind authority to the actual retained child.
 /// Only the build-only driver can mint this after explicit actor cleanup proof.
 pub(in crate::mdk_adapter) struct OwnedCleanupGuard<'a> {

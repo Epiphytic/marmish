@@ -1847,7 +1847,7 @@ fn check_request_owner(r: &Request, owner: &Owner) -> Result<()> {
     }
     Ok(())
 }
-fn freshness(conn: &Connection, id: Id, now: u64) -> Result<()> {
+pub(super) fn freshness(conn: &Connection, id: Id, now: u64) -> Result<()> {
     let floor: u64 = conn
         .query_row(
             "SELECT floor FROM command_replay_state WHERE id=1",

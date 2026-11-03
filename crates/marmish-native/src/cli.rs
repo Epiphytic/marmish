@@ -69,6 +69,9 @@ struct Args {
     stdin_none: bool,
     #[arg(long, global = true)]
     detach: bool,
+    /// Open a fresh independent command room instead of reusing the default.
+    #[arg(long, global = true)]
+    new_session: bool,
     #[arg(long, default_value_t = 180, global = true, value_parser = clap::value_parser!(u64).range(1..=86400))]
     wait_seconds: u64,
     #[arg(long, global = true)]
@@ -234,6 +237,9 @@ async fn run(
         && !matches!(args.command, Some(FrontendCommand::Daemon))
     {
         return Err(Error::Invalid("server_limit_operation"));
+    }
+    if args.new_session && !matches!(args.command, Some(FrontendCommand::Remote(_))) {
+        return Err(Error::Invalid("new_session_operation"));
     }
     if matches!(args.command, Some(FrontendCommand::ReleaseInfo)) {
         println!(
@@ -686,6 +692,7 @@ async fn run_command(args: &Args, state: &std::path::Path) -> Result<u8> {
                     StdinMode::Auto
                 },
                 detach: args.detach,
+                new_session: args.new_session,
                 wait,
             }
         }
@@ -817,6 +824,53 @@ mod tests {
         assert_eq!(usage_exit_code(&error), 255);
         let help = Args::try_parse_from(["marmish", "--help"]).err().unwrap();
         assert_eq!(usage_exit_code(&help), 0);
+    }
+    #[tokio::test]
+    async fn new_session_is_only_a_new_remote_command_option() {
+        let root = tempfile::tempdir().unwrap();
+        let layout = crate::native_layout::ExecutableLayout {
+            helper: root.path().join("missing-helper"),
+            worker: root.path().join("missing-worker"),
+        };
+        for operation in ["status", "commands", "daemon", "release-info", "setup"] {
+            let args = Args::try_parse_from(["marmish", "--new-session", operation]).unwrap();
+            assert!(
+                matches!(
+                    run(args, false, &layout).await,
+                    Err(Error::Invalid("new_session_operation"))
+                ),
+                "{operation}"
+            );
+        }
+        let args = Args::try_parse_from([
+            "marmish",
+            "--new-session",
+            "install",
+            "--prefix",
+            "/missing",
+            "--bin-dir",
+            "/missing/bin",
+        ])
+        .unwrap();
+        assert!(matches!(
+            run(args, false, &layout).await,
+            Err(Error::Invalid("new_session_operation"))
+        ));
+        assert!(root.path().read_dir().unwrap().next().is_none());
+        let args = Args::try_parse_from([
+            "marmish",
+            "--new-session",
+            "--detach",
+            "peer",
+            "--",
+            "/bin/echo",
+        ])
+        .unwrap();
+        assert!(args.new_session && args.detach);
+        assert!(matches!(args.command, Some(FrontendCommand::Remote(_))));
+        let args =
+            Args::try_parse_from(["marmish", "peer", "--", "/bin/echo", "--new-session"]).unwrap();
+        assert!(!args.new_session);
     }
     #[test]
     fn service_launch_owns_a_separate_terminal_session() {

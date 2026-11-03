@@ -1078,7 +1078,13 @@ mod tests {
             (valid.trim_end_matches('\n').to_owned(), false),
             (valid.clone() + "unknown\n", false),
             (valid.replace("state profile=2", "state profile=02"), false),
-            (valid.replace("journal=5", "journal=4294967296"), false),
+            (
+                valid.replace(
+                    &format!("journal={}", crate::journal::JOURNAL_FORMAT),
+                    "journal=4294967296",
+                ),
+                false,
+            ),
             (valid.replace("0555 marmish\n", "0755 marmish\n"), false),
             (valid.replace("commit ", "commit  "), false),
             (valid.replace("minimum ", "minimum \u{007f}"), false),

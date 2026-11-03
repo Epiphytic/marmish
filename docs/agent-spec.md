@@ -44,6 +44,25 @@ bounded engine operations and explicit local output consumption. Payload expiry
 is separate from replay facts and native publication obligations. Ordinary
 disconnect and owner stop do not cancel admitted commands.
 
+The native command CLI now implements explicit `--new-session` for new remote
+commands (including detached commands); handle operations and setup/administration
+reject the flag before state access. Ordinary commands keep a separate default
+room, including when the first room was explicitly fresh. The CLI freezes one
+preparation token across retries; the daemon generates and authenticates the actual
+independent MLS room/session. The SQLCipher journal format is now **6**, accepting
+existing formats 0, 3, 4 and 5 before upgrading. A durable exact-peer/normalized-relay
+creation fence permits one native creation attempt. An interrupted attempt with
+no accepted bound room returns `command_room_uncertain`; retries never recreate it.
+This is an application persistence rule, not a replay guarantee inferred from keys.
+The profile has 64 active command-room slots shared by default, fresh and inbound
+rooms, with no user-facing retirement operation. Successful fresh rooms consume
+those slots for the profile lifetime; total room metadata and permanent preparation
+markers each have separate 4096-row caps. Existing default reuse remains allowed
+at capacity. The [approved design](phases/v0.2-new-session.md) specifies the trust,
+60-second bounded preparation observation and creation fence. Focused offline
+Current-profile room, exact retry, selection, IPC and CLI tests pass; the updated
+installed recovery cohort remains an unexecuted final-source acceptance gate.
+
 All SQLCipher users cross one process-wide `marmish_engine::initialize_storage`
 barrier before their first SQLite call, including engine stores, the command
 journal, preflight, MDK and the Arti directory cache. This prevents the pinned

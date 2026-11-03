@@ -7,6 +7,7 @@ use crate::ipc::Request;
 use crate::journal::{ClientSlotState, Owner};
 use crate::transport::RelayPolicy;
 use serde::{Deserialize, Serialize};
+use sha2::Digest as _;
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -108,44 +109,100 @@ fn id(value: &str) -> Result<Id> {
     Ok(id)
 }
 
-/// Only public remote accounts are queued; no invocation or command is admitted
-/// while discovery runs. Coalescing never renews the original start-by deadline.
+fn relay_digest(policy: &RelayPolicy) -> Result<wire::Digest> {
+    let urls = policy
+        .urls()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    Ok(Sha256::digest(
+        serde_json::to_vec(&urls).map_err(|_| Error::Invalid("command_relay_binding"))?,
+    )
+    .into())
+}
+
+pub(crate) const FRESH_PREPARE_SECONDS: u64 = 60;
+pub(crate) const ROOM_TURN_SECONDS: u64 = 15;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RoomKey {
+    pub remote: Account,
+    pub fresh: Option<Id>,
+}
+impl From<Account> for RoomKey {
+    fn from(remote: Account) -> Self {
+        Self {
+            remote,
+            fresh: None,
+        }
+    }
+}
+impl RoomKey {
+    pub(crate) fn parse(remote: &str, fresh: Option<&str>) -> Result<Self> {
+        Ok(Self {
+            remote: fixed_hex::<32>(remote)?,
+            fresh: fresh.map(id).transpose()?,
+        })
+    }
+}
+pub(super) fn fresh_start_window(token: Id, current: u64) -> Result<Duration> {
+    let remaining = wire::id_timestamp(token)
+        .saturating_add(FRESH_PREPARE_SECONDS)
+        .saturating_sub(current)
+        .min(FRESH_PREPARE_SECONDS);
+    if remaining <= ROOM_TURN_SECONDS {
+        return Err(Error::Invalid("command_room_start_expired"));
+    }
+    Ok(Duration::from_secs(remaining - ROOM_TURN_SECONDS))
+}
+
+/// Coalescing never renews the original start-by deadline; no durable state is
+/// allocated until an admitted intent has successfully completed discovery.
 #[derive(Default)]
 pub(crate) struct RoomIntents {
-    queue: VecDeque<(Account, Instant)>,
-    outcomes: VecDeque<(Account, Instant, &'static str)>,
+    queue: VecDeque<(RoomKey, Instant)>,
+    outcomes: VecDeque<(RoomKey, Instant, &'static str)>,
 }
 impl RoomIntents {
-    pub(crate) fn enqueue(&mut self, remote: Account, at: Instant) -> LocalResult {
+    pub(crate) fn enqueue(&mut self, key: impl Into<RoomKey>, at: Instant) -> LocalResult {
+        let key = key.into();
         self.outcomes.retain(|(_, expires, _)| *expires > at);
-        if let Some((_, _, category)) = self.outcomes.iter().find(|(peer, _, _)| *peer == remote) {
+        if let Some((_, _, category)) = self.outcomes.iter().find(|(k, _, _)| *k == key) {
             return LocalResult::Failure {
                 category: (*category).into(),
                 handle: None,
             };
         }
-        if !self.queue.iter().any(|(peer, _)| *peer == remote) && self.queue.len() < 8 {
-            self.queue.push_back((remote, at + Duration::from_secs(60)));
+        if !self.queue.iter().any(|(k, _)| *k == key) && self.queue.len() < 8 {
+            let window = match key.fresh {
+                Some(token) => match now().and_then(|current| fresh_start_window(token, current)) {
+                    Ok(window) => window,
+                    Err(error) => return failure(error),
+                },
+                None => Duration::from_secs(60),
+            };
+            self.queue.push_back((key, at + window));
         }
         LocalResult::LocalBusy
     }
-    pub(crate) fn next(&mut self, at: Instant) -> Option<Account> {
-        while let Some((remote, deadline)) = self.queue.pop_front() {
+    pub(crate) fn next(&mut self, at: Instant) -> Option<RoomKey> {
+        while let Some((key, deadline)) = self.queue.pop_front() {
             if deadline > at {
-                return Some(remote);
+                return Some(key);
             }
-            self.failed(remote, at, "command_room_start_expired");
+            self.failed(key, at, "command_room_start_expired");
         }
         None
     }
-    pub(crate) fn failed(&mut self, remote: Account, at: Instant, category: &'static str) {
+    pub(crate) fn failed(&mut self, key: impl Into<RoomKey>, at: Instant, category: &'static str) {
+        let key = key.into();
         self.outcomes
-            .retain(|(peer, expires, _)| *peer != remote && *expires > at);
+            .retain(|(k, expires, _)| *k != key && *expires > at);
         if self.outcomes.len() == 8 {
             self.outcomes.pop_front();
         }
         self.outcomes
-            .push_back((remote, at + Duration::from_secs(60), category));
+            .push_back((key, at + Duration::from_secs(60), category));
     }
 }
 
@@ -229,13 +286,16 @@ impl MdkOwner {
     }
     pub(crate) async fn command_open_room_turn(
         &mut self,
-        remote: Account,
+        key: RoomKey,
         deadline: Instant,
     ) -> Result<()> {
         self.reconcile_orphans()?;
-        tokio::time::timeout_at(deadline, self.open_command_room(remote, false, deadline))
-            .await
-            .map_err(|_| Error::Timeout)??;
+        tokio::time::timeout_at(
+            deadline,
+            self.open_prepared_command_room(key.remote, key.fresh, deadline),
+        )
+        .await
+        .map_err(|_| Error::Timeout)??;
         Ok(())
     }
     pub(crate) fn command_can_prepare(&self, remote: Account, relays: &[String]) -> Result<()> {
@@ -257,35 +317,116 @@ impl MdkOwner {
         Ok(())
     }
 
-    /// A prepared room is not proof of peer admission. Retained native control
-    /// work must drain before a CLI freezes its first Submit against this room.
+    pub(super) fn command_relay_digest(&self) -> Result<wire::Digest> {
+        relay_digest(self.connector.policy())
+    }
+    fn command_room_drained(&mut self, room: &crate::journal::CommandRoom) -> Result<bool> {
+        let group = GroupId::new(room.group.clone());
+        self.command_context(&group)?;
+        let fanouts = mdk(self.storage.list_outbound_fanouts())?;
+        let welcomes = mdk(self.runtime.outstanding_welcome_deliveries())?;
+        Ok(!welcomes.iter().any(|(pending, _)| pending == &group)
+            && !fanouts
+                .iter()
+                .any(|f| f.group_id() == Some(&group) && f.application_message().is_none())
+            && mdk(self.storage.list_queued_outbound_intents(&group))?.is_empty())
+    }
+    /// Ready proves local placement/control delivery only, never peer admission.
     pub(crate) fn command_ready_room(
         &mut self,
         remote: Account,
         relays: &[String],
     ) -> Result<Option<Id>> {
+        self.command_ready_preparation(remote, relays, None)
+    }
+    /// A durable creation attempt is no longer queue work. Its accepted room
+    /// may still be delivering the Welcome; neither start-by expiry nor a
+    /// cached turn failure may turn that delivery wait into a new attempt.
+    pub(crate) fn command_enqueue_preparation(
+        &self,
+        key: RoomKey,
+        rooms: &mut RoomIntents,
+        at: Instant,
+    ) -> Result<LocalResult> {
+        if let Some(token) = key.fresh
+            && self
+                .journal
+                .command_preparation(&token, &key.remote, &self.command_relay_digest()?)?
+                .is_some()
+        {
+            return Ok(LocalResult::LocalBusy);
+        }
+        Ok(rooms.enqueue(key, at))
+    }
+    fn command_ready_preparation(
+        &mut self,
+        remote: Account,
+        relays: &[String],
+        fresh: Option<Id>,
+    ) -> Result<Option<Id>> {
         self.command_can_prepare(remote, relays)?;
+        let selected = fresh
+            .map(|token| {
+                self.journal
+                    .command_preparation(&token, &remote, &self.command_relay_digest()?)
+            })
+            .transpose()?
+            .flatten();
+        if fresh.is_some() && selected.is_none() {
+            return Ok(None);
+        }
         for room in self.journal.command_rooms()? {
             if room.peer != remote || room.direction != CommandDirection::Client {
                 continue;
             }
-            let group = GroupId::new(room.group);
-            match self.command_context(&group) {
-                Ok(_) => {}
-                Err(Error::Mdk("command_room_revoked")) => continue,
+            if let Some(ref record) = selected {
+                if room.session != record.session {
+                    continue;
+                }
+            } else if self
+                .journal
+                .command_preparation_session(room.session)?
+                .is_some()
+            {
+                continue;
+            }
+            match self.command_room_drained(&room) {
+                Ok(true) => return Ok(Some(room.session)),
+                Ok(false) => return Ok(None),
+                Err(Error::Mdk("command_room_revoked")) if fresh.is_none() => continue,
                 Err(error) => return Err(error),
             }
-            let fanouts = mdk(self.storage.list_outbound_fanouts())?;
-            if fanouts
-                .iter()
-                .any(|f| f.group_id() == Some(&group) && f.application_message().is_none())
-                || !mdk(self.storage.list_queued_outbound_intents(&group))?.is_empty()
-            {
-                return Ok(None);
-            }
-            return Ok(Some(room.session));
+        }
+        if selected.is_some() {
+            return Err(Error::Invalid("command_room_uncertain"));
         }
         Ok(None)
+    }
+    fn command_ready_session(
+        &mut self,
+        remote: Account,
+        relays: &[String],
+        session: Id,
+    ) -> Result<bool> {
+        self.command_can_prepare(remote, relays)?;
+        if let Some(record) = self.journal.command_preparation_session(session)? {
+            if record.peer != remote || record.relays_sha256 != self.command_relay_digest()? {
+                return Err(Error::Invalid("command_preparation_binding"));
+            }
+            let room = self
+                .journal
+                .command_rooms()?
+                .into_iter()
+                .find(|r| {
+                    r.session == session
+                        && r.peer == remote
+                        && r.direction == CommandDirection::Client
+                })
+                .ok_or(Error::Invalid("command_room_uncertain"))?;
+            self.command_room_drained(&room)
+        } else {
+            Ok(self.command_ready_room(remote, relays)? == Some(session))
+        }
     }
 
     fn local_owner(&mut self, profile: &str, handle: &CommandHandle) -> Result<Owner> {
@@ -379,15 +520,21 @@ impl MdkOwner {
         request: &Request,
     ) -> Result<LocalResult> {
         match request {
-            Request::CommandPrepare { remote, relays } => {
-                let remote = fixed_hex::<32>(remote)?;
-                Ok(match self.command_ready_room(remote, relays)? {
-                    Some(session) => LocalResult::Ready {
-                        session: hex::encode(session),
-                        local_account: self.identity.clone(),
+            Request::CommandPrepare {
+                remote,
+                relays,
+                fresh,
+            } => {
+                let key = RoomKey::parse(remote, fresh.as_deref())?;
+                Ok(
+                    match self.command_ready_preparation(key.remote, relays, key.fresh)? {
+                        Some(session) => LocalResult::Ready {
+                            session: hex::encode(session),
+                            local_account: self.identity.clone(),
+                        },
+                        None => LocalResult::LocalBusy,
                     },
-                    None => LocalResult::LocalBusy,
-                })
+                )
             }
             Request::CommandSubmit {
                 remote,
@@ -415,7 +562,7 @@ impl MdkOwner {
                     Err(
                         Error::Invalid("command_not_found") | Error::Storage("command_not_found"),
                     ) => {
-                        if self.command_ready_room(remote, relays)? != Some(session) {
+                        if !self.command_ready_session(remote, relays, session)? {
                             return Err(Error::Invalid("command_room_pending"));
                         }
                     }
@@ -550,6 +697,70 @@ impl MdkOwner {
 mod tests {
     use super::*;
     #[test]
+    fn relay_binding_digest_uses_normalized_set_order() {
+        let parse = |urls: Vec<String>| {
+            RelayPolicy::parse(
+                &urls,
+                crate::transport::RouteMode::Off,
+                crate::transport::TransportLimits::default(),
+            )
+            .unwrap()
+        };
+        let first = parse(vec![
+            "wss://Z.example:443/".into(),
+            "wss://a.example/path".into(),
+        ]);
+        let reordered = parse(vec![
+            "wss://a.example/path".into(),
+            "wss://z.example/".into(),
+            "wss://Z.EXAMPLE:443/".into(),
+        ]);
+        assert_eq!(
+            relay_digest(&first).unwrap(),
+            relay_digest(&reordered).unwrap()
+        );
+        let other = parse(vec![
+            "wss://z.example/other".into(),
+            "wss://a.example/path".into(),
+        ]);
+        assert_ne!(relay_digest(&first).unwrap(), relay_digest(&other).unwrap());
+    }
+    #[test]
+    fn fresh_intents_are_independent_and_keep_one_bounded_start_window() {
+        let current = now().unwrap();
+        let token = fixed_hex::<16>(&foundation::fresh_id(current).unwrap()).unwrap();
+        assert_eq!(
+            fresh_start_window(token, current).unwrap(),
+            Duration::from_secs(45)
+        );
+        assert_eq!(
+            fresh_start_window(token, current - 1).unwrap(),
+            Duration::from_secs(45)
+        );
+        assert!(matches!(
+            fresh_start_window(token, current + 45),
+            Err(Error::Invalid("command_room_start_expired"))
+        ));
+        let mut queue = RoomIntents::default();
+        let start = Instant::now();
+        let fresh = RoomKey {
+            remote: [1; 32],
+            fresh: Some(token),
+        };
+        queue.enqueue(fresh, start);
+        let original = queue.queue[0].1;
+        queue.enqueue(fresh, start + Duration::from_secs(5));
+        queue.enqueue([1; 32], start);
+        assert_eq!(queue.queue.len(), 2);
+        assert_eq!(queue.queue[0].1, original);
+        assert_eq!(queue.next(original), Some(RoomKey::from([1; 32])));
+        assert!(matches!(
+            queue.enqueue(fresh, original),
+            LocalResult::Failure { .. }
+        ));
+        assert!(RoomKey::parse(&hex::encode([1; 32]), Some("bad")).is_err());
+    }
+    #[test]
     fn room_intents_coalesce_cap_expire_and_keep_original_deadline() {
         let start = Instant::now();
         let mut queue = RoomIntents::default();
@@ -571,7 +782,10 @@ mod tests {
             queue.enqueue([0; 32], start + Duration::from_secs(121)),
             LocalResult::LocalBusy
         ));
-        assert_eq!(queue.next(start + Duration::from_secs(121)), Some([0; 32]));
+        assert_eq!(
+            queue.next(start + Duration::from_secs(121)),
+            Some(RoomKey::from([0; 32]))
+        );
     }
     #[test]
     fn room_failure_cache_is_bounded_and_other_peers_progress() {
@@ -590,8 +804,8 @@ mod tests {
             LocalResult::Failure { .. }
         ));
         queue.enqueue([9; 32], start);
-        assert_eq!(queue.next(start), Some([0; 32]));
-        assert_eq!(queue.next(start), Some([9; 32]));
+        assert_eq!(queue.next(start), Some(RoomKey::from([0; 32])));
+        assert_eq!(queue.next(start), Some(RoomKey::from([9; 32])));
     }
 }
 

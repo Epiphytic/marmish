@@ -9,6 +9,26 @@ use std::path::PathBuf;
 
 type PublicationProofs = BTreeMap<(Vec<u8>, Vec<u8>), crate::journal::PublicationKey>;
 
+/// Offline tests replace only network discovery and final publication delivery;
+/// group creation, acceptance, authority and durable creation fences stay real.
+#[cfg(test)]
+pub(super) struct CreationTest {
+    pub package: Option<KeyPackage>,
+    pub stage: CreationStage,
+    pub attempts: usize,
+}
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum CreationStage {
+    PendingWelcome,
+    DiscoveryFailure,
+    ExpiredAfterDiscovery,
+    StartExpiredAfterDiscovery,
+    InterruptAfterFence,
+    NativeFailure,
+    MismatchedSession,
+}
+
 impl MdkOwner {
     pub(crate) fn command_cancel_fixture(&mut self, invocations: &[Id]) -> Result<()> {
         self.commands
@@ -109,7 +129,13 @@ impl MdkOwner {
         self.ensure_ingress()?;
         if !new_session {
             for room in self.journal.command_rooms()? {
-                if room.peer == peer && room.direction == CommandDirection::Client {
+                if room.peer == peer
+                    && room.direction == CommandDirection::Client
+                    && self
+                        .journal
+                        .command_preparation_session(room.session)?
+                        .is_none()
+                {
                     match self.command_context(&GroupId::new(room.group.clone())) {
                         Ok(_) => return Ok(room),
                         Err(Error::Mdk("command_room_revoked")) => continue,
@@ -118,6 +144,55 @@ impl MdkOwner {
                 }
             }
         }
+        self.create_command_room(peer, None, deadline).await
+    }
+    pub(crate) async fn open_prepared_command_room(
+        &mut self,
+        peer: Account,
+        fresh: Option<Id>,
+        deadline: Instant,
+    ) -> Result<CommandRoom> {
+        let Some(token) = fresh else {
+            return self.open_command_room(peer, false, deadline).await;
+        };
+        let relays = self
+            .connector
+            .policy()
+            .urls()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        self.command_can_prepare(peer, &relays)?;
+        if let Some(record) =
+            self.journal
+                .command_preparation(&token, &peer, &self.command_relay_digest()?)?
+        {
+            let room = self
+                .journal
+                .command_rooms()?
+                .into_iter()
+                .find(|r| {
+                    r.session == record.session
+                        && r.peer == peer
+                        && r.direction == CommandDirection::Client
+                })
+                .ok_or(Error::Invalid("command_room_uncertain"))?;
+            self.command_context(&GroupId::new(room.group.clone()))?;
+            return Ok(room);
+        }
+        super::command_local::fresh_start_window(token, now()?)?;
+        self.create_command_room(peer, Some(token), deadline).await
+    }
+    async fn create_command_room(
+        &mut self,
+        peer: Account,
+        fresh: Option<Id>,
+        deadline: Instant,
+    ) -> Result<CommandRoom> {
+        if !self.active {
+            return Err(Error::Mdk("inactive"));
+        }
+        self.ensure_ingress()?;
         if self.journal.command_rooms()?.len() >= 64 {
             return Err(Error::Invalid("command_room_capacity"));
         }
@@ -126,7 +201,29 @@ impl MdkOwner {
             return Err(Error::Invalid("clock_behind_floor"));
         }
         let session = foundation::fresh_id(current)?;
+        #[cfg(test)]
+        let kp = if let Some(test) = &mut self.command_creation_test {
+            if test.stage == CreationStage::DiscoveryFailure {
+                return Err(Error::Transport("key_package_discovery"));
+            }
+            test.package
+                .take()
+                .ok_or(Error::Invalid("test_key_package"))?
+        } else {
+            self.discover(&hex::encode(peer), deadline).await?
+        };
+        #[cfg(not(test))]
         let kp = self.discover(&hex::encode(peer), deadline).await?;
+        #[cfg(test)]
+        let deadline = if self
+            .command_creation_test
+            .as_ref()
+            .is_some_and(|test| test.stage == CreationStage::ExpiredAfterDiscovery)
+        {
+            Instant::now()
+        } else {
+            deadline
+        };
         let routing = NostrRoutingV1::new(
             random::<32>()?,
             self.routing.endpoints.iter().map(|v| v.0.clone()).collect(),
@@ -143,6 +240,74 @@ impl MdkOwner {
                 data: encode_nostr_routing_v1(&routing).map_err(|_| Error::Invalid("routing"))?,
             }],
         };
+        if Instant::now() >= deadline {
+            return Err(Error::Timeout);
+        }
+        if let Some(token) = fresh {
+            let current = now()?;
+            #[cfg(test)]
+            let current = if self
+                .command_creation_test
+                .as_ref()
+                .is_some_and(|test| test.stage == CreationStage::StartExpiredAfterDiscovery)
+            {
+                current.saturating_add(46)
+            } else {
+                current
+            };
+            super::command_local::fresh_start_window(token, current)?;
+            let relays = self
+                .connector
+                .policy()
+                .urls()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            self.command_can_prepare(peer, &relays)?;
+            match self.journal.command_begin_preparation(
+                token,
+                peer,
+                self.command_relay_digest()?,
+                super::command_adapter::fixed_hex::<16>(&session)?,
+                now()?,
+            )? {
+                crate::journal::PreparationStart::Created(_) => {}
+                crate::journal::PreparationStart::Existing(_) => {
+                    return Err(Error::Invalid("command_room_uncertain"));
+                }
+            }
+        }
+        #[cfg(test)]
+        let deadline = if self
+            .command_creation_test
+            .as_ref()
+            .is_some_and(|test| test.stage == CreationStage::InterruptAfterFence)
+        {
+            Instant::now()
+        } else {
+            deadline
+        };
+        if Instant::now() >= deadline {
+            return Err(Error::Timeout);
+        }
+        #[cfg(test)]
+        let request = {
+            let mut request = request;
+            if let Some(test) = &mut self.command_creation_test {
+                test.attempts += 1;
+                if test.stage == CreationStage::NativeFailure {
+                    return Err(Error::Mdk("create_group"));
+                }
+                if test.stage == CreationStage::MismatchedSession {
+                    request.name = format!(
+                        "{}{}",
+                        RoomPurpose::Command.prefix(),
+                        foundation::fresh_id(now()?)?
+                    );
+                }
+            }
+            request
+        };
         let (group, effects) =
             tokio::time::timeout_at(deadline, self.runtime.create_group(request))
                 .await
@@ -155,9 +320,18 @@ impl MdkOwner {
                 return Err(error);
             }
         };
-        if room.peer != peer {
+        if room.peer != peer
+            || (fresh.is_some()
+                && (room.session != super::command_adapter::fixed_hex::<16>(&session)?
+                    || room.direction != CommandDirection::Client))
+        {
             self.command_forget_and_confirm(&group)?;
             return Err(Error::Mdk("command_room_peer"));
+        }
+        #[cfg(test)]
+        if self.command_creation_test.is_some() {
+            // Keep real native Welcome obligations pending, without a relay.
+            return Ok(room);
         }
         self.apply_effects(effects, deadline).await?;
         mdk(self.runtime.sync_transport_groups(None).await)?;

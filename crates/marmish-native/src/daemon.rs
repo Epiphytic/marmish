@@ -134,17 +134,13 @@ async fn dispatch(
             .unwrap_or_else(crate::command_local::failure);
         let result = match (&request, result) {
             (
-                Request::CommandPrepare { remote, .. },
+                Request::CommandPrepare { remote, fresh, .. },
                 crate::command_local::LocalResult::LocalBusy,
-            ) => {
-                let bytes = hex::decode(remote).map_err(|_| Error::Invalid("command_remote"))?;
-                rooms.enqueue(
-                    bytes
-                        .try_into()
-                        .map_err(|_| Error::Invalid("command_remote"))?,
-                    Instant::now(),
-                )
-            }
+            ) => owner.command_enqueue_preparation(
+                crate::command_local::RoomKey::parse(remote, fresh.as_deref())?,
+                rooms,
+                Instant::now(),
+            )?,
             (_, result) => result,
         };
         return Ok(Response::command(result));
@@ -304,7 +300,7 @@ async fn serve_owner(profile: &ProfileLease, owner: &mut MdkOwner) -> Result<()>
                         Err(error) => return Err(error),
                     }
                     if let Some(remote)=room_intents.next(Instant::now()) {
-                        let deadline=Instant::now()+Duration::from_secs(15);
+                        let deadline=Instant::now()+Duration::from_secs(crate::command_local::ROOM_TURN_SECONDS);
                         let result=tokio::select! {
                             _ = &mut shutdown_signal => break,
                             _ = &mut expired => break,
@@ -315,6 +311,9 @@ async fn serve_owner(profile: &ProfileLease, owner: &mut MdkOwner) -> Result<()>
                                 Error::Timeout=>"command_room_discovery_timeout",
                                 Error::Invalid("command_unauthorized")=>"command_room_unauthorized",
                                 Error::Invalid("command_room_capacity")=>"command_room_capacity",
+                                Error::Invalid("command_preparation_capacity")=>"command_preparation_capacity",
+                                Error::Invalid("command_room_uncertain")=>"command_room_uncertain",
+                                Error::Invalid("command_room_start_expired")=>"command_room_start_expired",
                                 Error::Invalid("clock_behind_floor")=>"command_room_clock",
                                 Error::Storage(_)=>"command_room_cleanup",
                                 _=>"command_room_creation",
