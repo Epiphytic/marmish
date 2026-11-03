@@ -1,0 +1,149 @@
+name: v0.2 HTTPS installer qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Successful immutable v02-release master run ID
+        required: true
+        type: string
+      candidate_run_attempt:
+        description: Exact successful candidate attempt
+        required: true
+        type: string
+      source_commit:
+        description: Full candidate source commit
+        required: true
+        type: string
+      bootstrap_commit:
+        description: Master workflow commit changing only scripts/install.sh after candidate
+        required: true
+        type: string
+      bootstrap_sha256:
+        description: Reviewed rendered script SHA256
+        required: true
+        type: string
+      version:
+        description: Explicit qualified 0.2.N or 0.2.N-rc.N version
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marmish-v02-https-installer
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Test supervisor contracts before credentials are exposed
+        run: python3 -m unittest discover -s tools -p test_marmish_native_https_check.py
+      - name: Validate candidate attempt, artifact bounds and bootstrap-only source change
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run_id }}
+          CANDIDATE_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          BOOTSTRAP_COMMIT: ${{ inputs.bootstrap_commit }}
+          BOOTSTRAP_SHA256: ${{ inputs.bootstrap_sha256 }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          python3 tools/marmish_native_https_check.py resolve \
+            --qualification-run "$GITHUB_RUN_ID" --qualification-attempt "$GITHUB_RUN_ATTEMPT" \
+            --workflow-commit "$GITHUB_SHA" --candidate-run "$CANDIDATE_RUN" \
+            --candidate-attempt "$CANDIDATE_ATTEMPT" --source-commit "$SOURCE_COMMIT" \
+            --bootstrap-commit "$BOOTSTRAP_COMMIT" --bootstrap-sha256 "$BOOTSTRAP_SHA256" \
+            --version "$RELEASE_VERSION" --output https-context.json
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: v02-pinned-bootstrap-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: candidate-bootstrap
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - name: Bind exact candidate template and published bootstrap bytes
+        run: python3 tools/marmish_native_https_check.py bind --context https-context.json --artifact candidate-bootstrap
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: v02-https-context-${{ github.run_id }}-${{ github.run_attempt }}
+          path: https-context.json
+          if-no-files-found: error
+          retention-days: 14
+
+  install:
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        source: [iris, github]
+        platform:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: v02-https-context-${{ github.run_id }}-${{ github.run_attempt }}
+          path: context
+      - name: Download both mirrors and execute the selected real HTTPS quickstart
+        env:
+          INSTALL_SOURCE: ${{ matrix.source }}
+          NATIVE_TARGET: ${{ matrix.platform.target }}
+        run: |
+          python3 tools/marmish_native_https_check.py cell --context context/https-context.json \
+            --source "$INSTALL_SOURCE" --target "$NATIVE_TARGET" --report https-cell.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: v02-https-${{ matrix.platform.target }}-${{ matrix.source }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: https-cell.json
+          if-no-files-found: error
+          retention-days: 14
+
+  rollup:
+    needs: [resolve, install]
+    if: always() && needs.resolve.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: v02-https-context-${{ github.run_id }}-${{ github.run_attempt }}
+          path: context
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: v02-https-*-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: cells
+      - name: Require six independent successful exact-source installations
+        run: |
+          python3 tools/marmish_native_https_check.py rollup --context context/https-context.json \
+            --reports cells --output https-rollup.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: v02-https-rollup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: https-rollup.json
+          if-no-files-found: error
+          retention-days: 14
