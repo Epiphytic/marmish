@@ -17,6 +17,7 @@ impl Namespace {
             Self::MarmishV2 => 2,
         }
     }
+    #[cfg(target_os = "linux")]
     pub(crate) fn version_str(self) -> &'static str {
         match self {
             Self::Legacy => "1",

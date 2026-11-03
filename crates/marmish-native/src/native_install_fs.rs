@@ -70,12 +70,14 @@ impl Anchors {
     }
     pub fn open(&self, path: &Path, flags: i32, mode: u32) -> Result<File> {
         let (parent, leaf) = self.parent(path)?;
+        // openat is variadic: macOS mode_t is u16 and must be promoted.
+        let promoted_mode: libc::c_uint = mode;
         let fd = unsafe {
             libc::openat(
                 parent.as_raw_fd(),
                 leaf.as_ptr(),
                 flags | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-                mode as libc::mode_t,
+                promoted_mode,
             )
         };
         if fd < 0 {

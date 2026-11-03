@@ -115,12 +115,18 @@ fn continuous_time() -> Result<Duration> {
 }
 #[cfg(target_os = "macos")]
 fn continuous_time() -> Result<Duration> {
+    #[repr(C)]
+    struct TimebaseInfo {
+        numer: u32,
+        denom: u32,
+    }
     unsafe extern "C" {
         fn mach_continuous_time() -> u64;
+        fn mach_timebase_info(info: *mut TimebaseInfo) -> i32;
     }
-    let mut base = libc::mach_timebase_info_data_t { numer: 0, denom: 0 };
+    let mut base = TimebaseInfo { numer: 0, denom: 0 };
     // SAFETY: the system API writes to a live, exclusively borrowed timebase struct.
-    if unsafe { libc::mach_timebase_info(&mut base) } != 0 || base.denom == 0 {
+    if unsafe { mach_timebase_info(&mut base) } != 0 || base.denom == 0 {
         return Err(Error::Invalid("command_continuous_clock"));
     }
     // SAFETY: this system clock function takes no arguments and has no preconditions.
