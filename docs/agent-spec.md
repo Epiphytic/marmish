@@ -959,3 +959,25 @@ now stops at `preflight_broker_confined` with signal 6. Default-keychain fronten
 acceptance requires a dedicated disposable account/VM; confined runtime and
 same-SHA interoperability remain pending. Linux acceptance does not establish
 those gates.
+
+## Native synthetic version lifecycle gate
+
+The installed-checks harness implements a separate three-platform synthetic
+version lifecycle gate; it is not yet qualified by a hosted lifecycle run. It
+builds genuine, explicitly synthetic predecessor/incompatible variants and keeps
+the immutable candidate unchanged. Recovery preserves the original worker and
+engine across the B-to-A switch, proves the same completed invocation under A,
+then performs one sealed cleanup. A failure before that proof preserves the
+engine. The incompatible rollback checks all main database bytes and preexisting
+sidecars exactly; only previously absent private empty WAL and 32,768-byte SHM
+files may appear during read-only SQLite bookkeeping. No immutable mode or
+checkpoint is used. macOS provider upgrade denial remains a finite red outcome,
+with cleanup facts reported separately; ACLs are not broadened.
+
+See the [lifecycle design](phases/v0.2-installed-version-lifecycle.md),
+[approved rollback ordering](reviews/v0.2-lifecycle-rollback-order-design-r1.md),
+[WAL prerequisite evidence](validation/v0.2/lifecycle-wal-prerequisite.md), and
+[integrated review findings](reviews/v0.2-version-lifecycle-integrated-code-r1.md).
+The runtime records stage durations, command wall time, restart readiness and
+byte counts. Actual installed latency samples remain pending; offline test
+duration is not a product performance measurement.

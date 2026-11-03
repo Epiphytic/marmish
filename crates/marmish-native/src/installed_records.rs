@@ -56,6 +56,7 @@ impl Context {
     pub(super) fn cohort_lifetime(&self) -> Result<u64> {
         match self.cohort.as_str() {
             "matrix" => Ok(2220),
+            "version-lifecycle" => Ok(1800),
             "autoexit" | "uptime" | "benchmark" | "recovery" | "policy" => Ok(3300),
             _ => Err(invalid()),
         }

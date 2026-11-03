@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {promises as fs} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {candidateInputs, checkRun, checkTooling, verifyTools, verifyContext, gather, sourceDigest, TARGETS, cohortLifetime} from './workflow.mjs';
+import {candidateInputs, checkRun, checkTooling, verifyTools, verifyContext, gather, sourceDigest, SOURCE_PATHS, TARGETS, cohortLifetime} from './workflow.mjs';
 import {LOCAL_COHORTS} from './local.mjs';
 import {digest, ROLES} from './transport.mjs';
 import {execFileSync} from 'node:child_process';
@@ -16,6 +16,7 @@ const run = {id:12,run_attempt:3,status:'completed',conclusion:'success',path:'.
 test('closed cohort lifetimes preserve matrix and original local wave bounds', () => {
   assert.deepEqual(cohortLifetime({}), {name:'matrix',seconds:2220});
   for (const name of ['autoexit','uptime','benchmark','recovery','policy']) assert.deepEqual(cohortLifetime({TEST_COHORT:name}), {name,seconds:3300});
+  assert.deepEqual(cohortLifetime({TEST_COHORT:'version-lifecycle'}), {name:'version-lifecycle',seconds:1800});
   for (const name of ['unknown','constructor','__proto__','']) assert.throws(()=>cohortLifetime({TEST_COHORT:name}));
 });
 test('candidate inputs bind control source and require explicit direct relay', () => {
@@ -65,9 +66,17 @@ test('bytes and original record digest authenticated before executable permissio
 test('source digest matches the candidate immutable git-tree pipeline', () => {
   const sha=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
   const tree=execFileSync('git',['ls-tree','-r',sha,'--','crates/marmish-native','Cargo.lock',
-    'tools/v02-actions','.github/workflows/v02-installed.yml']);
+    'tools/v02-actions','.github/workflows/v02-installed.yml', '.github/workflows/v02-version-lifecycle.yml',
+    'tools/marmish_v02_lifecycle_build.py', 'tools/test_marmish_v02_lifecycle_build.py',
+    'tools/marmish_native_https_check.py', 'tools/marmish_native_keychain_check.py', 'tools/marmish_native_quickstart_check.py']);
   const expected=execFileSync('shasum',['-a','256'],{input:tree,encoding:'utf8'}).split(' ')[0];
   assert.equal(sourceDigest(sha),expected);
+});
+test('release workflow hashes the exact same source path set, including uncommitted new tooling paths', async () => {
+  const yaml=await fs.readFile(new URL('../../.github/workflows/v02-release.yml',import.meta.url),'utf8');
+  const match=yaml.match(/git ls-tree -r "\$MARMISH_BUILD_COMMIT" -- ([\s\S]*?)\| shasum/);
+  assert.ok(match);
+  assert.deepEqual(match[1].replaceAll('\\','').trim().split(/\s+/),SOURCE_PATHS);
 });
 test('missing tooling pin or different candidate attempt fails before executing a tool', async t => {
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'marmish-context-'));

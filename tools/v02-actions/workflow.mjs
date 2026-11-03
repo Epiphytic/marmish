@@ -6,11 +6,14 @@ import {pathToFileURL} from 'node:url';
 import {ArtifactTransport, ROLES, artifactName, binding, boundedFile, childEnvironment, digest, requireThat} from './transport.mjs';
 export const TARGETS = ['x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu', 'aarch64-apple-darwin'];
 const TOOLS = ['marmish-installed-check', 'marmish-installed-fixture'];
-const SOURCE_PATHS = ['crates/marmish-native', 'Cargo.lock', 'tools/v02-actions', '.github/workflows/v02-installed.yml'];
+export const SOURCE_PATHS = ['crates/marmish-native', 'Cargo.lock', 'tools/v02-actions', '.github/workflows/v02-installed.yml',
+  '.github/workflows/v02-version-lifecycle.yml', 'tools/marmish_v02_lifecycle_build.py',
+  'tools/test_marmish_v02_lifecycle_build.py', 'tools/marmish_native_https_check.py',
+  'tools/marmish_native_keychain_check.py', 'tools/marmish_native_quickstart_check.py'];
 const hex = (s, n) => typeof s === 'string' && new RegExp(`^[0-9a-f]{${n}}$`).test(s);
 export function cohortLifetime(env) {
   const name = env.TEST_COHORT ?? 'matrix';
-  const seconds = {matrix: 2220, autoexit: 3300, uptime: 3300, benchmark: 3300, recovery: 3300, policy: 3300}[name];
+  const seconds = {matrix: 2220, autoexit: 3300, uptime: 3300, benchmark: 3300, recovery: 3300, policy: 3300, 'version-lifecycle': 1800}[name];
   requireThat(Number.isSafeInteger(seconds), 'unsupported_cohort');
   return {name, seconds};
 }
@@ -82,9 +85,9 @@ export function probeTool(file, source, target) {
 async function publicCopy(source, target, limit) {
   await fs.writeFile(target, await boundedFile(source, limit), {flag: 'wx', mode: 0o600});
 }
-async function validateCandidate(env) {
+export async function validateCandidate(env, retentionUntil = 0, injectedTransport) {
   const c = candidateInputs(env);
-  const transport = new ArtifactTransport({context: c, token: env.GH_TOKEN,
+  const transport = injectedTransport ?? new ArtifactTransport({context: c, token: env.GH_TOKEN,
     budgetFile: path.join(env.RESOLVE_ROOT, 'api-budget.json')});
   const deadline = Date.now() + 120_000;
   const reply = await transport.request(`https://api.github.com/repos/${c.repository}/actions/runs/${c.run_id}/attempts/${c.run_attempt}`,
@@ -98,12 +101,12 @@ async function validateCandidate(env) {
     `v02-pinned-bootstrap-${c.run_id}-${c.run_attempt}`];
   for (const name of names) {
     const matching = artifacts.filter(a => a.name === name);
-    requireThat(matching.length === 1 && !matching[0].expired, 'candidate_artifacts_missing');
+    requireThat(matching.length === 1 && !matching[0].expired
+      && (retentionUntil === 0 || Date.parse(matching[0].expires_at) >= retentionUntil), 'candidate_artifacts_missing');
   }
 }
-async function resolve(env) {
+export async function candidatePins(env) {
   const c = candidateInputs(env);
-  const cohort = cohortLifetime(env);
   const harness = sourceDigest(c.source);
   const manifests = path.join(env.RESOLVE_ROOT, 'manifests');
   const tooling = path.join(env.RESOLVE_ROOT, 'tooling');
@@ -119,6 +122,11 @@ async function resolve(env) {
     const checked = await verifyTools(toolDirectory, role, c.source, harness);
     await fs.writeFile(path.join(tooling, `${role}-tooling.json`), checked.bytes, {flag: 'wx', mode: 0o600});
   }
+  return {c, harness, manifests, tooling, output};
+}
+async function resolve(env) {
+  const {c, harness, manifests, tooling, output} = await candidatePins(env);
+  const cohort = cohortLifetime(env);
   const driver = path.join(env.TOOLS_ROOT,
     `v02-installed-tools-${TARGETS[0]}-${c.run_id}-${c.run_attempt}`, TOOLS[0]);
   probeTool(driver, c.source, TARGETS[0]);

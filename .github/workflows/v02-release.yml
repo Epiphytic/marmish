@@ -151,6 +151,9 @@ jobs:
           test "$(git rev-parse HEAD)" = "$MARMISH_BUILD_COMMIT"
           harness_sha256=$(git ls-tree -r "$MARMISH_BUILD_COMMIT" -- \
             crates/marmish-native Cargo.lock tools/v02-actions .github/workflows/v02-installed.yml \
+            .github/workflows/v02-version-lifecycle.yml tools/marmish_v02_lifecycle_build.py \
+            tools/test_marmish_v02_lifecycle_build.py tools/marmish_native_https_check.py \
+            tools/marmish_native_keychain_check.py tools/marmish_native_quickstart_check.py \
             | shasum -a 256 | cut -d ' ' -f 1)
           target/release/marmish-release-tool package-tooling \
             --input-dir "$RUNNER_TEMP/tooling-input" --output-dir "$RUNNER_TEMP/installed-tools" \

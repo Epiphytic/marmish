@@ -1,5 +1,6 @@
 """Offline supervisor contracts; real native provider success is a CI gate."""
 import json
+import signal
 from pathlib import Path
 import subprocess
 import tempfile
@@ -102,6 +103,181 @@ class InstalledProviderSupervisor(unittest.TestCase):
                 with self.assertRaisesRegex(check.Refused, 'staged_input_changed'):
                     check.inner(staging / 'bootstrap', staging, staging / 'report', pins)
                 constructor.assert_not_called()
+
+
+
+class LifecycleProviderSupervisor(unittest.TestCase):
+    def lifecycle_fixture(self, root):
+        a = root / 'a-assets'
+        a.mkdir()
+        (a / 'marmish-0.2.0-rc.1-aarch64-apple-darwin').write_bytes(b'offline fixture')
+        manifest = a / 'marmish-0.2.0-rc.1-aarch64-apple-darwin.manifest'
+        manifest.write_bytes(b'offline pinned manifest')
+        qualification = check.LifecycleQualification(root, root / 'bootstrap', root / 'b-assets',
+            a, check.digest(manifest))
+        qualification.bins.mkdir()
+        old, new = root / 'old-helper', root / 'new-helper'
+        old.write_bytes(b'old actual path')
+        new.write_bytes(b'new actual path')
+        binary = qualification.bins / 'marmish'
+        qualification.provider = mock.Mock()
+        qualification.provider.start.return_value = {}
+        qualification.wait_probe = mock.Mock()
+        qualification.command = mock.Mock(side_effect=[(0, b'{"backend":"keychain"}'), (1, b''), (1, b'')])
+        qualification.manifest = mock.Mock(return_value={'public_key': 'public'})
+        qualification.items = mock.Mock(return_value={('nostr', 'a'), ('sqlcipher', 'b')})
+        qualification.snapshot = mock.Mock(return_value=(b'profile', b'config'))
+        reloads = []
+        qualification.reload = mock.Mock(side_effect=lambda *_: reloads.append(binary.resolve()))
+        qualification.upgrade_reload = mock.Mock(side_effect=lambda public: qualification.reload('default', public))
+        def execute(argv, *_arguments, **_keywords):
+            if 'install' in argv:
+                version = argv[argv.index('--select') + 1] if '--select' in argv else '0.2.0-rc.1'
+                binary.unlink(missing_ok=True)
+                binary.symlink_to(old if version == '0.2.0-rc.1' else new)
+            elif argv[0] == '/bin/sh':
+                binary.unlink()
+                binary.symlink_to(new)
+            if argv[-1] == 'release-info':
+                version = '0.2.0-rc.1' if binary.resolve() == old else '0.2.0'
+                return 0, json.dumps({'version': version}).encode()
+            return 0, b'{}'
+        return qualification, execute, reloads, old, new
+
+    def test_lifecycle_fresh_process_order_and_denial_not_qualified(self):
+        for denied in (False, True):
+            with self.subTest(denied=denied), tempfile.TemporaryDirectory() as tmp:
+                qualification, execute, reloads, old, new = self.lifecycle_fixture(Path(tmp))
+                result = {'lifecycle_upgrade_loaded': False, 'lifecycle_rollback_loaded': False,
+                    'lifecycle_locked_denied': False}
+                if denied:
+                    qualification.upgrade_reload.side_effect = check.Refused('lifecycle_upgrade_locked_or_denied')
+                with mock.patch.object(check, 'execute', side_effect=execute):
+                    if denied:
+                        with self.assertRaisesRegex(check.Refused, 'lifecycle_upgrade_locked_or_denied'):
+                            qualification.run(result)
+                        self.assertFalse(any(result[key] for key in ('lifecycle_upgrade_loaded',
+                            'lifecycle_rollback_loaded', 'lifecycle_locked_denied')))
+                        self.assertEqual(result['lifecycle_stage'], 'upgrade_reload')
+                        qualification.provider.lock.assert_not_called()
+                    else:
+                        qualification.run(result)
+                        self.assertEqual(reloads, [old, new, new, old, new, new])
+                        self.assertTrue(all(result[key] for key in ('lifecycle_upgrade_loaded',
+                            'lifecycle_rollback_loaded', 'lifecycle_locked_denied')))
+                        qualification.provider.lock.assert_called_once()
+                        qualification.provider.unlock.assert_called_once()
+                        self.assertEqual(result['lifecycle_stage'], 'complete')
+
+    def test_lifecycle_a_pin_checked_before_any_product_execution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            qualification, _, _, _, _ = self.lifecycle_fixture(Path(tmp))
+            qualification.a_pin = '0' * 64
+            with mock.patch.object(check, 'execute') as run:
+                with self.assertRaisesRegex(check.Refused, 'lifecycle_a_manifest_pin'):
+                    qualification.run({})
+                run.assert_not_called()
+
+    def test_retained_helper_checks_inode_hash_and_selected_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            qualification, _, _, old, new = self.lifecycle_fixture(Path(tmp))
+            info = old.stat()
+            expected = info.st_dev, info.st_ino, info.st_size, check.digest(old)
+            qualification.retained(old, expected)
+            (qualification.bins / 'marmish').symlink_to(new)
+            with self.assertRaisesRegex(check.Refused, 'lifecycle_old_helper_retained'):
+                qualification.retained(old, expected, selected=True)
+            replacement = old.with_name('replacement')
+            replacement.write_bytes(old.read_bytes())
+            replacement.replace(old)
+            with self.assertRaisesRegex(check.Refused, 'lifecycle_old_helper_retained'):
+                qualification.retained(old, expected)
+            info = old.stat()
+            expected = info.st_dev, info.st_ino, info.st_size, check.digest(old)
+            old.write_bytes(new.read_bytes())
+            with self.assertRaisesRegex(check.Refused, 'lifecycle_old_helper_retained'):
+                qualification.retained(old, expected)
+
+    def test_upgrade_error_classifier_is_private_exact_and_finite(self):
+        for error, category in ((b'marmish: identity: locked_or_denied',
+                'lifecycle_upgrade_locked_or_denied'),
+                (b'private provider diagnostic', 'lifecycle_upgrade_reload_failed')):
+            with self.subTest(category=category), tempfile.TemporaryDirectory() as tmp:
+                qualification = check.LifecycleQualification.__new__(check.LifecycleQualification)
+                qualification.bins, qualification.state = Path(tmp), Path(tmp) / 'state'
+                qualification.environment = {}
+                executable = Path(tmp) / 'marmish'
+                executable.write_bytes(b'#!/bin/sh\nprintf "%s\\n" "' + error + b'" >&2\nexit 1\n')
+                executable.chmod(0o700)
+                with self.assertRaises(check.Refused) as caught:
+                    qualification.upgrade_reload('public')
+                self.assertEqual(str(caught.exception), category)
+                self.assertNotIn('private provider diagnostic', str(caught.exception))
+
+    def test_original_outer_budget_reserves_cleanup_and_clamps_inner(self):
+        self.assertEqual(check.provider_inner_budget(100, 540, True, 100), (480, 420))
+        self.assertEqual(check.provider_inner_budget(100, 540, True, 160), (420, 400))
+        self.assertEqual(check.provider_inner_budget(100, 300, True, 160), (180, 160))
+        self.assertEqual(check.provider_inner_budget(100, 600, False, 100), (570, 540))
+        with self.assertRaisesRegex(check.Refused, 'owned_account_setup_deadline'):
+            check.provider_inner_budget(100, 540, True, 550)
+
+    def test_outer_result_keeps_exact_upgrade_denial_and_requires_all_proofs(self):
+        result = {'ok': False, 'failure': 'lifecycle_upgrade_locked_or_denied'}
+        with self.assertRaisesRegex(check.Refused, '^lifecycle_upgrade_locked_or_denied$'):
+            check.provider_result_check(1, result, True)
+        result = {'ok': True, 'lifecycle_stage': 'complete', 'lifecycle_upgrade_loaded': True,
+            'lifecycle_rollback_loaded': True, 'lifecycle_locked_denied': True}
+        check.provider_result_check(0, result, True)
+        for key in ('lifecycle_upgrade_loaded', 'lifecycle_rollback_loaded', 'lifecycle_locked_denied'):
+            with self.assertRaisesRegex(check.Refused, 'lifecycle_provider_incomplete'):
+                check.provider_result_check(0, dict(result, **{key: False}), True)
+
+    def test_signal_context_owns_original_budget_and_restores_on_failure(self):
+        signals = (signal.SIGALRM, signal.SIGTERM, signal.SIGINT)
+        before = tuple(signal.getsignal(sig) for sig in signals)
+        with mock.patch.object(check.signal, 'alarm') as alarm:
+            with self.assertRaisesRegex(RuntimeError, 'owned failure'):
+                with check.ProviderSignals(True, 540) as control:
+                    self.assertTrue(all(callable(signal.getsignal(sig)) for sig in signals))
+                    control.limit_inner(400)
+                    control.cleanup()
+                    self.assertTrue(callable(signal.getsignal(signal.SIGTERM)))
+                    self.assertNotEqual(signal.getsignal(signal.SIGTERM), signal.SIG_IGN)
+                    signal.raise_signal(signal.SIGTERM)
+                    self.assertTrue(control.cancelled)
+                    raise RuntimeError('owned failure')
+            self.assertEqual([call.args[0] for call in alarm.call_args_list], [60, 400, 0, 0])
+        self.assertEqual(tuple(signal.getsignal(sig) for sig in signals), before)
+
+    def test_exact_staging_pins_and_cleanup_even_when_privileged_copy_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bootstrap = root / 'bootstrap.sh'
+            bootstrap.write_bytes(b'offline bootstrap fixture')
+            directories = []
+            for version in ('0.2.0', '0.2.0-rc.1'):
+                directory = root / version
+                directory.mkdir()
+                suffix = version + '-aarch64-apple-darwin'
+                for name in ('marmish', 'marmishd', 'marmish-worker', 'THIRD-PARTY-LICENSES'):
+                    (directory / (name + '-' + suffix)).write_bytes(name.encode())
+                (directory / ('marmish-' + suffix + '.manifest')).write_bytes(b'manifest')
+                directories.append(directory)
+            stage = None
+            with self.assertRaisesRegex(RuntimeError, 'privileged copy failed'):
+                with check.staged_provider_inputs(bootstrap, *directories) as stage:
+                    pins = json.loads((stage / 'input-pins.json').read_bytes())
+                    self.assertEqual(len(pins), 13)
+                    self.assertEqual(sum(name.startswith('assets/') for name in pins), 5)
+                    self.assertEqual(sum(name.startswith('a-assets/') for name in pins), 5)
+                    self.assertTrue(all(check.digest(stage / name) == pin for name, pin in pins.items()))
+                    raise RuntimeError('privileged copy failed')
+            self.assertFalse(stage.exists())
+            (directories[1] / 'unexpected').touch()
+            with self.assertRaisesRegex(check.Refused, 'lifecycle_asset_set'):
+                with check.staged_provider_inputs(bootstrap, *directories):
+                    self.fail('unexpected source accepted')
 
 
 if __name__ == '__main__':

@@ -1,0 +1,251 @@
+name: v0.2 installed version lifecycle qualification
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Successful immutable native candidate run
+        required: true
+        type: string
+      candidate_run_attempt:
+        description: Exact successful candidate attempt
+        required: true
+        type: string
+      source_commit:
+        description: Candidate SOURCE, equal to this master workflow commit
+        required: true
+        type: string
+      relay:
+        description: Explicit direct wss relay
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: marmish-v02-version-lifecycle
+  cancel-in-progress: false
+env:
+  CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+  CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+  SOURCE_COMMIT: ${{ inputs.source_commit }}
+  TEST_RELAY: ${{ inputs.relay }}
+  TEST_COHORT: version-lifecycle
+jobs:
+  resolve:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Refuse a moved or mismatched source
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT" && test "$GITHUB_SHA" = "$SOURCE_COMMIT"
+      - run: npm ci --ignore-scripts
+        working-directory: tools/v02-actions
+      - name: Validate candidate and retained artifact window
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESOLVE_ROOT: ${{ runner.temp }}/resolve
+          LIFECYCLE_MODE: validate-candidate
+        run: mkdir -m 700 "$RESOLVE_ROOT" && node tools/v02-actions/lifecycle.mjs
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: v02-candidate-*-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: ${{ runner.temp }}/assets
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: v02-installed-tools-*-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: ${{ runner.temp }}/tools
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-pinned-bootstrap-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: ${{ runner.temp }}/bootstrap
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - name: Freeze only the exact small manifest and tooling records
+        env:
+          RESOLVE_ROOT: ${{ runner.temp }}/resolve
+          ASSETS_ROOT: ${{ runner.temp }}/assets
+          TOOLS_ROOT: ${{ runner.temp }}/tools
+          BOOTSTRAP_ROOT: ${{ runner.temp }}/bootstrap
+          LIFECYCLE_MODE: pins
+        run: node tools/v02-actions/lifecycle.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v02-lifecycle-pins-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/resolve/manifests/*.manifest
+            ${{ runner.temp }}/resolve/tooling/*-tooling.json
+            ${{ runner.temp }}/resolve/bootstrap.sha256
+          if-no-files-found: error
+          retention-days: 7
+  lifecycle:
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            role: linux-amd64
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            role: linux-arm64
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-15
+            role: macos-arm64
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      ROLE: ${{ matrix.role }}
+      LANG: C
+    steps:
+      - name: Capture original job clock and private canonical parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          started=$(date +%s)
+          echo "JOB_STARTED_MS=$((started * 1000))" >> "$GITHUB_ENV"
+          echo "JOB_DEADLINE_MS=$(((started + 5100) * 1000))" >> "$GITHUB_ENV"
+          case "$(uname -s)" in Darwin) parent=$(mktemp -d /private/tmp/mvl.XXXXXX);; Linux) parent=$(mktemp -d /tmp/mvl.XXXXXX);; *) exit 1;; esac
+          chmod 700 "$parent"
+          echo "MARMISH_WORK=$parent/work" >> "$GITHUB_ENV"
+          echo "VARIANTS_ROOT=$parent/variants" >> "$GITHUB_ENV"
+          echo "LIFECYCLE_OUTPUT=$parent/public" >> "$GITHUB_ENV"
+          echo "PINS_ROOT=$RUNNER_TEMP/pins" >> "$GITHUB_ENV"
+          echo "ASSETS_ROOT=$RUNNER_TEMP/assets" >> "$GITHUB_ENV"
+          echo "TOOLS_ROOT=$RUNNER_TEMP/tools" >> "$GITHUB_ENV"
+          echo "BOOTSTRAP_ROOT=$RUNNER_TEMP/bootstrap" >> "$GITHUB_ENV"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Refuse a moved or mismatched source
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT" && test "$GITHUB_SHA" = "$SOURCE_COMMIT"
+      - uses: dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920
+        with:
+          toolchain: 1.97.1
+      - run: npm ci --ignore-scripts
+        working-directory: tools/v02-actions
+      - name: Recheck retention from this job's actual start
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESOLVE_ROOT: ${{ runner.temp }}/verify
+          LIFECYCLE_MODE: validate-candidate
+        run: mkdir -m 700 "$RESOLVE_ROOT" && node tools/v02-actions/lifecycle.mjs
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-lifecycle-pins-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pins
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-candidate-${{ matrix.target }}-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: ${{ runner.temp }}/assets
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-installed-tools-${{ matrix.target }}-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: ${{ runner.temp }}/tools
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-pinned-bootstrap-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: ${{ runner.temp }}/bootstrap
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - name: Build genuine variants then qualify installed lifecycle under original deadlines
+        env:
+          LIFECYCLE_MODE: run
+        run: node tools/v02-actions/lifecycle.mjs
+      - name: Preserve only finite runtime evidence, including genuine partial failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v02-version-lifecycle-${{ matrix.role }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.LIFECYCLE_OUTPUT }}/lifecycle-context.json
+            ${{ env.LIFECYCLE_OUTPUT }}/lifecycle-result.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Preserve synthetic provenance separately from candidate products
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: synthetic-lifecycle-${{ matrix.role }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.VARIANTS_ROOT }}/variants.json
+            ${{ env.VARIANTS_ROOT }}/patches/*.patch
+          if-no-files-found: error
+          retention-days: 7
+  rollup:
+    if: always() && needs.resolve.result == 'success'
+    needs: [resolve, lifecycle]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ROLE: linux-amd64
+      LIFECYCLE_JOB_RESULT: ${{ needs.lifecycle.result }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Refuse a moved or mismatched source
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT" && test "$GITHUB_SHA" = "$SOURCE_COMMIT"
+      - run: npm ci --ignore-scripts
+        working-directory: tools/v02-actions
+      - name: Set fixed rollup paths
+        run: |
+          echo "PINS_ROOT=$RUNNER_TEMP/pins" >> "$GITHUB_ENV"
+          echo "TOOLS_ROOT=$RUNNER_TEMP/tools" >> "$GITHUB_ENV"
+          echo "LIFECYCLE_RECORDS_ROOT=$RUNNER_TEMP/roles" >> "$GITHUB_ENV"
+          echo "LIFECYCLE_RECORDS_FLAT=$RUNNER_TEMP/records" >> "$GITHUB_ENV"
+          echo "LIFECYCLE_ROLLUP=$RUNNER_TEMP/rollup" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-lifecycle-pins-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pins
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-installed-tools-x86_64-unknown-linux-gnu-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: ${{ runner.temp }}/tools
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-version-lifecycle-linux-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/roles/linux-amd64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-version-lifecycle-linux-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/roles/linux-arm64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-version-lifecycle-macos-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/roles/macos-arm64
+      - name: Authenticate checker and collect exact six public records
+        run: |
+          LIFECYCLE_MODE=verify-tools node tools/v02-actions/lifecycle.mjs
+          LIFECYCLE_MODE=collect node tools/v02-actions/lifecycle.mjs
+      - name: Require actual typed lifecycle success on all three platforms
+        env:
+          LIFECYCLE_MODE: rollup
+        run: node tools/v02-actions/lifecycle.mjs
+      - name: Preserve red or green qualification summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v02-version-lifecycle-rollup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/rollup/lifecycle-rollup.json
+            ${{ runner.temp }}/rollup/lifecycle-summary.md
+          if-no-files-found: error
+          retention-days: 7

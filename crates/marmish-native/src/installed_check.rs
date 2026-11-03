@@ -7,6 +7,8 @@ mod benchmark;
 mod cleanup;
 #[path = "installed_fixture.rs"]
 mod fixture;
+#[path = "installed_lifecycle_provider.rs"]
+mod lifecycle_provider;
 #[path = "installed_local.rs"]
 mod local;
 pub(super) use cleanup::OwnedCleanupGuard;
@@ -22,6 +24,8 @@ mod process;
 mod records;
 #[path = "installed_recovery.rs"]
 mod recovery;
+#[path = "installed_version_lifecycle.rs"]
+mod version_lifecycle;
 use crate::{Error, Result};
 use clap::{Parser, Subcommand};
 use records::{Context, ROLES, TARGETS};
@@ -41,6 +45,54 @@ struct Args {
 #[derive(Subcommand)]
 enum Command {
     ReleaseInfo,
+    LifecycleContext {
+        #[arg(long)]
+        context: PathBuf,
+        #[arg(long)]
+        variants: PathBuf,
+        #[arg(long)]
+        internal_deadline: u64,
+        #[arg(long)]
+        target: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    LifecycleRun {
+        #[arg(long)]
+        context: PathBuf,
+        #[arg(long)]
+        workspace: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        candidate_assets: PathBuf,
+        #[arg(long)]
+        variant_assets: PathBuf,
+        #[arg(long)]
+        bootstrap: PathBuf,
+        #[arg(long)]
+        source_root: PathBuf,
+    },
+    LifecycleRollup {
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        job_result: String,
+        #[arg(long)]
+        source: String,
+        #[arg(long)]
+        run_id: u64,
+        #[arg(long)]
+        attempt: u64,
+        #[arg(long)]
+        harness_sha256: String,
+        #[arg(long)]
+        candidate_run_id: u64,
+        #[arg(long)]
+        candidate_run_attempt: u64,
+    },
     Cohort {
         #[arg(long)]
         cohort: String,
@@ -229,6 +281,67 @@ pub(crate) async fn entry() -> u8 {
         return release_info();
     }
     let result = match Args::parse().command {
+        Command::LifecycleContext {
+            context,
+            variants,
+            internal_deadline,
+            target,
+            output,
+        } => (|| {
+            let candidate = records::read(&context, 65536)?;
+            let variants_sha256 = records::digest(&records::read_bytes(&variants, 16384)?);
+            let context = version_lifecycle::LifecycleContext::mint(
+                candidate,
+                target,
+                variants_sha256,
+                internal_deadline,
+                now()?,
+            )?;
+            records::write(&output, &context)
+        })(),
+        Command::LifecycleRun {
+            context,
+            workspace,
+            output,
+            candidate_assets,
+            variant_assets,
+            bootstrap,
+            source_root,
+        } => {
+            version_lifecycle::run_cli(
+                &context,
+                &workspace,
+                &output,
+                &candidate_assets,
+                &variant_assets,
+                &bootstrap,
+                &source_root,
+            )
+            .await
+        }
+        Command::LifecycleRollup {
+            input,
+            output,
+            job_result,
+            source,
+            run_id,
+            attempt,
+            harness_sha256,
+            candidate_run_id,
+            candidate_run_attempt,
+        } => version_lifecycle::rollup(
+            &input,
+            &output,
+            &job_result,
+            version_lifecycle::RollupPins {
+                source: &source,
+                run_id,
+                attempt,
+                harness_sha256: &harness_sha256,
+                candidate_run_id,
+                candidate_attempt: candidate_run_attempt,
+            },
+        ),
         Command::Cohort {
             cohort,
             context,
@@ -311,4 +424,76 @@ pub(super) fn release_info() -> u8 {
             std::io::stdout().write_all(&b).map_err(|_| ())
         });
     if result.is_ok() { 0 } else { 1 }
+}
+
+#[cfg(test)]
+mod lifecycle_cli_tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn lifecycle_commands_require_exact_runtime_paths_and_external_rollup_pins() {
+        for argv in [
+            vec![
+                "check",
+                "lifecycle-context",
+                "--context",
+                "candidate",
+                "--variants",
+                "variants",
+                "--internal-deadline",
+                "123",
+                "--target",
+                TARGETS[0],
+                "--output",
+                "out",
+            ],
+            vec![
+                "check",
+                "lifecycle-run",
+                "--context",
+                "context",
+                "--workspace",
+                "work",
+                "--output",
+                "out",
+                "--candidate-assets",
+                "b",
+                "--variant-assets",
+                "ac",
+                "--bootstrap",
+                "bootstrap",
+                "--source-root",
+                "source",
+            ],
+            vec![
+                "check",
+                "lifecycle-rollup",
+                "--input",
+                "in",
+                "--output",
+                "out",
+                "--job-result",
+                "success",
+                "--source",
+                "source",
+                "--run-id",
+                "1",
+                "--attempt",
+                "1",
+                "--harness-sha256",
+                "harness",
+                "--candidate-run-id",
+                "2",
+                "--candidate-run-attempt",
+                "1",
+            ],
+        ] {
+            assert!(Args::try_parse_from(&argv).is_ok());
+            let mut missing_last = argv;
+            missing_last.truncate(missing_last.len() - 2);
+            assert!(Args::try_parse_from(missing_last).is_err());
+        }
+        Args::command().debug_assert();
+    }
 }
