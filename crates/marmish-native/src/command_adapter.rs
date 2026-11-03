@@ -20,7 +20,81 @@ pub(super) fn fixed_hex<const N: usize>(value: &str) -> Result<[u8; N]> {
         .try_into()
         .map_err(|_| Error::Mdk("command_room_binding"))
 }
+#[derive(Clone, Copy)]
+pub(super) enum CommandProbeExpected {
+    Existing,
+    InvocationConflict,
+}
+pub(super) struct CommandProbe {
+    group: GroupId,
+    request: wire::Request,
+    digest: wire::Digest,
+    expected: CommandProbeExpected,
+    result: Option<bool>,
+}
+impl CommandProbe {
+    fn observe(&mut self, group: &[u8], response: &wire::Response) {
+        if self.result.is_some()
+            || self.group.as_slice() != group
+            || response.binding != self.request.binding
+            || response.id != self.request.id
+            || response.request_sha256 != self.digest
+            || response.op != wire::Op::Submit
+        {
+            return;
+        }
+        self.result = Some(match (&self.expected, &response.result) {
+            (
+                CommandProbeExpected::Existing,
+                Ok(wire::ResponseResult::Submit {
+                    disposition: wire::Disposition::Existing,
+                    status,
+                }),
+            ) => status.invocation == self.request.op.invocation(),
+            (CommandProbeExpected::InvocationConflict, Err(error)) => {
+                error.code == wire::ErrorCode::InvocationConflict && error.detail.is_none()
+            }
+            _ => false,
+        });
+    }
+}
 impl MdkOwner {
+    /// Bounded fixture observation; grants no request ownership or ACK.
+    pub(super) fn arm_command_probe(
+        &mut self,
+        group: GroupId,
+        request: wire::Request,
+        expected: CommandProbeExpected,
+    ) -> Result<()> {
+        if self.command_probe.is_some() {
+            return Err(Error::Invalid("command_probe_busy"));
+        }
+        let context = self.command_context(&group)?;
+        let owner = crate::journal::Owner::from_context(&context);
+        let encoded = wire::encode_request(&request)?;
+        if context.direction() != CommandDirection::Client
+            || request.binding != *owner.binding()
+            || !matches!(request.op, wire::RequestOp::Submit(_))
+        {
+            return Err(Error::Invalid("command_probe_binding"));
+        }
+        self.command_probe = Some(CommandProbe {
+            group,
+            digest: wire::request_digest(&encoded),
+            request,
+            expected,
+            result: None,
+        });
+        Ok(())
+    }
+    pub(super) fn take_command_probe(&mut self) -> Option<bool> {
+        let result = self.command_probe.as_ref()?.result?;
+        self.command_probe = None;
+        Some(result)
+    }
+    pub(super) fn clear_command_probe(&mut self) {
+        self.command_probe = None;
+    }
     /// A dispatch hint only: full room authority is checked before admission.
     pub(super) fn is_command_join(&self, event: &GroupEvent) -> Result<bool> {
         let GroupEvent::GroupJoined { group_id, .. } = event else {
@@ -148,6 +222,10 @@ impl MdkOwner {
             group: source.group.clone(),
             native_id: source.native_id.clone(),
         };
+        let probe_response = match &envelope {
+            CommandEnvelope::Response(response) => Some(response.clone()),
+            CommandEnvelope::Request(_) => None,
+        };
         let projected = match self.commands.as_mut() {
             Some(service) => match envelope {
                 CommandEnvelope::Request(request) => service
@@ -162,6 +240,16 @@ impl MdkOwner {
         match projected {
             Ok(()) => {}
             Err(error) if command_projection_deferred(&error) => return Ok(()),
+            Err(Error::Invalid("command_not_found")) => {
+                // decode_command_event already authenticated the current
+                // sender/leaf/authority and exact room/direction binding.
+                if let (Some(probe), Some(response)) =
+                    (self.command_probe.as_mut(), probe_response.as_ref())
+                {
+                    probe.observe(context.mls_group(), response);
+                }
+                return self.reject_command_frame(message_id);
+            }
             Err(Error::Invalid(_)) => return self.reject_command_frame(message_id),
             Err(error) => return Err(error),
         }
@@ -403,5 +491,69 @@ mod tests {
         ] {
             assert!(!command_projection_deferred(&error));
         }
+    }
+}
+
+#[cfg(test)]
+mod fixture_probe_tests {
+    use super::*;
+    #[test]
+    fn fixture_probe_requires_exact_authenticated_response_binding_and_is_single_assignment() {
+        let request = wire::Request {
+            binding: wire::Binding {
+                client: [1; 32],
+                server: [2; 32],
+                session: [3; 16],
+            },
+            id: [4; 16],
+            op: wire::RequestOp::Submit(wire::Submit {
+                invocation: [5; 16],
+                argv: vec![b"/bin/true".to_vec()],
+                stdin: vec![],
+            }),
+        };
+        let mut probe = CommandProbe {
+            group: GroupId::new(vec![6; 32]),
+            request: request.clone(),
+            digest: [7; 32],
+            expected: CommandProbeExpected::InvocationConflict,
+            result: None,
+        };
+        let response = wire::Response {
+            binding: request.binding,
+            id: request.id,
+            op: wire::Op::Submit,
+            request_sha256: [7; 32],
+            result: Err(wire::WireError {
+                code: wire::ErrorCode::InvocationConflict,
+                detail: None,
+            }),
+        };
+        probe.observe(&[8; 32], &response);
+        assert!(probe.result.is_none());
+        for field in 0..4 {
+            let mut changed = response.clone();
+            match field {
+                0 => changed.id[0] ^= 1,
+                1 => changed.binding.session[0] ^= 1,
+                2 => changed.request_sha256[0] ^= 1,
+                _ => changed.op = wire::Op::Status,
+            }
+            probe.observe(&[6; 32], &changed);
+            assert!(probe.result.is_none());
+        }
+        probe.observe(&[6; 32], &response);
+        assert!(probe.result == Some(true));
+        let mut bad = response.clone();
+        bad.result = Err(wire::WireError {
+            code: wire::ErrorCode::Busy,
+            detail: None,
+        });
+        probe.observe(&[6; 32], &bad);
+        assert!(probe.result == Some(true));
+        probe.result = None;
+        probe.expected = CommandProbeExpected::Existing;
+        probe.observe(&[6; 32], &response);
+        assert!(probe.result == Some(false));
     }
 }

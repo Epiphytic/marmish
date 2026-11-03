@@ -1,4 +1,7 @@
 //! One actor owns the MDK handle, application journal, signer and relay plane.
+#[cfg(feature = "installed-checks")]
+#[path = "installed_check.rs"]
+pub(crate) mod installed_check;
 #[path = "command_adapter.rs"]
 mod command_adapter;
 #[path = "command_check.rs"]
@@ -836,6 +839,7 @@ pub struct MdkOwner {
     pending_cohort: VecDeque<(u8, Vec<u8>)>,
     pending_budget: usize,
     commands: Option<crate::command_service::CommandService>,
+    command_probe: Option<command_adapter::CommandProbe>,
     command_source_cursor: Option<crate::journal::SourceCursor>,
     command_invalidation_cursor: Option<crate::journal::SourceKey>,
 }
@@ -993,6 +997,7 @@ impl MdkOwner {
             pending_cohort: VecDeque::new(),
             pending_budget: 64,
             commands: None,
+            command_probe: None,
             command_source_cursor: None,
             command_invalidation_cursor: None,
         };

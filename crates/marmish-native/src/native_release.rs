@@ -34,6 +34,15 @@ enum Action {
         #[arg(long)]
         notarized: bool,
     },
+    /// Package build-only installed-test tools separately from install assets.
+    PackageTooling {
+        #[arg(long)]
+        input_dir: PathBuf,
+        #[arg(long)]
+        output_dir: PathBuf,
+        #[arg(long)]
+        harness_sha256: String,
+    },
     /// Render one independently usable bootstrap with pins for all three targets.
     Render {
         #[arg(long)]
@@ -53,9 +62,12 @@ fn metadata() -> Result<manifest::ReleaseMetadata> {
     Ok(m)
 }
 fn probe(path: &Path) -> Result<()> {
+    probe_argument(path, "release-info")
+}
+fn probe_argument(path: &Path, argument: &str) -> Result<()> {
     let expected = serde_json::to_vec(&metadata()?).map_err(|_| bad())?;
     let mut child = Command::new(path)
-        .arg("release-info")
+        .arg(argument)
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .stdin(Stdio::null())
@@ -141,6 +153,68 @@ fn create(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     file.sync_all()?;
     Ok(())
 }
+fn copy_asset(source: &Path, path: &Path, a: &manifest::Asset) -> Result<()> {
+    let input = manifest::safe_file(source, a.bytes)?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)?;
+    if std::io::copy(&mut input.take(a.bytes + 1), &mut file)? != a.bytes {
+        return Err(bad());
+    }
+    file.sync_all()?;
+    file.set_permissions(fs::Permissions::from_mode(a.mode))?;
+    file.sync_all()?;
+    manifest::verify_file(path, a, false)
+}
+const TOOL_NAMES: [&str; 2] = ["marmish-installed-check", "marmish-installed-fixture"];
+fn package_tooling(input: &Path, output: &Path, harness: &str) -> Result<()> {
+    let m = metadata()?;
+    if harness.len() != 64
+        || !harness
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(bad());
+    }
+    let role = match m.target {
+        "x86_64-unknown-linux-gnu" => "linux-amd64",
+        "aarch64-unknown-linux-gnu" => "linux-arm64",
+        "aarch64-apple-darwin" => "macos-arm64",
+        _ => return Err(bad()),
+    };
+    let mut files = serde_json::Map::new();
+    let mut assets = Vec::new();
+    for name in TOOL_NAMES {
+        let source = input.join(name);
+        let (bytes, sha256) = asset(&source, 256 * 1024 * 1024)?;
+        probe_argument(&source, "--release-info")?;
+        files.insert(
+            name.into(),
+            serde_json::json!({"sha256": hex::encode(sha256), "bytes": bytes}),
+        );
+        assets.push(manifest::Asset {
+            name,
+            bytes,
+            sha256,
+            mode: 0o555,
+        });
+    }
+    let record = serde_json::json!({
+        "schema": 1, "source_commit": m.commit, "target": m.target,
+        "harness_sha256": harness, "files": files
+    });
+    let bytes = serde_json::to_vec(&record).map_err(|_| bad())?;
+    fs::create_dir(output)?;
+    for a in assets {
+        copy_asset(&input.join(a.name), &output.join(a.name), &a)?;
+    }
+    create(&output.join(format!("{role}-tooling.json")), &bytes, 0o444)?;
+    File::open(output)?.sync_all()?;
+    Ok(())
+}
 fn package(
     input: &Path,
     output: &Path,
@@ -192,21 +266,7 @@ fn package(
     // Never overwrite an earlier candidate or its evidence.
     fs::create_dir(output)?;
     for (source, a) in sources.iter().zip(&parsed.files) {
-        let input = manifest::safe_file(source, a.bytes)?;
-        let path = output.join(parsed.asset_name(a.name));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(&path)?;
-        if std::io::copy(&mut input.take(a.bytes + 1), &mut file)? != a.bytes {
-            return Err(bad());
-        }
-        file.sync_all()?;
-        file.set_permissions(fs::Permissions::from_mode(a.mode))?;
-        file.sync_all()?;
-        manifest::verify_file(&path, a, false)?;
+        copy_asset(source, &output.join(parsed.asset_name(a.name)), a)?;
     }
     let path = output.join(format!("marmish-{}-{}.manifest", m.version, m.target));
     create(&path, text.as_bytes(), 0o444)?;
@@ -267,6 +327,11 @@ pub fn entry() -> u8 {
             notarized,
         ),
         Action::Render { assets_dir, output } => render(&assets_dir, &output),
+        Action::PackageTooling {
+            input_dir,
+            output_dir,
+            harness_sha256,
+        } => package_tooling(&input_dir, &output_dir, &harness_sha256),
     };
     match result {
         Ok(()) => 0,
@@ -280,17 +345,14 @@ pub fn entry() -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn input(root: &Path) -> PathBuf {
+    fn input(root: &Path, names: &[&str], argument: &str) -> PathBuf {
         let directory = root.join("input");
         fs::create_dir(&directory).unwrap();
         let metadata = serde_json::to_string(&metadata().unwrap()).unwrap();
-        for name in &NAMES[..3] {
-            create(
-                &directory.join(name),
-                format!("#!/bin/sh\nprintf '%s\\n' '{metadata}'\n").as_bytes(),
-                0o555,
-            )
-            .unwrap();
+        for name in names {
+            create(&directory.join(name), format!(
+                "#!/bin/sh\n[ \"$#\" = 1 ] && [ \"$1\" = {argument} ] || exit 9\nprintf '%s\\n' '{metadata}'\n"
+            ).as_bytes(), 0o555).unwrap();
         }
         directory
     }
@@ -302,9 +364,80 @@ mod tests {
         }
     }
     #[test]
+    fn tooling_record_binds_only_two_probed_files_and_exact_source() {
+        let root = tempfile::tempdir().unwrap();
+        let source = input(root.path(), &TOOL_NAMES, "--release-info");
+        let output = root.path().join("output");
+        let harness = "a".repeat(64);
+        package_tooling(&source, &output, &harness).unwrap();
+        let entries: Vec<_> = fs::read_dir(&output).unwrap().collect();
+        let mut names: Vec<_> = entries
+            .iter()
+            .map(|e| e.as_ref().unwrap().file_name())
+            .collect();
+        names.sort();
+        let role = match metadata().unwrap().target {
+            "x86_64-unknown-linux-gnu" => "linux-amd64",
+            "aarch64-unknown-linux-gnu" => "linux-arm64",
+            "aarch64-apple-darwin" => "macos-arm64",
+            _ => panic!("unsupported target"),
+        };
+        let mut expected: Vec<_> = TOOL_NAMES.iter().map(std::ffi::OsString::from).collect();
+        expected.push(format!("{role}-tooling.json").into());
+        expected.sort();
+        assert_eq!(names, expected);
+        let record = entries
+            .into_iter()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.extension().is_some_and(|e| e == "json"))
+            .unwrap();
+        assert_eq!(
+            fs::metadata(&record).unwrap().permissions().mode() & 0o777,
+            0o444
+        );
+        let record_bytes = fs::read(record).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&record_bytes).unwrap();
+        assert_eq!(value.as_object().unwrap().len(), 5);
+        assert_eq!(value["schema"], 1);
+        assert_eq!(value["source_commit"], metadata().unwrap().commit);
+        assert_eq!(value["target"], metadata().unwrap().target);
+        assert_eq!(value["harness_sha256"], harness);
+        assert_eq!(value["files"].as_object().unwrap().len(), 2);
+        for name in TOOL_NAMES {
+            assert_eq!(
+                fs::metadata(output.join(name))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o555
+            );
+            let (bytes, hash) = asset(&output.join(name), 256 * 1024 * 1024).unwrap();
+            assert_eq!(value["files"][name]["bytes"], bytes);
+            assert_eq!(value["files"][name]["sha256"], hex::encode(hash));
+        }
+        assert!(package_tooling(&source, &output, &harness).is_err());
+    }
+    #[test]
+    fn tooling_rejects_bad_harness_or_probe_before_output_mutation() {
+        let root = tempfile::tempdir().unwrap();
+        let source = input(root.path(), &TOOL_NAMES, "--release-info");
+        let output = root.path().join("output");
+        for harness in ["a".repeat(63), "A".repeat(64), "g".repeat(64)] {
+            assert!(package_tooling(&source, &output, &harness).is_err());
+            assert!(!output.exists());
+        }
+        let tool = source.join(TOOL_NAMES[1]);
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(&tool, b"#!/bin/sh\nprintf wrong\\n\n").unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o555)).unwrap();
+        assert!(package_tooling(&source, &output, &"a".repeat(64)).is_err());
+        assert!(!output.exists());
+    }
+    #[test]
     fn packaging_probes_original_names_and_refuses_reuse_or_changed_bytes() {
         let root = tempfile::tempdir().unwrap();
-        let source = input(root.path());
+        let source = input(root.path(), &NAMES[..3], "release-info");
         let licenses = root.path().join("licenses");
         create(&licenses, b"Original dependency notices\n", 0o444).unwrap();
         let output = root.path().join("assets");
@@ -331,7 +464,7 @@ mod tests {
     #[test]
     fn malformed_release_probe_is_finite_and_never_creates_output() {
         let root = tempfile::tempdir().unwrap();
-        let source = input(root.path());
+        let source = input(root.path(), &NAMES[..3], "release-info");
         let cli = source.join("marmish");
         fs::set_permissions(&cli, fs::Permissions::from_mode(0o600)).unwrap();
         fs::write(&cli, b"#!/bin/sh\nprintf wrong\\n\n").unwrap();

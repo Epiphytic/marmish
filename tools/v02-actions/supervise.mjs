@@ -10,7 +10,7 @@ import {ArtifactTransport, ROLES, artifactName, binding, boundedFile,
 
 export function timing(context, jobDeadline, mode, now = Date.now()) {
   requireThat(Number.isSafeInteger(context.created_at) && Number.isSafeInteger(context.expires_at)
-    && context.expires_at > context.created_at && context.expires_at - context.created_at <= 2400
+    && context.expires_at > context.created_at && context.expires_at - context.created_at <= 2220
     && context.created_at * 1000 <= now + 5000 && Number.isSafeInteger(jobDeadline)
     && context.expires_at + 900 <= jobDeadline, 'invalid_deadline');
   const deadline = Math.min(context.expires_at, mode === 'exchange' ? context.created_at + 900 : Infinity) * 1000;
@@ -111,7 +111,7 @@ export async function supervise({options, context, transport, artifact, spawnChi
       const exitedBeforeScan = owner?.result;
       for (const kind of outgoing) {
         let bytes;
-        try { bytes = await boundedFile(path.join(options.output, `${kind}.json`)); }
+        try { bytes = await boundedFile(path.join(options.output, `${options.role}-${kind}.json`)); }
         catch (error) {
           if (error.code === 'ENOENT' && !published.has(kind)) continue;
           throw error;

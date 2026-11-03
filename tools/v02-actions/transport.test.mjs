@@ -9,7 +9,7 @@ import {ArtifactTransport, artifactName, binding, childEnvironment, digest,
 import {ownedChild, supervise, timing} from './supervise.mjs';
 
 const context = {schema: 1, repository: 'Epiphytic/marmish', run_id: '12', run_attempt: '2',
-  source_commit: 'a'.repeat(40), cohort: 'matrix', created_at: 1000, expires_at: 3400};
+  source_commit: 'a'.repeat(40), cohort: 'matrix', created_at: 1000, expires_at: 3220};
 const one = Buffer.from('UEsDBBQAAAAAABIGY12MwfuJDAAAAAwAAAATAAAAaWRlbnRpdHktcmVhZHkuanNvbnsic2NoZW1hIjoxfVBLAQIUAxQAAAAAABIGY12MwfuJDAAAAAwAAAATAAAAAAAAAAAAAACAAQAAAABpZGVudGl0eS1yZWFkeS5qc29uUEsFBgAAAAABAAEAQQAAAD0AAAAAAA==', 'base64');
 const traversal = Buffer.from('UEsDBBQAAAAAABIGY11Dv6ajAgAAAAIAAAAWAAAALi4vaWRlbnRpdHktcmVhZHkuanNvbnt9UEsBAhQDFAAAAAAAEgZjXUO/pqMCAAAAAgAAABYAAAAAAAAAAAAAAIABAAAAAC4uL2lkZW50aXR5LXJlYWR5Lmpzb25QSwUGAAAAAAEAAQBEAAAANgAAAAAA', 'base64');
 const two = Buffer.from('UEsDBBQAAAAAABIGY11Dv6ajAgAAAAIAAAATAAAAaWRlbnRpdHktcmVhZHkuanNvbnt9UEsDBBQAAAAAABIGY12DFtyMAQAAAAEAAAAFAAAAZXh0cmF4UEsBAhQDFAAAAAAAEgZjXUO/pqMCAAAAAgAAABMAAAAAAAAAAAAAAIABAAAAAGlkZW50aXR5LXJlYWR5Lmpzb25QSwECFAMUAAAAAAASBmNdgxbcjAEAAAABAAAABQAAAAAAAAAAAAAAgAEzAAAAZXh0cmFQSwUGAAAAAAIAAgB0AAAAVwAAAAAA', 'base64');
@@ -28,8 +28,8 @@ test('artifact name binds run attempt and fixed role/kind', () => {
 });
 test('deadline enforces identity barrier and cleanup margin', () => {
   assert.equal(timing(context, 4300, 'exchange', 1100_000).deadline, 1900_000);
-  assert.equal(timing(context, 4300, 'run', 1100_000).deadline, 3400_000);
-  assert.throws(() => timing(context, 4299, 'run', 1100_000));
+  assert.equal(timing(context, 4300, 'run', 1100_000).deadline, 3220_000);
+  assert.throws(() => timing(context, 4119, 'run', 1100_000));
   assert.throws(() => timing(context, 4300, 'exchange', 1900_000));
 });
 test('child gets only explicit safe environment', () => {
@@ -105,7 +105,7 @@ test('driver terminal records are uploaded during run and exit failure remains r
   const dir = await temporary(t);
   const options = {mode: 'run', role: 'linux-amd64', context: '/context', driver: '/driver',
     workspace: dir, output: dir, inbox: path.join(dir, 'inbox'), identities: '/identities', jobDeadline: 4300};
-  for (const kind of ['server-ready', 'client-result', 'server-result']) await fs.writeFile(path.join(dir, `${kind}.json`), '{}');
+  for (const kind of ['server-ready', 'client-result', 'server-result']) await fs.writeFile(path.join(dir, `linux-amd64-${kind}.json`), '{}');
   const published = [];
   const child = new EventEmitter();
   child.kill = () => { setImmediate(() => child.emit('exit', null, 'SIGTERM')); };
@@ -152,7 +152,7 @@ test('cancellation retains owned child until its actual exit', async t => {
 });
 test('published record mutation is refused after the immutable staging upload', async t => {
   const dir = await temporary(t);
-  const record = path.join(dir, 'identity-ready.json');
+  const record = path.join(dir, 'linux-amd64-identity-ready.json');
   await fs.writeFile(record, '{}');
   const options = {mode: 'exchange', role: 'linux-amd64', workspace: dir, output: dir,
     identities: path.join(dir, 'identities'), jobDeadline: 4300};
@@ -194,7 +194,7 @@ test('API and ZIP size ceilings are enforced', async t => {
 });
 test('successful exchange copies all three identities and preserves exact directory membership', async t => {
   const dir = await temporary(t);
-  await fs.writeFile(path.join(dir, 'identity-ready.json'), '{}');
+  await fs.writeFile(path.join(dir, 'linux-amd64-identity-ready.json'), '{}');
   const identities = path.join(dir, 'identities');
   await supervise({options: {mode: 'exchange', role: 'linux-amd64', output: dir,
     identities, jobDeadline: 4300}, context, now: () => 1100_000,
@@ -233,7 +233,7 @@ test('a long API backoff cannot delay local terminal publication or joined exit'
     artifact: {uploadArtifact: async name => { published.push(name); return {id: published.length}; }},
     transport: {list: async () => {
       listed++;
-      for (const kind of ['server-ready', 'client-result', 'server-result']) await fs.writeFile(path.join(dir, `${kind}.json`), '{}');
+      for (const kind of ['server-ready', 'client-result', 'server-result']) await fs.writeFile(path.join(dir, `linux-amd64-${kind}.json`), '{}');
       child.emit('exit', 0, null);
       const error = new Error('artifact_retry'); error.retryAfter = 300_000; throw error;
     }}, delay: () => new Promise(resolve => setImmediate(resolve))});
@@ -243,7 +243,7 @@ test('a long API backoff cannot delay local terminal publication or joined exit'
 test('driver exit during last upload gets a final complete scan', async t => {
   const dir = await temporary(t);
   const child = new EventEmitter(); child.kill = () => {};
-  for (const kind of ['client-result', 'server-result']) await fs.writeFile(path.join(dir, `${kind}.json`), '{}');
+  for (const kind of ['client-result', 'server-result']) await fs.writeFile(path.join(dir, `linux-amd64-${kind}.json`), '{}');
   let count = 0;
   await supervise({options: {mode: 'run', role: 'linux-amd64', context: '/context', driver: '/driver',
     workspace: dir, output: dir, inbox: dir, identities: dir, jobDeadline: 4300},
@@ -279,7 +279,7 @@ test('a malformed in-flight artifact racing the final scan cannot become success
     }}, transport: {list: async () => new Promise((resolve, reject) => {
       rejectPoll = reject;
       (async () => {
-        for (const kind of ['client-result', 'server-result']) await fs.writeFile(path.join(dir, `${kind}.json`), '{}');
+        for (const kind of ['client-result', 'server-result']) await fs.writeFile(path.join(dir, `linux-amd64-${kind}.json`), '{}');
         child.emit('exit', 0, null);
       })().catch(reject);
     })}, delay: () => new Promise(resolve => setImmediate(resolve))}), /artifact_duplicate/);

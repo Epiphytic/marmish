@@ -19,6 +19,19 @@ path = "src/bin/marmishd.rs"
 name = "marmish-worker"
 path = "src/bin/marmish-worker.rs"
 
+[features]
+installed-checks = []
+
+[[bin]]
+name = "marmish-installed-check"
+path = "src/bin/marmish-installed-check.rs"
+required-features = ["installed-checks"]
+
+[[bin]]
+name = "marmish-installed-fixture"
+path = "src/bin/marmish-installed-fixture.rs"
+required-features = ["installed-checks"]
+
 [dependencies]
 hickory-resolver = { version = "=0.26.3", default-features = false, features = ["tokio", "system-config"] }
 base64.workspace = true

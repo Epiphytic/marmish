@@ -57,6 +57,10 @@ jobs:
           [[ "$MARMISH_BUILD_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$MARMISH_BUILD_COMMIT"
           git merge-base --is-ancestor "$MARMISH_BUILD_COMMIT" refs/remotes/origin/master
+          for source_path in crates/marmish-native Cargo.lock tools/v02-actions .github/workflows/v02-installed.yml; do
+            git cat-file -e "$MARMISH_BUILD_COMMIT:$source_path"
+          done
+          git diff --quiet HEAD --
           case "$EXPECTED_TARGET:$(uname -s):$(uname -m)" in
             x86_64-unknown-linux-gnu:Linux:x86_64|aarch64-unknown-linux-gnu:Linux:aarch64|aarch64-apple-darwin:Darwin:arm64) ;;
             *) exit 1 ;;
@@ -73,7 +77,10 @@ jobs:
           cargo test --locked -p marmish-engine -p marmish-native -p marmish-vault
           cargo clippy --locked -p marmish-native --all-targets -- -D warnings
       - name: Build final native executables
-        run: cargo build --locked --release -p marmish-native --bins
+        run: |
+          git diff --quiet HEAD --
+          cargo build --locked --release -p marmish-native --bins
+          git diff --quiet HEAD --
       - name: Ad hoc sign final macOS executables before hashing
         if: runner.os == 'macOS'
         run: |
@@ -104,6 +111,44 @@ jobs:
           target/release/marmish-release-tool package --input-dir "$RUNNER_TEMP/package-input" \
             --output-dir "$RUNNER_TEMP/native-assets" --licenses "$RUNNER_TEMP/THIRD-PARTY-LICENSES" \
             --signing "$SIGNING" --minimum "$MINIMUM"
+      - name: Build isolated installed-test tools without changing product assets
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --quiet HEAD --
+          shasum -a 256 "$RUNNER_TEMP"/native-assets/* > "$RUNNER_TEMP/product-before.sha256"
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/installed-tools-target"
+          cargo test --locked -p marmish-native --features installed-checks
+          cargo clippy --locked -p marmish-native --features installed-checks --all-targets -- -D warnings
+          cargo build --locked --release -p marmish-native --features installed-checks \
+            --bin marmish-installed-check --bin marmish-installed-fixture
+          mkdir "$RUNNER_TEMP/tooling-input"
+          for binary in marmish-installed-check marmish-installed-fixture; do
+            cp "$CARGO_TARGET_DIR/release/$binary" "$RUNNER_TEMP/tooling-input/$binary"
+            if [ "$EXPECTED_TARGET" = aarch64-apple-darwin ]; then
+              codesign --force --sign - "$RUNNER_TEMP/tooling-input/$binary"
+              codesign --verify --strict "$RUNNER_TEMP/tooling-input/$binary"
+            fi
+          done
+          shasum -a 256 "$RUNNER_TEMP"/native-assets/* > "$RUNNER_TEMP/product-after.sha256"
+          cmp "$RUNNER_TEMP/product-before.sha256" "$RUNNER_TEMP/product-after.sha256"
+          git diff --quiet HEAD --
+          test "$(git rev-parse HEAD)" = "$MARMISH_BUILD_COMMIT"
+          harness_sha256=$(git ls-tree -r "$MARMISH_BUILD_COMMIT" -- \
+            crates/marmish-native Cargo.lock tools/v02-actions .github/workflows/v02-installed.yml \
+            | shasum -a 256 | cut -d ' ' -f 1)
+          target/release/marmish-release-tool package-tooling \
+            --input-dir "$RUNNER_TEMP/tooling-input" --output-dir "$RUNNER_TEMP/installed-tools" \
+            --harness-sha256 "$harness_sha256"
+      - name: Preserve pinned installed-test tools separately
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: v02-installed-tools-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/installed-tools/*
+          if-no-files-found: error
+          retention-days: 14
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: v02-candidate-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}

@@ -33,13 +33,33 @@ MAX_TEXT = 2 * 1024 * 1024
 MAX_TOTAL = 128 * 1024 * 1024
 ROOTS = {'native': {'marmish-native'}, 'marmish': {'marmish-engine', 'marmish-prototype', 'marmish-vault'},
          'mdk': {'wn-cli'}}
-UPSTREAM_FILES = ('LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'LICENSE.txt',
-                  'LICENSE.md', 'COPYING', 'NOTICE', 'COPYRIGHT')
+UPSTREAM_FILES = ('LICENSE', 'LICENCE', 'LICENSE-MIT', 'LICENSE-APACHE', 'LICENSE.txt',
+                  'LICENSE.md', 'COPYING', 'NOTICE', 'COPYRIGHT', 'LICENSES/MIT.txt', 'MPL-2.0.txt')
 UPSTREAM_CACHE = {}
-# This published crate omits .cargo_vcs_info.json. Its signed upstream release
-# tag bitcoin-io-0.1.4 peels to this commit; io/Cargo.toml confirms version/license.
-SOURCE_OVERRIDES = {('bitcoin-io', '0.1.4'):
-    ('rust-bitcoin/rust-bitcoin', '29a07abb2f1cf91ba7aa4820216ea091ee8b91e8')}
+# Exact upstream release revisions for published crates missing cargo VCS metadata.
+# Verification evidence is recorded under docs/validation/v0.2/native-license-sources-2026-11-03.json.
+# The pre-existing bitcoin-io 0.1.4 override was verified against signed tag
+# bitcoin-io-0.1.4 and io/Cargo.toml (version/license) at the pinned commit.
+SOURCE_OVERRIDES = {
+    ('bitcoin-io', '0.1.4'): ('rust-bitcoin/rust-bitcoin', '29a07abb2f1cf91ba7aa4820216ea091ee8b91e8'),
+    ('bitcoin-consensus-encoding', '1.3.0'): ('rust-bitcoin/rust-bitcoin', '0cfc7908ff7c7c58e9c61c008c09cb2aeedb82cb'),
+    ('bitcoin-internals', '0.6.0'): ('rust-bitcoin/rust-bitcoin', '3812750b6824eb0374504d7e2fddd8e8528a2cda'),
+    ('bitcoin-internals', '0.7.0'): ('rust-bitcoin/rust-bitcoin', 'a53101246ec046340d0127d520192d00d39d261d'),
+    ('bitcoin-io', '0.1.101'): ('rust-bitcoin/rust-bitcoin', 'a010f1e9fd7752ee5e7ca60a909d32a58e0d3297'),
+    ('bitcoin_hashes', '0.14.101'): ('rust-bitcoin/rust-bitcoin', 'a010f1e9fd7752ee5e7ca60a909d32a58e0d3297'),
+    ('bitcoin_hashes', '1.2.0'): ('rust-bitcoin/rust-bitcoin', '0f68fcb392512b5707529f864fb87882306e33d9'),
+}
+# Exact optional-license choice; preserve the original expression in the manifest.
+LICENSE_CHOICES = {('priority-queue', '2.7.0'):
+    ('LGPL-3.0-or-later OR MPL-2.0', 'MPL-2.0', 'MPL-2.0.txt')}
+TOR_REPOSITORIES = ('https://gitlab.torproject.org/tpo/core/arti',
+                    'https://gitlab.torproject.org/Diziet/rust-derive-deftly')
+VOID_DECLARATION = 'Void 1.0.2 upstream supplies an MIT declaration and author attribution in README.md, but no full license file; the separate SPDX MIT template is canonical explanatory text, not an upstream copyright notice.'
+VOID_NOTICES = (
+    ('README.md', 'https://raw.githubusercontent.com/reem/rust-void/ab2f4dbb7c95c144ccba2fa8afd11e155aa91133/README.md',
+     'f85783a6fcf9ecc19edabd710775a88430d9e886f46728bfd7d65cef55ff3e73'),
+    ('canonical-license-template/MIT.txt', 'https://raw.githubusercontent.com/spdx/license-list-data/c4a7237ec8f4654e867546f9f409749300f1bf4c/text/MIT.txt',
+     'b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5'))
 
 
 def _production_packages(metadata, graph):
@@ -61,7 +81,10 @@ def _production_packages(metadata, graph):
 class _RawRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, message, headers, new_url):
         parsed = urllib.parse.urlsplit(new_url)
-        if parsed.scheme != 'https' or parsed.netloc != 'raw.githubusercontent.com':
+        if parsed.scheme != 'https' or not (parsed.netloc == 'raw.githubusercontent.com' or
+                (parsed.netloc == 'gitlab.torproject.org' and
+                 any(parsed.path.startswith(urllib.parse.urlsplit(repo).path + '/-/raw/')
+                     for repo in TOR_REPOSITORIES))):
             raise RuntimeError('unsafe_license_redirect')
         return super().redirect_request(request, fp, code, message, headers, new_url)
 
@@ -85,8 +108,9 @@ def _upstream_identity(package):
     override = SOURCE_OVERRIDES.get((package['name'], package['version']))
     if override:
         return override
-    repository = (package.get('repository') or '').removesuffix('.git').rstrip('/')
-    if not re.fullmatch(r'https://github.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
+    repository = (package.get('repository') or '').rstrip('/').removesuffix('.git')
+    if (repository not in TOR_REPOSITORIES and
+            not re.fullmatch(r'https://github.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository)):
         raise RuntimeError('unreviewed_license_source:' + package['name'])
     vcs = json.loads(_read(Path(package['manifest_path']).parent / '.cargo_vcs_info.json'))
     revision = vcs.get('git', {}).get('sha1')
@@ -96,9 +120,24 @@ def _upstream_identity(package):
 
 
 def _upstream_notices(package):
+    if (package['name'], package['version']) == ('void', '1.0.2'):
+        if (package.get('source') != 'registry+https://github.com/rust-lang/crates.io-index'
+                or package.get('license') != 'MIT'
+                or (package.get('repository') or '').rstrip('/').removesuffix('.git') != 'https://github.com/reem/rust-void'):
+            raise RuntimeError('void_declaration_source_mismatch')
+        notices = []
+        for name, url, expected in VOID_NOTICES:
+            raw = _download_notice(url)
+            if raw is None or hashlib.sha256(raw).hexdigest() != expected:
+                raise RuntimeError('void_declaration_digest_mismatch')
+            notices.append((name, raw, url))
+        return notices
     identity = _upstream_identity(package)
     if identity not in UPSTREAM_CACHE:
-        base = 'https://raw.githubusercontent.com/' + identity[0] + '/' + identity[1] + '/'
+        if identity[0] in TOR_REPOSITORIES:
+            base = identity[0] + '/-/raw/' + identity[1] + '/'
+        else:
+            base = 'https://raw.githubusercontent.com/' + identity[0] + '/' + identity[1] + '/'
         with ThreadPoolExecutor(max_workers=4) as pool:
             raw = list(pool.map(_download_notice, [base + name for name in UPSTREAM_FILES]))
         UPSTREAM_CACHE[identity] = [(name, data, base + name)
@@ -228,6 +267,13 @@ def _package_record(package, root, graph_source, lock, texts):
                              '37c248a11239e108afc9bd4ee62b8f60542012e3'})
     if not expression and inherited:
         expression = 'MIT'
+    choice = LICENSE_CHOICES.get((package['name'], package['version']))
+    override = 'MIT inherited from pinned MDK root LICENSE' if not package.get('license') else None
+    if choice:
+        if expression != choice[0]:
+            raise RuntimeError('license_choice_expression_mismatch')
+        override = 'Selected ' + choice[1] + ' from declared SPDX expression: ' + expression
+        expression = choice[1]
     _reviewed_license(expression)
     notices = []
     for path, original in _package_notices(package, root):
@@ -240,12 +286,17 @@ def _package_record(package, root, graph_source, lock, texts):
         for name, raw, url in _upstream_notices(package):
             digest = hashlib.sha256(raw).hexdigest()
             texts[digest] = raw
-            notices.append({'original_path': 'upstream-root/' + name, 'sha256': digest,
+            original = name if name.startswith('canonical-license-template/') else 'upstream-root/' + name
+            notices.append({'original_path': original, 'sha256': digest,
                             'text': 'texts/' + digest + '.txt', 'source_url': url})
+        if (package['name'], package['version']) == ('void', '1.0.2'):
+            override = VOID_DECLARATION
+    if choice and not any(n['original_path'] == choice[2] or
+            n['original_path'] == 'upstream-root/' + choice[2] for n in notices):
+        raise RuntimeError('missing_selected_license_text')
     return {'name': package['name'], 'version': package['version'],
             'license': expression, 'source': _source(package, graph_source, lock),
-            'notices': notices, 'license_override':
-            'MIT inherited from pinned MDK root LICENSE' if not package.get('license') else None}
+            'notices': notices, 'license_override': override}
 
 
 def _source_notice(graph_source, packages, native=False):

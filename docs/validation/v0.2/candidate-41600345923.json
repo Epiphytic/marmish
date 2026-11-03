@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "kind": "native_candidate_build",
+  "run_id": 41600345923,
+  "run_attempt": 1,
+  "source_commit": "25c534059a888152aea363245d147639b18640e9",
+  "ok": false,
+  "release_qualified": false,
+  "jobs": [
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "job_id": 125797346941,
+      "native_checks": true,
+      "release_build": true,
+      "release_build_ms": 425000,
+      "dependency_abi_inspection": true,
+      "glibc_max": "2.39",
+      "failure_stage": "license_collection",
+      "failure_category": "unreviewed_arti_license_source"
+    },
+    {
+      "target": "aarch64-unknown-linux-gnu",
+      "job_id": 125797347094,
+      "native_checks": true,
+      "release_build": true,
+      "release_build_ms": 409000,
+      "dependency_abi_inspection": true,
+      "glibc_max": "2.39",
+      "failure_stage": "license_collection",
+      "failure_category": "unreviewed_arti_license_source"
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "job_id": 125797346638,
+      "native_checks": false,
+      "release_build": false,
+      "failure_stage": "native_compile",
+      "failure_category": "unpromoted_variadic_mode"
+    }
+  ],
+  "render": "skipped",
+  "installed_quickstart": "skipped",
+  "raw_logs_committed": false
+}

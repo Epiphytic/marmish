@@ -1,0 +1,174 @@
+{
+  "schema": 1,
+  "kind": "build_only_license_source_provenance",
+  "github_api_release_tags_verified": true,
+  "overrides": [
+    {
+      "name": "bitcoin-consensus-encoding",
+      "version": "1.3.0",
+      "repository": "rust-bitcoin/rust-bitcoin",
+      "release_tag": "bitcoin-consensus-encoding-1.3.0",
+      "revision": "0cfc7908ff7c7c58e9c61c008c09cb2aeedb82cb",
+      "signed_tag_verified": true,
+      "upstream_manifest_url": "https://raw.githubusercontent.com/rust-bitcoin/rust-bitcoin/0cfc7908ff7c7c58e9c61c008c09cb2aeedb82cb/consensus_encoding/Cargo.toml",
+      "upstream_manifest_name_version_match": true,
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "bitcoin-internals",
+      "version": "0.6.0",
+      "repository": "rust-bitcoin/rust-bitcoin",
+      "release_tag": "bitcoin-internals-0.6.0",
+      "revision": "3812750b6824eb0374504d7e2fddd8e8528a2cda",
+      "signed_tag_verified": true,
+      "upstream_manifest_url": "https://raw.githubusercontent.com/rust-bitcoin/rust-bitcoin/3812750b6824eb0374504d7e2fddd8e8528a2cda/internals/Cargo.toml",
+      "upstream_manifest_name_version_match": true,
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "bitcoin-internals",
+      "version": "0.7.0",
+      "repository": "rust-bitcoin/rust-bitcoin",
+      "release_tag": "bitcoin-internals-0.7.0",
+      "revision": "a53101246ec046340d0127d520192d00d39d261d",
+      "signed_tag_verified": true,
+      "upstream_manifest_url": "https://raw.githubusercontent.com/rust-bitcoin/rust-bitcoin/a53101246ec046340d0127d520192d00d39d261d/internals/Cargo.toml",
+      "upstream_manifest_name_version_match": true,
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "bitcoin-io",
+      "version": "0.1.101",
+      "repository": "rust-bitcoin/rust-bitcoin",
+      "release_tag": "bitcoin-io-0.1.101",
+      "revision": "a010f1e9fd7752ee5e7ca60a909d32a58e0d3297",
+      "signed_tag_verified": true,
+      "upstream_manifest_url": "https://raw.githubusercontent.com/rust-bitcoin/rust-bitcoin/a010f1e9fd7752ee5e7ca60a909d32a58e0d3297/io/Cargo.toml",
+      "upstream_manifest_name_version_match": true,
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "bitcoin_hashes",
+      "version": "0.14.101",
+      "repository": "rust-bitcoin/rust-bitcoin",
+      "release_tag": "bitcoin_hashes-0.14.101",
+      "revision": "a010f1e9fd7752ee5e7ca60a909d32a58e0d3297",
+      "signed_tag_verified": true,
+      "upstream_manifest_url": "https://raw.githubusercontent.com/rust-bitcoin/rust-bitcoin/a010f1e9fd7752ee5e7ca60a909d32a58e0d3297/hashes/Cargo.toml",
+      "upstream_manifest_name_version_match": true,
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "bitcoin_hashes",
+      "version": "1.2.0",
+      "repository": "rust-bitcoin/rust-bitcoin",
+      "release_tag": "bitcoin_hashes-1.2.0",
+      "revision": "0f68fcb392512b5707529f864fb87882306e33d9",
+      "signed_tag_verified": true,
+      "upstream_manifest_url": "https://raw.githubusercontent.com/rust-bitcoin/rust-bitcoin/0f68fcb392512b5707529f864fb87882306e33d9/hashes/Cargo.toml",
+      "upstream_manifest_name_version_match": true,
+      "license": "CC0-1.0"
+    }
+  ],
+  "official_tor_vcs": [
+    {
+      "name": "arti-client",
+      "version": "0.47.0",
+      "repository": "https://gitlab.torproject.org/tpo/core/arti",
+      "revision": "ce8bc6e0998bd5a4efdf06dd62dce53c98ea1087",
+      "source": "published_crate_cargo_vcs_info"
+    },
+    {
+      "name": "derive-deftly-macros",
+      "version": "1.12.1",
+      "repository": "https://gitlab.torproject.org/Diziet/rust-derive-deftly",
+      "revision": "8ef3ca7ca2bd60977f3bece71e1dd6716a449f55",
+      "source": "published_crate_cargo_vcs_info"
+    }
+  ],
+  "local_collection_first_failure": {
+    "elapsed_ms": 3423,
+    "category": "missing_cargo_vcs_info",
+    "package": "bitcoin-consensus-encoding",
+    "version": "1.3.0"
+  },
+  "local_collection_attempts": [
+    {
+      "elapsed_ms": 3423,
+      "category": "missing_cargo_vcs_info",
+      "package": "bitcoin-consensus-encoding",
+      "version": "1.3.0"
+    },
+    {
+      "elapsed_ms": 7546,
+      "category": "missing_license_text",
+      "package": "cookie-factory",
+      "version": "0.3.3"
+    },
+    {
+      "elapsed_ms": 10934,
+      "category": "missing_license_text",
+      "package": "derive-deftly-macros",
+      "version": "1.12.1"
+    },
+    {
+      "elapsed_ms": 13540,
+      "category": "unreviewed_license_expression",
+      "package": "priority-queue",
+      "version": "2.7.0"
+    },
+    {
+      "elapsed_ms": 15659,
+      "category": "missing_license_text",
+      "package": "void",
+      "version": "1.0.2"
+    }
+  ],
+  "selected_optional_license": {
+    "name": "priority-queue",
+    "version": "2.7.0",
+    "declared": "LGPL-3.0-or-later OR MPL-2.0",
+    "selected": "MPL-2.0",
+    "revision": "0c76fb8fe75e4457f16f8e6c8e86508d1a89ba1d",
+    "original_notice": "MPL-2.0.txt"
+  },
+  "full_collection_passed": true,
+  "void_original_declaration": {
+    "name": "void",
+    "version": "1.0.2",
+    "license": "MIT",
+    "upstream_full_license_file_exists": false,
+    "annotation": "Void 1.0.2 upstream supplies an MIT declaration and author attribution in README.md, but no full license file; the separate SPDX MIT template is canonical explanatory text, not an upstream copyright notice.",
+    "notices": [
+      {
+        "original_path": "README.md",
+        "url": "https://raw.githubusercontent.com/reem/rust-void/ab2f4dbb7c95c144ccba2fa8afd11e155aa91133/README.md",
+        "sha256": "f85783a6fcf9ecc19edabd710775a88430d9e886f46728bfd7d65cef55ff3e73"
+      },
+      {
+        "original_path": "canonical-license-template/MIT.txt",
+        "url": "https://raw.githubusercontent.com/spdx/license-list-data/c4a7237ec8f4654e867546f9f409749300f1bf4c/text/MIT.txt",
+        "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+      }
+    ],
+    "canonical_template_release_tag": "v3.28.0",
+    "canonical_template_tag_object": "779ef2e5dff6d4af389c53de5e97116ab0bb52e8"
+  },
+  "local_collection_final": {
+    "schema": 1,
+    "exit_code": 0,
+    "elapsed_ms": 15344,
+    "output_exists": true,
+    "bytes": 2137225,
+    "sha256": "d78fb6776405a9643ace662f53cf54c4b32d07115301f4569a8f3d2a7cfd8225",
+    "package_count": 643,
+    "target": "x86_64-unknown-linux-gnu",
+    "source_commit": "1a8d42643e5c9e95b61d2bf268831ff458e2e30d",
+    "collector_sha256": "bb0b48d23fddb9f8d354f810edda6b5bb169e0f65e3e9d895024d6f37212b463",
+    "adapter_sha256": "7f44c1bc90947df24695d61fd17a3ca129836f145092c3c87edbb4b386be28ad",
+    "product_runtime_python": false,
+    "post_collection_change": "Removed unreachable void source override; special digest-pinned declaration path unchanged.",
+    "working_tree_contains_reviewed_uncommitted_changes": true,
+    "scope": "Actual local Linux AMD64 collection and assembly; hosted target-specific inventories remain candidate gates."
+  }
+}

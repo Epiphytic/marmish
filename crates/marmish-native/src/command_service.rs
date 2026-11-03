@@ -404,7 +404,7 @@ impl CommandService {
         if self.cleanup.is_some() {
             return Err(Error::Invalid("server_draining"));
         }
-        if ids.len() > 3 || ids.iter().collect::<BTreeSet<_>>().len() != ids.len() {
+        if ids.len() > 4 || ids.iter().collect::<BTreeSet<_>>().len() != ids.len() {
             return Err(Error::Invalid("command_fixture_ids"));
         }
         let mut cursor = None;

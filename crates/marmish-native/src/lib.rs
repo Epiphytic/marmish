@@ -46,3 +46,14 @@ pub fn validate_executable_layout() -> Result<()> {
 mod native_release;
 /// Build-only packaging entrypoint; not part of installed runtime launchers.
 pub fn native_release_tool() -> u8 { native_release::entry() }
+
+/// Build-only installed acceptance tooling; absent from default product builds.
+#[cfg(feature = "installed-checks")]
+pub async fn installed_check_entry() -> u8 {
+    mdk_adapter::installed_check::entry().await
+}
+/// Build-only deterministic remote byte fixture.
+#[cfg(feature = "installed-checks")]
+pub fn installed_fixture_entry() -> u8 {
+    mdk_adapter::installed_check::fixture_entry()
+}

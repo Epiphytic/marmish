@@ -64,9 +64,18 @@ polling; a [fresh live regression](validation/v0.2/public-cli-admission-regressi
 passed with exact 61-byte literal/Unicode argv output and exit zero in 3228 ms.
 Strict Clippy over every native target also passed. These local tests do not
 substitute for the installed cross-platform matrix.
-Restart while running, authenticated
-remote conflict/replay validation, command-count/uptime integration and installed
-cross-platform direct command acceptance remain unfinished or unvalidated. Working
+The internal recovery fixture now has an independently approved
+[fresh direct restart test](validation/v0.2/local-command-recovery-direct-2026-11-03.md).
+The command continued across a joined server restart, retained the original
+invocation, proved exact gap-free output prefixes before completion, executed
+once, and returned the expected stdout, stderr and exit 7. Actual authenticated
+remote probes returned Existing for identical Submit content and InvocationConflict
+for changed content. Probe publications retained their real unknown application
+ownership rather than fabricated ACKs. The complete local fixture passed in
+19,872 ms with actual quiescence, joined stops and private-state cleanup. This is
+internal Linux AMD64 direct protocol evidence, not installed acceptance. Installed
+command-count/uptime exit, policy/recovery, actual default-auto keychains and
+cross-platform command acceptance remain unfinished or unvalidated. Working
 Tor commands are deferred to v0.3. [The local Arti command attempts](validation/v0.2/local-command-arti-2026-11-02.md)
 failed; their actual cleanup results are preserved. No v0.2 release or native installer is accepted. The direct command
 timings are individual observations, not sustained throughput or RTT benchmarks.
