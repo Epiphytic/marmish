@@ -298,6 +298,12 @@ class Qualification:
         # owner status is public metadata, not a provider-load response.
         require(value.get('identity') == public, 'fresh_identity_reload')
 
+    def daemon_reload(self, name, public):
+        # Exercise the distinct daemon frontend, without claiming full startup.
+        _, raw = execute([str(self.bins / 'marmishd'), '--state-dir', str(self.state),
+            '-i', name, 'init'], self.environment, 120)
+        require(json.loads(raw).get('identity') == public, 'fresh_identity_reload')
+
     def items(self, expected):
         value = self.helper('list')
         require(value.get('ok'), 'provider_list')
@@ -336,6 +342,8 @@ class Qualification:
             'named_reference_separation')
         self.reload('default', first['public_key'])
         self.reload('second', second['public_key'])
+        self.daemon_reload('default', first['public_key'])
+        self.daemon_reload('second', second['public_key'])
         result.update(auto_keychain=True, distinct_named_identities=True, fresh_reload=True, item_count=4)
         before = {name: self.snapshot(name) for name in ('default', 'second')}
         self.provider.lock()
@@ -350,6 +358,8 @@ class Qualification:
         self.wait_probe()
         self.reload('default', first['public_key'])
         self.reload('second', second['public_key'])
+        self.daemon_reload('default', first['public_key'])
+        self.daemon_reload('second', second['public_key'])
         require(self.items(4) == references, 'locked_native_items_changed')
         result.update(locked_refused=True, unlocked_fresh_reload=True, no_plaintext_fallback=True)
         if isinstance(self.provider, LinuxProvider):

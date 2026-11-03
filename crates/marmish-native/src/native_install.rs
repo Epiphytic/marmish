@@ -971,6 +971,36 @@ mod tests {
         }
     }
     #[test]
+    fn installed_frontends_retain_one_same_version_credential_helper() {
+        let f = Fixture::new();
+        assert!(f.install().unwrap().active);
+        let id = read_receipt(&f.prefix()).unwrap().active.unwrap();
+        let version = f.prefix().join("versions").join(id).canonicalize().unwrap();
+        let mut retained = Vec::new();
+        for frontend in [
+            f.root.path().join("bin/marmish"),
+            f.root.path().join("bin/marmishd"),
+            f.prefix().join("current/marmish-worker"),
+        ] {
+            let layout = crate::native_layout::resolve(&frontend).unwrap();
+            assert_eq!(layout.helper, version.join("marmish"));
+            assert_eq!(layout.worker, version.join("marmish-worker"));
+            assert!(
+                !layout
+                    .helper
+                    .components()
+                    .any(|c| c.as_os_str() == "current")
+            );
+            retained.push(layout);
+        }
+        assert!(!run(f.options(InstallAction::Uninstall)).unwrap().active);
+        for layout in retained {
+            assert!(layout.helper.is_file());
+            assert!(layout.worker.is_file());
+        }
+    }
+
+    #[test]
     fn install_select_uninstall_preserves_versions_and_unrelated_state() {
         let f = Fixture::new();
         assert!(f.install().unwrap().active);

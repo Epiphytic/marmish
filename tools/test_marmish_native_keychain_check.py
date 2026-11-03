@@ -62,6 +62,20 @@ class InstalledProviderSupervisor(unittest.TestCase):
                 qualification.helper('load')
             self.assertEqual(run.call_count, 1)
 
+    def test_daemon_frontend_reload_uses_actual_daemon_and_rejects_mismatch(self):
+        qualification = check.Qualification.__new__(check.Qualification)
+        qualification.bins, qualification.state = Path('/owned/bin'), Path('/owned/state')
+        qualification.environment = {'HOME': '/owned'}
+        with mock.patch.object(check, 'execute', return_value=(0, b'{"identity":"public"}')) as run:
+            qualification.daemon_reload('second', 'public')
+            self.assertEqual(run.call_args.args, (['/owned/bin/marmishd', '--state-dir',
+                '/owned/state', '-i', 'second', 'init'], qualification.environment, 120))
+            with self.assertRaisesRegex(check.Refused, 'fresh_identity_reload'):
+                qualification.daemon_reload('second', 'different')
+        with mock.patch.object(check, 'execute', side_effect=check.Refused('operation_failed')):
+            with self.assertRaisesRegex(check.Refused, 'operation_failed'):
+                qualification.daemon_reload('second', 'public')
+
     def test_profile_refuses_file_fallback_and_shared_reference(self):
         with tempfile.TemporaryDirectory() as tmp:
             qualification = check.Qualification.__new__(check.Qualification)

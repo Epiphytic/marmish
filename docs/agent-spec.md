@@ -443,3 +443,5 @@ stable `0.2.N` candidate and matching native lock entry, rather than pinning
 `0.2.0`. See the [patch-version amendment](phases/v0.2-lifecycle-patch-versions.md).
 This changes qualification tooling only; hosted lifecycle qualification remains
 pending, and public release pins are unchanged.
+
+The canonical credential-helper correction (`marmish-far`) makes managed and ordinary sibling `marmish`, `marmishd` and worker entrypoints select validated same-version `marmish` for provider operations. Exact downloaded standalone CLI behavior is preserved. This fixes an inconsistent helper identity; reported macOS Keychain denial causation and full daemon startup remain pending actual pre/post-fix macOS qualification. No ACL or file-fallback policy changes. See [design](phases/v0.2-canonical-credential-helper.md).

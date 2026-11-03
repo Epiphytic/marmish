@@ -67,11 +67,8 @@ pub(crate) fn resolve(current: &Path) -> Result<ExecutableLayout> {
             }
         }
         executable(&current)?;
-        let helper = executable(&parent.join(if name == "marmish-worker" {
-            "marmish"
-        } else {
-            name
-        }))?;
+        // One signed credential-helper identity for all same-version frontends.
+        let helper = executable(&parent.join("marmish"))?;
         let worker = executable(&parent.join("marmish-worker"))?;
         Ok(ExecutableLayout { helper, worker })
     } else {
@@ -85,10 +82,15 @@ pub(crate) fn resolve(current: &Path) -> Result<ExecutableLayout> {
             return Err(bad());
         }
         let frontend = executable(&current)?;
-        let helper = if name == "marmish-worker" {
-            executable(&parent.join("marmish"))?
+        let helper = if name == downloaded {
+            frontend
         } else {
-            frontend.clone()
+            let expected = parent.join("marmish");
+            let helper = executable(&expected)?;
+            if helper != expected {
+                return Err(bad());
+            }
+            helper
         };
         // Downloaded installer probes intentionally do not contain a chmod'd sibling worker.
         let worker = parent.join("marmish-worker");
@@ -98,5 +100,84 @@ pub(crate) fn resolve(current: &Path) -> Result<ExecutableLayout> {
             executable(&worker)?
         };
         Ok(ExecutableLayout { helper, worker })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    fn fixture() -> tempfile::TempDir {
+        let parent = std::env::temp_dir().canonicalize().unwrap();
+        let root = tempfile::Builder::new()
+            .prefix("marmish-layout-")
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir_in(parent)
+            .unwrap();
+        for name in ["marmish", "marmishd", "marmish-worker"] {
+            fs::write(root.path().join(name), name).unwrap();
+            fs::set_permissions(root.path().join(name), fs::Permissions::from_mode(0o500)).unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn ordinary_frontends_share_the_same_canonical_helper() {
+        let root = fixture();
+        for name in ["marmish", "marmishd", "marmish-worker"] {
+            let layout = resolve(&root.path().join(name)).unwrap();
+            assert_eq!(layout.helper, root.path().join("marmish"));
+            assert_eq!(layout.worker, root.path().join("marmish-worker"));
+        }
+    }
+
+    #[test]
+    fn missing_symlinked_or_writable_helper_fails_closed() {
+        let root = fixture();
+        let helper = root.path().join("marmish");
+        fs::remove_file(&helper).unwrap();
+        for name in ["marmishd", "marmish-worker"] {
+            assert!(resolve(&root.path().join(name)).is_err());
+        }
+        symlink(root.path().join("marmishd"), &helper).unwrap();
+        assert!(resolve(&root.path().join("marmishd")).is_err());
+        fs::remove_file(&helper).unwrap();
+        fs::write(&helper, b"unsafe").unwrap();
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(resolve(&root.path().join("marmishd")).is_err());
+    }
+
+    #[test]
+    fn standalone_download_retains_its_exact_exception_even_beside_siblings() {
+        let root = fixture();
+        let download = root.path().join(format!(
+            "marmish-{}-{}",
+            env!("CARGO_PKG_VERSION"),
+            env!("MARMISH_BUILD_TARGET")
+        ));
+        fs::write(&download, b"download").unwrap();
+        fs::set_permissions(&download, fs::Permissions::from_mode(0o500)).unwrap();
+        assert_eq!(resolve(&download).unwrap().helper, download);
+        fs::remove_file(root.path().join("marmish")).unwrap();
+        fs::remove_file(root.path().join("marmish-worker")).unwrap();
+        assert_eq!(resolve(&download).unwrap().helper, download);
+        assert!(resolve(&root.path().join("marmishd")).is_err());
+    }
+
+    #[test]
+    fn resolved_helper_does_not_follow_later_launcher_retarget() {
+        let first = fixture();
+        let second = fixture();
+        let launcher = first.path().join("launcher");
+        symlink(first.path().join("marmishd"), &launcher).unwrap();
+        let held = resolve(&launcher).unwrap();
+        fs::remove_file(&launcher).unwrap();
+        symlink(second.path().join("marmishd"), &launcher).unwrap();
+        assert_eq!(held.helper, first.path().join("marmish"));
+        assert_eq!(
+            resolve(&launcher).unwrap().helper,
+            second.path().join("marmish")
+        );
     }
 }

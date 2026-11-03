@@ -1719,7 +1719,7 @@ pub(super) async fn run_cli(
             return Err(bad());
         }
         let worker = RetainedFile::capture(&a.version_root.join("marmish-worker"))?;
-        let helper = RetainedFile::capture(&a.version_root.join("marmishd"))?;
+        let helper = RetainedFile::capture(&a.version_root.join("marmish"))?;
         pair = Some(Pair::start(&root, &ctx, &env, end).await?);
         pair.as_mut().unwrap().ready(&root, work).await?;
         cancel.check()?;
@@ -1753,7 +1753,7 @@ pub(super) async fn run_cli(
         inputs.install(&root, &env, None, work).await?;
         worker.verify(&a.version_root.join("marmish-worker"))?;
         result.worker_inode_retained = true;
-        helper.verify(&a.version_root.join("marmishd"))?;
+        helper.verify(&a.version_root.join("marmish"))?;
         result.helper_inode_retained = true;
         pair.as_mut().unwrap().stop_ordinary(&root, work).await?;
         cancel.check()?;
@@ -1791,7 +1791,7 @@ pub(super) async fn run_cli(
         pair.as_mut().unwrap().unknown = true;
         inputs.select(&root, &env, &a.manifest.id(), work).await?;
         worker.verify(&a.version_root.join("marmish-worker"))?;
-        helper.verify(&a.version_root.join("marmishd"))?;
+        helper.verify(&a.version_root.join("marmish"))?;
         if root.join("bin/marmishd").canonicalize()?
             != a.version_root.join("marmishd").canonicalize()?
         {
@@ -1802,7 +1802,7 @@ pub(super) async fn run_cli(
             .restart(&root, &ctx, &env, work)
             .await?;
         worker.verify(&a.version_root.join("marmish-worker"))?;
-        helper.verify(&root.join("bin/marmishd").canonicalize()?)?;
+        helper.verify(&root.join("bin/marmish").canonicalize()?)?;
         pair.as_ref()
             .unwrap()
             .tree
