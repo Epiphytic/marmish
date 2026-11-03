@@ -270,7 +270,11 @@ fn configure_value(
         vec![]
     });
     value["cwd"] = serde_json::json!(fixture.parent().and_then(Path::to_str));
-    value["limits"] = serde_json::json!({"max_commands":4,"max_uptime":1800});
+    value["limits"] = if server {
+        serde_json::json!({"max_commands":4,"max_uptime":1800})
+    } else {
+        serde_json::json!({"max_uptime":1800})
+    };
     crate::command_config::CommandConfig::from_bytes(&records::canonical(&value)?)?;
     Ok(value)
 }
@@ -1033,6 +1037,24 @@ mod tests {
                 Path::new("/private/fixture/main"),
             )
             .unwrap();
+            let mut effective = crate::command_config::CommandConfig::from_bytes(
+                &records::canonical(&after).unwrap(),
+            )
+            .unwrap();
+            effective
+                .apply_limit_overrides(crate::command_limits::LimitOverrides::default())
+                .unwrap();
+            assert_eq!(
+                effective
+                    .limits()
+                    .max_commands
+                    .map(std::num::NonZeroU64::get),
+                if name == "server" { Some(4) } else { None }
+            );
+            assert_eq!(
+                effective.limits().max_uptime,
+                Some(Duration::from_secs(1800))
+            );
             for field in [
                 "role",
                 "relays",
