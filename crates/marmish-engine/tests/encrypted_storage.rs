@@ -97,6 +97,7 @@ print(json.dumps(result))
 }
 
 fn keyed_schema_count(path: &Path, raw_key: &[u8; 32]) -> rusqlite::Result<i64> {
+    initialize_storage().unwrap();
     let connection = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
@@ -123,6 +124,7 @@ fn retained_command_input_and_streams_require_the_storage_key() {
     if uid() == 0 {
         return;
     }
+    initialize_storage().unwrap();
     let probe = Connection::open_in_memory().unwrap();
     let version: String = probe
         .query_row("PRAGMA cipher_version", [], |row| row.get(0))
@@ -191,6 +193,7 @@ fn retained_command_input_and_streams_require_the_storage_key() {
     let main = policy.state_root.join("engine.sqlite3");
     assert!(keyed_schema_count(&main, &state_key).unwrap() > 0);
     assert!(keyed_schema_count(&main, &[0x42; 32]).is_err());
+    initialize_storage().unwrap();
     let unkeyed = Connection::open_with_flags(
         &main,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,

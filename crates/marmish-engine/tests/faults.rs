@@ -43,6 +43,7 @@ fn durable_stream_bytes(root: &Path, job: &Path, stream: u8) -> i64 {
     Hkdf::<Sha256>::new(Some(b"marmish-storage-hkdf-v1"), &master[8..])
         .expand(&info, key.as_mut())
         .unwrap();
+    initialize_storage().unwrap();
     let connection = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,

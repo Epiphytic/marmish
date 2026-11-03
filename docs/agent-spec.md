@@ -44,6 +44,14 @@ bounded engine operations and explicit local output consumption. Payload expiry
 is separate from replay facts and native publication obligations. Ordinary
 disconnect and owner stop do not cancel admitted commands.
 
+All SQLCipher users cross one process-wide `marmish_engine::initialize_storage`
+barrier before their first SQLite call, including engine stores, the command
+journal, preflight, MDK and the Arti directory cache. This prevents the pinned
+SQLite initialization hook race observed in the
+[failed candidate](validation/v0.2/candidate-41620775751.md); the
+[reviewed correction](validation/v0.2/sqlcipher-startup.md) retains encryption
+and normal parallel test execution. Fresh hosted qualification remains required.
+
 Phase 2 remains open. Public command CLI/IPC, explicit SRV resolution, Finish-based
 command-count drain and uptime limits, cached administrative evidence/cleanup,
 and native offline setup/install transactions are implemented in the current

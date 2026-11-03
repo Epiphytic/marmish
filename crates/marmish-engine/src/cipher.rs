@@ -66,6 +66,7 @@ pub(crate) fn open(
     context: Context,
     journal: Journal,
 ) -> Result<Connection> {
+    crate::initialize_storage()?;
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
         | OpenFlags::SQLITE_OPEN_NO_MUTEX
         | OpenFlags::SQLITE_OPEN_NOFOLLOW;
@@ -150,6 +151,7 @@ mod tests {
             .unwrap();
         assert_eq!(data, b"a\0\xff");
         drop(conn);
+        crate::initialize_storage().unwrap();
         let plain = Connection::open(&path).unwrap();
         assert!(plain
             .query_row("SELECT count(*) FROM sqlite_master", [], |row| row
@@ -226,6 +228,7 @@ mod tests {
             });
         }
         assert!(command.status().unwrap().success());
+        crate::initialize_storage().unwrap();
         let plain = Connection::open(&path).unwrap();
         assert!(plain
             .query_row("SELECT count(*) FROM sqlite_master", [], |row| row

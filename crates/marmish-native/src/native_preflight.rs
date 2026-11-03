@@ -24,6 +24,7 @@ fn open(path: &Path, key: &[u8; 32]) -> Result<Option<Connection>> {
     if file.metadata()?.len() == 0 {
         return Ok(None);
     }
+    marmish_engine::initialize_storage().map_err(|_| Error::Storage("sqlcipher_init"))?;
     let conn = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY
@@ -136,6 +137,7 @@ mod tests {
     use super::*;
     #[test]
     fn version_mismatch_is_distinct_from_corruption_and_readonly() {
+        marmish_engine::initialize_storage().unwrap();
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA user_version=99;").unwrap();
         assert!(matches!(
@@ -154,6 +156,7 @@ mod tests {
             .unwrap();
         let path = root.path().join("state.sqlite3");
         let key = [37u8; 32];
+        marmish_engine::initialize_storage().unwrap();
         let conn = Connection::open(&path).unwrap();
         let raw = format!("x'{}'", hex::encode(key));
         assert_eq!(

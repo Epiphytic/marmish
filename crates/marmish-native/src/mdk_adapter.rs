@@ -895,6 +895,7 @@ impl MdkOwner {
             .map_err(|_| Error::Storage("derive"))?;
         hk.expand(b"journal", jk.as_mut())
             .map_err(|_| Error::Storage("derive"))?;
+        marmish_engine::initialize_storage().map_err(|_| Error::Storage("sqlcipher_init"))?;
         // Close/reopen proof precedes constructing any networking object. The
         // retained clone below shares one connection rather than reopening it.
         drop(mdk(SqliteAccountStorage::open_encrypted(

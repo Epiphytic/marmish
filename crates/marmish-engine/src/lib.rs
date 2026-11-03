@@ -26,6 +26,25 @@ pub use storage::{NativeBinding, ProvidedMaster};
 use store::{AccountSpec, BootTime, InputOwner, StartDecision, Store, WorkerCredential};
 pub const ENGINE_FORMAT: i64 = store::ENGINE_FORMAT;
 
+/// Complete SQLCipher's process-global initialization before any SQLite use.
+///
+/// Every in-process SQLite consumer must cross this barrier before its first
+/// SQLite API call, including consumers that open unencrypted databases. SQLite
+/// can otherwise publish its ready flag before SQLCipher's extra-init finishes.
+/// Failure is permanent for this process; retrying SQLite's ready fast path
+/// would hide the original initialization error. Never call sqlite3_shutdown.
+pub fn initialize_storage() -> Result<()> {
+    static INITIALIZED: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
+    // SAFETY: this is the first SQLite caller for all controlled openers. The
+    // OnceLock keeps callers waiting until the extra-init hook has returned.
+    let result = INITIALIZED.get_or_init(|| unsafe { rusqlite::ffi::sqlite3_initialize() });
+    if *result == rusqlite::ffi::SQLITE_OK {
+        Ok(())
+    } else {
+        Err(EngineError::StorageFailure)
+    }
+}
+
 /// Validate a held directory using the same ancestor trust predicate as worker launch.
 pub fn validate_executable_directory(directory: &std::fs::File) -> Result<()> {
     launcher::ancestor(

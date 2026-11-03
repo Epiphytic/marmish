@@ -359,6 +359,8 @@ impl RelayConnector {
             return Ok(());
         }
         if self.policy().needs_tor() {
+            // Arti directory caches share this process's linked SQLCipher.
+            marmish_engine::initialize_storage().map_err(|_| Error::Storage("sqlcipher_init"))?;
             crate::diagnostics::event("arti_bootstrap", "begin");
             for path in [&self.0.dirs.state, &self.0.dirs.cache] {
                 check_private_directory(path)?;

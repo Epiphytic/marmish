@@ -252,6 +252,7 @@ fn encrypted_bytes_require_the_right_key_and_stream() {
     let contents = std::fs::read(&path).unwrap();
     assert!(!contents.windows(canary.len()).any(|w| w == canary));
     assert_ne!(&contents[..16], b"SQLite format 3\0");
+    crate::initialize_storage().unwrap();
     let plain = Connection::open(&path).unwrap();
     assert!(plain
         .query_row("SELECT count(*) FROM chunks", [], |r| r.get::<_, i64>(0))

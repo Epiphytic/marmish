@@ -97,6 +97,7 @@ impl Journal {
             }
             Err(e) => return Err(e.into()),
         }
+        marmish_engine::initialize_storage().map_err(|_| Error::Storage("sqlcipher_init"))?;
         let conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
