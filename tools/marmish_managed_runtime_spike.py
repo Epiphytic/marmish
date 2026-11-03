@@ -26,6 +26,7 @@ from marmish_installed import file_digest as digest
 
 REPO = Path(__file__).resolve().parent.parent
 FIXTURE = REPO / 'tests/fixtures/managed-runtime-assets.json'
+LEGACY_INSTALLER = REPO / 'tests/fixtures/legacy/install-v0.1.sh'
 HOSTS = frozenset({'github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com'})
 CAPS = {'uv': 64 << 20, 'python': 128 << 20, 'marmish': 512 << 20}
 TARGETS = {('Linux', 'x86_64'): 'x86_64-unknown-linux-gnu',
@@ -479,7 +480,7 @@ def uv_command(uv, row, slot, metadata):
 
 
 def embedded_verifier(destination):
-    source = (REPO / 'scripts/install.sh').read_bytes()
+    source = LEGACY_INSTALLER.read_bytes()
     begin, end = b'# BEGIN MARMISH INSTALLER PYTHON\n', b'# END MARMISH INSTALLER PYTHON'
     require(source.count(begin) == source.count(end) == 1, 'installer_marker_ambiguous')
     body = source.split(begin)[1].split(end)[0]

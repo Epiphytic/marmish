@@ -109,7 +109,7 @@ class ManagedRuntimeTests(unittest.TestCase):
     def test_embedded_verifier_byte_exact(self):
         output=self.root/'verifier.py'
         spike.embedded_verifier(output)
-        body=(spike.REPO/'scripts/install.sh').read_bytes().split(b'# BEGIN MARMISH INSTALLER PYTHON\n')[1].split(b'# END MARMISH INSTALLER PYTHON')[0]
+        body=spike.LEGACY_INSTALLER.read_bytes().split(b'# BEGIN MARMISH INSTALLER PYTHON\n')[1].split(b'# END MARMISH INSTALLER PYTHON')[0]
         self.assertEqual(output.read_bytes(),body)
 
     def test_launcher_substitution_preserves_template(self):

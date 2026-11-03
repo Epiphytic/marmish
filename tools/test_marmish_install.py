@@ -1,4 +1,4 @@
-"""Offline adversarial tests for the self-contained distribution installer."""
+"""Offline adversarial tests for the pinned legacy v0.1 distribution installer."""
 import gzip
 import contextlib
 import hashlib
@@ -13,7 +13,7 @@ import types
 import unittest
 from unittest import mock
 
-INSTALLER = Path(__file__).resolve().parents[1] / 'scripts' / 'install.sh'
+INSTALLER = Path(__file__).resolve().parents[1] / 'tests/fixtures/legacy/install-v0.1.sh'
 VERSION = '0.1.0-experimental.1'
 TARGET = 'x86_64-unknown-linux-gnu'
 
@@ -84,6 +84,18 @@ class InstallerTests(unittest.TestCase):
             self.install()
         self.assertFalse((self.prefix / 'current').exists())
         self.assertFalse((self.launcher_dir / 'marmish').exists())
+
+    def test_legacy_installer_reference_is_pinned_and_separate_from_public_bootstrap(self):
+        repo = Path(__file__).resolve().parents[1]
+        self.assertEqual(INSTALLER.relative_to(repo).as_posix(),
+                         'tests/fixtures/legacy/install-v0.1.sh')
+        self.assertNotEqual(INSTALLER.resolve(), (repo / 'scripts/install.sh').resolve())
+        source = INSTALLER.read_bytes()
+        self.assertEqual(hashlib.sha256(source).hexdigest(),
+                         'eac417b4748f0252adef82fe18c1260ef744523ec0ed6b624927dc6b803d0768')
+        for marker in (b'# BEGIN MARMISH INSTALLER PYTHON\n',
+                       b'# END MARMISH INSTALLER PYTHON'):
+            self.assertEqual(source.count(marker), 1)
 
     def test_help_is_self_contained_and_ignores_pythonpath_and_cwd(self):
         decoys = self.base / 'decoys'
