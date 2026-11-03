@@ -8,6 +8,7 @@
 # Private runtime state (may contain identities, commands and output)
 .marmish/
 .marmish-supervisor-*/
+.marmish-command-check-*/
 /state/
 /fixtures-output/
 .whitenoise/

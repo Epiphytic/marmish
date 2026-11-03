@@ -1,4 +1,10 @@
 //! One actor owns the MDK handle, application journal, signer and relay plane.
+#[path = "command_adapter.rs"]
+mod command_adapter;
+#[path = "command_check.rs"]
+pub(crate) mod command_check;
+#[path = "command_runtime.rs"]
+mod command_runtime;
 use crate::foundation::{self, Body, Envelope};
 use crate::identity::{IdentityMaterial, ProfileLease};
 pub use crate::journal::{Conversation, ReceivedMessage, SendStatus};
@@ -55,6 +61,257 @@ use zeroize::Zeroizing;
 type Runtime = AccountDeviceRuntime<PublicationGate, ExplicitRouting, Publisher>;
 const PURPOSE: &str = "marmish/v2 identity transport";
 const PREFIX: &str = "marmish/v2/";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RoomPurpose {
+    Foundation,
+    Command,
+}
+impl RoomPurpose {
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Foundation => PREFIX,
+            Self::Command => "marmish/command/1/",
+        }
+    }
+    fn description(self) -> &'static str {
+        match self {
+            Self::Foundation => PURPOSE,
+            Self::Command => "marmish-command/1 command transport",
+        }
+    }
+}
+
+/// Authority supplied by the accepted MLS room, never by wire fields or IPC.
+/// Only this adapter can construct production contexts after native validation.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct AuthenticatedCommandContext {
+    local_account: crate::command_wire::Account,
+    peer_account: crate::command_wire::Account,
+    mls_group: Vec<u8>,
+    transport_group: Vec<u8>,
+    session: crate::command_wire::Id,
+    direction: CommandDirection,
+    target_uid: u32,
+    authority_digest: crate::command_wire::Digest,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CommandDirection {
+    Client,
+    Server,
+}
+
+impl AuthenticatedCommandContext {
+    pub(crate) fn local_account(&self) -> crate::command_wire::Account {
+        self.local_account
+    }
+    pub(crate) fn peer_account(&self) -> crate::command_wire::Account {
+        self.peer_account
+    }
+    pub(crate) fn mls_group(&self) -> &[u8] {
+        &self.mls_group
+    }
+    pub(crate) fn transport_group(&self) -> &[u8] {
+        &self.transport_group
+    }
+    pub(crate) fn session(&self) -> crate::command_wire::Id {
+        self.session
+    }
+    pub(crate) fn direction(&self) -> CommandDirection {
+        self.direction
+    }
+    pub(crate) fn target_uid(&self) -> u32 {
+        self.target_uid
+    }
+    pub(crate) fn authority_digest(&self) -> crate::command_wire::Digest {
+        self.authority_digest
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_fixture(
+        local_account: crate::command_wire::Account,
+        peer_account: crate::command_wire::Account,
+        mls_group: Vec<u8>,
+        session: crate::command_wire::Id,
+        direction: CommandDirection,
+    ) -> Self {
+        Self {
+            local_account,
+            peer_account,
+            transport_group: mls_group.clone(),
+            mls_group,
+            session,
+            direction,
+            target_uid: unsafe { libc::geteuid() },
+            authority_digest: [7; 32],
+        }
+    }
+}
+
+/// Check frozen publication bytes before the journal transaction. This does no
+/// network work and does not grant authority; the store checks its sealed Owner.
+pub(crate) fn validate_command_publication(
+    publication: &crate::journal::PreparedCommandPublication,
+    local: crate::command_wire::Account,
+) -> Result<()> {
+    use crate::command_wire as wire;
+    use cgka_traits::app_event::MarmotAppEvent;
+    let refuse = || Error::Invalid("command_publication");
+    if publication.key.group.is_empty()
+        || publication.key.group.len() > 1024
+        || publication.encoded_wire.len() > wire::MAX_CONTENT
+        || publication.encoded_app_event.len() > wire::MAX_CONTENT + 4096
+    {
+        return Err(refuse());
+    }
+    let event = MarmotAppEvent::decode(&publication.encoded_app_event).map_err(|_| refuse())?;
+    if event.encode().map_err(|_| refuse())? != publication.encoded_app_event
+        || event.id != publication.key.app_event_id
+        || event.pubkey != hex::encode(local)
+        || event.kind != wire::KIND
+        || event.tags != vec![wire::TAG.map(str::to_owned).to_vec()]
+        || event.content.as_bytes() != publication.encoded_wire
+    {
+        return Err(refuse());
+    }
+    if let Ok(request) = wire::decode_request(&publication.encoded_wire) {
+        if request.binding != publication.binding
+            || request.id != publication.request_id
+            || request.binding.client != local
+            || wire::request_digest(&publication.encoded_wire) != publication.request_sha256
+        {
+            return Err(refuse());
+        }
+    } else {
+        let response = wire::decode_response(&publication.encoded_wire).map_err(|_| refuse())?;
+        if response.binding != publication.binding
+            || response.id != publication.request_id
+            || response.binding.server != local
+            || response.request_sha256 != publication.request_sha256
+        {
+            return Err(refuse());
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn prepare_command_publication(
+    group: &[u8],
+    binding: crate::command_wire::Binding,
+    request_id: crate::command_wire::Id,
+    request_sha256: crate::command_wire::Digest,
+    encoded_wire: Vec<u8>,
+    local: crate::command_wire::Account,
+) -> Result<crate::journal::PreparedCommandPublication> {
+    use crate::command_wire as wire;
+    let event = cgka_traits::app_event::MarmotAppEvent::new(
+        hex::encode(local),
+        wire::id_timestamp(request_id),
+        wire::KIND,
+        vec![wire::TAG.map(str::to_owned).to_vec()],
+        String::from_utf8(encoded_wire.clone())
+            .map_err(|_| Error::Invalid("command_publication"))?,
+    );
+    let publication = crate::journal::PreparedCommandPublication {
+        key: crate::journal::PublicationKey {
+            group: group.to_vec(),
+            app_event_id: event.id.clone(),
+        },
+        binding,
+        request_id,
+        request_sha256,
+        encoded_wire,
+        encoded_app_event: event
+            .encode()
+            .map_err(|_| Error::Invalid("command_publication"))?,
+    };
+    validate_command_publication(&publication, local)?;
+    Ok(publication)
+}
+
+#[cfg(test)]
+mod command_publication_tests {
+    use super::*;
+    use crate::command_wire::{self as wire, Binding, Request, RequestOp};
+
+    fn request() -> (Request, crate::journal::PreparedCommandPublication) {
+        let request = Request {
+            binding: Binding {
+                session: [1; 16],
+                client: [2; 32],
+                server: [3; 32],
+            },
+            id: [4; 16],
+            op: RequestOp::Status {
+                invocation: [5; 16],
+            },
+        };
+        let bytes = wire::encode_request(&request).unwrap();
+        let publication = prepare_command_publication(
+            b"authenticated-mls-group",
+            request.binding.clone(),
+            request.id,
+            wire::request_digest(&bytes),
+            bytes,
+            request.binding.client,
+        )
+        .unwrap();
+        (request, publication)
+    }
+
+    #[test]
+    fn frozen_publication_requires_native_and_wire_binding() {
+        let (request, publication) = request();
+        publication.validate(request.binding.client).unwrap();
+        assert!(publication.validate(request.binding.server).is_err());
+        let mut changed = publication.clone();
+        changed.request_sha256[0] ^= 1;
+        assert!(changed.validate(request.binding.client).is_err());
+        changed = publication.clone();
+        changed.request_id[0] ^= 1;
+        assert!(changed.validate(request.binding.client).is_err());
+        changed = publication.clone();
+        changed.binding.session[0] ^= 1;
+        assert!(changed.validate(request.binding.client).is_err());
+        changed = publication.clone();
+        changed.key.app_event_id.push('0');
+        assert!(changed.validate(request.binding.client).is_err());
+        changed = publication;
+        changed.encoded_app_event.push(b' ');
+        assert!(changed.validate(request.binding.client).is_err());
+    }
+
+    #[test]
+    fn valid_native_id_does_not_allow_a_different_purpose_or_wire_content() {
+        let (request, publication) = request();
+        let mut event =
+            cgka_traits::app_event::MarmotAppEvent::decode(&publication.encoded_app_event).unwrap();
+        event = cgka_traits::app_event::MarmotAppEvent::new(
+            event.pubkey,
+            event.created_at,
+            event.kind,
+            vec![vec!["marmish".into(), "v2-foundation".into()]],
+            event.content,
+        );
+        let mut changed = publication.clone();
+        changed.key.app_event_id = event.id.clone();
+        changed.encoded_app_event = event.encode().unwrap();
+        assert!(changed.validate(request.binding.client).is_err());
+        let mut changed_request = request.clone();
+        changed_request.id[15] ^= 1;
+        event = cgka_traits::app_event::MarmotAppEvent::new(
+            hex::encode(request.binding.client),
+            event.created_at,
+            wire::KIND,
+            vec![wire::TAG.map(str::to_owned).to_vec()],
+            String::from_utf8(wire::encode_request(&changed_request).unwrap()).unwrap(),
+        );
+        changed.key.app_event_id = event.id.clone();
+        changed.encoded_app_event = event.encode().unwrap();
+        assert!(changed.validate(request.binding.client).is_err());
+    }
+}
 
 // Startup owns only dialing/status observation; native publication begins after
 // this helper has observed Connected for every configured endpoint.
@@ -576,6 +833,9 @@ pub struct MdkOwner {
     loss_baseline: Option<NostrNotificationLoss>,
     pending_cohort: VecDeque<(u8, Vec<u8>)>,
     pending_budget: usize,
+    commands: Option<crate::command_service::CommandService>,
+    command_source_cursor: Option<crate::journal::SourceCursor>,
+    command_invalidation_cursor: Option<crate::journal::SourceKey>,
 }
 type PendingKey = (u8, Vec<u8>);
 fn select_pending(
@@ -619,7 +879,7 @@ impl MdkOwner {
             }
             allowed.insert(p);
         }
-        if allowed.len() > 64 {
+        if allowed.len() > 8192 {
             return Err(Error::Invalid("peer_count"));
         }
         let hk = Hkdf::<Sha256>::new(Some(b"marmish/v2/storage"), material.sqlcipher_root());
@@ -730,6 +990,9 @@ impl MdkOwner {
             loss_baseline: None,
             pending_cohort: VecDeque::new(),
             pending_budget: 64,
+            commands: None,
+            command_source_cursor: None,
+            command_invalidation_cursor: None,
         };
         for c in owner
             .journal
@@ -783,6 +1046,7 @@ impl MdkOwner {
                 .journal
                 .conversation_by_group(group.as_slice())?
                 .is_some()
+                || self.journal.command_room(group.as_slice())?.is_some()
                 || joins.contains(group.as_slice())
             {
                 continue;
@@ -817,12 +1081,36 @@ impl MdkOwner {
     }
     fn maintain_journal(&mut self) -> Result<()> {
         let mut protected: BTreeSet<Vec<u8>> = BTreeSet::new();
+        let mut command_protection = crate::journal::CommandProtection::default();
+        // Defensive compatibility with storage that retains invalidations. At
+        // pinned MDK 8abc51b only receives/joins are pending events; invalidations
+        // arrive in ephemeral effect sets. The terminal-state source sweep is
+        // their durable recovery backstop, rather than this normally empty gate.
+        for event in mdk(self.storage.list_pending_application_events())? {
+            if let GroupEvent::AppMessageInvalidated { group_id, .. } = event {
+                command_protection
+                    .invalidation_groups
+                    .insert(group_id.as_slice().to_vec());
+            }
+        }
         let fanouts = mdk(self.storage.list_outbound_fanouts())?;
         protected.extend(
             fanouts
                 .iter()
                 .filter_map(|f| f.group_id().map(|g| g.as_slice().to_vec())),
         );
+        for fanout in &fanouts {
+            if let (Some(group), Some(application)) =
+                (fanout.group_id(), fanout.application_message())
+            {
+                command_protection
+                    .publications
+                    .insert(crate::journal::PublicationKey {
+                        group: group.as_slice().to_vec(),
+                        app_event_id: application.app_event_id.clone(),
+                    });
+            }
+        }
         protected.extend(
             self.runtime
                 .unhydrated_group_ids()
@@ -836,12 +1124,22 @@ impl MdkOwner {
                 .map(|(g, _)| g.as_slice().to_vec()),
         );
         for group in self.native_group_union()? {
-            if !mdk(self.storage.list_queued_outbound_intents(&group))?.is_empty() {
+            let queued = mdk(self.storage.list_queued_outbound_intents(&group))?;
+            for intent in &queued {
+                command_protection
+                    .queued
+                    .insert((group.as_slice().to_vec(), intent.id.as_slice().to_vec()));
+            }
+            if !queued.is_empty() {
                 protected.insert(group.as_slice().to_vec());
             }
         }
-        self.journal
-            .maintain(now()?, self.retention_secs(), &protected)?;
+        command_protection.groups = protected.clone();
+        self.journal.command_maintain(now()?, &command_protection)?;
+        if command_protection.invalidation_groups.is_empty() {
+            self.journal
+                .maintain(now()?, self.retention_secs(), &protected)?;
+        }
         if !protected.is_empty() {
             crate::diagnostics::event("mdk_retention", "native_obligations_protected");
         }
@@ -911,7 +1209,15 @@ impl MdkOwner {
         g: &GroupId,
         expected_creator: Option<&str>,
     ) -> Result<(String, String, NostrRoutingV1, String)> {
-        if self.journal.group_rejected(g.as_slice())? {
+        self.check_group_for(g, expected_creator, RoomPurpose::Foundation)
+    }
+    fn check_group_for(
+        &self,
+        g: &GroupId,
+        expected_creator: Option<&str>,
+        purpose: RoomPurpose,
+    ) -> Result<(String, String, NostrRoutingV1, String)> {
+        if purpose == RoomPurpose::Foundation && self.journal.group_rejected(g.as_slice())? {
             return Err(Error::Mdk("group_rejected"));
         }
         let record = self
@@ -920,10 +1226,10 @@ impl MdkOwner {
             .map_err(|_| Error::Transport("group_state_unavailable"))?;
         let session = record
             .name
-            .strip_prefix(PREFIX)
+            .strip_prefix(purpose.prefix())
             .ok_or(Error::Mdk("conversation_purpose"))?;
         if !foundation::valid_hex(session, 32)
-            || record.description != PURPOSE
+            || record.description != purpose.description()
             || record.protocol_profile != ProtocolProfile::Current
             || record.removed
         {
@@ -1030,6 +1336,7 @@ impl MdkOwner {
             let (_, _, route, _) = self.check_group(&g, None)?;
             self.routing.group(g, route)?;
         }
+        self.rebuild_command_routes()?;
         Ok(())
     }
     fn ensure_ingress(&self) -> Result<()> {
@@ -1458,28 +1765,7 @@ impl MdkOwner {
                     .invalidate(group_id.as_slice(), message_id.as_slice())?;
             }
         }
-        for published in &effects.published_app_messages {
-            self.journal.bind_native(
-                published.group_id.as_slice(),
-                &published.app_event_id,
-                published.message_id.as_slice(),
-            )?;
-            self.journal.mark(
-                published.group_id.as_slice(),
-                &published.app_event_id,
-                "published",
-            )?;
-        }
-        mdk(self
-            .runtime
-            .acknowledge_published_app_messages(&effects.published_app_messages))?;
-        for failed in &effects.failed_app_messages {
-            self.journal.mark(
-                failed.group_id.as_slice(),
-                &failed.app_event_id,
-                "invalidated",
-            )?;
-        }
+        self.project_application_publications(&effects)?;
         // Always process the durable queue: it survives a crash between MDK
         // acceptance and the application's transaction. Never acknowledge a
         // message before its projection and deterministic receipt intent exist.
@@ -1510,34 +1796,58 @@ impl MdkOwner {
             }
         }
         selected.sort_by_key(|event| !matches!(event, GroupEvent::GroupJoined { .. }));
+        let command_proofs = self.command_publication_proofs(&[])?;
         for event in selected {
             let result = match event {
+                event @ GroupEvent::GroupJoined { .. } if self.is_command_join(&event)? => {
+                    self.project_command_join(event)
+                }
                 event @ GroupEvent::GroupJoined { .. } => self.project_join(event),
                 GroupEvent::MessageReceived { ref group_id, .. }
                     if pending_joins.contains(group_id.as_slice())
                         && self
                             .journal
                             .conversation_by_group(group_id.as_slice())?
-                            .is_none() =>
+                            .is_none()
+                        && self.journal.command_room(group_id.as_slice())?.is_none() =>
                 {
                     Ok(())
+                }
+                ref event @ GroupEvent::MessageReceived { ref group_id, .. }
+                    if self.journal.command_room(group_id.as_slice())?.is_some() =>
+                {
+                    self.project_command_message(event.clone())
                 }
                 event @ GroupEvent::MessageReceived { .. } => self.project_message(event),
                 GroupEvent::AppMessageInvalidated {
                     group_id,
                     message_id,
                     ..
-                } => {
+                } => (|| {
                     self.journal
                         .invalidate(group_id.as_slice(), message_id.as_slice())?;
+                    self.journal.command_apply_native(&[
+                        crate::journal::CommandNativeUpdate::Invalidated {
+                            group: group_id.as_slice().to_vec(),
+                            native_id: message_id.as_slice().to_vec(),
+                            possible_publication: command_proofs
+                                .get(&(
+                                    group_id.as_slice().to_vec(),
+                                    message_id.as_slice().to_vec(),
+                                ))
+                                .cloned(),
+                        },
+                    ])?;
                     mdk(self
                         .storage
                         .delete_pending_application_events(&[message_id]))
-                }
+                })(),
                 _ => Ok(()),
             };
             match result {
-                Err(Error::Storage("journal_capacity" | "source_capacity"))
+                Err(Error::Storage(
+                    "journal_capacity" | "source_capacity" | "command_invalidation_capacity",
+                ))
                 | Err(Error::Transport("foundation_future")) => {
                     crate::diagnostics::event("mdk_projection", "deferred");
                 }
@@ -1877,14 +2187,18 @@ impl MdkOwner {
         let live: BTreeSet<_> = owed.iter().map(|(_, m)| m.id.as_slice().to_vec()).collect();
         self.welcome_retry.retain(|id, _| live.contains(id));
         for (group, message) in owed.into_iter().take(64) {
-            match self.ensure_trusted(&group) {
+            match self.ensure_application_group(&group) {
                 Ok(()) => {}
                 Err(Error::Mdk(_)) => {
                     // A cross-store crash can retain a native Welcome without
                     // an application acceptance. Never publish that orphan.
                     self.reconcile_orphans()?;
                     self.routing.remove(&group);
-                    self.forget_and_confirm(&group)?;
+                    if self.journal.command_room(group.as_slice())?.is_some() {
+                        self.command_forget_and_confirm(&group)?;
+                    } else {
+                        self.forget_and_confirm(&group)?;
+                    }
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -1922,17 +2236,12 @@ impl MdkOwner {
         {
             let group =
                 GroupId::new(hex::decode(c.group_id).map_err(|_| Error::Storage("group_id"))?);
-            if mdk(self.runtime.has_pending_convergence_inputs(&group))?
-                || mdk(self.runtime.has_queued_outbound_intents(&group))?
-            {
-                self.ensure_trusted(&group)?;
-                let effects =
-                    tokio::time::timeout_at(deadline, self.runtime.advance_convergence(&group))
-                        .await
-                        .map_err(|_| Error::Timeout)?
-                        .map_err(|_| Error::Transport("convergence"))?;
-                self.apply_effects(effects, deadline).await?;
-            }
+            self.advance_application_convergence(&group, deadline)
+                .await?;
+        }
+        for room in self.journal.command_rooms()? {
+            self.advance_application_convergence(&GroupId::new(room.group), deadline)
+                .await?;
         }
         Ok(())
     }
@@ -2077,6 +2386,8 @@ impl MdkOwner {
         if !self.active {
             return Err(Error::Mdk("inactive"));
         }
+        self.progress_commands()?;
+        self.reconcile_command_sources()?;
         self.maintain_journal()?;
         self.rebuild_routes()?;
         if !self.recover_transport(deadline).await? {
@@ -2110,6 +2421,9 @@ impl MdkOwner {
         self.receive_one(deadline).await?;
         self.drive_retained(deadline).await?;
         self.submit_unsubmitted(deadline).await?;
+        self.submit_command_publications(deadline).await?;
+        self.progress_commands()?;
+        self.maintain_journal()?;
         Ok(())
     }
     pub async fn shutdown(&mut self, deadline: Instant) -> Result<()> {

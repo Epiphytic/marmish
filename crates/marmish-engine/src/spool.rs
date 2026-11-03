@@ -11,6 +11,14 @@ const CHUNK: u64 = 16 * 1024;
 const PAGE: u64 = 4096;
 const MAX_CAP: u64 = 64 * 1024 * 1024;
 
+pub(crate) fn cursor_after_gap(status: &OutputStatus, cursor: u64) -> u64 {
+    status
+        .gaps
+        .iter()
+        .find(|gap| gap.start <= cursor && gap.end.is_none_or(|end| cursor < end))
+        .map_or(cursor, |gap| gap.end.unwrap_or(cursor))
+}
+
 pub(crate) struct Spool {
     root: StateRoot,
     job: JobId,
@@ -406,13 +414,7 @@ impl Spool {
             .checked_add(bytes.len() as u64)
             .ok_or(EngineError::InvalidRequest)?;
         if bytes.is_empty() {
-            if let Some(gap) = status
-                .gaps
-                .iter()
-                .find(|gap| gap.start <= cursor && gap.end.is_none_or(|end| cursor < end))
-            {
-                next_cursor = gap.end.unwrap_or(gap.start);
-            }
+            next_cursor = cursor_after_gap(&status, cursor);
         }
         Ok(OutputChunk {
             bytes,

@@ -3472,6 +3472,8 @@ dependencies = [
  "hex",
  "hkdf 0.12.4",
  "libc",
+ "marmish-core",
+ "marmish-engine",
  "marmish-vault",
  "marmot-session",
  "nostr",

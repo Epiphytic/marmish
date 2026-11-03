@@ -17,7 +17,9 @@ use admission::{context_owner, random_bytes, sha256};
 pub use cleanup::CleanupGuard;
 use launcher::{FrontendGuard, LaunchSpec, StateRoot, WorkerPresence};
 pub use model::*;
-pub use policy::{CommandPolicy, KeyRestrictions, Restrictions};
+pub use policy::{
+    inspect_canonical_exec, CanonicalExecOutcome, CommandPolicy, KeyRestrictions, Restrictions,
+};
 use std::collections::HashMap;
 use std::time::Duration;
 pub use storage::{NativeBinding, ProvidedMaster};
@@ -37,6 +39,14 @@ pub struct Engine {
     orphan_cursor: Option<JobId>,
 }
 
+/// No process identifiers escape this owner-bound observation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnedWorkerPresence {
+    Present,
+    Absent,
+    Unknown,
+}
+
 enum Readiness {
     Ready,
     Pending,
@@ -49,6 +59,13 @@ enum ReconcileFailure {
 impl From<EngineError> for ReconcileFailure {
     fn from(error: EngineError) -> Self {
         Self::Global(error)
+    }
+}
+
+impl EnginePolicy {
+    /// Pure engine limit validation, without opening storage or inspecting paths.
+    pub fn validate_limits(&self) -> Result<()> {
+        admission::validate_limits(&self.limits)
     }
 }
 
@@ -290,6 +307,42 @@ impl Engine {
         Ok((owner, job))
     }
 
+    /// Read-only acceptance evidence. Never reconciles or starts accepted work.
+    pub fn terminal_status(
+        &mut self,
+        ctx: &AuthorizedContext,
+        id: InvocationId,
+    ) -> Result<InvocationStatus> {
+        let owner = self.owner(ctx)?;
+        let job = self.store.job_for(&owner.owner, id)?;
+        if self.store.job_state(job)? != InvocationState::Exited {
+            return Err(EngineError::RecoveryUncertain);
+        }
+        self.store.status(&owner.owner, job)
+    }
+
+    /// Raw, owner-bound observation with no reconciliation or signalling.
+    pub fn owned_worker_presence(
+        &mut self,
+        ctx: &AuthorizedContext,
+        id: InvocationId,
+    ) -> Result<OwnedWorkerPresence> {
+        let mut observe = || -> Result<OwnedWorkerPresence> {
+            let owner = self.owner(ctx)?;
+            let job = self.store.job_for(&owner.owner, id)?;
+            self.store.job_state(job)?;
+            let recorded = self.store.worker_identity(job)?;
+            Ok(match self.root.presence(job, recorded.as_ref())? {
+                WorkerPresence::Live(actual) if recorded.as_ref() == Some(&actual) => {
+                    OwnedWorkerPresence::Present
+                }
+                WorkerPresence::Absent => OwnedWorkerPresence::Absent,
+                _ => OwnedWorkerPresence::Unknown,
+            })
+        };
+        Ok(observe().unwrap_or(OwnedWorkerPresence::Unknown))
+    }
+
     pub fn status(
         &mut self,
         ctx: &AuthorizedContext,
@@ -363,11 +416,7 @@ impl Engine {
             if !status.closed || status.retained != 0 {
                 return Err(EngineError::RecoveryUncertain);
             }
-            let next_cursor = status
-                .gaps
-                .iter()
-                .find(|g| g.start <= cursor && g.end.is_none_or(|end| cursor < end))
-                .map_or(cursor, |g| g.end.unwrap_or(g.start));
+            let next_cursor = spool::cursor_after_gap(&status, cursor);
             return Ok(OutputChunk {
                 bytes: Vec::new(),
                 next_cursor,
@@ -409,16 +458,16 @@ impl Engine {
                     Readiness::Initializing
                 }
                 Err(ReconcileFailure::Job(error) | ReconcileFailure::Global(error)) => {
-                    return Err(error)
+                    return Err(error);
                 }
             };
             match readiness {
                 Readiness::Ready => return Ok(()),
                 Readiness::Pending if deadline.expired()? => {
-                    return Err(EngineError::WorkerUnavailable)
+                    return Err(EngineError::WorkerUnavailable);
                 }
                 Readiness::Initializing if deadline.expired()? => {
-                    return Err(EngineError::RecoveryUncertain)
+                    return Err(EngineError::RecoveryUncertain);
                 }
                 _ => std::thread::sleep(Duration::from_millis(50)),
             }
@@ -613,4 +662,86 @@ fn deadline(now: BootTime, duration: Duration) -> Result<BootTime> {
 #[doc(hidden)]
 pub fn worker_main(args: Vec<std::ffi::OsString>) -> std::process::ExitCode {
     worker::worker_main(args)
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn raw_observation_never_launches_an_accepted_job() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let principal = PrincipalId([7; 32]);
+        let server = ServerId([8; 32]);
+        let policy = EnginePolicy {
+            state_root: directory.path().join("state"),
+            worker_executable: std::fs::canonicalize("/usr/bin/true").unwrap(),
+            server,
+            allowed_principals: vec![principal],
+            allow_shell_command: false,
+            command_policy: None,
+            cwd: Some(directory.path().to_path_buf()),
+            limits: EngineLimits::default(),
+        };
+        let mut engine = Engine::open(policy).unwrap();
+        let uid = unsafe { libc::geteuid() };
+        let ctx = engine
+            .authorize(principal, EndpointId([9; 32]), server, uid)
+            .unwrap();
+        let token = engine.issue_execute_token(&ctx).unwrap();
+        let hash = token_hash(&token);
+        let owner = engine.owner(&ctx).unwrap();
+        let id = InvocationId([1; 16]);
+        let job = JobId([2; 16]);
+        let now = launcher::boot_time().unwrap();
+        engine
+            .store
+            .admit(
+                &owner,
+                engine.epoch,
+                hash,
+                now,
+                id,
+                &CommandRequest::Exec {
+                    argv: vec![b"/usr/bin/true".to_vec()],
+                },
+                job,
+                [3; 32],
+            )
+            .unwrap();
+        assert!(matches!(
+            engine.terminal_status(&ctx, id),
+            Err(EngineError::RecoveryUncertain)
+        ));
+        assert_eq!(
+            engine.owned_worker_presence(&ctx, id).unwrap(),
+            OwnedWorkerPresence::Absent
+        );
+        assert_eq!(
+            engine.store.job_state(job).unwrap(),
+            InvocationState::Accepted
+        );
+        assert!(!engine.root.job_directory_exists(job).unwrap());
+        assert_eq!(
+            engine
+                .owned_worker_presence(&ctx, InvocationId([4; 16]))
+                .unwrap(),
+            OwnedWorkerPresence::Unknown
+        );
+        assert!(matches!(
+            engine.terminal_status(&ctx, InvocationId([4; 16])),
+            Err(EngineError::NotFound)
+        ));
+        engine.cancel(&ctx, id).unwrap();
+        let terminal = engine.terminal_status(&ctx, id).unwrap();
+        assert_eq!(terminal.state, InvocationState::Exited);
+        assert_eq!(terminal.outcome, Some(ExitOutcome::NotStarted));
+        assert_eq!(
+            engine.owned_worker_presence(&ctx, id).unwrap(),
+            OwnedWorkerPresence::Absent
+        );
+        assert!(!engine.root.job_directory_exists(job).unwrap());
+    }
 }

@@ -78,6 +78,9 @@ enum Command {
     },
     /// Fresh-key encrypted exchange, restart, and receipt validation. No commands.
     FoundationCheck,
+    /// Disposable-key live remote-command validation through explicit relays.
+    #[command(name = "command-check")]
+    ValidateExecution,
 }
 
 fn state_dir(explicit: Option<PathBuf>) -> Result<PathBuf> {
@@ -100,6 +103,14 @@ fn state_dir(explicit: Option<PathBuf>) -> Result<PathBuf> {
 
 async fn run(args: Args, daemon_binary: bool) -> Result<bool> {
     let mode: RouteMode = args.tor.parse()?;
+    if matches!(args.command, Command::ValidateExecution) {
+        let report = crate::mdk_adapter::command_check::run(args.relay, mode).await?;
+        println!(
+            "{}",
+            serde_json::to_string(&report).map_err(|_| Error::Invalid("report_encoding"))?
+        );
+        return Ok(report["ok"].as_bool() == Some(true));
+    }
     if matches!(args.command, Command::FoundationCheck) {
         let report = foundation_check::run(args.relay, mode).await?;
         println!(
@@ -120,11 +131,14 @@ async fn run(args: Args, daemon_binary: bool) -> Result<bool> {
             retention: std::time::Duration::from_secs(args.retention_seconds),
         };
         if matches!(args.command, Command::Init) {
-            let (_profile, owner) = daemon::open(config).await?;
+            let (profile, owner) = daemon::open(config).await?;
+            let snapshot = owner.status();
+            let stopped = daemon::stop(profile, owner).await;
+            let snapshot = snapshot?;
+            stopped?;
             println!(
                 "{}",
-                serde_json::to_string(&owner.status()?)
-                    .map_err(|_| Error::Invalid("status_encoding"))?
+                serde_json::to_string(&snapshot).map_err(|_| Error::Invalid("status_encoding"))?
             );
         } else {
             daemon::run(config).await?;

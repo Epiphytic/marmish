@@ -1,0 +1,48 @@
+{
+  "category": null,
+  "cleanup_detail": null,
+  "detail": null,
+  "engine_quiesced": true,
+  "engine_stop_complete": true,
+  "mdk_stop_complete": true,
+  "milliseconds": 13816,
+  "ok": true,
+  "replay_conflict": "not_tested",
+  "restart_while_running": "not_tested",
+  "runtime_cleanup": true,
+  "samples": [
+    {
+      "bytes": 53,
+      "bytes_per_second": 30,
+      "exit_code": 0,
+      "milliseconds": 1736,
+      "sha256": "7e54a1cfb0d3166179d574624d5ff8ecc6f9cc97d1d4a98852715a32c47e7e6a",
+      "stage": "literal_argv",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 16384,
+      "bytes_per_second": 7374,
+      "exit_code": 0,
+      "milliseconds": 2221,
+      "sha256": "a1f259d4365ed4320c377ce26f5c8c56dcdc9a89e7b641bfd8eabfbbeac86654",
+      "stage": "binary_stdin",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 0,
+      "bytes_per_second": null,
+      "exit_code": 7,
+      "milliseconds": 1676,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stage": "stderr_exit",
+      "stderr_bytes": 12,
+      "stderr_sha256": "7f0f4d6973dd569fd55431999b1e53be9a962ceddc7ac03616c27b7a9c6b1034"
+    }
+  ],
+  "schema": 1,
+  "state_cleanup": true,
+  "state_retained": false
+}

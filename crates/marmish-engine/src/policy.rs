@@ -197,24 +197,62 @@ pub(crate) fn check_command(
     Ok(true)
 }
 
-pub(crate) fn require_canonical_exec(request: &CommandRequest) -> Result<()> {
+/// Filesystem inspection; callers must keep it off network/convergence actors.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CanonicalExecOutcome {
+    Allowed,
+    Noncanonical { canonical: Vec<u8> },
+    Unresolvable,
+}
+
+pub fn inspect_canonical_exec(request: &CommandRequest) -> CanonicalExecOutcome {
     let CommandRequest::Exec { argv } = request else {
-        return Err(EngineError::CommandDenied);
+        return CanonicalExecOutcome::Unresolvable;
     };
-    let executable = argv.first().ok_or(EngineError::CommandDenied)?;
+    let Some(executable) = argv.first() else {
+        return CanonicalExecOutcome::Unresolvable;
+    };
     if executable.is_empty()
         || executable.len() > 4095
         || executable[0] != b'/'
         || executable.contains(&0)
     {
-        return Err(EngineError::CommandDenied);
+        return CanonicalExecOutcome::Unresolvable;
     }
-    let resolved = std::fs::canonicalize(Path::new(std::ffi::OsStr::from_bytes(executable)))
-        .map_err(|_| EngineError::CommandDenied)?;
-    if resolved.as_os_str().as_bytes() != executable {
-        return Err(EngineError::CommandDenied);
+    let Ok(resolved) = std::fs::canonicalize(Path::new(std::ffi::OsStr::from_bytes(executable)))
+    else {
+        return CanonicalExecOutcome::Unresolvable;
+    };
+    if resolved.as_os_str().as_bytes() == executable {
+        CanonicalExecOutcome::Allowed
+    } else {
+        CanonicalExecOutcome::Noncanonical {
+            canonical: resolved.as_os_str().as_bytes().to_vec(),
+        }
     }
-    Ok(())
+}
+
+pub(crate) fn require_canonical_exec(request: &CommandRequest) -> Result<()> {
+    match inspect_canonical_exec(request) {
+        CanonicalExecOutcome::Allowed => Ok(()),
+        _ => Err(EngineError::CommandDenied),
+    }
+}
+impl CommandPolicy {
+    /// Pure validation only; does not grant authority or inspect the filesystem.
+    pub fn validate_for_principals(&self, admitted: &[PrincipalId]) -> Result<()> {
+        self.validate(admitted)
+    }
+}
+impl EnginePolicy {
+    /// Pure restrictions matching only; caller must independently check grants and shells.
+    pub fn check_exec_restrictions(
+        &self,
+        principal: PrincipalId,
+        request: &CommandRequest,
+    ) -> Result<bool> {
+        check_command(self, principal, request)
+    }
 }
 
 #[cfg(test)]

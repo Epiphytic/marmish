@@ -7,7 +7,8 @@ The user's 2026-11-02 reset replaces the active architecture with the
 v0.1 development and its experimental.3 candidate are stopped. The sections
 below are historical v0.1 plans and evidence, retained for protocol comparison;
 their Python, daemon-RPC and mandatory confinement requirements do not apply
-to the rewrite. Python remains an optional legacy interoperability fixture.
+to the rewrite. Python remains an optional legacy protocol comparison fixture; v0.2 wire and
+on-disk compatibility may break.
 
 ## Installed three-platform live acceptance
 

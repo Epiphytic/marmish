@@ -22,7 +22,23 @@ canonical receipt checks have passing production-API regressions and fresh
 direct/onion live repeats. [The actual round-5 code review](reviews/v0.2-native-code-r5.md)
 approves the integrated offline scope and independently passes 91 native tests
 (90 repository tests plus its additional regression) and 11 vault/helper tests.
-Remote commands and release acceptance remain pending.
+The Phase 2 internal Rust command path has a successful
+[fresh-key direct Marmot command run](validation/v0.2/local-command-direct-2026-11-02.md):
+literal special/non-UTF8 argv, 16 KiB binary stdin, independent stderr and exit 7,
+with actual engine quiescence, joined stops and private-state cleanup. The native
+`command-check` fixture exercises the production command owner/service/worker;
+it is not the public remote-command CLI. Commands use dedicated authenticated
+Current-profile rooms, a SQLCipher command ledger, immutable invocation digests,
+bounded engine operations and explicit local output consumption. Payload expiry
+is separate from replay facts and native publication obligations. Ordinary
+disconnect and owner stop do not cancel admitted commands.
+
+Phase 2 remains open: public command CLI/IPC, restart while running, authenticated
+remote conflict/replay validation, command-count/uptime limits, command execution
+over Arti and installed cross-platform command acceptance are unfinished or
+unvalidated. [The local Arti command attempts](validation/v0.2/local-command-arti-2026-11-02.md)
+failed; their actual cleanup results are preserved. No v0.2 release or native installer is accepted. The direct command
+timings are individual observations, not sustained throughput or RTT benchmarks.
 The macOS v2 provider has passed a separate
 [owned disposable-keychain gate](validation/v0.2/macos-v2-provider.md), including
 both identity and storage secrets across restart and copied-executable

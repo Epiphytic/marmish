@@ -1,0 +1,17 @@
+{
+  "category": "transport",
+  "cleanup_detail": null,
+  "detail": "arti_configuration",
+  "engine_quiesced": true,
+  "engine_stop_complete": true,
+  "mdk_stop_complete": true,
+  "milliseconds": 6435,
+  "ok": false,
+  "replay_conflict": "not_tested",
+  "restart_while_running": "not_tested",
+  "runtime_cleanup": true,
+  "samples": [],
+  "schema": 1,
+  "state_cleanup": true,
+  "state_retained": false
+}

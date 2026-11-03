@@ -15,6 +15,10 @@ path = "src/bin/marmish.rs"
 name = "marmishd"
 path = "src/bin/marmishd.rs"
 
+[[bin]]
+name = "marmish-worker"
+path = "src/bin/marmish-worker.rs"
+
 [dependencies]
 base64.workspace = true
 getrandom.workspace = true
@@ -28,6 +32,8 @@ thiserror.workspace = true
 url.workspace = true
 zeroize.workspace = true
 marmish-vault = { path = "../marmish-vault" }
+marmish-engine = { path = "../marmish-engine" }
+marmish-core = { path = "../marmish-core" }
 tempfile.workspace = true
 fs2 = "0.4"
 hex = "0.4"
@@ -55,5 +61,6 @@ transport-nostr-adapter = { git = "https://github.com/marmot-protocol/mdk", rev 
 transport-nostr-peeler = { git = "https://github.com/marmot-protocol/mdk", rev = "8abc51befbf71a1ae3bdbb25eb0860c731e75db2" }
 
 [dev-dependencies]
+marmot-session = { git = "https://github.com/marmot-protocol/mdk", rev = "8abc51befbf71a1ae3bdbb25eb0860c731e75db2", features = ["test-support"] }
 tempfile.workspace = true
 tokio = { version = "1", features = ["test-util"] }

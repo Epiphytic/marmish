@@ -26,13 +26,35 @@ pub struct Config {
 }
 
 pub async fn open(config: Config) -> Result<(ProfileLease, MdkOwner)> {
-    let (mut profile, material, policy, peers, retention) =
+    let (mut profile, material, policy, peers, retention, commands) =
         tokio::task::spawn_blocking(move || {
             std::fs::DirBuilder::new()
                 .recursive(true)
                 .mode(0o700)
                 .create(&config.state_dir)?;
             let mut profile = ProfileLease::acquire(&config.state_dir, &config.identity)?;
+            let commands = match std::fs::symlink_metadata(profile.root().join("config.json")) {
+                Ok(_) => Some(crate::command_config::CommandConfig::load(profile.root())?),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            };
+            let mut peers = config.allowed_peers;
+            if let Some(commands) = &commands {
+                if commands.relay_policy().urls() != config.relay_policy.urls()
+                    || commands.relay_policy().mode() != config.relay_policy.mode()
+                {
+                    return Err(Error::Invalid("command_runtime_binding"));
+                }
+                peers.extend(
+                    commands
+                        .trusted_remotes()
+                        .iter()
+                        .chain(commands.execution_clients())
+                        .map(hex::encode),
+                );
+                peers.sort();
+                peers.dedup();
+            }
             let material = profile.prepare(
                 config.backend,
                 &config.helper,
@@ -42,8 +64,9 @@ pub async fn open(config: Config) -> Result<(ProfileLease, MdkOwner)> {
                 profile,
                 material,
                 config.relay_policy,
-                config.allowed_peers,
+                peers,
                 config.retention,
+                commands,
             ))
         })
         .await
@@ -58,6 +81,13 @@ pub async fn open(config: Config) -> Result<(ProfileLease, MdkOwner)> {
     let mut owner = MdkOwner::open(&profile, &material, connector, peers)?;
     owner.set_retention(retention)?;
     profile.mark_ready(owner.opened_binding())?;
+    if let Some(commands) = commands {
+        let worker = std::env::current_exe()?
+            .parent()
+            .ok_or(Error::Invalid("worker_installation"))?
+            .join("marmish-worker");
+        owner.enable_commands(&profile, &material, commands, worker)?;
+    }
     Ok((profile, owner))
 }
 
@@ -110,6 +140,33 @@ async fn dispatch(owner: &mut MdkOwner, request: Request) -> Result<Response> {
 
 pub async fn run(config: Config) -> Result<()> {
     let (profile, mut owner) = open(config).await?;
+    let result = serve_owner(&profile, &mut owner).await;
+    let stopped = stop(profile, owner).await;
+    result.and(stopped)
+}
+
+pub(crate) async fn stop(profile: ProfileLease, owner: MdkOwner) -> Result<()> {
+    use crate::command_lifecycle::{OwnedIdentity, stop_owned};
+    let observed = stop_owned(
+        OwnedIdentity { owner, profile },
+        Instant::now() + Duration::from_secs(30),
+    )
+    .await;
+    let report = match observed.pending {
+        Some(pending) => {
+            crate::diagnostics::event("daemon_shutdown", "engine_join_pending");
+            pending.finish().await
+        }
+        None => observed.report,
+    };
+    if !report.engine_stop_complete || !report.mdk_stop_complete || !report.runtime_cleanup_complete
+    {
+        return Err(Error::Identity("owned_stop_incomplete"));
+    }
+    Ok(())
+}
+
+async fn serve_owner(profile: &ProfileLease, owner: &mut MdkOwner) -> Result<()> {
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let socket = profile.socket_path();
     let listener = ipc::bind(&socket)?;
@@ -144,7 +201,7 @@ pub async fn run(config: Config) -> Result<()> {
                     let Some(pending) = pending else { break };
                     let response = tokio::select! {
                         _ = &mut shutdown_signal => break,
-                        response = dispatch(&mut owner, pending.request) => response.unwrap_or_else(failure),
+                        response = dispatch(owner, pending.request) => response.unwrap_or_else(failure),
                     };
                     let _ = pending.respond.send(response);
                 }
@@ -169,13 +226,5 @@ pub async fn run(config: Config) -> Result<()> {
     }.await;
     server.abort();
     let _ = server.await;
-    let shutdown = owner
-        .shutdown(Instant::now() + Duration::from_secs(30))
-        .await;
-    let cleanup = std::fs::remove_file(&socket);
-    result?;
-    shutdown?;
-    cleanup?;
-    drop(profile);
-    Ok(())
+    result
 }

@@ -63,6 +63,42 @@ fn cap_binary_roundtrip_and_expiry_are_explicit() {
 }
 
 #[test]
+fn reading_inside_an_open_ended_gap_never_rewinds_the_cursor() {
+    let (_temp, root, keys, job) = setup();
+    let guard = root.lock_io(job).unwrap();
+    let mut saved = OutputStatus {
+        retained: 0,
+        produced: 8,
+        closed: true,
+        gaps: vec![MissingRange {
+            start: 4,
+            end: None,
+            reason: MissingReason::StorageFailure,
+        }],
+    };
+    for cursor in [4, 6, 8] {
+        let chunk = Spool::read(
+            &root,
+            &keys,
+            job,
+            Stream::Stdout,
+            &saved,
+            cursor,
+            16,
+            &guard,
+        )
+        .unwrap();
+        assert!(chunk.bytes.is_empty());
+        assert_eq!(chunk.next_cursor, cursor);
+        assert_eq!(chunk.status.gaps, saved.gaps);
+    }
+    saved.gaps[0].end = Some(8);
+    let chunk = Spool::read(&root, &keys, job, Stream::Stdout, &saved, 6, 16, &guard).unwrap();
+    assert!(chunk.bytes.is_empty());
+    assert_eq!(chunk.next_cursor, 8);
+}
+
+#[test]
 fn tiny_appends_are_compact_and_bound_physical_storage() {
     let (_temp, root, keys, job) = setup();
     let guard = root.lock_io(job).unwrap();

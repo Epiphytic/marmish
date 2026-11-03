@@ -11,14 +11,19 @@ targeting Tor endpoint support and no mandatory namespace/broker layer. See the
 [v0.2 plan](docs/v0.2-plan.md). The new binaries are not released yet.
 Native encrypted-message/restart validation and measured round-trip latency are
 recorded in [the foundation evidence](docs/validation/v0.2/native-foundation.md).
-The current foundation has independent code approval and passing Linux AMD64
-direct and Arti checks. Remote commands and the hosted platform matrix remain
+The foundation passed [hosted direct and Arti checks on all three targets](docs/validation/v0.2/hosted-41577006224.md).
+The internal Rust command path also passed a [fresh-key direct Marmot run](docs/validation/v0.2/local-command-direct-2026-11-02.md),
+including literal arguments, binary stdin, stderr, exit codes and owned cleanup,
+with measured command completion and goodput. [Arti command attempts](docs/validation/v0.2/local-command-arti-2026-11-02.md)
+have not passed. Public command CLI/IPC, running-job
+restart/replay checks and installed cross-platform command acceptance remain
 pending; this is not yet a usable v0.2 remote shell release.
 
 The Python implementation and the v0.1 instructions below are retained as a
-legacy protocol reference and interoperability fixture. v0.1 development is
+legacy protocol reference and optional comparison fixture. v0.1 development is
 stopped; its results do not establish v0.2 support. v0.2 uses fresh on-disk formats;
-no migration from experimental v0.1 state is planned.
+no migration from experimental v0.1 state is planned. Wire compatibility with
+v0.1 may also break; Rust↔Python interoperability is not a release gate.
 
 ## Legacy v0.1 experimental binary installation
 
@@ -52,6 +57,8 @@ which does not establish percentiles or one-way network latency. Full definition
 are included in the workflow's JSON and Markdown results.
 
 ### Copy-and-paste quickstart
+
+**Legacy v0.1 only. This script does not install Rust v0.2; its native quickstart is not available yet.**
 
 Run these commands on both machines as your normal Unix user with Python 3.11+
 and curl. Have the platform prerequisites described below in place; the installer

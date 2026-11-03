@@ -1,5 +1,5 @@
-//! Isolated configuration shapes, not executable-policy validation or activation.
-//! The module is declared only under cfg(test) until the Phase 1 gate passes.
+//! Private configuration normalization and pure executable-policy preflight.
+//! Loading alone does not activate an engine or authorize command execution.
 use crate::command_wire::Account;
 use crate::transport::{RelayPolicy, RouteMode, TransportLimits};
 use crate::{Error, Result};
@@ -132,6 +132,126 @@ impl CommandConfig {
             policy: raw.command_policy,
         })
     }
+    fn command_policy(&self) -> Result<marmish_engine::CommandPolicy> {
+        use marmish_engine::{CommandPolicy, KeyRestrictions, PrincipalId, Restrictions};
+        let restrictions = |raw: &RawRestrictions| Restrictions {
+            allow_exec: raw.allow_exec.clone(),
+            deny_exec: raw.deny_exec.clone(),
+        };
+        let mut defaults = restrictions(&self.policy.defaults);
+        if defaults.allow_exec.is_none() {
+            defaults.allow_exec = Some(vec!["/**".into()]);
+        }
+        Ok(CommandPolicy {
+            version: self.policy.version,
+            defaults,
+            keys: self
+                .policy
+                .keys
+                .iter()
+                .map(|entry| {
+                    Ok(KeyRestrictions {
+                        principal: PrincipalId(account(&entry.principal)?),
+                        restrictions: restrictions(&entry.restrictions),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+        })
+    }
+    pub(crate) fn engine_policy(
+        &self,
+        root: PathBuf,
+        worker: PathBuf,
+        server: Account,
+        historical: &[Account],
+    ) -> Result<Option<marmish_engine::EnginePolicy>> {
+        use marmish_engine::{EngineLimits, EnginePolicy, PrincipalId, ServerId};
+        if historical.len() > 4096 {
+            return Err(Error::Invalid("config_principals"));
+        }
+        let principals: BTreeSet<_> = self
+            .execution_clients
+            .iter()
+            .chain(historical)
+            .copied()
+            .collect();
+        if principals.len() > 4096 {
+            return Err(Error::Invalid("config_principals"));
+        }
+        if principals.is_empty() {
+            return Ok(None);
+        }
+        let allowed_principals: Vec<_> = principals.into_iter().map(PrincipalId).collect();
+        let commands = self.command_policy()?;
+        commands
+            .validate_for_principals(&allowed_principals)
+            .map_err(|_| Error::Invalid("config_policy"))?;
+        let limits = &self.limits;
+        let policy = EnginePolicy {
+            state_root: root,
+            worker_executable: worker,
+            server: ServerId(server),
+            allowed_principals,
+            allow_shell_command: false,
+            command_policy: Some(commands),
+            cwd: Some(self.cwd.clone()),
+            limits: EngineLimits {
+                active_jobs: limits.active_global,
+                invocation_records: limits.retained_global,
+                outstanding_tokens: limits.engine_tokens,
+                starting_workers: limits.engine_starting,
+                token_lifetime: limits.token_lifetime,
+                spool_bytes_per_stream: limits.stream_bytes,
+                aggregate_spool_bytes: limits.spool_bytes,
+                output_retention: marmish_core::Retention::from_seconds(Some(
+                    limits.payload_retention.as_secs(),
+                ))
+                .map_err(|_| Error::Invalid("config_limits"))?,
+                tombstone_retention: limits.tombstone_retention,
+                ..EngineLimits::default()
+            },
+        };
+        policy
+            .validate_limits()
+            .map_err(|_| Error::Invalid("config_limits"))?;
+        Ok(Some(policy))
+    }
+    /// Matching only: service independently enforces the current grant and Exec-only request.
+    pub(crate) fn check_exec_restrictions(
+        &self,
+        principal: Account,
+        argv: &[Vec<u8>],
+    ) -> Result<()> {
+        use marmish_engine::{CommandRequest, EngineLimits, EnginePolicy, PrincipalId, ServerId};
+        let commands = self.command_policy()?;
+        let admitted: Vec<_> = self
+            .execution_clients
+            .iter()
+            .copied()
+            .map(PrincipalId)
+            .collect();
+        // Startup validates the complete policy against current plus historical owners.
+        // Matching does not re-authorize those owners or reject historical key layers.
+        let policy = EnginePolicy {
+            state_root: PathBuf::new(),
+            worker_executable: PathBuf::new(),
+            server: ServerId([0; 32]),
+            allowed_principals: admitted,
+            allow_shell_command: false,
+            command_policy: Some(commands),
+            cwd: None,
+            limits: EngineLimits::default(),
+        };
+        policy
+            .check_exec_restrictions(
+                PrincipalId(principal),
+                &CommandRequest::Exec {
+                    argv: argv.to_vec(),
+                },
+            )
+            .map(|_| ())
+            .map_err(|_| Error::Invalid("command_denied"))
+    }
     pub(crate) fn role(&self) -> Role {
         self.role
     }
@@ -259,7 +379,7 @@ impl RawPolicy {
         Ok(())
     }
 }
-fn account(value: &str) -> Result<Account> {
+pub(crate) fn account(value: &str) -> Result<Account> {
     // Account is a 32-byte identifier, not proof of curve validity/authentication.
     let key = if value.starts_with("npub1") {
         PublicKey::from_bech32(value)
@@ -699,5 +819,103 @@ mod tests {
         bytes.extend_from_slice(b"{}");
         fixture.write(&bytes);
         assert!(CommandConfig::load(fixture.0.path()).is_err());
+    }
+    #[test]
+    fn engine_conversion_is_role_independent_and_maps_reviewed_limits() {
+        let fixture = Fixture::new();
+        let mut value = document();
+        value["role"] = json!("client");
+        value["execution_clients"] = json!([]);
+        let config = fixture.load(&value).unwrap();
+        assert!(
+            config
+                .engine_policy("/state".into(), "/worker".into(), [9; 32], &[])
+                .unwrap()
+                .is_none()
+        );
+        let policy = config
+            .engine_policy("/state".into(), "/worker".into(), [9; 32], &[[4; 32]])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            policy.allowed_principals,
+            vec![marmish_engine::PrincipalId([4; 32])]
+        );
+        assert!(!policy.allow_shell_command);
+        assert_eq!(policy.limits.token_lifetime, Duration::from_secs(120));
+        assert_eq!(policy.limits.cancel_grace, Duration::from_secs(5));
+        assert_eq!(policy.limits.drain_grace, Duration::from_secs(2));
+        assert_eq!(
+            policy.command_policy.unwrap().defaults.allow_exec,
+            Some(vec!["/**".into()])
+        );
+        assert!(
+            config
+                .engine_policy(
+                    "/state".into(),
+                    "/worker".into(),
+                    [9; 32],
+                    &vec![[4; 32]; 4097]
+                )
+                .is_err()
+        );
+        value["limits"] = json!({"spool_bytes":1});
+        let config = fixture.load(&value).unwrap();
+        assert!(
+            config
+                .engine_policy("/state".into(), "/worker".into(), [9; 32], &[[4; 32]])
+                .is_err()
+        );
+    }
+    #[test]
+    fn policy_conversion_preserves_empty_additive_and_historical_layers() {
+        let fixture = Fixture::new();
+        let mut value = document();
+        value["execution_clients"] = json!(["00".repeat(32)]);
+        value["command_policy"] = json!({"version":1,"keys":[{
+            "principal":"00".repeat(32),"restrictions":{"deny_exec":["/blocked/**"]}
+        }]});
+        let config = fixture.load(&value).unwrap();
+        assert!(
+            config
+                .check_exec_restrictions([0; 32], &[b"/not-present/allowed".to_vec()])
+                .is_ok()
+        );
+        assert!(
+            config
+                .check_exec_restrictions([0; 32], &[b"/blocked/file".to_vec()])
+                .is_err()
+        );
+        value["command_policy"]["keys"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "principal":"11".repeat(32),"restrictions":{"deny_exec":["/historical/**"]}
+            }));
+        let config = fixture.load(&value).unwrap();
+        assert!(
+            config
+                .engine_policy("/state".into(), "/worker".into(), [9; 32], &[[0x11; 32]])
+                .is_ok()
+        );
+        assert!(
+            config
+                .check_exec_restrictions([0; 32], &[b"/not-present/allowed".to_vec()])
+                .is_ok()
+        );
+        value["command_policy"]["defaults"]["allow_exec"] = json!([]);
+        let config = fixture.load(&value).unwrap();
+        assert!(
+            config
+                .check_exec_restrictions([0; 32], &[b"/not-present/allowed".to_vec()])
+                .is_err()
+        );
+        value["command_policy"]["defaults"]["allow_exec"] = json!(["relative"]);
+        let config = fixture.load(&value).unwrap();
+        assert!(
+            config
+                .engine_policy("/state".into(), "/worker".into(), [9; 32], &[[0x11; 32]])
+                .is_err()
+        );
     }
 }

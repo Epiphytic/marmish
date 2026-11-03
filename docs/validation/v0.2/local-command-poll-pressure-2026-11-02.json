@@ -1,0 +1,28 @@
+{
+  "category": "validation",
+  "cleanup_detail": null,
+  "detail": "command_poll_busy",
+  "engine_quiesced": true,
+  "engine_stop_complete": true,
+  "mdk_stop_complete": true,
+  "milliseconds": 11151,
+  "ok": false,
+  "replay_conflict": "not_tested",
+  "restart_while_running": "not_tested",
+  "runtime_cleanup": true,
+  "samples": [
+    {
+      "bytes": 53,
+      "bytes_per_second": 31,
+      "exit_code": 0,
+      "milliseconds": 1668,
+      "sha256": "7e54a1cfb0d3166179d574624d5ff8ecc6f9cc97d1d4a98852715a32c47e7e6a",
+      "stage": "literal_argv",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "schema": 1,
+  "state_cleanup": true,
+  "state_retained": false
+}

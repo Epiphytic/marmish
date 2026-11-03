@@ -1,8 +1,12 @@
 //! Native v0.2 Marmish. Legacy Python tooling is a separate test fixture.
 pub mod cli;
-#[cfg(test)]
 mod command_config;
-#[cfg(test)]
+mod command_engine;
+mod command_evidence;
+mod command_identity;
+mod command_lifecycle;
+mod command_service;
+mod command_target;
 mod command_wire;
 pub mod daemon;
 pub mod diagnostics;

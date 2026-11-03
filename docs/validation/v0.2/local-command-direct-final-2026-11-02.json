@@ -1,0 +1,58 @@
+{
+  "category": null,
+  "cleanup_detail": null,
+  "detail": null,
+  "engine_quiesced": true,
+  "engine_stop_complete": true,
+  "mdk_stop_complete": true,
+  "milliseconds": 13103,
+  "ok": true,
+  "replay_conflict": "not_tested",
+  "restart_while_running": "not_tested",
+  "runtime_cleanup": true,
+  "samples": [
+    {
+      "bytes": 53,
+      "bytes_per_second": 33,
+      "exit_code": 0,
+      "milliseconds": 1571,
+      "sha256": "7e54a1cfb0d3166179d574624d5ff8ecc6f9cc97d1d4a98852715a32c47e7e6a",
+      "stage": "literal_argv",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 16384,
+      "bytes_per_second": 5509,
+      "exit_code": 0,
+      "milliseconds": 2973,
+      "sha256": "a1f259d4365ed4320c377ce26f5c8c56dcdc9a89e7b641bfd8eabfbbeac86654",
+      "stage": "binary_stdin",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 0,
+      "bytes_per_second": null,
+      "exit_code": 7,
+      "milliseconds": 1623,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stage": "stderr_exit",
+      "stderr_bytes": 12,
+      "stderr_sha256": "7f0f4d6973dd569fd55431999b1e53be9a962ceddc7ac03616c27b7a9c6b1034"
+    }
+  ],
+  "schema": 1,
+  "source_base": "5a37bdc886aaa1d3e48f776ca9a25749882e1ebb",
+  "source_sha256": {
+    "command_adapter.rs": "93003b169802567bdec33a4b3936de5090e5a80151535b7a3a25c57ac6690fd4",
+    "command_check.rs": "1567b187bbc6e3f83934595e523012063ea9acf5ae7b7602f76d447ce2b4a68a",
+    "command_engine.rs": "e3ea72d4b67a817d77c5e7483312c7a5a404dc00d866effac55788f507ebd066",
+    "command_runtime.rs": "ad742051199e03958262f964ffc376ebcf1a8b7ceee2549dc8c14cdaa661d75d",
+    "command_service.rs": "a3e823cf2d2bf9dfa71b6a2ca680552645102c02b5874b57e0f1154b616002a7",
+    "command_store.rs": "0699c431f0f6e45943e1d56f49c47b3e26af0cf1c6d578bd134b53101dc31833",
+    "mdk_adapter_tests.rs": "c4d09166e056e7babebb6782f55fdb88d105c7d03347887c927e725b31e628a8"
+  },
+  "state_cleanup": true,
+  "state_retained": false
+}

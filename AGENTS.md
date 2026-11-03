@@ -9,9 +9,10 @@ v0.2 uses upstream mainline MDK, embedded Arti and native Rust application,
 daemon, CLI and setup tooling. Do not add a Python/uv runtime, private MDK fork,
 `wnd` subprocess, WASM/browser layer or mandatory namespace/broker dependency.
 Keep the Python implementation available as an isolated optional protocol
-compatibility fixture; it must not become a v0.2 runtime dependency. Preserve
-existing wire semantics unless a reviewed protocol change explicitly says
-otherwise. Source compatibility, wire compatibility and storage migration are
+reference fixture; it must not become a v0.2 runtime dependency. The user permits
+breaking both legacy wire and on-disk formats. Use the reviewed native protocol
+and test Rust interoperability; legacy Python compatibility is not a release
+gate. Source compatibility, wire compatibility and storage migration are
 separate claims and require separate evidence. The user permits breaking
 on-disk compatibility because there is no installed base. Use fresh v0.2 formats;
 do not add legacy storage migration work to preserve experimental state.

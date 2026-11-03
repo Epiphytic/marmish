@@ -132,7 +132,14 @@ impl Fixture {
             .runtime
             .prepare_create_group_with_audit_context(
                 CreateGroupRequest {
-                    name: format!("{PREFIX}{session}"),
+                    name: format!(
+                        "{}{session}",
+                        if description == RoomPurpose::Command.description() {
+                            RoomPurpose::Command.prefix()
+                        } else {
+                            PREFIX
+                        }
+                    ),
                     description: description.into(),
                     members,
                     required_features: vec![],
@@ -210,6 +217,16 @@ impl Fixture {
             vec![vec!["marmish".into(), "v2-foundation".into()]],
             String::from_utf8(envelope.encode().unwrap()).unwrap(),
         );
+        self.encrypted_app(group, app).await
+    }
+
+    async fn encrypted_app(
+        &mut self,
+        group: &GroupId,
+        app: cgka_traits::app_event::MarmotAppEvent,
+    ) -> GroupEvent {
+        let alice = &mut self.owners[0];
+        alice.publication.pause();
         tokio::time::timeout(
             Duration::from_secs(5),
             alice.runtime.send(SendIntent::AppMessage {
@@ -312,6 +329,15 @@ impl Fixture {
         assert!(bob.runtime.group_record(group).is_err());
     }
     async fn mutate(&mut self, intent: SendIntent) {
+        let expected_description = match &intent {
+            SendIntent::UpdateGroupData { description, .. } => description.clone(),
+            _ => None,
+        };
+        let group = match &intent {
+            SendIntent::UpdateGroupData { group_id, .. }
+            | SendIntent::UpdateAppComponents { group_id, .. } => group_id.clone(),
+            _ => panic!("fixture mutation requires an explicit group update"),
+        };
         let prepared = tokio::time::timeout(
             Duration::from_secs(10),
             self.owners[0]
@@ -326,11 +352,11 @@ impl Fixture {
         };
         let (effects, welcomes) = commit.into_effects_and_welcomes();
         assert!(welcomes.is_empty());
-        let message = effects
+        let (message, pending) = effects
             .publish
             .into_iter()
             .find_map(|work| match work {
-                PublishWork::GroupEvolution { msg, .. } => Some(msg),
+                PublishWork::GroupEvolution { msg, pending, .. } => Some((msg, pending)),
                 _ => None,
             })
             .unwrap();
@@ -359,17 +385,16 @@ impl Fixture {
             ingested.outcome,
             IngestOutcome::Processed | IngestOutcome::Buffered { .. }
         ));
-        let group = match &delivery.message.envelope {
-            TransportEnvelope::GroupMessage { .. } => {
-                bob.conversations().unwrap()[0].group_id.clone()
-            }
-            _ => unreachable!(),
-        };
-        let group = GroupId::new(hex::decode(group).unwrap());
         tokio::time::timeout(Duration::from_secs(5), async {
             for _ in 0..100 {
                 bob.runtime.advance_convergence(&group).await.unwrap();
-                if bob.check_group(&group, None).is_err() {
+                let changed = match &expected_description {
+                    Some(expected) => {
+                        bob.runtime.group_record(&group).unwrap().description == *expected
+                    }
+                    None => bob.check_group(&group, None).is_err(),
+                };
+                if changed {
                     return;
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
@@ -378,6 +403,14 @@ impl Fixture {
         })
         .await
         .unwrap();
+        // The fixture delivered the commit directly to its recipient. Confirm
+        // that staged sender commit before a subsequent metadata mutation.
+        self.owners[0]
+            .runtime
+            .session_mut()
+            .confirm_published(pending)
+            .await
+            .unwrap();
     }
 }
 impl Drop for Fixture {
@@ -1240,4 +1273,549 @@ async fn failed_open_attempt_immediately_reconciles_existing_native_creation_orp
     );
     assert!(alice.journal.group_rejected(group.as_slice()).unwrap());
     assert!(alice.journal.pending_group_cleanup().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn command_rooms_bind_native_purpose_and_permanent_direction() {
+    let mut f = Fixture::new(2);
+    let (group, _join) = f
+        .join(&[1], RoomPurpose::Command.description(), false)
+        .await;
+    let creator = f.owners[0].identity.clone();
+    assert!(f.owners[0].check_group(&group, None).is_err());
+    let client_room = f.owners[0].accept_command_group(&group, &creator).unwrap();
+    let server_room = f.owners[1].accept_command_group(&group, &creator).unwrap();
+    assert!(client_room.direction == CommandDirection::Client);
+    assert!(server_room.direction == CommandDirection::Server);
+    assert_eq!(client_room.session, server_room.session);
+    assert_eq!(client_room.transport, server_room.transport);
+    let client = f.owners[0].command_context(&group).unwrap();
+    let server = f.owners[1].command_context(&group).unwrap();
+    assert_eq!(client.peer_account(), server.local_account());
+    assert_eq!(client.session(), server.session());
+    assert_eq!(client.authority_digest(), server.authority_digest());
+    assert!(
+        f.owners[0]
+            .journal
+            .conversation_by_group(group.as_slice())
+            .unwrap()
+            .is_none()
+    );
+    f.owners[1]
+        .journal
+        .command_revoke_room(group.as_slice())
+        .unwrap();
+    assert!(matches!(
+        f.owners[1].command_context(&group),
+        Err(Error::Mdk("command_room_revoked"))
+    ));
+    assert!(f.owners[1].accept_command_group(&group, &creator).is_err());
+}
+
+#[tokio::test]
+async fn foundation_rooms_cannot_mint_command_authority() {
+    let mut f = Fixture::new(2);
+    let (group, _join) = f.join(&[1], PURPOSE, false).await;
+    let creator = f.owners[0].identity.clone();
+    assert!(f.owners[0].accept_command_group(&group, &creator).is_err());
+    assert!(f.owners[1].accept_command_group(&group, &creator).is_err());
+    assert!(f.owners[0].journal.command_rooms().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn encrypted_command_bytes_require_the_native_session_binding() {
+    use crate::command_wire as wire;
+    let mut f = Fixture::new(2);
+    let (group, _) = f
+        .join(&[1], RoomPurpose::Command.description(), false)
+        .await;
+    let creator = f.owners[0].identity.clone();
+    let room = f.owners[0].accept_command_group(&group, &creator).unwrap();
+    f.owners[1].accept_command_group(&group, &creator).unwrap();
+    let client = f.materials[0].public_key().to_bytes();
+    let server = f.materials[1].public_key().to_bytes();
+    let id = hex::decode(foundation::fresh_id(now().unwrap()).unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let mut request = wire::Request {
+        binding: wire::Binding {
+            session: room.session,
+            client,
+            server,
+        },
+        id,
+        op: wire::RequestOp::Submit(wire::Submit {
+            invocation: id,
+            argv: vec![b"/bin/printf".to_vec(), b"'\"$`\\;\n\xff".to_vec()],
+            stdin: vec![0, 0xff, b'\n'],
+        }),
+    };
+    let bytes = wire::encode_request(&request).unwrap();
+    let app = cgka_traits::app_event::MarmotAppEvent::new(
+        creator.clone(),
+        now().unwrap(),
+        wire::KIND,
+        vec![wire::TAG.map(str::to_owned).to_vec()],
+        String::from_utf8(bytes.clone()).unwrap(),
+    );
+    let event = f.encrypted_app(&group, app).await;
+    let (context, source, envelope) = f.owners[1].decode_command_event(&event).unwrap();
+    assert_eq!(context.peer_account(), client);
+    assert_eq!(source.group, group.as_slice());
+    let command_adapter::CommandEnvelope::Request(decoded) = envelope else {
+        panic!("request expected")
+    };
+    assert_eq!(wire::encode_request(&decoded).unwrap(), bytes);
+
+    request.binding.session[15] ^= 1;
+    let app = cgka_traits::app_event::MarmotAppEvent::new(
+        creator,
+        now().unwrap(),
+        wire::KIND,
+        vec![wire::TAG.map(str::to_owned).to_vec()],
+        String::from_utf8(wire::encode_request(&request).unwrap()).unwrap(),
+    );
+    let event = f.encrypted_app(&group, app).await;
+    assert!(matches!(
+        f.owners[1].decode_command_event(&event),
+        Err(Error::Invalid("command_wire_binding"))
+    ));
+    assert!(f.owners[1].journal.conversations().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn command_authority_rejects_extra_accounts_leaves_and_admins() {
+    for (accounts, duplicate_account, coadmin) in
+        [(3, false, false), (3, true, false), (2, false, true)]
+    {
+        let mut fixture = Fixture::accounts(accounts, duplicate_account);
+        let invitees = if accounts == 3 { vec![1, 2] } else { vec![1] };
+        let (group, _) = fixture
+            .join(&invitees, RoomPurpose::Command.description(), coadmin)
+            .await;
+        let creator = fixture.owners[0].identity.clone();
+        for owner in &mut fixture.owners[..2] {
+            assert!(owner.accept_command_group(&group, &creator).is_err());
+            assert!(owner.command_context(&group).is_err());
+            assert!(owner.journal.command_rooms().unwrap().is_empty());
+            assert!(
+                owner
+                    .journal
+                    .command_historical_principals()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn command_purpose_mutation_permanently_revokes_native_authority() {
+    let mut fixture = Fixture::new(2);
+    let (group, _) = fixture
+        .join(&[1], RoomPurpose::Command.description(), false)
+        .await;
+    let creator = fixture.owners[0].identity.clone();
+    fixture.owners[1]
+        .accept_command_group(&group, &creator)
+        .unwrap();
+    assert!(fixture.owners[1].command_context(&group).is_ok());
+    fixture
+        .mutate(SendIntent::UpdateGroupData {
+            group_id: group.clone(),
+            name: None,
+            description: Some("ordinary chat".into()),
+        })
+        .await;
+    assert!(matches!(
+        fixture.owners[1].command_context(&group),
+        Err(Error::Mdk("command_room_revoked"))
+    ));
+    assert!(
+        fixture.owners[1]
+            .journal
+            .command_room(group.as_slice())
+            .unwrap()
+            .unwrap()
+            .revoked
+    );
+    assert!(fixture.owners[1].routing.group_subscriptions().is_empty());
+    fixture
+        .mutate(SendIntent::UpdateGroupData {
+            group_id: group.clone(),
+            name: None,
+            description: Some(RoomPurpose::Command.description().into()),
+        })
+        .await;
+    assert!(matches!(
+        fixture.owners[1].command_context(&group),
+        Err(Error::Mdk("command_room_revoked"))
+    ));
+    assert!(
+        fixture.owners[1]
+            .accept_command_group(&group, &creator)
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn command_source_replay_states_defer_without_revocation_or_ack() {
+    use crate::command_wire as wire;
+    use crate::journal::{AdmissionDecision, CommandProjection, Owner};
+    let mut fixture = Fixture::new(2);
+    let (group, _) = fixture
+        .join(&[1], RoomPurpose::Command.description(), false)
+        .await;
+    let creator = fixture.owners[0].identity.clone();
+    let room = fixture.owners[0]
+        .accept_command_group(&group, &creator)
+        .unwrap();
+    fixture.owners[1]
+        .accept_command_group(&group, &creator)
+        .unwrap();
+    let id = hex::decode(foundation::fresh_id(now().unwrap()).unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let request = wire::Request {
+        binding: wire::Binding {
+            session: room.session,
+            client: fixture.materials[0].public_key().to_bytes(),
+            server: fixture.materials[1].public_key().to_bytes(),
+        },
+        id,
+        op: wire::RequestOp::Submit(wire::Submit {
+            invocation: id,
+            argv: vec![b"/bin/true".to_vec()],
+            stdin: vec![],
+        }),
+    };
+    let bytes = wire::encode_request(&request).unwrap();
+    let event = fixture
+        .encrypted_app(
+            &group,
+            cgka_traits::app_event::MarmotAppEvent::new(
+                creator,
+                now().unwrap(),
+                wire::KIND,
+                vec![wire::TAG.map(str::to_owned).to_vec()],
+                String::from_utf8(bytes.clone()).unwrap(),
+            ),
+        )
+        .await;
+    let bob = &mut fixture.owners[1];
+    let (context, source, _) = bob.decode_command_event(&event).unwrap();
+    let refusal = wire::WireError {
+        code: wire::ErrorCode::CommandDenied,
+        detail: None,
+    };
+    let response = wire::Response {
+        binding: request.binding.clone(),
+        id,
+        op: wire::Op::Submit,
+        request_sha256: wire::request_digest(&bytes),
+        result: Err(refusal.clone()),
+    };
+    let publication = prepare_command_publication(
+        group.as_slice(),
+        request.binding.clone(),
+        id,
+        response.request_sha256,
+        wire::encode_response(&response).unwrap(),
+        request.binding.server,
+    )
+    .unwrap();
+    let plan = CommandProjection {
+        owner: Owner::from_context(&context),
+        source: source.clone(),
+        request,
+        decision: AdmissionDecision::Refused(refusal),
+        response: Some(publication),
+    };
+    let key = bob
+        .journal
+        .command_project_request(&plan, now().unwrap())
+        .unwrap()
+        .key;
+    let native_id = MessageId::new(source.native_id.clone());
+    let original = bob.storage.get_message(&native_id).unwrap();
+    for state in [
+        cgka_traits::MessageState::Created,
+        cgka_traits::MessageState::Retryable,
+        cgka_traits::MessageState::ConvergenceDeferred,
+        cgka_traits::MessageState::PeelDeferred,
+    ] {
+        bob.storage.update_message_state(&native_id, state).unwrap();
+        bob.reconcile_command_sources().unwrap();
+        assert!(
+            bob.journal
+                .command_get(&key)
+                .unwrap()
+                .unwrap()
+                .authority_valid
+        );
+        let bindings = bob.journal.command_native_bindings(None, 64).unwrap();
+        assert_eq!(bindings.rows.len(), 1);
+        assert!(!bindings.rows[0].acked);
+    }
+    bob.storage.delete_message(&native_id).unwrap();
+    bob.reconcile_command_sources().unwrap();
+    assert!(
+        bob.journal
+            .command_get(&key)
+            .unwrap()
+            .unwrap()
+            .authority_valid
+    );
+    assert!(!bob.journal.command_native_bindings(None, 64).unwrap().rows[0].acked);
+    bob.storage.put_message(&original).unwrap();
+    bob.storage
+        .update_message_state(&native_id, cgka_traits::MessageState::EpochInvalidated)
+        .unwrap();
+    bob.reconcile_command_sources().unwrap();
+    assert!(
+        !bob.journal
+            .command_get(&key)
+            .unwrap()
+            .unwrap()
+            .authority_valid
+    );
+}
+
+// Build owned response obligations from real authenticated command events. The
+// effects below are controlled offline inputs, not evidence of relay delivery.
+async fn owned_command_refusal(
+    fixture: &mut Fixture,
+    group: &GroupId,
+) -> crate::journal::PreparedCommandPublication {
+    use crate::command_wire as wire;
+    use crate::journal::{AdmissionDecision, CommandProjection, Owner};
+    let context = fixture.owners[1].command_context(group).unwrap();
+    let id = hex::decode(foundation::fresh_id(now().unwrap()).unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let request = wire::Request {
+        binding: wire::Binding {
+            session: context.session(),
+            client: fixture.materials[0].public_key().to_bytes(),
+            server: fixture.materials[1].public_key().to_bytes(),
+        },
+        id,
+        op: wire::RequestOp::Submit(wire::Submit {
+            invocation: id,
+            argv: vec![b"/bin/true".to_vec()],
+            stdin: vec![],
+        }),
+    };
+    let bytes = wire::encode_request(&request).unwrap();
+    let event = fixture
+        .encrypted_app(
+            group,
+            cgka_traits::app_event::MarmotAppEvent::new(
+                fixture.owners[0].identity.clone(),
+                now().unwrap(),
+                wire::KIND,
+                vec![wire::TAG.map(str::to_owned).to_vec()],
+                String::from_utf8(bytes.clone()).unwrap(),
+            ),
+        )
+        .await;
+    let bob = &mut fixture.owners[1];
+    let (context, source, _) = bob.decode_command_event(&event).unwrap();
+    let refusal = wire::WireError {
+        code: wire::ErrorCode::CommandDenied,
+        detail: None,
+    };
+    let response = wire::Response {
+        binding: request.binding.clone(),
+        id,
+        op: wire::Op::Submit,
+        request_sha256: wire::request_digest(&bytes),
+        result: Err(refusal.clone()),
+    };
+    let publication = prepare_command_publication(
+        group.as_slice(),
+        request.binding.clone(),
+        id,
+        response.request_sha256,
+        wire::encode_response(&response).unwrap(),
+        request.binding.server,
+    )
+    .unwrap();
+    bob.journal
+        .command_project_request(
+            &CommandProjection {
+                owner: Owner::from_context(&context),
+                source,
+                request,
+                decision: AdmissionDecision::Refused(refusal),
+                response: Some(publication.clone()),
+            },
+            now().unwrap(),
+        )
+        .unwrap();
+    assert!(
+        bob.journal
+            .command_claim_publication(&publication.key)
+            .unwrap()
+            .is_some()
+    );
+    publication
+}
+
+fn command_published_effect(
+    publication: &crate::journal::PreparedCommandPublication,
+    native: &[u8],
+) -> marmot_session::PublishedApplicationMessage {
+    marmot_session::PublishedApplicationMessage {
+        group_id: GroupId::new(publication.key.group.clone()),
+        app_event_id: publication.key.app_event_id.clone(),
+        message_id: MessageId::new(native.to_vec()),
+        source_epoch: cgka_traits::EpochId(1),
+        retention: cgka_traits::app_event::AppMessageRetentionDecision {
+            retention_seconds: 86400,
+            expires_at: None,
+        },
+        authority: None,
+    }
+}
+
+#[tokio::test]
+async fn unmatched_command_queue_refusal_does_not_fail_the_owner() {
+    let mut fixture = Fixture::new(2);
+    let (group, _) = fixture
+        .join(&[1], RoomPurpose::Command.description(), false)
+        .await;
+    let creator = fixture.owners[0].identity.clone();
+    fixture.owners[0]
+        .accept_command_group(&group, &creator)
+        .unwrap();
+    fixture.owners[1]
+        .accept_command_group(&group, &creator)
+        .unwrap();
+    let publication = owned_command_refusal(&mut fixture, &group).await;
+    let published = command_published_effect(&publication, b"later-known-publication");
+    let mut effects = AccountDeviceEffects::default();
+    effects.events.push(GroupEvent::QueuedIntentRefused {
+        group_id: group,
+        intent_id: MessageId::new(b"unrecorded-intent".to_vec()),
+        intent_kind: "app_message".into(),
+        reason: "not_group_member".into(),
+    });
+    effects.published_app_messages.push(published.clone());
+    let bob = &mut fixture.owners[1];
+    bob.apply_effects(effects, Instant::now() + Duration::from_secs(5))
+        .await
+        .unwrap();
+    let bindings = bob
+        .journal
+        .command_publication_bindings(&publication.key)
+        .unwrap();
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(
+        bindings[0].source.native_id,
+        published.message_id.as_slice()
+    );
+    assert!(
+        bindings[0].evidence
+            == Some(crate::command_evidence::PublishedEvidence::from_native(
+                &published
+            ))
+    );
+    assert!(!bindings[0].acked);
+    assert!(
+        bob.journal
+            .command_publications(crate::journal::PublicationState::Published, 64)
+            .unwrap()[0]
+            .key
+            == publication.key
+    );
+}
+
+#[tokio::test]
+async fn command_invalidation_capacity_preserves_terminal_verdict_and_later_effects() {
+    use crate::journal::{CommandNativeUpdate, PublicationState};
+    let mut fixture = Fixture::new(2);
+    let (group, _) = fixture
+        .join(&[1], RoomPurpose::Command.description(), false)
+        .await;
+    let creator = fixture.owners[0].identity.clone();
+    fixture.owners[0]
+        .accept_command_group(&group, &creator)
+        .unwrap();
+    fixture.owners[1]
+        .accept_command_group(&group, &creator)
+        .unwrap();
+    let invalidated = owned_command_refusal(&mut fixture, &group).await;
+    let later = owned_command_refusal(&mut fixture, &group).await;
+    let bob = &mut fixture.owners[1];
+    for n in 0u16..256 {
+        bob.journal
+            .command_apply_native(&[CommandNativeUpdate::Invalidated {
+                group: group.as_slice().to_vec(),
+                native_id: n.to_be_bytes().to_vec(),
+                possible_publication: Some(invalidated.key.clone()),
+            }])
+            .unwrap();
+    }
+    assert_eq!(
+        bob.journal.command_pending_invalidations().unwrap().len(),
+        256
+    );
+    let published = command_published_effect(&invalidated, b"new-invalidated-source");
+    let surviving = command_published_effect(&later, b"later-surviving-source");
+    let mut effects = AccountDeviceEffects::default();
+    effects.events.push(GroupEvent::AppMessageInvalidated {
+        group_id: group,
+        message_id: published.message_id.clone(),
+        epoch: cgka_traits::EpochId(1),
+        reason: cgka_traits::engine::AppMessageInvalidationReason::LosingBranch,
+        decrypted_payload_ref: None,
+    });
+    effects
+        .published_app_messages
+        .extend([published, surviving.clone()]);
+    bob.apply_effects(effects, Instant::now() + Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert!(
+        bob.journal
+            .command_publications(PublicationState::Invalidated, 64)
+            .unwrap()[0]
+            .key
+            == invalidated.key
+    );
+    // Skipped confirmation must neither allocate a native binding nor create an
+    // ACK marker. No actual native fanout/network acknowledgement is fabricated.
+    assert!(
+        bob.journal
+            .command_publication_bindings(&invalidated.key)
+            .unwrap()
+            .is_empty()
+    );
+    let bindings = bob
+        .journal
+        .command_publication_bindings(&later.key)
+        .unwrap();
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(
+        bindings[0].source.native_id,
+        surviving.message_id.as_slice()
+    );
+    assert!(
+        bindings[0].evidence
+            == Some(crate::command_evidence::PublishedEvidence::from_native(
+                &surviving
+            ))
+    );
+    assert!(!bindings[0].acked);
+    assert!(
+        bob.journal
+            .command_publications(PublicationState::Published, 64)
+            .unwrap()[0]
+            .key
+            == later.key
+    );
 }

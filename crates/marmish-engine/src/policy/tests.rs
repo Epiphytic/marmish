@@ -262,3 +262,78 @@ fn canonical_check_refuses_aliases_but_preserves_argument_bytes() {
         );
     }
 }
+
+#[test]
+fn public_policy_wrappers_are_pure_and_preserve_additive_decisions() {
+    let p = policy(
+        allow(&["/**"]),
+        vec![KeyRestrictions {
+            principal: PrincipalId([2; 32]),
+            restrictions: Restrictions {
+                allow_exec: None,
+                deny_exec: vec!["/blocked/**".into()],
+            },
+        }],
+    );
+    p.command_policy
+        .as_ref()
+        .unwrap()
+        .validate_for_principals(&p.allowed_principals)
+        .unwrap();
+    assert_eq!(
+        p.check_exec_restrictions(PrincipalId([2; 32]), &exec(b"/nonexistent/allowed")),
+        Ok(true)
+    );
+    assert!(matches!(
+        p.check_exec_restrictions(PrincipalId([2; 32]), &exec(b"/blocked/file")),
+        Err(EngineError::CommandDenied)
+    ));
+    assert!(p
+        .command_policy
+        .as_ref()
+        .unwrap()
+        .validate_for_principals(&[])
+        .is_err());
+    assert!(p.validate_limits().is_ok());
+    let mut invalid = p;
+    invalid.limits.aggregate_spool_bytes = 1;
+    assert!(invalid.validate_limits().is_err());
+}
+
+#[test]
+fn canonical_inspection_has_closed_results_and_keeps_existing_launch_rule() {
+    use std::os::unix::{ffi::OsStrExt, fs::symlink};
+    let directory = tempfile::tempdir().unwrap();
+    let canonical_dir = directory.path().canonicalize().unwrap();
+    let file = canonical_dir.join("program");
+    std::fs::write(&file, b"not executed").unwrap();
+    let alias = canonical_dir.join("alias");
+    symlink(&file, &alias).unwrap();
+    assert_eq!(
+        inspect_canonical_exec(&exec(file.as_os_str().as_bytes())),
+        CanonicalExecOutcome::Allowed
+    );
+    assert_eq!(
+        inspect_canonical_exec(&exec(alias.as_os_str().as_bytes())),
+        CanonicalExecOutcome::Noncanonical {
+            canonical: file.as_os_str().as_bytes().to_vec()
+        }
+    );
+    assert!(require_canonical_exec(&exec(alias.as_os_str().as_bytes())).is_err());
+    for bad in [
+        b"relative".as_slice(),
+        b"/x\0y",
+        b"/nonexistent/marmish-program",
+    ] {
+        assert_eq!(
+            inspect_canonical_exec(&exec(bad)),
+            CanonicalExecOutcome::Unresolvable
+        );
+    }
+    assert_eq!(
+        inspect_canonical_exec(&CommandRequest::Shell {
+            command: b"true".to_vec()
+        }),
+        CanonicalExecOutcome::Unresolvable
+    );
+}

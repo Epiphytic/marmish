@@ -1,6 +1,12 @@
 //! Actor-owned encrypted application journal. Never opens the MDK database.
+#[path = "command_rooms.rs"]
+mod command_rooms;
+#[path = "command_store.rs"]
+mod command_store;
 use crate::foundation::{Body, Envelope};
 use crate::{Error, Result};
+pub(crate) use command_rooms::*;
+pub(crate) use command_store::*;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -129,7 +135,7 @@ impl Journal {
         let schema: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(db)?;
-        if schema != 0 && schema != 3 {
+        if !matches!(schema, 0 | 3 | 4) {
             return Err(Error::Storage("journal_schema"));
         }
         conn.execute_batch("PRAGMA temp_store=MEMORY; PRAGMA foreign_keys=ON; PRAGMA secure_delete=ON; PRAGMA synchronous=FULL; PRAGMA journal_mode=WAL;
@@ -144,7 +150,7 @@ impl Journal {
             INSERT OR IGNORE INTO replay_state VALUES(1,0,NULL);
             CREATE TABLE IF NOT EXISTS incoming_sources(group_id BLOB NOT NULL,native_id BLOB NOT NULL,sender TEXT NOT NULL,application_id TEXT NOT NULL,PRIMARY KEY(group_id,native_id));
             CREATE TABLE IF NOT EXISTS outgoing_sources(group_id BLOB NOT NULL,native_id BLOB NOT NULL,event_id TEXT NOT NULL,PRIMARY KEY(group_id,native_id));
-            PRAGMA user_version=3;").map_err(db)?;
+").map_err(db)?;
         let existing: Option<String> = conn
             .query_row("SELECT account FROM binding", [], |r| r.get(0))
             .optional()
@@ -157,7 +163,23 @@ impl Journal {
             }
             _ => {}
         }
-        Ok(Self { conn })
+        let mut journal = Self { conn };
+        journal.command_init()?;
+        journal.command_rooms_init()?;
+        journal
+            .conn
+            .execute_batch("PRAGMA user_version=4;")
+            .map_err(db)?;
+        Ok(journal)
+    }
+    pub(crate) fn publication_owned(&self, group: &[u8], event: &str) -> Result<bool> {
+        self.conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM outgoing WHERE group_id=?1 AND event_id=?2)",
+                params![group, event],
+                |row| row.get(0),
+            )
+            .map_err(db)
     }
     pub(crate) fn conversation(&self, session: &str) -> Result<Option<(Conversation, Vec<u8>)>> {
         self.conn
