@@ -1,0 +1,82 @@
+name: v0.2 macOS link diagnostic (not acceptance)
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: Exact trusted repository source commit (40 lowercase hex)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+      CARGO_TERM_COLOR: never
+      MARMISH_BUILD_COMMIT: ${{ inputs.source }}
+    steps:
+      - name: Validate exact source input before checkout
+        env:
+          SOURCE_SHA: ${{ inputs.source }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify immutable source and platform
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$MARMISH_BUILD_COMMIT"
+          git merge-base --is-ancestor "$MARMISH_BUILD_COMMIT" refs/remotes/origin/master
+          case "$(uname -s):$(uname -m)" in
+            Darwin:arm64) ;;
+            *) exit 1 ;;
+          esac
+          printf 'diagnostic-only source=%s platform=%s deployment=%s\n' \
+            "$MARMISH_BUILD_COMMIT" "$(uname -s):$(uname -m)" "$MACOSX_DEPLOYMENT_TARGET"
+      - uses: dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920 # 1.97.1
+        with:
+          toolchain: 1.97.1
+      - name: Build exact requested native source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rustc -Vv
+          cargo -V
+          cargo build --locked --release -p marmish-native --bins
+      - name: Print actual Mach-O dependencies and minimum-version records
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for binary in marmish marmishd marmish-worker; do
+            file="target/release/$binary"
+            test -f "$file"
+            test ! -L "$file"
+            test -x "$file"
+            printf '\n=== %s: architectures ===\n' "$binary"
+            architectures=$(lipo -archs "$file")
+            printf '%s\n' "$architectures"
+            test "$architectures" = arm64
+            printf '=== %s: otool -L ===\n' "$binary"
+            otool -L "$file"
+            printf '=== %s: minimum-version load commands ===\n' "$binary"
+            otool -l "$file" | awk '
+              $1 == "Load" && $2 == "command" { header = $0; selected = 0 }
+              $1 == "cmd" {
+                selected = ($2 == "LC_BUILD_VERSION" || $2 == "LC_VERSION_MIN_MACOSX")
+                if (selected) { print header; found = 1 }
+              }
+              selected { print }
+              END { if (!found) print "(no minimum-version load command found)" }
+            '
+          done
