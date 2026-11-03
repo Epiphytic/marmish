@@ -1040,6 +1040,7 @@ pub(crate) struct ClientInvocation {
     #[cfg(test)]
     pub submit_request_id: Id,
     pub submit_request_sha256: Digest,
+    pub group_submit_sha256: Digest,
     pub created: u64,
     pub admission: Admission,
     pub state: Option<State>,
@@ -1083,6 +1084,7 @@ fn client_invocation(conn: &Connection, record: InvocationRecord) -> Result<Clie
         #[cfg(test)]
         submit_request_id,
         submit_request_sha256: blob32(digest)?,
+        group_submit_sha256: record.digest,
         created,
         admission: record.admission,
         state: record.status.map(|s| s.state),
@@ -3473,6 +3475,7 @@ pub(crate) struct CommandEvidence {
     pub invocation: String,
     pub submit_sha256: String,
     pub engine_admitted: Option<u8>,
+    pub refusal: Option<wire::ErrorCode>,
     pub outcome: Option<wire::Outcome>,
     pub stdout: EvidenceStream,
     pub stderr: EvidenceStream,
@@ -3571,6 +3574,7 @@ impl Journal {
                 } else {
                     None
                 },
+                refusal: r.refusal.as_ref().map(|r| r.code),
                 outcome: r.status.as_ref().and_then(|s| s.outcome.clone()),
                 stdout: evidence_stream(r.status.as_ref().map(|s| &s.stdout)),
                 stderr: evidence_stream(r.status.as_ref().map(|s| &s.stderr)),
@@ -6124,6 +6128,15 @@ mod tests {
                 .is_err()
         );
         assert!(handle.validate_entry("default", [9; 32], &entry).is_err());
+        assert_eq!(
+            entry.group_submit_sha256,
+            journal
+                .command_get(&owner.key(id(1)))
+                .unwrap()
+                .unwrap()
+                .digest
+        );
+        assert_ne!(entry.group_submit_sha256, entry.submit_request_sha256);
         assert_eq!(entry.submit_request_id, request.id);
         assert_eq!(entry.submit_request_sha256, wire::request_digest(&bytes));
         assert_ne!(
@@ -6191,6 +6204,10 @@ mod tests {
         let page = journal.command_client_invocations(None, 64).unwrap();
         assert_eq!(page.entries.len(), 1);
         assert!(page.next.is_none());
+        assert_eq!(
+            page.entries[0].group_submit_sha256,
+            entry.group_submit_sha256
+        );
         assert_eq!(page.entries[0].submit_request_id, request.id);
         assert_eq!(
             page.entries[0].submit_request_sha256,

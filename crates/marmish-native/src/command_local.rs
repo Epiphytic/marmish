@@ -25,6 +25,7 @@ pub(crate) struct AnswerEntry {
 #[serde(deny_unknown_fields)]
 pub(crate) struct InvocationEntry {
     pub handle: CommandHandle,
+    pub group_submit_sha256: String,
     pub cursor: u64,
     pub created: u64,
     pub admission: wire::Admission,
@@ -180,6 +181,7 @@ impl MdkOwner {
                 Response::success(serde_json::json!({
                     "active":counts.active,"uncertain":counts.uncertain,
                     "worker_running":counts.worker_running,"worker_unknown":counts.worker_unknown,
+                    "engine_present":service.engine_present_readonly(),
                     "engine_quiesced":cleanup==CleanupState::Quiesced,
                     "observation_pending":counts.observation_pending || service.cleanup_observation_pending(),
                     "cleanup":match cleanup {CleanupState::Open=>"open",CleanupState::Draining=>"draining",CleanupState::Quiesced=>"quiesced",CleanupState::Failed=>"failed"},"final_seq":final_seq
@@ -430,6 +432,7 @@ impl MdkOwner {
                     .map(|entry| {
                         Ok(InvocationEntry {
                             handle: CommandHandle::from_invocation(profile, &entry)?,
+                            group_submit_sha256: hex::encode(entry.group_submit_sha256),
                             cursor: entry.cursor,
                             created: entry.created,
                             admission: entry.admission,

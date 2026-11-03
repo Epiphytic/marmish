@@ -2175,6 +2175,7 @@ mod tests {
         let first = handle();
         let second = handle();
         let entry = |handle, cursor| InvocationEntry {
+            group_submit_sha256: "11".repeat(32),
             handle,
             cursor,
             created: 1,

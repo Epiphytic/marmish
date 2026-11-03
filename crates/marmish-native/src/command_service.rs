@@ -513,6 +513,9 @@ impl CommandService {
             .as_ref()
             .map_or((CleanupState::Open, None), |p| (p.state, Some(p.fence)))
     }
+    pub(crate) fn engine_present_readonly(&self) -> bool {
+        self.engine.is_some()
+    }
     pub(crate) fn cleanup_observation_pending(&self) -> bool {
         self.completion.is_some()
             || self.ack.is_some()
