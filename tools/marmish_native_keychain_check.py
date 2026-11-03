@@ -51,6 +51,20 @@ def stop(child):
     except ProcessLookupError:
         child.wait(timeout=3)
         return
+    except PermissionError:
+        # Darwin can report EPERM for a group containing only an exited,
+        # unreaped leader. Permission denial itself never proves absence.
+        try:
+            child.wait(timeout=3)
+        except (subprocess.TimeoutExpired, OSError):
+            raise Refused('child_cleanup_incomplete') from None
+        try:
+            os.killpg(child.pid, 0)
+        except ProcessLookupError:
+            return
+        except OSError:
+            pass
+        raise Refused('child_cleanup_incomplete') from None
     if child.poll() is None:
         os.killpg(child.pid, signal.SIGTERM)
         try:

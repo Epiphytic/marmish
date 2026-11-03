@@ -46,9 +46,43 @@ class InstalledProviderSupervisor(unittest.TestCase):
         self.assertEqual([call.args[0] for call in kill.call_args_list], [98765] * 2)
 
     def test_capture_limit_is_enforced_while_child_runs(self):
-        with mock.patch.object(check, 'MAX_CAPTURE', 16):
-            with self.assertRaisesRegex(check.Refused, 'operation_output_limit'):
-                check.execute(['/bin/sh', '-c', 'printf 12345678901234567890'], {}, timeout=1)
+        # Exercise the real short-lived-child cleanup window repeatedly.
+        for _ in range(8):
+            with mock.patch.object(check, 'MAX_CAPTURE', 16):
+                with self.assertRaisesRegex(check.Refused, '^operation_output_limit$'):
+                    check.execute(['/bin/sh', '-c', 'printf 12345678901234567890'], {}, timeout=1)
+
+    def test_permission_probe_requires_exact_reap_and_fresh_absence(self):
+        for exited in (None, 0):
+            with self.subTest(exited=exited):
+                child = mock.Mock(pid=98765)
+                child.poll.return_value = exited
+                with mock.patch.object(check.os, 'killpg',
+                        side_effect=[PermissionError, ProcessLookupError]) as kill:
+                    check.stop(child)
+                child.wait.assert_called_once_with(timeout=3)
+                self.assertEqual(kill.call_args_list, [mock.call(98765, 0)] * 2)
+
+    def test_permission_probe_remaining_unknown_or_denied_group_is_red(self):
+        for result in (None, PermissionError(), OSError('unknown')):
+            with self.subTest(result=type(result).__name__):
+                child = mock.Mock(pid=98765)
+                with mock.patch.object(check.os, 'killpg',
+                        side_effect=[PermissionError, result]) as kill:
+                    with self.assertRaisesRegex(check.Refused, '^child_cleanup_incomplete$'):
+                        check.stop(child)
+                child.wait.assert_called_once_with(timeout=3)
+                self.assertEqual(kill.call_args_list, [mock.call(98765, 0)] * 2)
+
+    def test_permission_probe_wait_failure_is_finite_and_never_signals(self):
+        for error in (subprocess.TimeoutExpired('owned', 3), OSError('unknown')):
+            with self.subTest(error=type(error).__name__):
+                child = mock.Mock(pid=98765)
+                child.wait.side_effect = error
+                with mock.patch.object(check.os, 'killpg', side_effect=PermissionError) as kill:
+                    with self.assertRaisesRegex(check.Refused, '^child_cleanup_incomplete$'):
+                        check.stop(child)
+                self.assertEqual(kill.call_args_list, [mock.call(98765, 0)])
 
     def test_helper_only_requests_public_metadata(self):
         qualification = check.Qualification.__new__(check.Qualification)
@@ -123,6 +157,7 @@ class InstalledProviderSupervisor(unittest.TestCase):
 
 class LifecycleProviderSupervisor(unittest.TestCase):
     def lifecycle_fixture(self, root, version="0.2.0"):
+        root = root.resolve(strict=True)
         a_version = version + "-rc.1"
         a = root / 'a-assets'
         a.mkdir()
@@ -159,6 +194,19 @@ class LifecycleProviderSupervisor(unittest.TestCase):
                 return 0, json.dumps({'version': selected}).encode()
             return 0, b'{}'
         return qualification, execute, reloads, old, new
+
+    def test_lifecycle_fixture_accepts_alias_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'real').mkdir()
+            (root / 'alias').symlink_to(root / 'real', target_is_directory=True)
+            qualification, execute, reloads, old, new = self.lifecycle_fixture(root / 'alias')
+            self.assertEqual(old, old.resolve(strict=True))
+            with mock.patch.object(check, 'execute', side_effect=execute):
+                result = {}
+                qualification.run(result)
+            self.assertEqual(reloads, [old, new, new, old, new, new])
+            self.assertTrue(result['lifecycle_rollback_loaded'])
 
     def test_lifecycle_fresh_process_order_and_denial_not_qualified(self):
         for denied in (False, True):

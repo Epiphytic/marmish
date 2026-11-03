@@ -445,3 +445,7 @@ This changes qualification tooling only; hosted lifecycle qualification remains
 pending, and public release pins are unchanged.
 
 The canonical credential-helper correction (`marmish-far`) makes managed and ordinary sibling `marmish`, `marmishd` and worker entrypoints select validated same-version `marmish` for provider operations. Exact downloaded standalone CLI behavior is preserved. This fixes an inconsistent helper identity; reported macOS Keychain denial causation and full daemon startup remain pending actual pre/post-fix macOS qualification. No ACL or file-fallback policy changes. See [design](phases/v0.2-canonical-credential-helper.md).
+
+### macOS provider supervisor correction (offline reviewed, native pending)
+
+Candidate 41698628787 macOS stopped in offline supervisor tests; real Keychain qualification was skipped, so it supplies no provider or helper-custody verdict. The bounded correction canonicalizes lifecycle fixture paths and handles an initial owned-child group EPERM only by exact-child reap plus a fresh ESRCH proof; unknown or denied cleanup stays red. Linux provider23/HTTPS24 offline checks and independent [code review](reviews/v0.2.1-macos-provider-supervisor-code-r1.md) pass. Native macOS offline tests and actual disposable Keychain qualification remain pending. See [sanitized evidence](validation/v0.2.1/macos-provider-supervisor.md) and [approved design](phases/v0.2.1-macos-provider-supervisor.md).
