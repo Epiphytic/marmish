@@ -36,9 +36,11 @@ jobs:
           test "$(git rev-parse HEAD)" = "$MARMISH_BUILD_COMMIT"
           git merge-base --is-ancestor HEAD refs/remotes/origin/master
           test "$MARMISH_BUILD_COMMIT" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD^)" = 7c8dcc6f2773d1ffab9db47bb3b454acdb8f422e
-          git diff --quiet 347cf799ae5baa9e577ded1a00566c7a6b99b933 HEAD^ -- crates Cargo.toml Cargo.lock tools rust-toolchain rust-toolchain.toml
-          { git rev-parse HEAD HEAD^; git diff --stat HEAD^ HEAD; } > diagnostic/source.txt
+          test "$(git rev-parse HEAD^)" = 49d1314d8b1720d3554bf5945542bfc95f1e616b
+          test "$(git rev-parse 49d1314d8b1720d3554bf5945542bfc95f1e616b^)" = 7c8dcc6f2773d1ffab9db47bb3b454acdb8f422e
+          git diff --quiet 347cf799ae5baa9e577ded1a00566c7a6b99b933 7c8dcc6f2773d1ffab9db47bb3b454acdb8f422e -- crates Cargo.toml Cargo.lock tools rust-toolchain rust-toolchain.toml
+          git diff --quiet HEAD^ HEAD -- crates Cargo.toml Cargo.lock tools rust-toolchain rust-toolchain.toml
+          { git rev-parse HEAD HEAD^ 7c8dcc6f2773d1ffab9db47bb3b454acdb8f422e; git diff --stat HEAD^ HEAD; } > diagnostic/source.txt
           git diff --no-renames --name-status -z HEAD^ HEAD > "$RUNNER_TEMP/diagnostic-paths"
           count=0
           while IFS= read -r -d '' status; do
@@ -53,6 +55,7 @@ jobs:
             case "$entry" in "100644 blob "*) ;; *) exit 1 ;; esac
           done < "$RUNNER_TEMP/diagnostic-paths"
           test "$count" -gt 0
+          echo original-failing-source=347cf799ae5baa9e577ded1a00566c7a6b99b933 >> diagnostic/source.txt
           echo product-tree-equivalent-to347 >> diagnostic/source.txt
       - uses: dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920 # 1.97.1
         with:
@@ -70,12 +73,15 @@ jobs:
       - name: Run exact failing tests separately and preserve both outcomes
         shell: bash
         run: |
-          set -uo pipefail
+          set -euo pipefail
           failed=0
           [ "$(cat diagnostic/probe-status.txt)" = 0 ] || failed=1
           for test in detached_submit_and_wait_preserve_exact_handle_bytes_and_one_deadline cli_child_deadline_and_cancellation_are_owned_and_bounded; do
-            cargo test --locked -p marmish-native --features installed-checks --lib "mdk_adapter::installed_check::benchmark::tests::$test" -- --exact --nocapture --test-threads=1 > "diagnostic/$test.log" 2>&1
-            status=$?
+            if cargo test --locked -p marmish-native --features installed-checks --lib "mdk_adapter::installed_check::benchmark::tests::$test" -- --exact --nocapture --test-threads=1 > "diagnostic/$test.log" 2>&1; then
+              status=0
+            else
+              status=$?
+            fi
             printf '%s=%s\n' "$test" "$status" | tee -a diagnostic/outcomes.txt
             tail -n 100 "diagnostic/$test.log"
             if [ "$status" -ne 0 ] || ! grep -q '^running 1 test$' "diagnostic/$test.log"; then failed=1; fi

@@ -68,3 +68,39 @@ or cfg(test) execution boundaries. Its reach counts are not a production
 impact claim. Actual diff and focused diagnostic tests provide the scope proof.
 
 Final actual Claude code confirmation APPROVED session75f5b786-63de-48da-998b-976c8e6da9e2. Final workflow blob d8b43f08d53cc92070f8107e92da4ab52d28c774, SHA25646b3f851b03118482deccf18b9a56e8a84f5d9adc3c55160cb4fee0bf2aedf82. Author final shell checks13guard+5status cases PASS, including missing/empty/nonnumeric status; both exacttests always executed. Final actionlint/diffcheck PASS. No macOS run or diagnosis yet.
+
+## Actual diagnostic41670576377
+
+[Run41670576377](https://github.com/Epiphytic/marmish/actions/runs/41670576377),
+attempt1/source49d1314d8b1720d3554bf5945542bfc95f1e616b, started
+2026-11-03 16:05:34UTC (5seconds after creation) and failed16:11:26UTC.
+Source guard and utility-probe steps passed. Probe exit status was0; original,
+fresh copied, overwritten previously executed, and recreated printf all returned
+exact binary:ok bytes. Fractional sleep and rewritten shell probes also passed.
+These results do not establish the Rust test cause or product qualification.
+
+First Rust test compiled in5m24s, then failed after0.57s: detached loop case3
+returned outer Timeout where a retained handle was expected. Its failure-only
+submit replay with a fresh3s deadline exited0 and returned the synthetic handle.
+The original case3 deadline remains80ms shared across submit+wait, including
+its30ms submit sleep. Startup-budget exhaustion is plausible; dyld/AMFI or any
+other particular cause is unproven. No fixture timeout has been changed.
+
+The second Rust test **did not run**. GitHub's Bash command includes -e; the
+step's set -uo pipefail retained errexit, so cargo exit101 aborted before status
+capture. Artifact13248721575 contains only five files: utility JSONL/stderr,
+probe status, source record, first-test log; no outcomes.txt or second-test log.
+The earlier local claim that both tests always execute was insufficient: its
+fake cargo returned0 and did not exercise inherited-errexit with a failed test.
+Exact extracted-step reproduction under bash -e -o pipefail with cargo exit101
+confirmed one call and no outcomes.txt. The follow-up amendment adds the missing
+failure-path regression and captures status in explicit if/else.
+
+Artifact ZIP SHA256102e57592a88cf3eb78a19816eb5d93310c9bc0c4ebe8595b7d35ca29144ea7b.
+Raw logs/artifact remain outside the repository under
+/tmp/marmish-y5r-macos-41670576377. No production correction or acceptance is
+claimed; both exact tests still need an actual macOS run with reliable capture.
+
+Follow-up author validation: extracted actual YAML under bash -e -o pipefail passed14 provenance cases,5 probe-status cases (zero/nonzero/empty/nonnumeric/missing), and5 cargo/marker cases (first/second/both/neither failure101 and missing single-test marker). Both calls, exact statuses, both logs and aggregate result asserted. Exact old49d1314 YAML mutation fails the both-calls assertion (one call, exit101, nooutcomes), confirming the regression detects the bug. Local harness is uncommitted /tmp/marmish-y5r-errexit-guards.py. Actionlint1.7.7 and diffcheck PASS. No Cargo rerun: Rust/probe/production files unchanged. Scoped ripwire workflow quality-delta exit0: one minor verbosity81→87, gating0; change-check reports one changed workflow and no indexed tests, so the extracted Bash checks provide behavioral evidence.
+
+Completed-code review found one doc-only trailing blank line; corrected and full diffcheck PASS. Reviewer independently reproduced old-step onecall/101/nooutcomes versus newstep twocalls/aggregate1/exactstatuses, plus wrong if-not misfix rejection. Final local provenance cases15 include independently wrong fixed-baseline parent and original-baseline tree versus frozen-current-tree checks. Test step runs inherited -e; provenance guard explicitly enables -Eeuo itself. Actionlint again PASS; workflow source unchanged during these refinements.
