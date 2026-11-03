@@ -39,7 +39,7 @@ jobs:
             signing: adhoc
             minimum: macos=15.0
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       MARMISH_BUILD_COMMIT: ${{ inputs.source_commit }}
     steps:
