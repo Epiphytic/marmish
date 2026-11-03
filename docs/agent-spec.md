@@ -105,7 +105,10 @@ The [finite native-outcome amendment](phases/v0.2-phase1-native-outcome.md)
 adds an independently validated, size-bounded summary of the native check to
 owner cleanup artifacts, including failed checks. Missing or malformed reports
 become null without interrupting cleanup. This changes neither native transport
-nor readiness and cannot reconstruct discarded reports from earlier runs.
+nor readiness and cannot reconstruct discarded reports from earlier runs. A local exact-source owned-onion run passed and retained its full finite outcome.
+The subsequent hosted owner check retained a warm-activation deadline failure
+after successful cold encrypted exchanges; Phase 1 remains open. See
+[the scoped local and hosted evidence](validation/v0.2/native-owner-outcome.md).
 
 The native journal records definitely unsubmitted intents separately from
 prepared/ambiguous submissions. It never retries an ambiguous send by creating
@@ -134,7 +137,13 @@ work. Legacy comparison fixtures are optional; wire compatibility may break, and
 no old database or MLS state is imported. The approved
 [command interface supplement](phases/v0.2-phase2-interfaces.md) fixes the next
 phase's actor/engine/storage boundaries and crash-recovery contracts; it is a
-design, not implemented command support. The approved
+design, not implemented command support. An
+[independently approved scheduling amendment](reviews/v0.2-scheduling-design-r2.md)
+allows isolated, test-only codec/configuration work while Phase 1 remains open;
+engine/store/service integration and command activation still require its acceptance. The approved
+[destination and SRV supplement](phases/v0.2-phase2-destinations.md) defines
+explicit relay selection and bounded CLI-side SRV confirmation against the
+profile relay ceiling; it is also unimplemented. The approved
 [acceptance interface amendment](phases/v0.2-phase2-acceptance-interfaces.md)
 specifies actor-authenticated evidence, bounded admission and guarded cleanup.
 The approved [native acceptance design](phases/v0.2-phase4.md) specifies actual
