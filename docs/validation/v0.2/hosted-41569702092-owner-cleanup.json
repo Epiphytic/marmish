@@ -1,0 +1,141 @@
+{
+  "schema": 1,
+  "run_id": 41569702092,
+  "run_attempt": 1,
+  "source_sha": "f3dcf9521a1865b4c82e5f5d5255b3ac4fa90527",
+  "fixture_stage": "native_check",
+  "diagnostics": [
+    {
+      "stage": "bob_to_alice",
+      "category": "begin"
+    },
+    {
+      "stage": "restart_shutdown",
+      "category": "begin"
+    },
+    {
+      "stage": "restart_open",
+      "category": "begin"
+    },
+    {
+      "stage": "restart_activation_warm",
+      "category": "begin"
+    },
+    {
+      "stage": "arti_bootstrap",
+      "category": "begin"
+    },
+    {
+      "stage": "arti_bootstrap",
+      "category": "ready"
+    },
+    {
+      "stage": "relay_startup_status",
+      "category": "initialized"
+    },
+    {
+      "stage": "relay_startup_attempt",
+      "category": "one"
+    },
+    {
+      "stage": "relay_slot",
+      "category": "waiting"
+    },
+    {
+      "stage": "arti_connect",
+      "category": "begin"
+    },
+    {
+      "stage": "relay_stream",
+      "category": "connected"
+    },
+    {
+      "stage": "websocket_handshake",
+      "category": "begin"
+    },
+    {
+      "stage": "websocket_handshake",
+      "category": "ready"
+    },
+    {
+      "stage": "relay_startup_result",
+      "category": "ok"
+    },
+    {
+      "stage": "relay_startup_status",
+      "category": "connected"
+    },
+    {
+      "stage": "arti_bootstrap",
+      "category": "begin"
+    },
+    {
+      "stage": "arti_bootstrap",
+      "category": "ready"
+    },
+    {
+      "stage": "relay_startup_status",
+      "category": "initialized"
+    },
+    {
+      "stage": "relay_startup_attempt",
+      "category": "one"
+    },
+    {
+      "stage": "relay_slot",
+      "category": "waiting"
+    },
+    {
+      "stage": "arti_connect",
+      "category": "begin"
+    },
+    {
+      "stage": "relay_stream",
+      "category": "connected"
+    },
+    {
+      "stage": "websocket_handshake",
+      "category": "begin"
+    },
+    {
+      "stage": "websocket_handshake",
+      "category": "ready"
+    },
+    {
+      "stage": "relay_startup_result",
+      "category": "ok"
+    },
+    {
+      "stage": "relay_startup_status",
+      "category": "connected"
+    },
+    {
+      "stage": "restart_alice_to_bob",
+      "category": "begin"
+    },
+    {
+      "stage": "relay_slot",
+      "category": "waiting"
+    },
+    {
+      "stage": "arti_connect",
+      "category": "begin"
+    },
+    {
+      "stage": "connector_failure",
+      "category": "arti_connect"
+    },
+    {
+      "stage": "relay_slot",
+      "category": "waiting"
+    },
+    {
+      "stage": "arti_connect",
+      "category": "begin"
+    }
+  ],
+  "relay_children_reaped": true,
+  "private_state_removed": true,
+  "readiness_native_cleanup_ok": false,
+  "supervisor_reaped_by_this_step": false
+}

@@ -95,6 +95,17 @@ the original activation deadline; recovery observes an SDK-owned bounded dial
 across short actor turns. Per-relay SDK timeout and size limits are explicit.
 Source validation and a fresh hosted matrix must qualify the implementation;
 no Tor platform acceptance follows from diagnosing the timer.
+Its first exact-source hosted run passed all three direct flows, but the onion
+owner failed after both restarted owners connected successfully. A later Arti
+redial returned an error; the underlying error and final native operation were
+not retained. This differs from the earlier stream-acquisition timeout and does
+not establish a new cause. See the
+[preserved run 41569702092 evidence](validation/v0.2/hosted-foundation.md).
+The [finite native-outcome amendment](phases/v0.2-phase1-native-outcome.md)
+adds an independently validated, size-bounded summary of the native check to
+owner cleanup artifacts, including failed checks. Missing or malformed reports
+become null without interrupting cleanup. This changes neither native transport
+nor readiness and cannot reconstruct discarded reports from earlier runs.
 
 The native journal records definitely unsubmitted intents separately from
 prepared/ambiguous submissions. It never retries an ambiguous send by creating
@@ -123,7 +134,13 @@ work. Legacy comparison fixtures are optional; wire compatibility may break, and
 no old database or MLS state is imported. The approved
 [command interface supplement](phases/v0.2-phase2-interfaces.md) fixes the next
 phase's actor/engine/storage boundaries and crash-recovery contracts; it is a
-design, not implemented command support. Consult the evidence above and Beads
+design, not implemented command support. The approved
+[acceptance interface amendment](phases/v0.2-phase2-acceptance-interfaces.md)
+specifies actor-authenticated evidence, bounded admission and guarded cleanup.
+The approved [native acceptance design](phases/v0.2-phase4.md) specifies actual
+installation, direct/Arti platform cells, exact-byte command checks and benchmark
+measurement. Neither document establishes implementation or passing acceptance.
+Consult the evidence above and Beads
 before treating any phase as complete.
 
 The remainder of this document records the v0.1 implementation. Its mandatory

@@ -1,6 +1,52 @@
 # Hosted native foundation: first observed run
 
-Latest observed run: [41565379100](https://github.com/Epiphytic/marmish/actions/runs/41565379100),
+Latest observed run: [41569702092](https://github.com/Epiphytic/marmish/actions/runs/41569702092),
+attempt 1, source `f3dcf9521a1865b4c82e5f5d5255b3ac4fa90527`, failed onion-owner
+readiness. All four jobs started within a minute. All three platforms passed
+offline release tests/builds and direct encrypted-message checks; their waits
+for the unavailable onion endpoint were then cancelled. No onion client flow ran.
+
+The [finite owner report](hosted-41569702092-owner-cleanup.json) reaches
+`restart_alice_to_bob`: initial exchanges completed, and both restarted owners
+completed Arti bootstrap, onion stream, WebSocket handshake and Connected status.
+A later redial returned `arti_connect`, followed by another redial beginning.
+This label means Arti returned an error, distinct from the connector's own
+`timeout`; it does not identify the underlying error or explain the lost stream.
+Its final native category/operation was not retained, so an exchange-deadline
+explanation remains an inference. Relay children
+were reaped and private state removed; native readiness cleanup is unproven.
+The phase remains open; this is not evidence that the transport amendment passed
+the full hosted gate.
+
+Preserved direct reports verify all cleanup flags and four 66-byte exchanges:
+
+| Runner | Total | Cold activation | First A→B / B→A | Warm activation |
+| --- | ---: | ---: | ---: | ---: |
+| [Linux AMD64](hosted-41569702092-linux-amd64-direct.json) | 14.672 s | 161 ms | 347 / 353 ms | 408 ms |
+| [Linux ARM64](hosted-41569702092-linux-arm64-direct.json) | 9.899 s | 367 ms | 352 / 356 ms | 508 ms |
+| [macOS ARM64](hosted-41569702092-macos-direct.json) | 7.938 s | 195 ms | 335 / 387 ms | 364 ms |
+
+These are single tiny-message/receipt observations, not remote-command latency,
+bulk goodput or percentiles. Both directions after encrypted restart also passed.
+
+A separate [local Linux AMD64 onion reproduction](local-f3dcf95-onion.json)
+using that exact source and unchanged native deadlines passed cold exchange,
+restart, warm exchange and receipt validation in 85 seconds. The original
+fixture's native validator reached `ready`, and native cleanup, relay child
+reaping and private-state removal passed. A scratch report projection failed
+to compile because its jq helper used reserved name `label`; cleanup then
+deleted the full native report, so per-exchange timings are unavailable. This
+local result does not satisfy the hosted platform gate.
+
+An earlier local relay launch failed before Marmish ran: inherited `USER` and
+`LOGNAME` referred to a same-UID alias whose group lookup returned an error in
+Arti's permission checker. The successful reproduction set `USER`, `LOGNAME`
+and `HOME` from the current UID's canonical passwd entry, with all relay,
+profile and Arti state still explicitly inside the owned private fixture.
+No permission check was disabled. That local launcher cause is separate from
+the hosted warm-redial error, and no hosted cause is inferred from it.
+
+Previous observed run: [41565379100](https://github.com/Epiphytic/marmish/actions/runs/41565379100),
 attempt 1, source `22019f9de06327cbab7c7df373d5faf260625cff`, failed its owner
 readiness check. All four jobs started within a minute; all three client
 platforms passed offline tests, release builds and direct encrypted-message

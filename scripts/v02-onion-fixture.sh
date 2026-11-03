@@ -59,6 +59,17 @@ owner_diagnostics() {
   fi
   printf '%s\n' "$diagnostics"
 }
+owner_native_outcome() {
+  local report=$1 outcome='null'
+  if [[ -f $report && ! -L $report ]]; then
+    outcome=$(head -c 65537 -- "$report" 2>/dev/null |
+      jq -Rs --arg mode native-extract --argjson run "$run" --argjson attempt "$attempt" --arg sha "$sha" -f "$diagnostic_filter" 2>/dev/null) || outcome='null'
+  fi
+  if ! printf '%s\n' "$outcome" | jq -se --arg mode native-outcome --argjson run "$run" --argjson attempt "$attempt" --arg sha "$sha" -f "$diagnostic_filter" >/dev/null 2>&1; then
+    outcome='null'
+  fi
+  printf '%s\n' "$outcome"
+}
 serve() {
   [[ $# == 8 ]] || fail
   local relay=$1 marmish=$2 root=$3 ready=$4; run=$5; attempt=$6; sha=$7
@@ -70,7 +81,7 @@ serve() {
   [[ ! -e $root/stop && ! -e $ready && ! -e $root/cleanup.json ]] || fail
   chmod 700 "$root"
   cleanup() {
-    local status=$? pid until_at reaped=true diagnostics='[]'
+    local status=$? pid until_at reaped=true diagnostics='[]' native_outcome='null'
     trap - EXIT ERR INT TERM
     for pid in "$check_pid" "$relay_pid"; do
       [[ -n $pid ]] || continue
@@ -87,14 +98,15 @@ serve() {
     done
     if [[ -n $work ]]; then
       diagnostics=$(owner_diagnostics "$work/native-private.log") || diagnostics='[]'
+      native_outcome=$(owner_native_outcome "$work/native.json") || native_outcome='null'
     fi
     if [[ $reaped == true ]]; then
       [[ -z $work ]] || rm -rf -- "$work"
       [[ -z $native_tmp ]] || rm -rf -- "$native_tmp"
       if [[ ( -z $work || ! -e $work ) && ( -z $native_tmp || ! -e $native_tmp ) ]]; then cleaned=true; fi
     fi
-    jq -n --argjson run "$run" --argjson attempt "$attempt" --arg sha "$sha" --argjson reaped "$reaped" --argjson cleaned "$cleaned" --argjson native "$native_clean" --arg stage "$fixture_stage" --argjson diagnostics "$diagnostics" \
-      '{schema:1,run_id:$run,run_attempt:$attempt,source_sha:$sha,fixture_stage:$stage,diagnostics:$diagnostics,relay_children_reaped:$reaped,private_state_removed:$cleaned,readiness_native_cleanup_ok:$native,supervisor_reaped_by_this_step:false}' > "$root/cleanup.json.tmp"
+    jq -n --argjson run "$run" --argjson attempt "$attempt" --arg sha "$sha" --argjson reaped "$reaped" --argjson cleaned "$cleaned" --argjson native "$native_clean" --arg stage "$fixture_stage" --argjson diagnostics "$diagnostics" --argjson native_outcome "$native_outcome" \
+      '{schema:1,run_id:$run,run_attempt:$attempt,source_sha:$sha,fixture_stage:$stage,diagnostics:$diagnostics,native_outcome:$native_outcome,relay_children_reaped:$reaped,private_state_removed:$cleaned,readiness_native_cleanup_ok:$native,supervisor_reaped_by_this_step:false}' > "$root/cleanup.json.tmp"
     mv "$root/cleanup.json.tmp" "$root/cleanup.json"
     [[ $reaped == true && $cleaned == true ]] || status=1
     exit "$status"

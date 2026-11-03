@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "scope": "local-owned-onion-foundation",
+  "source_sha": "f3dcf9521a1865b4c82e5f5d5255b3ac4fa90527",
+  "marmish_sha256": "340232c8d50cb43e54962c2cd6273ca73eec3c58d7a4843af2dc6a1345a1c196",
+  "relay_sha256": "d2d6f0c7240cb07689f6e3e65fd6dceaef3185b7715560149480b625b7ce1cfc",
+  "platform": "linux-amd64",
+  "route": "always",
+  "identity_context": "canonical_passwd",
+  "fixture_exit": 0,
+  "wall_seconds": 85,
+  "fixture_stage": "ready",
+  "readiness_native_cleanup_ok": true,
+  "relay_children_reaped": true,
+  "private_state_removed": true,
+  "native_report_retained": false,
+  "per_exchange_timings": null,
+  "hosted_acceptance": false
+}
