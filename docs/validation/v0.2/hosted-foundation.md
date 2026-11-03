@@ -1,6 +1,38 @@
 # Hosted native foundation: first observed run
 
-Latest observed run: [41562508066](https://github.com/Epiphytic/marmish/actions/runs/41562508066),
+Latest observed run: [41565379100](https://github.com/Epiphytic/marmish/actions/runs/41565379100),
+attempt 1, source `22019f9de06327cbab7c7df373d5faf260625cff`, failed its owner
+readiness check. All four jobs started within a minute; all three client
+platforms passed offline tests, release builds and direct encrypted-message
+checks. Cancellation was requested after those direct checks because the failed
+owner could no longer publish the onion endpoint. No onion client acceptance
+follows from this run.
+
+The new [finite owner report](hosted-41565379100-owner-cleanup.json) locates the
+failure at `native_check`: an initial relay reached Connected, then another
+Arti bootstrap completed and three connection attempts timed out before obtaining
+an onion stream. The connector's own 15-second timer covers stream acquisition
+and TLS/WebSocket together; the SDK startup turn separately uses 15 seconds.
+This identifies a local deadline that can interrupt rendezvous construction. It
+does not prove that a longer deadline will succeed or that all shared Arti work
+restarts on cancellation. Relay children were reaped and private state removed;
+native readiness cleanup remains unproven. The
+[route-aware timing amendment](../../phases/v0.2-phase1-onion-timeouts.md)
+must be reviewed and validated before another full matrix.
+
+The final workflow conclusion is cancelled after owner failure. Preserved direct
+reports verify all cleanup flags and four 66-byte exchanges per platform:
+
+| Runner | Total | Cold activation | First A→B / B→A | Warm activation |
+| --- | ---: | ---: | ---: | ---: |
+| [Linux AMD64](hosted-41565379100-linux-amd64-direct.json) | 15.475 s | 349 ms | 357 / 470 ms | 375 ms |
+| [Linux ARM64](hosted-41565379100-linux-arm64-direct.json) | 9.673 s | 369 ms | 352 / 349 ms | 468 ms |
+| [macOS ARM64](hosted-41565379100-macos-direct.json) | 7.916 s | 941 ms | 466 / 459 ms | 991 ms |
+
+These are tiny encrypted-message/receipt observations, not command latency,
+bulk throughput or percentile estimates. No onion client flow ran.
+
+Previous observed run: [41562508066](https://github.com/Epiphytic/marmish/actions/runs/41562508066),
 attempt 1, source `bc75231530eb1fc4ef8db60d93c3528d5e9e71bd`, cannot pass: its
 owner failed before publishing onion readiness, about 80 s after fixture launch.
 All three platform direct checks passed. Once those results were available,

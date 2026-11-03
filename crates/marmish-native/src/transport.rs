@@ -55,6 +55,7 @@ pub struct TransportLimits {
     pub max_frame_bytes: usize,
     pub queue_capacity: usize,
     pub handshake_timeout: Duration,
+    pub tor_connect_timeout: Duration,
     pub bootstrap_timeout: Duration,
 }
 
@@ -65,6 +66,7 @@ impl Default for TransportLimits {
             max_frame_bytes: 1024 * 1024,
             queue_capacity: 64,
             handshake_timeout: Duration::from_secs(15),
+            tor_connect_timeout: Duration::from_secs(120),
             bootstrap_timeout: Duration::from_secs(120),
         }
     }
@@ -77,6 +79,8 @@ impl TransportLimits {
             || !(1..=64).contains(&self.queue_capacity)
             || self.handshake_timeout.is_zero()
             || self.handshake_timeout > Duration::from_secs(15)
+            || self.tor_connect_timeout.is_zero()
+            || self.tor_connect_timeout > Duration::from_secs(120)
             || self.bootstrap_timeout.is_zero()
             || self.bootstrap_timeout > Duration::from_secs(120)
         {
@@ -289,21 +293,50 @@ impl RelayConnector {
         &self.0.policy
     }
 
+    /// The complete attempt budget for an explicitly configured endpoint.
+    pub fn connection_timeout(&self, url: &Url) -> Result<Duration> {
+        let (_, route) = self.policy().destination(url)?;
+        self.route_timeout(route)
+    }
+
+    fn route_timeout(&self, route: Route) -> Result<Duration> {
+        let limits = self.policy().limits;
+        match route {
+            Route::Direct => Ok(limits.handshake_timeout),
+            Route::Tor => limits
+                .tor_connect_timeout
+                .checked_add(limits.handshake_timeout)
+                .ok_or(Error::Invalid("transport_limits")),
+        }
+    }
+
+    fn maximum_connection_timeout(&self) -> Result<Duration> {
+        self.route_timeout(if self.policy().needs_tor() {
+            Route::Tor
+        } else {
+            Route::Direct
+        })
+    }
+
+    pub(crate) fn relay_limits(&self) -> nostr_sdk::prelude::RelayLimits {
+        let mut limits = nostr_sdk::prelude::RelayLimits::default();
+        limits.messages.max_size = Some(self.policy().limits.max_frame_bytes as u32);
+        limits.events.max_size = Some(self.policy().limits.max_frame_bytes as u32);
+        limits
+    }
+
     pub fn sdk_client(&self, signer: Arc<nostr::key::Keys>) -> Result<nostr_sdk::client::Client> {
         if self.0.cancelled.is_cancelled() {
             return Err(Error::Transport("shutdown"));
         }
         let limits = self.policy().limits;
-        let mut relay_limits = nostr_sdk::prelude::RelayLimits::default();
-        relay_limits.messages.max_size = Some(limits.max_frame_bytes as u32);
-        relay_limits.events.max_size = Some(limits.max_frame_bytes as u32);
         Ok(nostr_sdk::client::Client::builder()
             .websocket_transport(self.clone())
             .authenticator(SignerAuthenticator::new(signer.as_ref().clone()))
             .max_relays(NonZeroUsize::new(limits.max_relays))
             .notification_channel_size(NonZeroUsize::new(limits.queue_capacity).expect("validated"))
-            .connect_timeout(limits.handshake_timeout)
-            .relay_limits(relay_limits)
+            .connect_timeout(self.maximum_connection_timeout()?)
+            .relay_limits(self.relay_limits())
             .build())
     }
 
@@ -393,21 +426,61 @@ impl RelayConnector {
         if self.0.cancelled.is_cancelled() {
             return Err(Error::Transport("shutdown"));
         }
-        let deadline = Instant::now() + self.policy().limits.handshake_timeout;
+        self.connection_phases(
+            route,
+            self.connect_stream(url, index, route),
+            |(stream, permit)| self.finish_socket(url, stream, permit),
+        )
+        .await
+    }
+
+    // The stream future includes permit acquisition. Direct retains one total
+    // envelope; Tor gets a stream budget followed by one shared TLS/WS budget.
+    async fn connection_phases<S, T, F, H, HF>(
+        &self,
+        route: Route,
+        stream: F,
+        handshake: H,
+    ) -> Result<T>
+    where
+        F: std::future::Future<Output = Result<S>>,
+        H: FnOnce(S) -> HF,
+        HF: std::future::Future<Output = Result<T>>,
+    {
+        let limits = self.policy().limits;
+        let deadline = Instant::now() + self.route_timeout(route)?;
+        let attempt = async {
+            let stream = match route {
+                Route::Direct => stream.await?,
+                Route::Tor => timeout_at(Instant::now() + limits.tor_connect_timeout, stream)
+                    .await
+                    .map_err(|_| Error::Timeout)??,
+            };
+            match route {
+                Route::Direct => handshake(stream).await,
+                Route::Tor => {
+                    timeout_at(Instant::now() + limits.handshake_timeout, handshake(stream))
+                        .await
+                        .map_err(|_| Error::Timeout)?
+                }
+            }
+        };
         tokio::select! {
             biased;
             _ = self.0.cancelled.cancelled() => Err(Error::Transport("shutdown")),
-            result = timeout_at(deadline, self.connect_once(url, index, route)) =>
-                result.map_err(|_| Error::Timeout)?,
+            result = timeout_at(deadline, attempt) => result.map_err(|_| Error::Timeout)?,
         }
     }
 
-    async fn connect_once(
+    async fn connect_stream(
         &self,
         url: &Url,
         index: usize,
         route: Route,
-    ) -> Result<(WebSocketSink, WebSocketStream)> {
+    ) -> Result<(
+        Box<dyn NetworkStream>,
+        Arc<tokio::sync::OwnedSemaphorePermit>,
+    )> {
         // The permit lives until BOTH SDK halves are dropped. Discovery and
         // ordinary runtime cannot establish parallel connections to one relay.
         crate::diagnostics::event("relay_slot", "waiting");
@@ -455,6 +528,21 @@ impl RelayConnector {
             }
         };
         crate::diagnostics::event("relay_stream", "connected");
+        Ok((stream, permit))
+    }
+
+    async fn finish_socket(
+        &self,
+        url: &Url,
+        stream: Box<dyn NetworkStream>,
+        permit: Arc<tokio::sync::OwnedSemaphorePermit>,
+    ) -> Result<(WebSocketSink, WebSocketStream)> {
+        let parsed = url::Url::parse(url.as_str()).map_err(|_| Error::Invalid("relay_url"))?;
+        let host = parsed
+            .host_str()
+            .ok_or(Error::Invalid("relay_host"))?
+            .trim_start_matches('[')
+            .trim_end_matches(']');
         let stream = if parsed.scheme() == "wss" {
             crate::diagnostics::event("tls", "begin");
             tls_stream(stream, host).await?
@@ -778,6 +866,146 @@ mod tests {
             assert!(
                 RelayPolicy::parse(&["wss://example.com".into()], RouteMode::Auto, limits).is_err()
             );
+        }
+    }
+
+    #[test]
+    fn configured_routes_select_bounded_sdk_budgets_and_limits() {
+        let onion = format!("ws://{}/", onion());
+        let connector =
+            connector(policy(&["wss://example.com/", &onion], RouteMode::Auto).unwrap());
+        assert_eq!(
+            connector
+                .connection_timeout(&Url::parse("wss://example.com/").unwrap())
+                .unwrap(),
+            Duration::from_secs(15)
+        );
+        assert_eq!(
+            connector
+                .connection_timeout(&Url::parse(&onion).unwrap())
+                .unwrap(),
+            Duration::from_secs(135)
+        );
+        assert_eq!(
+            connector.maximum_connection_timeout().unwrap(),
+            Duration::from_secs(135)
+        );
+        assert!(
+            connector
+                .connection_timeout(&Url::parse("wss://unconfigured.example/").unwrap())
+                .is_err()
+        );
+        let limits = connector.relay_limits();
+        assert_eq!(limits.messages.max_size, Some(1024 * 1024));
+        assert_eq!(limits.events.max_size, Some(1024 * 1024));
+        for duration in [Duration::ZERO, Duration::from_secs(121)] {
+            assert!(
+                RelayPolicy::parse(
+                    std::slice::from_ref(&onion),
+                    RouteMode::Auto,
+                    TransportLimits {
+                        tor_connect_timeout: duration,
+                        ..TransportLimits::default()
+                    }
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn route_phase_budgets_bound_stream_and_shared_tls_websocket() {
+        // Exercise the production wrapper with inert stream/TLS/WS futures.
+        for (route, stream_secs, tls_secs, ws_secs, succeeds, elapsed) in [
+            (Route::Tor, 20, 2, 3, true, 25),
+            (Route::Direct, 20, 0, 0, false, 15),
+            (Route::Tor, 121, 0, 0, false, 120),
+            (Route::Tor, 1, 8, 8, false, 16),
+            (Route::Direct, 10, 3, 3, false, 15),
+        ] {
+            let connector = connector(policy(&["wss://example.com/"], RouteMode::Always).unwrap());
+            let began = Instant::now();
+            let result = connector
+                .connection_phases(
+                    route,
+                    async {
+                        let permit = connector.0.slots[0].clone().acquire_owned().await.unwrap();
+                        tokio::time::sleep(Duration::from_secs(stream_secs)).await;
+                        Ok(permit)
+                    },
+                    |permit| async move {
+                        tokio::time::sleep(Duration::from_secs(tls_secs)).await;
+                        tokio::time::sleep(Duration::from_secs(ws_secs)).await;
+                        drop(permit);
+                        Ok(())
+                    },
+                )
+                .await;
+            assert_eq!(result.is_ok(), succeeds);
+            if !succeeds {
+                assert!(matches!(result, Err(Error::Timeout)));
+            }
+            assert_eq!(Instant::now() - began, Duration::from_secs(elapsed));
+            assert!(connector.0.slots[0].clone().try_acquire_owned().is_ok());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn permit_wait_consumes_the_route_stream_budget() {
+        for (route, budget) in [(Route::Direct, 15), (Route::Tor, 120)] {
+            let connector = connector(policy(&["wss://example.com/"], RouteMode::Always).unwrap());
+            let occupied = connector.0.slots[0].clone().acquire_owned().await.unwrap();
+            let began = Instant::now();
+            let result = connector
+                .connection_phases(
+                    route,
+                    async { Ok(connector.0.slots[0].clone().acquire_owned().await.unwrap()) },
+                    |_| async { Ok(()) },
+                )
+                .await;
+            assert!(matches!(result, Err(Error::Timeout)));
+            assert_eq!(Instant::now() - began, Duration::from_secs(budget));
+            drop(occupied);
+            assert!(connector.0.slots[0].clone().try_acquire_owned().is_ok());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancellation_drops_permit_wait_stream_and_handshake() {
+        for phase in 0..3 {
+            let connector = connector(policy(&["wss://example.com/"], RouteMode::Always).unwrap());
+            let occupied = if phase == 0 {
+                Some(connector.0.slots[0].clone().acquire_owned().await.unwrap())
+            } else {
+                None
+            };
+            let cancel = connector.0.cancelled.clone();
+            let canceller = tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                cancel.cancel();
+            });
+            let began = Instant::now();
+            let result = connector
+                .connection_phases(
+                    Route::Tor,
+                    async {
+                        let permit = connector.0.slots[0].clone().acquire_owned().await.unwrap();
+                        if phase == 1 {
+                            std::future::pending::<()>().await;
+                        }
+                        Ok(permit)
+                    },
+                    |permit| async move {
+                        let _permit = permit;
+                        std::future::pending::<Result<()>>().await
+                    },
+                )
+                .await;
+            assert!(matches!(result, Err(Error::Transport("shutdown"))));
+            assert_eq!(Instant::now() - began, Duration::from_secs(2));
+            canceller.await.unwrap();
+            drop(occupied);
+            assert!(connector.0.slots[0].clone().try_acquire_owned().is_ok());
         }
     }
 

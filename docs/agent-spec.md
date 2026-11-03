@@ -85,6 +85,16 @@ only six finite fixture stages and at most 32 allowlisted stage/category pairs
 in cleanup artifacts, with strict source/run/attempt validation before publication.
 Raw private logs are removed. Extraction failure yields an empty array without
 interrupting cleanup; this does not change transport or readiness criteria.
+Its first hosted run retained evidence of a native 15-second timeout before an
+onion stream was obtained. All three platforms passed direct flow, but the
+owner failed readiness. The independently approved
+[route-aware timeout amendment](phases/v0.2-phase1-onion-timeouts.md) gives Tor
+stream acquisition up to 120 seconds and then a shared 15-second TLS/WebSocket
+budget, while direct connections retain their 15-second total. Startup keeps
+the original activation deadline; recovery observes an SDK-owned bounded dial
+across short actor turns. Per-relay SDK timeout and size limits are explicit.
+Source validation and a fresh hosted matrix must qualify the implementation;
+no Tor platform acceptance follows from diagnosing the timer.
 
 The native journal records definitely unsubmitted intents separately from
 prepared/ambiguous submissions. It never retries an ambiguous send by creating
@@ -109,9 +119,12 @@ define the future command protocol's retry or streaming guarantees.
 Hosted native platform validation, remote commands and unified client/server role
 configuration, setup/install, full cross-platform command interoperability,
 bulk-throughput measurement and release publication remain subsequent acceptance
-work. Legacy wire compatibility is separately evaluated; no old database or MLS
-state is imported. Consult the evidence above and Beads before treating any phase
-as complete.
+work. Legacy comparison fixtures are optional; wire compatibility may break, and
+no old database or MLS state is imported. The approved
+[command interface supplement](phases/v0.2-phase2-interfaces.md) fixes the next
+phase's actor/engine/storage boundaries and crash-recovery contracts; it is a
+design, not implemented command support. Consult the evidence above and Beads
+before treating any phase as complete.
 
 The remainder of this document records the v0.1 implementation. Its mandatory
 confinement, daemon-RPC and packaging decisions are historical, not instructions

@@ -1,0 +1,141 @@
+{
+  "schema": 1,
+  "run_id": 41565379100,
+  "run_attempt": 1,
+  "source_sha": "22019f9de06327cbab7c7df373d5faf260625cff",
+  "fixture_stage": "native_check",
+  "diagnostics": [
+    {
+      "stage": "relay_startup_attempt",
+      "category": "one"
+    },
+    {
+      "stage": "relay_slot",
+      "category": "waiting"
+    },
+    {
+      "stage": "arti_connect",
+      "category": "begin"
+    },
+    {
+      "stage": "relay_stream",
+      "category": "connected"
+    },
+    {
+      "stage": "websocket_handshake",
+      "category": "begin"
+    },
+    {
+      "stage": "websocket_handshake",
+      "category": "ready"
+    },
+    {
+      "stage": "relay_startup_result",
+      "category": "ok"
+    },
+    {
+      "stage": "relay_startup_status",
+      "category": "connected"
+    },
+    {
+      "stage": "arti_bootstrap",
+      "category": "begin"
+    },
+    {
+      "stage": "arti_bootstrap",
+      "category": "ready"
+    },
+    {
+      "stage": "relay_startup_status",
+      "category": "initialized"
+    },
+    {
+      "stage": "relay_startup_attempt",
+      "category": "one"
+    },
+    {
+      "stage": "relay_slot",
+      "category": "waiting"
+    },
+    {
+      "stage": "arti_connect",
+      "category": "begin"
+    },
+    {
+      "stage": "connector_failure",
+      "category": "timeout"
+    },
+    {
+      "stage": "relay_startup_result",
+      "category": "error"
+    },
+    {
+      "stage": "relay_startup_error",
+      "category": "transport"
+    },
+    {
+      "stage": "relay_startup_status",
+      "category": "terminated"
+    },
+    {
+      "stage": "relay_startup_attempt",
+      "category": "two"
+    },
+    {
+      "stage": "relay_slot",
+      "category": "waiting"
+    },
+    {
+      "stage": "arti_connect",
+      "category": "begin"
+    },
+    {
+      "stage": "connector_failure",
+      "category": "timeout"
+    },
+    {
+      "stage": "relay_startup_result",
+      "category": "error"
+    },
+    {
+      "stage": "relay_startup_error",
+      "category": "transport"
+    },
+    {
+      "stage": "relay_startup_status",
+      "category": "terminated"
+    },
+    {
+      "stage": "relay_startup_attempt",
+      "category": "three"
+    },
+    {
+      "stage": "relay_slot",
+      "category": "waiting"
+    },
+    {
+      "stage": "arti_connect",
+      "category": "begin"
+    },
+    {
+      "stage": "connector_failure",
+      "category": "timeout"
+    },
+    {
+      "stage": "relay_startup_result",
+      "category": "error"
+    },
+    {
+      "stage": "relay_startup_error",
+      "category": "transport"
+    },
+    {
+      "stage": "relay_startup_status",
+      "category": "terminated"
+    }
+  ],
+  "relay_children_reaped": true,
+  "private_state_removed": true,
+  "readiness_native_cleanup_ok": false,
+  "supervisor_reaped_by_this_step": false
+}

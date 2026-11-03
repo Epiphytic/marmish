@@ -167,12 +167,16 @@ async fn wait_startup_turn(
     }
     Ok(false)
 }
-async fn connect_startup_relay(relay: &mut impl StartupRelay, deadline: Instant) -> Result<()> {
+async fn connect_startup_relay(
+    relay: &mut impl StartupRelay,
+    deadline: Instant,
+    connection_timeout: Duration,
+) -> Result<()> {
     for attempt in ["one", "two", "three"] {
         if startup_connected(relay, deadline)? {
             return Ok(());
         }
-        let turn_end = deadline.min(Instant::now() + Duration::from_secs(15));
+        let turn_end = deadline.min(Instant::now() + connection_timeout);
         crate::diagnostics::event("relay_startup_attempt", attempt);
         match relay
             .dial(turn_end.saturating_duration_since(Instant::now()))
@@ -192,6 +196,25 @@ async fn connect_startup_relay(relay: &mut impl StartupRelay, deadline: Instant)
         Err(Error::Timeout)
     } else {
         Err(Error::Transport("relay_connect"))
+    }
+}
+
+// The SDK owns one bounded dial across actor turns. Observing Pending or
+// Connecting must never cancel it or reset its per-relay connection deadline.
+fn recover_relay(relay: &nostr_sdk::relay::Relay) -> Result<bool> {
+    use nostr_sdk::relay::RelayStatus;
+    match relay.status() {
+        RelayStatus::Connected => Ok(true),
+        RelayStatus::Initialized | RelayStatus::Terminated => {
+            relay.connect();
+            Ok(false)
+        }
+        RelayStatus::Shutdown => Err(Error::Transport("shutdown")),
+        RelayStatus::Banned => Err(Error::Transport("relay_reconnect")),
+        RelayStatus::Pending
+        | RelayStatus::Connecting
+        | RelayStatus::Disconnected
+        | RelayStatus::Sleeping => Ok(false),
     }
 }
 
@@ -1039,10 +1062,13 @@ impl MdkOwner {
         }
         self.ensure_ingress()?;
         for endpoint in self.connector.policy().urls() {
+            let connection_timeout = self.connector.connection_timeout(endpoint)?;
             tokio::time::timeout_at(
                 deadline,
                 self.client
                     .add_relay(endpoint.as_str())
+                    .connect_timeout(connection_timeout)
+                    .limits(self.connector.relay_limits())
                     .reconnect(false)
                     .notification_channel_size(64),
             )
@@ -1055,7 +1081,8 @@ impl MdkOwner {
                 .await
                 .map_err(|_| Error::Transport("relay_connect"))?
                 .ok_or(Error::Transport("relay_connect"))?;
-            connect_startup_relay(&mut SdkStartupRelay(relay), deadline).await?;
+            connect_startup_relay(&mut SdkStartupRelay(relay), deadline, connection_timeout)
+                .await?;
         }
         // Ordinary drain does not drive KeyPackage maintenance. Readiness
         // requires an actual acknowledged publication of this device's stable
@@ -1934,46 +1961,35 @@ impl MdkOwner {
         if !self.recovery {
             return Ok(true);
         }
-        if loss != self.loss_baseline || stopped {
+        if loss != self.loss_baseline || stopped || !connected {
             self.recovery_subscribed = false;
         }
         if !self.recovery_subscribed && Instant::now() >= self.reconnect_after {
             self.reconnect_after = Instant::now() + Duration::from_secs(2);
-            if let Some(task) = self.forwarder.take() {
-                task.abort();
-                let _ = tokio::time::timeout_at(deadline, task).await;
-            }
-            self.forwarder = Some(
-                self.relay
-                    .spawn_notification_forwarder(self.adapter.clone()),
-            );
-            // Each recovery turn has at most one connect per configured relay;
-            // all share the caller's deadline and retain the original connector.
-            for endpoint in self.connector.policy().urls() {
-                if self
-                    .client
-                    .relay(endpoint.as_str())
-                    .await
-                    .map(|r| r.is_some_and(|r| r.status().is_connected()))
-                    .unwrap_or(false)
-                {
-                    continue;
+            // A healthy forwarder continues to observe loss and network events
+            // during a long SDK-owned dial. Do not restart it on every tick.
+            if stopped {
+                if let Some(task) = self.forwarder.take() {
+                    let _ = tokio::time::timeout_at(deadline, task).await;
                 }
-                let left = deadline
-                    .saturating_duration_since(Instant::now())
-                    .min(Duration::from_secs(15));
-                if left.is_zero() {
+                self.forwarder = Some(
+                    self.relay
+                        .spawn_notification_forwarder(self.adapter.clone()),
+                );
+            }
+            let mut all_connected = true;
+            for endpoint in self.connector.policy().urls() {
+                if Instant::now() >= deadline {
                     return Err(Error::Timeout);
                 }
-                tokio::time::timeout_at(
-                    deadline,
-                    self.client.try_connect_relay(endpoint.as_str(), left),
-                )
-                .await
-                .map_err(|_| Error::Timeout)?
-                .map_err(|_| Error::Transport("relay_reconnect"))?;
+                let relay = tokio::time::timeout_at(deadline, self.client.relay(endpoint.as_str()))
+                    .await
+                    .map_err(|_| Error::Timeout)?
+                    .map_err(|_| Error::Transport("relay_reconnect"))?
+                    .ok_or(Error::Transport("relay_reconnect"))?;
+                all_connected &= recover_relay(&relay)?;
             }
-            if !self.network_connected().await {
+            if !all_connected || !self.network_connected().await {
                 return Err(Error::Transport("relay_reconnect"));
             }
             self.loss_baseline = self.notification_loss.borrow().clone();
@@ -2641,9 +2657,13 @@ mod startup_tests {
                 )],
             );
             // Successful return is the publication/subscription admission gate.
-            connect_startup_relay(&mut relay, start + Duration::from_secs(120))
-                .await
-                .unwrap();
+            connect_startup_relay(
+                &mut relay,
+                start + Duration::from_secs(120),
+                Duration::from_secs(15),
+            )
+            .await
+            .unwrap();
             assert_eq!(relay.status, RelayStatus::Connected);
             assert_eq!(relay.calls, 1);
             assert_eq!(Instant::now() - start, Duration::from_secs(4));
@@ -2663,7 +2683,12 @@ mod startup_tests {
                 (0..3).map(|_| step(Ok(()), status, status, None)).collect(),
             );
             assert!(matches!(
-                connect_startup_relay(&mut relay, start + Duration::from_secs(120)).await,
+                connect_startup_relay(
+                    &mut relay,
+                    start + Duration::from_secs(120),
+                    Duration::from_secs(15)
+                )
+                .await,
                 Err(Error::Transport("relay_connect"))
             ));
             assert_eq!(relay.calls, 3);
@@ -2688,7 +2713,12 @@ mod startup_tests {
                 .collect(),
         );
         assert!(matches!(
-            connect_startup_relay(&mut relay, start + Duration::from_secs(120)).await,
+            connect_startup_relay(
+                &mut relay,
+                start + Duration::from_secs(120),
+                Duration::from_secs(15)
+            )
+            .await,
             Err(Error::Transport("relay_connect"))
         ));
         assert_eq!(relay.calls, 3);
@@ -2704,7 +2734,12 @@ mod startup_tests {
                 .collect(),
         );
         assert!(matches!(
-            connect_startup_relay(&mut relay, start + Duration::from_secs(20)).await,
+            connect_startup_relay(
+                &mut relay,
+                start + Duration::from_secs(20),
+                Duration::from_secs(15)
+            )
+            .await,
             Err(Error::Timeout)
         ));
         assert_eq!(Instant::now() - start, Duration::from_secs(20));
@@ -2721,8 +2756,12 @@ mod startup_tests {
             RelayStatus::Shutdown,
         ] {
             let mut relay = Script::new(status, vec![]);
-            let result =
-                connect_startup_relay(&mut relay, Instant::now() + Duration::from_secs(120)).await;
+            let result = connect_startup_relay(
+                &mut relay,
+                Instant::now() + Duration::from_secs(120),
+                Duration::from_secs(15),
+            )
+            .await;
             assert_eq!(result.is_ok(), status == RelayStatus::Connected);
             assert_eq!(relay.calls, 0);
             assert!(relay.waits.is_empty());
@@ -2743,9 +2782,13 @@ mod startup_tests {
                 step(Ok(()), RelayStatus::Connected, RelayStatus::Connected, None),
             ],
         );
-        connect_startup_relay(&mut relay, start + Duration::from_secs(120))
-            .await
-            .unwrap();
+        connect_startup_relay(
+            &mut relay,
+            start + Duration::from_secs(120),
+            Duration::from_secs(15),
+        )
+        .await
+        .unwrap();
         assert_eq!(relay.calls, 2);
         assert_eq!(Instant::now(), start);
     }
@@ -2767,7 +2810,12 @@ mod startup_tests {
                 .collect(),
         );
         assert!(matches!(
-            connect_startup_relay(&mut relay, start + Duration::from_secs(120)).await,
+            connect_startup_relay(
+                &mut relay,
+                start + Duration::from_secs(120),
+                Duration::from_secs(15)
+            )
+            .await,
             Err(Error::Transport("relay_connect"))
         ));
         assert_eq!(Instant::now() - start, Duration::from_secs(45));
@@ -2782,9 +2830,48 @@ mod startup_tests {
             )],
         );
         assert!(matches!(
-            connect_startup_relay(&mut late, Instant::now() + Duration::from_secs(5)).await,
+            connect_startup_relay(
+                &mut late,
+                Instant::now() + Duration::from_secs(5),
+                Duration::from_secs(15)
+            )
+            .await,
             Err(Error::Timeout)
         ));
+    }
+    #[tokio::test(start_paused = true)]
+    async fn startup_tor_budget_preserves_bootstrap_and_shared_endpoint_deadline() {
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(150);
+        // Bootstrap has already used part of the one activation budget.
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        let mut first = Script::new(
+            RelayStatus::Initialized,
+            vec![Step {
+                dial_time: Duration::from_secs(20),
+                ..step(Ok(()), RelayStatus::Connected, RelayStatus::Connected, None)
+            }],
+        );
+        connect_startup_relay(&mut first, deadline, Duration::from_secs(135))
+            .await
+            .unwrap();
+        assert_eq!(Instant::now() - start, Duration::from_secs(50));
+        let mut second = Script::new(
+            RelayStatus::Initialized,
+            vec![step(
+                Ok(()),
+                RelayStatus::Pending,
+                RelayStatus::Pending,
+                None,
+            )],
+        );
+        assert!(matches!(
+            connect_startup_relay(&mut second, deadline, Duration::from_secs(135)).await,
+            Err(Error::Timeout)
+        ));
+        assert_eq!(second.calls, 1);
+        assert_eq!(second.waits, vec![Duration::from_secs(100)]);
+        assert_eq!(Instant::now(), deadline);
     }
     #[test]
     fn startup_labels_are_finite() {
@@ -2848,5 +2935,207 @@ mod startup_tests {
                 "shutdown"
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    use futures_util::SinkExt;
+    use nostr_sdk::relay::{Relay, RelayOptions, RelayStatus};
+    use nostr_sdk::transport::websocket::{WebSocketSink, WebSocketStream, WebSocketTransport};
+    use std::sync::atomic::AtomicUsize;
+    use tokio::sync::Semaphore;
+
+    #[derive(Debug, Clone)]
+    struct DelayedTransport {
+        delay: Duration,
+        calls: Arc<AtomicUsize>,
+        permit: Arc<Semaphore>,
+    }
+    impl WebSocketTransport for DelayedTransport {
+        fn support_ping(&self) -> bool {
+            false
+        }
+        fn connect<'a>(
+            &'a self,
+            _url: &'a nostr::types::Url,
+            _proxy: Option<std::net::SocketAddr>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = std::result::Result<
+                            (WebSocketSink, WebSocketStream),
+                            nostr_sdk::error::Error,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                let _permit = self.permit.clone().acquire_owned().await.unwrap();
+                tokio::time::sleep(self.delay).await;
+                let sink = futures_util::sink::drain().sink_map_err(
+                    |never: std::convert::Infallible| -> nostr_sdk::error::Error { match never {} },
+                );
+                Ok((
+                    Box::pin(sink) as WebSocketSink,
+                    Box::pin(futures_util::stream::pending()) as WebSocketStream,
+                ))
+            })
+        }
+    }
+    fn transport(delay: Duration) -> DelayedTransport {
+        DelayedTransport {
+            delay,
+            calls: Arc::new(AtomicUsize::new(0)),
+            permit: Arc::new(Semaphore::new(1)),
+        }
+    }
+    fn relay(transport: &DelayedTransport) -> Relay {
+        Relay::builder(nostr::types::RelayUrl::parse("wss://relay.invalid/").unwrap())
+            .websocket_transport(transport.clone())
+            .opts(
+                RelayOptions::new()
+                    .reconnect(false)
+                    .ping(false)
+                    .connect_timeout(Duration::from_secs(135)),
+            )
+            .build()
+    }
+    async fn settle() {
+        // Give the actual SDK's spawned task and status notifications turns;
+        // yielding does not advance paused time or hide an elapsed deadline.
+        for _ in 0..16 {
+            tokio::task::yield_now().await;
+        }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn recovery_sdk_dial_survives_multiple_actor_turns_without_reset() {
+        let transport = transport(Duration::from_secs(50));
+        let relay = relay(&transport);
+        assert!(!recover_relay(&relay).unwrap());
+        settle().await;
+        for _ in 0..3 {
+            tokio::time::advance(Duration::from_secs(15)).await;
+            settle().await;
+            assert!(!recover_relay(&relay).unwrap());
+            assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+        }
+        tokio::time::advance(Duration::from_secs(5)).await;
+        settle().await;
+        assert!(recover_relay(&relay).unwrap());
+        assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+        relay.shutdown();
+        settle().await;
+    }
+    #[tokio::test(start_paused = true)]
+    async fn recovery_sdk_timeout_is_fixed_and_shutdown_releases_pending_dial() {
+        let transport = transport(Duration::from_secs(200));
+        let relay = relay(&transport);
+        assert!(!recover_relay(&relay).unwrap());
+        settle().await;
+        for _ in 0..8 {
+            tokio::time::advance(Duration::from_secs(15)).await;
+            settle().await;
+            assert!(!recover_relay(&relay).unwrap());
+            assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+        }
+        tokio::time::advance(Duration::from_secs(15)).await;
+        settle().await;
+        assert_eq!(relay.status(), RelayStatus::Terminated);
+        assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(transport.permit.available_permits(), 1);
+        // A later paced turn can retry the terminated attempt explicitly.
+        tokio::time::advance(Duration::from_secs(2)).await;
+        assert!(!recover_relay(&relay).unwrap());
+        settle().await;
+        assert_eq!(transport.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(transport.permit.available_permits(), 0);
+        relay.shutdown();
+        settle().await;
+        assert_eq!(transport.permit.available_permits(), 1);
+        assert!(matches!(
+            recover_relay(&relay),
+            Err(Error::Transport("shutdown"))
+        ));
+        tokio::time::advance(Duration::from_secs(200)).await;
+        settle().await;
+        assert_eq!(relay.status(), RelayStatus::Shutdown);
+        assert_eq!(transport.calls.load(Ordering::SeqCst), 2);
+    }
+    #[tokio::test(start_paused = true)]
+    async fn pending_owner_recovery_keeps_publication_paused_and_forwarder_alive() {
+        use crate::identity::BackendChoice;
+        use crate::transport::{ArtiDirs, RelayPolicy, RouteMode, TransportLimits};
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut profile = ProfileLease::acquire(temp.path(), "pending").unwrap();
+        let material = profile
+            .prepare(
+                BackendChoice::File,
+                &std::env::current_exe().unwrap(),
+                std::time::Instant::now() + Duration::from_secs(5),
+            )
+            .unwrap();
+        let connector = RelayConnector::new(
+            RelayPolicy::parse(
+                &["wss://relay.invalid/".into()],
+                RouteMode::Off,
+                TransportLimits::default(),
+            )
+            .unwrap(),
+            ArtiDirs {
+                state: profile.arti_state().into(),
+                cache: profile.arti_cache().into(),
+            },
+        )
+        .unwrap();
+        let mut owner = MdkOwner::open(&profile, &material, connector, vec![]).unwrap();
+        let transport = transport(Duration::from_secs(100));
+        let client = Client::builder()
+            .websocket_transport(transport.clone())
+            .build();
+        client
+            .add_relay("wss://relay.invalid/")
+            .reconnect(false)
+            .connect_timeout(Duration::from_secs(135))
+            .await
+            .unwrap();
+        // The original relay plane remains owned by owner.relay/adapter; keep
+        // its healthy notification forwarder while testing fake SDK dialing.
+        owner.client = client;
+        owner.forwarder = Some(
+            owner
+                .relay
+                .spawn_notification_forwarder(owner.adapter.clone()),
+        );
+        let forwarder_id = owner.forwarder.as_ref().unwrap().id();
+        for turn in 0..4 {
+            if turn == 2 {
+                // A lost connection after a prior resubscription must enter
+                // dialing again, rather than waiting forever for old EOSE.
+                owner.recovery_subscribed = true;
+            }
+            assert!(matches!(
+                owner
+                    .recover_transport(Instant::now() + Duration::from_secs(15))
+                    .await,
+                Err(Error::Transport("relay_reconnect"))
+            ));
+            settle().await;
+            assert!(owner.recovery && owner.publication.blocked());
+            assert!(!owner.recovery_subscribed);
+            assert_eq!(owner.forwarder.as_ref().unwrap().id(), forwarder_id);
+            assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+            tokio::time::advance(Duration::from_secs(15)).await;
+        }
+        drop(owner);
+        settle().await;
+        assert_eq!(transport.permit.available_permits(), 1);
+        assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+        profile.cleanup_runtime().unwrap();
     }
 }
