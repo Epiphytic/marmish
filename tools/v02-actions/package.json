@@ -1,0 +1,8 @@
+{
+  "name": "marmish-installed-actions-tooling",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test *.test.mjs" },
+  "dependencies": { "@actions/artifact": "6.3.1", "yauzl": "3.4.0" }
+}

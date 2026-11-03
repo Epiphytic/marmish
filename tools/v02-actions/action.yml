@@ -1,0 +1,37 @@
+name: Native installed Marmish rendezvous
+description: Build-only artifact exchange with an owned Rust acceptance driver
+inputs:
+  token:
+    description: GitHub API token; job requires actions read permission
+    default: ${{ github.token }}
+    required: true
+  mode:
+    required: true
+    description: exchange or run
+  context:
+    required: true
+    description: Immutable Rust-generated context JSON
+  role:
+    required: true
+    description: Fixed platform role
+  driver:
+    required: true
+    description: Absolute Rust installed-check executable
+  workspace:
+    required: true
+    description: Private prepared driver workspace
+  identities:
+    required: true
+    description: Owned directory for three identity records
+  inbox:
+    required: true
+    description: Owned directory for incoming records
+  output:
+    required: true
+    description: Owned atomic output record directory
+  job-deadline:
+    required: true
+    description: Internal first-step deadline plus 52 minutes under a 55-minute job limit, Unix seconds
+runs:
+  using: node24
+  main: supervise.mjs
