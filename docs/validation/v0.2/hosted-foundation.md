@@ -1,6 +1,11 @@
 # Hosted native foundation: first observed run
 
-Latest observed run: [41569702092](https://github.com/Epiphytic/marmish/actions/runs/41569702092),
+Current acceptance: [complete run 41577006224](hosted-41577006224.md) passed all
+three platforms over direct and Arti routes, owner readiness and cleanup, and
+independent acceptance review. Phase 1 is accepted. The observations below are
+historical failures and remain failed; they were not combined into that result.
+
+Historical run: [41569702092](https://github.com/Epiphytic/marmish/actions/runs/41569702092),
 attempt 1, source `f3dcf9521a1865b4c82e5f5d5255b3ac4fa90527`, failed onion-owner
 readiness. All four jobs started within a minute. All three platforms passed
 offline release tests/builds and direct encrypted-message checks; their waits

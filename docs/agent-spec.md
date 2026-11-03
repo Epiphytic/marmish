@@ -9,7 +9,10 @@ runtime. The Python implementation remains available solely as a legacy protocol
 reference and optional comparison fixture. The user explicitly authorizes a
 v0.2 wire break as well as fresh on-disk formats; Rust↔Python wire interoperability
 and disk migration are not release requirements. The phase-1 native foundation
-has independent integrated code approval; hosted phase gates remain pending.
+has independent integrated code approval and complete hosted acceptance. The
+[independently reviewed attempt 41577006224](validation/v0.2/hosted-41577006224.md)
+passed direct and Arti encrypted exchanges, owner restart and cleanup on Linux
+AMD64, Linux ARM64 and macOS. Phase 1 is accepted; Phase 2 integration may proceed.
 A Linux AMD64 release build
 passed real two-identity encrypted direct-relay and onion-through-Arti exchange, durable receipts,
 binary byte preservation, conflicting-ID rejection and encrypted restart; see
@@ -19,18 +22,19 @@ canonical receipt checks have passing production-API regressions and fresh
 direct/onion live repeats. [The actual round-5 code review](reviews/v0.2-native-code-r5.md)
 approves the integrated offline scope and independently passes 91 native tests
 (90 repository tests plus its additional regression) and 11 vault/helper tests.
-Hosted platforms, remote commands and release acceptance remain pending.
+Remote commands and release acceptance remain pending.
 The macOS v2 provider has passed a separate
 [owned disposable-keychain gate](validation/v0.2/macos-v2-provider.md), including
 both identity and storage secrets across restart and copied-executable
 replacement. This does not qualify default-keychain selection or the production
-helper's ACL identity. Hosted runs have passed both Linux architectures and
-macOS direct flow, but no full matrix has passed: one run failed the macOS
-post-restart Arti exchange, and the next failed ARM onion and macOS direct cold
-activation. These are separate observations; full phase acceptance remains open.
+helper's ACL identity. Earlier hosted runs failed different direct/onion stages.
+Those remain failed observations; the complete accepted attempt above uses one
+source, run and attempt for every required cell. The historical amendment
+descriptions below record the failures and gates that existed at each increment,
+not the current Phase 1 status.
 Historical results below do not establish v0.2 support.
 
-### Native foundation implemented, pending final phase acceptance
+### Native foundation implemented and accepted
 
 `crates/marmish-native` contains the native `marmish` and `marmishd` binaries;
 build them with `cargo build --locked --release -p marmish-native --bins`.
@@ -130,8 +134,8 @@ full room from blocking every other room. This implementation has integrated
 code approval and passing offline regressions; its deliberately small foundation limits do not
 define the future command protocol's retry or streaming guarantees.
 
-Hosted native platform validation, remote commands and unified client/server role
-configuration, setup/install, full cross-platform command interoperability,
+Remote commands and unified client/server role configuration, setup/install,
+full cross-platform command interoperability,
 bulk-throughput measurement and release publication remain subsequent acceptance
 work. Legacy comparison fixtures are optional; wire compatibility may break, and
 no old database or MLS state is imported. The approved
@@ -139,8 +143,9 @@ no old database or MLS state is imported. The approved
 phase's actor/engine/storage boundaries and crash-recovery contracts; it is a
 design, not implemented command support. An
 [independently approved scheduling amendment](reviews/v0.2-scheduling-design-r2.md)
-allows isolated, test-only codec/configuration work while Phase 1 remains open;
-engine/store/service integration and command activation still require its acceptance.
+allowed isolated, test-only codec/configuration work while Phase 1 remained open.
+That integration prerequisite is now satisfied; Phase 2 execution acceptance is
+still required before claiming working native commands.
 The isolated `command_wire` and `command_config` modules now have passing offline
 tests, but are declared only under `cfg(test)`: production binaries expose neither
 command execution nor this configuration yet. The codec implements the fresh

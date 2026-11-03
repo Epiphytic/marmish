@@ -1,0 +1,188 @@
+{
+  "schema": 1,
+  "run_id": 41577006224,
+  "run_attempt": 1,
+  "source_sha": "766e68cc44f68bc2e5a2488a1463ba211493ed29",
+  "fixture_stage": "ready",
+  "diagnostics": [
+    {
+      "stage": "conversation_open",
+      "category": "begin"
+    },
+    {
+      "stage": "conversation_join",
+      "category": "begin"
+    },
+    {
+      "stage": "alice_to_bob",
+      "category": "begin"
+    },
+    {
+      "stage": "bob_to_alice",
+      "category": "begin"
+    },
+    {
+      "stage": "restart_shutdown",
+      "category": "begin"
+    },
+    {
+      "stage": "restart_open",
+      "category": "begin"
+    },
+    {
+      "stage": "restart_activation_warm",
+      "category": "begin"
+    },
+    {
+      "stage": "arti_bootstrap",
+      "category": "begin"
+    },
+    {
+      "stage": "arti_bootstrap",
+      "category": "ready"
+    },
+    {
+      "stage": "relay_startup_status",
+      "category": "initialized"
+    },
+    {
+      "stage": "relay_startup_attempt",
+      "category": "one"
+    },
+    {
+      "stage": "relay_slot",
+      "category": "waiting"
+    },
+    {
+      "stage": "arti_connect",
+      "category": "begin"
+    },
+    {
+      "stage": "relay_stream",
+      "category": "connected"
+    },
+    {
+      "stage": "websocket_handshake",
+      "category": "begin"
+    },
+    {
+      "stage": "websocket_handshake",
+      "category": "ready"
+    },
+    {
+      "stage": "relay_startup_result",
+      "category": "ok"
+    },
+    {
+      "stage": "relay_startup_status",
+      "category": "connected"
+    },
+    {
+      "stage": "arti_bootstrap",
+      "category": "begin"
+    },
+    {
+      "stage": "arti_bootstrap",
+      "category": "ready"
+    },
+    {
+      "stage": "relay_startup_status",
+      "category": "initialized"
+    },
+    {
+      "stage": "relay_startup_attempt",
+      "category": "one"
+    },
+    {
+      "stage": "relay_slot",
+      "category": "waiting"
+    },
+    {
+      "stage": "arti_connect",
+      "category": "begin"
+    },
+    {
+      "stage": "relay_stream",
+      "category": "connected"
+    },
+    {
+      "stage": "websocket_handshake",
+      "category": "begin"
+    },
+    {
+      "stage": "websocket_handshake",
+      "category": "ready"
+    },
+    {
+      "stage": "relay_startup_result",
+      "category": "ok"
+    },
+    {
+      "stage": "relay_startup_status",
+      "category": "connected"
+    },
+    {
+      "stage": "restart_alice_to_bob",
+      "category": "begin"
+    },
+    {
+      "stage": "restart_bob_to_alice",
+      "category": "begin"
+    },
+    {
+      "stage": "completed",
+      "category": "begin"
+    }
+  ],
+  "native_outcome": {
+    "schema": 1,
+    "ok": true,
+    "stage": "completed",
+    "category": null,
+    "diagnostic": {
+      "last_recoverable": null,
+      "operation": "none",
+      "terminal_label": null
+    },
+    "elapsed_ms": 68626,
+    "samples": [
+      {
+        "stage": "activation_cold",
+        "milliseconds": 28976,
+        "bytes": 0
+      },
+      {
+        "stage": "alice_to_bob",
+        "milliseconds": 1738,
+        "bytes": 66
+      },
+      {
+        "stage": "bob_to_alice",
+        "milliseconds": 1582,
+        "bytes": 66
+      },
+      {
+        "stage": "restart_activation_warm",
+        "milliseconds": 18096,
+        "bytes": 0
+      },
+      {
+        "stage": "restart_alice_to_bob",
+        "milliseconds": 2507,
+        "bytes": 66
+      },
+      {
+        "stage": "restart_bob_to_alice",
+        "milliseconds": 1730,
+        "bytes": 66
+      }
+    ],
+    "cleanup_ok": true,
+    "runtime_cleanup_ok": true,
+    "state_cleanup_ok": true
+  },
+  "relay_children_reaped": true,
+  "private_state_removed": true,
+  "readiness_native_cleanup_ok": true,
+  "supervisor_reaped_by_this_step": false
+}
