@@ -350,6 +350,39 @@ fn legacy_default_home_upgrade_preserves_nested_v2_state_in_separate_process() {
     let status=std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact","native_install::tests::legacy_default_home_upgrade_preserves_nested_v2_state_in_separate_process","--nocapture"]).env(CHILD,"1").env("HOME",home).env_remove("XDG_DATA_HOME").status().unwrap();
     assert!(status.success());
 }
+fn legacy_diagnostic_path(stdout: &str) -> Option<&str> {
+    const MARKER: &str = "EXPECTED_PATH=";
+    if stdout.len() > 65_536 {
+        return None;
+    }
+    let (_, rest) = stdout.split_once(MARKER)?;
+    if rest.contains(MARKER) {
+        return None;
+    }
+    let quoted = rest.split('\n').next()?;
+    let path = serde_json::from_str::<String>(quoted).ok()?;
+    (serde_json::to_string(&path).ok()? == quoted).then_some(quoted)
+}
+#[test]
+fn legacy_diagnostic_marker_accepts_libtest_prefix_and_rejects_ambiguous_output() {
+    let quoted = serde_json::to_string("/owned/quoted \"; $`path`\n/marmishd").unwrap();
+    for prefix in ["", "test native_install::tests::child ... "] {
+        let stdout = format!("{prefix}EXPECTED_PATH={quoted}\nok\n");
+        assert_eq!(legacy_diagnostic_path(&stdout), Some(quoted.as_str()));
+    }
+    for stdout in [
+        "no marker".to_owned(),
+        "EXPECTED_PATH=".to_owned(),
+        "EXPECTED_PATH=123\n".to_owned(),
+        format!("EXPECTED_PATH={quoted}\r\n"),
+        format!("EXPECTED_PATH={quoted} \n"),
+        format!("EXPECTED_PATH={quoted} EXPECTED_PATH={quoted}\n"),
+        format!("EXPECTED_PATH={quoted}\nEXPECTED_PATH={quoted}\n"),
+        format!("{}EXPECTED_PATH={quoted}", "x".repeat(65_536)),
+    ] {
+        assert_eq!(legacy_diagnostic_path(&stdout), None, "{stdout:?}");
+    }
+}
 #[test]
 fn legacy_foreign_launcher_diagnostic_quotes_exact_path_in_separate_process() {
     const CHILD: &str = "MARMISH_LEGACY_DIAGNOSTIC_CHILD";
@@ -365,10 +398,8 @@ fn legacy_foreign_launcher_diagnostic_quotes_exact_path_in_separate_process() {
     let output=std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact","native_install::tests::legacy_foreign_launcher_diagnostic_quotes_exact_path_in_separate_process","--nocapture"]).env(CHILD,"1").output().unwrap();
     assert!(output.status.success(), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let expected = stdout
-        .lines()
-        .find_map(|s| s.strip_prefix("EXPECTED_PATH="))
-        .unwrap();
+    let expected = legacy_diagnostic_path(&stdout)
+        .unwrap_or_else(|| panic!("missing or malformed diagnostic path marker: {stdout:?}"));
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
         stderr.contains(&format!("conflicting launcher {expected};")),
