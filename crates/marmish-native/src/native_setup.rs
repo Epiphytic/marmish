@@ -310,7 +310,14 @@ pub(crate) async fn run(mut o: SetupOptions) -> Result<SetupReport> {
     })
     .await
     .map_err(|_| Error::Identity("initialization_worker"))??;
-    let (config, changed, role) = proposed(config_read(&profile)?, &o)?;
+    let (config, changed, role) = proposed(config_read(&profile)?, &o).inspect_err(|error| {
+        if matches!(error, Error::Invalid("config_exists")) {
+            eprintln!(
+                "marmish setup: existing configuration at {:?} differs from the requested options; rerun setup with --update to apply them (existing identity and data are kept).",
+                profile.root().join("config.json")
+            );
+        }
+    })?;
     let normalized = CommandConfig::from_bytes(
         &serde_json::to_vec(&config).map_err(|_| Error::Invalid("config_invalid"))?,
     )?;
