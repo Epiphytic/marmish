@@ -534,5 +534,167 @@ class ProviderDiagnostics(unittest.TestCase):
         self.assertNotIn('exit_code', result)
 
 
+class ChildDiagnostics(unittest.TestCase):
+    def inner_fixture(self, action, cleanup=None):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            report = home / 'result.json'
+            provider = check.MacProvider(home, {})
+            qualification = SimpleNamespace(provider=provider)
+            qualification.run = lambda result: action(qualification, result)
+            if cleanup is not None:
+                provider.close = lambda: cleanup(provider)
+            with mock.patch.object(check.pwd, 'getpwuid', return_value=SimpleNamespace(pw_dir=tmp)), \
+                    mock.patch.object(check, 'Qualification', return_value=qualification), \
+                    mock.patch.object(check.signal, 'signal'), mock.patch.object(check.signal, 'alarm'):
+                code = check.inner(home / 'bootstrap', home / 'assets', report)
+            return code, json.loads(report.read_text())
+
+    def test_specific_mac_failure_and_cleanup_keep_first_stage_status(self):
+        def action(q, result):
+            q.provider.start()
+        with mock.patch.object(check, 'execute', side_effect=check.Refused('operation_failed', 7)):
+            code, result = self.inner_fixture(action)
+        self.assertEqual(code, 1)
+        self.assertEqual(result['child_failure'], 'operation_failed')
+        self.assertEqual(result['child_failure_stage'], 'mac_create_keychain')
+        self.assertEqual(result['child_exit_code'], 7)
+        self.assertNotIn('_stage', result)
+        self.assertFalse(result['owned_children_reaped'])
+
+    def test_generic_primary_cannot_acquire_cleanup_status(self):
+        def action(q, result):
+            check.child_stage(result, 'quickstart')
+            raise RuntimeError('SENTINEL exception')
+        def cleanup(provider):
+            check.child_stage(provider._diagnostics, 'mac_delete_keychain')
+            raise check.Refused('operation_failed', 9)
+        _, result = self.inner_fixture(action, cleanup)
+        self.assertEqual(result['child_failure'], 'provider_qualification_failed')
+        self.assertEqual(result['child_failure_stage'], 'quickstart')
+        self.assertNotIn('child_exit_code', result)
+        self.assertNotIn('SENTINEL', json.dumps(result))
+
+    def test_cleanup_only_records_precise_mac_stage_real_status(self):
+        def cleanup(provider):
+            check.child_stage(provider._diagnostics, 'mac_delete_keychain')
+            raise check.Refused('operation_failed', 8)
+        _, result = self.inner_fixture(lambda *_:None, cleanup)
+        self.assertEqual(result['child_failure_stage'], 'mac_delete_keychain')
+        self.assertEqual(result['child_failure'], 'operation_failed')
+        self.assertEqual(result['child_exit_code'], 8)
+
+    def test_success_shape_legacy_and_optional_tracker(self):
+        _, result = self.inner_fixture(lambda *_:None, lambda _:None)
+        self.assertTrue(result['ok'])
+        self.assertFalse(any(key.startswith('child_') or key == '_stage' for key in result))
+        self.assertEqual(check.sanitize_child_diagnostics({'ok':False}), {'ok':False})
+        provider = check.MacProvider(Path('/owned'), {})
+        provider._diagnostics = None
+        with mock.patch.object(check, 'execute', return_value=(0,b'')):
+            provider.security('lock-keychain', 'SENTINEL', stage='mac_lock_keychain')
+
+    def test_generic_exception_cannot_supply_checked_subprocess_status(self):
+        error = RuntimeError('SENTINEL custom status')
+        error.exit_code = 7
+        result = {'_stage':'install'}
+        check.child_failure(result, error)
+        self.assertNotIn('child_exit_code', result)
+        self.assertEqual(result['child_failure'], 'provider_qualification_failed')
+        self.assertNotIn('SENTINEL', json.dumps(check.sanitize_provider_report(result)))
+
+    def test_closed_boundary_sanitizes_malformed_and_outer_only_values(self):
+        for value in ('SENTINEL', 'inner_launch', [], None, True):
+            result={'ok':False,'child_failure':value,'child_failure_stage':value,'child_exit_code':True}
+            check.sanitize_provider_report(result)
+            self.assertEqual(result, {'ok':False,'child_failure':'diagnostic_invalid',
+                'child_failure_stage':'diagnostic_invalid'})
+        for status in (-129,256,True,'7',None):
+            result={'child_failure':'operation_failed','child_failure_stage':'install','child_exit_code':status}
+            self.assertNotIn('child_exit_code', check.sanitize_child_diagnostics(result))
+        self.assertEqual(check.sanitize_child_diagnostics({'child_exit_code':7}), {
+            'child_failure':'diagnostic_invalid','child_failure_stage':'diagnostic_invalid','child_exit_code':7})
+        self.assertEqual(check.sanitize_child_diagnostics({'ok':True,'child_failure':'SENTINEL',
+            'child_failure_stage':'install','child_exit_code':7}), {'ok':True})
+        for category in ('lifecycle_upgrade_reload_failed','absent_provider_category','private_bus_start'):
+            self.assertEqual(check.sanitize_child_diagnostics({'child_failure':category})['child_failure'],
+                'diagnostic_invalid')
+
+    def test_outer_preserves_only_validated_child_tuple_and_own_primary(self):
+        harness = ProviderDiagnostics()
+        with tempfile.TemporaryDirectory() as tmp:
+            _, result, _ = harness.fixture(Path(tmp) / 'report.json', inner={
+                'kind':'installed_auto_provider','ok':False,'failure':'SENTINEL raw',
+                'child_failure':'operation_failed','child_failure_stage':'install','child_exit_code':7})
+        self.assertEqual(result['failure'], 'owned_account_qualification_failed')
+        self.assertEqual(result['failure_stage'], 'qualification_validate')
+        self.assertEqual(result['child_failure_stage'], 'install')
+        self.assertEqual(result['child_exit_code'], 7)
+        self.assertNotIn('SENTINEL', json.dumps(result))
+
+    def test_nonsecurity_install_does_not_keep_stale_mac_stage(self):
+        from types import SimpleNamespace
+        result = {}
+        provider = SimpleNamespace()
+        def start():
+            check.child_stage(result, 'mac_default_verify')
+            return {}
+        provider.start = start
+        qualification = check.Qualification.__new__(check.Qualification)
+        qualification.provider = provider
+        qualification.bootstrap, qualification.assets = Path('/SENTINEL'), Path('/assets')
+        qualification.prefix, qualification.bins = Path('/prefix'), Path('/bin')
+        with mock.patch.object(check, 'execute', side_effect=check.Refused('operation_failed', 7)):
+            with self.assertRaises(check.Refused) as failed:
+                qualification.run(result)
+        check.child_failure(result, failed.exception)
+        self.assertEqual(result['child_failure_stage'], 'install')
+        self.assertNotIn('SENTINEL', json.dumps(check.sanitize_provider_report(result)))
+        lifecycle = check.LifecycleQualification.__new__(check.LifecycleQualification)
+        lifecycle.provider = provider
+        lifecycle.a_assets = mock.Mock()
+        lifecycle.a_assets.glob.side_effect = RuntimeError('SENTINEL')
+        with self.assertRaises(RuntimeError):
+            lifecycle.run(result)
+        self.assertEqual(result['_stage'], 'qualification_remaining')
+
+    def test_report_parser_failure_is_at_quickstart_validation(self):
+        from types import SimpleNamespace
+        qualification = check.Qualification.__new__(check.Qualification)
+        qualification.provider = SimpleNamespace(start=lambda:{})
+        qualification.bootstrap, qualification.assets = Path('/bootstrap'), Path('/assets')
+        qualification.prefix, qualification.bins = Path('/prefix'), Path('/bin')
+        qualification.state = Path('/state')
+        qualification.wait_probe = lambda:None
+        result = {}
+        with mock.patch.object(check, 'execute', return_value=(0,b'')), \
+                mock.patch.object(check, 'interactive', return_value='SENTINEL'), \
+                mock.patch.object(check, 'reports', side_effect=RuntimeError('SENTINEL parser')):
+            with self.assertRaises(RuntimeError) as failed:
+                qualification.run(result)
+        check.child_failure(result, failed.exception)
+        self.assertEqual(result['child_failure_stage'], 'quickstart_validate')
+        self.assertNotIn('SENTINEL', json.dumps(check.sanitize_provider_report(result)))
+
+    def test_real_exit_and_stop_replacement_use_child_stage_without_raw_output(self):
+        for stop_error in (False, True):
+            result = {'_stage':'install'}
+            original = check.stop
+            def stopping(child):
+                original(child)
+                if stop_error:
+                    raise check.Refused('child_cleanup_incomplete')
+            with mock.patch.object(check, 'stop', side_effect=stopping):
+                try:
+                    check.execute(['/bin/sh','-c','echo SENTINEL >&2; exit 7'], {})
+                except check.Refused as error:
+                    check.child_failure(result, error)
+            check.sanitize_provider_report(result)
+            self.assertEqual(result['child_failure_stage'], 'install')
+            self.assertEqual(result.get('child_exit_code'), None if stop_error else 7)
+            self.assertNotIn('SENTINEL', json.dumps(result))
+
+
 if __name__ == '__main__':
     unittest.main()

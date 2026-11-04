@@ -53,6 +53,45 @@ cleanup_processes cleanup_delete_account cleanup_delete_home cleanup_verify_home
 cleanup_runner_search cleanup_runner_compare'''.split())
 
 
+CHILD_STAGES = frozenset('diagnostic_invalid provider_start mac_create_keychain mac_default_select mac_search_select mac_unlock_keychain mac_keychain_settings mac_default_verify mac_lock_keychain mac_delete_keychain install initial_probe quickstart quickstart_validate initial_identity_validate named_identity_setup named_identity_validate identity_reload locked_validation unlocked_validation absent_provider_validation qualification_remaining provider_cleanup'.split())
+CHILD_FAILURES = frozenset('diagnostic_invalid operation_failed operation_timeout operation_input_limit operation_output_limit child_cleanup_incomplete owned_descendant_remained qualification_deadline provider_qualification_failed provider_cleanup_incomplete owned_default_keychain keychain_cleanup_incomplete provider_state_unavailable helper_contract provider_metadata_limit quickstart_report quickstart_auto_keychain fresh_identity_reload profile_metadata profile_custody plaintext_fallback separate_key_references provider_list provider_item_count provider_item_uniqueness named_identity_separation named_reference_separation locked_existing_accepted locked_fresh_accepted locked_profile_mutated locked_files_fallback locked_native_items_changed'.split())
+
+
+def child_stage(result, stage):
+    if result is not None:
+        result['_stage'] = stage
+
+
+def sanitize_child_diagnostics(result):
+    fields = ('child_failure', 'child_failure_stage', 'child_exit_code')
+    if result.get('ok') is True:
+        for field in fields:
+            result.pop(field, None)
+    elif any(field in result for field in fields):
+        for field, allowed in (('child_failure', CHILD_FAILURES), ('child_failure_stage', CHILD_STAGES)):
+            value = result.get(field)
+            if not isinstance(value, str) or value not in allowed:
+                result[field] = 'diagnostic_invalid'
+        code = result.get('child_exit_code')
+        if not (type(code) is int and -128 <= code <= 255):
+            result.pop('child_exit_code', None)
+    return result
+
+
+def child_failure(result, error, cleanup=False):
+    if 'child_failure' in result:
+        return
+    category = str(error) if isinstance(error, Refused) else (
+        'provider_cleanup_incomplete' if cleanup else 'provider_qualification_failed')
+    values = {'child_failure': category, 'child_failure_stage': result.get('_stage')}
+    code = error.exit_code if isinstance(error, Refused) else None
+    if code is not None:
+        values['child_exit_code'] = code
+    sanitize_child_diagnostics(values)
+    # One update preserves the stage/category/status tuple before cleanup changes stage.
+    result.update(values)
+
+
 def provider_stage(result, stage):
     result['_stage'] = stage
 
@@ -83,7 +122,7 @@ def sanitize_provider_report(result):
         code = prefix + 'exit_code'
         if code in result and not (type(result[code]) is int and -128 <= result[code] <= 255):
             del result[code]
-    return result
+    return sanitize_child_diagnostics(result)
 
 
 def require(condition, category):
@@ -282,28 +321,29 @@ class MacProvider:
         self.root, self.environment = root, environment
         self.keychain = root / 'provider.keychain-db'
 
-    def security(self, *arguments):
+    def security(self, *arguments, stage):
+        child_stage(getattr(self, '_diagnostics', None), stage)
         return execute(['/usr/bin/security', *arguments], self.environment)[1]
 
     def start(self):
         password = PASSWORD.decode().strip()
-        self.security('create-keychain', '-p', password, str(self.keychain))
-        self.security('default-keychain', '-d', 'user', '-s', str(self.keychain))
-        self.security('list-keychains', '-d', 'user', '-s', str(self.keychain))
+        self.security('create-keychain', '-p', password, str(self.keychain), stage='mac_create_keychain')
+        self.security('default-keychain', '-d', 'user', '-s', str(self.keychain), stage='mac_default_select')
+        self.security('list-keychains', '-d', 'user', '-s', str(self.keychain), stage='mac_search_select')
         self.unlock()
-        self.security('set-keychain-settings', str(self.keychain))
-        selected = self.security('default-keychain', '-d', 'user').decode().strip().strip('"')
+        self.security('set-keychain-settings', str(self.keychain), stage='mac_keychain_settings')
+        selected = self.security('default-keychain', '-d', 'user', stage='mac_default_verify').decode().strip().strip('"')
         require(Path(selected) == self.keychain, 'owned_default_keychain')
         return self.environment
 
     def lock(self):
-        self.security('lock-keychain', str(self.keychain))
+        self.security('lock-keychain', str(self.keychain), stage='mac_lock_keychain')
 
     def unlock(self):
-        self.security('unlock-keychain', '-p', PASSWORD.decode().strip(), str(self.keychain))
+        self.security('unlock-keychain', '-p', PASSWORD.decode().strip(), str(self.keychain), stage='mac_unlock_keychain')
 
     def close(self):
-        self.security('delete-keychain', str(self.keychain))
+        self.security('delete-keychain', str(self.keychain), stage='mac_delete_keychain')
         require(not self.keychain.exists(), 'keychain_cleanup_incomplete')
 
 
@@ -376,15 +416,22 @@ class Qualification:
         return references
 
     def run(self, result):
+        self.provider._diagnostics = result
+        child_stage(result, 'provider_start')
         self.environment = self.provider.start()
+        child_stage(result, 'qualification_remaining')
         # Install without opening an identity first, so the real installed helper
         # can prove provider readiness before the interactive Auto setup starts.
+        child_stage(result, 'install')
         execute(['/bin/sh', str(self.bootstrap), '--asset-dir', str(self.assets),
             '--prefix', str(self.prefix), '--bin-dir', str(self.bins)], self.environment, 120)
+        child_stage(result, 'initial_probe')
         self.wait_probe()
+        child_stage(result, 'quickstart')
         output = interactive([str(self.bootstrap), '--quickstart', '--debug', '--asset-dir',
             str(self.assets), '--state-dir', str(self.state), '--prefix', str(self.prefix),
             '--bin-dir', str(self.bins)], self.environment, timeout=120)
+        child_stage(result, 'quickstart_validate')
         initial = [value for value in reports(output) if 'identity_created' in value]
         require(len(initial) == 1, 'quickstart_report')
         initial = initial[0]
@@ -392,16 +439,20 @@ class Qualification:
             and initial['identity_created'] and initial['owner_opened'] and not initial['inbound_enabled']
             and all(initial[key] for key in ('engine_stop_complete', 'mdk_stop_complete',
                 'runtime_cleanup_complete')), 'quickstart_auto_keychain')
+        child_stage(result, 'initial_identity_validate')
         first = self.manifest('default')
         self.items(2)
         self.reload('default', first['public_key'])
+        child_stage(result, 'named_identity_setup')
         _, raw = self.command('second', '--relay', 'wss://relay.invalid/', 'setup', '--role', 'both', '--no-grants')
+        child_stage(result, 'named_identity_validate')
         second_setup = json.loads(raw)
         second = self.manifest('second')
         require(second_setup['npub'] != initial['npub'], 'named_identity_separation')
         references = self.items(4)
         require(len({first['nostr_ref'], first['sqlcipher_ref'], second['nostr_ref'], second['sqlcipher_ref']}) == 4,
             'named_reference_separation')
+        child_stage(result, 'identity_reload')
         self.reload('default', first['public_key'])
         self.reload('second', second['public_key'])
         self.daemon_reload('default', first['public_key'])
@@ -409,6 +460,7 @@ class Qualification:
         result.update(auto_keychain=True, distinct_named_identities=True, fresh_reload=True, item_count=4)
         before = {name: self.snapshot(name) for name in ('default', 'second')}
         self.provider.lock()
+        child_stage(result, 'locked_validation')
         self.wait_probe('locked_or_denied')
         require(self.command('default', 'init', success=False)[0] != 0, 'locked_existing_accepted')
         require(self.command('locked-new', '--relay', 'wss://relay.invalid/', 'setup', '--role', 'both',
@@ -417,6 +469,7 @@ class Qualification:
         require(all(not (self.state / name / 'keys').exists() for name in before), 'locked_files_fallback')
         require(not (self.state / 'locked-new' / 'keys').exists(), 'locked_files_fallback')
         self.provider.unlock()
+        child_stage(result, 'unlocked_validation')
         self.wait_probe()
         self.reload('default', first['public_key'])
         self.reload('second', second['public_key'])
@@ -425,6 +478,7 @@ class Qualification:
         require(self.items(4) == references, 'locked_native_items_changed')
         result.update(locked_refused=True, unlocked_fresh_reload=True, no_plaintext_fallback=True)
         if isinstance(self.provider, LinuxProvider):
+            child_stage(result, 'absent_provider_validation')
             absent = dict(self.environment, DBUS_SESSION_BUS_ADDRESS=self.provider.absent)
             require(self.helper('probe', absent).get('error') == 'unavailable', 'absent_provider_category')
             require(self.command('default', 'init', success=False, environment=absent)[0] != 0,
@@ -488,7 +542,10 @@ class LifecycleQualification(Qualification):
         require(json.loads(raw).get('identity') == public, 'lifecycle_upgrade_identity')
 
     def run(self, result):
+        self.provider._diagnostics = result
+        child_stage(result, 'provider_start')
         self.environment = self.provider.start()
+        child_stage(result, 'qualification_remaining')
         manifests = list(self.a_assets.glob('*.manifest'))
         require(len(manifests) == 1 and digest(manifests[0]) == self.a_pin,
             'lifecycle_a_manifest_pin')
@@ -538,6 +595,7 @@ class LifecycleQualification(Qualification):
         result['lifecycle_stage'] = 'locked_denial'
         before = self.snapshot('default')
         self.provider.lock()
+        child_stage(result, 'qualification_remaining')
         self.wait_probe('locked_or_denied')
         require(self.command('default', 'init', success=False)[0] != 0,
             'lifecycle_locked_existing_accepted')
@@ -548,6 +606,7 @@ class LifecycleQualification(Qualification):
             and not (self.state / 'locked-new' / 'keys').exists(), 'lifecycle_locked_fallback')
         self.manifest('default')
         self.provider.unlock()
+        child_stage(result, 'qualification_remaining')
         self.wait_probe()
         self.reload('default', first['public_key'])
         require(self.items(2) == references, 'lifecycle_locked_items_changed')
@@ -583,27 +642,33 @@ def inner(bootstrap, assets, report, pins=None, deadline_seconds=540,
     if lifecycle_a_assets:
         result.update(lifecycle_upgrade_loaded=False, lifecycle_rollback_loaded=False,
             lifecycle_locked_denied=False, lifecycle_stage='initial_setup')
+    qualification.provider._diagnostics = result
+    child_stage(result, 'qualification_remaining')
     started = time.monotonic()
     try:
         qualification.run(result)
         result['ok'] = True
     except Refused as error:
+        child_failure(result, error)
         result['failure'] = str(error)
-    except Exception:
+    except Exception as error:
+        child_failure(result, error)
         result['failure'] = 'provider_qualification_failed'
     finally:
         try:
+            child_stage(result, 'provider_cleanup')
             qualification.provider.close()
             result['owned_children_reaped'] = True
-        except Exception:
+        except Exception as error:
             result['ok'] = False
             result.setdefault('failure', 'provider_cleanup_incomplete')
+            child_failure(result, error, cleanup=True)
         if result['ok'] and result['owned_children_reaped']:
             shutil.rmtree(root)
             result['owned_state_removed'] = not root.exists()
         signal.alarm(0)
         result['elapsed_ms'] = round((time.monotonic() - started) * 1000)
-        report.write_text(json.dumps(result, indent=2) + '\n')
+        report.write_text(json.dumps(sanitize_provider_report(result), indent=2) + '\n')
     return 0 if result['ok'] and result['owned_state_removed'] else 1
 
 
@@ -805,9 +870,10 @@ def mac_account(bootstrap, assets, report, lifecycle_a_assets=None, lifecycle_a_
                     'item_count', 'locked_refused', 'unlocked_fresh_reload', 'no_plaintext_fallback',
                     'python_in_runtime_path', 'network_activation', 'owned_children_reaped', 'owned_state_removed',
                     'lifecycle_upgrade_loaded', 'lifecycle_rollback_loaded', 'lifecycle_locked_denied',
-                    'lifecycle_stage'):
+                    'lifecycle_stage', 'child_failure', 'child_failure_stage', 'child_exit_code'):
                 if key in received:
                     result[key] = received[key]
+            sanitize_child_diagnostics(result)
             provider_stage(result, 'interpreter_recheck')
             result['supervisor_interpreter_unchanged'] = digest(python) == interpreter_digest
             require(result['supervisor_interpreter_unchanged'], 'interpreter_changed')

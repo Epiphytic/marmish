@@ -79,3 +79,48 @@ Session: 356654f9-896f-4d37-b32a-5d5b51c4b916
 1. The phase doc has missing spaces from line-wrapping, such as `supervisor5ccc646c…`, `product61f4…`, `mode0700`, `supervisor30+`, `Node58`, `staticworkflow3` and `version0.2.2`. Fix these in a docs-only touch-up before committing.
 2. I could not verify offline the claims about hosted run 41915532600/1 (start time, `guard=assets_pass`) or the Node 58/58, static-workflow 3/3 and actionlint results. They are plausible and consistent with the diff, and I take them from the docs.
 3. The docs correctly say that a fresh hosted provider run is still required. Later stages, from `stage_copy` onward, have never run, so any failure there should be recorded as a new observation.
+
+
+## Finite child diagnostic code review
+
+Actual independent Claude review recorded in
+`/tmp/marmish-scj-provider-child-code.json`: **APPROVED**, no blockers. Reviewer
+inspected the four-file child diagnostic increment against all nine binding
+design conditions and independently ran supervisor discovery and direct
+execution: 40/40 each, with `git diff --check` clean. Reviewer used no Cargo,
+live account, Keychain, network, edits or commits. Node 58, static workflow 3,
+and actionlint results were author evidence, not independently rerun by Claude.
+
+Useful non-blocking observations were incorporated: capture the child tuple
+before assigning the primary failure field, accept checked status only from
+`Refused`, and reconcile the earlier design prose with explicit source-literal
+stages, lifecycle reset requirements and precise cleanup-only status policy.
+A generic exception bearing an arbitrary `exit_code` now has a regression test
+proving that status is omitted. Updated supervisor discovery and direct execution
+each pass 41/41; diff whitespace check passes. A narrow follow-up review of these
+changes remains required before publication; no hosted provider pass is claimed.
+
+
+## Child diagnostic final narrow review
+
+Actual Claude Code `claude-sonnet-5-5`, `--permission-mode auto`.
+Session: f7360a21-ac8f-442d-9b22-042181113953
+
+**APPROVED.** The narrow fixes are correct, and I found no blockers or new findings. My prior full integrated approval stands.
+
+**Checks I ran**
+- The Python suite passes 41/41 as `unittest` and as direct execution. That is the earlier 40 plus the new generic-exception test. I ran both from `tools/`, since `-I` breaks the sibling import.
+- `git diff --check` is clean.
+- I did not rerun the Node, static-workflow or lint checks. I took your supervisor 41, 58, 3 and lint PASS results as given.
+- I made no edits, network calls, Cargo runs, live runs or commits.
+
+**The four changes**
+1. **`child_failure()` runs before the `failure` assignment.** Both inner excepts do this (`tools/marmish_native_keychain_check.py:651-656`): `child_failure(result, error)`, then `result['failure'] = …`. The cleanup path at `:665` is also unchanged and correct. The first-failure guard `if 'child_failure' in result: return` and the single `result.update(values)` keep the stage, category and status tuple together.
+2. **Only `Refused` supplies the checked exit status.** `code = error.exit_code if isinstance(error, Refused) else None` (`:87`). The values then go through `sanitize_child_diagnostics`, which keeps only `type(code) is int` in -128..255. The outer `provider_failure` still uses `getattr(error, 'exit_code', None)`, but that is a separate supervisor-side field, not the child tuple.
+3. **New test `test_generic_exception_cannot_supply_checked_subprocess_status`.** It builds a `RuntimeError` with `exit_code = 7` and checks three things:
+   - `child_exit_code` is absent.
+   - The category is `provider_qualification_failed`.
+   - The raw `SENTINEL` text does not appear in the sanitized report.
+4. **Design prose reconciled.** In `docs/phases/native-provider-diagnostics.md`, lines 22-24 and 313-316 now say the status is retained only when it is the actual checked subprocess status. Generic exceptions map to `provider_qualification_failed` without a status. Lines 334-340 say generic cleanup exceptions use `provider_cleanup_incomplete` with no status, and that the first-failure capture is a single operation. I found no leftover contradiction.
+
+**Non-blocking note:** the supervisor-side `provider_failure` still takes `exit_code` from any exception via `getattr`. It is not part of the child diagnostic boundary, and the design only requires `Refused.exit_code` there. I'm not asking for a change.

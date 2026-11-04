@@ -259,3 +259,147 @@ account `PrimaryGroupID=-2`. Offline supervisor discovery and direct execution
 both pass 31 tests; Node tooling passes 58, static workflow contracts pass 3,
 and actionlint 1.7.7 and whitespace checks pass. This is harness validation;
 actual hosted provider qualification remains required after code review.
+
+## Finite child diagnostics after 41916591226/1
+
+The second hosted diagnostic passed the owner-only chown stage and reached the
+unprivileged child. Its outer report has `owned_account_qualification_failed`
+at `qualification_validate`, elapsed 4123 ms, unchanged supervisor interpreter,
+`owned_children_reaped=true`, `owned_state_removed=false`, and unchanged runner
+Keychain. This establishes a child failure, without identifying whether provider
+setup, installation, or product setup failed. Do not infer a product defect from
+this report or weaken qualification to obtain a pass.
+
+This increment adds failure-only finite child diagnostics in the same existing
+supervisor and tests. It uses the existing pinned diagnostic workflow, product
+bytes, 12-path source audit and provenance envelope unchanged. No product,
+account, Keychain configuration, cleanup authority or timeout changes are in
+scope. Obtain actual independent Claude design approval before implementation,
+then code review before publication and another bounded hosted diagnostic.
+
+### Child interfaces and trust boundary
+
+Use the private `_stage` key on the child result as the live tracker, set only
+from source literals. The inner supervisor supplies its existing result dict to
+the provider through an optional private `_diagnostics` attribute before `run`;
+this does not change constructors or the existing lifecycle test fixtures.
+`Qualification.run` sets a source literal immediately before each coarse
+boundary. `MacProvider.security` updates that same tracker using an explicit
+source-literal stage keyword passed by `start`, `lock`, `unlock` or `close`; it
+never derives a stage from an argument, path, response or exception. Linux providers keep coarse boundaries.
+The tracker is removed immediately before writing a report, including successful
+reports. Never export provider arguments, raw stdout/stderr, exception text,
+passwords, key references, identity material or filesystem paths.
+
+Closed `CHILD_STAGES` values are `diagnostic_invalid`, `provider_start`,
+`mac_create_keychain`, `mac_default_select`, `mac_search_select`,
+`mac_unlock_keychain`, `mac_keychain_settings`, `mac_default_verify`,
+`mac_lock_keychain`, `mac_delete_keychain`, `install`, `initial_probe`,
+`quickstart`, `quickstart_validate`, `initial_identity_validate`,
+`named_identity_setup`, `named_identity_validate`, `identity_reload`,
+`locked_validation`, `unlocked_validation`, `absent_provider_validation`,
+`qualification_remaining`, and `provider_cleanup`. Distinguish default-keychain
+selection from verification with separate explicit source-literal stages at
+the call sites in `start`; neither inspects argv or path contents. Mark provider
+start before calling it and installation immediately after it, so the present
+4-second failure will identify a specific security operation or the first
+post-provider boundary. The lifecycle override must set `qualification_remaining`
+immediately after provider start, lock and unlock. Linux keeps the regular
+qualification runner's coarse boundaries rather than broad new instrumentation;
+existing finite primary failure categories remain available. This is attribution, not a redesign
+of the qualification runner.
+
+On the first child qualification exception, record failure-only
+`child_failure_stage`, optional `child_exit_code`, and `child_failure` before
+cleanup changes `_stage`. `Refused.exit_code` is retained only when it is the
+actual checked subprocess status; timeouts and stop-error replacements have no
+invented status. Generic exceptions map to `provider_qualification_failed`.
+The closed child category enum consists of `diagnostic_invalid`,
+`operation_failed`, `operation_timeout`, `operation_input_limit`,
+`operation_output_limit`, `child_cleanup_incomplete`, `owned_descendant_remained`,
+`qualification_deadline`, `provider_qualification_failed`,
+`provider_cleanup_incomplete`, `owned_default_keychain`,
+`keychain_cleanup_incomplete`, `provider_state_unavailable`, `helper_contract`,
+`provider_metadata_limit`, `quickstart_report`, `quickstart_auto_keychain`,
+`fresh_identity_reload`, `profile_metadata`, `profile_custody`,
+`plaintext_fallback`, `separate_key_references`, `provider_list`,
+`provider_item_count`, `provider_item_uniqueness`, `named_identity_separation`,
+`named_reference_separation`, `locked_existing_accepted`,
+`locked_fresh_accepted`, `locked_profile_mutated`, `locked_files_fallback`, and
+`locked_native_items_changed`. Any other category becomes `diagnostic_invalid`;
+additional known categories require an explicit reviewed enum addition, never a
+prefix match. This bounded list is sufficient to separate the present early
+failure without instrumenting every lifecycle assertion.
+
+For a cleanup-only failure, capture the same child fields at the precise
+current stage, including `mac_delete_keychain`. Retain a real `Refused` category
+and checked status subject to closed validation; generic cleanup exceptions use
+`provider_cleanup_incomplete` without a status. If a primary child failure already exists,
+its three child fields are immutable through cleanup: use a single first-failure
+capture operation, rather than independently filling a missing exit code from a
+later failure. Existing `failure`, cleanup booleans, return status, account/home
+retention and group reaping behavior are unchanged. Success reports gain none
+of these new fields. Lifecycle signal/timeout behavior must not overwrite the
+captured primary child cause with a later cleanup cause.
+
+The outer process treats every received child field as untrusted. It copies
+only the three named child diagnostic fields, on a failed qualification, through
+one sanitizer. Require exact closed membership for the category and stage;
+non-string, missing required or unknown values become `diagnostic_invalid`.
+Optional statuses require `type is int` in -128..255; bool and invalid values are
+omitted. Discard all child diagnostic fields on success. A legacy failed child
+report without these fields gains no fabricated diagnostics. If a failed child
+provides either required field, normalize both required fields, so a malformed
+partial diagnostic cannot pass as valid. Keep the outer primary
+`failure=owned_account_qualification_failed` and its `qualification_validate`
+stage; never restore copying an unchecked inner `failure` into the outer public
+report. Reapply this sanitizer at both existing report writes, including the
+main report rewrite, and strip `_stage` in every case.
+
+### Acceptance and review
+
+Add offline full mocked-child/outer tests for a specific Mac security failure
+with a real finite exit status, install failure, generic exception with sentinel
+text, and cleanup failure after a primary failure with and without a primary
+status. Assert child stage/category/status survive unchanged when outer failure
+is assigned, and cleanup cannot add its own status to the primary diagnostic.
+Exercise real `/bin/sh` exit 7 and the stop-error replacement contract without
+raw capture output. Test unknown categories, unknown/non-string stages,
+non-integer/bool/out-of-range statuses, partial fields, legacy missing fields,
+and successful reports. Sentinel text in argv, output and exception must never
+appear in serialized child or outer reports. Confirm private tracker removal,
+first-failure preservation, existing cleanup red-stays-red assertions and
+unchanged successful report shape. Repeat the supervisor discovery/direct
+suite, static workflow tests, full Node tests and actionlint. After independent
+code approval, dispatch the existing bounded diagnostic and report its exact
+product/supervisor/run binding and finite child failure or actual provider pass.
+
+
+The child addendum received actual Claude design approval recorded in
+`/tmp/marmish-scj-provider-child-design.json`, with nine binding conditions.
+Implementation uses separate `CHILD_STAGES` and `CHILD_FAILURES` enums and a
+distinct `child_stage` helper. Mac security calls pass explicit source literals;
+there is no argv inference. A missing/None provider tracker is a no-op.
+Non-security transitions reset the tracker immediately, including
+`quickstart_validate` before parsing and `qualification_remaining` in the
+lifecycle override immediately after provider start, lock and unlock. Lifecycle,
+Linux and absent-provider categories outside the reviewed category enum map to
+`diagnostic_invalid` in the supplemental diagnostics; existing primary categories
+are unchanged.
+
+The first child cause is assembled into locals and captured by one guarded
+`dict.update`, preserving the complete tuple through cleanup. Cleanup-only
+failure uses the precise current stage, including `mac_delete_keychain`; real
+`Refused` category/status is retained subject to closed validation, while a
+generic cleanup exception maps to `provider_cleanup_incomplete` without status.
+This clarifies the earlier coarse cleanup wording. Child fields are sanitized
+again at the outer report boundary and removed on success. Review records stay
+in existing allowlisted documentation and `/tmp`, without new review paths.
+
+Offline supervisor discovery and direct execution each pass 40 tests, including
+specific Mac create/delete failure, generic sentinel and cleanup preservation,
+outer revalidation, malformed fields, successful shape, lifecycle and install
+stale-stage checks, quickstart parser placement, and real exit/stop replacement.
+Node tooling passes 58 tests; static workflow contracts pass 3; actionlint 1.7.7
+and whitespace checks pass. These tests establish diagnostic contracts only;
+actual code approval and a new pinned hosted provider run remain required.

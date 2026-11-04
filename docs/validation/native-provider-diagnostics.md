@@ -40,3 +40,18 @@ Supervisor discovery and direct execution each pass 31/31; Node tooling passes
 checks pass. No live accounts, Cargo builds, product changes, or private provider
 material were used in this correction. Actual code review and a fresh hosted
 provider run remain necessary; no macOS provider pass is claimed.
+
+
+Hosted diagnostic [41916591226/1](https://github.com/Epiphytic/marmish/actions/runs/41916591226)
+reached the child after the owner-only correction. It failed at outer
+`qualification_validate` with `owned_account_qualification_failed`, elapsed
+4123 ms; `owned_children_reaped=true`, `owned_state_removed=false`, and
+`runner_keychain_unchanged=true`. This exposes no specific child cause and is
+not a provider pass.
+
+The independently approved finite-child-diagnostics increment adds failure-only
+validated category/stage/status tuples, preserving the outer failure category
+and successful schema. Offline supervisor discovery and direct execution each
+pass 40/40, Node tooling 58/58, static workflow contracts 3/3, actionlint 1.7.7
+and diff whitespace checks pass. No live accounts or product builds were run.
+Actual code review and another exact-source hosted diagnostic remain pending.
