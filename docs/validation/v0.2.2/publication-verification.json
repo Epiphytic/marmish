@@ -1,0 +1,112 @@
+{
+  "source_commit": "89107389b9a348b23458cc59b7250499fe1b7b08",
+  "bootstrap_commit": "465e51a9365a08365a49d555b876c39af25b97ff",
+  "annotated_tag": "6337d9846ce5c047416526a9e95936682ac4c234",
+  "tag": "v0.2.2",
+  "release_id": 433538011,
+  "script_sha256": "00d69af6289b0e3316539fde0a7edbd9b24ab6523bf57a8ba229f8172ac28135",
+  "scripts": [
+    {
+      "url": "https://raw.githubusercontent.com/Epiphytic/marmish/master/scripts/install.sh",
+      "sha256": "00d69af6289b0e3316539fde0a7edbd9b24ab6523bf57a8ba229f8172ac28135"
+    },
+    {
+      "url": "https://iris.radicle.network/raw/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/head/scripts/install.sh",
+      "sha256": "00d69af6289b0e3316539fde0a7edbd9b24ab6523bf57a8ba229f8172ac28135"
+    }
+  ],
+  "server_assets": [
+    {
+      "id": 708323550,
+      "name": "marmish-0.2.2-aarch64-apple-darwin",
+      "size": 55162176,
+      "digest": "sha256:76c4f3249e1c71fc7abb184a1a7b9d2cad12e70680cb0e1a42f72aeb81dd694c"
+    },
+    {
+      "id": 708323722,
+      "name": "marmish-0.2.2-aarch64-apple-darwin.manifest",
+      "size": 601,
+      "digest": "sha256:3fc2672dd4d62dfa23cce7d1a88ee054caa9f8505b2476e4d0705297088ce761"
+    },
+    {
+      "id": 708323751,
+      "name": "marmish-0.2.2-aarch64-unknown-linux-gnu",
+      "size": 66425696,
+      "digest": "sha256:0fb386bf84575e15147f1df2b363dee208f7d0a0fbef0d200febda79c3e29b7b"
+    },
+    {
+      "id": 708324015,
+      "name": "marmish-0.2.2-aarch64-unknown-linux-gnu.manifest",
+      "size": 605,
+      "digest": "sha256:30a68cd9708ca57253e3c42edbfcc71b32af47599a24382ed5cac485e05d25e4"
+    },
+    {
+      "id": 708324042,
+      "name": "marmish-0.2.2-x86_64-unknown-linux-gnu",
+      "size": 71159328,
+      "digest": "sha256:7de1ebc7b680a3c1decd08e50446524ce6e1f8ee8848bcafa36a977e53e6e9b7"
+    },
+    {
+      "id": 708324214,
+      "name": "marmish-0.2.2-x86_64-unknown-linux-gnu.manifest",
+      "size": 605,
+      "digest": "sha256:487f8845b399e38dbf432f245998964eb5a45f5f758bb7d5eadd40e9fdbc9110"
+    },
+    {
+      "id": 708324273,
+      "name": "marmish-worker-0.2.2-aarch64-apple-darwin",
+      "size": 6911584,
+      "digest": "sha256:c2b5a94d936456ce46966025596a68dd7596ea85c7bc61dfc219d5c56d4c7a8a"
+    },
+    {
+      "id": 708324338,
+      "name": "marmish-worker-0.2.2-aarch64-unknown-linux-gnu",
+      "size": 8717760,
+      "digest": "sha256:57f23de37aafbe94ff8cde8e193a7812182d6fc52a9b87f34ba115bb6dca6ca1"
+    },
+    {
+      "id": 708324370,
+      "name": "marmish-worker-0.2.2-x86_64-unknown-linux-gnu",
+      "size": 13089240,
+      "digest": "sha256:66371a7eecc7b68b3ee0291bad3df7647a0b08cba670f3cae5c96af0ad60fbc2"
+    },
+    {
+      "id": 708324402,
+      "name": "marmishd-0.2.2-aarch64-apple-darwin",
+      "size": 55162176,
+      "digest": "sha256:8241bb989770b27f3667172da30ff0605b7588ff77bab03129a85af6c5f024da"
+    },
+    {
+      "id": 708324667,
+      "name": "marmishd-0.2.2-aarch64-unknown-linux-gnu",
+      "size": 66425704,
+      "digest": "sha256:f4b40988a5aff9cb5a76f6bac34e46e5af3ad020b2f1131d013612f6655b543b"
+    },
+    {
+      "id": 708324950,
+      "name": "marmishd-0.2.2-x86_64-unknown-linux-gnu",
+      "size": 71159328,
+      "digest": "sha256:1085471b74b6e951eb34d342ccb2d16763a8af52fd1fa0df75a441bfee449a66"
+    },
+    {
+      "id": 708323441,
+      "name": "THIRD-PARTY-LICENSES-0.2.2-aarch64-apple-darwin",
+      "size": 2063445,
+      "digest": "sha256:9dde5721c3dca0cb34382c2ee378279395e9bebab0adb4d2b9ef950d0273305e"
+    },
+    {
+      "id": 708323478,
+      "name": "THIRD-PARTY-LICENSES-0.2.2-aarch64-unknown-linux-gnu",
+      "size": 2136129,
+      "digest": "sha256:6dfda45751322f944812918a5b2d8f001bc64bd7f292868e6aa5f63b0dd881c4"
+    },
+    {
+      "id": 708323509,
+      "name": "THIRD-PARTY-LICENSES-0.2.2-x86_64-unknown-linux-gnu",
+      "size": 2137225,
+      "digest": "sha256:b538c45f8b60f9d1c421709e57274ad3d1097b9b9071dd6c8cb6717f9e8a74b6"
+    }
+  ],
+  "all_15_server_sizes_and_digests_match": true,
+  "https_workflow": "not dispatched: candidate overall FAILURE; existing whole-success guard retained"
+}

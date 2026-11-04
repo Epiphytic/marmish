@@ -1,21 +1,23 @@
 # Marmish native v0.2 agent specification
 
-**Native v0.2.1 corrective prerelease is available.** It adds automatic upgrades
-of recognized v0.1 launchers and fixes credential-helper selection. All three
-platforms passed native verification, packaging and file-backed quickstart checks;
-both Linux real-provider checks passed. macOS real Keychain qualification was
-not invoked because its supervisor tests failed. Full cross-platform command,
-provider and lifecycle qualification remains incomplete. This corrective release
-was explicitly authorized for out-of-band macOS testing.
+**Native v0.2.2 corrective prerelease is available.** It adds explicit macOS
+`keychain-authorize` for existing credentials. All three platforms passed native
+verification, packaging and file-backed quickstart checks; both Linux provider
+checks passed. The macOS qualification supervisor failed without a detailed
+provider result. Interactive Keychain consent and recovery of the reported denial
+remain unverified. A separately tracked transport shutdown panic was observed in
+the otherwise successful installed Linux command check. Full cross-platform
+command, provider and lifecycle qualification remains incomplete. See the
+[release evidence](validation/v0.2.2/corrective-publication.md).
 
-Release source is `7c49c3785eab010bf017c1bb7f03511524312b95`;
-bootstrap-only commit is `22014b98a415ecf05b422ac2c754dc18b3311d46`.
-Both public installer URLs serve the verified v0.2.1 bootstrap. The candidate's
-overall conclusion remains FAILURE and its macOS real-provider check was not
-invoked. Both Linux default-auto provider checks and all three file-backed
-quickstarts passed; full installed matrix/lifecycle qualification is incomplete.
-See [corrective publication evidence](validation/v0.2/corrective-release-0.2.1.md).
-The [0.2.0 evidence](validation/v0.2/initial-release.md) remains historical.
+Release source is `89107389b9a348b23458cc59b7250499fe1b7b08`;
+bootstrap-only commit is `465e51a9365a08365a49d555b876c39af25b97ff`.
+Both public installer URLs serve the verified v0.2.2 bootstrap. Candidate
+41726568264 attempt 1 remains FAILURE after the opaque macOS qualification
+supervisor error; the separate HTTPS workflow is guard-blocked, not passed.
+See [publication evidence](validation/v0.2.2/corrective-publication.md).
+The [0.2.1 evidence](validation/v0.2/corrective-release-0.2.1.md) and
+[0.2.0 evidence](validation/v0.2/initial-release.md) remain historical.
 
 ## Scope and navigation
 
@@ -59,7 +61,7 @@ profile migration or automatic disk cleanup. Receipt generation determines
 rollback versus roll-forward after interruption, with recovery on the next
 installer invocation. Native uninstall removes native links, not the retained
 legacy backups. See the [reviewed design](phases/v0.2.1-native-legacy-upgrade.md).
-The public bootstrap now selects 0.2.1 with this behavior. Native suites passed
+The public bootstrap now selects 0.2.2 with this behavior. Native suites passed
 on all three release targets; actual user upgrade and real macOS provider
 qualification remain distinct observations.
 
@@ -337,7 +339,7 @@ and GitHub, with GitHub the independent script backup. Both routes may still
 need GitHub-hosted release assets. Availability of one mirror does not prove the
 other; source replication, HTTPS delivery and installed behavior need separate
 evidence. A native-bootstrap cutover and matching URL digests are required before
-the default script can be described as installing v0.2. Six-case HTTPS installer validation passed separately in run 41667214179 attempt 1; it is not inferred from source publication.
+the default script can be described as installing v0.2. Six-case HTTPS installer validation passed for v0.2.0 in run 41667214179 attempt 1; it does not qualify v0.2.2 or follow from source publication.
 
 Ordinary shutdown preserves jobs and durable native work. Hidden same-UID fixture
 cleanup is a separate irreversible draining lifecycle: close admission, refresh
@@ -387,8 +389,8 @@ bound result is explicitly recorded:
   state/sidecar proofs and owned keychain lifecycle.
 - Providers: actual default-auto Linux and macOS native-provider qualification.
 
-HTTPS installer validation passed within its tested scope for both script sources across all three
-targets in run 41667214179 attempt 1; the pending list above does not include it.
+HTTPS installer validation passed for v0.2.0 within its tested scope for both script sources across all three
+targets in run 41667214179 attempt 1; this is not v0.2.2 qualification. The list above omits only that historical v0.2.0 gate.
 
 Actual release manifests bind source and immutable asset hashes. Record source
 mirror and installer-byte verification as their own evidence; do not infer
@@ -441,11 +443,11 @@ The installed lifecycle checker derives synthetic A/C versions from the frozen
 stable `0.2.N` candidate and matching native lock entry, rather than pinning
 `0.2.0`. See the [patch-version amendment](phases/v0.2-lifecycle-patch-versions.md).
 This changes qualification tooling only; hosted lifecycle qualification remains
-pending. The public installer now pins 0.2.1.
+pending. The public installer now pins 0.2.2.
 
 The canonical credential-helper correction (`marmish-far`) makes managed and ordinary sibling `marmish`, `marmishd` and worker entrypoints select validated same-version `marmish` for provider operations. Exact downloaded standalone CLI behavior is preserved. This fixes an inconsistent helper identity; reported macOS Keychain denial causation and full daemon startup remain pending actual pre/post-fix macOS qualification. No ACL or file-fallback policy changes. See [design](phases/v0.2-canonical-credential-helper.md).
 
-The next corrective increment adds explicit foreground macOS
+The published 0.2.2 increment adds explicit foreground macOS
 `marmish [-i NAME] [--state-dir DIR] keychain-authorize`; it is not in the
 published 0.2.1 assets. See the independently reviewed
 [authorization design](phases/v0.2.2-keychain-authorize.md). It requires an
@@ -462,6 +464,17 @@ reserves the final 15 seconds for verification. SIGKILL cleanup relies on the
 helper watchdog. Interactive macOS consent and recovery of the user's denial
 remain qualification requirements, separate from offline test success.
 
-### macOS provider supervisor correction (offline reviewed, native pending)
+### macOS provider supervisor correction and remaining qualification
 
-Candidate 41698628787 macOS stopped in offline supervisor tests; real Keychain qualification was skipped, so it supplies no provider or helper-custody verdict. The bounded correction canonicalizes lifecycle fixture paths and handles an initial owned-child group EPERM only by exact-child reap plus a fresh ESRCH proof; unknown or denied cleanup stays red. Linux provider23/HTTPS24 offline checks and independent [code review](reviews/v0.2.1-macos-provider-supervisor-code-r1.md) pass. Native macOS offline tests and actual disposable Keychain qualification remain pending. See [sanitized evidence](validation/v0.2.1/macos-provider-supervisor.md) and [approved design](phases/v0.2.1-macos-provider-supervisor.md).
+Candidate 41698628787 macOS stopped in offline supervisor tests; real Keychain qualification was skipped, so it supplies no provider or helper-custody verdict. The bounded correction canonicalizes lifecycle fixture paths and handles an initial owned-child group EPERM only by exact-child reap plus a fresh ESRCH proof; unknown or denied cleanup stays red. Linux provider23/HTTPS24 offline checks and independent [code review](reviews/v0.2.1-macos-provider-supervisor-code-r1.md) pass. At that evidence point native macOS offline tests and actual disposable Keychain qualification remained pending; see the newer observation below. See [sanitized evidence](validation/v0.2.1/macos-provider-supervisor.md) and [approved design](phases/v0.2.1-macos-provider-supervisor.md).
+
+Candidate 41726568264 passed all 23 macOS offline supervisor tests, but its
+outer real-provider qualifier failed after 676 ms with `operation_failed` and
+unchanged runner Keychain snapshots. No inner report was imported; whether
+provider execution began is unknown. `owned_account_removed=false` does not
+prove an account existed or leaked. Bounded failure-stage diagnostics are
+tracked as `marmish-wtg`; interactive macOS acceptance remains pending.
+The installed Linux command check also emitted a background sink panic despite
+passing result/cleanup flags. Its source/dependencies are unchanged from 0.2.1;
+independent triage permits this caveated correction, while `marmish-xvd` tracks
+the defect. Remote final-write/closure effects remain unproven.

@@ -1,0 +1,29 @@
+{
+  "version": "0.2.2",
+  "source_commit": "89107389b9a348b23458cc59b7250499fe1b7b08",
+  "normal_uid": true,
+  "asset_directory_override": false,
+  "all_four_installed_files_match": true,
+  "files": [
+    {
+      "name": "marmish",
+      "sha256": "7de1ebc7b680a3c1decd08e50446524ce6e1f8ee8848bcafa36a977e53e6e9b7",
+      "size": 71159328
+    },
+    {
+      "name": "marmishd",
+      "sha256": "1085471b74b6e951eb34d342ccb2d16763a8af52fd1fa0df75a441bfee449a66",
+      "size": 71159328
+    },
+    {
+      "name": "marmish-worker",
+      "sha256": "66371a7eecc7b68b3ee0291bad3df7647a0b08cba670f3cae5c96af0ad60fbc2",
+      "size": 13089240
+    },
+    {
+      "name": "THIRD-PARTY-LICENSES",
+      "sha256": "b538c45f8b60f9d1c421709e57274ad3d1097b9b9071dd6c8cb6717f9e8a74b6",
+      "size": 2137225
+    }
+  ]
+}

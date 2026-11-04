@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "scope": "outer process stderr; separate from sample remote stderr",
+  "distinct_original_output_files": true,
+  "distinct_report_bytes": true,
+  "runs": [
+    {
+      "invocation": "installed-command-check",
+      "exit_code": 0,
+      "report_sha256": "09bebbaf5e5dbb280509a214b7bf5e58282226a749306f721a1d65c5a9c400ad",
+      "stderr_bytes": 209,
+      "stderr_sha256": "e75204b111ccf76dd031f697f1bff8cd49b1a924680e0c89333d64d71debc920",
+      "background_async_future_panic_observed": true
+    },
+    {
+      "invocation": "public-installed-command-check",
+      "exit_code": 0,
+      "report_sha256": "83db132141a6222e0365cca6d4bf54d18a5bc1e2e5b1db24b116cb97848e4c33",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "background_async_future_panic_observed": false
+    }
+  ]
+}

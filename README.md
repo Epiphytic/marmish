@@ -4,13 +4,15 @@ Run remote commands over Marmot's MLS-encrypted Nostr transport. Marmish v0.2
 uses native Rust clients and daemons, with one named Nostr identity per daemon.
 The same identity can send commands and accept authorized commands.
 
-**Native v0.2.1 corrective prerelease is available.** It adds automatic upgrades
-of recognized v0.1 launchers and fixes credential-helper selection. All three
-platforms passed native verification, packaging and file-backed quickstart checks;
-both Linux real-provider checks passed. macOS real Keychain qualification was
-not invoked because its supervisor tests failed. Full cross-platform command,
-provider and lifecycle qualification remains incomplete. This corrective release
-was explicitly authorized for out-of-band macOS testing.
+**Native v0.2.2 corrective prerelease is available.** It adds explicit macOS
+`keychain-authorize` for existing credentials. All three platforms passed native
+verification, packaging and file-backed quickstart checks; both Linux provider
+checks passed. The macOS qualification supervisor failed without a detailed
+provider result. Interactive Keychain consent and recovery of the reported denial
+remain unverified. A separately tracked transport shutdown panic was observed in
+the otherwise successful installed Linux command check. Full cross-platform
+command, provider and lifecycle qualification remains incomplete. See the
+[release evidence](docs/validation/v0.2.2/corrective-publication.md).
 
 Source: [GitHub](https://github.com/Epiphytic/marmish) ·
 [Radicle](https://radicle.network/nodes/iris.radicle.network/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg)
@@ -31,7 +33,7 @@ If Iris is unavailable, the same installer is available independently on GitHub:
 curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/Epiphytic/marmish/master/scripts/install.sh | sh -s -- --quickstart --debug
 ```
 
-The installer pins v0.2.1 and verifies its manifest and binary checksums. It does
+The installer pins v0.2.2 and verifies its manifest and binary checksums. It does
 not select a legacy v0.1 release. The Iris and GitHub URLs are independent script sources; both were verified to
 serve the same pinned native bootstrap. Versioned binary assets
 are downloaded from GitHub Releases. See [Scope and validation](#scope-and-validation) for the evidence boundary. No Python, uv,
@@ -41,7 +43,7 @@ The native 0.2.1 installer adds automatic upgrades of recognized v0.1 installer
 launchers. It verifies the old marker and exact wrappers, replaces the launchers,
 and retains the old runtime and launcher backups; private state is unchanged.
 Unrelated programs are refused rather than overwritten. Interrupted upgrades
-recover on the next installer invocation. The public bootstrap above selects the matching 0.2.1 assets.
+recover on the next installer invocation. The public bootstrap above selects the matching 0.2.2 assets.
 
 Supported binaries are Linux AMD64 and ARM64 (glibc 2.39 or newer), and macOS 15
 or newer on Apple Silicon. Use a native ARM64 terminal on macOS. The macOS
@@ -180,8 +182,7 @@ Stop the existing daemon before restarting it. Rerunning first-time quickstart
 against an existing configuration can report `config_exists`; use `setup --update`
 when intentionally changing setup.
 
-The next corrective version adds macOS `keychain-authorize` (not available in
-0.2.1). If an unlocked Keychain still produces `identity: locked_or_denied`,
+Version 0.2.2 adds macOS `keychain-authorize` (not available in 0.2.1). If an unlocked Keychain still produces `identity: locked_or_denied`,
 stop that profile's daemon and run this from a foreground macOS terminal:
 
 ```sh
@@ -231,31 +232,26 @@ to the native v0.2 distribution.
 
 ## Corrective release validation
 
-The [v0.2.1 prerelease](https://github.com/Epiphytic/marmish/releases/tag/v0.2.1)
+The [v0.2.2 prerelease](https://github.com/Epiphytic/marmish/releases/tag/v0.2.2)
 contains 15 verified assets built from source
-`7c49c3785eab010bf017c1bb7f03511524312b95`. Candidate
-[41698628787](https://github.com/Epiphytic/marmish/actions/runs/41698628787), attempt 1,
-passed all three package jobs, render, all three file-backed PTY quickstarts and
-both Linux default-auto keychain jobs. macOS passed 351 default and 446 installed
-feature tests. Its provider job then failed offline supervisor tests before
-invoking real Keychain qualification, leaving the **overall workflow failed**.
-The reviewed supervisor correction landed after the immutable release source;
-it does not retroactively establish a passing Mac provider result.
+`89107389b9a348b23458cc59b7250499fe1b7b08`. Candidate
+[41726568264](https://github.com/Epiphytic/marmish/actions/runs/41726568264), attempt 1,
+passed all three packages, render, all three file-backed quickstarts and both Linux
+provider checks. macOS passed its 23 offline supervisor tests; its outer provider
+qualifier then failed with generic `operation_failed` after 676 ms, importing no
+inner report. Whether provider execution began is unknown; this does not establish
+a Marmish Keychain denial. The overall candidate remains **FAILURE**, and its
+whole-success guard blocks the separate HTTPS workflow. No guard was bypassed.
+Both public installer scripts and all 15 anonymous asset downloads matched their
+verified hashes. A fresh Linux public-asset install passed.
 
-The existing whole-candidate-success guard prevents dispatching the six-case
-HTTPS qualification for this failed candidate; no guard was bypassed. Both
-public installer URLs were independently fetched and matched the rendered
-bootstrap. A separate Linux AMD64 install downloaded public release assets
-without an asset-directory override and passed in 10,285 ms.
-
-The installed Linux AMD64 direct-relay protocol check passed in 19,882 ms:
-running-command recovery 6,856 ms (one execution), literal argv 1,545 ms,
-16 KiB binary stdin/output 2,689 ms (6,092 output B/s), and stderr/exit 7 in
-1,713 ms. Joined engine/MDK stops, quiescence and local runtime/state cleanup
-passed. The probe reports `purpose_ownership_unknown=true`; this does not prove
-automatic probe-room deletion. These are single observations, not full public-CLI
-matrix, OS-restart or benchmark qualification.
-
-See [corrective release evidence](docs/validation/v0.2/corrective-release-0.2.1.md)
-for source, tag, bootstrap and finite reports. Historical
-[v0.2.0 results](docs/validation/v0.2/initial-release.md) remain separately labeled.
+The installed Linux direct-relay command check exited 0 in 19,496 ms, verifying
+running-command recovery, literal argv, 16 KiB binary stdin/output, stderr/exit 7
+and reported local cleanup. It also emitted a background transport worker panic
+from the unchanged sink path. Independent review judged it nonblocking for this
+narrow correction; it is tracked as `marmish-xvd`. Remote final-write/closure
+behavior and interactive macOS recovery are not established. See
+[v0.2.2 evidence](docs/validation/v0.2.2/corrective-publication.md) for exact results,
+latency/goodput and qualification limits. Historical
+[v0.2.1](docs/validation/v0.2/corrective-release-0.2.1.md) and
+[v0.2.0](docs/validation/v0.2/initial-release.md) evidence remain separately labeled.

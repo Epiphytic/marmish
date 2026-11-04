@@ -1,0 +1,77 @@
+[
+  {
+    "name": "THIRD-PARTY-LICENSES-0.2.2-aarch64-apple-darwin",
+    "size": 2063445,
+    "sha256": "9dde5721c3dca0cb34382c2ee378279395e9bebab0adb4d2b9ef950d0273305e"
+  },
+  {
+    "name": "THIRD-PARTY-LICENSES-0.2.2-aarch64-unknown-linux-gnu",
+    "size": 2136129,
+    "sha256": "6dfda45751322f944812918a5b2d8f001bc64bd7f292868e6aa5f63b0dd881c4"
+  },
+  {
+    "name": "THIRD-PARTY-LICENSES-0.2.2-x86_64-unknown-linux-gnu",
+    "size": 2137225,
+    "sha256": "b538c45f8b60f9d1c421709e57274ad3d1097b9b9071dd6c8cb6717f9e8a74b6"
+  },
+  {
+    "name": "marmish-0.2.2-aarch64-apple-darwin",
+    "size": 55162176,
+    "sha256": "76c4f3249e1c71fc7abb184a1a7b9d2cad12e70680cb0e1a42f72aeb81dd694c"
+  },
+  {
+    "name": "marmish-0.2.2-aarch64-apple-darwin.manifest",
+    "size": 601,
+    "sha256": "3fc2672dd4d62dfa23cce7d1a88ee054caa9f8505b2476e4d0705297088ce761"
+  },
+  {
+    "name": "marmish-0.2.2-aarch64-unknown-linux-gnu",
+    "size": 66425696,
+    "sha256": "0fb386bf84575e15147f1df2b363dee208f7d0a0fbef0d200febda79c3e29b7b"
+  },
+  {
+    "name": "marmish-0.2.2-aarch64-unknown-linux-gnu.manifest",
+    "size": 605,
+    "sha256": "30a68cd9708ca57253e3c42edbfcc71b32af47599a24382ed5cac485e05d25e4"
+  },
+  {
+    "name": "marmish-0.2.2-x86_64-unknown-linux-gnu",
+    "size": 71159328,
+    "sha256": "7de1ebc7b680a3c1decd08e50446524ce6e1f8ee8848bcafa36a977e53e6e9b7"
+  },
+  {
+    "name": "marmish-0.2.2-x86_64-unknown-linux-gnu.manifest",
+    "size": 605,
+    "sha256": "487f8845b399e38dbf432f245998964eb5a45f5f758bb7d5eadd40e9fdbc9110"
+  },
+  {
+    "name": "marmish-worker-0.2.2-aarch64-apple-darwin",
+    "size": 6911584,
+    "sha256": "c2b5a94d936456ce46966025596a68dd7596ea85c7bc61dfc219d5c56d4c7a8a"
+  },
+  {
+    "name": "marmish-worker-0.2.2-aarch64-unknown-linux-gnu",
+    "size": 8717760,
+    "sha256": "57f23de37aafbe94ff8cde8e193a7812182d6fc52a9b87f34ba115bb6dca6ca1"
+  },
+  {
+    "name": "marmish-worker-0.2.2-x86_64-unknown-linux-gnu",
+    "size": 13089240,
+    "sha256": "66371a7eecc7b68b3ee0291bad3df7647a0b08cba670f3cae5c96af0ad60fbc2"
+  },
+  {
+    "name": "marmishd-0.2.2-aarch64-apple-darwin",
+    "size": 55162176,
+    "sha256": "8241bb989770b27f3667172da30ff0605b7588ff77bab03129a85af6c5f024da"
+  },
+  {
+    "name": "marmishd-0.2.2-aarch64-unknown-linux-gnu",
+    "size": 66425704,
+    "sha256": "f4b40988a5aff9cb5a76f6bac34e46e5af3ad020b2f1131d013612f6655b543b"
+  },
+  {
+    "name": "marmishd-0.2.2-x86_64-unknown-linux-gnu",
+    "size": 71159328,
+    "sha256": "1085471b74b6e951eb34d342ccb2d16763a8af52fd1fa0df75a441bfee449a66"
+  }
+]

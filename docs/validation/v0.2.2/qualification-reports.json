@@ -1,0 +1,152 @@
+{
+  "source_commit": "89107389b9a348b23458cc59b7250499fe1b7b08",
+  "run_id": 41726568264,
+  "run_attempt": 1,
+  "reports": [
+    {
+      "artifact": "v02-quickstart-aarch64-apple-darwin-41726568264-1",
+      "sha256": "44a9eb0f5211507adef87dab9b13afae97e73a7203f5d9f8ae71dd920bfae2a6",
+      "report": {
+        "schema": 1,
+        "kind": "installed_quickstart_pty",
+        "ok": true,
+        "key_storage": "file",
+        "network_activation": false,
+        "python_in_runtime_path": false,
+        "owned_state_removed": true,
+        "role": "both",
+        "inbound_enabled": false,
+        "prompts_completed": 5,
+        "identity_created": true,
+        "repeat_same_identity": true,
+        "repeat_owner_opened": false,
+        "stop_complete": true,
+        "elapsed_ms": 4288
+      }
+    },
+    {
+      "artifact": "v02-quickstart-aarch64-unknown-linux-gnu-41726568264-1",
+      "sha256": "7971f9ee09dbc4ec9e648bba1d73b3a85a995a3501c70a997bae78f018680fd5",
+      "report": {
+        "schema": 1,
+        "kind": "installed_quickstart_pty",
+        "ok": true,
+        "key_storage": "file",
+        "network_activation": false,
+        "python_in_runtime_path": false,
+        "owned_state_removed": true,
+        "role": "both",
+        "inbound_enabled": false,
+        "prompts_completed": 5,
+        "identity_created": true,
+        "repeat_same_identity": true,
+        "repeat_owner_opened": false,
+        "stop_complete": true,
+        "elapsed_ms": 5554
+      }
+    },
+    {
+      "artifact": "v02-quickstart-x86_64-unknown-linux-gnu-41726568264-1",
+      "sha256": "f32aeed755e7d6b9a3f41d1322951430b16433140ed42233517eec6a7ea7cf21",
+      "report": {
+        "schema": 1,
+        "kind": "installed_quickstart_pty",
+        "ok": true,
+        "key_storage": "file",
+        "network_activation": false,
+        "python_in_runtime_path": false,
+        "owned_state_removed": true,
+        "role": "both",
+        "inbound_enabled": false,
+        "prompts_completed": 5,
+        "identity_created": true,
+        "repeat_same_identity": true,
+        "repeat_owner_opened": false,
+        "stop_complete": true,
+        "elapsed_ms": 4225
+      }
+    },
+    {
+      "artifact": "v02-provider-aarch64-apple-darwin-41726568264-1",
+      "sha256": "9604b383c3dd376e51178d3697b1656a803cfba96eba7185b2a6fc9228dc220d",
+      "report": {
+        "schema": 1,
+        "kind": "installed_auto_provider",
+        "ok": false,
+        "owned_account_removed": false,
+        "runner_keychain_unchanged": true,
+        "failure": "operation_failed",
+        "elapsed_ms": 676,
+        "source_commit": "89107389b9a348b23458cc59b7250499fe1b7b08",
+        "target": "aarch64-apple-darwin",
+        "run_id": "41726568264",
+        "run_attempt": "1",
+        "provider_packages": []
+      }
+    },
+    {
+      "artifact": "v02-provider-aarch64-unknown-linux-gnu-41726568264-1",
+      "sha256": "48374e96e889803e47ec2e790815e679612b5364b771bb17fcef8058ba70169e",
+      "report": {
+        "schema": 1,
+        "kind": "installed_auto_provider",
+        "ok": true,
+        "python_in_runtime_path": false,
+        "network_activation": false,
+        "owned_children_reaped": true,
+        "owned_state_removed": true,
+        "auto_keychain": true,
+        "distinct_named_identities": true,
+        "fresh_reload": true,
+        "item_count": 4,
+        "locked_refused": true,
+        "unlocked_fresh_reload": true,
+        "no_plaintext_fallback": true,
+        "absent_provider_files": true,
+        "elapsed_ms": 16744,
+        "source_commit": "89107389b9a348b23458cc59b7250499fe1b7b08",
+        "target": "aarch64-unknown-linux-gnu",
+        "run_id": "41726568264",
+        "run_attempt": "1",
+        "provider_packages": [
+          "dbus-bin=1.14.10-4ubuntu4.1",
+          "dbus-daemon=1.14.10-4ubuntu4.1",
+          "gnome-keyring=46.1-2ubuntu0.2",
+          "util-linux=2.39.3-9ubuntu6.6"
+        ]
+      }
+    },
+    {
+      "artifact": "v02-provider-x86_64-unknown-linux-gnu-41726568264-1",
+      "sha256": "ab57dc3e27dba25426b4326a92db2e17c0316c0dcc81e9fd3d7b39668a6c0809",
+      "report": {
+        "schema": 1,
+        "kind": "installed_auto_provider",
+        "ok": true,
+        "python_in_runtime_path": false,
+        "network_activation": false,
+        "owned_children_reaped": true,
+        "owned_state_removed": true,
+        "auto_keychain": true,
+        "distinct_named_identities": true,
+        "fresh_reload": true,
+        "item_count": 4,
+        "locked_refused": true,
+        "unlocked_fresh_reload": true,
+        "no_plaintext_fallback": true,
+        "absent_provider_files": true,
+        "elapsed_ms": 15216,
+        "source_commit": "89107389b9a348b23458cc59b7250499fe1b7b08",
+        "target": "x86_64-unknown-linux-gnu",
+        "run_id": "41726568264",
+        "run_attempt": "1",
+        "provider_packages": [
+          "dbus-bin=1.14.10-4ubuntu4.1",
+          "dbus-daemon=1.14.10-4ubuntu4.1",
+          "gnome-keyring=46.1-2ubuntu0.2",
+          "util-linux=2.39.3-9ubuntu6.6"
+        ]
+      }
+    }
+  ]
+}
