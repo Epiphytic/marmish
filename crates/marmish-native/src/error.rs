@@ -2,6 +2,9 @@
 /// carry secrets into the CLI or local IPC.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// Bounded finite diagnostic relayed over the private startup channel.
+    #[error("{0}")]
+    DaemonStartup(String),
     #[error("local I/O failed")]
     Io(#[from] std::io::Error),
     #[error("invalid input: {0}")]

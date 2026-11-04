@@ -80,9 +80,28 @@ it running:
 marmishd
 ```
 
-This runs in the foreground using the configured `default` identity. On a client,
-the first command starts its local daemon automatically if needed. Configure
-service supervision separately if you want the server to start at login or boot.
+The published v0.2.2 binaries run this in the foreground using the configured
+`default` identity. On a client, the first command starts its local daemon
+automatically if needed. Configure service supervision separately if you want
+the server to start at login or boot.
+
+In the newer source implementation, `marmishd` and `marmish daemon` detach by
+default. Successful startup is quiet and waits for credentials, storage, IPC and
+transport readiness; startup errors return to the caller's terminal. Normal
+output appends to the identity profile's private `daemon.log` (mode 0600), with
+no automatic rotation. With default paths, logs are under
+`~/.local/share/marmish/v2/<identity>/daemon.log` on Linux (or
+`$XDG_DATA_HOME/marmish/v2/<identity>/daemon.log`) and
+`~/Library/Application Support/Marmish/v2/<identity>/daemon.log` on macOS.
+Stop the daemon before rotating its log. Use
+`marmishd --foreground` for attached diagnostics or service supervision. This flag
+and background default are not available in the published v0.2.2 binaries.
+
+Source client autostart has a 300-second startup budget, including failed-start
+cleanup, independent of command `--wait-seconds`. If the launching parent or
+client dies before acknowledging readiness, the new unacknowledged daemon shuts
+down; an acknowledged daemon survives the caller. This does not install a login
+or boot service.
 
 ## Connect to another identity
 
@@ -177,6 +196,10 @@ quickstart, then restart the daemon:
 curl --proto '=https' --tlsv1.2 -fsSL https://iris.radicle.network/raw/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg/head/scripts/install.sh | sh
 marmishd --debug
 ```
+
+For attached debugging with the newer source implementation, use
+`marmishd --foreground --debug`; published v0.2.2 uses the `--debug` invocation
+above and does not accept `--foreground`.
 
 Stop the existing daemon before restarting it. Rerunning first-time quickstart
 against an existing configuration can report `config_exists`; use `setup --update`

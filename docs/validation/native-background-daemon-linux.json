@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "platform": "linux-amd64",
+  "artifact": "local-debug-source",
+  "relay": "wss://relay.us.whitenoise.chat/",
+  "cases": [
+    {
+      "name": "default_detach_ready_quiet",
+      "ok": true,
+      "milliseconds": 805
+    },
+    {
+      "name": "duplicate_start_error_visible",
+      "ok": true
+    },
+    {
+      "name": "concurrent_cold_autostart_literal_bytes",
+      "ok": true,
+      "milliseconds": 4622,
+      "bytes": 46,
+      "sha256": "cfae541d415028c592788fee0297eb408fd332dc4a09e30035ae2b30c9de9dd1"
+    },
+    {
+      "name": "concurrent_cold_autostart_literal_bytes",
+      "ok": true,
+      "milliseconds": 4828,
+      "bytes": 27,
+      "sha256": "069d8a85ab0ba30738f060dad9657e030c3bba36cd2683a9021727c793eb3fb1"
+    },
+    {
+      "name": "private_logs_exclude_remote_output",
+      "ok": true
+    },
+    {
+      "name": "bounded_daemons_joined_cleanup",
+      "ok": true
+    }
+  ],
+  "ok": true,
+  "milliseconds": 66647,
+  "private_state_removed": true
+}

@@ -478,3 +478,34 @@ The installed Linux command check also emitted a background sink panic despite
 passing result/cleanup flags. Its source/dependencies are unchanged from 0.2.1;
 independent triage permits this caveated correction, while `marmish-xvd` tracks
 the defect. Remote final-write/closure effects remain unproven.
+
+## Background daemon source increment
+
+The source implementation makes `marmishd` and `marmish daemon` detach by
+default; published v0.2.2 assets still run foreground and do not support the new
+`--foreground` flag. Explicit foreground operation preserves owned-child
+supervision, inherited output and shutdown receipts. Initialization and other
+operations retain their existing behavior. This is not login-service setup.
+
+Background startup is quiet on success only after credentials, storage, IPC,
+transport activation and the first active snapshot. Finite startup failures
+remain visible to the caller. Normal output appends to the private profile's
+`daemon.log`, mode 0600, without automatic rotation; stop before rotation.
+Private command output and credential-helper responses retain their dedicated
+pipes rather than inheriting the log. Installed supervisors explicitly select
+foreground operation to retain their exact child handles and receipt drains.
+
+Client autostart has a shared 300-second startup budget covering launch and
+failed-start cleanup, independent of command wait time. A launching parent or
+client that disappears before the readiness acknowledgement cannot leave an
+unacknowledged daemon running. An acknowledged daemon survives its caller.
+These source contracts require integrated validation and actual platform
+qualification; they do not change the published binary qualification record.
+See the [approved design](phases/native-background-daemon.md).
+
+The background-daemon source increment passes 471 local Linux all-feature native
+tests and strict all-target/all-feature Clippy. Its final live Linux test verifies
+default detachment, readiness, duplicate-start errors, simultaneous cold-client
+autostart, exact command bytes, private logs and joined cleanup. See
+[validation](validation/native-background-daemon.md); platform qualification remains
+separate from these local results.

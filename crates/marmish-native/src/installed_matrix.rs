@@ -121,6 +121,7 @@ impl Daemon {
         let args = base(workspace, name, &socket, relays)
             .into_iter()
             .chain([
+                OsString::from("--foreground"),
                 OsString::from("--max-uptime"),
                 uptime.to_string().into(),
                 "daemon".into(),

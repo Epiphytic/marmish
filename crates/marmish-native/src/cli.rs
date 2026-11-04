@@ -40,11 +40,16 @@ impl From<Backend> for BackendChoice {
 )]
 struct Args {
     #[arg(skip)]
+    startup: Option<crate::daemon_launch::StartupReporter>,
+    #[arg(skip)]
     trailing: Option<Vec<OsString>>,
     #[arg(skip)]
     authorize_disallowed: bool,
     #[arg(long, global = true)]
     debug: bool,
+    /// Keep the daemon attached to the terminal or service supervisor.
+    #[arg(long, global = true)]
+    foreground: bool,
     #[arg(long, global = true)]
     state_dir: Option<PathBuf>,
     #[arg(short = 'i', long, default_value = "default", global = true)]
@@ -229,11 +234,27 @@ fn state_dir(explicit: Option<PathBuf>) -> Result<PathBuf> {
     Ok(home.join(".local/share/marmish/v2"))
 }
 
+fn is_daemon(args: &Args, daemon_binary: bool) -> bool {
+    matches!(args.command, Some(FrontendCommand::Daemon))
+        || (daemon_binary && args.command.is_none())
+}
+
+fn validate_daemon_options(args: &Args, daemon_binary: bool) -> Result<()> {
+    if args.foreground && !is_daemon(args, daemon_binary) {
+        return Err(Error::Invalid("foreground_operation"));
+    }
+    if args.new_session && is_daemon(args, daemon_binary) {
+        return Err(Error::Invalid("new_session_operation"));
+    }
+    Ok(())
+}
+
 async fn run(
     mut args: Args,
     daemon_binary: bool,
     layout: &crate::native_layout::ExecutableLayout,
 ) -> Result<u8> {
+    validate_daemon_options(&args, daemon_binary)?;
     if matches!(args.command, Some(FrontendCommand::KeychainAuthorize)) {
         let started = std::time::Instant::now();
         if daemon_binary || args.authorize_disallowed {
@@ -431,7 +452,7 @@ async fn run(
                 serde_json::to_string(&snapshot).map_err(|_| Error::Invalid("status_encoding"))?
             );
         } else {
-            daemon::run(config).await?;
+            daemon::run_with_startup(config, args.startup).await?;
         }
         return Ok(0);
     }
@@ -513,19 +534,58 @@ fn selector(value: &SelectArgs, remote: Option<crate::command_wire::Account>) ->
     Ok(Selection { selector, remote })
 }
 
-fn spawn_service(child: &mut std::process::Command) -> std::io::Result<std::process::Child> {
-    use std::os::unix::process::CommandExt;
-    // A separate session survives terminal hangup and client Ctrl-C. Only the
-    // async-signal-safe setsid syscall runs between fork and exec.
-    unsafe {
-        child.pre_exec(|| {
-            if libc::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
+async fn autostart_daemon(
+    args: &Args,
+    state: &std::path::Path,
+    config: &CommandConfig,
+) -> Result<()> {
+    let executable = std::env::current_exe()?.canonicalize()?;
+    let daemon = executable
+        .parent()
+        .ok_or(Error::Invalid("daemon_installation"))?
+        .join("marmishd");
+    let mut child = std::process::Command::new(&daemon);
+    child
+        .arg("--state-dir")
+        .arg(state)
+        .arg("-i")
+        .arg(&args.identity)
+        .arg("--key-storage")
+        .arg(match args.key_storage {
+            Backend::Auto => "auto",
+            Backend::Keychain => "keychain",
+            Backend::File => "file",
+        })
+        .arg("--tor")
+        .arg(match config.relay_policy().mode() {
+            RouteMode::Auto => "auto",
+            RouteMode::Always => "always",
+            RouteMode::Off => "off",
         });
+    for relay in config.relay_policy().urls() {
+        child.arg("--relay").arg(relay.as_str());
     }
-    child.spawn()
+    if args.debug {
+        child.arg("--debug");
+    }
+    child.arg("daemon");
+    let arguments = child
+        .get_args()
+        .map(OsStr::to_os_string)
+        .collect::<Vec<_>>();
+    let state = state.to_owned();
+    let identity = args.identity.clone();
+    let launched = tokio::task::spawn_blocking(move || {
+        crate::daemon_launch::launch(&daemon, &arguments, &state, &identity)
+    })
+    .await
+    .map_err(|_| Error::Invalid("daemon_startup_worker"))?;
+    match launched {
+        Ok(()) | Err(Error::Identity("profile_in_use")) => (),
+        Err(Error::DaemonStartup(message)) if message == "identity: profile_in_use" => (),
+        Err(error) => return Err(error),
+    }
+    Ok(())
 }
 
 async fn command_socket(
@@ -533,8 +593,7 @@ async fn command_socket(
     state: &std::path::Path,
     config: &CommandConfig,
 ) -> Result<PathBuf> {
-    use std::process::Stdio;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
     let mut started = false;
     loop {
         let socket = args
@@ -576,43 +635,7 @@ async fn command_socket(
             return Err(Error::Invalid("daemon_unavailable"));
         }
         if !started {
-            let executable = std::env::current_exe()?.canonicalize()?;
-            let daemon = executable
-                .parent()
-                .ok_or(Error::Invalid("daemon_installation"))?
-                .join("marmishd");
-            let mut child = std::process::Command::new(daemon);
-            child
-                .arg("--state-dir")
-                .arg(state)
-                .arg("-i")
-                .arg(&args.identity)
-                .arg("--key-storage")
-                .arg(match args.key_storage {
-                    Backend::Auto => "auto",
-                    Backend::Keychain => "keychain",
-                    Backend::File => "file",
-                })
-                .arg("--tor")
-                .arg(match config.relay_policy().mode() {
-                    RouteMode::Auto => "auto",
-                    RouteMode::Always => "always",
-                    RouteMode::Off => "off",
-                });
-            for relay in config.relay_policy().urls() {
-                child.arg("--relay").arg(relay.as_str());
-            }
-            child
-                .arg("daemon")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
-            // No inherited terminal or output pipe holds the client open. The
-            // launched service owns its profile lease and survives this client.
-            let mut launched = spawn_service(&mut child)?;
-            std::thread::spawn(move || {
-                let _ = launched.wait();
-            });
+            autostart_daemon(args, state, config).await?;
             started = true;
         }
         if tokio::time::Instant::now() >= deadline {
@@ -846,7 +869,7 @@ pub fn main(daemon_binary: bool) -> ExitCode {
         .iter()
         .position(|v| v == OsStr::new("--"))
         .map(|i| raw[i + 1..].to_vec());
-    let matches = match Args::command().try_get_matches_from(raw) {
+    let matches = match Args::command().try_get_matches_from(raw.clone()) {
         Ok(matches) => matches,
         Err(error) => {
             let code = usage_exit_code(&error);
@@ -865,6 +888,20 @@ pub fn main(daemon_binary: bool) -> ExitCode {
     args.authorize_disallowed = authorize_disallowed;
     args.trailing = trailing;
     let failure_code = if command_action(&args) { 255 } else { 1 };
+    if let Err(error) = validate_daemon_options(&args, daemon_binary) {
+        print_error(&error);
+        return ExitCode::from(failure_code);
+    }
+    let startup = match crate::daemon_launch::StartupReporter::take_from_env(
+        args.foreground && is_daemon(&args, daemon_binary),
+    ) {
+        Ok(startup) => startup,
+        Err(error) => {
+            print_error(&error);
+            return ExitCode::from(failure_code);
+        }
+    };
+    args.startup = startup.clone();
     // Parsing needs no provider or private state. Canonical layout validation
     // still precedes every provider/profile access.
     let layout = match std::env::current_exe()
@@ -873,10 +910,30 @@ pub fn main(daemon_binary: bool) -> ExitCode {
     {
         Ok(layout) => layout,
         Err(error) => {
-            eprintln!("marmish: {error}");
+            if let Some(reporter) = &startup {
+                reporter.failed(&error);
+            }
+            print_error(&error);
             return ExitCode::from(failure_code);
         }
     };
+    if is_daemon(&args, daemon_binary) && !args.foreground {
+        let result = state_dir(args.state_dir.clone()).and_then(|state| {
+            crate::daemon_launch::launch(
+                &std::env::current_exe()?,
+                &raw[1..],
+                &state,
+                &args.identity,
+            )
+        });
+        return match result {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                print_error(&error);
+                ExitCode::from(failure_code)
+            }
+        };
+    }
     if args.debug {
         crate::diagnostics::enable();
     }
@@ -886,17 +943,35 @@ pub fn main(daemon_binary: bool) -> ExitCode {
     {
         Ok(runtime) => runtime,
         Err(_) => {
-            eprintln!("marmish: runtime_startup");
+            let error = Error::Invalid("runtime_startup");
+            if let Some(reporter) = &startup {
+                reporter.failed(&error);
+            }
+            print_error(&error);
             return ExitCode::from(failure_code);
         }
     };
     match runtime.block_on(run(args, daemon_binary, &layout)) {
-        Ok(code) => ExitCode::from(code),
+        Ok(code) => {
+            // A clean limit/signal exit during activation never became ready.
+            if let Some(reporter) = &startup {
+                reporter.failed(&Error::Invalid("daemon_stopped_before_ready"));
+            }
+            ExitCode::from(code)
+        }
         Err(error) => {
-            eprintln!("marmish: {error}");
+            if let Some(reporter) = &startup {
+                reporter.failed(&error);
+            }
+            print_error(&error);
             ExitCode::from(failure_code)
         }
     }
+}
+
+fn print_error(error: &Error) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr().lock(), "marmish: {error}");
 }
 
 #[cfg(test)]
@@ -961,16 +1036,22 @@ mod tests {
         assert!(!args.new_session);
     }
     #[test]
-    fn service_launch_owns_a_separate_terminal_session() {
-        let mut command = std::process::Command::new("/bin/sh");
-        command.args(["-c", "exec sleep 30"]);
-        let mut child = spawn_service(&mut command).unwrap();
-        let pid = child.id() as libc::pid_t;
-        assert_eq!(unsafe { libc::getsid(pid) }, pid);
-        assert_eq!(unsafe { libc::getpgid(pid) }, pid);
-        assert_ne!(unsafe { libc::getsid(0) }, pid);
-        child.kill().unwrap();
-        child.wait().unwrap();
+    fn foreground_is_only_valid_for_daemon_operation() {
+        for operation in ["status", "init", "release-info", "setup", "commands"] {
+            let args = Args::try_parse_from(["marmish", "--foreground", operation]).unwrap();
+            assert!(matches!(
+                validate_daemon_options(&args, false),
+                Err(Error::Invalid("foreground_operation"))
+            ));
+        }
+        for (raw, daemon_binary) in [
+            (vec!["marmish", "--foreground", "daemon"], false),
+            (vec!["marmishd", "--foreground"], true),
+            (vec!["marmishd", "daemon", "--foreground"], true),
+        ] {
+            let args = Args::try_parse_from(raw).unwrap();
+            validate_daemon_options(&args, daemon_binary).unwrap();
+        }
     }
     #[test]
     fn parser_contract_is_consistent() {

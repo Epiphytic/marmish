@@ -1236,6 +1236,7 @@ pub(crate) async fn run(relays: Vec<String>, mode: RouteMode) -> Result<Value> {
         ) => Some(*detail),
         Err(Error::Timeout) => Some("timeout"),
         Err(Error::Io(_)) => Some("local_io"),
+        Err(Error::DaemonStartup(_)) => Some("daemon_startup"),
         Ok(()) => None,
     };
     let detail = finite_detail(&result);
@@ -1260,6 +1261,7 @@ pub(crate) async fn run(relays: Vec<String>, mode: RouteMode) -> Result<Value> {
         Err(Error::Transport(_)) => Some("transport"),
         Err(Error::Mdk(_)) => Some("marmot"),
         Err(Error::Io(_)) => Some("local_io"),
+        Err(Error::DaemonStartup(_)) => Some("daemon_startup"),
     };
     Ok(
         json!({"schema":1,"ok":category.is_none()&&state_cleanup,"category":category,

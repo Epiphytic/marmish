@@ -116,6 +116,7 @@ fn failure(error: Error) -> Response {
         Error::Transport(_) => "transport",
         Error::Mdk(_) => "marmot",
         Error::Timeout => "deadline",
+        Error::DaemonStartup(_) => "daemon_startup",
     })
 }
 
@@ -181,8 +182,15 @@ async fn dispatch(
 }
 
 pub async fn run(config: Config) -> Result<()> {
+    run_with_startup(config, None).await
+}
+
+pub(crate) async fn run_with_startup(
+    config: Config,
+    startup: Option<crate::daemon_launch::StartupReporter>,
+) -> Result<()> {
     let (profile, mut owner) = open(config).await?;
-    let result = serve_owner(&profile, &mut owner).await;
+    let result = serve_owner(&profile, &mut owner, startup).await;
     let stopped = stop(profile, owner).await;
     result.and(stopped)
 }
@@ -221,7 +229,11 @@ async fn stop_reporting(profile: ProfileLease, owner: MdkOwner, emit: bool) -> R
     Ok(())
 }
 
-async fn serve_owner(profile: &ProfileLease, owner: &mut MdkOwner) -> Result<()> {
+async fn serve_owner(
+    profile: &ProfileLease,
+    owner: &mut MdkOwner,
+    mut startup: Option<crate::daemon_launch::StartupReporter>,
+) -> Result<()> {
     let lifetime = owner.command_lifetime();
     let expired = async move {
         loop {
@@ -263,6 +275,7 @@ async fn serve_owner(profile: &ProfileLease, owner: &mut MdkOwner) -> Result<()>
         }
         let mut interval = tokio::time::interval(Duration::from_millis(100));
         let mut degraded = false;
+        let mut last_retry_notice = None;
         loop {
             if owner.command_count_exit_ready()? {break;}
             let mut snapshot = serde_json::to_value(owner.status()?)
@@ -271,6 +284,9 @@ async fn serve_owner(profile: &ProfileLease, owner: &mut MdkOwner) -> Result<()>
                 if degraded { "transport_degraded" } else { "active" }.into(),
             );
             status.send_replace(Response::success(snapshot));
+            if let Some(reporter) = startup.take() {
+                reporter.ready().await?;
+            }
             tokio::select! {
                 _ = &mut shutdown_signal => break,
                 _ = &mut expired => break,
@@ -295,7 +311,11 @@ async fn serve_owner(profile: &ProfileLease, owner: &mut MdkOwner) -> Result<()>
                         Ok(()) => degraded = false,
                         Err(Error::Transport(_) | Error::Timeout) => {
                             degraded = true;
-                            crate::diagnostics::event("daemon_transport", "retry_pending");
+                            let now = Instant::now();
+                            if last_retry_notice.is_none_or(|last| now.duration_since(last) >= Duration::from_secs(30)) {
+                                crate::diagnostics::event("daemon_transport", "retry_pending");
+                                last_retry_notice = Some(now);
+                            }
                         }
                         Err(error) => return Err(error),
                     }

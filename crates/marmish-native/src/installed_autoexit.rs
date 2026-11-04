@@ -613,7 +613,7 @@ impl Daemon {
         if let Some(c) = count {
             a.extend(["--max-commands".into(), c.to_string().into()])
         }
-        a.push("daemon".into());
+        a.extend(["--foreground".into(), "daemon".into()]);
         let launch = Instant::now();
         let mut child = process::command(&w.join("bin/marmishd"), &a, w, env).spawn()?;
         let out = tokio::spawn(process::drain(child.stdout.take().ok_or_else(bad)?, 65536));

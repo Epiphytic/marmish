@@ -1906,7 +1906,12 @@ pub(super) async fn run_cli(
         let socket = negative.as_ref().unwrap().sockets.join("negative");
         let mut args =
             super::matrix::base(&negative_root, "server", &socket, &ctx.candidate.relays);
-        args.extend(["--max-uptime".into(), "15".into(), "daemon".into()]);
+        args.extend([
+            "--foreground".into(),
+            "--max-uptime".into(),
+            "15".into(),
+            "daemon".into(),
+        ]);
         let rejected = execute(
             &negative_root.join("bin/marmishd"),
             &args,

@@ -87,6 +87,7 @@ pub(crate) fn failure(error: Error) -> LocalResult {
         | Error::Transport(category) => category,
         Error::Io(_) => "local_io",
         Error::Timeout => "deadline",
+        Error::DaemonStartup(_) => "daemon_startup",
     };
     LocalResult::Failure {
         category: category.into(),

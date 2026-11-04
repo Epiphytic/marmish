@@ -12,6 +12,7 @@ mod command_service;
 mod command_target;
 mod command_wire;
 pub mod daemon;
+mod daemon_launch;
 pub mod diagnostics;
 pub mod error;
 pub mod foundation;
