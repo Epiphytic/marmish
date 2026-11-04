@@ -41,3 +41,13 @@ quickstart-only first-failure export, nonthrowing bounded byte parser, explicit
 source literals and true observed wait-status/reason rules. Only shared CI helper
 is added to the literal guard (13 paths); tests stay in existing supervisor file.
 No product fix or hosted success is inferred.
+
+### Identity vocabulary and owned root budget — actual combined design
+
+Actual Claude session `cd8f7738-6834-4a9b-a975-97cf8ab6f8e8` initially rejected
+enum-only prose/test scope (all source files, proper cfg(test) module boundary,
+and unknown Identity premise). Those findings were incorporated. The same actual
+reviewer then APPROVED the combined literal vocabulary and shorter owned-root
+remedy in `/tmp/marmish-scj-provider-identity-design-r2.json`; test conditions are
+pinned in the phase before implementation. This removes a source-proven fixture
+budget violation without asserting the unobserved hosted native category.

@@ -35,6 +35,10 @@ UTILITIES, interactive, reports = _fixture.UTILITIES, _fixture.interactive, _fix
 UTILITY_DISCOVERY_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 
 
+# Owned macOS HOME + mr2 runtime stays 13 bytes below the strict 104-byte bound.
+PROVIDER_ROOT_PREFIX = '.mp-'
+
+
 PASSWORD = b'marmish-disposable-provider-check\n'
 MAX_CAPTURE = 2 * 1024 * 1024
 
@@ -665,7 +669,7 @@ def inner(bootstrap, assets, report, pins=None, deadline_seconds=540,
             require(path.resolve().is_relative_to(staging) and digest(path) == expected,
                 'staged_input_changed')
     account = pwd.getpwuid(os.geteuid())
-    root = Path(tempfile.mkdtemp(prefix='.marmish-provider-', dir=account.pw_dir))
+    root = Path(tempfile.mkdtemp(prefix=PROVIDER_ROOT_PREFIX, dir=account.pw_dir))
     root.chmod(0o700)
     qualification = (LifecycleQualification(root, bootstrap, assets, lifecycle_a_assets, lifecycle_a_pin, lifecycle_b_version)
         if lifecycle_a_assets else Qualification(root, bootstrap, assets))

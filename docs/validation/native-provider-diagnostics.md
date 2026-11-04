@@ -106,3 +106,33 @@ fabricated status, optional-off behavior, hostile transcript/nested report
 sanitization, outer copying and cleanup snapshot preservation. No live product,
 accounts or Keychains were used. Next hosted run is still required to identify
 the actual quickstart failure and establish provider qualification.
+
+Hosted [41923076525/1](https://github.com/Epiphytic/marmish/actions/runs/41923076525)
+at c175e08 exposes terminal_failure, all five prompts, true exit1,
+setup_choices/native_setup_failed and unknown native token, elapsed7939ms.
+Runner Keychain unchanged and owned children reaped remain true; owned state
+and account removal remain false. Complete Identity vocabulary was absent from
+the diagnostic parser; no specific Identity error was observed. Independently,
+the old owned root produces runtime95+10=105 against strict104 and is therefore
+a source-proven budget violation. The reviewed .mp- fixture root gives81+10=91
+for all100reservedUIDs. No product socket bound or custody gate is changed.
+
+Central targeted Rust test
+`supervisor_failure_labels_match_python_ast_and_retain_cleanup` FAILED on the
+current diagnostic ancestry (0 passed, 1 failed): Python AST adds
+owned_preferences_directory while Rust REPORT_FAILURES omits it. The old
+owned_account_prerequisite_failed fallback remains reachable through a nested
+conditional and must remain in the mapping; recursive AST extraction must cover
+that path. Actual log:
+`/tmp/marmish-scj-provider-final-rust-contract.log`. The current prefix constant
+and Identity enum do not change those failure-label sets. Parent coordinates a
+separately reviewed installed-check mapping reconciliation in the automation
+worktree after integration; no Rust edit or diagnostic-guard expansion hides
+this failure. Full integrated acceptance remains pending.
+
+Identity vocabulary/socket-budget increment passed supervisor discovery/direct
+59/59 each, static workflow3/3, Node58/58, actionlint1.7.7 and whitespace.
+Actual Claude code/integration review approved this bounded increment with the
+central Rust failure explicitly open. No live product/account/Keychain was run.
+Full acceptance awaits the separately reviewed combined-tree Rust correction
+and actual hosted qualification; no category or provider success is inferred.

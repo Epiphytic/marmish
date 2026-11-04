@@ -228,3 +228,41 @@ code; this bounded diagnostics change adds no runtime product behavior. Local
 PTY tests execute only tiny disposable scripts, never Marmish, real accounts or
 Keychains. This increment identifies future failure evidence; it does not fix or
 claim success for the current hosted quickstart failure.
+
+### Identity vocabulary and owned-root socket budget — bounded approval
+
+Claude Code 2.1.301, `claude-sonnet-5-5`, session
+`54caee6f-012b-4b13-b864-a89f699851db`, APPROVED this bounded increment with an
+explicit open integration blocker; this is not full-phase acceptance. Actual
+reviews: `/tmp/marmish-scj-provider-identity-code.json` and
+`/tmp/marmish-scj-provider-identity-final.json`. Reviewer verified the exact
+65-production-label vocabulary plus the single `corrupt` compatibility label,
+18 static provider mappings, LF/CRLF/hostile/partial parser tests, disposable PTY
+failure propagation, all100 reserved UIDs, actual private root creation and
+unchanged product socket bounds. Useful nits adopted: consistent cfg(test) mod
+boundary, three partial-line cases, and clearer unknown-token prose. Initial
+review independently passed59 Python and58 Node tests, final review passed59
+Python tests and whitespace. Scratch mutation checks made old prefix and a
+renamed label fail tests; tracked source was unchanged by those checks.
+
+Reviewer checked unchanged success schema and failure-only child reports,
+dynamic sourceDigest inclusion of both helpers, unchanged13-path diagnostic
+guard, and no product or provider-gate bypass. The source-proven fixture budget
+violation does not establish the earlier hosted native error category. No
+product, account or Keychain was executed locally.
+
+Author checks: supervisor discovery/direct59/59 each, static workflow3/3,
+Node58/58, actionlint1.7.7 and whitespace PASS. Ripwire quality-delta flags
+historical short-horizon churn, unittest discovery false dead-code and test
+verbosity; no product behavior or structural expansion was added.
+
+The actual central Rust contract test FAILED (0 passed,1 failed), log
+`/tmp/marmish-scj-provider-final-rust-contract.log`. The earlier diagnostic
+ancestry added `owned_preferences_directory`, missing from Rust REPORT_FAILURES;
+the fallback `owned_account_prerequisite_failed` remains reachable through a
+nested conditional. Reviewer confirmed the current increment leaves the92-label
+HEAD/working AST sets identical. Root coordinates a separately reviewed
+installed-checks-only mapping and recursive-extraction correction; this worktree
+does not edit Rust or expand the diagnostic guard. The combined-tree contract
+must pass centrally before source freeze/full acceptance. A new hosted run is
+also required to observe the actual native category and qualify the provider.

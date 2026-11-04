@@ -984,5 +984,125 @@ class QuickstartFailureDiagnostics(unittest.TestCase):
             self.assertNotIn('SENTINEL', json.dumps(diagnostics))
 
 
+class IdentityDiagnosticVocabulary(unittest.TestCase):
+    def test_literal_vocabulary_matches_production_sources(self):
+        import re
+        repository = Path(check.__file__).resolve().parents[1]
+        sources = {}
+        labels = set()
+        for path in (repository / 'crates').glob('*/src/**/*.rs'):
+            source = re.split(r'#\[cfg\(test\)\]\s*mod\s+', path.read_text(), maxsplit=1)[0]
+            sources[path] = source
+            labels.update(re.findall(r'Error::Identity\(\s*"([a-z_]+)"', source))
+        identity = sources[repository / 'crates/marmish-native/src/identity.rs']
+        helper = identity.split('match result.error.as_deref()', 1)[1].split('let loaded', 1)[0]
+        labels.update(re.findall(r'=>\s*"([a-z_]+)"', helper))
+        mapped = set(re.findall(r'=>\s*"(keychain_(?:authorize|verify)_[a-z_]+)"', identity))
+        self.assertEqual(len(mapped), 18)
+        labels.update(mapped)
+        self.assertEqual(len(labels), 65)
+        self.assertEqual(check._fixture.INTERACTIVE_IDENTITY, labels | {'corrupt'})
+        self.assertNotIn('must_not_send_twice', labels)
+        self.assertNotIn('private marker', labels)
+        self.assertIn('runtime_path_too_long', labels)
+        self.assertIn('#[error("identity: {0}")]',
+            (repository / 'crates/marmish-native/src/error.rs').read_text())
+        self.assertIn('eprintln!("marmish: {error}");',
+            (repository / 'crates/marmish-native/src/cli.rs').read_text())
+
+    def test_every_literal_exact_native_line_and_hostile_unknowns(self):
+        for label in check._fixture.INTERACTIVE_IDENTITY:
+            for purpose in ('provider','nostr','sqlcipher'):
+                for ending in (b'\n',b'\r\n'):
+                    raw = b'marmish: keychain purpose=' + purpose.encode() + ending
+                    raw += b'marmish: identity: ' + label.encode() + ending
+                    value = check._fixture.interactive_snapshot(RuntimeError(), raw, 5, 1 << 8)
+                    self.assertEqual(value['native_failure'], 'identity_' + label)
+                    self.assertLess(len(json.dumps(value)), 1024)
+        for suffix in ('SENTINEL', 'keychain_verify_SENTINEL',
+                'keychain_verify_interaction_not_allowed/secret', 'missing\x1b', 'missing\x00'):
+            value = check._fixture.interactive_snapshot(RuntimeError(),
+                ('marmish: identity: ' + suffix + '\n').encode(), 5, 1 << 8)
+            self.assertEqual(value['native_failure'], 'diagnostic_invalid')
+            self.assertNotIn('SENTINEL',json.dumps(value))
+        for partial in (b'marmish: identity: keychain_verify_interaction_not_allowed',
+                b'marmish: identity: keychain_verify_interaction_', b'marmish: ident'):
+            value = check._fixture.interactive_snapshot(RuntimeError(), partial, 5, None)
+            self.assertEqual(value['native_failure'], 'absent')
+
+    def test_real_pty_identity_line_survives_child_and_outer_only_as_literal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'bootstrap'
+            path.write_text("printf '%s\\n' 'marmish: keychain purpose=provider' "
+                "'marmish: identity: keychain_verify_interaction_not_allowed'; exit 1\n")
+            path.chmod(0o644)
+            diagnostics = {}
+            with self.assertRaises(RuntimeError):
+                check.interactive([str(path)], {'PATH':'/bin'}, timeout=2,
+                    failure_diagnostics=diagnostics)
+            self.assertEqual(diagnostics['native_failure'],
+                'identity_keychain_verify_interaction_not_allowed')
+            result = {'ok':False, '_stage':'quickstart','_quickstart_diagnostics':diagnostics}
+            check.child_failure(result, RuntimeError('SENTINEL'))
+            child = check.sanitize_provider_report(result)
+            _, outer, _ = ProviderDiagnostics().fixture(Path(directory) / 'report', inner={
+                **child, 'kind':'installed_auto_provider'})
+            self.assertEqual(outer['child_quickstart'], child['child_quickstart'])
+            self.assertNotIn('SENTINEL', json.dumps(outer))
+
+
+class OwnedProviderSocketBudget(unittest.TestCase):
+    def test_owned_account_runtime_budget_for_all_reserved_uids(self):
+        self.assertEqual(check.PROVIDER_ROOT_PREFIX, '.mp-')
+        for account_hex in ('0123456789','a' * 10,'f' * 10):
+            home = Path('/Users') / ('marmishq' + account_hex)
+            for uid in range(55000,55100):
+                root = home / (check.PROVIDER_ROOT_PREFIX + 'abcdefgh')
+                runtime = root / ('mr2-' + str(uid) + '-' + 'a' * 32)
+                old = home / ('.marmish-provider-' + 'abcdefgh') / runtime.name
+                self.assertEqual(len(str(root).encode()),38)
+                self.assertEqual(len(str(runtime).encode()) + 10,91)
+                self.assertLess(len(str(runtime).encode()) + 10,104)
+                self.assertEqual(len(str(old).encode()) + 10,105)
+                self.assertGreaterEqual(len(str(old).encode()) + 10,104)
+                self.assertLess(len(str(runtime / 's').encode()),104)
+
+    def test_actual_owned_root_creation_parent_prefix_and_private_mode(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            created = []
+            def stop_after_root(root, *args):
+                created.append(root)
+                self.assertEqual(root.parent, home)
+                self.assertTrue(root.name.startswith(check.PROVIDER_ROOT_PREFIX))
+                self.assertEqual(len(root.name),12)
+                self.assertEqual(check.stat.S_IMODE(root.lstat().st_mode),0o700)
+                self.assertFalse(root.is_symlink())
+                raise RuntimeError('STOP BEFORE QUALIFICATION')
+            with mock.patch.object(check.pwd,'getpwuid',return_value=SimpleNamespace(pw_dir=directory)), \
+                    mock.patch.object(check,'Qualification',side_effect=stop_after_root):
+                with self.assertRaisesRegex(RuntimeError,'STOP BEFORE QUALIFICATION'):
+                    check.inner(home / 'bootstrap', home / 'assets', home / 'report')
+            self.assertEqual(len(created),1)
+            self.assertTrue(created[0].is_dir())
+
+    def test_product_socket_and_installer_tmpdir_contracts(self):
+        import re
+        repository = Path(check.__file__).resolve().parents[1]
+        identity = re.split(r'#\[cfg\(test\)\]\s*mod\s+',
+            (repository / 'crates/marmish-native/src/identity.rs').read_text(), maxsplit=1)[0]
+        self.assertIn('"mr2-{}-{profile_id}"',identity)
+        self.assertIn('random_hex(16)?',identity)
+        self.assertIn('runtime.as_os_str().as_encoded_bytes().len() + 10 >= 104',identity)
+        self.assertIn('runtime.join("s")',identity)
+        self.assertIn('socket.as_os_str().as_encoded_bytes().len() >= 104',identity)
+        ipc = (repository / 'crates/marmish-native/src/ipc.rs').read_text()
+        self.assertIn('path.as_os_str().as_encoded_bytes().len() >= 104',ipc)
+        installer = (repository / 'scripts/install.sh').read_text()
+        self.assertNotRegex(installer,r'(?m)^\s*(?:export\s+)?TMPDIR=')
+        self.assertIn('"$@" </dev/tty',installer)
+
+
 if __name__ == '__main__':
     unittest.main()

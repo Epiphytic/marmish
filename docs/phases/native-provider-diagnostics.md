@@ -617,3 +617,84 @@ never cleanup-induced termination; conversion errors omit it. Nested sanitizatio
 uses at most six known keys, closed enums and strict non-bool integers with
 bounded ranges; arbitrary keys are dropped and malformed objects normalize to
 finite invalid metadata. The resulting nested JSON is bounded below 1024 bytes.
+
+## Identity diagnostic vocabulary completion
+
+Hosted 41923076525/1 at c175e08 records terminal_failure, all five prompts seen,
+exit 1, setup_choices/native_setup_failed, native_failure diagnostic_invalid,
+elapsed 7939 ms. The product reached setup after input; actual native failure
+is still unknown. Identity is a leading but unproven candidate. The next emitted
+token determines whether to investigate a provider error or a malformed or
+non-Identity line. Production cli.rs prints `marmish: {error}` and error.rs renders
+Identity as `identity: {0}`. identity.rs helper response maps finite exists,
+ambiguous and other static labels, while authorize_result explicitly maps 18
+static keychain_authorize/keychain_verify labels. The five-entry diagnostic
+suffix vocabulary omits them. No CR/ANSI defect or specific provider error is
+inferred from this unknown token.
+
+Expand only the helper's explicit identity diagnostic vocabulary. Pin all 65
+production static Identity labels from Rust sources (including the helper's
+match arms and 18 authorization/verification mappings) as literal strings; retain
+existing corrupt recognition for compatibility. Never build this vocabulary
+from source or provider values at runtime; no arbitrary suffix or prefix match.
+The parser still requires a complete exact native line and emits identity_<token>
+only for membership. Unknown/control/partial identity suffixes remain invalid
+or absent; no failure/status/report schema, gate, cleanup, guard or product
+behavior changes. The largest label remains well within the existing 1024-byte
+nested report bound.
+
+Tests scan all crates source including feature-gated files, stripping only
+cfg(test) mod tails, never mid-file cfg(test) attributes; use multiline Identity
+literal regex and extract helper match/18tuple-arm outputs separately. Assert
+exact65source labels and exact parity plus sole non-source exception corrupt. These tests may use bounded regex to
+check source drift offline; runtime stays literal-only. Also parse every pinned
+suffix through the actual production stderr shape with LF/CRLF, decorative
+keychain-purpose preceding it, both keychain purposes, unknown suffixes, controls,
+partial lines and secret sentinels. Include a real small PTY script emitting a
+production-format omitted label then exiting1, and verify child and outer report
+preserve only the closed label. No live Marmish, provider or account. Run scoped
+Python/static/Node/actionlint, then actual independent code/integration review.
+The next hosted run must reveal the actual category before considering a fix.
+
+### Combined owned-fixture runtime path remedy (before code)
+
+A second source contract identifies a deterministic fixture problem independently
+of the unknown token: ProfileLease::from_locked builds TMPDIR/mr2-<uid>-<32hex>
+and refuses encoded length + 10 >= 104. inner() currently creates its private
+root as /Users/marmishq<10hex>/.marmish-provider-<8random> and uses it as TMPDIR.
+That root is 52 ASCII bytes, runtime is 95, and reserved suffix budget totals105,
+so every reserved UID55000..55099 is refused before identity creation. This
+arithmetic is proof of an incompatible fixture layout, not proof of the exact
+category emitted by the preceding hosted run.
+
+Combine the vocabulary completion with one CI-only root-prefix correction:
+pin PROVIDER_ROOT_PREFIX='.mp-' and use it in the existing mkdtemp call. Its root
+is38bytes, runtime81, plus10=91<104 for every reserved account UID. Keep root under
+the same owned account HOME, exact0700, nonsymlink checks, cleanup ownership,
+account range, product socket bound, runtime isolation, input pins and all
+qualification gates unchanged. Lifecycle uses the same owned root, and benefits
+without separate behavior. No Rust/product change or provider bypass.
+
+Add a regression over all100reservedUIDs and representative fixed10hex account
+names constructing the exact32hex profile runtime and asserting encoded socket
+budget below104; also assert the previous prefix violates it. Exercise actual
+inner fixture mkdtemp invocation to assert the new prefix, parent/account HOME
+and eight-character tempfile suffix under temporary local HOME only. Add
+source-contract checks for mr2 formatting/16-byteprofileID and strict+10/104bound
+so a future relevant Rust change requires reconsideration. Independent Claude
+must approve this combined amendment before implementation; prior enum-only
+review alone is insufficient. Next hosted run must still pass actual identity
+creation and full qualification, and may reveal another issue.
+
+Combined design r2 actual Claude APPROVED, session
+cd8f7738-6834-4a9b-a975-97cf8ab6f8e8,
+`/tmp/marmish-scj-provider-identity-design-r2.json`. Binding pins before code:
+budget regression uses synthetic fixed owned-account shape, all100UIDs and actual
+new constant; actual mkdtemp test checks only supplied HOME/prefix/name length12/
+0700 and stops at mocked Qualification construction. Source checks include both
+Identity socket bounds and ipc bound, mr2 format/random_hex16/runtime.join(s),
+and unchanged installer TMPDIR inheritance. Parent runs existing Rust
+supervisor_failure_labels_match_python_ast_and_retain_cleanup; prefix constants
+must not alter its failure-label set. No guard change. Separate runner-account
+quickstart fixture stays outside scope; its shorter HOME/UID fits the budget.
+Any next hosted setup failure must be assessed using actual emitted evidence.
