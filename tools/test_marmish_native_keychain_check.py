@@ -540,7 +540,9 @@ class ChildDiagnostics(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             report = home / 'result.json'
-            provider = check.MacProvider(home, {})
+            provider_root = home / 'provider'
+            provider_root.mkdir(mode=0o700)
+            provider = check.MacProvider(provider_root, {'HOME':tmp})
             qualification = SimpleNamespace(provider=provider)
             qualification.run = lambda result: action(qualification, result)
             if cleanup is not None:
@@ -694,6 +696,101 @@ class ChildDiagnostics(unittest.TestCase):
             self.assertEqual(result['child_failure_stage'], 'install')
             self.assertEqual(result.get('child_exit_code'), None if stop_error else 7)
             self.assertNotIn('SENTINEL', json.dumps(result))
+
+
+class MacPreferencePreparation(unittest.TestCase):
+    def fixture(self, home):
+        from types import SimpleNamespace
+        root = home / 'provider'
+        root.mkdir(mode=0o700)
+        provider = check.MacProvider(root, {'HOME':str(home)})
+        provider._diagnostics = {}
+        return provider, mock.patch.object(check.pwd, 'getpwuid',
+            return_value=SimpleNamespace(pw_dir=str(home)))
+
+    def test_private_parents_ready_before_original_security_sequence(self):
+        import stat
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            provider, account = self.fixture(home)
+            calls = []
+            def execute(argv, *_args, **_kwargs):
+                for directory in (home / 'Library', home / 'Library' / 'Preferences'):
+                    info = directory.lstat()
+                    self.assertTrue(stat.S_ISDIR(info.st_mode))
+                    self.assertEqual(stat.S_IMODE(info.st_mode), 0o700)
+                    self.assertEqual(info.st_uid, check.os.geteuid())
+                calls.append(argv)
+                return 0, ('"' + str(provider.keychain) + '"').encode()
+            with account, mock.patch.object(check, 'execute', side_effect=execute):
+                provider.start()
+                provider.start()  # Existing valid private directories are left intact.
+            expected = [
+                ['/usr/bin/security','create-keychain','-p',check.PASSWORD.decode().strip(),str(provider.keychain)],
+                ['/usr/bin/security','default-keychain','-d','user','-s',str(provider.keychain)],
+                ['/usr/bin/security','list-keychains','-d','user','-s',str(provider.keychain)],
+                ['/usr/bin/security','unlock-keychain','-p',check.PASSWORD.decode().strip(),str(provider.keychain)],
+                ['/usr/bin/security','set-keychain-settings',str(provider.keychain)],
+                ['/usr/bin/security','default-keychain','-d','user']]
+            self.assertEqual(calls, expected + expected)
+
+    def test_invalid_existing_paths_refuse_before_any_security(self):
+        for invalid in ('symlink','file','mode','foreign_uid','home_mismatch','home_symlink','root_symlink','unrelated_root'):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as tmp:
+                from contextlib import ExitStack
+                from types import SimpleNamespace
+                home = Path(tmp)
+                provider, account = self.fixture(home)
+                library = home / 'Library'
+                if invalid == 'symlink': library.symlink_to(provider.root, target_is_directory=True)
+                if invalid == 'file': library.write_text('SENTINEL')
+                if invalid == 'mode':
+                    library.mkdir(mode=0o755)
+                    library.chmod(0o755)  # Keep this invalid fixture independent of umask.
+                if invalid == 'home_mismatch': provider.environment['HOME'] = str(home / 'other')
+                if invalid == 'home_symlink':
+                    alias = home / 'alias'
+                    alias.symlink_to(home, target_is_directory=True)
+                    provider.environment['HOME'] = str(alias)
+                if invalid == 'root_symlink':
+                    provider.root.rmdir()
+                    provider.root.symlink_to(home, target_is_directory=True)
+                if invalid == 'unrelated_root': provider.root = home.parent / 'other'
+                with ExitStack() as stack:
+                    stack.enter_context(account)
+                    if invalid == 'foreign_uid':
+                        original = Path.lstat
+                        def lstat(path, *args, **kwargs):
+                            info = original(path, *args, **kwargs)
+                            return SimpleNamespace(st_uid=check.os.geteuid()+1,st_mode=info.st_mode) if path == home else info
+                        stack.enter_context(mock.patch.object(Path,'lstat',lstat))
+                    execute = stack.enter_context(mock.patch.object(check,'execute'))
+                    with self.assertRaises(check.Refused) as failed:
+                        provider.start()
+                self.assertEqual(str(failed.exception),'owned_preferences_directory')
+                self.assertIsNone(failed.exception.exit_code)
+                self.assertEqual(provider._diagnostics['_stage'],'mac_preferences_prepare')
+                execute.assert_not_called()
+
+    def test_mkdir_race_and_oserror_are_finite_without_security_or_status(self):
+        for race in (False, True):
+            with self.subTest(race=race), tempfile.TemporaryDirectory() as tmp:
+                provider, account = self.fixture(Path(tmp))
+                original = Path.mkdir
+                def mkdir(path, *args, **kwargs):
+                    if race:
+                        original(path, *args, **kwargs)
+                        raise FileExistsError('SENTINEL raced')
+                    raise PermissionError('SENTINEL permission')
+                with account, mock.patch.object(Path,'mkdir',mkdir), mock.patch.object(check,'execute') as execute:
+                    with self.assertRaises(check.Refused) as failed:
+                        provider.start()
+                check.child_failure(provider._diagnostics, failed.exception)
+                report = check.sanitize_provider_report(provider._diagnostics)
+                self.assertEqual(report, {'child_failure':'owned_preferences_directory',
+                    'child_failure_stage':'mac_preferences_prepare'})
+                self.assertNotIn('SENTINEL',json.dumps(report))
+                execute.assert_not_called()
 
 
 if __name__ == '__main__':

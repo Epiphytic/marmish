@@ -403,3 +403,102 @@ stale-stage checks, quickstart parser placement, and real exit/stop replacement.
 Node tooling passes 58 tests; static workflow contracts pass 3; actionlint 1.7.7
 and whitespace checks pass. These tests establish diagnostic contracts only;
 actual code approval and a new pinned hosted provider run remain required.
+
+## Owned preference-directory preparation after 41918539030/1
+
+Hosted run 41918539030/1 now attributes the failure to
+`child_failure_stage=mac_default_verify`, `child_failure=operation_failed`,
+`child_exit_code=1`, elapsed 2718 ms. Provider creation, default/search selection,
+unlock and settings completed; the separate default lookup failed before any
+product launch. The child reaped its provider, and runner Keychain state stayed
+unchanged. Do not report the suppressed security stderr as observed evidence.
+
+Apple's primary [security CLI source](https://github.com/apple-oss-distributions/Security/blob/main/SecurityTool/macOS/keychain_list.c)
+shows that setting `default-keychain -d user -s` invokes
+`SecKeychainSetDomainDefault`, whereas querying invokes
+`SecKeychainCopyDomainDefault`. Its primary [preference implementation](https://github.com/apple-oss-distributions/Security/blob/main/OSX/libsecurity_keychain/lib/DLDBListCFPref.cpp)
+defines the user path as `~/Library/Preferences/com.apple.security.plist`.
+`DLDbListCFPref::writePropertyList` opens that file with `O_CREAT` but creates no
+parent directories; it ignores an unsuccessful open. This provides a concrete
+mechanism for a successful setter followed by a failing fresh-process lookup
+when the manually created account lacks `Library/Preferences`. The qualifier
+currently creates only the account home. Missing preference parents are thus a
+source-supported hypothesis, not a proven observation of this runner's disk.
+The next actual diagnostic must confirm or refute the remedy; do not replace
+the lookup with a bypass or claim a provider pass from directory creation.
+
+Proposed scope is solely the existing CI Mac provider: before its first security
+operation, prepare `Library` and then `Library/Preferences` under the owned
+account's existing HOME as that same unprivileged account. No sudo, identity
+switch, runner-home mutation, changes to Security environment, preference-file
+contents, public product code, default-query argv, fallback, retry or timeout
+changes are permitted. The custom provider keychain path remains unchanged;
+there is no need to create a login keychain or `Library/Keychains` for this fix.
+
+Add a finite `mac_preferences_prepare` value to `CHILD_STAGES` and set it before
+preparation. Read HOME only from the existing trusted inner environment. Verify
+it is an absolute, existing directory owned by the current effective UID and
+not a symlink. HOME must also equal the current effective UID's account-database home. The
+owned nonsymlink provider root must have exactly that HOME as its parent, so the
+operation cannot target a different account. For each of the two literal
+child components, use a non-recursive `mkdir(mode=0o700)` in order; if it already
+exists, leave it untouched and validate it. Use `lstat` to require a directory,
+no symlink, current effective ownership and exactly mode 0700. Refuse an
+unexpected existing directory or permissions instead of changing them. The
+parent HOME is already newly created private state owned by this test account;
+no broader path or external ownership is accepted. This bounds every created
+path under the existing account cleanup scope. All validation failures, account lookup failures and OS errors (including a
+mkdir race) use the new closed `owned_preferences_directory` category without
+an exit status. Export no
+path, errno text or arbitrary error message.
+
+The original `mac_create_keychain` through `mac_default_verify` operations and
+default-path equality check then run unchanged. If successful, installer and
+all real provider qualification continue normally. Success schema remains
+unchanged, and failed prepare diagnostics use the existing sanitizer and
+first-failure tuple. Existing cleanup remains unchanged: the disposable home
+and account are removed only after successful qualification; failures honestly
+retain `owned_account_removed=false`. These accounts are confined to ephemeral
+hosted runners. Local validation may create only temporary test-fixture directories, never
+real account Library/Preferences directories.
+
+Offline acceptance: use temporary owned HOME fixtures and mocked security
+execution to assert Library/Preferences exist as exact 0700 directories before
+the first security command, with the original command sequence and default
+query argv preserved. Test preparation from scratch and reuse of valid private
+directories. Existing symlink, non-directory, foreign UID, non-0700 directory,
+unrelated provider root, invalid HOME, and mkdir failure must refuse before any
+security command and emit only finite diagnostics at mac_preferences_prepare.
+Mock identity/metadata where necessary; never chown or create real accounts.
+Keep create/default-selection/default-verification failures distinguishable,
+update existing temporary provider fixtures to supply their owned HOME, and run
+the complete supervisor discovery/direct tests plus static workflow, Node and
+actionlint checks. Obtain independent design and code approval, then publish
+only existing allowlisted paths and dispatch the same pinned product diagnostic.
+An actual successful default query and subsequent complete qualification are
+required to establish a fix; any later stage failure is new evidence to report.
+No raw-stderr or numeric-OSStatus expansion is necessary for this narrowly
+source-supported prerequisite remedy.
+
+Actual Claude preference design approval is recorded in
+`/tmp/marmish-scj-provider-prefs-design.json`. Its three amendments are binding:
+all preparation validation and OS errors, including a mkdir race, map to
+`Refused('owned_preferences_directory')` with no status; HOME must equal the
+current effective UID's account-database home and the nonsymlink owned provider
+root must have exactly that HOME as its parent; refusal of existing directory
+modes other than 0700 is deliberate. No permission repair or path fallback is
+permitted. These constraints supersede the earlier broader descendant/generic
+error wording and are pinned before implementation.
+
+
+The preference preparation implementation adds only the finite stage/category,
+owned-directory prerequisite, and offline fixtures. `MacProvider.start` runs it
+before any security command. Temporary-only tests cover fresh creation and valid
+reuse, exact original security argv/order, symlink/file/foreign-owner/wrong-mode
+and identity/path rejection, permission failure and a target-appears-during-mkdir
+race. Every preparation failure has the same category and no status, with no
+security command executed. Supervisor discovery and direct execution both pass
+44/44, static workflow contracts 3/3 and Node tooling 58/58; actionlint 1.7.7 and
+whitespace checks pass. No live account, runner HOME or Keychain was touched.
+Actual code review and hosted default-query/provider qualification remain
+required; this is still a source-supported prerequisite hypothesis.

@@ -55,3 +55,21 @@ and successful schema. Offline supervisor discovery and direct execution each
 pass 40/40, Node tooling 58/58, static workflow contracts 3/3, actionlint 1.7.7
 and diff whitespace checks pass. No live accounts or product builds were run.
 Actual code review and another exact-source hosted diagnostic remain pending.
+
+
+Hosted diagnostic [41918539030/1](https://github.com/Epiphytic/marmish/actions/runs/41918539030)
+identified `mac_default_verify`, `operation_failed`, child exit 1, elapsed
+2718 ms. Preceding security setup operations succeeded; the child provider was
+reaped and the runner Keychain stayed unchanged. Product execution had not
+started. Apple preference persistence source supports the missing-parent
+hypothesis described in the phase plan, without proving the runner's prior
+filesystem state.
+
+The independently approved, owned-account-only preference preparation remedy
+passes supervisor discovery/direct 44/44, static workflow 3/3, Node tooling
+58/58, actionlint 1.7.7 and whitespace checks. Directory fixtures are temporary;
+no local account, runner HOME, Keychain or product build was used. A reviewed
+hosted rerun remains required to establish successful default lookup and full
+qualification. Successful directory preparation alone is not a provider pass.
+
+Actual independent Claude code review APPROVED the owned Preferences prerequisite; see the existing [review record](../reviews/native-provider-diagnostics-code-r2.md). Reviewer independently passed 44 supervisor tests in discovery and direct modes and whitespace validation. A deterministic fixture chmod incorporates its useful nonblocking finding. Hosted qualification remains pending.

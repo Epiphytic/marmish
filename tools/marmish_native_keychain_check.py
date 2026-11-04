@@ -53,8 +53,8 @@ cleanup_processes cleanup_delete_account cleanup_delete_home cleanup_verify_home
 cleanup_runner_search cleanup_runner_compare'''.split())
 
 
-CHILD_STAGES = frozenset('diagnostic_invalid provider_start mac_create_keychain mac_default_select mac_search_select mac_unlock_keychain mac_keychain_settings mac_default_verify mac_lock_keychain mac_delete_keychain install initial_probe quickstart quickstart_validate initial_identity_validate named_identity_setup named_identity_validate identity_reload locked_validation unlocked_validation absent_provider_validation qualification_remaining provider_cleanup'.split())
-CHILD_FAILURES = frozenset('diagnostic_invalid operation_failed operation_timeout operation_input_limit operation_output_limit child_cleanup_incomplete owned_descendant_remained qualification_deadline provider_qualification_failed provider_cleanup_incomplete owned_default_keychain keychain_cleanup_incomplete provider_state_unavailable helper_contract provider_metadata_limit quickstart_report quickstart_auto_keychain fresh_identity_reload profile_metadata profile_custody plaintext_fallback separate_key_references provider_list provider_item_count provider_item_uniqueness named_identity_separation named_reference_separation locked_existing_accepted locked_fresh_accepted locked_profile_mutated locked_files_fallback locked_native_items_changed'.split())
+CHILD_STAGES = frozenset('diagnostic_invalid provider_start mac_preferences_prepare mac_create_keychain mac_default_select mac_search_select mac_unlock_keychain mac_keychain_settings mac_default_verify mac_lock_keychain mac_delete_keychain install initial_probe quickstart quickstart_validate initial_identity_validate named_identity_setup named_identity_validate identity_reload locked_validation unlocked_validation absent_provider_validation qualification_remaining provider_cleanup'.split())
+CHILD_FAILURES = frozenset('diagnostic_invalid owned_preferences_directory operation_failed operation_timeout operation_input_limit operation_output_limit child_cleanup_incomplete owned_descendant_remained qualification_deadline provider_qualification_failed provider_cleanup_incomplete owned_default_keychain keychain_cleanup_incomplete provider_state_unavailable helper_contract provider_metadata_limit quickstart_report quickstart_auto_keychain fresh_identity_reload profile_metadata profile_custody plaintext_fallback separate_key_references provider_list provider_item_count provider_item_uniqueness named_identity_separation named_reference_separation locked_existing_accepted locked_fresh_accepted locked_profile_mutated locked_files_fallback locked_native_items_changed'.split())
 
 
 def child_stage(result, stage):
@@ -325,7 +325,32 @@ class MacProvider:
         child_stage(getattr(self, '_diagnostics', None), stage)
         return execute(['/usr/bin/security', *arguments], self.environment)[1]
 
+    def prepare_preferences(self):
+        child_stage(getattr(self, '_diagnostics', None), 'mac_preferences_prepare')
+        try:
+            configured = self.environment.get('HOME')
+            require(isinstance(configured, str), 'owned_preferences_directory')
+            home = Path(configured)
+            uid = os.geteuid()
+            require(home.is_absolute() and home == Path(pwd.getpwuid(uid).pw_dir)
+                and self.root.parent == home, 'owned_preferences_directory')
+            for directory in (home, self.root):
+                info = directory.lstat()
+                require(stat.S_ISDIR(info.st_mode) and info.st_uid == uid
+                    and stat.S_IMODE(info.st_mode) == 0o700, 'owned_preferences_directory')
+            for directory in (home / 'Library', home / 'Library' / 'Preferences'):
+                try:
+                    info = directory.lstat()
+                except FileNotFoundError:
+                    directory.mkdir(mode=0o700)
+                    info = directory.lstat()
+                require(stat.S_ISDIR(info.st_mode) and info.st_uid == uid
+                    and stat.S_IMODE(info.st_mode) == 0o700, 'owned_preferences_directory')
+        except (OSError, KeyError):
+            raise Refused('owned_preferences_directory') from None
+
     def start(self):
+        self.prepare_preferences()
         password = PASSWORD.decode().strip()
         self.security('create-keychain', '-p', password, str(self.keychain), stage='mac_create_keychain')
         self.security('default-keychain', '-d', 'user', '-s', str(self.keychain), stage='mac_default_select')

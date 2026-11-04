@@ -124,3 +124,56 @@ Session: f7360a21-ac8f-442d-9b22-042181113953
 4. **Design prose reconciled.** In `docs/phases/native-provider-diagnostics.md`, lines 22-24 and 313-316 now say the status is retained only when it is the actual checked subprocess status. Generic exceptions map to `provider_qualification_failed` without a status. Lines 334-340 say generic cleanup exceptions use `provider_cleanup_incomplete` with no status, and that the first-failure capture is a single operation. I found no leftover contradiction.
 
 **Non-blocking note:** the supervisor-side `provider_failure` still takes `exit_code` from any exception via `getattr`. It is not part of the child diagnostic boundary, and the design only requires `Refused.exit_code` there. I'm not asking for a change.
+
+
+## Owned Preferences prerequisite code review
+
+Actual Claude Code `claude-sonnet-5-5`, `--permission-mode auto`.
+Session: 8cb3181d-089b-4049-baf1-eb8bb85db66e
+
+**APPROVED.** There are no blocking findings. This is an offline approval only. Nothing here shows the hosted default lookup now works.
+
+## Adherence to the approved design and the three amendments
+- **Scope and ordering:** `MacProvider.prepare_preferences()` (`tools/marmish_native_keychain_check.py:328`) is the only code change that does anything. `start()` calls it before the first `security` command. `Qualification` builds the provider with `HOME` from the account database, so the real flow supplies a matching HOME.
+- **Only the disposable account's HOME:**
+  - HOME must be a string, absolute, and equal to `pwd.getpwuid(geteuid()).pw_dir` (amendment 2).
+  - `self.root.parent == home` is an exact-parent test, not a lexical descendant test.
+  - HOME and the provider root are both checked with `lstat`: directory, not a symlink, owned by the effective uid, mode exactly 0700. That is stricter than the design asked for, which is fine.
+- **Directory creation:**
+  - `Library` and then `Library/Preferences` are created with non-recursive `mkdir(mode=0o700)`.
+  - Each is re-checked with `lstat` for directory, effective uid and exactly 0700.
+  - A directory that already exists is validated and never repaired, and the exact-0700 refusal is deliberate (amendment 3).
+- **Finite errors:**
+  - `except (OSError, KeyError)` becomes `Refused('owned_preferences_directory') from None`, with no exit code.
+  - That covers a `mkdir` race and a failed account lookup (amendment 1).
+  - The stage and category were added only to `CHILD_STAGES` and `CHILD_FAILURES`, the only allowlists. The existing sanitizer therefore passes only the finite tuple.
+  - No path, errno or message text can reach the report.
+- **Original security flow:** the six `security` argv calls and their order are unchanged. The `default-keychain -d user` query and the equality check are still required. No sudo, environment change, fallback, retry or product change was added.
+- **Cleanup:** `inner()` still removes the provider root only on success. The account cleanup still runs `rm -rf` on the home, so the new `Library` directories are removed with the account (`tools/marmish_native_keychain_check.py:931`). The failure path still reports `owned_account_removed=false`.
+
+## Tests I ran
+- `python3 -I -m unittest discover -s tools -p test_marmish_native_keychain_check.py` ran 44 tests, all OK.
+- `python3 tools/test_marmish_native_keychain_check.py` (direct run) ran 44 tests, all OK.
+- `git diff --check` is clean.
+- I did not rerun the Node tooling (58), static workflow (3) or actionlint results the docs cite, so I can't confirm them.
+- I touched no live accounts, Keychains or runner HOME. The tests use temporary directories with mocked `pwd` and `execute`.
+
+The new tests cover these cases:
+- **Fresh and reused directories:** the argv and order stay unchanged across a fresh run and a second `start()`.
+- **Refused paths:** symlink, file, wrong mode, foreign uid, HOME mismatch, symlinked HOME, symlinked root and unrelated root. None runs `security` or sets an exit code, and the stage is `mac_preferences_prepare`.
+- **`mkdir` failures:** a permission error and a target-appears race both produce the finite report with no `SENTINEL` text.
+
+## Nonblocking findings
+1. The `mode` fixture in `test_invalid_existing_paths_refuse_before_any_security` calls `library.mkdir(mode=0o755)`. That mode is subject to the umask, so under a restrictive umask such as 077 it would create 0700 and the test would fail for the wrong reason. A `chmod(0o755)` afterwards would make it deterministic.
+2. The foreign-uid, wrong-mode and symlink cases only exercise `Library`, and the foreign-uid case only mocks HOME. The `Preferences` component and a `KeyError` from the account lookup share the same code path but have no dedicated case.
+3. A restrictive umask makes the created directories fail the exact-0700 check. That fails finitely, which is acceptable.
+4. In `docs/phases/native-provider-diagnostics.md` the last section has a stray double blank line. The doc also still has a "descendant/generic error wording" sentence that the amendments supersede, and it says so.
+
+## Hosted-evidence limits
+- The offline tests prove the preparation logic and the diagnostics contract only. They do not prove macOS `security` behaves as hypothesized.
+- The missing-`Library/Preferences` theory rests on Apple source reading. The run's stderr was suppressed, so nothing observed confirms it.
+- A hosted pass past `mac_default_verify` would show the directories are sufficient. It would not prove they were the original cause.
+- A hosted run is still needed to show a successful default query and then full qualification, including cleanup (`owned_account_removed`, `runner_keychain_unchanged`).
+- If that run fails, the failing stage is new evidence to report. If it fails at `mac_preferences_prepare`, the first thing to check is whether the real account's HOME is exactly 0700 and equals `pw_dir`.
+
+Disposition: fixed the wrong-mode fixture with an explicit chmod so it is independent of umask. No product or provider behavior changed after approval. Additional component-specific fixtures are nonblocking because both components use the same validation loop. Hosted proof remains required.
