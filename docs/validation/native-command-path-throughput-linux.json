@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "platform": "linux-amd64",
+  "artifact": "local-debug-source",
+  "relay": "wss://relay.us.whitenoise.chat/",
+  "cases": [
+    {
+      "name": "server_detach_with_custom_path",
+      "ok": true,
+      "milliseconds": 812
+    },
+    {
+      "name": "cold_command",
+      "ok": true,
+      "milliseconds": 5141,
+      "exit": 0,
+      "bytes": 8,
+      "sha256": "8ba8496a2525ae171ffd104d632dede6ef418d9b95962a9d88e2fcdbc8d48d24"
+    },
+    {
+      "name": "output_64k",
+      "ok": true,
+      "milliseconds": 9554,
+      "exit": 0,
+      "bytes": 65536,
+      "sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "kib_per_second": 6.699
+    },
+    {
+      "name": "output_256k",
+      "ok": true,
+      "milliseconds": 36359,
+      "exit": 0,
+      "bytes": 262144,
+      "sha256": "8a39d2abd3999ab73c34db2476849cddf303ce389b35826850f9a700589b4a90",
+      "kib_per_second": 7.041
+    },
+    {
+      "name": "finite_server_diagnostics_exclude_argv_and_path",
+      "ok": true
+    },
+    {
+      "name": "bounded_daemons_joined_cleanup",
+      "ok": true
+    }
+  ],
+  "ok": true,
+  "milliseconds": 96689,
+  "private_state_removed": true,
+  "source_commit": "47d2a02165abdab1cb0656ddcfc3f083fa739baf"
+}

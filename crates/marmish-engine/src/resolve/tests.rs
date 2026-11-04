@@ -1,5 +1,4 @@
 use super::*;
-use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::{symlink, PermissionsExt};
 
 fn exec(name: &[u8]) -> CommandRequest {
@@ -109,16 +108,80 @@ fn candidate_failures_and_search_bounds_are_finite() {
         Err(EngineError::InvalidRequest)
     );
 }
+// Darwin filesystems reject invalid UTF-8 filenames before resolver lookup.
+#[cfg(target_os = "linux")]
 #[test]
-fn non_utf8_paths_and_lexical_alias_are_preserved() {
+fn non_utf8_filesystem_paths_and_argument_bytes_are_preserved() {
+    use std::os::unix::ffi::OsStringExt;
     let dir = tempfile::tempdir().unwrap();
     let name = std::ffi::OsString::from_vec(vec![b'a', 255]);
+    let alias = std::ffi::OsString::from_vec(vec![b'l', 255]);
     program(&dir.path().join(&name));
-    let result = resolve_exec(&exec(name.as_bytes()), Some(OsStr::new("./.")), dir.path()).unwrap();
-    let CommandRequest::ResolvedExec { invoked_path, .. } = result else {
+    symlink(&name, dir.path().join(&alias)).unwrap();
+    let result =
+        resolve_exec(&exec(alias.as_bytes()), Some(OsStr::new("./.")), dir.path()).unwrap();
+    let CommandRequest::ResolvedExec {
+        executable,
+        invoked_path,
+        argv,
+    } = result
+    else {
         panic!()
     };
-    assert_eq!(invoked_path, dir.path().join(name).as_os_str().as_bytes());
+    assert_eq!(
+        executable,
+        std::fs::canonicalize(dir.path().join(&name))
+            .unwrap()
+            .as_os_str()
+            .as_bytes()
+    );
+    assert_eq!(invoked_path, dir.path().join(&alias).as_os_str().as_bytes());
+    assert_eq!(
+        argv,
+        vec![
+            vec![b'l', 255],
+            vec![],
+            b"a ; $(echo bad) '*".to_vec(),
+            vec![255]
+        ]
+    );
+}
+
+#[test]
+fn lexical_symlink_alias_and_non_utf8_arguments_are_preserved() {
+    let dir = tempfile::tempdir().unwrap();
+    program(&dir.path().join("real"));
+    symlink("real", dir.path().join("alias")).unwrap();
+    let result = resolve_exec(&exec(b"alias"), Some(OsStr::new("./.")), dir.path()).unwrap();
+    let CommandRequest::ResolvedExec {
+        executable,
+        invoked_path,
+        argv,
+    } = result
+    else {
+        panic!()
+    };
+    assert_eq!(
+        executable,
+        std::fs::canonicalize(dir.path().join("real"))
+            .unwrap()
+            .as_os_str()
+            .as_bytes()
+    );
+    assert_eq!(
+        invoked_path,
+        dir.path().join("alias").as_os_str().as_bytes()
+    );
+    assert_ne!(executable, invoked_path);
+    assert_eq!(
+        argv,
+        vec![
+            b"alias".to_vec(),
+            vec![],
+            b"a ; $(echo bad) '*".to_vec(),
+            vec![255]
+        ]
+    );
 }
 
 #[test]

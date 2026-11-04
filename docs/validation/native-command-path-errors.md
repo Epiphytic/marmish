@@ -12,7 +12,7 @@ The final refusal fix is substantive: after a real Dispatch refuses before engin
 
 - `cargo test -p marmish-engine -p marmish-prototype --locked`: passed. Engine: 115 library, 2 concurrent-storage, 3 encrypted-storage, 14 engine integration and 5 native-storage tests (139 total). Prototype: 2 library and 9 bridge tests (11 total). Binary/doc targets also succeeded. Nested subprocess test summaries are not counted again.
 - Engine fault injection: 8 passed in 34.53 seconds using explicit, separately built production and fault-worker artifacts through `MARMISH_TEST_PRODUCTION_WORKER` and `MARMISH_TEST_FAULT_WORKER`. The initial attempt without those required fixture variables failed configuration; it was not a product failure or a successful test run.
-- Native all-feature library suite: **481 passed, zero failed**, 366.73 seconds, with no concurrent executable rebuild. This includes the real-engine refusal/cleanup fix. The subsequent fixture-only credential timeout amendment passed all 22 identity tests with 8 threads, followed by **20 further parallel identity-suite repetitions** (440 passing executions); no failure was reproduced. These passes do not establish the original CI error cause.
+- Final committed-source native all-feature library suite (`47d2a02`): **483 passed, zero failed**, 370.14 seconds, with no concurrent executable rebuild. This includes the real-engine refusal/cleanup, credential fixture and wire-guard corrections. The amended credential fixture also passed all 22 identity tests with 8 threads, followed by **20 further parallel identity-suite repetitions** (440 passing executions); no failure was reproduced. These passes do not establish the original CI error cause.
 - Strict Clippy on native, engine and prototype, all targets and all features: passed. One lazy Option closure was replaced by equivalent Option::and as suggested.
 - Rust formatting and `git diff --check`: passed.
 
@@ -20,7 +20,7 @@ Coverage includes PATH order/unset/empty/relative/non-UTF8 inputs and bounds; ca
 
 An earlier native run passed 480 tests and failed the real-engine cleanup test, exposing the stale Dispatching/uncertainty bug. The fix has a real-Dispatch, reopen/replay/cleanup regression. Earlier engine integration expectations were corrected to distinguish InvalidRequest from actual policy denial.
 
-The first live trial then caught a stale wire guard: validate_submit still rejected bare argv0 before the server resolver could run. The guard now rejects empty argv0 and NUL while preserving all size limits; the existing design already requires bare and relative names. Exact wire encode/decode/re-encode tests cover bare, relative, non-UTF8, metacharacter and empty-tail bytes, and negative empty/NUL inputs. [The final wire review](../reviews/native-command-path-errors-wire-final.md) approved this correction. The subsequent affected native suite passed **315 tests, zero failed**, 168 MDK tests filtered, in 40.82 seconds. The earlier 481-test full run predates only the later fixture and wire-guard corrections; it is not described as a full final-source rerun. Both daemons from the failed live trial emitted joined cleanup receipts and their owned private fixture was removed.
+The first live trial then caught a stale wire guard: validate_submit still rejected bare argv0 before the server resolver could run. The guard now rejects empty argv0 and NUL while preserving all size limits; the existing design already requires bare and relative names. Exact wire encode/decode/re-encode tests cover bare, relative, non-UTF8, metacharacter and empty-tail bytes, and negative empty/NUL inputs. [The final wire review](../reviews/native-command-path-errors-wire-final.md) approved this correction. The subsequent affected native suite passed **315 tests, zero failed**, 168 MDK tests filtered, in 40.82 seconds, followed by the final full 483-test run above. Both daemons from the failed live trial emitted joined cleanup receipts and their owned private fixture was removed.
 
 ## Static quality disposition
 
@@ -29,6 +29,10 @@ The first live trial then caught a stale wire guard: validate_submit still rejec
 ## Platform follow-up
 
 The preceding daemon candidate [41887894604](https://github.com/Epiphytic/marmish/actions/runs/41887894604), source `13b460a`, failed macOS native verification in two startup-channel fixtures and Linux AMD64 in an existing interrupted-credential-helper fixture. Linux ARM64 passed native verification and packaging, then its installed-feature build/test step failed the timeout-helper fixture (470 passed, 1 failed). The actual error variant was not logged; a root cause is not established. Installed qualification did not run. This increment includes the reviewed Darwin poll/recv startup correction and the Linux test-only helper request-read synchronization. These are not evidence of a successful macOS run. Candidate results for the new source must be recorded separately.
+
+In [candidate 41896579860](https://github.com/Epiphytic/marmish/actions/runs/41896579860), source `47d2a02`, the macOS job passed **388 native tests**, including all **19 daemon startup tests**, plus 13 vault and two helper integration tests. One explicitly gated native-vault test was ignored. Engine results were 122 passed and one failed: a fixture attempted to create an invalid UTF-8 filename and macOS returned EILSEQ (92) from `fs::write`, before calling the resolver. This is not a successful overall candidate or installer qualification. The [reviewed fixture amendment](../reviews/native-command-path-errors-macos-fixture-design.md) separates Linux raw-filename coverage from portable lexical-alias and raw-argument coverage; it does not change product behavior or swallow filesystem errors.
+
+The fixture-only correction passed all six resolver tests locally, engine all-target/all-feature strict Clippy, formatting and whitespace checks. Its quality delta against `47d2a02` exits zero with no gating findings; its only two reported new-symbol findings label Rust `#[test]` entry points as dead code, despite their successful execution. The earlier broader quality disposition above remains unchanged. Actual rerun/installer results remain pending.
 
 ## Final live relay result
 
@@ -45,3 +49,14 @@ The server inherited a private custom PATH prefix; the client found that server-
 | Full run, including the bounded daemon lifetime and cleanup | 186,507 ms |
 
 These are end-to-end CLI timings for tiny outputs on one public relay, including protocol, scheduling and finish-delivery overhead. They are not bulk-throughput measurements or macOS performance results. SHA-256 and byte counts are retained without raw output or identities. Final strict Clippy and native production-bin rebuild passed after the wire correction; formatting and staged whitespace checks passed.
+
+## Bounded output throughput
+
+A separate [sanitized throughput record](native-command-path-throughput-linux.json) uses the same final source (`47d2a02`), Linux AMD64 debug binaries, explicit relay and Tor-off configuration, with fresh disposable identities. Both transfer cases returned exact zero-filled byte counts and SHA-256 hashes:
+
+| Output | Full command time | End-to-end throughput |
+| --- | ---: | ---: |
+| 64 KiB | 9,554 ms | 6.699 KiB/s |
+| 256 KiB | 36,359 ms | 7.041 KiB/s |
+
+Cold command startup was 5,141 ms and background server readiness was 812 ms. These are single samples, including command negotiation, encrypted framing, relay transport, acknowledgements and finish delivery; they do not isolate raw network bandwidth. Both 90-second-bounded daemons emitted joined cleanup receipts without panic. Private state, keys and copied test executables were removed; total run time was 96,689 ms. No concurrent Cargo build or native test suite ran during these measurements.
