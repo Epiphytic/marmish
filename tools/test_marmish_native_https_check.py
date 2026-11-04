@@ -73,7 +73,11 @@ class HttpsInstallerContracts(unittest.TestCase):
             'path': '.github/workflows/v02-release.yml',
             'repository': {'full_name': 'Epiphytic/marmish'},
             'head_repository': {'full_name': 'Epiphytic/marmish'}}
-        check.validate_run(run, context())
+        for event in ('workflow_dispatch', 'push'):
+            check.validate_run(dict(run, event=event), context())
+        for event in ('pull_request', 'pull_request_target', 'workflow_run', 'release', None, 'Push'):
+            with self.subTest(event=event), self.assertRaisesRegex(check.Refused, 'candidate_run_binding'):
+                check.validate_run(dict(run, event=event), context())
         for key, value in (('id', 9), ('run_attempt', 1), ('head_sha', 'b' * 40),
                 ('head_branch', 'feature'), ('event', 'pull_request'), ('status', 'in_progress'),
                 ('conclusion', 'failure'), ('path', 'other.yml'), ('repository', {}),

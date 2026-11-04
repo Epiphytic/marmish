@@ -67,7 +67,8 @@ export function checkRun(run, c, policy) {
   const diagnostic = diagnosticPolicy(policy);
   requireThat(String(run.id) === c.run_id && String(run.run_attempt) === c.run_attempt
     && run.status === 'completed' && run.conclusion === (diagnostic ? 'failure' : 'success')
-    && run.path === '.github/workflows/v02-release.yml' && run.event === 'workflow_dispatch'
+    && run.path === '.github/workflows/v02-release.yml'
+    && (diagnostic ? run.event === 'workflow_dispatch' : ['workflow_dispatch', 'push'].includes(run.event))
     && run.head_branch === 'master' && run.head_repository?.full_name === c.repository
     && run.repository?.full_name === c.repository && hex(run.head_sha, 40)
     && (!diagnostic || run.head_sha === policy.source && c.source === policy.source

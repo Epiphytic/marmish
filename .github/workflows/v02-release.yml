@@ -2,6 +2,9 @@ name: v0.2 native release candidates
 run-name: ${{ inputs.caveated_release && 'v0.2 initial CAVEATED release - full validation pending' || 'v0.2 native release candidates' }}
 
 on:
+  push:
+    branches: [master]
+    paths: [crates/marmish-native/Cargo.toml]
   workflow_dispatch:
     inputs:
       caveated_release:
@@ -26,8 +29,35 @@ env:
   MARMISH_NATIVE_TOOLCHAIN: '1'
 
 jobs:
-  package:
+  release-eligibility:
     if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      decision: ${{ steps.eligibility.outputs.decision }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.source_commit || github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate explicit native version transition
+        id: eligibility
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_COMMIT: ${{ inputs.source_commit || github.sha }}
+          ELIGIBILITY_REPORT: ${{ runner.temp }}/eligibility.json
+        run: node tools/v02-actions/eligibility.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: v02-eligibility-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/eligibility.json
+          if-no-files-found: error
+          retention-days: 14
+  package:
+    needs: release-eligibility
+    if: needs.release-eligibility.outputs.decision == 'build'
     strategy:
       fail-fast: false
       matrix:
@@ -47,11 +77,11 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     env:
-      MARMISH_BUILD_COMMIT: ${{ inputs.source_commit }}
+      MARMISH_BUILD_COMMIT: ${{ inputs.source_commit || github.sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.source_commit }}
+          ref: ${{ inputs.source_commit || github.sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Verify immutable source and native target
@@ -261,7 +291,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.source_commit }}
+          ref: ${{ inputs.source_commit || github.sha }}
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -304,7 +334,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.source_commit }}
+          ref: ${{ inputs.source_commit || github.sha }}
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -335,7 +365,7 @@ jobs:
         run: python3 -m unittest discover -s tools -p test_marmish_native_keychain_check.py
       - name: Qualify installed default-auto custody with disposable real providers
         env:
-          MARMISH_BUILD_COMMIT: ${{ inputs.source_commit }}
+          MARMISH_BUILD_COMMIT: ${{ inputs.source_commit || github.sha }}
           EXPECTED_TARGET: ${{ matrix.target }}
         run: |
           python3 tools/marmish_native_keychain_check.py \

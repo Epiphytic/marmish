@@ -155,7 +155,7 @@ def validate_run(run, context):
     require(run.get('id') == int(context['candidate_run'])
         and run.get('run_attempt') == int(context['candidate_attempt'])
         and run.get('head_sha') == context['source_commit']
-        and run.get('head_branch') == 'master' and run.get('event') == 'workflow_dispatch'
+        and run.get('head_branch') == 'master' and run.get('event') in ('workflow_dispatch', 'push')
         and run.get('status') == 'completed' and run.get('conclusion') == 'success'
         and run.get('path') == '.github/workflows/v02-release.yml'
         and run.get('repository', {}).get('full_name') == 'Epiphytic/marmish'

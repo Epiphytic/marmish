@@ -302,3 +302,16 @@ behavior and interactive macOS recovery are not established. See
 latency/goodput and qualification limits. Historical
 [v0.2.1](docs/validation/v0.2/corrective-release-0.2.1.md) and
 [v0.2.0](docs/validation/v0.2/initial-release.md) evidence remain separately labeled.
+
+## Release process
+
+Releases require an explicit reviewed native Cargo version bump. The new GitHub
+workflow will run the full three-platform candidate checks before publishing
+immutable assets and updating the installer. It does not infer version numbers
+from commit messages. The v0.2.3 automation is undergoing hosted qualification;
+the installer continues selecting v0.2.2 until publication succeeds.
+
+Binary releases are hosted on GitHub. Source branches and tags are also mirrored
+to Radicle/Iris separately; GitHub Actions does not publish Radicle releases.
+See [the release design](docs/phases/native-automatic-release.md) for gates and
+same-source recovery rules.

@@ -317,6 +317,10 @@ const REPORT_FAILURES: &[(&str, ProviderFailure)] = &[
         ProviderFailure::PrerequisiteFailed,
     ),
     (
+        "owned_preferences_directory",
+        ProviderFailure::PrerequisiteFailed,
+    ),
+    (
         "owned_provider_service_state",
         ProviderFailure::QualificationFailed,
     ),
@@ -755,6 +759,9 @@ root=ast.parse(open(sys.argv[1],encoding="utf-8").read())
 labels=set()
 def add(node):
     if isinstance(node,ast.Constant) and isinstance(node.value,str): labels.add(node.value)
+    elif isinstance(node,ast.IfExp):
+        add(node.body)
+        add(node.orelse)
 for node in ast.walk(root):
     if isinstance(node,ast.Call):
         name=node.func.id if isinstance(node.func,ast.Name) else node.func.attr if isinstance(node.func,ast.Attribute) else ""
@@ -767,7 +774,7 @@ for node in ast.walk(root):
                 for value in item.value.values: add(value)
     if isinstance(node,ast.Assign):
         if any(isinstance(target,ast.Subscript) and isinstance(target.slice,ast.Constant) and target.slice.value=="failure" for target in node.targets): add(node.value)
-        if any(isinstance(target,ast.Name) and target.id=="category" for target in node.targets) and isinstance(node.value,ast.IfExp): add(node.value.orelse)
+        if any(isinstance(target,ast.Name) and target.id=="category" for target in node.targets) and isinstance(node.value,ast.IfExp): add(node.value)
     if isinstance(node,ast.Dict):
         for key,value in zip(node.keys,node.values):
             if isinstance(key,ast.Constant) and key.value=="failure": add(value)
@@ -782,6 +789,15 @@ print(json.dumps(sorted(labels)))
             .iter()
             .map(|(label, _)| (*label).into())
             .collect();
+        for fallback in [
+            "owned_account_prerequisite_failed",
+            "owned_account_cleanup_incomplete",
+        ] {
+            assert!(
+                python.contains(fallback),
+                "missing supervisor fallback: {fallback}"
+            );
+        }
         assert_eq!(python, rust);
         assert_eq!(rust.len(), REPORT_FAILURES.len());
         let ctx = context();

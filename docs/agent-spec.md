@@ -547,3 +547,25 @@ default detachment, readiness, duplicate-start errors, simultaneous cold-client
 autostart, exact command bytes, private logs and joined cleanup. See
 [validation](validation/native-background-daemon.md); platform qualification remains
 separate from these local results.
+
+
+## Gated native release automation
+
+The forthcoming reviewed v0.2.3 increment adds GitHub-only release automation.
+A master push changing the native Cargo manifest runs version eligibility first;
+an explicitly bumped native version must match Cargo.lock and advance existing
+native tags. CI never chooses a semantic version automatically. An unchanged
+version is a no-op. Candidate packaging, installed tests, quickstart installation
+and real provider checks must all pass on Linux AMD64/ARM64 and macOS ARM64.
+
+A separate publisher checks the completed whole attempt, source, reports and
+artifact hashes. It reproduces the Rust-rendered bootstrap without repository
+credentials, publishes exactly 15 immutable GitHub assets, then fast-forwards
+master with a direct-child change to scripts/install.sh. The initial bootstrap
+remains pinned to 0.2.2 until public 0.2.3 assets verify. Recovery cannot replace
+assets or move tags. Source and tag mirroring to Radicle/Iris remains manual;
+GitHub Actions has no Radicle credentials or release-publication responsibility.
+The independent six-cell public HTTPS installer run remains a separate gate.
+See [the release design](phases/native-automatic-release.md) and
+[publication plan](phases/v0.2.3-publication.md). Hosted automation acceptance and
+actual v0.2.3 publication are pending; offline tests do not establish them.

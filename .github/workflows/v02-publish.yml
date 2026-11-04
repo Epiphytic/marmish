@@ -1,0 +1,190 @@
+name: Publish qualified native release
+on:
+  workflow_run:
+    workflows: [v0.2 native release candidates]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Completed whole candidate run ID for immutable recovery
+        required: true
+        type: string
+      candidate_run_attempt:
+        description: Whole candidate attempt
+        required: true
+        type: string
+permissions: {}
+concurrency:
+  group: marmish-native-publication
+  cancel-in-progress: false
+env:
+  CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id || github.event.workflow_run.id }}
+  CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt || github.event.workflow_run.run_attempt }}
+jobs:
+  inspect:
+    if: github.ref == 'refs/heads/master' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      skip: ${{ steps.inspect.outputs.skip }}
+      inspection_sha256: ${{ steps.inspect.outputs.inspection_sha256 }}
+      inputs_artifact_id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install locked read-only archive tooling
+        working-directory: tools/v02-actions
+        run: npm ci --ignore-scripts
+      - name: Inspect completed candidate without executing artifacts
+        id: inspect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INSPECTION_ROOT: ${{ runner.temp }}/publish-inputs
+        run: node tools/v02-actions/release-candidate.mjs inspect
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        id: upload
+        if: steps.inspect.outputs.skip == 'false'
+        with:
+          name: v02-publish-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/publish-inputs/
+          if-no-files-found: error
+          retention-days: 14
+  reproduce-bootstrap:
+    needs: inspect
+    if: needs.inspect.outputs.skip == 'false'
+    permissions: {}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      render_artifact_id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - name: Fetch trusted publisher orchestration without credentials
+        env:
+          PUBLISHER_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$PUBLISHER_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git init trusted
+          git -C trusted remote add origin https://github.com/Epiphytic/marmish.git
+          git -C trusted -c credential.helper= fetch --depth=1 origin "$PUBLISHER_SHA"
+          git -C trusted checkout --detach FETCH_HEAD
+          test "$(git -C trusted rev-parse HEAD)" = "$PUBLISHER_SHA"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.inspect.outputs.inputs_artifact_id }}
+          path: ${{ runner.temp }}/publish-inputs
+          merge-multiple: true
+      - name: Reproduce bootstrap with credential-free child environment
+        env:
+          INSPECTION_ROOT: ${{ runner.temp }}/publish-inputs
+          INSPECTION_SHA256: ${{ needs.inspect.outputs.inspection_sha256 }}
+          RENDER_ROOT: ${{ runner.temp }}/publish-render
+        run: node trusted/tools/v02-actions/release-render.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        id: upload
+        with:
+          name: v02-publish-render-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/publish-render/
+          if-no-files-found: error
+          retention-days: 14
+  verify:
+    needs: [inspect, reproduce-bootstrap]
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      inventory_artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      inventory_sha256: ${{ steps.verify.outputs.inventory_sha256 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.inspect.outputs.inputs_artifact_id }}
+          path: ${{ runner.temp }}/publish-inputs
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.reproduce-bootstrap.outputs.render_artifact_id }}
+          path: ${{ runner.temp }}/publish-render
+          merge-multiple: true
+      - working-directory: tools/v02-actions
+        run: npm ci --ignore-scripts
+      - name: Independently revalidate candidate and reproduction
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INSPECTION_ROOT: ${{ runner.temp }}/publish-inputs
+          INSPECTION_SHA256: ${{ needs.inspect.outputs.inspection_sha256 }}
+          RENDER_ROOT: ${{ runner.temp }}/publish-render
+          INVENTORY_ROOT: ${{ runner.temp }}/publish-inventory
+          INPUTS_ARTIFACT_ID: ${{ needs.inspect.outputs.inputs_artifact_id }}
+          RENDER_ARTIFACT_ID: ${{ needs.reproduce-bootstrap.outputs.render_artifact_id }}
+        run: |
+          node tools/v02-actions/release-handoff.mjs
+          node tools/v02-actions/release-candidate.mjs verify
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        id: upload
+        with:
+          name: v02-publish-inventory-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/publish-inventory/inventory.json
+          if-no-files-found: error
+          retention-days: 14
+  publish:
+    needs: [inspect, reproduce-bootstrap, verify]
+    permissions:
+      contents: write
+      actions: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.inspect.outputs.inputs_artifact_id }}
+          path: ${{ runner.temp }}/publish-inputs
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.verify.outputs.inventory_artifact_id }}
+          path: ${{ runner.temp }}/publish-inventory
+          merge-multiple: true
+      - name: Publish immutable GitHub assets and fast-forward installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INVENTORY_SHA256: ${{ needs.verify.outputs.inventory_sha256 }}
+          RELEASE_ROOT: ${{ runner.temp }}
+          INPUTS_ARTIFACT_ID: ${{ needs.inspect.outputs.inputs_artifact_id }}
+          RENDER_ARTIFACT_ID: ${{ needs.reproduce-bootstrap.outputs.render_artifact_id }}
+          INVENTORY_ARTIFACT_ID: ${{ needs.verify.outputs.inventory_artifact_id }}
+        run: |
+          node tools/v02-actions/release-handoff.mjs
+          node tools/v02-actions/publish.mjs \
+            --inventory "$RELEASE_ROOT/publish-inventory/inventory.json" \
+            --inventory-sha256 "$INVENTORY_SHA256" \
+            --payload-root "$RELEASE_ROOT/publish-inputs/assets" \
+            --bootstrap "$RELEASE_ROOT/publish-inputs/bootstrap/install.sh" \
+            --state-out "$RELEASE_ROOT/publication-state.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: v02-publication-state-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/publication-state.json
+          if-no-files-found: warn
+          retention-days: 14

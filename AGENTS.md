@@ -85,7 +85,9 @@ the user changes it.
 Every completed change must be committed and pushed to both GitHub (`origin`,
 https://github.com/Epiphytic/marmish) and Radicle (`rad`,
 rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg). Push the explicit branch and any release tags
-to both remotes. Verify their refs, synchronize Radicle with Iris, and verify
+to both remotes. Binary release assets are published on GitHub only. Do not add
+Radicle release publication or credentials to GitHub Actions; source/tag mirroring
+and Iris synchronization remain manual agent duties. Verify their refs, synchronize Radicle with Iris, and verify
 external availability before reporting both mirrors current. If either push or
 replication fails, record the partial publication in Beads and tell the user;
 do not silently treat one successful push as completion. Preserve existing

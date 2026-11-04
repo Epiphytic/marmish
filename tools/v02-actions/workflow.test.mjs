@@ -28,7 +28,11 @@ test('candidate inputs bind control source and require explicit direct relay', (
   }
 });
 test('exact candidate attempt and workflow required; dispatch head is not selected source', () => {
-  const c=candidateInputs(env); checkRun(run,c);
+  const c=candidateInputs(env);
+  for (const event of ['workflow_dispatch','push']) checkRun({...run,event},c);
+  for (const event of ['pull_request','pull_request_target','workflow_run','release',undefined,null,'Push']) {
+    assert.throws(()=>checkRun({...run,event},c));
+  }
   for (const change of [{run_attempt:2},{id:13},{conclusion:'failure'},{status:'in_progress'},
     {path:'.github/workflows/other.yml'},{head_branch:'feature'},{event:'pull_request'},
     {head_repository:{full_name:'fork/marmish'}}]) assert.throws(()=>checkRun({...run,...change},c));
