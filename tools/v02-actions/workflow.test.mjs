@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {promises as fs} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {candidateInputs, checkRun, checkTooling, verifyTools, verifyContext, gather, sourceDigest, SOURCE_PATHS, TARGETS, cohortLifetime} from './workflow.mjs';
+import {candidateInputs, checkRun, checkTooling, verifyTools, verifyContext, gather, sourceDigest, SOURCE_PATHS, TARGETS, cohortLifetime, PROVIDER_DIAGNOSTIC, DIAGNOSTIC_PATHS, checkDiagnosticJobs, checkDiagnosticChanges, validateCandidate, providerDiagnostic} from './workflow.mjs';
 import {LOCAL_COHORTS} from './local.mjs';
 import {digest, ROLES} from './transport.mjs';
 import {execFileSync} from 'node:child_process';
@@ -132,4 +132,78 @@ test('workflow choices, JS routing and Rust routing advertise the same closed co
     assert.ok(dispatch.includes(`"${name}"`), `dispatch ${name}`);
     assert.ok(rollup.includes(`"${name}"`), `rollup ${name}`);
   }
+});
+
+const diagnosticEnv={...env,CANDIDATE_RUN_ID:PROVIDER_DIAGNOSTIC.run,
+  CANDIDATE_RUN_ATTEMPT:PROVIDER_DIAGNOSTIC.attempt,SOURCE_COMMIT:PROVIDER_DIAGNOSTIC.source};
+const diagnosticRun={...run,id:Number(PROVIDER_DIAGNOSTIC.run),run_attempt:1,
+  conclusion:'failure',head_sha:PROVIDER_DIAGNOSTIC.source};
+const diagnosticJobs=[
+  [126816261687,'package (ubuntu-24.04-arm, aarch64-unknown-linux-gnu, none, glibc=2.39)','success'],
+  [126816262401,'package (macos-15, aarch64-apple-darwin, adhoc, macos=15.0)','success'],
+  [126816262683,'package (ubuntu-24.04, x86_64-unknown-linux-gnu, none, glibc=2.39)','success'],
+  [126848469757,'render','success'],
+  [126848598035,'provider-qualification (macos-15, aarch64-apple-darwin)','failure']
+].map(([id,name,conclusion])=>({id,name,conclusion,status:'completed'}));
+function diagnosticTransport(change={}) {
+  return {request:async url=>({bytes:Buffer.from(JSON.stringify(url.includes('/jobs?')
+    ? (change.jobs??{total_count:5,jobs:diagnosticJobs}) : (change.run??diagnosticRun)))}),
+    list:async()=>change.artifacts??[
+      {name:`v02-candidate-aarch64-apple-darwin-${PROVIDER_DIAGNOSTIC.run}-1`,expired:false},
+      {name:`v02-pinned-bootstrap-${PROVIDER_DIAGNOSTIC.run}-1`,expired:false}]};
+}
+test('diagnostic exception requires literal policy and exact old product, production stays strict',()=>{
+  const c=candidateInputs(diagnosticEnv,PROVIDER_DIAGNOSTIC);
+  checkRun(diagnosticRun,c,PROVIDER_DIAGNOSTIC);
+  assert.throws(()=>candidateInputs(diagnosticEnv));
+  assert.throws(()=>candidateInputs(diagnosticEnv,{...PROVIDER_DIAGNOSTIC}));
+  assert.throws(()=>checkRun(diagnosticRun,c));
+  for(const change of [{SOURCE_COMMIT:source},{CANDIDATE_RUN_ID:'41898839618'},
+    {CANDIDATE_RUN_ATTEMPT:'2'},{GITHUB_REPOSITORY:'fork/marmish'}])
+    assert.throws(()=>candidateInputs({...diagnosticEnv,...change},PROVIDER_DIAGNOSTIC));
+  for(const change of [{head_sha:source},{conclusion:'success'},{run_attempt:2},
+    {path:'.github/workflows/other.yml'},{event:'push'},{head_branch:'other'},
+    {repository:{full_name:'fork/marmish'}},{head_repository:{full_name:'fork/marmish'}}])
+    assert.throws(()=>checkRun({...diagnosticRun,...change},c,PROVIDER_DIAGNOSTIC));
+});
+test('diagnostic requires three exact packages, render, and original failed mac job',async()=>{
+  assert.equal((await validateCandidate(diagnosticEnv,0,diagnosticTransport(),PROVIDER_DIAGNOSTIC)).length,2);
+  for(let i=0;i<diagnosticJobs.length;i++) {
+    for(const change of [{id:1},{name:'other'},{conclusion:'cancelled'},{status:'in_progress'}]) {
+      const jobs=diagnosticJobs.map((job,n)=>n===i?{...job,...change}:job);
+      assert.throws(()=>checkDiagnosticJobs(jobs));
+    }
+    assert.throws(()=>checkDiagnosticJobs(diagnosticJobs.filter((_,n)=>n!==i)));
+  }
+  assert.throws(()=>checkDiagnosticJobs([...diagnosticJobs,diagnosticJobs[0]]));
+  for(const jobs of [{total_count:6,jobs:diagnosticJobs},{total_count:4,jobs:diagnosticJobs},
+    {total_count:0,jobs:[]},{total_count:5,jobs:[...diagnosticJobs.slice(0,4),diagnosticJobs[0]]}])
+    await assert.rejects(validateCandidate(diagnosticEnv,0,diagnosticTransport({jobs}),PROVIDER_DIAGNOSTIC));
+  const artifacts=await diagnosticTransport().list();
+  for(const bad of [[],[...artifacts,artifacts[0]],artifacts.map(a=>({...a,expired:true})),
+    artifacts.map(a=>({...a,name:a.name.replace('-1','-2')}))])
+    await assert.rejects(validateCandidate(diagnosticEnv,0,diagnosticTransport({artifacts:bad}),PROVIDER_DIAGNOSTIC));
+});
+test('diagnostic source audit permits only twelve literal regular diagnostic paths',()=>{
+  assert.equal(DIAGNOSTIC_PATHS.length,12);
+  for(const name of DIAGNOSTIC_PATHS) for(const status of ['A','M']) checkDiagnosticChanges([[status,name,'100644']]);
+  for(const name of ['tools/v02-actions/workflow.mjs','tools/v02-actions/workflow.test.mjs'])
+    assert.ok(DIAGNOSTIC_PATHS.includes(name));
+  assert.throws(()=>checkDiagnosticChanges([]));
+  for(const entry of [['D',DIAGNOSTIC_PATHS[0],'100644'],['R100',DIAGNOSTIC_PATHS[0],'100644'],
+    ['M','crates/marmish-native/src/identity.rs','100644'],['M','tools/marmish_native_quickstart_check.py','100644'],
+    ['M',DIAGNOSTIC_PATHS[0],'120000'],['M',DIAGNOSTIC_PATHS[0],'100755'],
+    ['M','docs/reviews/unreviewed.md','100644']]) assert.throws(()=>checkDiagnosticChanges([entry]));
+});
+test('diagnostic guard refusal preserves separate finite product and supervisor envelope',async t=>{
+  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'marmish-diagnostic-'));
+  t.after(()=>fs.rm(directory,{recursive:true,force:true}));
+  await assert.rejects(providerDiagnostic({...env,DIAGNOSTIC_ROOT:directory,GITHUB_REF:'refs/heads/other',
+    GITHUB_RUN_ID:'88',GITHUB_RUN_ATTEMPT:'1'}),/provider_diagnostic_refused/);
+  const record=JSON.parse(await fs.readFile(path.join(directory,'provenance.json')));
+  assert.equal(record.product_source_commit,PROVIDER_DIAGNOSTIC.source);
+  assert.equal(record.supervisor_source_commit,source);
+  assert.equal(record.guard,'metadata_refused');
+  assert.equal(record.diagnostic,true);
+  assert.ok(!JSON.stringify(record).includes('Error:'));
 });

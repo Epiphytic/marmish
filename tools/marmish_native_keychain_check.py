@@ -37,6 +37,53 @@ MAX_CAPTURE = 2 * 1024 * 1024
 
 class Refused(Exception):
     """Finite public category, never a provider's raw error string."""
+    def __init__(self, category, exit_code=None):
+        super().__init__(category)
+        self.exit_code = exit_code
+
+
+STAGES = frozenset('''diagnostic_invalid runner_default_snapshot runner_search_snapshot
+account_uid_list account_uid_parse account_identity_lookup account_home_check account_create
+account_attribute_uid account_attribute_gid account_attribute_home account_attribute_shell
+account_attribute_realname account_attribute_password account_attribute_auth account_identity_check
+account_home_create account_home_chown input_stage stage_copy stage_permissions interpreter_lookup
+interpreter_validate interpreter_hash inner_budget inner_launch inner_report_read inner_report_parse
+inner_report_validate interpreter_recheck qualification_validate cleanup_identity cleanup_bootout
+cleanup_processes cleanup_delete_account cleanup_delete_home cleanup_verify_home cleanup_runner_default
+cleanup_runner_search cleanup_runner_compare'''.split())
+
+
+def provider_stage(result, stage):
+    result['_stage'] = stage
+
+
+def provider_failure(result, error, cleanup=False):
+    prefix = 'cleanup_' if cleanup else ''
+    category = str(error) if isinstance(error, Refused) else (
+        'owned_account_cleanup_incomplete' if cleanup else 'owned_account_prerequisite_failed')
+    if cleanup:
+        result.setdefault('cleanup_failure', category)
+    else:
+        # Inner reports are untrusted; preserve the supervisor's finite category.
+        result['failure'] = category
+    if '_stage' in result:
+        result.setdefault(prefix + 'failure_stage', result['_stage'])
+    if getattr(error, 'exit_code', None) is not None:
+        result.setdefault(prefix + 'exit_code', error.exit_code)
+    result['ok'] = False
+
+
+def sanitize_provider_report(result):
+    """Only source-defined stages and bounded numeric statuses leave the supervisor."""
+    result.pop('_stage', None)
+    for prefix in ('', 'cleanup_'):
+        stage = prefix + 'failure_stage'
+        if stage in result and (not isinstance(result[stage], str) or result[stage] not in STAGES):
+            result[stage] = 'diagnostic_invalid'
+        code = prefix + 'exit_code'
+        if code in result and not (type(result[code]) is int and -128 <= result[code] <= 255):
+            del result[code]
+    return result
 
 
 def require(condition, category):
@@ -121,7 +168,8 @@ def execute(argv, environment, timeout=15, data=None, success=True, error_map=No
                         errors.extend(raw)
         child.wait(timeout=max(0.001, deadline - time.monotonic()))
         category = error_map.get(bytes(errors).strip(), error_map[None]) if error_map else 'operation_failed'
-        require(not success or child.returncode == 0, category)
+        if success and child.returncode != 0:
+            raise Refused(category, exit_code=child.returncode)
         return child.returncode, bytes(out)
     except subprocess.TimeoutExpired:
         raise Refused('operation_timeout') from None
@@ -672,16 +720,21 @@ def mac_account(bootstrap, assets, report, lifecycle_a_assets=None, lifecycle_a_
     with ProviderSignals(lifecycle, deadline_seconds) as signals:
         try:
             for command in ('default-keychain', 'list-keychains'):
+                provider_stage(result, 'runner_default_snapshot' if command == 'default-keychain' else 'runner_search_snapshot')
                 runner.append(execute(['/usr/bin/security', command, '-d', 'user'], environment)[1])
+            provider_stage(result, 'account_uid_list')
             _, raw = execute(['/usr/bin/dscl', '.', '-list', '/Users', 'UniqueID'], environment)
+            provider_stage(result, 'account_uid_parse')
             used = {int(line.split()[-1]) for line in raw.decode().splitlines()}
             uid = next((number for number in range(55000, 55100) if number not in used), None)
             require(uid is not None, 'owned_account_uid_exhausted')
+            provider_stage(result, 'account_identity_lookup')
             try:
                 pwd.getpwnam(name)
                 raise Refused('owned_account_already_exists')
             except KeyError:
                 pass
+            provider_stage(result, 'account_home_check')
             home = Path('/Users') / name
             require(not home.exists() and not home.is_symlink(), 'owned_home_already_exists')
             account_deadline = min(time.monotonic() + 60, started + total_budget - 60)
@@ -690,27 +743,42 @@ def mac_account(bootstrap, assets, report, lifecycle_a_assets=None, lifecycle_a_
                 require(remaining > 0, 'owned_account_setup_deadline')
                 return execute(['/usr/bin/sudo', '-n', '/usr/bin/dscl', '.', *arguments],
                     environment, min(15, remaining))
+            provider_stage(result, 'account_create')
             created = True
             administrative('-create', '/Users/' + name)
             for key, value in (('UniqueID', str(uid)), ('PrimaryGroupID', '-2'),
                     ('NFSHomeDirectory', str(home)), ('UserShell', '/usr/bin/false'),
                     ('RealName', 'Disposable Marmish CI'), ('Password', '*'),
                     ('AuthenticationAuthority', ';DisabledUser;')):
+                provider_stage(result, {'UniqueID': 'account_attribute_uid', 'PrimaryGroupID': 'account_attribute_gid',
+                    'NFSHomeDirectory': 'account_attribute_home', 'UserShell': 'account_attribute_shell',
+                    'RealName': 'account_attribute_realname', 'Password': 'account_attribute_password',
+                    'AuthenticationAuthority': 'account_attribute_auth'}[key])
                 administrative('-create', '/Users/' + name, key, value)
+            provider_stage(result, 'account_identity_check')
             account = pwd.getpwnam(name)
             require(account.pw_uid == uid and account.pw_dir == str(home), 'owned_account_identity')
+            provider_stage(result, 'account_home_create')
             execute(['/usr/bin/sudo', '-n', '/bin/mkdir', '-m', '700', str(home)], environment)
+            provider_stage(result, 'account_home_chown')
             execute(['/usr/bin/sudo', '-n', '/usr/sbin/chown', str(uid) + ':-2', str(home)], environment)
             # Stage outside the runner's private HOME; rehash every copied input.
+            provider_stage(result, 'input_stage')
             with staged_provider_inputs(bootstrap, assets, lifecycle_a_assets, lifecycle_b_version) as stage:
+                provider_stage(result, 'stage_copy')
                 execute(['/usr/bin/sudo', '-n', '/bin/cp', '-R', str(stage), str(home / 'stage')], environment)
+                provider_stage(result, 'stage_permissions')
                 execute(['/usr/bin/sudo', '-n', '/bin/chmod', '-R', 'a+rX', str(home / 'stage')], environment)
             inner_report = home / 'provider-result.json'
+            provider_stage(result, 'interpreter_lookup')
             _, raw = execute(['/usr/bin/xcrun', '--find', 'python3'], environment)
+            provider_stage(result, 'interpreter_validate')
             python = Path(raw.decode().strip()).resolve()
             require(python.is_file() and not python.is_relative_to(Path(environment['HOME'])),
                 'owned_account_interpreter')
+            provider_stage(result, 'interpreter_hash')
             interpreter_digest = digest(python)
+            provider_stage(result, 'inner_budget')
             remaining, inner_budget = provider_inner_budget(started, total_budget, lifecycle, time.monotonic())
             signals.limit_inner(remaining)
             argv = ['/usr/bin/sudo', '-n', '/bin/launchctl', 'asuser', str(uid),
@@ -724,10 +792,14 @@ def mac_account(bootstrap, assets, report, lifecycle_a_assets=None, lifecycle_a_
                 argv += ['--lifecycle-a-assets', str(home / 'stage/a-assets'),
                     '--lifecycle-a-manifest-sha256', lifecycle_a_pin,
                     '--lifecycle-b-version', lifecycle_b_version]
+            provider_stage(result, 'inner_launch')
             code, _ = execute(argv, environment, remaining, success=False)
+            provider_stage(result, 'inner_report_read')
             _, raw = execute(['/usr/bin/sudo', '-n', '/bin/cat', str(inner_report)], environment)
             require(len(raw) <= 16384, 'owned_account_report_limit')
+            provider_stage(result, 'inner_report_parse')
             received = json.loads(raw)
+            provider_stage(result, 'inner_report_validate')
             require(received.get('kind') == 'installed_auto_provider', 'owned_account_report')
             for key in ('ok', 'failure', 'auto_keychain', 'distinct_named_identities', 'fresh_reload',
                     'item_count', 'locked_refused', 'unlocked_fresh_reload', 'no_plaintext_fallback',
@@ -736,46 +808,61 @@ def mac_account(bootstrap, assets, report, lifecycle_a_assets=None, lifecycle_a_
                     'lifecycle_stage'):
                 if key in received:
                     result[key] = received[key]
+            provider_stage(result, 'interpreter_recheck')
             result['supervisor_interpreter_unchanged'] = digest(python) == interpreter_digest
             require(result['supervisor_interpreter_unchanged'], 'interpreter_changed')
+            provider_stage(result, 'qualification_validate')
             provider_result_check(code, result, lifecycle)
         except Refused as error:
-            result.update(ok=False, failure=str(error))
-        except Exception:
-            result.update(ok=False, failure='owned_account_prerequisite_failed')
+            provider_failure(result, error)
+        except Exception as error:
+            provider_failure(result, error)
         finally:
             signals.cleanup()
             if created and uid is not None:
                 try:
+                    provider_stage(result, 'cleanup_identity')
                     account = pwd.getpwnam(name)
                     require(account.pw_uid == uid and account.pw_dir == str(home), 'owned_account_cleanup_identity')
                     # Never kill by process name: this freshly allocated UID is the scope.
+                    provider_stage(result, 'cleanup_bootout')
                     cleanup_execute(['/usr/bin/sudo', '-n', '/bin/launchctl', 'bootout', 'user/' + str(uid)],
                         success=False)
+                    provider_stage(result, 'cleanup_processes')
                     _, raw = cleanup_execute(['/bin/ps', '-u', str(uid), '-o', 'pid='], success=False)
                     require(not raw.strip(), 'owned_account_children_remain')
                     if result['ok']:
                         account = pwd.getpwnam(name)
                         require(account.pw_uid == uid and account.pw_dir == str(home)
                             and home.lstat().st_uid == uid and not home.is_symlink(), 'owned_account_cleanup_identity')
+                        provider_stage(result, 'cleanup_delete_account')
                         cleanup_execute(['/usr/bin/sudo', '-n', '/usr/bin/dscl', '.', '-delete', '/Users/' + name])
+                        provider_stage(result, 'cleanup_delete_home')
                         cleanup_execute(['/usr/bin/sudo', '-n', '/bin/rm', '-rf', str(home)])
+                        provider_stage(result, 'cleanup_verify_home')
                         require(not home.exists(), 'owned_account_home_remains')
                         result['owned_account_removed'] = True
-                except Exception:
-                    result['ok'] = False
+                except Exception as error:
+                    provider_failure(result, error, cleanup=True)
                     result.setdefault('failure', 'owned_account_cleanup_incomplete')
             try:
-                after = [cleanup_execute(['/usr/bin/security', command, '-d', 'user'])[1]
-                    for command in ('default-keychain', 'list-keychains')]
+                after = []
+                for command in ('default-keychain', 'list-keychains'):
+                    provider_stage(result, 'cleanup_runner_default' if command == 'default-keychain' else 'cleanup_runner_search')
+                    after.append(cleanup_execute(['/usr/bin/security', command, '-d', 'user'])[1])
+                provider_stage(result, 'cleanup_runner_compare')
                 result['runner_keychain_unchanged'] = len(runner) == 2 and runner == after
-            except Exception:
-                pass
+                require(result['runner_keychain_unchanged'], 'owned_account_cleanup_incomplete')
+            except Exception as error:
+                provider_failure(result, error, cleanup=True)
+                result.setdefault('failure', 'owned_account_cleanup_incomplete')
             result['ok'] = result['ok'] and result['owned_account_removed'] and result['runner_keychain_unchanged']
             if signals.cancelled:
                 result.update(ok=False, failure='lifecycle_provider_signal')
+                result.pop('failure_stage', None)
+                result.pop('exit_code', None)
             result['elapsed_ms'] = round((time.monotonic() - started) * 1000)
-            report.write_text(json.dumps(result, indent=2) + '\n')
+            report.write_text(json.dumps(sanitize_provider_report(result), indent=2) + '\n')
     return 0 if result['ok'] else 1
 
 
@@ -843,5 +930,5 @@ if __name__ == '__main__':
         require(len(versions) <= 8 and all(re.fullmatch('[a-z0-9.+:-]+=[A-Za-z0-9.+:~_-]+', line)
             for line in versions), 'package_metadata_invalid')
     value['provider_packages'] = versions
-    options.report.write_text(json.dumps(value, indent=2) + '\n')
+    options.report.write_text(json.dumps(sanitize_provider_report(value), indent=2) + '\n')
     raise SystemExit(code)

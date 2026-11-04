@@ -377,5 +377,142 @@ class LifecycleProviderSupervisor(unittest.TestCase):
                     self.fail('unexpected source accepted')
 
 
+
+class ProviderDiagnostics(unittest.TestCase):
+    def fixture(self, report, failure=None, cleanup_failure=None, changed_runner=False, inner=None, cancelled=False):
+        from contextlib import ExitStack, nullcontext
+        from types import SimpleNamespace
+        seen = []
+        original_stage = check.provider_stage
+        lookups = 0
+        def stage(result, name):
+            original_stage(result, name)
+            seen.append(name)
+            if name == failure or name == cleanup_failure:
+                raise check.Refused('operation_failed', exit_code=7)
+        def account(name):
+            nonlocal lookups
+            lookups += 1
+            if lookups == 1:
+                raise KeyError(name)
+            return SimpleNamespace(pw_uid=55000, pw_dir='/Users/' + name)
+        def execute(argv, *args, **kwargs):
+            if argv[:2] == ['/usr/bin/dscl', '.']:
+                return 0, b'runner 501\n'
+            if argv[0] == '/usr/bin/xcrun':
+                return 0, b'/usr/bin/python3\n'
+            if '/bin/cat' in argv:
+                return 0, json.dumps(inner or {'kind':'installed_auto_provider','ok':True}).encode()
+            if argv[0] == '/usr/bin/security':
+                return 0, b'changed' if changed_runner and seen[-1].startswith('cleanup_') else b'runner'
+            return 0, b''
+        with ExitStack() as patches:
+            patches.enter_context(mock.patch.object(check, 'provider_stage', side_effect=stage))
+            patches.enter_context(mock.patch.object(check, 'execute', side_effect=execute))
+            patches.enter_context(mock.patch.object(check.pwd, 'getpwnam', side_effect=account))
+            patches.enter_context(mock.patch.object(check.pwd, 'getpwuid', return_value=SimpleNamespace(pw_dir='/runner')))
+            patches.enter_context(mock.patch.object(check, 'staged_provider_inputs', return_value=nullcontext(Path('/stage'))))
+            patches.enter_context(mock.patch.object(check, 'digest', return_value='a' * 64))
+            patches.enter_context(mock.patch.object(Path, 'exists', return_value=False))
+            patches.enter_context(mock.patch.object(Path, 'is_symlink', return_value=False))
+            patches.enter_context(mock.patch.object(Path, 'is_file', return_value=True))
+            patches.enter_context(mock.patch.object(Path, 'lstat', return_value=SimpleNamespace(st_uid=55000)))
+            if cancelled:
+                patches.enter_context(mock.patch.object(check, 'ProviderSignals', return_value=
+                    nullcontext(SimpleNamespace(cancelled=True, cleanup=lambda:None, limit_inner=lambda _:None))))
+            code = check.mac_account(Path('/bootstrap'), Path('/assets'), report)
+        return code, json.loads(report.read_text()), seen
+
+    def test_every_outer_stage_has_finite_failure_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / 'report.json'
+            code, result, seen = self.fixture(report)
+            self.assertEqual((code, result['ok']), (0, True), result)
+            self.assertEqual(set(seen), check.STAGES - {'diagnostic_invalid'})
+            for stage in sorted(set(seen)):
+                with self.subTest(stage=stage):
+                    cleanup = stage.startswith('cleanup_')
+                    code, result, _ = self.fixture(report,
+                        failure=None if cleanup else stage, cleanup_failure=stage if cleanup else None)
+                    self.assertEqual(code, 1, result)
+                    self.assertFalse(result['ok'])
+                    prefix = 'cleanup_' if cleanup else ''
+                    self.assertEqual(result[prefix + 'failure_stage'], stage)
+                    self.assertEqual(result[prefix + 'exit_code'], 7)
+                    self.assertNotIn('_stage', result)
+                    self.assertNotIn('SENTINEL', json.dumps(result))
+
+    def test_primary_failure_survives_cleanup_failure_and_changed_runner_is_red(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / 'report.json'
+            _, result, _ = self.fixture(report, failure='inner_launch', cleanup_failure='cleanup_bootout')
+            self.assertEqual(result['failure_stage'], 'inner_launch')
+            self.assertEqual(result['cleanup_failure_stage'], 'cleanup_bootout')
+            self.assertFalse(result['owned_account_removed'])
+            _, result, _ = self.fixture(report, changed_runner=True)
+            self.assertFalse(result['ok'])
+            self.assertFalse(result['runner_keychain_unchanged'])
+            self.assertEqual(result['cleanup_failure_stage'], 'cleanup_runner_compare')
+
+    def test_actual_exit_status_is_finite_and_timeout_has_no_status(self):
+        with self.assertRaises(check.Refused) as failed:
+            check.execute(['/bin/sh', '-c', 'echo SENTINEL >&2; exit 7'], {})
+        self.assertEqual(str(failed.exception), 'operation_failed')
+        self.assertEqual(failed.exception.exit_code, 7)
+        with self.assertRaises(check.Refused) as timeout:
+            check.execute(['/bin/sh', '-c', 'exec /bin/sleep 5'], {}, timeout=0.01)
+        self.assertIsNone(timeout.exception.exit_code)
+        self.assertNotIn('SENTINEL', str(failed.exception))
+
+    def test_sanitizer_is_closed_idempotent_and_does_not_invent_early_stage(self):
+        for invalid in ('SENTINEL', [], None, 7):
+            value = {'failure_stage': invalid, 'cleanup_failure_stage': invalid,
+                'exit_code': True, 'cleanup_exit_code': 256, '_stage': 'SENTINEL'}
+            sanitized = check.sanitize_provider_report(value)
+            self.assertEqual(sanitized, {'failure_stage':'diagnostic_invalid',
+                'cleanup_failure_stage':'diagnostic_invalid'})
+            # The main rewrite reads the already-sanitized JSON and sanitizes again.
+            self.assertEqual(check.sanitize_provider_report(json.loads(json.dumps(sanitized))), sanitized)
+        early = {}
+        check.provider_failure(early, ValueError('SENTINEL'))
+        self.assertNotIn('failure_stage', check.sanitize_provider_report(early))
+        self.assertNotIn('SENTINEL', json.dumps(early))
+        for code in (-128, -6, 0, 7, 255):
+            self.assertEqual(check.sanitize_provider_report({'exit_code':code}), {'exit_code':code})
+        source = Path(check.__file__).read_text()
+        self.assertIn('json.dumps(sanitize_provider_report(value)', source)
+
+    def test_inner_failure_cannot_replace_supervisor_category_or_leak_sentinel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, result, _ = self.fixture(Path(tmp) / 'report.json', inner={
+                'kind':'installed_auto_provider','ok':False,'failure':'SENTINEL inner text'})
+        self.assertEqual(result['failure'], 'owned_account_qualification_failed')
+        self.assertEqual(result['failure_stage'], 'qualification_validate')
+        self.assertNotIn('SENTINEL', json.dumps(result))
+
+    def test_stop_error_replaces_exit_without_fabricating_status(self):
+        result = {'ok':True}
+        check.provider_stage(result, 'inner_launch')
+        with mock.patch.object(check, 'stop', side_effect=check.Refused('child_cleanup_incomplete')):
+            try:
+                check.execute(['/bin/sh', '-c', 'echo SENTINEL >&2; exit 7'], {})
+            except check.Refused as error:
+                self.assertIsNone(error.exit_code)
+                check.provider_failure(result, error)
+            else:
+                self.fail('expected cleanup failure')
+        self.assertEqual(result['failure'], 'child_cleanup_incomplete')
+        self.assertEqual(result['failure_stage'], 'inner_launch')
+        self.assertNotIn('exit_code', result)
+        self.assertNotIn('SENTINEL', json.dumps(result))
+
+    def test_signal_override_drops_stale_primary_stage_and_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, result, _ = self.fixture(Path(tmp) / 'report.json', failure='inner_launch', cancelled=True)
+        self.assertEqual(result['failure'], 'lifecycle_provider_signal')
+        self.assertNotIn('failure_stage', result)
+        self.assertNotIn('exit_code', result)
+
+
 if __name__ == '__main__':
     unittest.main()

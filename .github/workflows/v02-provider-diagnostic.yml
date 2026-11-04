@@ -1,0 +1,69 @@
+name: v0.2 macOS provider diagnostic (pinned old assets)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: v02-provider-diagnostic
+  cancel-in-progress: false
+jobs:
+  diagnose:
+    if: github.ref == 'refs/heads/master'
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set diagnostic evidence directory
+        run: echo "DIAGNOSTIC_ROOT=$RUNNER_TEMP/provider-diagnostic" >> "$GITHUB_ENV"
+      - name: Install locked CI resolver dependencies
+        run: npm ci --prefix tools/v02-actions --ignore-scripts
+      - name: Validate exact old product and diagnostic source provenance
+        run: node tools/v02-actions/workflow.mjs provider-diagnostic-validate
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-candidate-aarch64-apple-darwin-41898839617-1
+          path: candidate-assets
+          repository: Epiphytic/marmish
+          run-id: '41898839617'
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-pinned-bootstrap-41898839617-1
+          path: candidate-bootstrap
+          repository: Epiphytic/marmish
+          run-id: '41898839617'
+          github-token: ${{ github.token }}
+      - name: Verify downloaded product source and record content digests
+        env:
+          ASSETS_ROOT: ${{ github.workspace }}/candidate-assets
+          BOOTSTRAP_ROOT: ${{ github.workspace }}/candidate-bootstrap
+        run: node tools/v02-actions/workflow.mjs provider-diagnostic-assets
+      - name: Verify isolated supervisor contracts
+        run: python3 -m unittest discover -s tools -p test_marmish_native_keychain_check.py
+      - name: Diagnose installed old product custody with disposable real provider
+        env:
+          MARMISH_BUILD_COMMIT: 61f47606c5e7ba9048f196165a8025e7c2662839
+          GH_TOKEN: ''
+        run: |
+          python3 tools/marmish_native_keychain_check.py \
+            --bootstrap "$PWD/candidate-bootstrap/install.sh" \
+            --assets-dir "$PWD/candidate-assets" \
+            --target aarch64-apple-darwin \
+            --source-commit "$MARMISH_BUILD_COMMIT" \
+            --report "$DIAGNOSTIC_ROOT/provider.json"
+      - name: Preserve finite diagnostic evidence including refusal
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v02-provider-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/provider-diagnostic/provenance.json
+            ${{ runner.temp }}/provider-diagnostic/provider.json
+          if-no-files-found: warn
+          retention-days: 7
