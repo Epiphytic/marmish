@@ -26,8 +26,91 @@ DIALOG = (
 )
 
 
-def interactive(arguments, environment, timeout=240):
-    child, master = pty.fork()
+
+INTERACTIVE_STAGES = frozenset('target manifest asset_download asset_verify runtime_probe install_validate setup_choices complete'.split())
+INTERACTIVE_FAILURES = frozenset('missing_argument invalid_key_storage absolute_path_required invalid_argument missing_utility install_root_forbidden absolute_home_required native_arm64_shell_required unsupported_platform unqualified_release_template missing_checksum_utility temporary_directory missing_asset asset_size asset_read asset_download manifest_digest manifest_grammar asset_digest incompatible_runtime_check_TMPDIR_noexec incompatible_runtime_loader_or_userland runtime_probe_failed runtime_provenance native_install_failed native_setup_failed'.split())
+INTERACTIVE_NATIVE = frozenset('identity_unavailable identity_uninitialized identity_locked_or_denied identity_missing identity_corrupt storage transport marmot invalid_input local_io timeout'.split())
+INTERACTIVE_REASONS = frozenset('terminal_failure observation_limit permission_failed io_failed unexpected'.split())
+
+
+def sanitize_interactive_diagnostics(value):
+    # Bounded rebuilding prevents untrusted nested report data from reaching artifacts.
+    source = value if type(value) is dict and len(value) <= 6 else {}
+    result = {}
+    for key, allowed in (('reason', INTERACTIVE_REASONS),
+            ('installer_stage', INTERACTIVE_STAGES), ('installer_failure', INTERACTIVE_FAILURES),
+            ('native_failure', INTERACTIVE_NATIVE)):
+        item = source.get(key)
+        vocabulary = allowed if key == 'reason' else allowed | {'absent'}
+        result[key] = item if type(item) is str and item in vocabulary else 'diagnostic_invalid'
+    for key, low, high in (('prompts_seen', 0, len(DIALOG)), ('exit_code', -128, 255)):
+        item = source.get(key)
+        if type(item) is int and low <= item <= high:
+            result[key] = item
+    return result
+
+
+def interactive_snapshot(error, output, prompts_seen, status):
+    reason = 'unexpected'
+    if type(error) is RuntimeError:
+        reason = {('quickstart_terminal_failure',): 'terminal_failure',
+            ('quickstart_observation_limit',): 'observation_limit'}.get(error.args, 'unexpected')
+    elif isinstance(error, PermissionError):
+        reason = 'permission_failed'
+    elif isinstance(error, OSError):
+        reason = 'io_failed'
+    result = dict(reason=reason, prompts_seen=prompts_seen,
+        installer_stage='absent', installer_failure='absent', native_failure='absent')
+    if type(status) is int:
+        try:
+            result['exit_code'] = os.waitstatus_to_exitcode(status)
+        except (ValueError, TypeError):
+            pass
+    # Only complete LF/CRLF lines; raw terminal bytes never leave this function.
+    for line in bytes(output[:2 * 1024 * 1024]).split(b'\n')[:-1]:
+        if line.endswith(b'\r'):
+            line = line[:-1]
+        if len(line) > 1024:
+            continue
+        text = line.decode('ascii', errors='replace')
+        if text.startswith('marmish installer debug: stage='):
+            value = text[len('marmish installer debug: stage='):]
+            result['installer_stage'] = value if value in INTERACTIVE_STAGES else 'diagnostic_invalid'
+        elif text.startswith('marmish installer: '):
+            token, separator, stage = text[len('marmish installer: '):].partition(' (stage=')
+            result['installer_failure'] = token if separator and stage.endswith(')') and token in INTERACTIVE_FAILURES else 'diagnostic_invalid'
+            stage = stage[:-1] if separator and stage.endswith(')') else ''
+            result['installer_stage'] = stage if stage in INTERACTIVE_STAGES else 'diagnostic_invalid'
+        elif text.startswith('marmish: '):
+            value = text[len('marmish: '):]
+            category = {'local I/O failed':'local_io', 'operation deadline exceeded':'timeout'}.get(value)
+            if value.startswith('identity: '):
+                candidate = 'identity_' + value[len('identity: '):]
+                category = candidate if candidate in INTERACTIVE_NATIVE else None
+            else:
+                for prefix, family in (('storage: ', 'storage'), ('transport: ', 'transport'),
+                        ('marmot: ', 'marmot'), ('invalid input: ', 'invalid_input')):
+                    if value.startswith(prefix) and value[len(prefix):] and all(32 <= ord(c) <= 126 for c in value):
+                        category = family
+            result['native_failure'] = category or 'diagnostic_invalid'
+    return sanitize_interactive_diagnostics(result)
+
+
+def capture_interactive_failure(target, error, output, prompts_seen, status):
+    if type(target) is not dict or target:
+        return
+    try:
+        snapshot = interactive_snapshot(error, output, prompts_seen, status)
+    except Exception:
+        snapshot = sanitize_interactive_diagnostics(None)
+    target.update(snapshot)
+
+def interactive(arguments, environment, timeout=240, *, failure_diagnostics=None):
+    try:
+        child, master = pty.fork()
+    except Exception as error:
+        capture_interactive_failure(failure_diagnostics, error, b'', 0, None)
+        raise
     if child == 0:
         os.execve('/bin/sh', ['/bin/sh', *arguments], environment)
     output = bytearray()
@@ -69,6 +152,9 @@ def interactive(arguments, environment, timeout=240):
         if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0 or next_prompt != len(DIALOG):
             raise RuntimeError('quickstart_terminal_failure')
         return bytes(output)
+    except Exception as error:
+        capture_interactive_failure(failure_diagnostics, error, output, next_prompt, status)
+        raise
     finally:
         if status is None:
             # The PID/session was created here, never loaded from a file or global search.

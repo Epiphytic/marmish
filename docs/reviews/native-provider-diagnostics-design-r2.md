@@ -31,3 +31,13 @@ inherited decoy PATH, exact symlink subset and missing utility/Python checks.
 Sibling quickstart/HTTPS lookup loops remain outside this bounded fix; they run
 under different environments. Offline evidence establishes discovery hygiene;
 complete hosted qualification remains required.
+
+### Quickstart PTY diagnostics — actual design approval
+
+Claude Code actual session `5ad4c7aa-ccf8-49d4-958d-12fb566e18c1` APPROVED with
+binding conditions in `/tmp/marmish-scj-provider-pty-design.json`. All five pins
+are recorded in the phase amendment before code: internal-key stripping,
+quickstart-only first-failure export, nonthrowing bounded byte parser, explicit
+source literals and true observed wait-status/reason rules. Only shared CI helper
+is added to the literal guard (13 paths); tests stay in existing supervisor file.
+No product fix or hosted success is inferred.

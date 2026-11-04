@@ -88,3 +88,21 @@ workflow 3/3, Node tooling 58/58, actionlint 1.7.7 and whitespace checks.
 Actual independent Claude design and final code/integration reviews APPROVED;
 see the existing review records. Runtime PATH remains the private exact utility
 allowlist, excluding Python. Hosted installer/provider success remains pending.
+
+Hosted [41921288533/1](https://github.com/Epiphytic/marmish/actions/runs/41921288533)
+at supervisor 698571a passes install and initial provider probe, then fails at
+quickstart: `provider_qualification_failed`, no checked child status, elapsed
+6760 ms. Runner Keychain unchanged and owned children reaped remain true;
+owned state/account removed remain false. The PTY driver already invokes the
+0644 bootstrap via `/bin/sh`; executable-bit failure is not supported by source.
+Complete finite failure diagnostics are being added before another hosted run;
+no product fix or qualification pass is inferred.
+
+Complete bounded PTY diagnostics passed supervisor discovery/direct 53/53 each,
+static workflow 3/3, Node 58/58, actionlint 1.7.7 and whitespace. Actual Claude
+design and final code/integration reviews approved; evidence is in existing
+review records. Tests include mode-0644 scripts, true exit/signal, timeout without
+fabricated status, optional-off behavior, hostile transcript/nested report
+sanitization, outer copying and cleanup snapshot preservation. No live product,
+accounts or Keychains were used. Next hosted run is still required to identify
+the actual quickstart failure and establish provider qualification.

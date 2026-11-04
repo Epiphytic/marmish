@@ -837,5 +837,152 @@ class QualificationUtilityDiscovery(unittest.TestCase):
             self.assertEqual(which.call_count, len(check.UTILITIES))
 
 
+class QuickstartFailureDiagnostics(unittest.TestCase):
+    def snapshot(self, output=b'', status=None):
+        return check._fixture.interactive_snapshot(RuntimeError('quickstart_terminal_failure'),
+            output, 2, status)
+
+    def test_exact_complete_lines_and_sentinel_exclusion(self):
+        raw = (b'/secret/SENTINEL npubSENTINEL errno SENTINEL\n'
+            b'{"secret":"SENTINEL"}\n'
+            b'marmish installer debug: stage=setup_choices\r\n'
+            b'marmish: identity: locked_or_denied\r\n'
+            b'marmish installer: native_setup_failed (stage=setup_choices)\r\n'
+            b'marmish: identity: missing')
+        value = self.snapshot(raw, 7 << 8)
+        self.assertEqual(value, {'reason':'terminal_failure', 'prompts_seen':2,
+            'exit_code':7, 'installer_stage':'setup_choices',
+            'installer_failure':'native_setup_failed', 'native_failure':'identity_locked_or_denied'})
+        self.assertNotIn('SENTINEL', json.dumps(value))
+        for raw in (b'marmish: identity: SENTINEL\n', b'marmish: identity: missing\x00\n',
+                b'marmish installer debug: stage=SENTINEL\n',
+                b'marmish installer: SENTINEL (stage=SENTINEL)\n'):
+            value = self.snapshot(raw)
+            self.assertIn('diagnostic_invalid', value.values())
+            self.assertNotIn('SENTINEL', json.dumps(value))
+        for raw in (b'prefix marmish: identity: missing\n', b'marmish: identity: missing',
+                b'\x1bmarmish: identity: missing\n', b'\xff\n', b'x' * 2048 + b'\n'):
+            self.assertEqual(self.snapshot(raw)['native_failure'], 'absent')
+
+    def test_native_families_are_finite(self):
+        for text, expected in ((b'local I/O failed','local_io'),
+                (b'operation deadline exceeded','timeout'), (b'storage: SENTINEL','storage'),
+                (b'transport: SENTINEL','transport'), (b'marmot: SENTINEL','marmot'),
+                (b'invalid input: SENTINEL','invalid_input'), (b'unknown SENTINEL','diagnostic_invalid')):
+            value = self.snapshot(b'marmish: ' + text + b'\n')
+            self.assertEqual(value['native_failure'], expected)
+            self.assertNotIn('SENTINEL', json.dumps(value))
+
+    def test_nested_reports_strict_bounds_stage_gate_and_success_strip(self):
+        # Raw wait status 9 is SIGKILL; use actual status in the valid tuple.
+        valid = self.snapshot(b'marmish: identity: missing\n', 9)
+        self.assertEqual(valid['exit_code'], -9)
+        for hostile in ({'SENTINEL':'SENTINEL'}, None, [],
+                {**valid,'extra':'SENTINEL'}, {**valid,'prompts_seen':True, 'exit_code':True},
+                {**valid,'prompts_seen':999999, 'exit_code':999999}):
+            report = {'ok':False,'child_failure':'provider_qualification_failed',
+                'child_failure_stage':'quickstart', 'child_quickstart':hostile,
+                '_quickstart_diagnostics':{'raw':'SENTINEL'}, '_other':'SENTINEL'}
+            check.sanitize_provider_report(report)
+            self.assertNotIn('SENTINEL', json.dumps(report))
+            self.assertLess(len(json.dumps(report['child_quickstart'])), 1024)
+            self.assertNotIn('_other', report)
+            self.assertNotIn('extra', report['child_quickstart'])
+            self.assertNotEqual(type(report['child_quickstart'].get('exit_code')), bool)
+        for report in ({'ok':True,'child_quickstart':valid},
+                {'ok':False,'child_quickstart':valid},
+                {'ok':False,'child_failure':'operation_failed','child_failure_stage':'install','child_quickstart':valid}):
+            check.sanitize_provider_report(report)
+            self.assertNotIn('child_quickstart', report)
+
+    def test_snapshot_once_parser_fault_and_first_failure_immutable(self):
+        target = {}
+        check._fixture.capture_interactive_failure(target, PermissionError('SENTINEL'), b'', 0, None)
+        original = dict(target)
+        check._fixture.capture_interactive_failure(target, OSError('SENTINEL'), b'', 4, 0)
+        self.assertEqual(target, original)
+        self.assertEqual(target['reason'], 'permission_failed')
+        self.assertNotIn('exit_code', target)
+        with mock.patch.object(check._fixture, 'interactive_snapshot', side_effect=ValueError('SENTINEL')):
+            value = {}
+            check._fixture.capture_interactive_failure(value, RuntimeError(), b'', 0, None)
+        self.assertNotIn('SENTINEL', json.dumps(value))
+        result = {'_stage':'quickstart','_quickstart_diagnostics':original}
+        check.child_failure(result, RuntimeError('SENTINEL'))
+        first = dict(result['child_quickstart'])
+        result['_stage'] = 'mac_delete_keychain'
+        result['_quickstart_diagnostics'] = {'raw':'SENTINEL'}
+        check.child_failure(result, check.Refused('operation_failed', 7), cleanup=True)
+        self.assertEqual(result['child_quickstart'], first)
+        self.assertEqual(result['child_failure_stage'], 'quickstart')
+
+    def test_real_0644_script_nonzero_signal_timeout_and_optional_off(self):
+        for script, code, reason in (('exit 7',7,'terminal_failure'),
+                ('kill -9 $$',-9,'terminal_failure'), ('exec /bin/sleep 5',None,'observation_limit'),
+                ('exit 0',0,'terminal_failure')):
+            with self.subTest(script=script), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'bootstrap'
+                path.write_text(script + '\n')
+                path.chmod(0o644)
+                diagnostics = {}
+                with self.assertRaises(RuntimeError):
+                    check.interactive([str(path)], {'PATH':'/bin'},
+                        timeout=0.08 if code is None else 2,
+                        failure_diagnostics=diagnostics)
+                self.assertEqual(diagnostics['reason'], reason)
+                self.assertEqual(diagnostics.get('exit_code'), code)
+                self.assertEqual(diagnostics['prompts_seen'], 0)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'bootstrap'
+            # Exercise all unchanged prompt gates with no product or account.
+            path.write_text(''.join("printf '%s' " + "'" + prompt.decode().replace("'", "'\\''") +
+                "'; read answer\n" for prompt, _ in check._fixture.DIALOG))
+            path.chmod(0o644)
+            without = check.interactive([str(path)], {'PATH':'/bin'}, timeout=2)
+            diagnostics = {}
+            with_diagnostics = check.interactive([str(path)], {'PATH':'/bin'}, timeout=2,
+                failure_diagnostics=diagnostics)
+            self.assertEqual(without, with_diagnostics)
+            self.assertEqual(diagnostics, {})
+
+    def test_outer_copy_revalidates_nested_tuple_without_leaks(self):
+        raw = self.snapshot(b'marmish: identity: locked_or_denied\n', 7 << 8)
+        raw['native_failure'] = 'SENTINEL /secret npubSENTINEL'
+        for ok, stage in ((False,'quickstart'), (False,'install'), (True,'quickstart')):
+            with self.subTest(ok=ok, stage=stage), tempfile.TemporaryDirectory() as directory:
+                _, report, _ = ProviderDiagnostics().fixture(Path(directory) / 'report', inner={
+                    'kind':'installed_auto_provider', 'ok':ok,
+                    'child_failure':'provider_qualification_failed', 'child_failure_stage':stage,
+                    'child_quickstart':raw, '_quickstart_diagnostics':{'raw':'SENTINEL'}})
+                self.assertNotIn('SENTINEL', json.dumps(report))
+                if not ok and stage == 'quickstart':
+                    self.assertEqual(report['child_quickstart']['native_failure'], 'diagnostic_invalid')
+                    self.assertEqual(report['child_quickstart']['exit_code'], 7)
+                else:
+                    self.assertNotIn('child_quickstart', report)
+
+    def test_fork_failure_diagnostic_and_cleanup_cannot_replace_snapshot(self):
+        with mock.patch.object(check._fixture.pty, 'fork', side_effect=PermissionError('SENTINEL')):
+            diagnostics = {}
+            with self.assertRaises(PermissionError):
+                check.interactive([], {}, failure_diagnostics=diagnostics)
+            self.assertEqual(diagnostics['reason'], 'permission_failed')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'bootstrap'
+            path.write_text('exit 7\n')
+            diagnostics = {}
+            original_close = check._fixture.os.close
+            def close(fd):
+                original_close(fd)
+                raise OSError('SENTINEL cleanup')
+            with mock.patch.object(check._fixture.os, 'close', side_effect=close):
+                with self.assertRaises(OSError):
+                    check.interactive([str(path)], {'PATH':'/bin'}, timeout=2,
+                        failure_diagnostics=diagnostics)
+            self.assertEqual(diagnostics['exit_code'], 7)
+            self.assertEqual(diagnostics['reason'], 'terminal_failure')
+            self.assertNotIn('SENTINEL', json.dumps(diagnostics))
+
+
 if __name__ == '__main__':
     unittest.main()

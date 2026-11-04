@@ -540,3 +540,80 @@ and two discovery fixtures. Existing design/code review records contain session
 IDs and evidence. No success fields, provider gates, runtime PATH or utility
 allowlist were changed. Offline checks pass; next hosted qualification remains
 the acceptance boundary.
+
+## Quickstart PTY failure diagnostics amendment
+
+Hosted 41921288533/1 at supervisor 698571a passes install and initial provider
+probe, then fails `quickstart` with generic `provider_qualification_failed`, no
+checked status, after 6760 ms. Bootstrap mode 0644 is supported: the existing
+PTY driver already executes `/bin/sh` with the script as its first argument.
+Adding another shell argument would be incorrect. No product fix is inferred.
+
+Extend the existing CI-only `interactive` driver with optional keyword
+`failure_diagnostics=None` (a caller-owned dictionary). Its default callers,
+exec argv, prompts, timeout/output budgets and success/failure gates stay intact.
+On an exception, before cleanup, populate that dictionary once with a safe
+snapshot: `reason` in terminal_failure/observation_limit/permission_failed/
+io_failed/unexpected; `prompts_seen` integer 0..len(DIALOG); `exit_code` only
+from an actually reaped wait status using os.waitstatus_to_exitcode (range
+-128..255). Also derive `installer_stage`, `installer_failure`, `native_failure`
+from the already bounded in-memory PTY bytes. Each field uses explicit literal
+allowlists; missing evidence is `absent`, unrecognized evidence
+`diagnostic_invalid`. Installer debug/failure lines must have exact prefixes and
+finite tokens, and native lines must start `marmish: `; recognized native identity
+suffixes are unavailable/uninitialized/locked_or_denied/missing/corrupt, other
+identity suffixes normalize invalid. Other native output maps only to the fixed
+families invalid_input/storage/transport/marmot/local_io/timeout, never arbitrary
+suffix text. Select last recognized line per field; once failure is captured,
+cleanup cannot overwrite it. No raw output, exception strings, paths, npubs,
+errno messages, commands or JSON reports leave driver memory. Helper exceptions
+remain unchanged; diagnostics never create a success.
+
+Qualification passes a private diagnostics dictionary at quickstart only. On
+failure it attaches an internal snapshot for child_failure to export as
+`child_quickstart`; the child sanitizer validates the entire nested object from
+scratch using exact closed fields, bounds, and enums, drops unknown fields and
+invalid status, and normalizes invalid finite tokens. Outer report copying
+includes only that sanitized optional field; successful reports remove it.
+Existing primary category/stage/status and first-failure preservation remain
+unchanged. Non-quickstart failures cannot gain this tuple. Snapshot must survive
+cleanup errors, while the existing first primary failure tuple stays immutable.
+
+The diagnostic guard's literal allowlist expands from 12 to 13 paths by exactly
+`tools/marmish_native_quickstart_check.py`, which is already part of sourceDigest.
+Tests stay in the existing allowlisted supervisor test file; no additional test
+path needed. Keep A/M regular-file-only audits, exact pinned old product bytes,
+run/attempt/source/package checks, provider gates and production policy unchanged.
+Update only guard literal and its positive/negative tests. This harness-only
+expansion does not authorize product changes or alter published binaries.
+
+Offline acceptance: synthetic bounded PTY transcripts including sentinels and
+malformed/unknown categories; exact wait status vs absent/signal/bool/out-of-range
+rejection; success stripping, nested hostile JSON and outer copying; real small
+local script via existing PTY driver with mode 0644 to verify explicit shell,
+nonzero exit and incomplete prompts; optional-off backward behavior; mocked IO
+failure and failure-before-cleanup snapshot preservation. Never launch product,
+real Keychains or accounts. Run supervisor/direct, static workflow, Node and
+actionlint, then actual independent code/integration review. Next hosted run
+remains necessary to identify the real quickstart failure and qualify product.
+
+Actual Claude design review APPROVED with binding conditions, session
+5ad4c7aa-ccf8-49d4-958d-12fb566e18c1,
+`/tmp/marmish-scj-provider-pty-design.json`. Pins before implementation:
+remove every internal `_`-prefixed report key; export nested diagnostics atomically
+with the first failure tuple only, and drop unless failure stage is quickstart.
+Snapshot parsing must never raise/mask the primary exception, must build locally
+and update only an empty target, tolerate arbitrary bytes and CRLF, ignore partial
+lines and cap lines at 1024 bytes. Installer stages are exactly target/manifest/
+asset_download/asset_verify/runtime_probe/install_validate/setup_choices/complete.
+Installer failures are exactly the current scripts/install.sh fail tokens (pinned
+as a literal helper enum, never inferred at runtime). Native families are identity
+with the five enumerated suffixes, storage/transport/marmot/invalid_input, exact
+local I/O failed and operation deadline exceeded; any other native line is
+invalid. Snapshot reasons map exact RuntimeError arguments quickstart_terminal_failure
+and quickstart_observation_limit, then PermissionError before OSError, else
+unexpected. Exit status comes exclusively from the loop's own observed waitpid,
+never cleanup-induced termination; conversion errors omit it. Nested sanitization
+uses at most six known keys, closed enums and strict non-bool integers with
+bounded ranges; arbitrary keys are dropped and malformed objects normalize to
+finite invalid metadata. The resulting nested JSON is bounded below 1024 bytes.

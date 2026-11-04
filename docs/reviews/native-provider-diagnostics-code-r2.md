@@ -201,3 +201,30 @@ historical short-horizon churn on the existing Qualification constructor and
 unittest-discovery symbols as dead code; no structural expansion is needed for
 the one-call lookup correction. No local accounts, Keychains, product builds or
 live commands were used. Hosted qualification is still required.
+
+### Complete quickstart PTY failure diagnostics — actual code/integration approval
+
+Claude Code 2.1.301, `claude-sonnet-5-5`, session
+`9614455e-0370-4058-95cf-520ae9f72d13`, APPROVED code and integration without
+blockers. Actual evidence: `/tmp/marmish-scj-provider-pty-code.json`,
+`/tmp/marmish-scj-provider-pty-integration.json`, and final test-only approval
+`/tmp/marmish-scj-provider-pty-test-bound.json`. All five binding design conditions
+were checked, including immutable pre-cleanup snapshot, strict nested rebuilding,
+quickstart-only export, success stripping/internal-key removal, true observed
+status and bounded parser. Useful nits adopted: exact string enum types, no
+`absent` reason, removal of overwritten test assignment. Final test-only bound
+uses two seconds for exit/signal cases; only the deliberate timeout uses 80 ms.
+Reviewer independently passed 53 supervisor tests, static workflow 3/3 and Node
+58/58, and probed ANSI/malformed/partial-line inputs without leakage. It explicitly
+verified dynamic git-tree sourceDigest inclusion of helper+supervisor, exact
+13-path regular-file guard and product-change refusal. Production candidate and
+provider gates remain unchanged. Root's separate automation suite still needs
+integrated validation; no hosted path was exercised by reviewer.
+
+Author scoped checks pass supervisor discovery/direct 53/53 each, static workflow
+3/3, Node 58/58, actionlint 1.7.7 and whitespace. Ripwire flags historical churn on
+edited existing symbols, minor added lines and discovery-based test false dead
+code; this bounded diagnostics change adds no runtime product behavior. Local
+PTY tests execute only tiny disposable scripts, never Marmish, real accounts or
+Keychains. This increment identifies future failure evidence; it does not fix or
+claim success for the current hosted quickstart failure.

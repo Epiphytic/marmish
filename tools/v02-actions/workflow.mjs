@@ -14,6 +14,7 @@ const hex = (s, n) => typeof s === 'string' && new RegExp(`^[0-9a-f]{${n}}$`).te
 export const PROVIDER_DIAGNOSTIC = Object.freeze({run:'41898839617', attempt:'1',
   source:'61f47606c5e7ba9048f196165a8025e7c2662839'});
 export const DIAGNOSTIC_PATHS = Object.freeze([
+  'tools/marmish_native_quickstart_check.py',
   'tools/marmish_native_keychain_check.py', 'tools/test_marmish_native_keychain_check.py',
   '.github/workflows/v02-provider-diagnostic.yml', 'tools/test_marmish_provider_diagnostic_workflow.py',
   'tools/v02-actions/workflow.mjs', 'tools/v02-actions/workflow.test.mjs',

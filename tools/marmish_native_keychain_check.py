@@ -67,7 +67,7 @@ def child_stage(result, stage):
 
 
 def sanitize_child_diagnostics(result):
-    fields = ('child_failure', 'child_failure_stage', 'child_exit_code')
+    fields = ('child_failure', 'child_failure_stage', 'child_exit_code', 'child_quickstart')
     if result.get('ok') is True:
         for field in fields:
             result.pop(field, None)
@@ -79,6 +79,10 @@ def sanitize_child_diagnostics(result):
         code = result.get('child_exit_code')
         if not (type(code) is int and -128 <= code <= 255):
             result.pop('child_exit_code', None)
+        if result.get('child_failure_stage') == 'quickstart' and 'child_quickstart' in result:
+            result['child_quickstart'] = _fixture.sanitize_interactive_diagnostics(result['child_quickstart'])
+        else:
+            result.pop('child_quickstart', None)
     return result
 
 
@@ -91,6 +95,8 @@ def child_failure(result, error, cleanup=False):
     code = error.exit_code if isinstance(error, Refused) else None
     if code is not None:
         values['child_exit_code'] = code
+    if result.get('_stage') == 'quickstart' and result.get('_quickstart_diagnostics'):
+        values['child_quickstart'] = result['_quickstart_diagnostics']
     sanitize_child_diagnostics(values)
     # One update preserves the stage/category/status tuple before cleanup changes stage.
     result.update(values)
@@ -118,7 +124,9 @@ def provider_failure(result, error, cleanup=False):
 
 def sanitize_provider_report(result):
     """Only source-defined stages and bounded numeric statuses leave the supervisor."""
-    result.pop('_stage', None)
+    for key in list(result):
+        if isinstance(key, str) and key.startswith('_'):
+            result.pop(key)
     for prefix in ('', 'cleanup_'):
         stage = prefix + 'failure_stage'
         if stage in result and (not isinstance(result[stage], str) or result[stage] not in STAGES):
@@ -457,9 +465,11 @@ class Qualification:
         child_stage(result, 'initial_probe')
         self.wait_probe()
         child_stage(result, 'quickstart')
+        result['_quickstart_diagnostics'] = {}
         output = interactive([str(self.bootstrap), '--quickstart', '--debug', '--asset-dir',
             str(self.assets), '--state-dir', str(self.state), '--prefix', str(self.prefix),
-            '--bin-dir', str(self.bins)], self.environment, timeout=120)
+            '--bin-dir', str(self.bins)], self.environment, timeout=120,
+            failure_diagnostics=result['_quickstart_diagnostics'])
         child_stage(result, 'quickstart_validate')
         initial = [value for value in reports(output) if 'identity_created' in value]
         require(len(initial) == 1, 'quickstart_report')
@@ -899,7 +909,7 @@ def mac_account(bootstrap, assets, report, lifecycle_a_assets=None, lifecycle_a_
                     'item_count', 'locked_refused', 'unlocked_fresh_reload', 'no_plaintext_fallback',
                     'python_in_runtime_path', 'network_activation', 'owned_children_reaped', 'owned_state_removed',
                     'lifecycle_upgrade_loaded', 'lifecycle_rollback_loaded', 'lifecycle_locked_denied',
-                    'lifecycle_stage', 'child_failure', 'child_failure_stage', 'child_exit_code'):
+                    'lifecycle_stage', 'child_failure', 'child_failure_stage', 'child_exit_code', 'child_quickstart'):
                 if key in received:
                     result[key] = received[key]
             sanitize_child_diagnostics(result)

@@ -184,15 +184,20 @@ test('diagnostic requires three exact packages, render, and original failed mac 
     artifacts.map(a=>({...a,name:a.name.replace('-1','-2')}))])
     await assert.rejects(validateCandidate(diagnosticEnv,0,diagnosticTransport({artifacts:bad}),PROVIDER_DIAGNOSTIC));
 });
-test('diagnostic source audit permits only twelve literal regular diagnostic paths',()=>{
-  assert.equal(DIAGNOSTIC_PATHS.length,12);
+test('diagnostic source audit permits only thirteen literal regular diagnostic paths',()=>{
+  assert.equal(DIAGNOSTIC_PATHS.length,13);
   for(const name of DIAGNOSTIC_PATHS) for(const status of ['A','M']) checkDiagnosticChanges([[status,name,'100644']]);
-  for(const name of ['tools/v02-actions/workflow.mjs','tools/v02-actions/workflow.test.mjs'])
+  for(const name of ['tools/v02-actions/workflow.mjs','tools/v02-actions/workflow.test.mjs','tools/marmish_native_quickstart_check.py'])
     assert.ok(DIAGNOSTIC_PATHS.includes(name));
   assert.throws(()=>checkDiagnosticChanges([]));
   for(const entry of [['D',DIAGNOSTIC_PATHS[0],'100644'],['R100',DIAGNOSTIC_PATHS[0],'100644'],
-    ['M','crates/marmish-native/src/identity.rs','100644'],['M','tools/marmish_native_quickstart_check.py','100644'],
+    ['M','crates/marmish-native/src/identity.rs','100644'],['M','tools/marmish_native_quickstart_check.pyc','100644'],
     ['M',DIAGNOSTIC_PATHS[0],'120000'],['M',DIAGNOSTIC_PATHS[0],'100755'],
+    ['D','tools/marmish_native_quickstart_check.py','100644'],
+    ['R100','tools/marmish_native_quickstart_check.py','100644'],
+    ['M','tools/marmish_native_quickstart_check.py','100755'],
+    ['M','tools/marmish_native_quickstart_check.py','120000'],
+    ['M','other/marmish_native_quickstart_check.py','100644'],
     ['M','docs/reviews/unreviewed.md','100644']]) assert.throws(()=>checkDiagnosticChanges([entry]));
 });
 test('diagnostic guard refusal preserves separate finite product and supervisor envelope',async t=>{
