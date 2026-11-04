@@ -502,3 +502,41 @@ security command executed. Supervisor discovery and direct execution both pass
 whitespace checks pass. No live account, runner HOME or Keychain was touched.
 Actual code review and hosted default-query/provider qualification remain
 required; this is still a source-supported prerequisite hypothesis.
+
+## Installer utility discovery amendment
+
+Hosted diagnostic 41920220640/1 now passes the unchanged real default Keychain
+query and reaches `install`, which exits 1 after 1558 ms. This establishes progress
+past the previous boundary, without proving the runner's earlier directory state.
+The disposable-account launch deliberately sets process PATH to `/usr/bin:/bin`.
+`Qualification.__init__` currently calls `shutil.which(name)` against that PATH
+when constructing its private utility directory. The existing utility allowlist
+includes `sysctl`, and `scripts/install.sh` requires it for Darwin architecture
+selection. Apple's [system_cmds build definition](https://github.com/apple-oss-distributions/system_cmds/blob/main/system_cmds.xcodeproj/project.pbxproj)
+sets the sysctl Release target's `INSTALL_PATH = /usr/sbin`. The fixture therefore
+omits a required existing utility. The source mismatch explains an installer
+failure without needing raw stderr; a hosted rerun must still validate the remedy.
+
+Change only CI harness utility discovery: pass a fixed trusted lookup path
+`/usr/bin:/bin:/usr/sbin:/sbin` explicitly to `shutil.which` for each name in the
+unchanged `UTILITIES` tuple. Keep optional absent utilities absent. Do not consult
+inherited/user PATH or change the outer account launch. Runtime/install child
+PATH remains exactly the private utilities directory, containing only symlinks
+for allowed names: Python remains unavailable. No product, installer, Keychain,
+provenance, cleanup or success criteria change.
+
+Offline tests will model restricted process PATH and a sysctl found only in
+`/usr/sbin`, assert the exact discovery path on every lookup, unchanged process
+PATH, exact allowlist-derived symlinks and private runtime PATH, and absent
+utilities/Python exclusion. Run supervisor discovery/direct, static diagnostic
+workflow, Node tooling, actionlint and whitespace checks. Obtain actual Claude
+design approval before code, then actual Claude code review of this finite diff.
+The next hosted diagnostic must use the same pinned product and report real
+installer/provider qualification; offline checks alone cannot establish that pass.
+
+Actual independent Claude design approval preceded this finite implementation;
+final same-session code/integration approval covers the constant, explicit lookup
+and two discovery fixtures. Existing design/code review records contain session
+IDs and evidence. No success fields, provider gates, runtime PATH or utility
+allowlist were changed. Offline checks pass; next hosted qualification remains
+the acceptance boundary.

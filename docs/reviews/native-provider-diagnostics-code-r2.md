@@ -177,3 +177,27 @@ The new tests cover these cases:
 - If that run fails, the failing stage is new evidence to report. If it fails at `mac_preferences_prepare`, the first thing to check is whether the real account's HOME is exactly 0700 and equals `pw_dir`.
 
 Disposition: fixed the wrong-mode fixture with an explicit chmod so it is independent of umask. No product or provider behavior changed after approval. Additional component-specific fixtures are nonblocking because both components use the same validation loop. Hosted proof remains required.
+
+### Installer utility discovery — actual code and integration review
+
+Claude Code 2.1.301 (`claude-sonnet-5-5`), session
+`c2dc2382-9d7e-4307-9d58-e5e93d3ab186`, APPROVED the five-file diff without
+blocking findings. Actual JSON evidence:
+`/tmp/marmish-scj-provider-discovery-code.json` and the same-session final
+`/tmp/marmish-scj-provider-discovery-integration.json`. Useful nits incorporated
+before final review: discovery-only constant comment and a recording fake that
+finds sysctl only when `/usr/sbin` is included. Reviewer independently passed
+46 supervisor tests (discovery/direct initial review; discovery final review),
+58 Node tests and whitespace checks. It confirmed unchanged success schema and
+failure-only child diagnostics, dynamic sourceDigest inclusion of the supervisor,
+the literal diagnostic path audit, and no product/provider gate bypass. The
+separate automation approval remains applicable to this finite source class;
+reviewer inspected its exact-key report validation but did not rerun its 113-test
+suite. No hosted success is asserted. Parent will run integrated validation.
+
+Author checks: supervisor discovery/direct 46/46, static workflow 3/3, Node
+58/58, actionlint 1.7.7 and diff whitespace PASS. Ripwire quality-delta flags
+historical short-horizon churn on the existing Qualification constructor and
+unittest-discovery symbols as dead code; no structural expansion is needed for
+the one-call lookup correction. No local accounts, Keychains, product builds or
+live commands were used. Hosted qualification is still required.

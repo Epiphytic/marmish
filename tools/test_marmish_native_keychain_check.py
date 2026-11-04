@@ -793,5 +793,49 @@ class MacPreferencePreparation(unittest.TestCase):
                 execute.assert_not_called()
 
 
+class QualificationUtilityDiscovery(unittest.TestCase):
+    def test_fixed_system_discovery_preserves_private_runtime_path(self):
+        expected_path = '/usr/bin:/bin:/usr/sbin:/sbin'
+        self.assertEqual(check.UTILITY_DISCOVERY_PATH, expected_path)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            decoy = root / 'decoy'
+            decoy.mkdir()
+            for name in ('python3', 'curl'):
+                (decoy / name).write_text('decoy')
+                (decoy / name).chmod(0o700)
+            found = {name: ('/usr/sbin/sysctl' if name == 'sysctl' else '/usr/bin/' + name)
+                for name in check.UTILITIES if name != 'sha256sum'}
+            def discover(name, *, path):
+                self.assertEqual(path, expected_path)
+                if name == 'sysctl' and '/usr/sbin' not in path.split(':'):
+                    return None
+                return found.get(name)
+            with mock.patch.dict(check.os.environ, {'PATH': str(decoy)}), \
+                    mock.patch.object(check.shutil, 'which', side_effect=discover) as which:
+                qualification = check.Qualification(root, root / 'bootstrap', root / 'assets')
+                self.assertEqual(check.os.environ['PATH'], str(decoy))
+            self.assertEqual(which.call_args_list,
+                [mock.call(name, path=expected_path) for name in check.UTILITIES])
+            utilities = root / 'utilities'
+            self.assertEqual(qualification.environment['PATH'], str(utilities))
+            self.assertEqual({entry.name for entry in utilities.iterdir()}, set(found))
+            for name, target in found.items():
+                self.assertTrue((utilities / name).is_symlink())
+                self.assertEqual(check.os.readlink(utilities / name), target)
+            self.assertFalse((utilities / 'sha256sum').is_symlink())
+            self.assertFalse((utilities / 'python3').is_symlink())
+            self.assertFalse((utilities / 'python').is_symlink())
+
+    def test_missing_utilities_remain_absent(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(check.shutil, 'which', return_value=None) as which:
+            root = Path(directory)
+            qualification = check.Qualification(root, root / 'bootstrap', root / 'assets')
+            self.assertEqual(list((root / 'utilities').iterdir()), [])
+            self.assertEqual(qualification.environment['PATH'], str(root / 'utilities'))
+            self.assertEqual(which.call_count, len(check.UTILITIES))
+
+
 if __name__ == '__main__':
     unittest.main()

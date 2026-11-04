@@ -31,6 +31,10 @@ _quickstart.loader.exec_module(_fixture)
 UTILITIES, interactive, reports = _fixture.UTILITIES, _fixture.interactive, _fixture.reports
 
 
+# CI-only trusted system lookup; child PATH remains the private utility allowlist.
+UTILITY_DISCOVERY_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+
+
 PASSWORD = b'marmish-disposable-provider-check\n'
 MAX_CAPTURE = 2 * 1024 * 1024
 
@@ -380,7 +384,7 @@ class Qualification:
             'LOGNAME': pwd.getpwuid(os.geteuid()).pw_name, 'LC_ALL': 'C', 'TMPDIR': str(root)}
         utilities = private(root / 'utilities')
         for name in UTILITIES:
-            executable = shutil.which(name)
+            executable = shutil.which(name, path=UTILITY_DISCOVERY_PATH)
             if executable:
                 (utilities / name).symlink_to(executable)
         self.environment['PATH'] = str(utilities)

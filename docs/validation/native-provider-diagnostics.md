@@ -73,3 +73,18 @@ hosted rerun remains required to establish successful default lookup and full
 qualification. Successful directory preparation alone is not a provider pass.
 
 Actual independent Claude code review APPROVED the owned Preferences prerequisite; see the existing [review record](../reviews/native-provider-diagnostics-code-r2.md). Reviewer independently passed 44 supervisor tests in discovery and direct modes and whitespace validation. A deterministic fixture chmod incorporates its useful nonblocking finding. Hosted qualification remains pending.
+
+Hosted diagnostic [41920220640/1](https://github.com/Epiphytic/marmish/actions/runs/41920220640)
+was created at 21:53:12 UTC and started at 21:53:17 UTC. The unchanged real default
+Keychain query now succeeds; later `install` fails with `operation_failed`, child
+exit 1, elapsed 1558 ms. Runner Keychain unchanged and owned children reaped are
+true; owned state/account removed are false. This is progress, not complete
+qualification or proof of the original missing-directory hypothesis. The source
+utility-discovery mismatch is documented in the phase amendment; hosted remedy
+validation remains required.
+
+The discovery-only remedy passed supervisor discovery/direct 46/46, static
+workflow 3/3, Node tooling 58/58, actionlint 1.7.7 and whitespace checks.
+Actual independent Claude design and final code/integration reviews APPROVED;
+see the existing review records. Runtime PATH remains the private exact utility
+allowlist, excluding Python. Hosted installer/provider success remains pending.

@@ -19,3 +19,15 @@ Session: `d2b23b5e-0a22-4816-977c-7626cdbf1810`.
 1. The main block re-reads and rewrites the report at `:825-846`, and its `except Exception` fallback at `:820` writes a bare report. Run the sanitizer in `mac_account` right before its write at `:778`, as specified. Also make sure the main rewrite cannot reintroduce unsanitized fields. It copies `value` from the sanitized file, so it should be fine, but add a test for it.
 2. `ProviderSignals.__enter__` and `lifecycle_arguments`, at `:657` and `:672`, run before any stage is set. Failures there should report an absent stage, not `diagnostic_invalid`.
 3. Add `workflow.mjs` and its tests to the changed-path allowlist test, since `workflow.mjs` and the supervisor are inputs to `sourceDigest`, so this increment changes the harness hash. The doc already says new release assets need their own qualification.
+
+### Installer utility discovery amendment — actual independent review
+
+Claude Code 2.1.301, model `claude-sonnet-5-5`, session
+`1f675bdf-369a-4d88-ae4a-e3e0d7b4bd07`, APPROVED the amendment before code.
+Actual JSON: `/tmp/marmish-scj-provider-discovery-design.json`. Reviewer inspected
+the finite source mismatch, saved Apple build definition and actual hosted report;
+no blockers. Useful nits adopted: explicit module constant, recording fake lookup,
+inherited decoy PATH, exact symlink subset and missing utility/Python checks.
+Sibling quickstart/HTTPS lookup loops remain outside this bounded fix; they run
+under different environments. Offline evidence establishes discovery hygiene;
+complete hosted qualification remains required.
