@@ -404,30 +404,62 @@ fn status_problem(status: &wire::Status) -> Option<&'static str> {
         None
     }
 }
-fn wire_category(code: wire::ErrorCode) -> &'static str {
+fn wire_failure(error: &wire::WireError) -> Error {
+    crate::diagnostics::event("command_remote_refusal", error.diagnostic_category());
+    if let Some(reason) = error.diagnostic_reason() {
+        crate::diagnostics::event("command_remote_reason", reason);
+    }
+    invalid(refusal_message(error))
+}
+fn refusal_message(error: &wire::WireError) -> &'static str {
     use wire::ErrorCode::*;
-    match code {
-        InvalidRequest => "invalid_request",
-        Unauthorized => "unauthorized",
-        RoleDisabled => "role_disabled",
-        CommandDenied => "command_denied",
-        NoncanonicalExecutable => "noncanonical_executable",
-        InvocationConflict => "invocation_conflict",
-        Expired => "expired",
-        FutureDeferred => "future_deferred",
-        FutureExcessive => "future_excessive",
-        ClockBehindFloor => "clock_behind_floor",
-        QuotaExceeded => "quota_exceeded",
-        Busy => "busy",
-        NotFound => "not_found",
-        ResultExpired => "result_expired",
-        RecoveryUncertain => "recovery_uncertain",
-        InputFailed => "input_failed",
-        StorageFailure => "storage_failure",
-        TransportDegraded => "transport_degraded",
-        AuthorityRevoked => "invalidated",
+    match (error.code, error.diagnostic_reason()) {
+        (CommandNotFound, Some("path_search_exhausted")) => {
+            "command_not_found: no executable was found in the server daemon's PATH"
+        }
+        (CommandNotFound, _) => "command_not_found: the executable was not found on the server",
+        (CommandNotExecutable, Some("filesystem_permission")) => {
+            "command_not_executable: filesystem permissions prevent server execution"
+        }
+        (CommandNotExecutable, Some("not_regular_file")) => {
+            "command_not_executable: the server path is not a regular file"
+        }
+        (CommandNotExecutable, Some("execute_bit_missing")) => {
+            "command_not_executable: the server file has no applicable execute permission"
+        }
+        (CommandNotExecutable, _) => "command_not_executable: the server cannot execute this file",
+        (CommandResolutionFailed, Some("symlink_loop")) => {
+            "command_resolution_failed: the server path contains a symlink loop"
+        }
+        (CommandResolutionFailed, Some("invalid_search_path")) => {
+            "command_resolution_failed: the server daemon's PATH exceeds supported limits"
+        }
+        (CommandResolutionFailed, _) => {
+            "command_resolution_failed: a server filesystem error prevented executable lookup"
+        }
+        (CommandDenied, _) => {
+            "command_denied: the server's command policy does not allow this command"
+        }
+        (CommandPolicyError, _) => {
+            "command_policy_error: the server could not evaluate its command policy"
+        }
+        _ => error.diagnostic_category(),
     }
 }
+fn launch_failure_message(value: u8) -> &'static str {
+    match value {
+        1 => "command_launch_failed: filesystem permissions prevented startup",
+        2 => {
+            "command_launch_failed: the executable, interpreter or loader was missing, or the working directory disappeared"
+        }
+        3 => "command_launch_failed: the executable format is invalid",
+        4 => "command_launch_failed: the server working directory is invalid",
+        5 => "command_launch_failed: server resources were unavailable during startup",
+        6 => "command_launch_failed: the executable changed before startup",
+        _ => "command_launch_failed: the server could not start the command",
+    }
+}
+
 fn report_error(error: &Error) -> u8 {
     let category = match error {
         Error::Invalid(value) => *value,
@@ -463,7 +495,9 @@ fn terminal_exit(status: &wire::Status, cursors: &Cursors) -> Option<u8> {
     match (outcome.kind, outcome.value) {
         (wire::OutcomeKind::Code, Some(value)) => Some(value),
         (wire::OutcomeKind::Signal, Some(value)) => Some(128u8.saturating_add(value)),
-        (wire::OutcomeKind::NotStarted, _) => Some(255),
+        (wire::OutcomeKind::NotStarted, _) | (wire::OutcomeKind::LaunchFailed, Some(1..=7)) => {
+            Some(255)
+        }
         _ => None,
     }
 }
@@ -517,12 +551,14 @@ struct WaitProgress {
     delivery_confirmed: bool,
     authenticated: bool,
     known_terminal: Option<u8>,
+    launch_failure: Option<u8>,
 }
 struct Applied {
     terminal: Option<u8>,
     accepted: bool,
     poll: bool,
-    refusal: Option<wire::ErrorCode>,
+    refusal: Option<wire::WireError>,
+    launch_failure: Option<u8>,
 }
 fn retryable_wire(code: wire::ErrorCode) -> bool {
     matches!(
@@ -549,7 +585,8 @@ impl Context {
                     terminal: None,
                     accepted: false,
                     poll: is_poll,
-                    refusal: Some(error.code),
+                    refusal: Some(error.clone()),
+                    launch_failure: None,
                 });
             }
         };
@@ -580,6 +617,10 @@ impl Context {
             let terminal = is_poll
                 .then(|| terminal_exit(&status, &committed.cursors))
                 .flatten();
+            let launch_failure = terminal
+                .and(status.outcome.as_ref())
+                .filter(|o| o.kind == wire::OutcomeKind::LaunchFailed)
+                .and_then(|o| o.value);
             if terminal.is_some() && !*delivery_confirmed && !detach {
                 match committed.finish {
                     Some(finish) => match self.finish_delivery(handle, finish, deadline).await {
@@ -590,7 +631,11 @@ impl Context {
                                 terminal,
                                 accepted: status.authority_valid,
                                 poll: is_poll,
-                                refusal: Some(wire::ErrorCode::Busy),
+                                refusal: Some(wire::WireError {
+                                    code: wire::ErrorCode::Busy,
+                                    detail: None,
+                                }),
+                                launch_failure,
                             });
                         }
                         Err(_) => {
@@ -609,6 +654,7 @@ impl Context {
                 accepted: status.authority_valid,
                 poll: is_poll,
                 refusal: None,
+                launch_failure,
             })
         } else {
             Ok(Applied {
@@ -616,6 +662,7 @@ impl Context {
                 accepted: false,
                 poll: false,
                 refusal: None,
+                launch_failure: None,
             })
         }
     }
@@ -628,11 +675,7 @@ impl Context {
         out: &mut impl Write,
         err: &mut impl Write,
     ) -> Result<Consumption> {
-        let result = answer
-            .response
-            .result
-            .as_ref()
-            .map_err(|e| invalid(wire_category(e.code)))?;
+        let result = answer.response.result.as_ref().map_err(wire_failure)?;
         match copy_poll(result, start, out, err) {
             Ok(_) => {
                 self.consume(
@@ -771,19 +814,20 @@ impl Context {
                 poll = Some(request_id);
             }
             progress.authenticated |= applied.accepted;
-            if let Some(code) = applied.refusal {
+            progress.launch_failure = applied.launch_failure.or(progress.launch_failure);
+            if let Some(error) = &applied.refusal {
                 if applied.terminal.is_some() {
                     progress.known_terminal = applied.terminal;
                     continue;
                 }
-                if retryable_wire(code)
-                    || (code == wire::ErrorCode::NotFound
+                if retryable_wire(error.code)
+                    || (error.code == wire::ErrorCode::NotFound
                         && applied.poll
                         && !progress.authenticated)
                 {
                     continue;
                 }
-                return Err(invalid(wire_category(code)));
+                return Err(wire_failure(error));
             }
             if detach && applied.accepted {
                 return Ok((Some(0), poll));
@@ -815,14 +859,25 @@ impl Context {
         detach: bool,
         progress: &mut WaitProgress,
     ) -> Result<u8> {
-        match self.wait_loop(handle, deadline, detach, progress).await {
+        let result = match self.wait_loop(handle, deadline, detach, progress).await {
             Err(Error::Timeout | Error::Io(_)) if progress.known_terminal.is_some() => {
                 eprintln!("marmish: delivery_pending");
                 Ok(progress.known_terminal.expect("known outcome"))
             }
             result => result,
+        };
+        if matches!(result, Ok(255))
+            && let Some(reason) = progress.launch_failure
+        {
+            crate::diagnostics::event(
+                "command_launch_failed",
+                wire::launch_failure_reason(reason).unwrap_or("other_startup_failure"),
+            );
+            return Err(invalid(launch_failure_message(reason)));
         }
+        result
     }
+
     async fn wait_loop(
         &self,
         handle: &CommandHandle,
@@ -916,16 +971,19 @@ impl Context {
                             )
                             .await?;
                         progress.authenticated |= applied.accepted;
-                        if let Some(code) = applied.refusal {
+                        progress.launch_failure =
+                            applied.launch_failure.or(progress.launch_failure);
+                        if let Some(error) = &applied.refusal {
                             if applied.terminal.is_some() {
                                 progress.known_terminal = applied.terminal;
                                 pending = None;
                                 continue;
                             }
-                            if !retryable_wire(code)
-                                && !(code == wire::ErrorCode::NotFound && !progress.authenticated)
+                            if !retryable_wire(error.code)
+                                && !(error.code == wire::ErrorCode::NotFound
+                                    && !progress.authenticated)
                             {
-                                return Err(invalid(wire_category(code)));
+                                return Err(wire_failure(error));
                             }
                         }
                         if detach && applied.accepted {
@@ -1021,8 +1079,8 @@ impl Context {
                 let applied = self
                     .apply_answer(handle, answer, None, deadline, &mut false, false)
                     .await?;
-                if let Some(code) = applied.refusal {
-                    return Err(invalid(wire_category(code)));
+                if let Some(error) = &applied.refusal {
+                    return Err(wire_failure(error));
                 }
                 return Ok(0);
             }
@@ -1955,7 +2013,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(applied.terminal, Some(7));
-        assert!(applied.refusal == Some(wire::ErrorCode::Busy));
+        assert!(
+            applied
+                .refusal
+                .as_ref()
+                .is_some_and(|e| e.code == wire::ErrorCode::Busy)
+        );
         let mut progress = WaitProgress {
             authenticated: true,
             known_terminal: applied.terminal,
@@ -2342,5 +2405,263 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         std::fs::write(&path, vec![b' '; 1025]).unwrap();
         assert!(read_handle(path).is_err());
+    }
+    #[test]
+    fn remote_failures_use_fixed_local_explanations() {
+        for (code, detail, expected) in [
+            (
+                wire::ErrorCode::CommandNotFound,
+                "path_search_exhausted",
+                "daemon's PATH",
+            ),
+            (
+                wire::ErrorCode::CommandNotFound,
+                "executable_missing",
+                "not found",
+            ),
+            (
+                wire::ErrorCode::CommandNotExecutable,
+                "filesystem_permission",
+                "permissions",
+            ),
+            (
+                wire::ErrorCode::CommandNotExecutable,
+                "not_regular_file",
+                "regular file",
+            ),
+            (
+                wire::ErrorCode::CommandNotExecutable,
+                "execute_bit_missing",
+                "execute permission",
+            ),
+            (
+                wire::ErrorCode::CommandResolutionFailed,
+                "symlink_loop",
+                "symlink loop",
+            ),
+            (
+                wire::ErrorCode::CommandResolutionFailed,
+                "filesystem_io",
+                "filesystem error",
+            ),
+            (
+                wire::ErrorCode::CommandResolutionFailed,
+                "invalid_search_path",
+                "supported limits",
+            ),
+            (
+                wire::ErrorCode::CommandDenied,
+                "policy_restriction",
+                "command policy",
+            ),
+        ] {
+            let error = wire::WireError {
+                code,
+                detail: Some(detail.into()),
+            };
+            assert!(refusal_message(&error).contains(expected));
+            let hostile = wire::WireError {
+                code,
+                detail: Some("\x1b[31mnsec1private argv-secret".into()),
+            };
+            assert!(!refusal_message(&hostile).contains("nsec1private"));
+            assert!(!refusal_message(&hostile).contains("argv-secret"));
+            assert!(!refusal_message(&hostile).contains('\x1b'));
+        }
+        let error = wire::WireError {
+            code: wire::ErrorCode::CommandPolicyError,
+            detail: None,
+        };
+        assert!(refusal_message(&error).contains("could not evaluate"));
+    }
+    #[test]
+    fn launch_failures_stay_terminal_until_all_output_is_consumed() {
+        let mut s = status(fresh_id().unwrap());
+        for value in 1..=7 {
+            s.outcome = Some(wire::Outcome {
+                kind: wire::OutcomeKind::LaunchFailed,
+                value: Some(value),
+            });
+            assert_eq!(
+                terminal_exit(
+                    &s,
+                    &Cursors {
+                        stdout: 3,
+                        stderr: 2
+                    }
+                ),
+                Some(255)
+            );
+            assert_eq!(
+                terminal_exit(
+                    &s,
+                    &Cursors {
+                        stdout: 2,
+                        stderr: 2
+                    }
+                ),
+                None
+            );
+            assert!(status_problem(&s).is_none());
+            assert!(launch_failure_message(value).starts_with("command_launch_failed:"));
+        }
+        assert!(launch_failure_message(2).contains("working directory disappeared"));
+    }
+    #[tokio::test]
+    async fn resumed_submit_status_and_poll_preserve_refusal_reason() {
+        for op in [Op::Submit, Op::Status, Op::Poll] {
+            let (_dir, context, listener) = socket_context();
+            let handle = handle();
+            let request_id = fresh_id().unwrap();
+            let answer = response_result(
+                &handle,
+                request_id,
+                op,
+                Err(wire::WireError {
+                    code: wire::ErrorCode::CommandNotFound,
+                    detail: Some("path_search_exhausted".into()),
+                }),
+            );
+            let LocalResult::Answer {
+                response_sha256, ..
+            } = &answer
+            else {
+                unreachable!()
+            };
+            let mut replies = vec![
+                LocalResult::Entries {
+                    entries: vec![crate::command_local::AnswerEntry {
+                        request_id: hex::encode(request_id),
+                        op,
+                        sha256: response_sha256.clone(),
+                    }],
+                },
+                answer,
+            ];
+            if op == Op::Poll {
+                replies.push(LocalResult::Cursors {
+                    stdout: 0,
+                    stderr: 0,
+                });
+            }
+            replies.push(LocalResult::Consumed {
+                stdout: 0,
+                stderr: 0,
+                finish_request_id: None,
+                finish_confirmed: false,
+            });
+            let server = tokio::spawn(serve_replies(listener, replies));
+            let error = context
+                .wait_inner(
+                    &handle,
+                    Instant::now() + Duration::from_secs(2),
+                    false,
+                    false,
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(
+                error,
+                Error::Invalid(
+                    "command_not_found: no executable was found in the server daemon's PATH"
+                )
+            ));
+            let requests = server.await.unwrap();
+            assert!(matches!(
+                requests.last(),
+                Some(Request::CommandConsume { .. })
+            ));
+        }
+    }
+    #[tokio::test]
+    async fn launch_failure_is_consumed_and_finished_before_reporting() {
+        let (_dir, context, listener) = socket_context();
+        let handle = handle();
+        let request_id = fresh_id().unwrap();
+        let finish = fresh_id().unwrap();
+        let mut status = status(handle.invocation());
+        status.stdout.produced = 0;
+        status.stdout.retained = 0;
+        status.stderr.produced = 0;
+        status.stderr.retained = 0;
+        status.outcome = Some(wire::Outcome {
+            kind: wire::OutcomeKind::LaunchFailed,
+            value: Some(3),
+        });
+        let answer = response_result(
+            &handle,
+            request_id,
+            Op::Poll,
+            Ok(ResponseResult::Poll {
+                status,
+                stdout: wire::Chunk {
+                    bytes: vec![],
+                    next_cursor: 0,
+                },
+                stderr: wire::Chunk {
+                    bytes: vec![],
+                    next_cursor: 0,
+                },
+            }),
+        );
+        let LocalResult::Answer {
+            response_sha256, ..
+        } = &answer
+        else {
+            unreachable!()
+        };
+        let replies = vec![
+            LocalResult::Entries {
+                entries: vec![crate::command_local::AnswerEntry {
+                    request_id: hex::encode(request_id),
+                    op: Op::Poll,
+                    sha256: response_sha256.clone(),
+                }],
+            },
+            answer,
+            LocalResult::Cursors {
+                stdout: 0,
+                stderr: 0,
+            },
+            LocalResult::Consumed {
+                stdout: 0,
+                stderr: 0,
+                finish_request_id: Some(hex::encode(finish)),
+                finish_confirmed: false,
+            },
+            response_result(
+                &handle,
+                finish,
+                Op::Finish,
+                Ok(ResponseResult::Finish { finished: true }),
+            ),
+            LocalResult::Consumed {
+                stdout: 0,
+                stderr: 0,
+                finish_request_id: None,
+                finish_confirmed: true,
+            },
+        ];
+        let server = tokio::spawn(serve_replies(listener, replies));
+        assert!(matches!(
+            context
+                .wait_inner(
+                    &handle,
+                    Instant::now() + Duration::from_secs(2),
+                    false,
+                    false
+                )
+                .await,
+            Err(Error::Invalid(
+                "command_launch_failed: the executable format is invalid"
+            ))
+        ));
+        let requests = server.await.unwrap();
+        assert!(
+            matches!(&requests[4], Request::CommandResponse { request_id, .. } if request_id == &hex::encode(finish))
+        );
+        assert!(
+            matches!(&requests[5], Request::CommandConsume { request_id, .. } if request_id == &hex::encode(finish))
+        );
     }
 }

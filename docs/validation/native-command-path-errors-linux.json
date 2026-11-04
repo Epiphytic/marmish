@@ -1,0 +1,144 @@
+{
+  "schema": 1,
+  "platform": "linux-amd64",
+  "artifact": "local-debug-source",
+  "relay": "wss://relay.us.whitenoise.chat/",
+  "cases": [
+    {
+      "name": "server_detach_with_custom_path",
+      "ok": true,
+      "milliseconds": 738
+    },
+    {
+      "name": "server_custom_path_literal_bytes",
+      "ok": true,
+      "milliseconds": 4297,
+      "exit": 0,
+      "bytes": 50,
+      "sha256": "77123742dc104e4df18a565924d442d62983e0cc6a481cb45db2209213c81811"
+    },
+    {
+      "name": "standard_path_lookup",
+      "ok": true,
+      "milliseconds": 2892,
+      "exit": 0,
+      "bytes": 8,
+      "sha256": "fe6d3468cf5c74d8ec2a95b40f2e05338c37a4202f8fad692d2b64a9cf9b468a"
+    },
+    {
+      "name": "absolute_alias_lookup",
+      "ok": true,
+      "milliseconds": 3004,
+      "exit": 0,
+      "bytes": 5,
+      "sha256": "1a0a6a36ca0a3953b997ddaeb722cb31e9e421b038f6a67ef55593f21dcf92b1"
+    },
+    {
+      "name": "relative_path_lookup",
+      "ok": true,
+      "milliseconds": 2906,
+      "exit": 0,
+      "bytes": 8,
+      "sha256": "d2d9e1f13413d3e07064d629ac3341a6e1d6a5eb0895e76a3c66df19307a56f0"
+    },
+    {
+      "name": "original_argv0_preserved",
+      "ok": true,
+      "milliseconds": 2915,
+      "exit": 0,
+      "bytes": 2,
+      "sha256": "89c4ec9f6b3f1086b158d8ef03dfe8155e6f79d9e66434b8f9b3432fe8720e50"
+    },
+    {
+      "name": "missing_bare",
+      "ok": true,
+      "milliseconds": 1789,
+      "exit": 255,
+      "category": "command_not_found",
+      "reason": "path_search_exhausted"
+    },
+    {
+      "name": "missing_absolute",
+      "ok": true,
+      "milliseconds": 1798,
+      "exit": 255,
+      "category": "command_not_found",
+      "reason": "executable_missing"
+    },
+    {
+      "name": "missing_execute_bits",
+      "ok": true,
+      "milliseconds": 2116,
+      "exit": 255,
+      "category": "command_not_executable",
+      "reason": "execute_bit_missing"
+    },
+    {
+      "name": "directory_target",
+      "ok": true,
+      "milliseconds": 1808,
+      "exit": 255,
+      "category": "command_not_executable",
+      "reason": "not_regular_file"
+    },
+    {
+      "name": "loop_target",
+      "ok": true,
+      "milliseconds": 1899,
+      "exit": 255,
+      "category": "command_resolution_failed",
+      "reason": "symlink_loop"
+    },
+    {
+      "name": "default_policy_refusal",
+      "ok": true,
+      "milliseconds": 1997,
+      "exit": 255,
+      "category": "command_denied",
+      "reason": "policy_restriction"
+    },
+    {
+      "name": "per_key_policy_refusal",
+      "ok": true,
+      "milliseconds": 1806,
+      "exit": 255,
+      "category": "command_denied",
+      "reason": "policy_restriction"
+    },
+    {
+      "name": "symlink_policy_refusal",
+      "ok": true,
+      "milliseconds": 1985,
+      "exit": 255,
+      "category": "command_denied",
+      "reason": "policy_restriction"
+    },
+    {
+      "name": "invalid_executable_format",
+      "ok": true,
+      "milliseconds": 3188,
+      "exit": 255,
+      "category": "command_launch_failed",
+      "reason": "invalid_executable_format"
+    },
+    {
+      "name": "missing_interpreter",
+      "ok": true,
+      "milliseconds": 2934,
+      "exit": 255,
+      "category": "command_launch_failed",
+      "reason": "missing_executable_or_interpreter"
+    },
+    {
+      "name": "finite_server_diagnostics_exclude_argv_and_path",
+      "ok": true
+    },
+    {
+      "name": "bounded_daemons_joined_cleanup",
+      "ok": true
+    }
+  ],
+  "ok": true,
+  "milliseconds": 186507,
+  "private_state_removed": true
+}

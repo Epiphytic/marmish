@@ -1,4 +1,4 @@
-//! Private configuration normalization and pure executable-policy preflight.
+//! Private configuration normalization and execution-policy construction.
 //! Loading alone does not activate an engine or authorize command execution.
 use crate::command_wire::Account;
 use crate::transport::{RelayPolicy, RouteMode, TransportLimits};
@@ -223,7 +223,8 @@ impl CommandConfig {
             .map_err(|_| Error::Invalid("config_limits"))?;
         Ok(Some(policy))
     }
-    /// Matching only: service independently enforces the current grant and Exec-only request.
+    /// Test-only pure matching; live policy runs after dedicated-owner resolution.
+    #[cfg(test)]
     pub(crate) fn check_exec_restrictions(
         &self,
         principal: Account,

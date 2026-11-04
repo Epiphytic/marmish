@@ -168,7 +168,7 @@ fn empty_and_missing_allows_and_effective_shell_restrictions_are_distinct() {
     for path in [&b"echo"[..], &b"./echo"[..], &vec![b'/'; 4096][..]] {
         assert_eq!(
             check_command(&p, principal, &exec(path)),
-            Err(EngineError::CommandDenied)
+            Err(EngineError::InvalidRequest)
         );
     }
     p.command_policy = None;
@@ -225,7 +225,7 @@ fn adversarial_fuel_exhaustion_denies_independently_of_pattern_order() {
     let principal = p.allowed_principals[0];
     assert_eq!(
         check_command(&p, principal, &exec(candidate.as_bytes())),
-        Err(EngineError::CommandDenied)
+        Err(EngineError::InvalidPolicy)
     );
     p.command_policy
         .as_mut()
@@ -237,7 +237,7 @@ fn adversarial_fuel_exhaustion_denies_independently_of_pattern_order() {
         .reverse();
     assert_eq!(
         check_command(&p, principal, &exec(candidate.as_bytes())),
-        Err(EngineError::CommandDenied)
+        Err(EngineError::InvalidPolicy)
     );
 }
 
@@ -258,7 +258,7 @@ fn canonical_check_refuses_aliases_but_preserves_argument_bytes() {
     ] {
         assert_eq!(
             require_canonical_exec(&exec(bad.as_os_str().as_bytes())),
-            Err(EngineError::CommandDenied)
+            Err(EngineError::InvalidRequest)
         );
     }
 }
@@ -335,5 +335,26 @@ fn canonical_inspection_has_closed_results_and_keeps_existing_launch_rule() {
             command: b"true".to_vec()
         }),
         CanonicalExecOutcome::Unresolvable
+    );
+}
+
+#[test]
+fn resolved_alias_denies_and_canonical_allows_are_additive() {
+    let request = CommandRequest::ResolvedExec {
+        executable: b"/usr/bin/tool".to_vec(),
+        invoked_path: b"/bin/tool".to_vec(),
+        argv: vec![b"tool".to_vec()],
+    };
+    let mut p = policy(allow(&["/usr/bin/tool"]), vec![]);
+    assert_eq!(check_command(&p, PrincipalId([2; 32]), &request), Ok(true));
+    p.command_policy
+        .as_mut()
+        .unwrap()
+        .defaults
+        .deny_exec
+        .push("/bin/tool".into());
+    assert_eq!(
+        check_command(&p, PrincipalId([2; 32]), &request),
+        Err(EngineError::CommandDenied)
     );
 }

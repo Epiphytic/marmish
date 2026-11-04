@@ -9,6 +9,7 @@ mod launcher;
 mod model;
 mod platform;
 mod policy;
+mod resolve;
 mod spool;
 mod storage;
 mod store;
@@ -259,6 +260,29 @@ impl Engine {
         Ok(token)
     }
 
+    /// Resolve a new exec using an explicit daemon PATH, off the network actor.
+    pub fn resolve_exec(
+        &self,
+        request: &CommandRequest,
+        search_path: Option<&std::ffi::OsStr>,
+    ) -> Result<CommandRequest> {
+        resolve::resolve_exec(request, search_path, &self.account.cwd)
+    }
+    /// Validate authorization and executable restrictions without reserving a token.
+    pub fn check_execute_request(
+        &self,
+        ctx: &AuthorizedContext,
+        request: &CommandRequest,
+    ) -> Result<()> {
+        self.owner(ctx)?;
+        admission::validate_request(request, true)?;
+        let canonical = policy::check_command(&self.policy, ctx.principal, request)?;
+        if canonical || matches!(request, CommandRequest::ResolvedExec { .. }) {
+            policy::require_canonical_exec(request)?;
+        }
+        admission::validate_request(request, self.policy.allow_shell_command)
+    }
+
     pub fn submit(
         &mut self,
         ctx: &AuthorizedContext,
@@ -277,10 +301,7 @@ impl Engine {
                 ..existing
             });
         }
-        if policy::check_command(&self.policy, ctx.principal, request)? {
-            policy::require_canonical_exec(request)?;
-        }
-        admission::validate_request(request, self.policy.allow_shell_command)?;
+        self.check_execute_request(ctx, request)?;
         launcher::worker_preconditions(&self.policy.worker_executable)?;
         let now = launcher::boot_time()?;
         let expires = self.deadlines.get(&hash).ok_or(EngineError::InvalidToken)?;

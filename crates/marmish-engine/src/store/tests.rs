@@ -2085,3 +2085,74 @@ fn wrong_native_master_reopen_leaves_an_inflight_accepted_job_unchanged() {
     assert_eq!(stored.attempts, 0);
     assert!(stored.worker.is_none());
 }
+
+#[test]
+fn denial_precheck_does_not_exhaust_execute_tokens() {
+    let fixture = Fixture::new();
+    let (_directory, mut engine, owner) = fixture.into_engine();
+    let ctx = test_context(&engine, &owner);
+    engine.policy.command_policy = Some(crate::CommandPolicy {
+        version: 1,
+        defaults: crate::Restrictions {
+            allow_exec: Some(vec!["/usr/bin/true".into()]),
+            deny_exec: vec![],
+        },
+        keys: vec![],
+    });
+    let denied = CommandRequest::Exec {
+        argv: vec![b"/usr/bin/false".to_vec()],
+    };
+    for _ in 0..256 {
+        assert_eq!(
+            engine.check_execute_request(&ctx, &denied),
+            Err(EngineError::CommandDenied)
+        );
+    }
+    assert!(engine.deadlines.is_empty());
+    assert!(engine.check_execute_request(&ctx, &request()).is_ok());
+    assert!(engine.issue_execute_token(&ctx).is_ok());
+}
+
+#[test]
+fn launch_failure_is_persisted_only_from_launching() {
+    let mut fixture = Fixture::new();
+    let job = fixture.admit(221);
+    let worker = fixture.claim(job);
+    let outcome = ExitOutcome::LaunchFailed(LaunchFailure::InvalidExecutableFormat);
+    fixture.store.finish(job, &worker, outcome.clone()).unwrap();
+    assert_eq!(
+        fixture
+            .store
+            .status(&fixture.owner.owner, job)
+            .unwrap()
+            .outcome,
+        Some(outcome)
+    );
+    let other = fixture.admit(222);
+    let worker = fixture.claim(other);
+    fixture
+        .store
+        .mark_running(
+            other,
+            &worker,
+            &ProcessIdentity {
+                pid: 234,
+                start_ticks: 2,
+                ..worker.clone()
+            },
+            234,
+        )
+        .unwrap();
+    assert_eq!(
+        fixture.store.finish(
+            other,
+            &worker,
+            ExitOutcome::LaunchFailed(LaunchFailure::OtherStartupFailure)
+        ),
+        Err(EngineError::WorkerUnavailable)
+    );
+    assert_eq!(
+        decode::<ExitOutcome>(br#""NotStarted""#).unwrap(),
+        ExitOutcome::NotStarted
+    );
+}

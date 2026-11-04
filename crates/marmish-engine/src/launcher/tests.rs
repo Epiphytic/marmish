@@ -447,3 +447,67 @@ fn native_initialization_and_commit_require_the_held_root_guard() {
     assert!(!second.path().join("engine.native.json").exists());
     assert!(!second.path().join(".engine.native.pending").exists());
 }
+
+unsafe fn image_test_setup() -> std::io::Result<()> {
+    Ok(())
+}
+unsafe fn image_test_eperm() -> std::io::Result<()> {
+    Err(std::io::Error::from_raw_os_error(libc::EPERM))
+}
+unsafe fn image_test_enoent() -> std::io::Result<()> {
+    Err(std::io::Error::from_raw_os_error(libc::ENOENT))
+}
+
+#[test]
+fn direct_exec_image_uses_exact_envp_without_inheritance() {
+    let environment = vec![(
+        OsString::from("MARMISH_IMAGE_TEST"),
+        OsString::from("exact value"),
+    )];
+    let mut command = Command::new("/usr/bin/env");
+    command.stdout(Stdio::piped());
+    let image =
+        exec_image::ExecImage::new(&command, OsStr::new("custom-argv0"), &environment).unwrap();
+    unsafe {
+        install_exec_image(&mut command, image, image_test_setup);
+    }
+    let output = command.output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"MARMISH_IMAGE_TEST=exact value\n");
+}
+
+#[test]
+fn direct_exec_setup_errors_cannot_impersonate_kernel_exec_errors() {
+    for setup in [
+        image_test_eperm as unsafe fn() -> std::io::Result<()>,
+        image_test_enoent,
+    ] {
+        let mut command = Command::new("/usr/bin/true");
+        let image = exec_image::ExecImage::new(&command, OsStr::new("true"), &[]).unwrap();
+        unsafe {
+            install_exec_image(&mut command, image, setup);
+        }
+        assert_eq!(
+            command.spawn().unwrap_err().raw_os_error(),
+            Some(PRE_EXEC_FAILURE)
+        );
+    }
+}
+
+#[test]
+fn exec_image_validates_environment_before_fork() {
+    let command = Command::new("/usr/bin/true");
+    for entries in [
+        vec![("", "value")],
+        vec![("a=b", "value")],
+        vec![("a\0", "value")],
+        vec![("a", "value\0")],
+        vec![("a", "one"), ("a", "two")],
+    ] {
+        let environment = entries
+            .into_iter()
+            .map(|(key, value)| (OsString::from(key), OsString::from(value)))
+            .collect::<Vec<_>>();
+        assert!(exec_image::ExecImage::new(&command, OsStr::new("true"), &environment).is_err());
+    }
+}

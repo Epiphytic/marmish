@@ -214,12 +214,50 @@ side effects. Argv is not shell-parsed. Shell requests are denied in native v0.2
 authorized interpreters can nevertheless execute arbitrary code as the local
 Unix user. Execution policy is not a sandbox or resource-isolation promise.
 
-Executable paths must be absolute and canonical. A symlink spelling such as
-/bin on a platform where it aliases /usr/bin may be refused even when the
-canonical target is permitted. Filesystem canonical inspection occurs on the
-blocking engine owner, before token issuance, independently of pure policy
-matching. Cwd is fixed by config or the passwd home, with a minimal fixed
-execution environment and no shell, tilde or environment expansion.
+Current source resolves bare command names using the running daemon's PATH,
+with no fallback if PATH is unset. Empty or relative PATH entries and relative
+paths containing `/` use the configured command cwd (or passwd home). Symlinks
+are canonicalized before policy. PATH is captured when starting the engine;
+restart the daemon after changing it. Lookup runs on the blocking engine owner,
+never the MDK convergence actor. The original argv, including argv[0], is
+preserved for multi-call executables; a separate canonical program path is
+persisted. The trusted Marmish worker helper never uses PATH search.
+
+Allow layers match the canonical executable. Deny layers match both its canonical
+target and the selected absolute alias spelling (lexically normalized). A denied
+first executable in PATH never causes a search for a later permitted candidate.
+All policy/lookup checks precede token issuance. The original native request
+digest remains unchanged; established invocations bypass resolution on retries
+and recovery. An initial Accepted can be followed asynchronously by a refusal.
+
+The child still receives its existing minimal environment, including
+PATH=/usr/bin:/bin, rather than inheriting the daemon environment. There is no
+implicit shell, tilde or environment expansion. Launch uses an explicit execve
+image prepared before fork, so executable text without a valid header is not
+silently retried through /bin/sh. Legacy raw Exec bare names retain the fixed
+child PATH lookup; current native requests use their resolved executable.
+Filesystem checks have ordinary
+path replacement races and can block on slow filesystems; canonicalization is
+not executable-inode pinning. For bare-name search, PATH is bounded to 64KiB and 1024 entries.
+
+Missing executables, non-executable targets, resolution errors and policy errors
+have distinct finite codes/details. `command_denied` means an effective command
+policy refusal. The client explains validated reasons using fixed local text;
+debug logs contain finite stage/category/reason without argv, PATH, matched
+rules, payloads or OS error strings. Known process-start failures have persisted
+`launch_failed` outcomes, separate from cancellation-before-start and uncertain
+launch. Retrying a refused invocation returns its recorded refusal; after repair,
+submit a new command. Authorized clients can distinguish missing/type failures
+from policy denial; this limited filesystem existence disclosure is accepted.
+
+These source changes require coordinated client/server upgrades: old closed wire
+decoders cannot read new error/outcome values. New binaries read legacy engine
+requests/outcomes, but downgrading a profile after it records ResolvedExec or
+LaunchFailed is unsupported. Published 0.2.2 assets predate this increment and
+retain their canonical absolute-path requirement, including possible refusal of
+symlink spellings such as /bin. See
+[the reviewed lookup design](phases/native-command-path-errors.md) and
+[validation evidence](validation/native-command-path-errors.md).
 
 Default and every matching per-key restriction accumulate. Allows intersect,
 denies union, omitted allow adds no constraint, and an empty allow denies all.

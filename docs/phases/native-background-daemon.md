@@ -119,3 +119,38 @@ Update README and agent specification, record sanitized validation and actual
 Claude auto code review, resolve blocking findings, inspect exact staged source,
 then commit and publish both source mirrors. Keep the currently published 0.2.2
 binary behavior distinct until a separate corrective distribution is published.
+
+## macOS startup-read correction
+
+Candidate 41887894604 exposed two Darwin-specific failures in native verification.
+The production startup reader set a socket read timeout before each chunk; XNU
+rejects setsockopt once both directions are closed, even with a complete failure
+frame still buffered. The reader now uses poll and recv(MSG_DONTWAIT) under the
+same absolute deadline and drains buffered data on HUP before interpreting EOF.
+The READY/ACK trust and readiness contract is unchanged. A regression reaps the
+failed child before reading its buffered failure frame. The parent-disconnect
+fixture waits for READY before closing: this isolates ACK loss from Darwin's
+LOCAL_PEERPID requirement for a live connection during credential validation.
+
+Source rationale: XNU [socket options](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/uipc_socket.c)
+and [Unix socket disconnect/credentials](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/uipc_usrreq.c).
+Local Linux checks cannot substitute for rerunning actual macOS CI. These bounded
+corrections preserve the approved startup contract and receive integrated Claude
+code review with the command-lookup increment before publication.
+
+The same candidate's Linux AMD64 run failed the existing keychain helper
+interruption fixture. Its self-signalling child did not consume the request,
+allowing termination to race the parent's initial pipe write. The fixture now
+consumes the request before SIGTERM and includes the actual result in assertion
+diagnostics. The original log did not expose the returned error, so this race is
+a source-supported explanation rather than a confirmed error category. This is
+a separate fixture correction; production keychain behavior is unchanged, and
+the corrected test requires rerunning before validation is claimed.
+
+The later ARM installed-feature run also failed the existing timeout-helper
+fixture: 470 passed, 1 failed, and no actual result variant was printed. An
+independently approved fixture-only amendment uses separate closed executables,
+absolute utility paths, request consumption and result/elapsed diagnostics, while
+retaining the original 60ms/2s bounds. This does not establish the original
+error cause or change production credential timeouts. See the command-lookup
+[fixture review](../reviews/native-command-path-errors-fixture-design.md).

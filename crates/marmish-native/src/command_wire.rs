@@ -157,7 +157,8 @@ closed_enum!(State {
 closed_enum!(OutcomeKind {
     Code,
     Signal,
-    NotStarted
+    NotStarted,
+    LaunchFailed
 });
 closed_enum!(InputHealth {
     Open,
@@ -181,6 +182,10 @@ closed_enum!(ErrorCode {
     Unauthorized,
     RoleDisabled,
     CommandDenied,
+    CommandNotFound,
+    CommandNotExecutable,
+    CommandResolutionFailed,
+    CommandPolicyError,
     NoncanonicalExecutable,
     InvocationConflict,
     Expired,
@@ -203,6 +208,63 @@ pub(crate) struct WireError {
     pub code: ErrorCode,
     #[serde(deserialize_with = "required_nullable")]
     pub detail: Option<String>,
+}
+impl WireError {
+    pub(crate) fn diagnostic_category(&self) -> &'static str {
+        use ErrorCode::*;
+        match self.code {
+            InvalidRequest => "invalid_request",
+            Unauthorized => "unauthorized",
+            RoleDisabled => "role_disabled",
+            CommandDenied => "command_denied",
+            CommandNotFound => "command_not_found",
+            CommandNotExecutable => "command_not_executable",
+            CommandResolutionFailed => "command_resolution_failed",
+            CommandPolicyError => "command_policy_error",
+            NoncanonicalExecutable => "noncanonical_executable",
+            InvocationConflict => "invocation_conflict",
+            Expired => "expired",
+            FutureDeferred => "future_deferred",
+            FutureExcessive => "future_excessive",
+            ClockBehindFloor => "clock_behind_floor",
+            QuotaExceeded => "quota_exceeded",
+            Busy => "busy",
+            NotFound => "not_found",
+            ResultExpired => "result_expired",
+            RecoveryUncertain => "recovery_uncertain",
+            InputFailed => "input_failed",
+            StorageFailure => "storage_failure",
+            TransportDegraded => "transport_degraded",
+            AuthorityRevoked => "invalidated",
+        }
+    }
+    pub(crate) fn diagnostic_reason(&self) -> Option<&'static str> {
+        use ErrorCode::*;
+        match (self.code, self.detail.as_deref()?) {
+            (CommandNotFound, "path_search_exhausted") => Some("path_search_exhausted"),
+            (CommandNotFound, "executable_missing") => Some("executable_missing"),
+            (CommandNotExecutable, "filesystem_permission") => Some("filesystem_permission"),
+            (CommandNotExecutable, "not_regular_file") => Some("not_regular_file"),
+            (CommandNotExecutable, "execute_bit_missing") => Some("execute_bit_missing"),
+            (CommandResolutionFailed, "symlink_loop") => Some("symlink_loop"),
+            (CommandResolutionFailed, "filesystem_io") => Some("filesystem_io"),
+            (CommandResolutionFailed, "invalid_search_path") => Some("invalid_search_path"),
+            (CommandDenied, "policy_restriction") => Some("policy_restriction"),
+            _ => None,
+        }
+    }
+}
+pub(crate) fn launch_failure_reason(value: u8) -> Option<&'static str> {
+    match value {
+        1 => Some("filesystem_permission"),
+        2 => Some("missing_executable_or_interpreter"),
+        3 => Some("invalid_executable_format"),
+        4 => Some("invalid_working_directory"),
+        5 => Some("resource_unavailable"),
+        6 => Some("executable_changed"),
+        7 => Some("other_startup_failure"),
+        _ => None,
+    }
 }
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -418,7 +480,7 @@ fn validate_submit(s: &Submit) -> Result<()> {
     {
         return Err(Error::Invalid("command_bytes_limit"));
     }
-    if s.argv[0].first() != Some(&b'/') || s.argv.iter().any(|a| a.contains(&0)) {
+    if s.argv[0].is_empty() || s.argv.iter().any(|a| a.contains(&0)) {
         return Err(Error::Invalid("command_argv"));
     }
     Ok(())
@@ -535,7 +597,8 @@ fn validate_status(s: &Status) -> Result<()> {
         match (o.kind, o.value) {
             (OutcomeKind::Code, Some(_))
             | (OutcomeKind::Signal, Some(1..=127))
-            | (OutcomeKind::NotStarted, None) => {}
+            | (OutcomeKind::NotStarted, None)
+            | (OutcomeKind::LaunchFailed, Some(1..=7)) => {}
             _ => return Err(invalid()),
         }
     }
@@ -556,16 +619,21 @@ fn validate_status(s: &Status) -> Result<()> {
     Ok(())
 }
 fn validate_error(e: &WireError) -> Result<()> {
-    if let Some(detail) = &e.detail
-        && (e.code != ErrorCode::NoncanonicalExecutable
-            || !detail.starts_with('/')
-            || detail.contains('\0')
-            || serde_json::to_vec(detail).map_err(|_| invalid())?.len() > 1024)
-    {
-        return Err(invalid());
+    if let Some(detail) = &e.detail {
+        if e.code == ErrorCode::NoncanonicalExecutable {
+            if !detail.starts_with('/')
+                || detail.contains('\0')
+                || serde_json::to_vec(detail).map_err(|_| invalid())?.len() > 1024
+            {
+                return Err(invalid());
+            }
+        } else if e.diagnostic_reason().is_none() {
+            return Err(invalid());
+        }
     }
     Ok(())
 }
+
 fn result_value(r: &ResponseResult) -> Result<serde_json::Value> {
     if let Some(status) = r.status() {
         validate_status(status)?;
@@ -1076,6 +1144,66 @@ mod tests {
         }
     }
     #[test]
+    fn requests_roundtrip_bare_and_cwd_relative_executable_bytes() {
+        // Both encode and decode are exercised: real CLI submission previously
+        // failed here before the server could apply its approved PATH lookup.
+        for executable in [
+            b"printf".to_vec(),
+            b"./tool".to_vec(),
+            b"subdir/tool".to_vec(),
+            b"../tool".to_vec(),
+            vec![b't', 0xff],
+            vec![b'.', b'/', 0xff, b' ', b';'],
+        ] {
+            let argv = vec![
+                executable,
+                vec![],
+                b"quotes'\"\n* ** $(echo no);\\".to_vec(),
+                vec![0xff, 1],
+            ];
+            let s = Submit {
+                argv: argv.clone(),
+                ..submit()
+            };
+            let r = request(RequestOp::Submit(s));
+            let bytes = encode_request(&r).unwrap();
+            let decoded = decode_request(&bytes).unwrap();
+            let RequestOp::Submit(decoded_submit) = &decoded.op else {
+                unreachable!()
+            };
+            assert_eq!(decoded_submit.argv, argv);
+            assert!(decoded == r);
+            assert_eq!(encode_request(&decoded).unwrap(), bytes);
+        }
+    }
+    #[test]
+    fn request_executable_validation_still_rejects_empty_and_nul_arguments() {
+        let bytes = encode_request(&request(RequestOp::Submit(submit()))).unwrap();
+        for argv in [
+            vec![vec![]],
+            vec![b"ba\0re".to_vec()],
+            vec![b"./to\0ol".to_vec()],
+            vec![b"printf".to_vec(), b"arg\0ument".to_vec()],
+        ] {
+            let s = Submit {
+                argv: argv.clone(),
+                ..submit()
+            };
+            assert!(matches!(
+                encode_request(&request(RequestOp::Submit(s))),
+                Err(Error::Invalid("command_argv"))
+            ));
+            assert!(
+                decode_request(&mutate(&bytes, |v| {
+                    v["body"]["argv"] = serde_json::json!(
+                        argv.iter().map(|a| STANDARD.encode(a)).collect::<Vec<_>>()
+                    );
+                }))
+                .is_err()
+            );
+        }
+    }
+    #[test]
     fn combined_envelope_and_decoded_bounds() {
         let mut s = submit();
         s.argv.push(vec![b'x'; MAX_BYTES - 15]);
@@ -1087,7 +1215,6 @@ mod tests {
         ));
         for argv in [
             vec![],
-            vec![b"relative".to_vec()],
             vec![vec![]],
             vec![b"/a\0b".to_vec()],
             vec![b"/x".to_vec(); 129],
@@ -1304,6 +1431,10 @@ mod tests {
             ErrorCode::Unauthorized,
             ErrorCode::RoleDisabled,
             ErrorCode::CommandDenied,
+            ErrorCode::CommandNotFound,
+            ErrorCode::CommandNotExecutable,
+            ErrorCode::CommandResolutionFailed,
+            ErrorCode::CommandPolicyError,
             ErrorCode::NoncanonicalExecutable,
             ErrorCode::InvocationConflict,
             ErrorCode::Expired,
@@ -1766,6 +1897,7 @@ mod tests {
             (OutcomeKind::Code, r#""code""#),
             (OutcomeKind::Signal, r#""signal""#),
             (OutcomeKind::NotStarted, r#""not_started""#),
+            (OutcomeKind::LaunchFailed, r#""launch_failed""#),
         ]);
         enum_literals(&[
             (InputHealth::Open, r#""open""#),
@@ -1789,6 +1921,16 @@ mod tests {
             (ErrorCode::Unauthorized, r#""unauthorized""#),
             (ErrorCode::RoleDisabled, r#""role_disabled""#),
             (ErrorCode::CommandDenied, r#""command_denied""#),
+            (ErrorCode::CommandNotFound, r#""command_not_found""#),
+            (
+                ErrorCode::CommandNotExecutable,
+                r#""command_not_executable""#,
+            ),
+            (
+                ErrorCode::CommandResolutionFailed,
+                r#""command_resolution_failed""#,
+            ),
+            (ErrorCode::CommandPolicyError, r#""command_policy_error""#),
             (
                 ErrorCode::NoncanonicalExecutable,
                 r#""noncanonical_executable""#,
@@ -1808,5 +1950,94 @@ mod tests {
             (ErrorCode::TransportDegraded, r#""transport_degraded""#),
             (ErrorCode::AuthorityRevoked, r#""authority_revoked""#),
         ]);
+    }
+    #[test]
+    fn lookup_error_reasons_are_closed_per_code() {
+        let pairs = [
+            (ErrorCode::CommandNotFound, "path_search_exhausted"),
+            (ErrorCode::CommandNotFound, "executable_missing"),
+            (ErrorCode::CommandNotExecutable, "filesystem_permission"),
+            (ErrorCode::CommandNotExecutable, "not_regular_file"),
+            (ErrorCode::CommandNotExecutable, "execute_bit_missing"),
+            (ErrorCode::CommandResolutionFailed, "symlink_loop"),
+            (ErrorCode::CommandResolutionFailed, "filesystem_io"),
+            (ErrorCode::CommandResolutionFailed, "invalid_search_path"),
+            (ErrorCode::CommandDenied, "policy_restriction"),
+        ];
+        for (code, reason) in pairs {
+            let mut r = response(ResponseResult::Status(status()));
+            r.result = Err(WireError {
+                code,
+                detail: Some(reason.into()),
+            });
+            response_roundtrip(r.clone());
+            let bytes = encode_response(&r).unwrap();
+            for invalid in [
+                "unknown",
+                "filesystem_io\n",
+                "nsec1private;argv-secret",
+                "\x1b[31m",
+            ] {
+                assert!(
+                    decode_response(&mutate(&bytes, |v| {
+                        v["body"]["error"]["detail"] = invalid.into();
+                    }))
+                    .is_err()
+                );
+            }
+            for (other_code, other_reason) in pairs {
+                r.result = Err(WireError {
+                    code: other_code,
+                    detail: Some(reason.into()),
+                });
+                assert_eq!(
+                    encode_response(&r).is_ok(),
+                    other_code == code,
+                    "reason {reason} must belong only to its code, compared with {other_reason}"
+                );
+            }
+        }
+        let mut r = response(ResponseResult::Status(status()));
+        r.result = Err(WireError {
+            code: ErrorCode::CommandPolicyError,
+            detail: Some("policy_restriction".into()),
+        });
+        assert!(encode_response(&r).is_err());
+    }
+    #[test]
+    fn launch_failed_outcomes_have_fixed_finite_values() {
+        let reasons = [
+            "filesystem_permission",
+            "missing_executable_or_interpreter",
+            "invalid_executable_format",
+            "invalid_working_directory",
+            "resource_unavailable",
+            "executable_changed",
+            "other_startup_failure",
+        ];
+        for value in 0..=u8::MAX {
+            let mut s = status();
+            s.outcome = Some(Outcome {
+                kind: OutcomeKind::LaunchFailed,
+                value: Some(value),
+            });
+            let r = response(ResponseResult::Status(s));
+            assert_eq!(encode_response(&r).is_ok(), (1..=7).contains(&value));
+            if (1..=7).contains(&value) {
+                assert_eq!(
+                    launch_failure_reason(value),
+                    Some(reasons[usize::from(value - 1)])
+                );
+                response_roundtrip(r);
+            } else {
+                assert!(launch_failure_reason(value).is_none());
+            }
+        }
+        let mut s = status();
+        s.outcome = Some(Outcome {
+            kind: OutcomeKind::LaunchFailed,
+            value: None,
+        });
+        assert!(encode_response(&response(ResponseResult::Status(s))).is_err());
     }
 }

@@ -745,7 +745,8 @@ impl Store {
             return Ok(existing);
         }
         let canonical_exec_required =
-            crate::policy::check_command(&self.config.policy, owner.owner.principal, request)?;
+            crate::policy::check_command(&self.config.policy, owner.owner.principal, request)?
+                || matches!(request, CommandRequest::ResolvedExec { .. });
         validate_request(request, self.config.policy.allow_shell_command)?;
         fault_point(&self.root, job, FaultPoint::BeforeAccepted);
         let result=self.transaction(|tx|{
@@ -931,7 +932,12 @@ impl Store {
             let request = j.request.take().ok_or(EngineError::StorageFailure)?;
             // Accepted work retains its original authority across policy changes.
             validate_request(&request, true)?;
-            if j.canonical_exec_required && !matches!(request, CommandRequest::Exec { .. }) {
+            if j.canonical_exec_required
+                && !matches!(
+                    request,
+                    CommandRequest::Exec { .. } | CommandRequest::ResolvedExec { .. }
+                )
+            {
                 return Err(EngineError::StorageFailure);
             }
             j.state = InvocationState::Launching;
@@ -983,9 +989,8 @@ impl Store {
         fault_point(&self.root, id, FaultPoint::BeforeExitCommit);
         self.mutate(id, |j, tx| {
             j.verify_worker(worker)?;
-            if !(j.state == InvocationState::Running && !matches!(outcome, ExitOutcome::NotStarted)
-                || j.state == InvocationState::Launching
-                    && matches!(outcome, ExitOutcome::NotStarted))
+            if !(j.state == InvocationState::Running && !outcome.is_startup_failure()
+                || j.state == InvocationState::Launching && outcome.is_startup_failure())
             {
                 return Err(EngineError::WorkerUnavailable);
             }

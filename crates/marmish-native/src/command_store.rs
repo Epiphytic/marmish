@@ -2498,6 +2498,7 @@ impl Journal {
         }
         tx.execute("UPDATE command_invocations SET operation=NULL,operation_revision=NULL,operation_kind=NULL,operation_request=NULL WHERE k=?1",[key_bytes(&completion.key)]).map_err(db)?;
         tx.commit().map_err(db)?;
+        report_committed_diagnostics(projection.decision, &updated);
         Ok(CommitAck {
             operation: completion.operation,
             key: completion.key.clone(),
@@ -2508,6 +2509,27 @@ impl Journal {
         })
     }
 }
+fn report_committed_diagnostics(decision: CommittedDecision, record: &InvocationRecord) {
+    // Report only committed decisions, with static code-specific reasons.
+    if decision == CommittedDecision::DefinitivelyRefused
+        && let Some(error) = &record.refusal
+    {
+        crate::diagnostics::event("command_refusal", error.diagnostic_category());
+        if let Some(reason) = error.diagnostic_reason() {
+            crate::diagnostics::event("command_refusal_reason", reason);
+        }
+    }
+    if let Some(outcome) = record
+        .status
+        .as_ref()
+        .and_then(|status| status.outcome.as_ref())
+        && outcome.kind == wire::OutcomeKind::LaunchFailed
+        && let Some(reason) = outcome.value.and_then(wire::launch_failure_reason)
+    {
+        crate::diagnostics::event("command_launch_failed", reason);
+    }
+}
+
 fn advance_feeder(
     record: &mut InvocationRecord,
     operation: &EngineOperation,
@@ -3682,6 +3704,8 @@ pub(crate) fn project_completion(
         EngineObservation::Refused(error) => {
             if !record.engine_known {
                 record.refusal = Some(error.clone());
+                record.admission = Admission::Accepted;
+                record.uncertain = false;
                 record.feeder = FeederState::Failed;
                 CommittedDecision::DefinitivelyRefused
             } else {
@@ -5714,6 +5738,95 @@ mod tests {
             spool_bytes: 65536,
             max_commands: None,
             max_uptime: None,
+        }
+    }
+    #[test]
+    fn executable_refusals_reopen_replay_and_release_active_budget() {
+        for (code, detail) in [
+            (ErrorCode::CommandNotFound, Some("path_search_exhausted")),
+            (ErrorCode::CommandNotExecutable, Some("execute_bit_missing")),
+            (ErrorCode::CommandResolutionFailed, Some("symlink_loop")),
+            (ErrorCode::CommandDenied, Some("policy_restriction")),
+            (ErrorCode::CommandPolicyError, None),
+        ] {
+            let (tmp, mut journal) = setup();
+            let settings = limits();
+            journal.command_configure(&settings).unwrap();
+            let (_, key) = admitted(&mut journal, 1);
+            let mut original = journal.command_get(&key).unwrap().unwrap();
+            // A previous unsuccessful observation may have retained uncertainty.
+            original.uncertain = true;
+            save_record(&journal.conn, &original).unwrap();
+            let dispatch = EngineOperation::Dispatch {
+                submit: original.payload().unwrap().clone(),
+            };
+            let operation = journal
+                .command_begin_operation(&key, original.revision, dispatch.clone())
+                .unwrap();
+            let dispatching = journal.command_get(&key).unwrap().unwrap();
+            assert!(dispatching.admission == Admission::Dispatching);
+            assert!(dispatching.uncertain);
+            assert!(
+                journal
+                    .command_cleanup_counts()
+                    .unwrap()
+                    .observation_pending
+            );
+            let refusal = WireError {
+                code,
+                detail: detail.map(str::to_owned),
+            };
+            let ack = journal
+                .command_commit_completion(
+                    &EngineCompletion {
+                        operation: operation.id,
+                        key: key.clone(),
+                        revision: operation.revision,
+                        result: EngineObservation::Refused(refusal.clone()),
+                    },
+                    &[],
+                )
+                .unwrap();
+            assert!(ack.decision == CommittedDecision::DefinitivelyRefused);
+            drop(journal);
+            let mut journal = Journal::open(
+                &tmp.path().join("journal.db"),
+                &[7; 32],
+                &hex::encode([2; 32]),
+            )
+            .unwrap();
+            journal.command_init().unwrap();
+            let row = journal.command_get(&key).unwrap().unwrap();
+            assert!(row.refusal == Some(refusal));
+            assert!(!row.engine_known && !row.active() && !row.uncertain);
+            assert!(row.admission == Admission::Accepted);
+            let counts = journal.command_cleanup_counts().unwrap();
+            assert_eq!(counts.active, 0);
+            assert_eq!(counts.uncertain, 0);
+            assert!(!counts.observation_pending);
+            assert!(journal.command_recovery().unwrap().is_empty());
+            assert!(journal.command_operation(operation.id).unwrap().is_none());
+            assert!(matches!(
+                journal.command_begin_operation(&key, row.revision, dispatch),
+                Err(Error::Invalid("command_dispatch_barrier"))
+            ));
+            assert_eq!(row.digest, original.digest);
+            assert!(
+                journal
+                    .command_find_request(&row.owner, &submit(1))
+                    .unwrap()
+                    .is_some()
+            );
+            assert!(
+                journal
+                    .command_get(&key)
+                    .unwrap()
+                    .unwrap()
+                    .refusal
+                    .is_some()
+            );
+            // Per-principal active limit is one: the durable refusal releases it.
+            admitted(&mut journal, 2);
         }
     }
     #[test]

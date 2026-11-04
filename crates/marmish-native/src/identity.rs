@@ -1284,20 +1284,40 @@ mod tests {
     #[test]
     fn native_helper_timeout_and_oversize_are_bounded() {
         let f = Fixture::new();
-        let helper = f.base.path().join("fake");
-        write_new(&helper, b"#!/bin/sh\nexec sleep 10\n").unwrap();
-        fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
+        let timeout_helper = f.base.path().join("timeout-helper");
+        // write_new closes each file before that helper is spawned.
+        write_new(
+            &timeout_helper,
+            b"#!/bin/sh\n/bin/cat >/dev/null\nexec /bin/sleep 10\n",
+        )
+        .unwrap();
+        fs::set_permissions(&timeout_helper, fs::Permissions::from_mode(0o700)).unwrap();
         let start = Instant::now();
-        assert!(matches!(
-            helper_exchange(&helper, b"{}", start + Duration::from_millis(60)),
-            Err(Error::Timeout)
-        ));
-        assert!(start.elapsed() < Duration::from_secs(2));
-        fs::write(&helper, b"#!/bin/sh\nexec head -c 9000 /dev/zero\n").unwrap();
-        assert!(matches!(
-            helper_exchange(&helper, b"{}", Instant::now() + Duration::from_secs(2)),
-            Err(Error::Identity("helper_oversize"))
-        ));
+        let result = helper_exchange(&timeout_helper, b"{}", start + Duration::from_millis(60));
+        assert!(
+            matches!(result, Err(Error::Timeout)),
+            "{result:?} after {:?}",
+            start.elapsed()
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "{result:?} after {:?}",
+            start.elapsed()
+        );
+        let oversize_helper = f.base.path().join("oversize-helper");
+        write_new(
+            &oversize_helper,
+            b"#!/bin/sh\n/bin/cat >/dev/null\nexec /usr/bin/head -c 9000 /dev/zero\n",
+        )
+        .unwrap();
+        fs::set_permissions(&oversize_helper, fs::Permissions::from_mode(0o700)).unwrap();
+        let start = Instant::now();
+        let result = helper_exchange(&oversize_helper, b"{}", start + Duration::from_secs(2));
+        assert!(
+            matches!(result, Err(Error::Identity("helper_oversize"))),
+            "{result:?} after {:?}",
+            start.elapsed()
+        );
     }
     #[test]
     fn named_profiles_have_independent_keys_roots_and_slots() {
@@ -1749,21 +1769,23 @@ i=0; while [ $i -lt 9000 ]; do printf x; i=$((i + 1)); done",
             ),
             Err(Error::Identity("helper_oversize"))
         ));
-        helper_fixture(scripts.base.path(), "kill -TERM $$");
-        assert!(matches!(
-            controlled_helper_exchange(
-                &helper,
-                b"{}",
-                Instant::now() + Duration::from_secs(2),
-                HelperKind::Authorize,
-                None
-            )
-            .and_then(|(bytes, status)| authorization_response(
-                &bytes,
-                status,
-                HelperKind::Authorize
-            )),
-            Err(Error::Identity("keychain_authorize_interrupted"))
-        ));
+        // Consume the request before exiting so this tests signal reporting,
+        // rather than racing the parent's initial write with a closed pipe.
+        helper_fixture(scripts.base.path(), "IFS= read -r request\nkill -TERM $$");
+        let result = controlled_helper_exchange(
+            &helper,
+            b"{}",
+            Instant::now() + Duration::from_secs(2),
+            HelperKind::Authorize,
+            None,
+        )
+        .and_then(|(bytes, status)| authorization_response(&bytes, status, HelperKind::Authorize));
+        assert!(
+            matches!(
+                result,
+                Err(Error::Identity("keychain_authorize_interrupted"))
+            ),
+            "{result:?}"
+        );
     }
 }

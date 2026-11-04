@@ -3,7 +3,7 @@ use crate::{Error, Result, identity::ProfileLease};
 use std::{
     ffi::OsString,
     fs::{File, OpenOptions},
-    io::{Read, Write},
+    io::Write,
     os::{
         fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
         unix::{
@@ -304,7 +304,6 @@ fn inherit_channel(source: RawFd) -> std::io::Result<()> {
 
 fn await_startup(mut child: OwnedChild, mut channel: UnixStream, budget: Duration) -> Result<()> {
     let end = Instant::now() + budget;
-    channel.set_write_timeout(Some(ACK_TIMEOUT))?;
     let mut tag = [0];
     if read_before(&mut channel, &mut tag, end).is_err() {
         let early = child
@@ -381,13 +380,52 @@ fn read_before(stream: &mut UnixStream, mut bytes: &mut [u8], end: Instant) -> s
             .checked_duration_since(Instant::now())
             .filter(|d| !d.is_zero())
             .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::TimedOut))?;
-        stream.set_read_timeout(Some(remaining))?;
-        match stream.read(bytes) {
-            Ok(0) => return Err(std::io::ErrorKind::UnexpectedEof.into()),
-            Ok(count) => bytes = &mut bytes[count..],
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error),
+        // Darwin rejects setsockopt after the peer has closed even when valid
+        // startup bytes remain buffered. Poll without changing socket options,
+        // then drain with a nonblocking recv under the original deadline.
+        let mut descriptor = libc::pollfd {
+            fd: stream.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let timeout = remaining.as_millis().clamp(1, i32::MAX as u128) as i32;
+        // SAFETY: one live descriptor and its writable pollfd; finite timeout.
+        let ready = unsafe { libc::poll(&mut descriptor, 1, timeout) };
+        if ready < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
         }
+        if ready == 0 {
+            continue;
+        }
+        // POLLHUP may accompany unread bytes, so recv must run before EOF is
+        // inferred. MSG_DONTWAIT also makes spurious readiness harmless.
+        // SAFETY: the mutable slice covers exactly the supplied byte length.
+        let count = unsafe {
+            libc::recv(
+                stream.as_raw_fd(),
+                bytes.as_mut_ptr().cast(),
+                bytes.len(),
+                libc::MSG_DONTWAIT,
+            )
+        };
+        if count == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        if count < 0 {
+            let error = std::io::Error::last_os_error();
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+            ) {
+                continue;
+            }
+            return Err(error);
+        }
+        bytes = &mut bytes[count as usize..];
     }
     Ok(())
 }
@@ -661,10 +699,25 @@ mod tests {
     fn finite_failure_waits_for_normal_child_exit() {
         let root = private_root();
         let (child, channel) = spawn_fixture("child_error", root.path());
-        let message = await_startup(child, channel, Duration::from_secs(5))
-            .unwrap_err()
-            .to_string();
-        assert_eq!(message, "identity: profile_in_use");
+        let error = await_startup(child, channel, Duration::from_secs(5)).unwrap_err();
+        assert_eq!(error.to_string(), "identity: profile_in_use", "{error:?}");
+        assert!(
+            fs::read_to_string(root.path().join("test/daemon.log"))
+                .unwrap()
+                .contains("failure-normal-exit")
+        );
+    }
+
+    #[test]
+    fn buffered_failure_is_preserved_after_child_exit() {
+        let root = private_root();
+        let (mut child, channel) = spawn_fixture("child_error", root.path());
+        // Force the peer to close before the parent reads any frame byte. On
+        // Darwin, setting socket timeouts now fails with EINVAL; buffered
+        // failure bytes must nevertheless retain the specific startup error.
+        child.wait_after_failure().unwrap();
+        let error = await_startup(child, channel, Duration::from_secs(5)).unwrap_err();
+        assert_eq!(error.to_string(), "identity: profile_in_use", "{error:?}");
         assert!(
             fs::read_to_string(root.path().join("test/daemon.log"))
                 .unwrap()
@@ -699,7 +752,18 @@ mod tests {
     #[test]
     fn child_requires_parent_ack_and_rejects_inapplicable_context() {
         let root = private_root();
-        let (mut child, channel) = spawn_fixture("child_parent_gone", root.path());
+        let (mut child, mut channel) = spawn_fixture("child_parent_gone", root.path());
+        // Let the child validate the inherited channel before closing the peer.
+        // Darwin's LOCAL_PEERPID requires a live connection. Reading READY
+        // without sending ACK tests the intended acknowledgement failure.
+        let mut ready = [0];
+        read_before(
+            &mut channel,
+            &mut ready,
+            Instant::now() + Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(ready, *b"R");
         drop(channel);
         child.wait_after_failure().unwrap();
         let log = fs::read_to_string(root.path().join("test/daemon.log")).unwrap();

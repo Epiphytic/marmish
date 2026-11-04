@@ -106,7 +106,7 @@ pub(crate) fn sha256(bytes: &[u8]) -> [u8; 32] {
 
 pub(crate) fn validate_request(request: &CommandRequest, allow_shell: bool) -> Result<()> {
     match request {
-        CommandRequest::Exec { argv } => {
+        CommandRequest::Exec { argv } | CommandRequest::ResolvedExec { argv, .. } => {
             if argv.is_empty() || argv.len() > 256 || argv[0].is_empty() || argv[0].len() > 4096 {
                 return Err(EngineError::InvalidRequest);
             }
@@ -127,6 +127,23 @@ pub(crate) fn validate_request(request: &CommandRequest, allow_shell: bool) -> R
             if !allow_shell || command.len() > 64 * 1024 || command.contains(&0) {
                 return Err(EngineError::InvalidRequest);
             }
+        }
+    }
+    if let CommandRequest::ResolvedExec {
+        executable,
+        invoked_path,
+        ..
+    } = request
+    {
+        validate_resolved_paths(executable, invoked_path)?;
+    }
+    Ok(())
+}
+
+fn validate_resolved_paths(executable: &[u8], invoked_path: &[u8]) -> Result<()> {
+    for path in [executable, invoked_path] {
+        if path.is_empty() || path.len() > 4095 || path[0] != b'/' || path.contains(&0) {
+            return Err(EngineError::InvalidRequest);
         }
     }
     Ok(())

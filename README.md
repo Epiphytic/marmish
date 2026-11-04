@@ -127,11 +127,35 @@ relays, use `marmish -u SERVER_NPUB -- /absolute/program` to select the full
 configured set. Repeated `--relay` URLs may explicitly restate that exact set.
 
 The npub is the remote identity, not a Unix username; the host is a relay, not
-the remote machine. Always include `--` before an absolute executable path.
+the remote machine. Always include `--` before the command.
 Arguments are sent as separate literal arguments. Shell expansion and pipelines
 are not implicitly evaluated remotely. Pass `--stdin` to send up to 16 KiB of
 immutable input from stdin, or `--stdin-none` to send none. By default, piped
 input is read and terminal input is not.
+
+Current source also accepts short command names, for example
+`marmish SERVER_NPUB@relay.example -- printf '%s\n' hello`. The server resolves
+these using the PATH inherited by its running daemon. Restart `marmishd` after
+changing that PATH. Absolute paths, cwd-relative paths and executable symlinks
+also work; command policy checks the resolved target, with deny rules also
+checking its selected alias path. Remaining arguments are passed literally.
+Remote children retain their minimal environment (PATH=/usr/bin:/bin).
+
+A missing command reports `command_not_found`; filesystem permissions or file
+type failures report `command_not_executable`; lookup and policy evaluation have
+separate errors. `command_denied` means the server's execution policy refused it.
+`command_launch_failed` identifies a known process-start failure and explains its
+finite reason. Executable text needs a valid interpreter header; it is not
+implicitly retried through a shell. Use `--debug` on both ends for stage/reason diagnostics; background
+server diagnostics go to its private `daemon.log`. Repairing a refused command
+requires a new invocation, since retries preserve recorded results.
+
+These lookup/diagnostic changes are in source and require both peers to upgrade;
+published 0.2.2 binaries predate them and still require canonical absolute
+executable paths; symlink spellings such as `/bin` may be refused there.
+Do not downgrade a profile after executing
+commands with the new source. See [the design](docs/phases/native-command-path-errors.md)
+for PATH limits, recovery behavior and accepted filesystem-check limitations.
 
 Aliases are configured in the named profile's `config.json`, while its daemon is
 stopped. For example, add an entry to its existing `aliases` object:

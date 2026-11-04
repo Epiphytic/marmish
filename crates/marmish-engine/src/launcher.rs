@@ -68,7 +68,7 @@ pub(crate) struct SpawnedChild {
 }
 #[derive(Debug)]
 pub(crate) enum ChildSpawnError {
-    NotStarted,
+    NotStarted(LaunchFailure),
     Uncertain,
 }
 
@@ -1067,12 +1067,94 @@ fn discard_spawned_child(child: &mut Child, pid: i32) {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
-pub(crate) fn spawn_child(spec: &ChildSpec) -> std::result::Result<SpawnedChild, ChildSpawnError> {
-    if spec.canonical_exec_required {
-        crate::policy::require_canonical_exec(&spec.request)
-            .map_err(|_| ChildSpawnError::NotStarted)?;
+mod exec_image;
+
+// Private non-kernel errno transmitted through Command's pre_exec error pipe.
+const PRE_EXEC_FAILURE: i32 = 0x4d41;
+fn legacy_exec_program(
+    spec: &ChildSpec,
+    argv: &[Vec<u8>],
+) -> std::result::Result<Vec<u8>, ChildSpawnError> {
+    if argv[0].contains(&b'/') {
+        return Ok(spec
+            .cwd
+            .join(Path::new(OsStr::from_bytes(&argv[0])))
+            .as_os_str()
+            .as_bytes()
+            .to_vec());
     }
-    let account = local_account(Some(&spec.cwd)).map_err(|_| ChildSpawnError::NotStarted)?;
+    let path = spec
+        .environment
+        .iter()
+        .find(|(key, _)| key == "PATH")
+        .map(|(_, value)| value.as_os_str());
+    let resolved =
+        crate::resolve::resolve_exec(&spec.request, path, &spec.cwd).map_err(|error| {
+            let reason = match error {
+                EngineError::CommandNotFound(_) => LaunchFailure::MissingExecutableOrInterpreter,
+                EngineError::CommandNotExecutable(_) => LaunchFailure::FilesystemPermission,
+                _ => LaunchFailure::OtherStartupFailure,
+            };
+            ChildSpawnError::NotStarted(reason)
+        })?;
+    let CommandRequest::ResolvedExec { executable, .. } = resolved else {
+        return Err(ChildSpawnError::NotStarted(
+            LaunchFailure::OtherStartupFailure,
+        ));
+    };
+    Ok(executable)
+}
+
+unsafe fn install_exec_image(
+    command: &mut Command,
+    image: exec_image::ExecImage,
+    setup: unsafe fn() -> std::io::Result<()>,
+) {
+    unsafe {
+        command.pre_exec(move || {
+            setup().map_err(|_| std::io::Error::from_raw_os_error(PRE_EXEC_FAILURE))?;
+            Err(image.execve())
+        });
+    }
+}
+
+fn prepare_child_command(
+    spec: &ChildSpec,
+    account: &AccountSpec,
+) -> std::result::Result<Command, ChildSpawnError> {
+    Ok(match &spec.request {
+        CommandRequest::Exec { argv } | CommandRequest::ResolvedExec { argv, .. } => {
+            let executable = match &spec.request {
+                CommandRequest::ResolvedExec { executable, .. } => executable.clone(),
+                _ => legacy_exec_program(spec, argv)?,
+            };
+            let mut command = Command::new(OsStr::from_bytes(&executable));
+            command.arg0(OsStr::from_bytes(&argv[0]));
+            command.args(argv[1..].iter().map(|a| OsStr::from_bytes(a)));
+            command
+        }
+        CommandRequest::Shell { command } => {
+            let mut shell = Command::new(&account.shell);
+            shell.arg("-c").arg(OsStr::from_bytes(command));
+            shell
+        }
+    })
+}
+
+pub(crate) fn spawn_child(spec: &ChildSpec) -> std::result::Result<SpawnedChild, ChildSpawnError> {
+    crate::admission::validate_request(&spec.request, true)
+        .map_err(|_| ChildSpawnError::NotStarted(LaunchFailure::OtherStartupFailure))?;
+    if !spec.cwd.is_dir() {
+        return Err(ChildSpawnError::NotStarted(
+            LaunchFailure::InvalidWorkingDirectory,
+        ));
+    }
+    if spec.canonical_exec_required || matches!(spec.request, CommandRequest::ResolvedExec { .. }) {
+        crate::policy::require_canonical_exec(&spec.request)
+            .map_err(|_| ChildSpawnError::NotStarted(LaunchFailure::ExecutableChanged))?;
+    }
+    let account = local_account(Some(&spec.cwd))
+        .map_err(|_| ChildSpawnError::NotStarted(LaunchFailure::OtherStartupFailure))?;
     if account.uid != spec.account.uid
         || account.gid != spec.account.gid
         || account.user != spec.account.user
@@ -1082,33 +1164,13 @@ pub(crate) fn spawn_child(spec: &ChildSpec) -> std::result::Result<SpawnedChild,
         || spec.umask != 0o077
         || spec.environment != child_environment(&account)
     {
-        return Err(ChildSpawnError::NotStarted);
+        return Err(ChildSpawnError::NotStarted(
+            LaunchFailure::OtherStartupFailure,
+        ));
     }
-    platform::prepare_spawn().map_err(|_| ChildSpawnError::NotStarted)?;
-    let mut command = match &spec.request {
-        CommandRequest::Exec { argv } => {
-            if argv.is_empty()
-                || argv.len() > 256
-                || argv[0].is_empty()
-                || argv[0].len() > 4096
-                || argv.iter().any(|a| a.contains(&0))
-                || argv.iter().map(|a| a.len() + 1).sum::<usize>() > 65536
-            {
-                return Err(ChildSpawnError::NotStarted);
-            }
-            let mut command = Command::new(OsStr::from_bytes(&argv[0]));
-            command.args(argv[1..].iter().map(|a| OsStr::from_bytes(a)));
-            command
-        }
-        CommandRequest::Shell { command } => {
-            if command.len() > 65536 || command.contains(&0) {
-                return Err(ChildSpawnError::NotStarted);
-            }
-            let mut shell = Command::new(&account.shell);
-            shell.arg("-c").arg(OsStr::from_bytes(command));
-            shell
-        }
-    };
+    platform::prepare_spawn()
+        .map_err(|_| ChildSpawnError::NotStarted(LaunchFailure::OtherStartupFailure))?;
+    let mut command = prepare_child_command(spec, &account)?;
     command
         .env_clear()
         .envs(spec.environment.iter().cloned())
@@ -1116,10 +1178,33 @@ pub(crate) fn spawn_child(spec: &ChildSpec) -> std::result::Result<SpawnedChild,
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    let argv0 = match &spec.request {
+        CommandRequest::Exec { argv } | CommandRequest::ResolvedExec { argv, .. } => {
+            OsStr::from_bytes(&argv[0])
+        }
+        CommandRequest::Shell { .. } => account.shell.as_os_str(),
+    };
+    let image = exec_image::ExecImage::new(&command, argv0, &spec.environment)
+        .map_err(|_| ChildSpawnError::NotStarted(LaunchFailure::OtherStartupFailure))?;
+    // SAFETY: all image storage is immutable and prepared before fork. The
+    // callback performs only the platform's syscall setup and direct execve.
     unsafe {
-        command.pre_exec(|| platform::pre_exec());
+        install_exec_image(&mut command, image, platform::pre_exec);
     }
-    let mut child = command.spawn().map_err(|_| ChildSpawnError::NotStarted)?;
+    let mut child = command.spawn().map_err(|error| {
+        let reason = match error.raw_os_error() {
+            Some(libc::EACCES | libc::EPERM) => LaunchFailure::FilesystemPermission,
+            Some(libc::ENOENT | libc::ENOTDIR) => LaunchFailure::MissingExecutableOrInterpreter,
+            Some(libc::ENOEXEC) => LaunchFailure::InvalidExecutableFormat,
+            #[cfg(target_os = "macos")]
+            Some(libc::EBADARCH) => LaunchFailure::InvalidExecutableFormat,
+            Some(libc::EAGAIN | libc::ENOMEM | libc::EMFILE | libc::ENFILE | libc::ETXTBSY) => {
+                LaunchFailure::ResourceUnavailable
+            }
+            _ => LaunchFailure::OtherStartupFailure,
+        };
+        ChildSpawnError::NotStarted(reason)
+    })?;
     let pid = child.id() as i32;
     #[cfg(target_os = "linux")]
     let captured = process_identity(pid);

@@ -43,6 +43,19 @@ remains: detailed design and independent Claude approval, bounded agent
 implementation, appropriate tests, actual Claude auto code review, then reviewed
 commit/push to GitHub and Radicle with sanitized evidence and Beads handoff.
 
+## Native command lookup and diagnostics increment
+
+The [command lookup design](phases/native-command-path-errors.md), Beads
+`marmish-8r4`, follows the reviewed daemon lifecycle change. Its boundaries are
+engine resolution/launch outcomes, durable native integration and client
+explanations, then actual transport and platform qualification. The server
+resolves short command names using its own daemon PATH before enforcing every
+additive executable restriction against the canonical target. Missing commands,
+filesystem execution failures, policy refusal and process-start failures have
+separate finite explanations. Existing invocation recovery and original-request
+identity remain stable. Claude design/code reviews and dual-mirror publication
+remain the exit gates; release assets are a separate publication step.
+
 ## Historical v0.1 plans and evidence
 
 Everything below is historical v0.1 planning/evidence. Its installer, interpreter,

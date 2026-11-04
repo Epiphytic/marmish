@@ -540,10 +540,143 @@ fn canonical_launch_marker_checks_actual_path_again_before_spawning() {
     std::os::unix::fs::symlink("/usr/bin/true", &canonical).unwrap();
     assert!(matches!(
         launcher::spawn_child(&spec),
-        Err(ChildSpawnError::NotStarted)
+        Err(ChildSpawnError::NotStarted(
+            LaunchFailure::ExecutableChanged
+        ))
     ));
     std::fs::remove_file(&canonical).unwrap();
     std::fs::copy("/usr/bin/true", &canonical).unwrap();
     let mut spawned = launcher::spawn_child(&spec).unwrap();
     assert_eq!(spawned.child.wait().unwrap().code(), Some(0));
+}
+
+#[test]
+fn resolved_program_preserves_original_argv0() {
+    use std::io::Read;
+    let directory = tempfile::tempdir().unwrap();
+    let alias = directory.path().join("applet");
+    std::os::unix::fs::symlink("/bin/sh", &alias).unwrap();
+    let request = crate::resolve::resolve_exec(
+        &CommandRequest::Exec {
+            argv: vec![
+                b"applet".to_vec(),
+                b"-c".to_vec(),
+                b"printf '%s' \"$0\"".to_vec(),
+            ],
+        },
+        Some(directory.path().as_os_str()),
+        directory.path(),
+    )
+    .unwrap();
+    let account = launcher::local_account(Some(directory.path())).unwrap();
+    let spec = ChildSpec {
+        environment: launcher::child_environment(&account),
+        cwd: account.cwd.clone(),
+        account,
+        request,
+        umask: 0o077,
+        canonical_exec_required: true,
+    };
+    let mut spawned = launcher::spawn_child(&spec).unwrap();
+    let mut output = Vec::new();
+    spawned.stdout.read_to_end(&mut output).unwrap();
+    assert_eq!(spawned.child.wait().unwrap().code(), Some(0));
+    assert_eq!(output, b"applet");
+}
+
+#[test]
+fn definite_launch_failures_have_finite_reasons() {
+    use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};
+    let directory = tempfile::tempdir().unwrap();
+    for (contents, expected) in [
+        (
+            &b"invalid executable"[..],
+            LaunchFailure::InvalidExecutableFormat,
+        ),
+        (
+            &b"#!/marmish-nonexistent-interpreter\n"[..],
+            LaunchFailure::MissingExecutableOrInterpreter,
+        ),
+    ] {
+        let path = directory.path().join("program");
+        std::fs::write(&path, contents).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let account = launcher::local_account(Some(directory.path())).unwrap();
+        let canonical = std::fs::canonicalize(path).unwrap();
+        let spec = ChildSpec {
+            environment: launcher::child_environment(&account),
+            cwd: account.cwd.clone(),
+            account,
+            request: CommandRequest::ResolvedExec {
+                executable: canonical.as_os_str().as_bytes().to_vec(),
+                invoked_path: canonical.as_os_str().as_bytes().to_vec(),
+                argv: vec![b"program".to_vec()],
+            },
+            umask: 0o077,
+            canonical_exec_required: false,
+        };
+        assert!(
+            matches!(launcher::spawn_child(&spec), Err(ChildSpawnError::NotStarted(reason)) if reason == expected)
+        );
+    }
+}
+
+#[test]
+fn legacy_bare_exec_searches_child_path_without_using_cwd_imposter() {
+    use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let imposter = directory.path().join("sh");
+    std::fs::write(&imposter, b"#!/bin/sh\nprintf imposter\n").unwrap();
+    std::fs::set_permissions(&imposter, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let account = launcher::local_account(Some(directory.path())).unwrap();
+    let spec = ChildSpec {
+        environment: launcher::child_environment(&account),
+        cwd: account.cwd.clone(),
+        account,
+        request: CommandRequest::Exec {
+            argv: vec![
+                b"sh".to_vec(),
+                b"-c".to_vec(),
+                b"printf '%s|%s' \"$0\" \"$PATH\"".to_vec(),
+            ],
+        },
+        umask: 0o077,
+        canonical_exec_required: false,
+    };
+    let mut spawned = launcher::spawn_child(&spec).unwrap();
+    let mut output = Vec::new();
+    spawned.stdout.read_to_end(&mut output).unwrap();
+    assert_eq!(spawned.child.wait().unwrap().code(), Some(0));
+    assert_eq!(output, b"sh|/usr/bin:/bin");
+}
+
+#[test]
+fn headerless_executable_is_not_interpreted_as_shell() {
+    use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("headerless");
+    std::fs::write(&program, b"touch should-not-exist\n").unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let canonical = std::fs::canonicalize(&program).unwrap();
+    let account = launcher::local_account(Some(directory.path())).unwrap();
+    let spec = ChildSpec {
+        environment: launcher::child_environment(&account),
+        cwd: account.cwd.clone(),
+        account,
+        request: CommandRequest::ResolvedExec {
+            executable: canonical.as_os_str().as_bytes().to_vec(),
+            invoked_path: canonical.as_os_str().as_bytes().to_vec(),
+            argv: vec![b"headerless".to_vec()],
+        },
+        umask: 0o077,
+        canonical_exec_required: true,
+    };
+    assert!(matches!(
+        launcher::spawn_child(&spec),
+        Err(ChildSpawnError::NotStarted(
+            LaunchFailure::InvalidExecutableFormat
+        ))
+    ));
+    assert!(!directory.path().join("should-not-exist").exists());
 }

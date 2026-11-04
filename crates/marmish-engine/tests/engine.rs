@@ -709,17 +709,20 @@ fn additive_command_policy_denial_keeps_token_and_invocation_unused() {
     let other = h.context(OTHER, 2);
     let id = InvocationId([240; 16]);
     let token = h.engine().issue_execute_token(&ctx).unwrap();
-    for request in [
-        exec(&[b"printf"]),
-        exec(&[b"/usr/bin/false"]),
-        CommandRequest::Shell {
-            command: b"printf forbidden".to_vec(),
-        },
+    for (request, expected) in [
+        (exec(&[b"printf"]), EngineError::InvalidRequest),
+        (exec(&[b"/usr/bin/false"]), EngineError::CommandDenied),
+        (
+            CommandRequest::Shell {
+                command: b"printf forbidden".to_vec(),
+            },
+            EngineError::CommandDenied,
+        ),
     ] {
-        assert!(matches!(
-            h.engine().submit(&ctx, &token, id, &request),
-            Err(EngineError::CommandDenied)
-        ));
+        assert_eq!(
+            h.engine().submit(&ctx, &token, id, &request).unwrap_err(),
+            expected
+        );
         assert!(matches!(
             h.engine().status(&ctx, id),
             Err(EngineError::NotFound)
@@ -780,7 +783,7 @@ fn restricted_commands_refuse_traversal_and_symlink_spelling_without_creating_jo
         assert!(matches!(
             h.engine()
                 .submit(&ctx, &token, InvocationId([241; 16]), &exec(&[path])),
-            Err(EngineError::CommandDenied)
+            Err(EngineError::InvalidRequest)
         ));
     }
     assert_eq!(

@@ -609,7 +609,7 @@ fn output(value: OutputStatus) -> Value {
     json!({"retained":value.retained,"produced":value.produced,"closed":value.closed,"gaps":value.gaps.into_iter().map(|g|json!({"start":g.start,"end":g.end,"reason":match g.reason {MissingReason::Limit=>"limit",MissingReason::StorageFailure=>"storage_failure",MissingReason::Expired=>"expired",MissingReason::UncertainTail=>"uncertain_tail"}})).collect::<Vec<_>>()})
 }
 fn status(value: InvocationStatus) -> Value {
-    json!({"invocation":encoded(&value.invocation.0),"state":match value.state {InvocationState::Accepted=>"accepted",InvocationState::Launching=>"launching",InvocationState::Running=>"running",InvocationState::Exited=>"exited",InvocationState::UnknownLaunch=>"unknown_launch",InvocationState::Lost=>"lost"},"outcome":value.outcome.map(|o|match o {ExitOutcome::Code(value)=>json!({"kind":"code","value":value}),ExitOutcome::Signal(value)=>json!({"kind":"signal","value":value}),ExitOutcome::NotStarted=>json!({"kind":"not_started"})}),"cancel_requested":value.cancel_requested,"input":input(value.input),"stdout":output(value.stdout),"stderr":output(value.stderr)})
+    json!({"invocation":encoded(&value.invocation.0),"state":match value.state {InvocationState::Accepted=>"accepted",InvocationState::Launching=>"launching",InvocationState::Running=>"running",InvocationState::Exited=>"exited",InvocationState::UnknownLaunch=>"unknown_launch",InvocationState::Lost=>"lost"},"outcome":value.outcome.map(|o|match o {ExitOutcome::Code(value)=>json!({"kind":"code","value":value}),ExitOutcome::Signal(value)=>json!({"kind":"signal","value":value}),ExitOutcome::NotStarted=>json!({"kind":"not_started"}),ExitOutcome::LaunchFailed(reason)=>json!({"kind":"launch_failed","reason":format!("{reason:?}")})}),"cancel_requested":value.cancel_requested,"input":input(value.input),"stdout":output(value.stdout),"stderr":output(value.stderr)})
 }
 
 fn error_code(error: EngineError) -> &'static str {
@@ -618,6 +618,9 @@ fn error_code(error: EngineError) -> &'static str {
         EngineError::RootForbidden => "root_forbidden",
         EngineError::InvalidPolicy => "invalid_policy",
         EngineError::CommandDenied => "command_denied",
+        EngineError::CommandNotFound(_) => "command_not_found",
+        EngineError::CommandNotExecutable(_) => "command_not_executable",
+        EngineError::CommandResolutionFailed(_) => "command_resolution_failed",
         EngineError::UnsafePath => "unsafe_path",
         EngineError::AlreadyOpen => "already_open",
         EngineError::InvalidRequest => "invalid_request",

@@ -154,29 +154,32 @@ pub(crate) fn check_command(
     if layers.is_empty() {
         return Ok(false);
     }
-    let CommandRequest::Exec { argv } = request else {
-        return Err(EngineError::CommandDenied);
-    };
-    let executable = argv.first().ok_or(EngineError::CommandDenied)?;
-    if executable.len() > 4095
-        || executable.first() != Some(&b'/')
-        || executable[1..]
-            .split(|b| *b == b'/')
-            .any(|part| part.is_empty() || part == b"." || part == b"..")
-    {
-        return Err(EngineError::CommandDenied);
-    }
+    let (executable, alias) = executable_names(request)?;
     // Preflight the entire applicable policy, even patterns that short-circuit.
     // This makes budget exhaustion independent of rule and key-entry ordering.
     let mut fuel = MATCH_FUEL;
     let mut compiled = Vec::new();
     for layer in &layers {
-        for pattern in layer.patterns() {
-            let tokens = compile(pattern).map_err(|_| EngineError::CommandDenied)?;
+        for (pattern, deny) in layer
+            .allow_exec
+            .iter()
+            .flatten()
+            .map(|p| (p, false))
+            .chain(layer.deny_exec.iter().map(|p| (p, true)))
+        {
+            let tokens = compile(pattern).map_err(|_| EngineError::InvalidPolicy)?;
+            let length = if deny {
+                executable
+                    .len()
+                    .checked_add(alias.map_or(0, |p| p.len() + 1))
+            } else {
+                Some(executable.len())
+            }
+            .ok_or(EngineError::InvalidPolicy)?;
             let cost = (tokens.len() + 1)
-                .checked_mul(executable.len() + 1)
-                .ok_or(EngineError::CommandDenied)?;
-            fuel = fuel.checked_sub(cost).ok_or(EngineError::CommandDenied)?;
+                .checked_mul(length + 1)
+                .ok_or(EngineError::InvalidPolicy)?;
+            fuel = fuel.checked_sub(cost).ok_or(EngineError::InvalidPolicy)?;
             compiled.push(tokens);
         }
     }
@@ -188,13 +191,39 @@ pub(crate) fn check_command(
         }
         let mut denied = false;
         for _ in &layer.deny_exec {
-            denied |= matches(patterns.next().unwrap(), executable);
+            let pattern = patterns.next().unwrap();
+            denied |=
+                matches(pattern, executable) || alias.is_some_and(|path| matches(pattern, path));
         }
         if !allowed || denied {
             return Err(EngineError::CommandDenied);
         }
     }
     Ok(true)
+}
+
+fn executable_names(request: &CommandRequest) -> Result<(&[u8], Option<&[u8]>)> {
+    let (executable, alias) = match request {
+        CommandRequest::Exec { argv } => (
+            argv.first().ok_or(EngineError::InvalidRequest)?.as_slice(),
+            None,
+        ),
+        CommandRequest::ResolvedExec {
+            executable,
+            invoked_path,
+            ..
+        } => (executable.as_slice(), Some(invoked_path.as_slice())),
+        CommandRequest::Shell { .. } => return Err(EngineError::CommandDenied),
+    };
+    if executable.len() > 4095
+        || executable.first() != Some(&b'/')
+        || executable[1..]
+            .split(|b| *b == b'/')
+            .any(|part| part.is_empty() || part == b"." || part == b"..")
+    {
+        return Err(EngineError::InvalidRequest);
+    }
+    Ok((executable, alias))
 }
 
 /// Filesystem inspection; callers must keep it off network/convergence actors.
@@ -206,11 +235,13 @@ pub enum CanonicalExecOutcome {
 }
 
 pub fn inspect_canonical_exec(request: &CommandRequest) -> CanonicalExecOutcome {
-    let CommandRequest::Exec { argv } = request else {
-        return CanonicalExecOutcome::Unresolvable;
-    };
-    let Some(executable) = argv.first() else {
-        return CanonicalExecOutcome::Unresolvable;
+    let executable = match request {
+        CommandRequest::Exec { argv } => match argv.first() {
+            Some(path) => path,
+            None => return CanonicalExecOutcome::Unresolvable,
+        },
+        CommandRequest::ResolvedExec { executable, .. } => executable,
+        CommandRequest::Shell { .. } => return CanonicalExecOutcome::Unresolvable,
     };
     if executable.is_empty()
         || executable.len() > 4095
@@ -235,7 +266,7 @@ pub fn inspect_canonical_exec(request: &CommandRequest) -> CanonicalExecOutcome 
 pub(crate) fn require_canonical_exec(request: &CommandRequest) -> Result<()> {
     match inspect_canonical_exec(request) {
         CanonicalExecOutcome::Allowed => Ok(()),
-        _ => Err(EngineError::CommandDenied),
+        _ => Err(EngineError::InvalidRequest),
     }
 }
 impl CommandPolicy {

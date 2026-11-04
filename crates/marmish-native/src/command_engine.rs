@@ -11,6 +11,7 @@ use marmish_engine as engine;
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
+    ffi::{OsStr, OsString},
     sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -330,6 +331,7 @@ struct Worker {
     awaiting: BTreeMap<Key, Awaiting>,
     pending: VecDeque<OperationRecord>,
     closed: bool,
+    search_path: Option<OsString>,
 }
 impl Worker {
     fn new(engine: engine::Engine, recovery: Vec<RecoveryRecord>) -> Self {
@@ -349,6 +351,7 @@ impl Worker {
             awaiting: BTreeMap::new(),
             pending: VecDeque::new(),
             closed: false,
+            search_path: std::env::var_os("PATH"),
         }
     }
     fn can_dispatch(&self, k: &Key) -> bool {
@@ -494,7 +497,7 @@ impl Worker {
             Err(err) => return failed(err),
         };
         let id = engine::InvocationId(op.key.invocation);
-        execute_operation(e, &ctx, id, op, known)
+        execute_operation(e, &ctx, id, op, known, self.search_path.as_deref())
     }
 }
 
@@ -523,12 +526,62 @@ fn worker(
 fn error(code: wire::ErrorCode, detail: Option<String>) -> EngineObservation {
     EngineObservation::Refused(wire::WireError { code, detail })
 }
+/// A definite pre-admission failure is durable; operational uncertainty is not
+/// converted into Missing, which could otherwise repeat dispatch indefinitely.
+fn execution_refusal(error: engine::EngineError) -> EngineObservation {
+    use engine::{
+        EngineError as E, NotExecutableReason as X, NotFoundReason as N, ResolutionReason as R,
+    };
+    let (code, detail) = match error {
+        E::CommandNotFound(reason) => (
+            wire::ErrorCode::CommandNotFound,
+            Some(match reason {
+                N::PathSearchExhausted => "path_search_exhausted",
+                N::ExecutableMissing => "executable_missing",
+            }),
+        ),
+        E::CommandNotExecutable(reason) => (
+            wire::ErrorCode::CommandNotExecutable,
+            Some(match reason {
+                X::FilesystemPermission => "filesystem_permission",
+                X::NotRegularFile => "not_regular_file",
+                X::ExecuteBitMissing => "execute_bit_missing",
+            }),
+        ),
+        E::CommandResolutionFailed(reason) => (
+            wire::ErrorCode::CommandResolutionFailed,
+            Some(match reason {
+                R::SymlinkLoop => "symlink_loop",
+                R::FilesystemIo => "filesystem_io",
+                R::InvalidSearchPath => "invalid_search_path",
+            }),
+        ),
+        E::CommandDenied => (wire::ErrorCode::CommandDenied, Some("policy_restriction")),
+        E::InvalidPolicy => (wire::ErrorCode::CommandPolicyError, None),
+        E::InvalidRequest => (wire::ErrorCode::InvalidRequest, None),
+        E::QuotaExceeded => (wire::ErrorCode::QuotaExceeded, None),
+        E::Unauthorized => (wire::ErrorCode::Unauthorized, None),
+        other => return failed(other),
+    };
+    crate::diagnostics::event(
+        "command_resolution",
+        detail.unwrap_or(match code {
+            wire::ErrorCode::CommandPolicyError => "command_policy_error",
+            wire::ErrorCode::InvalidRequest => "invalid_request",
+            wire::ErrorCode::QuotaExceeded => "quota_exceeded",
+            wire::ErrorCode::Unauthorized => "unauthorized",
+            _ => "refused",
+        }),
+    );
+    self::error(code, detail.map(str::to_owned))
+}
 fn execute_operation(
     e: &mut engine::Engine,
     ctx: &engine::AuthorizedContext,
     id: engine::InvocationId,
     op: &OperationRecord,
     known: bool,
+    search_path: Option<&OsStr>,
 ) -> EngineObservation {
     let initial = if matches!(op.operation, EngineOperation::FinalObserve) {
         e.terminal_status(ctx, id)
@@ -550,17 +603,12 @@ fn execute_operation(
             let request = engine::CommandRequest::Exec {
                 argv: submit.argv.clone(),
             };
-            match engine::inspect_canonical_exec(&request) {
-                engine::CanonicalExecOutcome::Allowed => {}
-                engine::CanonicalExecOutcome::Unresolvable => {
-                    return error(wire::ErrorCode::CommandDenied, None);
-                }
-                engine::CanonicalExecOutcome::Noncanonical { canonical } => {
-                    let detail = String::from_utf8(canonical)
-                        .ok()
-                        .filter(|s| serde_json::to_vec(s).is_ok_and(|v| v.len() <= 1024));
-                    return error(wire::ErrorCode::NoncanonicalExecutable, detail);
-                }
+            let request = match e.resolve_exec(&request, search_path) {
+                Ok(request) => request,
+                Err(err) => return execution_refusal(err),
+            };
+            if let Err(err) = e.check_execute_request(ctx, &request) {
+                return execution_refusal(err);
             }
             let submitted = match e.issue_execute_token(ctx) {
                 Ok(token) => e.submit(ctx, &token, id, &request),
@@ -573,16 +621,10 @@ fn execute_operation(
                 }
                 Err(engine::EngineError::NotFound) => {
                     return match submitted {
-                        Err(engine::EngineError::CommandDenied) => {
-                            error(wire::ErrorCode::CommandDenied, None)
-                        }
-                        Err(engine::EngineError::InvalidRequest) => {
-                            error(wire::ErrorCode::InvalidRequest, None)
-                        }
-                        Err(engine::EngineError::QuotaExceeded) => {
-                            error(wire::ErrorCode::QuotaExceeded, None)
-                        }
-                        _ => EngineObservation::Missing,
+                        Err(err) => execution_refusal(err),
+                        // A successful submit without observable durable facts is
+                        // uncertain, never a definite missing command/rejection.
+                        Ok(_) => EngineObservation::Failed(OperationalFailure::Uncertain),
                     };
                 }
                 Err(err) => return failed(err),
@@ -858,6 +900,18 @@ fn wire_status(s: &engine::InvocationStatus, op: &OperationRecord) -> Option<wir
             kind: wire::OutcomeKind::NotStarted,
             value: None,
         }),
+        Some(engine::ExitOutcome::LaunchFailed(reason)) => Some(wire::Outcome {
+            kind: wire::OutcomeKind::LaunchFailed,
+            value: Some(match reason {
+                engine::LaunchFailure::FilesystemPermission => 1,
+                engine::LaunchFailure::MissingExecutableOrInterpreter => 2,
+                engine::LaunchFailure::InvalidExecutableFormat => 3,
+                engine::LaunchFailure::InvalidWorkingDirectory => 4,
+                engine::LaunchFailure::ResourceUnavailable => 5,
+                engine::LaunchFailure::ExecutableChanged => 6,
+                engine::LaunchFailure::OtherStartupFailure => 7,
+            }),
+        }),
         Some(engine::ExitOutcome::Code(v)) => Some(wire::Outcome {
             kind: wire::OutcomeKind::Code,
             value: Some(u8::try_from(*v).ok()?),
@@ -1024,6 +1078,7 @@ mod tests {
             awaiting: BTreeMap::new(),
             pending: VecDeque::new(),
             closed: false,
+            search_path: None,
         }
     }
     fn handle() -> (
@@ -1317,7 +1372,7 @@ mod tests {
         assert!(w.known.contains(&own));
     }
     #[test]
-    fn real_engine_canonical_refusal_creates_no_job_and_known_missing_never_dispatches() {
+    fn real_engine_missing_command_creates_no_job_and_known_missing_never_dispatches() {
         if unsafe { libc::geteuid() } == 0 {
             return;
         }
@@ -1333,7 +1388,7 @@ mod tests {
         let alias = d.path().join("alias");
         let executable = d.path().join("worker").canonicalize().unwrap();
         assert!(executable.is_file());
-        symlink(&executable, &alias).unwrap();
+        symlink(d.path().join("missing-target"), &alias).unwrap();
         let op = operation(
             1,
             EngineOperation::Dispatch {
@@ -1345,9 +1400,16 @@ mod tests {
             },
         );
         assert!(matches!(
-            execute_operation(&mut e, &ctx, engine::InvocationId([1; 16]), &op, false),
+            execute_operation(
+                &mut e,
+                &ctx,
+                engine::InvocationId([1; 16]),
+                &op,
+                false,
+                None
+            ),
             EngineObservation::Refused(wire::WireError {
-                code: wire::ErrorCode::NoncanonicalExecutable,
+                code: wire::ErrorCode::CommandNotFound,
                 ..
             })
         ));
@@ -1357,7 +1419,7 @@ mod tests {
         ));
         // Even a perfectly executable argv cannot replay a previously known job.
         assert!(matches!(
-            execute_operation(&mut e, &ctx, engine::InvocationId([1; 16]), &op, true),
+            execute_operation(&mut e, &ctx, engine::InvocationId([1; 16]), &op, true, None),
             EngineObservation::Missing
         ));
         assert!(matches!(
@@ -1365,6 +1427,132 @@ mod tests {
             Err(engine::EngineError::NotFound)
         ));
         drop(e);
+    }
+
+    #[test]
+    fn native_policy_refusals_do_not_exhaust_tokens_before_allowed_dispatch() {
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        let mut settings = engine_settings(&d);
+        let allowed = settings.policy.worker_executable.canonicalize().unwrap();
+        let denied = d.path().join("denied");
+        std::fs::copy(&allowed, &denied).unwrap();
+        std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o700)).unwrap();
+        settings.policy.command_policy = Some(engine::CommandPolicy {
+            version: 1,
+            defaults: engine::Restrictions {
+                allow_exec: Some(vec![allowed.to_str().unwrap().to_owned()]),
+                deny_exec: vec![],
+            },
+            keys: vec![],
+        });
+        let mut e = engine::Engine::open_with_master(
+            settings.policy,
+            settings.binding,
+            engine::ProvidedMaster::new(*settings.master),
+        )
+        .unwrap();
+        let ctx = e
+            .authorize(
+                engine::PrincipalId([2; 32]),
+                engine::EndpointId(Sha256::digest([3; 32]).into()),
+                engine::ServerId([1; 32]),
+                unsafe { libc::geteuid() },
+            )
+            .unwrap();
+        for n in 1..=140 {
+            let id = engine::InvocationId([n; 16]);
+            let op = operation(
+                n,
+                EngineOperation::Dispatch {
+                    submit: wire::Submit {
+                        invocation: id.0,
+                        argv: vec![denied.as_os_str().as_encoded_bytes().to_vec()],
+                        stdin: vec![],
+                    },
+                },
+            );
+            assert!(matches!(
+                execute_operation(&mut e, &ctx, id, &op, false, None),
+                EngineObservation::Refused(wire::WireError {
+                    code: wire::ErrorCode::CommandDenied,
+                    ..
+                })
+            ));
+            assert!(matches!(
+                e.status(&ctx, id),
+                Err(engine::EngineError::NotFound)
+            ));
+        }
+        let id = engine::InvocationId([141; 16]);
+        let op = operation(
+            141,
+            EngineOperation::Dispatch {
+                submit: wire::Submit {
+                    invocation: id.0,
+                    argv: vec![allowed.as_os_str().as_encoded_bytes().to_vec()],
+                    stdin: vec![],
+                },
+            },
+        );
+        assert!(matches!(
+            execute_operation(&mut e, &ctx, id, &op, false, None),
+            EngineObservation::Dispatched { .. }
+        ));
+        assert!(e.status(&ctx, id).unwrap().invocation == id);
+    }
+    #[test]
+    fn native_known_invocation_bypasses_lookup_after_target_and_path_change() {
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let (d, mut e) = engine_fixture();
+        let target = d.path().join("target");
+        std::fs::copy(std::env::current_exe().unwrap(), &target).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let ctx = e
+            .authorize(
+                engine::PrincipalId([2; 32]),
+                engine::EndpointId(Sha256::digest([3; 32]).into()),
+                engine::ServerId([1; 32]),
+                unsafe { libc::geteuid() },
+            )
+            .unwrap();
+        let id = engine::InvocationId([1; 16]);
+        let dispatch = operation(
+            1,
+            EngineOperation::Dispatch {
+                submit: wire::Submit {
+                    invocation: id.0,
+                    argv: vec![b"target".to_vec()],
+                    stdin: vec![],
+                },
+            },
+        );
+        assert!(matches!(
+            execute_operation(
+                &mut e,
+                &ctx,
+                id,
+                &dispatch,
+                false,
+                Some(d.path().as_os_str())
+            ),
+            EngineObservation::Dispatched { .. }
+        ));
+        std::fs::remove_file(&target).unwrap();
+        // This PATH would itself be rejected if the known invocation were resolved again.
+        let unusable_path = OsString::from("x".repeat(65_537));
+        let observe = operation(1, EngineOperation::Observe);
+        for op in [&observe, &dispatch] {
+            assert!(matches!(
+                execute_operation(&mut e, &ctx, id, op, true, Some(&unusable_path)),
+                EngineObservation::Found { .. }
+            ));
+            assert!(e.status(&ctx, id).unwrap().invocation == id);
+        }
     }
     fn input_status(
         length: u64,

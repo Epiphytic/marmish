@@ -138,7 +138,8 @@ impl CommandService {
             self.finish_response(journal, &owner, &request)?
         } else {
             let admission = self.admission_response(&owner, &request, record.as_ref())?;
-            // Only a new, policy-valid Submit can reserve the bounded budget.
+            // Only a new authenticated Submit can reserve the bounded budget.
+            // Executable resolution and policy run on the dedicated engine owner.
             if matches!(admission.0, AdmissionDecision::New) {
                 self.bounded_admission(journal, &owner, &request, admission)?
             } else {
@@ -246,20 +247,6 @@ impl CommandService {
                 Some(response_publication(owner, request, Err(error))?),
             ));
         };
-        if self
-            .config
-            .check_exec_restrictions(owner.binding().client, &submit.argv)
-            .is_err()
-        {
-            let error = WireError {
-                code: ErrorCode::CommandDenied,
-                detail: None,
-            };
-            return Ok((
-                AdmissionDecision::Refused(error.clone()),
-                Some(response_publication(owner, request, Err(error))?),
-            ));
-        }
         let result = Ok(ResponseResult::Submit {
             disposition: Disposition::Accepted,
             status: accepted_status(submit.invocation, submit.stdin.len() as u32),
@@ -1304,6 +1291,13 @@ mod tests {
             )
             .unwrap();
         let mut row = journal.command_get(&projected.key).unwrap().unwrap();
+        // New requests await the engine; only a definitive refusal is safe.
+        assert!(validate_cleanup_row(&row, 0).is_err());
+        row.refusal = Some(WireError {
+            code: ErrorCode::CommandDenied,
+            detail: Some("policy_restriction".into()),
+        });
+        row.feeder = crate::journal::FeederState::Failed;
         row.observed_seq = 10;
         assert!(validate_cleanup_row(&row, 10).is_ok());
         assert!(validate_cleanup_row(&row, 11).is_err());
@@ -1443,6 +1437,24 @@ mod tests {
             )
             .unwrap()
             .key;
+        let record = journal.command_get(&key).unwrap().unwrap();
+        let operation = journal
+            .command_begin_operation(&key, record.revision, EngineOperation::Observe)
+            .unwrap();
+        journal
+            .command_commit_completion(
+                &EngineCompletion {
+                    operation: operation.id,
+                    key: key.clone(),
+                    revision: operation.revision,
+                    result: crate::journal::EngineObservation::Refused(WireError {
+                        code: ErrorCode::CommandDenied,
+                        detail: Some("policy_restriction".into()),
+                    }),
+                },
+                &[],
+            )
+            .unwrap();
         assert!(!service.cancel_fixture_key(&mut journal, &key).unwrap());
         assert!(service.enqueued.is_empty() && service.waiting.is_empty());
         service.cleanup = Some(CleanupPreparation {
@@ -1503,7 +1515,32 @@ mod tests {
             )
             .unwrap()
             .key;
-        let fence = service.begin_cleanup(&mut journal).unwrap();
+        // Executable refusal is now asynchronous; cleanup must not discard an
+        // accepted request before its engine decision has been committed.
+        while journal
+            .command_get(&key)
+            .unwrap()
+            .unwrap()
+            .refusal
+            .is_none()
+        {
+            assert!(Instant::now() < deadline);
+            service.poll_completions(&mut journal, NOW).unwrap();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        // The durable refusal precedes the worker's observation of its ACK.
+        // Cleanup must wait for that registration to drain as well.
+        let fence = loop {
+            match service.begin_cleanup(&mut journal) {
+                Ok(fence) => break fence,
+                Err(Error::Storage("command_cleanup_busy")) => {
+                    assert!(Instant::now() < deadline);
+                    service.poll_completions(&mut journal, NOW).unwrap();
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Err(error) => panic!("unexpected cleanup failure: {error:?}"),
+            }
+        };
         while service.poll_cleanup(&mut journal).unwrap() != CleanupState::Quiesced {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(2));
@@ -1665,7 +1702,7 @@ mod tests {
         );
     }
     #[test]
-    fn pure_denial_is_durable_without_engine_or_filesystem_exec_check() {
+    fn executable_policy_is_deferred_without_filesystem_work_on_actor() {
         let (_tmp, mut journal, mut service) = setup(true);
         let request = request();
         let projected = service
@@ -1677,15 +1714,10 @@ mod tests {
                 NOW,
             )
             .unwrap();
-        assert!(
-            journal
-                .command_get(&projected.key)
-                .unwrap()
-                .unwrap()
-                .refusal
-                .is_some_and(|error| error.code == ErrorCode::CommandDenied)
-        );
-        assert!(journal.command_recovery().unwrap().is_empty());
+        let record = journal.command_get(&projected.key).unwrap().unwrap();
+        assert!(record.refusal.is_none());
+        assert!(record.admission == Admission::Accepted && !record.engine_known);
+        assert_eq!(journal.command_recovery().unwrap().len(), 1);
         assert!(service.engine_mut().is_none());
     }
     #[test]

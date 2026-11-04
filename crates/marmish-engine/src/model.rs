@@ -84,8 +84,17 @@ impl Default for EngineLimits {
 }
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CommandRequest {
-    Exec { argv: Vec<Vec<u8>> },
-    Shell { command: Vec<u8> },
+    Exec {
+        argv: Vec<Vec<u8>>,
+    },
+    Shell {
+        command: Vec<u8>,
+    },
+    ResolvedExec {
+        executable: Vec<u8>,
+        invoked_path: Vec<u8>,
+        argv: Vec<Vec<u8>>,
+    },
 }
 impl fmt::Debug for CommandRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -106,7 +115,41 @@ pub enum ExitOutcome {
     Code(i32),
     Signal(i32),
     NotStarted,
+    LaunchFailed(LaunchFailure),
 }
+impl ExitOutcome {
+    pub(crate) fn is_startup_failure(&self) -> bool {
+        matches!(self, Self::NotStarted | Self::LaunchFailed(_))
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LaunchFailure {
+    FilesystemPermission,
+    MissingExecutableOrInterpreter,
+    InvalidExecutableFormat,
+    InvalidWorkingDirectory,
+    ResourceUnavailable,
+    ExecutableChanged,
+    OtherStartupFailure,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotFoundReason {
+    PathSearchExhausted,
+    ExecutableMissing,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotExecutableReason {
+    FilesystemPermission,
+    NotRegularFile,
+    ExecuteBitMissing,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResolutionReason {
+    SymlinkLoop,
+    FilesystemIo,
+    InvalidSearchPath,
+}
+
 #[derive(Clone, Debug)]
 pub struct InvocationStatus {
     pub invocation: InvocationId,
@@ -202,6 +245,12 @@ pub enum EngineError {
     InvalidRequest,
     #[error("command denied")]
     CommandDenied,
+    #[error("command not found: {0:?}")]
+    CommandNotFound(NotFoundReason),
+    #[error("command not executable: {0:?}")]
+    CommandNotExecutable(NotExecutableReason),
+    #[error("command resolution failed: {0:?}")]
+    CommandResolutionFailed(ResolutionReason),
     #[error("invocation not found")]
     NotFound,
     #[error("invocation content conflict")]

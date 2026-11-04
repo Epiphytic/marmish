@@ -809,8 +809,8 @@ fn launch_claimed(
     fault_point(root, job, FaultPoint::BeforeSpawn);
     let spawned = match launcher::spawn_child(&spec) {
         Ok(child) => child,
-        Err(ChildSpawnError::NotStarted) => {
-            return retry(|| store.finish(job, worker, ExitOutcome::NotStarted));
+        Err(ChildSpawnError::NotStarted(reason)) => {
+            return retry(|| store.finish(job, worker, ExitOutcome::LaunchFailed(reason)));
         }
         Err(ChildSpawnError::Uncertain) => {
             return retry(|| {
