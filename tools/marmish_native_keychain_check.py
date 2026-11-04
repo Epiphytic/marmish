@@ -761,7 +761,7 @@ def mac_account(bootstrap, assets, report, lifecycle_a_assets=None, lifecycle_a_
             provider_stage(result, 'account_home_create')
             execute(['/usr/bin/sudo', '-n', '/bin/mkdir', '-m', '700', str(home)], environment)
             provider_stage(result, 'account_home_chown')
-            execute(['/usr/bin/sudo', '-n', '/usr/sbin/chown', str(uid) + ':-2', str(home)], environment)
+            execute(['/usr/bin/sudo', '-n', '/usr/sbin/chown', str(uid), str(home)], environment)
             # Stage outside the runner's private HOME; rehash every copied input.
             provider_stage(result, 'input_stage')
             with staged_provider_inputs(bootstrap, assets, lifecycle_a_assets, lifecycle_b_version) as stage:

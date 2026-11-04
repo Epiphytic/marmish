@@ -379,7 +379,7 @@ class LifecycleProviderSupervisor(unittest.TestCase):
 
 
 class ProviderDiagnostics(unittest.TestCase):
-    def fixture(self, report, failure=None, cleanup_failure=None, changed_runner=False, inner=None, cancelled=False):
+    def fixture(self, report, failure=None, cleanup_failure=None, changed_runner=False, inner=None, cancelled=False, calls=None):
         from contextlib import ExitStack, nullcontext
         from types import SimpleNamespace
         seen = []
@@ -397,6 +397,8 @@ class ProviderDiagnostics(unittest.TestCase):
                 raise KeyError(name)
             return SimpleNamespace(pw_uid=55000, pw_dir='/Users/' + name)
         def execute(argv, *args, **kwargs):
+            if calls is not None:
+                calls.append(list(argv))
             if argv[:2] == ['/usr/bin/dscl', '.']:
                 return 0, b'runner 501\n'
             if argv[0] == '/usr/bin/xcrun':
@@ -422,6 +424,24 @@ class ProviderDiagnostics(unittest.TestCase):
                     nullcontext(SimpleNamespace(cancelled=True, cleanup=lambda:None, limit_inner=lambda _:None))))
             code = check.mac_account(Path('/bootstrap'), Path('/assets'), report)
         return code, json.loads(report.read_text()), seen
+
+    def test_fresh_private_home_creation_precedes_owner_only_chown(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as tmp:
+            code, result, _ = self.fixture(Path(tmp) / 'report.json', calls=calls)
+        self.assertEqual(code, 0, result)
+        chowns = [argv for argv in calls if '/usr/sbin/chown' in argv]
+        self.assertEqual(len(chowns), 1)
+        chown = chowns[0]
+        home = chown[-1]
+        self.assertTrue(home.startswith('/Users/marmishq'))
+        self.assertEqual(chown, ['/usr/bin/sudo', '-n', '/usr/sbin/chown', '55000', home])
+        self.assertNotIn(':', chown[3])
+        mkdir = ['/usr/bin/sudo', '-n', '/bin/mkdir', '-m', '700', home]
+        self.assertEqual(calls.count(mkdir), 1)
+        self.assertLess(calls.index(mkdir), calls.index(chown))
+        self.assertIn(['/usr/bin/sudo', '-n', '/usr/bin/dscl', '.', '-create',
+            home, 'PrimaryGroupID', '-2'], calls)
 
     def test_every_outer_stage_has_finite_failure_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

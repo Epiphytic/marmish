@@ -222,3 +222,40 @@ Claude code review, publish the reviewed diagnostic source as authorized, then
 dispatch the bounded macOS qualification. Record its actual report and result.
 If diagnostics expose another prerequisite failure, report the exact finite
 stage/status and design its remedy rather than claiming the provider passed.
+
+
+## Observed macOS setup correction (41915532600/1)
+
+The approved diagnostic ran at supervisor 5ccc646c3b5a85df73aef79dd14286c6b6d78f0c
+against unchanged product 61f47606c5e7ba9048f196165a8025e7c2662839. All provenance
+and offline gates passed. Actual provider report: failure_stage=account_home_chown,
+failure=operation_failed, exit_code=1, elapsed_ms=530; runner_keychain_unchanged=true.
+No product launch occurred. The chown operand is currently uid:-2. Apple chown
+parses numeric IDs as unsigned and rejects this negative group representation.
+
+The proposed correction changes only that operand to the allocated numeric UID.
+The newly created home remains mode 0700 and its inherited group is retained;
+only its owned UID needs access. Account allocation, primary group, disabled
+login, path validation, isolation, cleanup scope, provider commands and product
+bytes remain unchanged. Existing account/home identity checks compare UID and
+home; no group ownership requirement is being weakened. No fallback, sudo
+relaxation or runner Keychain change is introduced.
+
+Acceptance: add an offline full mocked-harness argv assertion that chown receives
+only the allocated UID and owned home, preserving mode 0700 creation and all
+failure/cleanup tests. Re-run supervisor 30+, Node 58, static workflow 3 and lint.
+Obtain independent Claude design and code reviews before committing; use only
+the existing twelve allowlisted paths, keeping version 0.2.2. Reuse the same
+product/bootstrap artifacts in a new diagnostic dispatch, bound to its new
+supervisor source. Require actual qualification, not merely successful chown.
+Any later stage failure is a new observation, never hidden by weakening checks.
+
+
+The owner-only correction received actual independent Claude design approval
+(`/tmp/marmish-scj-provider-chown-design.json`): no blocking findings. The
+implemented operand is `str(uid)`, without a group separator. The regression
+asserts the complete chown argv, exact `mkdir -m 700` before chown, and unchanged
+account `PrimaryGroupID=-2`. Offline supervisor discovery and direct execution
+both pass 31 tests; Node tooling passes 58, static workflow contracts pass 3,
+and actionlint 1.7.7 and whitespace checks pass. This is harness validation;
+actual hosted provider qualification remains required after code review.

@@ -43,3 +43,39 @@ I read these against `docs/phases/native-provider-diagnostics.md` and `docs/revi
 **Commit-time cautions (not blockers):**
 - Stage only the six files plus the diagnostic docs. The workflow audits `git diff PRODUCT HEAD`, so the untracked `native-automatic-release` and `v0.2.3-publication` docs must stay out of the commit. Otherwise `diagnostic_source_delta` refuses the run.
 - The allowlist includes `docs/reviews/native-provider-diagnostics-code-r2.md` and `docs/validation/native-provider-diagnostics.md`. Whichever of those you add later stays within the allowlist, and any file outside it will cause a refusal.
+
+
+## Follow-up owner-only chown code review
+
+Actual Claude Code `claude-sonnet-5-5`, permission mode `auto`.
+Session: 356654f9-896f-4d37-b32a-5d5b51c4b916
+
+**Verdict: APPROVED.** I found no blocking findings. I ran only the offline Python tests. I ran no Cargo, live accounts or keychains, or network, and I edited and committed nothing.
+
+**Root cause and fix**
+- The code diff is one line, at `tools/marmish_native_keychain_check.py:764`. The chown operand changes from `str(uid) + ':-2'` to `str(uid)`.
+- A chown operand with no colon sets only the owner and leaves the group unchanged. That removes the negative-group operand that the diagnostic report (`account_home_chown`, exit code 1) attributes to Apple's unsigned numeric parsing.
+- The previous design approval is consistent with this. It confirmed the cause, and its non-blocking note 1 asked for the exact-argv and ordering assertion, which the new test adds.
+
+**Regression test**
+- `test_fresh_private_home_creation_precedes_owner_only_chown` runs the full mocked `mac_account` flow and records every `execute` argv through a new optional `calls` parameter.
+- It checks that exactly one chown occurs and that its argv is exactly `['/usr/bin/sudo','-n','/usr/sbin/chown','55000',home]`.
+- It checks that the operand has no `:`, so a group change cannot return silently.
+- It checks that the exact `mkdir -m 700 home` call occurs once and comes before the chown.
+- It checks that the dscl `PrimaryGroupID -2` create is still issued. The dscl record path `/Users/<name>` equals `home`, so that assertion matches real behavior.
+- The old operand `55000:-2` would fail the exact-argv assertion, so the test does guard this regression.
+
+**Isolation and cleanup**
+- The diff touches no account creation, path validation (`account_home_check`), identity checks, cleanup logic or runner-keychain comparison.
+- The identity checks compare uid and home, not group.
+- The home keeps whatever group `sudo mkdir` gave it. At mode 0700 that group has no access, so owner-only is the right posture.
+
+**Tests**
+- `unittest discover` and direct execution each give 31/31 OK.
+- The 8 `ProviderDiagnostics` tests pass, including the new one.
+- Running with `python3 -I -m unittest <module>` fails with `ModuleNotFoundError`, because `-I` drops the working directory from the path. That is how I invoked it, not a defect in the code.
+
+**Non-blocking notes**
+1. The phase doc has missing spaces from line-wrapping, such as `supervisor5ccc646c…`, `product61f4…`, `mode0700`, `supervisor30+`, `Node58`, `staticworkflow3` and `version0.2.2`. Fix these in a docs-only touch-up before committing.
+2. I could not verify offline the claims about hosted run 41915532600/1 (start time, `guard=assets_pass`) or the Node 58/58, static-workflow 3/3 and actionlint results. They are plausible and consistent with the diff, and I take them from the docs.
+3. The docs correctly say that a fresh hosted provider run is still required. Later stages, from `stage_copy` onward, have never run, so any failure there should be recorded as a new observation.

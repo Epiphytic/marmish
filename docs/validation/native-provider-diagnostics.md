@@ -22,5 +22,21 @@ existing-function churn; these serve bounded diagnostic attribution and were
 reviewed. Dynamic unittest entry points are not dead code. No runtime identities,
 account details, raw subprocess output or private provider material are committed.
 
-Actual hosted diagnostic outcome is pending dispatch; no macOS provider pass is
-claimed here. Follow-up results belong to their exact run/attempt/source.
+Hosted diagnostic [41915532600/1](https://github.com/Epiphytic/marmish/actions/runs/41915532600)
+started at 21:22:49 UTC on 2026-11-04, six seconds after creation. Supervisor
+`5ccc646c3b5a85df73aef79dd14286c6b6d78f0c` validated the exact old product and
+artifact bindings, passed offline contracts, then failed at `account_home_chown`
+with `operation_failed`, exit code 1, elapsed 530 ms. The report records
+`runner_keychain_unchanged=true` and `owned_account_removed=false`; product
+execution was not reached. The provenance envelope records `guard=assets_pass`.
+
+The negative group operand `uid:-2` is incompatible with Apple's unsigned
+numeric [chown parser](https://github.com/apple-oss-distributions/file_cmds/blob/main/chown/chown.c).
+An independently approved harness-only correction changes chown to the allocated
+UID alone. New offline coverage asserts complete argv, private mode-0700 home
+creation before ownership transfer, and unchanged account primary group.
+Supervisor discovery and direct execution each pass 31/31; Node tooling passes
+58/58; static workflow contracts pass 3/3. Actionlint 1.7.7 and diff whitespace
+checks pass. No live accounts, Cargo builds, product changes, or private provider
+material were used in this correction. Actual code review and a fresh hosted
+provider run remain necessary; no macOS provider pass is claimed.
