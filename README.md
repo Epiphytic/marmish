@@ -4,15 +4,14 @@ Run remote commands over Marmot's MLS-encrypted Nostr transport. Marmish v0.2
 uses native Rust clients and daemons, with one named Nostr identity per daemon.
 The same identity can send commands and accept authorized commands.
 
-**Native v0.2.2 corrective prerelease is available.** It adds explicit macOS
-`keychain-authorize` for existing credentials. All three platforms passed native
-verification, packaging and file-backed quickstart checks; both Linux provider
-checks passed. The macOS qualification supervisor failed without a detailed
-provider result. Interactive Keychain consent and recovery of the reported denial
-remain unverified. A separately tracked transport shutdown panic was observed in
-the otherwise successful installed Linux command check. Full cross-platform
-command, provider and lifecycle qualification remains incomplete. See the
-[release evidence](docs/validation/v0.2.2/corrective-publication.md).
+**Native v0.2.3 is available.** It includes background daemon startup, server
+PATH resolution and distinct command lookup, policy and launch errors. All three
+platforms passed native verification, packaging, installed tests, provider checks
+and file-backed quickstart checks. Both public installer sources passed the
+six-cell HTTPS install/setup matrix. Interactive macOS Keychain consent and
+recovery of the reported user denial remain unverified; full nine-pair remote
+command and version-lifecycle qualification remain incomplete. Tor is experimental.
+See the [current release evidence](docs/validation/native-automatic-release.md).
 
 Source: [GitHub](https://github.com/Epiphytic/marmish) ·
 [Radicle](https://radicle.network/nodes/iris.radicle.network/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg)
@@ -33,7 +32,7 @@ If Iris is unavailable, the same installer is available independently on GitHub:
 curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/Epiphytic/marmish/master/scripts/install.sh | sh -s -- --quickstart --debug
 ```
 
-The installer pins v0.2.2 and verifies its manifest and binary checksums. It does
+The installer pins v0.2.3 and verifies its manifest and binary checksums. It does
 not select a legacy v0.1 release. The Iris and GitHub URLs are independent script sources; both were verified to
 serve the same pinned native bootstrap. Versioned binary assets
 are downloaded from GitHub Releases. See [Scope and validation](#scope-and-validation) for the evidence boundary. No Python, uv,
@@ -43,7 +42,7 @@ The native 0.2.1 installer adds automatic upgrades of recognized v0.1 installer
 launchers. It verifies the old marker and exact wrappers, replaces the launchers,
 and retains the old runtime and launcher backups; private state is unchanged.
 Unrelated programs are refused rather than overwritten. Interrupted upgrades
-recover on the next installer invocation. The public bootstrap above selects the matching 0.2.2 assets.
+recover on the next installer invocation. The public bootstrap above selects the matching 0.2.3 assets.
 
 Supported binaries are Linux AMD64 and ARM64 (glibc 2.39 or newer), and macOS 15
 or newer on Apple Silicon. Use a native ARM64 terminal on macOS. The macOS
@@ -73,19 +72,13 @@ whether inbound execution is enabled. It does not print your private keys.
 Setup initializes local state and exits; it does not leave a server running.
 
 Launchers are installed in `~/.local/bin`. If necessary, add that directory to
-your shell's PATH. On a machine accepting commands, start the daemon and leave
-it running:
+your shell's PATH. On a machine accepting commands, start the daemon:
 
 ```sh
 marmishd
 ```
 
-The published v0.2.2 binaries run this in the foreground using the configured
-`default` identity. On a client, the first command starts its local daemon
-automatically if needed. Configure service supervision separately if you want
-the server to start at login or boot.
-
-In the newer source implementation, `marmishd` and `marmish daemon` detach by
+Version 0.2.3 uses the configured `default` identity and detaches by
 default. Successful startup is quiet and waits for credentials, storage, IPC and
 transport readiness; startup errors return to the caller's terminal. Normal
 output appends to the identity profile's private `daemon.log` (mode 0600), with
@@ -94,10 +87,10 @@ no automatic rotation. With default paths, logs are under
 `$XDG_DATA_HOME/marmish/v2/<identity>/daemon.log`) and
 `~/Library/Application Support/Marmish/v2/<identity>/daemon.log` on macOS.
 Stop the daemon before rotating its log. Use
-`marmishd --foreground` for attached diagnostics or service supervision. This flag
-and background default are not available in the published v0.2.2 binaries.
+`marmishd --foreground` for attached diagnostics or service supervision.
 
-Source client autostart has a 300-second startup budget, including failed-start
+On a client, the first command starts its local daemon automatically if needed.
+Client autostart has a 300-second startup budget, including failed-start
 cleanup, independent of command `--wait-seconds`. If the launching parent or
 client dies before acknowledging readiness, the new unacknowledged daemon shuts
 down; an acknowledged daemon survives the caller. This does not install a login
@@ -133,7 +126,7 @@ are not implicitly evaluated remotely. Pass `--stdin` to send up to 16 KiB of
 immutable input from stdin, or `--stdin-none` to send none. By default, piped
 input is read and terminal input is not.
 
-Current source also accepts short command names, for example
+Version 0.2.3 also accepts short command names, for example
 `marmish SERVER_NPUB@relay.example -- printf '%s\n' hello`. The server resolves
 these using the PATH inherited by its running daemon. Restart `marmishd` after
 changing that PATH. Absolute paths, cwd-relative paths and executable symlinks
@@ -150,11 +143,10 @@ implicitly retried through a shell. Use `--debug` on both ends for stage/reason 
 server diagnostics go to its private `daemon.log`. Repairing a refused command
 requires a new invocation, since retries preserve recorded results.
 
-These lookup/diagnostic changes are in source and require both peers to upgrade;
-published 0.2.2 binaries predate them and still require canonical absolute
-executable paths; symlink spellings such as `/bin` may be refused there.
-Do not downgrade a profile after executing
-commands with the new source. See [the design](docs/phases/native-command-path-errors.md)
+These lookup/diagnostic changes require both peers to upgrade to v0.2.3.
+Older v0.2.2 binaries require canonical absolute executable paths; symlink
+spellings such as `/bin` may be refused there. Do not downgrade a profile after
+executing commands with v0.2.3. See [the design](docs/phases/native-command-path-errors.md)
 for PATH limits, recovery behavior and accepted filesystem-check limitations.
 
 Aliases are configured in the named profile's `config.json`, while its daemon is
@@ -221,9 +213,8 @@ curl --proto '=https' --tlsv1.2 -fsSL https://iris.radicle.network/raw/rad:z3x7G
 marmishd --debug
 ```
 
-For attached debugging with the newer source implementation, use
-`marmishd --foreground --debug`; published v0.2.2 uses the `--debug` invocation
-above and does not accept `--foreground`.
+For attached debugging, use `marmishd --foreground --debug`. Background debug
+output goes to the private profile log.
 
 Stop the existing daemon before restarting it. Rerunning first-time quickstart
 against an existing configuration can report `config_exists`; use `setup --update`
@@ -277,7 +268,26 @@ Use `marmish --help` for command options.
 The old Python distribution's `--doctor` and namespace requirements do not apply
 to the native v0.2 distribution.
 
-## Corrective release validation
+## Current release validation
+
+The [v0.2.3 release](https://github.com/Epiphytic/marmish/releases/tag/v0.2.3)
+contains 15 verified assets from source
+`0d849fe4dd92b447aa16591b168fff70abcd732c`. Candidate
+[41926462226](https://github.com/Epiphytic/marmish/actions/runs/41926462226)
+passed all 11 jobs, including 388 default and 483 installed-feature native tests
+on each platform, provider checks and installed quickstarts. Publisher
+[41936735554](https://github.com/Epiphytic/marmish/actions/runs/41936735554)
+passed all four jobs and updated the public bootstrap to v0.2.3.
+
+The GitHub and Iris scripts matched byte-for-byte. Public HTTPS run
+[41937495649](https://github.com/Epiphytic/marmish/actions/runs/41937495649)
+passed all eight jobs: both installer sources across all three platforms,
+including install/setup validation and completed cleanup. Source and release tag
+were also mirrored to Radicle/Iris. These checks do not establish the full
+nine-pair remote command matrix, version lifecycle, interactive macOS consent or
+Tor command transport. See [current evidence](docs/validation/native-automatic-release.md).
+
+## Historical v0.2.2 validation
 
 The [v0.2.2 prerelease](https://github.com/Epiphytic/marmish/releases/tag/v0.2.2)
 contains 15 verified assets built from source
@@ -306,10 +316,10 @@ latency/goodput and qualification limits. Historical
 ## Release process
 
 Releases require an explicit reviewed native Cargo version bump. The new GitHub
-workflow will run the full three-platform candidate checks before publishing
+workflow runs the full three-platform candidate checks before publishing
 immutable assets and updating the installer. It does not infer version numbers
-from commit messages. The v0.2.3 automation is undergoing hosted qualification;
-the installer continues selecting v0.2.2 until publication succeeds.
+from commit messages. The v0.2.3 candidate and publisher passed hosted
+qualification, and the installer selects v0.2.3.
 
 Binary releases are hosted on GitHub. Source branches and tags are also mirrored
 to Radicle/Iris separately; GitHub Actions does not publish Radicle releases.

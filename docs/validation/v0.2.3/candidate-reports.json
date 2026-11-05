@@ -1,0 +1,158 @@
+[
+  {
+    "artifact": "v02-provider-aarch64-apple-darwin-41926462226-1",
+    "file": "provider.json",
+    "report": {
+      "schema": 1,
+      "kind": "installed_auto_provider",
+      "ok": true,
+      "owned_account_removed": true,
+      "runner_keychain_unchanged": true,
+      "auto_keychain": true,
+      "distinct_named_identities": true,
+      "fresh_reload": true,
+      "item_count": 4,
+      "locked_refused": true,
+      "unlocked_fresh_reload": true,
+      "no_plaintext_fallback": true,
+      "python_in_runtime_path": false,
+      "network_activation": false,
+      "owned_children_reaped": true,
+      "owned_state_removed": true,
+      "supervisor_interpreter_unchanged": true,
+      "elapsed_ms": 16740,
+      "source_commit": "0d849fe4dd92b447aa16591b168fff70abcd732c",
+      "target": "aarch64-apple-darwin",
+      "run_id": "41926462226",
+      "run_attempt": "1",
+      "provider_packages": []
+    }
+  },
+  {
+    "artifact": "v02-provider-aarch64-unknown-linux-gnu-41926462226-1",
+    "file": "provider.json",
+    "report": {
+      "schema": 1,
+      "kind": "installed_auto_provider",
+      "ok": true,
+      "python_in_runtime_path": false,
+      "network_activation": false,
+      "owned_children_reaped": true,
+      "owned_state_removed": true,
+      "auto_keychain": true,
+      "distinct_named_identities": true,
+      "fresh_reload": true,
+      "item_count": 4,
+      "locked_refused": true,
+      "unlocked_fresh_reload": true,
+      "no_plaintext_fallback": true,
+      "absent_provider_files": true,
+      "elapsed_ms": 17101,
+      "source_commit": "0d849fe4dd92b447aa16591b168fff70abcd732c",
+      "target": "aarch64-unknown-linux-gnu",
+      "run_id": "41926462226",
+      "run_attempt": "1",
+      "provider_packages": [
+        "dbus-bin=1.14.10-4ubuntu4.1",
+        "dbus-daemon=1.14.10-4ubuntu4.1",
+        "gnome-keyring=46.1-2ubuntu0.2",
+        "util-linux=2.39.3-9ubuntu6.6"
+      ]
+    }
+  },
+  {
+    "artifact": "v02-provider-x86_64-unknown-linux-gnu-41926462226-1",
+    "file": "provider.json",
+    "report": {
+      "schema": 1,
+      "kind": "installed_auto_provider",
+      "ok": true,
+      "python_in_runtime_path": false,
+      "network_activation": false,
+      "owned_children_reaped": true,
+      "owned_state_removed": true,
+      "auto_keychain": true,
+      "distinct_named_identities": true,
+      "fresh_reload": true,
+      "item_count": 4,
+      "locked_refused": true,
+      "unlocked_fresh_reload": true,
+      "no_plaintext_fallback": true,
+      "absent_provider_files": true,
+      "elapsed_ms": 22687,
+      "source_commit": "0d849fe4dd92b447aa16591b168fff70abcd732c",
+      "target": "x86_64-unknown-linux-gnu",
+      "run_id": "41926462226",
+      "run_attempt": "1",
+      "provider_packages": [
+        "dbus-bin=1.14.10-4ubuntu4.1",
+        "dbus-daemon=1.14.10-4ubuntu4.1",
+        "gnome-keyring=46.1-2ubuntu0.2",
+        "util-linux=2.39.3-9ubuntu6.6"
+      ]
+    }
+  },
+  {
+    "artifact": "v02-quickstart-aarch64-apple-darwin-41926462226-1",
+    "file": "quickstart.json",
+    "report": {
+      "schema": 1,
+      "kind": "installed_quickstart_pty",
+      "ok": true,
+      "key_storage": "file",
+      "network_activation": false,
+      "python_in_runtime_path": false,
+      "owned_state_removed": true,
+      "role": "both",
+      "inbound_enabled": false,
+      "prompts_completed": 5,
+      "identity_created": true,
+      "repeat_same_identity": true,
+      "repeat_owner_opened": false,
+      "stop_complete": true,
+      "elapsed_ms": 4684
+    }
+  },
+  {
+    "artifact": "v02-quickstart-aarch64-unknown-linux-gnu-41926462226-1",
+    "file": "quickstart.json",
+    "report": {
+      "schema": 1,
+      "kind": "installed_quickstart_pty",
+      "ok": true,
+      "key_storage": "file",
+      "network_activation": false,
+      "python_in_runtime_path": false,
+      "owned_state_removed": true,
+      "role": "both",
+      "inbound_enabled": false,
+      "prompts_completed": 5,
+      "identity_created": true,
+      "repeat_same_identity": true,
+      "repeat_owner_opened": false,
+      "stop_complete": true,
+      "elapsed_ms": 6098
+    }
+  },
+  {
+    "artifact": "v02-quickstart-x86_64-unknown-linux-gnu-41926462226-1",
+    "file": "quickstart.json",
+    "report": {
+      "schema": 1,
+      "kind": "installed_quickstart_pty",
+      "ok": true,
+      "key_storage": "file",
+      "network_activation": false,
+      "python_in_runtime_path": false,
+      "owned_state_removed": true,
+      "role": "both",
+      "inbound_enabled": false,
+      "prompts_completed": 5,
+      "identity_created": true,
+      "repeat_same_identity": true,
+      "repeat_owner_opened": false,
+      "stop_complete": true,
+      "elapsed_ms": 6792
+    }
+  }
+]

@@ -1,23 +1,30 @@
 # Marmish native v0.2 agent specification
 
-**Native v0.2.2 corrective prerelease is available.** It adds explicit macOS
-`keychain-authorize` for existing credentials. All three platforms passed native
-verification, packaging and file-backed quickstart checks; both Linux provider
-checks passed. The macOS qualification supervisor failed without a detailed
-provider result. Interactive Keychain consent and recovery of the reported denial
-remain unverified. A separately tracked transport shutdown panic was observed in
-the otherwise successful installed Linux command check. Full cross-platform
-command, provider and lifecycle qualification remains incomplete. See the
-[release evidence](validation/v0.2.2/corrective-publication.md).
+**Native v0.2.3 is released.** Source is
+`0d849fe4dd92b447aa16591b168fff70abcd732c`; bootstrap-only commit is
+`84af2ac715b6af3dcf2e553359200c8834b6bf99`. Candidate
+[41926462226](https://github.com/Epiphytic/marmish/actions/runs/41926462226)
+passed all 11 jobs: three-platform builds, 388 default and 483 installed-feature
+native tests per platform, provider checks and installed quickstarts. Publisher
+[41936735554](https://github.com/Epiphytic/marmish/actions/runs/41936735554)
+passed all four jobs and published the
+[v0.2.3 assets](https://github.com/Epiphytic/marmish/releases/tag/v0.2.3).
 
-Release source is `89107389b9a348b23458cc59b7250499fe1b7b08`;
-bootstrap-only commit is `465e51a9365a08365a49d555b876c39af25b97ff`.
-Both public installer URLs serve the verified v0.2.2 bootstrap. Candidate
-41726568264 attempt 1 remains FAILURE after the opaque macOS qualification
-supervisor error; the separate HTTPS workflow is guard-blocked, not passed.
-See [publication evidence](validation/v0.2.2/corrective-publication.md).
-The [0.2.1 evidence](validation/v0.2/corrective-release-0.2.1.md) and
-[0.2.0 evidence](validation/v0.2/initial-release.md) remain historical.
+Both public scripts install v0.2.3 and matched SHA256
+`164a59a2672b1f2a74afbcd6556d4eed87df80170cabc00bd5638ffad2c88a30`.
+The two-source, three-platform HTTPS installer run
+[41937495649](https://github.com/Epiphytic/marmish/actions/runs/41937495649)
+passed all eight jobs, including six install/setup cells and completed cleanup.
+Source and tag were manually mirrored to Radicle and synchronized with Iris;
+binary releases are hosted only on GitHub. See
+[current release evidence](validation/native-automatic-release.md).
+
+Interactive macOS Keychain consent and recovery of the reported user denial,
+the full nine-pair remote command matrix and version-lifecycle qualification
+remain unverified. Tor command transport remains experimental. The
+[v0.2.2](validation/v0.2.2/corrective-publication.md),
+[v0.2.1](validation/v0.2/corrective-release-0.2.1.md) and
+[v0.2.0](validation/v0.2/initial-release.md) evidence remains historical.
 
 ## Scope and navigation
 
@@ -42,8 +49,8 @@ Other operating systems, architectures and older runtime platforms are not
 covered by those assets. Target availability is separate from full qualification. Darwin ad-hoc signing is not Developer ID signing or
 notarization; the actual manifest records the signing state.
 
-Direct relays are the intended v0.2 command route; full installed qualification
-is still pending for this initial release. Working Tor command
+Direct relays are the intended v0.2 command route; the full nine-pair installed
+command matrix and version-lifecycle qualification remain pending. Working Tor command
 transport is deferred to v0.3. Embedded Arti and its foundation evidence remain
 experimental command capabilities, with no direct-network fallback after a
 Tor failure. No PTY, tmux, interactive shell, Unix-login mapping, root execution
@@ -61,9 +68,9 @@ profile migration or automatic disk cleanup. Receipt generation determines
 rollback versus roll-forward after interruption, with recovery on the next
 installer invocation. Native uninstall removes native links, not the retained
 legacy backups. See the [reviewed design](phases/v0.2.1-native-legacy-upgrade.md).
-The public bootstrap now selects 0.2.2 with this behavior. Native suites passed
-on all three release targets; actual user upgrade and real macOS provider
-qualification remain distinct observations.
+The public bootstrap now selects 0.2.3 with this behavior. Native suites and
+provider qualification passed on all three release targets; actual user upgrade
+and interactive macOS consent remain separate observations.
 
 ## Identity, ownership and local trust
 
@@ -250,7 +257,7 @@ launch. Retrying a refused invocation returns its recorded refusal; after repair
 submit a new command. Authorized clients can distinguish missing/type failures
 from policy denial; this limited filesystem existence disclosure is accepted.
 
-These source changes require coordinated client/server upgrades: old closed wire
+These v0.2.3 changes require coordinated client/server upgrades: old closed wire
 decoders cannot read new error/outcome values. New binaries read legacy engine
 requests/outcomes, but downgrading a profile after it records ResolvedExec or
 LaunchFailed is unsupported. Published 0.2.2 assets predate this increment and
@@ -372,12 +379,12 @@ Rollback selection does not imply older binaries can read newer state. Unsupport
 formats refuse before profile opening; no compatibility marker is rewritten to
 force acceptance. Runtime requires the installed sibling marmish-worker.
 
-The release bootstrap is intended to be served byte-for-byte from Radicle/Iris
-and GitHub, with GitHub the independent script backup. Both routes may still
-need GitHub-hosted release assets. Availability of one mirror does not prove the
-other; source replication, HTTPS delivery and installed behavior need separate
-evidence. A native-bootstrap cutover and matching URL digests are required before
-the default script can be described as installing v0.2. Six-case HTTPS installer validation passed for v0.2.0 in run 41667214179 attempt 1; it does not qualify v0.2.2 or follow from source publication.
+The release bootstrap is served byte-for-byte from Radicle/Iris and GitHub,
+with GitHub the independent script backup. Both routes download GitHub-hosted
+release assets. The v0.2.3 script digests and six-cell HTTPS install/setup checks
+passed for both sources, as recorded in
+[current evidence](validation/native-automatic-release.md). Source replication,
+HTTPS delivery and installed behavior remain separately recorded observations.
 
 Ordinary shutdown preserves jobs and durable native work. Hidden same-UID fixture
 cleanup is a separate irreversible draining lifecycle: close admission, refresh
@@ -388,7 +395,7 @@ proofs fail cleanup. No-engine clients use honest engine-absence/empty-server-le
 and retained-directory proofs, never a fabricated engine guard or quiesced flag.
 No caller-supplied PID or filesystem path authorizes process-tree deletion.
 
-## Initial release and evidence status
+## Historical initial release and evidence status
 
 The user authorized the initial native 0.2.0 release with a prominent macOS
 full-testing-in-progress caveat; corrections are planned for v0.2.1. This
@@ -416,8 +423,10 @@ Earlier evidence remains useful within its recorded scope: foundation acceptance
 and the [lifecycle component review](reviews/v0.2-version-lifecycle-integrated-code-r3.md).
 Component review is not hosted release qualification.
 
-The following full qualification remains pending unless a new independently
-bound result is explicitly recorded:
+At the initial release, the following qualification was pending. The current
+v0.2.3 provider results supersede the historical provider status below; the
+remaining full matrix, benchmark and lifecycle gates still need independently
+bound results:
 
 - Installed matrix: nine directed platform pairs and exact bytes/exits.
 - Local installed cohorts: count/uptime exit, policy, recovery and new-session.
@@ -428,7 +437,8 @@ bound result is explicitly recorded:
 - Providers: actual default-auto Linux and macOS native-provider qualification.
 
 HTTPS installer validation passed for v0.2.0 within its tested scope for both script sources across all three
-targets in run 41667214179 attempt 1; this is not v0.2.2 qualification. The list above omits only that historical v0.2.0 gate.
+targets in run 41667214179 attempt 1; this is historical v0.2.0 qualification. Current v0.2.3 HTTPS and provider
+results are recorded separately above.
 
 Actual release manifests bind source and immutable asset hashes. Record source
 mirror and installer-byte verification as their own evidence; do not infer
@@ -481,9 +491,9 @@ The installed lifecycle checker derives synthetic A/C versions from the frozen
 stable `0.2.N` candidate and matching native lock entry, rather than pinning
 `0.2.0`. See the [patch-version amendment](phases/v0.2-lifecycle-patch-versions.md).
 This changes qualification tooling only; hosted lifecycle qualification remains
-pending. The public installer now pins 0.2.2.
+pending. The public installer now pins 0.2.3.
 
-The canonical credential-helper correction (`marmish-far`) makes managed and ordinary sibling `marmish`, `marmishd` and worker entrypoints select validated same-version `marmish` for provider operations. Exact downloaded standalone CLI behavior is preserved. This fixes an inconsistent helper identity; reported macOS Keychain denial causation and full daemon startup remain pending actual pre/post-fix macOS qualification. No ACL or file-fallback policy changes. See [design](phases/v0.2-canonical-credential-helper.md).
+The canonical credential-helper correction (`marmish-far`) makes managed and ordinary sibling `marmish`, `marmishd` and worker entrypoints select validated same-version `marmish` for provider operations. Exact downloaded standalone CLI behavior is preserved. This fixes an inconsistent helper identity; reported macOS Keychain denial causation and interactive recovery remain unverified. Current v0.2.3 automated provider checks passed separately; they do not validate user consent dialogs. No ACL or file-fallback policy changes. See [design](phases/v0.2-canonical-credential-helper.md).
 
 The published 0.2.2 increment adds explicit foreground macOS
 `marmish [-i NAME] [--state-dir DIR] keychain-authorize`; it is not in the
@@ -502,7 +512,7 @@ reserves the final 15 seconds for verification. SIGKILL cleanup relies on the
 helper watchdog. Interactive macOS consent and recovery of the user's denial
 remain qualification requirements, separate from offline test success.
 
-### macOS provider supervisor correction and remaining qualification
+### Historical macOS provider supervisor correction
 
 Candidate 41698628787 macOS stopped in offline supervisor tests; real Keychain qualification was skipped, so it supplies no provider or helper-custody verdict. The bounded correction canonicalizes lifecycle fixture paths and handles an initial owned-child group EPERM only by exact-child reap plus a fresh ESRCH proof; unknown or denied cleanup stays red. Linux provider23/HTTPS24 offline checks and independent [code review](reviews/v0.2.1-macos-provider-supervisor-code-r1.md) pass. At that evidence point native macOS offline tests and actual disposable Keychain qualification remained pending; see the newer observation below. See [sanitized evidence](validation/v0.2.1/macos-provider-supervisor.md) and [approved design](phases/v0.2.1-macos-provider-supervisor.md).
 
@@ -512,16 +522,17 @@ unchanged runner Keychain snapshots. No inner report was imported; whether
 provider execution began is unknown. `owned_account_removed=false` does not
 prove an account existed or leaked. Bounded failure-stage diagnostics are
 tracked as `marmish-wtg`; interactive macOS acceptance remains pending.
+Current v0.2.3 provider checks passed on all three platforms; these historical
+failures remain separately recorded and do not establish interactive consent.
 The installed Linux command check also emitted a background sink panic despite
 passing result/cleanup flags. Its source/dependencies are unchanged from 0.2.1;
 independent triage permits this caveated correction, while `marmish-xvd` tracks
 the defect. Remote final-write/closure effects remain unproven.
 
-## Background daemon source increment
+## Background daemon (v0.2.3)
 
-The source implementation makes `marmishd` and `marmish daemon` detach by
-default; published v0.2.2 assets still run foreground and do not support the new
-`--foreground` flag. Explicit foreground operation preserves owned-child
+Version 0.2.3 makes `marmishd` and `marmish daemon` detach by default.
+Explicit `--foreground` operation preserves owned-child
 supervision, inherited output and shutdown receipts. Initialization and other
 operations retain their existing behavior. This is not login-service setup.
 
@@ -537,8 +548,9 @@ Client autostart has a shared 300-second startup budget covering launch and
 failed-start cleanup, independent of command wait time. A launching parent or
 client that disappears before the readiness acknowledgement cannot leave an
 unacknowledged daemon running. An acknowledged daemon survives its caller.
-These source contracts require integrated validation and actual platform
-qualification; they do not change the published binary qualification record.
+The released v0.2.3 candidate passed the three-platform native suites, provider
+checks and quickstarts. These results do not establish the full nine-pair command
+matrix or version lifecycle.
 See the [approved design](phases/native-background-daemon.md).
 
 The background-daemon source increment passes 471 local Linux all-feature native
@@ -551,7 +563,7 @@ separate from these local results.
 
 ## Gated native release automation
 
-The forthcoming reviewed v0.2.3 increment adds GitHub-only release automation.
+The released v0.2.3 increment adds GitHub-only binary release automation.
 A master push changing the native Cargo manifest runs version eligibility first;
 an explicitly bumped native version must match Cargo.lock and advance existing
 native tags. CI never chooses a semantic version automatically. An unchanged
@@ -561,11 +573,13 @@ and real provider checks must all pass on Linux AMD64/ARM64 and macOS ARM64.
 A separate publisher checks the completed whole attempt, source, reports and
 artifact hashes. It reproduces the Rust-rendered bootstrap without repository
 credentials, publishes exactly 15 immutable GitHub assets, then fast-forwards
-master with a direct-child change to scripts/install.sh. The initial bootstrap
-remains pinned to 0.2.2 until public 0.2.3 assets verify. Recovery cannot replace
+master with a direct-child change to scripts/install.sh. Publication succeeded
+for v0.2.3, and the bootstrap now selects its verified assets. Recovery cannot replace
 assets or move tags. Source and tag mirroring to Radicle/Iris remains manual;
 GitHub Actions has no Radicle credentials or release-publication responsibility.
-The independent six-cell public HTTPS installer run remains a separate gate.
+The independent six-cell public HTTPS installer run remains a separate gate;
+it passed for v0.2.3 in run 41937495649.
 See [the release design](phases/native-automatic-release.md) and
-[publication plan](phases/v0.2.3-publication.md). Hosted automation acceptance and
-actual v0.2.3 publication are pending; offline tests do not establish them.
+[publication plan](phases/v0.2.3-publication.md), with actual hosted candidate,
+publisher and public-install results in
+[release evidence](validation/native-automatic-release.md).

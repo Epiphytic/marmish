@@ -1,6 +1,6 @@
 # Gated native GitHub release automation
 
-Beads: `marmish-scj`. Status: design APPROVED by actual Claude rounds2–3; integrated offline code review APPROVED in round2. Hosted candidate/publication acceptance remains required.
+Beads: `marmish-scj`. Status: design APPROVED by actual Claude rounds2–3; integrated offline code review APPROVED in round2. Hosted candidate, automatic publication and six-cell public HTTPS qualification PASSED for v0.2.3; see [validation](../validation/native-automatic-release.md).
 See [review](../reviews/native-automatic-release-design-r3.md). The user authorizes a new release and appropriate
 releases following versioned mainline merges. The latest constraint excludes
 Radicle publication from GitHub Actions: binaries remain GitHub release assets;

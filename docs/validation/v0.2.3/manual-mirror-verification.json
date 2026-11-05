@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "source": "0d849fe4dd92b447aa16591b168fff70abcd732c",
+  "bootstrap_commit": "84af2ac715b6af3dcf2e553359200c8834b6bf99",
+  "branch": "master",
+  "github_branch_verified": true,
+  "radicle_delegate_branch_verified": true,
+  "tag": "v0.2.3",
+  "annotated_tag_object": "1d6aa87ba11e5324a8c2f360e32e600a7b091812",
+  "github_tag_verified": true,
+  "radicle_delegate_tag_verified": true,
+  "iris_synced": true,
+  "public_installer_sha256": "164a59a2672b1f2a74afbcd6556d4eed87df80170cabc00bd5638ffad2c88a30",
+  "both_public_installer_bytes_verified": true,
+  "method": "Manual source and annotated-tag mirroring; no binary releases on Radicle."
+}

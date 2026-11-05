@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "kind": "installed_public_release_provenance",
+  "release_info": {
+    "schema": 1,
+    "version": "0.2.3",
+    "target": "x86_64-unknown-linux-gnu",
+    "commit": "0d849fe4dd92b447aa16591b168fff70abcd732c",
+    "formats": [
+      2,
+      6,
+      1,
+      1,
+      1
+    ]
+  },
+  "bootstrap_sha256": "164a59a2672b1f2a74afbcd6556d4eed87df80170cabc00bd5638ffad2c88a30",
+  "assets": [
+    {
+      "asset": "THIRD-PARTY-LICENSES-0.2.3-x86_64-unknown-linux-gnu",
+      "size": 2137225,
+      "sha256": "e0966c945751a6d83e1f6289d0d80ff980aafd1871ccd1e8d7425da80a2716b0"
+    },
+    {
+      "asset": "marmish-0.2.3-x86_64-unknown-linux-gnu",
+      "size": 71301920,
+      "sha256": "d57584bc55ca4d69ee65b55472488f68828b1c3d94b0d0131ff44d4b4d5312e0"
+    },
+    {
+      "asset": "marmish-worker-0.2.3-x86_64-unknown-linux-gnu",
+      "size": 13133296,
+      "sha256": "7c5e3aab1878020a410c065f2e807c9488fe41d6e6e0dc2ef8d8f8244e837ca2"
+    },
+    {
+      "asset": "marmishd-0.2.3-x86_64-unknown-linux-gnu",
+      "size": 71301928,
+      "sha256": "37d39d1e2d02a32864401bb11ddf9f6f7724819dd5c4ef0cf91d17177b4de6b2"
+    }
+  ],
+  "note": "Independent repeated public HTTPS installation after command cohorts; preserves provenance output and installed asset hashes. Same pinned bootstrap and immutable release assets as the cohorts.",
+  "ok": true,
+  "owned_installation_removed": true
+}

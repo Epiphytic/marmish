@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "platform": "linux-amd64",
+  "artifact": "github-release-v0.2.3",
+  "relay": "wss://relay.us.whitenoise.chat/",
+  "cases": [
+    {
+      "name": "server_detach_with_custom_path",
+      "ok": true,
+      "milliseconds": 754
+    },
+    {
+      "name": "cold_command",
+      "ok": true,
+      "milliseconds": 4461,
+      "exit": 0,
+      "bytes": 8,
+      "sha256": "8ba8496a2525ae171ffd104d632dede6ef418d9b95962a9d88e2fcdbc8d48d24"
+    },
+    {
+      "name": "output_64k",
+      "ok": true,
+      "milliseconds": 8830,
+      "exit": 0,
+      "bytes": 65536,
+      "sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "goodput_kib_per_second": 7.25
+    },
+    {
+      "name": "output_256k",
+      "ok": true,
+      "milliseconds": 31216,
+      "exit": 0,
+      "bytes": 262144,
+      "sha256": "8a39d2abd3999ab73c34db2476849cddf303ce389b35826850f9a700589b4a90",
+      "goodput_kib_per_second": 8.2
+    },
+    {
+      "name": "finite_server_diagnostics_exclude_argv_and_path",
+      "ok": true
+    },
+    {
+      "name": "bounded_daemons_joined_cleanup",
+      "ok": true
+    }
+  ],
+  "ok": true,
+  "milliseconds": 96530,
+  "private_state_removed": true,
+  "source_commit": "0d849fe4dd92b447aa16591b168fff70abcd732c",
+  "tor": "off",
+  "key_storage": "file",
+  "measurement": "Single end-to-end CLI invocation samples, including protocol/relay overhead; not raw-link throughput."
+}

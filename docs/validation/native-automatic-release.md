@@ -1,8 +1,104 @@
 # Native automatic release validation
 
-Beads: marmish-scj. Hosted acceptance and v0.2.3 publication remain pending.
-The installer still selects v0.2.2 until independently verified public assets and
-the exact direct-child bootstrap exist.
+Beads: marmish-scj. **v0.2.3 is published and hosted qualification passed.**
+The installer selects v0.2.3 on Linux AMD64/ARM64 and macOS ARM64.
+
+## Published release and hosted acceptance
+
+[GitHub prerelease v0.2.3](https://github.com/Epiphytic/marmish/releases/tag/v0.2.3)
+was published automatically from source
+`0d849fe4dd92b447aa16591b168fff70abcd732c`.
+[Candidate 41926462226/1](https://github.com/Epiphytic/marmish/actions/runs/41926462226)
+passed all 11 jobs, without a macOS qualification bypass. Each platform passed
+388 default native tests and 483 installed-feature native tests. Linux passed
+116 engine and 12 vault tests; macOS passed 123 engine and 13 vault tests.
+Strict Clippy, package, license and platform checks passed.
+
+All three actual provider checks verified automatic keychain custody, two
+named identities/four items, fresh reload, locked refusal, unlocked reload,
+no plaintext fallback and owned process/state cleanup. macOS additionally
+verified owned account removal and unchanged runner Keychain/interpreter.
+These checks deliberately do not activate a relay connection. All three
+PTY quickstarts passed setup and repeat-identity checks; their deterministic
+fixtures use explicit file custody, separately from automatic provider tests.
+See the exact finite [candidate reports](v0.2.3/candidate-reports.json).
+Quickstart envelopes are bound to the source run through their exact artifact
+names and the publisher-verified artifact/report digests in the inventory.
+
+[Automatic publisher 41936735554/1](https://github.com/Epiphytic/marmish/actions/runs/41936735554)
+passed all four stages. Its 15 public assets match the verified names, sizes
+and SHA256 hashes in the [inventory](v0.2.3/publication-inventory.json).
+The [publication state](v0.2.3/publication-state.json) records its immutable
+completion snapshot. Its `manual_source_mirror_pending: true` describes the
+publisher boundary; the subsequent [manual source/tag mirroring completed](v0.2.3/manual-mirror-verification.json).
+Binary release publication is GitHub-only; Actions has no Radicle credentials.
+
+Annotated tag `v0.2.3` peels to SOURCE. GitHub and Radicle source branches and tag
+were verified equal, and Iris synchronization completed. The publisher created
+bootstrap `84af2ac715b6af3dcf2e553359200c8834b6bf99`, a direct child of SOURCE
+changing only `scripts/install.sh`. Both public URLs returned script SHA256
+`164a59a2672b1f2a74afbcd6556d4eed87df80170cabc00bd5638ffad2c88a30`.
+
+[HTTPS installer qualification 41937495649/1](https://github.com/Epiphytic/marmish/actions/runs/41937495649)
+passed all eight jobs: six Iris/GitHub × Linux AMD64/ARM64/macOS ARM64 cells,
+source resolution and rollup. Every cell verified exact provenance, installation,
+setup, repeat installation, status, released profile leases, stopped owned
+processes and removed owned state/runtime. Master remained frozen through
+completion. [Exact finite HTTPS reports](v0.2.3/https-reports.json) bind the
+candidate, source, bootstrap, manifests and qualification attempt.
+
+macOS packages remain ad-hoc signed and not notarized, requiring macOS 15 on
+Apple Silicon. Linux requires glibc 2.39 or newer. Automated isolated Keychain
+qualification does not establish interactive user-consent behavior. This release
+does not claim Tor qualification or a complete nine-pair interoperability run.
+
+## Installed public-release Marmot command checks
+
+The actual public GitHub bootstrap installed the Linux AMD64 v0.2.3 binaries
+into a unique private test root. A separate repeated public installation retained
+[actual release-info and installed asset hashes](v0.2.3/installed-release-info.json),
+verifying SOURCE and formats `[2,6,1,1,1]` against the same immutable release.
+Fresh disposable server/client identities used explicit
+`wss://relay.us.whitenoise.chat/`, Tor off and explicit file custody.
+[All 15 remote command cases passed](v0.2.3/installed-live-commands.json):
+custom inherited PATH, standard PATH, absolute/relative aliases, preserved argv0,
+missing bare/absolute executable, execute-bit/directory/symlink-loop failures,
+additive default/per-key policy denials including a symlink alias, invalid format
+and missing interpreter. Unicode, metacharacters, quotes, whitespace and newline
+were preserved byte-for-byte (50 bytes, SHA256 in report).
+
+Daemon detach/readiness took 745 ms. Five successful small remote commands took
+2.696–3.965 seconds each end-to-end; ten expected failures took 1.627–2.734 seconds.
+These are single samples over a public relay, not a latency distribution or Tor
+measurements. Finite server logs excluded the payload sentinel and executable
+fixture directory. Both bounded detached daemons joined shutdown, recorded complete
+engine/MDK/runtime cleanup, emitted no panic and their private state was removed.
+This is Linux-to-Linux command evidence, separate from the three-platform package
+and installer results.
+
+## Installed public-release latency and goodput
+
+A second fresh identity pair ran the same installed release through the explicit
+public relay. [Byte-exact transfer samples](v0.2.3/installed-performance.json):
+
+| Workload | End-to-end duration | Effective output goodput |
+| --- | ---: | ---: |
+| Cold 8-byte command | 4.461 s | — |
+| 64 KiB output | 8.830 s | 7.25 KiB/s |
+| 256 KiB output | 31.216 s | 8.20 KiB/s |
+
+Every output matched its expected length and SHA256. Goodput divides application
+output by the entire CLI invocation duration, including protocol and relay
+processing; it is not raw network throughput. These are single samples with
+Tor off and explicit file custody on Linux AMD64, not medians, percentiles,
+cross-platform benchmarks or a performance promise. Daemon readiness took
+754 ms. Both daemons recorded complete joined cleanup, no panic, and removal
+of the disposable private state. Both local test cohorts ran sequentially.
+
+## Historical implementation and review evidence
+
+The observations below predate publication and retain their original source
+bindings. Later hosted results above supersede their pending-publication state.
 
 Integrated offline checks after diagnostic ancestor d39a912 and round-1 fixes:
 113 Node tests, Python HTTPS 24, automation workflow 4, provider supervisor 31
