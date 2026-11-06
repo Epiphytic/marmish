@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "default_relays": [
+    "wss://relay.eu.whitenoise.chat/",
+    "wss://relay.us.whitenoise.chat/"
+  ],
+  "explicit_relay_flags": false,
+  "bare_npub": true,
+  "private_state_removed": true,
+  "daemons_joined": true,
+  "commands": [
+    {
+      "case": "literal_special_characters",
+      "exit_code": 0,
+      "output_bytes": 64,
+      "byte_exact": true,
+      "elapsed_ms": 4965
+    },
+    {
+      "case": "second_command_same_room",
+      "exit_code": 0,
+      "output_bytes": 19,
+      "byte_exact": true,
+      "elapsed_ms": 4559
+    }
+  ],
+  "bare_npub_filters": [
+    "commands",
+    "wait",
+    "output"
+  ],
+  "ok": true
+}

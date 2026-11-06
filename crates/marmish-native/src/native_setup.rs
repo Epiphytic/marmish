@@ -3,7 +3,7 @@ use crate::command_config::CommandConfig;
 use crate::command_lifecycle::{OwnedIdentity, stop_owned};
 use crate::identity::{BackendChoice, ProfileLease};
 use crate::mdk_adapter::MdkOwner;
-use crate::transport::{ArtiDirs, RelayConnector};
+use crate::transport::{ArtiDirs, RelayConnector, default_relays};
 use crate::{Error, Result};
 use nostr::nips::nip19::ToBech32;
 use serde::Serialize;
@@ -130,7 +130,7 @@ fn proposed(mut old: Option<Value>, o: &SetupOptions) -> Result<(Value, bool, Se
         return Err(Error::Invalid("grant_choice_required"));
     }
     let before = old.clone();
-    let mut value=old.take().unwrap_or_else(||json!({"version":crate::command_config::CONFIG_FORMAT,"role":role.text(),"relays":[],"tor":"auto","trusted_remotes":[],"execution_clients":[],"command_policy":{"version":1},"cwd":null,"limits":{},"aliases":{}}));
+    let mut value=old.take().unwrap_or_else(||json!({"version":crate::command_config::CONFIG_FORMAT,"role":role.text(),"relays":default_relays(),"tor":"auto","trusted_remotes":[],"execution_clients":[],"command_policy":{"version":1},"cwd":null,"limits":{},"aliases":{}}));
     if let Some(r) = o.role {
         value["role"] = json!(r.text());
     }
@@ -215,6 +215,9 @@ fn choices(o: &mut SetupOptions) -> Result<()> {
         );
     }
     if o.relays.is_none() {
+        tty.file.write_all(
+            b"Enter keeps existing relay settings, or uses White Noise EU/US for a new profile.\nDefault Tor auto connects to public relays directly; choose always or --tor always for Tor.\n",
+        )?;
         let text = tty.line("Explicit relay URL(s), separated by spaces: ")?;
         if !text.is_empty() {
             o.relays = Some(text.split_whitespace().map(str::to_owned).collect());
@@ -442,14 +445,50 @@ mod tests {
         }
     }
     #[test]
-    fn both_without_grants_is_disabled_and_no_defaults_for_relays() {
+    fn both_without_grants_is_disabled_and_new_profiles_default_to_white_noise() {
         let o = options();
         let (v, _, role) = proposed(None, &o).unwrap();
         assert_eq!(role, SetupRole::Both);
         assert!(v["execution_clients"].as_array().unwrap().is_empty());
         let mut o = options();
         o.relays = None;
-        assert!(proposed(None, &o).is_err());
+        o.tor = None;
+        let (defaulted, _, _) = proposed(None, &o).unwrap();
+        assert_eq!(defaulted["relays"], json!(default_relays()));
+        assert_eq!(defaulted["tor"], "auto");
+        assert!(
+            defaulted["execution_clients"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(v["relays"], json!(["wss://relay.example/"]));
+    }
+    #[test]
+    fn omitted_setup_relays_preserve_existing_authority() {
+        let (original, _, _) = proposed(None, &options()).unwrap();
+        let mut omitted = options();
+        omitted.relays = None;
+        let (repeated, changed, _) = proposed(Some(original.clone()), &omitted).unwrap();
+        assert!(!changed);
+        assert_eq!(repeated, original);
+        omitted.update = true;
+        omitted.role = Some(SetupRole::Client);
+        let (updated, changed, _) = proposed(Some(original.clone()), &omitted).unwrap();
+        assert!(changed);
+        assert_eq!(updated["relays"], original["relays"]);
+    }
+    #[test]
+    fn explicit_empty_or_invalid_setup_relays_never_use_defaults() {
+        for relays in [
+            vec![],
+            vec!["not-a-relay".into()],
+            vec!["ws://relay.example/".into()],
+        ] {
+            let mut o = options();
+            o.relays = Some(relays);
+            assert!(proposed(None, &o).is_err());
+        }
     }
     #[test]
     fn existing_restrictions_preserved_and_update_explicit() {
@@ -477,6 +516,7 @@ mod tests {
         let root = private_state();
         let mut first = options();
         first.state_dir = root.path().join("state");
+        first.relays = None;
         let report = run(first).await.unwrap();
         assert!(report.identity_created && report.owner_opened);
         assert!(!report.inbound_enabled);
@@ -487,11 +527,14 @@ mod tests {
         );
         let mut second = options();
         second.state_dir = root.path().join("state");
+        second.relays = None;
         let repeated = run(second).await.unwrap();
         assert_eq!(repeated.npub, report.npub);
         assert!(!repeated.identity_created && !repeated.owner_opened && !repeated.config_changed);
         let profile = ProfileLease::acquire(&root.path().join("state"), "default").unwrap();
         assert!(profile.setup_snapshot().ready);
+        let config = config_read(&profile).unwrap().unwrap();
+        assert_eq!(config["relays"], json!(default_relays()));
         assert!(!profile.root().join("commands").exists());
     }
     #[tokio::test(flavor = "current_thread")]

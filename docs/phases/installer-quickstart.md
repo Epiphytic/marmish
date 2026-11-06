@@ -1,5 +1,9 @@
 # Installer quickstart increment
 
+> Historical design: public-default restrictions are superseded by
+> [White Noise defaults](whitenoise-default-relays.md).
+
+
 Beads: `marmish-zwn`. This extends the reviewed distribution installer, retaining
 its archive verification and platform gates. Existing phased implementation and
 dual-publication authorization applies.

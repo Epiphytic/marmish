@@ -52,7 +52,10 @@ approval. Linux musl and Intel macOS binaries are not provided.
 Quickstart creates the `default` identity and asks for:
 
 - A role: enter `c`, `s` or `b`, then Return. Return alone selects **both**.
-- Your explicit relay URL(s), separated by spaces. No public relay is selected automatically.
+- Relay URL(s), separated by spaces. **Unreleased source:** Return selects
+  `wss://relay.eu.whitenoise.chat/` and `wss://relay.us.whitenoise.chat/` for new
+  profiles, or keeps an existing profile’s relays. Published v0.2.3 still requires
+  explicit URLs; enter the two URLs above when installing that version.
 - Tor routing (`auto`, `always` or `off`): `always` routes all relays through Tor;
   `off` refuses onion relays. Return selects experimental `auto`, which
   connects directly to non-onion relays. Tor remains
@@ -112,6 +115,18 @@ marmish setup --update --trust SERVER_NPUB
 marmish SERVER_NPUB@relay.example -- /usr/bin/printf '%s\n' 'Hello from Marmish'
 ```
 
+With the unreleased source, omit the hostname to use the profile’s relay set:
+
+```sh
+marmish SERVER_NPUB -- printf '%s\n' 'Hello from Marmish'
+```
+
+New profiles use the two White Noise relays above by default. Existing custom
+profiles keep their configured relays. Default `--tor auto` connects directly to
+these public relays; choose `--tor always` to request experimental Tor routing.
+An explicit hostname or relay selection must match the configured relay set;
+errors never cause a fallback to public relays.
+
 Replace `CLIENT_NPUB` and `SERVER_NPUB` with complete `npub1…` values and
 `relay.example` with your configured relay hostname. The relay selection must
 match the profile's complete configured relay set. A bare hostname means
@@ -155,6 +170,10 @@ stopped. For example, add an entry to its existing `aliases` object:
 ```json
 "box": {"remote": "SERVER_NPUB", "relays": ["wss://relay.example/"]}
 ```
+
+Alias names beginning `npub`, `nsec` or `nprofile`, or consisting of 64 hex
+characters, are reserved for identities in the unreleased source; rename such
+aliases. A valid npub always identifies its own key.
 
 The alias must include the profile's complete relay set. Then run
 `marmish box -- /usr/bin/printf '%s\n' hello`. Explicit DNS SRV selection is also

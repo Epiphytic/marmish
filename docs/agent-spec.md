@@ -142,7 +142,15 @@ Never delete databases, change format markers or bypass checks to recover access
 
 ## Relay selection, destinations and routing
 
-Relays are explicit; there is no public default. A named profile freezes a
+Unreleased source defaults new setup profiles to
+`wss://relay.eu.whitenoise.chat/` and `wss://relay.us.whitenoise.chat/` when no
+relay is supplied. Setup writes this concrete pair to disk. Existing profiles
+keep their relays, and missing/empty/null config fields still fail validation.
+Published v0.2.3 requires explicit setup relays. This supersedes the earlier
+prohibition on public defaults following the user’s White Noise authorization.
+See [default-relay validation](validation/whitenoise-default-relays/README.md)
+for live commands and installer checks.
+A named profile freezes a
 canonical relay set and route policy. Selected command destinations must equal
 that exact set, not merely be a subset. CLI options cannot broaden or replace a
 live owner's connector policy. Aliases bind an exact remote npub and exact relay
@@ -155,6 +163,14 @@ marmish -i client npub1...@relay.example -- /canonical/program literal-argument
 marmish -i client -u npub1... --relay wss://relay.example/ -- /canonical/program
 marmish -i client ALIAS -- /canonical/program
 ```
+
+Unreleased source accepts a bare valid npub, using the profile’s relay set when
+no host or relay selector is given; explicit `--relay`/`--srv` follow the existing
+`-u` rules. Ordinary aliases keep their complete configured set. Npub/nsec/nprofile
+prefixes and raw 64-hex names never resolve as aliases; a valid npub wins over a
+same-name alias. No invalid input or network failure invokes a default fallback.
+Default Tor auto connects directly to the White Noise endpoints; `--tor always`
+requests Tor. Config-less daemon startup still requires setup.
 
 Bare hosts normalize to secure WebSocket URLs. Full URLs, IPv4 and bracketed
 IPv6 use the native parser. Conflicting inline, alias, --relay, --srv and -u

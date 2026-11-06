@@ -73,24 +73,31 @@ pub(crate) fn parse(
                 (account(config, remote)?, Some(host))
             }
             None => {
-                if !relays.is_empty() || !srvs.is_empty() {
-                    return Err(invalid("conflicting_destination"));
+                // Apply the same identity-before-alias rules as -u, including
+                // reserved-prefix rejection, before consulting alias relays.
+                let remote = account(config, value)?;
+                if value.starts_with("npub1") {
+                    (remote, None)
+                } else {
+                    if !relays.is_empty() || !srvs.is_empty() {
+                        return Err(invalid("conflicting_destination"));
+                    }
+                    let alias = config
+                        .aliases()
+                        .get(value)
+                        .ok_or_else(|| invalid("unknown_alias"))?;
+                    return Ok(TargetSelection {
+                        remote,
+                        source: RelaySource::Explicit(
+                            alias
+                                .relays
+                                .urls()
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect(),
+                        ),
+                    });
                 }
-                let alias = config
-                    .aliases()
-                    .get(value)
-                    .ok_or_else(|| invalid("unknown_alias"))?;
-                return Ok(TargetSelection {
-                    remote: alias.remote,
-                    source: RelaySource::Explicit(
-                        alias
-                            .relays
-                            .urls()
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect(),
-                    ),
-                });
             }
         },
         (None, Some(user)) => (account(config, user)?, None),
@@ -302,6 +309,7 @@ mod tests {
             if urls == &["wss://relay.example/"]));
         for target in [
             resolve(&c, Some(&inline), None, &[]),
+            resolve(&c, Some(&npub()), None, &[]),
             resolve(&c, Some("remote"), None, &[]),
             resolve(&c, None, Some(&npub()), &[]),
             resolve(
@@ -319,6 +327,74 @@ mod tests {
         assert!(resolve(&c, None, Some("nsec1invalid"), &[]).is_err());
         assert!(resolve(&c, None, Some("npub1badchecksum"), &[]).is_err());
         assert!(resolve(&c, None, Some("missing"), &[]).is_err());
+    }
+    #[test]
+    fn bare_identity_uses_complete_configured_set_or_explicit_selection() {
+        for relays in [
+            vec!["wss://relay.example/".to_owned()],
+            crate::transport::default_relays(),
+        ] {
+            let urls: Vec<_> = relays.iter().map(String::as_str).collect();
+            let c = config(&urls, "auto");
+            let bare = parse(&c, Some(&npub()), None, &[], &[]).unwrap();
+            assert_eq!(bare.remote, [2; 32]);
+            assert!(matches!(bare.source, RelaySource::Configured));
+            let target = resolve(&c, Some(&npub()), None, &[]).unwrap();
+            let user = resolve(&c, None, Some(&npub()), &[]).unwrap();
+            assert_eq!(target.remote, user.remote);
+            assert_eq!(target.relays, user.relays);
+            assert_eq!(target.relays, relays);
+            let explicit = resolve(&c, Some(&npub()), None, &relays).unwrap();
+            assert_eq!(explicit.relays, target.relays);
+            assert!(matches!(
+                resolve(
+                    &c,
+                    Some(&npub()),
+                    None,
+                    &["wss://unconfigured.example/".into()]
+                ),
+                Err(Error::Invalid("destination_policy_mismatch"))
+            ));
+            assert!(resolve(&c, Some(&format!("{}@", npub())), None, &[]).is_err());
+        }
+    }
+    #[test]
+    fn identity_spellings_never_redirect_through_aliases() {
+        let mut value = serde_json::json!({"version":1,"role":"both",
+            "relays":["wss://relay.example/"],"tor":"auto",
+            "trusted_remotes":[],"execution_clients":[],"command_policy":{"version":1},
+            "cwd":null,"limits":{},"aliases":{}});
+        let other = PublicKey::from_hex(&"03".repeat(32))
+            .unwrap()
+            .to_bech32()
+            .unwrap();
+        let aliases = value["aliases"].as_object_mut().unwrap();
+        let reserved = ["npub1badchecksum", "npub-bob", "nsec-bob", "nprofile-bob"];
+        let raw_hex = "ab".repeat(32);
+        for name in std::iter::once(npub())
+            .chain(reserved.iter().map(|s| (*s).to_owned()))
+            .chain(std::iter::once(raw_hex.clone()))
+        {
+            aliases.insert(
+                name,
+                serde_json::json!({"remote":other,"relays":["wss://relay.example/"]}),
+            );
+        }
+        let c = CommandConfig::from_bytes(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(
+            resolve(&c, Some(&npub()), None, &[]).unwrap().remote,
+            [2; 32]
+        );
+        for name in reserved
+            .iter()
+            .copied()
+            .chain(std::iter::once(raw_hex.as_str()))
+        {
+            assert!(matches!(
+                parse(&c, Some(name), None, &[], &[]),
+                Err(Error::Invalid("invalid_remote_identity"))
+            ));
+        }
     }
     #[test]
     fn conflicting_sources_and_policy_narrowing_fail() {
@@ -444,6 +520,17 @@ mod tests {
             assert!(validate_srv_name(value).is_err(), "accepted {value}");
         }
         let c = config(&["wss://relay.example/"], "auto");
+        let bare = parse(
+            &c,
+            Some(&npub()),
+            None,
+            &[],
+            &["_shell._tcp.example".into()],
+        )
+        .unwrap();
+        assert_eq!(bare.remote, [2; 32]);
+        assert!(matches!(bare.source, RelaySource::Srv(ref names)
+            if names == &["_shell._tcp.example."]));
         let selection = parse(
             &c,
             Some(&format!("{}@srv:_shell._tcp.example", npub())),
@@ -468,6 +555,16 @@ mod tests {
         assert!(parse(&c, Some(&format!("{}@srv:443", npub())), None, &[], &[]).is_err());
         assert!(finalize(&c, selection.remote, &["wss://other.example/".into()]).is_err());
         let always = config(&["wss://relay.example/"], "always");
+        assert!(matches!(
+            parse(
+                &always,
+                Some(&npub()),
+                None,
+                &[],
+                &["_shell._tcp.example".into()]
+            ),
+            Err(Error::Invalid("srv_route_unsupported"))
+        ));
         assert!(matches!(
             parse(
                 &always,

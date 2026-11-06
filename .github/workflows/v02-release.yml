@@ -309,11 +309,16 @@ jobs:
             --bootstrap "$PWD/candidate-bootstrap/install.sh" \
             --assets-dir "$PWD/candidate-assets" \
             --report "$RUNNER_TEMP/quickstart.json"
+          # Candidate-only blank input accepts and freezes the default relay pair.
+          python3 tools/marmish_native_quickstart_check.py \
+            --bootstrap "$PWD/candidate-bootstrap/install.sh" \
+            --assets-dir "$PWD/candidate-assets" --default-relays \
+            --report "$RUNNER_TEMP/quickstart-default-relays.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: v02-quickstart-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/quickstart.json
+          path: ${{ runner.temp }}/quickstart*.json
           if-no-files-found: error
           retention-days: 14
   provider-qualification:

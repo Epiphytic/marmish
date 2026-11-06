@@ -1057,6 +1057,39 @@ mod tests {
     fn parser_contract_is_consistent() {
         Args::command().debug_assert();
     }
+    #[tokio::test]
+    async fn bare_identity_filters_command_listing_wait_and_output() {
+        use nostr::nips::nip19::ToBech32;
+        let remote = nostr::key::PublicKey::from_hex(&"02".repeat(32)).unwrap();
+        let npub = remote.to_bech32().unwrap();
+        let config = CommandConfig::from_bytes(
+            &serde_json::to_vec(&serde_json::json!({
+                "version":1,"role":"both","relays":crate::transport::default_relays(),
+                "tor":"auto","trusted_remotes":[],"execution_clients":[],
+                "command_policy":{"version":1},"cwd":null,"limits":{},"aliases":{}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        for operation in ["commands", "wait", "output"] {
+            let mut raw = vec!["marmish", operation, &npub];
+            if operation != "commands" {
+                raw.push("--latest");
+            }
+            let args = Args::try_parse_from(raw).unwrap();
+            let destination = match &args.command {
+                Some(FrontendCommand::Commands { destination }) => destination.as_deref(),
+                Some(FrontendCommand::Wait(select) | FrontendCommand::Output(select)) => {
+                    select.destination.as_deref()
+                }
+                _ => panic!("target operation"),
+            };
+            assert_eq!(
+                target_filter(&config, &args, destination).await.unwrap(),
+                Some(remote.to_bytes())
+            );
+        }
+    }
     #[test]
     fn remote_separator_preserves_options_and_non_utf8_argv() {
         use std::os::unix::ffi::{OsStrExt, OsStringExt};

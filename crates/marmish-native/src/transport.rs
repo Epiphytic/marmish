@@ -27,6 +27,14 @@ use tokio_tungstenite::tungstenite::{Message as NativeMessage, protocol::WebSock
 use tokio_util::sync::CancellationToken;
 use tor_rtcompat::PreferredRuntime;
 
+/// Initial relay set for new profiles; persisted configuration remains authoritative.
+pub(crate) fn default_relays() -> Vec<String> {
+    vec![
+        "wss://relay.eu.whitenoise.chat/".into(),
+        "wss://relay.us.whitenoise.chat/".into(),
+    ]
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RouteMode {
     /// Onion relays through Tor; ordinary configured WSS relays directly.
@@ -719,6 +727,45 @@ impl WebSocketTransport for RelayConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn white_noise_defaults_are_canonical_and_follow_route_policy() {
+        let relays = default_relays();
+        assert_eq!(
+            relays,
+            [
+                "wss://relay.eu.whitenoise.chat/",
+                "wss://relay.us.whitenoise.chat/",
+            ]
+        );
+        for mode in [RouteMode::Auto, RouteMode::Off, RouteMode::Always] {
+            let policy = RelayPolicy::parse(&relays, mode, TransportLimits::default()).unwrap();
+            assert_eq!(
+                policy
+                    .urls()
+                    .iter()
+                    .map(|url| url.as_str())
+                    .collect::<Vec<_>>(),
+                relays
+            );
+            assert_eq!(policy.needs_tor(), mode == RouteMode::Always);
+            assert_eq!(
+                policy.routes,
+                vec![
+                    if mode == RouteMode::Always {
+                        Route::Tor
+                    } else {
+                        Route::Direct
+                    };
+                    2
+                ]
+            );
+        }
+        assert!(matches!(
+            RelayPolicy::parse(&[], RouteMode::Auto, TransportLimits::default()),
+            Err(Error::Invalid("relay_count"))
+        ));
+    }
 
     #[test]
     fn connector_diagnostics_redact_unknown_errors() {

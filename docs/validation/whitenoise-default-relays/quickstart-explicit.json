@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "kind": "installed_quickstart_pty",
+  "ok": true,
+  "key_storage": "file",
+  "network_activation": false,
+  "python_in_runtime_path": false,
+  "owned_state_removed": true,
+  "relay_selection": "explicit",
+  "role": "both",
+  "inbound_enabled": false,
+  "prompts_completed": 5,
+  "identity_created": true,
+  "repeat_same_identity": true,
+  "repeat_owner_opened": false,
+  "stop_complete": true,
+  "elapsed_ms": 24715
+}

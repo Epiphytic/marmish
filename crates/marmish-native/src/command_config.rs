@@ -892,6 +892,23 @@ mod tests {
         );
     }
     #[test]
+    fn persisted_relays_must_be_explicit_nonempty_and_nonnull() {
+        let mut missing = document();
+        missing.as_object_mut().unwrap().remove("relays");
+        assert!(matches!(
+            CommandConfig::from_bytes(&serde_json::to_vec(&missing).unwrap()),
+            Err(Error::Invalid("config_schema"))
+        ));
+        for (relays, expected) in [(Value::Null, "config_schema"), (json!([]), "relay_count")] {
+            let mut value = document();
+            value["relays"] = relays;
+            assert!(matches!(
+                CommandConfig::from_bytes(&serde_json::to_vec(&value).unwrap()),
+                Err(Error::Invalid(actual)) if actual == expected
+            ));
+        }
+    }
+    #[test]
     fn relay_raw_count_and_tor_validation_are_existing_policy_checks() {
         let fixture = Fixture::new();
         for relays in [
