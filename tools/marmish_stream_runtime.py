@@ -488,10 +488,10 @@ def write_report(path: Path, report: dict):
             os.unlink(temporary)
 
 
-def main() -> int:
+def main(qualification_type=None, cases=None) -> int:
     options = arguments()
     os.umask(0o077)
-    qualification = Qualification(options)
+    qualification = (qualification_type or Qualification)(options)
     started = time.monotonic()
     previous_handlers = {}
 
@@ -504,11 +504,14 @@ def main() -> int:
         qualification.identify_binary()
         remote = qualification.initialize()
         qualification.start_daemons()
-        qualification.binary_roundtrip(remote)
-        qualification.early_stdin_closure(remote)
-        qualification.literal_arguments(remote)
-        qualification.latency(remote)
-        qualification.cancel_backpressure(remote)
+        if cases is None:
+            qualification.binary_roundtrip(remote)
+            qualification.early_stdin_closure(remote)
+            qualification.literal_arguments(remote)
+            qualification.latency(remote)
+            qualification.cancel_backpressure(remote)
+        else:
+            cases(qualification, remote)
         qualification.report["passed"] = True
     except QualificationError as error:
         qualification.report.update(passed=False, error={"stage": error.stage, "category": error.category})

@@ -68,8 +68,14 @@ Linux AMD64 live-relay qualification. Existing finite commands retain their limi
 The [phase 1 design review](reviews/streaming-primitives-design.md) records the
 approved bounds and provisional protocol, and the
 [runtime design](phases/streaming-runtime.md) specifies the authenticated launch,
-backpressure, cancellation and recovery contract. Rsync and native file transfer
-remain planned. None of these streaming additions is in the v0.2.3 release.
+backpressure, cancellation and recovery contract. The reviewed `rsh` adapter
+now supports modern rsync with secluded arguments (`-s`); Linux same-host native
+relay tests pass for exact trees, deltas, compression, confirmed process-group
+cancellation and partial restart. See [rsync evidence](validation/rsync-runtime-live.md)
+for rates and uncovered cases. It requires rsync3.x on both ends and uses the
+same executable authorization as other commands; granting rsync permits broad
+same-UID file access and execution. Native copy and installed cross-platform
+qualification remain pending. None of these streaming additions is in v0.2.3.
 
 Cancellation must be explicit and independent of blocked stream data. The runtime
 implements Ctrl-C and cancellation by stable stream ID from another terminal,

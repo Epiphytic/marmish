@@ -99,6 +99,45 @@ client dies before acknowledging readiness, the new unacknowledged daemon shuts
 down; an acknowledged daemon survives the caller. This does not install a login
 or boot service.
 
+## Rsync over Marmish (unreleased source)
+
+Install a modern rsync on both machines and use secluded arguments (`-s`):
+
+```sh
+rsync -as -e 'marmish rsh' ./source/ SERVER_NPUB:destination/
+rsync -as -e 'marmish rsh' SERVER_NPUB:source/ ./destination/
+rsync -as -e 'marmish -i work rsh --compress' ./source/ remote-alias:destination/
+```
+
+The npub or configured alias is the remote identity. To select a relay hostname,
+use `SERVER_NPUB@relay.example:destination/`. For relay URLs, ports or SRV routing,
+put `--relay URL` or `--srv NAME` before `rsh` and use a bare identity as rsync's
+host. Routing must match the configured relay set. Local Marmish options such as
+`-i` also go before `rsh`; its options include `--compress`, `--idle-seconds` and
+`--keepalive-seconds` (defaults 660 and 300 seconds). Both identities need the same
+trust/grant configuration as other remote commands.
+
+Arguments and protocol bytes pass directly to the remote rsync without a shell.
+Paths with spaces or shell metacharacters are transferred by rsync's secluded
+protocol, not interpreted as shell commands. `--rsync-path` may name one literal
+executable, including a path with spaces; shell command prefixes are unsupported.
+The remote daemon resolves `rsync` using its PATH and applies its usual canonical
+executable policy. Check the running daemon's PATH when rsync cannot be found.
+
+Granting rsync is powerful: its protocol controls filesystem destinations and
+options, and executable rules do not confine it to a directory. Treat unrestricted
+rsync permission as potentially arbitrary execution under the configured Unix
+account. This adapter provides no directory sandbox. Stopping rsync with an
+explicit interrupt requests remote cancellation; a disconnected client or closed
+local output alone leaves the remote command running. Use `marmish streams` and
+`marmish cancel --stream ID` to inspect and explicitly stop a detached command.
+
+The adapter requires `-s`; old argument escaping, rsync daemon mode, `rsync://`,
+SSH options and interactive shells are unsupported. Native resumable copy commands
+are a separate planned feature. See the [rsync phase design](docs/phases/streaming-rsync.md)
+for limits and qualification requirements; this source addition is not a released
+cross-platform interoperability claim.
+
 ## Connect to another identity
 
 Exchange the npubs printed by setup. On the server, grant the client's npub; on

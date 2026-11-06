@@ -44,6 +44,8 @@ struct Args {
     #[arg(skip)]
     trailing: Option<Vec<OsString>>,
     #[arg(skip)]
+    rsh: Option<crate::rsync_cli::Invocation>,
+    #[arg(skip)]
     authorize_disallowed: bool,
     #[arg(long, global = true)]
     debug: bool,
@@ -116,6 +118,8 @@ struct SelectArgs {
 
 #[derive(Subcommand)]
 enum FrontendCommand {
+    /// Rsync remote shell: rsync -s -e 'marmish rsh'. Global options go before rsh.
+    Rsh,
     /// Execute with binary stdin/stdout streams and explicit remote cancellation.
     Stream {
         destination: String,
@@ -539,16 +543,54 @@ fn stream_action(args: &Args) -> bool {
         &args.command,
         Some(
             FrontendCommand::Stream { .. }
+                | FrontendCommand::Rsh
                 | FrontendCommand::Streams { .. }
                 | FrontendCommand::StreamReconcile { .. }
         )
     ) || matches!(&args.command, Some(FrontendCommand::Cancel(select)) if select.stream.is_some())
 }
 
+async fn stream_preparation<T>(
+    signals: &mut Option<crate::stream_cli::ExecutionSignals>,
+    operation: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    if let Some(signals) = signals.as_mut() {
+        tokio::select! {
+            biased;
+            interrupt = signals.interrupted() => {
+                interrupt?;
+                use std::io::Write;
+                let _ = writeln!(std::io::stderr().lock(),
+                    "marmish stream: interrupted before remote Open; no remote child was launched");
+                Err(Error::Invalid("stream_interrupted_before_open"))
+            }
+            result = operation => result,
+        }
+    } else {
+        operation.await
+    }
+}
+
 async fn run_stream_command(args: &Args, state: &std::path::Path) -> Result<u8> {
     crate::identity::validate_name(&args.identity)?;
+    use crate::stream_cli::{ExecutionSignals, SignalPolicy};
+    let mut signals = match &args.command {
+        Some(FrontendCommand::Stream { argv, .. }) => {
+            if args.detach || args.stdin_none || args.trailing.as_ref() != Some(argv) {
+                return Err(Error::Invalid("stream_arguments"));
+            }
+            Some(ExecutionSignals::register(SignalPolicy::Interactive)?)
+        }
+        Some(FrontendCommand::Rsh) => {
+            if args.rsh.is_none() {
+                return Err(Error::Invalid("rsync_arguments"));
+            }
+            Some(ExecutionSignals::register(SignalPolicy::Rsync)?)
+        }
+        _ => None,
+    };
     let config = CommandConfig::load(&state.join(&args.identity))?;
-    let socket = command_socket(args, state, &config).await?;
+    let socket = stream_preparation(&mut signals, command_socket(args, state, &config)).await?;
     let context = Context {
         socket,
         profile: args.identity.clone(),
@@ -561,10 +603,11 @@ async fn run_stream_command(args: &Args, state: &std::path::Path) -> Result<u8> 
             idle_seconds,
             keepalive_seconds,
         }) => {
-            if args.detach || args.stdin_none || args.trailing.as_ref() != Some(argv) {
-                return Err(Error::Invalid("stream_arguments"));
-            }
-            let target = resolve_target(&config, args, Some(destination)).await?;
+            let target = stream_preparation(
+                &mut signals,
+                resolve_target(&config, args, Some(destination)),
+            )
+            .await?;
             crate::stream_cli::execute(
                 context,
                 target.remote,
@@ -575,6 +618,34 @@ async fn run_stream_command(args: &Args, state: &std::path::Path) -> Result<u8> 
                     new_session: args.new_session,
                     idle: Duration::from_secs(*idle_seconds),
                     keepalive: Duration::from_secs(*keepalive_seconds),
+                    signals: signals.take().ok_or(Error::Invalid("stream_signal"))?,
+                },
+            )
+            .await
+        }
+        Some(FrontendCommand::Rsh) => {
+            let rsh = args.rsh.as_ref().ok_or(Error::Invalid("rsync_arguments"))?;
+            let target = stream_preparation(
+                &mut signals,
+                resolve_target_with_user(
+                    &config,
+                    args,
+                    Some(&rsh.destination),
+                    rsh.login.as_deref(),
+                ),
+            )
+            .await?;
+            crate::stream_cli::execute(
+                context,
+                target.remote,
+                target.relays,
+                rsh.argv.clone(),
+                crate::stream_cli::ExecuteOptions {
+                    compress: rsh.compress,
+                    new_session: false,
+                    idle: rsh.idle,
+                    keepalive: rsh.keepalive,
+                    signals: signals.take().ok_or(Error::Invalid("stream_signal"))?,
                 },
             )
             .await
@@ -773,14 +844,17 @@ async fn resolve_target(
     args: &Args,
     destination: Option<&str>,
 ) -> Result<crate::command_target::ResolvedTarget> {
+    resolve_target_with_user(config, args, destination, args.user.as_deref()).await
+}
+
+async fn resolve_target_with_user(
+    config: &CommandConfig,
+    args: &Args,
+    destination: Option<&str>,
+    user: Option<&str>,
+) -> Result<crate::command_target::ResolvedTarget> {
     use crate::command_target::{self, RelaySource};
-    let target = command_target::parse(
-        config,
-        destination,
-        args.user.as_deref(),
-        &args.relay,
-        &args.srv,
-    )?;
+    let target = command_target::parse(config, destination, user, &args.relay, &args.srv)?;
     let relays = match target.source {
         RelaySource::Configured => config
             .relay_policy()
@@ -963,6 +1037,29 @@ fn usage_exit_code(error: &clap::Error) -> u8 {
     }
 }
 
+fn parse_public(raw: &[OsString]) -> std::result::Result<Args, clap::Error> {
+    let rsh = crate::rsync_cli::split(raw, Args::command())?;
+    let root = rsh.as_ref().map_or(raw, |rsh| rsh.root.as_slice());
+    let matches = Args::command().try_get_matches_from(root)?;
+    let mut args = Args::from_arg_matches(&matches)?;
+    if rsh.is_some() && !matches!(args.command, Some(FrontendCommand::Rsh)) {
+        return Err(clap::Error::raw(
+            clap::error::ErrorKind::InvalidValue,
+            "rsync parser mismatch",
+        ));
+    }
+    args.authorize_disallowed = authorization_disallowed(&matches);
+    args.trailing = if rsh.is_none() {
+        raw.iter()
+            .position(|value| value == OsStr::new("--"))
+            .map(|index| raw[index + 1..].to_vec())
+    } else {
+        None
+    };
+    args.rsh = rsh;
+    Ok(args)
+}
+
 pub fn main(daemon_binary: bool) -> ExitCode {
     let raw = std::env::args_os().collect::<Vec<_>>();
     // The provider helper has its own private protocol; validate its canonical
@@ -988,12 +1085,8 @@ pub fn main(daemon_binary: bool) -> ExitCode {
             _ => marmish_vault::helper::run(),
         };
     }
-    let trailing = raw
-        .iter()
-        .position(|v| v == OsStr::new("--"))
-        .map(|i| raw[i + 1..].to_vec());
-    let matches = match Args::command().try_get_matches_from(raw.clone()) {
-        Ok(matches) => matches,
+    let mut args = match parse_public(&raw) {
+        Ok(args) => args,
         Err(error) => {
             let code = usage_exit_code(&error);
             let _ = error.print();
@@ -1003,13 +1096,6 @@ pub fn main(daemon_binary: bool) -> ExitCode {
             return ExitCode::from(code);
         }
     };
-    let authorize_disallowed = authorization_disallowed(&matches);
-    let mut args = match Args::from_arg_matches(&matches) {
-        Ok(args) => args,
-        Err(_) => return ExitCode::from(255),
-    };
-    args.authorize_disallowed = authorize_disallowed;
-    args.trailing = trailing;
     let failure_code = if command_action(&args) || stream_action(&args) {
         255
     } else {
@@ -1078,7 +1164,7 @@ pub fn main(daemon_binary: bool) -> ExitCode {
             return ExitCode::from(failure_code);
         }
     };
-    match runtime.block_on(run(args, daemon_binary, &layout)) {
+    match run_async(runtime, run(args, daemon_binary, &layout)) {
         Ok(code) => {
             // A clean limit/signal exit during activation never became ready.
             if let Some(reporter) = &startup {
@@ -1096,6 +1182,23 @@ pub fn main(daemon_binary: bool) -> ExitCode {
     }
 }
 
+/// An interrupted frontend may have abandoned a blocking daemon startup wait.
+/// The independently launched local daemon may finish starting; runtime teardown
+/// must not turn that wait into a delay in acknowledging the user's interrupt.
+fn run_async(
+    runtime: tokio::runtime::Runtime,
+    operation: impl std::future::Future<Output = Result<u8>>,
+) -> Result<u8> {
+    let result = runtime.block_on(operation);
+    if matches!(
+        &result,
+        Err(Error::Invalid("stream_interrupted_before_open"))
+    ) {
+        runtime.shutdown_background();
+    }
+    result
+}
+
 fn print_error(error: &Error) {
     use std::io::Write;
     let _ = writeln!(std::io::stderr().lock(), "marmish: {error}");
@@ -1105,6 +1208,287 @@ fn print_error(error: &Error) {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+    #[test]
+    fn early_stream_signal_does_not_wait_for_blocking_autostart() {
+        const MARKER: &str = "MARMISH_TEST_AUTOSTART_SIGNAL_MARKER";
+        if let Some(marker) = std::env::var_os(MARKER) {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap();
+            let result = run_async(runtime, async {
+                let mut signals = Some(crate::stream_cli::ExecutionSignals::register(
+                    crate::stream_cli::SignalPolicy::Rsync,
+                )?);
+                stream_preparation(&mut signals, async {
+                    let (entered, waiting) = tokio::sync::oneshot::channel();
+                    // Model a launcher which has entered its blocking startup
+                    // wait. Runtime Drop would otherwise wait indefinitely.
+                    let wait = tokio::task::spawn_blocking(move || {
+                        let _ = entered.send(());
+                        loop {
+                            std::thread::park();
+                        }
+                    });
+                    waiting.await.map_err(|_| Error::Invalid("fixture"))?;
+                    std::fs::write(marker, b"ready")?;
+                    wait.await.map_err(|_| Error::Invalid("fixture"))?;
+                    Ok(0)
+                })
+                .await
+            });
+            assert!(matches!(
+                result,
+                Err(Error::Invalid("stream_interrupted_before_open"))
+            ));
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("ready");
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "cli::tests::early_stream_signal_does_not_wait_for_blocking_autostart",
+                "--nocapture",
+            ])
+            .env(MARKER, &marker)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !marker.exists() {
+            if let Some(status) = child.try_wait().unwrap() {
+                panic!("fixture exited before startup wait: {status}");
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("fixture did not enter startup wait");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Signal only our live, unreaped child. Its Tokio listener already exists.
+        assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGUSR1) }, 0);
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                let output = child.wait_with_output().unwrap();
+                assert!(status.success(), "{output:?}");
+                assert!(
+                    output
+                        .stderr
+                        .windows(b"interrupted before remote Open".len())
+                        .any(|part| part == b"interrupted before remote Open")
+                );
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let output = child.wait_with_output().unwrap();
+                panic!("frontend waited for blocking startup: {output:?}");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn public(values: &[&str]) -> std::result::Result<Args, clap::Error> {
+        parse_public(&values.iter().map(OsString::from).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn rsh_production_parser_separates_globals_and_opaque_bootstrap() {
+        for identity in ["work", "rsh"] {
+            for spelling in [
+                vec!["-i".to_owned(), identity.to_owned()],
+                vec!["--identity".to_owned(), identity.to_owned()],
+                vec![format!("-i{identity}")],
+                vec![format!("-i={identity}")],
+                vec![format!("--identity={identity}")],
+            ] {
+                let mut raw = vec![OsString::from("marmish")];
+                raw.extend(spelling.into_iter().map(OsString::from));
+                raw.extend(
+                    [
+                        "rsh",
+                        "--compress",
+                        "-l",
+                        "remote-alias",
+                        "relay.example",
+                        "rsync",
+                        "--server",
+                        "-slogDtpre.iLsfxCIvu",
+                    ]
+                    .map(OsString::from),
+                );
+                let args = parse_public(&raw).unwrap();
+                assert_eq!(args.identity, identity);
+                assert!(stream_action(&args));
+                assert!(!command_action(&args));
+                let rsh = args.rsh.unwrap();
+                assert_eq!(rsh.destination, "relay.example");
+                assert_eq!(rsh.login.as_deref(), Some("remote-alias"));
+                assert!(rsh.compress);
+                assert_eq!((rsh.idle.as_secs(), rsh.keepalive.as_secs()), (660, 300));
+                assert_eq!(
+                    rsh.argv,
+                    ["rsync", "--server", "-slogDtpre.iLsfxCIvu"].map(OsString::from)
+                );
+            }
+        }
+        let args = public(&[
+            "marmish",
+            "--state-dir=rsh",
+            "rsh",
+            "remote-alias",
+            "rsync",
+            "--server",
+            "-s",
+        ])
+        .unwrap();
+        assert_eq!(args.state_dir, Some(PathBuf::from("rsh")));
+        assert!(args.trailing.is_none());
+        assert!(matches!(
+            public(&["marmish", "peer", "--", "echo", "rsh"])
+                .unwrap()
+                .command,
+            Some(FrontendCommand::Remote(_))
+        ));
+    }
+
+    #[test]
+    fn rsh_remote_globals_never_become_local_configuration() {
+        for dangerous in [
+            "--state-dir",
+            "--socket",
+            "--relay",
+            "--srv",
+            "-i",
+            "-u",
+            "--help",
+            "--version",
+            "--",
+        ] {
+            let error = public(&[
+                "marmish",
+                "rsh",
+                "remote-alias",
+                "rsync",
+                "--server",
+                "-s",
+                dangerous,
+            ])
+            .err()
+            .unwrap();
+            assert_eq!(usage_exit_code(&error), 255, "{dangerous}");
+        }
+        for before in [
+            "--detach",
+            "--new-session",
+            "--foreground",
+            "--stdin",
+            "--stdin-none",
+        ] {
+            assert!(
+                public(&["marmish", before, "rsh", "peer", "rsync", "--server", "-s"]).is_err()
+            );
+        }
+        for pair in [
+            ["-u", "peer"],
+            ["--user", "peer"],
+            ["--wait-seconds", "10"],
+            ["--allow-peer", "peer"],
+            ["--max-commands", "3"],
+            ["--max-uptime", "30m"],
+        ] {
+            assert!(
+                public(&[
+                    "marmish", pair[0], pair[1], "rsh", "peer", "rsync", "--server", "-s"
+                ])
+                .is_err()
+            );
+        }
+        for suffix in [
+            vec!["--", "peer", "rsync", "--server", "-s"],
+            vec!["-l", "peer", "other@relay", "rsync", "--server", "-s"],
+            vec!["peer@@relay", "rsync", "--server", "-s"],
+            vec!["-l", "one", "-l", "two", "relay", "rsync", "--server", "-s"],
+        ] {
+            let mut raw = vec!["marmish", "rsh"];
+            raw.extend(suffix);
+            assert!(public(&raw).is_err());
+        }
+        assert_eq!(
+            usage_exit_code(&public(&["marmish", "rsh", "--help"]).err().unwrap()),
+            0
+        );
+        assert_eq!(
+            usage_exit_code(&public(&["marmish", "--help", "rsh"]).err().unwrap()),
+            0
+        );
+    }
+
+    #[test]
+    fn rsh_preserves_non_utf8_executable_and_iconv_bytes_but_rejects_non_utf8_host() {
+        use std::os::unix::ffi::OsStringExt;
+        let mut raw = [
+            "marmish",
+            "rsh",
+            "peer",
+            "rsync",
+            "--server",
+            "-s",
+            "--iconv=utf8",
+        ]
+        .map(OsString::from)
+        .to_vec();
+        raw[3] = OsString::from_vec(b"/opt/a b;$(literal)\xff".to_vec());
+        raw[6] = OsString::from_vec(b"--iconv=\xff".to_vec());
+        let args = parse_public(&raw).unwrap();
+        assert_eq!(args.rsh.unwrap().argv, raw[3..]);
+        raw[2] = OsString::from_vec(vec![255]);
+        assert!(parse_public(&raw).is_err());
+    }
+
+    #[test]
+    fn rsh_global_metadata_arity_is_closed_and_explicit() {
+        let mut command = Args::command();
+        command.build();
+        for argument in command.get_arguments().filter(|arg| arg.is_global_set()) {
+            let takes_value = match argument.get_id().as_str() {
+                "debug" | "foreground" | "stdin" | "stdin_none" | "detach" | "new_session"
+                | "no_autostart" => false,
+                "state_dir" | "identity" | "socket" | "relay" | "tor" | "key_storage"
+                | "allow_peer" | "retention_seconds" | "user" | "srv" | "wait_seconds"
+                | "max_commands" | "max_uptime" => true,
+                id => panic!("new global option requires rsync parser review: {id}"),
+            };
+            assert_eq!(argument.get_action().takes_values(), takes_value);
+            if let Some(range) = argument.get_num_args() {
+                assert_eq!(range.min_values(), usize::from(takes_value));
+                assert_eq!(range.max_values(), usize::from(takes_value));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn rsh_is_rejected_by_daemon_before_profile_access() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut args = public(&["marmishd", "rsh", "peer", "rsync", "--server", "-s"]).unwrap();
+        args.state_dir = Some(directory.path().join("absent"));
+        let layout = crate::native_layout::ExecutableLayout {
+            helper: directory.path().join("absent-helper"),
+            worker: directory.path().join("absent-worker"),
+        };
+        assert!(matches!(
+            run(args, true, &layout).await,
+            Err(Error::Invalid("daemon_operation"))
+        ));
+        assert!(directory.path().read_dir().unwrap().next().is_none());
+    }
+
     #[tokio::test]
     async fn command_socket_waits_for_existing_activation_without_autostart() {
         use std::os::unix::fs::PermissionsExt;

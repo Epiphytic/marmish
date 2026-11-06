@@ -1,0 +1,152 @@
+{
+  "schema": 1,
+  "passed": true,
+  "relay": "wss://relay.eu.whitenoise.chat",
+  "relay_path_redacted": false,
+  "cleanup_scope": "owned_daemon_shutdown_and_protocol_cancel",
+  "platform": "Linux",
+  "architecture": "x86_64",
+  "payload_bytes": 393216,
+  "results": [
+    {
+      "case": "push_raw",
+      "seconds": 94.891013,
+      "exit": 0,
+      "marmish_compression": false,
+      "rsync_compression": false,
+      "sha256": "2f0d322d7635bc4e01c55d306ea6bdafd74877d8e88ede2e68ff3916cc5ee0d7",
+      "payload_bytes": 413184,
+      "entries": 16,
+      "tree_bytes_per_second": 4354.3,
+      "literal_bytes": 413184,
+      "matched_bytes": 0
+    },
+    {
+      "case": "pull_raw",
+      "seconds": 89.152097,
+      "exit": 0,
+      "marmish_compression": false,
+      "rsync_compression": false,
+      "sha256": "2f0d322d7635bc4e01c55d306ea6bdafd74877d8e88ede2e68ff3916cc5ee0d7",
+      "payload_bytes": 413184,
+      "entries": 16,
+      "tree_bytes_per_second": 4634.6,
+      "literal_bytes": 413184,
+      "matched_bytes": 0
+    },
+    {
+      "case": "unchanged",
+      "seconds": 16.98946,
+      "exit": 0,
+      "marmish_compression": false,
+      "rsync_compression": false,
+      "sha256": "2f0d322d7635bc4e01c55d306ea6bdafd74877d8e88ede2e68ff3916cc5ee0d7",
+      "payload_bytes": 413184,
+      "entries": 16,
+      "tree_bytes_per_second": 24320.0,
+      "literal_bytes": 0,
+      "matched_bytes": 0
+    },
+    {
+      "case": "delta_zlib",
+      "seconds": 22.662331,
+      "exit": 0,
+      "marmish_compression": true,
+      "rsync_compression": false,
+      "sha256": "1a8e9d673f5fa1a55c48d48355434c35718869ce3924af72b0ae48db858688b3",
+      "payload_bytes": 413184,
+      "entries": 16,
+      "tree_bytes_per_second": 18232.2,
+      "literal_bytes": 700,
+      "matched_bytes": 392516
+    },
+    {
+      "case": "pull_rsync_z",
+      "seconds": 24.372255,
+      "exit": 0,
+      "marmish_compression": false,
+      "rsync_compression": true,
+      "sha256": "1a8e9d673f5fa1a55c48d48355434c35718869ce3924af72b0ae48db858688b3",
+      "payload_bytes": 413184,
+      "entries": 16,
+      "tree_bytes_per_second": 16953.0,
+      "literal_bytes": 700,
+      "matched_bytes": 392516
+    },
+    {
+      "case": "delete",
+      "seconds": 19.225164,
+      "exit": 0,
+      "marmish_compression": false,
+      "rsync_compression": false,
+      "sha256": "1a8e9d673f5fa1a55c48d48355434c35718869ce3924af72b0ae48db858688b3",
+      "payload_bytes": 413184,
+      "entries": 16,
+      "tree_bytes_per_second": 21491.8,
+      "literal_bytes": 0,
+      "matched_bytes": 0
+    },
+    {
+      "case": "reject_old_bootstrap",
+      "exit": 255
+    },
+    {
+      "case": "missing_remote_exec",
+      "exit": 255
+    },
+    {
+      "case": "rsync_group_interrupt",
+      "exit": 20,
+      "confirmed": true,
+      "seconds": 2.153507,
+      "partial_bytes": 262144
+    },
+    {
+      "case": "partial_restart",
+      "seconds": 400.396159,
+      "exit": 0,
+      "marmish_compression": false,
+      "rsync_compression": false,
+      "sha256": "bb6008d7ad529dd132e97e9839f70334bde2bfed261eb3c14edfd278c3c3d738",
+      "payload_bytes": 2097152,
+      "entries": 1,
+      "tree_bytes_per_second": 5237.7,
+      "literal_bytes": 1835352,
+      "matched_bytes": 261800
+    }
+  ],
+  "suite": "rsync_native_source",
+  "scope": "same_host_linux_partial_qualification",
+  "not_covered": [
+    "denied executable and untrusted identity",
+    "invalid relay and failed remote rsync",
+    "rsync-parent TERM/HUP and direct adapter TERM/HUP",
+    "repeated-signal uncertain cancel and another-terminal cancel",
+    "EPIPE and SIGKILL parent detach without cancel",
+    "daemon restart and authority withdrawal",
+    "cross-platform and installer runs",
+    "command latency",
+    "direct adapter exit code during outer rsync cancellation",
+    "source without trailing slash and outside-directory symlink fixtures",
+    "compression ratio and compressed push/pull combinations"
+  ],
+  "binary": {
+    "sha256": "75402466a43fbdf69a884ee3dc787175150eab9f95c47938a69762d3c40a632b",
+    "version": "0.2.3"
+  },
+  "rsync_version": "3.2.7",
+  "rsync_protocol": 31,
+  "rsync_binary_sha256": "6b4fb867cb49d0332b72b234656311c807ab68b0537905fda7a3e7481a139f16",
+  "daemon_shutdown": [
+    {
+      "role": "client",
+      "exit": 0
+    },
+    {
+      "role": "server",
+      "exit": 0
+    }
+  ],
+  "total_seconds": 742.783041,
+  "private_state_retained": false
+}

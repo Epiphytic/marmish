@@ -21,6 +21,7 @@ pub mod identity;
 pub mod ipc;
 pub mod journal;
 pub mod mdk_adapter;
+mod rsync_cli;
 mod stream_cli;
 mod stream_runner;
 mod stream_service;

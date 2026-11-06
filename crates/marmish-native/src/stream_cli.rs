@@ -10,7 +10,7 @@ use marmish_stream::{
     codec::{self, Codec},
     wire::{self, Binding, Request, RequestBody, ResponseBody, Terminal},
 };
-use std::{ffi::OsString, os::unix::ffi::OsStringExt, time::Duration};
+use std::{cell::Cell, ffi::OsString, os::unix::ffi::OsStringExt, time::Duration};
 use tokio::time::Instant;
 
 fn diagnostic(message: std::fmt::Arguments<'_>) {
@@ -24,6 +24,142 @@ fn invalid(why: &'static str) -> Error {
 }
 fn protocol<T>(result: marmish_stream::Result<T>) -> Result<T> {
     result.map_err(|_| invalid("stream_protocol"))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SignalPolicy {
+    Interactive,
+    Rsync,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExecutionSignal {
+    Interrupt,
+    Terminate,
+    Hangup,
+    User,
+}
+
+/// Registered before any frontend await, retained through cancel confirmation.
+pub(crate) struct ExecutionSignals {
+    policy: SignalPolicy,
+    interrupt: tokio::signal::unix::Signal,
+    terminate: Option<tokio::signal::unix::Signal>,
+    hangup: Option<tokio::signal::unix::Signal>,
+    user: Option<tokio::signal::unix::Signal>,
+    last: Option<ExecutionSignal>,
+}
+
+async fn optional_signal(signal: &mut Option<tokio::signal::unix::Signal>) -> Option<()> {
+    match signal {
+        Some(signal) => signal.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+impl ExecutionSignals {
+    pub(crate) fn register(policy: SignalPolicy) -> Result<Self> {
+        use tokio::signal::unix::{SignalKind, signal};
+        let rsync = policy == SignalPolicy::Rsync;
+        Ok(Self {
+            policy,
+            interrupt: signal(SignalKind::interrupt())?,
+            terminate: rsync.then(|| signal(SignalKind::terminate())).transpose()?,
+            hangup: rsync.then(|| signal(SignalKind::hangup())).transpose()?,
+            user: rsync
+                .then(|| signal(SignalKind::user_defined1()))
+                .transpose()?,
+            last: None,
+        })
+    }
+
+    pub(crate) async fn interrupted(&mut self) -> Result<()> {
+        let (received, kind) = tokio::select! {
+            biased;
+            value = self.interrupt.recv() => (value, ExecutionSignal::Interrupt),
+            value = optional_signal(&mut self.terminate) => (value, ExecutionSignal::Terminate),
+            value = optional_signal(&mut self.hangup) => (value, ExecutionSignal::Hangup),
+            value = optional_signal(&mut self.user) => (value, ExecutionSignal::User),
+        };
+        received.ok_or(invalid("stream_signal"))?;
+        self.last = Some(kind);
+        Ok(())
+    }
+
+    async fn pending(&mut self) -> Result<bool> {
+        tokio::select! {
+            biased;
+            signal = self.interrupted() => { signal?; Ok(true) }
+            () = std::future::ready(()) => Ok(false),
+        }
+    }
+
+    // OS handlers wake Tokio's signal driver before recv becomes ready. A
+    // bounded wait gives that driver a real scheduling opportunity even when
+    // this frontend runs on the multi-thread runtime's block_on thread.
+    async fn pending_after_dispatch(&mut self) -> Result<bool> {
+        if self.pending().await? {
+            return Ok(true);
+        }
+        match tokio::time::timeout(Duration::from_millis(50), self.interrupted()).await {
+            Ok(result) => {
+                result?;
+                Ok(true)
+            }
+            Err(_) => Ok(false),
+        }
+    }
+
+    fn coalesces(&self, first: Instant, now: Instant) -> bool {
+        self.policy == SignalPolicy::Rsync
+            && (self.last == Some(ExecutionSignal::User)
+                || now.duration_since(first) < Duration::from_secs(2))
+    }
+}
+
+async fn confirm_cancel(peer: &Peer<'_>, signals: &mut ExecutionSignals) -> Result<u8> {
+    diagnostic(format_args!(
+        "marmish stream: requesting remote cancellation"
+    ));
+    let first = Instant::now();
+    let confirmation = peer.cancel();
+    tokio::pin!(confirmation);
+    loop {
+        tokio::select! {
+            biased;
+            signal = signals.interrupted() => {
+                signal?;
+                if !signals.coalesces(first, Instant::now()) {
+                    return Err(invalid("stream_cancellation_uncertain"));
+                }
+            }
+            result = &mut confirmation => return result,
+        }
+    }
+}
+
+async fn attachment_error(
+    peer: &Peer<'_>,
+    signals: &mut ExecutionSignals,
+    open_attempted: bool,
+    error: Error,
+) -> Result<u8> {
+    if signals.pending_after_dispatch().await? {
+        if open_attempted {
+            confirm_cancel(peer, signals).await
+        } else {
+            interrupted_before_open()
+        }
+    } else {
+        Err(error)
+    }
+}
+
+fn interrupted_before_open<T>() -> Result<T> {
+    diagnostic(format_args!(
+        "marmish stream: interrupted before remote Open; no remote child was launched"
+    ));
+    Err(invalid("stream_interrupted_before_open"))
 }
 
 struct Peer<'a> {
@@ -293,6 +429,7 @@ async fn pipeline(
     argv: Vec<Vec<u8>>,
     codec: Codec,
     keepalive: Duration,
+    open_attempted: &Cell<bool>,
 ) -> Result<u8> {
     let hello = peer
         .call(
@@ -309,6 +446,7 @@ async fn pipeline(
     if !matches!(hello.body, ResponseBody::Hello { ref codecs, .. } if codecs.contains(&codec)) {
         return Err(invalid("stream_unsupported"));
     }
+    open_attempted.set(true);
     if !matches!(peer.call(0, RequestBody::Open { argv, codec }).await?.body, ResponseBody::Opened { codec: selected, .. } if selected==codec)
     {
         return Err(invalid("stream_open"));
@@ -413,6 +551,7 @@ pub(crate) struct ExecuteOptions {
     pub new_session: bool,
     pub idle: Duration,
     pub keepalive: Duration,
+    pub signals: ExecutionSignals,
 }
 pub(crate) async fn execute(
     context: Context,
@@ -421,7 +560,7 @@ pub(crate) async fn execute(
     argv: Vec<OsString>,
     options: ExecuteOptions,
 ) -> Result<u8> {
-    let mut interrupts = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+    let mut signals = options.signals;
     // Reject unusable local pipes before room preparation or remote Open. Keep
     // the restoration guard outside the cancellable pipeline future.
     let _flags = Nonblocking::stdio()?;
@@ -434,10 +573,9 @@ pub(crate) async fn execute(
     getrandom::fill(&mut stream[8..]).map_err(|_| Error::Identity("random"))?;
     let (session, client) = tokio::select! {
         biased;
-        signal = interrupts.recv() => {
-            signal.ok_or(invalid("stream_signal"))?;
-            diagnostic(format_args!("marmish stream: interrupted before remote Open"));
-            return Err(invalid("stream_interrupted_before_open"));
+        signal = signals.interrupted() => {
+            signal?;
+            return interrupted_before_open();
         }
         result = context.prepare(remote, relays.clone(), options.new_session) => result?,
     };
@@ -459,23 +597,30 @@ pub(crate) async fn execute(
     };
     let argv = argv.into_iter().map(OsString::into_vec).collect();
     diagnostic(format_args!("marmish stream: {}", hex::encode(stream)));
+    let open_attempted = Cell::new(false);
     let result = tokio::select! {
         biased;
-        signal=interrupts.recv()=> {
-            signal.ok_or(invalid("stream_signal"))?;
-            diagnostic(format_args!("marmish stream: requesting remote cancellation; press Ctrl-C again to leave without confirmation"));
-            tokio::select! {
-                biased;
-                signal=interrupts.recv()=> {
-                    signal.ok_or(invalid("stream_signal"))?;
-                    Err(invalid("stream_cancellation_uncertain"))
-                }
-                result=peer.cancel()=>result,
+        signal = signals.interrupted() => {
+            signal?;
+            if open_attempted.get() {
+                confirm_cancel(&peer, &mut signals).await
+            } else {
+                interrupted_before_open()
             }
         }
-        result=pipeline(&peer,argv,codec,options.keepalive)=>result,
+        result = pipeline(&peer, argv, codec, options.keepalive, &open_attempted) => {
+            match result {
+                Err(error) => attachment_error(&peer, &mut signals, open_attempted.get(), error).await,
+                Ok(code) => Ok(code),
+            }
+        }
     };
-    if result.is_err() {
+    if result.is_err()
+        && !matches!(
+            result,
+            Err(Error::Invalid("stream_interrupted_before_open"))
+        )
+    {
         diagnostic(format_args!(
             "marmish stream {}: attachment ended; remote execution may continue",
             hex::encode(stream)
@@ -607,8 +752,301 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[tokio::test]
+    async fn rsync_signal_and_epipe_priority_are_isolated() {
+        signal_epipe_subprocess("stream_cli::tests::rsync_signal_and_epipe_priority_are_isolated")
+            .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rsync_signal_and_epipe_priority_on_worker_threads() {
+        signal_epipe_subprocess(
+            "stream_cli::tests::rsync_signal_and_epipe_priority_on_worker_threads",
+        )
+        .await;
+    }
+
+    async fn signal_epipe_subprocess(test_name: &str) {
+        const CHILD: &str = "MARMISH_TEST_RSYNC_SIGNAL_SOCKET";
+        const MODE: &str = "MARMISH_TEST_RSYNC_SIGNAL_MODE";
+        if let Some(socket) = std::env::var_os(CHILD) {
+            let mut signals = ExecutionSignals::register(SignalPolicy::Rsync).unwrap();
+            let mode = std::env::var(MODE).unwrap();
+            let signaled = mode != "detach";
+            if signaled {
+                assert_eq!(unsafe { libc::raise(libc::SIGUSR1) }, 0);
+            }
+            let mut pipe = [0; 2];
+            assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+            unsafe {
+                libc::close(pipe[0]);
+            }
+            let error = write_bytes(pipe[1], b"closed").await.unwrap_err();
+            unsafe {
+                libc::close(pipe[1]);
+            }
+            let context = Context {
+                socket: socket.into(),
+                profile: "test".into(),
+            };
+            let peer = Peer {
+                context: &context,
+                relays: Vec::new(),
+                binding: Binding {
+                    stream: [1; 16],
+                    session: [2; 16],
+                    client: [3; 32],
+                    server: [4; 32],
+                },
+                idle: Duration::from_secs(3),
+            };
+            let result = attachment_error(&peer, &mut signals, mode != "preopen", error).await;
+            if mode == "preopen" {
+                assert!(matches!(
+                    result,
+                    Err(Error::Invalid("stream_interrupted_before_open"))
+                ));
+            } else if signaled {
+                assert_eq!(result.unwrap(), 130);
+            } else {
+                assert!(
+                    matches!(result, Err(Error::Io(ref error)) if error.kind() == std::io::ErrorKind::BrokenPipe)
+                );
+            }
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        for mode in ["signal", "detach", "preopen"] {
+            let directory = tempfile::Builder::new()
+                .permissions(std::fs::Permissions::from_mode(0o700))
+                .tempdir()
+                .unwrap();
+            let path = directory.path().join("s");
+            let listener = ipc::bind(&path).unwrap();
+            let cancellations = Arc::new(AtomicUsize::new(0));
+            let count = cancellations.clone();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let length = socket.read_u32().await.unwrap() as usize;
+                assert!(length <= 65_536);
+                let mut bytes = vec![0; length];
+                socket.read_exact(&mut bytes).await.unwrap();
+                let ipc::Request::Stream {
+                    request: StreamLocalRequest::Frame { frame_base64, .. },
+                } = serde_json::from_slice(&bytes).unwrap()
+                else {
+                    panic!("expected stream");
+                };
+                let bytes = STANDARD.decode(frame_base64).unwrap();
+                let request = wire::decode_request(&bytes).unwrap();
+                assert!(matches!(request.body, RequestBody::Cancel));
+                count.fetch_add(1, Ordering::SeqCst);
+                let response = wire::Response {
+                    binding: request.binding,
+                    sequence: 0,
+                    request_sha256: wire::request_digest(&bytes),
+                    body: ResponseBody::Exchange {
+                        stdin_accepted: 0,
+                        stdin_delivered: 0,
+                        stdin_closed: true,
+                        stdout: None,
+                        stderr: None,
+                        stdout_eof: Some(0),
+                        stderr_eof: Some(0),
+                        cancel_requested: true,
+                        terminal: Some(Terminal::Cancelled),
+                    },
+                };
+                let response = ipc::Response::stream(StreamLocalResult::Frame {
+                    frame_base64: STANDARD.encode(wire::encode_response(&response).unwrap()),
+                });
+                let bytes = serde_json::to_vec(&response).unwrap();
+                socket.write_u32(bytes.len() as u32).await.unwrap();
+                socket.write_all(&bytes).await.unwrap();
+            });
+            let child = tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", test_name, "--nocapture"])
+                .env(CHILD, &path)
+                .env(MODE, mode)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let output = tokio::time::timeout(Duration::from_secs(10), child.wait_with_output())
+                .await
+                .expect("signal test child timed out")
+                .unwrap();
+            assert!(output.status.success(), "mode={mode} child={output:?}");
+            assert_eq!(
+                cancellations.load(Ordering::SeqCst),
+                usize::from(mode == "signal")
+            );
+            server.abort();
+            let _ = server.await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancellation_confirmation_handles_late_signals_without_extending_deadline() {
+        const CHILD: &str = "MARMISH_TEST_CANCEL_CONFIRM_SOCKET";
+        const MODE: &str = "MARMISH_TEST_CANCEL_CONFIRM_MODE";
+        if let Some(socket) = std::env::var_os(CHILD) {
+            let mode = std::env::var(MODE).unwrap();
+            let mut signals = ExecutionSignals::register(SignalPolicy::Rsync).unwrap();
+            let context = Context {
+                socket: socket.into(),
+                profile: "test".into(),
+            };
+            let peer = Peer {
+                context: &context,
+                relays: Vec::new(),
+                binding: Binding {
+                    stream: [1; 16],
+                    session: [2; 16],
+                    client: [3; 32],
+                    server: [4; 32],
+                },
+                idle: Duration::from_secs(3),
+            };
+            let late_interrupt = mode == "interrupt";
+            let repeat = mode == "deadline";
+            let sender = tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(2150)).await;
+                let signal = if late_interrupt {
+                    libc::SIGINT
+                } else {
+                    libc::SIGUSR1
+                };
+                assert_eq!(unsafe { libc::raise(signal) }, 0);
+                if repeat {
+                    for _ in 0..2 {
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                        assert_eq!(unsafe { libc::raise(libc::SIGUSR1) }, 0);
+                    }
+                }
+            });
+            let started = Instant::now();
+            let result = confirm_cancel(&peer, &mut signals).await;
+            match mode.as_str() {
+                "interrupt" => assert!(matches!(
+                    result,
+                    Err(Error::Invalid("stream_cancellation_uncertain"))
+                )),
+                "confirm" => assert_eq!(result.unwrap(), 130),
+                "deadline" => {
+                    assert!(matches!(result, Err(Error::Timeout)));
+                    // Forwarded USR1 notifications must not restart the original deadline.
+                    assert!(started.elapsed() >= Duration::from_millis(2900));
+                    assert!(started.elapsed() < Duration::from_millis(3900));
+                }
+                _ => panic!("unknown signal mode"),
+            }
+            assert!(started.elapsed() >= Duration::from_secs(2));
+            sender.await.unwrap();
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        for mode in ["interrupt", "confirm", "deadline"] {
+            let directory = tempfile::Builder::new()
+                .permissions(std::fs::Permissions::from_mode(0o700))
+                .tempdir()
+                .unwrap();
+            let path = directory.path().join("s");
+            let listener = ipc::bind(&path).unwrap();
+            let started = Instant::now();
+            let server = tokio::spawn(async move {
+                loop {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let length = socket.read_u32().await.unwrap() as usize;
+                    assert!(length <= 65_536);
+                    let mut bytes = vec![0; length];
+                    socket.read_exact(&mut bytes).await.unwrap();
+                    let ipc::Request::Stream {
+                        request: StreamLocalRequest::Frame { frame_base64, .. },
+                    } = serde_json::from_slice(&bytes).unwrap()
+                    else {
+                        panic!("expected Cancel")
+                    };
+                    let bytes = STANDARD.decode(frame_base64).unwrap();
+                    let request = wire::decode_request(&bytes).unwrap();
+                    assert!(matches!(request.body, RequestBody::Cancel));
+                    let terminal = (mode == "confirm"
+                        && started.elapsed() >= Duration::from_millis(2350))
+                    .then_some(Terminal::Cancelled);
+                    let response = wire::Response {
+                        binding: request.binding,
+                        sequence: 0,
+                        request_sha256: wire::request_digest(&bytes),
+                        body: ResponseBody::Exchange {
+                            stdin_accepted: 0,
+                            stdin_delivered: 0,
+                            stdin_closed: true,
+                            stdout: None,
+                            stderr: None,
+                            stdout_eof: terminal.map(|_| 0),
+                            stderr_eof: terminal.map(|_| 0),
+                            cancel_requested: true,
+                            terminal,
+                        },
+                    };
+                    let response = ipc::Response::stream(StreamLocalResult::Frame {
+                        frame_base64: STANDARD.encode(wire::encode_response(&response).unwrap()),
+                    });
+                    let bytes = serde_json::to_vec(&response).unwrap();
+                    socket.write_u32(bytes.len() as u32).await.unwrap();
+                    socket.write_all(&bytes).await.unwrap();
+                }
+            });
+            let child = tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "stream_cli::tests::cancellation_confirmation_handles_late_signals_without_extending_deadline", "--nocapture"])
+                .env(CHILD, &path).env(MODE, mode)
+                .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped()).kill_on_drop(true).spawn().unwrap();
+            let output = tokio::time::timeout(Duration::from_secs(6), child.wait_with_output())
+                .await
+                .expect("confirmation child timed out")
+                .unwrap();
+            server.abort();
+            let _ = server.await;
+            assert!(output.status.success(), "mode={mode} child={output:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn rsync_bursts_and_forwarded_usr1_do_not_abandon_confirmation() {
+        let mut signals = ExecutionSignals::register(SignalPolicy::Rsync).unwrap();
+        let first = Instant::now();
+        for kind in [
+            ExecutionSignal::Interrupt,
+            ExecutionSignal::Terminate,
+            ExecutionSignal::Hangup,
+            ExecutionSignal::User,
+        ] {
+            signals.last = Some(kind);
+            assert!(signals.coalesces(first, first + Duration::from_millis(1999)));
+            assert_eq!(
+                signals.coalesces(first, first + Duration::from_secs(2)),
+                kind == ExecutionSignal::User
+            );
+            assert_eq!(
+                signals.coalesces(first, first + Duration::from_secs(59)),
+                kind == ExecutionSignal::User
+            );
+        }
+        signals.policy = SignalPolicy::Interactive;
+        signals.last = Some(ExecutionSignal::Interrupt);
+        assert!(!signals.coalesces(first, first));
+    }
+
+    #[tokio::test]
     async fn interrupt_during_preparation_restores_stdio_without_open() {
         const CHILD_SOCKET: &str = "MARMISH_TEST_PREPARE_INTERRUPT_SOCKET";
+        const STAGE: &str = "MARMISH_TEST_PREPARE_INTERRUPT_STAGE";
         if let Some(socket) = std::env::var_os(CHILD_SOCKET) {
             let flags: Vec<_> = (0..=2)
                 .map(|fd| unsafe { libc::fcntl(fd, libc::F_GETFL) })
@@ -626,6 +1064,7 @@ mod tests {
                     new_session: false,
                     idle: Duration::from_secs(3),
                     keepalive: Duration::from_secs(1),
+                    signals: ExecutionSignals::register(SignalPolicy::Interactive).unwrap(),
                 },
             )
             .await;
@@ -639,63 +1078,99 @@ mod tests {
             return;
         }
         use std::os::unix::fs::PermissionsExt;
-        let directory = tempfile::tempdir().unwrap();
-        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let path = directory.path().join("owner.sock");
-        let listener = ipc::bind(&path).unwrap();
-        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "stream_cli::tests::interrupt_during_preparation_restores_stdio_without_open",
-                "--nocapture",
-            ])
-            .env(CHILD_SOCKET, &path)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        let observed = tokio::time::timeout(Duration::from_secs(10), async {
-            let (mut connection, _) = listener.accept().await?;
-            let length = connection.read_u32().await? as usize;
-            assert!(length <= 65_536);
-            let mut bytes = vec![0; length];
-            connection.read_exact(&mut bytes).await?;
-            let request: ipc::Request = serde_json::from_slice(&bytes).unwrap();
-            assert!(matches!(request, ipc::Request::CommandPrepare { .. }));
-            std::io::Result::Ok(connection)
-        })
-        .await;
-        let connection = match observed {
-            Ok(Ok(connection)) => connection,
-            other => {
-                let _ = child.kill();
-                let output = child.wait_with_output().unwrap();
-                panic!("prepare not observed: {other:?}, child={output:?}");
+        for stage in ["prepare", "hello"] {
+            let directory = tempfile::tempdir().unwrap();
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+            let path = directory.path().join("owner.sock");
+            let listener = ipc::bind(&path).unwrap();
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "stream_cli::tests::interrupt_during_preparation_restores_stdio_without_open",
+                    "--nocapture",
+                ])
+                .env(CHILD_SOCKET, &path)
+                .env(STAGE, stage)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            let observed = tokio::time::timeout(Duration::from_secs(10), async {
+                let (mut connection, _) = listener.accept().await?;
+                let length = connection.read_u32().await? as usize;
+                assert!(length <= 65_536);
+                let mut bytes = vec![0; length];
+                connection.read_exact(&mut bytes).await?;
+                let request: ipc::Request = serde_json::from_slice(&bytes).unwrap();
+                assert!(matches!(request, ipc::Request::CommandPrepare { .. }));
+                if stage == "hello" {
+                    let response =
+                        ipc::Response::command(crate::command_local::LocalResult::Ready {
+                            session: hex::encode([2; 16]),
+                            local_account: hex::encode([3; 32]),
+                        });
+                    let bytes = serde_json::to_vec(&response).unwrap();
+                    connection.write_u32(bytes.len() as u32).await?;
+                    connection.write_all(&bytes).await?;
+                    drop(connection);
+                    let (mut hello, _) = listener.accept().await?;
+                    let length = hello.read_u32().await? as usize;
+                    assert!(length <= 65_536);
+                    let mut bytes = vec![0; length];
+                    hello.read_exact(&mut bytes).await?;
+                    let ipc::Request::Stream {
+                        request: StreamLocalRequest::Frame { frame_base64, .. },
+                    } = serde_json::from_slice(&bytes).unwrap()
+                    else {
+                        panic!("expected Hello")
+                    };
+                    let request =
+                        wire::decode_request(&STANDARD.decode(frame_base64).unwrap()).unwrap();
+                    assert!(matches!(request.body, RequestBody::Hello { .. }));
+                    return std::io::Result::Ok(hello);
+                }
+                std::io::Result::Ok(connection)
+            })
+            .await;
+            let connection = match observed {
+                Ok(Ok(connection)) => connection,
+                other => {
+                    let _ = child.kill();
+                    let output = child.wait_with_output().unwrap();
+                    panic!("prepare not observed: {other:?}, child={output:?}");
+                }
+            };
+            // Signal only the still-owned live child, never a persisted PID.
+            assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    let output = child.wait_with_output().unwrap();
+                    assert!(status.success(), "child={output:?}");
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    assert!(stderr.contains("no remote child was launched"), "{stderr}");
+                    assert!(
+                        !stderr.contains("remote execution may continue"),
+                        "{stderr}"
+                    );
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let output = child.wait_with_output().unwrap();
+                    panic!("interrupt did not stop preparation: {output:?}");
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
-        };
-        // Signal only the still-owned live child, never a persisted PID.
-        assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            if let Some(status) = child.try_wait().unwrap() {
-                let output = child.wait_with_output().unwrap();
-                assert!(status.success(), "child={output:?}");
-                break;
-            }
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let output = child.wait_with_output().unwrap();
-                panic!("interrupt did not stop preparation: {output:?}");
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            drop(connection);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                    .await
+                    .is_err()
+            );
         }
-        drop(connection);
-        assert!(
-            tokio::time::timeout(Duration::from_millis(100), listener.accept())
-                .await
-                .is_err()
-        );
     }
 
     #[tokio::test]

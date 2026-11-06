@@ -66,10 +66,11 @@ requires independent Claude design/code review and dual-mirror publication.
 The [native runtime increment](phases/streaming-runtime.md) adds stream execution,
 bounded pipes, explicit authenticated cancellation, local administrative cleanup
 and durable launch fences. Its integrated code review has technical approval;
-final Linux AMD64 live qualification passed, and source publication is being
-completed. The
-[rsync adapter design](phases/streaming-rsync.md) is independently approved but
-not implemented. Native resumable copy and installed cross-platform qualification
+final Linux AMD64 live qualification passed and source was published to both
+remotes. The [rsync adapter](phases/streaming-rsync.md) is implemented and has
+independent code/harness approval plus passing Linux native relay qualification;
+see [exact evidence and rates](validation/rsync-runtime-live.md).
+Native resumable copy and installed cross-platform qualification
 remain later phases. See [runtime evidence](validation/streaming-runtime.md) for
 actual source/platform test boundaries and failures. None of these increments is
 a capability of the currently published v0.2.3 binary installer.

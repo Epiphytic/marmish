@@ -259,23 +259,28 @@ terminal status retains its exit code; interrupted-before-Open and unconfirmed
 cancellation return 255. These are adapter codes; outer rsync may map them.
 An autostarted local daemon may remain available; it is not a remote command and
 must not be killed as a consequence of frontend interruption. No signal
-registration/polling on the daemon actor is needed. This is a planned addition to
-Phase 2a's CLI and `stream_cli::execute`, whose Phase 2a implementation registers Ctrl-C at execute entry before room
-preparation but after socket setup and target resolution. The broader early
-registration and rsync signal policy are not existing support.
+registration/polling on the daemon actor is needed. The unreleased Phase2b source
+registers the listener before socket setup and target resolution, extending
+Phase2a's later execute-entry registration. On interruption before Open,
+`run_async` shuts down the runtime in the background so an abandoned blocking
+startup/DNS task cannot delay frontend exit. This never terminates the daemon.
 
 Explicit signals take priority over simultaneous pipeline failure. Use a shared
 latched signal state and biased selects polling it before prepare/pipeline
-completion. Before returning an I/O error, poll/drain pending signal notifications,
-yield once to the Tokio signal dispatcher, and recheck the latch. If an explicit
-signal is already delivered/pending, enter cancel confirmation instead of taking
+completion. Before returning an I/O error, poll pending signal notifications;
+if none are ready, wait once for at most50ms for the signal driver to broadcast.
+A `yield_now` alone is insufficient on the multithread runtime's outer block_on
+thread. This bounded correction was approved in integrated code-review round3
+and verified by real signal subprocesses on both runtime flavors. Scheduler
+starvation beyond the bound is not an absolute delivery guarantee. If an explicit
+signal is delivered during the wait, enter cancel confirmation instead of taking
 the EPIPE/error exit. Keep that cancel future alive through coalesced signals;
 its bounded control exchange must never depend on stdout/stderr writability.
 Diagnostics use the existing nonfatal best-effort stderr writer. Claude's local
 rsync 3.2.7 probes observed USR1 before EPIPE in four repeated exits; implementation
 must verify the Tokio latch/dispatcher ordering rather than treating this local
-observation as a portable proof. Use a deterministic test hook for signal-pending
-then I/O-error ordering. Tests must force USR1 pending together with stdout EPIPE and verify confirmed remote cancel;
+observation as a portable proof. Actual owned subprocess tests raise USR1 together
+with stdout EPIPE and verify confirmed remote cancel;
 EPIPE without a signal must still detach without sending Cancel. Also send one
 actual process-group INT to rsync plus its adapter, verifying the resulting
 INT+USR1 burst does not trigger premature uncertain cancellation.
