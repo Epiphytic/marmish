@@ -10,6 +10,8 @@ mod command_runtime;
 #[cfg(feature = "installed-checks")]
 #[path = "installed_check.rs"]
 pub(crate) mod installed_check;
+#[path = "stream_runtime.rs"]
+mod stream_runtime;
 use crate::foundation::{self, Body, Envelope};
 use crate::identity::{IdentityMaterial, ProfileLease};
 pub use crate::journal::{Conversation, ReceivedMessage, SendStatus};
@@ -841,6 +843,7 @@ pub struct MdkOwner {
     pending_cohort: VecDeque<(u8, Vec<u8>)>,
     pending_budget: usize,
     commands: Option<crate::command_service::CommandService>,
+    streams: crate::stream_service::StreamState,
     command_probe: Option<command_adapter::CommandProbe>,
     command_source_cursor: Option<crate::journal::SourceCursor>,
     command_invalidation_cursor: Option<crate::journal::SourceKey>,
@@ -1002,6 +1005,7 @@ impl MdkOwner {
             pending_cohort: VecDeque::new(),
             pending_budget: 64,
             commands: None,
+            streams: crate::stream_service::StreamState::default(),
             command_probe: None,
             command_source_cursor: None,
             command_invalidation_cursor: None,
@@ -1099,7 +1103,15 @@ impl MdkOwner {
         // arrive in ephemeral effect sets. The terminal-state source sweep is
         // their durable recovery backstop, rather than this normally empty gate.
         for event in mdk(self.storage.list_pending_application_events())? {
-            if let GroupEvent::AppMessageInvalidated { group_id, .. } = event {
+            if let GroupEvent::AppMessageInvalidated {
+                group_id,
+                message_id,
+                ..
+            } = event
+            {
+                self.invalidate_stream_projection(group_id.as_slice())?;
+                self.journal
+                    .stream_publication_invalidated(group_id.as_slice(), message_id.as_slice())?;
                 command_protection
                     .invalidation_groups
                     .insert(group_id.as_slice().to_vec());
@@ -1146,6 +1158,7 @@ impl MdkOwner {
                 protected.insert(group.as_slice().to_vec());
             }
         }
+        protected.extend(self.journal.stream_records()?.into_iter().map(|r| r.group));
         command_protection.groups = protected.clone();
         self.journal.command_maintain(now()?, &command_protection)?;
         if command_protection.invalidation_groups.is_empty() {
@@ -1777,6 +1790,7 @@ impl MdkOwner {
                     .invalidate(group_id.as_slice(), message_id.as_slice())?;
             }
         }
+        self.project_stream_publication_effects(&effects)?;
         self.project_application_publications(&effects)?;
         // Always process the durable queue: it survives a crash between MDK
         // acceptance and the application's transaction. Never acknowledge a
@@ -1828,7 +1842,11 @@ impl MdkOwner {
                 ref event @ GroupEvent::MessageReceived { ref group_id, .. }
                     if self.journal.command_room(group_id.as_slice())?.is_some() =>
                 {
-                    self.project_command_message(event.clone())
+                    if Self::is_stream_message(event) {
+                        self.project_stream_message(event.clone())
+                    } else {
+                        self.project_command_message(event.clone())
+                    }
                 }
                 event @ GroupEvent::MessageReceived { .. } => self.project_message(event),
                 GroupEvent::AppMessageInvalidated {
@@ -2399,6 +2417,7 @@ impl MdkOwner {
             return Err(Error::Mdk("inactive"));
         }
         self.progress_commands()?;
+        self.progress_streams()?;
         self.reconcile_command_sources()?;
         self.maintain_journal()?;
         self.rebuild_routes()?;
@@ -2434,7 +2453,9 @@ impl MdkOwner {
         self.drive_retained(deadline).await?;
         self.submit_unsubmitted(deadline).await?;
         self.submit_command_publications(deadline).await?;
+        self.submit_stream_publications(deadline).await?;
         self.progress_commands()?;
+        self.progress_streams()?;
         self.maintain_journal()?;
         Ok(())
     }

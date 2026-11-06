@@ -1087,7 +1087,7 @@ impl Context {
             tokio::time::sleep_until((Instant::now() + Duration::from_secs(1)).min(deadline)).await;
         }
     }
-    async fn prepare(
+    pub(crate) async fn prepare(
         &self,
         remote: Account,
         relays: Vec<String>,

@@ -1803,10 +1803,14 @@ fn insert_invocation_with_client_request(
         client_request,
     } = admission;
     let limits = store_limits(conn)?;
-    if count(conn, "SELECT count(*) FROM command_invocations", None)? >= limits.retained_global
+    if count(
+        conn,
+        "SELECT (SELECT count(*) FROM command_invocations)+(SELECT count(*) FROM live_streams)",
+        None,
+    )? >= limits.retained_global
         || count(
             conn,
-            "SELECT count(*) FROM command_invocations WHERE principal=?1",
+            "SELECT (SELECT count(*) FROM command_invocations WHERE principal=?1)+(SELECT count(*) FROM live_streams WHERE principal=?1)",
             Some(&owner.binding.client),
         )? >= limits.retained_per_principal
     {
@@ -1818,12 +1822,12 @@ fn insert_invocation_with_client_request(
         && active
         && (count(
             conn,
-            "SELECT count(*) FROM command_invocations WHERE server_side=1 AND active=1",
+            "SELECT (SELECT count(*) FROM command_invocations WHERE server_side=1 AND active=1)+(SELECT count(*) FROM live_streams WHERE server_side=1 AND active=1)",
             None,
         )? >= limits.active_global
             || count(
                 conn,
-                "SELECT count(*) FROM command_invocations WHERE server_side=1 AND active=1 AND principal=?1",
+                "SELECT (SELECT count(*) FROM command_invocations WHERE server_side=1 AND active=1 AND principal=?1)+(SELECT count(*) FROM live_streams WHERE server_side=1 AND active=1 AND principal=?1)",
                 Some(&owner.binding.client),
             )? >= limits.active_per_principal)
     {
@@ -4077,6 +4081,50 @@ fn check_local_binding(conn: &Connection, owner: &Owner) -> Result<()> {
     Ok(())
 }
 
+// Shared actor admission used by live streams under the same transaction.
+pub(super) fn stream_check_admission(
+    conn: &Connection,
+    principal: &[u8; 32],
+    active: bool,
+    new_record: bool,
+) -> Result<()> {
+    let limits = store_limits(conn)?;
+    let global = count(
+        conn,
+        "SELECT (SELECT count(*) FROM command_invocations)+(SELECT count(*) FROM live_streams)",
+        None,
+    )?;
+    let peer = count(
+        conn,
+        "SELECT (SELECT count(*) FROM command_invocations WHERE principal=?1)+(SELECT count(*) FROM live_streams WHERE principal=?1)",
+        Some(principal),
+    )?;
+    if new_record && (global >= limits.retained_global || peer >= limits.retained_per_principal) {
+        return Err(invalid("stream_retained_capacity"));
+    }
+    if active {
+        let global = count(
+            conn,
+            "SELECT (SELECT count(*) FROM command_invocations WHERE server_side=1 AND active=1)+(SELECT count(*) FROM live_streams WHERE server_side=1 AND active=1)",
+            None,
+        )?;
+        let peer = count(
+            conn,
+            "SELECT (SELECT count(*) FROM command_invocations WHERE server_side=1 AND active=1 AND principal=?1)+(SELECT count(*) FROM live_streams WHERE server_side=1 AND active=1 AND principal=?1)",
+            Some(principal),
+        )?;
+        if global >= limits.active_global || peer >= limits.active_per_principal {
+            return Err(invalid("stream_active_capacity"));
+        }
+        reserve_credit(conn, &limits)?;
+    }
+    Ok(())
+}
+
+pub(super) fn stream_payload_retention(conn: &Connection) -> Result<u64> {
+    Ok(store_limits(conn)?.payload_retention)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4271,7 +4319,7 @@ mod tests {
     }
     fn totals(j: &Journal) -> (usize, usize, usize) {
         (
-            count(&j.conn, "SELECT count(*) FROM command_invocations", None).unwrap(),
+            count(&j.conn, "SELECT (SELECT count(*) FROM command_invocations)+(SELECT count(*) FROM live_streams)", None).unwrap(),
             count(&j.conn, "SELECT count(*) FROM command_requests", None).unwrap(),
             count(&j.conn, "SELECT count(*) FROM command_publications", None).unwrap(),
         )

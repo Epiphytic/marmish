@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "passed": false,
+  "relay": "wss://relay.eu.whitenoise.chat",
+  "relay_path_redacted": false,
+  "cleanup_scope": "owned_daemon_shutdown_and_protocol_cancel",
+  "platform": "Linux",
+  "architecture": "x86_64",
+  "payload_bytes": 393216,
+  "latency_samples": 3,
+  "results": [],
+  "binary": {
+    "sha256": "35e74479c4a5d9f5169e4baccbf19c27f942ce4c77bcf58822c36946af39d6e6",
+    "version": "0.2.3"
+  },
+  "error": {
+    "stage": "binary_roundtrip",
+    "category": "byte_or_exit_mismatch"
+  },
+  "daemon_shutdown": [
+    {
+      "role": "client",
+      "exit": 0
+    },
+    {
+      "role": "server",
+      "exit": 0
+    }
+  ],
+  "total_seconds": 7.435865,
+  "private_state_retained": true
+}

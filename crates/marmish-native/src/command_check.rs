@@ -200,6 +200,7 @@ impl Pair {
                         None => stopped.report,
                     };
                     if !report.engine_stop_complete
+                        || !report.stream_stop_complete
                         || !report.mdk_stop_complete
                         || !report.runtime_cleanup_complete
                     {
@@ -735,6 +736,7 @@ async fn restart_server(pair: &mut Pair, deadline: Instant, report: &mut Value) 
         return Err(Error::Timeout);
     }
     if !stopped.report.engine_stop_complete
+        || !stopped.report.stream_stop_complete
         || !stopped.report.mdk_stop_complete
         || !stopped.report.runtime_cleanup_complete
     {

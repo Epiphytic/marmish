@@ -93,8 +93,14 @@ struct Args {
 
 #[derive(clap::Args)]
 #[group(skip)]
-#[command(group(clap::ArgGroup::new("selector").required(true).args(["handle", "handle_file", "invocation", "latest"])))]
+#[command(group(clap::ArgGroup::new("selector").required(true).args(["handle", "handle_file", "invocation", "latest", "stream"])))]
 struct SelectArgs {
+    /// Cancel this locally recorded stream ID, including an uncertain attachment.
+    #[arg(long)]
+    stream: Option<String>,
+    /// Cancel an owned server process without requiring a remote grant.
+    #[arg(long, requires = "stream")]
+    local: bool,
     /// Exact private handle JSON previously printed by marmish.
     #[arg(long)]
     handle: Option<String>,
@@ -110,6 +116,28 @@ struct SelectArgs {
 
 #[derive(Subcommand)]
 enum FrontendCommand {
+    /// Execute with binary stdin/stdout streams and explicit remote cancellation.
+    Stream {
+        destination: String,
+        #[arg(long)]
+        compress: bool,
+        #[arg(long, default_value_t = 660, value_parser = clap::value_parser!(u64).range(1..=86400))]
+        idle_seconds: u64,
+        #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(1..=86400))]
+        keepalive_seconds: u64,
+        #[arg(last = true, required = true)]
+        argv: Vec<OsString>,
+    },
+    /// List locally recorded streams and their last known remote states.
+    Streams {
+        destination: Option<String>,
+    },
+    /// Acknowledge that an uncertain orphan may still be running, releasing credit.
+    StreamReconcile {
+        stream: String,
+        #[arg(long, required = true)]
+        acknowledge_possible_live: bool,
+    },
     /// Ask macOS for access to this existing profile, then verify without UI.
     KeychainAuthorize,
     /// Print this binary's native version, build target and source commit.
@@ -270,7 +298,12 @@ async fn run(
     {
         return Err(Error::Invalid("server_limit_operation"));
     }
-    if args.new_session && !matches!(args.command, Some(FrontendCommand::Remote(_))) {
+    if args.new_session
+        && !matches!(
+            args.command,
+            Some(FrontendCommand::Remote(_) | FrontendCommand::Stream { .. })
+        )
+    {
         return Err(Error::Invalid("new_session_operation"));
     }
     if matches!(args.command, Some(FrontendCommand::ReleaseInfo)) {
@@ -405,8 +438,11 @@ async fn run(
         );
         return Ok(0);
     }
-    if daemon_binary && command_action(&args) {
+    if daemon_binary && (command_action(&args) || stream_action(&args)) {
         return Err(Error::Invalid("daemon_operation"));
+    }
+    if stream_action(&args) {
+        return run_stream_command(&args, &state).await;
     }
     if command_action(&args) {
         return run_command(&args, &state).await;
@@ -496,6 +532,91 @@ fn command_action(args: &Args) -> bool {
                 | FrontendCommand::Output(_)
         )
     ) || (args.command.is_none() && args.user.is_some())
+}
+
+fn stream_action(args: &Args) -> bool {
+    matches!(
+        &args.command,
+        Some(
+            FrontendCommand::Stream { .. }
+                | FrontendCommand::Streams { .. }
+                | FrontendCommand::StreamReconcile { .. }
+        )
+    ) || matches!(&args.command, Some(FrontendCommand::Cancel(select)) if select.stream.is_some())
+}
+
+async fn run_stream_command(args: &Args, state: &std::path::Path) -> Result<u8> {
+    crate::identity::validate_name(&args.identity)?;
+    let config = CommandConfig::load(&state.join(&args.identity))?;
+    let socket = command_socket(args, state, &config).await?;
+    let context = Context {
+        socket,
+        profile: args.identity.clone(),
+    };
+    match &args.command {
+        Some(FrontendCommand::Stream {
+            destination,
+            argv,
+            compress,
+            idle_seconds,
+            keepalive_seconds,
+        }) => {
+            if args.detach || args.stdin_none || args.trailing.as_ref() != Some(argv) {
+                return Err(Error::Invalid("stream_arguments"));
+            }
+            let target = resolve_target(&config, args, Some(destination)).await?;
+            crate::stream_cli::execute(
+                context,
+                target.remote,
+                target.relays,
+                argv.clone(),
+                crate::stream_cli::ExecuteOptions {
+                    compress: *compress,
+                    new_session: args.new_session,
+                    idle: Duration::from_secs(*idle_seconds),
+                    keepalive: Duration::from_secs(*keepalive_seconds),
+                },
+            )
+            .await
+        }
+        Some(FrontendCommand::Streams { destination }) => {
+            let remote = target_filter(&config, args, destination.as_deref()).await?;
+            crate::stream_cli::list(&context, remote).await
+        }
+        Some(FrontendCommand::Cancel(select)) => {
+            let (remote, relays) = if select.destination.is_some() || args.user.is_some() {
+                let target = resolve_target(&config, args, select.destination.as_deref()).await?;
+                (Some(target.remote), target.relays)
+            } else {
+                target_filter(&config, args, None).await?;
+                (
+                    None,
+                    config
+                        .relay_policy()
+                        .urls()
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect(),
+                )
+            };
+            crate::stream_cli::cancel_selected(
+                &context,
+                select
+                    .stream
+                    .as_deref()
+                    .ok_or(Error::Invalid("stream_id"))?,
+                remote,
+                select.local,
+                relays,
+            )
+            .await
+        }
+        Some(FrontendCommand::StreamReconcile {
+            stream,
+            acknowledge_possible_live,
+        }) => crate::stream_cli::reconcile(&context, stream, *acknowledge_possible_live).await,
+        _ => Err(Error::Invalid("stream_operation")),
+    }
 }
 
 fn validate_separator(values: &[OsString], argv: &[OsString], destination: bool) -> Result<()> {
@@ -631,7 +752,9 @@ async fn command_socket(
             Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
-        if args.no_autostart || args.socket.is_some() {
+        // These options forbid launching a daemon, but an authenticated
+        // activating daemon already owns startup and still needs readiness time.
+        if (args.no_autostart || args.socket.is_some()) && !started {
             return Err(Error::Invalid("daemon_unavailable"));
         }
         if !started {
@@ -887,7 +1010,11 @@ pub fn main(daemon_binary: bool) -> ExitCode {
     };
     args.authorize_disallowed = authorize_disallowed;
     args.trailing = trailing;
-    let failure_code = if command_action(&args) { 255 } else { 1 };
+    let failure_code = if command_action(&args) || stream_action(&args) {
+        255
+    } else {
+        1
+    };
     if let Err(error) = validate_daemon_options(&args, daemon_binary) {
         print_error(&error);
         return ExitCode::from(failure_code);
@@ -978,6 +1105,82 @@ fn print_error(error: &Error) {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+    #[tokio::test]
+    async fn command_socket_waits_for_existing_activation_without_autostart() {
+        use std::os::unix::fs::PermissionsExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let config = CommandConfig::from_bytes(
+            br#"{"version":1,"role":"client","relays":["wss://127.0.0.1:9/"],"tor":"off","trusted_remotes":[],"execution_clients":[],"command_policy":{"version":1},"cwd":"/","limits":{},"aliases":{}}"#,
+        )
+        .unwrap();
+        for (explicit_socket, no_autostart) in [(false, true), (true, false), (true, true)] {
+            let directory = tempfile::Builder::new()
+                .permissions(std::fs::Permissions::from_mode(0o700))
+                .tempdir()
+                .unwrap();
+            let mut profile =
+                crate::identity::ProfileLease::acquire(directory.path(), "default").unwrap();
+            let _identity = profile
+                .prepare(
+                    BackendChoice::File,
+                    &directory.path().join("unused-helper"),
+                    std::time::Instant::now() + Duration::from_secs(5),
+                )
+                .unwrap();
+            let socket = profile.socket_path();
+            let listener = ipc::bind(&socket).unwrap();
+            let server = tokio::spawn(async move {
+                // Each response follows a real Status request: readiness changes
+                // by protocol exchange, rather than by a test timing assumption.
+                for state in ["activating", "active"] {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let length = stream.read_u32().await.unwrap() as usize;
+                    assert!(length > 0 && length <= 65_536);
+                    let mut bytes = vec![0; length];
+                    stream.read_exact(&mut bytes).await.unwrap();
+                    assert!(matches!(
+                        serde_json::from_slice::<Request>(&bytes).unwrap(),
+                        Request::Status {}
+                    ));
+                    let response = serde_json::to_vec(&ipc::Response::success(
+                        serde_json::json!({"state": state}),
+                    ))
+                    .unwrap();
+                    stream.write_u32(response.len() as u32).await.unwrap();
+                    stream.write_all(&response).await.unwrap();
+                    stream.shutdown().await.unwrap();
+                }
+            });
+            let mut args = Args::try_parse_from(["marmish"]).unwrap();
+            args.no_autostart = no_autostart;
+            args.socket = explicit_socket.then(|| socket.clone());
+            let resolved = tokio::time::timeout(
+                Duration::from_secs(3),
+                command_socket(&args, directory.path(), &config),
+            )
+            .await
+            .expect("existing activating daemon must become ready")
+            .unwrap();
+            assert_eq!(resolved, socket);
+            server.await.unwrap();
+
+            // Once the listener is gone, neither restricted mode may launch a
+            // replacement daemon. A missing endpoint must fail immediately.
+            std::fs::remove_file(&socket).unwrap();
+            assert!(matches!(
+                tokio::time::timeout(
+                    Duration::from_secs(1),
+                    command_socket(&args, directory.path(), &config),
+                )
+                .await
+                .expect("absent daemon must not enter startup wait"),
+                Err(Error::Invalid("daemon_unavailable"))
+            ));
+            profile.cleanup_runtime().unwrap();
+        }
+    }
+
     #[test]
     fn usage_failures_have_transport_error_exit_status() {
         let error =
@@ -1056,6 +1259,52 @@ mod tests {
     #[test]
     fn parser_contract_is_consistent() {
         Args::command().debug_assert();
+    }
+    #[test]
+    fn stream_cli_preserves_literal_argv_and_cancel_selection() {
+        let args = Args::try_parse_from([
+            "marmish",
+            "stream",
+            "peer",
+            "--compress",
+            "--",
+            "printf",
+            "%s",
+            "a b;$(x)\\\"\n",
+            "",
+        ])
+        .unwrap();
+        let Some(FrontendCommand::Stream {
+            argv,
+            compress,
+            idle_seconds,
+            keepalive_seconds,
+            ..
+        }) = args.command
+        else {
+            panic!("stream command");
+        };
+        assert!(compress);
+        assert_eq!((idle_seconds, keepalive_seconds), (660, 300));
+        assert_eq!(
+            argv,
+            ["printf", "%s", "a b;$(x)\\\"\n", ""].map(OsString::from)
+        );
+        assert!(Args::try_parse_from(["marmish", "stream", "peer", "printf"]).is_err());
+        let args =
+            Args::try_parse_from(["marmish", "cancel", "--stream", &"00".repeat(16), "peer"])
+                .unwrap();
+        assert!(stream_action(&args));
+        assert!(
+            Args::try_parse_from([
+                "marmish",
+                "cancel",
+                "--stream",
+                &"00".repeat(16),
+                "--latest"
+            ])
+            .is_err()
+        );
     }
     #[tokio::test]
     async fn bare_identity_filters_command_listing_wait_and_output() {

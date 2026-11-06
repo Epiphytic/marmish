@@ -47,6 +47,7 @@ url.workspace = true
 zeroize.workspace = true
 marmish-vault = { path = "../marmish-vault" }
 marmish-engine = { path = "../marmish-engine" }
+marmish-stream = { path = "../marmish-stream" }
 marmish-core = { path = "../marmish-core" }
 tempfile.workspace = true
 fs2 = "0.4"

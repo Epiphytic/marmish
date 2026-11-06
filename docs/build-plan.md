@@ -63,7 +63,16 @@ Beads `marmish-8ka`, adds reliable duplex remote shell support for rsync,
 optional compression and resumable regular-file transfer. Its first detailed
 phase is [bounded stream primitives](phases/streaming-primitives.md). Each phase
 requires independent Claude design/code review and dual-mirror publication.
-These are planned capabilities until implementation evidence is recorded.
+The [native runtime increment](phases/streaming-runtime.md) adds stream execution,
+bounded pipes, explicit authenticated cancellation, local administrative cleanup
+and durable launch fences. Its integrated code review has technical approval;
+final Linux AMD64 live qualification passed, and source publication is being
+completed. The
+[rsync adapter design](phases/streaming-rsync.md) is independently approved but
+not implemented. Native resumable copy and installed cross-platform qualification
+remain later phases. See [runtime evidence](validation/streaming-runtime.md) for
+actual source/platform test boundaries and failures. None of these increments is
+a capability of the currently published v0.2.3 binary installer.
 
 ## Historical v0.1 plans and evidence
 

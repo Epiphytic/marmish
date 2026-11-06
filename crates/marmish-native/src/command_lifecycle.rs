@@ -1,8 +1,9 @@
 //! Joined engine stop with the existing profile lease held across frontend close.
-//! Ordinary stop never cancels workers or authorizes engine-state deletion.
+//! Finite workers survive ordinary stop; live streams receive bounded grace.
 use crate::command_engine::CommandEngine;
 use crate::identity::ProfileLease;
 use crate::mdk_adapter::MdkOwner;
+use crate::stream_runner::RunnerHandle;
 use serde::Serialize;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
@@ -22,6 +23,8 @@ pub(crate) struct LifecycleStopReport {
     pub engine_quiesced: bool,
     pub engine_stop_complete: bool,
     pub mdk_stop_complete: bool,
+    #[serde(skip)]
+    pub stream_stop_complete: bool,
     pub runtime_cleanup_complete: bool,
 }
 impl Default for LifecycleStopReport {
@@ -31,6 +34,7 @@ impl Default for LifecycleStopReport {
             engine_quiesced: false,
             engine_stop_complete: false,
             mdk_stop_complete: false,
+            stream_stop_complete: false,
             runtime_cleanup_complete: false,
         }
     }
@@ -103,14 +107,39 @@ impl Drop for Frontend {
     }
 }
 impl Frontend {
-    async fn stop(mut self, deadline: Instant, progress: Progress) {
-        let success = match self.owner.as_mut() {
-            Some(owner) => matches!(
-                tokio::time::timeout_at(deadline, owner.shutdown(deadline)).await,
-                Ok(Ok(()))
-            ),
-            None => true,
+    async fn stop(mut self, begun: bool, progress: Progress) {
+        let Some(owner) = self.owner.as_mut() else {
+            return;
         };
+        let grace = Instant::now() + Duration::from_secs(2);
+        while !owner.stream_runners_finished() && Instant::now() < grace {
+            let turn = grace.min(Instant::now() + Duration::from_millis(100));
+            let _ = tokio::time::timeout_at(turn, owner.stream_stop_progress(turn)).await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let cancelled = owner.stream_cancel_stop().is_ok();
+        // Journal failure must not prevent physical cleanup; its uncertainty is
+        // retained in the report instead of keeping an uncancelled child alive.
+        for runner in owner.stream_runner_barriers() {
+            runner.cancel();
+        }
+        loop {
+            let _ = owner.progress_streams();
+            if owner.stream_runners_finished() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // Physical completion alone does not prove the terminal journal commit.
+        let confirmed = begun && cancelled && owner.stream_stop_confirmed().unwrap_or(false);
+        update(&progress, |report| report.stream_stop_complete = confirmed);
+        let publication = Instant::now() + Duration::from_secs(2);
+        let _ = tokio::time::timeout_at(publication, owner.stream_stop_publish(publication)).await;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let success = matches!(
+            tokio::time::timeout_at(deadline, owner.shutdown(deadline)).await,
+            Ok(Ok(()))
+        );
         update(&progress, |report| report.mdk_stop_complete = success);
         // Drop runs before the keeper can finish its frontend handoff.
     }
@@ -120,6 +149,7 @@ fn start_keeper(
     profile: ProfileLease,
     mut engine: Option<CommandEngine>,
     frontend: mpsc::Receiver<()>,
+    barriers: Vec<RunnerHandle>,
     progress: Progress,
 ) -> PendingStop {
     let shared = progress.clone();
@@ -152,8 +182,19 @@ fn start_keeper(
         // recv returning Disconnected is the normal ownership handoff: the
         // Frontend guard closed its sender after dropping MDK/journal.
         let _ = frontend.recv();
+        // A frontend panic or runtime cancellation cannot release the lease while
+        // detached runner threads still own children. Its channel closes only
+        // after MDK drops; these independent handles preserve the physical fence.
+        for runner in &barriers {
+            runner.cancel();
+        }
+        while barriers.iter().any(|runner| !runner.finished()) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let streams_clean = snapshot(&shared).stream_stop_complete
+            && barriers.iter().all(|runner| !runner.snapshot().uncertain);
         drop(engine);
-        let runtime_clean = !failed && profile.cleanup_runtime().is_ok();
+        let runtime_clean = !failed && streams_clean && profile.cleanup_runtime().is_ok();
         update(&shared, |report| {
             report.runtime_cleanup_complete = runtime_clean
         });
@@ -168,24 +209,22 @@ fn start_keeper(
 /// callers must retain it and the runtime until actual engine join completes.
 pub(crate) async fn stop_owned(identity: OwnedIdentity, deadline: Instant) -> StopObservation {
     let OwnedIdentity { mut owner, profile } = identity;
+    // Close admissions and invalidate all preparation results before capturing
+    // independent child-ownership barriers. No network wait precedes the keeper.
+    let begun = owner.stream_begin_stop().is_ok();
+    let barriers = owner.stream_runner_barriers();
     let engine = owner.take_engine_for_stop();
     let progress = Arc::new(Mutex::new(LifecycleStopReport::default()));
     let (closed, frontend) = mpsc::channel();
-    let keeper = start_keeper(profile, engine, frontend, progress.clone());
+    let keeper = start_keeper(profile, engine, frontend, barriers, progress.clone());
     let frontend = Frontend {
         owner: Some(owner),
         closed: Some(closed),
     };
-    let (_, mut observation) = tokio::join!(
-        frontend.stop(deadline, progress.clone()),
-        keeper.observe(deadline)
-    );
-    // Concurrent network shutdown may have completed after the keeper observer
-    // expired; return the latest actual flags with the same pending handle.
-    if observation.pending.is_some() {
-        observation.report = snapshot(&progress);
-    }
-    observation
+    // Detached deliberately: observer expiry returns the keeper immediately,
+    // while this guard continues bounded network grace and physical cleanup.
+    tokio::spawn(frontend.stop(begun, progress));
+    keeper.observe(deadline).await
 }
 
 #[cfg(test)]
@@ -201,7 +240,8 @@ mod tests {
         let engine = CommandEngine::gated_stop_for_test(gate);
         let progress = Arc::new(Mutex::new(LifecycleStopReport::default()));
         let (closed, frontend) = mpsc::channel();
-        let keeper = start_keeper(profile, Some(engine), frontend, progress);
+        update(&progress, |report| report.stream_stop_complete = true);
+        let keeper = start_keeper(profile, Some(engine), frontend, vec![], progress);
         drop(closed); // frontend is already closed; only the OS thread is gated.
         let observed = keeper
             .observe(Instant::now() + Duration::from_millis(20))
@@ -221,7 +261,8 @@ mod tests {
         let profile = ProfileLease::acquire(root.path(), "account").unwrap();
         let progress = Arc::new(Mutex::new(LifecycleStopReport::default()));
         let (closed, frontend) = mpsc::channel();
-        let keeper = start_keeper(profile, None, frontend, progress);
+        update(&progress, |report| report.stream_stop_complete = true);
+        let keeper = start_keeper(profile, None, frontend, vec![], progress);
         let observed = keeper
             .observe(Instant::now() + Duration::from_millis(20))
             .await;
@@ -232,6 +273,62 @@ mod tests {
         let finished = observed.pending.unwrap().finish().await;
         assert!(finished.engine_stop_complete);
         assert!(!finished.mdk_stop_complete); // no successful network stop claimed.
+        assert!(ProfileLease::acquire(root.path(), "account").is_ok());
+    }
+    #[tokio::test]
+    async fn closed_frontend_cannot_release_lease_before_live_runner_exits() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let profile = ProfileLease::acquire(root.path(), "account").unwrap();
+        let (_state, prepared) = crate::stream_runner::tests::prepare(
+            "trap '' TERM; printf ready; while :; do sleep 1; done",
+        );
+        let runner = RunnerHandle::start(
+            prepared,
+            crate::stream_runner::RunnerLimits {
+                cancel_grace: Duration::from_millis(250),
+                drain_grace: Duration::from_millis(80),
+                poll_interval: Duration::from_millis(2),
+            },
+        )
+        .unwrap();
+        let ready = Instant::now() + Duration::from_secs(5);
+        while runner.snapshot().stdout.is_none() {
+            assert!(Instant::now() < ready);
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        let progress = Arc::new(Mutex::new(LifecycleStopReport::default()));
+        let (closed, frontend) = mpsc::channel();
+        let keeper = start_keeper(profile, None, frontend, vec![runner.clone()], progress);
+        drop(closed); // Models frontend abort/drop; the keeper must cancel safely.
+        let observed = keeper
+            .observe(Instant::now() + Duration::from_millis(20))
+            .await;
+        assert!(observed.pending.is_some());
+        assert!(!runner.finished());
+        assert!(ProfileLease::acquire(root.path(), "account").is_err());
+        let report =
+            tokio::time::timeout(Duration::from_secs(5), observed.pending.unwrap().finish())
+                .await
+                .unwrap();
+        assert!(runner.finished());
+        assert!(!report.stream_stop_complete);
+        assert!(!report.runtime_cleanup_complete);
+        assert!(ProfileLease::acquire(root.path(), "account").is_ok());
+    }
+    #[tokio::test]
+    async fn unresolved_stream_stop_never_claims_runtime_cleanup() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let profile = ProfileLease::acquire(root.path(), "account").unwrap();
+        let progress = Arc::new(Mutex::new(LifecycleStopReport::default()));
+        let (closed, frontend) = mpsc::channel();
+        let keeper = start_keeper(profile, None, frontend, vec![], progress);
+        drop(closed); // Models frontend failure before confirming its stream journal.
+        let report = keeper.finish().await;
+        assert!(report.engine_stop_complete);
+        assert!(!report.stream_stop_complete);
+        assert!(!report.runtime_cleanup_complete);
         assert!(ProfileLease::acquire(root.path(), "account").is_ok());
     }
     #[tokio::test]
@@ -263,17 +360,14 @@ mod tests {
         .unwrap();
         let owner = MdkOwner::open(&profile, &material, connector, vec![]).unwrap();
         profile.mark_ready(owner.opened_binding()).unwrap();
-        let stopped = stop_owned(
-            OwnedIdentity { owner, profile },
-            Instant::now() + Duration::from_secs(3),
-        )
-        .await;
+        let stopped = stop_owned(OwnedIdentity { owner, profile }, Instant::now()).await;
         let report = match stopped.pending {
             Some(pending) => pending.finish().await,
             None => stopped.report,
         };
         assert!(
             report.engine_stop_complete
+                && report.stream_stop_complete
                 && report.mdk_stop_complete
                 && report.runtime_cleanup_complete
         );

@@ -58,6 +58,22 @@ pub(crate) enum QueueBusy {
     InvocationBusy,
     Unavailable,
 }
+/// Bounded, read-only execution preparation on the engine owner thread.
+pub(crate) struct LivePrepareRequest {
+    pub operation_id: [u8; 16],
+    pub stream_id: [u8; 16],
+    pub revision: u64,
+    pub owner: crate::journal::Owner,
+    pub argv: Vec<Vec<u8>>,
+}
+pub(crate) struct LivePrepared {
+    pub operation_id: [u8; 16],
+    pub stream_id: [u8; 16],
+    pub revision: u64,
+    pub result: std::result::Result<engine::PreparedLiveExec, engine::EngineError>,
+}
+const LIVE_CAPACITY: usize = 4;
+
 struct Registration {
     id: [u8; 16],
     revision: u64,
@@ -76,10 +92,15 @@ enum Event {
     OpenFailed,
     Completion(Box<EngineCompletion>),
     Cleanup(CleanupState),
+    LivePrepared(Box<LivePrepared>),
 }
 
 pub(crate) struct CommandEngine {
     operations: SyncSender<OperationRecord>,
+    live_preparations: SyncSender<LivePrepareRequest>,
+    live_pending: BTreeSet<[u8; 16]>,
+    live_prepared: VecDeque<LivePrepared>,
+    live_capacity: usize,
     controls: SyncSender<Control>,
     events: Receiver<Event>,
     completions: VecDeque<EngineCompletion>,
@@ -95,10 +116,12 @@ impl CommandEngine {
     /// Returns after spawning, never after opening storage. The actor retains
     /// this exact handle until its thread joins; observation never permits reopening.
     pub fn start(settings: EngineSettings, recovery: Vec<RecoveryRecord>) -> Result<Self> {
+        let live_capacity = (settings.policy.limits.starting_workers as usize).min(LIVE_CAPACITY);
         if recovery.len() > 32 {
             return Err(Error::Invalid("engine_recovery_limit"));
         }
         let (operations, rx) = mpsc::sync_channel(CAPACITY);
+        let (live_preparations, live_rx) = mpsc::sync_channel(LIVE_CAPACITY);
         let (controls, control_rx) = mpsc::sync_channel(CAPACITY);
         let (tx, events) = mpsc::sync_channel(CAPACITY);
         let thread = thread::Builder::new()
@@ -118,7 +141,7 @@ impl CommandEngine {
                 match opened {
                     Ok(engine) => {
                         if tx.send(Event::Ready).is_ok() {
-                            Worker::new(engine, recovery).run(rx, control_rx, tx);
+                            Worker::new(engine, recovery).run(rx, live_rx, control_rx, tx);
                         }
                     }
                     Err(_) => {
@@ -128,6 +151,10 @@ impl CommandEngine {
             })?;
         Ok(Self {
             operations,
+            live_preparations,
+            live_pending: BTreeSet::new(),
+            live_prepared: VecDeque::new(),
+            live_capacity,
             controls,
             events,
             completions: VecDeque::new(),
@@ -155,6 +182,7 @@ impl CommandEngine {
                     self.completions.push_back(*c)
                 }
                 Event::Cleanup(state) => self.cleanup = state,
+                Event::LivePrepared(result) => self.live_prepared.push_back(*result),
             }
         }
     }
@@ -167,7 +195,7 @@ impl CommandEngine {
         self.readiness == Readiness::Opening && self.opened.elapsed() >= OPEN_OBSERVER
     }
     pub fn observation_pending(&self) -> bool {
-        !self.registered.is_empty()
+        !self.registered.is_empty() || !self.live_pending.is_empty()
     }
     #[cfg(test)]
     pub fn observer_expired(&self, k: &InvocationKey) -> bool {
@@ -191,7 +219,7 @@ impl CommandEngine {
         if self.registered.contains_key(&k) {
             return Err(QueueBusy::InvocationBusy);
         }
-        if self.registered.len() >= CAPACITY {
+        if self.registered.len() + self.live_pending.len() >= CAPACITY {
             return Err(QueueBusy::Full);
         }
         let reg = Registration {
@@ -207,6 +235,41 @@ impl CommandEngine {
         })?;
         self.registered.insert(k, reg);
         Ok(())
+    }
+    pub(crate) fn try_prepare_live(
+        &mut self,
+        request: LivePrepareRequest,
+    ) -> std::result::Result<(), QueueBusy> {
+        self.collect();
+        if self.stopping
+            || self.cleanup != CleanupState::Open
+            || self.readiness == Readiness::Failed
+        {
+            return Err(QueueBusy::Unavailable);
+        }
+        if self.live_pending.contains(&request.stream_id) {
+            return Err(QueueBusy::InvocationBusy);
+        }
+        if self.live_pending.len() >= self.live_capacity
+            || self.live_pending.len() + self.registered.len() >= CAPACITY
+        {
+            return Err(QueueBusy::Full);
+        }
+        let id = request.stream_id;
+        self.live_preparations
+            .try_send(request)
+            .map_err(|error| match error {
+                TrySendError::Full(_) => QueueBusy::Full,
+                TrySendError::Disconnected(_) => QueueBusy::Unavailable,
+            })?;
+        self.live_pending.insert(id);
+        Ok(())
+    }
+    pub(crate) fn take_live_prepared(&mut self) -> Option<LivePrepared> {
+        self.collect();
+        let result = self.live_prepared.pop_front()?;
+        self.live_pending.remove(&result.stream_id);
+        Some(result)
     }
     pub fn try_completion(&mut self) -> Option<EngineCompletion> {
         self.collect();
@@ -233,6 +296,7 @@ impl CommandEngine {
         self.collect();
         if self.cleanup != CleanupState::Open
             || !self.registered.is_empty()
+            || !self.live_pending.is_empty()
             || self.readiness != Readiness::Ready
         {
             return Err(Error::Invalid("engine_cleanup_busy"));
@@ -289,14 +353,19 @@ impl CommandEngine {
 impl CommandEngine {
     pub(crate) fn gated_stop_for_test(gate: Receiver<()>) -> Self {
         let (operations, rx) = mpsc::sync_channel(CAPACITY);
+        let (live_preparations, live_rx) = mpsc::sync_channel(LIVE_CAPACITY);
         let (controls, control_rx) = mpsc::sync_channel(CAPACITY);
         let (tx, events) = mpsc::sync_channel(CAPACITY);
         let worker = thread::spawn(move || {
             let _ = gate.recv();
-            drop((rx, control_rx, tx));
+            drop((rx, live_rx, control_rx, tx));
         });
         Self {
             operations,
+            live_preparations,
+            live_pending: BTreeSet::new(),
+            live_prepared: VecDeque::new(),
+            live_capacity: LIVE_CAPACITY,
             controls,
             events,
             completions: VecDeque::new(),
@@ -383,6 +452,7 @@ impl Worker {
     fn run(
         mut self,
         rx: Receiver<OperationRecord>,
+        live_rx: Receiver<LivePrepareRequest>,
         controls: Receiver<Control>,
         tx: SyncSender<Event>,
     ) {
@@ -419,6 +489,21 @@ impl Worker {
                     }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => return,
+                }
+            }
+            // One preparation per round keeps finite operations and controls fair.
+            if let Ok(request) = live_rx.try_recv() {
+                let result = self.prepare_live(&request);
+                if tx
+                    .send(Event::LivePrepared(Box::new(LivePrepared {
+                        operation_id: request.operation_id,
+                        stream_id: request.stream_id,
+                        revision: request.revision,
+                        result,
+                    })))
+                    .is_err()
+                {
+                    return;
                 }
             }
             // A single bounded queue remains observable while dispatch is fenced.
@@ -474,6 +559,26 @@ impl Worker {
                 thread::sleep(Duration::from_millis(2));
             }
         }
+    }
+    fn prepare_live(
+        &self,
+        request: &LivePrepareRequest,
+    ) -> std::result::Result<engine::PreparedLiveExec, engine::EngineError> {
+        if self.closed || !request.owner.server_side() {
+            return Err(engine::EngineError::Unauthorized);
+        }
+        let e = self
+            .engine
+            .as_ref()
+            .ok_or(engine::EngineError::WorkerUnavailable)?;
+        let binding = request.owner.binding();
+        let ctx = e.authorize(
+            engine::PrincipalId(binding.client),
+            engine::EndpointId(Sha256::digest(request.owner.group()).into()),
+            engine::ServerId(binding.server),
+            request.owner.uid(),
+        )?;
+        e.prepare_live_exec(&ctx, request.argv.clone(), self.search_path.as_deref())
     }
     fn execute(&mut self, op: &OperationRecord) -> EngineObservation {
         if op.engine_known {
@@ -1088,11 +1193,16 @@ mod tests {
         SyncSender<Event>,
     ) {
         let (operations, rx) = mpsc::sync_channel(CAPACITY);
+        let (live_preparations, _live_rx) = mpsc::sync_channel(LIVE_CAPACITY);
         let (controls, crx) = mpsc::sync_channel(CAPACITY);
         let (tx, events) = mpsc::sync_channel(CAPACITY);
         (
             CommandEngine {
                 operations,
+                live_preparations,
+                live_pending: BTreeSet::new(),
+                live_prepared: VecDeque::new(),
+                live_capacity: LIVE_CAPACITY,
                 controls,
                 events,
                 completions: VecDeque::new(),
@@ -1283,6 +1393,87 @@ mod tests {
         )
         .unwrap();
         (d, e)
+    }
+    #[test]
+    fn live_preparation_is_bounded_off_actor_and_does_not_admit_finite_jobs() {
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        let mut handle = CommandEngine::start(engine_settings(&d), vec![]).unwrap();
+        let request = |id| LivePrepareRequest {
+            operation_id: [id; 16],
+            stream_id: [id; 16],
+            revision: 3,
+            owner: operation(id, EngineOperation::Observe).owner,
+            argv: vec![b"/bin/echo".to_vec(), b"literal$`'\\".to_vec()],
+        };
+        handle.try_prepare_live(request(1)).ok().unwrap();
+        assert!(matches!(
+            handle.try_prepare_live(request(1)),
+            Err(QueueBusy::InvocationBusy)
+        ));
+        for id in 2..=4 {
+            handle.try_prepare_live(request(id)).ok().unwrap();
+        }
+        assert!(matches!(
+            handle.try_prepare_live(request(5)),
+            Err(QueueBusy::Full)
+        ));
+        assert!(handle.try_prepare_cleanup().is_err());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut received = BTreeSet::new();
+        while received.len() < 4 {
+            if let Some(result) = handle.take_live_prepared() {
+                assert_eq!(result.revision, 3);
+                assert_eq!(result.operation_id, result.stream_id);
+                assert!(result.result.is_ok());
+                assert!(received.insert(result.stream_id));
+            }
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert!(!handle.observation_pending());
+        handle.try_prepare_cleanup().unwrap();
+        while handle.cleanup_state() == CleanupState::Draining && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert!(handle.cleanup_state() == CleanupState::Quiesced);
+        assert!(handle.shutdown(deadline).unwrap().complete);
+    }
+    #[test]
+    fn live_preparation_checks_current_grants_and_resolves_without_shell() {
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let (_dir, e) = engine_fixture();
+        let mut worker = Worker::new(e, vec![]);
+        worker.search_path = Some("/usr/bin:/bin".into());
+        let mut request = LivePrepareRequest {
+            operation_id: [1; 16],
+            stream_id: [1; 16],
+            revision: 1,
+            owner: operation(1, EngineOperation::Observe).owner,
+            argv: vec![b"echo".to_vec(), b"$(touch should-not-exist)".to_vec()],
+        };
+        assert!(worker.prepare_live(&request).is_ok());
+        request.argv = vec![b"does-not-exist-marmish".to_vec()];
+        assert!(matches!(
+            worker.prepare_live(&request),
+            Err(engine::EngineError::CommandNotFound(_))
+        ));
+        let context = AuthenticatedCommandContext::test_fixture(
+            [1; 32],
+            [7; 32],
+            vec![3; 32],
+            [4; 16],
+            CommandDirection::Server,
+        );
+        request.owner = Owner::from_context(&context);
+        assert!(matches!(
+            worker.prepare_live(&request),
+            Err(engine::EngineError::Unauthorized)
+        ));
     }
     #[test]
     fn real_thread_opens_observes_commits_and_retains_cleanup_guard_until_shutdown() {

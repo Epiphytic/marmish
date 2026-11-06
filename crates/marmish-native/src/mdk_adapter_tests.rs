@@ -2478,3 +2478,801 @@ async fn new_session_first_submit_rejects_wrong_bindings_missing_and_nondefault_
         matches!(f.owners[0].command_local("account0",&Request::CommandPrepare{remote:hex::encode(peer),relays,fresh:None}).unwrap(),LocalResult::Ready{session,..} if session==hex::encode(selected))
     );
 }
+
+impl Fixture {
+    async fn stream_fixture(&mut self) -> (GroupId, marmish_stream::wire::Binding) {
+        let (group, _) = self
+            .join(&[1], RoomPurpose::Command.description(), false)
+            .await;
+        let creator = self.owners[0].identity.clone();
+        let room = self.owners[0]
+            .accept_command_group(&group, &creator)
+            .unwrap();
+        self.owners[1]
+            .accept_command_group(&group, &creator)
+            .unwrap();
+        let client = self.materials[0].public_key().to_bytes();
+        let server = self.materials[1].public_key().to_bytes();
+        let config=crate::command_config::CommandConfig::from_bytes(&serde_json::to_vec(&serde_json::json!({"version":1,"role":"server","relays":["wss://127.0.0.1:9/"],"tor":"off","trusted_remotes":[],"execution_clients":[hex::encode(client)],"command_policy":{"version":1},"cwd":"/","limits":{},"aliases":{}})).unwrap()).unwrap();
+        self.owners[1].commands = Some(crate::command_service::CommandService::new(config, None));
+        let mut stream = [8; 16];
+        stream[..8].copy_from_slice(&now().unwrap().to_be_bytes());
+        (
+            group,
+            marmish_stream::wire::Binding {
+                stream,
+                session: room.session,
+                client,
+                server,
+            },
+        )
+    }
+    async fn stream_event(
+        &mut self,
+        group: &GroupId,
+        request: &marmish_stream::wire::Request,
+        author: Option<String>,
+    ) -> GroupEvent {
+        let app = cgka_traits::app_event::MarmotAppEvent::new(
+            author.unwrap_or_else(|| self.owners[0].identity.clone()),
+            now().unwrap(),
+            30101,
+            vec![vec!["marmish".into(), "stream/1".into()]],
+            String::from_utf8(marmish_stream::wire::encode_request(request).unwrap()).unwrap(),
+        );
+        self.encrypted_app(group, app).await
+    }
+}
+#[tokio::test]
+async fn stream_encrypted_cancel_before_open_is_irreversible() {
+    use marmish_stream::{codec::Codec, wire as w};
+    let mut f = Fixture::new(2);
+    let (group, binding) = f.stream_fixture().await;
+    let mut request = w::Request {
+        binding,
+        sequence: 0,
+        body: w::RequestBody::Cancel,
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    request.body = w::RequestBody::Open {
+        argv: vec![b"/bin/true".to_vec()],
+        codec: Codec::None,
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    let records = f.owners[1].journal.stream_records().unwrap();
+    assert_eq!(records.len(), 1);
+    assert!(records[0].cancel);
+    assert_eq!(records[0].terminal, Some(w::Terminal::Cancelled));
+    assert!(records[0].open_digest.is_none());
+    assert!(!records[0].active);
+}
+#[tokio::test]
+async fn stream_rejects_wrong_binding_author_and_current_withdrawal() {
+    use marmish_stream::{codec::Codec, wire as w};
+    let mut f = Fixture::new(2);
+    let (group, binding) = f.stream_fixture().await;
+    let mut request = w::Request {
+        binding,
+        sequence: 0,
+        body: w::RequestBody::Hello {
+            codecs: vec![Codec::None],
+        },
+    };
+    request.binding.server = [77; 32];
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    assert!(f.owners[1].journal.stream_records().unwrap().is_empty());
+    request.binding.server = f.materials[1].public_key().to_bytes();
+    let mut event = f.stream_event(&group, &request, None).await;
+    // Native Marmot rejects a forged author while constructing encrypted bytes.
+    // Also exercise the adapter guard against inconsistent delivered metadata.
+    if let GroupEvent::MessageReceived { payload, .. } = &mut event {
+        let app = cgka_traits::app_event::MarmotAppEvent::new(
+            f.owners[1].identity.clone(),
+            now().unwrap(),
+            30101,
+            vec![vec!["marmish".into(), "stream/1".into()]],
+            String::from_utf8(w::encode_request(&request).unwrap()).unwrap(),
+        );
+        *payload = app.encode().unwrap();
+    }
+    f.owners[1].project_stream_message(event).unwrap();
+    assert!(f.owners[1].journal.stream_records().unwrap().is_empty());
+    f.owners[1].commands = None;
+    request.binding.stream[15] ^= 1; // avoid native duplicate suppression of the prior Hello
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    assert!(f.owners[1].journal.stream_records().unwrap().is_empty());
+}
+#[tokio::test]
+async fn stream_requires_hello_and_cancel_invalidates_preparation_revision() {
+    use marmish_stream::{codec::Codec, wire as w};
+    let mut f = Fixture::new(2);
+    let (group, binding) = f.stream_fixture().await;
+    let mut request = w::Request {
+        binding,
+        sequence: 0,
+        body: w::RequestBody::Open {
+            argv: vec![b"/bin/true".to_vec()],
+            codec: Codec::None,
+        },
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    let mut record = f.owners[1].journal.stream_records().unwrap().remove(0);
+    assert!(record.open_digest.is_none());
+    assert!(!record.active);
+    // Model an in-flight blocking preparation: cancel commits a revision before
+    // the result can be handed to a runner, so stale completion cannot launch.
+    record.hello = true;
+    record.state = "preparing".into();
+    record.revision = 4;
+    record.open_digest = Some([4; 32]);
+    f.owners[1].journal.stream_admit(&mut record).unwrap();
+    request.body = w::RequestBody::Cancel;
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    let record = f.owners[1]
+        .journal
+        .stream_get(&record.key())
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.revision, 5);
+    assert!(record.cancel);
+    assert!(!record.active);
+    assert_eq!(record.terminal, Some(w::Terminal::Cancelled));
+}
+
+#[tokio::test]
+async fn stream_terminal_snapshot_preserves_offsets_after_runner_eviction() {
+    use marmish_stream::{codec::Codec, wire as w};
+    let mut f = Fixture::new(2);
+    let (group, binding) = f.stream_fixture().await;
+    let record = crate::stream_service::StreamRecord {
+        binding,
+        group: group.as_slice().to_vec(),
+        server_side: true,
+        hello: true,
+        open_digest: Some([4; 32]),
+        argv: vec![b"/bin/cat".to_vec()],
+        codec: Codec::None,
+        state: "terminal".into(),
+        cancel: false,
+        active: false,
+        terminal: Some(w::Terminal::Exited { code: 0 }),
+        identity: None,
+        child_disposition: None,
+        revision: 1,
+        sequence: 9,
+        stdin_accepted: 8193,
+        stdin_delivered: 8193,
+        stdout_eof: Some(8193),
+        stderr_eof: Some(17),
+        completed_at: None,
+        last_exchange_digest: None,
+        payload_drained: false,
+        payload_expired: false,
+        projection_invalidated: false,
+    };
+    f.owners[1].journal.stream_insert(&record).unwrap();
+    assert!(f.owners[1].streams.live.is_empty());
+    let w::ResponseBody::Exchange {
+        stdin_accepted,
+        stdin_delivered,
+        stdout_eof,
+        stderr_eof,
+        terminal,
+        ..
+    } = f.owners[1].stream_snapshot(&record).unwrap()
+    else {
+        panic!("expected terminal snapshot")
+    };
+    assert_eq!(
+        (stdin_accepted, stdin_delivered, stdout_eof, stderr_eof),
+        (8193, 8193, Some(8193), Some(17))
+    );
+    assert_eq!(terminal, record.terminal);
+}
+
+#[tokio::test]
+async fn stream_uncertain_record_snapshot_closes_input_without_claiming_child_exit() {
+    use marmish_stream::{codec::Codec, wire as w};
+    let mut f = Fixture::new(2);
+    let (group, binding) = f.stream_fixture().await;
+    let request = w::Request {
+        binding: binding.clone(),
+        sequence: 0,
+        body: w::RequestBody::Hello {
+            codecs: vec![Codec::None],
+        },
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    let (_directory, prepared) = crate::stream_runner::tests::prepare("exec cat");
+    let runner = crate::stream_runner::RunnerHandle::start(
+        prepared,
+        crate::stream_runner::RunnerLimits {
+            drain_grace: Duration::from_millis(80),
+            cancel_grace: Duration::from_millis(40),
+            poll_interval: Duration::from_millis(2),
+        },
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while runner.snapshot().identity.is_none() {
+        assert!(Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    let owner = &mut f.owners[1];
+    let mut record = owner.journal.stream_records().unwrap().remove(0);
+    record.state = "running".into();
+    record.open_digest = Some([3; 32]);
+    owner.journal.stream_admit(&mut record).unwrap();
+    let live = owner.streams.live.get_mut(&record.key()).unwrap();
+    live.runner = Some(runner.clone());
+    live.identity_committed = true;
+    runner.permit_input();
+    assert!(!runner.snapshot().stdin_closed);
+    for (cancel, terminal) in [
+        (
+            false,
+            Some(w::Terminal::Failed {
+                code: w::WireErrorCode::Uncertain,
+            }),
+        ),
+        (true, Some(w::Terminal::Cancelled)),
+        (true, None),
+    ] {
+        record.cancel = cancel;
+        record.terminal = terminal;
+        let response = w::Response {
+            binding: binding.clone(),
+            sequence: 0,
+            request_sha256: [0; 32],
+            body: owner.stream_snapshot(&record).unwrap(),
+        };
+        let bytes = w::encode_response(&response)
+            .expect("record-level uncertainty/cancel must make a valid snapshot");
+        match w::decode_response(&bytes).unwrap().body {
+            w::ResponseBody::Error { code } if terminal.is_some() => {
+                assert_eq!(code, w::WireErrorCode::Uncertain);
+            }
+            w::ResponseBody::Exchange {
+                stdin_closed,
+                terminal: observed,
+                cancel_requested,
+                stdin_accepted,
+                stdin_delivered,
+                ..
+            } if terminal.is_none() => {
+                assert!(stdin_closed);
+                assert_eq!(observed, None);
+                assert_eq!(cancel_requested, cancel);
+                assert_eq!((stdin_accepted, stdin_delivered), (0, 0));
+            }
+            _ => panic!("must not fabricate terminal EOF for a live child"),
+        }
+        let physical = runner.snapshot();
+        assert!(
+            physical.terminal.is_none() && !physical.stdin_closed && !physical.cancel_requested,
+            "projected uncertainty must not kill or close the physical child"
+        );
+    }
+    runner.cancel();
+    while !runner.finished() {
+        assert!(Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+}
+
+#[tokio::test]
+async fn stream_early_stdin_close_keeps_output_ack_and_natural_exit_live() {
+    use marmish_stream::{
+        codec::{self, Codec},
+        wire as w,
+    };
+    for (script, consume_first) in [("exec /usr/bin/true", false), ("exec head -c 100", true)] {
+        let mut f = Fixture::new(2);
+        let (group, binding) = f.stream_fixture().await;
+        let hello = w::Request {
+            binding: binding.clone(),
+            sequence: 0,
+            body: w::RequestBody::Hello {
+                codecs: vec![Codec::None],
+            },
+        };
+        let event = f.stream_event(&group, &hello, None).await;
+        f.owners[1].project_stream_message(event).unwrap();
+        let (_directory, prepared) = crate::stream_runner::tests::prepare(script);
+        let runner = crate::stream_runner::RunnerHandle::start(
+            prepared,
+            crate::stream_runner::RunnerLimits {
+                drain_grace: Duration::from_millis(80),
+                cancel_grace: Duration::from_millis(40),
+                poll_interval: Duration::from_millis(2),
+            },
+        )
+        .unwrap();
+        let mut record = f.owners[1].journal.stream_records().unwrap().remove(0);
+        record.state = "running".into();
+        record.open_digest = Some([3; 32]);
+        f.owners[1].journal.stream_admit(&mut record).unwrap();
+        let live = f.owners[1].streams.live.get_mut(&record.key()).unwrap();
+        live.runner = Some(runner.clone());
+        live.identity_committed = true;
+        runner.permit_input();
+        let first = vec![b'x'; marmish_stream::MAX_BLOCK];
+        if consume_first {
+            runner.exchange(Some((0, &first)), None, 0, 0).unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            let snapshot = runner.snapshot();
+            if snapshot.stdin_closed
+                && snapshot.terminal.is_some()
+                && (!consume_first || snapshot.stdout.is_some())
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "early-close child did not exit");
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        let accepted = runner.snapshot().stdin_accepted;
+        let request = w::Request {
+            binding,
+            sequence: 1,
+            body: w::RequestBody::Exchange {
+                stdin: Some(codec::encode(accepted, b"unaccepted", Codec::None).unwrap()),
+                stdin_eof: None,
+                stdout_ack: if consume_first { 100 } else { 0 },
+                stderr_ack: 0,
+            },
+        };
+        let bytes = w::encode_request(&request).unwrap();
+        let digest = w::request_digest(&bytes);
+        let event = f.stream_event(&group, &request, None).await;
+        f.owners[1].project_stream_message(event).unwrap();
+        let response = f.owners[1]
+            .journal
+            .stream_slot(&record.key(), &digest)
+            .unwrap()
+            .unwrap()
+            .1
+            .unwrap();
+        let w::ResponseBody::Exchange {
+            stdin_closed,
+            stdin_accepted,
+            stdin_delivered,
+            terminal,
+            stdout,
+            ..
+        } = w::decode_response(&response).unwrap().body
+        else {
+            panic!("must drain instead of fatal Closed")
+        };
+        assert!(stdin_closed);
+        assert_eq!(stdin_accepted, accepted);
+        assert!(stdin_delivered <= accepted);
+        assert_eq!(terminal, Some(w::Terminal::Exited { code: 0 }));
+        assert!(
+            stdout.is_none(),
+            "valid output ACK must apply even when new input is rejected"
+        );
+        assert_eq!(
+            f.owners[1]
+                .journal
+                .stream_get(&record.key())
+                .unwrap()
+                .unwrap()
+                .sequence,
+            1
+        );
+        while !runner.finished() {
+            assert!(Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn stream_admission_refusal_is_typed_only_for_charged_records() {
+    use marmish_stream::{codec::Codec, wire as w};
+    let mut f = Fixture::new(2);
+    let (group, binding) = f.stream_fixture().await;
+    let mut request = w::Request {
+        binding,
+        sequence: 0,
+        body: w::RequestBody::Hello {
+            codecs: vec![Codec::None],
+        },
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    let base = f.owners[1].journal.stream_records().unwrap().remove(0);
+    for index in 1..=4 {
+        let mut other = base.clone();
+        other.binding.stream[15] ^= index;
+        f.owners[1].journal.stream_insert(&other).unwrap();
+        f.owners[1].journal.stream_admit(&mut other).unwrap();
+    }
+    request.body = w::RequestBody::Open {
+        argv: vec![b"/bin/true".to_vec()],
+        codec: Codec::None,
+    };
+    let digest = w::request_digest(&w::encode_request(&request).unwrap());
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    let bytes = f.owners[1]
+        .journal
+        .stream_slot(&base.key(), &digest)
+        .unwrap()
+        .unwrap()
+        .1
+        .unwrap();
+    assert!(matches!(
+        w::decode_response(&bytes).unwrap().body,
+        w::ResponseBody::Error {
+            code: w::WireErrorCode::Capacity
+        }
+    ));
+    f.owners[1].stream_begin_stop().unwrap();
+    let publications = f.owners[1].journal.stream_publications().unwrap().len();
+    let records = f.owners[1].journal.stream_records().unwrap().len();
+    request.binding.stream[15] ^= 42;
+    request.body = w::RequestBody::Hello {
+        codecs: vec![Codec::None],
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    assert_eq!(f.owners[1].journal.stream_records().unwrap().len(), records);
+    assert_eq!(
+        f.owners[1].journal.stream_publications().unwrap().len(),
+        publications
+    );
+}
+
+#[tokio::test]
+async fn stream_invalidation_preserves_restart_holds_until_explicit_reconcile() {
+    use marmish_stream::{codec::Codec, wire as w};
+    let mut f = Fixture::new(2);
+    let (group, binding) = f.stream_fixture().await;
+    let request = w::Request {
+        binding,
+        sequence: 0,
+        body: w::RequestBody::Hello {
+            codecs: vec![Codec::None],
+        },
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    let base = f.owners[1].journal.stream_records().unwrap().remove(0);
+    for (index, state) in [(0, "lost"), (1, "unknown_launch"), (2, "launching")] {
+        let mut record = base.clone();
+        record.binding.stream[15] ^= index;
+        if index > 0 {
+            f.owners[1].journal.stream_insert(&record).unwrap();
+        }
+        record.state = state.into();
+        f.owners[1].journal.stream_admit(&mut record).unwrap();
+    }
+    let mut effects = AccountDeviceEffects::default();
+    effects.events.push(GroupEvent::AppMessageInvalidated {
+        group_id: group,
+        message_id: cgka_traits::MessageId::new(vec![8; 32]),
+        epoch: cgka_traits::EpochId(1),
+        reason: cgka_traits::engine::AppMessageInvalidationReason::LosingBranch,
+        decrypted_payload_ref: None,
+    });
+    f.owners[1]
+        .project_stream_publication_effects(&effects)
+        .unwrap();
+    for record in f.owners[1].journal.stream_records().unwrap() {
+        assert!(record.projection_invalidated && record.active);
+        assert!(matches!(
+            record.state.as_str(),
+            "lost" | "unknown_launch" | "launching"
+        ));
+        f.owners[1]
+            .stream_request_local(crate::stream_service::StreamLocalRequest::AdminCancel {
+                stream: hex::encode(record.binding.stream),
+            })
+            .unwrap();
+        assert!(
+            f.owners[1]
+                .journal
+                .stream_get(&record.key())
+                .unwrap()
+                .unwrap()
+                .active
+        );
+    }
+    f.owners[1].stream_begin_stop().unwrap();
+    f.owners[1].stream_cancel_stop().unwrap();
+    assert!(
+        f.owners[1]
+            .journal
+            .stream_records()
+            .unwrap()
+            .iter()
+            .all(|r| r.active)
+    );
+    assert!(!f.owners[1].stream_stop_confirmed().unwrap());
+    let lost = f.owners[1]
+        .journal
+        .stream_records()
+        .unwrap()
+        .into_iter()
+        .find(|r| r.state == "lost")
+        .unwrap();
+    f.owners[1]
+        .stream_request_local(crate::stream_service::StreamLocalRequest::AdminReconcile {
+            stream: hex::encode(lost.binding.stream),
+            acknowledge_possible_live: true,
+        })
+        .unwrap();
+    assert!(
+        !f.owners[1]
+            .journal
+            .stream_get(&lost.key())
+            .unwrap()
+            .unwrap()
+            .active
+    );
+}
+
+#[tokio::test]
+async fn stream_definitive_failure_retires_without_freezing_execution_but_ambiguity_holds() {
+    use marmish_stream::{codec::Codec, wire as w};
+    let mut f = Fixture::new(2);
+    let (group, binding) = f.stream_fixture().await;
+    let request = w::Request {
+        binding,
+        sequence: 0,
+        body: w::RequestBody::Hello {
+            codecs: vec![Codec::None],
+        },
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    let owner = &mut f.owners[1];
+    let mut record = owner.journal.stream_records().unwrap().remove(0);
+    record.state = "preparing".into();
+    record.open_digest = Some([3; 32]);
+    owner.journal.stream_admit(&mut record).unwrap();
+    let publication = owner.journal.stream_publications().unwrap().remove(0);
+    // Equivalent to MDK's definitive zero-accepted failure effect. No fanout or
+    // queued intent survives, so successful-publication ACK is unnecessary.
+    owner
+        .journal
+        .stream_publication_state(&publication.group, &publication.event_id, "failed")
+        .unwrap();
+    owner
+        .submit_stream_publications(Instant::now() + Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(
+        owner.journal.stream_publications().unwrap()[0].state,
+        "retired_failed"
+    );
+    let retained = owner.journal.stream_get(&record.key()).unwrap().unwrap();
+    assert!(retained.active && retained.terminal.is_none());
+    assert_eq!(retained.state, "preparing");
+    assert!(
+        owner.journal.stream_publications().unwrap()[0]
+            .payload
+            .is_empty()
+    );
+    // A different ambiguous attempt remains owned even when native storage has
+    // neither fanout nor intent. Retired attempts themselves are immutable.
+    let mut ambiguous = publication.clone();
+    ambiguous.event_id.push_str("-ambiguous");
+    owner.journal.stream_queue_publication(&ambiguous).unwrap();
+    owner
+        .journal
+        .stream_publication_state(&ambiguous.group, &ambiguous.event_id, "uncertain")
+        .unwrap();
+    owner
+        .submit_stream_publications(Instant::now() + Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(
+        owner
+            .journal
+            .stream_publication(&ambiguous.group, &ambiguous.event_id)
+            .unwrap()
+            .unwrap()
+            .state,
+        "uncertain"
+    );
+    assert_eq!(
+        owner
+            .journal
+            .stream_publication(&publication.group, &publication.event_id)
+            .unwrap()
+            .unwrap()
+            .state,
+        "retired_failed"
+    );
+    let retained = owner.journal.stream_get(&record.key()).unwrap().unwrap();
+    assert!(retained.active);
+    assert_eq!(retained.state, "transport_uncertain");
+    assert!(!owner.streams_idle().unwrap());
+}
+
+#[tokio::test]
+async fn stream_invalidation_fences_preparation_and_unknown_exchange_allocates_nothing() {
+    use marmish_stream::{codec::Codec, wire as w};
+    let mut f = Fixture::new(2);
+    let (group, binding) = f.stream_fixture().await;
+    let mut request = w::Request {
+        binding,
+        sequence: 1,
+        body: w::RequestBody::Exchange {
+            stdin: None,
+            stdin_eof: None,
+            stdout_ack: 0,
+            stderr_ack: 0,
+        },
+    };
+    let server = hex::encode(request.binding.server);
+    let config = crate::command_config::CommandConfig::from_bytes(&serde_json::to_vec(&serde_json::json!({"version":1,"role":"client","relays":["wss://127.0.0.1:9/"],"tor":"off","trusted_remotes":[server],"execution_clients":[],"command_policy":{"version":1},"cwd":"/","limits":{},"aliases":{}})).unwrap()).unwrap();
+    f.owners[0].commands = Some(crate::command_service::CommandService::new(config, None));
+    let local =
+        f.owners[0].stream_request_local(crate::stream_service::StreamLocalRequest::Frame {
+            frame_base64: base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                w::encode_request(&request).unwrap(),
+            ),
+            relays: vec!["wss://127.0.0.1:9/".into()],
+        });
+    assert!(matches!(local, Err(Error::Invalid("stream_not_found"))));
+    assert!(f.owners[0].journal.stream_records().unwrap().is_empty());
+    let event = f.stream_event(&group, &request, None).await;
+    let _ = f.owners[1].project_stream_message(event);
+    assert!(f.owners[1].journal.stream_records().unwrap().is_empty());
+    assert!(f.owners[1].streams.live.is_empty());
+    request.sequence = 0;
+    request.body = w::RequestBody::Hello {
+        codecs: vec![Codec::None],
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    let mut record = f.owners[1].journal.stream_records().unwrap().remove(0);
+    record.state = "preparing".into();
+    record.open_digest = Some([3; 32]);
+    record.revision = 8;
+    f.owners[1].journal.stream_admit(&mut record).unwrap();
+    let mut effects = AccountDeviceEffects::default();
+    effects.events.push(GroupEvent::AppMessageInvalidated {
+        group_id: group,
+        message_id: cgka_traits::MessageId::new(vec![8; 32]),
+        epoch: cgka_traits::EpochId(1),
+        reason: cgka_traits::engine::AppMessageInvalidationReason::LosingBranch,
+        decrypted_payload_ref: None,
+    });
+    f.owners[1]
+        .project_stream_publication_effects(&effects)
+        .unwrap();
+    f.owners[1]
+        .project_stream_publication_effects(&effects)
+        .unwrap();
+    f.owners[1].progress_streams().unwrap();
+    let retained = f.owners[1]
+        .journal
+        .stream_get(&record.key())
+        .unwrap()
+        .unwrap();
+    assert!(retained.projection_invalidated && retained.active && !retained.cancel);
+    assert_eq!(retained.revision, 9);
+    assert_eq!(retained.state, "projection_invalidated");
+    assert!(
+        f.owners[1]
+            .streams
+            .live
+            .values()
+            .all(|live| !live.preparing && live.runner.is_none())
+    );
+    assert!(
+        f.owners[1]
+            .stream_request_local(crate::stream_service::StreamLocalRequest::AdminReconcile {
+                stream: hex::encode([99; 16]),
+                acknowledge_possible_live: true
+            })
+            .is_err()
+    );
+    // Administrative cancellation remains available without a remote grant.
+    f.owners[1].commands = None;
+    f.owners[1]
+        .stream_request_local(crate::stream_service::StreamLocalRequest::AdminCancel {
+            stream: hex::encode(record.binding.stream),
+        })
+        .unwrap();
+    let retained = f.owners[1]
+        .journal
+        .stream_get(&record.key())
+        .unwrap()
+        .unwrap();
+    assert!(retained.cancel && !retained.active);
+}
+
+#[tokio::test]
+async fn stream_service_stop_closes_admission_before_cancel_and_preserves_uncertainty() {
+    use marmish_stream::{codec::Codec, wire as w};
+    let mut f = Fixture::new(2);
+    let (group, binding) = f.stream_fixture().await;
+    let mut request = w::Request {
+        binding,
+        sequence: 0,
+        body: w::RequestBody::Hello {
+            codecs: vec![Codec::None],
+        },
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    let mut record = f.owners[1].journal.stream_records().unwrap().remove(0);
+    record.state = "preparing".into();
+    record.open_digest = Some([3; 32]);
+    record.revision = 3;
+    f.owners[1].journal.stream_admit(&mut record).unwrap();
+    f.owners[1].stream_begin_stop().unwrap();
+    let stopping = f.owners[1]
+        .journal
+        .stream_get(&record.key())
+        .unwrap()
+        .unwrap();
+    assert!(stopping.active && !stopping.cancel);
+    assert_eq!(stopping.state, "server_stopping");
+    assert_eq!(stopping.revision, 4);
+    assert!(!f.owners[1].stream_stop_confirmed().unwrap());
+    assert!(f.owners[1].stream_runner_barriers().is_empty());
+    // A new remote Open cannot create a retained row or spawn during grace.
+    request.binding.stream[15] ^= 1;
+    request.body = w::RequestBody::Open {
+        argv: vec![b"/bin/true".to_vec()],
+        codec: Codec::None,
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    let _ = f.owners[1].project_stream_message(event);
+    f.owners[1].progress_streams().unwrap();
+    assert_eq!(f.owners[1].journal.stream_records().unwrap().len(), 1);
+    assert!(
+        f.owners[1]
+            .streams
+            .live
+            .values()
+            .all(|live| !live.preparing && live.runner.is_none())
+    );
+    f.owners[1].stream_cancel_stop().unwrap();
+    let stopped = f.owners[1]
+        .journal
+        .stream_get(&record.key())
+        .unwrap()
+        .unwrap();
+    assert_eq!(stopped.state, "server_stopped");
+    assert!(stopped.cancel && !stopped.active);
+    assert_eq!(stopped.terminal, Some(w::Terminal::Cancelled));
+    assert!(f.owners[1].stream_stop_confirmed().unwrap());
+    // A missing runner after uncertain launch is not evidence of a stopped
+    // process; administrative shutdown must not release that quota or claim it.
+    let mut unknown = stopped;
+    unknown.binding.stream[15] ^= 2;
+    unknown.state = "unknown_launch".into();
+    unknown.cancel = false;
+    unknown.terminal = Some(w::Terminal::Failed {
+        code: w::WireErrorCode::Uncertain,
+    });
+    f.owners[1].journal.stream_insert(&unknown).unwrap();
+    f.owners[1].journal.stream_admit(&mut unknown).unwrap();
+    f.owners[1].stream_cancel_stop().unwrap();
+    assert!(!f.owners[1].stream_stop_confirmed().unwrap());
+    assert!(
+        f.owners[1]
+            .journal
+            .stream_get(&unknown.key())
+            .unwrap()
+            .unwrap()
+            .active
+    );
+}

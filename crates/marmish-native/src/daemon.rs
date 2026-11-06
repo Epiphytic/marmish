@@ -126,6 +126,14 @@ async fn dispatch(
     rooms: &mut crate::command_local::RoomIntents,
     request: Request,
 ) -> Result<Response> {
+    if let Request::Stream { request } = request {
+        let result = owner.stream_request_local(request).unwrap_or_else(|error| {
+            crate::stream_service::StreamLocalResult::Failure {
+                category: crate::command_local::failure_category(error).into(),
+            }
+        });
+        return Ok(Response::stream(result));
+    }
     if let Some(response) = owner.command_acceptance(&request)? {
         return Ok(response);
     }
@@ -222,7 +230,10 @@ async fn stop_reporting(profile: ProfileLease, owner: MdkOwner, emit: bool) -> R
     if emit {
         writeln!(std::io::stdout().lock(), "{encoded}")?;
     }
-    if !report.engine_stop_complete || !report.mdk_stop_complete || !report.runtime_cleanup_complete
+    if !report.engine_stop_complete
+        || !report.stream_stop_complete
+        || !report.mdk_stop_complete
+        || !report.runtime_cleanup_complete
     {
         return Err(Error::Identity("owned_stop_incomplete"));
     }

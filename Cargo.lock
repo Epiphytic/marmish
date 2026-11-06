@@ -3645,6 +3645,7 @@ dependencies = [
  "libc",
  "marmish-core",
  "marmish-engine",
+ "marmish-stream",
  "marmish-vault",
  "marmot-session",
  "nostr",

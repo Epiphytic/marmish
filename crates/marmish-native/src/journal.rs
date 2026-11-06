@@ -5,6 +5,8 @@ mod command_preparation;
 mod command_rooms;
 #[path = "command_store.rs"]
 mod command_store;
+#[path = "stream_store.rs"]
+mod stream_store;
 use crate::foundation::{Body, Envelope};
 use crate::{Error, Result};
 pub(crate) use command_preparation::*;
@@ -17,6 +19,7 @@ use std::fs::{self, OpenOptions};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 use std::time::Duration;
+pub(crate) use stream_store::*;
 use zeroize::Zeroizing;
 
 pub(crate) const JOURNAL_FORMAT: i64 = 6;
@@ -172,6 +175,7 @@ impl Journal {
         }
         let mut journal = Self { conn };
         journal.command_init()?;
+        journal.stream_init()?;
         journal.command_rooms_init()?;
         journal.command_preparations_init()?;
         journal

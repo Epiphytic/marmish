@@ -392,6 +392,7 @@ pub(crate) async fn run(mut o: SetupOptions) -> Result<SetupReport> {
         };
         action?;
         if !report.engine_stop_complete
+            || !report.stream_stop_complete
             || !report.mdk_stop_complete
             || !report.runtime_cleanup_complete
         {

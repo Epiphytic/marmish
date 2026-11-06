@@ -9,6 +9,7 @@
 .marmish/
 .marmish-supervisor-*/
 .marmish-command-check-*/
+.marmish-stream-check-*/
 /state/
 /fixtures-output/
 .whitenoise/

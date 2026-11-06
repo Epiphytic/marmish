@@ -6,9 +6,11 @@ mod cipher;
 mod cleanup;
 mod fault;
 mod launcher;
+mod live;
 mod model;
 mod platform;
 mod policy;
+mod process;
 mod resolve;
 mod spool;
 mod storage;
@@ -17,6 +19,10 @@ mod worker;
 use admission::{context_owner, random_bytes, sha256};
 pub use cleanup::CleanupGuard;
 use launcher::{FrontendGuard, LaunchSpec, StateRoot, WorkerPresence};
+pub use live::{
+    probe_recorded_process, LiveChild, LivePipes, LiveProcessRecord, LiveSpawnError,
+    PreparedLiveExec, RecordedProcessDisposition,
+};
 pub use model::*;
 pub use policy::{
     inspect_canonical_exec, CanonicalExecOutcome, CommandPolicy, KeyRestrictions, Restrictions,

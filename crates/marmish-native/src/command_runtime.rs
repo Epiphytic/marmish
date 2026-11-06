@@ -607,6 +607,12 @@ impl MdkOwner {
         let proofs = self.command_publication_proofs(&effects.published_app_messages)?;
         let mut ownership_diagnostic = false;
         for published in &effects.published_app_messages {
+            if self
+                .journal
+                .stream_publication_owned(published.group_id.as_slice(), &published.app_event_id)?
+            {
+                continue;
+            }
             let key = PublicationKey {
                 group: published.group_id.as_slice().to_vec(),
                 app_event_id: published.app_event_id.clone(),
@@ -639,6 +645,12 @@ impl MdkOwner {
             }
         }
         for failed in &effects.failed_app_messages {
+            if self
+                .journal
+                .stream_publication_owned(failed.group_id.as_slice(), &failed.app_event_id)?
+            {
+                continue;
+            }
             let key = PublicationKey {
                 group: failed.group_id.as_slice().to_vec(),
                 app_event_id: failed.app_event_id.clone(),

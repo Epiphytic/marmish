@@ -19,7 +19,7 @@ struct Marker {
 }
 pub(super) struct Plan {
     pub record: Legacy,
-    _lock: fs::File,
+    _lock: InstallLock,
 }
 fn version(v: &str) -> bool {
     v.strip_prefix("0.1.0-experimental.").is_some_and(|n| {
@@ -138,8 +138,7 @@ fn recognize(ctx: &Anchors, o: &InstallOptions, root: PathBuf) -> Result<Option<
     {
         return Err(invalid("legacy_install_unrecognized"));
     }
-    lock.try_lock_exclusive()
-        .map_err(|_| invalid("install_busy"))?;
+    let lock = InstallLock::acquire(lock)?;
     // Re-read after taking the old installer's lock, before observing launchers.
     let again: Marker = json(&marker_path, 0o600, 16384)?;
     if again.format != 1

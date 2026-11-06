@@ -88,6 +88,7 @@ pub enum ResponseBody {
     Exchange {
         stdin_accepted: u64,
         stdin_delivered: u64,
+        stdin_closed: bool,
         stdout: Option<EncodedBlock>,
         stderr: Option<EncodedBlock>,
         stdout_eof: Option<u64>,
@@ -261,6 +262,7 @@ fn validate_response(response: &Response) -> Result<()> {
         ResponseBody::Exchange {
             stdin_accepted,
             stdin_delivered,
+            stdin_closed,
             stdout,
             stderr,
             stdout_eof,
@@ -272,6 +274,9 @@ fn validate_response(response: &Response) -> Result<()> {
             offset(*stdin_delivered)?;
             if stdin_delivered > stdin_accepted {
                 return Err(Error::Ack);
+            }
+            if (terminal.is_some() || *cancel_requested) && !stdin_closed {
+                return Err(invalid());
             }
             validate_output(stdout, *stdout_eof)?;
             validate_output(stderr, *stderr_eof)?;
@@ -517,6 +522,7 @@ mod tests {
         ResponseBody::Exchange {
             stdin_accepted: MAX_OFFSET,
             stdin_delivered: MAX_OFFSET,
+            stdin_closed: true,
             stdout: Some(max_block()),
             stderr: Some(max_block()),
             stdout_eof: Some(MAX_OFFSET),
@@ -723,6 +729,36 @@ mod tests {
         }
         assert!(encode_response(&rejected).is_err());
     }
+    #[test]
+    fn input_closed_is_required_and_truthful_for_terminal_and_cancel() {
+        let canonical = encode_response(&response(exchange(None))).unwrap();
+        let missing = String::from_utf8(canonical.clone())
+            .unwrap()
+            .replace("\"stdin_closed\":true,", "");
+        assert!(decode_response(missing.as_bytes()).is_err());
+        for terminal in [None, Some(Terminal::Exited { code: 0 })] {
+            let mut body = exchange(terminal);
+            if let ResponseBody::Exchange { stdin_closed, .. } = &mut body {
+                *stdin_closed = false;
+            }
+            assert!(encode_response(&response(body)).is_err());
+        }
+        let mut open = exchange(None);
+        if let ResponseBody::Exchange {
+            stdin_closed,
+            cancel_requested,
+            ..
+        } = &mut open
+        {
+            *stdin_closed = false;
+            *cancel_requested = false;
+        }
+        let open = response(open);
+        let bytes = encode_response(&open).unwrap();
+        assert!(decode_response(&bytes).unwrap() == open);
+        assert!(bytes.len() <= MAX_CONTENT);
+    }
+
     #[test]
     fn age_only_checks_open_and_immutable_digest_excludes_sequence() {
         let now = 1_800_000_000;

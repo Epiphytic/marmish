@@ -79,7 +79,14 @@ pub(crate) enum LocalResult {
 }
 
 pub(crate) fn failure(error: Error) -> LocalResult {
-    let category = match error {
+    LocalResult::Failure {
+        category: failure_category(error).into(),
+        handle: None,
+    }
+}
+
+pub(crate) fn failure_category(error: Error) -> &'static str {
+    match error {
         Error::Invalid(category)
         | Error::Storage(category)
         | Error::Mdk(category)
@@ -88,10 +95,6 @@ pub(crate) fn failure(error: Error) -> LocalResult {
         Error::Io(_) => "local_io",
         Error::Timeout => "deadline",
         Error::DaemonStartup(_) => "daemon_startup",
-    };
-    LocalResult::Failure {
-        category: category.into(),
-        handle: None,
     }
 }
 
@@ -274,7 +277,8 @@ impl MdkOwner {
         {
             return Ok(false);
         }
-        Ok(self.journal.command_sources_all_acknowledged()?
+        Ok(self.streams_idle()?
+            && self.journal.command_sources_all_acknowledged()?
             && mdk(self.storage.list_pending_application_events())?.is_empty())
     }
     pub(crate) fn command_set_lifetime(

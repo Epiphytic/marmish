@@ -197,6 +197,47 @@ ordinary work. There is also a lifetime limit of 4096 fresh-room preparation
 markers per profile and 4096 lifetime command-room metadata rows. These are separate from command handles, which identify
 individual invocations.
 
+## Streaming commands (unreleased source)
+
+The source build adds a separate bounded binary stream path; the published
+v0.2.3 installer does not include it. Both ends need the new source build.
+
+```sh
+marmish stream SERVER_NPUB -- /bin/cat < input.bin > output.bin
+marmish stream SERVER_NPUB --compress -- /bin/cat < input.bin > output.bin
+marmish streams
+marmish cancel --stream STREAM_ID
+```
+
+Arguments remain literal and remote executable restrictions still apply. Stderr
+carries the stream ID and diagnostics; stdout carries only remote stdout.
+Optional compression uses independent bounded zlib blocks, falling back to raw
+blocks when compression does not help. This is binary execution without a PTY.
+Rsync remote-shell syntax and native file-copy commands are separate increments.
+
+Ctrl-C requests remote cancellation independently of blocked stream data. Marmish
+reports confirmation only after receiving a confirmed remote terminal result;
+a second Ctrl-C leaves locally without claiming the process stopped. An ordinary
+disconnect, broken pipe or idle timeout leaves the remote command running with
+bounded output buffers, which can cause it to block until explicitly cancelled.
+The default attachment idle limit is 11 minutes (`--idle-seconds 660`), with
+`--keepalive-seconds 300`; adaptive polling remains responsive to output.
+
+On the server, `marmish cancel --stream STREAM_ID --local` cancels an owned
+process even after its remote grant is removed. Abrupt daemon failure can leave
+an orphan: stored PIDs are diagnostic and are never used to kill a potentially
+reused process. Lost/uncertain streams retain admission credit. After separately
+checking and cleaning up any surviving process, an operator can release that
+credit with `marmish stream-reconcile STREAM_ID --acknowledge-possible-live`;
+this acknowledges possible surviving execution and does not kill it.
+Unreconciled Lost/UnknownLaunch records also prevent a clean shutdown report;
+setup and validation refuse to proceed until an operator reconciles them.
+
+The frontend temporarily makes inherited standard descriptors nonblocking and
+restores their flags on normal exit and Ctrl-C cancellation. Abrupt termination
+that bypasses cleanup (including SIGKILL, SIGTERM and SIGHUP) can leave shared
+descriptor flags changed; use explicit cancellation for a controlled stop.
+
 ## Named identities and key storage
 
 Use `-i NAME` consistently for setup, the daemon and commands:

@@ -1,0 +1,113 @@
+{
+  "schema": 1,
+  "passed": true,
+  "relay": "wss://relay.eu.whitenoise.chat",
+  "relay_path_redacted": false,
+  "cleanup_scope": "owned_daemon_shutdown_and_protocol_cancel",
+  "platform": "Linux",
+  "architecture": "x86_64",
+  "payload_bytes": 393216,
+  "latency_samples": 3,
+  "results": [
+    {
+      "case": "binary_roundtrip",
+      "compression": "none",
+      "bytes": 393216,
+      "seconds": 87.085049,
+      "bytes_per_second": 4515.3,
+      "sha256": "51d5d3740668f519c3256da5aae565c7604d5b5679437e4b46c552be283d5c9a",
+      "exit": 7
+    },
+    {
+      "case": "binary_roundtrip",
+      "compression": "zlib",
+      "bytes": 393216,
+      "seconds": 66.435655,
+      "bytes_per_second": 5918.7,
+      "sha256": "51d5d3740668f519c3256da5aae565c7604d5b5679437e4b46c552be283d5c9a",
+      "exit": 7
+    },
+    {
+      "case": "early_stdin_closure",
+      "command": "true",
+      "compression": "none",
+      "offered_bytes": 393216,
+      "stdout_bytes": 0,
+      "exit": 0
+    },
+    {
+      "case": "early_stdin_closure",
+      "command": "head",
+      "compression": "none",
+      "offered_bytes": 393216,
+      "stdout_bytes": 1,
+      "exit": 0
+    },
+    {
+      "case": "early_stdin_closure",
+      "command": "true",
+      "compression": "zlib",
+      "offered_bytes": 393216,
+      "stdout_bytes": 0,
+      "exit": 0
+    },
+    {
+      "case": "early_stdin_closure",
+      "command": "head",
+      "compression": "zlib",
+      "offered_bytes": 393216,
+      "stdout_bytes": 1,
+      "exit": 0
+    },
+    {
+      "case": "literal_argv",
+      "passed": true,
+      "arguments": 10
+    },
+    {
+      "case": "small_command_latency",
+      "sample": 1,
+      "seconds": 5.538228,
+      "bytes": 15
+    },
+    {
+      "case": "small_command_latency",
+      "sample": 2,
+      "seconds": 5.412073,
+      "bytes": 15
+    },
+    {
+      "case": "small_command_latency",
+      "sample": 3,
+      "seconds": 5.777887,
+      "bytes": 15
+    },
+    {
+      "case": "ctrl_c_cancel_backpressure",
+      "exit": 130,
+      "seconds": 7.527215,
+      "confirmed": true
+    }
+  ],
+  "binary": {
+    "sha256": "3b4b21d653fb7699303946b497f26c12aa2c198dc5258f8ce6bf34848b936625",
+    "version": "0.2.3"
+  },
+  "latency_seconds": {
+    "min": 5.412073,
+    "median": 5.538228,
+    "max": 5.777887
+  },
+  "daemon_shutdown": [
+    {
+      "role": "client",
+      "exit": 0
+    },
+    {
+      "role": "server",
+      "exit": 0
+    }
+  ],
+  "total_seconds": 224.368797,
+  "private_state_retained": false
+}

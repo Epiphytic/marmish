@@ -30,6 +30,7 @@ struct CleanupPreparation {
 
 pub(crate) struct CommandService {
     config: CommandConfig,
+    stopping: bool,
     engine: Option<CommandEngine>,
     completion: Option<EngineCompletion>,
     ack: Option<CommitAck>,
@@ -44,6 +45,7 @@ impl CommandService {
     pub(crate) fn new(config: CommandConfig, engine: Option<CommandEngine>) -> Self {
         Self {
             config,
+            stopping: false,
             engine,
             completion: None,
             ack: None,
@@ -54,6 +56,9 @@ impl CommandService {
             cleanup: None,
             lifetime: None,
         }
+    }
+    pub(crate) fn close_admission(&mut self) {
+        self.stopping = true;
     }
     pub(crate) fn set_lifetime(
         &mut self,
@@ -180,7 +185,7 @@ impl CommandService {
         request: &Request,
         admission: (AdmissionDecision, Option<PreparedCommandPublication>),
     ) -> Result<(AdmissionDecision, Option<PreparedCommandPublication>)> {
-        if self.lifetime_expired()? {
+        if self.stopping || self.lifetime_expired()? {
             return Err(Error::Invalid("command_admission_closed"));
         }
         let budget = journal.command_admission_budget()?;
@@ -997,6 +1002,40 @@ mod tests {
             })
             .unwrap();
         journal.command_configure(service.config.limits()).unwrap();
+    }
+    #[test]
+    fn stopping_closes_new_admission_but_preserves_status_and_cancel() {
+        let (_tmp, mut journal, mut service) = setup(false);
+        let submit = request();
+        let ctx = context(CommandDirection::Server);
+        service
+            .project_request(&mut journal, &ctx, source(&submit, 1), submit.clone(), NOW)
+            .unwrap();
+        service.close_admission();
+        let mut next = submit.clone();
+        next.id = id(4);
+        if let RequestOp::Submit(ref mut body) = next.op {
+            body.invocation = id(5);
+        }
+        assert!(matches!(
+            service.project_request(&mut journal, &ctx, source(&next, 2), next, NOW),
+            Err(Error::Invalid("command_admission_closed"))
+        ));
+        // Retry and existing-job controls retain their durable projection semantics.
+        service
+            .project_request(&mut journal, &ctx, source(&submit, 3), submit.clone(), NOW)
+            .unwrap();
+        for (n, op) in [
+            (6, RequestOp::Status { invocation: id(3) }),
+            (7, RequestOp::Cancel { invocation: id(3) }),
+        ] {
+            let mut control = submit.clone();
+            control.id = id(n);
+            control.op = op;
+            service
+                .project_request(&mut journal, &ctx, source(&control, n), control, NOW)
+                .unwrap();
+        }
     }
     #[test]
     fn reserved_capacity_defers_but_exhaustion_freezes_refusal_across_limit_raise() {

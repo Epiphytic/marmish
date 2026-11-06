@@ -61,17 +61,36 @@ service or general process sandbox is promised by this release.
 The [streaming plan](phases/streaming-transfer-plan.md) adds a separate bounded
 full-duplex execution path, rsync remote-shell mode, native regular-file copy
 and optional block compression in reviewed increments. Phase 1 introduces the
-pure Rust `marmish-stream` wire, zlib codec and byte windows; it is not connected
-to the daemon or shipped CLI yet. Existing finite commands retain their limits.
+pure Rust `marmish-stream` wire, zlib codec and byte windows. Phase 2a connects
+those primitives to the native daemon and `stream` CLI with explicit remote
+cancellation; its integrated implementation has independent Claude code approval and passed
+Linux AMD64 live-relay qualification. Existing finite commands retain their limits.
 The [phase 1 design review](reviews/streaming-primitives-design.md) records the
-approved bounds and provisional protocol. Runtime integration, cancellation,
-rsync and file transfer remain planned, not supported release capabilities.
+approved bounds and provisional protocol, and the
+[runtime design](phases/streaming-runtime.md) specifies the authenticated launch,
+backpressure, cancellation and recovery contract. Rsync and native file transfer
+remain planned. None of these streaming additions is in the v0.2.3 release.
 
 Cancellation must be explicit and independent of blocked stream data. The runtime
-plan includes Ctrl-C and cancellation by stable stream ID from another terminal,
+implements Ctrl-C and cancellation by stable stream ID from another terminal,
 confirmed versus uncertain outcomes, and safe process-group cleanup. Disconnect
 alone must not cancel a command. Cross-platform and live-relay qualification are
 required before claiming the new capabilities.
+
+The source-only stream snapshot has a mandatory `stdin_closed` flag. Closing
+stdin early does not fail the command: accepted/delivered cursors remain truthful,
+valid output ACKs still apply, and the client stops sending unaccepted input while
+draining output and the natural exit status. A client fingerprints Open before
+publication and retains nonterminal Open/running state beyond the seven-day fresh
+admission window. Lost, UnknownLaunch and uncertain publication holds do not age
+out; room invalidation cannot convert them into confirmed cleanup or release their
+quota. Explicit local reconciliation acknowledges possible surviving children.
+
+Known charged streams receive typed Capacity/Closed admission refusals. A fresh
+Hello refused at retained capacity or while stopping is dropped without a durable
+reply and may time out. This bounds storage instead of creating uncharged retry
+or publication rows. These are reviewed and Linux-qualified source contracts, separate
+from released v0.2.3 behavior and platform acceptance.
 
 ## Native 0.2.1 launcher upgrades
 

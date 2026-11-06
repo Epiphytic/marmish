@@ -19,6 +19,23 @@ const RECEIPT: &str = ".marmish-native-install.json";
 const TRANSACTION: &str = ".transaction.json";
 const VERSION_RECEIPT: &str = ".version-receipt.json";
 const LAUNCHERS: [&str; 2] = ["marmish", "marmishd"];
+
+/// Release the open-file-description lock at transaction completion even if a
+/// concurrent spawn temporarily inherited a descriptor before its exec.
+struct InstallLock(fs::File);
+impl InstallLock {
+    fn acquire(file: fs::File) -> Result<Self> {
+        file.try_lock_exclusive()
+            .map_err(|_| invalid("install_busy"))?;
+        Ok(Self(file))
+    }
+}
+impl Drop for InstallLock {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.0);
+    }
+}
+
 pub(crate) struct InstallOptions {
     pub action: InstallAction,
     pub prefix: PathBuf,
@@ -721,8 +738,7 @@ pub(crate) fn run(o: InstallOptions) -> Result<InstallReport> {
     {
         return Err(invalid("unsafe_install_path"));
     }
-    lock.try_lock_exclusive()
-        .map_err(|_| invalid("install_busy"))?;
+    let _lock = InstallLock::acquire(lock)?;
     let mut receipt = if exists(&o.prefix.join(RECEIPT))? {
         read_receipt(&o.prefix)?
     } else {
@@ -970,6 +986,33 @@ mod tests {
             self.root.path().join("prefix")
         }
     }
+    #[test]
+    fn transaction_unlocks_even_while_an_inherited_description_remains_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("install.lock");
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        let held = InstallLock::acquire(file).unwrap();
+        let independent = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        assert!(independent.try_lock_exclusive().is_err());
+        // try_clone models a fork-inherited reference to the same description.
+        let inherited = held.0.try_clone().unwrap();
+        assert!(independent.try_lock_exclusive().is_err());
+        drop(held);
+        let next_transaction = InstallLock::acquire(independent).unwrap();
+        assert!(inherited.metadata().unwrap().is_file());
+        drop(next_transaction);
+        drop(inherited);
+    }
+
     #[test]
     fn installed_frontends_retain_one_same_version_credential_helper() {
         let f = Fixture::new();

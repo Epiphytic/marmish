@@ -18,6 +18,9 @@ const IO_TIMEOUT: Duration = Duration::from_secs(15);
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Request {
+    Stream {
+        request: crate::stream_service::StreamLocalRequest,
+    },
     Status {},
     OpenConversation {
         peer: String,
@@ -111,6 +114,8 @@ pub struct Response {
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) command: Option<crate::command_local::LocalResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) stream: Option<crate::stream_service::StreamLocalResult>,
 }
 
 impl Response {
@@ -121,6 +126,7 @@ impl Response {
                 result: Some(value),
                 error: None,
                 command: None,
+                stream: None,
             },
             Err(_) => Self::failure("response_encoding"),
         }
@@ -132,6 +138,7 @@ impl Response {
             result: None,
             error: Some(category.to_owned()),
             command: None,
+            stream: None,
         }
     }
     pub(crate) fn command(result: crate::command_local::LocalResult) -> Self {
@@ -140,6 +147,16 @@ impl Response {
             result: None,
             error: None,
             command: Some(result),
+            stream: None,
+        }
+    }
+    pub(crate) fn stream(result: crate::stream_service::StreamLocalResult) -> Self {
+        Self {
+            ok: true,
+            result: None,
+            error: None,
+            command: None,
+            stream: Some(result),
         }
     }
 }
@@ -231,12 +248,16 @@ pub(crate) async fn command_request(
         write_frame(&mut stream, request).await?;
         let response: Response = read_frame(&mut stream).await?;
         if let Some(result) = response.command {
-            if !response.ok || response.result.is_some() || response.error.is_some() {
+            if !response.ok
+                || response.result.is_some()
+                || response.error.is_some()
+                || response.stream.is_some()
+            {
                 return Err(Error::Invalid("command_local_response"));
             }
             return Ok(result);
         }
-        if response.ok || response.result.is_some() {
+        if response.ok || response.result.is_some() || response.stream.is_some() {
             return Err(Error::Invalid("command_local_response"));
         }
         match response.error.as_deref() {
@@ -247,6 +268,54 @@ pub(crate) async fn command_request(
     })
     .await
     .map_err(|_| Error::Timeout)?
+}
+
+/// A bounded same-UID stream operation. Pending remote work never holds IPC open.
+pub(crate) async fn stream_request(
+    path: &Path,
+    request: crate::stream_service::StreamLocalRequest,
+) -> Result<crate::stream_service::StreamLocalResult> {
+    tokio::time::timeout(IO_TIMEOUT, async {
+        let mut stream = UnixStream::connect(path).await?;
+        verify_peer(&stream)?;
+        write_frame(&mut stream, &Request::Stream { request }).await?;
+        let response: Response = read_frame(&mut stream).await?;
+        if response.result.is_some() || response.command.is_some() {
+            return Err(Error::Invalid("stream_local_response"));
+        }
+        if !response.ok && response.stream.is_none() {
+            return stream_failure(response.error.as_deref().unwrap_or_default());
+        }
+        if !response.ok || response.error.is_some() {
+            return Err(Error::Invalid("stream_local_response"));
+        }
+        let result = response
+            .stream
+            .ok_or(Error::Invalid("stream_local_response"))?;
+        if let crate::stream_service::StreamLocalResult::Failure { category } = &result {
+            return stream_failure(category);
+        }
+        Ok(result)
+    })
+    .await
+    .map_err(|_| Error::Timeout)?
+}
+
+fn stream_failure(category: &str) -> Result<crate::stream_service::StreamLocalResult> {
+    if category.is_empty()
+        || category.len() > 80
+        || !category
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    {
+        return Err(Error::Invalid("stream_local_response"));
+    }
+    use std::io::Write as _;
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "marmish stream: local error {category}"
+    );
+    Err(Error::Invalid("stream_local_failure"))
 }
 
 /// The caller owns the listener task and cancels/joins it on shutdown. At most
@@ -383,6 +452,44 @@ mod tests {
             read_frame::<Request>(&mut receiver).await,
             Err(Error::Invalid("ipc_frame_size"))
         ));
+    }
+
+    #[tokio::test]
+    async fn stream_errors_preserve_categories_and_reject_mixed_or_untrusted_diagnostics() {
+        use crate::stream_service::{StreamLocalRequest, StreamLocalResult};
+        let denied = Response::stream(StreamLocalResult::Failure {
+            category: "stream_admin_not_found".into(),
+        });
+        let untrusted = Response::stream(StreamLocalResult::Failure {
+            category: "error\nextra diagnostic".into(),
+        });
+        let mut mixed = denied.clone();
+        mixed.result = Some(serde_json::json!({}));
+        for (response, expected) in [
+            (denied, "stream_local_failure"),
+            (Response::failure("busy"), "stream_local_failure"),
+            (untrusted, "stream_local_response"),
+            (mixed, "stream_local_response"),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+            let socket = directory.path().join("s");
+            let listener = bind(&socket).unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                assert!(matches!(
+                    read_frame::<Request>(&mut socket).await.unwrap(),
+                    Request::Stream { .. }
+                ));
+                write_frame(&mut socket, &response).await.unwrap();
+            });
+            assert!(matches!(
+                stream_request(&socket, StreamLocalRequest::List { remote: None }).await,
+                Err(Error::Invalid(category)) if category == expected
+            ));
+            server.await.unwrap();
+        }
     }
 
     #[tokio::test]
