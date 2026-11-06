@@ -3684,6 +3684,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "marmish-stream"
+version = "0.2.3"
+dependencies = [
+ "base64 0.22.1",
+ "flate2",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "marmish-vault"
 version = "0.1.0"
 dependencies = [

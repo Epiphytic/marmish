@@ -163,7 +163,7 @@ jobs:
           set -Eeuo pipefail
           if test "$EXPECTED_ARCH" != native; then test "$(uname -m)" = "$EXPECTED_ARCH"; fi
           uname -m
-          cargo test --locked --release -p marmish-native -p marmish-vault -- --test-threads=1
+          cargo test --locked --release -p marmish-native -p marmish-vault -p marmish-stream -- --test-threads=1
           cargo build --locked --release -p marmish-native --bins
           mkdir -p "$RUNNER_TEMP/v02-public"
           cargo tree --locked -p marmish-native -e normal,build,features > "$RUNNER_TEMP/v02-public/dependencies.txt"

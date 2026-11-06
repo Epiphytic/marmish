@@ -56,6 +56,15 @@ separate finite explanations. Existing invocation recovery and original-request
 identity remain stable. Claude design/code reviews and dual-mirror publication
 remain the exit gates; release assets are a separate publication step.
 
+## Streaming commands and file transfer
+
+The active [streaming/file-transfer initiative](phases/streaming-transfer-plan.md),
+Beads `marmish-8ka`, adds reliable duplex remote shell support for rsync,
+optional compression and resumable regular-file transfer. Its first detailed
+phase is [bounded stream primitives](phases/streaming-primitives.md). Each phase
+requires independent Claude design/code review and dual-mirror publication.
+These are planned capabilities until implementation evidence is recorded.
+
 ## Historical v0.1 plans and evidence
 
 Everything below is historical v0.1 planning/evidence. Its installer, interpreter,

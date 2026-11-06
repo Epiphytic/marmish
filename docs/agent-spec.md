@@ -56,6 +56,23 @@ experimental command capabilities, with no direct-network fallback after a
 Tor failure. No PTY, tmux, interactive shell, Unix-login mapping, root execution
 service or general process sandbox is promised by this release.
 
+## Streaming initiative (source only)
+
+The [streaming plan](phases/streaming-transfer-plan.md) adds a separate bounded
+full-duplex execution path, rsync remote-shell mode, native regular-file copy
+and optional block compression in reviewed increments. Phase 1 introduces the
+pure Rust `marmish-stream` wire, zlib codec and byte windows; it is not connected
+to the daemon or shipped CLI yet. Existing finite commands retain their limits.
+The [phase 1 design review](reviews/streaming-primitives-design.md) records the
+approved bounds and provisional protocol. Runtime integration, cancellation,
+rsync and file transfer remain planned, not supported release capabilities.
+
+Cancellation must be explicit and independent of blocked stream data. The runtime
+plan includes Ctrl-C and cancellation by stable stream ID from another terminal,
+confirmed versus uncertain outcomes, and safe process-group cleanup. Disconnect
+alone must not cancel a command. Cross-platform and live-relay qualification are
+required before claiming the new capabilities.
+
 ## Native 0.2.1 launcher upgrades
 
 The native 0.2.1 installer automatically replaces recognized v0.1
