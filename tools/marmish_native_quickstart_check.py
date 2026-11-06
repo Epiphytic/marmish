@@ -122,7 +122,8 @@ def capture_interactive_failure(target, error, output, prompts_seen, status):
         snapshot = sanitize_interactive_diagnostics(None)
     target.update(snapshot)
 
-def interactive(arguments, environment, timeout=240, *, failure_diagnostics=None):
+def interactive(arguments, environment, timeout=240, *, failure_diagnostics=None,
+                dialog=DIALOG):
     try:
         child, master = pty.fork()
     except Exception as error:
@@ -147,8 +148,8 @@ def interactive(arguments, environment, timeout=240, *, failure_diagnostics=None
                         raise
                     data = b''
                 output.extend(data)
-            while next_prompt < len(DIALOG) and DIALOG[next_prompt][0] in output:
-                os.write(master, DIALOG[next_prompt][1])
+            while next_prompt < len(dialog) and dialog[next_prompt][0] in output:
+                os.write(master, dialog[next_prompt][1])
                 next_prompt += 1
             observed, current = os.waitpid(child, os.WNOHANG)
             if observed == child:
@@ -166,7 +167,7 @@ def interactive(arguments, environment, timeout=240, *, failure_diagnostics=None
                     output.extend(data)
                     if len(output) > 2 * 1024 * 1024:
                         raise RuntimeError('quickstart_observation_limit')
-        if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0 or next_prompt != len(DIALOG):
+        if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0 or next_prompt != len(dialog):
             raise RuntimeError('quickstart_terminal_failure')
         return bytes(output)
     except Exception as error:
@@ -202,14 +203,15 @@ def reports(output):
     return found
 
 
-def run(bootstrap, assets, report):
+def run(bootstrap, assets, report, *, default_relays=False):
     account = pwd.getpwuid(os.geteuid())
     root = Path(tempfile.mkdtemp(prefix='.marmish-quickstart-check-', dir=account.pw_dir))
     root.chmod(0o700)
     completed = False
     result = {'schema': 1, 'kind': 'installed_quickstart_pty', 'ok': False,
               'key_storage': 'file', 'network_activation': False,
-              'python_in_runtime_path': False, 'owned_state_removed': False}
+              'python_in_runtime_path': False, 'owned_state_removed': False,
+              'relay_selection': 'default' if default_relays else 'explicit'}
     try:
         utilities = root / 'utilities'
         utilities.mkdir(mode=0o700)
@@ -222,13 +224,20 @@ def run(bootstrap, assets, report):
                        'LC_ALL': 'C', 'TMPDIR': str(root)}
         state, prefix, bins = (root / name for name in ('state', 'prefix', 'bin'))
         begin = time.monotonic()
+        dialog = tuple((prompt, b'\n' if index == 1 and default_relays else answer)
+                       for index, (prompt, answer) in enumerate(DIALOG))
         output = interactive([str(bootstrap), '--quickstart', '--key-storage', 'file',
             '--debug', '--asset-dir', str(assets), '--state-dir', str(state),
-            '--prefix', str(prefix), '--bin-dir', str(bins)], environment)
+            '--prefix', str(prefix), '--bin-dir', str(bins)], environment, dialog=dialog)
         initial = [value for value in reports(output) if 'identity_created' in value]
         if len(initial) != 1:
             raise RuntimeError('quickstart_missing_setup_report')
         initial = initial[0]
+        config = json.loads((state / 'default' / 'config.json').read_text())
+        expected = (['wss://relay.eu.whitenoise.chat/', 'wss://relay.us.whitenoise.chat/']
+                    if default_relays else ['wss://relay.invalid/'])
+        if config['relays'] != expected:
+            raise RuntimeError('quickstart_relay_contract')
         if not (initial['identity_created'] and initial['owner_opened']
                 and initial['role'] == 'both' and not initial['inbound_enabled']
                 and initial['backend'] == 'file'
@@ -266,6 +275,8 @@ if __name__ == '__main__':
     parser.add_argument('--bootstrap', required=True, type=Path)
     parser.add_argument('--assets-dir', required=True, type=Path)
     parser.add_argument('--report', required=True, type=Path)
+    parser.add_argument('--default-relays', action='store_true',
+                        help='Candidate-only offline fixture accepting White Noise defaults')
     options = parser.parse_args()
     raise SystemExit(run(options.bootstrap.resolve(), options.assets_dir.resolve(),
-                         options.report.resolve()))
+                         options.report.resolve(), default_relays=options.default_relays))
