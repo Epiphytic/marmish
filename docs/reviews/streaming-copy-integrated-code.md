@@ -191,13 +191,51 @@ uncertainty and hidden-helper context/dispatch. It inspected validation summarie
 but ran no Cargo or network tests. No source blockers remained.
 
 It did not reread every helper/worker test body or other scopes already covered
-by independent reviews. A nonblocking helper post-receipt error-mapping edge is
-tracked in Beads `marmish-5i4`: a faulty post-commit peer or Commit-send failure
-can return a finite error although the destination is committed. Resume still
-recovers the durable receipt. Cancelled worker futures are not reusable; current
+by independent reviews. The nonblocking helper post-receipt error-mapping edge
+tracked in Beads `marmish-5i4` was subsequently corrected and independently
+reviewed; see the followup below. Cancelled worker futures are not reusable; current
 CLI shuts their worker down. Long helper qualification used debug builds.
 Live transport, actual cancellation/resume waves, installed binaries and macOS
 qualification remain separate evidence gates.
+
+## Post-receipt uncertainty followup
+
+After a Put receiver has produced its durable receipt, a local protocol or pipe
+failure in Commit/Finish handling now becomes `CommitUncertain`. Explicit peer
+errors and cancellation retain their existing meanings. Precommit errors and
+Get behavior are unchanged. This corrects a misleading finite failure after the
+destination was already committed; it does not roll the file back.
+
+Actual Claude Code Sonnet 5.5 reviews used `--permission-mode auto`:
+
+- Design **APPROVE**, session `3f268e85-5a6f-48f6-a287-9d92f9c07aae`,
+  109.978 seconds, 12 turns.
+- Code **APPROVE**, session `54b669fb-ec3f-412f-bfe8-0d4c349dad9f`,
+  50.915 seconds, seven turns.
+- Strengthened regression **APPROVE**, same code session, 16.737 seconds,
+  two turns. The reviewer identified that an empty source made a zero-Data
+  resume assertion vacuous. The final case transfers nonempty data and verifies
+  the installed bytes, size and hash before receipt recovery.
+
+The real inherited-pipe helper regression exercises an unexpected post-receipt
+Done frame, EOF before Finish, explicit peer failure and a precommit
+protocol contrast. It verifies exit/error classification and successful fresh
+Resume from the committed receipt without additional Data. Final regression:
+**one passed**, 3.66 seconds. Helper units: **10 passed**. The integration cohort
+passed seven tests with one expected ignored child entrypoint in 102.81 seconds
+before the final test-only nonempty-source strengthening; product code was the
+same. Final strict native library/test Clippy passed in 0.25 seconds.
+
+The reviewers inspected the complete changed test, shared spawn fixture and
+causal helper paths; they ran no tests or relay operations themselves. Author
+logs are `/tmp/marmish-5i4-helper-test-r2.log`,
+`/tmp/marmish-5i4-clippy-r2.log`; raw reviews are
+`/tmp/marmish-5i4-{design-review,code-review,code-review-r2}.json`.
+These local diagnostics are not published artifacts. Quality delta reported
+zero gating or worsened-existing findings, with five new-symbol rows including
+test complexity/verbosity and test-macro dead-code reports; this is not a claim
+of zero new measured debt. No live relay, installed or platform qualification
+is established by this followup.
 
 ## Large-file filesystem test followup
 

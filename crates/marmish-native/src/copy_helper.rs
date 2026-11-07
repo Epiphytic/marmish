@@ -31,6 +31,14 @@ enum Failure {
     Build,
     Launch,
 }
+// A durable receipt already exists; a local protocol/pipe failure can no
+// longer establish that the destination was not committed.
+fn after_receipt<T>(result: Result<T>) -> Result<T> {
+    result.map_err(|failure| match failure {
+        Failure::File(_) => Failure::File(CopyError::CommitUncertain),
+        other => other,
+    })
+}
 impl From<copy_files::Failure> for Failure {
     fn from(value: copy_files::Failure) -> Self {
         Self::File(value.code)
@@ -539,17 +547,19 @@ fn receive(
         return invalid();
     };
     let receipt = receipt.ok_or(Failure::Cancelled)?;
-    io.send(Frame::Commit {
-        transfer: receipt.transfer,
-        size: receipt.size,
-        sha256: receipt.sha256,
-    })?;
-    match io.next(None)? {
-        Some(Frame::Finish { transfer, sha256 })
-            if transfer == receipt.transfer && sha256 == receipt.sha256 => {}
-        _ => return invalid(),
-    }
-    io.finish()
+    after_receipt((|| {
+        io.send(Frame::Commit {
+            transfer: receipt.transfer,
+            size: receipt.size,
+            sha256: receipt.sha256,
+        })?;
+        match io.next(None)? {
+            Some(Frame::Finish { transfer, sha256 })
+                if transfer == receipt.transfer && sha256 == receipt.sha256 => {}
+            _ => return invalid(),
+        }
+        io.finish()
+    })())
 }
 fn transmit(io: &mut Pipes, worker: &Worker, launch: Launch) -> Result<()> {
     let Event::Source { size, mode, mtime } = io.work(worker, Job::Source(launch.clone()), None)?
@@ -699,6 +709,33 @@ mod tests {
     }
     fn protocol_failure<T>(result: Result<T>) -> bool {
         matches!(result, Err(Failure::File(CopyError::Protocol)))
+    }
+
+    #[test]
+    fn post_receipt_mapping_preserves_peer_cancel_and_preparation_failures() {
+        for code in [CopyError::Protocol, CopyError::LocalIo, CopyError::DiskFull] {
+            assert!(matches!(
+                after_receipt::<()>(Err(Failure::File(code))),
+                Err(Failure::File(CopyError::CommitUncertain))
+            ));
+        }
+        assert!(matches!(
+            after_receipt::<()>(Err(Failure::Cancelled)),
+            Err(Failure::Cancelled)
+        ));
+        assert!(matches!(
+            after_receipt::<()>(Err(Failure::Peer)),
+            Err(Failure::Peer)
+        ));
+        assert!(matches!(
+            after_receipt::<()>(Err(Failure::Build)),
+            Err(Failure::Build)
+        ));
+        assert!(matches!(
+            after_receipt::<()>(Err(Failure::Launch)),
+            Err(Failure::Launch)
+        ));
+        assert!(matches!(after_receipt(Ok(7)), Ok(7)));
     }
 
     #[test]

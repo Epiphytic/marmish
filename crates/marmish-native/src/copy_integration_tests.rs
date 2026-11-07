@@ -89,6 +89,55 @@ async fn read_pipe<R: AsyncRead + Unpin>(mut pipe: R, send: mpsc::Sender<Option<
         }
     }
 }
+fn spawn_helper(
+    launch: &Launch,
+    codec: Codec,
+    stream: [u8; 16],
+) -> (tokio::process::Child, tokio::fs::File) {
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    writer
+        .write_all(&context(launch, codec, stream).encode().unwrap())
+        .unwrap();
+    drop(writer);
+    let context = relocate(File::from(OwnedFd::from(reader)));
+    let (output, output_writer) = std::io::pipe().unwrap();
+    let output_writer = relocate(File::from(OwnedFd::from(output_writer)));
+    let context_fd = context.as_raw_fd();
+    let output_fd = output_writer.as_raw_fd();
+    let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "copy_integration_tests::helper_child",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("MARMISH_TEST_COPY_CONTEXT_FD", context_fd.to_string())
+        .env("MARMISH_TEST_COPY_OUTPUT_FD", output_fd.to_string())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    unsafe {
+        command.pre_exec(move || {
+            for fd in [context_fd, output_fd] {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        });
+    }
+    let child = command.spawn().unwrap();
+    drop(context);
+    drop(output_writer);
+    (
+        child,
+        tokio::fs::File::from_std(File::from(OwnedFd::from(output))),
+    )
+}
+
 #[derive(Clone, Default)]
 struct Flow {
     data: Vec<(u64, usize)>,
@@ -200,53 +249,13 @@ impl Bridge {
         let delay_checkpoints = launch.direction == Direction::Put
             && launch.mode == AttemptMode::Create
             && fault == Fault::None;
-        let (reader, mut writer) = std::io::pipe().unwrap();
-        writer
-            .write_all(&context(launch, codec, stream).encode().unwrap())
-            .unwrap();
-        drop(writer);
-        let context = relocate(File::from(OwnedFd::from(reader)));
-        let (output, output_writer) = std::io::pipe().unwrap();
-        let output_writer = relocate(File::from(OwnedFd::from(output_writer)));
-        let context_fd = context.as_raw_fd();
-        let output_fd = output_writer.as_raw_fd();
-        let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
-        command
-            .args([
-                "--exact",
-                "copy_integration_tests::helper_child",
-                "--ignored",
-                "--nocapture",
-            ])
-            .env("MARMISH_TEST_COPY_CONTEXT_FD", context_fd.to_string())
-            .env("MARMISH_TEST_COPY_OUTPUT_FD", output_fd.to_string())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        unsafe {
-            command.pre_exec(move || {
-                for fd in [context_fd, output_fd] {
-                    let flags = libc::fcntl(fd, libc::F_GETFD);
-                    if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                }
-                Ok(())
-            });
-        }
-        let mut child = command.spawn().unwrap();
-        drop(context);
-        drop(output_writer);
+        let (mut child, output) = spawn_helper(launch, codec, stream);
         let mut input = child.stdin.take();
         let stderr = child.stderr.take().unwrap();
         let (out_send, mut out_receive) = mpsc::channel(1);
         let (err_send, mut err_receive) = mpsc::channel(1);
         let mut readers = JoinSet::new();
-        readers.spawn(read_pipe(
-            tokio::fs::File::from_std(File::from(OwnedFd::from(output))),
-            out_send,
-        ));
+        readers.spawn(read_pipe(output, out_send));
         readers.spawn(read_pipe(stderr, err_send));
         let (stop, mut stopped) = oneshot::channel();
         let task = tokio::spawn(async move {
@@ -842,5 +851,192 @@ async fn disconnected_put_resumes_checkpoint_and_lost_commit_reply_recovers_rece
         }
         assert_eq!(std::fs::read(&destination).unwrap(), bytes);
         assert_metadata(&source, &destination);
+    }
+}
+
+// Read one small fixture frame without consuming bytes belonging to its successor.
+// The timeout also bounds a helper which produces Progress indefinitely.
+async fn helper_frame(
+    output: &mut tokio::fs::File,
+    decoder: &mut cp::FrameDecoder,
+) -> Option<cp::Frame> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let mut byte = [0];
+            if output.read(&mut byte).await.unwrap() == 0 {
+                decoder.finish().unwrap();
+                return None;
+            }
+            let (used, frame) = decoder.feed(&byte).unwrap();
+            assert_eq!(used, 1);
+            match frame {
+                Some(cp::Frame::Progress { .. }) | None => (),
+                Some(frame) => return Some(frame),
+            }
+        }
+    })
+    .await
+    .expect("bounded real-helper frame")
+}
+async fn helper_send(input: &mut tokio::process::ChildStdin, frame: cp::Frame) {
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        input.write_all(&frame.encode().unwrap()),
+    )
+    .await
+    .expect("bounded real-helper input")
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn malformed_finish_after_durable_receipt_is_uncertain_and_resume_needs_no_data() {
+    for fault in ["precommit", "malformed_finish", "eof", "peer_error"] {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().canonicalize().unwrap();
+        let source = dir.join("source");
+        let destination = dir.join("received");
+        let bytes = b"a durable nonempty committed receipt";
+        std::fs::write(&source, bytes).unwrap();
+        let mut original = launch(&source, &destination, Direction::Put);
+        original.preserve_mode = false;
+        original.preserve_mtime = false;
+        let hash: [u8; 32] = Sha256::digest(bytes).into();
+        let empty_hash: [u8; 32] = Sha256::digest([]).into();
+        let size = bytes.len() as u64;
+        let manifest = cp::Manifest {
+            version: original.version,
+            transfer: original.transfer,
+            client: original.client,
+            server: original.server,
+            direction: Direction::Put,
+            source: original.source.clone(),
+            destination: original.destination.clone(),
+            overwrite: false,
+            preserve_mode: false,
+            preserve_mtime: false,
+            size,
+            sha256: hash,
+            mode: None,
+            mtime: None,
+        };
+        let (mut child, mut output) = spawn_helper(&original, Codec::None, [3; 16]);
+        let mut input = child.stdin.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let mut decoder = cp::FrameDecoder::default();
+        helper_send(&mut input, cp::Frame::Start(original.clone(), Codec::None)).await;
+        helper_send(&mut input, cp::Frame::Manifest(manifest)).await;
+        assert!(matches!(helper_frame(&mut output, &mut decoder).await,
+            Some(cp::Frame::Resume { phase: cp::Phase::Created, offset: 0, sha256 }) if sha256 == empty_hash));
+        let postcommit = fault != "precommit";
+        if postcommit {
+            helper_send(
+                &mut input,
+                cp::Frame::Prefix {
+                    offset: 0,
+                    sha256: empty_hash,
+                },
+            )
+            .await;
+            helper_send(
+                &mut input,
+                cp::Frame::Data {
+                    offset: 0,
+                    bytes: bytes.to_vec(),
+                },
+            )
+            .await;
+            helper_send(&mut input, cp::Frame::Done { size, sha256: hash }).await;
+            assert!(matches!(helper_frame(&mut output, &mut decoder).await,
+                Some(cp::Frame::Checkpoint { offset, sha256 }) if offset == size && sha256 == hash));
+            assert!(matches!(helper_frame(&mut output, &mut decoder).await,
+                Some(cp::Frame::Commit { transfer, size: committed_size, sha256 })
+                    if transfer == original.transfer && committed_size == size && sha256 == hash));
+            // Observe the actual durable destination before injecting a fault.
+            assert_eq!(std::fs::read(&destination).unwrap(), bytes);
+        }
+        if fault == "eof" {
+            drop(input);
+        } else {
+            // Done is valid framing, but invalid as either Prefix or Finish.
+            let frame = if fault == "peer_error" {
+                cp::Frame::Error(cp::CopyError::LocalIo)
+            } else {
+                cp::Frame::Done {
+                    size: 0,
+                    sha256: hash,
+                }
+            };
+            helper_send(&mut input, frame).await;
+            if fault != "peer_error" {
+                let expected = if postcommit {
+                    cp::CopyError::CommitUncertain
+                } else {
+                    cp::CopyError::Protocol
+                };
+                assert!(matches!(helper_frame(&mut output, &mut decoder).await,
+                    Some(cp::Frame::Error(code)) if code == expected));
+            }
+            drop(input);
+        }
+        if fault == "eof" {
+            assert!(matches!(
+                helper_frame(&mut output, &mut decoder).await,
+                Some(cp::Frame::Error(cp::CopyError::CommitUncertain))
+            ));
+        }
+        assert!(
+            helper_frame(&mut output, &mut decoder).await.is_none(),
+            "{fault}: extra response"
+        );
+        let status = tokio::time::timeout(Duration::from_secs(5), child.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(status.code(), Some(1), "{fault}");
+        let mut diagnostic = Vec::new();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            stderr.take(4097).read_to_end(&mut diagnostic),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(diagnostic.len() <= 4096);
+        let diagnostic = String::from_utf8(diagnostic).unwrap();
+        if fault == "peer_error" {
+            assert!(
+                diagnostic.is_empty(),
+                "explicit peer error must not be relabelled"
+            );
+        } else {
+            assert!(
+                diagnostic.contains(if postcommit {
+                    "CommitUncertain"
+                } else {
+                    "Protocol"
+                }),
+                "{fault}: {diagnostic}"
+            );
+        }
+        let checkpoint = cp::Checkpoint::decode(
+            &std::fs::read(dir.join(original.namespace()).join("checkpoint")).unwrap(),
+        )
+        .unwrap();
+        if postcommit {
+            assert_eq!(checkpoint.phase, cp::Phase::Committed);
+            assert_eq!(checkpoint.manifest.sha256, hash);
+            original.mode = AttemptMode::Resume;
+            let (result, metrics) =
+                attempt_observed(&dir.join("resume"), original, Codec::None, [4; 16]).await;
+            result.unwrap();
+            assert!(
+                metrics.input.data.is_empty(),
+                "receipt recovery retransmitted data"
+            );
+            assert_eq!(std::fs::read(&destination).unwrap(), bytes);
+        } else {
+            assert_ne!(checkpoint.phase, cp::Phase::Committed);
+            assert!(!destination.exists());
+        }
     }
 }
