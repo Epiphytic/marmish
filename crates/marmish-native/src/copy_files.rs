@@ -87,6 +87,8 @@ fn name(bytes: &[u8]) -> Result<CString> {
     CString::new(bytes).map_err(|_| failure(CopyError::UnsafePath))
 }
 fn open_at(parent: &File, name: &CStr, flags: i32, mode: libc::mode_t) -> Result<File> {
+    #[cfg(target_os = "macos")]
+    let mode = libc::c_uint::from(mode);
     let fd = unsafe {
         libc::openat(
             parent.as_raw_fd(),
