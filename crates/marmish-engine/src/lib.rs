@@ -35,6 +35,20 @@ pub use storage::{NativeBinding, ProvidedMaster};
 use store::{AccountSpec, BootTime, InputOwner, StartDecision, Store, WorkerCredential};
 pub const ENGINE_FORMAT: i64 = store::ENGINE_FORMAT;
 
+/// Normalize inherited process limits before starting threads or engine work.
+///
+/// Executable entry points must call this before initializing runtimes or helpers.
+/// On macOS only the soft NOFILE limit is capped at the engine's descriptor
+/// ceiling; lower soft limits and the hard limit are preserved. No descriptors
+/// are opened, enumerated or changed. Engine bootstrap and spawn retain their
+/// separate actual-descriptor checks. Linux is a no-op.
+pub fn initialize_process_limits() -> Result<()> {
+    platform::initialize_process_limits()
+}
+
+#[cfg(test)]
+mod process_limits_tests;
+
 /// Complete SQLCipher's process-global initialization before any SQLite use.
 ///
 /// Every in-process SQLite consumer must cross this barrier before its first

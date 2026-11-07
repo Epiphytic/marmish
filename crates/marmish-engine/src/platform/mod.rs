@@ -17,6 +17,16 @@ use linux as native;
 #[cfg(target_os = "macos")]
 use macos as native;
 
+pub(crate) fn initialize_process_limits() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        native::initialize_process_limits()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Ok(())
+    }
+}
 pub(crate) fn boot_time() -> Result<BootTime> {
     native::boot_time()
 }

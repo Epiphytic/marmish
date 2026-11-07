@@ -1023,7 +1023,117 @@ impl MdkOwner {
         context.validate().map_err(|_| invalid())?;
         Ok(context)
     }
+    /// Only definitive failed bootstrap proves these local queues cannot launch.
+    /// Cancel/Stop may already have committed inactivity before this sweep.
+    fn retire_failed_stream_preparations(&mut self) -> Result<()> {
+        if !self
+            .commands
+            .as_mut()
+            .and_then(|s| s.engine_mut())
+            .is_some_and(|e| e.readiness() == crate::command_engine::Readiness::Failed)
+        {
+            return Ok(());
+        }
+        let keys = self
+            .streams
+            .live
+            .iter()
+            .filter(|(_, live)| {
+                live.runner.is_none() && (live.preparing || live.operation_id.is_some())
+            })
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        for key in keys {
+            let record = self.journal.stream_get(&key)?;
+            if record.as_ref().is_some_and(|r| r.active) {
+                continue;
+            }
+            let stream = match record {
+                Some(record) => record.binding.stream,
+                None => {
+                    // Parse only the stable local bookkeeping key, never an
+                    // authentication identity. No durable record is synthesized.
+                    let Some((_, encoded)) = key.rsplit_once(':') else {
+                        continue;
+                    };
+                    let Ok(stream) = super::command_adapter::fixed_hex::<16>(encoded) else {
+                        continue;
+                    };
+                    stream
+                }
+            };
+            if self
+                .commands
+                .as_mut()
+                .and_then(|s| s.engine_mut())
+                .is_some_and(|e| e.retire_failed_bootstrap_live(stream))
+                && let Some(live) = self.streams.live.get_mut(&key)
+            {
+                live.preparing = false;
+                live.operation_id = None;
+            }
+        }
+        Ok(())
+    }
+    // Caller has collected definitive OpenFailed. Every durable and authority
+    // fence is refreshed before the transaction; queued IDs survive its failure.
+    fn finish_failed_stream_preparation(&mut self, record: &StreamRecord) -> Result<()> {
+        let k = record.key();
+        let live = self.streams.live.get(&k);
+        if live.is_some_and(|live| {
+            live.runner.is_some()
+                || ((live.preparing || live.operation_id.is_some())
+                    && (!live.preparing
+                        || live.operation_id.is_none()
+                        || live.revision != record.revision))
+        }) {
+            return Ok(());
+        }
+        let Some(mut current) = self.journal.stream_get(&k)? else {
+            return Ok(());
+        };
+        if !current.active
+            || !current.server_side
+            || current.state != "preparing"
+            || current.cancel
+            || current.projection_invalidated
+            || current.revision != record.revision
+            || current.binding != record.binding
+            || current.group != record.group
+        {
+            return Ok(());
+        }
+        let context = match self.command_context(&GroupId::new(current.group.clone())) {
+            Ok(context) => context,
+            Err(_) => return Ok(()),
+        };
+        if self
+            .check_stream_binding(&context, &current.binding)
+            .is_err()
+            || !self.journal.copy_attempt_matches(&current)?
+        {
+            return Ok(());
+        }
+        current.state = "terminal".into();
+        current.terminal = Some(sw::Terminal::Failed {
+            code: sw::WireErrorCode::Invalid,
+        });
+        // On transaction failure retain all queued IDs for the next tick.
+        self.journal.stream_finish(&mut current)?;
+        if self
+            .commands
+            .as_mut()
+            .and_then(|s| s.engine_mut())
+            .is_some_and(|e| e.retire_failed_bootstrap_live(current.binding.stream))
+            && let Some(live) = self.streams.live.get_mut(&k)
+        {
+            live.preparing = false;
+            live.operation_id = None;
+        }
+        Ok(())
+    }
     fn prepare_streams(&mut self) -> Result<()> {
+        self.retire_failed_stream_preparations()?;
         if self.streams.stopping {
             return Ok(());
         }
@@ -1043,6 +1153,15 @@ impl MdkOwner {
                 continue;
             }
             if !self.journal.copy_attempt_matches(&record)? {
+                continue;
+            }
+            if self
+                .commands
+                .as_mut()
+                .and_then(|s| s.engine_mut())
+                .is_some_and(|e| e.readiness() == crate::command_engine::Readiness::Failed)
+            {
+                self.finish_failed_stream_preparation(&record)?;
                 continue;
             }
             let kind = match &record.launch {

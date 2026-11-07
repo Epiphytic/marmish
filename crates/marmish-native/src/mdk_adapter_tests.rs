@@ -3850,3 +3850,475 @@ async fn stream_authenticated_open_replay_and_grant_withdrawal_preserve_one_owne
     assert_eq!(stopped.state, "terminal");
     assert_eq!(stopped.terminal, Some(w::Terminal::Cancelled));
 }
+
+// Actual Opening -> OpenFailed fixture: the worker executable is invalid, and
+// the bootstrap thread cannot reach Engine::open until the test releases it.
+async fn failed_bootstrap_stream_fixture() -> (
+    Fixture,
+    GroupId,
+    marmish_stream::wire::Binding,
+    std::sync::mpsc::Sender<()>,
+) {
+    failed_bootstrap_stream_fixture_kind(false).await
+}
+async fn failed_bootstrap_stream_fixture_kind(
+    copy: bool,
+) -> (
+    Fixture,
+    GroupId,
+    marmish_stream::wire::Binding,
+    std::sync::mpsc::Sender<()>,
+) {
+    use marmish_stream::{codec::Codec, wire as w};
+    let mut fixture = Fixture::new(2);
+    let (group, binding) = fixture.stream_fixture().await;
+    let config = crate::command_config::CommandConfig::from_bytes(
+        &serde_json::to_vec(&serde_json::json!({
+            "version":1,"role":"server","relays":["wss://127.0.0.1:9/"],
+            "tor":"off","trusted_remotes":[],"execution_clients":[hex::encode(binding.client)],
+            "command_policy":{"version":1},"cwd":"/","limits":{},"aliases":{}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let settings = crate::command_engine::EngineSettings {
+        policy: marmish_engine::EnginePolicy {
+            state_root: fixture._root.path().join("failed-bootstrap-engine"),
+            worker_executable: fixture._root.path().join("missing-worker"),
+            server: marmish_engine::ServerId(binding.server),
+            allowed_principals: vec![marmish_engine::PrincipalId(binding.client)],
+            allow_shell_command: false,
+            command_policy: None,
+            cwd: Some(fixture._root.path().to_owned()),
+            limits: marmish_engine::EngineLimits::default(),
+        },
+        binding: marmish_engine::NativeBinding::new([81; 32], [82; 32]),
+        master: zeroize::Zeroizing::new([83; 32]),
+        canonical_native_image: None,
+    };
+    let (release, gate) = std::sync::mpsc::channel();
+    let engine = crate::command_engine::CommandEngine::gated_open_for_test(settings, gate);
+    fixture.owners[1].commands = Some(crate::command_service::CommandService::new(
+        config,
+        Some(engine),
+    ));
+    let mut request = w::Request {
+        binding: binding.clone(),
+        sequence: 0,
+        body: if copy {
+            w::RequestBody::CopyHello {
+                versions: vec![1],
+                codecs: vec![Codec::None],
+            }
+        } else {
+            w::RequestBody::Hello {
+                codecs: vec![Codec::None],
+            }
+        },
+    };
+    let event = fixture.stream_event(&group, &request, None).await;
+    fixture.owners[1].project_stream_message(event).unwrap();
+    request.body = if copy {
+        w::RequestBody::OpenCopy {
+            launch: native_copy_test_launch(&binding),
+            codec: Codec::None,
+        }
+    } else {
+        w::RequestBody::Open {
+            argv: vec![b"/bin/true".to_vec()],
+            codec: Codec::None,
+        }
+    };
+    let event = fixture.stream_event(&group, &request, None).await;
+    fixture.owners[1].project_stream_message(event).unwrap();
+    (fixture, group, binding, release)
+}
+fn bootstrap_engine(owner: &mut MdkOwner) -> &mut crate::command_engine::CommandEngine {
+    owner.commands.as_mut().unwrap().engine_mut().unwrap()
+}
+async fn await_failed_bootstrap(owner: &mut MdkOwner) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if bootstrap_engine(owner).readiness() == crate::command_engine::Readiness::Failed {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "bootstrap did not fail"
+        );
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    assert!(bootstrap_engine(owner).take_live_prepared().is_none());
+}
+fn bootstrap_assert_finished(owner: &mut MdkOwner, key: &str, stream: [u8; 16]) {
+    use marmish_stream::wire as w;
+    let record = owner.journal.stream_get(key).unwrap().unwrap();
+    assert!(!record.active);
+    assert_eq!(record.state, "terminal");
+    assert_eq!(
+        record.terminal,
+        Some(w::Terminal::Failed {
+            code: w::WireErrorCode::Invalid
+        })
+    );
+    assert!(record.identity.is_none());
+    assert!(!bootstrap_engine(owner).live_pending_for_test(stream));
+    assert!(!bootstrap_engine(owner).observation_pending());
+    assert!(owner.streams.live.get(key).is_none_or(|live| {
+        !live.preparing && live.operation_id.is_none() && live.runner.is_none()
+    }));
+    let cleanup = owner.stream_cleanup_status().unwrap();
+    assert_eq!(cleanup.active, 0);
+    assert_eq!(cleanup.owned_runners, 0);
+    assert!(cleanup.cleanup_ready);
+}
+#[tokio::test]
+async fn stream_failed_bootstrap_finishes_unqueued_and_queued_once() {
+    for queued in [false, true] {
+        let (mut f, _group, binding, release) = failed_bootstrap_stream_fixture().await;
+        let key = f.owners[1]
+            .journal
+            .stream_records()
+            .unwrap()
+            .remove(0)
+            .key();
+        if queued {
+            f.owners[1].progress_streams().unwrap();
+            assert!(bootstrap_engine(&mut f.owners[1]).live_pending_for_test(binding.stream));
+            let record = f.owners[1].journal.stream_get(&key).unwrap().unwrap();
+            assert!(record.active && record.state == "preparing");
+            assert!(f.owners[1].streams.live[&key].preparing);
+            // Opening is retryable: no terminal outcome or runner is invented.
+            f.owners[1].progress_streams().unwrap();
+            assert!(
+                f.owners[1]
+                    .journal
+                    .stream_get(&key)
+                    .unwrap()
+                    .unwrap()
+                    .terminal
+                    .is_none()
+            );
+        }
+        release.send(()).unwrap();
+        await_failed_bootstrap(&mut f.owners[1]).await;
+        f.owners[1].progress_streams().unwrap();
+        bootstrap_assert_finished(&mut f.owners[1], &key, binding.stream);
+        let counters = f.owners[1].journal.command_admission_budget().unwrap();
+        f.owners[1].progress_streams().unwrap();
+        let after = f.owners[1].journal.command_admission_budget().unwrap();
+        assert_eq!(
+            (after.admitted, after.finished),
+            (counters.admitted, counters.finished)
+        );
+        assert!(!f._root.path().join("failed-bootstrap-engine").exists());
+    }
+}
+
+// Independent keyed connection injects a real transaction abort, rather than a
+// fake error before stream_finish. It never logs the disposable journal key.
+fn bootstrap_journal_connection(f: &Fixture) -> rusqlite::Connection {
+    let hk = hkdf::Hkdf::<sha2::Sha256>::new(
+        Some(b"marmish/v2/storage"),
+        f.materials[1].sqlcipher_root(),
+    );
+    let mut key = zeroize::Zeroizing::new([0; 32]);
+    hk.expand(b"journal", key.as_mut()).unwrap();
+    let connection = rusqlite::Connection::open(f.profiles[1].journal_database()).unwrap();
+    let raw = zeroize::Zeroizing::new(format!("x'{}'", hex::encode(*key)));
+    connection.pragma_update(None, "key", raw.as_str()).unwrap();
+    connection
+        .execute_batch("PRAGMA cipher_compatibility=4; PRAGMA cipher_page_size=4096;")
+        .unwrap();
+    connection
+        .query_row("SELECT count(*) FROM live_streams", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap();
+    connection
+}
+#[tokio::test]
+async fn stream_failed_bootstrap_commit_failure_keeps_pending_until_retry() {
+    let (mut f, _, binding, release) = failed_bootstrap_stream_fixture().await;
+    let record = f.owners[1].journal.stream_records().unwrap().remove(0);
+    let key = record.key();
+    f.owners[1].progress_streams().unwrap();
+    let operation = f.owners[1].streams.live[&key].operation_id;
+    assert!(operation.is_some());
+    let connection = bootstrap_journal_connection(&f);
+    connection.execute_batch("CREATE TRIGGER bootstrap_finish_refusal BEFORE UPDATE ON live_streams WHEN NEW.active=0 BEGIN SELECT RAISE(ABORT,'test_finish_refusal'); END;").unwrap();
+    release.send(()).unwrap();
+    await_failed_bootstrap(&mut f.owners[1]).await;
+    assert!(f.owners[1].progress_streams().is_err());
+    assert!(
+        f.owners[1]
+            .journal
+            .stream_get(&key)
+            .unwrap()
+            .unwrap()
+            .active
+    );
+    assert_eq!(f.owners[1].streams.live[&key].operation_id, operation);
+    assert!(bootstrap_engine(&mut f.owners[1]).live_pending_for_test(binding.stream));
+    connection
+        .execute_batch("DROP TRIGGER bootstrap_finish_refusal")
+        .unwrap();
+    f.owners[1].progress_streams().unwrap();
+    bootstrap_assert_finished(&mut f.owners[1], &key, binding.stream);
+    let counts = f.owners[1].journal.command_admission_budget().unwrap();
+    assert_eq!(counts.finished, 1);
+    f.owners[1].progress_streams().unwrap();
+    assert_eq!(
+        f.owners[1]
+            .journal
+            .command_admission_budget()
+            .unwrap()
+            .finished,
+        1
+    );
+}
+#[tokio::test]
+async fn stream_failed_bootstrap_cancel_and_stop_retire_already_inactive_pending() {
+    use marmish_stream::wire as w;
+    for stop in [false, true] {
+        let (mut f, group, binding, release) = failed_bootstrap_stream_fixture().await;
+        let key = f.owners[1]
+            .journal
+            .stream_records()
+            .unwrap()
+            .remove(0)
+            .key();
+        f.owners[1].progress_streams().unwrap();
+        assert!(bootstrap_engine(&mut f.owners[1]).live_pending_for_test(binding.stream));
+        if stop {
+            f.owners[1].stream_begin_stop().unwrap();
+            f.owners[1].stream_cancel_stop().unwrap();
+        } else {
+            f.owners[1].streams.control_rate = crate::stream_service::Rate::new(8);
+            f.owners[1].streams.live.get_mut(&key).unwrap().control_rate =
+                crate::stream_service::Rate::new(8);
+            f.owners[1].streams.peer_rates.remove(&binding.client);
+            let request = w::Request {
+                binding: binding.clone(),
+                sequence: 0,
+                body: w::RequestBody::Cancel,
+            };
+            let event = f.stream_event(&group, &request, None).await;
+            f.owners[1].project_stream_message(event).unwrap();
+        }
+        let before = f.owners[1].journal.stream_get(&key).unwrap().unwrap();
+        assert!(!before.active);
+        assert_eq!(before.terminal, Some(w::Terminal::Cancelled));
+        assert!(
+            f.owners[1]
+                .stream_cleanup_status()
+                .unwrap()
+                .observation_pending
+        );
+        release.send(()).unwrap();
+        await_failed_bootstrap(&mut f.owners[1]).await;
+        f.owners[1].progress_streams().unwrap();
+        assert!(!bootstrap_engine(&mut f.owners[1]).live_pending_for_test(binding.stream));
+        let after = f.owners[1].journal.stream_get(&key).unwrap().unwrap();
+        assert_eq!(after.state, before.state);
+        assert_eq!(after.terminal, before.terminal);
+        assert_eq!(after.revision, before.revision);
+        let cleanup = f.owners[1].stream_cleanup_status().unwrap();
+        assert!(cleanup.cleanup_ready && cleanup.stop_complete);
+        assert_eq!(cleanup.owned_runners, 0);
+    }
+}
+#[tokio::test]
+async fn stream_failed_bootstrap_preserves_active_authority_and_launch_fences() {
+    for guard in [
+        "revoked",
+        "invalidated",
+        "binding",
+        "revision",
+        "launching",
+        "lost",
+        "unknown_launch",
+    ] {
+        let (mut f, group, binding, release) = failed_bootstrap_stream_fixture().await;
+        let mut record = f.owners[1].journal.stream_records().unwrap().remove(0);
+        let key = record.key();
+        f.owners[1].progress_streams().unwrap();
+        match guard {
+            "revoked" => {
+                f.owners[1]
+                    .journal
+                    .command_revoke_room(group.as_slice())
+                    .unwrap();
+            }
+            "invalidated" => {
+                record.projection_invalidated = true;
+                f.owners[1].journal.stream_save(&record).unwrap();
+            }
+            "binding" => {
+                record.binding.client = [99; 32];
+                f.owners[1].journal.stream_save(&record).unwrap();
+            }
+            "revision" => {
+                record.revision += 1;
+                f.owners[1].journal.stream_save(&record).unwrap();
+            }
+            state => {
+                record.state = state.into();
+                f.owners[1].journal.stream_save(&record).unwrap();
+            }
+        }
+        release.send(()).unwrap();
+        await_failed_bootstrap(&mut f.owners[1]).await;
+        f.owners[1].progress_streams().unwrap();
+        let current = f.owners[1].journal.stream_get(&key).unwrap().unwrap();
+        assert!(current.active, "{guard}");
+        assert!(current.terminal.is_none(), "{guard}");
+        assert!(
+            bootstrap_engine(&mut f.owners[1]).live_pending_for_test(binding.stream),
+            "{guard}"
+        );
+        assert!(f.owners[1].streams.live[&key].preparing, "{guard}");
+        assert_eq!(
+            f.owners[1]
+                .journal
+                .command_admission_budget()
+                .unwrap()
+                .finished,
+            0
+        );
+    }
+}
+#[tokio::test]
+async fn stream_failed_bootstrap_absent_record_retires_only_local_bookkeeping() {
+    let (mut f, _, binding, release) = failed_bootstrap_stream_fixture().await;
+    let record = f.owners[1].journal.stream_records().unwrap().remove(0);
+    let key = record.key();
+    f.owners[1].progress_streams().unwrap();
+    let connection = bootstrap_journal_connection(&f);
+    connection
+        .execute("DELETE FROM live_streams WHERE k=?1", [&key])
+        .unwrap();
+    release.send(()).unwrap();
+    await_failed_bootstrap(&mut f.owners[1]).await;
+    f.owners[1].progress_streams().unwrap();
+    assert!(f.owners[1].journal.stream_get(&key).unwrap().is_none());
+    assert!(!bootstrap_engine(&mut f.owners[1]).live_pending_for_test(binding.stream));
+    assert!(
+        f.owners[1]
+            .streams
+            .live
+            .get(&key)
+            .is_none_or(|live| !live.preparing && live.operation_id.is_none())
+    );
+    assert_eq!(
+        f.owners[1]
+            .journal
+            .command_admission_budget()
+            .unwrap()
+            .finished,
+        0
+    );
+}
+#[tokio::test]
+async fn stream_failed_bootstrap_native_copy_finishes_before_helper_context_construction() {
+    let (mut f, _, binding, release) = failed_bootstrap_stream_fixture_kind(true).await;
+    let before = f.owners[1].journal.stream_records().unwrap().remove(0);
+    assert!(matches!(
+        before.launch,
+        crate::stream_service::StreamLaunch::NativeCopy { .. }
+    ));
+    assert!(f.owners[1].journal.copy_attempt_matches(&before).unwrap());
+    release.send(()).unwrap();
+    await_failed_bootstrap(&mut f.owners[1]).await;
+    f.owners[1].progress_streams().unwrap();
+    bootstrap_assert_finished(&mut f.owners[1], &before.key(), binding.stream);
+    let after = f.owners[1]
+        .journal
+        .stream_get(&before.key())
+        .unwrap()
+        .unwrap();
+    assert!(f.owners[1].journal.copy_attempt_matches(&after).unwrap());
+}
+#[tokio::test]
+async fn stream_failed_bootstrap_full_opening_queue_is_retryable() {
+    use crate::command_engine::{LivePrepareKind, LivePrepareRequest, QueueBusy};
+    let (mut f, group, binding, release) = failed_bootstrap_stream_fixture().await;
+    let record = f.owners[1].journal.stream_records().unwrap().remove(0);
+    let context = f.owners[1].command_context(&group).unwrap();
+    let mut queued = Vec::new();
+    for n in 1..=64 {
+        let stream_id = [n; 16];
+        let request = LivePrepareRequest {
+            operation_id: [n; 16],
+            stream_id,
+            revision: 1,
+            owner: crate::journal::Owner::from_context(&context),
+            kind: LivePrepareKind::Exec {
+                argv: vec![b"/bin/true".to_vec()],
+            },
+        };
+        match bootstrap_engine(&mut f.owners[1]).try_prepare_live(request) {
+            Ok(()) => queued.push(stream_id),
+            Err(QueueBusy::Full) => break,
+            Err(_) => panic!("Opening request unexpectedly refused"),
+        }
+    }
+    assert!(!queued.is_empty() && queued.len() < 64);
+    assert!(!bootstrap_engine(&mut f.owners[1]).retire_failed_bootstrap_live(queued[0]));
+    assert!(bootstrap_engine(&mut f.owners[1]).live_pending_for_test(queued[0]));
+    f.owners[1].progress_streams().unwrap();
+    let current = f.owners[1]
+        .journal
+        .stream_get(&record.key())
+        .unwrap()
+        .unwrap();
+    assert!(current.active && current.terminal.is_none() && current.state == "preparing");
+    assert!(
+        f.owners[1]
+            .streams
+            .live
+            .get(&record.key())
+            .is_none_or(|live| !live.preparing)
+    );
+    assert!(!bootstrap_engine(&mut f.owners[1]).live_pending_for_test(binding.stream));
+    release.send(()).unwrap();
+    await_failed_bootstrap(&mut f.owners[1]).await;
+    f.owners[1].progress_streams().unwrap();
+    for stream in queued {
+        assert!(bootstrap_engine(&mut f.owners[1]).retire_failed_bootstrap_live(stream));
+    }
+    bootstrap_assert_finished(&mut f.owners[1], &record.key(), binding.stream);
+}
+#[tokio::test]
+async fn stream_failed_bootstrap_never_retires_an_owned_runner() {
+    let (mut f, _, binding, release) = failed_bootstrap_stream_fixture().await;
+    let record = f.owners[1].journal.stream_records().unwrap().remove(0);
+    let key = record.key();
+    f.owners[1].progress_streams().unwrap();
+    // A real child installed at the preparation seam tests runner ownership;
+    // it does not claim that a failed bootstrap could have spawned this child.
+    let (_root, prepared) = crate::stream_runner::tests::prepare("exec cat");
+    let runner = crate::stream_runner::RunnerHandle::start(
+        prepared,
+        crate::stream_runner::RunnerLimits {
+            drain_grace: Duration::from_millis(80),
+            cancel_grace: Duration::from_millis(40),
+            poll_interval: Duration::from_millis(2),
+        },
+    )
+    .unwrap();
+    f.owners[1].streams.live.get_mut(&key).unwrap().runner = Some(runner.clone());
+    release.send(()).unwrap();
+    await_failed_bootstrap(&mut f.owners[1]).await;
+    f.owners[1].progress_streams().unwrap();
+    let current = f.owners[1].journal.stream_get(&key).unwrap().unwrap();
+    assert!(current.active && current.terminal.is_none());
+    assert!(bootstrap_engine(&mut f.owners[1]).live_pending_for_test(binding.stream));
+    assert!(f.owners[1].streams.live[&key].runner.is_some());
+    runner.cancel();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !runner.finished() {
+        assert!(std::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+}

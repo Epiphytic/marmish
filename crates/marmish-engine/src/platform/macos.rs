@@ -504,6 +504,30 @@ pub(super) fn verify_descriptors(_path: &Path, root: &File, jobs: &File) -> Resu
     }
     Ok(())
 }
+pub(super) fn initialize_process_limits() -> Result<()> {
+    let mut before: libc::rlimit = unsafe { zeroed() };
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut before) } != 0 {
+        return Err(EngineError::WorkerUnavailable);
+    }
+    let expected_soft = before.rlim_cur.min(FD_CEILING as libc::rlim_t);
+    if before.rlim_cur != expected_soft {
+        let normalized = libc::rlimit {
+            rlim_cur: expected_soft,
+            rlim_max: before.rlim_max,
+        };
+        if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &normalized) } != 0 {
+            return Err(EngineError::WorkerUnavailable);
+        }
+    }
+    let mut after: libc::rlimit = unsafe { zeroed() };
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut after) } != 0
+        || after.rlim_cur != expected_soft
+        || after.rlim_max != before.rlim_max
+    {
+        return Err(EngineError::WorkerUnavailable);
+    }
+    Ok(())
+}
 pub(super) fn prepare_spawn() -> Result<()> {
     prepare_spawn_below(FD_CEILING)
 }

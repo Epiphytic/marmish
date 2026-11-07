@@ -142,6 +142,18 @@ impl CommandEngine {
     /// Returns after spawning, never after opening storage. The actor retains
     /// this exact handle until its thread joins; observation never permits reopening.
     pub fn start(settings: EngineSettings, recovery: Vec<RecoveryRecord>) -> Result<Self> {
+        Self::start_internal(
+            settings,
+            recovery,
+            #[cfg(test)]
+            None,
+        )
+    }
+    fn start_internal(
+        settings: EngineSettings,
+        recovery: Vec<RecoveryRecord>,
+        #[cfg(test)] before_open: Option<Receiver<()>>,
+    ) -> Result<Self> {
         let live_capacity = (settings.policy.limits.starting_workers as usize).min(LIVE_CAPACITY);
         if recovery.len() > 32 {
             return Err(Error::Invalid("engine_recovery_limit"));
@@ -153,6 +165,10 @@ impl CommandEngine {
         let thread = thread::Builder::new()
             .name("marmish-engine".into())
             .spawn(move || {
+                #[cfg(test)]
+                if let Some(gate) = before_open {
+                    let _ = gate.recv();
+                }
                 let EngineSettings {
                     policy,
                     binding,
@@ -327,6 +343,15 @@ impl CommandEngine {
         self.live_pending.insert(id);
         Ok(())
     }
+    /// OpenFailed is emitted before Worker exists or can consume live requests.
+    /// Generic disconnection, stopping and Opening do not establish this proof.
+    pub(crate) fn retire_failed_bootstrap_live(&mut self, stream: [u8; 16]) -> bool {
+        if self.readiness() != Readiness::Failed {
+            return false;
+        }
+        self.live_pending.remove(&stream);
+        true
+    }
     pub(crate) fn take_live_prepared(&mut self) -> Option<LivePrepared> {
         self.collect();
         let result = self.live_prepared.pop_front()?;
@@ -413,6 +438,12 @@ impl CommandEngine {
 
 #[cfg(test)]
 impl CommandEngine {
+    pub(crate) fn gated_open_for_test(settings: EngineSettings, gate: Receiver<()>) -> Self {
+        Self::start_internal(settings, vec![], Some(gate)).unwrap()
+    }
+    pub(crate) fn live_pending_for_test(&self, stream: [u8; 16]) -> bool {
+        self.live_pending.contains(&stream)
+    }
     pub(crate) fn gated_stop_for_test(gate: Receiver<()>) -> Self {
         let (operations, rx) = mpsc::sync_channel(CAPACITY);
         let (live_preparations, live_rx) = mpsc::sync_channel(LIVE_CAPACITY);

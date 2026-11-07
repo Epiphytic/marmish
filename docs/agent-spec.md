@@ -200,8 +200,20 @@ succeeded; admission is not process-launch proof. See [reviewed failure evidence
 Zero cells qualified, and the other seven cohorts were not dispatched. The
 [bounded inherited-limit diagnostic](phases/macos-engine-inherited-limits.md)
 compares shell and Node 24 launch environments without product execution or a
-qualification waiver. The concrete engine error and release readiness remain
-unestablished.
+qualification waiver. Its [actual hosted observation](validation/macos-inherited-limits-fa71302.md)
+measured soft limits of 10240 under the shell and 1048575 in the Node24 action's
+child, both with infinite hard limits, on the same recorded image version as
+the failed matrix. The latter exceeds the engine's fixed 65536 startup ceiling.
+This reproduces a gate incompatibility, without capturing the original engine
+error. The independently approved [native startup correction](phases/macos-native-startup-limits.md)
+normalizes only an excessive macOS soft limit before threads, preserves hard
+and lower soft limits, and retains the engine's existing high-descriptor fence.
+The source also implements definitive bootstrap-failure preparation/cleanup
+handling, with current authority checks and durable finish before local retirement.
+The [integrated code review](reviews/macos-native-startup-limits.md) approves
+the correction. macOS child commands inherit a soft limit at most 65536 while
+the original hard limit is preserved. Fresh installed qualification remains
+required; release readiness is unestablished.
 
 The [local receiver cleanup contract](phases/streaming-copy-local-gc.md) uses an
 encrypted actor-owned index, explicit admission/activation, owned worker joining,

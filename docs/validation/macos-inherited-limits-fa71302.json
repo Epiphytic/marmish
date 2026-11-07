@@ -1,0 +1,186 @@
+{
+  "schema": 1,
+  "scope": "hosted-macos-inherited-nofile-diagnostic",
+  "status": "PASS",
+  "qualification": false,
+  "source_commit": "fa7130238958ced782677ccdfea5b64cae7b3353",
+  "run": {
+    "id": 42397433443,
+    "run_attempt": 1,
+    "name": "macOS inherited engine limits diagnostic",
+    "path": ".github/workflows/macos-engine-inherited-limits.yml",
+    "event": "workflow_dispatch",
+    "status": "completed",
+    "conclusion": "success",
+    "head_sha": "fa7130238958ced782677ccdfea5b64cae7b3353",
+    "created_at": "2026-11-07T17:40:07Z",
+    "updated_at": "2026-11-07T17:40:21Z",
+    "html_url": "https://github.com/Epiphytic/marmish/actions/runs/42397433443"
+  },
+  "job": {
+    "id": 128477736281,
+    "name": "observe",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-11-07T17:40:12Z",
+    "completed_at": "2026-11-07T17:40:21Z",
+    "labels": [
+      "macos-15"
+    ]
+  },
+  "steps": [
+    {
+      "name": "Set up job",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-07T17:40:12Z",
+      "completed_at": "2026-11-07T17:40:13Z"
+    },
+    {
+      "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-07T17:40:13Z",
+      "completed_at": "2026-11-07T17:40:16Z"
+    },
+    {
+      "name": "Observe shell baseline",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-07T17:40:16Z",
+      "completed_at": "2026-11-07T17:40:16Z"
+    },
+    {
+      "name": "Observe Node24 child and compare",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-07T17:40:16Z",
+      "completed_at": "2026-11-07T17:40:16Z"
+    },
+    {
+      "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-07T17:40:16Z",
+      "completed_at": "2026-11-07T17:40:16Z"
+    },
+    {
+      "name": "Complete job",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-07T17:40:16Z",
+      "completed_at": "2026-11-07T17:40:16Z"
+    }
+  ],
+  "retained_input_sha256": {
+    "run_api": "71c4febfb506707756dcee3425c8ca0fed83d9c12cfbf87abfa159db8d1ecef8",
+    "jobs_api": "a390dd4026e8463e7b1a59ba4bf7a67b86bcbf0cafc119a42a0caeafadeed3f2",
+    "full_job_log": "544220c2336fab3c9953d63f22cae857c9f1aec135a3291f82aae6adf0e1cd9d",
+    "previous_failed_matrix_macos_job_log": "f0716eea0a135c478f060b4efe0ea32db02c5bd4c418b3f97b9eb9afb17fbc9c",
+    "previous_failed_matrix_status_api": "1b107e3a9a5d7f461f13b821e57be6cf1caafbd6cfbe018cea6f1332f0049c1f"
+  },
+  "summary": {
+    "schema": 1,
+    "kind": "macos-inherited-nofile-comparison",
+    "qualification": false,
+    "ceiling": 65536,
+    "observations": [
+      {
+        "schema": 1,
+        "kind": "macos-inherited-nofile",
+        "chain": "shell",
+        "soft": "10240",
+        "hard": "infinity"
+      },
+      {
+        "schema": 1,
+        "kind": "macos-inherited-nofile",
+        "chain": "node24",
+        "soft": "1048575",
+        "hard": "infinity"
+      }
+    ],
+    "soft_changed": true,
+    "shell_exceeds_ceiling": false,
+    "node24_exceeds_ceiling": true,
+    "provenance": {
+      "macos_version": "15.8.2",
+      "image_version": "20261104.0514.1",
+      "image_os": "macos15",
+      "node_version": "v24.22.1"
+    }
+  },
+  "summary_json_sha256": "35af6f0434f338545f6f782809fe307d595cb2ce4264e5fbb3911e496e56954b",
+  "measurement_contract": {
+    "shell": "A /bin/sh child of the workflow bash step measured its inherited soft/hard open-file limits; the step passed those values to the Node24 action as inputs.",
+    "node24": "The Node24 action invoked a bounded /bin/sh child; that child measured its own inherited soft/hard limits. This is not an in-process Node resource-limit reading.",
+    "implementation_source": "https://github.com/Epiphytic/marmish/blob/fa7130238958ced782677ccdfea5b64cae7b3353/tools/macos-engine-inherited-limits/probe.mjs#L42",
+    "no_adjustment": "The probe did not request a limit change. It reports the two execution chains; it does not identify which layer changed the limit.",
+    "hard_limit_normalization": "The probe normalizes shell text unlimited to the closed summary value infinity."
+  },
+  "source_gate": {
+    "ceiling": 65536,
+    "constant_source": "https://github.com/Epiphytic/marmish/blob/fa7130238958ced782677ccdfea5b64cae7b3353/crates/marmish-engine/src/platform/macos.rs#L6",
+    "guard_source": "https://github.com/Epiphytic/marmish/blob/fa7130238958ced782677ccdfea5b64cae7b3353/crates/marmish-engine/src/platform/macos.rs#L507",
+    "contract": "prepare_spawn calls prepare_spawn_below with the fixed ceiling. Lines 512\u2013519 return WorkerUnavailable if getrlimit fails, the supplied ceiling is nonpositive (unreachable with the fixed production constant), the soft limit exceeds the ceiling, or any enumerated descriptor is at/above the ceiling. A hard limit of infinity alone is not this predicate.",
+    "conditional_application": "The observed Node24-child soft limit 1048575 exceeds 65536; if inherited unchanged by a Marmish process reaching this guard, it would fail this soft-limit predicate. The shell soft limit 10240 does not exceed this ceiling. The probe did not execute the guard or enumerate the original engine descriptors. The engine reads its own in-process resource limit when prepare_spawn executes; the actual intervening limit history was not measured."
+  },
+  "previous_failure_comparison": {
+    "run_id": 42395261837,
+    "run_attempt": 1,
+    "source_commit": "987d71d682b3e5d42653ee1257e204c8fc1f5618",
+    "job_id": 128471236622,
+    "recorded_image": {
+      "macos_version": "15.8.2",
+      "image_version": "20261104.0514.1"
+    },
+    "diagnostic_recorded_image": {
+      "macos_version": "15.8.2",
+      "image_version": "20261104.0514.1"
+    },
+    "recorded_fields_equal": true,
+    "interpretation": "The recorded macOS and image-version fields are identical, so a difference in those recorded versions does not explain these observations. This does not prove identical machines, process ancestry, environment, installed components or all runner properties.",
+    "unavailable": "The prior failed job did not retain its actual Marmish engine RLIMIT_NOFILE or a matching engine error in these records."
+  },
+  "interpretation": "Supportive evidence for an inherited-limit hypothesis, not proof of the original Mac stream failure cause. Success means the diagnostic measured and emitted its closed comparison; it is not a successful Marmish command or release qualification.",
+  "limits": [
+    "No original failing Marmish engine process limit or actual WorkerUnavailable error is observed by this diagnostic.",
+    "No Marmish daemon/engine startup, relay traffic, installed matrix, file transfer or command execution was performed by this probe.",
+    "No resource limits were adjusted and no product fix was tested here.",
+    "Equal recorded image and macOS versions do not prove all host/process properties match.",
+    "The summary qualification flag is false; this diagnostic qualifies zero original matrix cells."
+  ],
+  "independent_review": {
+    "reviewer": "Claude Code",
+    "model": [
+      "claude-sonnet-5-5"
+    ],
+    "permission_mode": "auto",
+    "verdict": "APPROVE",
+    "session_id": "439e85d0-d336-46cb-9ab4-ac8e508b859b",
+    "duration_seconds": 61.867,
+    "turns": 9,
+    "scope": "Read-only retained diagnostic API/log hashes, provenance, step statuses, unique summary and arithmetic; previous failed job recorded image fields; pinned engine gate and probe/action source; sanitization and conditional claim limits.",
+    "not_verified": [
+      "Original failed engine resource limit or WorkerUnavailable error.",
+      "Any runtime limit change before prepare_spawn.",
+      "Probe tests or phase/review documents."
+    ],
+    "notes": "Both actual review rounds APPROVE with no blockers; useful wording refinements incorporated. Session/duration/turn metadata transcribed from retained Claude JSON wrappers, not independently verified by the reviewer.",
+    "rounds": [
+      {
+        "round": 1,
+        "verdict": "APPROVE",
+        "duration_seconds": 61.867,
+        "turns": 9
+      },
+      {
+        "round": 2,
+        "verdict": "APPROVE",
+        "duration_seconds": 29.11,
+        "turns": 5,
+        "additional_check": "Prior failed run source/job/conclusion binding verified against retained status snapshot; prior attempt 1 supported by artifact-name suffix in its retained log."
+      }
+    ]
+  }
+}

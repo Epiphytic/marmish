@@ -62,3 +62,18 @@ unchanged workflow diff or previous evidence audits. Author seven tests passed
 in 68.47 ms; the coordinator independently passed them in 64.17 ms. These are
 local Node 22 results, not hosted Node 24 or macOS observations. All first-run
 unknowns remain. The new entry file is explicitly staged for publication.
+
+## Hosted evidence review
+
+The [actual hosted observation](../validation/macos-inherited-limits-fa71302.md)
+is recorded separately from code approval and is explicitly nonqualifying.
+Actual Claude Code AUTO `claude-sonnet-5-5` session
+`439e85d0-d336-46cb-9ab4-ac8e508b859b` approved the retained evidence in two
+rounds: 61.867 seconds / 9 turns and 29.110 seconds / 5 turns. Private result
+SHA256 values are
+`3338c4dc43b2556a3da3fbd0d425d11b465e07c17aa611af6b845236a76b558f` and
+`ee52b65546cbe3e96313550d5504e25f47b8bb80979e4b59be220336b3ff7154`.
+The evidence records precise verification scope and remaining limits. Useful
+wording clarifies that both readings use child shells, the infinity normalization,
+the conditional guard inference and matching recorded image fields. Neither
+round establishes the original discarded engine error or product correction.
