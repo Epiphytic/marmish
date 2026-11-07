@@ -1,0 +1,15 @@
+name: Observe Node24 inherited NOFILE limits
+description: Manual diagnostic only; does not change resource limits
+inputs:
+  shell-soft:
+    description: Baseline soft limit from the identical shell program
+    required: true
+  shell-hard:
+    description: Baseline hard limit from the identical shell program
+    required: true
+  macos-version:
+    description: Finite sw_vers product version
+    required: true
+runs:
+  using: node24
+  main: run.mjs

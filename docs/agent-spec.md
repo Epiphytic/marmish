@@ -191,8 +191,17 @@ truncated or ambiguous records remain unknown; cached answers do not prove CLI
 consumption, and recorded publication state does not prove relay delivery.
 Inspection changes product observability, so a new complete candidate and the
 original installed matrix are required. The [integrated code review](reviews/streaming-progress-inspection.md)
-approves the implementation; hosted qualification remains pending. No root cause
-or release readiness is established.
+approves the implementation. Fresh candidate 42387811714 at 987d71d passed all
+three platform jobs and rendering; see [candidate evidence](validation/streaming-candidate-987d71d.md).
+The subsequent original matrix 42395261837 failed: six Linux-target observations
+passed, but all three macOS-server records remained Preparing with Hello/Open
+cached and their first input Exchange unanswered. Six bounded inspections
+succeeded; admission is not process-launch proof. See [reviewed failure evidence](validation/streaming-installed-987d71d-failure.md).
+Zero cells qualified, and the other seven cohorts were not dispatched. The
+[bounded inherited-limit diagnostic](phases/macos-engine-inherited-limits.md)
+compares shell and Node 24 launch environments without product execution or a
+qualification waiver. The concrete engine error and release readiness remain
+unestablished.
 
 The [local receiver cleanup contract](phases/streaming-copy-local-gc.md) uses an
 encrypted actor-owned index, explicit admission/activation, owned worker joining,

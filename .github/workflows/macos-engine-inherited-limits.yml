@@ -1,0 +1,31 @@
+name: macOS inherited engine limits diagnostic
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  observe:
+    runs-on: macos-15
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Observe shell baseline
+        id: baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = Epiphytic/marmish
+          test "$(uname -s):$(uname -m)" = Darwin:arm64
+          test "$(id -u)" -ne 0
+          /bin/sh -c 'set -eu; soft=$(ulimit -Sn); hard=$(ulimit -Hn); for value in "$soft" "$hard"; do case "$value" in unlimited) ;; ""|*[!0-9]*) exit 1;; esac; done; printf "soft=%s\nhard=%s\n" "$soft" "$hard"' >> "$GITHUB_OUTPUT"
+          version=$(sw_vers -productVersion)
+          [[ "$version" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){1,2}$ ]]
+          printf 'macos_version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+      - name: Observe Node24 child and compare
+        uses: ./tools/macos-engine-inherited-limits
+        with:
+          shell-soft: ${{ steps.baseline.outputs.soft }}
+          shell-hard: ${{ steps.baseline.outputs.hard }}
+          macos-version: ${{ steps.baseline.outputs.macos_version }}

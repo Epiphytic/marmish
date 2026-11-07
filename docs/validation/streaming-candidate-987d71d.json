@@ -1,0 +1,615 @@
+{
+  "schema": 1,
+  "source_commit": "987d71d682b3e5d42653ee1257e204c8fc1f5618",
+  "run_id": 42387811714,
+  "run_attempt": 1,
+  "run_url": "https://github.com/Epiphytic/marmish/actions/runs/42387811714",
+  "result": "PASS",
+  "scope": "native-tests-and-candidate-packaging",
+  "workflow": ".github/workflows/streaming-candidate.yml",
+  "started_at": "2026-11-07T15:44:10Z",
+  "completed_at": "2026-11-07T17:12:58Z",
+  "completed_at_source": "Proxy: run updated_at is 2026-11-07T17:12:58Z; final render job completed_at is 2026-11-07T17:12:57Z. The API gives no exact run completion time.",
+  "platforms": [
+    {
+      "role": "linux-amd64",
+      "job_id": 128448837949,
+      "job_url": "https://github.com/Epiphytic/marmish/actions/runs/42387811714/job/128448837949",
+      "started_at": "2026-11-07T15:44:15Z",
+      "completed_at": "2026-11-07T17:12:46Z",
+      "conclusion": "success",
+      "native_library": {
+        "passed": 620,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 1573.7
+      },
+      "installed_feature_native_library": {
+        "passed": 833,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 1600.18
+      },
+      "engine_library": {
+        "passed": 138,
+        "failed": 0,
+        "ignored": 1,
+        "seconds": 9.79
+      },
+      "stream_library": {
+        "passed": 29,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.26
+      },
+      "vault_library": {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.01
+      },
+      "validation_build_timings": {
+        "unit": "seconds",
+        "source": "Cargo Finished lines; build/Clippy durations rounded as printed",
+        "default_test_compilation": 337.0,
+        "default_strict_clippy": 83.0,
+        "product_release_build": 592.0,
+        "installed_feature_test_compilation": 311.0,
+        "installed_feature_strict_clippy": 95.0,
+        "installed_tool_release_build": 640.0
+      },
+      "product_asset_hashes_preserved": true,
+      "asset_hash_preservation_evidence": "Inferred from the successful isolated installed-tool step: before/after SHA-256 inventories of all native-assets files are compared with cmp under set -euo pipefail, including the pre-signed macOS package bytes. The inventories are not separately logged.",
+      "raw_private_log_sha256": "449a575697e9cbe3be38ce35ebde667c68fbcecf511ef2fb6167dc1a431664cb",
+      "raw_private_log_bytes": 577587,
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success",
+          "started_at": "2026-11-07T15:44:16Z",
+          "completed_at": "2026-11-07T15:44:17Z"
+        },
+        {
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success",
+          "started_at": "2026-11-07T15:44:17Z",
+          "completed_at": "2026-11-07T15:44:18Z"
+        },
+        {
+          "name": "Verify immutable source and native target",
+          "conclusion": "success",
+          "started_at": "2026-11-07T15:44:18Z",
+          "completed_at": "2026-11-07T15:44:18Z"
+        },
+        {
+          "name": "Run dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920",
+          "conclusion": "success",
+          "started_at": "2026-11-07T15:44:18Z",
+          "completed_at": "2026-11-07T15:44:28Z"
+        },
+        {
+          "name": "Set qualified macOS deployment minimum",
+          "conclusion": "skipped",
+          "started_at": "2026-11-07T15:44:28Z",
+          "completed_at": "2026-11-07T15:44:28Z"
+        },
+        {
+          "name": "Verify native components",
+          "conclusion": "success",
+          "started_at": "2026-11-07T15:44:28Z",
+          "completed_at": "2026-11-07T16:18:18Z"
+        },
+        {
+          "name": "Build final native executables",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:18:18Z",
+          "completed_at": "2026-11-07T16:28:10Z"
+        },
+        {
+          "name": "Ad hoc sign final macOS executables before hashing",
+          "conclusion": "skipped",
+          "started_at": "2026-11-07T16:28:10Z",
+          "completed_at": "2026-11-07T16:28:10Z"
+        },
+        {
+          "name": "Inspect final dependency allowlists and qualified ABI baselines",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:28:10Z",
+          "completed_at": "2026-11-07T16:28:11Z"
+        },
+        {
+          "name": "Collect locked production license texts (CI tooling only)",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:28:11Z",
+          "completed_at": "2026-11-07T16:28:20Z"
+        },
+        {
+          "name": "Package verified immutable candidate assets",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:28:20Z",
+          "completed_at": "2026-11-07T16:28:21Z"
+        },
+        {
+          "name": "Build isolated installed-test tools without changing product assets",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:28:21Z",
+          "completed_at": "2026-11-07T17:12:33Z"
+        },
+        {
+          "name": "Preserve pinned installed-test tools separately",
+          "conclusion": "success",
+          "started_at": "2026-11-07T17:12:33Z",
+          "completed_at": "2026-11-07T17:12:35Z"
+        },
+        {
+          "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "conclusion": "success",
+          "started_at": "2026-11-07T17:12:35Z",
+          "completed_at": "2026-11-07T17:12:41Z"
+        },
+        {
+          "name": "Preserve host render tool separately (never an install asset)",
+          "conclusion": "success",
+          "started_at": "2026-11-07T17:12:41Z",
+          "completed_at": "2026-11-07T17:12:43Z"
+        },
+        {
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success",
+          "started_at": "2026-11-07T17:12:43Z",
+          "completed_at": "2026-11-07T17:12:43Z"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success",
+          "started_at": "2026-11-07T17:12:43Z",
+          "completed_at": "2026-11-07T17:12:44Z"
+        }
+      ]
+    },
+    {
+      "role": "linux-arm64",
+      "job_id": 128448838055,
+      "job_url": "https://github.com/Epiphytic/marmish/actions/runs/42387811714/job/128448838055",
+      "started_at": "2026-11-07T15:44:17Z",
+      "completed_at": "2026-11-07T16:40:48Z",
+      "conclusion": "success",
+      "native_library": {
+        "passed": 620,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 882.14
+      },
+      "installed_feature_native_library": {
+        "passed": 833,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 903.49
+      },
+      "engine_library": {
+        "passed": 138,
+        "failed": 0,
+        "ignored": 1,
+        "seconds": 9.83
+      },
+      "stream_library": {
+        "passed": 29,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.57
+      },
+      "vault_library": {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.01
+      },
+      "validation_build_timings": {
+        "unit": "seconds",
+        "source": "Cargo Finished lines; build/Clippy durations rounded as printed",
+        "default_test_compilation": 263.0,
+        "default_strict_clippy": 61.0,
+        "product_release_build": 419.0,
+        "installed_feature_test_compilation": 255.0,
+        "installed_feature_strict_clippy": 74.0,
+        "installed_tool_release_build": 460.0
+      },
+      "product_asset_hashes_preserved": true,
+      "asset_hash_preservation_evidence": "Inferred from the successful isolated installed-tool step: before/after SHA-256 inventories of all native-assets files are compared with cmp under set -euo pipefail, including the pre-signed macOS package bytes. The inventories are not separately logged.",
+      "raw_private_log_sha256": "b272aeafb429b179ffc0269a5517d6c1a12bd330e50c2c75a46ce9ea232a5441",
+      "raw_private_log_bytes": 559212,
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success",
+          "started_at": "2026-11-07T15:44:18Z",
+          "completed_at": "2026-11-07T15:44:19Z"
+        },
+        {
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success",
+          "started_at": "2026-11-07T15:44:19Z",
+          "completed_at": "2026-11-07T15:44:21Z"
+        },
+        {
+          "name": "Verify immutable source and native target",
+          "conclusion": "success",
+          "started_at": "2026-11-07T15:44:21Z",
+          "completed_at": "2026-11-07T15:44:21Z"
+        },
+        {
+          "name": "Run dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920",
+          "conclusion": "success",
+          "started_at": "2026-11-07T15:44:21Z",
+          "completed_at": "2026-11-07T15:44:27Z"
+        },
+        {
+          "name": "Set qualified macOS deployment minimum",
+          "conclusion": "skipped",
+          "started_at": "2026-11-07T15:44:27Z",
+          "completed_at": "2026-11-07T15:44:27Z"
+        },
+        {
+          "name": "Verify native components",
+          "conclusion": "success",
+          "started_at": "2026-11-07T15:44:27Z",
+          "completed_at": "2026-11-07T16:05:09Z"
+        },
+        {
+          "name": "Build final native executables",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:05:09Z",
+          "completed_at": "2026-11-07T16:12:08Z"
+        },
+        {
+          "name": "Ad hoc sign final macOS executables before hashing",
+          "conclusion": "skipped",
+          "started_at": "2026-11-07T16:12:08Z",
+          "completed_at": "2026-11-07T16:12:08Z"
+        },
+        {
+          "name": "Inspect final dependency allowlists and qualified ABI baselines",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:12:08Z",
+          "completed_at": "2026-11-07T16:12:09Z"
+        },
+        {
+          "name": "Collect locked production license texts (CI tooling only)",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:12:09Z",
+          "completed_at": "2026-11-07T16:12:19Z"
+        },
+        {
+          "name": "Package verified immutable candidate assets",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:12:19Z",
+          "completed_at": "2026-11-07T16:12:21Z"
+        },
+        {
+          "name": "Build isolated installed-test tools without changing product assets",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:12:21Z",
+          "completed_at": "2026-11-07T16:40:39Z"
+        },
+        {
+          "name": "Preserve pinned installed-test tools separately",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:40:39Z",
+          "completed_at": "2026-11-07T16:40:41Z"
+        },
+        {
+          "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:40:41Z",
+          "completed_at": "2026-11-07T16:40:45Z"
+        },
+        {
+          "name": "Preserve host render tool separately (never an install asset)",
+          "conclusion": "skipped",
+          "started_at": "2026-11-07T16:40:45Z",
+          "completed_at": "2026-11-07T16:40:45Z"
+        },
+        {
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:40:45Z",
+          "completed_at": "2026-11-07T16:40:45Z"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:40:45Z",
+          "completed_at": "2026-11-07T16:40:46Z"
+        }
+      ]
+    },
+    {
+      "role": "macos-arm64",
+      "job_id": 128448837723,
+      "job_url": "https://github.com/Epiphytic/marmish/actions/runs/42387811714/job/128448837723",
+      "started_at": "2026-11-07T15:44:15Z",
+      "completed_at": "2026-11-07T16:39:47Z",
+      "conclusion": "success",
+      "native_library": {
+        "passed": 619,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 606.24
+      },
+      "installed_feature_native_library": {
+        "passed": 832,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 618.3
+      },
+      "engine_library": {
+        "passed": 145,
+        "failed": 0,
+        "ignored": 1,
+        "seconds": 35.68
+      },
+      "stream_library": {
+        "passed": 29,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.36
+      },
+      "vault_library": {
+        "passed": 13,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.04
+      },
+      "validation_build_timings": {
+        "unit": "seconds",
+        "source": "Cargo Finished lines; build/Clippy durations rounded as printed",
+        "default_test_compilation": 349.0,
+        "default_strict_clippy": 85.0,
+        "product_release_build": 600.0,
+        "installed_feature_test_compilation": 277.0,
+        "installed_feature_strict_clippy": 105.0,
+        "installed_tool_release_build": 563.0
+      },
+      "product_asset_hashes_preserved": true,
+      "asset_hash_preservation_evidence": "Inferred from the successful isolated installed-tool step: before/after SHA-256 inventories of all native-assets files are compared with cmp under set -euo pipefail, including the pre-signed macOS package bytes. The inventories are not separately logged.",
+      "raw_private_log_sha256": "4693bfe201e1d93aa3a0c7b6b3a2ba25c58efb2b30522ea1f13484c7aea477be",
+      "raw_private_log_bytes": 530025,
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success",
+          "started_at": "2026-11-07T15:44:16Z",
+          "completed_at": "2026-11-07T15:44:17Z"
+        },
+        {
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success",
+          "started_at": "2026-11-07T15:44:17Z",
+          "completed_at": "2026-11-07T15:44:20Z"
+        },
+        {
+          "name": "Verify immutable source and native target",
+          "conclusion": "success",
+          "started_at": "2026-11-07T15:44:20Z",
+          "completed_at": "2026-11-07T15:44:21Z"
+        },
+        {
+          "name": "Run dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920",
+          "conclusion": "success",
+          "started_at": "2026-11-07T15:44:21Z",
+          "completed_at": "2026-11-07T15:44:31Z"
+        },
+        {
+          "name": "Set qualified macOS deployment minimum",
+          "conclusion": "success",
+          "started_at": "2026-11-07T15:44:31Z",
+          "completed_at": "2026-11-07T15:44:31Z"
+        },
+        {
+          "name": "Verify native components",
+          "conclusion": "success",
+          "started_at": "2026-11-07T15:44:31Z",
+          "completed_at": "2026-11-07T16:03:06Z"
+        },
+        {
+          "name": "Build final native executables",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:03:06Z",
+          "completed_at": "2026-11-07T16:13:07Z"
+        },
+        {
+          "name": "Ad hoc sign final macOS executables before hashing",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:13:07Z",
+          "completed_at": "2026-11-07T16:13:08Z"
+        },
+        {
+          "name": "Inspect final dependency allowlists and qualified ABI baselines",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:13:08Z",
+          "completed_at": "2026-11-07T16:13:12Z"
+        },
+        {
+          "name": "Collect locked production license texts (CI tooling only)",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:13:12Z",
+          "completed_at": "2026-11-07T16:13:24Z"
+        },
+        {
+          "name": "Package verified immutable candidate assets",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:13:24Z",
+          "completed_at": "2026-11-07T16:13:26Z"
+        },
+        {
+          "name": "Build isolated installed-test tools without changing product assets",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:13:26Z",
+          "completed_at": "2026-11-07T16:39:35Z"
+        },
+        {
+          "name": "Preserve pinned installed-test tools separately",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:39:35Z",
+          "completed_at": "2026-11-07T16:39:37Z"
+        },
+        {
+          "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:39:37Z",
+          "completed_at": "2026-11-07T16:39:41Z"
+        },
+        {
+          "name": "Preserve host render tool separately (never an install asset)",
+          "conclusion": "skipped",
+          "started_at": "2026-11-07T16:39:41Z",
+          "completed_at": "2026-11-07T16:39:41Z"
+        },
+        {
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:39:41Z",
+          "completed_at": "2026-11-07T16:39:41Z"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success",
+          "started_at": "2026-11-07T16:39:41Z",
+          "completed_at": "2026-11-07T16:39:44Z"
+        }
+      ]
+    }
+  ],
+  "render_job": {
+    "job_id": 128470900692,
+    "conclusion": "success",
+    "url": "https://github.com/Epiphytic/marmish/actions/runs/42387811714/job/128470900692",
+    "started_at": "2026-11-07T17:12:49Z",
+    "completed_at": "2026-11-07T17:12:57Z",
+    "raw_private_log_sha256": "02bfb2b4279bc6ab4628b2432f611af2a23b4b095e7fb1c0267285efd59904e8",
+    "raw_private_log_bytes": 11430
+  },
+  "artifacts": [
+    {
+      "id": 13581683622,
+      "name": "v02-candidate-aarch64-apple-darwin-42387811714-1",
+      "size_in_bytes": 47976468,
+      "digest": "sha256:e769998ad08d44485b91dc4a964ba8ab08730285de62d0f6edd47389c29aa86a",
+      "expired": false
+    },
+    {
+      "id": 13581099712,
+      "name": "v02-candidate-aarch64-unknown-linux-gnu-42387811714-1",
+      "size_in_bytes": 56256588,
+      "digest": "sha256:148f79dbdca75222e740e5236f2009aa0bc5f42bc1eeea5a32baede5b3489637",
+      "expired": false
+    },
+    {
+      "id": 13582682636,
+      "name": "v02-candidate-x86_64-unknown-linux-gnu-42387811714-1",
+      "size_in_bytes": 55707772,
+      "digest": "sha256:1ecf77da0b8b0e8ac1d0a4823430cc32561d8b0d4ee4bf7873b43a4e4e57c6dc",
+      "expired": false
+    },
+    {
+      "id": 13582450108,
+      "name": "v02-installed-tools-aarch64-apple-darwin-42387811714-1",
+      "size_in_bytes": 9728200,
+      "digest": "sha256:3ecb9229a2b78ac92814b80faae7af8eb8f7575c53d2c209d2e8eba3593cf809",
+      "expired": false
+    },
+    {
+      "id": 13581219369,
+      "name": "v02-installed-tools-aarch64-unknown-linux-gnu-42387811714-1",
+      "size_in_bytes": 10846117,
+      "digest": "sha256:e4d462ca23e711760923f327668c0db6d5173a07fb43824403840646ffb8d362",
+      "expired": false
+    },
+    {
+      "id": 13583336033,
+      "name": "v02-installed-tools-x86_64-unknown-linux-gnu-42387811714-1",
+      "size_in_bytes": 13206983,
+      "digest": "sha256:d6d9c5b9548c73271ea99bf27fb00d1d51b407667d9f8f4209131b6b0ac6d1f9",
+      "expired": false
+    },
+    {
+      "id": 13582898165,
+      "name": "v02-pinned-bootstrap-42387811714-1",
+      "size_in_bytes": 3544,
+      "digest": "sha256:e5fa2f95dca8acbe705ba203e960086c9bd50f269677e8968a3e2f8360221099",
+      "expired": false
+    },
+    {
+      "id": 13583500507,
+      "name": "v02-render-tool-42387811714-1",
+      "size_in_bytes": 5022651,
+      "digest": "sha256:f6171e8991d0fb2c3ce4fab221aff27d3dc1c86171498aa7aa49766fbd7a35ac",
+      "expired": false
+    }
+  ],
+  "artifact_hash_scope": "All eight ZIP digests and compressed sizes were checked against the GitHub artifact API. Each of the eight upload-log SHA-256 lines matches its API digest; the render log additionally records digest-verified downloads of the three product packages and the host render tool. No artifact payload was independently downloaded or executed by the evidence harvester.",
+  "counting": "Native library totals overlap across default and installed-checks feature variants. Engine, stream and vault library totals are reported separately, never summed. Nested filtered child-process result lines are excluded. Cargo suite timings exclude compilation and are not end-to-end or relay latency metrics. Platform test counts differ; platform gating is a plausible explanation, not established by these logs alone. macOS uses RUST_TEST_THREADS=1 while Linux does not; suite runtimes are not comparable across platforms.",
+  "ignored": {
+    "native_library": [
+      "copy_integration_tests::helper_child",
+      "copy_integration_tests::large::large_raw_zlib_actual_helper_four_way",
+      "stream_runner::tests::large_duplex_integrity_with_slow_consumers_and_bounded_windows"
+    ],
+    "engine_library": [
+      "live::tests::fd_probe_child"
+    ],
+    "additional_integration_gate": "The isolated Linux keyring or disposable macOS keychain integration gate is separately ignored by this default candidate command. It is outside the library counts above. No provider runtime qualification is inferred."
+  },
+  "limitations": [
+    "Ignored tests are not passes. Exec-only child entrypoints may run through parent fixtures; their ignored registration is still excluded from the main library passes.",
+    "Native test/package success does not establish installed client/server interoperability or the eight installed qualification cohorts.",
+    "The original Mac-target installed stream failure remains pending until a separate real installed matrix passes; this build evidence does not resolve it.",
+    "macOS executables and separately packaged installed tools were ad hoc signed and verified; this is not notarization.",
+    "No public release/version/installer pin is changed or qualified by this candidate build.",
+    "Raw logs remain private; only sanitized evidence and their hashes are published."
+  ],
+  "evidence_inputs": [
+    {
+      "kind": "run.json",
+      "sha256": "09e9a0c311baeee08124a67fb37b4e9efd024d4ad31dec21d94c11e95e41f2df",
+      "bytes": 12041
+    },
+    {
+      "kind": "jobs.json",
+      "sha256": "8d59ae0b5f77e6838c056baa5d3009409c69ec33f85ffe8b0756495e5af5349a",
+      "bytes": 14604
+    },
+    {
+      "kind": "artifacts.json",
+      "sha256": "bc32a76b29f810d95e05356a18271fc316c8ccf8321b8e193da9e4ca4618736b",
+      "bytes": 5748
+    }
+  ],
+  "evidence_input_sha256": "36542b5236380d22097f79221f7494326bae6317e8ec1cdf2e4530e2d976ab30",
+  "evidence_input_hash_order": [
+    "run.json",
+    "jobs.json",
+    "artifacts.json"
+  ],
+  "independent_review": {
+    "reviewer": "Claude Code",
+    "model": "claude-sonnet-5-5",
+    "permission_mode": "auto",
+    "session_id": "a399ff8c-a7d9-4f33-ae9a-6817bddcde62",
+    "verdict": "APPROVE",
+    "blocking_findings": 0,
+    "duration_ms": 20781,
+    "turns": 4,
+    "raw_private_review_sha256": "5d65d020a314d01e673f4c9a5e5d1bd905ee2c4333bb1eff50c9408fb5ac4116",
+    "scope": "Both candidate evidence documents against the exact run, jobs, logs, artifacts and checked-in workflow; no product or live workload execution.",
+    "checks": [
+      "Exact source, run and attempt; all four job and step conclusions/timestamps.",
+      "Raw input and log hashes; all eight artifact API pins; logged render download/upload digest matches.",
+      "All main library counts and suite timings; ignored and nested filtered results excluded; no summed overlapping totals.",
+      "All 18 Cargo compilation, Clippy and release-build durations.",
+      "Signing order, dependency/ABI inspection, license tests, separate tooling build and successful inventory comparison.",
+      "Sanitization, nonqualification and unchanged public release/installer boundaries."
+    ],
+    "dispositions": "Initial APPROVE95.137s13turns; useful wording corrections independently re-approved20.781s4turns. All eight upload-log digests match API; render downloads versus independent harvest downloads distinguished; spacing fixed; named manifest-step evidence and inferred platform-gating cause qualified. No blocking findings."
+  }
+}

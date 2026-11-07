@@ -1,0 +1,19 @@
+# Candidate 987d71d native verification and packaging
+
+[Candidate run 42387811714](https://github.com/Epiphytic/marmish/actions/runs/42387811714), attempt 1, completed **PASS** for exact source `987d71d682b3e5d42653ee1257e204c8fc1f5618`. All three package jobs and the final provenance/manifest-render job succeeded. The run started at 2026-11-07T15:44:10Z; final render ended at 2026-11-07T17:12:57Z. The run `updated_at` proxy is 2026-11-07T17:12:58Z; the API provides no exact run completion time. Structured JSON records full job/step conclusions, private log hashes and artifact API pins.
+
+| Platform | Default native: pass / fail / ignored; runtime | Installed-feature native: pass / fail / ignored; runtime | Engine: pass / fail / ignored; runtime |
+| --- | --- | --- | --- |
+| linux-amd64 | 620 / 0 / 3; 1573.70s | 833 / 0 / 3; 1600.18s | 138 / 0 / 1; 9.79s |
+| linux-arm64 | 620 / 0 / 3; 882.14s | 833 / 0 / 3; 903.49s | 138 / 0 / 1; 9.83s |
+| macos-arm64 | 619 / 0 / 3; 606.24s | 832 / 0 / 3; 618.30s | 145 / 0 / 1; 35.68s |
+
+These are separate, overlapping suites, never additive totals. Ignored registrations and nested filtered child-process results are excluded from passes. Each platform passed stream library's 29 tests; vault counts were 12 on Linux and 13 on macOS, with no failures or ignored tests in those suites. Suite timings exclude compilation and are neither relay latency nor transfer speed. macOS used RUST_TEST_THREADS=1; Linux did not, so platform runtimes are not comparable. Platform counts differ; platform gating is a plausible explanation, not established by these logs alone. JSON separately records all 18 Cargo build/Clippy durations and additional ignored provider gates. The large copy and duplex qualifications remain explicitly ignored by this default candidate command.
+
+Each platform passed default and installed-feature strict all-target Clippy, built release product binaries, inspected dependency/ABI allowlists, collected locked licenses, packaged immutable assets, and built separately packaged installed-test tools. macOS product and tool executables were ad hoc signed and strictly verified; this is not notarization. Product asset preservation is inferred from the successful isolated-tool step, which compares before/after SHA-256 inventories with cmp under set -euo pipefail; inventories are not separately logged.
+
+The final render job passed its named provenance/manifest-render step, whose checked-in commands render three pinned manifests; the logs do not provide separate per-manifest provenance tuple dumps. Eight artifacts were uploaded: three product packages, three installed-tool packages, a host render tool and pinned bootstrap. JSON records exact IDs, compressed sizes and API ZIP digests. This harvest checked complete job logs and API metadata, without independently downloading or executing candidate artifacts. All eight upload-log SHA-256 lines match their API digests. The render log also records digest-verified downloads of the three product packages and host render tool. No artifact payload was independently downloaded or executed by the evidence harvester.
+
+This establishes native verification and candidate packaging only. It does not establish installed cross-platform interoperability, the eight installed cohorts, or resolution of the previous Mac-target stream failures. No public release/version/installer pin is changed. Raw logs remain private.
+
+Independent evidence review: actual Claude Code `claude-sonnet-5-5`, `--permission-mode auto`, session `a399ff8c-a7d9-4f33-ae9a-6817bddcde62`, **APPROVE**, no blockers. Initial review: 95.137 seconds / 13 turns; corrective wording review: 20.781 seconds / four turns. The reviewer independently checked retained API/log inputs and both reports without executing artifacts or interfering with live workloads. JSON records the private review hash and dispositions.
