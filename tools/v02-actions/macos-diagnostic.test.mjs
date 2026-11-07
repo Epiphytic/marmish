@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {POLICY,ARTIFACTS,ALLOWED_PATHS,checkInputs,checkChanges,guardSource,checkCandidate,
+import {POLICY,ARTIFACTS,ALLOWED_PATHS,COLD_ALLOWED_PATHS,checkColdReport,checkColdFailureReport,checkInputs,checkChanges,guardSource,checkCandidate,
   selectArtifact,checkZip,checkProduct,checkBootstrap,checkToolFiles,checkPins,checkReport,validateReport,requestedConcurrency,checkFailureReport,checkFailureMarker} from './macos-diagnostic.mjs';
 import {digest} from './transport.mjs';
 const harness='a'.repeat(40),oldHarness='b'.repeat(64);
@@ -204,6 +204,17 @@ test('credential-free validator verifies closed failed reports and marker preced
     await fs.writeFile(marker,'malformed');await assert.rejects(validateReport(checkEnv));
     await fs.unlink(marker);await fs.symlink(path.join(root,'absent'),marker);
     await assert.rejects(validateReport(checkEnv));
+    await fs.unlink(marker);
+    f.report={...coldFixture().report,pins:f.pins,probe_sha256:f.probe.sha256};
+    const coldEnv={...checkEnv,RUN_CONCURRENT:undefined};
+    await writeReport();await validateReport(coldEnv,'cold');
+    await assert.rejects(validateReport(checkEnv));
+    f.report.passed=false;f.report.failure='topology_mismatch';await writeReport();
+    await assert.rejects(validateReport(coldEnv,'cold'),/diagnostic_failed_report/);
+    f.report.passed=true;f.report.failure=null;await writeReport();
+    await fs.writeFile(marker,JSON.stringify({schema:1,kind:'macos-diagnostic-failure',failure:'report_failed'}));
+    await assert.rejects(validateReport(coldEnv,'cold'),/diagnostic_failure_marker/);
+
   } finally {await fs.rm(root,{recursive:true,force:true});}
 });
 
@@ -243,4 +254,69 @@ test('failed reports remain closed sanitized diagnostic records without becoming
   const early=structuredClone(f.report);early.pins=null;early.stage='pins';early.failure='pins_invalid';
   early.observations=[];checkFailureReport(early,f.pins,f.probe,false);
   early.stage='install';assert.throws(()=>checkFailureReport(early,f.pins,f.probe,false));
+});
+
+
+test('cold mode source guard adds only its exact reviewed paths without broadening original mode',()=>{
+  assert.equal(COLD_ALLOWED_PATHS.length,ALLOWED_PATHS.length+10);
+  for(const name of COLD_ALLOWED_PATHS) checkChanges([['M',name,'100644']],'cold');
+  for(const name of COLD_ALLOWED_PATHS.filter(p=>!ALLOWED_PATHS.includes(p))) {
+    assert.throws(()=>checkChanges([['A',name,'100644']]));
+    const git=args=>args[0] === 'diff' && args.includes('--name-status') ? `A\0${name}\0` : gitFixture()(args);
+    guardSource(env,git,'cold');assert.throws(()=>guardSource(env,git));
+  }
+  for(const row of [['M','crates/marmish-native/src/installed_streaming_cases.rs','100644'],
+    ['M','crates/marmish-native/src/installed_streaming_fixture.rs','100644'],
+    ['M','docs/validation/arbitrary.json','100644'],['R100',COLD_ALLOWED_PATHS.at(-1),'100644'],
+    ['D',COLD_ALLOWED_PATHS.at(-1),'100644'],['A',COLD_ALLOWED_PATHS.at(-1),'100755'],
+    ['A',COLD_ALLOWED_PATHS.at(-1),'120000']]) assert.throws(()=>checkChanges([row],'cold'));
+  assert.throws(()=>checkChanges([['M',ALLOWED_PATHS[0],'100644']],'constructor'));
+});
+function coldFixture() {
+  const f=reportFixture(true),old=f.report.observations;
+  f.report={...f.report,kind:'macos-cold-multiprincipal-diagnostic',stage:'fixture_direct',
+    scenario:'cold-three-principals',cold_before_direct:true,local_outbound_fixture_traffic:false,
+    observations:[...old.slice(3).map((o,i)=>({...o,case:`cold-${i+1}`})),{...old[0],case:'direct-after'}],
+    principals:['linux-amd64','linux-arm64','macos-arm64'].map((role,i)=>({label:`client-${i+1}`,role,
+      account_sha256:String(i+1).repeat(64),session_sha256:String(i+4).repeat(64),
+      group_sha256:String(i+7).repeat(64),open_sha256:['a','b','c'][i].repeat(64),pair_valid:true})),
+    cleanup:{clients:Array.from({length:3},()=>({cancel:true,idle:true,stop:true})),
+      server:{cancel:true,idle:true,stop:true}}};
+  return f;
+}
+function verifyCold(f) {
+  const bytes=Buffer.from(JSON.stringify(f.report));
+  checkColdReport(f.report,{schema:1,kind:'macos-diagnostic-complete',passed:true,
+    report_sha256:digest(bytes)},bytes,f.pins,f.probe);
+}
+test('cold success requires ordered distinct principals and rooms, Pair evidence and all four cleanups',()=>{
+  verifyCold(coldFixture());
+  for(const mutate of [f=>f.report.kind='macos-stream-diagnostic',f=>f.report.scenario='warm-only',
+    f=>f.report.cold_before_direct=false,f=>f.report.local_outbound_fixture_traffic=true,
+    f=>f.report.observations.reverse(),f=>f.report.observations.splice(0,3),
+    f=>f.report.principals.pop(),f=>f.report.principals[0].pair_valid=false,
+    f=>f.report.principals[1].account_sha256=f.report.principals[0].account_sha256,
+    ...['session_sha256','group_sha256','open_sha256'].map(key=>f=>f.report.principals[1][key]=f.report.principals[0][key]),
+    f=>f.report.principals[0].open_sha256=null,f=>f.report.principals[0].role='server',
+    f=>f.report.principals[0].private_path='/private/state',f=>f.report.cleanup.clients[1].idle=false,
+    f=>f.report.cleanup.server.stop=false,f=>f.report.observations[0].wall_ms=330001,
+    f=>f.report.observations[3].wall_ms=15001,f=>f.report.observations[0].server_terminal={kind:'cancelled'},
+    f=>f.report.observations[0].offsets_available=true]) {
+    const f=coldFixture();mutate(f);assert.throws(()=>verifyCold(f));
+  }
+  const f=coldFixture();assert.throws(()=>verifyReport(f));
+});
+test('closed cold failures retain failed cold then successful direct without converting to pass',()=>{
+  const make=()=>{const f=coldFixture();f.report.passed=false;f.report.failure='hash_mismatch';
+    f.report.observations[0].failure='hash_mismatch';f.report.observations[0].output_match=false;return f;};
+  const f=make();checkColdFailureReport(f.report,f.pins,f.probe);assert.throws(()=>verifyCold(f));
+  for(const mutate of [f=>f.report.observations.splice(0,3),f=>f.report.cold_before_direct=false,
+    f=>f.report.failure='private arbitrary error',f=>f.report.observations[0].private='raw',
+    f=>f.report.cleanup.clients[0].idle=1,f=>f.report.principals[0].session_sha256='bad',
+    f=>f.report.observations[0].wall_ms=true]) {
+    const f=make();mutate(f);assert.throws(()=>checkColdFailureReport(f.report,f.pins,f.probe));
+  }
+  const early=make();early.report.stage='pins';early.report.failure='pins_invalid';early.report.pins=null;
+  early.report.principals=[];early.report.observations=[];early.report.cold_before_direct=false;
+  checkColdFailureReport(early.report,early.pins,early.probe);
 });

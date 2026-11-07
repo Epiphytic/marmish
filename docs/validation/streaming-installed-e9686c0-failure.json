@@ -1,0 +1,768 @@
+{
+  "schema": 1,
+  "status": "FAIL",
+  "scope": "installed-stream-matrix",
+  "source_commit": "e9686c0799e78010c350d4990406c93ddb8bc474",
+  "candidate": {
+    "run_id": 42367702241,
+    "run_attempt": 1,
+    "url": "https://github.com/Epiphytic/marmish/actions/runs/42367702241",
+    "native_and_package_all_three_platforms": "PASS",
+    "status_snapshot_sha256": "0e9feb5a5436d59c45f6548b0059b6a9d944807e60622415b2707a219cda8b05"
+  },
+  "installed_run": {
+    "run_id": 42371657352,
+    "run_attempt": 1,
+    "url": "https://github.com/Epiphytic/marmish/actions/runs/42371657352",
+    "workflow": ".github/workflows/streaming-installed.yml",
+    "status": "completed",
+    "conclusion": "failure",
+    "status_snapshot_sha256": "66996caedb048ca83090e87160d2d13bb0e297a734ae748c3d01d209d5ad37a0",
+    "jobs": [
+      {
+        "completedAt": "2026-11-07T12:15:44Z",
+        "conclusion": "success",
+        "databaseId": 128400866191,
+        "name": "resolve",
+        "startedAt": "2026-11-07T12:15:26Z",
+        "status": "completed",
+        "url": "https://github.com/Epiphytic/marmish/actions/runs/42371657352/job/128400866191"
+      },
+      {
+        "completedAt": "2026-11-07T12:22:31Z",
+        "conclusion": "failure",
+        "databaseId": 128400940993,
+        "name": "matrix (macos-15, macos-arm64, aarch64-apple-darwin)",
+        "startedAt": "2026-11-07T12:15:47Z",
+        "status": "completed",
+        "url": "https://github.com/Epiphytic/marmish/actions/runs/42371657352/job/128400940993"
+      },
+      {
+        "completedAt": "2026-11-07T12:22:48Z",
+        "conclusion": "failure",
+        "databaseId": 128400941060,
+        "name": "matrix (ubuntu-24.04, linux-amd64, x86_64-unknown-linux-gnu)",
+        "startedAt": "2026-11-07T12:15:46Z",
+        "status": "completed",
+        "url": "https://github.com/Epiphytic/marmish/actions/runs/42371657352/job/128400941060"
+      },
+      {
+        "completedAt": "2026-11-07T12:22:52Z",
+        "conclusion": "failure",
+        "databaseId": 128400941097,
+        "name": "matrix (ubuntu-24.04-arm, linux-arm64, aarch64-unknown-linux-gnu)",
+        "startedAt": "2026-11-07T12:15:49Z",
+        "status": "completed",
+        "url": "https://github.com/Epiphytic/marmish/actions/runs/42371657352/job/128400941097"
+      },
+      {
+        "completedAt": "2026-11-07T12:23:07Z",
+        "conclusion": "failure",
+        "databaseId": 128402516800,
+        "name": "rollup",
+        "startedAt": "2026-11-07T12:22:55Z",
+        "status": "completed",
+        "url": "https://github.com/Epiphytic/marmish/actions/runs/42371657352/job/128402516800"
+      }
+    ],
+    "job_log_sha256": {
+      "128400866191": "db5892a75228ca5e54aaf9623d1d049d3d53e35ce00e18408c12cfc8245e51b3",
+      "128400940993": "85c13ec293f025f0acb7eb08810ecd0aff819a8d590f5b5f53b7320aeb22adfc",
+      "128400941060": "ecf09a8d7517399178370dddc0f823fb8be546e14b2a1cdb955e934c855db127",
+      "128400941097": "764a3a124ac0bf055093215243d6c098c21f1852b3743f33340414a937ec6495",
+      "128402516800": "f052ce3798be9c6f53f5d53676522eb86c2d1a64c821a93868801a257ad412c8"
+    }
+  },
+  "context_sha256": "e87ba9fb68c6a8d6c0082154eb9e0143a00849231b72183af8b35ab6148feb2b",
+  "relay": [
+    "wss://relay.us.whitenoise.chat/"
+  ],
+  "roles": {
+    "linux-amd64": {
+      "server_ready": true,
+      "identity_ready_record_sha256": "bef7ccedb6fcab89a19f957bac2acbcd488cc1cb0a69375e96f5c44d75cebc12",
+      "server_ready_record_sha256": "bbf5c93ac331d8335df0c3851e978cbb73e099de2a97bf62497bbfc13e7c5399",
+      "client_result_record_sha256": "6424adf4908f193c3e0950d5d531e2697395a26856df52b5d67281e0cba75010",
+      "server_result_record_sha256": "27e177d93be6f65b045847d79947d82a5f514564d94d6a4d0aaab075d9a1296b",
+      "installation": {
+        "bootstrap_sha256": "a582e0b2cb9d82334e38e367ec78e4395b135013741c98064eaa9f3aa333872d",
+        "files": {
+          "THIRD-PARTY-LICENSES": {
+            "bytes": 2137884,
+            "sha256": "b539705cdebd44194e699d6ee131ff905960f6e50b4a54a1a17527bcdcb356d1"
+          },
+          "marmish": {
+            "bytes": 73565728,
+            "sha256": "dfe3192a4937d6c0b9139e4d31a57fe1251c8afcc44a633275f62a26b64f6f3e"
+          },
+          "marmish-worker": {
+            "bytes": 13255944,
+            "sha256": "ad898e7c481a6d6dfd405780c2cf842c0ea266efeffb077a876e4076c0058f45"
+          },
+          "marmishd": {
+            "bytes": 73565736,
+            "sha256": "3180d048758e6de26550c8ddc95a7df37cab8015247a53ef89c000094902fd34"
+          }
+        },
+        "manifest_sha256": "9aaf8a6d802c66c5f4edcd5297bb0f1a63a146cbe21c6cf09021591176183ed9",
+        "source_commit": "e9686c0799e78010c350d4990406c93ddb8bc474",
+        "target": "x86_64-unknown-linux-gnu",
+        "version": "0.2.3"
+      },
+      "client_complete": false,
+      "server_complete": false,
+      "client_observations": 2,
+      "server_receipts": 0,
+      "reported_cleanup": {
+        "stream_cleanup_complete": true,
+        "server_stop_complete": true,
+        "client_stop_complete": true
+      }
+    },
+    "linux-arm64": {
+      "server_ready": true,
+      "identity_ready_record_sha256": "72e9d454742e31a9fb68eb945647cc81d4314312b1960d3a637febfd345d20ae",
+      "server_ready_record_sha256": "aa7971744e22039aaa3118e3b156150afd27a2aecbc5df7bc7c1361af43f1b6a",
+      "client_result_record_sha256": "3c70cda69f4185f242e4dc1dbccfd09ef5051b546a8b853189f20755141a88da",
+      "server_result_record_sha256": "f3d32e1e2ce5a52d91e4ffd79c24e25ffbbec6f07032c3d596beede6665777dd",
+      "installation": {
+        "bootstrap_sha256": "a582e0b2cb9d82334e38e367ec78e4395b135013741c98064eaa9f3aa333872d",
+        "files": {
+          "THIRD-PARTY-LICENSES": {
+            "bytes": 2136788,
+            "sha256": "45a100e8f195d042f68af56db3c02e2dd0484937472d9483931023da32f608bc"
+          },
+          "marmish": {
+            "bytes": 69086928,
+            "sha256": "61cb8c7931fe1d40de94c4c00506c44cbf002dce68a0eb69591ac2471921b74f"
+          },
+          "marmish-worker": {
+            "bytes": 8729200,
+            "sha256": "3664993ce19de2e4e0fa9ad134a9ed7b935f79531f6cea8389bcb3c260bdcbaa"
+          },
+          "marmishd": {
+            "bytes": 69086936,
+            "sha256": "0c0101a8b7735be9cdab73dd40008ad5a34fcb4184dc4ee20e8702d0e7bfaca1"
+          }
+        },
+        "manifest_sha256": "56ece33af62888423fc4e2e960ba86aec35d2bd1d65658fddaccd08c11acf8ef",
+        "source_commit": "e9686c0799e78010c350d4990406c93ddb8bc474",
+        "target": "aarch64-unknown-linux-gnu",
+        "version": "0.2.3"
+      },
+      "client_complete": false,
+      "server_complete": false,
+      "client_observations": 2,
+      "server_receipts": 0,
+      "reported_cleanup": {
+        "stream_cleanup_complete": true,
+        "server_stop_complete": true,
+        "client_stop_complete": true
+      }
+    },
+    "macos-arm64": {
+      "server_ready": true,
+      "identity_ready_record_sha256": "458f7f2e49cb9460a542e0f54b3ce8adb0b6e4450916096a4892550607b825d5",
+      "server_ready_record_sha256": "a1937e01a6d87bb1c27e095a0a1d4a4860a17f7a950cf8fb5acef345c15eb2e2",
+      "client_result_record_sha256": "4df10a6c11b3350c0bda19089d3a327b018770c3e4e0897a4c0fe78a7e5308b6",
+      "server_result_record_sha256": "abae1a00aac467edfa6678b7e5007e7411ae5bbb354d3991cb053e365af40c06",
+      "installation": {
+        "bootstrap_sha256": "a582e0b2cb9d82334e38e367ec78e4395b135013741c98064eaa9f3aa333872d",
+        "files": {
+          "THIRD-PARTY-LICENSES": {
+            "bytes": 2064104,
+            "sha256": "d0f177c2a3b7c94433d50bc71bf0fd0aa2f1ea3cb6aa6653652d7357e3db07dc"
+          },
+          "marmish": {
+            "bytes": 57674784,
+            "sha256": "ac247ca4f93ed6ef28c5f525629155adc1d868f817eec9bc397ef5ca7d0d4847"
+          },
+          "marmish-worker": {
+            "bytes": 6934656,
+            "sha256": "7868257320c2b7da0caca51be12438bb0a734681dfdabf625bdd602aa3934fe4"
+          },
+          "marmishd": {
+            "bytes": 57674784,
+            "sha256": "ac2da1316a468e6552e5bf83940a236e3be707e67b34e46cc08a8a818cf5aad9"
+          }
+        },
+        "manifest_sha256": "1ab34cfd6b32624b9f17d14fdf1529920f10bcb893b7a56bf41ccf284c98dd6e",
+        "source_commit": "e9686c0799e78010c350d4990406c93ddb8bc474",
+        "target": "aarch64-apple-darwin",
+        "version": "0.2.3"
+      },
+      "client_complete": false,
+      "server_complete": false,
+      "client_observations": 2,
+      "server_receipts": 0,
+      "reported_cleanup": {
+        "stream_cleanup_complete": true,
+        "server_stop_complete": true,
+        "client_stop_complete": true
+      }
+    }
+  },
+  "observed_client_pairs": [
+    {
+      "client": "linux-amd64",
+      "server": "linux-amd64",
+      "case": "duplex",
+      "complete": true,
+      "stdin_bytes": 98304,
+      "stdin_sha256": "96530301817a31d40a668aadcab374b26aa72c327bdbd030331432ca0bb76060",
+      "stdout_bytes": 98304,
+      "stdout_sha256": "8d648d63c73be7e3c7b0c14cc09fe151c031c30d50e85cb087fc3f17fa129669",
+      "stderr_bytes": 8192,
+      "stderr_sha256": "dc7207caa32416e4c555186bc8c6e6907203b0e523374fb57d437380c9c06ac0",
+      "exit": 7,
+      "wall_ns": 47949461069,
+      "compression_requested": "zlib",
+      "qualification": "client-observation-only",
+      "stdout_goodput_bytes_per_second": 2050.158601,
+      "aggregate_application_payload_bytes_per_second": 4271.163751
+    },
+    {
+      "client": "linux-amd64",
+      "server": "linux-arm64",
+      "case": "duplex",
+      "complete": true,
+      "stdin_bytes": 98304,
+      "stdin_sha256": "650fb209995f779ac098be7b38b793961772a64ebaacd8f8ad7b037f798bdd43",
+      "stdout_bytes": 98304,
+      "stdout_sha256": "35d2baa2cf7084beb36359a00888c39ac584771c2ae3045445361682bf5f33ee",
+      "stderr_bytes": 8192,
+      "stderr_sha256": "b48082d324cb262d1c24628dfa9c4ab8c215deac301899e146b3bfd957dcec2f",
+      "exit": 7,
+      "wall_ns": 47163642759,
+      "compression_requested": "zlib",
+      "qualification": "client-observation-only",
+      "stdout_goodput_bytes_per_second": 2084.317373,
+      "aggregate_application_payload_bytes_per_second": 4342.327861
+    },
+    {
+      "client": "linux-arm64",
+      "server": "linux-amd64",
+      "case": "duplex",
+      "complete": true,
+      "stdin_bytes": 98304,
+      "stdin_sha256": "e6cf927e59b48661f35ba7ee0f308843d919091e84ec53f419a62180bca2cb49",
+      "stdout_bytes": 98304,
+      "stdout_sha256": "3dd7257888f3edfddde0543d6c9a4643a874592cf38abd05523da5c1d9c90f73",
+      "stderr_bytes": 8192,
+      "stderr_sha256": "b554430e52db1d7cc9ee4d37f2377603a72eb9c494ad61aac0574c358f9d4423",
+      "exit": 7,
+      "wall_ns": 45868009479,
+      "compression_requested": "none",
+      "qualification": "client-observation-only",
+      "stdout_goodput_bytes_per_second": 2143.193069,
+      "aggregate_application_payload_bytes_per_second": 4464.98556
+    },
+    {
+      "client": "linux-arm64",
+      "server": "linux-arm64",
+      "case": "duplex",
+      "complete": true,
+      "stdin_bytes": 98304,
+      "stdin_sha256": "f6befaa8ae20597b89a746bb999889aa4f6cedbf7081f0a291559016097032ac",
+      "stdout_bytes": 98304,
+      "stdout_sha256": "dffd2bf6caaeb0c875f494c1f848bf1d7c6e7ff1f83b196cdfa82b1ae4e95dff",
+      "stderr_bytes": 8192,
+      "stderr_sha256": "abfc955db853abbdfd2c49ed47fc59b43584273c0f278fca4ac6303d074b4221",
+      "exit": 7,
+      "wall_ns": 45006875001,
+      "compression_requested": "zlib",
+      "qualification": "client-observation-only",
+      "stdout_goodput_bytes_per_second": 2184.199636,
+      "aggregate_application_payload_bytes_per_second": 4550.415909
+    },
+    {
+      "client": "macos-arm64",
+      "server": "linux-amd64",
+      "case": "duplex",
+      "complete": true,
+      "stdin_bytes": 98304,
+      "stdin_sha256": "ddc9acc9418b7dba6eae92e0e95c713d2501f674b491b135de7ef6b92cd4bca4",
+      "stdout_bytes": 98304,
+      "stdout_sha256": "9ffd6c22a5e117ba547cc2a4f0ff4c47c0f5636106289f39ff690096cf77bef2",
+      "stderr_bytes": 8192,
+      "stderr_sha256": "76c7e00d998d4b6910569d04698dd33d6cb8a66accc6419978259458c994363d",
+      "exit": 7,
+      "wall_ns": 23894371000,
+      "compression_requested": "none",
+      "qualification": "client-observation-only",
+      "stdout_goodput_bytes_per_second": 4114.107042,
+      "aggregate_application_payload_bytes_per_second": 8571.056338
+    },
+    {
+      "client": "macos-arm64",
+      "server": "linux-arm64",
+      "case": "duplex",
+      "complete": true,
+      "stdin_bytes": 98304,
+      "stdin_sha256": "3156a5c6058f571d0be0dbda0e8bde27e66388f8c21cb3a68c84b95b46373078",
+      "stdout_bytes": 98304,
+      "stdout_sha256": "ac00cf525751db443fbc5875a51ddd6c81c991cee5b25e11a1eabda0ff34f99a",
+      "stderr_bytes": 8192,
+      "stderr_sha256": "30565b1d2594d418af84b709743f610bae1760cb1057291e131f1b090dd07dcf",
+      "exit": 7,
+      "wall_ns": 22558606000,
+      "compression_requested": "none",
+      "qualification": "client-observation-only",
+      "stdout_goodput_bytes_per_second": 4357.716075,
+      "aggregate_application_payload_bytes_per_second": 9078.575157
+    }
+  ],
+  "failed_cells": [
+    {
+      "client": "linux-amd64",
+      "case": "duplex",
+      "category": "validation_or_transport",
+      "server": "macos-arm64",
+      "status": "unqualified",
+      "compression_requested": "zlib"
+    },
+    {
+      "client": "linux-arm64",
+      "case": "duplex",
+      "category": "validation_or_transport",
+      "server": "macos-arm64",
+      "status": "unqualified",
+      "compression_requested": "zlib"
+    },
+    {
+      "client": "macos-arm64",
+      "case": "duplex",
+      "category": "validation_or_transport",
+      "server": "macos-arm64",
+      "status": "unqualified",
+      "compression_requested": "zlib"
+    }
+  ],
+  "total_client_observations": 6,
+  "qualified_cells": 0,
+  "qualification": "none",
+  "rollup": {
+    "category": "validation_or_platform_failure",
+    "cohort": "stream-matrix",
+    "complete": false,
+    "context_sha256": "e87ba9fb68c6a8d6c0082154eb9e0143a00849231b72183af8b35ab6148feb2b",
+    "missing_records": [],
+    "passed_cells": 0,
+    "qualification": "none",
+    "schema": 1,
+    "scope": "installed-streaming",
+    "source_commit": "e9686c0799e78010c350d4990406c93ddb8bc474",
+    "status": "FAIL"
+  },
+  "rollup_record_sha256": "5e3ebb577eab818dbfa463f505714316443747ac4085e603b52459e37c12ff44",
+  "diagnosis": {
+    "status": "unresolved",
+    "failure_category": "validation_or_transport",
+    "precise_remote_failure_available": false,
+    "receipts_empty_explanation": "Every client result contains a Mac-target failed cell. installed_streaming.rs returns on !complete before clients() and collect_receipts(); therefore all server receipt arrays remain empty. This is a control-flow inference from the pinned source, not observation that remote fixture receipts were absent.",
+    "source_reference": "crates/marmish-native/src/installed_streaming.rs:676",
+    "compression_platform_confounder": "All three Mac-target duplex calls request zlib because the harness selects compression when client role <= server role. Mac-client calls to Linux request none. Some Linux-target calls request zlib and succeed. These observations do not isolate Mac execution from Mac-server compression behavior.",
+    "diagnostic_limit": "Sanitized failed-cell records retain only the generic category; failed subprocess status, stderr and stream terminal are unavailable.",
+    "repetition": "This fresh source run repeats the earlier six Linux-target client observations and three generic Mac-target failures; it does not establish a Mac-server root cause."
+  },
+  "timing_definition": "wall_ns is elapsed installed CLI operation time through local terminal-record IPC lookup. stdout goodput divides validated stdout bytes by this duration; aggregate application payload rate divides stdin + stdout + stderr bytes by the same duration. Neither is network RTT, wire throughput or compression ratio. Independent remote receipt validation was not reached.",
+  "limitations": [
+    "The six client records report validated payload sizes/hashes and exit 7; they are not six qualified cells because independent server receipts and final rollup validation did not pass.",
+    "All reported cleanup and stop flags are true, but these artifacts are not an independent observation of physical process cleanup or private-state deletion.",
+    "No precise Mac-server root cause or reproduction is established by these downloaded artifacts.",
+    "No installed copy, rsync, edge or live cancellation qualification is established by this stream-matrix run.",
+    "Candidate native/package test counts overlap and are not additive; candidate success does not qualify installed interoperability.",
+    "No release, version, installer pin or public release assets are changed by this evidence."
+  ],
+  "provenance": {
+    "bootstrap_sha256": "a582e0b2cb9d82334e38e367ec78e4395b135013741c98064eaa9f3aa333872d",
+    "harness_sha256": "16b5a08001255aa6055095879fb494cb5bb0218f1b65969bbe4ce916480f8814",
+    "manifests": {
+      "linux-amd64": "9aaf8a6d802c66c5f4edcd5297bb0f1a63a146cbe21c6cf09021591176183ed9",
+      "linux-arm64": "56ece33af62888423fc4e2e960ba86aec35d2bd1d65658fddaccd08c11acf8ef",
+      "macos-arm64": "1ab34cfd6b32624b9f17d14fdf1529920f10bcb893b7a56bf41ccf284c98dd6e"
+    },
+    "tooling": [
+      {
+        "files": {
+          "marmish-installed-check": {
+            "bytes": 22815352,
+            "sha256": "78a366cefde25e723ab6201eec7982c173af62b5a5dc2193cd4c265169ef643c"
+          },
+          "marmish-installed-fixture": {
+            "bytes": 13020496,
+            "sha256": "7f8da5add37a841f18c4fa705fc48b23f19cfda312236cb5f396a1aef198f215"
+          }
+        },
+        "harness_sha256": "16b5a08001255aa6055095879fb494cb5bb0218f1b65969bbe4ce916480f8814",
+        "schema": 1,
+        "source_commit": "e9686c0799e78010c350d4990406c93ddb8bc474",
+        "target": "x86_64-unknown-linux-gnu"
+      },
+      {
+        "files": {
+          "marmish-installed-check": {
+            "bytes": 17543368,
+            "sha256": "5ca24896cbcfcef865f1461bb05e8336a926fea350271b5bfa76e941e5044b66"
+          },
+          "marmish-installed-fixture": {
+            "bytes": 8363200,
+            "sha256": "811f7c6ced28b5907fcb3cc3827d5c71d8cb8d99eff8b677fa0859faebeec664"
+          }
+        },
+        "harness_sha256": "16b5a08001255aa6055095879fb494cb5bb0218f1b65969bbe4ce916480f8814",
+        "schema": 1,
+        "source_commit": "e9686c0799e78010c350d4990406c93ddb8bc474",
+        "target": "aarch64-unknown-linux-gnu"
+      },
+      {
+        "files": {
+          "marmish-installed-check": {
+            "bytes": 15019696,
+            "sha256": "110d55b5bbd20825dcb974fd8dc51b21c8484a6eb46286af42aab81d2b395ec8"
+          },
+          "marmish-installed-fixture": {
+            "bytes": 6544448,
+            "sha256": "5a2b7127ad5dd5f22a00fa53c90af2b5838cb501284296826d27cd148132c064"
+          }
+        },
+        "harness_sha256": "16b5a08001255aa6055095879fb494cb5bb0218f1b65969bbe4ce916480f8814",
+        "schema": 1,
+        "source_commit": "e9686c0799e78010c350d4990406c93ddb8bc474",
+        "target": "aarch64-apple-darwin"
+      }
+    ],
+    "tooling_manifests": {
+      "linux-amd64": "f6261aa7757d222ac9d7ced1564901818fde81b47325dc217ded0f33130a823b",
+      "linux-arm64": "f20eb0726404d8e9861a9372cb758eb8703c2e8d6a10ac1a7c194147a18a0c73",
+      "macos-arm64": "fd1f783e8851893dbd30b90c681587183368b93e21b1e93e85b9041fe6970401"
+    },
+    "version": "0.2.3"
+  },
+  "canonical_record_count": 12,
+  "artifact_metadata": [
+    {
+      "id": 13574700760,
+      "name": "v02-installed-diagnostic-42371657352-1-linux-amd64",
+      "size_in_bytes": 3419,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574700760",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574700760/zip",
+      "expired": false,
+      "created_at": "2026-11-07T12:22:46Z",
+      "expires_at": "2026-11-21T12:22:45Z",
+      "updated_at": "2026-11-07T12:22:46Z",
+      "digest": "sha256:fe4d77db08d8e28cf6d98a4e6ed8a8bb3fa3d3e749a2517790f8c5b8967e8e74",
+      "workflow_run": {
+        "id": 42371657352,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "e9686c0799e78010c350d4990406c93ddb8bc474"
+      }
+    },
+    {
+      "id": 13574685763,
+      "name": "v02-installed-42371657352-1-e9686c0799e7-stream-matrix-linux-amd64-server-result",
+      "size_in_bytes": 540,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574685763",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574685763/zip",
+      "expired": false,
+      "created_at": "2026-11-07T12:22:45Z",
+      "expires_at": "2026-11-21T12:22:44Z",
+      "updated_at": "2026-11-07T12:22:45Z",
+      "digest": "sha256:8c0e84cd873ceffd7804e0d99b04fed4fc7fad46b8b616ecb3fe6223861d1cd7",
+      "workflow_run": {
+        "id": 42371657352,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "e9686c0799e78010c350d4990406c93ddb8bc474"
+      }
+    },
+    {
+      "id": 13574680811,
+      "name": "v02-installed-42371657352-1-e9686c0799e7-stream-matrix-linux-arm64-client-result",
+      "size_in_bytes": 1411,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574680811",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574680811/zip",
+      "expired": false,
+      "created_at": "2026-11-07T12:22:47Z",
+      "expires_at": "2026-11-21T12:22:46Z",
+      "updated_at": "2026-11-07T12:22:47Z",
+      "digest": "sha256:f90ff57dbee7e0d58b868c3cb1f4643183ef690e52564cf88fd7b3e14e8d51d2",
+      "workflow_run": {
+        "id": 42371657352,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "e9686c0799e78010c350d4990406c93ddb8bc474"
+      }
+    },
+    {
+      "id": 13574670014,
+      "name": "v02-installed-42371657352-1-e9686c0799e7-stream-matrix-macos-arm64-server-ready",
+      "size_in_bytes": 581,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574670014",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574670014/zip",
+      "expired": false,
+      "created_at": "2026-11-07T12:16:19Z",
+      "expires_at": "2026-11-21T12:16:17Z",
+      "updated_at": "2026-11-07T12:16:19Z",
+      "digest": "sha256:11ab8448f030f1e8c4d9376f631b0cf52f14e4eddbf3aa3b3433a97c0149c9dd",
+      "workflow_run": {
+        "id": 42371657352,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "e9686c0799e78010c350d4990406c93ddb8bc474"
+      }
+    },
+    {
+      "id": 13574610005,
+      "name": "v02-installed-42371657352-1-e9686c0799e7-stream-matrix-linux-amd64-server-ready",
+      "size_in_bytes": 583,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574610005",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574610005/zip",
+      "expired": false,
+      "created_at": "2026-11-07T12:16:44Z",
+      "expires_at": "2026-11-21T12:16:43Z",
+      "updated_at": "2026-11-07T12:16:44Z",
+      "digest": "sha256:25a7927336e0405a3a62e63753b24311a8c2aa05de6aec1a1c6fee6c51281ed8",
+      "workflow_run": {
+        "id": 42371657352,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "e9686c0799e78010c350d4990406c93ddb8bc474"
+      }
+    },
+    {
+      "id": 13574555371,
+      "name": "v02-installed-context-42371657352-1",
+      "size_in_bytes": 1175,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574555371",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574555371/zip",
+      "expired": false,
+      "created_at": "2026-11-07T12:15:42Z",
+      "expires_at": "2026-11-21T12:15:41Z",
+      "updated_at": "2026-11-07T12:15:42Z",
+      "digest": "sha256:51c5f5d1470dc273b467b63ab6f7e520f1c9cfe9eac626c917724cdc3d10170d",
+      "workflow_run": {
+        "id": 42371657352,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "e9686c0799e78010c350d4990406c93ddb8bc474"
+      }
+    },
+    {
+      "id": 13574375773,
+      "name": "v02-installed-42371657352-1-e9686c0799e7-stream-matrix-macos-arm64-identity-ready",
+      "size_in_bytes": 846,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574375773",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574375773/zip",
+      "expired": false,
+      "created_at": "2026-11-07T12:16:15Z",
+      "expires_at": "2026-11-21T12:16:13Z",
+      "updated_at": "2026-11-07T12:16:15Z",
+      "digest": "sha256:b62a28b03163f9a581e336c91ecfbdebd0c818a0e977efd0e5c719158bbaffde",
+      "workflow_run": {
+        "id": 42371657352,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "e9686c0799e78010c350d4990406c93ddb8bc474"
+      }
+    },
+    {
+      "id": 13574371747,
+      "name": "v02-installed-rollup-42371657352-1",
+      "size_in_bytes": 1031,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574371747",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574371747/zip",
+      "expired": false,
+      "created_at": "2026-11-07T12:23:05Z",
+      "expires_at": "2026-11-21T12:23:05Z",
+      "updated_at": "2026-11-07T12:23:05Z",
+      "digest": "sha256:daf0212a4e73c6eaa4de30ec2fad7353af50d00badd7289d29704b8dc21fe432",
+      "workflow_run": {
+        "id": 42371657352,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "e9686c0799e78010c350d4990406c93ddb8bc474"
+      }
+    },
+    {
+      "id": 13574276793,
+      "name": "v02-installed-42371657352-1-e9686c0799e7-stream-matrix-linux-amd64-client-result",
+      "size_in_bytes": 1410,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574276793",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574276793/zip",
+      "expired": false,
+      "created_at": "2026-11-07T12:22:44Z",
+      "expires_at": "2026-11-21T12:22:43Z",
+      "updated_at": "2026-11-07T12:22:44Z",
+      "digest": "sha256:17a75d08bee8e5c68d70b4dd13c56101be1bf9a7cfc2a7a618b8d7ff6e7b51b2",
+      "workflow_run": {
+        "id": 42371657352,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "e9686c0799e78010c350d4990406c93ddb8bc474"
+      }
+    },
+    {
+      "id": 13574071412,
+      "name": "v02-installed-42371657352-1-e9686c0799e7-stream-matrix-linux-amd64-identity-ready",
+      "size_in_bytes": 856,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574071412",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574071412/zip",
+      "expired": false,
+      "created_at": "2026-11-07T12:16:10Z",
+      "expires_at": "2026-11-21T12:16:09Z",
+      "updated_at": "2026-11-07T12:16:10Z",
+      "digest": "sha256:32af323e35263bf81ff9c1d1e50b266917f1a31449d5025e78bacac63b71281b",
+      "workflow_run": {
+        "id": 42371657352,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "e9686c0799e78010c350d4990406c93ddb8bc474"
+      }
+    },
+    {
+      "id": 13574066438,
+      "name": "v02-installed-diagnostic-42371657352-1-macos-arm64",
+      "size_in_bytes": 3405,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574066438",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13574066438/zip",
+      "expired": false,
+      "created_at": "2026-11-07T12:22:27Z",
+      "expires_at": "2026-11-21T12:22:26Z",
+      "updated_at": "2026-11-07T12:22:27Z",
+      "digest": "sha256:af1f491d48d223304d27fcbf8a7d1a8de39c02f93a7d3819b9cb83852e34956f",
+      "workflow_run": {
+        "id": 42371657352,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "e9686c0799e78010c350d4990406c93ddb8bc474"
+      }
+    },
+    {
+      "id": 13573992555,
+      "name": "v02-installed-diagnostic-42371657352-1-linux-arm64",
+      "size_in_bytes": 3414,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13573992555",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13573992555/zip",
+      "expired": false,
+      "created_at": "2026-11-07T12:22:49Z",
+      "expires_at": "2026-11-21T12:22:49Z",
+      "updated_at": "2026-11-07T12:22:49Z",
+      "digest": "sha256:885ba8d34d5b9a2c60012e549e60436a7003b38423961e93da76d87a7af0ad27",
+      "workflow_run": {
+        "id": 42371657352,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "e9686c0799e78010c350d4990406c93ddb8bc474"
+      }
+    },
+    {
+      "id": 13573947910,
+      "name": "v02-installed-42371657352-1-e9686c0799e7-stream-matrix-linux-arm64-server-result",
+      "size_in_bytes": 540,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13573947910",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13573947910/zip",
+      "expired": false,
+      "created_at": "2026-11-07T12:22:48Z",
+      "expires_at": "2026-11-21T12:22:48Z",
+      "updated_at": "2026-11-07T12:22:48Z",
+      "digest": "sha256:e99b491cef0262f28726c690f97c258949afac30eb3192db61de74e6939a07a5",
+      "workflow_run": {
+        "id": 42371657352,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "e9686c0799e78010c350d4990406c93ddb8bc474"
+      }
+    },
+    {
+      "id": 13573881750,
+      "name": "v02-installed-42371657352-1-e9686c0799e7-stream-matrix-linux-arm64-identity-ready",
+      "size_in_bytes": 852,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13573881750",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13573881750/zip",
+      "expired": false,
+      "created_at": "2026-11-07T12:16:12Z",
+      "expires_at": "2026-11-21T12:16:12Z",
+      "updated_at": "2026-11-07T12:16:12Z",
+      "digest": "sha256:d6be57b9b73057ea9a42641f3661c31048ad2d2b1a4138fba66cac0c12a80888",
+      "workflow_run": {
+        "id": 42371657352,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "e9686c0799e78010c350d4990406c93ddb8bc474"
+      }
+    },
+    {
+      "id": 13573867430,
+      "name": "v02-installed-42371657352-1-e9686c0799e7-stream-matrix-macos-arm64-client-result",
+      "size_in_bytes": 1409,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13573867430",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13573867430/zip",
+      "expired": false,
+      "created_at": "2026-11-07T12:22:20Z",
+      "expires_at": "2026-11-21T12:22:19Z",
+      "updated_at": "2026-11-07T12:22:20Z",
+      "digest": "sha256:922934859f82a374d0ed347937269a2204a0622abf034cb4e4143d1a787e094c",
+      "workflow_run": {
+        "id": 42371657352,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "e9686c0799e78010c350d4990406c93ddb8bc474"
+      }
+    },
+    {
+      "id": 13573792125,
+      "name": "v02-installed-42371657352-1-e9686c0799e7-stream-matrix-linux-arm64-server-ready",
+      "size_in_bytes": 581,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13573792125",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13573792125/zip",
+      "expired": false,
+      "created_at": "2026-11-07T12:16:46Z",
+      "expires_at": "2026-11-21T12:16:45Z",
+      "updated_at": "2026-11-07T12:16:46Z",
+      "digest": "sha256:36ad5bf4ecdcc70f00abe9ff24197524e18c3f5afe021250a2516be080485b24",
+      "workflow_run": {
+        "id": 42371657352,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "e9686c0799e78010c350d4990406c93ddb8bc474"
+      }
+    },
+    {
+      "id": 13573683022,
+      "name": "v02-installed-42371657352-1-e9686c0799e7-stream-matrix-macos-arm64-server-result",
+      "size_in_bytes": 539,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13573683022",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13573683022/zip",
+      "expired": false,
+      "created_at": "2026-11-07T12:22:26Z",
+      "expires_at": "2026-11-21T12:22:24Z",
+      "updated_at": "2026-11-07T12:22:26Z",
+      "digest": "sha256:a38b28d7a7402abc94dfa13a26c4e03f554d2fe4d03b38fb403389761fc4f01e",
+      "workflow_run": {
+        "id": 42371657352,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "e9686c0799e78010c350d4990406c93ddb8bc474"
+      }
+    }
+  ]
+}

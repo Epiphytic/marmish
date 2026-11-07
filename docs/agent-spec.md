@@ -141,9 +141,24 @@ zlib, so platform and compression are not isolated by this run. Receipt
 collection was skipped after local failures; zero uploaded receipts does not
 prove fixtures never ran. The final rollup qualifies zero cells. See
 [failure evidence](validation/streaming-installed-macos-failure.json).
-A bounded, separately identified diagnostic has approved design and code reviews;
-hosted observations remain pending. It cannot qualify this failed candidate. A fresh corrected candidate and all eight actual
-installed cross-platform relay cohorts remain required after any useful fix.
+The separately identified [macOS diagnostic 42367008260](https://github.com/Epiphytic/marmish/actions/runs/42367008260)
+passed direct-fixture, raw, zlib and three concurrent zlib observations on one
+macOS ARM64 host using one client identity; all cleanup proofs passed. It ran
+immutable candidate 571 product/fixture artifacts with a separate e968 harness.
+See [diagnostic evidence](validation/streaming-macos-diagnostic.md). This is not
+qualification: the original three-identity cross-host macOS-server failure
+remains unexplained, and no product fix has been established. Fresh all-platform
+candidate [42367702241](https://github.com/Epiphytic/marmish/actions/runs/42367702241)
+at e968 passed all three native/package jobs and rendering; see
+[native candidate evidence](validation/streaming-candidate-e9686c0.md). Its original
+[installed stream matrix 42371657352](https://github.com/Epiphytic/marmish/actions/runs/42371657352)
+repeated the same three macOS-server failures while all six Linux-target client
+observations passed exact bytes and exit7. The failed rollup qualifies zero cells,
+and the sequence stopped before the other seven cohorts. See
+[repeat failure evidence](validation/streaming-installed-e9686c0-failure.json).
+The independently reviewed [cold three-principal diagnostic design](phases/streaming-macos-cold-multiprincipal.md)
+is now triggered; implementation and its separate diagnostic result remain pending.
+No product cause or fix is established; full installed qualification remains open.
 
 The [local receiver cleanup contract](phases/streaming-copy-local-gc.md) uses an
 encrypted actor-owned index, explicit admission/activation, owned worker joining,
@@ -723,3 +738,10 @@ See [the release design](phases/native-automatic-release.md) and
 [publication plan](phases/v0.2.3-publication.md), with actual hosted candidate,
 publisher and public-install results in
 [release evidence](validation/native-automatic-release.md).
+
+The separate cold-three-principal macOS diagnostic harness now has actual
+independent Claude code approval and passing local checks (191 Rust installed
+checks and 29 JavaScript tests). See [the review](reviews/streaming-macos-cold-multiprincipal.md)
+for explicit coverage limitations. Hosted execution is pending; this changes no
+product behavior and does not resolve the failing installed matrix or qualify a
+release.

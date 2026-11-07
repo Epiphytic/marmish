@@ -5,8 +5,13 @@ replace the three-platform candidate and eight installed cohorts. Implementation
 and dispatch require the independent design approval recorded by the coordinator.
 Design approval was recorded after three actual Claude Code auto review rounds;
 see [review evidence](../reviews/streaming-macos-diagnostic.md). Integrated code
-approval and its bounded budget amendment are recorded there; hosted observations
-remain pending.
+approval and its bounded budget amendment are recorded there. Hosted
+[run 42367008260](https://github.com/Epiphytic/marmish/actions/runs/42367008260)
+passed all six requested observations and cleanup proofs; see
+[sanitized evidence](../validation/streaming-macos-diagnostic.md). This same-host,
+single-client-identity diagnostic does not qualify the candidate, explain the
+original cross-host failure, or establish a product fix. Full all-platform
+qualification remains pending.
 
 ## Evidence and question
 

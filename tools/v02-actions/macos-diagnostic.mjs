@@ -29,6 +29,22 @@ export const ALLOWED_PATHS = Object.freeze([
   'docs/phases/streaming-macos-diagnostic.md', 'docs/reviews/streaming-macos-diagnostic.md',
   'docs/validation/streaming-macos-diagnostic.json',
 ]);
+export const COLD_ALLOWED_PATHS = Object.freeze([...ALLOWED_PATHS,
+  'docs/validation/streaming-macos-diagnostic.md',
+  'docs/validation/streaming-installed-e9686c0-failure.json',
+  'docs/validation/streaming-candidate-e9686c0.json',
+  'docs/validation/streaming-candidate-e9686c0.md',
+  'docs/phases/streaming-macos-cold-multiprincipal.md',
+  'docs/reviews/streaming-macos-cold-multiprincipal.md',
+  'docs/validation/streaming-macos-cold-multiprincipal.json',
+  'crates/marmish-native/src/installed_macos_cold_multiprincipal.rs',
+  'crates/marmish-native/src/installed_macos_cold_multiprincipal_tests.rs',
+  '.github/workflows/streaming-macos-cold-multiprincipal.yml',
+]);
+function allowedPaths(mode) {
+  need(mode === 'original' || mode === 'cold','diagnostic_mode');
+  return mode === 'cold' ? COLD_ALLOWED_PATHS : ALLOWED_PATHS;
+}
 const hex = (value,n) => typeof value === 'string' && new RegExp(`^[0-9a-f]{${n}}$`).test(value);
 const pin = bytes => ({sha256:digest(bytes),bytes:bytes.length});
 const gitDefault = args => execFileSync('git',args,{encoding:'utf8',env:childEnvironment(process.env),maxBuffer:2*1024*1024});
@@ -38,12 +54,14 @@ export function checkInputs(env) {
   for (const name of ['DIAGNOSTIC_ROOT','PROBE']) need(typeof env[name] === 'string'
     && path.isAbsolute(env[name]),'diagnostic_path');
 }
-export function checkChanges(entries) {
+export function checkChanges(entries,mode = 'original') {
+  const allowed=allowedPaths(mode);
   need(entries.length > 0,'diagnostic_empty_delta');
-  for (const [status,name,mode] of entries) need(['A','M'].includes(status)
-    && ALLOWED_PATHS.includes(name) && mode === '100644','diagnostic_source_delta');
+  for (const [status,name,fileMode] of entries) need(['A','M'].includes(status)
+    && allowed.includes(name) && fileMode === '100644','diagnostic_source_delta');
 }
-export function guardSource(env,git = gitDefault) {
+export function guardSource(env,git = gitDefault,mode = 'original') {
+  const allowed=allowedPaths(mode);
   checkInputs(env);
   need(git(['rev-parse','HEAD']).trim() === env.HARNESS_COMMIT,'diagnostic_head');
   git(['merge-base','--is-ancestor',POLICY.source,env.HARNESS_COMMIT]);
@@ -54,11 +72,11 @@ export function guardSource(env,git = gitDefault) {
   const entries = [];
   for (let i=0;i<parts.length;i+=2) {
     const name = parts[i+1];
-    need(ALLOWED_PATHS.includes(name),'diagnostic_source_delta');
+    need(allowed.includes(name),'diagnostic_source_delta');
     const tree = git(['ls-tree',env.HARNESS_COMMIT,'--',name]);
     entries.push([parts[i],name,tree.startsWith('100644 blob ') ? '100644' : 'invalid']);
   }
-  checkChanges(entries);
+  checkChanges(entries,mode);
 }
 export function checkCandidate(run,latest) {
   const c = {repository:POLICY.repository,run_id:POLICY.run,run_attempt:POLICY.attempt,source:POLICY.source};
@@ -146,8 +164,8 @@ async function writeFiles(directory,files) {
   await fs.mkdir(directory,{mode:0o700});
   for (const [name,bytes] of files) await fs.writeFile(path.join(directory,name),bytes,{flag:'wx',mode:0o600});
 }
-export async function acquire(env) {
-  guardSource(env);
+export async function acquire(env,mode = 'original') {
+  guardSource(env,gitDefault,mode);
   const root=env.DIAGNOSTIC_ROOT;
   const stat=await fs.lstat(root);
   need(stat.isDirectory() && !stat.isSymbolicLink() && stat.uid === process.getuid()
@@ -242,11 +260,10 @@ export function checkReport(report,complete,reportBytes,pins,probe,concurrent) {
   const expected=['fixture_direct','raw','zlib'];
   if (concurrent) expected.push('concurrent-1','concurrent-2','concurrent-3');
   need(equal(report.observations.map(o=>o.case).sort(),expected.sort()),'diagnostic_cases');
-  report.observations.forEach(checkObservation);
+  report.observations.forEach(o=>checkObservation(o));
 }
-function checkObservation(o) {
+function checkObservation(o,direct = o.case === 'fixture_direct') {
   closed(o,observationFields);
-  const direct=o.case === 'fixture_direct';
   need(o.stage === (direct ? 'fixture_direct' : 'receipt') && o.failure === null && o.exit === 7
     && o.signal === null && o.input_bytes === 98304 && o.stdin_written === 98304
     && o.stdout_bytes === 98304 && Number.isSafeInteger(o.stderr_bytes)
@@ -304,6 +321,14 @@ export function checkFailureReport(report,pins,probe,concurrent) {
     closed(o,observationFields);
     need(expected.includes(o.case) && !seen.has(o.case) && stages.includes(o.stage)
       && (o.failure === null || categories.includes(o.failure)),'diagnostic_failed_observation');seen.add(o.case);
+    checkFailureObservation(o);
+  }
+}
+
+function checkFailureObservation(o) {
+  closed(o,observationFields);
+  need(stages.includes(o.stage) && (o.failure === null || categories.includes(o.failure)),
+    'diagnostic_failed_observation');
     need((o.exit === null || Number.isInteger(o.exit) && o.exit >= -2147483648 && o.exit <= 2147483647)
       && (o.signal === null || boundedInt(o.signal,2147483647)),'diagnostic_failed_status');
     for(const k of ['input_bytes','stdin_written','stdout_bytes','stderr_bytes']) need(boundedInt(o[k],1048576),'diagnostic_count');
@@ -313,12 +338,74 @@ export function checkFailureReport(report,pins,probe,concurrent) {
       'stream_present','binding_equal','receipt_present','receipt_valid','output_match']) need(typeof o[k] === 'boolean','diagnostic_flag');
     need(o.offsets_available === false,'diagnostic_offsets');
     checkTerminal(o.client_terminal);checkTerminal(o.server_terminal);
-  }
 }
 
-export async function validateReport(env) {
+const coldCases=['cold-1','cold-2','cold-3','direct-after'];
+const coldFields=['schema','kind','qualification','same_host_only','relay','pins','probe_sha256',
+  'stage','failure','observations','cleanup','passed','scenario','cold_before_direct',
+  'local_outbound_fixture_traffic','principals'];
+function checkColdBase(report,pins,probe,passed) {
+  closed(report,coldFields);
+  need(report.schema === 1 && report.kind === 'macos-cold-multiprincipal-diagnostic'
+    && report.qualification === false && report.same_host_only === true
+    && report.relay === 'wss://relay.us.whitenoise.chat' && report.passed === passed
+    && report.probe_sha256 === probe.sha256 && report.scenario === 'cold-three-principals'
+    && typeof report.cold_before_direct === 'boolean' && report.local_outbound_fixture_traffic === false,
+  'diagnostic_cold_report');
+  need(equal(report.pins,pins) || (!passed && report.pins === null && report.stage === 'pins'
+    && report.failure === 'pins_invalid'),'diagnostic_failed_pins');
+  closed(report.cleanup,['clients','server']);
+  need(Array.isArray(report.cleanup.clients) && report.cleanup.clients.length === 3,'diagnostic_cleanup');
+  for(const service of [...report.cleanup.clients,report.cleanup.server]) {
+    closed(service,['cancel','idle','stop']);
+    need(Object.values(service).every(v=>passed ? v === true : typeof v === 'boolean'),'diagnostic_cleanup');
+  }
+  need(Array.isArray(report.principals) && (passed ? report.principals.length === 3
+    : report.principals.length === 0 || report.principals.length === 3),'diagnostic_principals');
+  const roles=['linux-amd64','linux-arm64','macos-arm64'];
+  for(const [i,principal] of report.principals.entries()) {
+    closed(principal,['label','role','account_sha256','session_sha256','group_sha256','open_sha256','pair_valid']);
+    need(principal.label === `client-${i+1}` && principal.role === roles[i]
+      && hex(principal.account_sha256,64) && typeof principal.pair_valid === 'boolean','diagnostic_principal');
+    for(const key of ['session_sha256','group_sha256','open_sha256']) {
+      need(hex(principal[key],64) || (!passed && principal[key] === null),'diagnostic_principal_binding');
+    }
+    if(passed) need(principal.pair_valid === true,'diagnostic_pair');
+  }
+  if(passed) for(const key of ['account_sha256','session_sha256','group_sha256','open_sha256']) {
+    need(new Set(report.principals.map(p=>p[key])).size === 3,'diagnostic_distinct_principals');
+  }
+}
+export function checkColdReport(report,complete,reportBytes,pins,probe) {
+  checkColdBase(report,pins,probe,true);
+  closed(complete,['schema','kind','report_sha256','passed']);
+  need(complete.schema === 1 && complete.kind === 'macos-diagnostic-complete'
+    && complete.passed === true && complete.report_sha256 === digest(reportBytes),'diagnostic_complete');
+  need(report.failure === null && report.stage === 'fixture_direct' && report.cold_before_direct === true
+    && Array.isArray(report.observations) && equal(report.observations.map(o=>o.case),coldCases),'diagnostic_cold_order');
+  report.observations.forEach(o=>checkObservation(o,o.case === 'direct-after'));
+  need(report.observations.slice(0,3).every(o=>o.wall_ms <= 330000)
+    && report.observations[3].wall_ms <= 15000,'diagnostic_cold_wall');
+}
+export function checkColdFailureReport(report,pins,probe) {
+  checkColdBase(report,pins,probe,false);
+  need([...categories,'topology_mismatch'].includes(report.failure) && stages.includes(report.stage),
+    'diagnostic_failed_report');
+  need(Array.isArray(report.observations) && report.observations.length <= 4,'diagnostic_observations');
+  let previous=-1;
+  for(const o of report.observations) {
+    const index=coldCases.indexOf(o.case);
+    need(index > previous && index >= 0,'diagnostic_cold_order');previous=index;
+    checkFailureObservation(o);
+  }
+  if(report.observations.some(o=>o.case === 'direct-after')) need(report.cold_before_direct === true
+    && equal(report.observations.map(o=>o.case),coldCases),'diagnostic_cold_order');
+}
+
+export async function validateReport(env,mode = 'original') {
+  allowedPaths(mode);
   checkInputs(env);
-  const concurrent=requestedConcurrency(env.RUN_CONCURRENT);
+  const concurrent=mode === 'cold' ? false : requestedConcurrency(env.RUN_CONCURRENT);
   const root=env.DIAGNOSTIC_ROOT;
   let failureMarker=false;
   try { await fs.lstat(path.join(root,'output/failure.json'));failureMarker=true; }
@@ -340,15 +427,20 @@ export async function validateReport(env) {
   const reportBytes=await read('output/report.json',1048576),report=JSON.parse(reportBytes);
   if(failureMarker) checkFailureMarker(JSON.parse(await read('output/failure.json',16384)));
   if(report.passed === false) {
-    checkFailureReport(report,pins,probe,concurrent);
+    if(mode === 'cold') checkColdFailureReport(report,pins,probe);
+    else checkFailureReport(report,pins,probe,concurrent);
     throw new Error('diagnostic_failed_report');
   }
-  checkReport(report,JSON.parse(await read('output/complete.json',16384)),reportBytes,pins,probe,concurrent);
+  const complete=JSON.parse(await read('output/complete.json',16384));
+  if(mode === 'cold') checkColdReport(report,complete,reportBytes,pins,probe);
+  else checkReport(report,complete,reportBytes,pins,probe,concurrent);
   need(!failureMarker,'diagnostic_failure_marker');
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args=process.argv.slice(2);
-  const run=args.length === 0 ? acquire : args.length === 1 && args[0] === 'validate-report' ? validateReport : null;
+  const commands={'validate-report':validateReport,'acquire-cold':env=>acquire(env,'cold'),
+    'validate-cold-report':env=>validateReport(env,'cold')};
+  const run=args.length === 0 ? acquire : args.length === 1 && Object.hasOwn(commands,args[0]) ? commands[args[0]] : null;
   Promise.resolve().then(()=>{need(run,'diagnostic_arguments');return run(process.env);})
     .catch(()=>{console.error('marmish macOS diagnostic: provenance verification failed');process.exitCode=1;});
 }

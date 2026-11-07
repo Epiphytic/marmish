@@ -1,0 +1,106 @@
+name: Cold multiprincipal macOS diagnostic (not qualification)
+on:
+  workflow_dispatch:
+    inputs:
+      harness_commit:
+        description: Reviewed full harness commit; must equal this workflow commit
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: marmish-streaming-installed
+  cancel-in-progress: false
+env:
+  CARGO_TERM_COLOR: never
+  MARMISH_NATIVE_TOOLCHAIN: '1'
+jobs:
+  diagnostic:
+    if: github.ref == 'refs/heads/master'
+    runs-on: macos-15
+    timeout-minutes: 48
+    env:
+      HARNESS_COMMIT: ${{ inputs.harness_commit }}
+      MARMISH_BUILD_COMMIT: ${{ inputs.harness_commit }}
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.harness_commit }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify reviewed harness and Mac ARM64 host
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$HARNESS_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$HARNESS_COMMIT"
+          test "$HARNESS_COMMIT" = "$GITHUB_SHA"
+          test "$GITHUB_REPOSITORY" = Epiphytic/marmish
+          test "$GITHUB_REF" = refs/heads/master
+          test "$(uname -s):$(uname -m)" = Darwin:arm64
+          test "$(id -u)" -ne 0
+          git merge-base --is-ancestor "$HARNESS_COMMIT" refs/remotes/origin/master
+          git diff --quiet HEAD --
+      - name: Allocate private diagnostic root
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          root=$(mktemp -d /private/tmp/mm.XXXXXX)
+          chmod 700 "$root"
+          test "$(cd "$root" && pwd -P)" = "$root"
+          echo "DIAGNOSTIC_ROOT=$root" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920 # 1.97.1
+        with:
+          toolchain: 1.97.1
+      - name: Build diagnostic probe only
+        timeout-minutes: 23
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked -p marmish-native --features installed-checks --bin marmish-installed-check
+          codesign --force --sign - target/debug/marmish-installed-check
+          codesign --verify --strict target/debug/marmish-installed-check
+          git diff --quiet HEAD --
+      - name: Install locked acquisition tooling
+        working-directory: tools/v02-actions
+        run: npm ci --ignore-scripts
+      - name: Acquire and verify immutable old candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROBE: ${{ github.workspace }}/target/debug/marmish-installed-check
+        run: node tools/v02-actions/macos-diagnostic.mjs acquire-cold
+      - name: Diagnose cold multiprincipal old product
+        id: probe
+        timeout-minutes: 19
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(macos-cold-multiprincipal-diagnostic
+            --assets "$DIAGNOSTIC_ROOT/assets"
+            --bootstrap "$DIAGNOSTIC_ROOT/bootstrap/install.sh"
+            --fixture "$DIAGNOSTIC_ROOT/tools/marmish-installed-fixture"
+            --pins "$DIAGNOSTIC_ROOT/pins.json"
+            --workspace "$DIAGNOSTIC_ROOT/work"
+            --output "$DIAGNOSTIC_ROOT/output")
+          target/debug/marmish-installed-check "${args[@]}"
+      - name: Independently validate closed diagnostic records
+        if: always() && steps.probe.outcome != 'skipped'
+        env:
+          PROBE: ${{ github.workspace }}/target/debug/marmish-installed-check
+        run: node tools/v02-actions/macos-diagnostic.mjs validate-cold-report
+      - name: Preserve sanitized diagnostic records only
+        if: always() && steps.prepare.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-cold-multiprincipal-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.DIAGNOSTIC_ROOT }}/provenance.json
+            ${{ env.DIAGNOSTIC_ROOT }}/output/report.json
+            ${{ env.DIAGNOSTIC_ROOT }}/output/complete.json
+            ${{ env.DIAGNOSTIC_ROOT }}/output/failure.json
+          if-no-files-found: error
+          retention-days: 7

@@ -124,3 +124,19 @@ prefix, and the source guard running after build. Existing closed markers and
 failures prevent these limits from qualifying a release. The hosted macOS run
 must still exercise actual installer, daemons, relay and cleanup. Diagnostic
 success cannot qualify the failed matrix or cross-platform interoperability.
+
+## Hosted evidence review
+
+Actual Claude Code auto review of the four diagnostic evidence/specification
+documents returned **APPROVE**, 65.348 seconds, ten turns, session
+`1679a1b0-92d5-4fe5-8f44-6d685f78f692`, model `claude-sonnet-5-5`. It compared
+the exact downloaded ZIP and embedded records, sizes and hashes, recomputed
+payload rates and checked read-only GitHub run/artifact metadata and the reviewed
+harness. It confirmed the same-host/single-client scope, retained failed-matrix
+status, separate source provenance, cleanup observations and qualification=false.
+Three cosmetic missing-space findings in the changed evidence were corrected.
+No source edits, Cargo tests, live relay workload, dispatch or Git mutations ran
+in review. The reviewer did not independently recompute the Pins canonical hash;
+the actual workflow validator and local closed-schema validation passed. This
+documentation approval does not qualify the candidate or explain the earlier
+cross-host failure.

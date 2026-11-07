@@ -1,0 +1,475 @@
+{
+  "schema": 1,
+  "status": "PASS",
+  "scope": "bounded-same-host-macos-stream-diagnostic",
+  "qualification": false,
+  "run": {
+    "id": 42367008260,
+    "attempt": 1,
+    "url": "https://github.com/Epiphytic/marmish/actions/runs/42367008260",
+    "workflow": ".github/workflows/streaming-macos-diagnostic.yml",
+    "event": "workflow_dispatch",
+    "status": "completed",
+    "conclusion": "success",
+    "source_commit": "e9686c0799e78010c350d4990406c93ddb8bc474",
+    "started_at": "2026-11-07T11:09:53Z",
+    "updated_at": "2026-11-07T11:18:39Z"
+  },
+  "artifact": {
+    "id": 13572088229,
+    "name": "macos-stream-diagnostic-42367008260-1",
+    "zip_bytes": 3381,
+    "zip_sha256": "4b5ec5d6202da949b13b1c118b18af409dcc31cbd786a94f07e1d3601ab73783",
+    "files": [
+      {
+        "path": "provenance.json",
+        "bytes": 1833,
+        "sha256": "0b697979ad8d56f2cb16155e9147eb37c79422ff04b682ba07c4b8df7cd07792"
+      },
+      {
+        "path": "output/report.json",
+        "bytes": 6501,
+        "sha256": "6f4982991473b7e3f199103a565c15d43cb9aa0f49dd632552c39f8014c1afe5"
+      },
+      {
+        "path": "output/complete.json",
+        "bytes": 145,
+        "sha256": "5ea61ff55eaccfba7c01c4839dba59ce06e4efe78934dbb4ec14d1b7e1e913ce"
+      }
+    ]
+  },
+  "limits": {
+    "work_seconds": 900,
+    "cleanup_seconds": 180,
+    "capture_bytes_per_output": 1048576,
+    "concurrent_requested": true,
+    "same_host_only": true,
+    "client_identities": 1,
+    "tor": "off",
+    "public_release_changed": false
+  },
+  "metrics": {
+    "meaning": "Per-case diagnostic wall time includes local process and transport work; it is not relay RTT or pure wire throughput. Direct-fixture time is local execution only.",
+    "payload_bytes_per_case": {
+      "stdin": 98304,
+      "stdout": 98304,
+      "stderr": 8192
+    },
+    "stream_stderr_prefix_bytes": 49,
+    "cases": [
+      {
+        "case": "fixture_direct",
+        "wall_ms": 48,
+        "payload_bytes_per_second": 4266666.667,
+        "payload_rate_includes_both_directions": true
+      },
+      {
+        "case": "raw",
+        "wall_ms": 14761,
+        "payload_bytes_per_second": 13874.399,
+        "payload_rate_includes_both_directions": true
+      },
+      {
+        "case": "zlib",
+        "wall_ms": 14765,
+        "payload_bytes_per_second": 13870.64,
+        "payload_rate_includes_both_directions": true
+      },
+      {
+        "case": "concurrent-1",
+        "wall_ms": 44148,
+        "payload_bytes_per_second": 4638.942,
+        "payload_rate_includes_both_directions": true
+      },
+      {
+        "case": "concurrent-2",
+        "wall_ms": 44174,
+        "payload_bytes_per_second": 4636.211,
+        "payload_rate_includes_both_directions": true
+      },
+      {
+        "case": "concurrent-3",
+        "wall_ms": 44249,
+        "payload_bytes_per_second": 4628.353,
+        "payload_rate_includes_both_directions": true
+      }
+    ],
+    "concurrent_wall_times_overlap": true,
+    "wire_bytes_available": false,
+    "compression_ratio_available": false,
+    "transport_offsets_available": false
+  },
+  "limitations": [
+    "Single macOS ARM64 host and one authenticated client identity; the concurrent cases are three streams sharing that identity.",
+    "The fixture, product binaries and installer are immutable candidate 571 artifacts; the diagnostic harness is separately sourced from e968.",
+    "No product fix or cause of the original three-identity cross-host macOS-server failure has been established.",
+    "This success does not qualify candidate 571, replace all-platform installer tests or any of the eight installed cohorts, or add streaming to public release 0.2.3.",
+    "Fresh candidate 42367702241 at e968 had started qualification when this evidence was written; no result is asserted here."
+  ],
+  "records": {
+    "provenance.json": {
+      "schema": 1,
+      "kind": "macos-stream-diagnostic-provenance",
+      "qualification": false,
+      "pins_sha256": "a060a645d3513fb973924a16b74909b89c6279118109f74f9ba85f1794a2f9c5",
+      "product": {
+        "schema": 1,
+        "kind": "macos-stream-diagnostic-pins",
+        "qualification": false,
+        "repository": "Epiphytic/marmish",
+        "candidate_run_id": "42358105270",
+        "candidate_attempt": "1",
+        "candidate_commit": "571d98b77780d265a2fb29d84ae160fec72ba37b",
+        "harness_commit": "e9686c0799e78010c350d4990406c93ddb8bc474",
+        "target": "aarch64-apple-darwin",
+        "version": "0.2.3",
+        "old_harness_sha256": "f2b805880c907c2fcb12dd1774766da90550def3df6e7b6d7d048ca2ef9cef36",
+        "artifacts": {
+          "product": {
+            "id": 13570516008,
+            "name": "v02-candidate-aarch64-apple-darwin-42358105270-1",
+            "bytes": 47988691,
+            "sha256": "f6c27bfab5b3dd2370eb38fa93f99f1c48ae906a7f04c6f45a59bf2bc758f970"
+          },
+          "tooling": {
+            "id": 13570605471,
+            "name": "v02-installed-tools-aarch64-apple-darwin-42358105270-1",
+            "bytes": 9460623,
+            "sha256": "6cf4a04d8ee549bd86d9f7a256fefd7cfdcdb68eaccc189ba5c03b2c1315895c"
+          },
+          "bootstrap": {
+            "id": 13570810425,
+            "name": "v02-pinned-bootstrap-42358105270-1",
+            "bytes": 3543,
+            "sha256": "974f86f238a8798ad2e565f300930070073cc5097748df07c30a9626c871d2ba"
+          }
+        },
+        "manifest": {
+          "sha256": "abfe1ae7daa0ebc374c271a01f272f38b7332ec57fbbb766de5d437b4f193e59",
+          "bytes": 601
+        },
+        "tooling_record": {
+          "sha256": "9684214b58e7ee52676d45ea40c60bf33ae735ae8c2da37386a0cca329d8456b",
+          "bytes": 440
+        },
+        "fixture": {
+          "sha256": "e745c823a75a781908acbf2b9fac41614e8c1996cbc5afccd1b66231ac6bcc55",
+          "bytes": 6546288
+        },
+        "bootstrap": {
+          "sha256": "1fbbc16515fa0706256dbca9d9a5acef36797fc124e3d909b2881650df75b597",
+          "bytes": 9120
+        }
+      },
+      "harness": {
+        "commit": "e9686c0799e78010c350d4990406c93ddb8bc474",
+        "source_sha256": "16b5a08001255aa6055095879fb494cb5bb0218f1b65969bbe4ce916480f8814",
+        "target": "aarch64-apple-darwin",
+        "probe": {
+          "sha256": "c075b05f7235c4dcb63247b8fea5bb035f3a4e51b9df726b7acaec34442800e4",
+          "bytes": 35539136
+        }
+      }
+    },
+    "output/report.json": {
+      "cleanup": {
+        "client_cancel": true,
+        "client_idle": true,
+        "client_stop": true,
+        "server_cancel": true,
+        "server_idle": true,
+        "server_stop": true
+      },
+      "failure": null,
+      "kind": "macos-stream-diagnostic",
+      "observations": [
+        {
+          "binding_equal": false,
+          "capture_io": false,
+          "capture_overflow": false,
+          "case": "fixture_direct",
+          "client_terminal": null,
+          "exit": 7,
+          "failure": null,
+          "input_bytes": 98304,
+          "input_epipe": false,
+          "input_sha256": "c420c45dcc21922215c6093a4cd6591eb46d9068aead0c7cb66ea140d3f90b5f",
+          "interrupted": false,
+          "offsets_available": false,
+          "output_match": true,
+          "owned_group_clean": true,
+          "receipt_present": true,
+          "receipt_valid": true,
+          "server_terminal": null,
+          "signal": null,
+          "stage": "fixture_direct",
+          "stderr_bytes": 8192,
+          "stderr_sha256": "2a711953082b5e5add53b7d8821f35636a23b8000c8d4bc54fabcfeb928e5a56",
+          "stdin_written": 98304,
+          "stdout_bytes": 98304,
+          "stdout_sha256": "aebbf435cc085f60b0456e0f62dba2262d5f9c4c14a3e8e166dd20cd47c9014f",
+          "stream_present": false,
+          "timed_out": false,
+          "wall_ms": 48
+        },
+        {
+          "binding_equal": true,
+          "capture_io": false,
+          "capture_overflow": false,
+          "case": "raw",
+          "client_terminal": {
+            "data": {
+              "code": 7
+            },
+            "kind": "exited"
+          },
+          "exit": 7,
+          "failure": null,
+          "input_bytes": 98304,
+          "input_epipe": false,
+          "input_sha256": "d33a2c6fc77130dea2098a1a0a3b13194c9b5789d2ebb7db65d6f26ce0e98a39",
+          "interrupted": false,
+          "offsets_available": false,
+          "output_match": true,
+          "owned_group_clean": true,
+          "receipt_present": true,
+          "receipt_valid": true,
+          "server_terminal": {
+            "data": {
+              "code": 7
+            },
+            "kind": "exited"
+          },
+          "signal": null,
+          "stage": "receipt",
+          "stderr_bytes": 8241,
+          "stderr_sha256": "a1c34f9c77795c5fd04f52a4cfeb36fde5b6d6e48895ffa2065b119eef34045e",
+          "stdin_written": 98304,
+          "stdout_bytes": 98304,
+          "stdout_sha256": "1a30b3720be551330ea5d9d3288e95a17aa5d1130f1997a55b9e13448361d5cb",
+          "stream_present": true,
+          "timed_out": false,
+          "wall_ms": 14761
+        },
+        {
+          "binding_equal": true,
+          "capture_io": false,
+          "capture_overflow": false,
+          "case": "zlib",
+          "client_terminal": {
+            "data": {
+              "code": 7
+            },
+            "kind": "exited"
+          },
+          "exit": 7,
+          "failure": null,
+          "input_bytes": 98304,
+          "input_epipe": false,
+          "input_sha256": "d49fce0bca5ea07c8d0f4e16444ec0e57c3d0a2151a9a3a88621bbae784737fa",
+          "interrupted": false,
+          "offsets_available": false,
+          "output_match": true,
+          "owned_group_clean": true,
+          "receipt_present": true,
+          "receipt_valid": true,
+          "server_terminal": {
+            "data": {
+              "code": 7
+            },
+            "kind": "exited"
+          },
+          "signal": null,
+          "stage": "receipt",
+          "stderr_bytes": 8241,
+          "stderr_sha256": "3dcf23a0badab3f63d74c28e02605e842ffe2be9b16c81dd36ae23114e12b370",
+          "stdin_written": 98304,
+          "stdout_bytes": 98304,
+          "stdout_sha256": "a0b71c3eece6bc3596f305267bbfd78b641ddd3f5308039bd4dfb6c94a8e9c7b",
+          "stream_present": true,
+          "timed_out": false,
+          "wall_ms": 14765
+        },
+        {
+          "binding_equal": true,
+          "capture_io": false,
+          "capture_overflow": false,
+          "case": "concurrent-1",
+          "client_terminal": {
+            "data": {
+              "code": 7
+            },
+            "kind": "exited"
+          },
+          "exit": 7,
+          "failure": null,
+          "input_bytes": 98304,
+          "input_epipe": false,
+          "input_sha256": "28cbf185c89477e4654dcc7b970d04af9f2c370bdac0c1031f6820740430663c",
+          "interrupted": false,
+          "offsets_available": false,
+          "output_match": true,
+          "owned_group_clean": true,
+          "receipt_present": true,
+          "receipt_valid": true,
+          "server_terminal": {
+            "data": {
+              "code": 7
+            },
+            "kind": "exited"
+          },
+          "signal": null,
+          "stage": "receipt",
+          "stderr_bytes": 8241,
+          "stderr_sha256": "c07cb5e5fc3b50a9903ef2e7185633f83efa37ef4fcfa4e8dddc98b2e37d1162",
+          "stdin_written": 98304,
+          "stdout_bytes": 98304,
+          "stdout_sha256": "ed7e6c286e116b036ae63b13f6fc684ca6319bf45cd2642c7acf84715902e825",
+          "stream_present": true,
+          "timed_out": false,
+          "wall_ms": 44148
+        },
+        {
+          "binding_equal": true,
+          "capture_io": false,
+          "capture_overflow": false,
+          "case": "concurrent-2",
+          "client_terminal": {
+            "data": {
+              "code": 7
+            },
+            "kind": "exited"
+          },
+          "exit": 7,
+          "failure": null,
+          "input_bytes": 98304,
+          "input_epipe": false,
+          "input_sha256": "094bc1a91314ceefdc5b24abb0b48d58ec509b754cb6b46f758f6a4bf991aa7d",
+          "interrupted": false,
+          "offsets_available": false,
+          "output_match": true,
+          "owned_group_clean": true,
+          "receipt_present": true,
+          "receipt_valid": true,
+          "server_terminal": {
+            "data": {
+              "code": 7
+            },
+            "kind": "exited"
+          },
+          "signal": null,
+          "stage": "receipt",
+          "stderr_bytes": 8241,
+          "stderr_sha256": "7dec2849f2d17fe216a5435ae8078124690dcba1f5480801dd36f094701c4334",
+          "stdin_written": 98304,
+          "stdout_bytes": 98304,
+          "stdout_sha256": "0bba27d8e22ade9f8aad54b645ad811925f8bdcc36d746739d3b70b55d995e54",
+          "stream_present": true,
+          "timed_out": false,
+          "wall_ms": 44174
+        },
+        {
+          "binding_equal": true,
+          "capture_io": false,
+          "capture_overflow": false,
+          "case": "concurrent-3",
+          "client_terminal": {
+            "data": {
+              "code": 7
+            },
+            "kind": "exited"
+          },
+          "exit": 7,
+          "failure": null,
+          "input_bytes": 98304,
+          "input_epipe": false,
+          "input_sha256": "f7d9a0f1dbcd06e3e87f1d5fcde93163fac89682206f92a1a27bf76a18c76212",
+          "interrupted": false,
+          "offsets_available": false,
+          "output_match": true,
+          "owned_group_clean": true,
+          "receipt_present": true,
+          "receipt_valid": true,
+          "server_terminal": {
+            "data": {
+              "code": 7
+            },
+            "kind": "exited"
+          },
+          "signal": null,
+          "stage": "receipt",
+          "stderr_bytes": 8241,
+          "stderr_sha256": "4f642f7722df31cdf61f393c3cf5a266a7d1b52c61a8df728f82e8c125c6f809",
+          "stdin_written": 98304,
+          "stdout_bytes": 98304,
+          "stdout_sha256": "f84cec51e3fd9807c2daec3bf53020b71f5ea5ba30fb4c63421b81b5b4c4434e",
+          "stream_present": true,
+          "timed_out": false,
+          "wall_ms": 44249
+        }
+      ],
+      "passed": true,
+      "pins": {
+        "artifacts": {
+          "bootstrap": {
+            "bytes": 3543,
+            "id": 13570810425,
+            "name": "v02-pinned-bootstrap-42358105270-1",
+            "sha256": "974f86f238a8798ad2e565f300930070073cc5097748df07c30a9626c871d2ba"
+          },
+          "product": {
+            "bytes": 47988691,
+            "id": 13570516008,
+            "name": "v02-candidate-aarch64-apple-darwin-42358105270-1",
+            "sha256": "f6c27bfab5b3dd2370eb38fa93f99f1c48ae906a7f04c6f45a59bf2bc758f970"
+          },
+          "tooling": {
+            "bytes": 9460623,
+            "id": 13570605471,
+            "name": "v02-installed-tools-aarch64-apple-darwin-42358105270-1",
+            "sha256": "6cf4a04d8ee549bd86d9f7a256fefd7cfdcdb68eaccc189ba5c03b2c1315895c"
+          }
+        },
+        "bootstrap": {
+          "bytes": 9120,
+          "sha256": "1fbbc16515fa0706256dbca9d9a5acef36797fc124e3d909b2881650df75b597"
+        },
+        "candidate_attempt": "1",
+        "candidate_commit": "571d98b77780d265a2fb29d84ae160fec72ba37b",
+        "candidate_run_id": "42358105270",
+        "fixture": {
+          "bytes": 6546288,
+          "sha256": "e745c823a75a781908acbf2b9fac41614e8c1996cbc5afccd1b66231ac6bcc55"
+        },
+        "harness_commit": "e9686c0799e78010c350d4990406c93ddb8bc474",
+        "kind": "macos-stream-diagnostic-pins",
+        "manifest": {
+          "bytes": 601,
+          "sha256": "abfe1ae7daa0ebc374c271a01f272f38b7332ec57fbbb766de5d437b4f193e59"
+        },
+        "old_harness_sha256": "f2b805880c907c2fcb12dd1774766da90550def3df6e7b6d7d048ca2ef9cef36",
+        "qualification": false,
+        "repository": "Epiphytic/marmish",
+        "schema": 1,
+        "target": "aarch64-apple-darwin",
+        "tooling_record": {
+          "bytes": 440,
+          "sha256": "9684214b58e7ee52676d45ea40c60bf33ae735ae8c2da37386a0cca329d8456b"
+        },
+        "version": "0.2.3"
+      },
+      "probe_sha256": "c075b05f7235c4dcb63247b8fea5bb035f3a4e51b9df726b7acaec34442800e4",
+      "qualification": false,
+      "relay": "wss://relay.us.whitenoise.chat",
+      "same_host_only": true,
+      "schema": 1,
+      "stage": "stream_capture"
+    },
+    "output/complete.json": {
+      "kind": "macos-diagnostic-complete",
+      "passed": true,
+      "report_sha256": "6f4982991473b7e3f199103a565c15d43cb9aa0f49dd632552c39f8014c1afe5",
+      "schema": 1
+    }
+  }
+}

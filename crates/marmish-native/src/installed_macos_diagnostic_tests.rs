@@ -1,5 +1,5 @@
 use super::*;
-fn fixture() -> (tempfile::TempDir, process::Environment) {
+pub(super) fn fixture() -> (tempfile::TempDir, process::Environment) {
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
@@ -184,7 +184,7 @@ async fn spawn_failure_is_a_finite_capture_not_lost_case() {
     assert!(c.cleanup);
     assert!(c.stdout.bytes.is_empty());
 }
-fn entry(direction: &str, stream: &str) -> streaming_cleanup::Entry {
+pub(super) fn entry(direction: &str, stream: &str) -> streaming_cleanup::Entry {
     streaming_cleanup::Entry {
         stream: stream.into(),
         session: "ab".repeat(16),
@@ -270,7 +270,7 @@ fn observation_preserves_failure_evidence_without_private_identifiers() {
     assert_eq!(observation.failure.as_deref(), Some("hash_mismatch"));
     assert!(!observation.offsets_available);
 }
-fn valid_pins() -> Pins {
+pub(super) fn valid_pins() -> Pins {
     let file = FilePin {
         sha256: "ab".repeat(32),
         bytes: 1,
@@ -381,7 +381,7 @@ fn stream_argv_uses_npub_and_preserves_six_literal_arguments() {
     assert!(stream_args(root.path(), &socket, "not-an-account", &nonce, false).is_err());
 }
 
-fn successful_capture(nonce: &str) -> Capture {
+pub(super) fn successful_capture(nonce: &str) -> Capture {
     Capture {
         status: Some(ExitStatus::from_raw(7 << 8)),
         stdout: Pipe {

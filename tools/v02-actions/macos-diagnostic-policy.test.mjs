@@ -10,8 +10,8 @@ function step(yaml, name) {
   const next = yaml.indexOf('\n      - ', start + prefix.length);
   return yaml.slice(start, next < 0 ? undefined : next);
 }
-function runtimeBoundary(yaml) {
-  const run = step(yaml, 'Diagnose installed old product');
+function runtimeBoundary(yaml, name = 'Diagnose installed old product') {
+  const run = step(yaml, name);
   assert.match(run, /timeout-minutes: 19\n/);
   assert.doesNotMatch(run, /GH_TOKEN|github\.token|GITHUB_TOKEN|secrets\.|continue-on-error/);
   for (const [flag, suffix] of [
@@ -112,4 +112,62 @@ test('uploads name only sanitized closed records on both success and failure', (
 test('diagnostic cannot publish source, releases or packages', () => {
   assert.doesNotMatch(workflow, /git (push|tag|commit)|cargo publish|gh release|rad (push|sync)|npm publish|workflow run|repository_dispatch/);
   assert.match(workflow, /not qualification/);
+});
+
+const coldWorkflow = readFileSync(new URL('../../.github/workflows/streaming-macos-cold-multiprincipal.yml', import.meta.url), 'utf8');
+const coldStep = 'Diagnose cold multiprincipal old product';
+
+test('cold workflow retains manual read-only Mac authority and fixed administrative bounds', () => {
+  assert.match(coldWorkflow, /on:\n  workflow_dispatch:\n/);
+  assert.doesNotMatch(coldWorkflow, /\n  (push|pull_request|schedule|workflow_run):/);
+  assert.match(coldWorkflow, /permissions:\n  contents: read\n  actions: read\nconcurrency:/);
+  assert.match(coldWorkflow, /group: marmish-streaming-installed\n  cancel-in-progress: false/);
+  assert.deepEqual([...coldWorkflow.matchAll(/^  ([a-z][\w-]*):\n(?=    if:)/gm)].map(m => m[1]), ['diagnostic']);
+  assert.match(coldWorkflow, /runs-on: macos-15\n    timeout-minutes: 48/);
+  assert.doesNotMatch(coldWorkflow, /secrets\.|: write|ubuntu-|windows-|strategy:|matrix:|concurrent:|RUN_CONCURRENT|--concurrent/);
+  assert.doesNotMatch(coldWorkflow, /candidate_run:|candidate_source:|candidate_attempt:/);
+  assert.doesNotMatch(coldWorkflow, /git (push|tag|commit)|cargo publish|gh release|rad (push|sync)|npm publish|workflow run|repository_dispatch/);
+  assert.match(coldWorkflow, /not qualification/);
+});
+
+test('cold workflow inherits exact reviewed source, private root and probe-only signed build', () => {
+  // All unchanged steps must remain literal copies of the reviewed original policy.
+  for (const name of ['Verify reviewed harness and Mac ARM64 host', 'Allocate private diagnostic root', 'Build diagnostic probe only', 'Install locked acquisition tooling']) {
+    assert.equal(step(coldWorkflow, name), step(workflow, name));
+  }
+  assert.match(coldWorkflow, /ref: \$\{\{ inputs\.harness_commit \}\}\n          persist-credentials: false\n          fetch-depth: 0/);
+  assert.match(coldWorkflow, /toolchain: 1\.97\.1\n/);
+  assert.match(coldWorkflow, /MACOSX_DEPLOYMENT_TARGET: '15\.0'/);
+  assert.ok(coldWorkflow.indexOf('Build diagnostic probe only') < coldWorkflow.indexOf('Acquire and verify immutable old candidate'));
+});
+
+test('cold acquisition and validator use distinct fixed modes with credential-free execution', () => {
+  const acquire = step(coldWorkflow, 'Acquire and verify immutable old candidate');
+  assert.equal(acquire, step(workflow, 'Acquire and verify immutable old candidate').replace('macos-diagnostic.mjs', 'macos-diagnostic.mjs acquire-cold'));
+  assert.equal((coldWorkflow.match(/GH_TOKEN:/g) ?? []).length, 1);
+  assert.doesNotMatch(coldWorkflow, /actions\/download-artifact|curl|wget/);
+  assert.ok(coldWorkflow.indexOf('Acquire and verify immutable old candidate') < coldWorkflow.indexOf(coldStep));
+  const probe = step(coldWorkflow, coldStep);
+  runtimeBoundary(coldWorkflow, coldStep);
+  assert.match(probe, /args=\(macos-cold-multiprincipal-diagnostic\n/);
+  assert.doesNotMatch(probe, /RUN_CONCURRENT|--concurrent|macos-diagnostic\n/);
+  const validate = step(coldWorkflow, 'Independently validate closed diagnostic records');
+  assert.match(validate, /if: always\(\) && steps\.probe\.outcome != 'skipped'/);
+  assert.match(validate, /PROBE: \$\{\{ github\.workspace \}\}\/target\/debug\/marmish-installed-check/);
+  assert.match(validate, /run: node tools\/v02-actions\/macos-diagnostic\.mjs validate-cold-report/);
+  assert.doesNotMatch(validate, /GH_TOKEN|github\.token|RUN_CONCURRENT/);
+  assert.doesNotMatch(coldWorkflow, /continue-on-error|\|\| true|set \+e/);
+});
+
+test('cold workflow uploads only closed sanitized evidence with a distinct artifact name', () => {
+  uploadBoundary(coldWorkflow);
+  assert.match(coldWorkflow, /name: macos-cold-multiprincipal-diagnostic-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/);
+  assert.equal((coldWorkflow.match(/uses: actions\/upload-artifact@/g) ?? []).length, 1);
+  assert.throws(() => uploadBoundary(coldWorkflow.replace('/output/report.json', '/output/*')));
+});
+
+test('cold runtime rejects secret exposure, wrong fixture and expanded deadline', () => {
+  assert.throws(() => runtimeBoundary(coldWorkflow.replace('id: probe', 'id: probe\n        env:\n          GH_TOKEN: bad'), coldStep));
+  assert.throws(() => runtimeBoundary(coldWorkflow.replace('--fixture "$DIAGNOSTIC_ROOT/tools/marmish-installed-fixture"', '--fixture "$DIAGNOSTIC_ROOT/new-fixture"'), coldStep));
+  assert.throws(() => runtimeBoundary(coldWorkflow.replace('timeout-minutes: 19', 'timeout-minutes: 30'), coldStep));
 });

@@ -90,6 +90,7 @@ struct Args {
 enum Command {
     ReleaseInfo,
     MacosDiagnostic(macos_diagnostic::Options),
+    MacosColdMultiprincipalDiagnostic(macos_diagnostic::ColdOptions),
     LifecycleContext {
         #[arg(long)]
         context: PathBuf,
@@ -327,6 +328,9 @@ pub(crate) async fn entry() -> u8 {
     }
     let result = match Args::parse().command {
         Command::MacosDiagnostic(options) => macos_diagnostic::run(options).await,
+        Command::MacosColdMultiprincipalDiagnostic(options) => {
+            macos_diagnostic::run_cold(options).await
+        }
         Command::LifecycleContext {
             context,
             variants,

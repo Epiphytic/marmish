@@ -459,12 +459,49 @@ fn success(c: &Capture) -> bool {
         && !c.stderr.io_error
         && !c.input_error
 }
-fn setup_valid(s: &prepare::Setup, name: &str, new: bool, granted: bool) -> bool {
+#[derive(Clone, Copy)]
+struct ProfileSpec<'a> {
+    identity_name: &'a str,
+    role: &'a str,
+}
+impl ProfileSpec<'_> {
+    fn validate(self) -> Result<()> {
+        crate::identity::validate_name(self.identity_name)?;
+        if !matches!(self.role, "client" | "server") {
+            return Err(bad());
+        }
+        Ok(())
+    }
+}
+fn setup_args(w: &Path, spec: ProfileSpec<'_>, peers: Option<&[String]>) -> Result<Vec<OsString>> {
+    spec.validate()?;
+    let mut args = base(w, spec.identity_name);
+    args.push("setup".into());
+    match peers {
+        None => args.extend(["--role".into(), spec.role.into(), "--no-grants".into()]),
+        Some(peers) => {
+            args.push("--update".into());
+            for peer in peers {
+                args.extend([
+                    if spec.role == "server" {
+                        "--grant"
+                    } else {
+                        "--trust"
+                    }
+                    .into(),
+                    records::public_destination(peer)?.into(),
+                ]);
+            }
+        }
+    }
+    Ok(args)
+}
+fn setup_valid_named(s: &prepare::Setup, spec: ProfileSpec<'_>, new: bool, granted: bool) -> bool {
     s.schema == 1
-        && s.identity == name
+        && s.identity == spec.identity_name
         && s.backend == "file"
-        && s.role == name
-        && s.inbound_enabled == (name == "server" && granted)
+        && s.role == spec.role
+        && s.inbound_enabled == (spec.role == "server" && granted)
         && s.config_changed
         && s.identity_created == new
         && s.owner_opened == new
@@ -472,14 +509,24 @@ fn setup_valid(s: &prepare::Setup, name: &str, new: bool, granted: bool) -> bool
         && s.mdk_stop_complete
         && s.runtime_cleanup_complete
 }
-async fn install_and_setup(
+fn setup_valid(s: &prepare::Setup, name: &str, new: bool, granted: bool) -> bool {
+    setup_valid_named(
+        s,
+        ProfileSpec {
+            identity_name: name,
+            role: name,
+        },
+        new,
+        granted,
+    )
+}
+async fn install_image(
     o: &Options,
     pins: &Pins,
-    state: &mut State,
+    environment: &process::Environment,
     deadline: Instant,
     signal: watch::Receiver<bool>,
-    stage: &mut String,
-) -> Result<()> {
+) -> Result<PathBuf> {
     let expected = crate::native_manifest::hex32(&pins.manifest.sha256)?;
     let manifest = crate::native_manifest::verify_directory(
         &o.assets,
@@ -509,7 +556,7 @@ async fn install_and_setup(
         Path::new("/bin/sh"),
         &args,
         &o.workspace,
-        &state.environment,
+        environment,
         &[],
         cutoff(deadline, 120),
         signal.clone(),
@@ -534,18 +581,29 @@ async fn install_and_setup(
     }
     directory(&o.workspace.join("fixture"))?;
     directory(&o.workspace.join("fixture/receipts"))?;
-    state.fixture = o.workspace.join("fixture/main");
-    write_private(&state.fixture, &fixture, 0o700)?;
-    state.fixture = state.fixture.canonicalize()?;
+    let fixture_path = o.workspace.join("fixture/main");
+    write_private(&fixture_path, &fixture, 0o700)?;
+    fixture_path.canonicalize().map_err(Error::from)
+}
+async fn install_and_setup(
+    o: &Options,
+    pins: &Pins,
+    state: &mut State,
+    deadline: Instant,
+    signal: watch::Receiver<bool>,
+    stage: &mut String,
+) -> Result<()> {
+    state.fixture = install_image(o, pins, &state.environment, deadline, signal.clone()).await?;
     *stage = "setup".into();
     for name in ["client", "server"] {
-        let mut args = base(&o.workspace, name);
-        args.extend([
-            "setup".into(),
-            "--role".into(),
-            name.into(),
-            "--no-grants".into(),
-        ]);
+        let args = setup_args(
+            &o.workspace,
+            ProfileSpec {
+                identity_name: name,
+                role: name,
+            },
+            None,
+        )?;
         let c = invoke(
             state,
             &o.workspace,
@@ -567,18 +625,14 @@ async fn install_and_setup(
     }
     for (i, name) in ["client", "server"].into_iter().enumerate() {
         let peer = &state.accounts[1 - i];
-        let mut args = base(&o.workspace, name);
-        args.extend([
-            "setup".into(),
-            "--update".into(),
-            if name == "server" {
-                "--grant"
-            } else {
-                "--trust"
-            }
-            .into(),
-            records::public_destination(peer)?.into(),
-        ]);
+        let args = setup_args(
+            &o.workspace,
+            ProfileSpec {
+                identity_name: name,
+                role: name,
+            },
+            Some(std::slice::from_ref(peer)),
+        )?;
         let c = invoke(
             state,
             &o.workspace,
@@ -611,17 +665,32 @@ async fn install_and_setup(
     Ok(())
 }
 fn configure_value(
-    mut config: serde_json::Value,
+    config: serde_json::Value,
     name: &str,
     peer: &str,
     workspace: &Path,
     fixture: &Path,
 ) -> Result<Vec<u8>> {
+    configure_peers(config, name, &[peer.to_owned()], workspace, fixture)
+}
+fn configure_peers(
+    mut config: serde_json::Value,
+    name: &str,
+    peers: &[String],
+    workspace: &Path,
+    fixture: &Path,
+) -> Result<Vec<u8>> {
+    if peers.is_empty()
+        || peers.windows(2).any(|w| w[0] >= w[1])
+        || peers.iter().any(|p| !records::hexadecimal(p, 64))
+    {
+        return Err(bad());
+    }
     if !matches!(name, "client" | "server") {
         return Err(bad());
     }
 
-    let peers = serde_json::json!([peer]);
+    let peers = serde_json::json!(peers);
     let empty = serde_json::json!([]);
     if config["role"] != name
         || config["relays"] != serde_json::json!([RELAY])
@@ -722,12 +791,21 @@ fn check_capture(
     Ok(())
 }
 fn check_receipt(obs: &mut Observation, state: &State, pins: &Pins, nonce: &str) -> Result<()> {
-    let path = streaming_fixture::receipt_path(&state.fixture, nonce)?;
+    check_receipt_named(obs, &state.fixture, pins, nonce, "macos-arm64")
+}
+fn check_receipt_named(
+    obs: &mut Observation,
+    fixture: &Path,
+    pins: &Pins,
+    nonce: &str,
+    role: &str,
+) -> Result<()> {
+    let path = streaming_fixture::receipt_path(fixture, nonce)?;
     obs.receipt_present = path.try_exists()?;
     if obs.receipt_present {
         let actual: Result<streaming_fixture::Receipt> = records::read(&path, 16384);
         obs.receipt_valid = actual.is_ok_and(|a| {
-            streaming_fixture::receipt(&state.fixture, &pins.fixture.sha256, nonce, "macos-arm64")
+            streaming_fixture::receipt(fixture, &pins.fixture.sha256, nonce, role)
                 .is_ok_and(|e| a == e)
         });
     }
@@ -794,7 +872,31 @@ fn stream_args(
     nonce: &str,
     compress: bool,
 ) -> Result<Vec<OsString>> {
-    let mut args = matrix::base(workspace, "client", socket, &[RELAY.into()]);
+    stream_args_named(
+        workspace,
+        socket,
+        "client",
+        account,
+        nonce,
+        "macos-arm64",
+        compress,
+    )
+}
+fn stream_args_named(
+    workspace: &Path,
+    socket: &Path,
+    identity: &str,
+    account: &str,
+    nonce: &str,
+    role: &str,
+    compress: bool,
+) -> Result<Vec<OsString>> {
+    ProfileSpec {
+        identity_name: identity,
+        role: "client",
+    }
+    .validate()?;
+    let mut args = matrix::base(workspace, identity, socket, &[RELAY.into()]);
     args.extend([
         "--no-autostart".into(),
         "stream".into(),
@@ -804,7 +906,17 @@ fn stream_args(
         args.push("--compress".into());
     }
     args.extend(["--".into(), "./fixture/main".into()]);
-    args.extend(streaming_fixture::arguments(nonce, "macos-arm64")?);
+    args.extend(streaming_fixture::arguments(nonce, role)?);
+    Ok(args)
+}
+fn cancel_args_named(
+    w: &Path,
+    name: &str,
+    socket: &Path,
+    entry: &streaming_cleanup::Entry,
+) -> Result<Vec<OsString>> {
+    let mut args = matrix::base(w, name, socket, &[RELAY.into()]);
+    args.extend(streaming_cases::cancel_args(&entry.server, &entry.stream)?);
     Ok(args)
 }
 async fn entries(
@@ -1129,15 +1241,9 @@ impl CleanupActions for DaemonCleanup<'_> {
                                 && e.open_digest.is_some()
                                 && e.terminal.is_none()
                         }) {
-                            let mut args = matrix::base(
-                                &o.workspace,
-                                "client",
-                                &client.socket,
-                                &[RELAY.into()],
-                            );
-                            match streaming_cases::cancel_args(&entry.server, &entry.stream) {
-                                Ok(extra) => {
-                                    args.extend(extra);
+                            match cancel_args_named(&o.workspace, "client", &client.socket, &entry)
+                            {
+                                Ok(args) => {
                                     let out = capture(
                                         &o.workspace.join("bin/marmish"),
                                         &args,
@@ -1237,9 +1343,34 @@ fn category(stage: &str, error: &Error) -> &'static str {
     }
 }
 fn publish(output: &Path, report: &Report<'_>) -> Result<()> {
+    publish_report(
+        PublicationContext {
+            output,
+            report_kind: report.kind,
+        },
+        &records::canonical(report)?,
+        report.passed,
+    )
+}
+struct PublicationContext<'a> {
+    output: &'a Path,
+    report_kind: &'a str,
+}
+fn publish_report(context: PublicationContext<'_>, report: &[u8], passed: bool) -> Result<()> {
+    let output = context.output;
+    if !matches!(
+        context.report_kind,
+        "macos-stream-diagnostic" | "macos-cold-multiprincipal-diagnostic"
+    ) {
+        return Err(bad());
+    }
+    let value: serde_json::Value = serde_json::from_slice(report).map_err(|_| bad())?;
+    if value["kind"] != context.report_kind || value["passed"] != passed {
+        return Err(bad());
+    }
     let result = (|| {
-        records::write(&output.join("report.json"), report)?;
-        if report.passed {
+        records::write_raw(&output.join("report.json"), report)?;
+        if passed {
             let bytes = records::read_bytes(&output.join("report.json"), 1048576)?;
             records::write(
                 &output.join("complete.json"),
@@ -1284,7 +1415,7 @@ fn finish_report(
         );
     }
 }
-pub(super) async fn run(o: Options) -> Result<()> {
+fn signal_watcher() -> Result<(watch::Receiver<bool>, tokio::task::JoinHandle<()>)> {
     // Install signal handlers before child or relay work. A second signal never aborts finalization.
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
@@ -1295,12 +1426,16 @@ pub(super) async fn run(o: Options) -> Result<()> {
             let _ = send.send(true);
         }
     });
+    Ok((signal, watcher))
+}
+pub(super) async fn run(o: Options) -> Result<()> {
+    let (signal, watcher) = signal_watcher()?;
     let result = run_inner(&o, signal).await;
     watcher.abort();
     let _ = watcher.await;
     result
 }
-async fn run_inner(o: &Options, signal: watch::Receiver<bool>) -> Result<()> {
+fn preflight_paths(o: &Options) -> Result<()> {
     for path in [
         &o.assets,
         &o.bootstrap,
@@ -1326,6 +1461,22 @@ async fn run_inner(o: &Options, signal: watch::Receiver<bool>) -> Result<()> {
             return Err(bad());
         }
     }
+    Ok(())
+}
+fn prepare_environment(o: &Options) -> Result<process::Environment> {
+    directory(&o.workspace)?;
+    let environment = process::Environment {
+        home: o.workspace.join("home"),
+        temporary: o.workspace.join("tmp"),
+        utilities: o.workspace.join("utilities"),
+    };
+    directory(&environment.home)?;
+    directory(&environment.temporary)?;
+    process::utilities(&environment.utilities)?;
+    Ok(environment)
+}
+async fn run_inner(o: &Options, signal: watch::Receiver<bool>) -> Result<()> {
+    preflight_paths(o)?;
     directory(&o.output)?;
     let mut stage = "pins".to_string();
     let mut observations = Vec::new();
@@ -1354,15 +1505,7 @@ async fn run_inner(o: &Options, signal: watch::Receiver<bool>) -> Result<()> {
         {
             return Err(bad());
         }
-        directory(&o.workspace)?;
-        let environment = process::Environment {
-            home: o.workspace.join("home"),
-            temporary: o.workspace.join("tmp"),
-            utilities: o.workspace.join("utilities"),
-        };
-        directory(&environment.home)?;
-        directory(&environment.temporary)?;
-        process::utilities(&environment.utilities)?;
+        let environment = prepare_environment(o)?;
         let mut state = State {
             client: None,
             server: None,
@@ -1398,3 +1541,7 @@ async fn run_inner(o: &Options, signal: watch::Receiver<bool>) -> Result<()> {
 #[cfg(test)]
 #[path = "installed_macos_diagnostic_tests.rs"]
 mod tests;
+
+#[path = "installed_macos_cold_multiprincipal.rs"]
+mod cold_multiprincipal;
+pub(super) use cold_multiprincipal::{Options as ColdOptions, run as run_cold};
