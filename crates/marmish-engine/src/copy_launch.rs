@@ -303,8 +303,46 @@ pub(crate) mod tests {
         (child.reap_last().unwrap(), bytes)
     }
 
+    const ISOLATED_SUCCESS: i32 = 42;
+
+    fn isolated_test(name: &str, marker: &str) -> bool {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--nocapture", "--test-threads=1"])
+            .env(marker, "1")
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                return status.code() == Some(ISOLATED_SUCCESS);
+            }
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn isolated_test_requires_positive_child_execution_proof() {
+        assert!(!isolated_test(
+            "copy_launch::tests::no_such_isolated_test",
+            "MARMISH_COPY_UNUSED_CHILD"
+        ));
+    }
+
     #[test]
     fn owned_context_is_read_only_cloexec_above_three_and_has_no_writer() {
+        const MARKER: &str = "MARMISH_COPY_OWNED_CONTEXT_CHILD";
+        if std::env::var_os(MARKER).is_none() {
+            assert!(isolated_test(
+                "copy_launch::tests::owned_context_is_read_only_cloexec_above_three_and_has_no_writer",
+                MARKER
+            ));
+            return;
+        }
         let expected = context();
         let owned = OwnedCopyContext::new(&expected).unwrap();
         let fd = owned.locator();
@@ -328,6 +366,8 @@ pub(crate) mod tests {
         drop(file);
         drop(owned);
         assert_ne!(identity(fd), Some(before));
+        // Distinguish completed assertions from an empty exact test filter.
+        unsafe { libc::_exit(ISOLATED_SUCCESS) };
     }
 
     #[test]
@@ -491,25 +531,13 @@ pub(crate) mod tests {
             // No test harness output/destructors may touch its deliberately
             // closed stdio. This isolated child owns no surviving test state.
             unsafe {
-                libc::_exit(0);
+                libc::_exit(ISOLATED_SUCCESS);
             }
         }
-        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "copy_launch::tests::context_fd_allocation_and_spawn_survive_closed_stdio_and_original_fd_three", "--nocapture"])
-            .env(MARKER, "1").spawn().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(15);
-        loop {
-            if let Some(status) = child.try_wait().unwrap() {
-                assert!(status.success());
-                break;
-            }
-            if Instant::now() >= deadline {
-                child.kill().unwrap();
-                child.wait().unwrap();
-                panic!("isolated closed-FD test timed out");
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        assert!(isolated_test(
+            "copy_launch::tests::context_fd_allocation_and_spawn_survive_closed_stdio_and_original_fd_three",
+            MARKER
+        ));
     }
 
     #[test]

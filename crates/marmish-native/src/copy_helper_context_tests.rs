@@ -168,25 +168,178 @@ fn oversized_context_is_bounded_and_closes_locator_even_with_live_writer() {
 }
 
 #[test]
-fn open_writer_cannot_hold_context_startup_waiting_for_eof() {
-    let (reader, mut writer) = std::io::pipe().unwrap();
-    writer
-        .write_all(&valid_context().encode().unwrap())
-        .unwrap();
+fn inherited_duplicate_writer_delays_eof_but_not_valid_context_startup() {
+    let expected = valid_context();
+    let bytes = expected.encode().unwrap();
+    let (reader, writer) = std::io::pipe().unwrap();
+    let writer = File::from(OwnedFd::from(writer));
+    // Model another fork inheriting the CLOEXEC writer before its exec: our
+    // original writer closes, but this duplicate remains alive temporarily.
+    let mut inherited = Some(writer.try_clone().unwrap());
+    drop(writer);
+    let mut file = relocate(File::from(OwnedFd::from(reader)));
+    let locator = PinnedLocator::new(&file);
+    inherited.as_mut().unwrap().write_all(&bytes).unwrap();
+    nonblocking(&file).unwrap_or_else(|_| panic!("context nonblocking setup"));
+
+    // Actual old-reader RED baseline, synchronously on the same fixture. It
+    // consumes the full valid bytes, then fails because the writer still lives.
+    let mut baseline = Vec::new();
+    let failure = Read::by_ref(&mut file)
+        .take((protocol::MAX_CONTEXT + 1) as u64)
+        .read_to_end(&mut baseline)
+        .unwrap_err();
+    assert_eq!(failure.kind(), io::ErrorKind::WouldBlock);
+    assert_eq!(baseline, bytes);
+
+    inherited.as_mut().unwrap().write_all(&bytes).unwrap();
+    let mut waits = 0;
+    let result = context_with_wait(file, |file, deadline| {
+        waits += 1;
+        // The seam is reached only after the real reader sees WouldBlock.
+        drop(inherited.take());
+        context_readable(file, deadline)
+    });
+    drop(inherited);
+    assert_eq!(waits, 1);
+    assert!(matches!(result, Ok(actual) if actual == expected));
+    locator.released();
+}
+
+#[test]
+fn delayed_partial_context_finishes_only_after_remaining_bytes_and_eof() {
+    let expected = valid_context();
+    let bytes = expected.encode().unwrap();
+    let split = bytes.len() / 2;
+    let (reader, writer) = std::io::pipe().unwrap();
+    let mut writer = Some(File::from(OwnedFd::from(writer)));
+    writer.as_mut().unwrap().write_all(&bytes[..split]).unwrap();
     let file = relocate(File::from(OwnedFd::from(reader)));
     let locator = PinnedLocator::new(&file);
-    let (send, receive) = mpsc::sync_channel(1);
-    let worker = std::thread::spawn(move || {
-        send.send(context(file)).ok();
+    let mut waits = 0;
+    let result = context_with_wait(file, |file, deadline| {
+        waits += 1;
+        writer.as_mut().unwrap().write_all(&bytes[split..])?;
+        drop(writer.take());
+        context_readable(file, deadline)
     });
-    let outcome = receive.recv_timeout(Duration::from_secs(2));
-    // Always release and join before asserting, including a regression where
-    // context incorrectly performs a blocking read until EOF.
     drop(writer);
-    worker.join().unwrap();
-    assert!(matches!(
-        outcome,
-        Ok(Err(Failure::File(CopyError::LocalIo)))
-    ));
+    assert_eq!(waits, 1);
+    assert!(matches!(result, Ok(actual) if actual == expected));
     locator.released();
+}
+
+#[test]
+fn progressive_context_bytes_and_eof_share_one_absolute_deadline() {
+    let expected = valid_context();
+    let bytes = expected.encode().unwrap();
+    let first = bytes.len() / 3;
+    let second = 2 * bytes.len() / 3;
+    let (reader, writer) = std::io::pipe().unwrap();
+    let mut writer = Some(File::from(OwnedFd::from(writer)));
+    writer.as_mut().unwrap().write_all(&bytes[..first]).unwrap();
+    let file = relocate(File::from(OwnedFd::from(reader)));
+    let locator = PinnedLocator::new(&file);
+    let mut deadlines = Vec::new();
+    let result = context_with_wait(file, |file, deadline| {
+        // Each invocation follows an actual WouldBlock after the preceding
+        // chunk was consumed. Keep the writer alive even after the final byte
+        // so EOF is a separate readiness event using the same production poll.
+        deadlines.push(deadline);
+        match deadlines.len() {
+            1 => writer.as_mut().unwrap().write_all(&bytes[first..second])?,
+            2 => writer.as_mut().unwrap().write_all(&bytes[second..])?,
+            _ => drop(writer.take()),
+        }
+        context_readable(file, deadline)
+    });
+    drop(writer);
+    assert!(matches!(result, Ok(actual) if actual == expected));
+    assert_eq!(deadlines.len(), 3);
+    assert!(deadlines.windows(2).all(|pair| pair[0] == pair[1]));
+    locator.released();
+}
+
+#[test]
+fn valid_prefix_cannot_hide_a_trailing_byte_appended_before_eof() {
+    let bytes = valid_context().encode().unwrap();
+    let (reader, writer) = std::io::pipe().unwrap();
+    let mut writer = Some(File::from(OwnedFd::from(writer)));
+    writer.as_mut().unwrap().write_all(&bytes).unwrap();
+    let file = relocate(File::from(OwnedFd::from(reader)));
+    let locator = PinnedLocator::new(&file);
+    let mut waits = 0;
+    let result = context_with_wait(file, |file, deadline| {
+        waits += 1;
+        writer.as_mut().unwrap().write_all(&[0])?;
+        drop(writer.take());
+        context_readable(file, deadline)
+    });
+    drop(writer);
+    assert_eq!(waits, 1);
+    assert!(matches!(result, Err(Failure::File(CopyError::Protocol))));
+    locator.released();
+}
+
+#[test]
+fn delayed_overflow_is_rejected_without_requiring_writer_eof() {
+    let prefix = valid_context().encode().unwrap();
+    let (reader, writer) = std::io::pipe().unwrap();
+    let mut writer = File::from(OwnedFd::from(writer));
+    writer.write_all(&prefix).unwrap();
+    nonblocking(&writer).unwrap_or_else(|_| panic!("writer nonblocking setup"));
+    let file = relocate(File::from(OwnedFd::from(reader)));
+    let locator = PinnedLocator::new(&file);
+    let suffix = vec![0u8; protocol::MAX_CONTEXT + 1 - prefix.len()];
+    let mut sent = 0;
+    let mut waits = 0;
+    let result = context_with_wait(file, |file, deadline| {
+        waits += 1;
+        // Accommodate a small pipe without blocking this reader thread. Each
+        // batch uses the same actual readiness poll and original deadline.
+        while sent < suffix.len() {
+            match writer.write(&suffix[sent..]) {
+                Ok(0) => return Err(io::Error::from(io::ErrorKind::WriteZero).into()),
+                Ok(count) => sent += count,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        context_readable(file, deadline)
+    });
+    // The writer remains live until the reader has rejected all 4097 bytes.
+    drop(writer);
+    assert!(waits > 0);
+    assert_eq!(sent, suffix.len());
+    assert!(matches!(result, Err(Failure::File(CopyError::Protocol))));
+    locator.released();
+}
+
+#[test]
+fn open_writer_cannot_hold_context_startup_waiting_for_eof() {
+    let bytes = valid_context().encode().unwrap();
+    for prefix in [Vec::new(), bytes[..bytes.len() / 2].to_vec(), bytes] {
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        writer.write_all(&prefix).unwrap();
+        let file = relocate(File::from(OwnedFd::from(reader)));
+        let locator = PinnedLocator::new(&file);
+        let (send, receive) = mpsc::sync_channel(1);
+        let started = Instant::now();
+        let worker = std::thread::spawn(move || {
+            send.send(context(file)).ok();
+        });
+        let outcome = receive.recv_timeout(Duration::from_secs(5));
+        let elapsed = started.elapsed();
+        // Always release and join before asserting, including a regression
+        // where context incorrectly performs a blocking read until EOF.
+        drop(writer);
+        worker.join().unwrap();
+        assert!(matches!(
+            outcome,
+            Ok(Err(Failure::File(CopyError::LocalIo)))
+        ));
+        assert!(elapsed >= CONTEXT_READ_TIMEOUT);
+        locator.released();
+    }
 }

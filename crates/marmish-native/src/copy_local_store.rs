@@ -651,9 +651,7 @@ mod tests {
     use super::*;
     const NOW: u64 = 1_000_000;
     fn journal() -> (tempfile::TempDir, Journal) {
-        let dir = tempfile::tempdir().unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let dir = super::super::private_test_directory();
         let journal = Journal::open(
             &dir.path().join("journal"),
             &[91; 32],

@@ -1300,6 +1300,20 @@ mod tests {
             );
         }
         let mut m = manifest(b"abc");
+        m.destination = "-strange λ漢字\n' *;$".as_bytes().to_vec();
+        let mut receiver = open(&base, m.clone(), AttemptMode::Create).unwrap();
+        receive(&mut receiver, b"abc");
+        finish(&mut receiver);
+        assert_eq!(
+            std::fs::read(dir.path().join(std::ffi::OsStr::from_bytes(&m.destination))).unwrap(),
+            b"abc"
+        );
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_raw_non_utf8_destination_commits_without_conversion() {
+        let (dir, base) = base();
+        let mut m = manifest(b"abc");
         m.destination = b"-strange\xff\n' *".to_vec();
         let mut receiver = open(&base, m.clone(), AttemptMode::Create).unwrap();
         receive(&mut receiver, b"abc");

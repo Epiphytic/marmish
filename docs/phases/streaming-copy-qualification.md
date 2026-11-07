@@ -49,12 +49,11 @@ the functional delivery scope while bounding public-relay workloads.
   step `Verify native components`, runs unfiltered native and engine tests on
   `macos-15`, including `only_macos_exact_public_alias_prefixes_are_normalized`
   and the closed-stdio/original-FD3 launch tests. The job must assert non-root
-  execution; record its exact job/run in validation evidence. Installed design:
-  `docs/phases/streaming-installed.md` on `feat/streaming-installed`, base commit
-  `23105d859e995db8ba036d4db3f8d15e1ba913bf`, currently uncommitted design blob
-  `ee8c361b7cbce78a34fbcdea76c7c65db1093177` (reviewed snapshot; later edits
-  require final source review). It is absent from this branch. Merge the design
-  before this proposal becomes a self-contained final qualification record.
+  execution; record its exact job/run in validation evidence. The
+  [installed design](streaming-installed.md) and reviewed drivers/workflows were
+  integrated in `493f059`; source integration does not satisfy the installed
+  execution gates above. Fresh exact-source candidate and cohort evidence is
+  still required.
 - Local recovery tests must demonstrate uncheckpointed-suffix truncation,
   corrupted-prefix refusal, source/destination binding conflicts, dropped
   checkpoint and commit replies, committed receipt recovery without Data, and

@@ -92,7 +92,52 @@ fn nonblocking(file: &File) -> Result<()> {
     }
     Ok(())
 }
-fn context(mut file: File) -> Result<HelperContext> {
+const CONTEXT_READ_TIMEOUT: Duration = Duration::from_secs(1);
+
+fn context_remaining(deadline: Instant) -> Result<Duration> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(io::Error::from(io::ErrorKind::TimedOut).into());
+    }
+    Ok(remaining)
+}
+
+fn context_readable(file: &File, deadline: Instant) -> Result<()> {
+    loop {
+        let remaining = context_remaining(deadline)?;
+        let mut descriptor = libc::pollfd {
+            fd: file.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let milliseconds = remaining.as_millis().clamp(1, i32::MAX as u128) as i32;
+        let ready = unsafe { libc::poll(&mut descriptor, 1, milliseconds) };
+        if ready < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error.into());
+        }
+        if descriptor.revents & (libc::POLLERR | libc::POLLNVAL) != 0 {
+            return Err(io::Error::other("copy context poll failed").into());
+        }
+        if ready > 0 && descriptor.revents & (libc::POLLIN | libc::POLLHUP) != 0 {
+            return Ok(());
+        }
+    }
+}
+
+fn context(file: File) -> Result<HelperContext> {
+    context_with_wait(file, context_readable)
+}
+
+// The private wait boundary also permits deterministic real-pipe tests. It
+// runs only after read actually returned WouldBlock, never on a decoded prefix.
+fn context_with_wait(
+    mut file: File,
+    mut wait: impl FnMut(&File, Instant) -> Result<()>,
+) -> Result<HelperContext> {
     if file.as_raw_fd() <= 3 {
         return invalid();
     }
@@ -101,15 +146,30 @@ fn context(mut file: File) -> Result<HelperContext> {
     if flags < 0 || flags & libc::O_ACCMODE != libc::O_RDONLY {
         return invalid();
     }
-    // Trusted parent prewrites <=PIPE_BUF and closes its writer before spawn.
-    // A forged pipe with an open writer cannot hang startup awaiting EOF.
+    // Our parent prewrites and closes its writer before this helper's spawn.
+    // A concurrent fork may retain another CLOEXEC writer until its exec. Wait
+    // briefly for actual EOF, with no deadline renewal on progress or EINTR.
     nonblocking(&file)?;
-    let mut bytes = Vec::new();
-    Read::by_ref(&mut file)
-        .take((protocol::MAX_CONTEXT + 1) as u64)
-        .read_to_end(&mut bytes)?;
+    let deadline = Instant::now() + CONTEXT_READ_TIMEOUT;
+    let mut bytes = [0u8; protocol::MAX_CONTEXT + 1];
+    let mut length = 0;
+    loop {
+        context_remaining(deadline)?;
+        match file.read(&mut bytes[length..]) {
+            Ok(0) => break,
+            Ok(count) => {
+                length += count;
+                if length > protocol::MAX_CONTEXT {
+                    return invalid();
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => wait(&file, deadline)?,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
     drop(file);
-    let context = HelperContext::decode(&bytes)?;
+    let context = HelperContext::decode(&bytes[..length])?;
     let build = crate::native_manifest::compiled_release_metadata();
     let mut commit = [0; 20];
     hex::decode_to_slice(build.commit, &mut commit).map_err(|_| Failure::Build)?;

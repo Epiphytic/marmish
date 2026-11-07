@@ -77,7 +77,8 @@ same executable authorization as other commands; granting rsync permits broad
 same-UID file access and execution. Native copy has independent source approval and passed the 12-case Linux relay
 small smoke and [2 MiB + 8192-byte functional suite](validation/copy-runtime-live-r4.md).
 The [66 MiB local helper suite](validation/copy-large-helper-local.md) also passed all four direction/codec combinations.
-Corrective relay deadline-margin checks and installed cross-platform qualification remain pending. None of these streaming
+The [selected corrective relay deadline-margin checks](validation/copy-runtime-live-r5-corrective.md)
+passed; installed cross-platform qualification remains pending. None of these streaming
 additions is in v0.2.3.
 
 The [native copy design](phases/streaming-copy.md) adds literal regular-file
@@ -88,6 +89,14 @@ native executable using the ordinary additive execution policy. Allowing that
 image also permits its other subcommands with the server UID's authority; there
 is no directory confinement or copy-only grant. Helper image revalidation is a
 same-UID consistency check with a retained pathname-to-exec race.
+
+The helper requires EOF on its bounded context pipe before decoding or opening
+profile state. The source reader allows one absolute second for a transient
+writer inherited by a concurrent fork to close; it retains the 4097-byte sentinel
+cap and descriptor/build checks. A writer retained longer still causes safe
+refusal. See the [portability correction design](phases/streaming-portability-fixtures.md)
+for regression requirements; this change does not establish installed platform
+qualification.
 
 The [local receiver cleanup contract](phases/streaming-copy-local-gc.md) uses an
 encrypted actor-owned index, explicit admission/activation, owned worker joining,

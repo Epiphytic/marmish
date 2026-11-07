@@ -1,0 +1,132 @@
+{
+  "schema": 1,
+  "scope": "Linux x86_64 local portability and cancellation regression",
+  "status": "PASS",
+  "source_base": "ad9cf27e184214d826ea1876b3c0964b69448739",
+  "integration_head": "dcb7aacc11c9809037c6c152d5f55761eca28558",
+  "working_tree_sources": {
+    "crates/marmish-engine/src/copy_launch.rs": "63dfb5d72ebf604e5e9f18e3fde2f0569a63fcdf5595d0649eab4653722ab16b",
+    "crates/marmish-native/src/copy_cancel_tests.rs": "37cace188f43c71a97d482a37ff98c41c6b246f7c208916de15fc0509202381e",
+    "crates/marmish-native/src/copy_files.rs": "5cd234a7dd889eee253c44bb0c4153ad9ac7cb7d88abe9378adbeb58bd5cd9c0",
+    "crates/marmish-native/src/copy_helper.rs": "e6cc5e51c018e3a166ed6def644ddd90b762b1def5850ae1d26d23d465835750",
+    "crates/marmish-native/src/copy_helper_context_tests.rs": "36679348bdfd8d82c48c738d295facc85c5f7fe63d795d0efa2b4947ae8704a5",
+    "crates/marmish-native/src/copy_integration_tests.rs": "95917123715ca8b38a0925ce208820be090af83fa2c6c1c0d01b58a58ab6d39d",
+    "crates/marmish-native/src/copy_local_store.rs": "c4c34de9963fe3a72b3b2448733538cc2926c1bb4ac85b49c22369fd9ae9deef",
+    "crates/marmish-native/src/stream_cli.rs": "de358c795dd41a1c4080c0489ea8a5c6e61e2ccc16bb662bde83d2ac4d81593d"
+  },
+  "uid": 1001,
+  "rustc": "1.97.1",
+  "checks": [
+    {
+      "name": "engine",
+      "passed": 11,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.19,
+      "log_sha256": "b959558ed07ab1105ae2a24e25cefba9dcd7d50384507e86b220c4653ffef926"
+    },
+    {
+      "name": "local_copy_journal",
+      "passed": 13,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 1.74,
+      "log_sha256": "803f408db6b4bb0d7f5e696bbdb21cbcdb5a8b7e509decd4fff9fbb83a1d2d98"
+    },
+    {
+      "name": "canonical_parent_symlink_refusal",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.41,
+      "log_sha256": "4583f434f0195bea183899bb0ad005222bbac69a15999bcabc620902526482a8"
+    },
+    {
+      "name": "preparation_interrupt",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.24,
+      "log_sha256": "cd34250ec5fb9e86db36c99de13688be2bd02d1530affc508596f61db66e6d9e"
+    },
+    {
+      "name": "descriptor_restore",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.0,
+      "log_sha256": "71e3f7c25945d9dcae1075a9f9794d709b56c2999d1c041154765348e653f6ec"
+    },
+    {
+      "name": "filesystem",
+      "passed": 34,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 20.42,
+      "log_sha256": "be1d0af94d1a9ba93a603c23f2a11c664f068228b6fa5c0101440b1d5ce10798"
+    },
+    {
+      "name": "helper_integration",
+      "passed": 14,
+      "failed": 0,
+      "ignored": 2,
+      "seconds": 102.53,
+      "log_sha256": "b964b3e7675801a7fe039b791abaeb44170022309001d50a4ba79dfb984f4127"
+    },
+    {
+      "name": "reviewer_context",
+      "passed": 11,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 3.0,
+      "log_sha256": "05daea1a06c7e9d3c209ea59b5d2bf02c001ed8ddd19a7614e1d44de795e08d9"
+    },
+    {
+      "name": "reviewer_cancellation",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 75.66,
+      "log_sha256": "7e4dff9deafdb77dd0caa5c5a3a0026166bd7a5abc93d91fdc103eb0251f4246"
+    },
+    {
+      "name": "reviewer_postreceipt_1",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 6.35,
+      "log_sha256": "c705f520f8f55694e4cbcbdcb30f04bd73171162e1ca476c5eb8fc5977bf38bb"
+    },
+    {
+      "name": "reviewer_postreceipt_2",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 6.37,
+      "log_sha256": "e07531412c8f8f45ab482557ed81d595aa444325dffb204680a1e0f4191661d0"
+    }
+  ],
+  "engine_module_additional_repetitions": 20,
+  "engine_repetition_log_sha256": "a8ab1b62078876797bbf14d23538c69011e207d821a074b308d4e9304c029367",
+  "strict_all_target_clippy_with_installed_checks": "PASS",
+  "reviewer_clippy_log_sha256": "92d23b05666c2d8c271f8aab50639480f16d02625e86f27ace22ba3e507a7f66",
+  "format_and_diff_checks": "PASS",
+  "reviewer": "Claude Code / Claude Sonnet 5.5 / permission-mode auto",
+  "review_session": "7355c5fd-9aa0-4370-89af-0e2e249e4ccd",
+  "final_review_verdict": "APPROVE",
+  "quality_delta": {
+    "exit_code": 2,
+    "rows": 30,
+    "major_gates": 14,
+    "disposition": "Recorded test fixture complexity, duplication, verbosity and churn; follow-up marmish-8zu"
+  },
+  "limitations": [
+    "No relay or installed execution in these local regressions",
+    "No macOS or Linux ARM64 execution in this report",
+    "Two ignored integration workloads are not counted as passed",
+    "Parked postreceipt cancellation leaves receipt-bearing IPC reply unobserved",
+    "SIGTERM before helper context completion can take default signal action",
+    "Writer retained beyond fixed one-second context deadline safely refuses startup",
+    "No released asset or version-pin change"
+  ]
+}

@@ -140,9 +140,10 @@ cross-platform interoperability claim.
 ## Native file copy (implementation under qualification)
 
 The streaming source branch adds literal regular-file transfers. These commands
-are not in the v0.2.3 installer. Independent source review and a 12-case Linux
-relay small smoke passed; large-file and installed platform qualification remain
-pending. See [copy validation](docs/validation/copy-runtime-live.md).
+are not in the v0.2.3 installer. Independent source review, Linux relay tests
+and four-way 66 MiB local helper tests passed. Installed platform qualification
+and transfers above 65 MiB through a relay remain pending. See
+[copy validation](docs/validation/copy-runtime-live.md).
 
 ```sh
 marmish put SERVER_NPUB ./local-file 'remote file'
@@ -343,9 +344,11 @@ Unreconciled Lost/UnknownLaunch records also prevent a clean shutdown report;
 setup and validation refuse to proceed until an operator reconciles them.
 
 The frontend temporarily makes inherited standard descriptors nonblocking and
-restores their flags on normal exit and Ctrl-C cancellation. Abrupt termination
-that bypasses cleanup (including SIGKILL, SIGTERM and SIGHUP) can leave shared
-descriptor flags changed; use explicit cancellation for a controlled stop.
+restores their flags on normal exit and Ctrl-C cancellation. The rsync adapter
+also routes SIGTERM, SIGHUP and forwarded SIGUSR1 through cancellation.
+Termination that bypasses cleanup, including SIGKILL or SIGTERM/SIGHUP during
+direct streaming commands or copies, can leave shared descriptor flags changed;
+use explicit cancellation for a controlled stop.
 
 ## Named identities and key storage
 

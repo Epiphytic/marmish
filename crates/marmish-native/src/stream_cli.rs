@@ -1051,6 +1051,7 @@ mod tests {
             let flags: Vec<_> = (0..=2)
                 .map(|fd| unsafe { libc::fcntl(fd, libc::F_GETFL) })
                 .collect();
+            assert!(flags.iter().all(|flags| *flags >= 0));
             let result = execute(
                 Context {
                     socket: socket.into(),
@@ -1073,7 +1074,22 @@ mod tests {
                 Err(Error::Invalid("stream_interrupted_before_open"))
             ));
             for (fd, original) in (0..=2).zip(flags) {
-                assert_eq!(unsafe { libc::fcntl(fd, libc::F_GETFL) }, original);
+                let restored = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+                assert!(restored >= 0);
+                #[cfg(target_os = "macos")]
+                {
+                    // Darwin adds kernel-owned FWASWRITTEN after diagnostics;
+                    // compare access mode and public F_SETFL flags instead.
+                    let mask = libc::O_ACCMODE
+                        | libc::O_APPEND
+                        | libc::O_ASYNC
+                        | libc::O_SYNC
+                        | libc::O_DSYNC
+                        | libc::O_NONBLOCK;
+                    assert_eq!(restored & mask, original & mask);
+                }
+                #[cfg(not(target_os = "macos"))]
+                assert_eq!(restored, original);
             }
             return;
         }

@@ -41,7 +41,7 @@ async fn wait_flag(bridge: &Bridge, direction: Direction, full: bool) {
                 Direction::Get => metrics.output_full,
             }
         } else {
-            metrics.gated
+            metrics.parked
         } {
             return;
         }
@@ -292,12 +292,15 @@ async fn actual_helper_postreceipt_cancel_never_rolls_back_and_resumes_without_d
 async fn closed_bridge_control_is_reported_without_panicking_before_cleanup() {
     let (control, receive) = mpsc::channel(1);
     drop(receive);
+    let (cancels, receive) = mpsc::channel(1);
+    drop(receive);
     let (stop, _) = oneshot::channel();
     let mut bridge = Bridge {
         metrics: Arc::new(Mutex::new(Metrics::default())),
         task: tokio::spawn(async { true }),
         stop: Some(stop),
         control,
+        cancels,
     };
     let gate = bridge.gate(Direction::Put).await;
     let cancel = bridge.cancel().await;

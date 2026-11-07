@@ -307,6 +307,7 @@ struct Metrics {
     input_full: bool,
     output_full: bool,
     gated: bool,
+    parked: bool,
 }
 fn ingest(
     window: &mut SendWindow,
@@ -343,13 +344,13 @@ enum Fault {
 }
 enum BridgeControl {
     Gate(Direction, oneshot::Sender<()>),
-    Cancel(oneshot::Sender<bool>),
 }
 struct Bridge {
     metrics: Arc<Mutex<Metrics>>,
     task: JoinHandle<bool>,
     stop: Option<oneshot::Sender<()>>,
     control: mpsc::Sender<BridgeControl>,
+    cancels: mpsc::Sender<oneshot::Sender<bool>>,
 }
 impl Drop for Bridge {
     fn drop(&mut self) {
@@ -370,8 +371,8 @@ impl Bridge {
     }
     async fn cancel(&self) -> Result<bool, String> {
         let (send, receive) = oneshot::channel();
-        self.control
-            .send(BridgeControl::Cancel(send))
+        self.cancels
+            .send(send)
             .await
             .map_err(|_| "cancel_control_closed".to_string())?;
         tokio::time::timeout(Duration::from_secs(5), receive)
@@ -452,6 +453,7 @@ impl Bridge {
         readers.spawn(read_pipe(stderr, err_send));
         let direction = launch.direction;
         let (control, mut controls) = mpsc::channel(4);
+        let (cancels, mut cancellations) = mpsc::channel::<oneshot::Sender<bool>>(1);
         let (stop, mut stopped) = oneshot::channel();
         let task = tokio::spawn(async move {
             let mut stdout = SendWindow::default();
@@ -467,6 +469,7 @@ impl Bridge {
             let mut cache: Option<([u8; 32], Vec<u8>)> = None;
             let loop_result = std::panic::AssertUnwindSafe(async {
                 loop {
+                    let mut cancel_ack = None;
                     let connection = tokio::select! {
                         biased;
                         Some(control)=controls.recv()=> {
@@ -475,13 +478,6 @@ impl Bridge {
                                     match direction { Direction::Put=>gate_put=true, Direction::Get=>gate_get=true }
                                     observed.lock().unwrap().gated=true;
                                     let _=ack.send(());
-                                }
-                                BridgeControl::Cancel(ack)=> {
-                                    let alive=child.try_wait().unwrap().is_none();
-                                    signaled=alive && unsafe { libc::kill(child.id().unwrap().try_into().unwrap(),libc::SIGTERM) }==0;
-                                    observed.lock().unwrap().signaled=signaled;
-                                    let _=ack.send(signaled);
-                                    break;
                                 }
                             }
                             continue;
@@ -499,172 +495,199 @@ impl Bridge {
                             }
                             continue;
                         }
+                        Some(ack)=cancellations.recv()=> { cancel_ack=Some(ack); None },
                         _=&mut stopped => break,
-                        result=listener.accept()=>result.unwrap().0,
+                        result=listener.accept()=>Some(result.unwrap().0),
                     };
-                    let mut connection = connection;
-                    let Ok(n) = connection.read_u32().await else {
-                        continue;
-                    };
-                    let n = n as usize;
-                    assert!(n <= 65536);
-                    let mut bytes = vec![0; n];
-                    if connection.read_exact(&mut bytes).await.is_err() {
-                        continue;
-                    }
-                    let ipc::Request::Stream {
-                        request: StreamLocalRequest::Frame { frame_base64, .. },
-                    } = serde_json::from_slice(&bytes).unwrap()
-                    else {
-                        panic!("unexpected local request")
-                    };
-                    let raw = STANDARD.decode(frame_base64).unwrap();
-                    if disconnected {
-                        continue;
-                    }
-                    let request = wire::decode_request(&raw).unwrap();
-                    let digest = wire::request_digest(&raw);
-                    let response = if let Some((old_digest, encoded)) = &cache
-                        && *old_digest == digest
-                    {
-                        encoded.clone()
-                    } else {
-                        let RequestBody::Exchange {
-                            stdin: input_block,
-                            stdin_eof,
-                            stdout_ack,
-                            stderr_ack,
-                        } = request.body
-                        else {
-                            panic!("expected Exchange")
-                        };
-                        stdout.acknowledge(stdout_ack).unwrap();
-                        observed
-                            .lock()
-                            .unwrap()
-                            .output_codec
-                            .acknowledge(stdout_ack);
-                        stderr.acknowledge(stderr_ack).unwrap();
-                        assert!(fault != Fault::Panic, "injected bridge panic");
-                        if let Some(block) = input_block {
-                            let bytes = codec::decode(&block, codec).unwrap();
-                            if stdin.accept(block.offset, &bytes).unwrap() {
-                                observed.lock().unwrap().input_codec.add(&block);
+                    if let Some(connection) = connection {
+                        // All socket and pipe borrows belong to this scoped request.
+                        // Cancel drops it (including the socket) before signaling.
+                        let request = async {
+                            let mut connection = connection;
+                            let Ok(n) = connection.read_u32().await else {
+                                return;
+                            };
+                            let n = n as usize;
+                            assert!(n <= 65536);
+                            let mut bytes = vec![0; n];
+                            if connection.read_exact(&mut bytes).await.is_err() {
+                                return;
                             }
-                        }
-                        if let Some(end) = stdin_eof { stdin.finish(end).unwrap(); }
-                        while !gate_put && stdin.buffered()>0 {
-                            let bytes=stdin.pending(MAX_BLOCK).unwrap();
-                            input.as_mut().unwrap().write_all(&bytes).await.unwrap();
-                            stdin.delivered_through(stdin.delivered()+bytes.len() as u64).unwrap();
-                            let mut probe=observed.lock().unwrap();
-                            probe.input.observe(&mut input_decoder,&bytes);
-                            if post_receipt && direction==Direction::Get && probe.input.committed {
-                                gate_get=true;
-                                probe.gated=true;
+                            let ipc::Request::Stream {
+                                request: StreamLocalRequest::Frame { frame_base64, .. },
+                            } = serde_json::from_slice(&bytes).unwrap()
+                            else {
+                                panic!("unexpected local request")
+                            };
+                            let raw = STANDARD.decode(frame_base64).unwrap();
+                            if disconnected {
+                                return;
                             }
-                        }
-                        if stdin.drained() { input.take(); }
-                        {
-                            let mut probe=observed.lock().unwrap();
-                            probe.input_peak=probe.input_peak.max(stdin.buffered());
-                            probe.input_full=stdin.credit()<MAX_BLOCK && stdin.eof().is_none();
-                        }
-                        // Give the bounded helper pipe pump a scheduling opportunity.
-                        tokio::task::yield_now().await;
-                        {
-                            let mut probe = observed.lock().unwrap();
-                            ingest(
-                                &mut stdout,
-                                &mut out_receive,
-                                Some((&mut output_decoder, &mut probe.output)),
-                            );
-                        }
-                        ingest(&mut stderr, &mut err_receive, None);
-                        {
-                            let mut probe=observed.lock().unwrap();
-                            probe.output_peak=probe.output_peak.max(stdout.buffered());
-                            probe.output_full=stdout.credit()<MAX_BLOCK && stdout.eof().is_none();
-                            if post_receipt && direction==Direction::Put && probe.output.committed {
-                                gate_put=true;
-                                probe.gated=true;
-                            }
-                        }
-                        let disconnect = {
-                            let probe = observed.lock().unwrap();
-                            (fault == Fault::Checkpoint && probe.output.checkpoints > 0)
-                                || (fault == Fault::Commit && probe.output.committed)
-                        };
-                        if disconnect {
-                            disconnected = true;
-                            // Lose the real IPC reply after observing durable helper
-                            // output. The caller sees transport failure, not Error.
-                            continue;
-                        }
-                        let hold_checkpoint = {
-                            let probe = observed.lock().unwrap();
-                            delay_checkpoints
-                                && probe.output.checkpoints > 0
-                                && !probe.input.done
-                                && probe.input.bytes() < cp::DURABLE_WINDOW
-                        };
-                        if terminal.is_none()
-                            && let Some(status) = child.try_wait().unwrap()
-                        {
-                            terminal = Some(if let Some(code) = status.code() {
-                                Terminal::Exited {
-                                    code: code.try_into().unwrap(),
-                                }
+                            let request = wire::decode_request(&raw).unwrap();
+                            let digest = wire::request_digest(&raw);
+                            let response = if let Some((old_digest, encoded)) = &cache
+                                && *old_digest == digest
+                            {
+                                encoded.clone()
                             } else {
-                                Terminal::Signaled {
-                                    signal: status.signal().unwrap().try_into().unwrap(),
+                                let RequestBody::Exchange {
+                                    stdin: input_block,
+                                    stdin_eof,
+                                    stdout_ack,
+                                    stderr_ack,
+                                } = request.body
+                                else {
+                                    panic!("expected Exchange")
+                                };
+                                stdout.acknowledge(stdout_ack).unwrap();
+                                observed
+                                    .lock()
+                                    .unwrap()
+                                    .output_codec
+                                    .acknowledge(stdout_ack);
+                                stderr.acknowledge(stderr_ack).unwrap();
+                                assert!(fault != Fault::Panic, "injected bridge panic");
+                                if let Some(block) = input_block {
+                                    let bytes = codec::decode(&block, codec).unwrap();
+                                    if stdin.accept(block.offset, &bytes).unwrap() {
+                                        observed.lock().unwrap().input_codec.add(&block);
+                                    }
                                 }
-                            });
-                        }
-                        let output_block = if hold_checkpoint || gate_get {
-                            None
-                        } else {
-                            block(&stdout, codec)
+                                if let Some(end) = stdin_eof { stdin.finish(end).unwrap(); }
+                                while !gate_put && stdin.buffered()>0 {
+                                    let bytes=stdin.pending(MAX_BLOCK).unwrap();
+                                    input.as_mut().unwrap().write_all(&bytes).await.unwrap();
+                                    stdin.delivered_through(stdin.delivered()+bytes.len() as u64).unwrap();
+                                    let mut probe=observed.lock().unwrap();
+                                    probe.input.observe(&mut input_decoder,&bytes);
+                                    if post_receipt && direction==Direction::Get && probe.input.committed {
+                                        gate_get=true;
+                                        probe.gated=true;
+                                    }
+                                }
+                                if stdin.drained() { input.take(); }
+                                {
+                                    let mut probe=observed.lock().unwrap();
+                                    probe.input_peak=probe.input_peak.max(stdin.buffered());
+                                    probe.input_full=stdin.credit()<MAX_BLOCK && stdin.eof().is_none();
+                                }
+                                // Give the bounded helper pipe pump a scheduling opportunity.
+                                tokio::task::yield_now().await;
+                                {
+                                    let mut probe = observed.lock().unwrap();
+                                    ingest(
+                                        &mut stdout,
+                                        &mut out_receive,
+                                        Some((&mut output_decoder, &mut probe.output)),
+                                    );
+                                }
+                                ingest(&mut stderr, &mut err_receive, None);
+                                {
+                                    let mut probe=observed.lock().unwrap();
+                                    probe.output_peak=probe.output_peak.max(stdout.buffered());
+                                    probe.output_full=stdout.credit()<MAX_BLOCK && stdout.eof().is_none();
+                                    if post_receipt && direction==Direction::Put && probe.output.committed {
+                                        gate_put=true;
+                                        probe.gated=true;
+                                    }
+                                }
+                                let disconnect = {
+                                    let probe = observed.lock().unwrap();
+                                    (fault == Fault::Checkpoint && probe.output.checkpoints > 0)
+                                        || (fault == Fault::Commit && probe.output.committed)
+                                };
+                                if disconnect {
+                                    disconnected = true;
+                                    // Lose the real IPC reply after observing durable helper
+                                    // output. The caller sees transport failure, not Error.
+                                    return;
+                                }
+                                let hold_checkpoint = {
+                                    let probe = observed.lock().unwrap();
+                                    delay_checkpoints
+                                        && probe.output.checkpoints > 0
+                                        && !probe.input.done
+                                        && probe.input.bytes() < cp::DURABLE_WINDOW
+                                };
+                                if terminal.is_none()
+                                    && let Some(status) = child.try_wait().unwrap()
+                                {
+                                    terminal = Some(if let Some(code) = status.code() {
+                                        Terminal::Exited {
+                                            code: code.try_into().unwrap(),
+                                        }
+                                    } else {
+                                        Terminal::Signaled {
+                                            signal: status.signal().unwrap().try_into().unwrap(),
+                                        }
+                                    });
+                                }
+                                let output_block = if hold_checkpoint || gate_get {
+                                    None
+                                } else {
+                                    block(&stdout, codec)
+                                };
+                                if let Some(block) = &output_block {
+                                    observed.lock().unwrap().output_codec.emitted(block);
+                                }
+                                let body = ResponseBody::Exchange {
+                                    stdin_accepted: stdin.accepted(),
+                                    stdin_delivered: stdin.delivered(),
+                                    stdin_closed: input.is_none() || terminal.is_some(),
+                                    stdout: output_block,
+                                    stderr: block(&stderr, codec),
+                                    stdout_eof: stdout.eof(),
+                                    stderr_eof: stderr.eof(),
+                                    cancel_requested: false,
+                                    terminal: terminal
+                                        .filter(|_| stdout.eof().is_some() && stderr.eof().is_some()),
+                                };
+                                let encoded = wire::encode_response(&wire::Response {
+                                    binding: request.binding,
+                                    sequence: request.sequence,
+                                    request_sha256: digest,
+                                    body,
+                                })
+                                .unwrap();
+                                cache = Some((digest, encoded.clone()));
+                                encoded
+                            };
+                            let response = ipc::Response {
+                                ok: true,
+                                result: None,
+                                error: None,
+                                command: None,
+                                stream: Some(StreamLocalResult::Frame {
+                                    frame_base64: STANDARD.encode(response),
+                                }),
+                            };
+                            let bytes = serde_json::to_vec(&response).unwrap();
+                            if post_receipt && observed.lock().unwrap().gated {
+                                observed.lock().unwrap().parked = true;
+                                // The enclosing request select keeps stop and Cancel live.
+                                tokio::time::sleep(Duration::from_secs(10)).await;
+                                panic!("parked reply deadline");
+                            }
+                            // Deadline cancellation intentionally drops an outstanding IPC
+                            // socket; its exact response remains cached for retry.
+                            if connection.write_u32(bytes.len() as u32).await.is_ok() {
+                                let _ = connection.write_all(&bytes).await;
+                            }
                         };
-                        if let Some(block) = &output_block {
-                            observed.lock().unwrap().output_codec.emitted(block);
+                        tokio::pin!(request);
+                        tokio::select! {
+                            biased;
+                            Some(ack) = cancellations.recv() => cancel_ack=Some(ack),
+                            _ = &mut stopped => break,
+                            _ = &mut request => {},
                         }
-                        let body = ResponseBody::Exchange {
-                            stdin_accepted: stdin.accepted(),
-                            stdin_delivered: stdin.delivered(),
-                            stdin_closed: input.is_none() || terminal.is_some(),
-                            stdout: output_block,
-                            stderr: block(&stderr, codec),
-                            stdout_eof: stdout.eof(),
-                            stderr_eof: stderr.eof(),
-                            cancel_requested: false,
-                            terminal: terminal
-                                .filter(|_| stdout.eof().is_some() && stderr.eof().is_some()),
-                        };
-                        let encoded = wire::encode_response(&wire::Response {
-                            binding: request.binding,
-                            sequence: request.sequence,
-                            request_sha256: digest,
-                            body,
-                        })
-                        .unwrap();
-                        cache = Some((digest, encoded.clone()));
-                        encoded
-                    };
-                    let response = ipc::Response {
-                        ok: true,
-                        result: None,
-                        error: None,
-                        command: None,
-                        stream: Some(StreamLocalResult::Frame {
-                            frame_base64: STANDARD.encode(response),
-                        }),
-                    };
-                    let bytes = serde_json::to_vec(&response).unwrap();
-                    // Deadline cancellation intentionally drops an outstanding IPC
-                    // socket; its exact response remains cached for retry.
-                    if connection.write_u32(bytes.len() as u32).await.is_ok() {
-                        let _ = connection.write_all(&bytes).await;
+                    }
+                    if let Some(ack) = cancel_ack {
+                        let alive=child.try_wait().unwrap().is_none();
+                        signaled=alive && unsafe { libc::kill(child.id().unwrap().try_into().unwrap(),libc::SIGTERM) }==0;
+                        observed.lock().unwrap().signaled=signaled;
+                        let _=ack.send(signaled);
+                        break;
                     }
                 }
             })
@@ -738,6 +761,7 @@ impl Bridge {
             task,
             stop: Some(stop),
             control,
+            cancels,
         }
     }
 }
