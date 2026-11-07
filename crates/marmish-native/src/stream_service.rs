@@ -8,6 +8,7 @@ use std::time::Instant;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum StreamLocalRequest {
+    Inspect {},
     CopyReceiver {
         request: Box<crate::copy_local_gc::Request>,
     },
@@ -29,6 +30,9 @@ pub(crate) enum StreamLocalRequest {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum StreamLocalResult {
+    Inspection {
+        snapshot: Box<StreamInspection>,
+    },
     CopyReceiver {
         response: Box<crate::copy_local_gc::Response>,
     },
@@ -59,6 +63,139 @@ pub(crate) struct StreamEntry {
     pub terminal: Option<wire::Terminal>,
     #[serde(default)]
     pub child_disposition: Option<ChildDisposition>,
+}
+/// Private SAME-UID journal projection. Never log bindings without redaction.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StreamInspection {
+    pub schema: u8,
+    pub entries: Vec<StreamInspectionEntry>,
+    pub records_truncated: bool,
+    pub outbox_truncated: bool,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StreamInspectionEntry {
+    pub binding: Option<wire::Binding>,
+    pub direction: Option<InspectionDirection>,
+    /// Invalid if the record or any selected slot fails validation. A bad slot
+    /// does not clear independently validated record progress below; inspect
+    /// each slot's integrity before interpreting its projected fields.
+    pub integrity: InspectionIntegrity,
+    pub phase: Option<InspectionPhase>,
+    pub server_hello_validated: Option<bool>,
+    pub open_present: Option<bool>,
+    pub active: Option<bool>,
+    pub cancel_requested: Option<bool>,
+    pub projection_invalidated: Option<bool>,
+    pub record_sequence: Option<u64>,
+    pub record_stdin_accepted: Option<u64>,
+    pub record_stdin_delivered: Option<u64>,
+    pub stdout_eof: Option<u64>,
+    pub stderr_eof: Option<u64>,
+    pub terminal: Option<wire::Terminal>,
+    pub slots: Vec<InspectionSlot>,
+    pub slots_truncated: bool,
+    pub outbox: Vec<InspectionOutbox>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InspectionSlot {
+    /// Invalid slots retain only the cached-response presence flag; kind is
+    /// Invalid and sequence, exchange and response projections are null.
+    pub integrity: InspectionIntegrity,
+    pub kind: InspectionKind,
+    pub sequence: Option<u64>,
+    pub response_cached: bool,
+    pub exchange: Option<InspectionExchange>,
+    pub response: Option<InspectionExchangeResponse>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InspectionExchange {
+    pub stdin_offset: Option<u64>,
+    pub stdin_end: Option<u64>,
+    pub stdin_eof: Option<u64>,
+    pub stdout_ack: u64,
+    pub stderr_ack: u64,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InspectionExchangeResponse {
+    pub stdin_accepted: u64,
+    pub stdin_delivered: u64,
+    pub stdout_end: Option<u64>,
+    pub stderr_end: Option<u64>,
+    pub stdout_eof: Option<u64>,
+    pub stderr_eof: Option<u64>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InspectionOutbox {
+    pub bucket: InspectionPublicationState,
+    pub count: u32,
+    pub native_id_present: u32,
+    pub intent_present: u32,
+    pub evidence_present: u32,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InspectionDirection {
+    Client,
+    Server,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InspectionIntegrity {
+    Valid,
+    Invalid,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InspectionKind {
+    Hello,
+    Open,
+    Exchange,
+    Status,
+    Cancel,
+    CopyHello,
+    OpenCopy,
+    Other,
+    Invalid,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InspectionPublicationState {
+    Unsubmitted,
+    Prepared,
+    Queued,
+    Published,
+    Uncertain,
+    Failed,
+    Acked,
+    RetiredFailed,
+    Other,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InspectionPhase {
+    Hello,
+    Opening,
+    Preparing,
+    Launching,
+    Running,
+    Cancelling,
+    Terminal,
+    AuthorityRevoked,
+    Lost,
+    UnknownLaunch,
+    TransportUncertain,
+    ReconciledPossibleLive,
+    CleanupUncertain,
+    ServerStopping,
+    ServerStopped,
+    ProjectionInvalidated,
+    Other,
 }
 /// Startup inspection of the recorded leader; never evidence of group cleanup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

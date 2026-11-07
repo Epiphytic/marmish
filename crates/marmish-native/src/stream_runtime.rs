@@ -118,6 +118,9 @@ impl MdkOwner {
         request: StreamLocalRequest,
     ) -> Result<StreamLocalResult> {
         match request {
+            StreamLocalRequest::Inspect {} => Ok(StreamLocalResult::Inspection {
+                snapshot: Box::new(self.journal.stream_inspect()?),
+            }),
             StreamLocalRequest::CopyReceiver { request } => {
                 let retention = self
                     .commands

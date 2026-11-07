@@ -390,6 +390,7 @@ fn interruption_direction(cohort: &str) -> Option<bool> {
     }
 }
 pub(super) async fn run(o: Run) -> Result<()> {
+    let inspection_origin = Instant::now();
     let ctx: Context = records::read(&o.context, 65536)?;
     ctx.validate()?;
     // Other reviewed cohorts are enabled only when their complete driver is integrated.
@@ -726,6 +727,18 @@ pub(super) async fn run(o: Run) -> Result<()> {
         }
         Ok(())
     })();
+    if super::streaming_inspection::eligible(&ctx.cohort, &result) {
+        super::streaming_inspection::failure(
+            runtime.client.as_mut(),
+            runtime.server.as_mut(),
+            &ids,
+            role,
+            stop_by,
+            inspection_origin,
+            &mut termination,
+        )
+        .await;
+    }
     // Cleanup must run even when publishing failure evidence itself fails.
     let (clean, server, client) = runtime.close(stop_by).await;
     failed_client_record?;

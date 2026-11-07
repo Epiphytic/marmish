@@ -194,8 +194,11 @@ pub fn bind(path: &Path) -> Result<UnixListener> {
 }
 
 fn verify_peer(stream: &UnixStream) -> Result<()> {
-    let credentials = stream.peer_cred()?;
-    if credentials.uid() != unsafe { libc::geteuid() } {
+    verify_peer_uid(stream.peer_cred()?.uid())
+}
+
+fn verify_peer_uid(uid: u32) -> Result<()> {
+    if uid != unsafe { libc::geteuid() } {
         return Err(Error::Invalid("ipc_peer_uid"));
     }
     Ok(())
@@ -376,6 +379,17 @@ pub(crate) async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn peer_uid_predicate_rejects_foreign_uid() {
+        // Predicate proof only: no privileged foreign-UID process is spawned.
+        let uid = unsafe { libc::geteuid() };
+        assert!(verify_peer_uid(uid).is_ok());
+        assert!(matches!(
+            verify_peer_uid(uid.wrapping_add(1)),
+            Err(Error::Invalid("ipc_peer_uid"))
+        ));
+    }
 
     #[test]
     fn command_requests_are_closed_and_reject_duplicate_fields() {

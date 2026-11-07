@@ -9,6 +9,8 @@ mod command_store;
 mod copy_local_store;
 #[path = "copy_store.rs"]
 mod copy_store;
+#[path = "stream_inspect_store.rs"]
+mod stream_inspect_store;
 #[path = "stream_store.rs"]
 mod stream_store;
 use crate::foundation::{Body, Envelope};

@@ -183,6 +183,17 @@ dispatched. See [failure evidence](validation/streaming-installed-d5addee-failur
 The observation change alters neither the product nor matrix acceptance;
 full installed qualification remains open.
 
+The approved [local progress inspection](phases/streaming-progress-inspection.md)
+adds a read-only same-UID IPC request and bounded original-matrix failure
+snapshots before cleanup. It projects retained journal, slot and publication
+state without command content or native identifiers in public summaries. Missing,
+truncated or ambiguous records remain unknown; cached answers do not prove CLI
+consumption, and recorded publication state does not prove relay delivery.
+Inspection changes product observability, so a new complete candidate and the
+original installed matrix are required. The [integrated code review](reviews/streaming-progress-inspection.md)
+approves the implementation; hosted qualification remains pending. No root cause
+or release readiness is established.
+
 The [local receiver cleanup contract](phases/streaming-copy-local-gc.md) uses an
 encrypted actor-owned index, explicit admission/activation, owned worker joining,
 current durable GC claims and anchored physical checkpoint validation. Unknown
