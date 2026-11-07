@@ -189,7 +189,7 @@ impl Engine {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{
         CommandPolicy, EndpointId, EngineLimits, EnginePolicy, ExitOutcome, KeyRestrictions,
@@ -220,7 +220,7 @@ mod tests {
             expected_commit: [7; 20],
         }
     }
-    fn fixture() -> (
+    pub(crate) fn fixture() -> (
         tempfile::TempDir,
         Engine,
         AuthorizedContext,
@@ -270,7 +270,7 @@ mod tests {
         .unwrap();
         (root, engine, ctx, helper, context)
     }
-    fn identity(fd: i32) -> Option<(libc::dev_t, libc::ino_t)> {
+    pub(crate) fn identity(fd: i32) -> Option<(libc::dev_t, libc::ino_t)> {
         let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
         if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } != 0 {
             return None;

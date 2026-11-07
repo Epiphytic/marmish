@@ -368,3 +368,7 @@ mod tests {
         assert_eq!(result, ExitOutcome::Code(0), "{stdout}\n{stderr}");
     }
 }
+
+#[cfg(test)]
+#[path = "copy_context_tests.rs"]
+mod copy_context_tests;

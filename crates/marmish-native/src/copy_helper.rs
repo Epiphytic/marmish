@@ -903,3 +903,7 @@ mod tests {
         assert!(bytes.is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "copy_helper_context_tests.rs"]
+mod context_tests;
