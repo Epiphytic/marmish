@@ -20,6 +20,18 @@ pub fn private_tempdir_in(parent: &Path) -> tempfile::TempDir {
     directory
 }
 
+// Cargo artifact sources must be unambiguous even when native and engine bins
+// are built in the same target directory. Installed/fault fixtures use the
+// generic copier below because their source names are intentionally arbitrary.
+#[allow(dead_code)] // Fault fixtures include this module but use arbitrary-name sources.
+pub fn stage_cargo_worker(source: &Path) -> InstalledWorker {
+    assert_eq!(
+        source.file_name(),
+        Some(std::ffi::OsStr::new("marmish-engine-worker"))
+    );
+    stage_worker(source)
+}
+
 pub fn stage_worker(source: &Path) -> InstalledWorker {
     let directory = private_tempdir();
     let path = directory

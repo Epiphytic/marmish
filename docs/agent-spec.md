@@ -804,3 +804,42 @@ retains the exact immutable pins. This same-host diagnostic omits the original
 macOS outgoing traffic, multi-server trust and cross-host timing. It changes no
 product behavior and does not resolve the failing installed matrix or qualify a
 release.
+
+### Development worker isolation and cleanup diagnostics (source increment)
+
+The engine crate's standalone development target is `marmish-engine-worker`;
+the native distributed target remains `marmish-worker`. Engine Cargo fixtures
+assert the unique source target and may stage its bytes under their private
+`marmish-worker` destination. Both historical Python bundle builders preserve
+that destination while selecting the unique engine source. Generic negative
+worker fixtures still accept deliberate custom artifacts.
+
+The [failed 53f94f9 candidate](validation/streaming-candidate-53f94f9-failure.md)
+reported the old output-name collision and a separate unclassified cleanup
+uncertainty. Removal of a longstanding collision is a build-contract correction;
+the failed run's winning bytes were not captured. The native runner increment
+adds only test-side failure context, observed-exit synchronization and bounded
+panic cleanup; it does not change production cleanup or waive uncertainty.
+The original full-window race remains covered alongside deterministic after-exit
+and live-cancellation cases. Test diagnostics identify the operation, finite
+engine error and lifecycle/window state; an internal Darwin reason can still
+require another investigation.
+
+The manual `macos-native-regression.yml` uses an exact workflow/source pin,
+records distinct worker hashes, runs the original combined native suites and
+repeats four focused cleanup cases. It uses no relay and is diagnostic only.
+See the [approved design](phases/macos-candidate-worker-and-cleanup.md) and
+[actual reviews](reviews/macos-candidate-worker-and-cleanup.md). All-platform
+candidate and installed qualification remain required; the public installer
+still selects v0.2.3, with no new release implied by this source increment.
+
+The first local combined rerun passed the engine integrations but failed the
+closed-stdin fixture (delivered13, expected0). A controlled inherited-reader
+check demonstrates a missing fixture premise, without establishing the failed
+run's exact cause; its inherited test-thread setting was not captured. A narrow
+exact selfexec isolation correction has independent design approval and passing
+focused checks; the full rerun and final code review are pending. It preserves
+delivery/retry/EOF/natural-exit assertions and
+production behavior. A recurrence in the isolated child remains a product
+defect to investigate. See [local evidence](validation/macos-worker-cleanup-local.md);
+the combined suite is not yet green.

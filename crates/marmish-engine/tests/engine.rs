@@ -69,7 +69,8 @@ struct Harness {
 
 impl Harness {
     fn new(limits: EngineLimits) -> Self {
-        let worker = executable::stage_worker(Path::new(env!("CARGO_BIN_EXE_marmish-worker")));
+        let worker =
+            executable::stage_cargo_worker(Path::new(env!("CARGO_BIN_EXE_marmish-engine-worker")));
         Self::with_worker(limits, worker)
     }
 
@@ -216,7 +217,8 @@ fn installed_worker_rejects_writable_mode_and_preserves_unsafe_source() {
     if uid() == 0 {
         return;
     }
-    let source = executable::stage_worker(Path::new(env!("CARGO_BIN_EXE_marmish-worker")));
+    let source =
+        executable::stage_cargo_worker(Path::new(env!("CARGO_BIN_EXE_marmish-engine-worker")));
     std::fs::set_permissions(&source.path, std::fs::Permissions::from_mode(0o775)).unwrap();
     let installed = executable::stage_worker(&source.path);
     assert_eq!(source.path.metadata().unwrap().mode() & 0o777, 0o775);

@@ -162,8 +162,10 @@ def build_runtime(destination):
     cargo_target = Path(os.environ.get('CARGO_TARGET_DIR', str(REPO / 'target')))
     if not cargo_target.is_absolute():
         cargo_target = REPO / cargo_target
-    for name in ('marmish-worker', 'marmish-engine-bridge', 'marmish-keychain'):
-        _copy(cargo_target / 'release' / name, destination / name)
+    for source, name in (('marmish-engine-worker', 'marmish-worker'),
+                         ('marmish-engine-bridge', 'marmish-engine-bridge'),
+                         ('marmish-keychain', 'marmish-keychain')):
+        _copy(cargo_target / 'release' / source, destination / name)
     checked([sys.executable, REPO / 'tools/build_mdk.py', '--output', destination / 'wnd',
              '--licenses-output', destination / 'licenses'], cwd=REPO)
 

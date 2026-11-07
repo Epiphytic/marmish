@@ -69,7 +69,8 @@ fn native_binding_wrong_key_modes_and_restart() {
     if unsafe { libc::getuid() } == 0 {
         return;
     }
-    let worker = executable::stage_worker(Path::new(env!("CARGO_BIN_EXE_marmish-worker")));
+    let worker =
+        executable::stage_cargo_worker(Path::new(env!("CARGO_BIN_EXE_marmish-engine-worker")));
     let dir = executable::private_tempdir();
     let policy = policy(dir.path(), &worker.path);
     let mut engine =
@@ -131,7 +132,8 @@ fn migration_authenticates_quiesces_and_recovers_committed_mixed_state() {
     if unsafe { libc::getuid() } == 0 {
         return;
     }
-    let worker = executable::stage_worker(Path::new(env!("CARGO_BIN_EXE_marmish-worker")));
+    let worker =
+        executable::stage_cargo_worker(Path::new(env!("CARGO_BIN_EXE_marmish-engine-worker")));
     let dir = executable::private_tempdir();
     let policy = policy(dir.path(), &worker.path);
     let mut engine = reopen(|| Engine::open(policy.clone())).unwrap();
@@ -249,7 +251,8 @@ fn worker_rejects_truncated_trailing_wrong_binding_and_open_pipe_without_db_muta
     if unsafe { libc::getuid() } == 0 {
         return;
     }
-    let worker = executable::stage_worker(Path::new(env!("CARGO_BIN_EXE_marmish-worker")));
+    let worker =
+        executable::stage_cargo_worker(Path::new(env!("CARGO_BIN_EXE_marmish-engine-worker")));
     let dir = executable::private_tempdir();
     let policy = policy(dir.path(), &worker.path);
     let mut engine =
@@ -372,7 +375,8 @@ fn native_pending_recovery_requires_pristine_root_and_exact_binding() {
     if unsafe { libc::getuid() } == 0 {
         return;
     }
-    let worker = executable::stage_worker(Path::new(env!("CARGO_BIN_EXE_marmish-worker")));
+    let worker =
+        executable::stage_cargo_worker(Path::new(env!("CARGO_BIN_EXE_marmish-engine-worker")));
     let source = executable::private_tempdir();
     let source_policy = policy(source.path(), &worker.path);
     drop(reopen(|| Engine::open_with_master(source_policy.clone(), binding(), master())).unwrap());
@@ -433,7 +437,8 @@ fn migration_refuses_active_workers_and_leaves_file_mode_untouched() {
     if unsafe { libc::getuid() } == 0 {
         return;
     }
-    let worker = executable::stage_worker(Path::new(env!("CARGO_BIN_EXE_marmish-worker")));
+    let worker =
+        executable::stage_cargo_worker(Path::new(env!("CARGO_BIN_EXE_marmish-engine-worker")));
     let dir = executable::private_tempdir();
     let policy = policy(dir.path(), &worker.path);
     let mut engine = reopen(|| Engine::open(policy.clone())).unwrap();

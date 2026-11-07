@@ -147,6 +147,32 @@ def fixture(parent):
     return root, record
 
 
+class WorkerBundleTests(unittest.TestCase):
+    def test_runtime_build_uses_unique_engine_source_and_legacy_destination(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifact = root / 'custom-target/release'
+            artifact.mkdir(parents=True)
+            for name, data in [('marmish-engine-worker', b'engine-worker'),
+                               ('marmish-worker', b'wrong-native-worker'),
+                               ('marmish-engine-bridge', b'bridge'),
+                               ('marmish-keychain', b'keychain')]:
+                (artifact / name).write_bytes(data)
+            destination = root / 'runtime'
+            with patch.object(release, 'REPO', root), \
+                    patch.dict(os.environ, {'CARGO_TARGET_DIR': 'custom-target'}), \
+                    patch.object(release, 'checked') as checked, \
+                    patch('marmish_release_licenses.collect'):
+                release.build_runtime(destination)
+            self.assertEqual((destination / 'marmish-worker').read_bytes(), b'engine-worker')
+            self.assertFalse((destination / 'marmish-engine-worker').exists())
+            self.assertEqual((destination / 'marmish-engine-bridge').read_bytes(), b'bridge')
+            self.assertEqual((destination / 'marmish-keychain').read_bytes(), b'keychain')
+            self.assertEqual(checked.call_args_list[0].args[0],
+                             ['cargo', 'build', '--locked', '--release', '-p',
+                              'marmish-engine', '-p', 'marmish-prototype', '-p', 'marmish-vault'])
+
+
 class ReleaseTests(unittest.TestCase):
     def setUp(self):
         self.original_umask = os.umask(0o077)

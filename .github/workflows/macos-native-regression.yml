@@ -1,0 +1,93 @@
+name: macOS native worker and cleanup regression (not qualification)
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Reviewed full master commit; must equal this workflow commit
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: marmish-macos-native-regression
+  cancel-in-progress: false
+env:
+  CARGO_TERM_COLOR: never
+  MARMISH_NATIVE_TOOLCHAIN: '1'
+jobs:
+  regression:
+    if: github.ref == 'refs/heads/master'
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      MARMISH_BUILD_COMMIT: ${{ inputs.source_commit }}
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+      RUST_TEST_THREADS: '1'
+      MARMISH_REQUIRE_NONROOT_PERMISSION_TESTS: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_commit }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify immutable source and nonroot macOS ARM64 host
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$MARMISH_BUILD_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$MARMISH_BUILD_COMMIT" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$MARMISH_BUILD_COMMIT"
+          test "$GITHUB_REPOSITORY" = Epiphytic/marmish
+          test "$GITHUB_REF" = refs/heads/master
+          test "$(uname -s):$(uname -m)" = Darwin:arm64
+          test "$(id -u)" -ne 0
+          git merge-base --is-ancestor "$MARMISH_BUILD_COMMIT" refs/remotes/origin/master
+          git diff --quiet HEAD --
+      - uses: dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920 # 1.97.1
+        with:
+          toolchain: 1.97.1
+      - name: Compile original combined native suites and identify both workers
+        id: compile
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          cargo test --locked --no-fail-fast -p marmish-engine -p marmish-stream -p marmish-native -p marmish-vault --no-run
+          metadata=$(mktemp "$RUNNER_TEMP/marmish-worker-metadata.XXXXXX")
+          trap 'rm -f "$metadata"' EXIT
+          cargo metadata --locked --no-deps --format-version 1 > "$metadata"
+          jq -e '[.packages[] | select(.name == "marmish-engine")] | if length == 1 then .[0].targets | map(select(.kind | index("bin"))) | sort_by(.name) | map({name, required_features: (.["required-features"] // [])}) == [{name: "marmish-engine-worker", required_features: []}, {name: "marmish-test-frontend", required_features: ["fault-injection"]}] else false end' "$metadata"
+          jq -c '[.packages[] | select(.name == "marmish-engine" or .name == "marmish-native") | {package: .name, binaries: [.targets[] | select(.kind | index("bin")) | .name]}]' "$metadata"
+          for binary in marmish-engine-worker marmish-worker; do
+            test -f "target/debug/$binary"
+            test -x "target/debug/$binary"
+            shasum -a 256 "target/debug/$binary"
+          done
+          git diff --quiet HEAD --
+      - name: Run original combined native suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          cargo test --locked --no-fail-fast -p marmish-engine -p marmish-stream -p marmish-native -p marmish-vault
+      - name: Repeat exact cleanup regressions twenty times
+        if: always() && steps.compile.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          log=$(mktemp "$RUNNER_TEMP/marmish-cleanup-regression.XXXXXX")
+          trap 'rm -f "$log"' EXIT
+          tests=(
+            stream_runner::tests::final_handle_drop_releases_full_unacked_output_after_exit
+            stream_runner::tests::final_handle_drop_releases_full_unacked_output_race
+            stream_runner::tests::final_handle_drop_cancels_live_full_unacked_output
+            stream_runner::tests::final_service_handle_drop_finishes_owned_cleanup
+          )
+          for iteration in {1..20}; do
+            for test_name in "${tests[@]}"; do
+              echo "cleanup regression iteration=$iteration test=$test_name"
+              cargo test --locked -p marmish-native --lib "$test_name" -- --exact --nocapture 2>&1 | tee "$log"
+              grep -Eq '^test result: ok\. 1 passed; 0 failed; 0 ignored;' "$log"
+            done
+          done

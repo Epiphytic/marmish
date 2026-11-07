@@ -51,6 +51,33 @@ pub(crate) struct RunnerSnapshot {
     pub terminal: Option<Terminal>,
     pub uncertain: bool,
 }
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct TestFailure {
+    caller: Option<(&'static str, u32)>,
+    engine_error: Option<marmish_engine::EngineError>,
+    lifecycle: Option<[bool; 4]>,
+    stdout_credit: usize,
+    stdout_eof: Option<u64>,
+    stderr_credit: usize,
+    stderr_eof: Option<u64>,
+}
+#[cfg(test)]
+impl std::fmt::Display for TestFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "site={:?} engine={:?} lifecycle[exit_seen,cancel_started,cancelled_while_running,killed]={:?} stdout=({},{:?}) stderr=({},{:?})",
+            self.caller,
+            self.engine_error,
+            self.lifecycle,
+            self.stdout_credit,
+            self.stdout_eof,
+            self.stderr_credit,
+            self.stderr_eof
+        )
+    }
+}
 #[derive(Default)]
 struct State {
     identity: Option<LiveProcessRecord>,
@@ -60,6 +87,10 @@ struct State {
     stderr: SendWindow,
     terminal: Option<Terminal>,
     uncertain: bool,
+    #[cfg(test)]
+    test_failure: Option<TestFailure>,
+    #[cfg(test)]
+    test_leader_exit_observed: bool,
 }
 struct Shared {
     state: Mutex<State>,
@@ -97,8 +128,48 @@ impl Shared {
             uncertain: state.uncertain,
         }
     }
+    #[cfg(test)]
+    #[track_caller]
+    fn record_failure_context(
+        &self,
+        engine_error: Option<marmish_engine::EngineError>,
+        lifecycle: Option<&Lifecycle>,
+    ) {
+        let caller = std::panic::Location::caller();
+        let mut state = self.state();
+        state.test_failure = Some(TestFailure {
+            stdout_credit: state.stdout.credit(),
+            stdout_eof: state.stdout.eof(),
+            stderr_credit: state.stderr.credit(),
+            stderr_eof: state.stderr.eof(),
+            engine_error,
+            caller: Some((caller.file(), caller.line())),
+            lifecycle: lifecycle.map(|l| {
+                [
+                    l.exit_seen.is_some(),
+                    l.cancel_started.is_some(),
+                    l.cancelled_while_running,
+                    l.killed.is_some(),
+                ]
+            }),
+        });
+    }
+    #[cfg_attr(test, track_caller)]
     fn failed(&self, uncertain: bool) {
         let mut state = self.state();
+        #[cfg(test)]
+        {
+            let mut failure = state.test_failure.take().unwrap_or_else(|| TestFailure {
+                stdout_credit: state.stdout.credit(),
+                stdout_eof: state.stdout.eof(),
+                stderr_credit: state.stderr.credit(),
+                stderr_eof: state.stderr.eof(),
+                ..TestFailure::default()
+            });
+            let caller = std::panic::Location::caller();
+            failure.caller = Some((caller.file(), caller.line()));
+            state.test_failure = Some(failure);
+        }
         let stdout_end = state.stdout.produced();
         let stderr_end = state.stderr.produced();
         let _ = state.stdout.finish(stdout_end);
@@ -275,7 +346,9 @@ fn run(prepared: PreparedLiveExec, shared: &Shared, limits: RunnerLimits) {
     shared.state().identity = Some(child.identity());
     let pipes = match child.take_pipes() {
         Ok(pipes) => pipes,
-        Err(_) => {
+        Err(_error) => {
+            #[cfg(test)]
+            shared.record_failure_context(Some(_error), None);
             shared.failed(true);
             return;
         }
@@ -300,6 +373,8 @@ fn run(prepared: PreparedLiveExec, shared: &Shared, limits: RunnerLimits) {
             match pump_stdin(&mut stdin, shared) {
                 Ok(progress) => progress,
                 Err(_) => {
+                    #[cfg(test)]
+                    shared.record_failure_context(None, Some(&lifecycle));
                     shared.failed(true);
                     return;
                 }
@@ -315,6 +390,8 @@ fn run(prepared: PreparedLiveExec, shared: &Shared, limits: RunnerLimits) {
         ) {
             (Ok(stdout), Ok(stderr)) => (stdout, stderr),
             _ => {
+                #[cfg(test)]
+                shared.record_failure_context(None, Some(&lifecycle));
                 shared.failed(true);
                 return;
             }
@@ -346,7 +423,9 @@ impl Lifecycle {
         let now = Instant::now();
         let exited = match child.try_exit() {
             Ok(exited) => exited,
-            Err(_) => {
+            Err(_error) => {
+                #[cfg(test)]
+                shared.record_failure_context(Some(_error), Some(self));
                 shared.failed(true);
                 return false;
             }
@@ -355,7 +434,12 @@ impl Lifecycle {
             self.exit_seen = Some(now);
             // Leader exit fences input even while output remains backpressured
             // and terminal cannot be exposed until owned cleanup/reaping.
-            shared.state().stdin_closed = true;
+            let mut state = shared.state();
+            state.stdin_closed = true;
+            #[cfg(test)]
+            {
+                state.test_leader_exit_observed = true;
+            }
         }
         let cancellation = shared.cancel.load(Ordering::Acquire);
         // A late user request must not relabel an already-observed natural exit.
@@ -367,7 +451,9 @@ impl Lifecycle {
             .exit_seen
             .is_some_and(|at| now.duration_since(at) >= limits.drain_grace);
         if self.cancel_started.is_none() && (cancellation || drain_expired) {
-            if child.signal_term().is_err() {
+            if let Err(_error) = child.signal_term() {
+                #[cfg(test)]
+                shared.record_failure_context(Some(_error), Some(self));
                 shared.failed(true);
                 return false;
             }
@@ -378,7 +464,9 @@ impl Lifecycle {
                 .cancel_started
                 .is_some_and(|at| now.duration_since(at) >= limits.cancel_grace)
         {
-            if child.signal_kill().is_err() {
+            if let Err(_error) = child.signal_kill() {
+                #[cfg(test)]
+                shared.record_failure_context(Some(_error), Some(self));
                 shared.failed(true);
                 return false;
             }
@@ -401,6 +489,8 @@ impl Lifecycle {
                 .killed
                 .is_some_and(|at| now.duration_since(at) >= limits.drain_grace)
             {
+                #[cfg(test)]
+                shared.record_failure_context(None, Some(self));
                 shared.failed(true);
                 return true;
             }
@@ -434,7 +524,9 @@ impl Lifecycle {
             if stalled_stdout || stalled_stderr {
                 finish_output(stdout, shared, true);
                 finish_output(stderr, shared, false);
-                let _ = child.reap_last();
+                let _reap_error = child.reap_last().err();
+                #[cfg(test)]
+                shared.record_failure_context(_reap_error, Some(self));
                 shared.failed(true);
                 return true;
             }
@@ -443,7 +535,9 @@ impl Lifecycle {
             return false;
         }
         if self.killed.is_none() {
-            if child.signal_kill().is_err() {
+            if let Err(_error) = child.signal_kill() {
+                #[cfg(test)]
+                shared.record_failure_context(Some(_error), Some(self));
                 shared.failed(true);
                 return true;
             }
@@ -451,7 +545,9 @@ impl Lifecycle {
         }
         let outcome = match child.reap_last() {
             Ok(outcome) => outcome,
-            Err(_) => {
+            Err(_error) => {
+                #[cfg(test)]
+                shared.record_failure_context(Some(_error), Some(self));
                 shared.failed(true);
                 return true;
             }
@@ -471,6 +567,10 @@ impl Lifecycle {
                 },
             }
         };
+        #[cfg(test)]
+        if matches!(terminal, Terminal::Failed { .. }) {
+            shared.record_failure_context(None, Some(self));
+        }
         let mut state = shared.state();
         state.uncertain = matches!(terminal, Terminal::Failed { .. });
         state.terminal = Some(terminal);
@@ -588,6 +688,71 @@ pub(crate) mod tests {
             drain_grace: Duration::from_millis(80),
             cancel_grace: Duration::from_millis(40),
             poll_interval: Duration::from_millis(2),
+        }
+    }
+    // Retain only cancellation/wake capabilities, never a Control/handle clone.
+    // Moving the directory here keeps state alive until physical worker release.
+    struct CleanupGuard {
+        directory: Option<tempfile::TempDir>,
+        shared: Arc<Shared>,
+        wake: thread::Thread,
+    }
+    impl CleanupGuard {
+        fn start(script: &str) -> (RunnerHandle, Self) {
+            let (directory, prepared) = prepare(script);
+            let handle = RunnerHandle::start(prepared, limits()).unwrap();
+            let cleanup = Self::new(directory, &handle);
+            (handle, cleanup)
+        }
+        fn new(directory: tempfile::TempDir, handle: &RunnerHandle) -> Self {
+            Self {
+                directory: Some(directory),
+                shared: handle.control.shared.clone(),
+                wake: handle.control.wake.clone(),
+            }
+        }
+        fn wait_finished(&self) -> bool {
+            let deadline = Instant::now() + Duration::from_secs(8);
+            while !self.shared.finished.load(Ordering::Acquire) {
+                if Instant::now() >= deadline {
+                    return false;
+                }
+                thread::sleep(Duration::from_millis(2));
+            }
+            true
+        }
+        fn assert_finished(&self, expected: Option<Terminal>) {
+            assert!(self.wait_finished(), "last-handle cleanup timed out");
+            let state = self.shared.state();
+            assert!(state.terminal.is_some());
+            assert!(
+                !state.uncertain,
+                "{}",
+                state
+                    .test_failure
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "failure_unrecorded".into())
+            );
+            if let Some(expected) = expected {
+                assert_eq!(state.terminal, Some(expected));
+            }
+        }
+    }
+    impl Drop for CleanupGuard {
+        fn drop(&mut self) {
+            self.shared.cancel.store(true, Ordering::Release);
+            self.wake.unpark();
+            if !self.wait_finished() {
+                if let Some(directory) = self.directory.take() {
+                    let _ = directory.keep();
+                }
+                if thread::panicking() {
+                    eprintln!("runner_test_cleanup_timeout");
+                } else {
+                    panic!("runner_test_cleanup_timeout");
+                }
+            }
         }
     }
     pub(crate) fn prepare(script: &str) -> (tempfile::TempDir, PreparedLiveExec) {
@@ -912,20 +1077,11 @@ pub(crate) mod tests {
 
     #[test]
     fn final_service_handle_drop_finishes_owned_cleanup() {
-        let (_dir, prepared) = prepare("trap '' TERM; exec sleep 30");
-        let handle = RunnerHandle::start(prepared, limits()).unwrap();
+        let (handle, cleanup) = CleanupGuard::start("trap '' TERM; exec sleep 30");
         wait_for(&handle, |snapshot| snapshot.identity.is_some());
-        let shared = handle.control.shared.clone();
         assert!(!handle.finished());
         drop(handle);
-        let deadline = Instant::now() + Duration::from_secs(8);
-        while !shared.finished.load(Ordering::Acquire) {
-            assert!(Instant::now() < deadline, "last-handle cleanup timed out");
-            thread::sleep(Duration::from_millis(2));
-        }
-        let state = shared.state();
-        assert_eq!(state.terminal, Some(Terminal::Cancelled));
-        assert!(!state.uncertain);
+        cleanup.assert_finished(Some(Terminal::Cancelled));
     }
 
     #[test]
@@ -1066,35 +1222,147 @@ pub(crate) mod tests {
         assert!(!state.uncertain);
     }
 
-    #[test]
-    fn final_handle_drop_releases_full_unacked_output_after_exit() {
-        let script = format!(
+    fn full_window_exit_script() -> String {
+        format!(
             "dd if=/dev/zero bs=1024 count={} 2>/dev/null; printf tail; exit 7",
             marmish_stream::WINDOW_BYTES / 1024
-        );
-        let (_dir, prepared) = prepare(&script);
-        let handle = RunnerHandle::start(prepared, limits()).unwrap();
+        )
+    }
+
+    #[test]
+    fn final_handle_drop_releases_full_unacked_output_after_exit() {
+        let (handle, cleanup) = CleanupGuard::start(&full_window_exit_script());
+        wait_for(&handle, |_| {
+            let state = handle.control.shared.state();
+            state.stdout.credit() == 0 && state.test_leader_exit_observed
+        });
+        drop(handle);
+        cleanup.assert_finished(Some(Terminal::Exited { code: 7 }));
+    }
+
+    #[test]
+    fn final_handle_drop_releases_full_unacked_output_race() {
+        let (handle, cleanup) = CleanupGuard::start(&full_window_exit_script());
         wait_for(&handle, |_| {
             handle.control.shared.state().stdout.credit() == 0
         });
-        let shared = handle.control.shared.clone();
         drop(handle);
-        let deadline = Instant::now() + Duration::from_secs(8);
-        while !shared.finished.load(Ordering::Acquire) {
+        cleanup.assert_finished(None);
+    }
+
+    #[test]
+    fn final_handle_drop_cancels_live_full_unacked_output() {
+        let (handle, cleanup) = CleanupGuard::start("exec /usr/bin/yes");
+        wait_for(&handle, |_| {
+            handle.control.shared.state().stdout.credit() == 0
+        });
+        assert!(!handle.control.shared.state().test_leader_exit_observed);
+        drop(handle);
+        cleanup.assert_finished(Some(Terminal::Cancelled));
+    }
+
+    // The target closing fd0 does not rule out a different concurrently forked
+    // test child retaining its CLOEXEC pipe reader until exec. Create this pipe
+    // only after selfexec, outside the parallel library test process.
+    struct ClosedStdinChild {
+        child: std::process::Child,
+        directory: Option<tempfile::TempDir>,
+    }
+    impl Drop for ClosedStdinChild {
+        fn drop(&mut self) {
+            if let Some(directory) = self.directory.take() {
+                let _ = directory.keep();
+                let _ = self.child.kill();
+                let deadline = Instant::now() + Duration::from_secs(2);
+                loop {
+                    match self.child.try_wait() {
+                        Ok(Some(_)) => break,
+                        Ok(None) if Instant::now() < deadline => {
+                            thread::sleep(Duration::from_millis(2));
+                        }
+                        _ => {
+                            eprintln!("closed_stdin_test_cleanup_uncertain_unreaped");
+                            break;
+                        }
+                    }
+                }
+                // Killing this test child does not establish cleanup of the
+                // runner's separately owned process group. Retain its state.
+                eprintln!("closed_stdin_test_cleanup_uncertain_state_retained");
+            }
+        }
+    }
+    fn isolated_closed_stdin() {
+        use std::io::{Read, Seek, SeekFrom};
+        use std::process::{Command, Stdio};
+        const NAME: &str =
+            "stream_runner::tests::closed_stdin_retains_delivery_cursors_and_natural_exit";
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let mut capture = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(root.join("capture"))
+            .unwrap();
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", NAME, "--test-threads=1", "--nocapture"])
+            .env("MARMISH_TEST_CLOSED_STDIN", "isolated-v1")
+            .env("TMPDIR", &root)
+            .stdin(Stdio::null())
+            .stdout(capture.try_clone().unwrap())
+            .stderr(capture.try_clone().unwrap())
+            .spawn()
+            .unwrap();
+        let mut owned = ClosedStdinChild {
+            child,
+            directory: Some(directory),
+        };
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let status = loop {
+            if let Some(status) = owned.child.try_wait().unwrap() {
+                break status;
+            }
             assert!(
                 Instant::now() < deadline,
-                "full-window last-handle cleanup timed out"
+                "closed_stdin_test_supervision_timeout"
             );
             thread::sleep(Duration::from_millis(2));
+        };
+        let size = capture.metadata().unwrap().len();
+        let start = size.saturating_sub(64 * 1024);
+        capture.seek(SeekFrom::Start(start)).unwrap();
+        let mut bytes = Vec::new();
+        capture.take(64 * 1024).read_to_end(&mut bytes).unwrap();
+        let output = String::from_utf8_lossy(&bytes);
+        let named_ok = format!("test {NAME} ... ok");
+        let valid = status.success()
+            && size <= 64 * 1024
+            && output.lines().any(|line| line == named_ok)
+            && output
+                .lines()
+                .any(|line| line.starts_with("test result: ok. 1 passed; 0 failed; 0 ignored;"));
+        if !valid {
+            let tail = &bytes[bytes.len().saturating_sub(8 * 1024)..];
+            let diagnostic =
+                String::from_utf8_lossy(tail).replace(root.to_string_lossy().as_ref(), "<private>");
+            panic!("closed_stdin_test_child_failed: {diagnostic}");
         }
-        assert!(shared.state().terminal.is_some());
-        assert!(!shared.state().uncertain);
+        // Successful reaping and exact execution proof precede state removal.
+        drop(owned.directory.take());
     }
 
     #[test]
     fn closed_stdin_retains_delivery_cursors_and_natural_exit() {
-        let (_dir, prepared) = prepare("exec 0<&-; printf closed; sleep 1; exit 9");
+        if std::env::var_os("MARMISH_TEST_CLOSED_STDIN").as_deref()
+            != Some(std::ffi::OsStr::new("isolated-v1"))
+        {
+            isolated_closed_stdin();
+            return;
+        }
+        let (dir, prepared) = prepare("exec 0<&-; printf closed; sleep 1; exit 9");
         let handle = RunnerHandle::start(prepared, limits()).unwrap();
+        let _cleanup = CleanupGuard::new(dir, &handle);
         wait_for(&handle, |snapshot| snapshot.stdout.is_some());
         handle
             .exchange(Some((0, b"not delivered")), None, 0, 0)

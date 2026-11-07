@@ -139,7 +139,8 @@ fn retained_command_input_and_streams_require_the_storage_key() {
     eprintln!("compiled SQLCipher version: {version}");
     drop(probe);
 
-    let worker = executable::stage_worker(Path::new(env!("CARGO_BIN_EXE_marmish-worker")));
+    let worker =
+        executable::stage_cargo_worker(Path::new(env!("CARGO_BIN_EXE_marmish-engine-worker")));
     let directory = executable::private_tempdir();
     let policy = policy(directory.path(), &worker.path);
     let mut engine = Engine::open(policy.clone()).unwrap();
@@ -246,7 +247,8 @@ fn legacy_plaintext_database_is_rejected_intact_without_creating_key() {
     if uid() == 0 {
         return;
     }
-    let worker = executable::stage_worker(Path::new(env!("CARGO_BIN_EXE_marmish-worker")));
+    let worker =
+        executable::stage_cargo_worker(Path::new(env!("CARGO_BIN_EXE_marmish-engine-worker")));
     let directory = executable::private_tempdir();
     let policy = policy(directory.path(), &worker.path);
     std::fs::create_dir(&policy.state_root).unwrap();

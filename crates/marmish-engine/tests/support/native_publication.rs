@@ -134,7 +134,8 @@ fn native_publication_crash_boundaries_recover_exact_binding() {
     if unsafe { libc::getuid() } == 0 {
         return;
     }
-    let worker = executable::stage_worker(Path::new(env!("CARGO_BIN_EXE_marmish-worker")));
+    let worker =
+        executable::stage_cargo_worker(Path::new(env!("CARGO_BIN_EXE_marmish-engine-worker")));
     for migration in [false, true] {
         let points = [
             "AfterNativePendingCreate",

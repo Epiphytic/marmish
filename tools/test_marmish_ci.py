@@ -49,6 +49,25 @@ class CiTests(unittest.TestCase):
                 archive.addfile(info, io.BytesIO(data))
         return path
 
+    def test_bundle_build_uses_unique_engine_source_and_legacy_destination(self):
+        artifact = self.root / 'target/release'
+        artifact.mkdir(parents=True)
+        (artifact / 'marmish-engine-worker').write_bytes(b'engine-worker')
+        (artifact / 'marmish-worker').write_bytes(b'wrong-native-worker')
+        (artifact / 'marmish-engine-bridge').write_bytes(b'bridge')
+        self.destination.mkdir()
+        with patch.object(ci, 'REPO', self.root), patch.object(ci, 'checked') as checked:
+            ci._build_bundle(self.destination)
+        self.assertEqual((self.destination / 'marmish-worker').read_bytes(), b'engine-worker')
+        self.assertFalse((self.destination / 'marmish-engine-worker').exists())
+        self.assertEqual((self.destination / 'marmish-worker').stat().st_mode & 0o777, 0o755)
+        self.assertEqual(checked.call_args_list[0].args[0],
+                         ['cargo', 'build', '--locked', '--release', '-p',
+                          'marmish-engine', '-p', 'marmish-prototype'])
+        record = json.loads((self.destination / 'bundle.json').read_text())
+        self.assertEqual(record['hashes']['marmish-worker'],
+                         hashlib.sha256(b'engine-worker').hexdigest())
+
     def test_unpack_preserves_executable_modes_and_context(self):
         ci.unpack(self.archive(), self.destination)
         self.assertEqual((self.destination / 'wnd').stat().st_mode & 0o777, 0o755)

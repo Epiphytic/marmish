@@ -47,6 +47,9 @@ endpoints. It does not contact public relays. Namespace tests require the Linux
 tools and kernel permissions described in the README; unsupported hosts cannot
 establish the confinement evidence merely by passing unrelated unit tests.
 
+The current command uses the renamed standalone engine target
+`marmish-engine-worker`; historical results retain their original artifact names.
+
 The live harness requires explicit opt-in, a selected relay set, the pinned
 daemon and built worker/bridge. Replace the example origin with the intended
 test relay; repeat `--relay` when using multiple origins.
@@ -57,7 +60,7 @@ python3 tools/marmish_e2e.py --live \
   --wnd /absolute/path/to/wnd \
   --wnd-sha256 1324c70d389fb49f37ae8f7f6ab2a16840b138a0c438d7aef10bb6f9eee20a03 \
   --bridge "$PWD/target/debug/marmish-engine-bridge" \
-  --worker "$PWD/target/debug/marmish-worker" --timeout 900
+  --worker "$PWD/target/debug/marmish-engine-worker" --timeout 900
 ```
 
 It creates disposable identities under a private temporary root and tests real

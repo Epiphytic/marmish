@@ -28,7 +28,7 @@ serde_json.workspace = true
 tempfile.workspace = true
 
 [[bin]]
-name = "marmish-worker"
+name = "marmish-engine-worker"
 path = "src/bin/marmish-worker.rs"
 
 [[bin]]

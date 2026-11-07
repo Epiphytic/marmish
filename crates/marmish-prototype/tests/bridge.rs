@@ -43,12 +43,12 @@ impl Pipe {
             .unwrap()
             .parent()
             .unwrap()
-            .join("marmish-worker");
+            .join("marmish-engine-worker");
         assert!(
             worker.is_file(),
-            "build reviewed worker first: cargo build -p marmish-engine --bin marmish-worker"
+            "build reviewed worker first: cargo build -p marmish-engine --bin marmish-engine-worker"
         );
-        let worker = executable::stage_worker(&worker);
+        let worker = executable::stage_cargo_worker(&worker);
         let mut child = Command::new(env!("CARGO_BIN_EXE_marmish-engine-bridge"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

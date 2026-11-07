@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "qualified": false,
+  "source_commit": "53f94f99d06942a58f52fd4a76048a26ced1a99d",
+  "candidate": {
+    "id": 42400376357,
+    "attempt": 1,
+    "url": "https://github.com/Epiphytic/marmish/actions/runs/42400376357",
+    "created_at": "2026-11-07T18:15:30Z",
+    "status": "completed",
+    "conclusion": "cancelled"
+  },
+  "macos_job": {
+    "id": 128486633561,
+    "name": "package (macos-15, aarch64-apple-darwin, adhoc, macos=15.0)",
+    "status": "completed",
+    "conclusion": "failure",
+    "started_at": "2026-11-07T18:15:35Z",
+    "completed_at": "2026-11-07T18:35:39Z",
+    "html_url": "https://github.com/Epiphytic/marmish/actions/runs/42400376357/job/128486633561"
+  },
+  "decision": "Cancel remaining Linux builds after decisive macOS failure; no installed cohorts dispatched.",
+  "test_targets": {
+    "engine_lib": {
+      "passed": 148,
+      "failed": 0,
+      "ignored": 1
+    },
+    "encrypted_storage": {
+      "passed": 2,
+      "failed": 1,
+      "ignored": 0
+    },
+    "engine_integration": {
+      "passed": 2,
+      "failed": 12,
+      "ignored": 0
+    },
+    "native_storage": {
+      "passed": 1,
+      "failed": 4,
+      "ignored": 0
+    },
+    "native_lib": {
+      "passed": 626,
+      "failed": 1,
+      "ignored": 3
+    },
+    "native_process_limits_integration": {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    }
+  },
+  "observations": [
+    "Cargo warned native and engine binary targets have the same debug marmish-worker and dSYM output path.",
+    "Engine integration failures mostly report NotStarted/InputClosed; no actual winning worker bytes retained.",
+    "Native final_handle_drop_releases_full_unacked_output_after_exit failed !uncertain; original test did not first observe leader exit.",
+    "Other native cleanup tests and startup tests passed; these do not waive the failure."
+  ],
+  "interpretation_limits": [
+    "Collision is longstanding and removal is a hypothesis test; original winning worker identity was not captured.",
+    "Cleanup failure operation and underlying Darwin reason were not recorded.",
+    "No product cleanup fix is established by this evidence.",
+    "Nested isolated test counts are not added to outer target totals.",
+    "Linux cancellation is not a Linux test failure or pass."
+  ],
+  "private_evidence": [
+    {
+      "private_file": "marmish-53f94-candidate-api.json",
+      "bytes": 12067,
+      "sha256": "5b21d075eb95cf470da5133dc94e8a1c65fb37f1508da9f77befc73fbccde270"
+    },
+    {
+      "private_file": "marmish-53f94-macos-job-api.json",
+      "bytes": 4165,
+      "sha256": "f732f6bd7530e4885e3001bdd566a4493a2422936a1a2276da52fb50431842d0"
+    },
+    {
+      "private_file": "marmish-53f94-macos-candidate.log",
+      "bytes": 240540,
+      "sha256": "12586c2abe3f17e6d0230cf4c6742b85f30c2ad192f9b20c66028d6e849b7ed5"
+    },
+    {
+      "private_file": "marmish-53f94-candidate-all.log",
+      "bytes": 1528431,
+      "sha256": "b865834e13440d722dc6208359f7566f4c2571c4c1ec2f3799708008aa9589aa"
+    }
+  ]
+}

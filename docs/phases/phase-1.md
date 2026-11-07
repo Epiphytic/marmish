@@ -442,13 +442,16 @@ The integrator defines `[features] default = []` and `fault-injection = []`. No 
 
 The integrator owns `src/fault.rs` and shares its exact `FaultPoint` enum with both agents before edits. Its crate-private `fault_point(root: &StateRoot, job: JobId, point: FaultPoint)` is a no-op by default. Paired enum points cover Before/AfterAccepted, Claim, Spawn, Running, InputWrite, InputProgress, SpoolSync, OutputCommit, and ExitCommit. Claim atomically commits Launching, so Claim and Launching are aliases of the same durable boundary, not two transactions. Under the feature, frontend Before/AfterAccepted points read the fixed state-root `fault` file through `StateRoot::read_frontend_fault`; all worker points read `jobs/<id>/fault` through `StateRoot::read_fault` (each at most 256 bytes, private no-follow file). The root-level sentinel can be placed before the random JobId exists. The test helper aborts immediately after accepted commit and before worker spawn; the harness then lists canonical job dirs to discover the generated ID and place its worker sentinel before restarting/reconciling. It never guesses or supplies the server-generated JobId. Only feature code interprets either sentinel; arbitrary contents never execute code. Fault selectors are fixed enum labels, not scripts/paths/commands, and never come from ambient environment or ordinary production CLI. The feature is off by default; production releases use `--no-default-features` explicitly and are built separately from feature-enabled tests so artifact reuse cannot blur the claim.
 
+Current commands use the unique engine target `marmish-engine-worker`; historical
+execution evidence below retains the names used at the time.
+
 Required commands, in addition to workspace default checks:
 
 ```sh
 cargo build --offline --locked -p marmish-engine --release --no-default-features --target-dir target/phase1-production
-cargo build --offline --locked -p marmish-engine --release --features fault-injection --bin marmish-worker --target-dir target/phase1-fault
-MARMISH_TEST_PRODUCTION_WORKER="$PWD/target/phase1-production/release/marmish-worker" \
-MARMISH_TEST_FAULT_WORKER="$PWD/target/phase1-fault/release/marmish-worker" \
+cargo build --offline --locked -p marmish-engine --release --features fault-injection --bin marmish-engine-worker --target-dir target/phase1-fault
+MARMISH_TEST_PRODUCTION_WORKER="$PWD/target/phase1-production/release/marmish-engine-worker" \
+MARMISH_TEST_FAULT_WORKER="$PWD/target/phase1-fault/release/marmish-engine-worker" \
 cargo test --offline --locked --workspace --features fault-injection
 ```
 

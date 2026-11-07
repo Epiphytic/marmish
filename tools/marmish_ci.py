@@ -221,8 +221,9 @@ def validate_bundle(record, expected_context=None):
 
 def _build_bundle(destination):
     checked(['cargo', 'build', '--locked', '--release', '-p', 'marmish-engine', '-p', 'marmish-prototype'])
-    for name in ('marmish-worker', 'marmish-engine-bridge'):
-        shutil.copyfile(REPO / 'target/release' / name, destination / name)
+    for source, name in (('marmish-engine-worker', 'marmish-worker'),
+                         ('marmish-engine-bridge', 'marmish-engine-bridge')):
+        shutil.copyfile(REPO / 'target/release' / source, destination / name)
         (destination / name).chmod(0o755)
     checked(['rustc', '--edition=2024', '-O', str(REPO / 'tools/marmish_fixture.rs'),
              '-o', str(destination / 'fixture')])
