@@ -66,6 +66,48 @@ test('candidate-only workflows retain three platforms and closed nonpublishing s
   assert.ok(installed.includes('MARMISH_TEST_RSYNC=$rsync_image'));
 });
 
+// Restrict the budget check to job-level keys; unrelated jobs/steps cannot satisfy it.
+function candidateBuildBudget(source) {
+  const jobs=[...source.matchAll(/^  (package|render):\n([\s\S]*?)(?=^  [a-z][a-z_-]*:|$(?![\s\S]))/gm)];
+  assert.deepEqual(jobs.map(job=>job[1]),['package','render']);
+  for(const [index,expected] of [[0,'120'],[1,'5']]) {
+    const caps=[...jobs[index][2].matchAll(/^    timeout-minutes: ([0-9]+)\s*$/gm)];
+    assert.deepEqual(caps.map(cap=>cap[1]),[expected]);
+  }
+}
+function candidateStep(source,name) {
+  const marker=`      - name: ${name}\n`;
+  assert.equal(source.split(marker).length,2,`unique step: ${name}`);
+  return source.split(marker)[1].split('\n      - ')[0];
+}
+test('candidate package budget is bounded independently of render and installed traffic',async()=>{
+  const candidate=await fs.readFile(new URL('../../.github/workflows/streaming-candidate.yml',import.meta.url),'utf8');
+  candidateBuildBudget(candidate);
+  const cap='    timeout-minutes: 120\n';
+  for(const replacement of ['', '    timeout-minutes: 90\n',cap+cap]) {
+    assert.throws(()=>candidateBuildBudget(candidate.replace(cap,replacement)));
+  }
+  assert.throws(()=>candidateBuildBudget(candidate.replace(cap,'    timeout-minutes: 90\n')+
+    '  unrelated:\n    timeout-minutes: 120\n'));
+  assert.throws(()=>candidateBuildBudget(candidate.replace('    timeout-minutes: 5\n',cap)));
+  const native=candidateStep(candidate,'Verify native components');
+  for(const command of [
+    'cargo test --locked --no-fail-fast -p marmish-engine -p marmish-stream -p marmish-native -p marmish-vault',
+    'cargo clippy --locked -p marmish-native -p marmish-engine --all-targets -- -D warnings',
+  ]) assert.ok(native.includes(command),command);
+  const isolated=candidateStep(candidate,'Build isolated installed-test tools without changing product assets');
+  for(const command of [
+    'export CARGO_TARGET_DIR="$RUNNER_TEMP/installed-tools-target"',
+    'cargo test --locked -p marmish-native --features installed-checks',
+    'cargo clippy --locked -p marmish-native --features installed-checks --all-targets -- -D warnings',
+    'cargo build --locked --release -p marmish-native --features installed-checks ' + '\\' +
+      '\n            --bin marmish-installed-check --bin marmish-installed-fixture',
+    'shasum -a 256 "$RUNNER_TEMP"/native-assets/* > "$RUNNER_TEMP/product-before.sha256"',
+    'shasum -a 256 "$RUNNER_TEMP"/native-assets/* > "$RUNNER_TEMP/product-after.sha256"',
+    'cmp "$RUNNER_TEMP/product-before.sha256" "$RUNNER_TEMP/product-after.sha256"',
+  ]) assert.ok(isolated.includes(command),command);
+});
+
 test('native enforcing budget constants remain equal to the Node mirror',async()=>{
   const source=await fs.readFile(new URL('../../crates/marmish-native/src/installed_streaming_records.rs',import.meta.url),'utf8');
   for(const fragment of [

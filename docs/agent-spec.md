@@ -837,9 +837,27 @@ The first local combined rerun passed the engine integrations but failed the
 closed-stdin fixture (delivered13, expected0). A controlled inherited-reader
 check demonstrates a missing fixture premise, without establishing the failed
 run's exact cause; its inherited test-thread setting was not captured. A narrow
-exact selfexec isolation correction has independent design approval and passing
-focused checks; the full rerun and final code review are pending. It preserves
-delivery/retry/EOF/natural-exit assertions and
-production behavior. A recurrence in the isolated child remains a product
-defect to investigate. See [local evidence](validation/macos-worker-cleanup-local.md);
-the combined suite is not yet green.
+exact selfexec isolation correction has independent design and final code/result
+approval. The final unchanged Linux combined suite passed in693.03s; delivery,
+retry, EOF and natural-exit assertions and production behavior are preserved.
+A recurrence in the isolated child remains a product defect to investigate.
+See [local and hosted evidence](validation/macos-worker-cleanup-local.md).
+
+At source2ebc8b6, focused macOS run42406498129/1 passed the combined suites and
+80 exact cleanup repetitions under serial libtest. Historical failure causality
+and parallel macOS behavior remain unproven. Subsequent candidate42408127994/1
+passed macOS and Linux ARM64, but Linux AMD64 hit its90-minute job cap during
+release compilation of installed-test tools after its tests passed. The
+[candidate is unqualified](validation/streaming-candidate-2ebc8b6-timeout.json),
+with zero installed cohorts dispatched. These diagnostic/partial results do not
+qualify the streaming release; a fresh exact-source candidate and all eight
+original installed cohorts remain required.
+
+The [reviewed candidate build-budget correction](phases/streaming-candidate-build-budget.md)
+changes only the three-platform package-job cap from90 to120minutes, after the
+actual AMD timeout. The installed65-minute cap and all runtime/traffic deadlines,
+workloads and acceptance remain unchanged. Its
+[local policy checks](validation/streaming-candidate-build-budget.md) do not
+qualify a release; a fresh exact-source candidate and all eight original
+installed cohorts remain required. A second budget expiry must be preserved
+and investigated rather than silently increasing the cap again.

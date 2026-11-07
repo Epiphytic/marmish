@@ -173,12 +173,34 @@ passed and remain in scope for integrated review.
 
 ## Hosted and release limits
 
-The focused macOS workflow has not yet run for this increment. It must execute
-the unchanged combined four-package suite and twenty repetitions of each of
-the four exact cleanup tests. Even a green focused job is diagnostic evidence,
-not release qualification: the fresh three-platform candidate and all eight
-original installed cohorts remain mandatory. No version bump, public installer
-pin change, tag or release publication is part of this increment.
+The focused macOS workflow subsequently passed at source
+`2ebc8b6b2489f3b63255658846b23e7fe58f855f`: run
+[42406498129/1](https://github.com/Epiphytic/marmish/actions/runs/42406498129),
+job128505241150. It executed the unchanged combined four-package suite and
+20 repetitions of each of the four exact cleanup tests (80 named successful
+executions and 80 one-test-passed summaries). The serial job took1143s under
+its2700s cap, leaving1557s; cap/observed=2.362 is one measured observation,
+not a guarantee. Compilation/identity checks took340s, combined suites728s,
+and the80 focused executions57s. See the
+[sanitized hosted evidence](macos-worker-cleanup-hosted.json) and
+[actual result reviews](../reviews/macos-candidate-worker-and-cleanup.md).
+
+Both the historical failed macOS run and this passing run set
+`RUST_TEST_THREADS=1`; no parallel macOS run was performed. The unknown inherited
+thread setting refers to the first failed local Linux combined run. This result
+establishes neither historical causality nor the old collision's winning bytes.
+Five existing ignored tests remain ignored. No relay or installer runs in this
+diagnostic. Its evidence stays bound to2ebc8b6 and is not transferred to a new
+source revision.
+
+The subsequent exact-source three-platform candidate
+[42408127994/1](https://github.com/Epiphytic/marmish/actions/runs/42408127994)
+passed both ARM platform jobs but hit the AMD64 package-job90-minute cap while
+release-compiling installed-test tools. It is unqualified and dispatched no
+installed cohorts; [structured evidence](streaming-candidate-2ebc8b6-timeout.json)
+preserves its results. A fresh candidate and all eight original installed
+cohorts remain mandatory. No version bump, public installer pin change, tag or
+release publication is part of this increment.
 
 Final D/runner check logs (prefix `/tmp/marmish-worker-cleanup-`):
 

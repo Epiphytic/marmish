@@ -162,3 +162,30 @@ cleanup instrumentation, accepted low timeout-capture limitation, non-clean
 quality tool gates, preexisting broader Python marker failure, unavailable
 Beads tracking and unmeasured hosted headroom. The Mac focused loop repeats the
 four cleanup cases; its combined suite separately includes closed-stdin.
+
+
+## Hosted macOS diagnostic result reviews
+
+Actual Claude Code AUTO (`claude-sonnet-5-5`) resumed session
+`17daba31-37b8-4b31-aa3a-4f679cc87085` after hosted run42406498129/1:
+
+| Round | Verdict | Duration | Turns | Private JSON SHA-256 |
+|---|---|---:|---:|---|
+| 1 | APPROVE with required serial caveat | 43.167s | 6 | `e5636331c6322f8322712fc79c443454e57490714b263c4d7a8aba03462cae46` |
+| 2 | APPROVE corrected serial caveat | 16.633s | 3 | `97314949636756a55f8d5ab08f1e1b9663209b42d205d6312dcbd1950388991a` |
+
+The reviewer inspected the actual log and API evidence, worker hashes, top-level
+test results and80 exact successful cleanup repetitions. It required the serial
+execution and single-run timing limits. Root corrected the initial historical
+thread-setting description against the actual old macOS log; round2 approved
+the correction. Both macOS jobs set `RUST_TEST_THREADS=1`; only the first failed
+local Linux run's inherited thread setting is unknown. No captured fork
+interleaving proves that historical failure's cause. No Cargo, source edits,
+network dispatch or conflicting live tests ran during these result reviews.
+
+Approval covers this diagnostic evidence, not installed qualification. The
+[hosted summary](../validation/macos-worker-cleanup-hosted.json) includes actual
+source/run/job IDs, log/API hashes, counts, timings and limits. Later candidate
+42408127994 timed out during AMD64 tool release compilation; neither the green
+focused diagnostic nor its two successful ARM platform jobs qualifies that
+candidate or a new source revision.

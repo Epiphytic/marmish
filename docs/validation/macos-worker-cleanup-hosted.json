@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "source_commit": "2ebc8b6b2489f3b63255658846b23e7fe58f855f",
+  "run_id": 42406498129,
+  "run_attempt": 1,
+  "job_id": 128505241150,
+  "conclusion": "success",
+  "platform": "macos-15 ARM64 nonroot",
+  "qualified_release": false,
+  "job_elapsed_seconds": 1143,
+  "job_limit_seconds": 2700,
+  "remaining_seconds": 1557,
+  "cap_to_elapsed_ratio": 2.3622047244094486,
+  "steps_seconds": {
+    "compile_and_identify": 340,
+    "combined_suite": 728,
+    "focused_eighty": 57
+  },
+  "top_level_test_results": {
+    "engine": {
+      "passed": 148,
+      "ignored": 1,
+      "seconds": 35.75
+    },
+    "engine_integrations_passed": [
+      2,
+      3,
+      14,
+      5
+    ],
+    "native": {
+      "passed": 629,
+      "ignored": 3,
+      "seconds": 652.04
+    },
+    "native_worker_passed": 1,
+    "process_limits_passed": 1,
+    "stream_passed": 29,
+    "vault_passed": 13,
+    "vault_helper_passed": 2,
+    "native_vault_ignored": 1
+  },
+  "focused_cleanup": {
+    "four_distinct_cases": 4,
+    "repetitions_each": 20,
+    "verified_log_markers": 80,
+    "zero_test_summary_rejected_by_workflow": true
+  },
+  "worker_sha256": {
+    "marmish-engine-worker": "8be2d0c63d17409d53824b0119d1d54fccdc9c069af45f74100154027d8549e6",
+    "marmish-worker": "c1260df6914296cbb5def0de41d64e1f833e0f21b45f57f05d717a6f80ecd2eb"
+  },
+  "evidence_sha256": {
+    "log": "ce55da69233cf2232c31713def837d70b16ce019b65687ef72699b1602edd707",
+    "run_api": "ddb70fe3eecbac0ca87976da92d94788f9d0f98584fa0c86f1b137b6c2f28c76",
+    "job_api": "1fce81cad5457e77f6971f2f025d2637445a5b91b71fdbf45f1b6b8f27da92ce"
+  },
+  "limits": [
+    "One hosted macOS job; not historical root-cause proof",
+    "No installer, relay or installed live traffic in diagnostic",
+    "Five existing ignored tests not newly enabled",
+    "Public release/pin unchanged; three-platform candidate and all8 installed cohorts still required",
+    "No parallel-test macOS execution was performed",
+    "Historical cleanup cause and winning collision bytes remain unknown"
+  ],
+  "rust_test_threads": "1 (job-level serial libtest)",
+  "headroom_scope": "One serial hosted run; measured margin, not a guarantee",
+  "review": {
+    "model": "claude-sonnet-5-5",
+    "permission_mode": "auto",
+    "session": "17daba31-37b8-4b31-aa3a-4f679cc87085",
+    "round1": {
+      "verdict": "APPROVE with required serial caveat",
+      "seconds": 43.167,
+      "turns": 6,
+      "result_sha256": "e5636331c6322f8322712fc79c443454e57490714b263c4d7a8aba03462cae46"
+    },
+    "round2": {
+      "verdict": "APPROVE corrected serial caveat",
+      "seconds": 16.633,
+      "turns": 3,
+      "result_sha256": "97314949636756a55f8d5ab08f1e1b9663209b42d205d6312dcbd1950388991a"
+    },
+    "clarifications": [
+      "Both historical failed macOS and new passing macOS runs set RUST_TEST_THREADS=1",
+      "Unknown inherited thread setting refers to first failed local Linux combined run",
+      "No captured causal fork interleaving; historical macOS cleanup cause remains unknown"
+    ]
+  }
+}
