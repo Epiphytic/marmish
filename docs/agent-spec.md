@@ -98,6 +98,16 @@ refusal. See the [portability correction design](phases/streaming-portability-fi
 for regression requirements; this change does not establish installed platform
 qualification.
 
+Candidate [42332308304](https://github.com/Epiphytic/marmish/actions/runs/42332308304)
+passed both Linux packages and native macOS verification, signing and packaging,
+but failed one isolated installed-tool cleanup test (751 passed, one failed,
+three ignored). It is ineligible for installed relay cohorts. The bounded
+[owned-group cleanup correction](phases/streaming-owned-group-cleanup.md) retains
+the exact Child fence for the final group signal; after EPERM, only bounded
+exact-child reap and a fresh zero-signal ESRCH proof permit cleanup success.
+Unknown cleanup remains a failure. A fresh complete candidate and actual
+installed cross-platform relay cohorts remain required.
+
 The [local receiver cleanup contract](phases/streaming-copy-local-gc.md) uses an
 encrypted actor-owned index, explicit admission/activation, owned worker joining,
 current durable GC claims and anchored physical checkpoint validation. Unknown

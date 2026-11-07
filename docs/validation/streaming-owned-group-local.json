@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "scope": "Linux AMD64 local installed-tool cleanup policy",
+  "base_commit": "5d00a159ffb24e9d743b668448d7c602a58e177d",
+  "status": "PASS",
+  "source_sha256": {
+    "crates/marmish-native/src/installed_edge_rsync.rs": "7e6b98f89101ac929926b9694e8f4affa0b202244fbcde50c60327b0c6cf3904",
+    "crates/marmish-native/src/installed_owned_group_cleanup_tests.rs": "5d8b0858a24668e1c6d8d3779695087693f2f6d1d9002feeda600607a8401044"
+  },
+  "tests": {
+    "filter": "installed_check::edge",
+    "passed": 30,
+    "failed": 0,
+    "ignored": 0,
+    "filtered": 732,
+    "seconds": 0.1,
+    "author_compile_seconds": 31.82,
+    "new_cleanup_tests": 6,
+    "independently_repeated_by_reviewer": true
+  },
+  "strict_native_installed_checks_all_target_clippy": "PASS",
+  "format_diff": "PASS",
+  "quality_delta": {
+    "exit_code": 0,
+    "gating": 0,
+    "new_symbol_rows": 8,
+    "disposition": "six discovered tokio tests and two small independent assertion duplicates"
+  },
+  "reviewer": "Claude Code / Claude Sonnet 5.5 / permission-mode auto",
+  "review_session": "7b99e00c-ec90-4a56-8186-f6789689f003",
+  "review_verdict": "APPROVE",
+  "limitations": [
+    "Injected EPERM tests are policy evidence, not native XNU execution",
+    "Full platform suite and installed relay cohorts pending",
+    "No release asset or version-pin change"
+  ]
+}

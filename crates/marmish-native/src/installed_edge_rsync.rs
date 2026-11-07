@@ -223,16 +223,17 @@ impl OwnedRsync {
         // leader PID/PGID fence, even if it has already exited.
         Self::exited(child)?;
         let pgid = i32::try_from(pid).map_err(|_| bad())?;
-        if unsafe { libc::kill(-pgid, libc::SIGKILL) } != 0 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::ESRCH) {
-                return Err(error.into());
-            }
-        }
-        tokio::time::timeout(Duration::from_secs(3), child.wait())
-            .await
-            .map_err(|_| Error::Timeout)?
-            .map_err(Into::into)
+        cleanup_owned_group(
+            || group_signal(pgid, libc::SIGKILL),
+            || async {
+                tokio::time::timeout(Duration::from_secs(3), child.wait())
+                    .await
+                    .map_err(|_| Error::Timeout)?
+                    .map_err(Into::into)
+            },
+            || group_signal(pgid, 0),
+        )
+        .await
     }
     fn signal(&mut self, signal: i32, group: bool) -> Result<()> {
         if !matches!(signal, libc::SIGINT | libc::SIGTERM | libc::SIGHUP)
@@ -310,6 +311,45 @@ impl OwnedRsync {
         })
     }
 }
+fn group_signal(group: i32, signal: i32) -> std::io::Result<()> {
+    if unsafe { libc::kill(-group, signal) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+/// The kill runs while the owned leader still reserves its group identity.
+/// EPERM alone proves nothing: after exact-child reap, only fresh ESRCH proves
+/// group absence. The post-reap operation never sends a nonzero signal.
+async fn cleanup_owned_group<W>(
+    kill: impl FnOnce() -> std::io::Result<()>,
+    wait: impl FnOnce() -> W,
+    probe: impl FnOnce() -> std::io::Result<()>,
+) -> Result<ExitStatus>
+where
+    W: std::future::Future<Output = Result<ExitStatus>>,
+{
+    let denied = match kill() {
+        Ok(()) => false,
+        Err(error) if error.raw_os_error() == Some(libc::ESRCH) => false,
+        Err(error) if error.raw_os_error() == Some(libc::EPERM) => true,
+        Err(error) => return Err(error.into()),
+    };
+    let status = wait().await?;
+    if denied {
+        match probe() {
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => {}
+            Err(error) => return Err(error.into()),
+            Ok(()) => return Err(Error::Invalid("installed_owned_group_present")),
+        }
+    }
+    Ok(status)
+}
+
+#[cfg(test)]
+#[path = "installed_owned_group_cleanup_tests.rs"]
+mod cleanup_tests;
+
 /// Probe this Child without reaping it or granting authority from a numeric PID.
 pub(super) fn leader_exited(child: &Child) -> Result<bool> {
     OwnedRsync::exited(child)

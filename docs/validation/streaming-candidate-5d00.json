@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "source_commit": "5d00a159ffb24e9d743b668448d7c602a58e177d",
+  "run_id": 42332308304,
+  "run_url": "https://github.com/Epiphytic/marmish/actions/runs/42332308304",
+  "conclusion": "failure",
+  "jobs": {
+    "linux_arm64": {
+      "id": 128281366192,
+      "conclusion": "success"
+    },
+    "linux_amd64": {
+      "id": 128281366312,
+      "conclusion": "success"
+    },
+    "macos_arm64": {
+      "id": 128281366338,
+      "conclusion": "failure",
+      "native_verification": "PASS",
+      "release_build_sign_abi_package": "PASS",
+      "installed_tool_tests": {
+        "passed": 751,
+        "failed": 1,
+        "ignored": 3,
+        "seconds": 603.49,
+        "failure": "installed_check::edge_process::tests::signals_use_owned_group_and_reap_without_accepting_malformed_start",
+        "operation": "finish retained child after successful owned-group SIGKILL",
+        "error": "EPERM (code 1)",
+        "source_line": 203
+      }
+    }
+  },
+  "render": "skipped",
+  "eligible_for_installed_cohorts": false,
+  "disposition": "marmish-8ka.5.4; new reviewed source and complete candidate required"
+}
