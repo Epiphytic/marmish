@@ -2,12 +2,12 @@
 
 Four concurrent actual-helper copies passed on non-root Linux x86_64 using an unoptimized debug/test executable: Put and Get, each with raw and zlib transport codecs. Every case copied **69,206,033 bytes (66 MiB + 17)** with exact SHA-256 `023eff39a2963cf1653913ca8e7af127391bb8cfcca1a7a0f04b1f95804118cb`, mode 0640 and mtime 1700000000.123456789. The whole test passed in 1075.17 s.
 
-| Direction | Codec | Case seconds | Raw stream bytes | Encoded payload bytes | Local payload ratio |
-| --- | --- | ---: | ---: | ---: | ---: |
-| Put | none |854.552|69,316,709|69,316,709|1.000000|
-| Put | zlib |850.763|69,316,709|36,181,619|0.521975|
-| Get | none |1071.095|69,316,508|69,316,508|1.000000|
-| Get | zlib |1069.638|69,316,508|36,181,579|0.521976|
+| Direction | Codec | Case seconds | File bytes/s | Raw stream bytes | Encoded payload bytes | Local payload ratio |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Put | none |854.552|80,985.2|69,316,709|69,316,709|1.000000|
+| Put | zlib |850.763|81,345.8|69,316,709|36,181,619|0.521975|
+| Get | none |1071.095|64,612.4|69,316,508|69,316,508|1.000000|
+| Get | zlib |1069.638|64,700.4|69,316,508|36,181,579|0.521976|
 
 The deterministic source alternates 1 MiB of compressible all-byte cycles with 1 MiB of seeded pseudorandom bytes. These ratios measure codec payloads on **local framed IPC**, excluding JSON/base64, Marmot encryption and network framing. They are not network compression ratios or relay throughput measurements. Times include concurrent test execution, filesystem work and production polling delays; this is qualification rather than a release-performance benchmark.
 
