@@ -243,6 +243,28 @@ pub(super) struct TransferProof {
     pub transfer_id: Option<String>,
     pub checkpoint: Option<super::copy_checkpoint::Proof>,
 }
+#[derive(Clone, Default, Serialize)]
+pub(super) struct DuplexChecks {
+    pub client_role: Option<bool>,
+    pub server_role: Option<bool>,
+    pub transfer_absent: Option<bool>,
+    pub case: Option<bool>,
+    pub complete: Option<bool>,
+    pub failure_absent: Option<bool>,
+    pub nonce: Option<bool>,
+    pub stream_hex: Option<bool>,
+    pub session_hex: Option<bool>,
+    pub open_digest_hex: Option<bool>,
+    pub group_sha256_hex: Option<bool>,
+    pub stdin_count: Option<bool>,
+    pub stdout_count: Option<bool>,
+    pub stderr_count: Option<bool>,
+    pub exit7: Option<bool>,
+    pub wall_ns: Option<bool>,
+    pub stdin_hash: Option<bool>,
+    pub stdout_hash: Option<bool>,
+    pub stderr_hash: Option<bool>,
+}
 impl Pair {
     pub(super) fn validate(
         &self,
@@ -372,41 +394,85 @@ impl Pair {
         ctx: &Context,
         ids: &BTreeMap<String, IdentityReady>,
     ) -> Result<()> {
-        if !ROLES.contains(&self.client.as_str())
-            || !ROLES.contains(&self.server.as_str())
-            || self.transfer.is_some()
-            || self.case != "duplex"
-            || !self.complete
-            || self.failure.is_some()
-            || self.nonce != nonce(ctx, ids, &self.client, &self.server, "duplex")?
-            || !records::hexadecimal(&self.stream, 64)
-            || !records::hexadecimal(&self.session, 64)
-            || !records::hexadecimal(&self.open_digest, 64)
-            || !records::hexadecimal(&self.group_sha256, 64)
-            || self.stdin_bytes != streaming_fixture::STDIN_BYTES
-            || self.stdout_bytes != streaming_fixture::STDOUT_BYTES
-            || self.stderr_bytes != streaming_fixture::STDERR_BYTES
-            || self.exit != 7
-            || self.wall_ns == 0
-            || self.wall_ns > 330_000_000_000
-            || self.stdin_sha256
-                != records::digest(&streaming_fixture::bytes(&self.nonce, 7, self.stdin_bytes)?)
-            || self.stdout_sha256
-                != records::digest(&streaming_fixture::bytes(
-                    &self.nonce,
-                    43,
-                    self.stdout_bytes,
-                )?)
-            || self.stderr_sha256
-                != records::digest(&streaming_fixture::bytes(
-                    &self.nonce,
-                    149,
-                    self.stderr_bytes,
-                )?)
-        {
-            return Err(bad());
-        }
-        Ok(())
+        self.check_duplex(ctx, ids).1
+    }
+    pub(super) fn check_duplex(
+        &self,
+        ctx: &Context,
+        ids: &BTreeMap<String, IdentityReady>,
+    ) -> (DuplexChecks, Result<()>) {
+        let mut checks = DuplexChecks::default();
+        let result = (|| {
+            macro_rules! check {
+                ($field:ident, $value:expr) => {
+                    let valid = $value;
+                    checks.$field = Some(valid);
+                    if !valid {
+                        return Err(bad());
+                    }
+                };
+            }
+            check!(client_role, ROLES.contains(&self.client.as_str()));
+            check!(server_role, ROLES.contains(&self.server.as_str()));
+            check!(transfer_absent, self.transfer.is_none());
+            check!(case, self.case == "duplex");
+            check!(complete, self.complete);
+            check!(failure_absent, self.failure.is_none());
+            check!(
+                nonce,
+                self.nonce == nonce(ctx, ids, &self.client, &self.server, "duplex")?
+            );
+            check!(stream_hex, records::hexadecimal(&self.stream, 64));
+            check!(session_hex, records::hexadecimal(&self.session, 64));
+            check!(open_digest_hex, records::hexadecimal(&self.open_digest, 64));
+            check!(
+                group_sha256_hex,
+                records::hexadecimal(&self.group_sha256, 64)
+            );
+            check!(
+                stdin_count,
+                self.stdin_bytes == streaming_fixture::STDIN_BYTES
+            );
+            check!(
+                stdout_count,
+                self.stdout_bytes == streaming_fixture::STDOUT_BYTES
+            );
+            check!(
+                stderr_count,
+                self.stderr_bytes == streaming_fixture::STDERR_BYTES
+            );
+            check!(exit7, self.exit == 7);
+            check!(wall_ns, self.wall_ns > 0 && self.wall_ns <= 330_000_000_000);
+            check!(
+                stdin_hash,
+                self.stdin_sha256
+                    == records::digest(&streaming_fixture::bytes(
+                        &self.nonce,
+                        7,
+                        self.stdin_bytes
+                    )?)
+            );
+            check!(
+                stdout_hash,
+                self.stdout_sha256
+                    == records::digest(&streaming_fixture::bytes(
+                        &self.nonce,
+                        43,
+                        self.stdout_bytes
+                    )?)
+            );
+            check!(
+                stderr_hash,
+                self.stderr_sha256
+                    == records::digest(&streaming_fixture::bytes(
+                        &self.nonce,
+                        149,
+                        self.stderr_bytes
+                    )?)
+            );
+            Ok(())
+        })();
+        (checks, result)
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -503,5 +569,173 @@ mod tests {
         assert!(budget(&c, 1720, 1900).is_err());
         c.expires_at = 3699;
         assert!(budget(&c, 1720, 1720).is_err());
+    }
+}
+
+#[cfg(test)]
+mod duplex_observation_tests {
+    use super::*;
+    fn fixture() -> (Context, BTreeMap<String, IdentityReady>, Pair) {
+        let ctx = records::tests::ctx();
+        let ids = ROLES
+            .into_iter()
+            .map(|role| {
+                (
+                    role.into(),
+                    IdentityReady {
+                        schema: 1,
+                        kind: "identity-ready".into(),
+                        context_sha256: String::new(),
+                        role: role.into(),
+                        nonce: "a".repeat(64),
+                        client_account: "b".repeat(64),
+                        server_account: "c".repeat(64),
+                        installation: records::Installation {
+                            version: String::new(),
+                            target: String::new(),
+                            source_commit: String::new(),
+                            manifest_sha256: String::new(),
+                            bootstrap_sha256: String::new(),
+                            files: BTreeMap::new(),
+                        },
+                        identity_ready_at: 0,
+                    },
+                )
+            })
+            .collect();
+        let nonce = nonce(&ctx, &ids, ROLES[0], ROLES[2], "duplex").unwrap();
+        let pair = Pair {
+            client: ROLES[0].into(),
+            server: ROLES[2].into(),
+            case: "duplex".into(),
+            nonce: nonce.clone(),
+            stream: "a".repeat(64),
+            session: "b".repeat(64),
+            open_digest: "c".repeat(64),
+            group_sha256: "d".repeat(64),
+            stdin_bytes: streaming_fixture::STDIN_BYTES,
+            stdout_bytes: streaming_fixture::STDOUT_BYTES,
+            stderr_bytes: streaming_fixture::STDERR_BYTES,
+            stdin_sha256: records::digest(
+                &streaming_fixture::bytes(&nonce, 7, streaming_fixture::STDIN_BYTES).unwrap(),
+            ),
+            stdout_sha256: records::digest(
+                &streaming_fixture::bytes(&nonce, 43, streaming_fixture::STDOUT_BYTES).unwrap(),
+            ),
+            stderr_sha256: records::digest(
+                &streaming_fixture::bytes(&nonce, 149, streaming_fixture::STDERR_BYTES).unwrap(),
+            ),
+            exit: 7,
+            wall_ns: 1,
+            complete: true,
+            failure: None,
+            transfer: None,
+        };
+        (ctx, ids, pair)
+    }
+    #[test]
+    fn shared_checks_pin_every_predicate_short_circuit_and_serialized_pair_parity() {
+        let (ctx, ids, pair) = fixture();
+        let original = serde_json::to_value(&pair).unwrap();
+        assert!(pair.validate_duplex(&ctx, &ids).is_ok());
+        let (checks, result) = pair.check_duplex(&ctx, &ids);
+        assert!(result.is_ok());
+        assert!(
+            serde_json::to_value(checks)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .values()
+                .all(|v| v == true)
+        );
+        assert_eq!(serde_json::to_value(&pair).unwrap(), original);
+        let cases = [
+            ("client", "client_role", serde_json::json!("invalid")),
+            ("server", "server_role", serde_json::json!("invalid")),
+            (
+                "transfer",
+                "transfer_absent",
+                serde_json::json!({"client_items":[],"controls":[],"items":[],"payload_bytes":0,"rsync":null,"transfer_sha256":null,"checkpoint":null}),
+            ),
+            ("case", "case", serde_json::json!("other")),
+            ("complete", "complete", serde_json::json!(false)),
+            ("failure", "failure_absent", serde_json::json!("private")),
+            ("nonce", "nonce", serde_json::json!("x")),
+            ("stream_sha256", "stream_hex", serde_json::json!("x")),
+            ("session_sha256", "session_hex", serde_json::json!("x")),
+            ("open_digest", "open_digest_hex", serde_json::json!("x")),
+            ("group_sha256", "group_sha256_hex", serde_json::json!("x")),
+            ("stdin_bytes", "stdin_count", serde_json::json!(usize::MAX)),
+            (
+                "stdout_bytes",
+                "stdout_count",
+                serde_json::json!(usize::MAX),
+            ),
+            (
+                "stderr_bytes",
+                "stderr_count",
+                serde_json::json!(usize::MAX),
+            ),
+            ("exit", "exit7", serde_json::json!(0)),
+            ("wall_ns", "wall_ns", serde_json::json!(0)),
+            ("stdin_sha256", "stdin_hash", serde_json::json!("x")),
+            ("stdout_sha256", "stdout_hash", serde_json::json!("x")),
+            ("stderr_sha256", "stderr_hash", serde_json::json!("x")),
+        ];
+        let order: Vec<_> = cases.iter().map(|(_, check, _)| *check).collect();
+        for (index, (field, check, value)) in cases.into_iter().enumerate() {
+            let mut value_pair = original.clone();
+            value_pair[field] = value;
+            let changed: Pair = serde_json::from_value(value_pair).unwrap();
+            let (checks, result) = changed.check_duplex(&ctx, &ids);
+            assert!(
+                matches!(result, Err(Error::Invalid("installed_stream_record"))),
+                "{field}"
+            );
+            assert!(matches!(
+                changed.validate_duplex(&ctx, &ids),
+                Err(Error::Invalid("installed_stream_record"))
+            ));
+            let checks = serde_json::to_value(checks).unwrap();
+            assert_eq!(checks[check], false, "{field}");
+            for later in &order[index + 1..] {
+                assert!(
+                    checks[*later].is_null(),
+                    "later predicate {later} after {field}"
+                );
+            }
+            assert_eq!(
+                checks
+                    .as_object()
+                    .unwrap()
+                    .values()
+                    .filter(|v| **v == false)
+                    .count(),
+                1
+            );
+        }
+    }
+    #[test]
+    fn early_failures_do_not_index_missing_identity_or_generate_untrusted_sizes() {
+        let (ctx, ids, mut pair) = fixture();
+        pair.client = "invalid".into();
+        let (checks, result) = pair.check_duplex(&ctx, &BTreeMap::new());
+        assert!(result.is_err());
+        assert_eq!(checks.server_role, None);
+        assert_eq!(checks.nonce, None);
+        pair.client = ROLES[0].into();
+        pair.stdin_bytes = usize::MAX;
+        let (checks, result) = pair.check_duplex(&ctx, &ids);
+        assert!(result.is_err());
+        assert_eq!(checks.stdin_count, Some(false));
+        assert_eq!(checks.stdin_hash, None);
+        assert_eq!(checks.stdout_count, None);
+        pair.stdin_bytes = streaming_fixture::STDIN_BYTES;
+        let mut invalid_ctx = ctx;
+        invalid_ctx.schema = 0;
+        assert!(matches!(
+            pair.check_duplex(&invalid_ctx, &ids).1,
+            Err(Error::Invalid("installed_stream_record"))
+        ));
     }
 }

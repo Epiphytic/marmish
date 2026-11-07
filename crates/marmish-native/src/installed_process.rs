@@ -1,4 +1,5 @@
 //! Credential-free, bounded children owned by the build-only acceptance driver.
+use super::streaming_observation::{self as observation, Evidence, Outcome, Stage, Trace};
 use crate::{Error, Result};
 use std::{
     ffi::{OsStr, OsString},
@@ -93,14 +94,168 @@ pub(super) async fn run_input(
     limit: usize,
     input: Option<&[u8]>,
 ) -> Result<Output> {
+    run_input_inner(
+        executable,
+        args,
+        cwd,
+        environment,
+        deadline,
+        limit,
+        (input, None),
+    )
+    .await
+}
+pub(super) async fn run_input_observed(
+    executable: &Path,
+    args: &[OsString],
+    cwd: &Path,
+    environment: &Environment,
+    deadline: Instant,
+    limit: usize,
+    observed: (&[u8], &Trace<'_>),
+) -> Result<Output> {
+    run_input_inner(
+        executable,
+        args,
+        cwd,
+        environment,
+        deadline,
+        limit,
+        (Some(observed.0), Some(observed.1)),
+    )
+    .await
+}
+fn drain_result(
+    result: std::result::Result<std::io::Result<(Vec<u8>, bool)>, tokio::task::JoinError>,
+    stage: Stage,
+    trace: Option<&Trace<'_>>,
+) -> Result<(Vec<u8>, bool)> {
+    match result {
+        Ok(Ok(value)) => {
+            observation::note(trace, stage, Outcome::Ok, None);
+            Ok(value)
+        }
+        Ok(Err(error)) => {
+            observation::note(
+                trace,
+                stage,
+                Outcome::Error,
+                Some(Evidence::Io {
+                    io: observation::io_kind(error.kind()),
+                }),
+            );
+            Err(error.into())
+        }
+        Err(_) => {
+            observation::note(trace, stage, Outcome::Error, Some(Evidence::JoinFailure));
+            Err(Error::Invalid("installed_child_pipe"))
+        }
+    }
+}
+async fn terminate_observed(child: &mut Child, trace: Option<&Trace<'_>>) -> Result<()> {
+    observation::note(trace, Stage::Terminate, Outcome::Begin, None);
+    let result = terminate(child).await;
+    observation::note(
+        trace,
+        Stage::Terminate,
+        if result.is_ok() {
+            Outcome::Ok
+        } else {
+            Outcome::Error
+        },
+        None,
+    );
+    result
+}
+type Drained = (Vec<u8>, bool);
+type DrainPair = (Drained, Drained);
+type DrainTask = tokio::task::JoinHandle<std::io::Result<(Vec<u8>, bool)>>;
+async fn joined_drains(
+    out: &mut DrainTask,
+    err: &mut DrainTask,
+    phase: &mut Stage,
+    trace: Option<&Trace<'_>>,
+) -> Result<DrainPair> {
+    observation::note(trace, *phase, Outcome::Begin, None);
+    let stdout = drain_result(out.await, *phase, trace)?;
+    *phase = Stage::StderrJoin;
+    observation::note(trace, *phase, Outcome::Begin, None);
+    let stderr = drain_result(err.await, *phase, trace)?;
+    Ok((stdout, stderr))
+}
+fn failed_input(cleanup: Result<()>) -> Result<Output> {
+    cleanup?;
+    Err(Error::Invalid("installed_child_input"))
+}
+async fn write_input(
+    stdin: &mut tokio::process::ChildStdin,
+    input: &[u8],
+    deadline: Instant,
+    trace: Option<&Trace<'_>>,
+) -> bool {
+    let mut phase = Stage::InputWrite;
+    observation::note(trace, phase, Outcome::Begin, None);
+    let wrote = tokio::time::timeout_at(deadline, async {
+        stdin.write_all(input).await?;
+        observation::note(
+            trace,
+            phase,
+            Outcome::Ok,
+            Some(Evidence::Written {
+                local_pipe_written: input.len(),
+            }),
+        );
+        phase = Stage::InputShutdown;
+        observation::note(trace, phase, Outcome::Begin, None);
+        stdin.shutdown().await
+    })
+    .await;
+    match &wrote {
+        Ok(Ok(())) => observation::note(trace, phase, Outcome::Ok, None),
+        Ok(Err(error)) => observation::note(
+            trace,
+            phase,
+            Outcome::Error,
+            Some(Evidence::Io {
+                io: observation::io_kind(error.kind()),
+            }),
+        ),
+        Err(_) => observation::note(trace, phase, Outcome::Timeout, None),
+    }
+    matches!(wrote, Ok(Ok(())))
+}
+async fn run_input_inner(
+    executable: &Path,
+    args: &[OsString],
+    cwd: &Path,
+    environment: &Environment,
+    deadline: Instant,
+    limit: usize,
+    observed: (Option<&[u8]>, Option<&Trace<'_>>),
+) -> Result<Output> {
+    let (input, trace) = observed;
+    observation::note(trace, Stage::Preflight, Outcome::Begin, None);
     if limit == 0 || limit > 1024 * 1024 || Instant::now() >= deadline {
+        observation::note(trace, Stage::Preflight, Outcome::Error, None);
         return Err(Error::Invalid("installed_child_limit"));
     }
+    observation::note(trace, Stage::Preflight, Outcome::Ok, None);
     let mut cmd = command(executable, args, cwd, environment);
     if input.is_some() {
         cmd.stdin(Stdio::piped());
     }
-    let mut child = cmd.spawn()?;
+    observation::note(trace, Stage::Spawn, Outcome::Begin, None);
+    let mut child = cmd.spawn().inspect_err(|error| {
+        observation::note(
+            trace,
+            Stage::Spawn,
+            Outcome::Error,
+            Some(Evidence::Io {
+                io: observation::io_kind(error.kind()),
+            }),
+        );
+    })?;
+    observation::note(trace, Stage::Spawn, Outcome::Ok, None);
     let stdout = child
         .stdout
         .take()
@@ -116,57 +271,74 @@ pub(super) async fn run_input(
             .stdin
             .take()
             .ok_or(Error::Invalid("installed_child"))?;
-        let wrote = tokio::time::timeout_at(deadline, async {
-            stdin.write_all(input).await?;
-            stdin.shutdown().await
-        })
-        .await;
-        if !matches!(wrote, Ok(Ok(()))) {
-            let cleanup = terminate(&mut child).await;
+        let wrote = write_input(&mut stdin, input, deadline, trace).await;
+        if !wrote {
+            let cleanup = terminate_observed(&mut child, trace).await;
             out.abort();
             err.abort();
-            cleanup?;
-            return Err(Error::Invalid("installed_child_input"));
+            return failed_input(cleanup);
         }
     }
+    observation::note(trace, Stage::Wait, Outcome::Begin, None);
     let status = match tokio::time::timeout_at(deadline, child.wait()).await {
-        Ok(status) => status?,
+        Ok(status) => {
+            observation::note(
+                trace,
+                Stage::Wait,
+                if status.is_ok() {
+                    Outcome::Ok
+                } else {
+                    Outcome::Error
+                },
+                status.as_ref().err().map(|error| Evidence::Io {
+                    io: observation::io_kind(error.kind()),
+                }),
+            );
+            status?
+        }
         Err(_) => {
-            let cleanup = terminate(&mut child).await;
+            observation::note(trace, Stage::Wait, Outcome::Timeout, None);
+            let cleanup = terminate_observed(&mut child, trace).await;
             out.abort();
             err.abort();
             cleanup?;
             return Err(Error::Timeout);
         }
     };
-    let result = tokio::time::timeout_at(deadline, async {
-        Ok::<_, Error>((
-            (&mut out)
-                .await
-                .map_err(|_| Error::Invalid("installed_child_pipe"))??,
-            (&mut err)
-                .await
-                .map_err(|_| Error::Invalid("installed_child_pipe"))??,
-        ))
-    })
+    let mut phase = Stage::StdoutJoin;
+    let result = tokio::time::timeout_at(
+        deadline,
+        joined_drains(&mut out, &mut err, &mut phase, trace),
+    )
     .await;
     let result = match result {
         Ok(result) => result?,
         Err(_) => {
+            observation::note(trace, phase, Outcome::Timeout, None);
             out.abort();
             err.abort();
             return Err(Error::Timeout);
         }
     };
     if result.0.1 || result.1.1 {
+        observation::note(trace, Stage::Overflow, Outcome::Error, None);
         return Err(Error::Invalid("installed_child_output_limit"));
     }
-    Ok(Output {
+    let output = Output {
         status,
         stdout: result.0.0,
         stderr: result.1.0,
-    })
+    };
+    if let Some(trace) = trace {
+        trace.event(
+            Stage::Capture,
+            Outcome::Ok,
+            Some(observation::capture(&output)),
+        );
+    }
+    Ok(output)
 }
+
 pub(super) fn args(values: &[&OsStr]) -> Vec<OsString> {
     values.iter().map(|v| v.to_os_string()).collect()
 }
@@ -298,5 +470,55 @@ mod tests {
                 .map(str::to_owned)
                 .collect()
         );
+    }
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::*;
+    use std::cell::RefCell;
+    #[tokio::test]
+    async fn joined_drain_errors_keep_stdout_precedence_and_classify_real_io_and_join_errors() {
+        let bytes = RefCell::new(Vec::new());
+        let sink = |line: &[u8]| {
+            bytes.borrow_mut().extend(line);
+            Ok(())
+        };
+        let trace = Trace::new("linux-amd64", "macos-arm64", &sink).unwrap();
+        let mut out = tokio::spawn(async {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "SECRET",
+            ))
+        });
+        let mut err = tokio::spawn(async {
+            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "SECRET"))
+        });
+        let mut phase = Stage::StdoutJoin;
+        assert!(
+            matches!(joined_drains(&mut out,&mut err,&mut phase,Some(&trace)).await,Err(Error::Io(e)) if e.kind()==std::io::ErrorKind::PermissionDenied)
+        );
+        assert_eq!(phase, Stage::StdoutJoin);
+        assert!(!String::from_utf8_lossy(&bytes.borrow()).contains("stderr_join"));
+        let task = tokio::spawn(std::future::pending::<std::io::Result<(Vec<u8>, bool)>>());
+        task.abort();
+        let join = task.await;
+        assert!(matches!(
+            drain_result(join, Stage::StderrJoin, Some(&trace)),
+            Err(Error::Invalid("installed_child_pipe"))
+        ));
+        assert!(String::from_utf8_lossy(&bytes.borrow()).contains("join_failure"));
+        assert!(!String::from_utf8_lossy(&bytes.borrow()).contains("SECRET"));
+    }
+    #[test]
+    fn input_cleanup_error_keeps_original_precedence() {
+        assert!(matches!(
+            failed_input(Err(Error::Timeout)),
+            Err(Error::Timeout)
+        ));
+        assert!(matches!(
+            failed_input(Ok(())),
+            Err(Error::Invalid("installed_child_input"))
+        ));
     }
 }

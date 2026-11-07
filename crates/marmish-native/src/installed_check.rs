@@ -31,6 +31,8 @@ mod lifecycle_provider;
 mod local;
 #[path = "installed_macos_diagnostic.rs"]
 mod macos_diagnostic;
+#[path = "installed_streaming_observation.rs"]
+mod streaming_observation;
 pub(super) use cleanup::OwnedCleanupGuard;
 #[path = "installed_copy_checkpoint.rs"]
 mod copy_checkpoint;

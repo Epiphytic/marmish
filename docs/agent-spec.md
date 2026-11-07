@@ -156,9 +156,18 @@ repeated the same three macOS-server failures while all six Linux-target client
 observations passed exact bytes and exit7. The failed rollup qualifies zero cells,
 and the sequence stopped before the other seven cohorts. See
 [repeat failure evidence](validation/streaming-installed-e9686c0-failure.json).
-The independently reviewed [cold three-principal diagnostic design](phases/streaming-macos-cold-multiprincipal.md)
-is now triggered; implementation and its separate diagnostic result remain pending.
-No product cause or fix is established; full installed qualification remains open.
+The independently reviewed [cold three-principal diagnostic](phases/streaming-macos-cold-multiprincipal.md)
+passed on macOS ARM64 in [run 42374246025](https://github.com/Epiphytic/marmish/actions/runs/42374246025).
+All three concurrent identities preserved exact bytes and exit7 in 42.392–43.915
+seconds; all cleanup proofs passed. Its [verified evidence](validation/streaming-macos-cold-multiprincipal.json)
+is diagnostic only: same-host traffic does not replace the original cross-host
+matrix. No product cause or fix is established; full installed qualification remains open.
+The reviewed [original-matrix observation](phases/streaming-matrix-failure-observation.md)
+now emits bounded sanitized stage records from that exact duplex test path,
+including input/process completion, prefix parsing, List acquisition, terminal
+binding and ordered Pair predicates. Its local203-test installed-driver suite
+and strict Clippy passed; hosted qualification with these observations remains
+pending. It changes neither the product nor the matrix acceptance criteria.
 
 The [local receiver cleanup contract](phases/streaming-copy-local-gc.md) uses an
 encrypted actor-owned index, explicit admission/activation, owned worker joining,
