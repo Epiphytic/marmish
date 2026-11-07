@@ -13,7 +13,7 @@ use marmish_stream::{
     MAX_BLOCK,
     codec::{self, Codec},
     copy_protocol::{self as cp, AttemptMode, Direction, HelperContext, Launch},
-    windows::SendWindow,
+    windows::{ReceiveWindow, SendWindow},
     wire::{self, Binding, RequestBody, ResponseBody, Terminal},
 };
 use sha2::{Digest, Sha256};
@@ -45,6 +45,25 @@ fn helper_child() {
         let fd: i32 = std::env::var(name).unwrap().parse().unwrap();
         assert!(fd > 3);
         unsafe { File::from_raw_fd(fd) }
+    }
+    if std::env::var_os("MARMISH_TEST_COPY_COMMIT_FD").is_some() {
+        let file = inherited("MARMISH_TEST_COPY_COMMIT_FD");
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
+        let metadata = file.metadata().unwrap();
+        assert!(metadata.file_type().is_socket());
+        assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
+        let point = match std::env::var("MARMISH_TEST_COPY_COMMIT_POINT")
+            .unwrap()
+            .as_str()
+        {
+            "1" => crate::copy_commit_hook::Point::BeforeRename,
+            "2" => crate::copy_commit_hook::Point::AfterRename,
+            _ => panic!("commit_hook_point"),
+        };
+        let socket = std::os::unix::net::UnixStream::from(OwnedFd::from(file));
+        crate::copy_commit_hook::pending(
+            crate::copy_commit_hook::Hook::new(socket, point).unwrap(),
+        );
     }
     let context = inherited("MARMISH_TEST_COPY_CONTEXT_FD");
     let output = inherited("MARMISH_TEST_COPY_OUTPUT_FD");
@@ -95,6 +114,18 @@ fn spawn_helper(
     codec: Codec,
     stream: [u8; 16],
 ) -> (tokio::process::Child, tokio::fs::File) {
+    spawn_helper_hook(launch, codec, stream, None)
+}
+fn spawn_helper_hook(
+    launch: &Launch,
+    codec: Codec,
+    stream: [u8; 16],
+    hook: Option<(
+        std::os::unix::net::UnixStream,
+        crate::copy_commit_hook::Point,
+    )>,
+) -> (tokio::process::Child, tokio::fs::File) {
+    let hook = hook.map(|(socket, point)| (relocate(File::from(OwnedFd::from(socket))), point));
     let (reader, mut writer) = std::io::pipe().unwrap();
     writer
         .write_all(&context(launch, codec, stream).encode().unwrap())
@@ -103,6 +134,7 @@ fn spawn_helper(
     let context = relocate(File::from(OwnedFd::from(reader)));
     let (output, output_writer) = std::io::pipe().unwrap();
     let output_writer = relocate(File::from(OwnedFd::from(output_writer)));
+    let hook_fd = hook.as_ref().map(|(file, _)| file.as_raw_fd());
     let context_fd = context.as_raw_fd();
     let output_fd = output_writer.as_raw_fd();
     let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
@@ -119,9 +151,21 @@ fn spawn_helper(
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    if let Some((_, point)) = &hook {
+        command
+            .env("MARMISH_TEST_COPY_COMMIT_FD", hook_fd.unwrap().to_string())
+            .env("MARMISH_TEST_COPY_COMMIT_POINT", (*point as u8).to_string());
+    } else {
+        command
+            .env_remove("MARMISH_TEST_COPY_COMMIT_FD")
+            .env_remove("MARMISH_TEST_COPY_COMMIT_POINT");
+    }
     unsafe {
         command.pre_exec(move || {
-            for fd in [context_fd, output_fd] {
+            for fd in [Some(context_fd), Some(output_fd), hook_fd]
+                .into_iter()
+                .flatten()
+            {
                 let flags = libc::fcntl(fd, libc::F_GETFD);
                 if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
                     return Err(std::io::Error::last_os_error());
@@ -133,6 +177,7 @@ fn spawn_helper(
     let child = command.spawn().unwrap();
     drop(context);
     drop(output_writer);
+    drop(hook);
     (
         child,
         tokio::fs::File::from_std(File::from(OwnedFd::from(output))),
@@ -153,6 +198,7 @@ struct Flow {
     first_offset: Option<u64>,
     next_offset: Option<u64>,
     discontiguous: bool,
+    errors: u64,
 }
 impl Flow {
     fn bytes(&self) -> u64 {
@@ -180,6 +226,7 @@ impl Flow {
                     self.resumes.push(offset);
                 }
                 Some(cp::Frame::Checkpoint { .. }) => self.checkpoints += 1,
+                Some(cp::Frame::Error(_)) => self.errors += 1,
                 Some(cp::Frame::Done { .. }) => self.done = true,
                 Some(cp::Frame::Commit { .. }) => self.committed = true,
                 Some(cp::Frame::Finish { .. }) => self.finished = true,
@@ -252,6 +299,14 @@ struct Metrics {
     stdout_drained: bool,
     stderr_drained: bool,
     cleanup_confirmed: bool,
+    stderr_produced: u64,
+    helper_exit: Option<i32>,
+    signaled: bool,
+    input_peak: usize,
+    output_peak: usize,
+    input_full: bool,
+    output_full: bool,
+    gated: bool,
 }
 fn ingest(
     window: &mut SendWindow,
@@ -286,10 +341,15 @@ enum Fault {
     Commit,
     Panic,
 }
+enum BridgeControl {
+    Gate(Direction, oneshot::Sender<()>),
+    Cancel(oneshot::Sender<bool>),
+}
 struct Bridge {
     metrics: Arc<Mutex<Metrics>>,
     task: JoinHandle<bool>,
     stop: Option<oneshot::Sender<()>>,
+    control: mpsc::Sender<BridgeControl>,
 }
 impl Drop for Bridge {
     fn drop(&mut self) {
@@ -297,6 +357,28 @@ impl Drop for Bridge {
     }
 }
 impl Bridge {
+    async fn gate(&self, direction: Direction) -> Result<(), String> {
+        let (send, receive) = oneshot::channel();
+        self.control
+            .send(BridgeControl::Gate(direction, send))
+            .await
+            .map_err(|_| "gate_control_closed".to_string())?;
+        tokio::time::timeout(Duration::from_secs(5), receive)
+            .await
+            .map_err(|_| "gate_ack_timeout".to_string())?
+            .map_err(|_| "gate_ack_closed".to_string())
+    }
+    async fn cancel(&self) -> Result<bool, String> {
+        let (send, receive) = oneshot::channel();
+        self.control
+            .send(BridgeControl::Cancel(send))
+            .await
+            .map_err(|_| "cancel_control_closed".to_string())?;
+        tokio::time::timeout(Duration::from_secs(5), receive)
+            .await
+            .map_err(|_| "cancel_ack_timeout".to_string())?
+            .map_err(|_| "cancel_ack_closed".to_string())
+    }
     fn metrics(&self) -> Metrics {
         self.metrics
             .lock()
@@ -337,6 +419,20 @@ impl Bridge {
         stream: [u8; 16],
         fault: Fault,
     ) -> Self {
+        Self::start_options(socket, launch, codec, stream, fault, None, false).await
+    }
+    async fn start_options(
+        socket: &Path,
+        launch: &Launch,
+        codec: Codec,
+        stream: [u8; 16],
+        fault: Fault,
+        hook: Option<(
+            std::os::unix::net::UnixStream,
+            crate::copy_commit_hook::Point,
+        )>,
+        post_receipt: bool,
+    ) -> Self {
         let listener = UnixListener::bind(socket).unwrap();
         let metrics = Arc::new(Mutex::new(Metrics::default()));
         let observed = metrics.clone();
@@ -346,7 +442,7 @@ impl Bridge {
         let delay_checkpoints = launch.direction == Direction::Put
             && launch.mode == AttemptMode::Create
             && fault == Fault::None;
-        let (mut child, output) = spawn_helper(launch, codec, stream);
+        let (mut child, output) = spawn_helper_hook(launch, codec, stream, hook);
         let mut input = child.stdin.take();
         let stderr = child.stderr.take().unwrap();
         let (out_send, mut out_receive) = mpsc::channel(1);
@@ -354,11 +450,16 @@ impl Bridge {
         let mut readers = JoinSet::new();
         readers.spawn(read_pipe(output, out_send));
         readers.spawn(read_pipe(stderr, err_send));
+        let direction = launch.direction;
+        let (control, mut controls) = mpsc::channel(4);
         let (stop, mut stopped) = oneshot::channel();
         let task = tokio::spawn(async move {
             let mut stdout = SendWindow::default();
             let mut stderr = SendWindow::default();
-            let mut accepted = 0;
+            let mut stdin = ReceiveWindow::default();
+            let mut gate_put = false;
+            let mut gate_get = false;
+            let mut signaled = false;
             let mut input_decoder = cp::FrameDecoder::default();
             let mut output_decoder = cp::FrameDecoder::default();
             let mut terminal = None;
@@ -367,6 +468,37 @@ impl Bridge {
             let loop_result = std::panic::AssertUnwindSafe(async {
                 loop {
                     let connection = tokio::select! {
+                        biased;
+                        Some(control)=controls.recv()=> {
+                            match control {
+                                BridgeControl::Gate(direction, ack) => {
+                                    match direction { Direction::Put=>gate_put=true, Direction::Get=>gate_get=true }
+                                    observed.lock().unwrap().gated=true;
+                                    let _=ack.send(());
+                                }
+                                BridgeControl::Cancel(ack)=> {
+                                    let alive=child.try_wait().unwrap().is_none();
+                                    signaled=alive && unsafe { libc::kill(child.id().unwrap().try_into().unwrap(),libc::SIGTERM) }==0;
+                                    observed.lock().unwrap().signaled=signaled;
+                                    let _=ack.send(signaled);
+                                    break;
+                                }
+                            }
+                            continue;
+                        }
+                        item=out_receive.recv(), if gate_get && stdout.credit()>=MAX_BLOCK && stdout.eof().is_none()=> {
+                            match item.expect("pipe EOF item") {
+                                Some(bytes)=>{
+                                    let mut probe=observed.lock().unwrap();
+                                    probe.output.observe(&mut output_decoder,&bytes);
+                                    stdout.push(&bytes).unwrap();
+                                    probe.output_peak=probe.output_peak.max(stdout.buffered());
+                                    probe.output_full=stdout.credit()<MAX_BLOCK;
+                                }
+                                None=>stdout.finish(stdout.produced()).unwrap(),
+                            }
+                            continue;
+                        }
                         _=&mut stopped => break,
                         result=listener.accept()=>result.unwrap().0,
                     };
@@ -398,7 +530,7 @@ impl Bridge {
                         encoded.clone()
                     } else {
                         let RequestBody::Exchange {
-                            stdin,
+                            stdin: input_block,
                             stdin_eof,
                             stdout_ack,
                             stderr_ack,
@@ -414,21 +546,29 @@ impl Bridge {
                             .acknowledge(stdout_ack);
                         stderr.acknowledge(stderr_ack).unwrap();
                         assert!(fault != Fault::Panic, "injected bridge panic");
-                        if let Some(block) = stdin {
-                            assert_eq!(block.offset, accepted);
+                        if let Some(block) = input_block {
                             let bytes = codec::decode(&block, codec).unwrap();
-                            observed.lock().unwrap().input_codec.add(&block);
-                            observed
-                                .lock()
-                                .unwrap()
-                                .input
-                                .observe(&mut input_decoder, &bytes);
-                            input.as_mut().unwrap().write_all(&bytes).await.unwrap();
-                            accepted += bytes.len() as u64;
+                            if stdin.accept(block.offset, &bytes).unwrap() {
+                                observed.lock().unwrap().input_codec.add(&block);
+                            }
                         }
-                        if let Some(end) = stdin_eof {
-                            assert_eq!(end, accepted);
-                            input.take();
+                        if let Some(end) = stdin_eof { stdin.finish(end).unwrap(); }
+                        while !gate_put && stdin.buffered()>0 {
+                            let bytes=stdin.pending(MAX_BLOCK).unwrap();
+                            input.as_mut().unwrap().write_all(&bytes).await.unwrap();
+                            stdin.delivered_through(stdin.delivered()+bytes.len() as u64).unwrap();
+                            let mut probe=observed.lock().unwrap();
+                            probe.input.observe(&mut input_decoder,&bytes);
+                            if post_receipt && direction==Direction::Get && probe.input.committed {
+                                gate_get=true;
+                                probe.gated=true;
+                            }
+                        }
+                        if stdin.drained() { input.take(); }
+                        {
+                            let mut probe=observed.lock().unwrap();
+                            probe.input_peak=probe.input_peak.max(stdin.buffered());
+                            probe.input_full=stdin.credit()<MAX_BLOCK && stdin.eof().is_none();
                         }
                         // Give the bounded helper pipe pump a scheduling opportunity.
                         tokio::task::yield_now().await;
@@ -441,6 +581,15 @@ impl Bridge {
                             );
                         }
                         ingest(&mut stderr, &mut err_receive, None);
+                        {
+                            let mut probe=observed.lock().unwrap();
+                            probe.output_peak=probe.output_peak.max(stdout.buffered());
+                            probe.output_full=stdout.credit()<MAX_BLOCK && stdout.eof().is_none();
+                            if post_receipt && direction==Direction::Put && probe.output.committed {
+                                gate_put=true;
+                                probe.gated=true;
+                            }
+                        }
                         let disconnect = {
                             let probe = observed.lock().unwrap();
                             (fault == Fault::Checkpoint && probe.output.checkpoints > 0)
@@ -472,7 +621,7 @@ impl Bridge {
                                 }
                             });
                         }
-                        let output_block = if hold_checkpoint {
+                        let output_block = if hold_checkpoint || gate_get {
                             None
                         } else {
                             block(&stdout, codec)
@@ -481,8 +630,8 @@ impl Bridge {
                             observed.lock().unwrap().output_codec.emitted(block);
                         }
                         let body = ResponseBody::Exchange {
-                            stdin_accepted: accepted,
-                            stdin_delivered: accepted,
+                            stdin_accepted: stdin.accepted(),
+                            stdin_delivered: stdin.delivered(),
                             stdin_closed: input.is_none() || terminal.is_some(),
                             stdout: output_block,
                             stderr: block(&stderr, codec),
@@ -527,11 +676,16 @@ impl Bridge {
                 metrics.stdout_drained = stdout.drained();
                 metrics.stderr_drained = stderr.drained();
             }
+            if !signaled {
+                input.take();
+            }
+            let status = tokio::time::timeout(Duration::from_secs(3), child.wait()).await;
+            let natural = matches!(status, Ok(Ok(_)));
+            observed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .helper_exit = status.ok().and_then(Result::ok).and_then(|s| s.code());
             input.take();
-            let natural = matches!(
-                tokio::time::timeout(Duration::from_secs(3), child.wait()).await,
-                Ok(Ok(_))
-            );
             let reaped = if natural {
                 true
             } else {
@@ -541,6 +695,34 @@ impl Bridge {
                     Ok(Ok(_))
                 )
             };
+            if signaled {
+                let drain = tokio::time::timeout(Duration::from_secs(5), async {
+                    while let Some(item) = out_receive.recv().await {
+                        match item {
+                            Some(bytes) => observed
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .output
+                                .observe(&mut output_decoder, &bytes),
+                            None => break,
+                        }
+                    }
+                    output_decoder.finish().unwrap();
+                    let mut tail = 0;
+                    while let Some(item) = err_receive.recv().await {
+                        match item {
+                            Some(bytes) => tail += bytes.len() as u64,
+                            None => break,
+                        }
+                    }
+                    observed
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .stderr_produced = stderr.produced() + tail;
+                })
+                .await;
+                assert!(drain.is_ok(), "bounded cancellation output drain");
+            }
             readers.shutdown().await;
             observed
                 .lock()
@@ -555,6 +737,7 @@ impl Bridge {
             metrics,
             task,
             stop: Some(stop),
+            control,
         }
     }
 }
@@ -1174,3 +1357,6 @@ async fn malformed_finish_after_durable_receipt_is_uncertain_and_resume_needs_no
 
 #[path = "copy_large_tests.rs"]
 mod large;
+
+#[path = "copy_cancel_tests.rs"]
+mod cancel;

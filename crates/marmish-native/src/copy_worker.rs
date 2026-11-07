@@ -77,12 +77,24 @@ impl Worker {
     pub(crate) fn start(cancel: Cancellation) -> Self {
         Self::start_at(cancel, None)
     }
+    #[cfg(test)]
+    pub(crate) fn start_with_commit_hook(
+        cancel: Cancellation,
+        hook: crate::copy_commit_hook::Hook,
+    ) -> Self {
+        crate::copy_commit_hook::pending(hook);
+        Self::start(cancel)
+    }
     pub(crate) fn start_at(cancel: Cancellation, base: Option<ReceiverBase>) -> Self {
+        #[cfg(test)]
+        let commit_hook = crate::copy_commit_hook::take_pending();
         let (jobs, receive) = mpsc::sync_channel(1);
         let (send, events) = mpsc::sync_channel(1);
         let observation = Arc::new(Mutex::new(Disposition::NeverSubmitted));
         let observed = observation.clone();
         let thread = std::thread::spawn(move || {
+            #[cfg(test)]
+            crate::copy_commit_hook::install(commit_hook);
             let mut files = None;
             while let Ok(job) = receive.recv() {
                 let receiver_stream = match &job {
