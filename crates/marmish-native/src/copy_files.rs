@@ -815,6 +815,8 @@ impl CopyReceiver {
         if cancel.load(std::sync::atomic::Ordering::Acquire) {
             return Ok(None);
         }
+        #[cfg(test)]
+        crate::copy_commit_hook::at(crate::copy_commit_hook::Point::BeforeRename)?;
         if self.checkpoint.manifest.overwrite {
             if observed.is_some_and(|s| s.st_mode & libc::S_IFMT != libc::S_IFREG) {
                 return Err(failure(CopyError::UnsafePath));
@@ -841,6 +843,9 @@ impl CopyReceiver {
                 &self.destination.basename,
             )?;
         }
+        #[cfg(test)]
+        crate::copy_commit_hook::at(crate::copy_commit_hook::Point::AfterRename)
+            .map_err(|_| failure(CopyError::CommitUncertain))?;
         sync_directory(&self.private)?;
         sync_directory(&self.destination.parent)?;
         self.checkpoint.phase = Phase::Committed;

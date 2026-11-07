@@ -83,3 +83,6 @@ mod copy_integration_tests;
 
 #[cfg(test)]
 mod copy_io_abort_tests;
+
+#[cfg(test)]
+mod copy_commit_hook;

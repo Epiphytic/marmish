@@ -1,0 +1,143 @@
+{
+  "schema": 1,
+  "passed": true,
+  "relay": "wss://relay.eu.whitenoise.chat",
+  "relay_path_redacted": false,
+  "cleanup_scope": "owned_daemon_shutdown_and_protocol_cancel",
+  "platform": "Linux",
+  "architecture": "x86_64",
+  "payload_bytes": 2105344,
+  "results": [
+    {
+      "case": "put_raw",
+      "exit": 0,
+      "compression": false,
+      "payload_bytes": 2105344,
+      "negotiated_codec": "none",
+      "sha256": "989ebe23152bf66312278b9d463c75ba7c808250e58b98349b185ba513fa5c9c",
+      "seconds": 385.632204,
+      "payload_bytes_per_second": 5459.5
+    },
+    {
+      "case": "get_raw",
+      "exit": 0,
+      "compression": false,
+      "payload_bytes": 2105344,
+      "negotiated_codec": "none",
+      "sha256": "989ebe23152bf66312278b9d463c75ba7c808250e58b98349b185ba513fa5c9c",
+      "seconds": 504.492509,
+      "payload_bytes_per_second": 4173.2
+    },
+    {
+      "case": "put_zlib",
+      "exit": 0,
+      "compression": true,
+      "payload_bytes": 2105344,
+      "negotiated_codec": "zlib",
+      "sha256": "989ebe23152bf66312278b9d463c75ba7c808250e58b98349b185ba513fa5c9c",
+      "seconds": 739.814749,
+      "payload_bytes_per_second": 2845.8
+    },
+    {
+      "case": "get_zlib",
+      "exit": 0,
+      "compression": true,
+      "payload_bytes": 2105344,
+      "negotiated_codec": "zlib",
+      "sha256": "989ebe23152bf66312278b9d463c75ba7c808250e58b98349b185ba513fa5c9c",
+      "seconds": 720.348362,
+      "payload_bytes_per_second": 2922.7
+    },
+    {
+      "case": "compressible_put_zlib",
+      "exit": 0,
+      "compression": true,
+      "payload_bytes": 57344,
+      "negotiated_codec": "zlib",
+      "sha256": "f55114a2038adae0cc06adcf14d71b25e7f90ef5b32525c74db8b3bcd4c57e01",
+      "seconds": 41.307695,
+      "payload_bytes_per_second": 1388.2
+    },
+    {
+      "case": "compressible_get_zlib",
+      "exit": 0,
+      "compression": true,
+      "payload_bytes": 57344,
+      "negotiated_codec": "zlib",
+      "sha256": "f55114a2038adae0cc06adcf14d71b25e7f90ef5b32525c74db8b3bcd4c57e01",
+      "seconds": 49.480216,
+      "payload_bytes_per_second": 1158.9
+    },
+    {
+      "case": "empty_put",
+      "exit": 0,
+      "compression": false,
+      "payload_bytes": 0,
+      "negotiated_codec": "none",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "seconds": 24.469141,
+      "payload_bytes_per_second": 0.0
+    },
+    {
+      "case": "empty_get",
+      "exit": 0,
+      "compression": false,
+      "payload_bytes": 0,
+      "negotiated_codec": "none",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "seconds": 29.500598,
+      "payload_bytes_per_second": 0.0
+    },
+    {
+      "case": "put_missing_source",
+      "exit": 1,
+      "expected_error": "file_not_found",
+      "seconds": 15.97948
+    },
+    {
+      "case": "put_existing_destination",
+      "exit": 1,
+      "expected_error": "transfer_conflict",
+      "seconds": 796.748054
+    },
+    {
+      "case": "get_missing_source",
+      "exit": 1,
+      "expected_error": "file_not_found",
+      "seconds": 20.573001
+    },
+    {
+      "case": "get_existing_destination",
+      "exit": 1,
+      "expected_error": "transfer_conflict",
+      "seconds": 796.870511
+    }
+  ],
+  "payload_scope": "default_window_crossing",
+  "suite": "native_copy_source",
+  "scope": "same_host_native_marmot",
+  "not_covered": [
+    "cross-platform installer",
+    "Tor",
+    "daemon restart",
+    "live interrupted durable resume",
+    "live copy cancellation",
+    "retention garbage collection"
+  ],
+  "binary": {
+    "sha256": "ef9f55b88c4b69a267abedf431e73973332f07110309283f50ff93c774bb716d",
+    "version": "0.2.3"
+  },
+  "daemon_shutdown": [
+    {
+      "role": "client",
+      "exit": 0
+    },
+    {
+      "role": "server",
+      "exit": 0
+    }
+  ],
+  "total_seconds": 4134.843382,
+  "private_state_retained": false
+}

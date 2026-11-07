@@ -74,9 +74,10 @@ relay tests pass for exact trees, deltas, compression, confirmed process-group
 cancellation and partial restart. See [rsync evidence](validation/rsync-runtime-live.md)
 for rates and uncovered cases. It requires rsync3.x on both ends and uses the
 same executable authorization as other commands; granting rsync permits broad
-same-UID file access and execution. Native copy has independent source approval and passed a 12-case Linux relay
-small smoke; large-file runtime and
-installed cross-platform qualification remain pending. None of these streaming
+same-UID file access and execution. Native copy has independent source approval and passed the 12-case Linux relay
+small smoke and [2 MiB + 8192-byte functional suite](validation/copy-runtime-live-r4.md).
+The [66 MiB local helper suite](validation/copy-large-helper-local.md) also passed all four direction/codec combinations.
+Corrective relay deadline-margin checks and installed cross-platform qualification remain pending. None of these streaming
 additions is in v0.2.3.
 
 The [native copy design](phases/streaming-copy.md) adds literal regular-file
