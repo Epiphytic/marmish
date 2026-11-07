@@ -166,8 +166,22 @@ The reviewed [original-matrix observation](phases/streaming-matrix-failure-obser
 now emits bounded sanitized stage records from that exact duplex test path,
 including input/process completion, prefix parsing, List acquisition, terminal
 binding and ordered Pair predicates. Its local203-test installed-driver suite
-and strict Clippy passed; hosted qualification with these observations remains
-pending. It changes neither the product nor the matrix acceptance criteria.
+and strict Clippy passed. Fresh candidate
+[42377010307](https://github.com/Epiphytic/marmish/actions/runs/42377010307)
+at d5addee passed all three native/package/tool jobs and rendering; see
+[reviewed candidate evidence](validation/streaming-candidate-d5addee.md).
+Its original [installed matrix 42383713647](https://github.com/Epiphytic/marmish/actions/runs/42383713647)
+again failed every macOS-target cell. The new observations locate all three
+failures at the local CLI stdin `write_all` deadline of 330 seconds, followed
+by successful child termination. Partial written bytes and remote execution
+state remain unknown: the original failure path discards the drain results.
+The CLI can await room setup, Hello, Open or an Exchange before consuming more
+input, so this does not establish a remote rejection or a product cause.
+All six Linux-target observations passed exact bytes, exit7 and Pair predicates;
+the failed rollup still qualifies zero cells. The other seven cohorts were not
+dispatched. See [failure evidence](validation/streaming-installed-d5addee-failure.md).
+The observation change alters neither the product nor matrix acceptance;
+full installed qualification remains open.
 
 The [local receiver cleanup contract](phases/streaming-copy-local-gc.md) uses an
 encrypted actor-owned index, explicit admission/activation, owned worker joining,

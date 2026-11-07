@@ -1,0 +1,1379 @@
+{
+  "schema": 1,
+  "status": "FAIL",
+  "scope": "installed-stream-matrix",
+  "source_commit": "d5addee3211f8b0327f46664ca3334f71f7ee05d",
+  "candidate": {
+    "run_id": 42377010307,
+    "run_attempt": 1,
+    "url": "https://github.com/Epiphytic/marmish/actions/runs/42377010307",
+    "native_and_package_all_three_platforms": "PASS",
+    "status_snapshot_sha256": "b8016de9bcbd280593287a732356caca8a09a5d783e524f106c013052af47a80",
+    "jobs": [
+      {
+        "completedAt": "2026-11-07T14:52:58Z",
+        "conclusion": "success",
+        "databaseId": 128416572510,
+        "name": "package (ubuntu-24.04, x86_64-unknown-linux-gnu, none, glibc=2.39)",
+        "startedAt": "2026-11-07T13:27:05Z",
+        "status": "completed",
+        "url": "https://github.com/Epiphytic/marmish/actions/runs/42377010307/job/128416572510"
+      },
+      {
+        "completedAt": "2026-11-07T14:19:27Z",
+        "conclusion": "success",
+        "databaseId": 128416572688,
+        "name": "package (ubuntu-24.04-arm, aarch64-unknown-linux-gnu, none, glibc=2.39)",
+        "startedAt": "2026-11-07T13:27:07Z",
+        "status": "completed",
+        "url": "https://github.com/Epiphytic/marmish/actions/runs/42377010307/job/128416572688"
+      },
+      {
+        "completedAt": "2026-11-07T14:25:19Z",
+        "conclusion": "success",
+        "databaseId": 128416572725,
+        "name": "package (macos-15, aarch64-apple-darwin, adhoc, macos=15.0)",
+        "startedAt": "2026-11-07T13:27:06Z",
+        "status": "completed",
+        "url": "https://github.com/Epiphytic/marmish/actions/runs/42377010307/job/128416572725"
+      },
+      {
+        "completedAt": "2026-11-07T14:53:08Z",
+        "conclusion": "success",
+        "databaseId": 128436404547,
+        "name": "render",
+        "startedAt": "2026-11-07T14:53:01Z",
+        "status": "completed",
+        "url": "https://github.com/Epiphytic/marmish/actions/runs/42377010307/job/128436404547"
+      }
+    ]
+  },
+  "installed_run": {
+    "run_id": 42383713647,
+    "run_attempt": 1,
+    "url": "https://github.com/Epiphytic/marmish/actions/runs/42383713647",
+    "workflow": ".github/workflows/streaming-installed.yml",
+    "status": "completed",
+    "conclusion": "failure",
+    "status_snapshot_sha256": "c97862ad22776534eb9ad61c903299e0de815d74277ac3fb515c85b42f754483",
+    "jobs": [
+      {
+        "completedAt": "2026-11-07T14:53:52Z",
+        "conclusion": "success",
+        "databaseId": 128436540492,
+        "name": "resolve",
+        "startedAt": "2026-11-07T14:53:35Z",
+        "status": "completed",
+        "url": "https://github.com/Epiphytic/marmish/actions/runs/42383713647/job/128436540492"
+      },
+      {
+        "completedAt": "2026-11-07T15:00:58Z",
+        "conclusion": "failure",
+        "databaseId": 128436616248,
+        "name": "matrix (ubuntu-24.04-arm, linux-arm64, aarch64-unknown-linux-gnu)",
+        "startedAt": "2026-11-07T14:53:57Z",
+        "status": "completed",
+        "url": "https://github.com/Epiphytic/marmish/actions/runs/42383713647/job/128436616248"
+      },
+      {
+        "completedAt": "2026-11-07T15:00:47Z",
+        "conclusion": "failure",
+        "databaseId": 128436616252,
+        "name": "matrix (macos-15, macos-arm64, aarch64-apple-darwin)",
+        "startedAt": "2026-11-07T14:53:56Z",
+        "status": "completed",
+        "url": "https://github.com/Epiphytic/marmish/actions/runs/42383713647/job/128436616252"
+      },
+      {
+        "completedAt": "2026-11-07T15:01:01Z",
+        "conclusion": "failure",
+        "databaseId": 128436616261,
+        "name": "matrix (ubuntu-24.04, linux-amd64, x86_64-unknown-linux-gnu)",
+        "startedAt": "2026-11-07T14:53:55Z",
+        "status": "completed",
+        "url": "https://github.com/Epiphytic/marmish/actions/runs/42383713647/job/128436616261"
+      },
+      {
+        "completedAt": "2026-11-07T15:01:18Z",
+        "conclusion": "failure",
+        "databaseId": 128438312953,
+        "name": "rollup",
+        "startedAt": "2026-11-07T15:01:03Z",
+        "status": "completed",
+        "url": "https://github.com/Epiphytic/marmish/actions/runs/42383713647/job/128438312953"
+      }
+    ]
+  },
+  "context_sha256": "1d53bcb1f18c656394bddbd7eab91b5673777d8f4453277b7eac15a7b08008ca",
+  "relay": [
+    "wss://relay.us.whitenoise.chat/"
+  ],
+  "roles": {
+    "linux-amd64": {
+      "server_ready": true,
+      "identity_ready_record_sha256": "cc6903141a12efbd473d1dbdb901174ab1ad0b164b7f4c8a6e8b9b7ac3c4e919",
+      "server_ready_record_sha256": "fff15fbe4b368cc95c0e21a1b33efacc53c41c046590feece8b3c40874663775",
+      "client_result_record_sha256": "747f0903e00e8ccd7e6fb2bd640ade8bdf49b3a6679d45b4877a244d7447ceb3",
+      "server_result_record_sha256": "8c54f1e7d763b10ed1167f85884936ca638727a4a1bbc6495c51c622cf8f8304",
+      "installation": {
+        "bootstrap_sha256": "f4f500f5974275e44a1c16e33c2fdeb46d94753c20108f534a64d5c499776909",
+        "files": {
+          "THIRD-PARTY-LICENSES": {
+            "bytes": 2137884,
+            "sha256": "d4ba2e2e876b5051afc888c45abf1cb8053dd88bca974e913744ac66cdda68c4"
+          },
+          "marmish": {
+            "bytes": 73566672,
+            "sha256": "cfa93ba5e75c8f64eac045d0470e7f113b3d16df41cc610797925fa159b1209e"
+          },
+          "marmish-worker": {
+            "bytes": 13255952,
+            "sha256": "081177cb9588d1e667b8f5884a2a74410162504aff7372030e64c8026436c5ca"
+          },
+          "marmishd": {
+            "bytes": 73566680,
+            "sha256": "36c5a5d25ccbe31d8a9abc2a2e7dba3ae3139116f1b6bb60acb90d9c61c4e092"
+          }
+        },
+        "manifest_sha256": "b054a36f5e8140c7295dc8fb5a3f580788f51075e2745f3305a8e8e2db14adb0",
+        "source_commit": "d5addee3211f8b0327f46664ca3334f71f7ee05d",
+        "target": "x86_64-unknown-linux-gnu",
+        "version": "0.2.3"
+      },
+      "client_complete": false,
+      "server_complete": false,
+      "receipt_records_returned": 0,
+      "reported_cleanup_flags": {
+        "client_stop_complete": true,
+        "server_stop_complete": true,
+        "stream_cleanup_complete": true
+      }
+    },
+    "linux-arm64": {
+      "server_ready": true,
+      "identity_ready_record_sha256": "998f1671cc9489b0b3b5a03214ecbc88ad703d7b76ec9618db0a2f7f8b553c02",
+      "server_ready_record_sha256": "0cbd9d3dc389d6527a0aeab72fcff81c7b352e63eb2d2a02350bc19f9e1c026a",
+      "client_result_record_sha256": "91789b313e6f8dc534d343c1005519e8618b8809db7f4a60e3ae91869f2fe1fa",
+      "server_result_record_sha256": "b4b8c12b6e7be2336bbe90e80a1730b8e7100bee3ce22b1e9ef774960f3768d4",
+      "installation": {
+        "bootstrap_sha256": "f4f500f5974275e44a1c16e33c2fdeb46d94753c20108f534a64d5c499776909",
+        "files": {
+          "THIRD-PARTY-LICENSES": {
+            "bytes": 2136788,
+            "sha256": "5968eae4aedbfa21f2e94b4571945c4ca56902c45de88320d383fe6437ecf712"
+          },
+          "marmish": {
+            "bytes": 69087640,
+            "sha256": "8606ae2b7d0a288b7a8476cf3b115d9a67d14f2903ae99bcc57246d549eb8ae5"
+          },
+          "marmish-worker": {
+            "bytes": 8729264,
+            "sha256": "0bace5def9417b465147b32e843fe5fc0522320597bd163f686b2e7b73ff77aa"
+          },
+          "marmishd": {
+            "bytes": 69087648,
+            "sha256": "32cc7e24417df46c0469a5cae011a036ee970269b630228618d153868f7c2861"
+          }
+        },
+        "manifest_sha256": "d0364eec0fd00d6bfe76d5247166750ed84995e8a6cd6bf7c09230fda9d424b7",
+        "source_commit": "d5addee3211f8b0327f46664ca3334f71f7ee05d",
+        "target": "aarch64-unknown-linux-gnu",
+        "version": "0.2.3"
+      },
+      "client_complete": false,
+      "server_complete": false,
+      "receipt_records_returned": 0,
+      "reported_cleanup_flags": {
+        "client_stop_complete": true,
+        "server_stop_complete": true,
+        "stream_cleanup_complete": true
+      }
+    },
+    "macos-arm64": {
+      "server_ready": true,
+      "identity_ready_record_sha256": "2bbcfb9e1fbd1625ffdc59e4f6f20b233a200e29be50064183c4783d4f523121",
+      "server_ready_record_sha256": "f546036f4cd2140fe1164a9eb9862f168cdbe413c4d67f1454484332ef790fb9",
+      "client_result_record_sha256": "8d8da9761fdacc76561db015ef4eb9e744ec9748e255225ce97245fc3dd86caa",
+      "server_result_record_sha256": "ec0991942f0d6df134e2bb95d837543fbc9abf8cae7f6b45c62c47f2a0306176",
+      "installation": {
+        "bootstrap_sha256": "f4f500f5974275e44a1c16e33c2fdeb46d94753c20108f534a64d5c499776909",
+        "files": {
+          "THIRD-PARTY-LICENSES": {
+            "bytes": 2064104,
+            "sha256": "bc8fdce32bb8e5d758aa7d1fc444e77952db86b054eff96d0d4c86633992f92b"
+          },
+          "marmish": {
+            "bytes": 57674784,
+            "sha256": "42cb5d290177702670a4b8fd6ecf3e3c0a634c4196a4f9fbe922b3dac974d7b6"
+          },
+          "marmish-worker": {
+            "bytes": 6934656,
+            "sha256": "5a1d0909c820773acf158cdb8ca1c079f44c82af3b7fe860bc87618e084db4f5"
+          },
+          "marmishd": {
+            "bytes": 57674784,
+            "sha256": "2007d0f0dfffd4ccfccb41d5a4d179a82cb1f69c84e376ad6597ef292d10a700"
+          }
+        },
+        "manifest_sha256": "76a80e947cea39864e9217c6fc3a4e1217b841bf4474896939acc45f80a1705f",
+        "source_commit": "d5addee3211f8b0327f46664ca3334f71f7ee05d",
+        "target": "aarch64-apple-darwin",
+        "version": "0.2.3"
+      },
+      "client_complete": false,
+      "server_complete": false,
+      "receipt_records_returned": 0,
+      "reported_cleanup_flags": {
+        "client_stop_complete": true,
+        "server_stop_complete": true,
+        "stream_cleanup_complete": true
+      }
+    }
+  },
+  "observed_client_pairs": [
+    {
+      "client": "linux-amd64",
+      "server": "linux-amd64",
+      "case": "duplex",
+      "complete": true,
+      "stdin_bytes": 98304,
+      "stdin_sha256": "a36df53a571d1ceb970cbeb6d0ff785d7de35bc0f237f7146e39698133878efd",
+      "stdout_bytes": 98304,
+      "stdout_sha256": "26a9f30e3e50d0c67578c1f8a21202102d2d74b79d68dc868b3d63a92777b81b",
+      "stderr_bytes": 8192,
+      "stderr_sha256": "a66fbd8b65182f6831c6f7f63e6d612dd9366e4ab22c1453211dcffa4b8e4414",
+      "exit": 7,
+      "wall_ns": 45245295624,
+      "compression_requested": "zlib",
+      "qualification": "client-observation-only",
+      "stdout_goodput_bytes_per_second": 2172.68997,
+      "aggregate_application_payload_bytes_per_second": 4526.437438
+    },
+    {
+      "client": "linux-amd64",
+      "server": "linux-arm64",
+      "case": "duplex",
+      "complete": true,
+      "stdin_bytes": 98304,
+      "stdin_sha256": "7c6f340669ef2bd9a2f89e16796dd0a9e4fd7c503ed8a960fc3272d44f63617e",
+      "stdout_bytes": 98304,
+      "stdout_sha256": "e7a6867b4f706686e37702ab640683d17b15863c0c3ae91e9d88587c2dc4e3ec",
+      "stderr_bytes": 8192,
+      "stderr_sha256": "2b64311f0d31d0590d0f51045b03d83abb83296ce1e73ab15191446e3a045bc9",
+      "exit": 7,
+      "wall_ns": 46657385015,
+      "compression_requested": "zlib",
+      "qualification": "client-observation-only",
+      "stdout_goodput_bytes_per_second": 2106.933339,
+      "aggregate_application_payload_bytes_per_second": 4389.444456
+    },
+    {
+      "client": "linux-arm64",
+      "server": "linux-amd64",
+      "case": "duplex",
+      "complete": true,
+      "stdin_bytes": 98304,
+      "stdin_sha256": "b5b76cf1816753a794ce0b962fb86404cf69f4cba6bc6e2d69ef6b2de176cb4a",
+      "stdout_bytes": 98304,
+      "stdout_sha256": "2c24813585be42c9a5d90622c154f4905f1c7431b0aea664497c17347d59acdb",
+      "stderr_bytes": 8192,
+      "stderr_sha256": "a972f1f7860386a92aaf951ec4d483b67607df222c091da1b61867fde6da05f9",
+      "exit": 7,
+      "wall_ns": 46745530793,
+      "compression_requested": "none",
+      "qualification": "client-observation-only",
+      "stdout_goodput_bytes_per_second": 2102.960397,
+      "aggregate_application_payload_bytes_per_second": 4381.167494
+    },
+    {
+      "client": "linux-arm64",
+      "server": "linux-arm64",
+      "case": "duplex",
+      "complete": true,
+      "stdin_bytes": 98304,
+      "stdin_sha256": "6e5d29da4173621c21454d7a3e2c2f83ce1a04f5b3a000ad1bc630a6eafea167",
+      "stdout_bytes": 98304,
+      "stdout_sha256": "dbf3443342e8d62bc7233e19616a9dcd0dccc42b1b617a2e63faacfa940f336a",
+      "stderr_bytes": 8192,
+      "stderr_sha256": "e3bdf2450f2788ca220a826e067e6cab802e969b0efb41830cee96bce35d59e4",
+      "exit": 7,
+      "wall_ns": 47661589328,
+      "compression_requested": "zlib",
+      "qualification": "client-observation-only",
+      "stdout_goodput_bytes_per_second": 2062.541375,
+      "aggregate_application_payload_bytes_per_second": 4296.961198
+    },
+    {
+      "client": "macos-arm64",
+      "server": "linux-amd64",
+      "case": "duplex",
+      "complete": true,
+      "stdin_bytes": 98304,
+      "stdin_sha256": "008f125a8dac574497ac97f2beab90cfe591feb805f284d44729063afd8b6c01",
+      "stdout_bytes": 98304,
+      "stdout_sha256": "ad3e0efcbfd4c75639af369bcb62c453f2351c6ff4979412f53db29909f1ffd7",
+      "stderr_bytes": 8192,
+      "stderr_sha256": "a30d0d321dc2e5c3e6afc0865d8e88624ce69bb94fe598cebddd66da1d46baeb",
+      "exit": 7,
+      "wall_ns": 22808497416,
+      "compression_requested": "none",
+      "qualification": "client-observation-only",
+      "stdout_goodput_bytes_per_second": 4309.972648,
+      "aggregate_application_payload_bytes_per_second": 8979.109683
+    },
+    {
+      "client": "macos-arm64",
+      "server": "linux-arm64",
+      "case": "duplex",
+      "complete": true,
+      "stdin_bytes": 98304,
+      "stdin_sha256": "caa8b0e15345536834261c05b5e7d58dfa16c5c6ec40caca12fdfb8a8ce1749d",
+      "stdout_bytes": 98304,
+      "stdout_sha256": "4a924417b804558cb397443c538647b60344237d4c17e535934b900e75715688",
+      "stderr_bytes": 8192,
+      "stderr_sha256": "d43f5bbe60f40e219e0e849a16ebbd9479fea3355fb3f53100817fead989fc2c",
+      "exit": 7,
+      "wall_ns": 21802555958,
+      "compression_requested": "none",
+      "qualification": "client-observation-only",
+      "stdout_goodput_bytes_per_second": 4508.829157,
+      "aggregate_application_payload_bytes_per_second": 9393.394077
+    }
+  ],
+  "failed_cells": [
+    {
+      "client": "linux-amd64",
+      "case": "duplex",
+      "category": "validation_or_transport",
+      "server": "macos-arm64",
+      "status": "unqualified"
+    },
+    {
+      "client": "linux-arm64",
+      "case": "duplex",
+      "category": "validation_or_transport",
+      "server": "macos-arm64",
+      "status": "unqualified"
+    },
+    {
+      "client": "macos-arm64",
+      "case": "duplex",
+      "category": "validation_or_transport",
+      "server": "macos-arm64",
+      "status": "unqualified"
+    }
+  ],
+  "total_client_observations": 6,
+  "qualified_cells": 0,
+  "qualification": "none",
+  "canonical_record_count": 12,
+  "canonical_records": [
+    {
+      "role": "linux-amd64",
+      "kind": "identity-ready",
+      "sha256": "cc6903141a12efbd473d1dbdb901174ab1ad0b164b7f4c8a6e8b9b7ac3c4e919",
+      "bytes": 1167,
+      "diagnostic_duplicate_byte_equal": true
+    },
+    {
+      "role": "linux-amd64",
+      "kind": "server-ready",
+      "sha256": "fff15fbe4b368cc95c0e21a1b33efacc53c41c046590feece8b3c40874663775",
+      "bytes": 730,
+      "diagnostic_duplicate_byte_equal": true
+    },
+    {
+      "role": "linux-amd64",
+      "kind": "client-result",
+      "sha256": "747f0903e00e8ccd7e6fb2bd640ade8bdf49b3a6679d45b4877a244d7447ceb3",
+      "bytes": 2567,
+      "diagnostic_duplicate_byte_equal": true
+    },
+    {
+      "role": "linux-amd64",
+      "kind": "server-result",
+      "sha256": "8c54f1e7d763b10ed1167f85884936ca638727a4a1bbc6495c51c622cf8f8304",
+      "bytes": 650,
+      "diagnostic_duplicate_byte_equal": true
+    },
+    {
+      "role": "linux-arm64",
+      "kind": "identity-ready",
+      "sha256": "998f1671cc9489b0b3b5a03214ecbc88ad703d7b76ec9618db0a2f7f8b553c02",
+      "bytes": 1167,
+      "diagnostic_duplicate_byte_equal": true
+    },
+    {
+      "role": "linux-arm64",
+      "kind": "server-ready",
+      "sha256": "0cbd9d3dc389d6527a0aeab72fcff81c7b352e63eb2d2a02350bc19f9e1c026a",
+      "bytes": 730,
+      "diagnostic_duplicate_byte_equal": true
+    },
+    {
+      "role": "linux-arm64",
+      "kind": "client-result",
+      "sha256": "91789b313e6f8dc534d343c1005519e8618b8809db7f4a60e3ae91869f2fe1fa",
+      "bytes": 2567,
+      "diagnostic_duplicate_byte_equal": true
+    },
+    {
+      "role": "linux-arm64",
+      "kind": "server-result",
+      "sha256": "b4b8c12b6e7be2336bbe90e80a1730b8e7100bee3ce22b1e9ef774960f3768d4",
+      "bytes": 650,
+      "diagnostic_duplicate_byte_equal": true
+    },
+    {
+      "role": "macos-arm64",
+      "kind": "identity-ready",
+      "sha256": "2bbcfb9e1fbd1625ffdc59e4f6f20b233a200e29be50064183c4783d4f523121",
+      "bytes": 1162,
+      "diagnostic_duplicate_byte_equal": true
+    },
+    {
+      "role": "macos-arm64",
+      "kind": "server-ready",
+      "sha256": "f546036f4cd2140fe1164a9eb9862f168cdbe413c4d67f1454484332ef790fb9",
+      "bytes": 730,
+      "diagnostic_duplicate_byte_equal": true
+    },
+    {
+      "role": "macos-arm64",
+      "kind": "client-result",
+      "sha256": "8d8da9761fdacc76561db015ef4eb9e744ec9748e255225ce97245fc3dd86caa",
+      "bytes": 2567,
+      "diagnostic_duplicate_byte_equal": true
+    },
+    {
+      "role": "macos-arm64",
+      "kind": "server-result",
+      "sha256": "ec0991942f0d6df134e2bb95d837543fbc9abf8cae7f6b45c62c47f2a0306176",
+      "bytes": 650,
+      "diagnostic_duplicate_byte_equal": true
+    }
+  ],
+  "diagnostic_duplicate_records_checked": 12,
+  "diagnostic_duplicate_records_byte_equal": true,
+  "artifact_metadata": [
+    {
+      "id": 13579180833,
+      "name": "v02-installed-42383713647-1-d5addee3211f-stream-matrix-macos-arm64-server-ready",
+      "size_in_bytes": 583,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13579180833",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13579180833/zip",
+      "expired": false,
+      "created_at": "2026-11-07T14:54:27Z",
+      "expires_at": "2026-11-21T14:54:26Z",
+      "updated_at": "2026-11-07T14:54:27Z",
+      "digest": "sha256:35dfedfb7209a2984309ece61454eca62db1c2405de6712504822bc8de151e3d",
+      "workflow_run": {
+        "id": 42383713647,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "d5addee3211f8b0327f46664ca3334f71f7ee05d"
+      }
+    },
+    {
+      "id": 13578867982,
+      "name": "v02-installed-rollup-42383713647-1",
+      "size_in_bytes": 1029,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578867982",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578867982/zip",
+      "expired": false,
+      "created_at": "2026-11-07T15:01:16Z",
+      "expires_at": "2026-11-21T15:01:15Z",
+      "updated_at": "2026-11-07T15:01:16Z",
+      "digest": "sha256:403babfc9e1f34ee5adc2144f8757d23e29060a5fb3c3c772fa141e6f11d0b81",
+      "workflow_run": {
+        "id": 42383713647,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "d5addee3211f8b0327f46664ca3334f71f7ee05d"
+      }
+    },
+    {
+      "id": 13578652488,
+      "name": "v02-installed-context-42383713647-1",
+      "size_in_bytes": 1175,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578652488",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578652488/zip",
+      "expired": false,
+      "created_at": "2026-11-07T14:53:49Z",
+      "expires_at": "2026-11-21T14:53:49Z",
+      "updated_at": "2026-11-07T14:53:49Z",
+      "digest": "sha256:f10e204c99c14c8a0b6f7b2f825e4e3afd496f5eafecec7c8597c2b67b12f3a5",
+      "workflow_run": {
+        "id": 42383713647,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "d5addee3211f8b0327f46664ca3334f71f7ee05d"
+      }
+    },
+    {
+      "id": 13578638443,
+      "name": "v02-installed-42383713647-1-d5addee3211f-stream-matrix-linux-arm64-client-result",
+      "size_in_bytes": 1412,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578638443",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578638443/zip",
+      "expired": false,
+      "created_at": "2026-11-07T15:00:54Z",
+      "expires_at": "2026-11-21T15:00:53Z",
+      "updated_at": "2026-11-07T15:00:54Z",
+      "digest": "sha256:1777dcf8614dd3a1a731fb248d79dd8c29d6e17b23e56ef5c8e84e371ee7a44d",
+      "workflow_run": {
+        "id": 42383713647,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "d5addee3211f8b0327f46664ca3334f71f7ee05d"
+      }
+    },
+    {
+      "id": 13578638373,
+      "name": "v02-installed-42383713647-1-d5addee3211f-stream-matrix-macos-arm64-client-result",
+      "size_in_bytes": 1410,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578638373",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578638373/zip",
+      "expired": false,
+      "created_at": "2026-11-07T15:00:30Z",
+      "expires_at": "2026-11-21T15:00:29Z",
+      "updated_at": "2026-11-07T15:00:30Z",
+      "digest": "sha256:e50b5937a1b42b9cbdba75d8250e4bea1c2b651febe127bdecfb7ee277bc13bb",
+      "workflow_run": {
+        "id": 42383713647,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "d5addee3211f8b0327f46664ca3334f71f7ee05d"
+      }
+    },
+    {
+      "id": 13578542724,
+      "name": "v02-installed-42383713647-1-d5addee3211f-stream-matrix-linux-arm64-identity-ready",
+      "size_in_bytes": 854,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578542724",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578542724/zip",
+      "expired": false,
+      "created_at": "2026-11-07T14:54:20Z",
+      "expires_at": "2026-11-21T14:54:20Z",
+      "updated_at": "2026-11-07T14:54:20Z",
+      "digest": "sha256:9b481d0d34086c0ed5f58709782235c8f44fb138182da4e6ce2d2a11c1765fcb",
+      "workflow_run": {
+        "id": 42383713647,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "d5addee3211f8b0327f46664ca3334f71f7ee05d"
+      }
+    },
+    {
+      "id": 13578483856,
+      "name": "v02-installed-42383713647-1-d5addee3211f-stream-matrix-linux-arm64-server-result",
+      "size_in_bytes": 541,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578483856",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578483856/zip",
+      "expired": false,
+      "created_at": "2026-11-07T15:00:55Z",
+      "expires_at": "2026-11-21T15:00:55Z",
+      "updated_at": "2026-11-07T15:00:55Z",
+      "digest": "sha256:4ce10dc18ac2c2be20f2a29a5831d57cfff18f381bdd955573fa9345affdb87e",
+      "workflow_run": {
+        "id": 42383713647,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "d5addee3211f8b0327f46664ca3334f71f7ee05d"
+      }
+    },
+    {
+      "id": 13578483021,
+      "name": "v02-installed-42383713647-1-d5addee3211f-stream-matrix-linux-amd64-server-ready",
+      "size_in_bytes": 582,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578483021",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578483021/zip",
+      "expired": false,
+      "created_at": "2026-11-07T14:54:54Z",
+      "expires_at": "2026-11-21T14:54:53Z",
+      "updated_at": "2026-11-07T14:54:54Z",
+      "digest": "sha256:6e923daf5f92000c772fc3ec916044e34fdb15fbb1fed62e61fa97b96cda6d58",
+      "workflow_run": {
+        "id": 42383713647,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "d5addee3211f8b0327f46664ca3334f71f7ee05d"
+      }
+    },
+    {
+      "id": 13578473901,
+      "name": "v02-installed-42383713647-1-d5addee3211f-stream-matrix-linux-amd64-client-result",
+      "size_in_bytes": 1408,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578473901",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578473901/zip",
+      "expired": false,
+      "created_at": "2026-11-07T15:00:56Z",
+      "expires_at": "2026-11-21T15:00:55Z",
+      "updated_at": "2026-11-07T15:00:56Z",
+      "digest": "sha256:bd73c8758e9222fb4fccbf361ea9f67265b22fe9c6c438bd984842303431380f",
+      "workflow_run": {
+        "id": 42383713647,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "d5addee3211f8b0327f46664ca3334f71f7ee05d"
+      }
+    },
+    {
+      "id": 13578449022,
+      "name": "v02-installed-diagnostic-42383713647-1-linux-amd64",
+      "size_in_bytes": 3413,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578449022",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578449022/zip",
+      "expired": false,
+      "created_at": "2026-11-07T15:00:58Z",
+      "expires_at": "2026-11-21T15:00:58Z",
+      "updated_at": "2026-11-07T15:00:58Z",
+      "digest": "sha256:cf73982086e7bd413e1d908d5c7d52c1c68378ab532bb4abeb6e6e508003826e",
+      "workflow_run": {
+        "id": 42383713647,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "d5addee3211f8b0327f46664ca3334f71f7ee05d"
+      }
+    },
+    {
+      "id": 13578424218,
+      "name": "v02-installed-42383713647-1-d5addee3211f-stream-matrix-linux-amd64-server-result",
+      "size_in_bytes": 540,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578424218",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578424218/zip",
+      "expired": false,
+      "created_at": "2026-11-07T15:00:57Z",
+      "expires_at": "2026-11-21T15:00:56Z",
+      "updated_at": "2026-11-07T15:00:57Z",
+      "digest": "sha256:4ae927afb632c0c9b7679dc1d1872fca4fc78893c8085a4792e191d20a620196",
+      "workflow_run": {
+        "id": 42383713647,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "d5addee3211f8b0327f46664ca3334f71f7ee05d"
+      }
+    },
+    {
+      "id": 13578424165,
+      "name": "v02-installed-42383713647-1-d5addee3211f-stream-matrix-macos-arm64-server-result",
+      "size_in_bytes": 542,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578424165",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578424165/zip",
+      "expired": false,
+      "created_at": "2026-11-07T15:00:36Z",
+      "expires_at": "2026-11-21T15:00:34Z",
+      "updated_at": "2026-11-07T15:00:36Z",
+      "digest": "sha256:2f2326fa9a62c99fbd8c9630523ae9d5f10b29b47a71eea1d3859d5b1933c1fe",
+      "workflow_run": {
+        "id": 42383713647,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "d5addee3211f8b0327f46664ca3334f71f7ee05d"
+      }
+    },
+    {
+      "id": 13578384193,
+      "name": "v02-installed-diagnostic-42383713647-1-macos-arm64",
+      "size_in_bytes": 3411,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578384193",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578384193/zip",
+      "expired": false,
+      "created_at": "2026-11-07T15:00:37Z",
+      "expires_at": "2026-11-21T15:00:36Z",
+      "updated_at": "2026-11-07T15:00:37Z",
+      "digest": "sha256:38366b05bb5d1187977faff459f6df6fb671411fbf2ae7dcceb0cc72878bb267",
+      "workflow_run": {
+        "id": 42383713647,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "d5addee3211f8b0327f46664ca3334f71f7ee05d"
+      }
+    },
+    {
+      "id": 13578383379,
+      "name": "v02-installed-42383713647-1-d5addee3211f-stream-matrix-macos-arm64-identity-ready",
+      "size_in_bytes": 846,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578383379",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578383379/zip",
+      "expired": false,
+      "created_at": "2026-11-07T14:54:23Z",
+      "expires_at": "2026-11-21T14:54:22Z",
+      "updated_at": "2026-11-07T14:54:23Z",
+      "digest": "sha256:5f8dbd0c6ff2a49d2bef8802935ace3ef3517247f4db150b5bb106dc4beb8e46",
+      "workflow_run": {
+        "id": 42383713647,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "d5addee3211f8b0327f46664ca3334f71f7ee05d"
+      }
+    },
+    {
+      "id": 13578378400,
+      "name": "v02-installed-42383713647-1-d5addee3211f-stream-matrix-linux-arm64-server-ready",
+      "size_in_bytes": 583,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578378400",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578378400/zip",
+      "expired": false,
+      "created_at": "2026-11-07T14:54:54Z",
+      "expires_at": "2026-11-21T14:54:54Z",
+      "updated_at": "2026-11-07T14:54:54Z",
+      "digest": "sha256:3b90d25150d9a8c9c7db48905deac40dafa220e1a45185e0af9fe43f7ab1de6f",
+      "workflow_run": {
+        "id": 42383713647,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "d5addee3211f8b0327f46664ca3334f71f7ee05d"
+      }
+    },
+    {
+      "id": 13578264740,
+      "name": "v02-installed-diagnostic-42383713647-1-linux-arm64",
+      "size_in_bytes": 3420,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578264740",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578264740/zip",
+      "expired": false,
+      "created_at": "2026-11-07T15:00:56Z",
+      "expires_at": "2026-11-21T15:00:56Z",
+      "updated_at": "2026-11-07T15:00:56Z",
+      "digest": "sha256:83af52a93159f35ed9415cad84c07adb82279d684b911ace57d1707cdff951d3",
+      "workflow_run": {
+        "id": 42383713647,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "d5addee3211f8b0327f46664ca3334f71f7ee05d"
+      }
+    },
+    {
+      "id": 13578263861,
+      "name": "v02-installed-42383713647-1-d5addee3211f-stream-matrix-linux-amd64-identity-ready",
+      "size_in_bytes": 853,
+      "url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578263861",
+      "archive_download_url": "https://api.github.com/repos/Epiphytic/marmish/actions/artifacts/13578263861/zip",
+      "expired": false,
+      "created_at": "2026-11-07T14:54:20Z",
+      "expires_at": "2026-11-21T14:54:19Z",
+      "updated_at": "2026-11-07T14:54:20Z",
+      "digest": "sha256:c21b3336fcbcf28b37f6c5ada9f9461f2759fb92028b807f208789bf0c45e255",
+      "workflow_run": {
+        "id": 42383713647,
+        "repository_id": 1429964286,
+        "head_repository_id": 1429964286,
+        "head_branch": "master",
+        "head_sha": "d5addee3211f8b0327f46664ca3334f71f7ee05d"
+      }
+    }
+  ],
+  "artifact_metadata_snapshot_sha256": "393bc3be26bb9adb84fd8a5b7f8cf494bcf0f65eb7cbf4207a49b45d50c9238e",
+  "rollup": {
+    "category": "validation_or_platform_failure",
+    "cohort": "stream-matrix",
+    "complete": false,
+    "context_sha256": "1d53bcb1f18c656394bddbd7eab91b5673777d8f4453277b7eac15a7b08008ca",
+    "missing_records": [],
+    "passed_cells": 0,
+    "qualification": "none",
+    "schema": 1,
+    "scope": "installed-streaming",
+    "source_commit": "d5addee3211f8b0327f46664ca3334f71f7ee05d",
+    "status": "FAIL"
+  },
+  "rollup_record_sha256": "edd112760687df899181a4f5b115e9bec7874e0ce4b08075c3135445004a4fb4",
+  "rollup_failure_marker_byte_equal": true,
+  "original_stage_observations": [
+    {
+      "job_id": 128436616261,
+      "client": "linux-amd64",
+      "event_count": 77,
+      "closed_records_sha256": "2a4c1d9d4dabce89659cf38acb4894de428b180cb5a274e395433595f913c4d5",
+      "private_full_job_log_sha256": "f1dedb5e9149663853b21ab2c463fded76d549e9054558b7f4002f940d3fe2ef",
+      "cells": [
+        {
+          "server": "linux-amd64",
+          "event_count": 33,
+          "last_record": {
+            "schema": 1,
+            "case": "duplex",
+            "client": "linux-amd64",
+            "server": "linux-amd64",
+            "elapsed_ms": 45245,
+            "stage": "cell",
+            "outcome": "ok",
+            "evidence": null
+          },
+          "last_pair_record": {
+            "schema": 1,
+            "case": "duplex",
+            "client": "linux-amd64",
+            "server": "linux-amd64",
+            "elapsed_ms": 45245,
+            "stage": "pair_validation",
+            "outcome": "ok",
+            "evidence": {
+              "kind": "checks",
+              "checks": {
+                "client_role": true,
+                "server_role": true,
+                "transfer_absent": true,
+                "case": true,
+                "complete": true,
+                "failure_absent": true,
+                "nonce": true,
+                "stream_hex": true,
+                "session_hex": true,
+                "open_digest_hex": true,
+                "group_sha256_hex": true,
+                "stdin_count": true,
+                "stdout_count": true,
+                "stderr_count": true,
+                "exit7": true,
+                "wall_ns": true,
+                "stdin_hash": true,
+                "stdout_hash": true,
+                "stderr_hash": true
+              }
+            }
+          }
+        },
+        {
+          "server": "linux-arm64",
+          "event_count": 33,
+          "last_record": {
+            "schema": 1,
+            "case": "duplex",
+            "client": "linux-amd64",
+            "server": "linux-arm64",
+            "elapsed_ms": 46657,
+            "stage": "cell",
+            "outcome": "ok",
+            "evidence": null
+          },
+          "last_pair_record": {
+            "schema": 1,
+            "case": "duplex",
+            "client": "linux-amd64",
+            "server": "linux-arm64",
+            "elapsed_ms": 46657,
+            "stage": "pair_validation",
+            "outcome": "ok",
+            "evidence": {
+              "kind": "checks",
+              "checks": {
+                "client_role": true,
+                "server_role": true,
+                "transfer_absent": true,
+                "case": true,
+                "complete": true,
+                "failure_absent": true,
+                "nonce": true,
+                "stream_hex": true,
+                "session_hex": true,
+                "open_digest_hex": true,
+                "group_sha256_hex": true,
+                "stdin_count": true,
+                "stdout_count": true,
+                "stderr_count": true,
+                "exit7": true,
+                "wall_ns": true,
+                "stdin_hash": true,
+                "stdout_hash": true,
+                "stderr_hash": true
+              }
+            }
+          }
+        },
+        {
+          "server": "macos-arm64",
+          "event_count": 11,
+          "last_record": {
+            "schema": 1,
+            "case": "duplex",
+            "client": "linux-amd64",
+            "server": "macos-arm64",
+            "elapsed_ms": 330000,
+            "stage": "cell",
+            "outcome": "error",
+            "evidence": null
+          },
+          "decisive_failure": {
+            "schema": 1,
+            "case": "duplex",
+            "client": "linux-amd64",
+            "server": "macos-arm64",
+            "elapsed_ms": 329998,
+            "stage": "input_write",
+            "outcome": "timeout",
+            "evidence": null
+          },
+          "cleanup_suffix": [
+            {
+              "schema": 1,
+              "case": "duplex",
+              "client": "linux-amd64",
+              "server": "macos-arm64",
+              "elapsed_ms": 329998,
+              "stage": "terminate",
+              "outcome": "begin",
+              "evidence": null
+            },
+            {
+              "schema": 1,
+              "case": "duplex",
+              "client": "linux-amd64",
+              "server": "macos-arm64",
+              "elapsed_ms": 330000,
+              "stage": "terminate",
+              "outcome": "ok",
+              "evidence": null
+            }
+          ],
+          "input_partial_bytes": null,
+          "capture_returned": false,
+          "terminal_observed": false,
+          "remote_error_observed": false
+        }
+      ]
+    },
+    {
+      "job_id": 128436616248,
+      "client": "linux-arm64",
+      "event_count": 77,
+      "closed_records_sha256": "b386d72e3ccb295533310276a068c1d00b9d94b649034b3aa69e61f9b3bb4f4c",
+      "private_full_job_log_sha256": "6a3fba02fc413cb5d99fabb88261cdf4f0dfb80cd9fd3170d594e319a1675c98",
+      "cells": [
+        {
+          "server": "linux-amd64",
+          "event_count": 33,
+          "last_record": {
+            "schema": 1,
+            "case": "duplex",
+            "client": "linux-arm64",
+            "server": "linux-amd64",
+            "elapsed_ms": 46746,
+            "stage": "cell",
+            "outcome": "ok",
+            "evidence": null
+          },
+          "last_pair_record": {
+            "schema": 1,
+            "case": "duplex",
+            "client": "linux-arm64",
+            "server": "linux-amd64",
+            "elapsed_ms": 46746,
+            "stage": "pair_validation",
+            "outcome": "ok",
+            "evidence": {
+              "kind": "checks",
+              "checks": {
+                "client_role": true,
+                "server_role": true,
+                "transfer_absent": true,
+                "case": true,
+                "complete": true,
+                "failure_absent": true,
+                "nonce": true,
+                "stream_hex": true,
+                "session_hex": true,
+                "open_digest_hex": true,
+                "group_sha256_hex": true,
+                "stdin_count": true,
+                "stdout_count": true,
+                "stderr_count": true,
+                "exit7": true,
+                "wall_ns": true,
+                "stdin_hash": true,
+                "stdout_hash": true,
+                "stderr_hash": true
+              }
+            }
+          }
+        },
+        {
+          "server": "linux-arm64",
+          "event_count": 33,
+          "last_record": {
+            "schema": 1,
+            "case": "duplex",
+            "client": "linux-arm64",
+            "server": "linux-arm64",
+            "elapsed_ms": 47662,
+            "stage": "cell",
+            "outcome": "ok",
+            "evidence": null
+          },
+          "last_pair_record": {
+            "schema": 1,
+            "case": "duplex",
+            "client": "linux-arm64",
+            "server": "linux-arm64",
+            "elapsed_ms": 47662,
+            "stage": "pair_validation",
+            "outcome": "ok",
+            "evidence": {
+              "kind": "checks",
+              "checks": {
+                "client_role": true,
+                "server_role": true,
+                "transfer_absent": true,
+                "case": true,
+                "complete": true,
+                "failure_absent": true,
+                "nonce": true,
+                "stream_hex": true,
+                "session_hex": true,
+                "open_digest_hex": true,
+                "group_sha256_hex": true,
+                "stdin_count": true,
+                "stdout_count": true,
+                "stderr_count": true,
+                "exit7": true,
+                "wall_ns": true,
+                "stdin_hash": true,
+                "stdout_hash": true,
+                "stderr_hash": true
+              }
+            }
+          }
+        },
+        {
+          "server": "macos-arm64",
+          "event_count": 11,
+          "last_record": {
+            "schema": 1,
+            "case": "duplex",
+            "client": "linux-arm64",
+            "server": "macos-arm64",
+            "elapsed_ms": 330000,
+            "stage": "cell",
+            "outcome": "error",
+            "evidence": null
+          },
+          "decisive_failure": {
+            "schema": 1,
+            "case": "duplex",
+            "client": "linux-arm64",
+            "server": "macos-arm64",
+            "elapsed_ms": 329999,
+            "stage": "input_write",
+            "outcome": "timeout",
+            "evidence": null
+          },
+          "cleanup_suffix": [
+            {
+              "schema": 1,
+              "case": "duplex",
+              "client": "linux-arm64",
+              "server": "macos-arm64",
+              "elapsed_ms": 329999,
+              "stage": "terminate",
+              "outcome": "begin",
+              "evidence": null
+            },
+            {
+              "schema": 1,
+              "case": "duplex",
+              "client": "linux-arm64",
+              "server": "macos-arm64",
+              "elapsed_ms": 330000,
+              "stage": "terminate",
+              "outcome": "ok",
+              "evidence": null
+            }
+          ],
+          "input_partial_bytes": null,
+          "capture_returned": false,
+          "terminal_observed": false,
+          "remote_error_observed": false
+        }
+      ]
+    },
+    {
+      "job_id": 128436616252,
+      "client": "macos-arm64",
+      "event_count": 77,
+      "closed_records_sha256": "f6ed25e6e361e6997f0118e72e1fe1ccce3f238a5df2ac64cdc278246b123685",
+      "private_full_job_log_sha256": "4e56a8cb9f2f672f21b3a0a3b03985306fca73357b9086a6219466a99a4ffb3e",
+      "cells": [
+        {
+          "server": "linux-amd64",
+          "event_count": 33,
+          "last_record": {
+            "schema": 1,
+            "case": "duplex",
+            "client": "macos-arm64",
+            "server": "linux-amd64",
+            "elapsed_ms": 22811,
+            "stage": "cell",
+            "outcome": "ok",
+            "evidence": null
+          },
+          "last_pair_record": {
+            "schema": 1,
+            "case": "duplex",
+            "client": "macos-arm64",
+            "server": "linux-amd64",
+            "elapsed_ms": 22811,
+            "stage": "pair_validation",
+            "outcome": "ok",
+            "evidence": {
+              "kind": "checks",
+              "checks": {
+                "client_role": true,
+                "server_role": true,
+                "transfer_absent": true,
+                "case": true,
+                "complete": true,
+                "failure_absent": true,
+                "nonce": true,
+                "stream_hex": true,
+                "session_hex": true,
+                "open_digest_hex": true,
+                "group_sha256_hex": true,
+                "stdin_count": true,
+                "stdout_count": true,
+                "stderr_count": true,
+                "exit7": true,
+                "wall_ns": true,
+                "stdin_hash": true,
+                "stdout_hash": true,
+                "stderr_hash": true
+              }
+            }
+          }
+        },
+        {
+          "server": "linux-arm64",
+          "event_count": 33,
+          "last_record": {
+            "schema": 1,
+            "case": "duplex",
+            "client": "macos-arm64",
+            "server": "linux-arm64",
+            "elapsed_ms": 21804,
+            "stage": "cell",
+            "outcome": "ok",
+            "evidence": null
+          },
+          "last_pair_record": {
+            "schema": 1,
+            "case": "duplex",
+            "client": "macos-arm64",
+            "server": "linux-arm64",
+            "elapsed_ms": 21803,
+            "stage": "pair_validation",
+            "outcome": "ok",
+            "evidence": {
+              "kind": "checks",
+              "checks": {
+                "client_role": true,
+                "server_role": true,
+                "transfer_absent": true,
+                "case": true,
+                "complete": true,
+                "failure_absent": true,
+                "nonce": true,
+                "stream_hex": true,
+                "session_hex": true,
+                "open_digest_hex": true,
+                "group_sha256_hex": true,
+                "stdin_count": true,
+                "stdout_count": true,
+                "stderr_count": true,
+                "exit7": true,
+                "wall_ns": true,
+                "stdin_hash": true,
+                "stdout_hash": true,
+                "stderr_hash": true
+              }
+            }
+          }
+        },
+        {
+          "server": "macos-arm64",
+          "event_count": 11,
+          "last_record": {
+            "schema": 1,
+            "case": "duplex",
+            "client": "macos-arm64",
+            "server": "macos-arm64",
+            "elapsed_ms": 330004,
+            "stage": "cell",
+            "outcome": "error",
+            "evidence": null
+          },
+          "decisive_failure": {
+            "schema": 1,
+            "case": "duplex",
+            "client": "macos-arm64",
+            "server": "macos-arm64",
+            "elapsed_ms": 330000,
+            "stage": "input_write",
+            "outcome": "timeout",
+            "evidence": null
+          },
+          "cleanup_suffix": [
+            {
+              "schema": 1,
+              "case": "duplex",
+              "client": "macos-arm64",
+              "server": "macos-arm64",
+              "elapsed_ms": 330001,
+              "stage": "terminate",
+              "outcome": "begin",
+              "evidence": null
+            },
+            {
+              "schema": 1,
+              "case": "duplex",
+              "client": "macos-arm64",
+              "server": "macos-arm64",
+              "elapsed_ms": 330002,
+              "stage": "terminate",
+              "outcome": "ok",
+              "evidence": null
+            }
+          ],
+          "input_partial_bytes": null,
+          "capture_returned": false,
+          "terminal_observed": false,
+          "remote_error_observed": false
+        }
+      ]
+    }
+  ],
+  "provenance": {
+    "bootstrap_sha256": "f4f500f5974275e44a1c16e33c2fdeb46d94753c20108f534a64d5c499776909",
+    "harness_sha256": "bc943ee19cc097e9901b7c895fe2c0786510b10eafe7a8607ec0d0f9b6667d60",
+    "manifests": {
+      "linux-amd64": "b054a36f5e8140c7295dc8fb5a3f580788f51075e2745f3305a8e8e2db14adb0",
+      "linux-arm64": "d0364eec0fd00d6bfe76d5247166750ed84995e8a6cd6bf7c09230fda9d424b7",
+      "macos-arm64": "76a80e947cea39864e9217c6fc3a4e1217b841bf4474896939acc45f80a1705f"
+    },
+    "tooling": [
+      {
+        "files": {
+          "marmish-installed-check": {
+            "bytes": 23116128,
+            "sha256": "780f6580f6883e3a1212dae146f6837c42d2526a48a50bb5135120124460bfe6"
+          },
+          "marmish-installed-fixture": {
+            "bytes": 13012392,
+            "sha256": "a455ce189798c109f8085a084cef2c1f006d319a18d7e3757b5102b38517aeea"
+          }
+        },
+        "harness_sha256": "bc943ee19cc097e9901b7c895fe2c0786510b10eafe7a8607ec0d0f9b6667d60",
+        "schema": 1,
+        "source_commit": "d5addee3211f8b0327f46664ca3334f71f7ee05d",
+        "target": "x86_64-unknown-linux-gnu"
+      },
+      {
+        "files": {
+          "marmish-installed-check": {
+            "bytes": 17867480,
+            "sha256": "b664ec33674eb86a13db071136c79feb2ba24619a41c37ce83206a5b6b539158"
+          },
+          "marmish-installed-fixture": {
+            "bytes": 8358664,
+            "sha256": "e3a0778a5c26fb1ad75dd5c904e43fc30d4bfecaafe14f4758c3f7e44cacf419"
+          }
+        },
+        "harness_sha256": "bc943ee19cc097e9901b7c895fe2c0786510b10eafe7a8607ec0d0f9b6667d60",
+        "schema": 1,
+        "source_commit": "d5addee3211f8b0327f46664ca3334f71f7ee05d",
+        "target": "aarch64-unknown-linux-gnu"
+      },
+      {
+        "files": {
+          "marmish-installed-check": {
+            "bytes": 15263840,
+            "sha256": "9f6a0085a398cf1e778aa3f49975e1df129e6d158d987d1d43d9cd1ecaee791c"
+          },
+          "marmish-installed-fixture": {
+            "bytes": 6544528,
+            "sha256": "ddf516f0a0db56363de4cb1241d164844e711f8080278134a0afc146cad903ce"
+          }
+        },
+        "harness_sha256": "bc943ee19cc097e9901b7c895fe2c0786510b10eafe7a8607ec0d0f9b6667d60",
+        "schema": 1,
+        "source_commit": "d5addee3211f8b0327f46664ca3334f71f7ee05d",
+        "target": "aarch64-apple-darwin"
+      }
+    ],
+    "tooling_manifests": {
+      "linux-amd64": "45f76984165d7e7654cc0c8458486e4903141d100794202fb3371cf3aba69145",
+      "linux-arm64": "da52670aa669107b98ecc0cede9e4126036ff32c9ff664c22b169bf561513d00",
+      "macos-arm64": "ddaca871c3267592d451f0d6a1d36fd7d3302c941a161feda13e050c3de54935"
+    },
+    "version": "0.2.3"
+  },
+  "diagnosis": {
+    "status": "unresolved",
+    "decisive_local_branch": "input_write timeout in all three Mac-target cells, followed by reported local terminate success and cell error",
+    "outer_timeout_or_missing_terminal_observation_record": false,
+    "partial_input_bytes": "unknown: timeout of write_all may follow partial writes; no count was returned",
+    "remote_failure_cause": "unknown: no completed capture, prefix, client List, binding, or Pair observation reached for these cells",
+    "empty_receipt_arrays": "All server-result arrays are empty. Pinned cohort control flow returns on incomplete cohort before collecting receipts; this does not establish absence of remote fixture receipts.",
+    "compression_context": "All Mac-target cells request compression; compressed Linux-target cells pass. Earlier passed cold multiprincipal diagnostic also compressed all three simultaneous inbound streams. Compression or inbound concurrency alone is not a demonstrated distinguishing cause.",
+    "remaining_topology_difference": "Original Mac client daemon also sends two raw streams to Linux while the separate local Mac server receives three compressed streams; passed cold diagnostic used separate client daemons on one host. Causality is unproven.",
+    "report_categories": "validation_or_transport (failed cells) and validation_or_platform_failure (rollup) are generic report-category labels, not diagnoses. Failure to complete local stdin input is not proof of remote rejection or root cause."
+  },
+  "timing_definition": {
+    "wall_ns": "Original per-cell Pair duration, including setup, transfer and validation before final construction; not network RTT. Concurrent cell durations must not be summed as total run duration.",
+    "stdout_goodput_bytes_per_second": "stdout_bytes / (wall_ns / 1e9)",
+    "aggregate_application_payload_bytes_per_second": "(stdin_bytes + stdout_bytes + stderr_bytes) / (wall_ns / 1e9); 204800 bytes per successful observation. Excludes diagnostic prefix, protocol overhead and compression effects; not wire throughput.",
+    "retained_stderr": "Successful captures retain 8241 bytes including a 49-byte stream prefix; Pair payload validation counts 8192 bytes.",
+    "cell_deadline": "The 330-second ceiling is the shared absolute per-cell deadline (clipped by the overall deadline), covering startup and the whole capture; it is not a dedicated input-write timeout.",
+    "compression_requested": "Derived from the pinned installed_streaming_cases::duplex source rule role <= server; not a measured field in the client-result artifacts."
+  },
+  "limitations": [
+    "Six complete client observations are not six qualified cells: independent server receipt reconciliation and successful overall rollup were not reached. Zero cells are qualified.",
+    "No Mac-target partial byte totals, child exit status, remote error code, or terminal state is available from the failed input-write branch. Do not infer zero bytes written or no command execution.",
+    "Cleanup flags and local terminate observations are reported facts, not independent physical-process, daemon or private-state-removal proof.",
+    "Raw logs, identities, nonces and runtime state remain private. Only fixed role labels, closed observations and hashes are published.",
+    "Artifact digests and sizes are GitHub API ZIP metadata; canonical record hashes are hashes of downloaded extracted bytes. Artifact ZIP hashes have not been independently recomputed here.",
+    "No release, source behavior change, rerun or later cohort qualification is asserted by this record.",
+    "The other seven installed cohorts were not dispatched after this stream-matrix failure. This run provides no installed-qualification or public-release claim."
+  ],
+  "original_stage_observation_total": 231,
+  "other_cohorts_dispatched": false,
+  "other_cohorts_not_dispatched_count": 7,
+  "independent_evidence_review": {
+    "reviewer": "Claude Code",
+    "model": "claude-sonnet-5-5",
+    "permission_mode": "auto",
+    "session_id": "57c63432-eaaa-4f1c-92c8-b7714aaf9b31",
+    "rounds": [
+      {
+        "verdict": "REQUEST_CHANGES",
+        "duration_ms": 205068,
+        "turns": 27,
+        "result_sha256": "13a210b12ee3b9c3d298fd4fbcf8867b063391675d4b6bd95b5bb06098c0e6e8",
+        "findings": "Explicitly distinguish generic report categories from diagnosis and state that seven later cohorts were not dispatched. Useful deadline, timing-range, compression-provenance and total-record wording clarified."
+      },
+      {
+        "verdict": "APPROVE",
+        "duration_ms": 45607,
+        "turns": 6,
+        "result_sha256": "2ed2c6f537f626630f97d9971349c4bcdef5f2e07dc2964610c07eee391a6a7d",
+        "findings": "No blockers or new issues; exact evidence, rates, stages, pins and sanitization rechecked."
+      }
+    ],
+    "scope": "Read-only evidence verification; no product or relay workloads. API ZIP digests not independently recomputed."
+  }
+}

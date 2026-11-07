@@ -85,3 +85,27 @@ The same actual Claude session reviewed the two strengthened tests and returned
 tests (one pass each,1.07 and0.00 seconds), formatting and diff checks. No source
 behavior changed after the integrated approval. The follow-up approval covers
 source/tests; coordinator documentation records the already reviewed evidence.
+
+## Hosted verification and independent evidence review
+
+Fresh candidate 42377010307 at d5addee passed all three native/package/tool jobs
+and rendering. Actual Claude auto evidence review, session
+`5f8328eb-6848-4d3a-a65c-2d6b3509e954`, returned APPROVE without blockers
+(93.519 seconds,14 turns). It checked complete private logs, API metadata, exact
+suite counts/timings, artifact pins, signing, ABI/license checks and the successful
+product-inventory comparison. See [candidate evidence](../validation/streaming-candidate-d5addee.md).
+
+The original installed matrix 42383713647 failed all three macOS-target cells at
+the local stdin-write deadline. All six Linux-target observations reached Pair
+validation; the rollup still qualifies zero cells. No remaining cohort ran.
+The observations locate the harness failure stage without establishing the remote
+cause. See [failure evidence](../validation/streaming-installed-d5addee-failure.md).
+
+Actual Claude auto evidence review, session
+`57c63432-eaaa-4f1c-92c8-b7714aaf9b31`, initially requested explicit generic-category
+and undispatched-cohort wording (205.068 seconds,27 turns). Those findings and
+useful timing/compression clarifications were incorporated. The same reviewer
+then returned APPROVE without blockers or new issues (45.607 seconds,six turns),
+rechecking actual pins, canonical/duplicate records, decisive stages, rate
+arithmetic and sanitization. These reviews were read-only; they ran no product or
+relay workloads and did not independently recompute artifact ZIP digests.

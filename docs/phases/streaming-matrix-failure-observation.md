@@ -130,3 +130,21 @@ rerun original stream-matrix before later cohorts. Actions already inherits
 STDERR; retain sanitized event extraction with actual run/source provenance.
 Original eight-cohort artifacts/cleanup/acceptance remain binding. Log volume is
 bounded in SIZE, not time: synchronous stderr can block on a stalled log consumer.
+
+## Observed outcome
+
+Candidate 42377010307 at d5addee passed all three complete native/package/tool
+jobs and final rendering. The original installed stream matrix 42383713647
+failed again: every client targeting macOS timed out during the local stdin
+write at 330 seconds. Each emitted an explicit error after successful owned
+child termination. All six Linux-target observations reached successful ordered
+Pair validation; the failed rollup qualifies zero cells and the remaining seven
+cohorts were not dispatched. See the [candidate evidence](../validation/streaming-candidate-d5addee.md)
+and [original failure observations](../validation/streaming-installed-d5addee-failure.md).
+
+This establishes the failing harness stage, not the remote cause. The write
+may have partially completed, and the original failure path discards stdout
+and stderr drain results. The CLI can await setup, Hello, Open or subsequent
+Exchanges before consuming more stdin. No remote output count, remote error,
+absent execution or absent receipt is inferred. Additional read-only progress
+inspection needs its own approved design; the current acceptance is unchanged.
