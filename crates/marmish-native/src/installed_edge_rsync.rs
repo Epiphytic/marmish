@@ -15,6 +15,13 @@ use serde::{Deserialize, Serialize};
 use std::os::unix::fs::DirBuilderExt;
 use std::{collections::BTreeMap, ffi::OsString, path::Path, process::ExitStatus, time::Duration};
 use tokio::{io::AsyncReadExt, process::Child, task::JoinHandle, time::Instant};
+fn remote_operand(account: &str, nonce: &str) -> Result<String> {
+    Ok(format!(
+        "{}:edge-rsync-{nonce}.destination",
+        records::public_destination(account)?
+    ))
+}
+
 fn bad() -> Error {
     Error::Invalid("installed_edge_rsync")
 }
@@ -544,7 +551,7 @@ async fn one(c: &Cohort<'_, '_>, case: Case) -> Result<Observation> {
     args.extend([
         "--".into(),
         source.into_os_string(),
-        format!("{}:edge-rsync-{nonce}.destination", c.ready.server_account).into(),
+        remote_operand(&c.ready.server_account, &nonce)?.into(),
     ]);
     let start = Instant::now();
     let mut child = OwnedRsync::start(Path::new(&local.path), &args, c.client, c.deadline).await?;
@@ -838,5 +845,19 @@ mod tests {
             stream_line(format!("marmish stream: {} trailing\n", "a".repeat(32)).as_bytes())
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod public_destination_tests {
+    use super::*;
+    #[test]
+    fn public_destination_builder_obeys_product_contract() {
+        let account = "ab".repeat(32);
+        let remote = remote_operand(&account, "nonce").unwrap();
+        let (target, path) = remote.split_once(':').unwrap();
+        records::assert_public_target(target.as_ref(), &account);
+        assert_eq!(path, "edge-rsync-nonce.destination");
+        assert!(remote_operand("bad", "nonce").is_err());
     }
 }

@@ -1,4 +1,5 @@
 //! Two positive transfers per directed cell, using installed product commands only.
+use super::streaming_cases::fixture_args;
 use super::{
     matrix, process,
     records::{self, Context, IdentityReady},
@@ -10,6 +11,18 @@ use super::{
 use crate::{Error, Result};
 use std::{collections::BTreeMap, ffi::OsString};
 use tokio::time::Instant;
+
+fn copy_target(account: &str) -> Result<Vec<OsString>> {
+    Ok(vec![
+        "--".into(),
+        records::public_destination(account)?.into(),
+    ])
+}
+
+fn remote_operand(account: &str, path: &str) -> Result<String> {
+    Ok(format!("{}:{path}/", records::public_destination(account)?))
+}
+
 fn bad() -> Error {
     Error::Invalid("installed_transfer_case")
 }
@@ -120,13 +133,7 @@ async fn fixture_checkpoint(
 ) -> Result<(Option<transfer_fixture::Receipt>, ControlProof)> {
     let ep = cell.ep;
     let mut args = matrix::base(ep.workspace, "client", ep.socket, &cell.ctx.relays);
-    args.extend([
-        "--no-autostart".into(),
-        "stream".into(),
-        cell.ready.server_account.clone().into(),
-        "--".into(),
-        "./fixture/main".into(),
-    ]);
+    args.extend(fixture_args(&cell.ready.server_account)?);
     args.extend(match checkpoint {
         Some((launch, stream)) => {
             transfer_fixture::checkpoint_arguments(nonce, cell.client, launch, stream)?
@@ -292,13 +299,12 @@ pub(super) async fn rsync(
                 Ok(_) => return Err(bad()),
             }
         }
-        let remote_path = format!(
-            "{}:{}/",
-            ready.server_account,
+        let remote_path = remote_operand(
+            &ready.server_account,
             transfer_fixture::target(&nonce, case)?
                 .to_str()
-                .ok_or_else(bad)?
-        );
+                .ok_or_else(bad)?,
+        )?;
         let local_path: OsString = format!("{}/", localroot.to_str().ok_or_else(bad)?).into();
         let mut args = vec![
             "-as".into(),
@@ -387,7 +393,7 @@ pub(super) async fn copy(
         if case == "put" {
             args.push("--compress".into());
         }
-        args.extend(["--".into(), ready.server_account.clone().into()]);
+        args.extend(copy_target(&ready.server_account)?);
         if case == "put" {
             args.extend([localpath.clone(), remotepath.clone()]);
         } else {
@@ -517,5 +523,25 @@ mod tests {
             )
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod public_destination_tests {
+    use super::*;
+    #[test]
+    fn public_destination_builder_obeys_product_contract() {
+        let account = "ab".repeat(32);
+        let fixture = fixture_args(&account).unwrap();
+        records::assert_public_target(&fixture[2], &account);
+        assert_eq!(fixture[3..], ["--", "./fixture/main"]);
+        let copy = copy_target(&account).unwrap();
+        records::assert_public_target(&copy[1], &account);
+        assert_eq!(copy[0], "--");
+        let remote = remote_operand(&account, "literal space/'quote\n雪").unwrap();
+        let (target, path) = remote.split_once(':').unwrap();
+        records::assert_public_target(target.as_ref(), &account);
+        assert_eq!(path, "literal space/'quote\n雪/");
+        assert!(remote_operand("bad", "path").is_err());
     }
 }

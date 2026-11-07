@@ -1,4 +1,5 @@
 //! A paused owned server cannot answer Hello and therefore cannot authorize Open.
+use super::streaming_cases::hold_args as stream_args;
 use super::{
     cleanup, edge_fixture, edge_process::Started, edge_signals::Cohort, matrix, records,
     streaming_cleanup,
@@ -7,6 +8,7 @@ use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::{process::Child, sync::MutexGuard, time::Instant};
+
 fn bad() -> Error {
     Error::Invalid("installed_edge_preopen")
 }
@@ -164,17 +166,7 @@ pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Observation> {
         c.client.socket,
         &c.context.relays,
     );
-    args.extend([
-        "--no-autostart".into(),
-        "stream".into(),
-        c.ready.server_account.clone().into(),
-        "--".into(),
-        "./fixture/main".into(),
-        "edge-v1".into(),
-        "hold".into(),
-        nonce.into(),
-        c.role.into(),
-    ]);
+    args.extend(stream_args(&c.ready.server_account, &nonce, c.role)?);
     let mut client = match Started::start(
         &c.client.workspace.join("bin/marmish"),
         &args,
@@ -298,6 +290,21 @@ mod tests {
                 .unwrap()
                 .code(),
             Some(7)
+        );
+    }
+}
+
+#[cfg(test)]
+mod public_destination_tests {
+    use super::*;
+    #[test]
+    fn public_destination_builder_obeys_product_contract() {
+        let account = "ab".repeat(32);
+        let args = stream_args(&account, "nonce", "role").unwrap();
+        records::assert_public_target(&args[2], &account);
+        assert_eq!(
+            args[3..],
+            ["--", "./fixture/main", "edge-v1", "hold", "nonce", "role"]
         );
     }
 }

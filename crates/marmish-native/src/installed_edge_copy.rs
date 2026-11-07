@@ -367,7 +367,7 @@ async fn idle(c: &Cohort<'_, '_>) -> Result<(StreamStatus, StreamStatus)> {
             .await;
     }
 }
-fn attempt_args(account: &str, attempt: &Attempt<'_>) -> Vec<OsString> {
+fn attempt_args(account: &str, attempt: &Attempt<'_>) -> Result<Vec<OsString>> {
     let mut args = Vec::new();
     args.extend([
         "--no-autostart".into(),
@@ -383,11 +383,11 @@ fn attempt_args(account: &str, attempt: &Attempt<'_>) -> Vec<OsString> {
     }
     args.extend([
         "--".into(),
-        account.into(),
+        records::public_destination(account)?.into(),
         attempt.source.as_os_str().to_owned(),
         attempt.destination.as_os_str().to_owned(),
     ]);
-    args
+    Ok(args)
 }
 async fn invoke(c: &Cohort<'_, '_>, case: Case, attempt: Attempt<'_>) -> Result<Completed> {
     let scoped = Cohort {
@@ -422,7 +422,7 @@ async fn invoke_inner(c: &Cohort<'_, '_>, case: Case, attempt: Attempt<'_>) -> R
         c.client.socket,
         &c.context.relays,
     );
-    args.extend(attempt_args(&c.ready.server_account, &attempt));
+    args.extend(attempt_args(&c.ready.server_account, &attempt)?);
     let start = Instant::now();
     let out = process::run(
         &c.client.workspace.join("bin/marmish"),
@@ -1358,7 +1358,7 @@ mod tests {
     #[test]
     fn resume_args_match_actual_cli_without_transfer_id_flag() {
         let args = attempt_args(
-            "server",
+            &"ab".repeat(32),
             &Attempt {
                 direction: "put",
                 source: Path::new("source"),
@@ -1367,7 +1367,10 @@ mod tests {
                 resume: Some("id"),
                 protected: None,
             },
-        );
+        )
+        .unwrap();
+        records::assert_public_target(&args[8], &"ab".repeat(32));
+        let destination = records::public_destination(&"ab".repeat(32)).unwrap();
         assert_eq!(
             args,
             [
@@ -1379,7 +1382,7 @@ mod tests {
                 "--resume",
                 "id",
                 "--",
-                "server",
+                &destination,
                 "source",
                 "destination"
             ]
@@ -1419,5 +1422,33 @@ mod tests {
         let proof = destination_proof(root.as_path(), Case::DestinationDirectory).unwrap();
         assert_eq!(proof.names.unwrap(), [b"sentinel".to_vec()]);
         assert_eq!(proof.entry.st_mode & libc::S_IFMT, libc::S_IFDIR);
+    }
+}
+
+#[cfg(test)]
+mod public_destination_tests {
+    use super::*;
+    #[test]
+    fn public_destination_builder_preserves_non_utf8_copy_operands() {
+        use std::os::unix::ffi::OsStringExt;
+        let account = "ab".repeat(32);
+        let source = std::path::PathBuf::from(OsString::from_vec(b"source \xff\n--".to_vec()));
+        let destination = Path::new("destination '雪\n--");
+        for direction in ["put", "get"] {
+            let attempt = Attempt {
+                direction,
+                source: &source,
+                destination,
+                overwrite: true,
+                resume: Some("id"),
+                protected: None,
+            };
+            let args = attempt_args(&account, &attempt).unwrap();
+            records::assert_public_target(&args[8], &account);
+            assert_eq!(args[9], source.as_os_str());
+            assert_eq!(args[10], destination.as_os_str());
+            assert_eq!(args[5..8], ["--resume", "id", "--"]);
+            assert!(attempt_args("bad", &attempt).is_err());
+        }
     }
 }

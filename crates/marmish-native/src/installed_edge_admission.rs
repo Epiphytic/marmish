@@ -10,8 +10,28 @@ use super::{
 use crate::{Error, Result};
 use marmish_stream::wire::{Terminal, WireErrorCode};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, ffi::OsString};
 use tokio::time::Instant;
+
+fn rsh_args(account: &str) -> Result<Vec<OsString>> {
+    Ok(vec![
+        "rsh".into(),
+        records::public_destination(account)?.into(),
+        "rsync".into(),
+        "--server".into(),
+        "--sender".into(),
+        ".".into(),
+        "fixture".into(),
+    ])
+}
+
+fn stream_args(account: &str) -> Result<Vec<OsString>> {
+    Ok(vec![
+        "stream".into(),
+        records::public_destination(account)?.into(),
+        "--".into(),
+    ])
+}
 
 fn bad() -> Error {
     Error::Invalid("installed_edge_admission")
@@ -108,21 +128,9 @@ async fn one(c: &Cohort<'_, '_>, case: &str) -> Result<Observation> {
     );
     args.push("--no-autostart".into());
     if case == "rsync-bootstrap-without-seclusion" {
-        args.extend([
-            "rsh".into(),
-            c.ready.server_account.clone().into(),
-            "rsync".into(),
-            "--server".into(),
-            "--sender".into(),
-            ".".into(),
-            "fixture".into(),
-        ]);
+        args.extend(rsh_args(&c.ready.server_account)?);
     } else {
-        args.extend([
-            "stream".into(),
-            c.ready.server_account.clone().into(),
-            "--".into(),
-        ]);
+        args.extend(stream_args(&c.ready.server_account)?);
         let command = if case == "missing-executable" {
             c.server.workspace.join("never-created-executable")
         } else {
@@ -270,5 +278,20 @@ mod tests {
         value.validate().unwrap();
         value.server_open_count_after = 2;
         assert!(value.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod public_destination_tests {
+    use super::*;
+    #[test]
+    fn public_destination_builder_obeys_product_contract() {
+        let account = "ab".repeat(32);
+        let rsh = rsh_args(&account).unwrap();
+        records::assert_public_target(&rsh[1], &account);
+        assert_eq!(rsh[2..], ["rsync", "--server", "--sender", ".", "fixture"]);
+        let stream = stream_args(&account).unwrap();
+        records::assert_public_target(&stream[1], &account);
+        assert_eq!(stream[2], "--");
     }
 }

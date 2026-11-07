@@ -116,7 +116,20 @@ answered Status and reached relay-active at that standard address. The bounded
 [socket correction](phases/streaming-installed-socket.md) also fixes the reused
 resolver's latent sixteen-versus-thirty-two-character profile-ID check. Failed
 hosted cleanup proofs remain incomplete; separate local stop reports cannot
-qualify them. A fresh complete candidate and all actual installed cross-platform
+qualify them. Fresh candidate
+[42352121220](https://github.com/Epiphytic/marmish/actions/runs/42352121220)
+passed all three native/package/tool gates and rendering, including all four
+new socket regressions. See [native evidence](validation/streaming-candidate-86b40cb.json).
+Its installed [stream matrix](https://github.com/Epiphytic/marmish/actions/runs/42356736438)
+now published all three server-ready records, then failed all nine duplex cells
+before any validated receipt. The qualifier passed internal hexadecimal accounts
+to public CLI destinations, which require npubs or aliases. The bounded
+[target correction design](phases/streaming-installed-target.md) converts only
+public argv boundaries; internal account and evidence formats stay hexadecimal.
+An installed Linux same-host npub duplex reproduction passed exact binary output,
+special arguments and clean stop in about 22 seconds; this does not qualify the
+hosted matrix. See [failure and reproduction evidence](validation/streaming-installed-target-failure.json).
+A fresh corrected complete candidate and all eight actual installed cross-platform
 relay cohorts remain required.
 
 The [local receiver cleanup contract](phases/streaming-copy-local-gc.md) uses an

@@ -1,0 +1,254 @@
+{
+  "schema": 1,
+  "status": "FAIL",
+  "scope": "installed-stream-matrix",
+  "source_commit": "86b40cb8f36f7dea311d232770b8aa5351bd0405",
+  "candidate": {
+    "run_id": 42352121220,
+    "attempt": 1,
+    "native_and_package_all_three_platforms": "PASS"
+  },
+  "installed_run": {
+    "run_id": 42356736438,
+    "attempt": 1,
+    "url": "https://github.com/Epiphytic/marmish/actions/runs/42356736438"
+  },
+  "context_sha256": "4d6f2edc001d716cf005a6523d49d64f024a4318ad8b3a1ecb99241857ae8d26",
+  "roles": {
+    "linux-amd64": {
+      "server_ready": true,
+      "server_ready_record_sha256": "9cdb36b5a06f565e65f5198dea590466b4da45f0f0653d5a6f5163fc8e13de41",
+      "client_result_record_sha256": "89aa8b0d9f61fdf6a479a3d0ccda42cd8bcaf622eaf5d4ad0b2df4488c8502da",
+      "server_result_record_sha256": "17b0a332642e3635946ef9ed47a1eb5c675dfb69b00a99041fdb10e5f9143204",
+      "failed_cells": [
+        {
+          "case": "duplex",
+          "category": "validation_or_transport",
+          "server": "linux-amd64",
+          "status": "unqualified"
+        },
+        {
+          "case": "duplex",
+          "category": "validation_or_transport",
+          "server": "linux-arm64",
+          "status": "unqualified"
+        },
+        {
+          "case": "duplex",
+          "category": "validation_or_transport",
+          "server": "macos-arm64",
+          "status": "unqualified"
+        }
+      ],
+      "validated_pairs": 0,
+      "server_receipts": 0,
+      "stream_cleanup_complete": true,
+      "server_stop_complete": false,
+      "client_stop_complete": true,
+      "complete": false
+    },
+    "linux-arm64": {
+      "server_ready": true,
+      "server_ready_record_sha256": "5342b298ceded002eaa1d10a56cf0eeb4cdfe37a2ec477e23c7c74cce9afaa60",
+      "client_result_record_sha256": "f50da170eaf223006df4886ed69ab63e00ddbe80b808d686d954e22f6914e63d",
+      "server_result_record_sha256": "d8617f482ae9c7dd9b39cda0b76d4e933e15b240c7426b446c2af0004e8028e3",
+      "failed_cells": [
+        {
+          "case": "duplex",
+          "category": "validation_or_transport",
+          "server": "linux-amd64",
+          "status": "unqualified"
+        },
+        {
+          "case": "duplex",
+          "category": "validation_or_transport",
+          "server": "linux-arm64",
+          "status": "unqualified"
+        },
+        {
+          "case": "duplex",
+          "category": "validation_or_transport",
+          "server": "macos-arm64",
+          "status": "unqualified"
+        }
+      ],
+      "validated_pairs": 0,
+      "server_receipts": 0,
+      "stream_cleanup_complete": true,
+      "server_stop_complete": false,
+      "client_stop_complete": true,
+      "complete": false
+    },
+    "macos-arm64": {
+      "server_ready": true,
+      "server_ready_record_sha256": "c4c74986c1ba6d007d3d54c9eecc6a97c6303664fae29903d51408849f507fc1",
+      "client_result_record_sha256": "b598fa5f9bc85950072736f6430e516185fde317688a01626dc5644f881e865c",
+      "server_result_record_sha256": "d8d50700a7b8755d2cdc16c742e40f66e9f52ca855d47caa586ceffce06e4186",
+      "failed_cells": [
+        {
+          "case": "duplex",
+          "category": "validation_or_transport",
+          "server": "linux-amd64",
+          "status": "unqualified"
+        },
+        {
+          "case": "duplex",
+          "category": "validation_or_transport",
+          "server": "linux-arm64",
+          "status": "unqualified"
+        },
+        {
+          "case": "duplex",
+          "category": "validation_or_transport",
+          "server": "macos-arm64",
+          "status": "unqualified"
+        }
+      ],
+      "validated_pairs": 0,
+      "server_receipts": 0,
+      "stream_cleanup_complete": true,
+      "server_stop_complete": false,
+      "client_stop_complete": true,
+      "complete": false
+    }
+  },
+  "total_validated_pairs": 0,
+  "qualification": "none",
+  "diagnosis": {
+    "confirmed_contract_mismatch": "Build-only qualifier passes 64-character hexadecimal account records as public CLI destinations. Product CLI accepts npub or aliases and rejects raw hexadecimal. Internal account records must retain hexadecimal representation.",
+    "local_installed_reproduction": {
+      "platform": "linux-amd64",
+      "candidate_run_id": 42352121220,
+      "owned_daemon_relay_state": "active",
+      "synthetic_64hex_destination_exit": 255,
+      "stderr": "marmish: invalid input: invalid_remote_identity\n",
+      "stdout_bytes": 0,
+      "owned_daemon_sigterm_exit": 0,
+      "engine_stop_complete": true,
+      "mdk_stop_complete": true,
+      "runtime_cleanup_complete": true
+    },
+    "hosted_failure_attribution": "The source contract mismatch and local reproduction explain a pre-Open failure. Hosted sanitized categories alone do not expose child stderr and do not independently identify the precise rejection.",
+    "correct_public_target_local_reproduction": {
+      "platform": "linux-amd64",
+      "candidate_run_id": 42352121220,
+      "relay": "wss://relay.us.whitenoise.chat/",
+      "scope": "same-host installed client/server disposable file-backed identities",
+      "destination": "setup-generated npub",
+      "compression": "zlib",
+      "fixture_exit": 7,
+      "expected_exit": 7,
+      "stdin_bytes": 98304,
+      "stdout_bytes": 98304,
+      "stdout_exact": true,
+      "stderr_payload_bytes": 8192,
+      "stderr_payload_exact": true,
+      "stream_prefix_valid": true,
+      "fixture_receipt_created": true,
+      "argv_checks": "fixture validates empty argument, quotes, backslash, shell metacharacters, newline and Unicode literally",
+      "wall_seconds": 21.996943921025377,
+      "validated_payload_bytes": 204800,
+      "payload_goodput_bytes_per_second": 9310.384239523639,
+      "metric_scope": "one CLI wall-time sample including protocol setup; not network RTT or wire throughput",
+      "server_sigterm_exit": 0,
+      "client_sigterm_exit": 0,
+      "server_stop_report": {
+        "schema": 1,
+        "engine_quiesced": false,
+        "engine_stop_complete": true,
+        "mdk_stop_complete": true,
+        "stream_stop_complete": true,
+        "runtime_cleanup_complete": true
+      },
+      "client_stop_report": {
+        "schema": 1,
+        "engine_quiesced": false,
+        "engine_stop_complete": true,
+        "mdk_stop_complete": true,
+        "runtime_cleanup_complete": true
+      },
+      "private_test_state_removed": true
+    },
+    "additional_journal_probe_status": "Corrected private probe PASS. Two earlier additional-probe assertions were test-tool mistakes (Terminal JSON nesting and relay flags supplied to a destination-free local streams listing); exact duplex and owned cleanup still passed in those attempts. No product change addressed those private-tool errors.",
+    "bound_local_reproduction": {
+      "status": "PASS",
+      "platform": "linux-amd64",
+      "candidate_run_id": 42352121220,
+      "scope": "same-host installed client/server, independent disposable file-backed identities",
+      "relay": "wss://relay.us.whitenoise.chat/",
+      "compression": "zlib",
+      "exit": 7,
+      "stdout_bytes": 98304,
+      "stdout_exact": true,
+      "stderr_payload_bytes": 8192,
+      "stderr_payload_exact": true,
+      "fixture_receipt_created": true,
+      "argv_literal_fixture_validation": true,
+      "wall_seconds": 23.957399115955923,
+      "validated_payload_bytes": 204800,
+      "payload_goodput_bytes_per_second": 8548.507248585289,
+      "metric_scope": "single CLI elapsed interval before journal and idle inspection; includes session setup, not network RTT or wire throughput",
+      "journal_and_idle": {
+        "event": "journal_and_idle",
+        "peer_pid_uid_verified": true,
+        "terminal_both_exited7": true,
+        "stream_session_principals_open_group_equal": true,
+        "server_client_idle": {
+          "server": {
+            "active": 0,
+            "cancelling": 0,
+            "cleanup_ready": true,
+            "observation_pending": false,
+            "owned_runners": 0,
+            "stop_complete": true,
+            "uncertain": 0,
+            "unfinished_runners": 0
+          },
+          "client": {
+            "active": 0,
+            "cancelling": 0,
+            "cleanup_ready": true,
+            "observation_pending": false,
+            "owned_runners": 0,
+            "stop_complete": true,
+            "uncertain": 0,
+            "unfinished_runners": 0
+          }
+        }
+      },
+      "stops": {
+        "server": {
+          "exit": 0,
+          "report": {
+            "schema": 1,
+            "engine_quiesced": false,
+            "engine_stop_complete": true,
+            "mdk_stop_complete": true,
+            "stream_stop_complete": true,
+            "runtime_cleanup_complete": true
+          },
+          "stderr_bytes": 0
+        },
+        "client": {
+          "exit": 0,
+          "report": {
+            "schema": 1,
+            "engine_quiesced": false,
+            "engine_stop_complete": true,
+            "mdk_stop_complete": true,
+            "runtime_cleanup_complete": true
+          },
+          "stderr_bytes": 0
+        }
+      },
+      "private_test_state_removed": true
+    }
+  },
+  "limitations": [
+    "No hosted remote execution is validated.",
+    "Incomplete hosted stop proofs are not proof of process survival or stop.",
+    "A local clean stop does not qualify hosted cleanup.",
+    "Native tests and package success do not qualify installed interoperability.",
+    "No release tag, version bump or public assets were published."
+  ]
+}

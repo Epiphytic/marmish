@@ -1,4 +1,5 @@
 //! Installed stream cancellation and detach checks using owned gated fixtures.
+use super::streaming_cases::{cancel_args, fixture_args as stream_args};
 use super::{
     copy_interrupt::Binding,
     edge_fixture,
@@ -14,6 +15,7 @@ use marmish_stream::wire::Terminal;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, ffi::OsString, time::Duration};
 use tokio::time::Instant;
+
 fn bad() -> Error {
     Error::Invalid("installed_edge_signal")
 }
@@ -283,13 +285,7 @@ async fn second_cancel(c: &Cohort<'_, '_>, stream: &str) -> Result<bool> {
         c.client.socket,
         &c.context.relays,
     );
-    args.extend([
-        "--no-autostart".into(),
-        "cancel".into(),
-        "--stream".into(),
-        stream.into(),
-        c.ready.server_account.clone().into(),
-    ]);
+    args.extend(cancel_args(&c.ready.server_account, stream)?);
     let output = process::run(
         &c.client.workspace.join("bin/marmish"),
         &args,
@@ -338,13 +334,7 @@ async fn one(c: &Cohort<'_, '_>, case: Case) -> Result<Observation> {
         c.client.socket,
         &c.context.relays,
     );
-    args.extend([
-        "--no-autostart".into(),
-        "stream".into(),
-        c.ready.server_account.clone().into(),
-        "--".into(),
-        "./fixture/main".into(),
-    ]);
+    args.extend(stream_args(&c.ready.server_account)?);
     args.extend(remote_args);
     let start = Instant::now();
     let mut child = Started::start(
@@ -498,5 +488,23 @@ mod tests {
         e.validate().unwrap();
         e.cleanup.unfinished_runners = 1;
         assert!(e.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod public_destination_tests {
+    use super::*;
+    #[test]
+    fn public_destination_builder_obeys_product_contract() {
+        let account = "ab".repeat(32);
+        let stream = stream_args(&account).unwrap();
+        records::assert_public_target(&stream[2], &account);
+        assert_eq!(stream[3..], ["--", "./fixture/main"]);
+        let cancel = cancel_args(&account, "stream").unwrap();
+        records::assert_public_target(&cancel[4], &account);
+        assert_eq!(
+            cancel[..4],
+            ["--no-autostart", "cancel", "--stream", "stream"]
+        );
     }
 }

@@ -32,6 +32,16 @@ use std::{
 };
 use tokio::time::Instant;
 const SIZE: usize = super::copy_interrupt::PAYLOAD_BYTES as usize;
+
+fn copy_operands(account: &str, source: &Path, target: &Path) -> Result<Vec<OsString>> {
+    Ok(vec![
+        "--".into(),
+        records::public_destination(account)?.into(),
+        source.as_os_str().into(),
+        target.as_os_str().into(),
+    ])
+}
+
 fn bad() -> Error {
     Error::Invalid("installed_copy_interruption_case")
 }
@@ -163,7 +173,7 @@ fn arguments(
     target: &Path,
     put: bool,
     resume: Option<&str>,
-) -> Vec<OsString> {
+) -> Result<Vec<OsString>> {
     let mut args = matrix::base(
         c.client.workspace,
         "client",
@@ -182,13 +192,8 @@ fn arguments(
     if let Some(id) = resume {
         args.extend(["--resume".into(), id.into()]);
     }
-    args.extend([
-        "--".into(),
-        c.ready.server_account.clone().into(),
-        source.as_os_str().into(),
-        target.as_os_str().into(),
-    ]);
-    args
+    args.extend(copy_operands(&c.ready.server_account, source, target)?);
+    Ok(args)
 }
 fn busy_ids(stderr: &[u8], transfer: &str, old: &str) -> Result<String> {
     let end = stderr.iter().position(|b| *b == b'\n').ok_or_else(bad)? + 1;
@@ -210,7 +215,7 @@ async fn busy(
 ) -> Result<Binding> {
     let out = process::run(
         &c.client.workspace.join("bin/marmish"),
-        &arguments(c, source, target, true, Some(transfer)),
+        &arguments(c, source, target, true, Some(transfer))?,
         c.client.workspace,
         c.client.environment,
         c.deadline,
@@ -251,7 +256,7 @@ pub(super) async fn run(c: Cohort<'_, '_>, put: bool) -> Result<Evidence> {
     };
     let detached = copy_detach::run(
         &c.client.workspace.join("bin/marmish"),
-        &arguments(&c, &source, &target, put, None),
+        &arguments(&c, &source, &target, put, None)?,
         c.client.workspace,
         c.client.environment,
         c.deadline,
@@ -319,7 +324,7 @@ pub(super) async fn run(c: Cohort<'_, '_>, put: bool) -> Result<Evidence> {
     let resume_start = Instant::now();
     let result = process::run(
         &c.client.workspace.join("bin/marmish"),
-        &arguments(&c, &source, &target, put, Some(&detached.transfer)),
+        &arguments(&c, &source, &target, put, Some(&detached.transfer))?,
         c.client.workspace,
         c.client.environment,
         c.deadline,
@@ -444,5 +449,23 @@ mod tests {
             .is_err()
         );
         assert!(busy_ids(format!("{stderr}extra\n").as_bytes(), &transfer, &old).is_err());
+    }
+}
+
+#[cfg(test)]
+mod public_destination_tests {
+    use super::*;
+    #[test]
+    fn public_destination_builder_obeys_product_contract() {
+        let account = "ab".repeat(32);
+        use std::os::unix::ffi::OsStringExt;
+        let source = std::path::PathBuf::from(OsString::from_vec(b"source \xff\n--".to_vec()));
+        let target = Path::new("target '雪\n--");
+        let args = copy_operands(&account, &source, target).unwrap();
+        records::assert_public_target(&args[1], &account);
+        assert_eq!(args[0], "--");
+        assert_eq!(args[2], source.as_os_str());
+        assert_eq!(args[3], target.as_os_str());
+        assert!(copy_operands("bad", &source, target).is_err());
     }
 }

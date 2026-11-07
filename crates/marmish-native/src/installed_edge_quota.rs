@@ -1,4 +1,5 @@
 //! Peer quota saturation uses two owned fixture processes, never inferred load.
+use super::streaming_cases::{cancel_args, hold_args};
 use super::{
     copy_interrupt::Binding, edge_fixture, edge_process::Started, edge_signals::Cohort, fixture,
     matrix, process, records, streaming_cleanup,
@@ -8,6 +9,7 @@ use marmish_stream::wire::Terminal;
 use serde::{Deserialize, Serialize};
 use std::{ffi::OsString, time::Duration};
 use tokio::time::Instant;
+
 fn bad() -> Error {
     Error::Invalid("installed_edge_quota")
 }
@@ -97,25 +99,15 @@ impl Observation {
         Ok(())
     }
 }
-fn args(c: &Cohort<'_, '_>, nonce: &str) -> Vec<OsString> {
+fn args(c: &Cohort<'_, '_>, nonce: &str) -> Result<Vec<OsString>> {
     let mut args = matrix::base(
         c.client.workspace,
         "client",
         c.client.socket,
         &c.context.relays,
     );
-    args.extend([
-        "--no-autostart".into(),
-        "stream".into(),
-        c.ready.server_account.clone().into(),
-        "--".into(),
-        "./fixture/main".into(),
-        "edge-v1".into(),
-        "hold".into(),
-        nonce.into(),
-        c.role.into(),
-    ]);
-    args
+    args.extend(hold_args(&c.ready.server_account, nonce, c.role)?);
+    Ok(args)
 }
 async fn started(c: &Cohort<'_, '_>, stream: &str, nonce: &str) -> Result<(Binding, String)> {
     let path = edge_fixture::marker(c.server.workspace, nonce)?;
@@ -168,13 +160,7 @@ async fn cancel(c: &Cohort<'_, '_>, stream: &str) -> Result<()> {
         c.client.socket,
         &c.context.relays,
     );
-    args.extend([
-        "--no-autostart".into(),
-        "cancel".into(),
-        "--stream".into(),
-        stream.into(),
-        c.ready.server_account.clone().into(),
-    ]);
+    args.extend(cancel_args(&c.ready.server_account, stream)?);
     let out = process::run(
         &c.client.workspace.join("bin/marmish"),
         &args,
@@ -213,7 +199,7 @@ pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Observation> {
             }
             let child = Started::start(
                 &c.client.workspace.join("bin/marmish"),
-                &args(&c, &nonce),
+                &args(&c, &nonce)?,
                 c.client.workspace,
                 c.client.environment,
                 c.deadline,
@@ -244,7 +230,7 @@ pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Observation> {
         }
         let third = process::run(
             &c.client.workspace.join("bin/marmish"),
-            &args(&c, &nonce),
+            &args(&c, &nonce)?,
             c.client.workspace,
             c.client.environment,
             c.deadline,
@@ -482,5 +468,26 @@ mod tests {
         }
         value.held[1] = value.held[0].clone();
         assert!(value.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod public_destination_tests {
+    use super::*;
+    #[test]
+    fn public_destination_builder_obeys_product_contract() {
+        let account = "ab".repeat(32);
+        let args = hold_args(&account, "nonce", "role").unwrap();
+        records::assert_public_target(&args[2], &account);
+        assert_eq!(
+            args[3..],
+            ["--", "./fixture/main", "edge-v1", "hold", "nonce", "role"]
+        );
+        let cancel = cancel_args(&account, "stream").unwrap();
+        records::assert_public_target(&cancel[4], &account);
+        assert_eq!(
+            cancel[..4],
+            ["--no-autostart", "cancel", "--stream", "stream"]
+        );
     }
 }

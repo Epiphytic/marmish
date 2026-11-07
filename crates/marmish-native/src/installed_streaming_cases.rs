@@ -9,6 +9,49 @@ use super::{
 use crate::{Error, Result};
 use std::{collections::BTreeMap, ffi::OsString, path::Path, time::Duration};
 use tokio::{process::Child, time::Instant};
+
+fn stream_args(account: &str) -> Result<Vec<OsString>> {
+    Ok(vec![
+        "--no-autostart".into(),
+        "stream".into(),
+        records::public_destination(account)?.into(),
+    ])
+}
+
+pub(super) fn hold_args(account: &str, nonce: &str, role: &str) -> Result<Vec<OsString>> {
+    Ok(vec![
+        "--no-autostart".into(),
+        "stream".into(),
+        records::public_destination(account)?.into(),
+        "--".into(),
+        "./fixture/main".into(),
+        "edge-v1".into(),
+        "hold".into(),
+        nonce.into(),
+        role.into(),
+    ])
+}
+
+pub(super) fn cancel_args(account: &str, stream: &str) -> Result<Vec<OsString>> {
+    Ok(vec![
+        "--no-autostart".into(),
+        "cancel".into(),
+        "--stream".into(),
+        stream.into(),
+        records::public_destination(account)?.into(),
+    ])
+}
+
+pub(super) fn fixture_args(account: &str) -> Result<Vec<OsString>> {
+    Ok(vec![
+        "--no-autostart".into(),
+        "stream".into(),
+        records::public_destination(account)?.into(),
+        "--".into(),
+        "./fixture/main".into(),
+    ])
+}
+
 fn bad() -> Error {
     Error::Invalid("installed_stream_case")
 }
@@ -40,11 +83,7 @@ pub(super) async fn duplex(
 ) -> Result<Pair> {
     let nonce = streaming_records::nonce(ctx, ids, role, server, "duplex")?;
     let mut args = matrix::base(ep.workspace, "client", ep.socket, &ctx.relays);
-    args.extend([
-        "--no-autostart".into(),
-        "stream".into(),
-        ready.server_account.clone().into(),
-    ]);
+    args.extend(stream_args(&ready.server_account)?);
     if role <= server {
         args.push("--compress".into());
     }
@@ -122,5 +161,18 @@ mod tests {
         assert_eq!(payload, b"\x00\xff\n");
         assert!(stderr(b"marmish stream: invalid\n").is_err());
         assert!(stderr(&[b"prefix".as_slice(), &bytes].concat()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod public_destination_tests {
+    use super::*;
+    #[test]
+    fn public_destination_builder_obeys_product_contract() {
+        let account = "ab".repeat(32);
+        let args = stream_args(&account).unwrap();
+        records::assert_public_target(&args[2], &account);
+        assert_eq!(args[..2], ["--no-autostart", "stream"]);
+        assert!(stream_args("bad").is_err());
     }
 }

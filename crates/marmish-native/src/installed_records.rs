@@ -9,6 +9,19 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
+/// Convert checked artifact account text only at the installed public CLI boundary.
+pub(super) fn public_destination(account: &str) -> Result<String> {
+    use nostr::nips::nip19::ToBech32;
+    let bad = || Error::Invalid("installed_public_destination");
+    if !hexadecimal(account, 64) {
+        return Err(bad());
+    }
+    nostr::key::PublicKey::from_hex(account)
+        .map_err(|_| bad())?
+        .to_bech32()
+        .map_err(|_| bad())
+}
+
 pub(super) const ROLES: [&str; 3] = ["linux-amd64", "linux-arm64", "macos-arm64"];
 pub(super) const TARGETS: [&str; 3] = [
     "x86_64-unknown-linux-gnu",
@@ -624,5 +637,51 @@ impl ToolingManifest {
             return Err(invalid());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+pub(super) fn assert_public_target(target: &std::ffi::OsStr, account: &str) {
+    let config = crate::command_config::CommandConfig::from_bytes(
+        br#"{"version":1,"role":"both","relays":["wss://relay.example/"],"tor":"off","trusted_remotes":[],"execution_clients":[],"command_policy":{"version":1},"cwd":null,"limits":{},"aliases":{}}"#,
+    ).unwrap();
+    assert!(matches!(
+        crate::command_target::parse(&config, Some(account), None, &[], &[]),
+        Err(Error::Invalid("invalid_remote_identity"))
+    ));
+    let target = target.to_str().unwrap();
+    assert!(target.starts_with("npub1"));
+    let selected = crate::command_target::parse(&config, Some(target), None, &[], &[]).unwrap();
+    assert_eq!(hex::encode(selected.remote), account);
+    assert_eq!(
+        crate::command_config::account(target).unwrap().as_slice(),
+        hex::decode(account).unwrap()
+    );
+}
+
+#[cfg(test)]
+mod public_destination_tests {
+    use super::*;
+    #[test]
+    fn public_destination_roundtrip_and_strict_sanitized_refusal() {
+        let account = hex::encode(nostr::key::Keys::generate().public_key().to_bytes());
+        let target = public_destination(&account).unwrap();
+        assert_public_target(target.as_ref(), &account);
+        assert_eq!(public_destination(&account).unwrap(), target);
+        for invalid in [
+            String::new(),
+            "a".repeat(63),
+            "a".repeat(65),
+            "AB".repeat(32),
+            "gg".repeat(32),
+            target,
+            "nsec1private".into(),
+            "../private".into(),
+        ] {
+            assert!(matches!(
+                public_destination(&invalid),
+                Err(Error::Invalid("installed_public_destination"))
+            ));
+        }
     }
 }
