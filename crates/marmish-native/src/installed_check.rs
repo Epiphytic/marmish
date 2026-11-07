@@ -29,6 +29,8 @@ mod fixture;
 mod lifecycle_provider;
 #[path = "installed_local.rs"]
 mod local;
+#[path = "installed_macos_diagnostic.rs"]
+mod macos_diagnostic;
 pub(super) use cleanup::OwnedCleanupGuard;
 #[path = "installed_copy_checkpoint.rs"]
 mod copy_checkpoint;
@@ -87,6 +89,7 @@ struct Args {
 #[derive(Subcommand)]
 enum Command {
     ReleaseInfo,
+    MacosDiagnostic(macos_diagnostic::Options),
     LifecycleContext {
         #[arg(long)]
         context: PathBuf,
@@ -323,6 +326,7 @@ pub(crate) async fn entry() -> u8 {
         return release_info();
     }
     let result = match Args::parse().command {
+        Command::MacosDiagnostic(options) => macos_diagnostic::run(options).await,
         Command::LifecycleContext {
             context,
             variants,

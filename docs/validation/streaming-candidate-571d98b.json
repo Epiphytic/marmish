@@ -1,0 +1,305 @@
+{
+  "schema": 1,
+  "source_commit": "571d98b77780d265a2fb29d84ae160fec72ba37b",
+  "run_id": 42358105270,
+  "run_attempt": 1,
+  "run_url": "https://github.com/Epiphytic/marmish/actions/runs/42358105270",
+  "result": "PASS",
+  "platforms": [
+    {
+      "role": "linux-amd64",
+      "job_id": 128360507733,
+      "job_url": "https://github.com/Epiphytic/marmish/actions/runs/42358105270/job/128360507733",
+      "started_at": "2026-11-07T09:03:51Z",
+      "completed_at": "2026-11-07T10:13:02Z",
+      "conclusion": "success",
+      "native_library": {
+        "passed": 610,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 1043.43
+      },
+      "installed_feature_native_library": {
+        "passed": 773,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 1052.23
+      },
+      "new_public_destination_contract_tests_passed": 10,
+      "raw_private_log_sha256": "f196fa0add613d236acc58cee3e95bf80b952b40403f3a446875e0abd9144078",
+      "raw_private_log_bytes": 552068,
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify immutable source and native target",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920",
+          "conclusion": "success"
+        },
+        {
+          "name": "Set qualified macOS deployment minimum",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Verify native components",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build final native executables",
+          "conclusion": "success"
+        },
+        {
+          "name": "Ad hoc sign final macOS executables before hashing",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Inspect final dependency allowlists and qualified ABI baselines",
+          "conclusion": "success"
+        },
+        {
+          "name": "Collect locked production license texts (CI tooling only)",
+          "conclusion": "success"
+        },
+        {
+          "name": "Package verified immutable candidate assets",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build isolated installed-test tools without changing product assets",
+          "conclusion": "success"
+        },
+        {
+          "name": "Preserve pinned installed-test tools separately",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "conclusion": "success"
+        },
+        {
+          "name": "Preserve host render tool separately (never an install asset)",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "role": "linux-arm64",
+      "job_id": 128360507689,
+      "job_url": "https://github.com/Epiphytic/marmish/actions/runs/42358105270/job/128360507689",
+      "started_at": "2026-11-07T09:03:53Z",
+      "completed_at": "2026-11-07T09:58:59Z",
+      "conclusion": "success",
+      "native_library": {
+        "passed": 610,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 855.48
+      },
+      "installed_feature_native_library": {
+        "passed": 773,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 879.62
+      },
+      "new_public_destination_contract_tests_passed": 10,
+      "raw_private_log_sha256": "1ee7216e6655c3c998cd48ae99b0e2b2b50249f9c5bb94cb7fb9e77c60f1277d",
+      "raw_private_log_bytes": 548061,
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify immutable source and native target",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920",
+          "conclusion": "success"
+        },
+        {
+          "name": "Set qualified macOS deployment minimum",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Verify native components",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build final native executables",
+          "conclusion": "success"
+        },
+        {
+          "name": "Ad hoc sign final macOS executables before hashing",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Inspect final dependency allowlists and qualified ABI baselines",
+          "conclusion": "success"
+        },
+        {
+          "name": "Collect locked production license texts (CI tooling only)",
+          "conclusion": "success"
+        },
+        {
+          "name": "Package verified immutable candidate assets",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build isolated installed-test tools without changing product assets",
+          "conclusion": "success"
+        },
+        {
+          "name": "Preserve pinned installed-test tools separately",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "conclusion": "success"
+        },
+        {
+          "name": "Preserve host render tool separately (never an install asset)",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "role": "macos-arm64",
+      "job_id": 128360507557,
+      "job_url": "https://github.com/Epiphytic/marmish/actions/runs/42358105270/job/128360507557",
+      "started_at": "2026-11-07T09:03:52Z",
+      "completed_at": "2026-11-07T10:06:01Z",
+      "conclusion": "success",
+      "native_library": {
+        "passed": 609,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 653.82
+      },
+      "installed_feature_native_library": {
+        "passed": 772,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 650.81
+      },
+      "new_public_destination_contract_tests_passed": 10,
+      "raw_private_log_sha256": "7234f938dd4f8a8867798cdbb4525e87b9ba681096479515d6e3b6884f86643e",
+      "raw_private_log_bytes": 519026,
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify immutable source and native target",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920",
+          "conclusion": "success"
+        },
+        {
+          "name": "Set qualified macOS deployment minimum",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify native components",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build final native executables",
+          "conclusion": "success"
+        },
+        {
+          "name": "Ad hoc sign final macOS executables before hashing",
+          "conclusion": "success"
+        },
+        {
+          "name": "Inspect final dependency allowlists and qualified ABI baselines",
+          "conclusion": "success"
+        },
+        {
+          "name": "Collect locked production license texts (CI tooling only)",
+          "conclusion": "success"
+        },
+        {
+          "name": "Package verified immutable candidate assets",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build isolated installed-test tools without changing product assets",
+          "conclusion": "success"
+        },
+        {
+          "name": "Preserve pinned installed-test tools separately",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "conclusion": "success"
+        },
+        {
+          "name": "Preserve host render tool separately (never an install asset)",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    }
+  ],
+  "render_job": {
+    "job_id": 128375108725,
+    "conclusion": "success",
+    "url": "https://github.com/Epiphytic/marmish/actions/runs/42358105270/job/128375108725"
+  },
+  "limitations": [
+    "Library totals overlap between feature variants and are not additive.",
+    "Ignored tests are not passes.",
+    "Native test/package success does not establish installed client/server interoperability.",
+    "No public release/version/installer pin is changed or qualified by this candidate build.",
+    "Raw logs remain private; only bounded sanitized evidence and their hashes are published."
+  ],
+  "scope": "native-tests-and-candidate-packaging",
+  "workflow": ".github/workflows/streaming-candidate.yml",
+  "evidence_input_sha256": "329b46f6671c47f5aec9e3b75e8a5266a6c11192169a2c446fe34424018719e4",
+  "counting": "Per-platform suite counts overlap across normal and installed-checks feature variants; do not add them or the ten public-destination contract tests to obtain a distinct test count."
+}

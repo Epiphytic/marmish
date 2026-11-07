@@ -129,8 +129,21 @@ public argv boundaries; internal account and evidence formats stay hexadecimal.
 An installed Linux same-host npub duplex reproduction passed exact binary output,
 special arguments and clean stop in about 22 seconds; this does not qualify the
 hosted matrix. See [failure and reproduction evidence](validation/streaming-installed-target-failure.json).
-A fresh corrected complete candidate and all eight actual installed cross-platform
-relay cohorts remain required.
+The corrected candidate
+[42358105270](https://github.com/Epiphytic/marmish/actions/runs/42358105270)
+passed all three complete native/package/tool gates and rendering, including
+the public destination contract tests. See [native evidence](validation/streaming-candidate-571d98b.json).
+Its installed [stream matrix](https://github.com/Epiphytic/marmish/actions/runs/42363063498)
+published all three server-ready records. All three clients observed exact
+duplex output and exit7 against both Linux servers; every macOS-server cell
+failed with an unresolved generic category. All macOS-server cells requested
+zlib, so platform and compression are not isolated by this run. Receipt
+collection was skipped after local failures; zero uploaded receipts does not
+prove fixtures never ran. The final rollup qualifies zero cells. See
+[failure evidence](validation/streaming-installed-macos-failure.json).
+A bounded, separately identified diagnostic has approved design and code reviews;
+hosted observations remain pending. It cannot qualify this failed candidate. A fresh corrected candidate and all eight actual
+installed cross-platform relay cohorts remain required after any useful fix.
 
 The [local receiver cleanup contract](phases/streaming-copy-local-gc.md) uses an
 encrypted actor-owned index, explicit admission/activation, owned worker joining,
