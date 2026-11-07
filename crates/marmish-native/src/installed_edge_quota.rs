@@ -1,4 +1,5 @@
 //! Peer quota saturation uses two owned fixture processes, never inferred load.
+use super::edge_observation::{Case, Family, Stage, Trace};
 use super::streaming_cases::{cancel_args, hold_args};
 use super::{
     copy_interrupt::Binding, edge_fixture, edge_process::Started, edge_signals::Cohort, fixture,
@@ -122,33 +123,26 @@ async fn started(c: &Cohort<'_, '_>, stream: &str, nonce: &str) -> Result<(Bindi
         let entries =
             streaming_cleanup::entries(*c.server.daemon.lock().await, c.server.socket, c.deadline)
                 .await?;
-        if let Some(e) = entries.into_iter().find(|e| e.stream == stream) {
-            if e.direction != "server"
-                || e.client != c.identities[c.role].client_account
-                || e.server != c.ready.server_account
-                || e.terminal.is_some()
-                || e.cancel_requested
-                || !e.active
-            {
-                return Err(bad());
-            }
-            if e.state == "running" && path.try_exists()? {
-                let marker: serde_json::Value = records::read(&path, 8192)?;
-                if marker
-                    != serde_json::json!({"schema":1,"nonce":nonce,"executable_sha256":c.ready.fixture_sha256,"argv_sha256":argv})
-                {
-                    return Err(bad());
-                }
-                return Ok((
-                    Binding {
-                        stream_sha256: records::digest(e.stream.as_bytes()),
-                        session_sha256: records::digest(e.session.as_bytes()),
-                        open_digest: e.open_digest.ok_or_else(bad)?,
-                        group_sha256: e.group_sha256,
-                    },
-                    records::digest(&records::read_bytes(&path, 8192)?),
-                ));
-            }
+        let selected = entries.into_iter().find(|e| e.stream == stream);
+        let phase = streaming_cleanup::startup_phase(
+            selected.as_ref(),
+            &c.identities[c.role].client_account,
+            &c.ready.server_account,
+            false,
+        )?;
+        if phase == streaming_cleanup::StartupPhase::Running && path.try_exists()? {
+            let e = selected.ok_or_else(bad)?;
+            let marker: serde_json::Value = records::read(&path, 8192)?;
+            edge_fixture::validate_marker(&marker, nonce, &c.ready.fixture_sha256, &argv)?;
+            return Ok((
+                Binding {
+                    stream_sha256: records::digest(e.stream.as_bytes()),
+                    session_sha256: records::digest(e.session.as_bytes()),
+                    open_digest: e.open_digest.ok_or_else(bad)?,
+                    group_sha256: e.group_sha256,
+                },
+                records::digest(&records::read_bytes(&path, 8192)?),
+            ));
         }
         tokio::time::sleep_until(c.deadline.min(Instant::now() + Duration::from_millis(50))).await;
     }
@@ -182,6 +176,13 @@ async fn cancel(c: &Cohort<'_, '_>, stream: &str) -> Result<()> {
     Ok(())
 }
 pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Observation> {
+    let trace = Trace::new(c.role, Family::Quota, Case::TwoChildrenQuota);
+    let result = run_inner(c, &trace).await;
+    trace.finish(&result);
+    result
+}
+async fn run_inner(c: Cohort<'_, '_>, trace: &Trace<'_>) -> Result<Observation> {
+    trace.stage(Stage::Prerequisite);
     let start = Instant::now();
     let mut owned = Vec::new();
     let result = async {
@@ -197,6 +198,7 @@ pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Observation> {
             if edge_fixture::marker(c.server.workspace, &nonce)?.try_exists()? {
                 return Err(bad());
             }
+            trace.stage(Stage::Attachment);
             let child = Started::start(
                 &c.client.workspace.join("bin/marmish"),
                 &args(&c, &nonce)?,
@@ -207,6 +209,7 @@ pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Observation> {
             )
             .await?;
             owned.push(child);
+            trace.stage(Stage::Startup);
             let (binding, marker) =
                 started(&c, &owned.last().ok_or_else(bad)?.stream, &nonce).await?;
             bindings.push(binding);
@@ -222,12 +225,12 @@ pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Observation> {
         if third_marker.try_exists()? {
             return Err(bad());
         }
+        trace.stage(Stage::Baseline);
         let before =
             streaming_cleanup::status(*c.server.daemon.lock().await, c.server.socket, c.deadline)
                 .await?;
-        if before.active != 2 || before.unfinished_runners != 2 || before.uncertain != 0 {
-            return Err(bad());
-        }
+        streaming_cleanup::validate_charged(&before, 2)?;
+        trace.stage(Stage::Attachment);
         let third = process::run(
             &c.client.workspace.join("bin/marmish"),
             &args(&c, &nonce)?,
@@ -237,6 +240,7 @@ pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Observation> {
             65536,
         )
         .await?;
+        trace.stage(Stage::Prefix);
         let (third_stream, diagnostic) = super::streaming_cases::stderr(&third.stderr)?;
         if !third.stdout.is_empty()
             || !diagnostic
@@ -249,9 +253,8 @@ pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Observation> {
         let status =
             streaming_cleanup::status(*c.server.daemon.lock().await, c.server.socket, c.deadline)
                 .await?;
-        if status.active != 2 || status.unfinished_runners != 2 || status.uncertain != 0 {
-            return Err(bad());
-        }
+        streaming_cleanup::validate_charged(&status, 2)?;
+        trace.stage(Stage::JournalCheck);
         let server_entries =
             streaming_cleanup::entries(*c.server.daemon.lock().await, c.server.socket, c.deadline)
                 .await?;
@@ -335,6 +338,7 @@ pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Observation> {
         };
         refusal.validate()?;
         for child in &owned {
+            trace.stage(Stage::Cancel);
             cancel(&c, &child.stream).await?;
         }
         for child in &mut owned {
@@ -384,10 +388,12 @@ pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Observation> {
             third_exit: third.status.code().ok_or_else(bad)?,
             cleanup,
         };
+        trace.stage(Stage::Validation);
         observation.validate()?;
         Ok(observation)
     }
     .await;
+    trace.stage(Stage::Cleanup);
     let mut cleanup_error = None;
     for child in &mut owned {
         if let Err(error) = child.abort().await {

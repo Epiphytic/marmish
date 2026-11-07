@@ -1,4 +1,5 @@
 //! Installed stream cancellation and detach checks using owned gated fixtures.
+use super::edge_observation::{Case as TraceCase, Family, Stage, Trace};
 use super::streaming_cases::{cancel_args, fixture_args as stream_args};
 use super::{
     copy_interrupt::Binding,
@@ -155,13 +156,48 @@ fn principal(c: &Cohort<'_, '_>, entry: &Entry) -> bool {
         && entry.client == c.identities[c.role].client_account
         && entry.server == c.ready.server_account
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Marker {
-    schema: u8,
-    nonce: String,
-    executable_sha256: String,
-    argv_sha256: String,
+fn snapshot_decision(
+    phase: streaming_cleanup::StartupPhase,
+    marker_exists: bool,
+    established: bool,
+) -> Result<bool> {
+    let running = phase == streaming_cleanup::StartupPhase::Running && marker_exists;
+    if established && !running {
+        return Err(bad());
+    }
+    Ok(running)
+}
+async fn running_snapshot(
+    c: &Cohort<'_, '_>,
+    stream: &str,
+    marker: &std::path::Path,
+    nonce: &str,
+    argv: &str,
+    established: bool,
+) -> Result<Option<(Entry, String, streaming_cleanup::StreamStatus)>> {
+    let selected = entry(c, stream).await?;
+    let phase = streaming_cleanup::startup_phase(
+        selected.as_ref(),
+        &c.identities[c.role].client_account,
+        &c.ready.server_account,
+        established,
+    )?;
+    let marker_exists = phase == streaming_cleanup::StartupPhase::Running && marker.try_exists()?;
+    if !snapshot_decision(phase, marker_exists, established)? {
+        return Ok(None);
+    }
+    let e = selected.ok_or_else(bad)?;
+    let m: serde_json::Value = records::read(marker, 8192)?;
+    edge_fixture::validate_marker(&m, nonce, &c.ready.fixture_sha256, argv)?;
+    let status =
+        streaming_cleanup::status(*c.server.daemon.lock().await, c.server.socket, c.deadline)
+            .await?;
+    streaming_cleanup::validate_charged(&status, 1)?;
+    Ok(Some((
+        e,
+        records::digest(&records::read_bytes(marker, 8192)?),
+        status,
+    )))
 }
 async fn running(
     c: &Cohort<'_, '_>,
@@ -174,34 +210,8 @@ async fn running(
         if Instant::now() >= c.deadline {
             return Err(Error::Timeout);
         }
-        if let Some(e) = entry(c, stream).await? {
-            if !principal(c, &e) || e.cancel_requested || e.terminal.is_some() || !e.active {
-                return Err(bad());
-            }
-            if e.state == "running" && marker.try_exists()? {
-                let m: Marker = records::read(marker, 8192)?;
-                if m.schema != 1
-                    || m.nonce != nonce
-                    || m.executable_sha256 != c.ready.fixture_sha256
-                    || m.argv_sha256 != argv
-                {
-                    return Err(bad());
-                }
-                let status = streaming_cleanup::status(
-                    *c.server.daemon.lock().await,
-                    c.server.socket,
-                    c.deadline,
-                )
-                .await?;
-                if status.active != 1 || status.unfinished_runners != 1 || status.uncertain != 0 {
-                    return Err(bad());
-                }
-                return Ok((
-                    e,
-                    records::digest(&records::read_bytes(marker, 8192)?),
-                    status,
-                ));
-            }
+        if let Some(proof) = running_snapshot(c, stream, marker, nonce, argv, false).await? {
+            return Ok(proof);
         }
         tokio::time::sleep_until(c.deadline.min(Instant::now() + Duration::from_millis(50))).await;
     }
@@ -225,7 +235,10 @@ async fn detached_dwell(
         if Instant::now() >= c.deadline {
             return Err(Error::Timeout);
         }
-        let (entry, marker_hash, status) = running(c, &initial.stream, marker, nonce, argv).await?;
+        let (entry, marker_hash, status) =
+            running_snapshot(c, &initial.stream, marker, nonce, argv, true)
+                .await?
+                .ok_or_else(bad)?;
         if entry.session != initial.session
             || entry.open_digest != initial.open_digest
             || entry.group_sha256 != initial.group_sha256
@@ -307,6 +320,19 @@ async fn second_cancel(c: &Cohort<'_, '_>, stream: &str) -> Result<bool> {
     Ok(true)
 }
 async fn one(c: &Cohort<'_, '_>, case: Case) -> Result<Observation> {
+    let kind = match case {
+        Case::Interrupt => TraceCase::StreamSigint,
+        Case::SignalClosedOutput => TraceCase::StreamSignalClosedOutput,
+        Case::Epipe => TraceCase::StreamEpipeDetach,
+        Case::Kill => TraceCase::StreamSigkillDetach,
+    };
+    let trace = Trace::new(c.role, Family::Signals, kind);
+    let result = one_inner(c, case, &trace).await;
+    trace.finish(&result);
+    result
+}
+async fn one_inner(c: &Cohort<'_, '_>, case: Case, trace: &Trace<'_>) -> Result<Observation> {
+    trace.stage(Stage::Prerequisite);
     let nonce = records::digest(&records::canonical(&(
         "installed-edge/1",
         c.context.digest()?,
@@ -337,6 +363,7 @@ async fn one(c: &Cohort<'_, '_>, case: Case) -> Result<Observation> {
     args.extend(stream_args(&c.ready.server_account)?);
     args.extend(remote_args);
     let start = Instant::now();
+    trace.stage(Stage::Attachment);
     let mut child = Started::start(
         &c.client.workspace.join("bin/marmish"),
         &args,
@@ -347,7 +374,9 @@ async fn one(c: &Cohort<'_, '_>, case: Case) -> Result<Observation> {
     )
     .await?;
     let result = async {
+        trace.stage(Stage::Startup);
         let (initial, marker_sha256, _) = running(c, &child.stream, &marker, &nonce, &argv).await?;
+        trace.stage(Stage::LocalAction);
         match case {
             Case::Interrupt => child.signal(libc::SIGINT, false)?,
             Case::SignalClosedOutput => {
@@ -357,6 +386,7 @@ async fn one(c: &Cohort<'_, '_>, case: Case) -> Result<Observation> {
             Case::Kill => child.signal(libc::SIGKILL, true)?,
             Case::Epipe => {}
         }
+        trace.stage(Stage::AttachmentFinish);
         let finished = child.finish(c.deadline).await?;
         if !finished.stdout.is_empty() {
             return Err(bad());
@@ -366,8 +396,10 @@ async fn one(c: &Cohort<'_, '_>, case: Case) -> Result<Observation> {
         if case.detach() {
             // Observe continuation repeatedly after the local endpoint exits.
             // This proves only the recorded dwell, not pipe-window occupancy.
+            trace.stage(Stage::DetachedDwell);
             detach_dwell =
                 Some(detached_dwell(c, &initial, &marker, &nonce, &argv, &marker_sha256).await?);
+            trace.stage(Stage::Cancel);
             second_client_cancel = second_cancel(c, &child.stream).await?;
         } else if !finished
             .stderr
@@ -376,6 +408,7 @@ async fn one(c: &Cohort<'_, '_>, case: Case) -> Result<Observation> {
         {
             return Err(bad());
         }
+        trace.stage(Stage::Idle);
         let cleanup = cancelled(c, &child.stream).await?;
         use std::os::unix::process::ExitStatusExt;
         let observation = Observation {
@@ -397,11 +430,13 @@ async fn one(c: &Cohort<'_, '_>, case: Case) -> Result<Observation> {
             remote_terminal: Terminal::Cancelled,
             cleanup,
         };
+        trace.stage(Stage::Validation);
         observation.validate()?;
         Ok(observation)
     }
     .await;
     if result.is_err() {
+        trace.stage(Stage::Cleanup);
         child.abort().await?;
     }
     result
@@ -506,5 +541,39 @@ mod public_destination_tests {
             cancel[..4],
             ["--no-autostart", "cancel", "--stream", "stream"]
         );
+    }
+}
+
+#[cfg(test)]
+mod startup_decision_tests {
+    use super::*;
+    #[test]
+    fn missing_marker_waits_only_at_startup_and_never_proves_running() {
+        use streaming_cleanup::StartupPhase::{Running, Wait};
+        for phase in [Wait, Running] {
+            for marker_exists in [false, true] {
+                let want = phase == Running && marker_exists;
+                assert_eq!(
+                    snapshot_decision(phase, marker_exists, false).unwrap(),
+                    want
+                );
+                assert_eq!(snapshot_decision(phase, marker_exists, true).is_ok(), want);
+            }
+        }
+    }
+    #[test]
+    fn detached_dwell_uses_one_shot_established_observation() {
+        // Guard the actual async call site as well as the pure decision table;
+        // no startup polling loop may be reached by an established dwell poll.
+        let source = include_str!("installed_edge_signals.rs");
+        let dwell = source
+            .split_once("async fn detached_dwell(")
+            .unwrap()
+            .1
+            .split_once("async fn cancelled(")
+            .unwrap()
+            .0;
+        assert!(dwell.contains("running_snapshot(c, &initial.stream, marker, nonce, argv, true)"));
+        assert!(!dwell.contains("running(c,"));
     }
 }

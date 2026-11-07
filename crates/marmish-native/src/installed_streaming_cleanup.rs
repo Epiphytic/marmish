@@ -79,6 +79,53 @@ pub(super) struct Entry {
     pub group_sha256: String,
     pub active: bool,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StartupPhase {
+    Wait,
+    Running,
+}
+pub(super) fn startup_phase(
+    entry: Option<&Entry>,
+    client: &str,
+    server: &str,
+    established: bool,
+) -> Result<StartupPhase> {
+    let phase = match entry {
+        None => StartupPhase::Wait,
+        Some(e) => {
+            if e.direction != "server"
+                || e.client != client
+                || e.server != server
+                || e.cancel_requested
+                || e.terminal.is_some()
+                || e.child_disposition.is_some()
+                || e.open_digest
+                    .as_ref()
+                    .is_some_and(|d| !super::records::hexadecimal(d, 64))
+            {
+                return Err(bad());
+            }
+            match e.state.as_str() {
+                "hello" if !e.active && e.open_digest.is_none() => StartupPhase::Wait,
+                "preparing" | "launching" if e.active && e.open_digest.is_some() => {
+                    StartupPhase::Wait
+                }
+                "running" if e.active && e.open_digest.is_some() => StartupPhase::Running,
+                _ => return Err(bad()),
+            }
+        }
+    };
+    if established && phase == StartupPhase::Wait {
+        return Err(bad());
+    }
+    Ok(phase)
+}
+pub(super) fn validate_charged(status: &StreamStatus, expected: u32) -> Result<()> {
+    if status.active != expected || status.unfinished_runners != expected || status.uncertain != 0 {
+        return Err(bad());
+    }
+    Ok(())
+}
 pub(super) async fn entries(
     child: &mut Child,
     socket: &Path,
@@ -236,5 +283,148 @@ mod tests {
             );
         }
         assert!(stop_report(br#"{"schema":1,"engine_quiesced":false,"engine_stop_complete":true,"mdk_stop_complete":true,"runtime_cleanup_complete":true}"#,true).is_err());
+    }
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::*;
+    fn entry(state: &str) -> Entry {
+        Entry {
+            stream: "stream".into(),
+            session: "session".into(),
+            client: "client".into(),
+            server: "server".into(),
+            direction: "server".into(),
+            state: state.into(),
+            cancel_requested: false,
+            terminal: None,
+            child_disposition: None,
+            open_digest: (state != "hello").then(|| "a".repeat(64)),
+            group_sha256: "b".repeat(64),
+            active: state != "hello",
+        }
+    }
+    #[test]
+    fn startup_progression_waits_but_established_observation_never_restarts() {
+        assert_eq!(
+            startup_phase(None, "client", "server", false).unwrap(),
+            StartupPhase::Wait
+        );
+        assert!(startup_phase(None, "client", "server", true).is_err());
+        for state in ["hello", "preparing", "launching", "running"] {
+            let e = entry(state);
+            let want = if state == "running" {
+                StartupPhase::Running
+            } else {
+                StartupPhase::Wait
+            };
+            assert_eq!(
+                startup_phase(Some(&e), "client", "server", false).unwrap(),
+                want
+            );
+            assert_eq!(
+                startup_phase(Some(&e), "client", "server", true).is_ok(),
+                state == "running"
+            );
+        }
+    }
+    #[test]
+    fn startup_rejects_inconsistent_or_untrusted_entries() {
+        for state in ["hello", "preparing", "launching", "running"] {
+            let good = entry(state);
+            let mut invalid = good.clone();
+            invalid.active = !invalid.active;
+            assert!(startup_phase(Some(&invalid), "client", "server", false).is_err());
+            let mut invalid = good.clone();
+            invalid.open_digest = if state == "hello" {
+                Some("a".repeat(64))
+            } else {
+                None
+            };
+            assert!(startup_phase(Some(&invalid), "client", "server", false).is_err());
+            for digest in [
+                "A".repeat(64),
+                "x".repeat(64),
+                "a".repeat(63),
+                String::new(),
+            ] {
+                let mut invalid = good.clone();
+                invalid.open_digest = Some(digest);
+                assert!(startup_phase(Some(&invalid), "client", "server", false).is_err());
+            }
+            for field in ["direction", "client", "server"] {
+                let mut invalid = good.clone();
+                match field {
+                    "direction" => invalid.direction = "client".into(),
+                    "client" => invalid.client = "other".into(),
+                    _ => invalid.server = "other".into(),
+                }
+                assert!(startup_phase(Some(&invalid), "client", "server", false).is_err());
+            }
+            let mut invalid = good.clone();
+            invalid.cancel_requested = true;
+            assert!(startup_phase(Some(&invalid), "client", "server", false).is_err());
+            for terminal in [
+                marmish_stream::wire::Terminal::Exited { code: 0 },
+                marmish_stream::wire::Terminal::Signaled { signal: 15 },
+                marmish_stream::wire::Terminal::Cancelled,
+                marmish_stream::wire::Terminal::Failed {
+                    code: marmish_stream::wire::WireErrorCode::Denied,
+                },
+            ] {
+                let mut invalid = good.clone();
+                invalid.terminal = Some(terminal);
+                assert!(startup_phase(Some(&invalid), "client", "server", false).is_err());
+            }
+            for disposition in [
+                crate::stream_service::ChildDisposition::Absent,
+                crate::stream_service::ChildDisposition::PresentUnowned,
+                crate::stream_service::ChildDisposition::Unknown,
+            ] {
+                let mut invalid = good.clone();
+                invalid.child_disposition = Some(disposition);
+                assert!(startup_phase(Some(&invalid), "client", "server", false).is_err());
+            }
+        }
+        for state in [
+            "",
+            "other",
+            "lost",
+            "unknown_launch",
+            "authority_revoked",
+            "server_stopping",
+            "server_stopped",
+            "terminal",
+        ] {
+            assert!(startup_phase(Some(&entry(state)), "client", "server", false).is_err());
+        }
+    }
+    #[test]
+    fn running_phase_does_not_substitute_for_charged_physical_status() {
+        for expected in [1, 2] {
+            let good = StreamStatus {
+                active: expected,
+                cancelling: 0,
+                uncertain: 0,
+                owned_runners: expected,
+                unfinished_runners: expected,
+                observation_pending: true,
+                cleanup_ready: false,
+                stop_complete: false,
+            };
+            validate_charged(&good, expected).unwrap();
+            for count in [expected - 1, expected + 1] {
+                let mut invalid = good.clone();
+                invalid.active = count;
+                assert!(validate_charged(&invalid, expected).is_err());
+                let mut invalid = good.clone();
+                invalid.unfinished_runners = count;
+                assert!(validate_charged(&invalid, expected).is_err());
+            }
+            let mut invalid = good;
+            invalid.uncertain = 1;
+            assert!(validate_charged(&invalid, expected).is_err());
+        }
     }
 }

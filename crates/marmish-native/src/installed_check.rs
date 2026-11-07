@@ -11,6 +11,8 @@ mod edge_admission;
 mod edge_copy;
 #[path = "installed_edge_fixture.rs"]
 mod edge_fixture;
+#[path = "installed_edge_observation.rs"]
+mod edge_observation;
 #[path = "installed_edge_preopen.rs"]
 mod edge_preopen;
 #[path = "installed_edge_process.rs"]

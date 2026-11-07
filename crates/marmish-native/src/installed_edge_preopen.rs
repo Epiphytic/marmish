@@ -1,4 +1,5 @@
 //! A paused owned server cannot answer Hello and therefore cannot authorize Open.
+use super::edge_observation::{Case, Family, Stage, Trace};
 use super::streaming_cases::hold_args as stream_args;
 use super::{
     cleanup, edge_fixture, edge_process::Started, edge_signals::Cohort, matrix, records,
@@ -137,6 +138,13 @@ fn fences(entries: &[streaming_cleanup::Entry]) -> Result<Vec<u8>> {
     records::canonical(&entries)
 }
 pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Observation> {
+    let trace = Trace::new(c.role, Family::Preopen, Case::InterruptBeforeOpen);
+    let result = run_inner(c, &trace).await;
+    trace.finish(&result);
+    result
+}
+async fn run_inner(c: Cohort<'_, '_>, trace: &Trace<'_>) -> Result<Observation> {
+    trace.stage(Stage::Baseline);
     let start = Instant::now();
     let baseline =
         streaming_cleanup::entries(*c.server.daemon.lock().await, c.server.socket, c.deadline)
@@ -158,6 +166,7 @@ pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Observation> {
         return Err(bad());
     }
     let until = c.deadline.min(Instant::now() + Duration::from_secs(20));
+    trace.stage(Stage::LocalAction);
     let mut paused = Pause::start(c.server.daemon.lock().await)?;
     paused.wait_stopped(until).await?;
     let mut args = matrix::base(
@@ -167,6 +176,7 @@ pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Observation> {
         &c.context.relays,
     );
     args.extend(stream_args(&c.ready.server_account, &nonce, c.role)?);
+    trace.stage(Stage::Attachment);
     let mut client = match Started::start(
         &c.client.workspace.join("bin/marmish"),
         &args,
@@ -184,25 +194,31 @@ pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Observation> {
         }
     };
     let result = async {
+        trace.stage(Stage::Startup);
         loop {
             let entries = streaming_cleanup::entries(*c.client.daemon.lock().await,c.client.socket,until).await?;
             if entries.iter().any(|e|e.stream==client.stream && hello(e,&c,"client")) { break; }
             if Instant::now() >= until { return Err(Error::Timeout); }
             tokio::time::sleep_until(until.min(Instant::now()+Duration::from_millis(25))).await;
         }
+        trace.stage(Stage::LocalAction);
         client.signal(libc::SIGINT,false)?;
+        trace.stage(Stage::AttachmentFinish);
         let output = client.finish(until).await?;
         if output.status.code()!=Some(255) || !output.stdout.is_empty()
             || output.stderr != b"marmish stream: interrupted before remote Open; no remote child was launched\nmarmish: invalid input: stream_interrupted_before_open\n" { return Err(bad()); }
         Ok(())
     }.await;
     if result.is_err() {
+        trace.stage(Stage::Cleanup);
         let cleanup = client.abort().await;
         paused.resume()?;
         cleanup?;
         return result.map(|_| unreachable!());
     }
+    trace.stage(Stage::LocalAction);
     paused.resume()?;
+    trace.stage(Stage::JournalCheck);
     let status: serde_json::Value = cleanup::request(
         *paused.child,
         c.server.socket,
@@ -238,6 +254,7 @@ pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Observation> {
                 server_hello_only: true,
                 unchanged_previous_fences: fences(&previous)? == prior,
             };
+            trace.stage(Stage::Validation);
             observation.validate()?;
             return Ok(observation);
         }

@@ -861,3 +861,29 @@ workloads and acceptance remain unchanged. Its
 qualify a release; a fresh exact-source candidate and all eight original
 installed cohorts remain required. A second budget expiry must be preserved
 and investigated rather than silently increasing the cap again.
+
+
+Candidate [42416184935/1](https://github.com/Epiphytic/marmish/actions/runs/42416184935)
+at `50ad3d12abaa7698737bf23c68ffd7002c07112d` passed all three complete native,
+package and installed-tool jobs plus rendering under the reviewed build cap.
+The subsequent original stream, rsync and copy matrices passed all nine directed
+platform pairs (9 duplex, 18 rsync and 18 copy cases). Their retained receipt,
+manifest and checkpoint evidence and application timing/goodput measurements
+are recorded in [the installed report](validation/streaming-installed-50ad3d1.md);
+see also [native candidate evidence](validation/streaming-candidate-50ad3d1.md).
+The fourth cohort, edge-stream, failed on all three hosts without preserving its
+failing case or stage. The chain stopped before the remaining four cohorts;
+complete installed qualification remains open. The separate legacy managed
+validation workflow is also red, with some native-tool failures unexplained.
+Passing candidate and partial matrix results do not mean all CI is green.
+
+The [reviewed harness correction](phases/streaming-edge-harness-correction.md)
+prepares the fixture's required private gate directory, distinguishes legitimate
+inactive Hello startup from established-running proof, and adds bounded closed
+failure-stage diagnostics. Its discovered source defects do not uniquely prove
+the historical hosted cause. Marker identity, physical charged-runner checks,
+explicit confirmed cancellation, existing acceptance, deadlines and workloads
+remain required. A corrected source requires a new complete three-platform
+candidate and all eight original serial cohorts; historical passes cannot be
+combined into a new qualification. No public release, version or installer pin
+change is part of this correction. Public installation still selects v0.2.3.

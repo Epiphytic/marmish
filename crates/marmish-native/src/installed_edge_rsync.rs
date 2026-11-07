@@ -12,7 +12,6 @@ use super::{
 use crate::{Error, Result};
 use marmish_stream::wire::Terminal;
 use serde::{Deserialize, Serialize};
-use std::os::unix::fs::DirBuilderExt;
 use std::{collections::BTreeMap, ffi::OsString, path::Path, process::ExitStatus, time::Duration};
 use tokio::{io::AsyncReadExt, process::Child, task::JoinHandle, time::Instant};
 fn remote_operand(account: &str, nonce: &str) -> Result<String> {
@@ -499,13 +498,7 @@ async fn one(c: &Cohort<'_, '_>, case: Case) -> Result<Observation> {
         c.role,
         case.name(),
     ))?);
-    let gates = c.server.workspace.join("edge-gates");
-    match std::fs::DirBuilder::new().mode(0o700).create(&gates) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error.into()),
-    }
-    crate::identity::check_dir(&gates)?;
+    edge_fixture::prepare_gates(c.server.workspace)?;
     let marker = edge_fixture::marker(c.server.workspace, &nonce)?;
     if marker.try_exists()? {
         return Err(bad());

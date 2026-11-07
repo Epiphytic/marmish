@@ -1,4 +1,5 @@
 //! Closed, independently reconciled evidence for isolated installed edge waves.
+use super::edge_observation::{Case, Family, Stage, Trace};
 use super::{
     copy_interrupt::Binding,
     edge_admission, edge_copy, edge_preopen, edge_quota, edge_rsync,
@@ -198,8 +199,22 @@ fn again<'a, 'b>(c: &Cohort<'a, 'b>) -> Cohort<'a, 'b> {
     }
 }
 pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Evidence> {
+    let trace = (c.context.cohort == "edge-stream")
+        .then(|| Trace::new(c.role, Family::Coordinator, Case::Family));
+    let result = run_inner(c, trace.as_ref()).await;
+    if let Some(trace) = &trace {
+        trace.finish(&result);
+    }
+    result
+}
+async fn run_inner(c: Cohort<'_, '_>, trace: Option<&Trace<'_>>) -> Result<Evidence> {
     let evidence = match c.context.cohort.as_str() {
         "edge-stream" => {
+            if let Some(trace) = trace {
+                trace.stage(Stage::Prerequisite);
+            }
+            super::edge_fixture::prepare_gates(c.server.workspace)?;
+            let family_trace = Trace::new(c.role, Family::Admission, Case::Family);
             let admission = edge_admission::run(edge_admission::Cohort {
                 context: c.context,
                 identities: c.identities,
@@ -209,10 +224,21 @@ pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Evidence> {
                 server: c.server,
                 deadline: c.deadline,
             })
-            .await?;
-            let signals = edge_signals::run(again(&c)).await?;
-            let quota = edge_quota::run(again(&c)).await?;
-            let preopen = edge_preopen::run(again(&c)).await?;
+            .await;
+            family_trace.finish(&admission);
+            let admission = admission?;
+            let family_trace = Trace::new(c.role, Family::Signals, Case::Family);
+            let signals = edge_signals::run(again(&c)).await;
+            family_trace.finish(&signals);
+            let signals = signals?;
+            let family_trace = Trace::new(c.role, Family::Quota, Case::Family);
+            let quota = edge_quota::run(again(&c)).await;
+            family_trace.finish(&quota);
+            let quota = quota?;
+            let family_trace = Trace::new(c.role, Family::Preopen, Case::Family);
+            let preopen = edge_preopen::run(again(&c)).await;
+            family_trace.finish(&preopen);
+            let preopen = preopen?;
             Evidence::Stream {
                 admission,
                 signals,
@@ -237,12 +263,27 @@ pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Evidence> {
         },
         _ => return Err(bad()),
     };
+    if let Some(trace) = trace {
+        trace.stage(Stage::Validation);
+    }
     evidence.validate(&c.context.cohort)?;
     confirm_server(&evidence, &c).await?;
     Ok(evidence)
 }
 /// Uses private same-UID observations, never public artifact hashes as authority.
 pub(super) async fn confirm_server(e: &Evidence, c: &Cohort<'_, '_>) -> Result<()> {
+    let trace = (c.context.cohort == "edge-stream")
+        .then(|| Trace::new(c.role, Family::Coordinator, Case::Family));
+    if let Some(trace) = &trace {
+        trace.stage(Stage::Reconciliation);
+    }
+    let result = confirm_server_inner(e, c).await;
+    if let Some(trace) = &trace {
+        trace.finish(&result);
+    }
+    result
+}
+async fn confirm_server_inner(e: &Evidence, c: &Cohort<'_, '_>) -> Result<()> {
     e.validate(&c.context.cohort)?;
     let entries =
         streaming_cleanup::entries(*c.server.daemon.lock().await, c.server.socket, c.deadline)

@@ -1,4 +1,5 @@
 //! Installed negative admission checks; their evidence never authorizes cleanup.
+use super::edge_observation::{Case, Family, Stage, Trace};
 use super::{
     copy_interrupt::Binding,
     matrix, process,
@@ -119,6 +120,18 @@ fn normalized(bytes: &[u8]) -> Vec<u8> {
         .collect()
 }
 async fn one(c: &Cohort<'_, '_>, case: &str) -> Result<Observation> {
+    let kind = match case {
+        "missing-executable" => Case::MissingExecutable,
+        "policy-denied" => Case::PolicyDenied,
+        _ => Case::RsyncBootstrapWithoutSeclusion,
+    };
+    let trace = Trace::new(c.role, Family::Admission, kind);
+    let result = one_inner(c, case, &trace).await;
+    trace.finish(&result);
+    result
+}
+async fn one_inner(c: &Cohort<'_, '_>, case: &str, trace: &Trace<'_>) -> Result<Observation> {
+    trace.stage(Stage::Baseline);
     let before = entries(c).await?;
     let mut args = matrix::base(
         c.client.workspace,
@@ -142,6 +155,7 @@ async fn one(c: &Cohort<'_, '_>, case: &str) -> Result<Observation> {
         args.push(command.into_os_string());
     }
     let started = Instant::now();
+    trace.stage(Stage::Attachment);
     let output = process::run(
         &c.client.workspace.join("bin/marmish"),
         &args,
@@ -151,6 +165,7 @@ async fn one(c: &Cohort<'_, '_>, case: &str) -> Result<Observation> {
         65536,
     )
     .await?;
+    trace.stage(Stage::JournalCheck);
     let after = entries(c).await?;
     let mut observed = Observation {
         case: case.into(),
@@ -181,7 +196,9 @@ async fn one(c: &Cohort<'_, '_>, case: &str) -> Result<Observation> {
             return Err(bad());
         }
     } else {
+        trace.stage(Stage::Prefix);
         let (stream, diagnostic) = streaming_cases::stderr(&output.stderr)?;
+        trace.stage(Stage::JournalCheck);
         let entry = after.iter().find(|e| e.stream == stream).ok_or_else(bad)?;
         if entry.direction != "server"
             || entry.client != c.identities[c.role].client_account
@@ -192,6 +209,7 @@ async fn one(c: &Cohort<'_, '_>, case: &str) -> Result<Observation> {
         {
             return Err(bad());
         }
+        trace.stage(Stage::DiagnosticCheck);
         let word = if case == "missing-executable" {
             b"notfound".as_slice()
         } else {
@@ -211,7 +229,9 @@ async fn one(c: &Cohort<'_, '_>, case: &str) -> Result<Observation> {
         });
         observed.terminal = entry.terminal;
     }
+    trace.stage(Stage::Validation);
     observed.validate()?;
+    trace.stage(Stage::Idle);
     streaming_cleanup::status(*c.server.daemon.lock().await, c.server.socket, c.deadline)
         .await?
         .validate_idle()?;
