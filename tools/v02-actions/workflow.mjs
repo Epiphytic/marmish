@@ -4,12 +4,19 @@ import {promises as fs} from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {ArtifactTransport, ROLES, artifactName, binding, boundedFile, childEnvironment, digest, requireThat} from './transport.mjs';
+import {isStreamingCohort} from './streaming-policy.mjs';
 export const TARGETS = ['x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu', 'aarch64-apple-darwin'];
 const TOOLS = ['marmish-installed-check', 'marmish-installed-fixture'];
-export const SOURCE_PATHS = ['crates/marmish-native', 'Cargo.lock', 'tools/v02-actions', '.github/workflows/v02-installed.yml',
+export const SOURCE_PATHS = ['crates/marmish-native', 'crates/marmish-engine', 'crates/marmish-stream',
+  'crates/marmish-core', 'crates/marmish-vault', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml',
+  'scripts', 'tools/v02-actions', '.github/workflows/v02-release.yml',
+  '.github/workflows/streaming-candidate.yml', '.github/workflows/streaming-installed.yml',
+  '.github/workflows/v02-installed.yml',
   '.github/workflows/v02-version-lifecycle.yml', 'tools/marmish_v02_lifecycle_build.py',
   'tools/test_marmish_v02_lifecycle_build.py', 'tools/marmish_native_https_check.py',
-  'tools/marmish_native_keychain_check.py', 'tools/marmish_native_quickstart_check.py'];
+  'tools/marmish_native_keychain_check.py', 'tools/marmish_native_quickstart_check.py',
+  'tools/test_marmish_native_inspection.py', 'tools/marmish_native_licenses.py',
+  'tools/test_marmish_native_licenses.py'];
 const hex = (s, n) => typeof s === 'string' && new RegExp(`^[0-9a-f]{${n}}$`).test(s);
 export const PROVIDER_DIAGNOSTIC = Object.freeze({run:'41898839617', attempt:'1',
   source:'61f47606c5e7ba9048f196165a8025e7c2662839'});
@@ -33,7 +40,7 @@ function diagnosticPolicy(policy) {
 }
 export function cohortLifetime(env) {
   const name = env.TEST_COHORT ?? 'matrix';
-  const seconds = {matrix: 2220, autoexit: 3300, uptime: 3300, benchmark: 3300, recovery: 3300, policy: 3300, 'version-lifecycle': 1800}[name];
+  const seconds = isStreamingCohort(name) ? 3300 : {matrix: 2220, autoexit: 3300, uptime: 3300, benchmark: 3300, recovery: 3300, policy: 3300, 'version-lifecycle': 1800}[name];
   requireThat(Number.isSafeInteger(seconds), 'unsupported_cohort');
   return {name, seconds};
 }
@@ -63,14 +70,21 @@ export function candidateInputs(env, policy) {
   return {repository: env.GITHUB_REPOSITORY, run_id: env.CANDIDATE_RUN_ID,
     run_attempt: env.CANDIDATE_RUN_ATTEMPT, source: env.SOURCE_COMMIT, relay: relay.href};
 }
-export function checkRun(run, c, policy) {
+export const INSTALLED_CANDIDATE_PATHS = Object.freeze([
+  '.github/workflows/v02-release.yml', '.github/workflows/streaming-candidate.yml',
+]);
+// Publication callers keep the release-only default; installed validation opts in.
+export function checkRun(run, c, policy, paths = ['.github/workflows/v02-release.yml']) {
   const diagnostic = diagnosticPolicy(policy);
   requireThat(String(run.id) === c.run_id && String(run.run_attempt) === c.run_attempt
     && run.status === 'completed' && run.conclusion === (diagnostic ? 'failure' : 'success')
-    && run.path === '.github/workflows/v02-release.yml'
+    && (diagnostic ? run.path === '.github/workflows/v02-release.yml'
+      : paths.includes(run.path))
     && (diagnostic ? run.event === 'workflow_dispatch' : ['workflow_dispatch', 'push'].includes(run.event))
     && run.head_branch === 'master' && run.head_repository?.full_name === c.repository
     && run.repository?.full_name === c.repository && hex(run.head_sha, 40)
+    && (run.path !== '.github/workflows/streaming-candidate.yml'
+      || run.event === 'workflow_dispatch' && run.head_sha === c.source)
     && (!diagnostic || run.head_sha === policy.source && c.source === policy.source
       && c.run_id === policy.run && c.run_attempt === policy.attempt), 'invalid_candidate_provenance');
 }
@@ -134,7 +148,7 @@ export async function validateCandidate(env, retentionUntil = 0, injectedTranspo
   const reply = await transport.request(`https://api.github.com/repos/${c.repository}/actions/runs/${c.run_id}/attempts/${c.run_attempt}`,
     true, 2 * 1024 * 1024, deadline);
   requireThat(reply.bytes, 'candidate_api_redirect');
-  checkRun(JSON.parse(reply.bytes), c, policy);
+  checkRun(JSON.parse(reply.bytes), c, policy, INSTALLED_CANDIDATE_PATHS);
   if (diagnostic) {
     const jobs = [];
     let total;
@@ -232,7 +246,8 @@ export async function gather(env, injectedTransport) {
   for (const role of ROLES) {
     for (const kind of ['identity-ready', 'server-ready', 'client-result', 'server-result']) {
       const bytes = await transport.download(artifacts, artifactName(binding(context, role), role, kind), `${kind}.json`, deadline);
-      requireThat(bytes, 'record_missing');
+      // Missing records stay absent: the pinned native rollup emits a sanitized FAIL.
+      if (!bytes) continue;
       await fs.writeFile(path.join(env.RECORDS_ROOT, `${role}-${kind}.json`), bytes, {flag: 'wx', mode: 0o600});
     }
   }

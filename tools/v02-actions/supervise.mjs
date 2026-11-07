@@ -8,14 +8,20 @@ import {pathToFileURL} from 'node:url';
 import {ArtifactTransport, ROLES, artifactName, binding, boundedFile,
   childEnvironment, digest, putImmutable, requireThat} from './transport.mjs';
 
+import {isStreamingCohort, STREAMING_BOUNDS} from './streaming-policy.mjs';
+
 export function timing(context, jobDeadline, mode, now = Date.now()) {
+  const streaming = isStreamingCohort(context.cohort);
+  const lifetime = streaming ? STREAMING_BOUNDS.lifetime : 2220;
+  const reserve = streaming ? STREAMING_BOUNDS.watchdogReserve : 900;
+  const cleanup = streaming ? STREAMING_BOUNDS.artifactCleanup : 600;
   requireThat(Number.isSafeInteger(context.created_at) && Number.isSafeInteger(context.expires_at)
-    && context.expires_at > context.created_at && context.expires_at - context.created_at <= 2220
+    && context.expires_at > context.created_at && context.expires_at - context.created_at <= lifetime
     && context.created_at * 1000 <= now + 5000 && Number.isSafeInteger(jobDeadline)
-    && context.expires_at + 900 <= jobDeadline, 'invalid_deadline');
+    && context.expires_at + reserve <= jobDeadline, 'invalid_deadline');
   const deadline = Math.min(context.expires_at, mode === 'exchange' ? context.created_at + 900 : Infinity) * 1000;
   requireThat(now < deadline, 'artifact_deadline');
-  return {deadline, cleanupDeadline: (context.expires_at + 600) * 1000};
+  return {deadline, cleanupDeadline: (context.expires_at + cleanup) * 1000};
 }
 
 export function ownedChild(child) {

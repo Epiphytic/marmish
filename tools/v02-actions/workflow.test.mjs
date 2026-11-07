@@ -4,6 +4,8 @@ import {promises as fs} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {candidateInputs, checkRun, checkTooling, verifyTools, verifyContext, gather, sourceDigest, SOURCE_PATHS, TARGETS, cohortLifetime, PROVIDER_DIAGNOSTIC, DIAGNOSTIC_PATHS, checkDiagnosticJobs, checkDiagnosticChanges, validateCandidate, providerDiagnostic} from './workflow.mjs';
+import {inspectCandidate} from './release-candidate.mjs';
+import {INSTALLED_CANDIDATE_PATHS} from './workflow.mjs';
 import {LOCAL_COHORTS} from './local.mjs';
 import {digest, ROLES} from './transport.mjs';
 import {execFileSync} from 'node:child_process';
@@ -69,18 +71,55 @@ test('bytes and original record digest authenticated before executable permissio
 
 test('source digest matches the candidate immutable git-tree pipeline', () => {
   const sha=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
-  const tree=execFileSync('git',['ls-tree','-r',sha,'--','crates/marmish-native','Cargo.lock',
-    'tools/v02-actions','.github/workflows/v02-installed.yml', '.github/workflows/v02-version-lifecycle.yml',
-    'tools/marmish_v02_lifecycle_build.py', 'tools/test_marmish_v02_lifecycle_build.py',
-    'tools/marmish_native_https_check.py', 'tools/marmish_native_keychain_check.py', 'tools/marmish_native_quickstart_check.py']);
+  const tree=execFileSync('git',['ls-tree','-r',sha,'--',...SOURCE_PATHS]);
   const expected=execFileSync('shasum',['-a','256'],{input:tree,encoding:'utf8'}).split(' ')[0];
   assert.equal(sourceDigest(sha),expected);
 });
-test('release workflow hashes the exact same source path set, including uncommitted new tooling paths', async () => {
-  const yaml=await fs.readFile(new URL('../../.github/workflows/v02-release.yml',import.meta.url),'utf8');
-  const match=yaml.match(/git ls-tree -r "\$MARMISH_BUILD_COMMIT" -- ([\s\S]*?)\| shasum/);
-  assert.ok(match);
-  assert.deepEqual(match[1].replaceAll('\\','').trim().split(/\s+/),SOURCE_PATHS);
+test('both candidate producers hash the exact source path set', async () => {
+  for (const name of ['v02-release.yml','streaming-candidate.yml']) {
+    const yaml=await fs.readFile(new URL(`../../.github/workflows/${name}`,import.meta.url),'utf8');
+    const match=yaml.match(/git ls-tree -r "\$MARMISH_BUILD_COMMIT" -- ([\s\S]*?)\| shasum/);
+    assert.ok(match,name);
+    assert.deepEqual(match[1].replaceAll('\\','').trim().split(/\s+/),SOURCE_PATHS,name);
+  }
+});
+test('source fingerprint closes native local path dependencies and build inputs', async () => {
+  const visited=new Set();
+  async function visit(directory) {
+    if(visited.has(directory)) return;
+    visited.add(directory);
+    assert.ok(SOURCE_PATHS.includes(directory),directory);
+    const manifest=await fs.readFile(new URL(`../../${directory}/Cargo.toml`,import.meta.url),'utf8');
+    for(const match of manifest.matchAll(/path\s*=\s*"(\.\.[^"]+)"/g)) {
+      await visit(path.posix.normalize(path.posix.join(directory,match[1])));
+    }
+  }
+  await visit('crates/marmish-native');
+  for(const name of ['engine','stream','core','vault']) assert.ok(visited.has(`crates/marmish-${name}`));
+  for(const name of ['Cargo.toml','Cargo.lock','rust-toolchain.toml','scripts',
+    '.github/workflows/streaming-candidate.yml','.github/workflows/streaming-installed.yml']) {
+    assert.ok(SOURCE_PATHS.includes(name),name);
+  }
+});
+test('streaming candidates require exact reviewed workflow head and dispatch', () => {
+  const c=candidateInputs(env);
+  const streaming={...run,path:'.github/workflows/streaming-candidate.yml',head_sha:source};
+  assert.throws(()=>checkRun(streaming,c),/invalid_candidate_provenance/);
+  checkRun(streaming,c,undefined,INSTALLED_CANDIDATE_PATHS);
+  for(const change of [{event:'push'},{head_sha:'c'.repeat(40)},
+    {path:'.github/workflows/streaming-candidate.yml@master'},
+    {path:'.github/workflows/streaming-installed.yml'}]) {
+    assert.throws(()=>checkRun({...streaming,...change},c,undefined,INSTALLED_CANDIDATE_PATHS));
+  }
+});
+test('release publication rejects streaming candidate before reading artifacts', async()=>{
+  let calls=0;
+  await assert.rejects(inspectCandidate({run_id:'12',run_attempt:'3',publisher_sha:'b'.repeat(40)}, {
+    api:async()=>{calls++;return {...run,path:'.github/workflows/streaming-candidate.yml',head_sha:source};},
+    git:()=>{throw new Error('must_not_read_git');},
+    transport:{list:async()=>{throw new Error('must_not_read_artifacts');}},
+  }),/invalid_candidate_provenance/);
+  assert.equal(calls,1);
 });
 test('missing tooling pin or different candidate attempt fails before executing a tool', async t => {
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'marmish-context-'));
@@ -96,7 +135,7 @@ test('missing tooling pin or different candidate attempt fails before executing 
   context.tooling_manifests={'linux-amd64':harness}; await fs.writeFile(file,JSON.stringify(context));
   await assert.rejects(verifyContext({...e,CANDIDATE_RUN_ATTEMPT:'1'}),/context_pins/);
 });
-test('gather writes exact twelve role-prefixed records and refuses a missing artifact', async t => {
+test('gather writes available exact role records and preserves missing records for FAIL rollup', async t => {
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'marmish-gather-'));
   t.after(()=>fs.rm(directory,{recursive:true,force:true}));
   const context={schema:1,repository:'Epiphytic/marmish',source_commit:source,run_id:12,run_attempt:3,cohort:'matrix'};
@@ -111,8 +150,9 @@ test('gather writes exact twelve role-prefixed records and refuses a missing art
   assert.deepEqual((await fs.readdir(e.RECORDS_ROOT)).sort(),names.sort());
   assert.equal(requested.length,12);
   assert.ok(requested.every(r=>r.name.startsWith('v02-installed-12-3-aaaaaaaaaaaa-matrix-') && !r.basename.includes('linux')));
-  await assert.rejects(gather({...e,RECORDS_ROOT:path.join(directory,'missing')},
-    {list:async()=>[],download:async()=>null}),/record_missing/);
+  await gather({...e,RECORDS_ROOT:path.join(directory,'missing')},
+    {list:async()=>[],download:async()=>null});
+  assert.deepEqual(await fs.readdir(path.join(directory,'missing')),[]);
 });
 
 // Source parity supplements typed Rust tests: every advertised wave must route.

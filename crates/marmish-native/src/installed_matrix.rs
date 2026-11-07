@@ -139,16 +139,24 @@ impl Daemon {
         })
     }
     pub(super) async fn stop(self, deadline: Instant) -> Result<()> {
-        self.stop_inner(deadline, true).await
+        self.stop_inner(deadline, true, None).await
     }
     pub(super) async fn stop_no_engine(self, deadline: Instant) -> Result<()> {
-        self.stop_inner(deadline, false).await
+        self.stop_inner(deadline, false, None).await
     }
     /// Joined ordinary stop while running work survives; this grants no cleanup authority.
     pub(super) async fn ordinary_stop(self, deadline: Instant) -> Result<()> {
-        self.stop_inner(deadline, false).await
+        self.stop_inner(deadline, false, None).await
     }
-    async fn stop_inner(self, deadline: Instant, engine_quiesced: bool) -> Result<()> {
+    pub(super) async fn stop_streaming(self, deadline: Instant, server: bool) -> Result<()> {
+        self.stop_inner(deadline, false, Some(server)).await
+    }
+    async fn stop_inner(
+        self,
+        deadline: Instant,
+        engine_quiesced: bool,
+        streaming: Option<bool>,
+    ) -> Result<()> {
         let Self {
             mut child,
             out,
@@ -172,6 +180,9 @@ impl Daemon {
         .map_err(|_| Error::Timeout)??;
         if read.0.1 || read.1.1 {
             return Err(bad());
+        }
+        if let Some(require_server_proof) = streaming {
+            return super::streaming_cleanup::stop_report(&read.0.0, require_server_proof);
         }
         if engine_quiesced {
             cleanup::stop_report(&read.0.0)
@@ -203,7 +214,9 @@ pub(super) fn base(
     }
     a
 }
-fn pins(ids: &BTreeMap<String, IdentityReady>) -> Result<BTreeMap<String, String>> {
+pub(super) fn pins<T: serde::Serialize>(
+    ids: &BTreeMap<String, T>,
+) -> Result<BTreeMap<String, String>> {
     ids.iter()
         .map(|(r, i)| Ok((r.clone(), records::digest(&records::canonical(i)?))))
         .collect()
@@ -300,7 +313,7 @@ fn configure_value(
     crate::command_config::CommandConfig::from_bytes(&records::canonical(&value)?)?;
     Ok(value)
 }
-async fn configure(
+pub(super) async fn configure(
     workspace: &Path,
     name: &str,
     ctx: &Context,

@@ -365,6 +365,18 @@ fn execute_recovery(executable: &Path, nonce: &str, supplied: &[OsString]) -> Re
 }
 fn execute() -> Result<u8> {
     let supplied: Vec<_> = std::env::args_os().collect();
+    if supplied
+        .get(1)
+        .is_some_and(|a| a == "edge-v1" || a == "--server")
+    {
+        return super::edge_fixture::execute(&supplied[1..]);
+    }
+    if supplied.get(1).is_some_and(|a| a == "transfer-v1") {
+        return super::transfer_fixture::execute(&supplied[1..]);
+    }
+    if supplied.get(1).is_some_and(|a| a == "stream-v1") {
+        return super::streaming_fixture::execute(&supplied[1..]);
+    }
     if supplied.len() != 7 {
         return Err(bad());
     }

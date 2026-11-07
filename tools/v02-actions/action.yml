@@ -31,7 +31,7 @@ inputs:
     description: Owned atomic output record directory
   job-deadline:
     required: true
-    description: Internal first-step deadline plus 52 minutes under a 55-minute job limit, Unix seconds
+    description: Original first-step deadline in Unix seconds; 52/55 minutes for legacy matrix, 62/65 for streaming
 runs:
   using: node24
   main: supervise.mjs

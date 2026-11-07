@@ -19,6 +19,8 @@ fn bad() -> Error {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Status {
+    #[serde(default, rename = "streams")]
+    _streams: Option<super::streaming_cleanup::StreamStatus>,
     active: u32,
     uncertain: u32,
     worker_running: u32,
@@ -91,6 +93,8 @@ struct Queued {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Stop {
+    #[serde(default, rename = "stream_stop_complete")]
+    _stream_stop_complete: Option<bool>,
     schema: u8,
     engine_quiesced: bool,
     engine_stop_complete: bool,
@@ -185,6 +189,18 @@ pub(super) async fn command_request(
         return Err(bad());
     }
     response.command.ok_or_else(bad)
+}
+pub(super) async fn stream_request(
+    child: &mut Child,
+    socket: &Path,
+    request: crate::stream_service::StreamLocalRequest,
+    deadline: Instant,
+) -> Result<crate::stream_service::StreamLocalResult> {
+    let response = response(child, socket, &ipc::Request::Stream { request }, deadline).await?;
+    if response.result.is_some() || response.command.is_some() {
+        return Err(bad());
+    }
+    response.stream.ok_or_else(bad)
 }
 /// Absence only; it never grants authority to remove an existing engine tree.
 pub(super) fn require_no_engine(profile: &Path) -> Result<()> {

@@ -1,0 +1,285 @@
+# Nonpublishing qualification: eight reviewed, separately dispatched installed cohorts.
+name: Installed streaming and transfer qualification
+on:
+  workflow_dispatch:
+    inputs:
+      cohort:
+        description: One qualification wave; dispatch only after prior wave completes
+        type: choice
+        required: true
+        default: stream-matrix
+        options: [stream-matrix, rsync-matrix, copy-matrix, edge-stream, edge-rsync, edge-copy, copy-interrupt-put, copy-interrupt-get]
+      candidate_run_id:
+        description: Successful native candidate run ID (rerun all jobs only)
+        required: true
+        type: string
+      candidate_run_attempt:
+        description: Exact successful candidate run attempt
+        required: true
+        type: string
+      source_commit:
+        description: Reviewed candidate source, must equal this master workflow commit
+        required: true
+        type: string
+      relay:
+        description: Explicit direct wss relay URL
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: marmish-streaming-installed
+  cancel-in-progress: false
+env:
+  CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+  CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+  SOURCE_COMMIT: ${{ inputs.source_commit }}
+  TEST_RELAY: ${{ inputs.relay }}
+  TEST_COHORT: ${{ inputs.cohort }}
+jobs:
+  resolve:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install locked build-only coordinator dependencies
+        working-directory: tools/v02-actions
+        run: npm ci --ignore-scripts
+      - name: Validate exact candidate provenance before downloading executables
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESOLVE_ROOT: ${{ runner.temp }}/resolve
+        run: |
+          mkdir -m 700 "$RESOLVE_ROOT"
+          node tools/v02-actions/workflow.mjs validate-candidate
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: v02-candidate-*-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: ${{ runner.temp }}/assets
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: v02-installed-tools-*-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: ${{ runner.temp }}/tools
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-pinned-bootstrap-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: ${{ runner.temp }}/bootstrap
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - name: Bind product, bootstrap and tooling into one immutable context
+        env:
+          RESOLVE_ROOT: ${{ runner.temp }}/resolve
+          ASSETS_ROOT: ${{ runner.temp }}/assets
+          TOOLS_ROOT: ${{ runner.temp }}/tools
+          BOOTSTRAP_ROOT: ${{ runner.temp }}/bootstrap
+        run: node tools/v02-actions/workflow.mjs resolve
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v02-installed-context-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/resolve/output/context.json
+          if-no-files-found: error
+          retention-days: 14
+  matrix:
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            role: linux-amd64
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            role: linux-arm64
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-15
+            role: macos-arm64
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 65
+    env:
+      ROLE: ${{ matrix.role }}
+      LANG: C
+    steps:
+      - name: Set internal deadline and private canonical parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "MARMISH_JOB_DEADLINE=$(( $(date +%s) + 3720 ))" >> "$GITHUB_ENV"
+          case "$(uname -s)" in Darwin) parent=$(mktemp -d /private/tmp/mm.XXXXXX);; Linux) parent=$(mktemp -d /tmp/mm.XXXXXX);; *) exit 1;; esac
+          chmod 700 "$parent"
+          echo "CONTEXT=$RUNNER_TEMP/context/context.json" >> "$GITHUB_ENV"
+          echo "TOOLS_ROOT=$RUNNER_TEMP/tools" >> "$GITHUB_ENV"
+          echo "BOOTSTRAP_ROOT=$RUNNER_TEMP/bootstrap" >> "$GITHUB_ENV"
+          echo "MARMISH_WORK=$parent/work" >> "$GITHUB_ENV"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install locked build-only coordinator dependencies
+        working-directory: tools/v02-actions
+        run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-installed-context-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/context
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-candidate-${{ matrix.target }}-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: ${{ runner.temp }}/assets
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-installed-tools-${{ matrix.target }}-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: ${{ runner.temp }}/tools
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-pinned-bootstrap-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: ${{ runner.temp }}/bootstrap
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify all executable bytes before probing or setup
+        run: node tools/v02-actions/workflow.mjs verify-context
+      - name: Verify maintained rsync prerequisite without Linux privilege escalation
+        timeout-minutes: 5
+        if: inputs.cohort == 'rsync-matrix' || inputs.cohort == 'edge-rsync'
+        shell: bash
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        run: |
+          set -euo pipefail
+          if [ "$(uname -s)" = Darwin ]; then
+            brew list --versions rsync >/dev/null || brew install rsync
+            rsync_image="$(brew --prefix rsync)/bin/rsync"
+            package=$(brew info --json=v2 rsync | node --input-type=module -e '
+              import fs from "node:fs";
+              const f=JSON.parse(fs.readFileSync(0,"utf8")).formulae;
+              if(f.length!==1||f[0].name!=="rsync"||f[0].installed.length!==1)process.exit(1);
+              const p=f[0].installed[0];
+              if(!/^[0-9._]{1,64}$/.test(p.version)||typeof p.poured_from_bottle!=="boolean")process.exit(1);
+              console.log(JSON.stringify({formula:"rsync",version:p.version,poured_from_bottle:p.poured_from_bottle}));')
+            echo "MARMISH_TEST_RSYNC_PACKAGE=$package" >> "$GITHUB_ENV"
+          else
+            rsync_image=$(command -v rsync)
+          fi
+          test -x "$rsync_image"
+          version=$("$rsync_image" --version | head -n 1)
+          printf '%s\n' "$version"
+          RSYNC_IMAGE="$rsync_image" node --input-type=module -e '
+            import {execFileSync} from "node:child_process";
+            const text=execFileSync(process.env.RSYNC_IMAGE,["--version"],{encoding:"utf8",timeout:10000,maxBuffer:65536});
+            const m=text.match(/version (3)\.(\d+)\.(\d+)/);
+            if (!m || Number(m[2]) < 2 || Number(m[2]) === 2 && Number(m[3]) < 7) process.exit(1);'
+          echo "MARMISH_TEST_RSYNC=$rsync_image" >> "$GITHUB_ENV"
+      - name: Install using the pinned bootstrap and prepare offline identities
+        shell: bash
+        run: |
+          "$TOOLS_ROOT/marmish-installed-check" prepare --cohort "$TEST_COHORT" --context "$CONTEXT" \
+            --assets "$RUNNER_TEMP/assets" --bootstrap "$BOOTSTRAP_ROOT/install.sh" \
+            --workspace "$MARMISH_WORK" --role "$ROLE" --output "$MARMISH_WORK/output"
+      - name: Exchange immutable identity records before enabling servers
+        uses: ./tools/v02-actions
+        with:
+          mode: exchange
+          context: ${{ env.CONTEXT }}
+          role: ${{ matrix.role }}
+          driver: ${{ env.TOOLS_ROOT }}/marmish-installed-check
+          workspace: ${{ env.MARMISH_WORK }}
+          identities: ${{ env.MARMISH_WORK }}/identities
+          inbox: ${{ env.MARMISH_WORK }}/inbox
+          output: ${{ env.MARMISH_WORK }}/output
+          job-deadline: ${{ env.MARMISH_JOB_DEADLINE }}
+      - name: Run owned installed server and bounded transfer cells
+        uses: ./tools/v02-actions
+        with:
+          mode: run
+          context: ${{ env.CONTEXT }}
+          role: ${{ matrix.role }}
+          driver: ${{ env.TOOLS_ROOT }}/marmish-installed-check
+          workspace: ${{ env.MARMISH_WORK }}
+          identities: ${{ env.MARMISH_WORK }}/identities
+          inbox: ${{ env.MARMISH_WORK }}/inbox
+          output: ${{ env.MARMISH_WORK }}/output
+          job-deadline: ${{ env.MARMISH_JOB_DEADLINE }}
+      - name: Preserve only finite sanitized failure records
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v02-installed-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.role }}
+          path: |
+            ${{ env.MARMISH_WORK }}/output/${{ matrix.role }}-identity-ready.json
+            ${{ env.MARMISH_WORK }}/output/${{ matrix.role }}-server-ready.json
+            ${{ env.MARMISH_WORK }}/output/${{ matrix.role }}-client-result.json
+            ${{ env.MARMISH_WORK }}/output/${{ matrix.role }}-server-result.json
+          if-no-files-found: ignore
+          retention-days: 14
+  rollup:
+    if: always() && needs.resolve.result == 'success'
+    needs: [resolve, matrix]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ROLE: linux-amd64
+      MATRIX_RESULT: ${{ needs.matrix.result }}
+    steps:
+      - name: Set owned coordinator paths
+        run: |
+          echo "CONTEXT=$RUNNER_TEMP/context/context.json" >> "$GITHUB_ENV"
+          echo "TOOLS_ROOT=$RUNNER_TEMP/tools" >> "$GITHUB_ENV"
+          echo "BOOTSTRAP_ROOT=$RUNNER_TEMP/bootstrap" >> "$GITHUB_ENV"
+          echo "RESOLVE_ROOT=$RUNNER_TEMP/resolve" >> "$GITHUB_ENV"
+          echo "RECORDS_ROOT=$RUNNER_TEMP/records" >> "$GITHUB_ENV"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install locked build-only coordinator dependencies
+        working-directory: tools/v02-actions
+        run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-installed-context-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/context
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-installed-tools-x86_64-unknown-linux-gnu-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: ${{ runner.temp }}/tools
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-pinned-bootstrap-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+          path: ${{ runner.temp }}/bootstrap
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify context and gather exact current-run records
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESOLVE_ROOT: ${{ runner.temp }}/resolve
+        run: |
+          mkdir -m 700 "$RESOLVE_ROOT"
+          node tools/v02-actions/workflow.mjs verify-context
+          node tools/v02-actions/workflow.mjs gather
+      - name: Validate required directed cells and physical stream cleanup proofs
+        run: |
+          mkdir -m 700 "$RUNNER_TEMP/rollup"
+          "$TOOLS_ROOT/marmish-installed-check" rollup --context "$CONTEXT" \
+            --records "$RECORDS_ROOT" --matrix-result "$MATRIX_RESULT" --output "$RUNNER_TEMP/rollup"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: v02-installed-rollup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rollup/matrix-rollup.*
+          if-no-files-found: error
+          retention-days: 14

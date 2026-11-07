@@ -5,6 +5,24 @@ mod autoexit;
 mod benchmark;
 #[path = "installed_cleanup.rs"]
 mod cleanup;
+#[path = "installed_edge_admission.rs"]
+mod edge_admission;
+#[path = "installed_edge_copy.rs"]
+mod edge_copy;
+#[path = "installed_edge_fixture.rs"]
+mod edge_fixture;
+#[path = "installed_edge_preopen.rs"]
+mod edge_preopen;
+#[path = "installed_edge_process.rs"]
+mod edge_process;
+#[path = "installed_edge_quota.rs"]
+mod edge_quota;
+#[path = "installed_edge_rsync.rs"]
+mod edge_rsync;
+#[path = "installed_edge_signals.rs"]
+mod edge_signals;
+#[path = "installed_edges.rs"]
+mod edges;
 #[path = "installed_fixture.rs"]
 mod fixture;
 #[path = "installed_lifecycle_provider.rs"]
@@ -12,6 +30,14 @@ mod lifecycle_provider;
 #[path = "installed_local.rs"]
 mod local;
 pub(super) use cleanup::OwnedCleanupGuard;
+#[path = "installed_copy_checkpoint.rs"]
+mod copy_checkpoint;
+#[path = "installed_copy_detach.rs"]
+mod copy_detach;
+#[path = "installed_copy_interrupt.rs"]
+mod copy_interrupt;
+#[path = "installed_copy_interruption_cases.rs"]
+mod copy_interruption_cases;
 #[path = "installed_matrix.rs"]
 mod matrix;
 #[path = "installed_policy.rs"]
@@ -24,6 +50,22 @@ mod process;
 mod records;
 #[path = "installed_recovery.rs"]
 mod recovery;
+#[path = "installed_streaming.rs"]
+mod streaming;
+#[path = "installed_streaming_cases.rs"]
+mod streaming_cases;
+#[path = "installed_streaming_cleanup.rs"]
+mod streaming_cleanup;
+#[path = "installed_streaming_fixture.rs"]
+mod streaming_fixture;
+#[path = "installed_streaming_prerequisites.rs"]
+mod streaming_prerequisites;
+#[path = "installed_streaming_records.rs"]
+mod streaming_records;
+#[path = "installed_transfer_cases.rs"]
+mod transfer_cases;
+#[path = "installed_transfer_fixture.rs"]
+mod transfer_fixture;
 #[path = "installed_version_lifecycle.rs"]
 mod version_lifecycle;
 use crate::{Error, Result};
@@ -362,21 +404,33 @@ pub(crate) async fn entry() -> u8 {
             inbox,
             output,
         } => {
-            matrix::run(matrix::Run {
+            let streaming = records::read::<Context>(&context, 65536)
+                .map(|ctx| streaming_records::is_streaming(&ctx.cohort));
+            let run = matrix::Run {
                 context,
                 workspace,
                 identities,
                 inbox,
                 output,
-            })
-            .await
+            };
+            match streaming {
+                Ok(true) => streaming::run(run).await,
+                Ok(false) => matrix::run(run).await,
+                Err(error) => Err(error),
+            }
         }
         Command::Rollup {
             context,
             records,
             matrix_result,
             output,
-        } => matrix::rollup(&context, &records, &matrix_result, &output),
+        } => records::read::<Context>(&context, 65536).and_then(|ctx| {
+            if streaming_records::is_streaming(&ctx.cohort) {
+                streaming::rollup(&context, &records, &matrix_result, &output)
+            } else {
+                matrix::rollup(&context, &records, &matrix_result, &output)
+            }
+        }),
         Command::ReleaseInfo => {
             return release_info();
         }

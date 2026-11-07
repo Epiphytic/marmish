@@ -58,6 +58,7 @@ impl Context {
             "matrix" => Ok(2220),
             "version-lifecycle" => Ok(1800),
             "autoexit" | "uptime" | "benchmark" | "recovery" | "policy" => Ok(3300),
+            name if super::streaming_records::is_streaming(name) => Ok(3300),
             _ => Err(invalid()),
         }
     }
@@ -322,6 +323,51 @@ pub(super) fn read_bytes(path: &Path, limit: u64) -> Result<Vec<u8>> {
 pub(super) fn write<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     write_raw(path, &canonical(value)?)
 }
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum PublicationFaultStage {
+    BeforeLink,
+    AfterLinkErr,
+}
+#[cfg(test)]
+thread_local! {
+    static PUBLICATION_FAULT: std::cell::Cell<Option<(&'static str, PublicationFaultStage)>> = const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+pub(super) struct PublicationFault;
+#[cfg(test)]
+impl PublicationFault {
+    pub(super) fn install(name: &'static str, stage: PublicationFaultStage) -> Self {
+        PUBLICATION_FAULT.with(|f| {
+            assert!(f.get().is_none());
+            f.set(Some((name, stage)));
+        });
+        Self
+    }
+}
+#[cfg(test)]
+impl Drop for PublicationFault {
+    fn drop(&mut self) {
+        PUBLICATION_FAULT.with(|f| f.set(None));
+    }
+}
+#[cfg(test)]
+fn publication_fault(path: &Path, stage: PublicationFaultStage) -> Result<()> {
+    PUBLICATION_FAULT.with(|f| {
+        if f.get().is_some_and(|(name, expected)| {
+            path.file_name().is_some_and(|n| n == name) && expected == stage
+        }) {
+            f.set(None);
+            Err(Error::Io(std::io::Error::other(
+                "injected publication failure",
+            )))
+        } else {
+            Ok(())
+        }
+    })
+}
+/// Immutable publication can return an error after the final hard link is visible.
+/// Callers must not infer absence from Err (directory sync and cleanup follow the link).
 pub(super) fn write_raw(path: &Path, bytes: &[u8]) -> Result<()> {
     if bytes.len() as u64 > RECORD_LIMIT {
         return Err(invalid());
@@ -341,8 +387,12 @@ pub(super) fn write_raw(path: &Path, bytes: &[u8]) -> Result<()> {
         file.write_all(bytes)?;
         file.sync_all()?;
         // Hard-link publication is atomic and refuses replacement of an immutable record.
+        #[cfg(test)]
+        publication_fault(path, PublicationFaultStage::BeforeLink)?;
         fs::hard_link(&temporary, path)?;
         fs::remove_file(&temporary)?;
+        #[cfg(test)]
+        publication_fault(path, PublicationFaultStage::AfterLinkErr)?;
         File::open(parent)?.sync_all()?;
         Ok(())
     })();

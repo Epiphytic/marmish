@@ -1501,6 +1501,8 @@ struct CleanupStatus {
     cleanup: String,
     #[serde(deserialize_with = "null")]
     final_seq: Option<u64>,
+    #[serde(default, rename = "streams")]
+    _streams: Option<super::streaming_cleanup::StreamStatus>,
 }
 async fn collect_evidence(
     server: &mut Daemon,

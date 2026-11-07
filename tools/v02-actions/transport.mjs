@@ -4,6 +4,8 @@ import {constants, promises as fs} from 'node:fs';
 import path from 'node:path';
 import yauzl from 'yauzl';
 
+import {isStreamingCohort} from './streaming-policy.mjs';
+
 export const ROLES = ['linux-amd64', 'linux-arm64', 'macos-arm64'];
 export const RECORD_LIMIT = 16 * 1024 * 1024;
 export const digest = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -17,8 +19,8 @@ export function binding(context, role) {
     requireThat(/^[1-9][0-9]{0,15}$/.test(String(value)), 'invalid_run');
   }
   requireThat(/^[0-9a-f]{40}$/.test(context.source_commit), 'invalid_source');
-  requireThat(context.cohort === 'matrix', 'unsupported_cohort');
-  return `v02-installed-${context.run_id}-${context.run_attempt}-${context.source_commit.slice(0, 12)}-matrix`;
+  requireThat(context.cohort === 'matrix' || isStreamingCohort(context.cohort), 'unsupported_cohort');
+  return `v02-installed-${context.run_id}-${context.run_attempt}-${context.source_commit.slice(0, 12)}-${context.cohort}`;
 }
 export function artifactName(prefix, role, kind) {
   requireThat(ROLES.includes(role), 'invalid_role');

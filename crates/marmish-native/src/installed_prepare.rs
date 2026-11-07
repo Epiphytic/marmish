@@ -204,6 +204,13 @@ pub(super) async fn run(o: Prepare) -> Result<()> {
             return Err(bad());
         }
     }
+    super::streaming_prerequisites::capture(
+        &ctx,
+        &o.workspace,
+        &environment,
+        Instant::now() + Duration::from_secs(ctx.expires_at.saturating_sub(super::now()?).min(120)),
+    )
+    .await?;
     let mut nonce = [0; 32];
     getrandom::fill(&mut nonce).map_err(|_| Error::Identity("random"))?;
     let record = IdentityReady {
