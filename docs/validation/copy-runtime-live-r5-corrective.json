@@ -1,0 +1,195 @@
+{
+  "schema": 1,
+  "passed": true,
+  "relay": "wss://relay.eu.whitenoise.chat",
+  "relay_path_redacted": false,
+  "cleanup_scope": "owned_daemon_shutdown_and_protocol_cancel",
+  "platform": "Linux",
+  "architecture": "x86_64",
+  "payload_bytes": 2105344,
+  "results": [
+    {
+      "case": "put_zlib",
+      "exit": 0,
+      "compression": true,
+      "payload_bytes": 2105344,
+      "negotiated_codec": "zlib",
+      "sha256": "8ec5adcd58753dd6f8c02575febd5f8ebf6ebac2e9bdb4372546b40c4c2aa936",
+      "seconds": 436.492758,
+      "payload_bytes_per_second": 4823.3,
+      "kind": "successful_copy",
+      "baseline": {
+        "seconds": 739.814749,
+        "expected_exit": 0,
+        "kind": "successful_copy",
+        "payload_binding": "case_payload_bytes",
+        "codec": "zlib"
+      },
+      "operation_timeout_seconds": 3300,
+      "deadline_headroom": 7.560211186597589,
+      "observed_seconds_including_validation": 436.4957431149669
+    },
+    {
+      "case": "get_zlib",
+      "exit": 0,
+      "compression": true,
+      "payload_bytes": 2105344,
+      "negotiated_codec": "zlib",
+      "sha256": "8ec5adcd58753dd6f8c02575febd5f8ebf6ebac2e9bdb4372546b40c4c2aa936",
+      "seconds": 541.608404,
+      "payload_bytes_per_second": 3887.2,
+      "kind": "successful_copy",
+      "baseline": {
+        "seconds": 720.348362,
+        "expected_exit": 0,
+        "kind": "successful_copy",
+        "payload_binding": "case_payload_bytes",
+        "codec": "zlib"
+      },
+      "operation_timeout_seconds": 3300,
+      "deadline_headroom": 6.092933219002916,
+      "observed_seconds_including_validation": 541.6110568400472
+    },
+    {
+      "case": "put_existing_destination",
+      "exit": 1,
+      "expected_error": "transfer_conflict",
+      "seconds": 730.498139,
+      "kind": "expected_refusal",
+      "baseline": {
+        "seconds": 796.748054,
+        "expected_exit": 1,
+        "kind": "expected_refusal",
+        "payload_binding": "report_payload_bytes",
+        "codec": "none"
+      },
+      "operation_timeout_seconds": 3300,
+      "deadline_headroom": 4.517464717600467,
+      "observed_seconds_including_validation": 730.4982343620504
+    },
+    {
+      "case": "get_existing_destination",
+      "exit": 1,
+      "expected_error": "transfer_conflict",
+      "seconds": 716.894207,
+      "kind": "expected_refusal",
+      "baseline": {
+        "seconds": 796.870511,
+        "expected_exit": 1,
+        "kind": "expected_refusal",
+        "payload_binding": "report_payload_bytes",
+        "codec": "none"
+      },
+      "operation_timeout_seconds": 3300,
+      "deadline_headroom": 4.60318906514393,
+      "observed_seconds_including_validation": 716.8942994299578
+    }
+  ],
+  "payload_scope": "default_window_crossing",
+  "suite": "native_copy_selected_corrective",
+  "scope": "same_host_native_marmot",
+  "not_covered": [
+    "cross-platform installer",
+    "Tor",
+    "daemon restart",
+    "live interrupted durable resume",
+    "live copy cancellation",
+    "retention garbage collection",
+    "put_raw",
+    "get_raw",
+    "compressible_put_zlib",
+    "compressible_get_zlib",
+    "empty_put",
+    "empty_get",
+    "put_missing_source",
+    "get_missing_source"
+  ],
+  "selected_only": true,
+  "full_gate_claimed": false,
+  "selected_cases": [
+    "put_zlib",
+    "get_zlib",
+    "put_existing_destination",
+    "get_existing_destination"
+  ],
+  "completed_cases": [
+    "put_zlib",
+    "get_zlib",
+    "put_existing_destination",
+    "get_existing_destination"
+  ],
+  "omitted_cases": [
+    "put_raw",
+    "get_raw",
+    "compressible_put_zlib",
+    "compressible_get_zlib",
+    "empty_put",
+    "empty_get",
+    "put_missing_source",
+    "get_missing_source"
+  ],
+  "baseline": {
+    "sha256": "5f96d205251666672dc0a89d0327a1ad7f4a7cf7b980db92bb35b80e790d9fa3",
+    "overall_passed": true,
+    "binary": {
+      "sha256": "ef9f55b88c4b69a267abedf431e73973332f07110309283f50ff93c774bb716d",
+      "version": "0.2.3"
+    },
+    "source_revision": null,
+    "source_revision_verified": false,
+    "relay_path_verified": false,
+    "selected": {
+      "put_zlib": {
+        "seconds": 739.814749,
+        "expected_exit": 0,
+        "kind": "successful_copy",
+        "payload_binding": "case_payload_bytes",
+        "codec": "zlib"
+      },
+      "get_zlib": {
+        "seconds": 720.348362,
+        "expected_exit": 0,
+        "kind": "successful_copy",
+        "payload_binding": "case_payload_bytes",
+        "codec": "zlib"
+      },
+      "put_existing_destination": {
+        "seconds": 796.748054,
+        "expected_exit": 1,
+        "kind": "expected_refusal",
+        "payload_binding": "report_payload_bytes",
+        "codec": "none"
+      },
+      "get_existing_destination": {
+        "seconds": 796.870511,
+        "expected_exit": 1,
+        "kind": "expected_refusal",
+        "payload_binding": "report_payload_bytes",
+        "codec": "none"
+      }
+    },
+    "required_timeout_seconds": 3188
+  },
+  "operation_timeout_seconds": 3300,
+  "elapsed_scope": "inherited_transfer_including_local_validation",
+  "locally_seeded_get_sources": [],
+  "fixture_scope": "same_host_owned_paths_no_preparatory_remote_transfers",
+  "baseline_eligibility": "completed_rows_only_no_timeout_or_missing_row_claim",
+  "negative_get_operand": "locally_created_main_payload_no_preparatory_transfer",
+  "binary": {
+    "sha256": "ef9f55b88c4b69a267abedf431e73973332f07110309283f50ff93c774bb716d",
+    "version": "0.2.3"
+  },
+  "daemon_shutdown": [
+    {
+      "role": "client",
+      "exit": 0
+    },
+    {
+      "role": "server",
+      "exit": 0
+    }
+  ],
+  "total_seconds": 2440.850466,
+  "private_state_retained": false
+}

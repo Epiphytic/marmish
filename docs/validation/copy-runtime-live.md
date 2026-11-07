@@ -92,3 +92,16 @@ retention garbage collection. Default 2 MiB plus 8192-byte qualification ran sep
 ## Fourth Linux relay run: large functional suite passed
 
 The [large-run report](copy-runtime-live-r4.md) and [unchanged JSON](copy-runtime-live-r4.json) record all 12 cases passing in 4134.843382 seconds. Each main transfer copied 2,105,344 exact bytes; raw Put/Get measured 5,459.5 / 4,173.2 payload bytes/s and zlib Put/Get 2,845.8 / 2,922.7 bytes/s. Both daemons exited cleanly and private state was removed. Four cases were below 1.5× deadline headroom and require separate corrective reruns under the reviewed amendment. This functional PASS does not claim the original 4× margin, an installed-platform result, or coverage of the later post-receipt uncertainty fix.
+
+## Fifth Linux relay run: selected deadline correction passed
+
+The [selected rerun report](copy-runtime-live-r5-corrective.md) and
+[unchanged JSON](copy-runtime-live-r5-corrective.json) record all four required
+corrective cases passing in 2440.850466 seconds, using the same immutable
+binary and a 3300-second deadline per operation. Zlib Put/Get measured
+4,823.3 / 3,887.2 payload bytes/s for 2,105,344 exact bytes. Both existing
+destinations were preserved. All four cases exceeded 4× headroom; both owned
+daemons exited 0, private state was removed and a subsequent process scan found
+no owned product processes. This selected rerun does not relabel the original
+raw-transfer margins or replace the full suite, installed-platform tests or
+live cancellation/resume qualification.
