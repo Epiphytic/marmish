@@ -87,5 +87,8 @@ Both owned daemons exited 0 and disposable private state was removed.
 Scope remains same-host Linux AMD64 through explicit
 `wss://relay.eu.whitenoise.chat`. This does not validate an installer, another
 platform, Tor, daemon restart, live interrupted resume or cancellation, or
-retention garbage collection. Default 2 MiB plus 8192-byte qualification is
-running separately against these same immutable binaries.
+retention garbage collection. Default 2 MiB plus 8192-byte qualification ran separately against these same immutable binaries; see the fourth run below.
+
+## Fourth Linux relay run: large functional suite passed
+
+The [large-run report](copy-runtime-live-r4.md) and [unchanged JSON](copy-runtime-live-r4.json) record all 12 cases passing in 4134.843382 seconds. Each main transfer copied 2,105,344 exact bytes; raw Put/Get measured 5,459.5 / 4,173.2 payload bytes/s and zlib Put/Get 2,845.8 / 2,922.7 bytes/s. Both daemons exited cleanly and private state was removed. Four cases were below 1.5× deadline headroom and require separate corrective reruns under the reviewed amendment. This functional PASS does not claim the original 4× margin, an installed-platform result, or coverage of the later post-receipt uncertainty fix.
