@@ -47,7 +47,7 @@ def bounded_integer(minimum: int, maximum: int):
     return parse
 
 
-def arguments(default_bytes: int = 393216) -> argparse.Namespace:
+def arguments(default_bytes: int = 393216, *, argv=None, configure_parser=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--marmish", required=True, type=Path)
     parser.add_argument("--relay", required=True)
@@ -56,7 +56,9 @@ def arguments(default_bytes: int = 393216) -> argparse.Namespace:
     parser.add_argument("--bytes", type=bounded_integer(1, 64 * 1024 * 1024), default=default_bytes)
     parser.add_argument("--samples", type=bounded_integer(1, 50), default=3)
     parser.add_argument("--timeout-seconds", type=bounded_integer(10, 86400), default=600)
-    options = parser.parse_args()
+    if configure_parser is not None:
+        configure_parser(parser)
+    options = parser.parse_args(argv)
     if options.source_revision is not None:
         if re.fullmatch(r"[0-9a-fA-F]{40}", options.source_revision) is None:
             parser.error("--source-revision must be a 40-character hexadecimal commit SHA")
@@ -488,8 +490,9 @@ def write_report(path: Path, report: dict):
             os.unlink(temporary)
 
 
-def main(qualification_type=None, cases=None, *, default_bytes=393216) -> int:
-    options = arguments(default_bytes)
+def main(qualification_type=None, cases=None, *, default_bytes=393216, options=None) -> int:
+    if options is None:
+        options = arguments(default_bytes)
     os.umask(0o077)
     qualification = (qualification_type or Qualification)(options)
     started = time.monotonic()
