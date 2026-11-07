@@ -1327,6 +1327,221 @@ mod tests {
         );
     }
     #[test]
+    fn each_parent_symlink_refuses_before_creating_any_copy_state() {
+        for component in 0..4 {
+            let (dir, base) = base();
+            let real = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(real.path().join("a/b/c")).unwrap();
+            std::fs::write(real.path().join("a/b/c/file"), b"sentinel").unwrap();
+            let parts = ["a", "b", "c"];
+            let index = component.min(2);
+            let mut at = dir.path().to_path_buf();
+            for part in &parts[..index] {
+                at.push(part);
+                std::fs::create_dir(&at).unwrap();
+            }
+            let target = if component == 3 {
+                real.path().join("missing")
+            } else {
+                real.path().join(parts[..=index].join("/"))
+            };
+            symlink(target, at.join(parts[index])).unwrap();
+            let operand = b"a/b/c/file";
+            assert_eq!(
+                code(PinnedPath::open(&base, operand)),
+                CopyError::UnsafePath
+            );
+            let mut m = manifest(b"new");
+            m.destination = operand.to_vec();
+            for mode in [AttemptMode::Create, AttemptMode::Resume] {
+                assert_eq!(code(open(&base, m.clone(), mode)), CopyError::UnsafePath);
+            }
+            assert_eq!(
+                std::fs::read(real.path().join("a/b/c/file")).unwrap(),
+                b"sentinel"
+            );
+            for root in [dir.path(), real.path()] {
+                for relative in ["", "a", "a/b", "a/b/c"] {
+                    let Ok(entries) = std::fs::read_dir(root.join(relative)) else {
+                        continue;
+                    };
+                    for entry in entries {
+                        assert!(
+                            !entry
+                                .unwrap()
+                                .file_name()
+                                .as_bytes()
+                                .starts_with(b".marmish-copy")
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn missing_parent_and_missing_resume_create_no_state() {
+        let (dir, base) = base();
+        for parent_missing in [true, false] {
+            let mut m = manifest(b"abc");
+            if parent_missing {
+                m.destination = b"missing/destination".to_vec();
+            }
+            let modes: &[AttemptMode] = if parent_missing {
+                &[AttemptMode::Create, AttemptMode::Resume]
+            } else {
+                &[AttemptMode::Resume]
+            };
+            for mode in modes {
+                assert_eq!(code(open(&base, m.clone(), *mode)), CopyError::NotFound);
+                // Resume takes the shared admission lock before discovering absence.
+                for entry in std::fs::read_dir(dir.path()).unwrap() {
+                    assert_eq!(entry.unwrap().file_name(), ".marmish-copy-admission.lock");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn read_only_parent_refuses_admission_and_namespace_creation() {
+        struct Restore(std::path::PathBuf);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
+            }
+        }
+        for existing_lock in [false, true] {
+            let (dir, base) = base();
+            if existing_lock {
+                let mut old = manifest(b"old");
+                old.transfer = [9; 32];
+                drop(open(&base, old, AttemptMode::Create).unwrap());
+            }
+            let _restore = Restore(dir.path().to_path_buf());
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+            let probe = dir.path().join("permission-probe");
+            match File::create(&probe) {
+                Ok(file) => {
+                    drop(file);
+                    std::fs::remove_file(&probe).unwrap();
+                    assert_ne!(
+                        std::env::var("MARMISH_REQUIRE_NONROOT_PERMISSION_TESTS").as_deref(),
+                        Ok("1"),
+                        "qualification requires real directory permission enforcement"
+                    );
+                    eprintln!("read-only parent check skipped: directory permissions bypassed");
+                    continue;
+                }
+                Err(error) => assert_eq!(error.kind(), io::ErrorKind::PermissionDenied),
+            }
+            let m = manifest(b"new");
+            assert_eq!(
+                code(open(&base, m.clone(), AttemptMode::Create)),
+                CopyError::PermissionDenied
+            );
+            assert!(!dir.path().join(m.namespace()).exists());
+            if !existing_lock {
+                assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn destination_appearing_after_prepare_is_not_adopted_by_content() {
+        let (dir, base) = base();
+        let m = manifest(b"new");
+        let mut receiver = open(&base, m.clone(), AttemptMode::Create).unwrap();
+        receive(&mut receiver, b"new");
+        receiver.checkpoint(101).unwrap();
+        receiver.prepare_commit(102).unwrap();
+        std::fs::write(dir.path().join("destination"), b"new").unwrap();
+        for _ in 0..2 {
+            assert_eq!(code(receiver.commit()), CopyError::Conflict);
+            assert_eq!(receiver.phase(), Phase::CommitPrepared);
+            assert_eq!(
+                std::fs::read(dir.path().join("destination")).unwrap(),
+                b"new"
+            );
+            assert_eq!(
+                std::fs::metadata(dir.path().join(m.namespace()).join("data"))
+                    .unwrap()
+                    .nlink(),
+                1
+            );
+        }
+        drop(receiver);
+        std::fs::remove_file(dir.path().join("destination")).unwrap();
+        let mut resumed = open(&base, m.clone(), AttemptMode::Resume).unwrap();
+        resumed.commit().unwrap();
+        drop(resumed);
+        let committed = open(&base, m, AttemptMode::Resume).unwrap();
+        assert_eq!(committed.phase(), Phase::Committed);
+        committed.receipt().unwrap();
+        assert_eq!(
+            std::fs::read(dir.path().join("destination")).unwrap(),
+            b"new"
+        );
+    }
+
+    #[test]
+    fn duplicate_create_and_changed_resume_bindings_preserve_original_prefix() {
+        let (dir, base) = base();
+        let m = manifest(b"abcdef");
+        let mut receiver = open(&base, m.clone(), AttemptMode::Create).unwrap();
+        receive(&mut receiver, b"abc");
+        receiver.checkpoint(101).unwrap();
+        assert_eq!(
+            code(open(&base, m.clone(), AttemptMode::Create)),
+            CopyError::Conflict
+        );
+        drop(receiver);
+        assert_eq!(
+            code(open(&base, m.clone(), AttemptMode::Create)),
+            CopyError::Conflict
+        );
+        for variant in 0..9 {
+            let mut changed = m.clone();
+            match variant {
+                0 => changed.client[0] ^= 1,
+                1 => changed.server[0] ^= 1,
+                2 => changed.transfer[0] ^= 1,
+                3 => changed.direction = Direction::Get,
+                4 => changed.sha256[0] ^= 1,
+                5 => changed.size += 1,
+                6 => {
+                    changed.preserve_mode = true;
+                    changed.mode = Some(0o640);
+                }
+                7 => changed.overwrite = true,
+                _ => changed.destination = b"other".to_vec(),
+            }
+            changed.validate().unwrap();
+            let expected = if variant < 4 {
+                CopyError::NotFound
+            } else {
+                CopyError::Conflict
+            };
+            assert_eq!(code(open(&base, changed, AttemptMode::Resume)), expected);
+            assert_eq!(
+                std::fs::read(dir.path().join(m.namespace()).join("data")).unwrap(),
+                b"abc"
+            );
+        }
+        let mut original = open(&base, m, AttemptMode::Resume).unwrap();
+        assert_eq!(original.accepted(), 3);
+        assert_eq!(
+            original.checkpoint.prefix_sha256,
+            Sha256::digest(b"abc").as_slice()
+        );
+        receive(&mut original, b"def");
+        finish(&mut original);
+        assert_eq!(
+            std::fs::read(dir.path().join("destination")).unwrap(),
+            b"abcdef"
+        );
+    }
+
+    #[test]
     fn explicit_overwrite_replaces_entry_and_preserves_other_hardlink() {
         let (dir, base) = base();
         std::fs::write(dir.path().join("destination"), b"old").unwrap();
