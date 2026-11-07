@@ -95,6 +95,8 @@ pub(crate) fn failure_category(error: Error) -> &'static str {
         Error::Io(_) => "local_io",
         Error::Timeout => "deadline",
         Error::DaemonStartup(_) => "daemon_startup",
+        Error::Copy(code) => crate::error::copy_category(&code),
+        Error::Stream(code) => crate::error::stream_category(&code),
     }
 }
 
@@ -240,6 +242,7 @@ impl MdkOwner {
                 let counts=self.journal.command_cleanup_counts()?;
                 let (cleanup,final_seq)=service.cleanup_snapshot_readonly();
                 Response::success(serde_json::json!({
+                    "streams":self.stream_cleanup_status()?,
                     "active":counts.active,"uncertain":counts.uncertain,
                     "worker_running":counts.worker_running,"worker_unknown":counts.worker_unknown,
                     "engine_present":service.engine_present_readonly(),

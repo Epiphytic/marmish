@@ -97,7 +97,7 @@ impl ExecutionSignals {
     // OS handlers wake Tokio's signal driver before recv becomes ready. A
     // bounded wait gives that driver a real scheduling opportunity even when
     // this frontend runs on the multi-thread runtime's block_on thread.
-    async fn pending_after_dispatch(&mut self) -> Result<bool> {
+    pub(crate) async fn pending_after_dispatch(&mut self) -> Result<bool> {
         if self.pending().await? {
             return Ok(true);
         }
@@ -270,14 +270,14 @@ fn exit_code(terminal: Terminal) -> u8 {
 
 /// Restore shared file-description flags on normal unwinding, including cancellation.
 /// Abrupt termination that skips Drop can leave inherited descriptors nonblocking.
-struct Nonblocking {
+pub(crate) struct Nonblocking {
     flags: Vec<(i32, i32)>,
 }
 impl Nonblocking {
     fn stdio() -> Result<Self> {
         Self::descriptors(&[0, 1, 2])
     }
-    fn descriptors(descriptors: &[i32]) -> Result<Self> {
+    pub(crate) fn descriptors(descriptors: &[i32]) -> Result<Self> {
         // Read every original flag before changing any: dup'd descriptors can
         // share one open file description (a terminal or shell's 2>&1).
         let mut flags = Vec::new();

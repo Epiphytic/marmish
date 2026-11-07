@@ -1,7 +1,7 @@
 //! SQLCipher launch fences, reply slots and native publication ownership.
 use super::*;
 use crate::command_evidence::PublishedEvidence;
-use crate::stream_service::StreamRecord;
+use crate::stream_service::{StreamLaunch, StreamRecord};
 
 #[derive(Clone)]
 pub(crate) struct StreamPublication {
@@ -29,8 +29,11 @@ fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     serde_json::from_slice(bytes).map_err(|_| Error::Storage("stream_decode"))
 }
 impl Journal {
-    pub(crate) fn stream_init(&mut self) -> Result<()> {
+    pub(crate) fn stream_schema_init(&mut self) -> Result<()> {
         self.conn.execute_batch("CREATE TABLE IF NOT EXISTS stream_attempts(k TEXT NOT NULL,digest BLOB NOT NULL,last_ms INTEGER NOT NULL,attempt INTEGER NOT NULL,created INTEGER NOT NULL,PRIMARY KEY(k,digest)); CREATE TABLE IF NOT EXISTS live_streams(k TEXT PRIMARY KEY,principal BLOB NOT NULL,server_side INTEGER NOT NULL,active INTEGER NOT NULL,record BLOB NOT NULL); CREATE TABLE IF NOT EXISTS stream_slots(k TEXT NOT NULL,digest BLOB NOT NULL,sequence INTEGER NOT NULL,request BLOB NOT NULL,response BLOB,PRIMARY KEY(k,digest)); CREATE TABLE IF NOT EXISTS stream_publications(group_id BLOB NOT NULL,event_id TEXT NOT NULL,k TEXT NOT NULL,payload BLOB NOT NULL,state TEXT NOT NULL,native_id BLOB,evidence BLOB,intent BLOB,PRIMARY KEY(group_id,event_id));").map_err(db)?;
+        Ok(())
+    }
+    pub(crate) fn stream_init(&mut self) -> Result<()> {
         for mut record in self.stream_records()? {
             if record.active
                 || record.state == "preparing"
@@ -114,13 +117,14 @@ impl Journal {
             .transpose()
     }
     pub(crate) fn stream_save(&mut self, r: &StreamRecord) -> Result<()> {
-        self.conn
-            .execute(
-                "UPDATE live_streams SET active=?2,record=?3 WHERE k=?1",
-                params![r.key(), r.active, encode(r)?],
-            )
-            .map_err(db)?;
-        Ok(())
+        let tx = self.conn.transaction().map_err(db)?;
+        tx.execute(
+            "UPDATE live_streams SET active=?2,record=?3 WHERE k=?1",
+            params![r.key(), r.active, encode(r)?],
+        )
+        .map_err(db)?;
+        super::copy_store::copy_sync_record(&tx, r)?;
+        tx.commit().map_err(db)
     }
     pub(crate) fn stream_insert(&mut self, r: &StreamRecord) -> Result<()> {
         let tx = self.conn.transaction().map_err(db)?;
@@ -159,6 +163,7 @@ impl Journal {
             params![r.key(), encode(r)?],
         )
         .map_err(db)?;
+        super::copy_store::copy_sync_record(&tx, r)?;
         if was_active && r.server_side {
             tx.execute(
                 "UPDATE command_replay_state SET finished=finished+1 WHERE id=1",
@@ -442,7 +447,8 @@ impl Journal {
                     .map_err(|_| Error::Invalid("stream_identifier"))?,
             );
             let native_pending: bool = self.conn.query_row("SELECT EXISTS(SELECT 1 FROM stream_publications WHERE k=?1 AND state NOT IN ('acked','retired_failed'))", [record.key()], |row| row.get(0)).map_err(db)?;
-            if timestamp > born.saturating_add(7 * 86400 + 60)
+            if !(record.server_side && matches!(record.launch, StreamLaunch::NativeCopy { .. }))
+                && timestamp > born.saturating_add(7 * 86400 + 60)
                 && !native_pending
                 && !matches!(
                     record.state.as_str(),
@@ -478,10 +484,10 @@ impl Journal {
                 .map_err(db)?;
             if (record.payload_drained || expired)
                 && (has_slots
-                    || !record.argv.is_empty()
+                    || record.launch.has_exec_payload()
                     || (expired && !record.payload_drained && !record.payload_expired))
             {
-                record.argv.clear();
+                record.launch.clear_exec();
                 record.payload_expired |= expired && !record.payload_drained;
                 self.stream_clear_slots(&record.key())?;
                 self.stream_save(&record)?;
@@ -673,8 +679,9 @@ mod tests {
             group: vec![5],
             server_side: true,
             hello: true,
+            copy_hello: false,
             open_digest: None,
-            argv: Vec::new(),
+            launch: StreamLaunch::default(),
             codec: Codec::None,
             state: "hello".into(),
             cancel: false,
@@ -1269,14 +1276,16 @@ mod tests {
         r.state = "terminal".into();
         r.terminal = Some(Terminal::Exited { code: 0 });
         r.completed_at = Some(timestamp.saturating_sub(86401));
-        r.argv = vec![b"secret argument".to_vec()];
+        r.launch = StreamLaunch::Exec {
+            argv: vec![b"secret argument".to_vec()],
+        };
         journal.stream_insert(&r).unwrap();
         journal
             .stream_request_slot(&r.key(), &[1; 32], 1, b"private bytes")
             .unwrap();
         journal.stream_maintain(timestamp).unwrap();
         let retained = journal.stream_get(&r.key()).unwrap().unwrap();
-        assert!(retained.payload_expired && retained.argv.is_empty());
+        assert!(retained.payload_expired && !retained.launch.has_exec_payload());
         assert!(journal.stream_slot(&r.key(), &[1; 32]).unwrap().is_none());
         let mut lost = record(2);
         lost.active = true;

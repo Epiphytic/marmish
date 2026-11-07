@@ -133,10 +133,77 @@ local output alone leaves the remote command running. Use `marmish streams` and
 `marmish cancel --stream ID` to inspect and explicitly stop a detached command.
 
 The adapter requires `-s`; old argument escaping, rsync daemon mode, `rsync://`,
-SSH options and interactive shells are unsupported. Native resumable copy commands
-are a separate planned feature. See the [rsync phase design](docs/phases/streaming-rsync.md)
+SSH options and interactive shells are unsupported. See the [rsync phase design](docs/phases/streaming-rsync.md)
 for limits and qualification requirements; this source addition is not a released
 cross-platform interoperability claim.
+
+## Native file copy (implementation under qualification)
+
+The streaming source branch adds literal regular-file transfers. These commands
+are not in the v0.2.3 installer; complete code review and installed platform
+qualification are still pending.
+
+```sh
+marmish put SERVER_NPUB ./local-file 'remote file'
+marmish get SERVER_NPUB 'remote file' ./downloaded-file
+marmish put --compress --preserve-mode --preserve-mtime -- SERVER_NPUB ./local-file 'remote file'
+marmish put --resume TRANSFER_ID -- SERVER_NPUB ./local-file 'remote file'
+```
+
+Paths are literal, including spaces and shell characters; no shell expands them.
+Only regular files are supported. Existing destinations require `--overwrite`.
+Resume repeats the same paths and options with the printed transfer ID, using a
+new stream ID. Diagnostics and IDs go to stderr. Success requires a verified
+commit; a lost commit acknowledgement reports uncertainty rather than claiming
+that the destination was unchanged.
+For a download, this can mean the local destination is already final but its
+confirmation did not reach the peer. Inspect it and use explicit resume to
+reconcile the retained transfer; do not assume failure means no file was written.
+An attachment whose immutable request deadline expired needs a fresh stream.
+
+Copy uses the server's installed native executable and its existing execution
+policy. Allowing that executable also allows its other subcommands under the
+server's Unix account; it does not grant directory-confined copy access. Review
+canonical executable rules after upgrades.
+
+Validated inactive copy receipts and partial files are eligible for cleanup after
+`limits.copy_receipt_retention` (default and minimum effective retention: seven
+days plus one minute; configurable up to 365 days). Active or uncertain ownership
+is retained. For local downloads, `marmish copy-receipts` shows the local index.
+Removing an uncertain entry is explicit and leaves its physical files untouched:
+
+```sh
+marmish copy-receipts --forget NAMESPACE --revision REVISION --acknowledge-retained-state
+```
+
+Inspect retained files manually before forgetting an entry. This command does
+not stop remote work or establish that an uncertain worker has exited.
+A crash before an initial checkpoint is written can leave an incomplete private
+transfer directory that cannot be resumed or automatically reclaimed. Stop and
+confirm the owning work has exited before manually inspecting such retained
+state; never delete a live or uncertain transfer's files to bypass a conflict.
+
+## Cancel running work (unreleased streaming source)
+
+Press Ctrl-C during a streaming command or transfer to request authenticated
+remote cancellation. Marmish waits for confirmation that the owned remote process
+has stopped; confirmed cancellation exits 130. A second Ctrl-C exits locally with
+an uncertain outcome, and does not claim the remote command stopped.
+
+To inspect or cancel work from another terminal, use the same local identity:
+
+```sh
+marmish streams
+marmish cancel --stream STREAM_ID
+```
+
+Add `-i NAME` before the subcommand when using a named identity. If the remote
+identity's access has been revoked, its owner can cancel directly on the server
+with `marmish cancel --stream STREAM_ID --local`. Disconnecting, closing output
+or reaching a client timeout leaves remote work running. An uncertain cancellation
+retains its stream ID for inspection and retry. Cancelling a file transfer keeps
+its durable partial data available for explicit resume; a destination already
+committed remains committed.
 
 ## Connect to another identity
 

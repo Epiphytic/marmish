@@ -12,6 +12,7 @@ fault-injection = []
 
 [dependencies]
 marmish-core = { path = "../marmish-core" }
+marmish-stream = { path = "../marmish-stream" }
 libc.workspace = true
 rusqlite.workspace = true
 sha2.workspace = true

@@ -5773,6 +5773,9 @@ mod tests {
     fn limits() -> crate::command_config::CommandLimits {
         use std::time::Duration;
         crate::command_config::CommandLimits {
+            copy_receipt_retention: std::time::Duration::from_secs(
+                marmish_stream::copy_protocol::MIN_RETENTION_SECS as u64,
+            ),
             active_per_principal: 1,
             active_global: 2,
             retained_per_principal: 3,

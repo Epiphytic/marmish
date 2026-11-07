@@ -74,8 +74,30 @@ relay tests pass for exact trees, deltas, compression, confirmed process-group
 cancellation and partial restart. See [rsync evidence](validation/rsync-runtime-live.md)
 for rates and uncovered cases. It requires rsync3.x on both ends and uses the
 same executable authorization as other commands; granting rsync permits broad
-same-UID file access and execution. Native copy and installed cross-platform
-qualification remain pending. None of these streaming additions is in v0.2.3.
+same-UID file access and execution. Native copy has independent source approval and passed a 12-case Linux relay
+small smoke; large-file runtime and
+installed cross-platform qualification remain pending. None of these streaming
+additions is in v0.2.3.
+
+The [native copy design](phases/streaming-copy.md) adds literal regular-file
+`put`/`get`, verified commits, explicit overwrite, metadata options, bounded block
+compression and transfer-ID resume across fresh stream IDs. A privileged helper
+protocol is not introduced: the authenticated server authorizes its canonical
+native executable using the ordinary additive execution policy. Allowing that
+image also permits its other subcommands with the server UID's authority; there
+is no directory confinement or copy-only grant. Helper image revalidation is a
+same-UID consistency check with a retained pathname-to-exec race.
+
+The [local receiver cleanup contract](phases/streaming-copy-local-gc.md) uses an
+encrypted actor-owned index, explicit admission/activation, owned worker joining,
+current durable GC claims and anchored physical checkpoint validation. Unknown
+or active ownership is retained. `copy-receipts` supports inspection and explicit
+index-only forgetting with revision and retained-state acknowledgement. The
+`limits.copy_receipt_retention` setting is distinct from room expiry and command
+payload retention; it defaults to and normalizes to at least 604860 seconds,
+with a maximum of 365 days. This implementation is not yet a qualified platform
+capability. See [current copy evidence](validation/copy-runtime-live.md), including
+the failed early relay attempt, and [integrated review](reviews/streaming-copy-integrated-code.md).
 
 Cancellation must be explicit and independent of blocked stream data. The runtime
 implements Ctrl-C and cancellation by stable stream ID from another terminal,

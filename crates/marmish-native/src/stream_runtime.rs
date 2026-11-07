@@ -38,8 +38,9 @@ fn stream_record(context: &AuthenticatedCommandContext, binding: sw::Binding) ->
         group: context.mls_group().to_vec(),
         server_side: context.direction() == CommandDirection::Server,
         hello: false,
+        copy_hello: false,
         open_digest: None,
-        argv: Vec::new(),
+        launch: crate::stream_service::StreamLaunch::default(),
         codec: Codec::None,
         state: "hello".into(),
         cancel: false,
@@ -61,11 +62,76 @@ fn stream_record(context: &AuthenticatedCommandContext, binding: sw::Binding) ->
     }
 }
 impl MdkOwner {
+    pub(crate) fn stream_has_server_state(&self) -> Result<bool> {
+        Ok(self
+            .journal
+            .stream_records()?
+            .iter()
+            .any(|r| r.server_side && r.open_digest.is_some()))
+    }
+    pub(crate) fn stream_cleanup_status(
+        &self,
+    ) -> Result<crate::stream_service::StreamCleanupStatus> {
+        let mut status = crate::stream_service::StreamCleanupStatus::default();
+        for record in self
+            .journal
+            .stream_records()?
+            .into_iter()
+            .filter(|r| r.server_side)
+        {
+            if record.active {
+                status.active += 1;
+            }
+            if record.cancel && record.active {
+                status.cancelling += 1;
+            }
+            if matches!(
+                record.state.as_str(),
+                "lost"
+                    | "unknown_launch"
+                    | "transport_uncertain"
+                    | "reconciled_possible_live"
+                    | "cleanup_uncertain"
+            ) {
+                status.uncertain += 1;
+            }
+        }
+        for live in self.streams.live.values() {
+            status.observation_pending |= live.preparing || live.operation_id.is_some();
+            if let Some(runner) = &live.runner {
+                status.owned_runners += 1;
+                if !runner.finished() {
+                    status.unfinished_runners += 1;
+                }
+            }
+        }
+        status.cleanup_ready = status.active == 0
+            && status.cancelling == 0
+            && status.uncertain == 0
+            && status.unfinished_runners == 0
+            && !status.observation_pending;
+        status.stop_complete = status.cleanup_ready && self.stream_stop_confirmed()?;
+        Ok(status)
+    }
     pub(crate) fn stream_request_local(
         &mut self,
         request: StreamLocalRequest,
     ) -> Result<StreamLocalResult> {
         match request {
+            StreamLocalRequest::CopyReceiver { request } => {
+                let retention = self
+                    .commands
+                    .as_ref()
+                    .map(|service| service.copy_receipt_retention().as_secs())
+                    .unwrap_or(marmish_stream::copy_protocol::MIN_RETENTION_SECS as u64);
+                let local_client = super::command_adapter::fixed_hex::<32>(&self.identity)?;
+                let response =
+                    self.journal
+                        .copy_local_request(*request, local_client, retention, now()?)?;
+                Ok(StreamLocalResult::CopyReceiver {
+                    response: Box::new(response),
+                })
+            }
             StreamLocalRequest::List { remote } => {
                 let entries = self
                     .journal
@@ -154,7 +220,10 @@ impl MdkOwner {
                 if self.streams.stopping
                     && matches!(
                         request.body,
-                        sw::RequestBody::Hello { .. } | sw::RequestBody::Open { .. }
+                        sw::RequestBody::Hello { .. }
+                            | sw::RequestBody::Open { .. }
+                            | sw::RequestBody::CopyHello { .. }
+                            | sw::RequestBody::OpenCopy { .. }
                     )
                 {
                     return Err(Error::Invalid("server_stopping"));
@@ -215,6 +284,22 @@ impl MdkOwner {
                         return Err(Error::Invalid("stream_open_conflict"));
                     }
                     record.open_digest = Some(open_digest);
+                    if record.state == "hello" {
+                        record.state = "opening".into();
+                    }
+                    self.journal.stream_save(&record)?;
+                }
+                if let sw::RequestBody::OpenCopy { launch, codec } = &request.body {
+                    let mut record = self.journal.stream_get(&k)?.ok_or(invalid())?;
+                    let open_digest = stream_result(launch.digest(*codec))?;
+                    if record.open_digest.is_some_and(|old| old != open_digest) {
+                        return Err(Error::Invalid("stream_open_conflict"));
+                    }
+                    record.open_digest = Some(open_digest);
+                    record.launch = crate::stream_service::StreamLaunch::NativeCopy {
+                        launch: launch.clone(),
+                    };
+                    record.codec = *codec;
                     if record.state == "hello" {
                         record.state = "opening".into();
                     }
@@ -484,7 +569,10 @@ impl MdkOwner {
         if self.streams.stopping
             && matches!(
                 request.body,
-                sw::RequestBody::Hello { .. } | sw::RequestBody::Open { .. }
+                sw::RequestBody::Hello { .. }
+                    | sw::RequestBody::Open { .. }
+                    | sw::RequestBody::CopyHello { .. }
+                    | sw::RequestBody::OpenCopy { .. }
             )
         {
             return self.reply_stream_error(context, &request, digest, sw::WireErrorCode::Closed);
@@ -519,6 +607,34 @@ impl MdkOwner {
         }) {
             return Err(Error::Invalid("stream_capacity"));
         }
+        if matches!(request.body, sw::RequestBody::OpenCopy { .. }) {
+            let record = self
+                .journal
+                .stream_get(&k)?
+                .unwrap_or_else(|| stream_record(context, request.binding.clone()));
+            if self
+                .commands
+                .as_ref()
+                .and_then(|s| s.lifetime())
+                .is_some_and(|l| l.expired().unwrap_or(true))
+            {
+                return Err(Error::Invalid("stream_admission_closed"));
+            }
+            let retention = self
+                .commands
+                .as_ref()
+                .ok_or(invalid())?
+                .copy_receipt_retention()
+                .as_secs();
+            let bytes = self.journal.admit_copy_open(
+                &record,
+                &request,
+                &request_bytes,
+                retention,
+                now()?,
+            )?;
+            return self.queue_stream_frame(context.mls_group(), &k, &bytes);
+        }
         let mut record = match self.journal.stream_get(&k)? {
             Some(r) => r,
             None => {
@@ -540,6 +656,25 @@ impl MdkOwner {
         self.journal
             .stream_request_slot(&k, &digest, request.sequence, &request_bytes)?;
         let body = match &request.body {
+            sw::RequestBody::CopyHello { versions, codecs } => {
+                if !versions.contains(&marmish_stream::copy_protocol::VERSION)
+                    || !codecs.contains(&Codec::None)
+                {
+                    sw::ResponseBody::CopyRefused {
+                        code: sw::CopyAdmissionError::Unsupported,
+                        prior_binding: None,
+                    }
+                } else {
+                    record.copy_hello = true;
+                    sw::ResponseBody::CopyHello {
+                        version: marmish_stream::copy_protocol::VERSION,
+                        codecs: vec![Codec::None, Codec::Zlib],
+                        frame_bytes: marmish_stream::MAX_BLOCK as u32,
+                        window_bytes: marmish_stream::WINDOW_BYTES as u32,
+                    }
+                }
+            }
+            sw::RequestBody::OpenCopy { .. } => return Err(invalid()),
             sw::RequestBody::Hello { codecs } => {
                 if !codecs.contains(&Codec::None) {
                     sw::ResponseBody::Error {
@@ -588,7 +723,8 @@ impl MdkOwner {
                     }
                     stream_result(request.validate_at(now()?))?;
                     record.open_digest = Some(open_digest);
-                    record.argv = argv.clone();
+                    record.launch =
+                        crate::stream_service::StreamLaunch::Exec { argv: argv.clone() };
                     record.codec = *codec;
                     record.state = "preparing".into();
                     record.revision = record.revision.saturating_add(1);
@@ -851,6 +987,39 @@ impl MdkOwner {
         self.observe_stream_runners()?;
         self.reclaim_stream_state()
     }
+    fn copy_helper_context(
+        &self,
+        record: &StreamRecord,
+        launch: &marmish_stream::copy_protocol::Launch,
+    ) -> Result<marmish_stream::copy_protocol::HelperContext> {
+        let metadata = crate::native_manifest::compiled_release_metadata();
+        let mut expected_commit = [0; 20];
+        hex::decode_to_slice(metadata.commit, &mut expected_commit)
+            .map_err(|_| Error::Invalid("copy_build_metadata"))?;
+        let context = marmish_stream::copy_protocol::HelperContext {
+            context_version: 1,
+            helper_protocol: marmish_stream::copy_protocol::VERSION,
+            client: record.binding.client,
+            server: record.binding.server,
+            group: record.group.clone(),
+            session: record.binding.session,
+            stream: record.binding.stream,
+            transfer: launch.transfer,
+            direction: launch.direction,
+            launch_digest: stream_result(launch.digest(record.codec))?,
+            retention_seconds: self
+                .commands
+                .as_ref()
+                .ok_or(invalid())?
+                .copy_receipt_retention()
+                .as_secs(),
+            expected_version: metadata.version.into(),
+            expected_target: metadata.target.into(),
+            expected_commit,
+        };
+        context.validate().map_err(|_| invalid())?;
+        Ok(context)
+    }
     fn prepare_streams(&mut self) -> Result<()> {
         if self.streams.stopping {
             return Ok(());
@@ -870,6 +1039,19 @@ impl MdkOwner {
             {
                 continue;
             }
+            if !self.journal.copy_attempt_matches(&record)? {
+                continue;
+            }
+            let kind = match &record.launch {
+                crate::stream_service::StreamLaunch::Exec { argv } => {
+                    crate::command_engine::LivePrepareKind::Exec { argv: argv.clone() }
+                }
+                crate::stream_service::StreamLaunch::NativeCopy { launch } => {
+                    crate::command_engine::LivePrepareKind::NativeCopy {
+                        context: Box::new(self.copy_helper_context(&record, launch)?),
+                    }
+                }
+            };
             let live = self.streams.live.entry(k).or_insert_with(LiveStream::new);
             if live.preparing || live.runner.is_some() {
                 continue;
@@ -881,7 +1063,7 @@ impl MdkOwner {
                 stream_id: record.binding.stream,
                 revision: record.revision,
                 owner: Owner::from_context(&context),
-                argv: record.argv,
+                kind,
             };
             if let Some(engine) = self.commands.as_mut().and_then(|s| s.engine_mut())
                 && engine.try_prepare_live(request).is_ok()
@@ -939,6 +1121,9 @@ impl MdkOwner {
             {
                 continue;
             }
+            if !self.journal.copy_attempt_matches(&record)? {
+                continue;
+            }
             match completion.result {
                 Ok(prepared) => {
                     record.state = "launching".into();
@@ -972,7 +1157,17 @@ impl MdkOwner {
                         marmish_engine::EngineError::CommandNotFound(_) => {
                             sw::WireErrorCode::NotFound
                         }
-                        marmish_engine::EngineError::CommandDenied => sw::WireErrorCode::Denied,
+                        marmish_engine::EngineError::CommandDenied
+                        | marmish_engine::EngineError::Unauthorized => sw::WireErrorCode::Denied,
+                        marmish_engine::EngineError::WorkerUnavailable
+                            if matches!(
+                                record.launch,
+                                crate::stream_service::StreamLaunch::NativeCopy { .. }
+                            ) =>
+                        {
+                            sw::WireErrorCode::Unsupported
+                        }
+                        marmish_engine::EngineError::QuotaExceeded => sw::WireErrorCode::Capacity,
                         _ => sw::WireErrorCode::Invalid,
                     };
                     record.terminal = Some(sw::Terminal::Failed { code });
@@ -1077,6 +1272,16 @@ impl MdkOwner {
         Ok(())
     }
     fn reclaim_stream_state(&mut self) -> Result<()> {
+        if let Some(done) = self
+            .commands
+            .as_mut()
+            .and_then(|s| s.engine_mut())
+            .and_then(|e| e.take_copy_gc())
+        {
+            self.journal
+                .copy_gc_complete(&done.key, done.revision, done.cleaned)?;
+        }
+
         let mut expired = std::collections::BTreeSet::new();
         if !self.streams.stopping
             && self
@@ -1085,6 +1290,32 @@ impl MdkOwner {
                 .is_none_or(|last| last.elapsed() >= std::time::Duration::from_secs(30))
         {
             self.journal.stream_maintain(now()?)?;
+            if self
+                .commands
+                .as_ref()
+                .is_some_and(|s| s.engine_present_readonly())
+                && let Some((key, attempt)) = self.journal.copy_gc_candidate(now()?)?
+            {
+                let service = self.commands.as_mut().ok_or(invalid())?;
+                let request = crate::command_engine::CopyGcRequest {
+                    key: key.clone(),
+                    revision: attempt.revision,
+                    launch: attempt.launch,
+                    stream: attempt.binding.stream,
+                    cwd: service.copy_cwd().to_owned(),
+                    timestamp: i64::try_from(now()?).map_err(|_| invalid())?,
+                };
+                if service
+                    .engine_mut()
+                    .ok_or(invalid())?
+                    .try_copy_gc(request)
+                    .is_err()
+                {
+                    self.journal
+                        .copy_gc_complete(&key, attempt.revision, false)?;
+                }
+            }
+
             // Only live handles can retain expired output. Keep this lookup
             // bounded by the live limit rather than decoding the full ledger.
             for k in self.streams.live.keys() {

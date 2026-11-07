@@ -50,6 +50,7 @@ pub(crate) struct CommandLimits {
     pub(crate) engine_tokens: u32,
     pub(crate) token_lifetime: Duration,
     pub(crate) payload_retention: Duration,
+    pub(crate) copy_receipt_retention: Duration,
     pub(crate) tombstone_retention: Duration,
     pub(crate) stream_bytes: u64,
     pub(crate) spool_bytes: u64,
@@ -275,7 +276,6 @@ impl CommandConfig {
     pub(crate) fn aliases(&self) -> &BTreeMap<String, AliasTarget> {
         &self.aliases
     }
-    #[cfg(test)]
     pub(crate) fn cwd(&self) -> &Path {
         &self.cwd
     }
@@ -502,6 +502,7 @@ struct RawLimits {
     engine_tokens: u32,
     token_lifetime: u64,
     payload_retention: u64,
+    copy_receipt_retention: u64,
     tombstone_retention: u64,
     stream_bytes: u64,
     spool_bytes: u64,
@@ -520,6 +521,7 @@ impl Default for RawLimits {
             engine_tokens: 1024,
             token_lifetime: 120,
             payload_retention: DAY,
+            copy_receipt_retention: marmish_stream::copy_protocol::MIN_RETENTION_SECS as u64,
             tombstone_retention: 2 * DAY,
             stream_bytes: 8 * 1024 * 1024,
             spool_bytes: 512 * 1024 * 1024,
@@ -542,6 +544,8 @@ impl RawLimits {
             || self.token_lifetime != 120
             || self.tombstone_retention != 2 * DAY
             || !(1..=7 * DAY).contains(&self.payload_retention)
+            || !(1..=marmish_stream::copy_protocol::MAX_RETENTION_SECS)
+                .contains(&self.copy_receipt_retention)
             || !(1..=8 * 1024 * 1024).contains(&self.stream_bytes)
             || !(1..=512 * 1024 * 1024).contains(&self.spool_bytes)
             || self.max_uptime.is_some_and(|s| s == 0 || s > 1800)
@@ -557,6 +561,10 @@ impl RawLimits {
             engine_tokens: self.engine_tokens,
             token_lifetime: Duration::from_secs(self.token_lifetime),
             payload_retention: Duration::from_secs(self.payload_retention),
+            copy_receipt_retention: Duration::from_secs(
+                self.copy_receipt_retention
+                    .max(marmish_stream::copy_protocol::MIN_RETENTION_SECS as u64),
+            ),
             tombstone_retention: Duration::from_secs(self.tombstone_retention),
             stream_bytes: self.stream_bytes,
             spool_bytes: self.spool_bytes,
@@ -800,6 +808,43 @@ mod tests {
         assert!(fixture.load(&value).is_err());
         value["command_policy"] = json!({"version":1,"keys":vec![json!({"principal":"00".repeat(32),"restrictions":{}});129]});
         assert!(fixture.load(&value).is_err());
+    }
+    #[test]
+    fn copy_receipt_policy_is_independent_normalized_and_bounded() {
+        use marmish_stream::copy_protocol::{MAX_RETENTION_SECS, MIN_RETENTION_SECS};
+        let mut value = document();
+        let read = |v: &Value| CommandConfig::from_bytes(&serde_json::to_vec(v).unwrap());
+        assert_eq!(
+            read(&value)
+                .unwrap()
+                .limits()
+                .copy_receipt_retention
+                .as_secs(),
+            MIN_RETENTION_SECS as u64
+        );
+        for (input, expected) in [
+            (1, MIN_RETENTION_SECS as u64),
+            (MAX_RETENTION_SECS, MAX_RETENTION_SECS),
+        ] {
+            value["limits"]["copy_receipt_retention"] = json!(input);
+            assert_eq!(
+                read(&value)
+                    .unwrap()
+                    .limits()
+                    .copy_receipt_retention
+                    .as_secs(),
+                expected
+            );
+        }
+        for invalid in [
+            json!(0),
+            json!(MAX_RETENTION_SECS + 1),
+            Value::Null,
+            json!("604860"),
+        ] {
+            value["limits"]["copy_receipt_retention"] = invalid;
+            assert!(read(&value).is_err());
+        }
     }
     #[test]
     fn closed_limits_seconds_fixed_values_and_ceiling_relationships() {

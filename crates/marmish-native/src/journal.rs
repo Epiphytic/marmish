@@ -5,6 +5,10 @@ mod command_preparation;
 mod command_rooms;
 #[path = "command_store.rs"]
 mod command_store;
+#[path = "copy_local_store.rs"]
+mod copy_local_store;
+#[path = "copy_store.rs"]
+mod copy_store;
 #[path = "stream_store.rs"]
 mod stream_store;
 use crate::foundation::{Body, Envelope};
@@ -22,8 +26,8 @@ use std::time::Duration;
 pub(crate) use stream_store::*;
 use zeroize::Zeroizing;
 
-pub(crate) const JOURNAL_FORMAT: i64 = 6;
-pub(crate) const JOURNAL_SUPPORTED_FORMATS: &[i64] = &[0, 3, 4, 5, 6];
+pub(crate) const JOURNAL_FORMAT: i64 = 7;
+pub(crate) const JOURNAL_SUPPORTED_FORMATS: &[i64] = &[0, 3, 4, 5, 6, 7];
 
 #[derive(Clone, Serialize)]
 pub struct Conversation {
@@ -175,6 +179,9 @@ impl Journal {
         }
         let mut journal = Self { conn };
         journal.command_init()?;
+        journal.stream_schema_init()?;
+        journal.copy_init(schema)?;
+        journal.copy_local_init()?;
         journal.stream_init()?;
         journal.command_rooms_init()?;
         journal.command_preparations_init()?;

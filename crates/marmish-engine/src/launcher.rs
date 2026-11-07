@@ -1105,11 +1105,10 @@ fn legacy_exec_program(
     Ok(executable)
 }
 
-unsafe fn install_exec_image(
-    command: &mut Command,
-    image: exec_image::ExecImage,
-    setup: unsafe fn() -> std::io::Result<()>,
-) {
+unsafe fn install_exec_image<F>(command: &mut Command, image: exec_image::ExecImage, mut setup: F)
+where
+    F: FnMut() -> std::io::Result<()> + Send + Sync + 'static,
+{
     unsafe {
         command.pre_exec(move || {
             setup().map_err(|_| std::io::Error::from_raw_os_error(PRE_EXEC_FAILURE))?;
@@ -1142,6 +1141,14 @@ fn prepare_child_command(
 }
 
 pub(crate) fn spawn_child(spec: &ChildSpec) -> std::result::Result<SpawnedChild, ChildSpawnError> {
+    spawn_child_with_context(spec, None)
+}
+// Only PreparedLiveExec with its retained OwnedCopyContext supplies Some(fd).
+// The locator is borrowed through spawn; this function never closes a parent FD.
+pub(crate) fn spawn_child_with_context(
+    spec: &ChildSpec,
+    copy_context: Option<i32>,
+) -> std::result::Result<SpawnedChild, ChildSpawnError> {
     crate::admission::validate_request(&spec.request, true)
         .map_err(|_| ChildSpawnError::NotStarted(LaunchFailure::OtherStartupFailure))?;
     if !spec.cwd.is_dir() {
@@ -1189,7 +1196,19 @@ pub(crate) fn spawn_child(spec: &ChildSpec) -> std::result::Result<SpawnedChild,
     // SAFETY: all image storage is immutable and prepared before fork. The
     // callback performs only the platform's syscall setup and direct execve.
     unsafe {
-        install_exec_image(&mut command, image, platform::pre_exec);
+        install_exec_image(&mut command, image, move || {
+            platform::pre_exec()?;
+            if let Some(fd) = copy_context {
+                if fd <= 3 {
+                    return Err(std::io::Error::from_raw_os_error(libc::EINVAL));
+                }
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        });
     }
     let mut child = command.spawn().map_err(|error| {
         let reason = match error.raw_os_error() {

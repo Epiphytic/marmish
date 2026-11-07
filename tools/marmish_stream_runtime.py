@@ -47,13 +47,13 @@ def bounded_integer(minimum: int, maximum: int):
     return parse
 
 
-def arguments() -> argparse.Namespace:
+def arguments(default_bytes: int = 393216) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--marmish", required=True, type=Path)
     parser.add_argument("--relay", required=True)
     parser.add_argument("--source-revision", help="optional 40-character source commit SHA")
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--bytes", type=bounded_integer(1, 64 * 1024 * 1024), default=393216)
+    parser.add_argument("--bytes", type=bounded_integer(1, 64 * 1024 * 1024), default=default_bytes)
     parser.add_argument("--samples", type=bounded_integer(1, 50), default=3)
     parser.add_argument("--timeout-seconds", type=bounded_integer(10, 86400), default=600)
     options = parser.parse_args()
@@ -488,8 +488,8 @@ def write_report(path: Path, report: dict):
             os.unlink(temporary)
 
 
-def main(qualification_type=None, cases=None) -> int:
-    options = arguments()
+def main(qualification_type=None, cases=None, *, default_bytes=393216) -> int:
+    options = arguments(default_bytes)
     os.umask(0o077)
     qualification = (qualification_type or Qualification)(options)
     started = time.monotonic()

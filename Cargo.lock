@@ -3604,6 +3604,7 @@ dependencies = [
  "hmac 0.12.1",
  "libc",
  "marmish-core",
+ "marmish-stream",
  "rusqlite",
  "serde",
  "serde_json",

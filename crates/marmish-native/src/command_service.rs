@@ -89,6 +89,12 @@ impl CommandService {
         }
         .ready())
     }
+    pub(crate) fn copy_cwd(&self) -> &std::path::Path {
+        self.config.cwd()
+    }
+    pub(crate) fn copy_receipt_retention(&self) -> std::time::Duration {
+        self.config.limits().copy_receipt_retention
+    }
     pub(crate) fn engine_mut(&mut self) -> Option<&mut CommandEngine> {
         self.engine.as_mut()
     }
@@ -1533,6 +1539,7 @@ mod tests {
                     },
                     binding: marmish_engine::NativeBinding::new([8; 32], [9; 32]),
                     master: zeroize::Zeroizing::new([10; 32]),
+                    canonical_native_image: None,
                 },
                 vec![],
             )

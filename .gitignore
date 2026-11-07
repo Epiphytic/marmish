@@ -10,6 +10,8 @@
 .marmish-supervisor-*/
 .marmish-command-check-*/
 .marmish-stream-check-*/
+# Native copy staging, retained checkpoints, locks and commit receipts
+.marmish-copy-v1-*/
 /state/
 /fixtures-output/
 .whitenoise/

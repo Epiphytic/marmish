@@ -70,8 +70,10 @@ final Linux AMD64 live qualification passed and source was published to both
 remotes. The [rsync adapter](phases/streaming-rsync.md) is implemented and has
 independent code/harness approval plus passing Linux native relay qualification;
 see [exact evidence and rates](validation/rsync-runtime-live.md).
-Native resumable copy and installed cross-platform qualification
-remain later phases. See [runtime evidence](validation/streaming-runtime.md) for
+Native resumable copy has independent integrated source approval and a passing
+12-case Linux relay small smoke; default large-file qualification is running. Its [design](phases/streaming-copy.md) and
+[local cleanup contract](phases/streaming-copy-local-gc.md) define the phase exit
+criteria. Installed cross-platform qualification remains the following phase. See [runtime evidence](validation/streaming-runtime.md) for
 actual source/platform test boundaries and failures. None of these increments is
 a capability of the currently published v0.2.3 binary installer.
 

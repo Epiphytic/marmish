@@ -1,4 +1,5 @@
 //! Same-user live execution. Persisted process identifiers are diagnostics only.
+use crate::copy_launch::OwnedCopyContext;
 use crate::launcher::{self, ChildSpec};
 use crate::model::*;
 use crate::process::ChildOwner;
@@ -12,6 +13,7 @@ use std::os::fd::{AsRawFd, OwnedFd};
 /// This value is intentionally neither Clone nor serializable.
 pub struct PreparedLiveExec {
     spec: ChildSpec,
+    copy_context: Option<OwnedCopyContext>,
 }
 
 /// Diagnostic identity; this record never confers signalling or wait ownership.
@@ -96,7 +98,14 @@ impl Engine {
         self.owner(ctx)?;
         let request = self.resolve_exec(&CommandRequest::Exec { argv }, search_path)?;
         self.check_execute_request(ctx, &request)?;
-        Ok(PreparedLiveExec {
+        Ok(self.prepared_live(request, None))
+    }
+    pub(crate) fn prepared_live(
+        &self,
+        request: CommandRequest,
+        copy_context: Option<OwnedCopyContext>,
+    ) -> PreparedLiveExec {
+        PreparedLiveExec {
             spec: ChildSpec {
                 account: self.account.clone(),
                 environment: launcher::child_environment(&self.account),
@@ -105,7 +114,8 @@ impl Engine {
                 umask: 0o077,
                 canonical_exec_required: true,
             },
-        })
+            copy_context,
+        }
     }
 }
 
@@ -124,10 +134,21 @@ impl PreparedLiveExec {
     pub fn spawn(self) -> std::result::Result<LiveChild, LiveSpawnError> {
         let worker = launcher::process_identity(std::process::id() as i32)
             .map_err(|_| LiveSpawnError::NotStarted(LaunchFailure::OtherStartupFailure))?;
-        let spawned = launcher::spawn_child(&self.spec).map_err(|error| match error {
-            launcher::ChildSpawnError::NotStarted(reason) => LiveSpawnError::NotStarted(reason),
-            launcher::ChildSpawnError::Uncertain => LiveSpawnError::Uncertain,
-        })?;
+        if let Some(context) = &self.copy_context {
+            context
+                .validate_image()
+                .map_err(|_| LiveSpawnError::NotStarted(LaunchFailure::OtherStartupFailure))?;
+        }
+        let locator = self.copy_context.as_ref().map(OwnedCopyContext::locator);
+        let spawned =
+            launcher::spawn_child_with_context(&self.spec, locator).map_err(
+                |error| match error {
+                    launcher::ChildSpawnError::NotStarted(reason) => {
+                        LiveSpawnError::NotStarted(reason)
+                    }
+                    launcher::ChildSpawnError::Uncertain => LiveSpawnError::Uncertain,
+                },
+            )?;
         let owner = ChildOwner {
             child: spawned.child,
             identity: spawned.identity,
@@ -207,6 +228,7 @@ mod tests {
                 umask: 0o077,
                 canonical_exec_required: true,
             },
+            copy_context: None,
         }
     }
     fn await_exit(child: &LiveChild) {

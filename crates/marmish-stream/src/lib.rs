@@ -40,3 +40,5 @@ pub(crate) fn end(offset: u64, len: usize) -> Result<u64> {
         .filter(|n| *n <= MAX_OFFSET)
         .ok_or(Error::Offset)
 }
+
+pub mod copy_protocol;

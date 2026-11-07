@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "passed": false,
+  "relay": "wss://relay.eu.whitenoise.chat",
+  "relay_path_redacted": false,
+  "cleanup_scope": "owned_daemon_shutdown_and_protocol_cancel",
+  "platform": "Linux",
+  "architecture": "x86_64",
+  "payload_bytes": 2105344,
+  "results": [
+    {
+      "case": "put_raw",
+      "exit": 0,
+      "compression": false,
+      "payload_bytes": 2105344,
+      "sha256": "508f0bcd0476c5f4143c3611580e3ce479a15704a77f3f6b6ca1b29e9e4854a6",
+      "seconds": 384.671499,
+      "payload_bytes_per_second": 5473.1
+    }
+  ],
+  "suite": "native_copy_source",
+  "scope": "same_host_native_marmot",
+  "not_covered": [
+    "cross-platform installer",
+    "Tor",
+    "daemon restart",
+    "live interrupted durable resume",
+    "live copy cancellation",
+    "retention garbage collection"
+  ],
+  "binary": {
+    "sha256": "7226159b1cd997187f44ced75e447b982cb4838232c13da4bb12fcd3cff26fe6",
+    "version": "0.2.3"
+  },
+  "error": {
+    "stage": "get_raw",
+    "category": "command_failed"
+  },
+  "daemon_shutdown": [
+    {
+      "role": "client",
+      "exit": 0
+    },
+    {
+      "role": "server",
+      "exit": 0
+    }
+  ],
+  "total_seconds": 394.514046,
+  "private_state_retained": true
+}

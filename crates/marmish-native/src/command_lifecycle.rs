@@ -25,6 +25,11 @@ pub(crate) struct LifecycleStopReport {
     pub mdk_stop_complete: bool,
     #[serde(skip)]
     pub stream_stop_complete: bool,
+    #[serde(
+        rename = "stream_stop_complete",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub stream_stop_observation: Option<bool>,
     pub runtime_cleanup_complete: bool,
 }
 impl Default for LifecycleStopReport {
@@ -35,6 +40,7 @@ impl Default for LifecycleStopReport {
             engine_stop_complete: false,
             mdk_stop_complete: false,
             stream_stop_complete: false,
+            stream_stop_observation: None,
             runtime_cleanup_complete: false,
         }
     }
@@ -132,7 +138,12 @@ impl Frontend {
         }
         // Physical completion alone does not prove the terminal journal commit.
         let confirmed = begun && cancelled && owner.stream_stop_confirmed().unwrap_or(false);
-        update(&progress, |report| report.stream_stop_complete = confirmed);
+        update(&progress, |report| {
+            report.stream_stop_complete = confirmed;
+            if report.stream_stop_observation.is_some() {
+                report.stream_stop_observation = Some(confirmed);
+            }
+        });
         let publication = Instant::now() + Duration::from_secs(2);
         let _ = tokio::time::timeout_at(publication, owner.stream_stop_publish(publication)).await;
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -211,10 +222,14 @@ pub(crate) async fn stop_owned(identity: OwnedIdentity, deadline: Instant) -> St
     let OwnedIdentity { mut owner, profile } = identity;
     // Close admissions and invalidate all preparation results before capturing
     // independent child-ownership barriers. No network wait precedes the keeper.
+    let stream_qualified = owner.stream_has_server_state().unwrap_or(true);
     let begun = owner.stream_begin_stop().is_ok();
     let barriers = owner.stream_runner_barriers();
     let engine = owner.take_engine_for_stop();
-    let progress = Arc::new(Mutex::new(LifecycleStopReport::default()));
+    let progress = Arc::new(Mutex::new(LifecycleStopReport {
+        stream_stop_observation: stream_qualified.then_some(false),
+        ..LifecycleStopReport::default()
+    }));
     let (closed, frontend) = mpsc::channel();
     let keeper = start_keeper(profile, engine, frontend, barriers, progress.clone());
     let frontend = Frontend {
@@ -231,6 +246,32 @@ pub(crate) async fn stop_owned(identity: OwnedIdentity, deadline: Instant) -> St
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    #[test]
+    fn stream_stop_observation_is_optional_and_never_defaults_to_success() {
+        let mut report = LifecycleStopReport::default();
+        assert!(
+            serde_json::to_value(report)
+                .unwrap()
+                .get("stream_stop_complete")
+                .is_none()
+        );
+        report.stream_stop_complete = true;
+        // Internal readiness cannot manufacture public proof for a finite-only
+        // identity; public proof appears only after a qualified stream stop.
+        assert!(
+            serde_json::to_value(report)
+                .unwrap()
+                .get("stream_stop_complete")
+                .is_none()
+        );
+        for confirmed in [false, true] {
+            report.stream_stop_observation = Some(confirmed);
+            assert_eq!(
+                serde_json::to_value(report).unwrap()["stream_stop_complete"],
+                confirmed
+            );
+        }
+    }
     #[tokio::test]
     async fn expired_observer_retains_lease_until_real_thread_join() {
         let root = tempfile::tempdir().unwrap();

@@ -116,8 +116,50 @@ struct SelectArgs {
     destination: Option<String>,
 }
 
+#[derive(clap::Args)]
+struct CopyArgs {
+    /// Remote npub or configured alias, optionally followed by @relay.
+    remote: String,
+    /// Literal source path (local for put; remote for get).
+    source: OsString,
+    /// Literal destination path (remote for put; local for get).
+    target: OsString,
+    #[arg(long)]
+    compress: bool,
+    /// Resume this exact transfer with unchanged paths and preservation options.
+    #[arg(long)]
+    resume: Option<String>,
+    #[arg(long)]
+    overwrite: bool,
+    #[arg(long)]
+    preserve_mode: bool,
+    #[arg(long)]
+    preserve_mtime: bool,
+    #[arg(long, default_value_t=660, value_parser=clap::value_parser!(u64).range(1..=86400))]
+    idle_seconds: u64,
+    #[arg(long, default_value_t=300, value_parser=clap::value_parser!(u64).range(1..=86400))]
+    keepalive_seconds: u64,
+    /// Capability probe deadline, no greater than the idle timeout.
+    #[arg(long, default_value_t=15, value_parser=clap::value_parser!(u64).range(1..=86400))]
+    probe_seconds: u64,
+}
+
 #[derive(Subcommand)]
 enum FrontendCommand {
+    /// Inspect retained local download receipts or acknowledge an uncertain record.
+    CopyReceipts {
+        #[arg(long, requires_all = ["revision", "acknowledge_retained_state"])]
+        forget: Option<String>,
+        #[arg(long, requires = "forget", value_parser = clap::value_parser!(u64).range(1..))]
+        revision: Option<u64>,
+        /// Remove only the index record; retained files require manual inspection.
+        #[arg(long, requires = "forget")]
+        acknowledge_retained_state: bool,
+    },
+    /// Copy one local regular file to a remote literal path.
+    Put(CopyArgs),
+    /// Copy one remote regular file to a local literal path.
+    Get(CopyArgs),
     /// Rsync remote shell: rsync -s -e 'marmish rsh'. Global options go before rsh.
     Rsh,
     /// Execute with binary stdin/stdout streams and explicit remote cancellation.
@@ -305,7 +347,12 @@ async fn run(
     if args.new_session
         && !matches!(
             args.command,
-            Some(FrontendCommand::Remote(_) | FrontendCommand::Stream { .. })
+            Some(
+                FrontendCommand::Remote(_)
+                    | FrontendCommand::Stream { .. }
+                    | FrontendCommand::Put(_)
+                    | FrontendCommand::Get(_)
+            )
         )
     {
         return Err(Error::Invalid("new_session_operation"));
@@ -543,7 +590,10 @@ fn stream_action(args: &Args) -> bool {
         &args.command,
         Some(
             FrontendCommand::Stream { .. }
+                | FrontendCommand::Put(_)
+                | FrontendCommand::Get(_)
                 | FrontendCommand::Rsh
+                | FrontendCommand::CopyReceipts { .. }
                 | FrontendCommand::Streams { .. }
                 | FrontendCommand::StreamReconcile { .. }
         )
@@ -578,6 +628,12 @@ async fn run_stream_command(args: &Args, state: &std::path::Path) -> Result<u8> 
         Some(FrontendCommand::Stream { argv, .. }) => {
             if args.detach || args.stdin_none || args.trailing.as_ref() != Some(argv) {
                 return Err(Error::Invalid("stream_arguments"));
+            }
+            Some(ExecutionSignals::register(SignalPolicy::Interactive)?)
+        }
+        Some(FrontendCommand::Put(_) | FrontendCommand::Get(_)) => {
+            if args.detach || args.stdin || args.stdin_none {
+                return Err(Error::Invalid("copy_arguments"));
             }
             Some(ExecutionSignals::register(SignalPolicy::Interactive)?)
         }
@@ -649,6 +705,68 @@ async fn run_stream_command(args: &Args, state: &std::path::Path) -> Result<u8> 
                 },
             )
             .await
+        }
+        Some(FrontendCommand::Put(copy) | FrontendCommand::Get(copy)) => {
+            let target = stream_preparation(
+                &mut signals,
+                resolve_target(&config, args, Some(&copy.remote)),
+            )
+            .await?;
+            crate::copy_cli::execute(
+                context,
+                target.remote,
+                target.relays,
+                crate::copy_cli::Options {
+                    direction: if matches!(args.command, Some(FrontendCommand::Put(_))) {
+                        marmish_stream::copy_protocol::Direction::Put
+                    } else {
+                        marmish_stream::copy_protocol::Direction::Get
+                    },
+                    source: copy.source.clone(),
+                    destination: copy.target.clone(),
+                    resume: copy.resume.clone(),
+                    overwrite: copy.overwrite,
+                    preserve_mode: copy.preserve_mode,
+                    preserve_mtime: copy.preserve_mtime,
+                    compress: copy.compress,
+                    idle: Duration::from_secs(copy.idle_seconds),
+                    keepalive: Duration::from_secs(copy.keepalive_seconds),
+                    probe: Duration::from_secs(copy.probe_seconds),
+                    retention: config.limits().copy_receipt_retention.as_secs(),
+                    new_session: args.new_session,
+                    signals: signals.take().ok_or(Error::Invalid("stream_signal"))?,
+                },
+            )
+            .await
+        }
+        Some(FrontendCommand::CopyReceipts {
+            forget,
+            revision,
+            acknowledge_retained_state,
+        }) => {
+            if let Some(namespace) = forget {
+                if !acknowledge_retained_state {
+                    return Err(Error::Invalid("copy_forget_acknowledgement"));
+                }
+                crate::copy_local_gc::forget(
+                    &context,
+                    namespace.clone(),
+                    revision.ok_or(Error::Invalid("copy_forget_revision"))?,
+                )
+                .await?;
+                use std::io::Write;
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "marmish copy: index record forgotten; retained files were not removed and require manual inspection"
+                );
+            } else {
+                println!(
+                    "{}",
+                    serde_json::to_string(&crate::copy_local_gc::inspect(&context).await?)
+                        .map_err(|_| Error::Invalid("report_encoding"))?
+                );
+            }
+            Ok(0)
         }
         Some(FrontendCommand::Streams { destination }) => {
             let remote = target_filter(&config, args, destination.as_deref()).await?;
@@ -1062,6 +1180,38 @@ fn parse_public(raw: &[OsString]) -> std::result::Result<Args, clap::Error> {
 
 pub fn main(daemon_binary: bool) -> ExitCode {
     let raw = std::env::args_os().collect::<Vec<_>>();
+    if raw
+        .get(1)
+        .is_some_and(|arg| arg == OsStr::new(marmish_stream::copy_protocol::HELPER_ENTRYPOINT))
+    {
+        use std::os::fd::FromRawFd;
+        let descriptor = raw.get(3).and_then(|arg| arg.to_str()).and_then(|text| {
+            text.parse::<i32>()
+                .ok()
+                .filter(|fd| *fd > 3 && fd.to_string() == text)
+        });
+        if raw.len() != 4
+            || raw
+                .get(2)
+                .is_none_or(|arg| arg != OsStr::new("--context-fd"))
+            || descriptor.is_none()
+        {
+            eprintln!("marmish copy: helper_context_invalid");
+            return ExitCode::from(1);
+        }
+        let fd = descriptor.unwrap();
+        if [fd, 0, 1]
+            .into_iter()
+            .any(|descriptor| unsafe { libc::fcntl(descriptor, libc::F_GETFD) } < 0)
+        {
+            return ExitCode::from(1);
+        }
+        // SAFETY: the dedicated child owns this open descriptor and all stdio.
+        let context = unsafe { std::fs::File::from_raw_fd(fd) };
+        let input = unsafe { std::fs::File::from_raw_fd(0) };
+        let output = unsafe { std::fs::File::from_raw_fd(1) };
+        std::process::exit(crate::copy_helper::run(context, input, output) as i32);
+    }
     // The provider helper has its own private protocol; validate its canonical
     // executable before entering it, without parsing public CLI arguments.
     let helper_action = raw.get(1).map(OsString::as_os_str);
@@ -1096,6 +1246,10 @@ pub fn main(daemon_binary: bool) -> ExitCode {
             return ExitCode::from(code);
         }
     };
+    let copy_action = matches!(
+        args.command,
+        Some(FrontendCommand::Put(_) | FrontendCommand::Get(_))
+    );
     let failure_code = if command_action(&args) || stream_action(&args) {
         255
     } else {
@@ -1177,7 +1331,11 @@ pub fn main(daemon_binary: bool) -> ExitCode {
                 reporter.failed(&error);
             }
             print_error(&error);
-            ExitCode::from(failure_code)
+            ExitCode::from(if copy_action {
+                crate::copy_cli::failure_exit(&error)
+            } else {
+                failure_code
+            })
         }
     }
 }
@@ -1208,6 +1366,60 @@ fn print_error(error: &Error) {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+    #[test]
+    fn forgetting_copy_index_requires_exact_revision_and_retention_acknowledgement() {
+        assert!(Args::try_parse_from(["marmish", "copy-receipts"]).is_ok());
+        assert!(Args::try_parse_from(["marmish", "copy-receipts", "--forget", "opaque"]).is_err());
+        assert!(
+            Args::try_parse_from([
+                "marmish",
+                "copy-receipts",
+                "--forget",
+                "opaque",
+                "--revision",
+                "1"
+            ])
+            .is_err()
+        );
+        assert!(
+            Args::try_parse_from([
+                "marmish",
+                "copy-receipts",
+                "--forget",
+                "opaque",
+                "--revision",
+                "1",
+                "--acknowledge-retained-state"
+            ])
+            .is_ok()
+        );
+    }
+    #[test]
+    fn copy_paths_preserve_literal_non_utf8_bytes_and_leading_flags() {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+        let source = OsString::from_vec(b"-source;$(echo x) \xff\n".to_vec());
+        let target = OsString::from_vec(b"-target*? \xfe\t".to_vec());
+        for action in ["put", "get"] {
+            let args = Args::try_parse_from([
+                OsString::from("marmish"),
+                OsString::from(action),
+                OsString::from("--compress"),
+                OsString::from("--"),
+                OsString::from("remote-alias"),
+                source.clone(),
+                target.clone(),
+            ])
+            .unwrap();
+            let copy = match args.command.unwrap() {
+                FrontendCommand::Put(copy) | FrontendCommand::Get(copy) => copy,
+                _ => panic!("copy action required"),
+            };
+            assert!(copy.compress);
+            assert_eq!(copy.source.as_bytes(), source.as_bytes());
+            assert_eq!(copy.target.as_bytes(), target.as_bytes());
+            assert_eq!(copy.remote, "remote-alias");
+        }
+    }
     #[test]
     fn early_stream_signal_does_not_wait_for_blocking_autostart() {
         const MARKER: &str = "MARMISH_TEST_AUTOSTART_SIGNAL_MARKER";

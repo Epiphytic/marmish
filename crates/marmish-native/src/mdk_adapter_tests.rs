@@ -2636,7 +2636,10 @@ async fn stream_terminal_snapshot_preserves_offsets_after_runner_eviction() {
         server_side: true,
         hello: true,
         open_digest: Some([4; 32]),
-        argv: vec![b"/bin/cat".to_vec()],
+        launch: crate::stream_service::StreamLaunch::Exec {
+            argv: vec![b"/bin/cat".to_vec()],
+        },
+        copy_hello: false,
         codec: Codec::None,
         state: "terminal".into(),
         cancel: false,
@@ -3275,4 +3278,575 @@ async fn stream_service_stop_closes_admission_before_cancel_and_preserves_uncert
             .unwrap()
             .active
     );
+}
+
+fn native_copy_test_launch(
+    binding: &marmish_stream::wire::Binding,
+) -> marmish_stream::copy_protocol::Launch {
+    use marmish_stream::copy_protocol as cp;
+    cp::Launch {
+        version: cp::VERSION,
+        mode: cp::AttemptMode::Create,
+        transfer: [47; 32],
+        client: binding.client,
+        server: binding.server,
+        direction: cp::Direction::Put,
+        source: b"literal source".to_vec(),
+        destination: b"literal destination".to_vec(),
+        overwrite: false,
+        preserve_mode: false,
+        preserve_mtime: false,
+    }
+}
+
+#[tokio::test]
+async fn copy_actor_rejects_wrong_binding_and_withdrawn_execution_grant() {
+    use marmish_stream::{codec::Codec, wire as w};
+    let mut f = Fixture::new(2);
+    let (group, binding) = f.stream_fixture().await;
+    let mut request = w::Request {
+        binding,
+        sequence: 0,
+        body: w::RequestBody::CopyHello {
+            versions: vec![1],
+            codecs: vec![Codec::None],
+        },
+    };
+    request.binding.server = [77; 32];
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    assert!(f.owners[1].journal.stream_records().unwrap().is_empty());
+    request.binding.server = f.materials[1].public_key().to_bytes();
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    let before = f.owners[1].journal.stream_records().unwrap().remove(0);
+    assert!(before.copy_hello);
+    f.owners[1].commands = None;
+    request.body = w::RequestBody::OpenCopy {
+        launch: native_copy_test_launch(&request.binding),
+        codec: Codec::None,
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    let after = f.owners[1]
+        .journal
+        .stream_get(&before.key())
+        .unwrap()
+        .unwrap();
+    assert!(after.open_digest.is_none() && !after.active);
+    assert_eq!(after.revision, before.revision);
+}
+
+#[tokio::test]
+async fn copy_actor_cancel_before_open_cannot_be_revived_by_copy_hello() {
+    use marmish_stream::{codec::Codec, wire as w};
+    let mut f = Fixture::new(2);
+    let (group, binding) = f.stream_fixture().await;
+    let mut request = w::Request {
+        binding,
+        sequence: 0,
+        body: w::RequestBody::Cancel,
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    request.body = w::RequestBody::CopyHello {
+        versions: vec![1],
+        codecs: vec![Codec::None],
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    request.body = w::RequestBody::OpenCopy {
+        launch: native_copy_test_launch(&request.binding),
+        codec: Codec::None,
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    let record = f.owners[1].journal.stream_records().unwrap().remove(0);
+    assert!(record.cancel && !record.active && record.open_digest.is_none());
+    assert_eq!(record.terminal, Some(w::Terminal::Cancelled));
+}
+
+#[tokio::test]
+async fn copy_actor_cancel_fences_preparing_revision_and_copy_index() {
+    use marmish_stream::{codec::Codec, wire as w};
+    let mut f = Fixture::new(2);
+    let (group, binding) = f.stream_fixture().await;
+    let mut request = w::Request {
+        binding,
+        sequence: 0,
+        body: w::RequestBody::CopyHello {
+            versions: vec![1],
+            codecs: vec![Codec::None],
+        },
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    request.body = w::RequestBody::OpenCopy {
+        launch: native_copy_test_launch(&request.binding),
+        codec: Codec::None,
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    let before = f.owners[1].journal.stream_records().unwrap().remove(0);
+    assert!(before.active && before.open_digest.is_some());
+    assert_eq!(before.state, "preparing");
+    // Restore the fixture burst budget: this test isolates the revision fence,
+    // while production control retries retain their bounded rate limit.
+    f.owners[1]
+        .streams
+        .live
+        .get_mut(&before.key())
+        .unwrap()
+        .control_rate = crate::stream_service::Rate::new(2);
+    request.body = w::RequestBody::Cancel;
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    let after = f.owners[1]
+        .journal
+        .stream_get(&before.key())
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.revision, before.revision + 1);
+    assert!(after.cancel && !after.active);
+    assert_eq!(after.terminal, Some(w::Terminal::Cancelled));
+    // Saving a later status projection must preserve the paired copy index fence.
+    f.owners[1].journal.stream_save(&after).unwrap();
+}
+
+#[tokio::test]
+async fn copy_local_receiver_reserves_real_client_command_rooms_without_server_engine() {
+    use crate::copy_local_gc::{Operation, ReceiverBase, Request, Response};
+    use crate::stream_service::{StreamLocalRequest, StreamLocalResult};
+    use marmish_stream::copy_protocol as cp;
+    for (case, configured) in [false, true, true].into_iter().enumerate() {
+        let mut f = Fixture::new(2);
+        let (group, binding) = f.stream_fixture().await;
+        // Production stream preparation binds command_rooms, never conversations.
+        assert!(
+            f.owners[0]
+                .journal
+                .command_room(group.as_slice())
+                .unwrap()
+                .is_some()
+        );
+        let retention = cp::MIN_RETENTION_SECS as u64 + if configured { 120 } else { 0 };
+        if configured {
+            let config = crate::command_config::CommandConfig::from_bytes(
+                &serde_json::to_vec(&serde_json::json!({
+                    "version":1,"role":"client","relays":["wss://127.0.0.1:9/"],
+                    "tor":"off","trusted_remotes":[hex::encode(binding.server)],
+                    "execution_clients":[],"command_policy":{"version":1},"cwd":"/","aliases":{},
+                    "limits":{"copy_receipt_retention":retention}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            f.owners[0].commands = Some(crate::command_service::CommandService::new(config, None));
+        } else {
+            assert!(f.owners[0].commands.is_none());
+        }
+        let mut launch = native_copy_test_launch(&binding);
+        launch.direction = cp::Direction::Get;
+        let operation = Operation::Reserve {
+            launch,
+            binding: binding.clone(),
+            base: ReceiverBase {
+                path: b"/local/receiver".to_vec(),
+                identity: crate::copy_local_gc::Identity {
+                    device: 1,
+                    inode: 2,
+                },
+            },
+        };
+        let mut id = [0; 16];
+        id[..8].copy_from_slice(&now().unwrap().to_be_bytes());
+        id[15] = 1;
+        let result = f.owners[0]
+            .stream_request_local(StreamLocalRequest::CopyReceiver {
+                request: Box::new(Request {
+                    id,
+                    operation: operation.clone(),
+                }),
+            })
+            .unwrap();
+        let lease = match result {
+            StreamLocalResult::CopyReceiver { response } => match *response {
+                Response::Reserved {
+                    retention: actual,
+                    lease,
+                } => {
+                    assert_eq!(actual, retention);
+                    lease
+                }
+                _ => panic!("expected local receiver reservation"),
+            },
+            _ => panic!("expected local receiver result"),
+        };
+        let mut activation_id = id;
+        activation_id[15] = 3;
+        let activation = Request {
+            id: activation_id,
+            operation: Operation::Activate { lease },
+        };
+        if configured {
+            let Operation::Reserve { launch, .. } = &operation else {
+                unreachable!()
+            };
+            let open = marmish_stream::wire::Request {
+                binding: binding.clone(),
+                sequence: 0,
+                body: marmish_stream::wire::RequestBody::OpenCopy {
+                    launch: launch.clone(),
+                    codec: marmish_stream::codec::Codec::None,
+                },
+            };
+            let result = f.owners[0]
+                .stream_request_local(StreamLocalRequest::Frame {
+                    frame_base64: base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD,
+                        marmish_stream::wire::encode_request(&open).unwrap(),
+                    ),
+                    relays: vec!["wss://127.0.0.1:9/".into()],
+                })
+                .unwrap();
+            assert!(matches!(result, StreamLocalResult::Pending));
+            if case == 1 {
+                let result = f.owners[0]
+                    .stream_request_local(StreamLocalRequest::CopyReceiver {
+                        request: Box::new(activation.clone()),
+                    })
+                    .unwrap();
+                assert!(
+                    matches!(result, StreamLocalResult::CopyReceiver { response }
+                    if matches!(*response, Response::Ok))
+                );
+            }
+        }
+        // Revoked command room metadata cannot authorize a fresh receiver lease.
+        f.owners[0]
+            .journal
+            .command_revoke_room(group.as_slice())
+            .unwrap();
+        if configured {
+            let result = f.owners[0].stream_request_local(StreamLocalRequest::CopyReceiver {
+                request: Box::new(activation),
+            });
+            if case == 1 {
+                assert!(matches!(result, Err(Error::Copy(cp::CopyError::Conflict))));
+            } else {
+                assert!(
+                    matches!(result.unwrap(), StreamLocalResult::CopyReceiver { response }
+                    if matches!(*response, Response::Rejected { code: cp::CopyError::Conflict }))
+                );
+            }
+        }
+        id[15] = 2;
+        let result = f.owners[0]
+            .stream_request_local(StreamLocalRequest::CopyReceiver {
+                request: Box::new(Request { id, operation }),
+            })
+            .unwrap();
+        assert!(
+            matches!(result, StreamLocalResult::CopyReceiver { response }
+            if matches!(*response, Response::Rejected { code: cp::CopyError::Conflict }))
+        );
+    }
+}
+
+// Exercises actual Marmot authentication and actor projection with a real owned
+// child installed at the preparation seam; this excludes engine preparation.
+#[tokio::test]
+async fn stream_authenticated_open_replay_and_grant_withdrawal_preserve_one_owned_child() {
+    use marmish_stream::{
+        codec::{self, Codec},
+        wire as w,
+    };
+    let mut f = Fixture::new(2);
+    let (group, binding) = f.stream_fixture().await;
+    let mut request = w::Request {
+        binding: binding.clone(),
+        sequence: 0,
+        body: w::RequestBody::Hello {
+            codecs: vec![Codec::None],
+        },
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    request.body = w::RequestBody::Open {
+        argv: vec![b"/bin/cat".to_vec()],
+        codec: Codec::None,
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    let admitted = f.owners[1].journal.stream_records().unwrap().remove(0);
+    assert!(admitted.active && admitted.state == "preparing");
+    // Replay before preparation must retain the same admission and revision.
+    f.owners[1]
+        .streams
+        .live
+        .get_mut(&admitted.key())
+        .unwrap()
+        .control_rate = crate::stream_service::Rate::new(2);
+    let app = cgka_traits::app_event::MarmotAppEvent::new(
+        f.owners[0].identity.clone(),
+        now().unwrap() + 1,
+        30101,
+        vec![vec!["marmish".into(), "stream/1".into()]],
+        String::from_utf8(w::encode_request(&request).unwrap()).unwrap(),
+    );
+    let event = f.encrypted_app(&group, app).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    let replayed = f.owners[1]
+        .journal
+        .stream_get(&admitted.key())
+        .unwrap()
+        .unwrap();
+    assert_eq!(replayed.revision, admitted.revision);
+    let digest = w::request_digest(&w::encode_request(&request).unwrap());
+    let response = f.owners[1]
+        .journal
+        .stream_slot(&admitted.key(), &digest)
+        .unwrap()
+        .unwrap()
+        .1
+        .unwrap();
+    assert!(matches!(
+        w::decode_response(&response).unwrap().body,
+        w::ResponseBody::Opened {
+            disposition: w::OpenDisposition::Existing,
+            ..
+        }
+    ));
+    assert_eq!(
+        f.owners[1]
+            .journal
+            .stream_active_server_records()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let marker_dir = tempfile::tempdir().unwrap();
+    let marker = marker_dir.path().join("launches");
+    let quoted = marker.to_str().unwrap().replace('\'', "'\\''");
+    let (_engine_dir, prepared) =
+        crate::stream_runner::tests::prepare(&format!("printf x >> '{quoted}'; exec cat"));
+    let runner = crate::stream_runner::RunnerHandle::start(
+        prepared,
+        crate::stream_runner::RunnerLimits {
+            drain_grace: Duration::from_millis(80),
+            cancel_grace: Duration::from_millis(40),
+            poll_interval: Duration::from_millis(2),
+        },
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while runner.snapshot().identity.is_none() || !marker.exists() {
+        assert!(Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    let identity = serde_json::to_vec(&runner.snapshot().identity.unwrap()).unwrap();
+    let mut running = admitted.clone();
+    running.state = "running".into();
+    running.identity = Some(identity.clone());
+    f.owners[1].journal.stream_save(&running).unwrap();
+    let live = f.owners[1].streams.live.get_mut(&running.key()).unwrap();
+    live.runner = Some(runner.clone());
+    live.identity_committed = true;
+    live.control_rate = crate::stream_service::Rate::new(2);
+    runner.permit_input();
+    // Distinguish a processed second replay from the first replay's cached reply.
+    f.owners[1]
+        .journal
+        .stream_response_slot(&admitted.key(), &digest, b"replay sentinel")
+        .unwrap();
+    let app = cgka_traits::app_event::MarmotAppEvent::new(
+        f.owners[0].identity.clone(),
+        now().unwrap() + 2,
+        30101,
+        vec![vec!["marmish".into(), "stream/1".into()]],
+        String::from_utf8(w::encode_request(&request).unwrap()).unwrap(),
+    );
+    let event = f.encrypted_app(&group, app).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    f.owners[1].progress_streams().unwrap();
+    let response = f.owners[1]
+        .journal
+        .stream_slot(&admitted.key(), &digest)
+        .unwrap()
+        .unwrap()
+        .1
+        .unwrap();
+    assert!(matches!(
+        w::decode_response(&response).unwrap().body,
+        w::ResponseBody::Opened {
+            disposition: w::OpenDisposition::Existing,
+            ..
+        }
+    ));
+    assert_eq!(
+        serde_json::to_vec(&runner.snapshot().identity.unwrap()).unwrap(),
+        identity
+    );
+    // This proves retention of our manually installed runner, not the engine's
+    // duplicate-launch suppression through its preparation path.
+    assert_eq!(std::fs::read(&marker).unwrap(), b"x");
+    assert_eq!(f.owners[1].stream_runner_barriers().len(), 1);
+    assert_eq!(
+        f.owners[1]
+            .journal
+            .stream_get(&running.key())
+            .unwrap()
+            .unwrap()
+            .revision,
+        admitted.revision
+    );
+
+    // A positive control immediately before withdrawal proves Status is usable.
+    f.owners[1]
+        .streams
+        .live
+        .get_mut(&running.key())
+        .unwrap()
+        .control_rate = crate::stream_service::Rate::new(2);
+    f.owners[1].streams.control_rate = crate::stream_service::Rate::new(8);
+    f.owners[1].streams.peer_rates.insert(
+        binding.client,
+        (
+            crate::stream_service::Rate::new(32),
+            crate::stream_service::Rate::new(8),
+        ),
+    );
+    request.body = w::RequestBody::Status;
+    let app = cgka_traits::app_event::MarmotAppEvent::new(
+        f.owners[0].identity.clone(),
+        now().unwrap() + 3,
+        30101,
+        vec![vec!["marmish".into(), "stream/1".into()]],
+        String::from_utf8(w::encode_request(&request).unwrap()).unwrap(),
+    );
+    let event = f.encrypted_app(&group, app).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    let status_digest = w::request_digest(&w::encode_request(&request).unwrap());
+    assert!(
+        f.owners[1]
+            .journal
+            .stream_slot(&running.key(), &status_digest)
+            .unwrap()
+            .unwrap()
+            .1
+            .is_some()
+    );
+    // Withdraw only the execution grant, keeping server configuration present.
+    let config = crate::command_config::CommandConfig::from_bytes(
+        &serde_json::to_vec(&serde_json::json!({
+            "version":1,"role":"server","relays":["wss://127.0.0.1:9/"],"tor":"off",
+            "trusted_remotes":[],"execution_clients":[],"command_policy":{"version":1},
+            "cwd":"/","limits":{},"aliases":{}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    f.owners[1].commands = Some(crate::command_service::CommandService::new(config, None));
+    f.owners[1]
+        .streams
+        .live
+        .get_mut(&running.key())
+        .unwrap()
+        .control_rate = crate::stream_service::Rate::new(8);
+    f.owners[1]
+        .streams
+        .live
+        .get_mut(&running.key())
+        .unwrap()
+        .data_rate = crate::stream_service::Rate::new(32);
+    f.owners[1].streams.control_rate = crate::stream_service::Rate::new(8);
+    f.owners[1].streams.data_rate = crate::stream_service::Rate::new(32);
+    f.owners[1].streams.peer_rates.insert(
+        binding.client,
+        (
+            crate::stream_service::Rate::new(32),
+            crate::stream_service::Rate::new(8),
+        ),
+    );
+    // Publication dedup alone cannot detect an illicit identical Status reply.
+    // A denied request must leave this response unchanged.
+    f.owners[1]
+        .journal
+        .stream_response_slot(&running.key(), &status_digest, b"status sentinel")
+        .unwrap();
+    let publications = f.owners[1].journal.stream_publications().unwrap().len();
+    for (index, body) in [
+        w::RequestBody::Exchange {
+            stdin: Some(codec::encode(0, b"forbidden", Codec::None).unwrap()),
+            stdin_eof: None,
+            stdout_ack: 0,
+            stderr_ack: 0,
+        },
+        w::RequestBody::Cancel,
+        w::RequestBody::Status,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        request.sequence = if matches!(body, w::RequestBody::Exchange { .. }) {
+            1
+        } else {
+            0
+        };
+        request.body = body;
+        let app = cgka_traits::app_event::MarmotAppEvent::new(
+            f.owners[0].identity.clone(),
+            now().unwrap() + 4 + index as u64,
+            30101,
+            vec![vec!["marmish".into(), "stream/1".into()]],
+            String::from_utf8(w::encode_request(&request).unwrap()).unwrap(),
+        );
+        let event = f.encrypted_app(&group, app).await;
+        f.owners[1].project_stream_message(event).unwrap();
+    }
+    assert_eq!(
+        f.owners[1]
+            .journal
+            .stream_slot(&running.key(), &status_digest)
+            .unwrap()
+            .unwrap()
+            .1
+            .unwrap(),
+        b"status sentinel"
+    );
+    f.owners[1].progress_streams().unwrap();
+    let retained = f.owners[1]
+        .journal
+        .stream_get(&running.key())
+        .unwrap()
+        .unwrap();
+    assert_eq!(retained.state, "authority_revoked");
+    assert!(retained.active && !retained.cancel);
+    assert_eq!(
+        f.owners[1].journal.stream_publications().unwrap().len(),
+        publications
+    );
+    let snapshot = runner.snapshot();
+    assert_eq!(snapshot.stdin_accepted, 0);
+    assert!(!snapshot.cancel_requested && snapshot.terminal.is_none());
+    assert_eq!(std::fs::read(&marker).unwrap(), b"x");
+    f.owners[1]
+        .stream_request_local(crate::stream_service::StreamLocalRequest::AdminCancel {
+            stream: hex::encode(binding.stream),
+        })
+        .unwrap();
+    while !runner.finished() {
+        assert!(Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    f.owners[1].progress_streams().unwrap();
+    let stopped = f.owners[1]
+        .journal
+        .stream_get(&running.key())
+        .unwrap()
+        .unwrap();
+    assert!(runner.finished() && stopped.cancel && !stopped.active);
+    assert_eq!(stopped.state, "terminal");
+    assert_eq!(stopped.terminal, Some(w::Terminal::Cancelled));
 }

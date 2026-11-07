@@ -117,6 +117,8 @@ fn failure(error: Error) -> Response {
         Error::Mdk(_) => "marmot",
         Error::Timeout => "deadline",
         Error::DaemonStartup(_) => "daemon_startup",
+        Error::Copy(code) => crate::error::copy_category(&code),
+        Error::Stream(code) => crate::error::stream_category(&code),
     })
 }
 

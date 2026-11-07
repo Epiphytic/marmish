@@ -33,6 +33,7 @@ pub(crate) struct EngineSettings {
     pub policy: engine::EnginePolicy,
     pub binding: engine::NativeBinding,
     pub master: Zeroizing<[u8; 32]>,
+    pub canonical_native_image: Option<std::path::PathBuf>,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Readiness {
@@ -64,13 +65,34 @@ pub(crate) struct LivePrepareRequest {
     pub stream_id: [u8; 16],
     pub revision: u64,
     pub owner: crate::journal::Owner,
-    pub argv: Vec<Vec<u8>>,
+    pub kind: LivePrepareKind,
+}
+pub(crate) enum LivePrepareKind {
+    Exec {
+        argv: Vec<Vec<u8>>,
+    },
+    NativeCopy {
+        context: Box<marmish_stream::copy_protocol::HelperContext>,
+    },
 }
 pub(crate) struct LivePrepared {
     pub operation_id: [u8; 16],
     pub stream_id: [u8; 16],
     pub revision: u64,
     pub result: std::result::Result<engine::PreparedLiveExec, engine::EngineError>,
+}
+pub(crate) struct CopyGcRequest {
+    pub key: String,
+    pub revision: u64,
+    pub launch: marmish_stream::copy_protocol::Launch,
+    pub stream: [u8; 16],
+    pub cwd: std::path::PathBuf,
+    pub timestamp: i64,
+}
+pub(crate) struct CopyGcCompletion {
+    pub key: String,
+    pub revision: u64,
+    pub cleaned: bool,
 }
 const LIVE_CAPACITY: usize = 4;
 
@@ -86,6 +108,7 @@ enum Control {
     Cleanup,
     FailCleanup,
     Stop,
+    CopyGc(CopyGcRequest),
 }
 enum Event {
     Ready,
@@ -93,6 +116,7 @@ enum Event {
     Completion(Box<EngineCompletion>),
     Cleanup(CleanupState),
     LivePrepared(Box<LivePrepared>),
+    CopyGc(Box<CopyGcCompletion>),
 }
 
 pub(crate) struct CommandEngine {
@@ -101,6 +125,8 @@ pub(crate) struct CommandEngine {
     live_pending: BTreeSet<[u8; 16]>,
     live_prepared: VecDeque<LivePrepared>,
     live_capacity: usize,
+    copy_gc_pending: bool,
+    copy_gc_completed: Option<CopyGcCompletion>,
     controls: SyncSender<Control>,
     events: Receiver<Event>,
     completions: VecDeque<EngineCompletion>,
@@ -131,6 +157,7 @@ impl CommandEngine {
                     policy,
                     binding,
                     master,
+                    canonical_native_image,
                 } = settings;
                 let opened = engine::Engine::open_with_master(
                     policy,
@@ -141,7 +168,9 @@ impl CommandEngine {
                 match opened {
                     Ok(engine) => {
                         if tx.send(Event::Ready).is_ok() {
-                            Worker::new(engine, recovery).run(rx, live_rx, control_rx, tx);
+                            let mut worker = Worker::new(engine, recovery);
+                            worker.register_copy_helper(canonical_native_image.as_deref());
+                            worker.run(rx, live_rx, control_rx, tx);
                         }
                     }
                     Err(_) => {
@@ -155,6 +184,8 @@ impl CommandEngine {
             live_pending: BTreeSet::new(),
             live_prepared: VecDeque::new(),
             live_capacity,
+            copy_gc_pending: false,
+            copy_gc_completed: None,
             controls,
             events,
             completions: VecDeque::new(),
@@ -167,9 +198,40 @@ impl CommandEngine {
             stopping: false,
         })
     }
+    pub(crate) fn try_copy_gc(
+        &mut self,
+        request: CopyGcRequest,
+    ) -> std::result::Result<(), QueueBusy> {
+        self.collect();
+        if self.stopping || self.readiness != Readiness::Ready {
+            return Err(QueueBusy::Unavailable);
+        }
+        if self.copy_gc_pending {
+            return Err(QueueBusy::Full);
+        }
+        self.controls
+            .try_send(Control::CopyGc(request))
+            .map_err(|error| match error {
+                TrySendError::Full(_) => QueueBusy::Full,
+                TrySendError::Disconnected(_) => QueueBusy::Unavailable,
+            })?;
+        self.copy_gc_pending = true;
+        Ok(())
+    }
+    pub(crate) fn take_copy_gc(&mut self) -> Option<CopyGcCompletion> {
+        self.collect();
+        let result = self.copy_gc_completed.take();
+        if result.is_some() {
+            self.copy_gc_pending = false;
+        }
+        result
+    }
     fn collect(&mut self) {
         while let Ok(event) = self.events.try_recv() {
             match event {
+                Event::CopyGc(completed) => {
+                    self.copy_gc_completed = Some(*completed);
+                }
                 Event::Ready => self.readiness = Readiness::Ready,
                 Event::OpenFailed => self.readiness = Readiness::Failed,
                 Event::Completion(c) => {
@@ -366,6 +428,8 @@ impl CommandEngine {
             live_pending: BTreeSet::new(),
             live_prepared: VecDeque::new(),
             live_capacity: LIVE_CAPACITY,
+            copy_gc_pending: false,
+            copy_gc_completed: None,
             controls,
             events,
             completions: VecDeque::new(),
@@ -401,6 +465,7 @@ struct Worker {
     pending: VecDeque<OperationRecord>,
     closed: bool,
     search_path: Option<OsString>,
+    copy_helper: Option<engine::RegisteredCopyHelper>,
 }
 impl Worker {
     fn new(engine: engine::Engine, recovery: Vec<RecoveryRecord>) -> Self {
@@ -421,6 +486,22 @@ impl Worker {
             pending: VecDeque::new(),
             closed: false,
             search_path: std::env::var_os("PATH"),
+            copy_helper: None,
+        }
+    }
+    fn register_copy_helper(&mut self, path: Option<&std::path::Path>) {
+        let metadata = crate::native_manifest::compiled_release_metadata();
+        let mut commit = [0; 20];
+        if let Some(path) = path
+            && hex::decode_to_slice(metadata.commit, &mut commit).is_ok()
+        {
+            self.copy_helper = engine::RegisteredCopyHelper::register(
+                path,
+                metadata.version,
+                metadata.target,
+                commit,
+            )
+            .ok();
         }
     }
     fn can_dispatch(&self, k: &Key) -> bool {
@@ -464,6 +545,36 @@ impl Worker {
                     Ok(Control::FailCleanup) => {
                         self.closed = true;
                         if tx.send(Event::Cleanup(CleanupState::Failed)).is_err() {
+                            return;
+                        }
+                    }
+                    Ok(Control::CopyGc(request)) => {
+                        let cleaned = if self.closed {
+                            false
+                        } else if request.launch.direction
+                            == marmish_stream::copy_protocol::Direction::Get
+                        {
+                            true
+                        } else {
+                            crate::copy_files::trusted_base(&request.cwd)
+                                .and_then(|base| {
+                                    crate::copy_files::reclaim_authorized(
+                                        &base,
+                                        &request.launch,
+                                        request.stream,
+                                        request.timestamp,
+                                    )
+                                })
+                                .unwrap_or(false)
+                        };
+                        if tx
+                            .send(Event::CopyGc(Box::new(CopyGcCompletion {
+                                key: request.key,
+                                revision: request.revision,
+                                cleaned,
+                            })))
+                            .is_err()
+                        {
                             return;
                         }
                     }
@@ -578,7 +689,18 @@ impl Worker {
             engine::ServerId(binding.server),
             request.owner.uid(),
         )?;
-        e.prepare_live_exec(&ctx, request.argv.clone(), self.search_path.as_deref())
+        match &request.kind {
+            LivePrepareKind::Exec { argv } => {
+                e.prepare_live_exec(&ctx, argv.clone(), self.search_path.as_deref())
+            }
+            LivePrepareKind::NativeCopy { context } => e.prepare_native_copy(
+                &ctx,
+                self.copy_helper
+                    .as_ref()
+                    .ok_or(engine::EngineError::WorkerUnavailable)?,
+                context.as_ref().clone(),
+            ),
+        }
     }
     fn execute(&mut self, op: &OperationRecord) -> EngineObservation {
         if op.engine_known {
@@ -1184,6 +1306,7 @@ mod tests {
             pending: VecDeque::new(),
             closed: false,
             search_path: None,
+            copy_helper: None,
         }
     }
     fn handle() -> (
@@ -1203,6 +1326,8 @@ mod tests {
                 live_pending: BTreeSet::new(),
                 live_prepared: VecDeque::new(),
                 live_capacity: LIVE_CAPACITY,
+                copy_gc_pending: false,
+                copy_gc_completed: None,
                 controls,
                 events,
                 completions: VecDeque::new(),
@@ -1381,6 +1506,7 @@ mod tests {
             policy,
             binding: engine::NativeBinding::new([8; 32], [9; 32]),
             master: Zeroizing::new([10; 32]),
+            canonical_native_image: None,
         }
     }
     fn engine_fixture() -> (tempfile::TempDir, engine::Engine) {
@@ -1406,7 +1532,9 @@ mod tests {
             stream_id: [id; 16],
             revision: 3,
             owner: operation(id, EngineOperation::Observe).owner,
-            argv: vec![b"/bin/echo".to_vec(), b"literal$`'\\".to_vec()],
+            kind: LivePrepareKind::Exec {
+                argv: vec![b"/bin/echo".to_vec(), b"literal$`'\\".to_vec()],
+            },
         };
         handle.try_prepare_live(request(1)).ok().unwrap();
         assert!(matches!(
@@ -1454,10 +1582,14 @@ mod tests {
             stream_id: [1; 16],
             revision: 1,
             owner: operation(1, EngineOperation::Observe).owner,
-            argv: vec![b"echo".to_vec(), b"$(touch should-not-exist)".to_vec()],
+            kind: LivePrepareKind::Exec {
+                argv: vec![b"echo".to_vec(), b"$(touch should-not-exist)".to_vec()],
+            },
         };
         assert!(worker.prepare_live(&request).is_ok());
-        request.argv = vec![b"does-not-exist-marmish".to_vec()];
+        request.kind = LivePrepareKind::Exec {
+            argv: vec![b"does-not-exist-marmish".to_vec()],
+        };
         assert!(matches!(
             worker.prepare_live(&request),
             Err(engine::EngineError::CommandNotFound(_))

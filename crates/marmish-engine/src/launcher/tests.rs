@@ -469,7 +469,7 @@ fn direct_exec_image_uses_exact_envp_without_inheritance() {
     let image =
         exec_image::ExecImage::new(&command, OsStr::new("custom-argv0"), &environment).unwrap();
     unsafe {
-        install_exec_image(&mut command, image, image_test_setup);
+        install_exec_image(&mut command, image, || image_test_setup());
     }
     let output = command.output().unwrap();
     assert!(output.status.success());
@@ -485,7 +485,7 @@ fn direct_exec_setup_errors_cannot_impersonate_kernel_exec_errors() {
         let mut command = Command::new("/usr/bin/true");
         let image = exec_image::ExecImage::new(&command, OsStr::new("true"), &[]).unwrap();
         unsafe {
-            install_exec_image(&mut command, image, setup);
+            install_exec_image(&mut command, image, move || setup());
         }
         assert_eq!(
             command.spawn().unwrap_err().raw_os_error(),

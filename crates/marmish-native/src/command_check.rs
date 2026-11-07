@@ -1239,6 +1239,8 @@ pub(crate) async fn run(relays: Vec<String>, mode: RouteMode) -> Result<Value> {
         Err(Error::Timeout) => Some("timeout"),
         Err(Error::Io(_)) => Some("local_io"),
         Err(Error::DaemonStartup(_)) => Some("daemon_startup"),
+        Err(Error::Copy(code)) => Some(crate::error::copy_category(code)),
+        Err(Error::Stream(code)) => Some(crate::error::stream_category(code)),
         Ok(()) => None,
     };
     let detail = finite_detail(&result);
@@ -1264,6 +1266,8 @@ pub(crate) async fn run(relays: Vec<String>, mode: RouteMode) -> Result<Value> {
         Err(Error::Mdk(_)) => Some("marmot"),
         Err(Error::Io(_)) => Some("local_io"),
         Err(Error::DaemonStartup(_)) => Some("daemon_startup"),
+        Err(Error::Copy(code)) => Some(crate::error::copy_category(&code)),
+        Err(Error::Stream(code)) => Some(crate::error::stream_category(&code)),
     };
     Ok(
         json!({"schema":1,"ok":category.is_none()&&state_cleanup,"category":category,

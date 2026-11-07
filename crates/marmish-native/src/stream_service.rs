@@ -8,6 +8,9 @@ use std::time::Instant;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum StreamLocalRequest {
+    CopyReceiver {
+        request: Box<crate::copy_local_gc::Request>,
+    },
     Frame {
         frame_base64: String,
         relays: Vec<String>,
@@ -26,10 +29,19 @@ pub(crate) enum StreamLocalRequest {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum StreamLocalResult {
+    CopyReceiver {
+        response: Box<crate::copy_local_gc::Response>,
+    },
     Pending,
-    Failure { category: String },
-    Frame { frame_base64: String },
-    Entries { entries: Vec<StreamEntry> },
+    Failure {
+        category: String,
+    },
+    Frame {
+        frame_base64: String,
+    },
+    Entries {
+        entries: Vec<StreamEntry>,
+    },
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,6 +52,9 @@ pub(crate) struct StreamEntry {
     pub server: String,
     pub direction: String,
     pub state: String,
+    pub open_digest: Option<String>,
+    pub group_sha256: String,
+    pub active: bool,
     pub cancel_requested: bool,
     pub terminal: Option<wire::Terminal>,
     #[serde(default)]
@@ -54,14 +69,41 @@ pub(crate) enum ChildDisposition {
     Unknown,
 }
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum StreamLaunch {
+    Exec {
+        argv: Vec<Vec<u8>>,
+    },
+    NativeCopy {
+        launch: marmish_stream::copy_protocol::Launch,
+    },
+}
+impl Default for StreamLaunch {
+    fn default() -> Self {
+        Self::Exec { argv: Vec::new() }
+    }
+}
+impl StreamLaunch {
+    pub fn clear_exec(&mut self) {
+        if let Self::Exec { argv } = self {
+            argv.clear();
+        }
+    }
+    pub fn has_exec_payload(&self) -> bool {
+        matches!(self, Self::Exec { argv } if !argv.is_empty())
+    }
+}
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct StreamRecord {
     pub binding: wire::Binding,
     pub group: Vec<u8>,
     pub server_side: bool,
     #[serde(default)]
     pub hello: bool,
+    #[serde(default)]
+    pub copy_hello: bool,
     pub open_digest: Option<[u8; 32]>,
-    pub argv: Vec<Vec<u8>>,
+    pub launch: StreamLaunch,
     pub codec: Codec,
     pub state: String,
     pub cancel: bool,
@@ -103,6 +145,12 @@ impl StreamRecord {
             server: hex::encode(self.binding.server),
             direction: if self.server_side { "server" } else { "client" }.into(),
             state: self.state.clone(),
+            open_digest: self.open_digest.map(hex::encode),
+            group_sha256: {
+                use sha2::{Digest, Sha256};
+                hex::encode(Sha256::digest(&self.group))
+            },
+            active: self.active,
             cancel_requested: self.cancel,
             terminal: self.terminal,
             child_disposition: self.child_disposition,
@@ -179,4 +227,18 @@ impl Rate {
         self.tokens -= 1.0;
         true
     }
+}
+
+/// Process cleanup observation, separate from filesystem receipt reclamation.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StreamCleanupStatus {
+    pub active: u32,
+    pub cancelling: u32,
+    pub uncertain: u32,
+    pub owned_runners: u32,
+    pub unfinished_runners: u32,
+    pub observation_pending: bool,
+    pub cleanup_ready: bool,
+    pub stop_complete: bool,
 }

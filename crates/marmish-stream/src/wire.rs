@@ -52,6 +52,14 @@ pub enum RequestBody {
     Hello {
         codecs: Vec<Codec>,
     },
+    CopyHello {
+        versions: Vec<u32>,
+        codecs: Vec<Codec>,
+    },
+    OpenCopy {
+        launch: crate::copy_protocol::Launch,
+        codec: Codec,
+    },
     Open {
         #[serde(with = "argv_encoding")]
         argv: Vec<Vec<u8>>,
@@ -74,6 +82,16 @@ pub enum RequestBody {
     deny_unknown_fields
 )]
 pub enum ResponseBody {
+    CopyHello {
+        version: u32,
+        codecs: Vec<Codec>,
+        frame_bytes: u32,
+        window_bytes: u32,
+    },
+    CopyRefused {
+        code: CopyAdmissionError,
+        prior_binding: Option<Binding>,
+    },
     Hello {
         codecs: Vec<Codec>,
         frame_bytes: u32,
@@ -100,6 +118,17 @@ pub enum ResponseBody {
         code: WireErrorCode,
     },
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CopyAdmissionError {
+    Unsupported,
+    Denied,
+    Busy,
+    Conflict,
+    Capacity,
+    RecoveryRequired,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OpenDisposition {
@@ -190,7 +219,10 @@ fn validate_argv(argv: &[Vec<u8>]) -> Result<()> {
 impl Request {
     pub fn validate_at(&self, now_unix_seconds: u64) -> Result<()> {
         validate_request(self)?;
-        if matches!(self.body, RequestBody::Open { .. }) {
+        if matches!(
+            self.body,
+            RequestBody::Open { .. } | RequestBody::OpenCopy { .. }
+        ) {
             let timestamp =
                 u64::from_be_bytes(self.binding.stream[..8].try_into().map_err(|_| invalid())?);
             if timestamp > now_unix_seconds.saturating_add(FUTURE_SKEW_SECONDS)
@@ -205,6 +237,29 @@ impl Request {
 fn validate_request(request: &Request) -> Result<()> {
     match &request.body {
         RequestBody::Hello { codecs: values } => codecs(values),
+        RequestBody::CopyHello {
+            versions,
+            codecs: values,
+        } => {
+            if versions.is_empty()
+                || versions.contains(&0)
+                || versions.len() > 4
+                || versions
+                    .iter()
+                    .enumerate()
+                    .any(|(i, v)| versions[..i].contains(v))
+            {
+                return Err(invalid());
+            }
+            codecs(values)
+        }
+        RequestBody::OpenCopy { launch, .. } => {
+            launch.validate()?;
+            if launch.client != request.binding.client || launch.server != request.binding.server {
+                return Err(invalid());
+            }
+            Ok(())
+        }
         RequestBody::Open { argv, .. } => validate_argv(argv),
         RequestBody::Exchange {
             stdin,
@@ -243,7 +298,16 @@ fn validate_output(block: &Option<EncodedBlock>, eof: Option<u64>) -> Result<()>
 }
 fn validate_response(response: &Response) -> Result<()> {
     match &response.body {
-        ResponseBody::Hello {
+        ResponseBody::CopyHello { version, .. } if *version != crate::copy_protocol::VERSION => {
+            Err(invalid())
+        }
+        ResponseBody::CopyHello {
+            codecs: values,
+            frame_bytes,
+            window_bytes,
+            ..
+        }
+        | ResponseBody::Hello {
             codecs: values,
             frame_bytes,
             window_bytes,
@@ -287,6 +351,25 @@ fn validate_response(response: &Response) -> Result<()> {
                 return Err(invalid());
             }
             if matches!(terminal, Some(Terminal::Cancelled)) && !cancel_requested {
+                return Err(invalid());
+            }
+            Ok(())
+        }
+        ResponseBody::CopyRefused {
+            code,
+            prior_binding,
+        } => {
+            if prior_binding.is_some()
+                && !matches!(
+                    code,
+                    CopyAdmissionError::Busy | CopyAdmissionError::RecoveryRequired
+                )
+            {
+                return Err(invalid());
+            }
+            if prior_binding.as_ref().is_some_and(|prior| {
+                prior.client != response.binding.client || prior.server != response.binding.server
+            }) {
                 return Err(invalid());
             }
             Ok(())
@@ -530,6 +613,99 @@ mod tests {
             cancel_requested: true,
             terminal,
         }
+    }
+    fn copy_launch() -> crate::copy_protocol::Launch {
+        use crate::copy_protocol::{AttemptMode, Direction, Launch, VERSION};
+        Launch {
+            version: VERSION,
+            mode: AttemptMode::Create,
+            transfer: [5; 32],
+            client: binding().client,
+            server: binding().server,
+            direction: Direction::Put,
+            source: b"a\xff;$(x)".to_vec(),
+            destination: b"/tmp/d".to_vec(),
+            overwrite: false,
+            preserve_mode: false,
+            preserve_mtime: false,
+        }
+    }
+    #[test]
+    fn copy_wire_is_closed_bounded_and_byte_preserving() {
+        for body in [
+            RequestBody::CopyHello {
+                versions: vec![1, 2],
+                codecs: vec![Codec::None, Codec::Zlib],
+            },
+            RequestBody::OpenCopy {
+                launch: copy_launch(),
+                codec: Codec::Zlib,
+            },
+        ] {
+            let r = request(body);
+            let bytes = encode_request(&r).unwrap();
+            assert!(decode_request(&bytes).unwrap() == r);
+            let text = std::str::from_utf8(&bytes).unwrap();
+            assert!(!text.contains("[97,"));
+        }
+        let r = request(RequestBody::OpenCopy {
+            launch: copy_launch(),
+            codec: Codec::None,
+        });
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&encode_request(&r).unwrap()).unwrap();
+        value["message"]["data"]["data"]["launch"]["extra"] = true.into();
+        assert!(decode_request(&serde_json::to_vec(&value).unwrap()).is_err());
+        let mut l = copy_launch();
+        l.client[0] ^= 1;
+        assert!(
+            encode_request(&request(RequestBody::OpenCopy {
+                launch: l,
+                codec: Codec::None
+            }))
+            .is_err()
+        );
+        // A future-only offer is syntactically valid and negotiates Unsupported;
+        // malformed offers must fail before reaching server negotiation.
+        assert!(
+            encode_request(&request(RequestBody::CopyHello {
+                versions: vec![2],
+                codecs: vec![Codec::None],
+            }))
+            .is_ok()
+        );
+        for versions in [vec![], vec![0], vec![1, 1], vec![1, 2, 3, 4, 5]] {
+            assert!(
+                encode_request(&request(RequestBody::CopyHello {
+                    versions,
+                    codecs: vec![Codec::None]
+                }))
+                .is_err()
+            );
+        }
+        for body in [
+            ResponseBody::CopyHello {
+                version: 1,
+                codecs: vec![Codec::None],
+                frame_bytes: MAX_BLOCK as u32,
+                window_bytes: WINDOW_BYTES as u32,
+            },
+            ResponseBody::CopyRefused {
+                code: CopyAdmissionError::Busy,
+                prior_binding: Some(binding()),
+            },
+        ] {
+            let r = response(body);
+            let b = encode_response(&r).unwrap();
+            assert!(decode_response(&b).unwrap() == r);
+        }
+        assert!(
+            encode_response(&response(ResponseBody::CopyRefused {
+                code: CopyAdmissionError::Conflict,
+                prior_binding: Some(binding())
+            }))
+            .is_err()
+        );
     }
     #[test]
     fn worst_case_fit_and_roundtrip_every_variant() {

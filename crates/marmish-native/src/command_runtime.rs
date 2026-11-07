@@ -100,6 +100,9 @@ impl MdkOwner {
                     policy,
                     binding: material.binding,
                     master: material.master,
+                    canonical_native_image: Some(
+                        crate::native_layout::resolve(&std::env::current_exe()?)?.helper,
+                    ),
                 },
                 self.journal.command_recovery()?,
             )?),

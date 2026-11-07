@@ -4,6 +4,7 @@ compile_error!("marmish-engine supports Linux and macOS only");
 mod admission;
 mod cipher;
 mod cleanup;
+mod copy_launch;
 mod fault;
 mod launcher;
 mod live;
@@ -18,6 +19,7 @@ mod store;
 mod worker;
 use admission::{context_owner, random_bytes, sha256};
 pub use cleanup::CleanupGuard;
+pub use copy_launch::RegisteredCopyHelper;
 use launcher::{FrontendGuard, LaunchSpec, StateRoot, WorkerPresence};
 pub use live::{
     probe_recorded_process, LiveChild, LivePipes, LiveProcessRecord, LiveSpawnError,

@@ -64,3 +64,22 @@ pub async fn installed_check_entry() -> u8 {
 pub fn installed_fixture_entry() -> u8 {
     mdk_adapter::installed_check::fixture_entry()
 }
+
+mod copy_files;
+mod copy_local_gc;
+
+mod copy_helper;
+
+mod copy_worker;
+
+mod stream_session;
+
+mod copy_cli;
+mod copy_client;
+mod copy_io;
+
+#[cfg(test)]
+mod copy_integration_tests;
+
+#[cfg(test)]
+mod copy_io_abort_tests;
