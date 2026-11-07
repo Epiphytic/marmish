@@ -742,6 +742,10 @@ publisher and public-install results in
 The separate cold-three-principal macOS diagnostic harness now has actual
 independent Claude code approval and passing local checks (191 Rust installed
 checks and 29 JavaScript tests). See [the review](reviews/streaming-macos-cold-multiprincipal.md)
-for explicit coverage limitations. Hosted execution is pending; this changes no
+for explicit coverage limitations. Hosted run `42374246025` passed all three
+cold principals (42.392–43.915s), direct-after, receipts, journal bindings and
+cleanup; [structured evidence](validation/streaming-macos-cold-multiprincipal.json)
+retains the exact immutable pins. This same-host diagnostic omits the original
+macOS outgoing traffic, multi-server trust and cross-host timing. It changes no
 product behavior and does not resolve the failing installed matrix or qualify a
 release.

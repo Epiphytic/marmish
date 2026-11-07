@@ -84,3 +84,30 @@ those files were separately included in the actual Claude review and tests.
 The hosted diagnostic has not yet run at this checkpoint. Approval authorizes
 this bounded diagnostic harness; it establishes no product fix, original matrix
 pass, new public release or release readiness.
+
+## Hosted diagnostic evidence
+
+[Run42374246025](https://github.com/Epiphytic/marmish/actions/runs/42374246025)
+completed **PASS** with reviewed harness `34e48f6a13d265fb57ed3a3369d04fbdc4deba62`
+and frozen571 product/fixture/bootstrap. The three distinct cold principal streams
+completed in 42.392/43.115/43.915s; direct-after took80ms. All commands preserved
+98304stdin/stdout bytes,8192 fixture stderr bytes and exit7; the three streams
+also had the49-byte prefix. Receipts, bindings and twelve daemon cleanup flags
+passed. This is same-host diagnostic evidence, not original matrix qualification.
+
+[The exact sanitized evidence](../validation/streaming-macos-cold-multiprincipal.json)
+was independently reviewed by actual Claude Code `claude-sonnet-5-5`,
+`--permission-mode auto`, session `80071190-2156-47cd-9d39-87c9a2623ca7`:
+**APPROVE**,71.658 seconds,10 turns. The reviewer checked actual API run/jobs,
+artifact metadata,3732-byte ZIP digest/CRC/exact membership, embedded canonical
+records and marker hash, original product/harness distinction, byte/status/Pair
+and principal assertions, timings/rate arithmetic, cleanup and sanitization.
+It ran the bounded harvest verification script. No product run, download, Git
+mutation, Cargo or hosted probe rehash was performed in evidence review.
+Nonblocking wording now explicitly states stderr-inclusive payload arithmetic,
+local direct-after non-comparability, and that direct-after is not a warmup.
+
+The earlier pending-hosted statement records the pre-dispatch checkpoint. This
+passing experiment rules out neither original macOS outgoing load nor original
+cross-host/multi-server timing, and establishes no causal product fix. The
+original installed stream matrix remains the release-testing blocker.

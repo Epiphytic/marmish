@@ -356,6 +356,9 @@ Fresh full candidate `42367702241` at exact e968 completed successfully on all t
 The repeated e968 matrix failure met the conditional trigger. The bounded
 implementation and independent actual Claude code approval are recorded in
 [the review](../reviews/streaming-macos-cold-multiprincipal.md), including local
-checks and explicit nonblocking coverage limitations. Hosted execution is the
-next validation step. Product binaries, ordinary installed matrix and public
-installer version remain unchanged.
+checks and explicit nonblocking coverage limitations. Hosted run `42374246025`
+subsequently passed: all three cold principals, direct-after, receipts, journal
+bindings and cleanup. See [the exact evidence](../validation/streaming-macos-cold-multiprincipal.json).
+Product binaries, ordinary installed matrix and public installer version remain
+unchanged. The result narrows hypotheses without proving a cause or original
+matrix pass.
