@@ -109,3 +109,21 @@ large fixture test. The tests exercise different refusal contracts; no generic
 abstraction was added solely to suppress the normalized-token clone. The earlier
 production dispatch complexity findings remain tracked independently. No clean
 static quality result is claimed.
+
+## Actual-helper large fixture and migration preparation
+
+The explicitly ignored `copy_integration_tests::large` qualification adds
+four concurrent debug-build helper transfers of 66 MiB plus 17 bytes each,
+using alternating compressible and deterministic incompressible regions.
+The hash/generator, flow accounting and acknowledged codec ledger are bounded.
+Its payload ratio is local IPC codec evidence, not Marmot or network savings.
+The long execution is still pending; it is not routine CI coverage or measured
+release throughput.
+
+Focused fixture tests passed 3 cases in 0.01 seconds (one expected ignored
+qualification test). Two migration component tests passed in 0.00 seconds;
+strict native all-target Clippy passed in 12.68 seconds. These use historical
+format-6 DDL with exact Exec row preservation and malformed-record rollback,
+not a complete historical encrypted journal. A genuine installed v0.2.3 upgrade
+and formats 0/3/4/5 remain unqualified. See the
+[independent test review](../reviews/streaming-copy-large-helper.md).

@@ -1153,44 +1153,169 @@ mod tests {
             0
         );
     }
-    #[test]
-    fn format_six_exec_migration_preserves_open_digest() {
-        let (d, mut j) = setup();
-        let (mut r, _, _) = open(1, 3, cp::AttemptMode::Create);
-        r.copy_hello = false;
-        r.open_digest = Some([8; 32]);
-        r.launch = StreamLaunch::Exec {
-            argv: vec![b"literal$'".to_vec()],
+    // Component fixture from 78641a4's live_streams DDL and argv record shape.
+    // This does not reconstruct a complete historical encrypted journal schema.
+    fn legacy_exec_fixture() -> (Journal, StreamRecord, Vec<u8>) {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE live_streams(k TEXT PRIMARY KEY,principal BLOB NOT NULL,server_side INTEGER NOT NULL,active INTEGER NOT NULL,record BLOB NOT NULL); PRAGMA user_version=6;").unwrap();
+        let (mut expected, _, _) = open(1, 3, cp::AttemptMode::Create);
+        expected.copy_hello = false;
+        expected.open_digest = Some([8; 32]);
+        expected.launch = StreamLaunch::Exec {
+            argv: vec![b"literal$'\0\xff".to_vec(), b"two words".to_vec()],
         };
-        j.stream_insert(&r).unwrap();
-        let mut v = serde_json::to_value(&r).unwrap();
-        let m = v.as_object_mut().unwrap();
-        let launch = m.remove("launch").unwrap();
-        m.insert("argv".into(), launch["argv"].clone());
-        j.conn
-            .execute(
-                "UPDATE live_streams SET record=?1",
-                [serde_json::to_vec(&v).unwrap()],
-            )
-            .unwrap();
-        j.conn.pragma_update(None, "user_version", 6).unwrap();
-        drop(j);
-        let j = Journal::open(
-            &d.path().join("journal.db"),
-            &[7; 32],
-            &hex::encode([2; 32]),
+        expected.hello = true;
+        expected.state = "terminal".into();
+        expected.terminal = Some(sw::Terminal::Exited { code: 7 });
+        expected.identity = Some(vec![0, 255, 19]);
+        expected.child_disposition = Some(crate::stream_service::ChildDisposition::Absent);
+        expected.revision = 12;
+        expected.sequence = 9;
+        expected.stdin_accepted = 4096;
+        expected.stdin_delivered = 2048;
+        expected.stdout_eof = Some(777);
+        expected.stderr_eof = Some(33);
+        expected.completed_at = Some(1_700_000_000);
+        expected.last_exchange_digest = Some([11; 32]);
+        expected.payload_drained = true;
+        expected.projection_invalidated = true;
+        let mut old = serde_json::to_value(&expected).unwrap();
+        let map = old.as_object_mut().unwrap();
+        let launch = map.remove("launch").unwrap();
+        map.remove("copy_hello");
+        map.insert("argv".into(), launch["argv"].clone());
+        let bytes = serde_json::to_vec(&old).unwrap();
+        conn.execute(
+            "INSERT INTO live_streams VALUES(?1,?2,?3,?4,?5)",
+            params![
+                expected.key(),
+                expected.binding.client.as_slice(),
+                expected.server_side,
+                expected.active,
+                &bytes
+            ],
         )
         .unwrap();
-        let migrated = j.stream_get(&r.key()).unwrap().unwrap();
-        assert_eq!(migrated.open_digest, Some([8; 32]));
-        assert!(
-            matches!(migrated.launch,StreamLaunch::Exec{argv}if argv==vec![b"literal$'".to_vec()])
-        );
+        (Journal { conn }, expected, bytes)
+    }
+    type LegacyRow = (String, Vec<u8>, bool, bool, Vec<u8>);
+    fn legacy_rows(journal: &Journal) -> Vec<LegacyRow> {
+        journal
+            .conn
+            .prepare("SELECT k,principal,server_side,active,record FROM live_streams ORDER BY k")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+    #[test]
+    fn format_six_component_upgrade_preserves_exact_exec_record_and_creates_copy_schema() {
+        let (mut journal, expected, old_bytes) = legacy_exec_fixture();
+        let before = legacy_rows(&journal);
+        journal.copy_init(6).unwrap();
+        let after = legacy_rows(&journal);
+        assert_eq!(after.len(), 1);
         assert_eq!(
-            j.conn
-                .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+            (&after[0].0, &after[0].1, after[0].2, after[0].3),
+            (&before[0].0, &before[0].1, before[0].2, before[0].3)
+        );
+        assert_ne!(after[0].4, old_bytes);
+        assert_eq!(after[0].4, serde_json::to_vec(&expected).unwrap());
+        for table in [
+            "copy_attempts",
+            "copy_open_receipts",
+            "copy_gc_claims",
+            "copy_refusals",
+            "copy_gc_schedule",
+        ] {
+            let count: i64 = journal
+                .conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(count, 0, "fresh {table}");
+        }
+        let floor: (i64, i64) = journal
+            .conn
+            .query_row("SELECT id,floor FROM copy_replay_state", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(floor, (1, 0));
+        assert_eq!(
+            journal
+                .conn
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
             7
+        );
+    }
+    #[test]
+    fn format_six_component_malformed_record_rolls_back_rows_schema_and_version() {
+        let (mut journal, _, _) = legacy_exec_fixture();
+        let valid = legacy_rows(&journal)[0].4.clone();
+        let mut malformed: serde_json::Value = serde_json::from_slice(&valid).unwrap();
+        // Both representations together are explicitly rejected after the first
+        // valid row has already been rewritten within the same transaction.
+        malformed.as_object_mut().unwrap().insert(
+            "launch".into(),
+            serde_json::json!({"kind":"exec","argv":[]}),
+        );
+        let malformed = serde_json::to_vec(&malformed).unwrap();
+        journal
+            .conn
+            .execute(
+                "INSERT INTO live_streams VALUES('zz-invalid',?1,1,0,?2)",
+                params![vec![4u8; 32], malformed],
+            )
+            .unwrap();
+        let order: Vec<Vec<u8>> = journal
+            .conn
+            .prepare("SELECT k,record FROM live_streams")
+            .unwrap()
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        // The production SELECT has no ORDER BY; establish the fixture's actual
+        // scan order rather than relying on insertion order as a SQL guarantee.
+        assert_eq!(order.first(), Some(&valid));
+        let before_rows = legacy_rows(&journal);
+        let schema = |journal: &Journal| -> Vec<(String, String, String, Option<String>)> {
+            journal
+                .conn
+                .prepare("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")
+                .unwrap()
+                .query_map([], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        let before_schema = schema(&journal);
+        assert!(matches!(
+            journal.copy_init(6),
+            Err(Error::Storage("stream_migration"))
+        ));
+        assert_eq!(legacy_rows(&journal), before_rows);
+        assert_eq!(schema(&journal), before_schema);
+        assert_eq!(
+            journal
+                .conn
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            6
         );
     }
 }
