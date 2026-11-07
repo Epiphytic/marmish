@@ -190,8 +190,11 @@ cache. This addresses the reviewed parallel initialization race without
 serializing the test suite or weakening encryption. Private files, ownership,
 link/type checks and canonical path requirements remain enforced.
 
-Current format constants are profile 2, journal 6, engine 1, config 1 and commands
-1. Command tables share the journal's persisted compatibility gate; commands=1
+Released v0.2.3 format constants are profile 2, journal 6, engine 1, config 1
+and commands 1. The unreleased native-copy source advances the journal to 7,
+recognizing formats 0, 3, 4, 5, 6 and 7; checked initialization creates the copy
+index/replay state and stamps 7. Do not downgrade a format-7 profile into the
+released format-6 owner. Command tables share the journal's persisted compatibility gate; commands=1
 is not an independent database version check. Journal opening recognizes the
 implemented older native formats 0, 3, 4 and 5 before checked initialization and
 stamping 6. This does not promise migration of historical Python profiles.

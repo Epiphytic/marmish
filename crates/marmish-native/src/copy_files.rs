@@ -1095,6 +1095,117 @@ mod tests {
         );
     }
     #[test]
+    fn large_files_checkpoint_resume_and_preserve_literal_paths() {
+        let size = 66 * 1024 * 1024 + 17;
+        for random in [false, true] {
+            let (dir, base) = base();
+            let mut m = manifest(b"");
+            m.source = b"-source-\n'$()".to_vec();
+            m.destination = b"-destination-\t*".to_vec();
+            // Invalid UTF-8 names are a Linux filesystem check, not a macOS promise.
+            #[cfg(target_os = "linux")]
+            {
+                m.source.push(0xff);
+                m.destination.push(0xfe);
+            }
+            m.size = size;
+            m.preserve_mode = true;
+            m.mode = Some(0o640);
+            let source_path = dir.path().join(std::ffi::OsStr::from_bytes(&m.source));
+            let mut file = File::create(&source_path).unwrap();
+            let mut hash = Sha256::new();
+            let mut remaining = size;
+            let mut state = 0x91a7_3c25_dde4_58b1_u64;
+            let mut block = [0u8; marmish_stream::MAX_BLOCK];
+            while remaining > 0 {
+                if random {
+                    for byte in &mut block {
+                        state ^= state << 13;
+                        state ^= state >> 7;
+                        state ^= state << 17;
+                        *byte = (state >> 32) as u8;
+                    }
+                }
+                let length = remaining.min(block.len() as u64) as usize;
+                file.write_all(&block[..length]).unwrap();
+                hash.update(&block[..length]);
+                remaining -= length as u64;
+            }
+            file.sync_all().unwrap();
+            drop(file);
+            m.sha256 = hash.finalize().into();
+            let source = CopySource::open(PinnedPath::open(&base, &m.source).unwrap()).unwrap();
+            assert_eq!(source.size(), size);
+            assert_eq!(source.prefix_hash(size).unwrap(), m.sha256);
+            let mut receiver = open(&base, m.clone(), AttemptMode::Create).unwrap();
+            let mut resumed = false;
+            let mut checkpoints = 0;
+            while receiver.accepted() < size {
+                let bytes = source.read_chunk(receiver.accepted()).unwrap();
+                receiver.receive_data(receiver.accepted(), &bytes).unwrap();
+                if receiver.accepted() - receiver.durable_prefix().offset >= 1024 * 1024 {
+                    receiver.checkpoint(101 + checkpoints).unwrap();
+                    checkpoints += 1;
+                    if !resumed && receiver.accepted() >= size / 2 {
+                        let durable = receiver.durable_prefix();
+                        let suffix = source.read_chunk(receiver.accepted()).unwrap();
+                        receiver.receive_data(receiver.accepted(), &suffix).unwrap();
+                        assert!(receiver.accepted() > durable.offset);
+                        assert!(
+                            receiver.data.as_ref().unwrap().metadata().unwrap().len()
+                                > durable.offset
+                        );
+                        drop(receiver);
+                        receiver = open(&base, m.clone(), AttemptMode::Resume).unwrap();
+                        assert_eq!(receiver.durable_prefix().offset, durable.offset);
+                        assert_eq!(receiver.durable_prefix().sha256, durable.sha256);
+                        assert_eq!(receiver.accepted(), durable.offset);
+                        assert_eq!(
+                            receiver.data.as_ref().unwrap().metadata().unwrap().len(),
+                            durable.offset
+                        );
+                        resumed = true;
+                    }
+                }
+            }
+            assert!(resumed);
+            assert_eq!(checkpoints, 66);
+            finish(&mut receiver);
+            drop(receiver);
+            let recovered = open(&base, m.clone(), AttemptMode::Resume).unwrap();
+            assert_eq!(recovered.phase(), Phase::Committed);
+            recovered.receipt().unwrap();
+            let destination = dir.path().join(std::ffi::OsStr::from_bytes(&m.destination));
+            assert_eq!(
+                std::fs::metadata(&destination).unwrap().mode() & 0o7777,
+                0o640
+            );
+            assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 4);
+            let copied = File::open(destination).unwrap();
+            assert_eq!(copied.metadata().unwrap().len(), size);
+            assert_eq!(
+                <[u8; 32]>::from(hash_prefix(&copied, size).unwrap().finalize()),
+                m.sha256
+            );
+        }
+    }
+
+    #[test]
+    fn preserved_modes_without_owner_read_write_refuse_before_staging() {
+        let (dir, base) = base();
+        for mode in [0, 0o400, 0o200, 0o7777] {
+            let mut m = manifest(b"payload");
+            m.preserve_mode = true;
+            m.mode = Some(mode);
+            assert_eq!(
+                code(open(&base, m, AttemptMode::Create)),
+                CopyError::Protocol
+            );
+            assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+        }
+    }
+
+    #[test]
     fn resume_rehashes_prefix_and_truncates_uncheckpointed_suffix() {
         let (dir, base) = base();
         let m = manifest(b"abcdef");

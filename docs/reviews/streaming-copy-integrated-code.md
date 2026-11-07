@@ -198,3 +198,22 @@ recovers the durable receipt. Cancelled worker futures are not reusable; current
 CLI shuts their worker down. Long helper qualification used debug builds.
 Live transport, actual cancellation/resume waves, installed binaries and macOS
 qualification remain separate evidence gates.
+
+## Large-file filesystem test followup
+
+Actual Claude Code Sonnet 5.5 auto review, session
+`1723b6b0-0be0-4280-ac86-323851cac8ff`: round 1 REQUEST_CHANGES
+(88.156 seconds, 11 turns), round 2 **APPROVE** (20.462 seconds, three turns).
+Scope: the two added `copy_files.rs` test bodies and actual Source/Receiver,
+Manifest validation and error-conversion contracts. Product source is unchanged.
+The reviewer ran no tests or network operations.
+
+Findings corrected an invalid 0400-mode assumption, required actual suffix
+truncation after a halfway drop, isolated invalid UTF-8 filenames to Linux,
+removed a cosmetic direction toggle, and strengthened exact checkpoint and
+sibling-entry assertions. Unsupported modes now have a separate pre-staging
+refusal test. Both tests ran in the 28-test filesystem cohort: PASS, 21.46 seconds;
+strict native all-target Clippy PASS, 12.47 seconds. This closes the source-review
+execution condition for these tests, without implying codec/helper/relay or
+macOS execution. The receiver preserves the manifest's 0640; this test does not
+independently prove source metadata-to-manifest mapping.

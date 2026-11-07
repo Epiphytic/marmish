@@ -140,8 +140,9 @@ cross-platform interoperability claim.
 ## Native file copy (implementation under qualification)
 
 The streaming source branch adds literal regular-file transfers. These commands
-are not in the v0.2.3 installer; complete code review and installed platform
-qualification are still pending.
+are not in the v0.2.3 installer. Independent source review and a 12-case Linux
+relay small smoke passed; large-file and installed platform qualification remain
+pending. See [copy validation](docs/validation/copy-runtime-live.md).
 
 ```sh
 marmish put SERVER_NPUB ./local-file 'remote file'
@@ -152,6 +153,8 @@ marmish put --resume TRANSFER_ID -- SERVER_NPUB ./local-file 'remote file'
 
 Paths are literal, including spaces and shell characters; no shell expands them.
 Only regular files are supported. Existing destinations require `--overwrite`.
+Preserved modes must retain owner read/write and exclude special permission bits;
+unsupported modes are refused.
 Resume repeats the same paths and options with the printed transfer ID, using a
 new stream ID. Diagnostics and IDs go to stderr. Success requires a verified
 commit; a lost commit acknowledgement reports uncertainty rather than claiming
