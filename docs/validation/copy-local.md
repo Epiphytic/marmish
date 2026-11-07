@@ -117,8 +117,10 @@ four concurrent debug-build helper transfers of 66 MiB plus 17 bytes each,
 using alternating compressible and deterministic incompressible regions.
 The hash/generator, flow accounting and acknowledged codec ledger are bounded.
 Its payload ratio is local IPC codec evidence, not Marmot or network savings.
-The long execution is still pending; it is not routine CI coverage or measured
-release throughput.
+The immutable four-way execution subsequently passed in 1075.17 seconds; see
+[the exact results](copy-large-helper-local.md), including source/binary hashes
+and the separately tested failure-path followup. It is not routine CI coverage
+or measured release throughput.
 
 Focused fixture tests passed 3 cases in 0.01 seconds (one expected ignored
 qualification test). Two migration component tests passed in 0.00 seconds;
