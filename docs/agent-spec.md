@@ -105,8 +105,19 @@ three ignored). It is ineligible for installed relay cohorts. The bounded
 [owned-group cleanup correction](phases/streaming-owned-group-cleanup.md) retains
 the exact Child fence for the final group signal; after EPERM, only bounded
 exact-child reap and a fresh zero-signal ESRCH proof permit cleanup success.
-Unknown cleanup remains a failure. A fresh complete candidate and actual
-installed cross-platform relay cohorts remain required.
+Unknown cleanup remains a failure. Candidate
+[42346198320](https://github.com/Epiphytic/marmish/actions/runs/42346198320)
+then passed all three complete native/package jobs and rendering, including the
+macOS cleanup fixture. See [native evidence](validation/streaming-candidate-78e39ee.json).
+Its first installed stream matrix failed on all three hosts before server-ready:
+the qualifier polled caller-selected sockets while the daemon binds its standard
+identity socket under the child's TMPDIR. A real installed Linux reproduction
+answered Status and reached relay-active at that standard address. The bounded
+[socket correction](phases/streaming-installed-socket.md) also fixes the reused
+resolver's latent sixteen-versus-thirty-two-character profile-ID check. Failed
+hosted cleanup proofs remain incomplete; separate local stop reports cannot
+qualify them. A fresh complete candidate and all actual installed cross-platform
+relay cohorts remain required.
 
 The [local receiver cleanup contract](phases/streaming-copy-local-gc.md) uses an
 encrypted actor-owned index, explicit admission/activation, owned worker joining,

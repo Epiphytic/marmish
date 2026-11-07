@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "source_commit": "78e39ee0301a58bbe2ed0da1187e58ef74f01ff0",
+  "candidate_run_id": 42346198320,
+  "cohort_run_id": 42350381517,
+  "cohort": "stream-matrix",
+  "conclusion": "FAIL",
+  "failure": "wrong_local_ipc_endpoint",
+  "timeout_seconds": 180,
+  "platforms": [
+    {
+      "role": "linux-amd64",
+      "client_stop_complete": true,
+      "server_stop_complete": false,
+      "stream_cleanup_complete": false,
+      "complete": false,
+      "server_ready_record_present": false,
+      "receipts": 0,
+      "record_sha256": "4f110ba855158f6d60d44b0769adbf70317ab5e50091f6f35581bcfeaa13c414"
+    },
+    {
+      "role": "linux-arm64",
+      "client_stop_complete": true,
+      "server_stop_complete": false,
+      "stream_cleanup_complete": false,
+      "complete": false,
+      "server_ready_record_present": false,
+      "receipts": 0,
+      "record_sha256": "82fc126d72e9fd5cf2ebaed20cbca583a426bc86473638be605cfcd11e6fd492"
+    },
+    {
+      "role": "macos-arm64",
+      "client_stop_complete": true,
+      "server_stop_complete": false,
+      "stream_cleanup_complete": false,
+      "complete": false,
+      "server_ready_record_present": false,
+      "receipts": 0,
+      "record_sha256": "fb889c395cba0cb614bf5b4f46604a38c7eb2e2ceb57efa06068ccc38f39a88f"
+    }
+  ],
+  "local_installed_reproduction": {
+    "decoy_socket_exists": false,
+    "actual_socket_exists": true,
+    "actual_status": "activating",
+    "child_alive": true,
+    "stop_exit": 0,
+    "engine_stop_complete": true,
+    "mdk_stop_complete": true,
+    "runtime_cleanup_complete": true,
+    "stderr_bytes": 0,
+    "private_profile_removed": true
+  },
+  "limitations": [
+    "Actual local reproduction was Linux AMD64 only",
+    "Activating status is not full relay readiness",
+    "Failure cleanup flags are retained without claiming physical stop",
+    "No source release assets or installer pins changed"
+  ],
+  "local_installed_activation_reproduction": {
+    "relay": "wss://relay.us.whitenoise.chat/",
+    "observed_states": [
+      "activating",
+      "active"
+    ],
+    "child_alive_at_active": true,
+    "decoy_socket_exists": false,
+    "stop_exit": 0,
+    "engine_stop_complete": true,
+    "mdk_stop_complete": true,
+    "runtime_cleanup_complete": true,
+    "stderr_bytes": 0,
+    "private_profile_removed": true
+  },
+  "validated_remote_commands": 0,
+  "driver_did_not_reach_remote_command_stage": {
+    "value": true,
+    "basis": "Control-flow inference: each local daemon readiness check failed before writing server-ready; command cells follow successful local and all-server readiness barriers."
+  },
+  "failed_rollup_sha256": "43c66e0fea31d4e191f979d7ea0b9cd1257f4fabb978192650d90ef428675ba4",
+  "qualified_cells": 0,
+  "qualification": "none"
+}

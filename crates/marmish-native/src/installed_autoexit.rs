@@ -698,19 +698,26 @@ impl Drop for Daemon {
         }
     }
 }
-fn socket(w: &Path, name: &str, env: &Environment) -> Result<PathBuf> {
+pub(super) fn socket(w: &Path, name: &str, env: &Environment) -> Result<PathBuf> {
+    crate::identity::validate_name(name)?;
+    crate::identity::check_dir(&env.temporary)?;
+    if !env.temporary.is_absolute() || env.temporary.canonicalize()? != env.temporary {
+        return Err(bad());
+    }
     let p: serde_json::Value =
         records::read(&w.join("profiles").join(name).join("profile.json"), 65536)?;
     let id = p["profile_id"]
         .as_str()
-        .filter(|s| hex(s, 16))
+        .filter(|s| hex(s, 32))
         .ok_or_else(bad)?;
-    let path = env
+    let runtime = env
         .temporary
-        .join(format!("mr2-{}-{id}", unsafe { libc::geteuid() }))
-        .join("s");
-    if path.as_os_str().as_bytes().len() >= 104 {
-        return Err(bad());
+        .join(format!("mr2-{}-{id}", unsafe { libc::geteuid() }));
+    let path = runtime.join("s");
+    if runtime.as_os_str().as_bytes().len() + 10 >= 104 || path.as_os_str().as_bytes().len() >= 104
+    {
+        eprintln!("marmish-installed-check: socket_path_too_long");
+        return Err(Error::Invalid("installed_socket_path_too_long"));
     }
     Ok(path)
 }
@@ -2700,3 +2707,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "installed_socket_tests.rs"]
+mod socket_tests;

@@ -434,12 +434,11 @@ pub(super) async fn run(o: Run) -> Result<()> {
     let ready_by = deadline(budget.ready_by)?;
     let traffic_by = deadline(budget.traffic_by)?;
     let mut stop_by = deadline(budget.stop_by)?;
-    let mut random = [0; 8];
-    getrandom::fill(&mut random).map_err(|_| Error::Identity("random"))?;
-    let sockets = std::env::temp_dir()
-        .canonicalize()?
-        .join(format!("ms-{}", hex::encode(random)));
-    fs::DirBuilder::new().mode(0o700).create(&sockets)?;
+    let server_socket = super::autoexit::socket(&o.workspace, "server", &environment)?;
+    let client_socket = super::autoexit::socket(&o.workspace, "client", &environment)?;
+    if server_socket == client_socket {
+        return Err(Error::Invalid("installed_socket_collision"));
+    }
     let mut runtime = Runtime {
         server: None,
         client: None,
@@ -454,7 +453,7 @@ pub(super) async fn run(o: Run) -> Result<()> {
         runtime.server = Some(Daemon::start(
             &o.workspace,
             "server",
-            sockets.join("s"),
+            server_socket,
             &environment,
             &ctx.relays,
             1800,
@@ -462,7 +461,7 @@ pub(super) async fn run(o: Run) -> Result<()> {
         runtime.client = Some(Daemon::start(
             &o.workspace,
             "client",
-            sockets.join("c"),
+            client_socket,
             &environment,
             &ctx.relays,
             1800,
@@ -760,9 +759,6 @@ pub(super) async fn run(o: Run) -> Result<()> {
         &o.output.join(format!("{role}-server-result.json")),
         &report,
     )?;
-    if clean && server && client {
-        let _ = fs::remove_dir(&sockets);
-    }
     if complete { Ok(()) } else { Err(bad()) }
 }
 

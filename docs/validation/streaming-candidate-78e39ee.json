@@ -1,0 +1,101 @@
+{
+  "schema": 1,
+  "source_commit": "78e39ee0301a58bbe2ed0da1187e58ef74f01ff0",
+  "candidate_run_id": 42346198320,
+  "candidate_run_attempt": 1,
+  "platform_packages": "PASS",
+  "macos_cleanup_regression": "PASS",
+  "jobs": [
+    {
+      "role": "linux-amd64",
+      "job_id": 128324364914,
+      "job_url": "https://github.com/Epiphytic/marmish/actions/runs/42346198320/job/128324364914",
+      "conclusion": "success",
+      "native_library_tests": {
+        "passed": 610,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 1010.24
+      },
+      "installed_tool_library_tests": {
+        "passed": 759,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 1008.76
+      },
+      "sanitized_checks": [
+        "native verification",
+        "strict clippy",
+        "release build",
+        "ABI and license checks",
+        "candidate packaging",
+        "isolated installed-tool verification and release build",
+        "artifact upload"
+      ],
+      "raw_job_log_sha256": "0309dc26f31026b52e437141a968744c7fe84c423fee24307359679204d79c0d"
+    },
+    {
+      "role": "linux-arm64",
+      "job_id": 128324365057,
+      "job_url": "https://github.com/Epiphytic/marmish/actions/runs/42346198320/job/128324365057",
+      "conclusion": "success",
+      "native_library_tests": {
+        "passed": 610,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 840.38
+      },
+      "installed_tool_library_tests": {
+        "passed": 759,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 928.8
+      },
+      "sanitized_checks": [
+        "native verification",
+        "strict clippy",
+        "release build",
+        "ABI and license checks",
+        "candidate packaging",
+        "isolated installed-tool verification and release build",
+        "artifact upload"
+      ],
+      "raw_job_log_sha256": "5bf4305ef0ecd0440ae1d599dfb59c86d758ab90a9fbf127657b1db645b51fbc"
+    },
+    {
+      "role": "macos-arm64",
+      "job_id": 128324365058,
+      "job_url": "https://github.com/Epiphytic/marmish/actions/runs/42346198320/job/128324365058",
+      "conclusion": "success",
+      "native_library_tests": {
+        "passed": 609,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 621.94
+      },
+      "installed_tool_library_tests": {
+        "passed": 758,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 607.37
+      },
+      "sanitized_checks": [
+        "native verification",
+        "strict clippy",
+        "release build",
+        "ABI and license checks",
+        "candidate packaging",
+        "isolated installed-tool verification and release build",
+        "artifact upload"
+      ],
+      "raw_job_log_sha256": "c6053140d0eb9c9dbbee15923919bd9400ee9a0be90f0850329b8c0139611335"
+    }
+  ],
+  "limitations": [
+    "Only named native library suite totals are shown; other workspace/integration suites also ran",
+    "Ignored tests are not counted as passed",
+    "Native fixture pass does not prove natural EPERM scheduling",
+    "Installed cross-platform relay cohorts remain pending",
+    "No public release asset or installer pin changed"
+  ]
+}
