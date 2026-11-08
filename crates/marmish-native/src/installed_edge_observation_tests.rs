@@ -10,83 +10,138 @@ fn decoded(lines: &RefCell<Vec<Vec<u8>>>) -> Vec<serde_json::Value> {
         })
         .collect()
 }
+// Standalone Trace contracts, not runtime copy-wrapper or cleanup parity proof.
 #[test]
 fn last_stage_error_finish_is_once_only_and_closed() {
-    let lines = RefCell::new(Vec::new());
-    let sink = |line: &[u8]| {
-        lines.borrow_mut().push(line.to_vec());
-        Ok(())
-    };
-    {
-        let trace = Trace::with_sink(
+    for (role, family, case, stage, stage_name, error, category) in [
+        (
             "macos-arm64",
             Family::Signals,
             Case::StreamEpipeDetach,
-            &sink,
+            Stage::DetachedDwell,
+            "detached_dwell",
+            Error::Invalid("private path must not appear"),
+            "invalid",
+        ),
+        (
+            "linux-amd64",
+            Family::CopyPut,
+            Case::CopyEmpty,
+            Stage::Prerequisite,
+            "prerequisite",
+            Error::Io(io::Error::other("private fixture path")),
+            "io",
+        ),
+        (
+            "linux-arm64",
+            Family::CopyGet,
+            Case::CopyEmpty,
+            Stage::Attachment,
+            "attachment",
+            Error::Timeout,
+            "timeout",
+        ),
+        (
+            "macos-arm64",
+            Family::CopyPut,
+            Case::CopyOverwrite,
+            Stage::Validation,
+            "validation",
+            Error::Invalid("private postcheck path"),
+            "invalid",
+        ),
+    ] {
+        let lines = RefCell::new(Vec::new());
+        let sink = |line: &[u8]| {
+            lines.borrow_mut().push(line.to_vec());
+            Ok(())
+        };
+        {
+            let trace = Trace::with_sink(role, family, case, &sink);
+            trace.stage(stage);
+            trace.finish::<()>(&Err(error));
+            trace.finish(&Ok(()));
+            trace.stage(Stage::Cleanup);
+        }
+        let events = decoded(&lines);
+        assert_eq!(events.len(), 3);
+        assert_eq!(
+            events[2],
+            serde_json::json!({"schema":1,"client_role":role,
+            "family":family,"case":case,"stage":stage_name,
+            "outcome":"error","error_category":category})
         );
-        trace.stage(Stage::DetachedDwell);
-        trace.finish::<()>(&Err(Error::Invalid("private path must not appear")));
-        trace.finish(&Ok(()));
-        trace.stage(Stage::Cleanup);
+        assert!(
+            !String::from_utf8(lines.borrow().concat())
+                .unwrap()
+                .contains("private")
+        );
+        if stage_name == "prerequisite" {
+            assert!(!events.iter().any(|event| event["stage"] == "attachment"));
+        }
     }
-    let events = decoded(&lines);
-    assert_eq!(events.len(), 3);
-    assert_eq!(
-        events[2],
-        serde_json::json!({"schema":1,"client_role":"macos-arm64",
-        "family":"signals","case":"stream_epipe_detach","stage":"detached_dwell",
-        "outcome":"error","error_category":"invalid"})
-    );
 }
 #[test]
 fn abandonment_and_truncation_reserve_final_line() {
-    let lines = RefCell::new(Vec::new());
-    let sink = |line: &[u8]| {
-        lines.borrow_mut().push(line.to_vec());
-        Ok(())
-    };
-    {
-        let trace = Trace::with_sink("linux-amd64", Family::Quota, Case::TwoChildrenQuota, &sink);
-        for _ in 0..100 {
-            trace.stage(Stage::Startup);
+    for (family, case) in [
+        (Family::Quota, Case::TwoChildrenQuota),
+        (Family::CopyPut, Case::CopyEmpty),
+        (Family::CopyGet, Case::CopyResumeCorruptCheckpoint),
+    ] {
+        let lines = RefCell::new(Vec::new());
+        let sink = |line: &[u8]| {
+            lines.borrow_mut().push(line.to_vec());
+            Ok(())
+        };
+        {
+            let trace = Trace::with_sink("linux-amd64", family, case, &sink);
+            for _ in 0..100 {
+                trace.stage(Stage::Startup);
+            }
+            trace.stage(Stage::Cleanup);
         }
-        trace.stage(Stage::Cleanup);
+        let events = decoded(&lines);
+        assert_eq!(events.len(), LIMIT + 2); // ordinary begin/stages, truncation, final
+        assert_eq!(
+            events
+                .iter()
+                .filter(|v| v["outcome"] == "truncated")
+                .count(),
+            1
+        );
+        assert_eq!(events.last().unwrap()["outcome"], "abandoned");
+        assert_eq!(events.last().unwrap()["stage"], "cleanup");
     }
-    let events = decoded(&lines);
-    assert_eq!(events.len(), LIMIT + 2); // ordinary begin/stages, truncation, final
-    assert_eq!(
-        events
-            .iter()
-            .filter(|v| v["outcome"] == "truncated")
-            .count(),
-        1
-    );
-    assert_eq!(events.last().unwrap()["outcome"], "abandoned");
-    assert_eq!(events.last().unwrap()["stage"], "cleanup");
 }
 #[test]
 fn failing_sink_preserves_original_result_and_cleanup_precedence() {
-    let sink = |_: &[u8]| Err(io::Error::other("sink private error"));
-    let run = |operation: Result<()>, cleanup: Result<()>| {
-        let trace = Trace::with_sink("linux-arm64", Family::Signals, Case::StreamSigint, &sink);
-        trace.stage(Stage::AttachmentFinish);
-        let result = if operation.is_err() {
-            cleanup.and(operation)
-        } else {
-            operation
+    for (family, case) in [
+        (Family::Signals, Case::StreamSigint),
+        (Family::CopyPut, Case::CopyEmpty),
+        (Family::CopyGet, Case::CopyEmpty),
+    ] {
+        let sink = |_: &[u8]| Err(io::Error::other("sink private error"));
+        let run = |operation: Result<()>, cleanup: Result<()>| {
+            let trace = Trace::with_sink("linux-arm64", family, case, &sink);
+            trace.stage(Stage::AttachmentFinish);
+            let result = if operation.is_err() {
+                cleanup.and(operation)
+            } else {
+                operation
+            };
+            trace.finish(&result);
+            result
         };
-        trace.finish(&result);
-        result
-    };
-    assert!(run(Ok(()), Ok(())).is_ok());
-    assert!(matches!(
-        run(Err(Error::Timeout), Ok(())),
-        Err(Error::Timeout)
-    ));
-    assert!(matches!(
-        run(Err(Error::Timeout), Err(Error::Invalid("cleanup"))),
-        Err(Error::Invalid("cleanup"))
-    ));
+        assert!(run(Ok(()), Ok(())).is_ok());
+        assert!(matches!(
+            run(Err(Error::Timeout), Ok(())),
+            Err(Error::Timeout)
+        ));
+        assert!(matches!(
+            run(Err(Error::Timeout), Err(Error::Invalid("cleanup"))),
+            Err(Error::Invalid("cleanup"))
+        ));
+    }
 }
 #[test]
 fn earlier_success_is_retained_and_later_case_is_not_entered() {
@@ -133,6 +188,8 @@ fn every_closed_enum_combination_fits_line_limit() {
         Family::Quota,
         Family::Preopen,
         Family::Rsync,
+        Family::CopyPut,
+        Family::CopyGet,
     ];
     let cases = [
         Case::Family,
@@ -151,6 +208,17 @@ fn every_closed_enum_combination_fits_line_limit() {
         Case::RsyncGroupSigint,
         Case::RsyncTimeoutUsr1,
         Case::RsyncIndependentFailure,
+        Case::CopyEmpty,
+        Case::CopyExistingRefusal,
+        Case::CopyOverwrite,
+        Case::CopyReceiptSeed,
+        Case::CopySymlinkSource,
+        Case::CopyDirectorySource,
+        Case::CopyDestinationSymlink,
+        Case::CopyDestinationDirectory,
+        Case::CopyResumeChangedSource,
+        Case::CopyResumeChangedBinding,
+        Case::CopyResumeCorruptCheckpoint,
     ];
     let stages = [
         Stage::Begin,
@@ -316,4 +384,80 @@ fn rsync_startup_and_journal_failures_keep_distinct_decisive_stages() {
         assert_eq!(events[2]["outcome"], "error");
         assert_eq!(events[2]["error_category"], category);
     }
+}
+
+#[test]
+fn copy_trace_has_exactly_twenty_two_distinct_closed_direction_case_labels() {
+    let cases = [
+        (Case::CopyEmpty, "copy_empty"),
+        (Case::CopyExistingRefusal, "copy_existing_refusal"),
+        (Case::CopyOverwrite, "copy_overwrite"),
+        (Case::CopyReceiptSeed, "copy_receipt_seed"),
+        (Case::CopySymlinkSource, "copy_symlink_source"),
+        (Case::CopyDirectorySource, "copy_directory_source"),
+        (Case::CopyDestinationSymlink, "copy_destination_symlink"),
+        (Case::CopyDestinationDirectory, "copy_destination_directory"),
+        (Case::CopyResumeChangedSource, "copy_resume_changed_source"),
+        (
+            Case::CopyResumeChangedBinding,
+            "copy_resume_changed_binding",
+        ),
+        (
+            Case::CopyResumeCorruptCheckpoint,
+            "copy_resume_corrupt_checkpoint",
+        ),
+    ];
+    let mut labels = std::collections::BTreeSet::new();
+    for (family, name) in [(Family::CopyPut, "copy_put"), (Family::CopyGet, "copy_get")] {
+        for (case, case_name) in cases {
+            let lines = RefCell::new(Vec::new());
+            let sink = |line: &[u8]| {
+                lines.borrow_mut().push(line.to_vec());
+                Ok(())
+            };
+            {
+                let trace = Trace::with_sink("macos-arm64", family, case, &sink);
+                trace.stage(Stage::Validation);
+                trace.finish(&Ok(()));
+                trace.finish::<()>(&Err(Error::Timeout));
+            }
+            let events = decoded(&lines);
+            assert_eq!(events.len(), 3);
+            assert_eq!(events[2]["family"], name);
+            assert_eq!(events[2]["case"], case_name);
+            assert_eq!(events[2]["stage"], "validation");
+            assert_eq!(events[2]["outcome"], "ok");
+            assert!(labels.insert((name, case_name)));
+        }
+    }
+    assert_eq!(labels.len(), 22);
+}
+
+#[test]
+fn copy_coordinator_source_wiring_covers_run_and_both_reconciliation_callers() {
+    // Architectural wiring guard, not runtime IPC or wrapper parity evidence.
+    let source = include_str!("installed_edges.rs");
+    assert_eq!(
+        source
+            .matches("\"edge-stream\" | \"edge-rsync\" | \"edge-copy\"")
+            .count(),
+        3
+    );
+    let arm = source.split("\"edge-copy\" => {").nth(1).unwrap();
+    let prerequisite = arm.find("trace.stage(Stage::Prerequisite)").unwrap();
+    let run = arm.find("edge_copy::run(again(&c)).await?").unwrap();
+    assert!(prerequisite < run);
+    assert!(source.contains("confirm_server(&evidence, &c).await?"));
+    let reconciliation = source
+        .split("pub(super) async fn confirm_server")
+        .nth(1)
+        .unwrap();
+    assert!(
+        reconciliation
+            .find("trace.stage(Stage::Reconciliation)")
+            .unwrap()
+            < reconciliation
+                .find("confirm_server_inner(e, c).await")
+                .unwrap()
+    );
 }

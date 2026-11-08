@@ -900,3 +900,23 @@ of valid Hello without Open; this does not establish historical failure causalit
 The proposed [bounded rsync correction](phases/streaming-rsync-edge-correction.md)
 requires independent design and integrated code approval, then a fresh complete
 candidate and all eight cohorts. Release qualification remains incomplete.
+
+
+Candidate [42435626121/1](https://github.com/Epiphytic/marmish/actions/runs/42435626121)
+at `2f98802d25e2a6ec9ebd995adfef3504169175b7` passed all three native/package/tool
+jobs and rendering. Five original cohorts passed, retaining 90 rollup observations
+(stream, rsync, copy, edge-stream and edge-rsync). Edge-copy then failed on all
+three platforms: all 12 canonical records remain, but no case/stage proof was
+retained and every server-stop flag is false. Both interruption cohorts and the
+final auditor were not run; complete qualification remains false. See
+[partial results, pins and application rates](validation/streaming-installed-2f98802.md).
+A separate source audit identifies the same workspace being used for two exclusive
+nonce-directory creates before the first copy edge case; historical runtime errno
+was not retained. The [approved correction](phases/streaming-copy-edge-correction.md)
+separates those fixture roots and adds bounded failure observations. Independent integrated
+code/evidence review approved the correction; a fresh complete exact-source chain remains required.
+Legacy managed CI remains red: 10 of 19 unique failed identities locally reproduce
+obsolete assumptions; nine locally pass with hosted causes unresolved. No failure
+is waived. GitHub exact source bytes matched, but Iris HTTP timed out despite
+verified remote refs/sync. This source-only increment changes no public version,
+release tag or installer pin; public installation still selects v0.2.3.

@@ -1,4 +1,4 @@
-//! Fixed, bounded breadcrumbs for build-only edge-stream and edge-rsync qualification.
+//! Fixed, bounded breadcrumbs for build-only edge qualification.
 use super::streaming_observation::{Role, stderr_sink};
 use crate::{Error, Result};
 use serde::Serialize;
@@ -15,6 +15,8 @@ pub(super) enum Family {
     Quota,
     Preopen,
     Rsync,
+    CopyPut,
+    CopyGet,
 }
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -35,6 +37,17 @@ pub(super) enum Case {
     RsyncGroupSigint,
     RsyncTimeoutUsr1,
     RsyncIndependentFailure,
+    CopyEmpty,
+    CopyExistingRefusal,
+    CopyOverwrite,
+    CopyReceiptSeed,
+    CopySymlinkSource,
+    CopyDirectorySource,
+    CopyDestinationSymlink,
+    CopyDestinationDirectory,
+    CopyResumeChangedSource,
+    CopyResumeChangedBinding,
+    CopyResumeCorruptCheckpoint,
 }
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -107,7 +120,7 @@ impl Trace<'static> {
     }
 }
 impl<'a> Trace<'a> {
-    fn with_sink(
+    pub(super) fn with_sink(
         role: &str,
         family: Family,
         case: Case,

@@ -1,4 +1,5 @@
 //! Installed tiny-copy edge cases. Ordinary preparation stays inside owned workspaces.
+use super::edge_observation::{Case as TraceCase, Family, Stage, Trace};
 use super::{
     copy_checkpoint,
     copy_interrupt::Binding,
@@ -68,6 +69,23 @@ impl Case {
             | Self::ResumeCorruptCheckpoint => "completed-receipt-negative",
             _ => "ordinary",
         }
+    }
+    fn trace(self, role: &str, direction: &str) -> Trace<'static> {
+        let family = copy_family(direction);
+        let case = match self {
+            Self::Empty => TraceCase::CopyEmpty,
+            Self::ExistingRefusal => TraceCase::CopyExistingRefusal,
+            Self::Overwrite => TraceCase::CopyOverwrite,
+            Self::ReceiptSeed => TraceCase::CopyReceiptSeed,
+            Self::SymlinkSource => TraceCase::CopySymlinkSource,
+            Self::DirectorySource => TraceCase::CopyDirectorySource,
+            Self::DestinationSymlink => TraceCase::CopyDestinationSymlink,
+            Self::DestinationDirectory => TraceCase::CopyDestinationDirectory,
+            Self::ResumeChangedSource => TraceCase::CopyResumeChangedSource,
+            Self::ResumeChangedBinding => TraceCase::CopyResumeChangedBinding,
+            Self::ResumeCorruptCheckpoint => TraceCase::CopyResumeCorruptCheckpoint,
+        };
+        Trace::new(role, family, case)
     }
     fn name(self) -> &'static str {
         match self {
@@ -244,6 +262,24 @@ impl Observation {
         Ok(())
     }
 }
+fn copy_family(direction: &str) -> Family {
+    if direction == "put" {
+        Family::CopyPut
+    } else {
+        Family::CopyGet
+    }
+}
+fn source_operands(send: &Path, source: &Path, trace: &Trace<'_>) -> Result<(PathBuf, PathBuf)> {
+    trace.stage(Stage::Prerequisite);
+    let result = (|| {
+        let alias = send.join("alias");
+        symlink(source, &alias)?;
+        let directory = private(send, "directory")?;
+        Ok((alias, directory))
+    })();
+    trace.finish(&result);
+    result
+}
 fn private(parent: &Path, name: &str) -> Result<PathBuf> {
     crate::identity::check_dir(parent)?;
     if parent.canonicalize()? != parent {
@@ -253,6 +289,15 @@ fn private(parent: &Path, name: &str) -> Result<PathBuf> {
     std::fs::DirBuilder::new().mode(0o700).create(&path)?;
     crate::identity::check_dir(&path)?;
     Ok(path)
+}
+fn edge_roots(
+    client_parent: &Path,
+    server_parent: &Path,
+    nonce: &str,
+) -> Result<(PathBuf, PathBuf)> {
+    let local = private(client_parent, &format!("edge-copy-client-{nonce}"))?;
+    let remote = private(server_parent, &format!("edge-copy-server-{nonce}"))?;
+    Ok((local, remote))
 }
 fn payload(path: &Path, bytes: &[u8]) -> Result<()> {
     std::fs::write(path, bytes)?;
@@ -389,7 +434,12 @@ fn attempt_args(account: &str, attempt: &Attempt<'_>) -> Result<Vec<OsString>> {
     ]);
     Ok(args)
 }
-async fn invoke(c: &Cohort<'_, '_>, case: Case, attempt: Attempt<'_>) -> Result<Completed> {
+async fn invoke(
+    c: &Cohort<'_, '_>,
+    case: Case,
+    attempt: Attempt<'_>,
+    trace: &Trace<'_>,
+) -> Result<Completed> {
     let scoped = Cohort {
         context: c.context,
         identities: c.identities,
@@ -401,11 +451,17 @@ async fn invoke(c: &Cohort<'_, '_>, case: Case, attempt: Attempt<'_>) -> Result<
             .deadline
             .min(Instant::now() + Duration::from_secs(CALL_SECONDS)),
     };
-    invoke_inner(&scoped, case, attempt)
+    invoke_inner(&scoped, case, attempt, trace)
         .await
         .map_err(|error| case_error(case, error))
 }
-async fn invoke_inner(c: &Cohort<'_, '_>, case: Case, attempt: Attempt<'_>) -> Result<Completed> {
+async fn invoke_inner(
+    c: &Cohort<'_, '_>,
+    case: Case,
+    attempt: Attempt<'_>,
+    trace: &Trace<'_>,
+) -> Result<Completed> {
+    trace.stage(Stage::Baseline);
     let protected = attempt.protected.unwrap_or(attempt.destination);
     let before = protected
         .try_exists()?
@@ -424,6 +480,7 @@ async fn invoke_inner(c: &Cohort<'_, '_>, case: Case, attempt: Attempt<'_>) -> R
     );
     args.extend(attempt_args(&c.ready.server_account, &attempt)?);
     let start = Instant::now();
+    trace.stage(Stage::Attachment);
     let out = process::run(
         &c.client.workspace.join("bin/marmish"),
         &args,
@@ -434,11 +491,15 @@ async fn invoke_inner(c: &Cohort<'_, '_>, case: Case, attempt: Attempt<'_>) -> R
         65536,
     )
     .await?;
+    trace.stage(Stage::Prefix);
     let (stream, transfer) = ids(&out.stderr, case, attempt.direction)?;
+    trace.stage(Stage::DiagnosticCheck);
     if !out.stdout.is_empty() || out.status.code() != Some(i32::from(case.diagnostic().is_some())) {
         return Err(bad());
     }
+    trace.stage(Stage::Idle);
     let (client_cleanup, server_cleanup) = idle(c).await?;
+    trace.stage(Stage::JournalCheck);
     let (binding, remote_terminal) = if matches!(case, Case::ResumeChangedBinding) {
         // A hello-only record is allowed, but never an accepted Open.
         for (endpoint, label) in [(c.client, "client"), (c.server, "server")] {
@@ -502,6 +563,7 @@ async fn invoke_inner(c: &Cohort<'_, '_>, case: Case, attempt: Attempt<'_>) -> R
             server_entry.terminal,
         )
     };
+    trace.stage(Stage::Validation);
     let after = std::fs::metadata(protected)?;
     let after_sha256 = records::digest(&std::fs::read(protected)?);
     let exact_metadata = if case.preserves() {
@@ -556,98 +618,136 @@ pub(super) async fn run(mut c: Cohort<'_, '_>) -> Result<Vec<Observation>> {
         c.role,
         &c.ready.server_account,
     ))?);
-    let local = private(c.client.workspace, &format!("edge-copy-{nonce}"))?;
-    let remote = private(c.server.workspace, &format!("edge-copy-{nonce}"))?;
+    let (local, remote) = edge_roots(c.client.workspace, c.server.workspace, &nonce)?;
     let mut observations = Vec::new();
     for direction in ["put", "get"] {
-        let client = private(&local, direction)?;
-        let server = private(&remote, direction)?;
+        let trace = Case::Empty.trace(c.role, direction);
+        trace.stage(Stage::Prerequisite);
+        let result: Result<_> = async {
+            let client = private(&local, direction)?;
+            let server = private(&remote, direction)?;
+            let (send, receive) = if direction == "put" {
+                (&client, &server)
+            } else {
+                (&server, &client)
+            };
+            let source = send.join("source");
+            let empty = send.join("empty");
+            payload(&source, b"tiny copy edge payload\0\xff")?;
+            payload(&empty, &[])?;
+            let empty_target = receive.join("empty");
+            observations.push(
+                invoke(
+                    &c,
+                    Case::Empty,
+                    Attempt {
+                        direction,
+                        source: &empty,
+                        destination: &empty_target,
+                        overwrite: false,
+                        resume: None,
+                        protected: None,
+                    },
+                    &trace,
+                )
+                .await?
+                .observation,
+            );
+            Ok((client, server, source))
+        }
+        .await;
+        trace.finish(&result);
+        let (client, server, source) = result?;
         let (send, receive) = if direction == "put" {
             (&client, &server)
         } else {
             (&server, &client)
         };
-        let source = send.join("source");
-        let empty = send.join("empty");
-        payload(&source, b"tiny copy edge payload\0\xff")?;
-        payload(&empty, &[])?;
-        let empty_target = receive.join("empty");
-        observations.push(
-            invoke(
-                &c,
-                Case::Empty,
-                Attempt {
-                    direction,
-                    source: &empty,
-                    destination: &empty_target,
-                    overwrite: false,
-                    resume: None,
-                    protected: None,
-                },
-            )
-            .await?
-            .observation,
-        );
         let target = receive.join("existing");
-        payload(&target, b"existing sentinel must survive failure\0")?;
-        observations.push(
-            invoke(
-                &c,
-                Case::ExistingRefusal,
-                Attempt {
-                    direction,
-                    source: &source,
-                    destination: &target,
-                    overwrite: false,
-                    resume: None,
-                    protected: None,
-                },
-            )
-            .await?
-            .observation,
-        );
-        observations.push(
-            invoke(
-                &c,
-                Case::Overwrite,
-                Attempt {
-                    direction,
-                    source: &source,
-                    destination: &target,
-                    overwrite: true,
-                    resume: None,
-                    protected: None,
-                },
-            )
-            .await?
-            .observation,
-        );
-        if std::fs::read(&target)? != std::fs::read(&source)? {
-            return Err(bad());
-        }
-        let alias = send.join("alias");
-        symlink(&source, &alias)?;
-        let directory = private(send, "directory")?;
-        for (case, operand) in [
-            (Case::SymlinkSource, &alias),
-            (Case::DirectorySource, &directory),
-        ] {
+        let trace = Case::ExistingRefusal.trace(c.role, direction);
+        trace.stage(Stage::Prerequisite);
+        let result: Result<()> = async {
+            payload(&target, b"existing sentinel must survive failure\0")?;
             observations.push(
                 invoke(
                     &c,
-                    case,
+                    Case::ExistingRefusal,
                     Attempt {
                         direction,
-                        source: operand,
+                        source: &source,
+                        destination: &target,
+                        overwrite: false,
+                        resume: None,
+                        protected: None,
+                    },
+                    &trace,
+                )
+                .await?
+                .observation,
+            );
+            Ok(())
+        }
+        .await;
+        trace.finish(&result);
+        result?;
+        let trace = Case::Overwrite.trace(c.role, direction);
+        let result: Result<()> = async {
+            observations.push(
+                invoke(
+                    &c,
+                    Case::Overwrite,
+                    Attempt {
+                        direction,
+                        source: &source,
                         destination: &target,
                         overwrite: true,
                         resume: None,
                         protected: None,
                     },
+                    &trace,
                 )
                 .await?
                 .observation,
             );
+            trace.stage(Stage::Validation);
+            if std::fs::read(&target)? != std::fs::read(&source)? {
+                return Err(bad());
+            }
+            Ok(())
+        }
+        .await;
+        trace.finish(&result);
+        result?;
+        let setup_trace = Trace::new(c.role, copy_family(direction), TraceCase::Family);
+        let (alias, directory) = source_operands(send, &source, &setup_trace)?;
+        for (case, operand) in [
+            (Case::SymlinkSource, &alias),
+            (Case::DirectorySource, &directory),
+        ] {
+            let trace = case.trace(c.role, direction);
+            let result: Result<()> = async {
+                observations.push(
+                    invoke(
+                        &c,
+                        case,
+                        Attempt {
+                            direction,
+                            source: operand,
+                            destination: &target,
+                            overwrite: true,
+                            resume: None,
+                            protected: None,
+                        },
+                        &trace,
+                    )
+                    .await?
+                    .observation,
+                );
+                Ok(())
+            }
+            .await;
+            trace.finish(&result);
+            result?;
         }
         destination_cases(&c, direction, &source, receive, &mut observations).await?;
         receipt_cases(&c, direction, send, receive, &mut observations).await?;
@@ -832,43 +932,54 @@ async fn destination_cases(
     observations: &mut Vec<Observation>,
 ) -> Result<()> {
     for case in [Case::DestinationSymlink, Case::DestinationDirectory] {
-        let parent = private(receive, case.name())?;
-        let destination = parent.join("destination");
-        let sentinel = if matches!(case, Case::DestinationSymlink) {
-            let sentinel = parent.join("sentinel");
-            symlink(&sentinel, &destination)?;
-            sentinel
-        } else {
-            private(&parent, "destination")?.join("sentinel")
-        };
-        payload(&sentinel, b"destination sentinel must survive\0\xff")?;
-        std::fs::set_permissions(&sentinel, std::fs::Permissions::from_mode(0o600))?;
-        let before = destination_proof(&parent, case)?;
-        let mut result = invoke(
-            c,
-            case,
-            Attempt {
-                direction,
-                source,
-                destination: &destination,
-                overwrite: true,
-                resume: None,
-                protected: Some(&sentinel),
-            },
-        )
-        .await?;
-        let after = destination_proof(&parent, case)?;
-        if !same_stat(&before.entry, &after.entry)
-            || file_identity(&before.sentinel) != file_identity(&after.sentinel)
-            || before.sentinel.nlink() != after.sentinel.nlink()
-            || before.link != after.link
-            || before.names != after.names
-        {
-            return Err(Error::Invalid(case.failure()));
+        let trace = case.trace(c.role, direction);
+        trace.stage(Stage::Prerequisite);
+        let result: Result<()> = async {
+            let parent = private(receive, case.name())?;
+            let destination = parent.join("destination");
+            let sentinel = if matches!(case, Case::DestinationSymlink) {
+                let sentinel = parent.join("sentinel");
+                symlink(&sentinel, &destination)?;
+                sentinel
+            } else {
+                private(&parent, "destination")?.join("sentinel")
+            };
+            payload(&sentinel, b"destination sentinel must survive\0\xff")?;
+            std::fs::set_permissions(&sentinel, std::fs::Permissions::from_mode(0o600))?;
+            trace.stage(Stage::Baseline);
+            let before = destination_proof(&parent, case)?;
+            let mut result = invoke(
+                c,
+                case,
+                Attempt {
+                    direction,
+                    source,
+                    destination: &destination,
+                    overwrite: true,
+                    resume: None,
+                    protected: Some(&sentinel),
+                },
+                &trace,
+            )
+            .await?;
+            trace.stage(Stage::Validation);
+            let after = destination_proof(&parent, case)?;
+            if !same_stat(&before.entry, &after.entry)
+                || file_identity(&before.sentinel) != file_identity(&after.sentinel)
+                || before.sentinel.nlink() != after.sentinel.nlink()
+                || before.link != after.link
+                || before.names != after.names
+            {
+                return Err(Error::Invalid(case.failure()));
+            }
+            result.observation.target_entry_preserved = Some(true);
+            result.observation.validate()?;
+            observations.push(result.observation);
+            Ok(())
         }
-        result.observation.target_entry_preserved = Some(true);
-        result.observation.validate()?;
-        observations.push(result.observation);
+        .await;
+        trace.finish(&result);
+        result?;
     }
     Ok(())
 }
@@ -1010,124 +1121,157 @@ async fn receipt_cases(
     receive: &Path,
     observations: &mut Vec<Observation>,
 ) -> Result<()> {
-    // Separate parents keep corrupt retained state out of ordinary inventories.
-    let source_parent = private(send, "receipt-negative")?;
-    let receiver_parent = private(receive, "receipt-negative")?;
-    let source = source_parent.join("source");
-    let target = receiver_parent.join("target");
-    let bytes = b"completed receipt binary\0\xff";
-    payload(&source, bytes)?;
-    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o600))?;
-    let mut seed = invoke(
-        c,
-        Case::ReceiptSeed,
-        Attempt {
-            direction,
-            source: &source,
-            destination: &target,
+    let trace = Case::ReceiptSeed.trace(c.role, direction);
+    trace.stage(Stage::Prerequisite);
+    let result: Result<_> = async {
+        // Separate parents keep corrupt retained state out of ordinary inventories.
+        let source_parent = private(send, "receipt-negative")?;
+        let receiver_parent = private(receive, "receipt-negative")?;
+        let source = source_parent.join("source");
+        let target = receiver_parent.join("target");
+        let bytes = b"completed receipt binary\0\xff";
+        payload(&source, bytes)?;
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o600))?;
+        let mut seed = invoke(
+            c,
+            Case::ReceiptSeed,
+            Attempt {
+                direction,
+                source: &source,
+                destination: &target,
+                overwrite: true,
+                resume: None,
+                protected: None,
+            },
+            &trace,
+        )
+        .await?;
+        let launch = Launch {
+            version: protocol::VERSION,
+            mode: AttemptMode::Create,
+            transfer: fixed(&seed.transfer)?,
+            client: fixed(&c.identities[c.role].client_account)?,
+            server: fixed(&c.ready.server_account)?,
+            direction: if direction == "put" {
+                Direction::Put
+            } else {
+                Direction::Get
+            },
+            source: source.as_os_str().as_bytes().to_vec(),
+            destination: target.as_os_str().as_bytes().to_vec(),
             overwrite: true,
-            resume: None,
-            protected: None,
-        },
-    )
-    .await?;
-    let launch = Launch {
-        version: protocol::VERSION,
-        mode: AttemptMode::Create,
-        transfer: fixed(&seed.transfer)?,
-        client: fixed(&c.identities[c.role].client_account)?,
-        server: fixed(&c.ready.server_account)?,
-        direction: if direction == "put" {
-            Direction::Put
-        } else {
-            Direction::Get
-        },
-        source: source.as_os_str().as_bytes().to_vec(),
-        destination: target.as_os_str().as_bytes().to_vec(),
-        overwrite: true,
-        preserve_mode: true,
-        preserve_mtime: true,
-    };
-    let stream = fixed(&seed.stream)?;
-    let proof = copy_checkpoint::observe(expected(&receiver_parent, &launch, stream, bytes)?)?;
-    let baseline = seed.observation.binding.clone().ok_or_else(bad)?;
-    seed.observation.receipt = Some(proof.clone());
-    seed.observation.validate()?;
-    observations.push(seed.observation);
+            preserve_mode: true,
+            preserve_mtime: true,
+        };
+        let stream = fixed(&seed.stream)?;
+        trace.stage(Stage::Validation);
+        let proof = copy_checkpoint::observe(expected(&receiver_parent, &launch, stream, bytes)?)?;
+        let baseline = seed.observation.binding.clone().ok_or_else(bad)?;
+        seed.observation.receipt = Some(proof.clone());
+        seed.observation.validate()?;
+        observations.push(seed.observation);
+        Ok((
+            receiver_parent,
+            source,
+            target,
+            bytes,
+            launch,
+            stream,
+            proof,
+            baseline,
+            seed.transfer,
+        ))
+    }
+    .await;
+    trace.finish(&result);
+    let (receiver_parent, source, target, bytes, launch, stream, proof, baseline, transfer) =
+        result?;
     for case in [
         Case::ResumeChangedSource,
         Case::ResumeChangedBinding,
         Case::ResumeCorruptCheckpoint,
     ] {
-        let deadline = c
-            .deadline
-            .min(Instant::now() + Duration::from_secs(CALL_SECONDS));
-        let scoped = Cohort {
-            context: c.context,
-            identities: c.identities,
-            role: c.role,
-            ready: c.ready,
-            client: c.client,
-            server: c.server,
-            deadline,
-        };
-        if copy_checkpoint::observe(expected(&receiver_parent, &launch, stream, bytes)?)
-            .map_err(|error| case_error(case, error))?
-            != proof
-        {
-            return Err(Error::Invalid(case.failure()));
-        }
-        let alternate = receiver_parent.join("alternate-never-created");
-        let destination = if matches!(case, Case::ResumeChangedBinding) {
-            &alternate
-        } else {
-            &target
-        };
-        if !absent_entry(&alternate)? {
-            return Err(bad());
-        }
-        if matches!(case, Case::ResumeChangedSource) {
-            let mut changed = bytes.to_vec();
-            changed[0] ^= 1;
-            payload(&source, &changed)?;
-            std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o600))?;
-        }
-        if matches!(case, Case::ResumeCorruptCheckpoint) {
-            idle(&scoped)
-                .await
-                .map_err(|error| case_error(case, error))?;
-            corrupt_committed(expected(&receiver_parent, &launch, stream, bytes)?, &proof)
-                .map_err(|error| case_error(case, error))?;
-        }
-        let mut result = invoke(
-            &scoped,
-            case,
-            Attempt {
-                direction,
-                source: &source,
-                destination,
-                overwrite: true,
-                resume: Some(&seed.transfer),
-                protected: Some(&target),
-            },
-        )
-        .await?;
-        if result.transfer != seed.transfer || !absent_entry(&alternate)? {
-            return Err(Error::Invalid(case.failure()));
-        }
-        result.observation.baseline = Some(baseline.clone());
-        result.observation.receipt = Some(proof.clone());
-        result.observation.validate()?;
-        observations.push(result.observation);
-        if !matches!(case, Case::ResumeCorruptCheckpoint) {
-            payload(&source, bytes)?;
-            std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o600))?;
-            if copy_checkpoint::observe(expected(&receiver_parent, &launch, stream, bytes)?)?
+        let trace = case.trace(c.role, direction);
+        let result: Result<()> = async {
+            let deadline = c
+                .deadline
+                .min(Instant::now() + Duration::from_secs(CALL_SECONDS));
+            let scoped = Cohort {
+                context: c.context,
+                identities: c.identities,
+                role: c.role,
+                ready: c.ready,
+                client: c.client,
+                server: c.server,
+                deadline,
+            };
+            trace.stage(Stage::Baseline);
+            if copy_checkpoint::observe(expected(&receiver_parent, &launch, stream, bytes)?)
+                .map_err(|error| case_error(case, error))?
                 != proof
             {
                 return Err(Error::Invalid(case.failure()));
             }
+            let alternate = receiver_parent.join("alternate-never-created");
+            let destination = if matches!(case, Case::ResumeChangedBinding) {
+                &alternate
+            } else {
+                &target
+            };
+            if !absent_entry(&alternate)? {
+                return Err(bad());
+            }
+            trace.stage(Stage::LocalAction);
+            if matches!(case, Case::ResumeChangedSource) {
+                let mut changed = bytes.to_vec();
+                changed[0] ^= 1;
+                payload(&source, &changed)?;
+                std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o600))?;
+            }
+            if matches!(case, Case::ResumeCorruptCheckpoint) {
+                idle(&scoped)
+                    .await
+                    .map_err(|error| case_error(case, error))?;
+                corrupt_committed(expected(&receiver_parent, &launch, stream, bytes)?, &proof)
+                    .map_err(|error| case_error(case, error))?;
+            }
+            let mut result = invoke(
+                &scoped,
+                case,
+                Attempt {
+                    direction,
+                    source: &source,
+                    destination,
+                    overwrite: true,
+                    resume: Some(&transfer),
+                    protected: Some(&target),
+                },
+                &trace,
+            )
+            .await?;
+            trace.stage(Stage::Validation);
+            if result.transfer != transfer || !absent_entry(&alternate)? {
+                return Err(Error::Invalid(case.failure()));
+            }
+            result.observation.baseline = Some(baseline.clone());
+            result.observation.receipt = Some(proof.clone());
+            result.observation.validate()?;
+            observations.push(result.observation);
+            trace.stage(Stage::Reconciliation);
+            if !matches!(case, Case::ResumeCorruptCheckpoint) {
+                payload(&source, bytes)?;
+                std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o600))?;
+                if copy_checkpoint::observe(expected(&receiver_parent, &launch, stream, bytes)?)?
+                    != proof
+                {
+                    return Err(Error::Invalid(case.failure()));
+                }
+            }
+            Ok(())
         }
+        .await;
+        trace.finish(&result);
+        result?;
     }
     Ok(())
 }
@@ -1135,6 +1279,169 @@ async fn receipt_cases(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn source_operands_actual_setup_reports_only_one_family_result() {
+        use std::cell::RefCell;
+        for direction in ["put", "get"] {
+            for failure in [None, Some("alias"), Some("directory")] {
+                let parent = crate::journal::private_test_directory();
+                let source = parent.path().join("source");
+                std::fs::write(&source, b"source").unwrap();
+                if let Some(name) = failure {
+                    std::fs::write(parent.path().join(name), b"existing").unwrap();
+                }
+                let lines = RefCell::new(Vec::new());
+                let sink = |bytes: &[u8]| {
+                    lines.borrow_mut().push(bytes.to_vec());
+                    Ok(())
+                };
+                let trace = Trace::with_sink(
+                    "linux-amd64",
+                    copy_family(direction),
+                    TraceCase::Family,
+                    &sink,
+                );
+                let result = source_operands(parent.path(), &source, &trace);
+                match failure {
+                    None => {
+                        let (alias, directory) = result.unwrap();
+                        assert_eq!(std::fs::read_link(alias).unwrap(), source);
+                        crate::identity::check_dir(&directory).unwrap();
+                    }
+                    Some("alias") => {
+                        assert!(
+                            matches!(result, Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::AlreadyExists)
+                        );
+                        assert!(!parent.path().join("directory").exists());
+                        assert_eq!(
+                            std::fs::read(parent.path().join("alias")).unwrap(),
+                            b"existing"
+                        );
+                    }
+                    Some("directory") => {
+                        assert!(
+                            matches!(result, Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::AlreadyExists)
+                        );
+                        assert_eq!(
+                            std::fs::read_link(parent.path().join("alias")).unwrap(),
+                            source
+                        );
+                        assert_eq!(
+                            std::fs::read(parent.path().join("directory")).unwrap(),
+                            b"existing"
+                        );
+                    }
+                    _ => unreachable!(),
+                }
+                drop(trace);
+                let events: Vec<serde_json::Value> = lines
+                    .borrow()
+                    .iter()
+                    .map(|line| {
+                        let json = line
+                            .strip_prefix(b"marmish installed edge observation: ")
+                            .unwrap();
+                        serde_json::from_slice(json).unwrap()
+                    })
+                    .collect();
+                assert_eq!(events.len(), 3);
+                for event in &events {
+                    assert_eq!(
+                        event["family"],
+                        if direction == "put" {
+                            "copy_put"
+                        } else {
+                            "copy_get"
+                        }
+                    );
+                    assert_eq!(event["case"], "family");
+                    assert_ne!(event["outcome"], "abandoned");
+                }
+                assert_eq!(events[0]["stage"], "begin");
+                assert_eq!(events[1]["stage"], "prerequisite");
+                assert_eq!(events[2]["stage"], "prerequisite");
+                assert_eq!(
+                    events[2]["outcome"],
+                    if failure.is_some() { "error" } else { "ok" }
+                );
+                assert_eq!(
+                    events[2]["error_category"],
+                    if failure.is_some() {
+                        serde_json::json!("io")
+                    } else {
+                        serde_json::Value::Null
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn old_shared_parent_names_collide_before_copy_cases() {
+        let parent = crate::journal::private_test_directory();
+        private(parent.path(), "edge-copy-same").unwrap();
+        let error = private(parent.path(), "edge-copy-same").unwrap_err();
+        assert!(
+            matches!(error, Error::Io(error) if error.kind() == std::io::ErrorKind::AlreadyExists)
+        );
+    }
+
+    #[test]
+    fn shared_parent_edge_roots_are_private_and_disjoint() {
+        let parent = crate::journal::private_test_directory();
+        let client_parent = parent.path();
+        let server_parent = parent.path();
+        assert_eq!(client_parent, server_parent);
+        let (client, server) = edge_roots(client_parent, server_parent, "same").unwrap();
+        assert_ne!(client, server);
+        for root in [&client, &server] {
+            assert_eq!(root.canonicalize().unwrap(), *root);
+            crate::identity::check_dir(root).unwrap();
+            let metadata = std::fs::symlink_metadata(root).unwrap();
+            assert!(metadata.is_dir());
+            assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
+            assert_eq!(metadata.mode() & 0o7777, 0o700);
+        }
+        for direction in ["put", "get"] {
+            let local = private(&client, direction).unwrap();
+            let remote = private(&server, direction).unwrap();
+            assert_ne!(local, remote);
+            assert_ne!(
+                local.canonicalize().unwrap(),
+                remote.canonicalize().unwrap()
+            );
+            assert!(local.starts_with(&client));
+            assert!(remote.starts_with(&server));
+        }
+        assert!(matches!(edge_roots(client_parent, server_parent, "same"),
+            Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::AlreadyExists));
+    }
+
+    #[test]
+    fn edge_roots_reject_preexisting_files_and_symlinks_at_either_root() {
+        for endpoint in ["client", "server"] {
+            for is_symlink in [false, true] {
+                let parent = crate::journal::private_test_directory();
+                let target = parent.path().join("sentinel");
+                std::fs::write(&target, b"must remain").unwrap();
+                let blocked = parent.path().join(format!("edge-copy-{endpoint}-same"));
+                if is_symlink {
+                    symlink(&target, &blocked).unwrap();
+                } else {
+                    std::fs::write(&blocked, b"must remain").unwrap();
+                }
+                assert!(matches!(edge_roots(parent.path(), parent.path(), "same"),
+                    Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::AlreadyExists));
+                assert_eq!(std::fs::read(&target).unwrap(), b"must remain");
+                assert_eq!(
+                    std::fs::symlink_metadata(&blocked).unwrap().is_symlink(),
+                    is_symlink
+                );
+                assert_eq!(std::fs::read(&blocked).unwrap(), b"must remain");
+            }
+        }
+    }
+
     #[test]
     fn refusal_evidence_requires_put_records_and_rejects_wrong_authority() {
         let mut entry = streaming_cleanup::Entry {
