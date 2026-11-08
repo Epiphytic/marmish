@@ -920,3 +920,17 @@ obsolete assumptions; nine locally pass with hosted causes unresolved. No failur
 is waived. GitHub exact source bytes matched, but Iris HTTP timed out despite
 verified remote refs/sync. This source-only increment changes no public version,
 release tag or installer pin; public installation still selects v0.2.3.
+
+The subsequent f96 candidate failed the macOS installed-feature native suite before
+any installed cohort could run: source control flow shows the test reached its final cancellation assertion, but
+cancellation cleanup returned `Failed(Uncertain)` instead of `Cancelled`.
+[Retained candidate evidence](validation/streaming-candidate-f96b692-failure.md)
+distinguishes this failure from the earlier copy-root defect. The existing test
+now uses the existing physical-cleanup guard and emits its finite failure context;
+it preserves the command, limits and every original assertion. This is a fixture
+lifetime/diagnostic correction, not proof of the historical cleanup cause.
+See the [diagnostic phase](phases/streaming-runner-cleanup-diagnostics.md) and
+[independent reviews](reviews/streaming-runner-cleanup-diagnostics.md).
+A separately demonstrated stale-observation lifecycle hazard requires its own
+review and tests. Fresh full qualification remains required; no new public
+version, release tag or installer pin is created. Source publication is separate from test qualification.

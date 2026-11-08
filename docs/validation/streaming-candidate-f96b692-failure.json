@@ -1,0 +1,156 @@
+{
+  "schema": 1,
+  "kind": "failed-native-candidate",
+  "source_revision": "f96b692194c4cc6c54dcbb142d03ace781803d42",
+  "candidate": {
+    "run_id": 42446123377,
+    "run_attempt": 1,
+    "url": "https://github.com/Epiphytic/marmish/actions/runs/42446123377",
+    "status": "FAILED_PLATFORM_GATE_OTHER_JOBS_PENDING",
+    "final_run_status": null,
+    "final_job_statuses_pending": true
+  },
+  "qualified": false,
+  "installed_cohorts_dispatched": 0,
+  "final_auditor": "NOT_RUN",
+  "platforms": [
+    {
+      "role": "linux-amd64",
+      "job_id": 128625304446,
+      "status": "PENDING_FINAL_EVIDENCE"
+    },
+    {
+      "role": "linux-arm64",
+      "job_id": 128625304518,
+      "status": "PENDING_FINAL_EVIDENCE"
+    },
+    {
+      "role": "macos-arm64",
+      "target": "aarch64-apple-darwin",
+      "job_id": 128625304714,
+      "status": "completed",
+      "conclusion": "failure",
+      "started_at": "2026-11-08T04:16:20Z",
+      "completed_at": "2026-11-08T05:02:40Z",
+      "failed_step": "Build isolated installed-test tools without changing product assets",
+      "log_sha256": "30e3c764c78eef5bb62fa2dd25f80ca3ded575ae9fc74be2b1bd35af378c97f8",
+      "log_bytes": 462931,
+      "default_library_suites": [
+        {
+          "package": "marmish-engine",
+          "passed": 148,
+          "failed": 0,
+          "ignored": 1,
+          "seconds": 34.38
+        },
+        {
+          "package": "marmish-native",
+          "passed": 629,
+          "failed": 0,
+          "ignored": 3,
+          "seconds": 617.64
+        },
+        {
+          "package": "marmish-stream",
+          "passed": 29,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 0.34
+        },
+        {
+          "package": "marmish-vault",
+          "passed": 13,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 0.03
+        }
+      ],
+      "installed_feature_native_library": {
+        "passed": 874,
+        "failed": 1,
+        "ignored": 3,
+        "seconds": 667.22
+      },
+      "default_and_feature_counts_overlap": true,
+      "completed_steps": [
+        {
+          "name": "Verify native components",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build final native executables",
+          "conclusion": "success"
+        },
+        {
+          "name": "Ad hoc sign final macOS executables before hashing",
+          "conclusion": "success"
+        },
+        {
+          "name": "Inspect final dependency allowlists and qualified ABI baselines",
+          "conclusion": "success"
+        },
+        {
+          "name": "Collect locked production license texts (CI tooling only)",
+          "conclusion": "success"
+        },
+        {
+          "name": "Package verified immutable candidate assets",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build isolated installed-test tools without changing product assets",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Preserve pinned installed-test tools separately",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Preserve host render tool separately (never an install asset)",
+          "conclusion": "skipped"
+        }
+      ]
+    }
+  ],
+  "failure": {
+    "test": "stream_runner::tests::authority_withdrawal_halts_queued_input_irreversibly_without_cancel",
+    "file": "crates/marmish-native/src/stream_runner.rs",
+    "line": 1074,
+    "actual_terminal": {
+      "kind": "failed",
+      "code": "Uncertain"
+    },
+    "expected_terminal": "Cancelled",
+    "earlier_default_invocation": "PASS",
+    "pre_cancel_assertions": "Reached final terminal comparison: source control flow establishes prior marker/input suspension assertions returned successfully. This is not independent payload telemetry.",
+    "underlying_branch_or_engine_error": "UNKNOWN_NOT_PRINTED",
+    "cleanup_physical_completion": "NOT_ESTABLISHED_BY_FAILURE_LOG"
+  },
+  "assessment": {
+    "fixture_diagnostic_proposal": "Reuse existing CleanupGuard to retain fixture directory until worker finished, and invoke its failure-context assertion before existing terminal checks. Preserve script, limits, markers, explicit cancellation and expected status.",
+    "independent_source_hazard": "Lifecycle signal timestamps are captured before signal completion; the expired post-KILL branch can rely on a stale negative exit observation. This is a separately demonstrated source-level hazard, not a proven historical cause.",
+    "proposed_product_amendment": "Fresh post-success signal times plus one fresh owned exit probe at the existing expired post-KILL failure boundary, preserving uncertainty on false/error and natural-exit meaning.",
+    "implementation_and_red_green_evidence": "PENDING_SEPARATE_REVIEW_AND_EXECUTION",
+    "historical_cause": "UNKNOWN"
+  },
+  "history": {
+    "partial_2f": "docs/validation/streaming-installed-2f98802.md",
+    "legacy": "Prior 19 hosted failed identities remain separate: 10 locally obsolete assumptions, 9 locally passing with hosted causes unresolved; none waived. No automatic legacy run for f96 is retained because changed paths do not trigger it."
+  },
+  "publication": {
+    "public_installer": "0.2.3",
+    "new_release_or_tag": false,
+    "source_only": true
+  },
+  "independent_evidence_review": "PENDING",
+  "limits": [
+    "No installed traffic or final-auditor result exists for this failed candidate.",
+    "Native success does not qualify installed interoperability.",
+    "Other jobs are pending in this draft, not inferred failed or passed.",
+    "The fixture and lifecycle proposals are not proven causes of the hosted failure."
+  ]
+}

@@ -1033,10 +1033,9 @@ pub(crate) mod tests {
     }
     #[test]
     fn authority_withdrawal_halts_queued_input_irreversibly_without_cancel() {
-        let (_dir, prepared) = prepare(
+        let (handle, cleanup) = CleanupGuard::start(
             "printf ready; sleep 1; dd bs=1 count=1 >/dev/null 2>/dev/null; printf reading; cat >/dev/null",
         );
-        let handle = RunnerHandle::start(prepared, limits()).unwrap();
         wait_for(&handle, |snapshot| snapshot.stdout.is_some());
         handle.permit_input();
         let block = vec![b'x'; MAX_BLOCK];
@@ -1071,6 +1070,7 @@ pub(crate) mod tests {
         assert!(alive.terminal.is_none());
         handle.cancel();
         let done = wait_for(&handle, |snapshot| snapshot.terminal.is_some());
+        cleanup.assert_finished(Some(Terminal::Cancelled));
         assert_eq!(done.terminal, Some(Terminal::Cancelled));
         assert!(!done.uncertain);
     }
