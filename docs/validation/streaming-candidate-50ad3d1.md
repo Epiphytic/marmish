@@ -15,8 +15,9 @@ or installed deadline was reduced.
 
 Every listed library block had zero failures. Default and installed-feature
 counts overlap and must not be summed. Existing ignored tests remain ignored;
-they are not successful execution evidence. Stream 29, vault 12 and engine process
-limits integration 1 passed in each applicable configuration. Strict Clippy,
+they are not successful execution evidence. Stream 29, vault 12 on Linux and
+13 on macOS, and engine process limits integration 1 passed in each applicable
+configuration. Strict Clippy,
 release binaries, native dependency/ABI/license checks, separate installed-tool
 builds, product-hash preservation and packaging passed on all targets. macOS
 ad-hoc signing and verification passed. Render job 128550338698 passed in 8 seconds.
@@ -42,7 +43,13 @@ eight original cohorts, bound to its new exact source and attempt.
 
 The separate legacy managed-validation run 42416166342/1 remains red in its three
 full Python tools suites; its three legacy installer jobs passed. Several focused
-reproductions identify historical Python installer-marker assumptions, but a
-native HTTPS cleanup-contract failure and macOS probe failure remain unexplained.
+reproductions identify historical Python installer-marker assumptions. A later
+bounded reproduction identified the native HTTPS cleanup-contract fixture's
+dependence on a short temporary parent: the managed runner's longer TMPDIR
+reaches the runtime-path length guard before the mocked installation. This
+does not establish every historical subcase's cause. The additional macOS
+failure was the denial-diagnostic unittest, not the legacy native probe. Its
+exact failing assertion and capability state were not retained and remain
+unexplained; the legacy probe produced its expected guarded refusal.
 These failures are not waived or reclassified as harmless. Native candidate
 success does not mean all repository CI is green.

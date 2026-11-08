@@ -1,4 +1,5 @@
 //! Installed qualified rsync signal edges. Receipts never grant signal authority.
+use super::edge_observation::{Case as TraceCase, Family, Stage, Trace};
 use super::{
     copy_interrupt::Binding,
     edge_fixture, process,
@@ -398,6 +399,60 @@ fn principal(c: &Cohort<'_, '_>, e: &Entry) -> bool {
             .is_some_and(|identity| e.client == identity.client_account)
         && e.server == c.ready.server_account
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Startup {
+    Wait,
+    Eligible,
+}
+impl Startup {
+    fn marker_eligible(self) -> bool {
+        self == Self::Eligible
+    }
+}
+fn startup(entry: Option<&Entry>, client: &str, server: &str, case: Case) -> Result<Startup> {
+    if !matches!(case, Case::Failure) {
+        return streaming_cleanup::startup_phase(entry, client, server, false).map(|phase| {
+            match phase {
+                streaming_cleanup::StartupPhase::Wait => Startup::Wait,
+                streaming_cleanup::StartupPhase::Running => Startup::Eligible,
+            }
+        });
+    }
+    let Some(e) = entry else {
+        return Ok(Startup::Wait);
+    };
+    if e.client != client
+        || e.server != server
+        || e.direction != "server"
+        || e.child_disposition.is_some()
+        || e.open_digest
+            .as_ref()
+            .is_some_and(|d| !records::hexadecimal(d, 64))
+    {
+        return Err(bad());
+    }
+    let open = e.open_digest.is_some();
+    match e.state.as_str() {
+        "hello" if !e.active && !open && !e.cancel_requested && e.terminal.is_none() => {
+            Ok(Startup::Wait)
+        }
+        "preparing" | "launching"
+            if e.active && open && !e.cancel_requested && e.terminal.is_none() =>
+        {
+            Ok(Startup::Wait)
+        }
+        "cancelling" if e.active && open && e.cancel_requested && e.terminal.is_none() => {
+            Ok(Startup::Wait)
+        }
+        "running" if e.active && open && !e.cancel_requested && e.terminal.is_none() => {
+            Ok(Startup::Eligible)
+        }
+        "terminal" if !e.active && open && e.terminal == Some(Terminal::Exited { code: 23 }) => {
+            Ok(Startup::Eligible)
+        }
+        _ => Err(bad()),
+    }
+}
 async fn started(
     c: &Cohort<'_, '_>,
     stream: &str,
@@ -409,44 +464,33 @@ async fn started(
         if Instant::now() >= c.deadline {
             return Err(Error::Timeout);
         }
-        if let Some(e) = entry(c, stream).await? {
-            if !principal(c, &e) || e.open_digest.is_none() {
+        let observed = entry(c, stream).await?;
+        let client = &c.identities.get(c.role).ok_or_else(bad)?.client_account;
+        let phase = startup(observed.as_ref(), client, &c.ready.server_account, case)?;
+        if phase.marker_eligible() && marker.try_exists()? {
+            let e = observed.ok_or_else(bad)?;
+            let m: Marker = records::read(&marker, 8192)?;
+            if m.schema != 1
+                || m.nonce != nonce
+                || m.executable_sha256 != c.ready.fixture_sha256
+                || !records::hexadecimal(&m.argv_sha256, 64)
+            {
                 return Err(bad());
             }
-            if marker.try_exists()? {
-                let m: Marker = records::read(&marker, 8192)?;
-                if m.schema != 1
-                    || m.nonce != nonce
-                    || m.executable_sha256 != c.ready.fixture_sha256
-                    || !records::hexadecimal(&m.argv_sha256, 64)
-                {
-                    return Err(bad());
-                }
-                if !matches!(case, Case::Failure) {
-                    if e.state != "running"
-                        || !e.active
-                        || e.cancel_requested
-                        || e.terminal.is_some()
-                    {
-                        return Err(bad());
-                    }
-                    let status = streaming_cleanup::status(
-                        *c.server.daemon.lock().await,
-                        c.server.socket,
-                        c.deadline,
-                    )
-                    .await?;
-                    if status.active != 1 || status.unfinished_runners != 1 || status.uncertain != 0
-                    {
-                        return Err(bad());
-                    }
-                }
-                return Ok((
-                    e,
-                    records::digest(&records::read_bytes(&marker, 8192)?),
-                    m.argv_sha256,
-                ));
+            if !matches!(case, Case::Failure) {
+                let status = streaming_cleanup::status(
+                    *c.server.daemon.lock().await,
+                    c.server.socket,
+                    c.deadline,
+                )
+                .await?;
+                streaming_cleanup::validate_charged(&status, 1)?;
             }
+            return Ok((
+                e,
+                records::digest(&records::read_bytes(&marker, 8192)?),
+                m.argv_sha256,
+            ));
         }
         tokio::time::sleep_until(c.deadline.min(Instant::now() + Duration::from_millis(50))).await;
     }
@@ -489,9 +533,25 @@ async fn terminal(
     }
 }
 async fn one(c: &Cohort<'_, '_>, case: Case) -> Result<Observation> {
+    let kind = match case {
+        Case::Interrupt => TraceCase::RsyncSigint,
+        Case::Terminate => TraceCase::RsyncSigterm,
+        Case::Hangup => TraceCase::RsyncSighup,
+        Case::GroupInterrupt => TraceCase::RsyncGroupSigint,
+        Case::Timeout => TraceCase::RsyncTimeoutUsr1,
+        Case::Failure => TraceCase::RsyncIndependentFailure,
+    };
+    let trace = Trace::new(c.role, Family::Rsync, kind);
+    let result = one_inner(c, case, &trace).await;
+    trace.finish(&result);
+    result
+}
+async fn one_inner(c: &Cohort<'_, '_>, case: Case, trace: &Trace<'_>) -> Result<Observation> {
+    trace.stage(Stage::Prerequisite);
     let local = streaming_prerequisites::rsync(c.context, c.client.workspace)?.ok_or_else(bad)?;
     let remote = c.ready.rsync.as_ref().ok_or_else(bad)?;
     streaming_prerequisites::verify(remote)?;
+    trace.stage(Stage::Baseline);
     let nonce = records::digest(&records::canonical(&(
         "installed-rsync-edge/1",
         c.context.digest()?,
@@ -547,13 +607,17 @@ async fn one(c: &Cohort<'_, '_>, case: Case) -> Result<Observation> {
         remote_operand(&c.ready.server_account, &nonce)?.into(),
     ]);
     let start = Instant::now();
+    trace.stage(Stage::Attachment);
     let mut child = OwnedRsync::start(Path::new(&local.path), &args, c.client, c.deadline).await?;
     let result = async {
+        trace.stage(Stage::Startup);
         let (initial, marker_sha256, fixture_argv_sha256) =
             started(c, &child.stream, &nonce, case).await?;
+        trace.stage(Stage::LocalAction);
         if let Some(signal) = case.signal() {
             child.signal(signal, matches!(case, Case::GroupInterrupt))?;
         }
+        trace.stage(Stage::AttachmentFinish);
         let done = child.finish(c.deadline).await?;
         if !done.stdout.is_empty()
             || (matches!(case, Case::Timeout)
@@ -570,6 +634,7 @@ async fn one(c: &Cohort<'_, '_>, case: Case) -> Result<Observation> {
         } else {
             Terminal::Cancelled
         };
+        trace.stage(Stage::JournalCheck);
         let cleanup = terminal(c, &initial, expected).await?;
         let observation = Observation {
             case: case.name().into(),
@@ -593,14 +658,17 @@ async fn one(c: &Cohort<'_, '_>, case: Case) -> Result<Observation> {
             remote_terminal: expected,
             cleanup,
         };
+        trace.stage(Stage::Validation);
         observation.validate()?;
         // All remote work is physically finished before replacing the gate for
         // the next case. Immutable publication refuses any pre-existing gate.
+        trace.stage(Stage::Cleanup);
         std::fs::remove_file(c.server.workspace.join("edge-gates/rsync.json"))?;
         Ok(observation)
     }
     .await;
     if result.is_err() {
+        trace.stage(Stage::Cleanup);
         child.abort().await?;
     }
     result
@@ -854,3 +922,7 @@ mod public_destination_tests {
         assert!(remote_operand("bad", "nonce").is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "installed_edge_rsync_startup_tests.rs"]
+mod startup_tests;

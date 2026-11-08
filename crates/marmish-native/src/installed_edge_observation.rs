@@ -1,4 +1,4 @@
-//! Fixed, bounded breadcrumbs for build-only edge-stream qualification.
+//! Fixed, bounded breadcrumbs for build-only edge-stream and edge-rsync qualification.
 use super::streaming_observation::{Role, stderr_sink};
 use crate::{Error, Result};
 use serde::Serialize;
@@ -14,6 +14,7 @@ pub(super) enum Family {
     Signals,
     Quota,
     Preopen,
+    Rsync,
 }
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -28,6 +29,12 @@ pub(super) enum Case {
     StreamSigkillDetach,
     TwoChildrenQuota,
     InterruptBeforeOpen,
+    RsyncSigint,
+    RsyncSigterm,
+    RsyncSighup,
+    RsyncGroupSigint,
+    RsyncTimeoutUsr1,
+    RsyncIndependentFailure,
 }
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]

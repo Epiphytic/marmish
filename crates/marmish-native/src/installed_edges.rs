@@ -199,7 +199,7 @@ fn again<'a, 'b>(c: &Cohort<'a, 'b>) -> Cohort<'a, 'b> {
     }
 }
 pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Evidence> {
-    let trace = (c.context.cohort == "edge-stream")
+    let trace = matches!(c.context.cohort.as_str(), "edge-stream" | "edge-rsync")
         .then(|| Trace::new(c.role, Family::Coordinator, Case::Family));
     let result = run_inner(c, trace.as_ref()).await;
     if let Some(trace) = &trace {
@@ -272,7 +272,7 @@ async fn run_inner(c: Cohort<'_, '_>, trace: Option<&Trace<'_>>) -> Result<Evide
 }
 /// Uses private same-UID observations, never public artifact hashes as authority.
 pub(super) async fn confirm_server(e: &Evidence, c: &Cohort<'_, '_>) -> Result<()> {
-    let trace = (c.context.cohort == "edge-stream")
+    let trace = matches!(c.context.cohort.as_str(), "edge-stream" | "edge-rsync")
         .then(|| Trace::new(c.role, Family::Coordinator, Case::Family));
     if let Some(trace) = &trace {
         trace.stage(Stage::Reconciliation);

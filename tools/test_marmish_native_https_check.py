@@ -283,10 +283,13 @@ class HttpsInstallerContracts(unittest.TestCase):
         return raw
 
     def test_cell_dispatch_cleanup_and_busy_lease_or_runtime_preserve_state(self):
+        # Keep the nested macOS runtime path plus its 53-byte socket reserve
+        # below 104 bytes, with eleven bytes of remaining allowed margin.
+        parent = Path('/private/tmp' if os.uname().sysname == 'Darwin' else '/tmp').resolve(strict=True)
         for source, locked, runtime in (('iris', False, False), ('github', False, False),
                 ('iris', True, False), ('iris', False, True)):
             with self.subTest(source=source, locked=locked, runtime=runtime), \
-                    tempfile.TemporaryDirectory() as directory:
+                    tempfile.TemporaryDirectory(prefix='mh-', dir=parent) as directory:
                 root = Path(directory); value = context()
                 fixture = root / 'fixture'; fixture.mkdir()
                 manifest = self.create_manifest(fixture, value)

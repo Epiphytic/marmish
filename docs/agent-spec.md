@@ -887,3 +887,16 @@ remain required. A corrected source requires a new complete three-platform
 candidate and all eight original serial cohorts; historical passes cannot be
 combined into a new qualification. No public release, version or installer pin
 change is part of this correction. Public installation still selects v0.2.3.
+
+Fresh candidate [42424780330/1](https://github.com/Epiphytic/marmish/actions/runs/42424780330)
+at `a7c3db4b30a953c3f3413226566e7650b282d33f` passed all three native/package/tool
+jobs and rendering. Its original stream, rsync, copy and edge-stream cohorts
+passed, with 72 retained observations. The subsequent edge-rsync cohort failed
+on all three platforms; its records retain no individual case/stage and report
+server-stop incomplete. The remaining three cohorts were not dispatched.
+See [partial evidence and measured rates](validation/streaming-installed-a7c3db4.md).
+The rsync startup observer independently contains the same premature rejection
+of valid Hello without Open; this does not establish historical failure causality.
+The proposed [bounded rsync correction](phases/streaming-rsync-edge-correction.md)
+requires independent design and integrated code approval, then a fresh complete
+candidate and all eight cohorts. Release qualification remains incomplete.
