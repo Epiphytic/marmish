@@ -122,7 +122,9 @@ async fn servers(
             diagnostic.peer(Stage::ServerRecordRead, role);
             let path = o.inbox.join(format!("{role}-server-ready.json"));
             if path.try_exists()? {
-                let record: ServerReady = records::read(&path, 65536)?;
+                let Some(record) = records::read_published::<ServerReady>(&path, 65536)? else {
+                    continue;
+                };
                 diagnostic.peer(Stage::ServerRecordValidate, role);
                 record.validate(ctx, ids, role)?;
                 all.insert(role.into(), record);
@@ -222,7 +224,9 @@ async fn clients(
         for role in ROLES {
             let path = o.inbox.join(format!("{role}-client-result.json"));
             if path.try_exists()? {
-                let record: ClientResult = records::read(&path, 1048576)?;
+                let Some(record) = records::read_published::<ClientResult>(&path, 1048576)? else {
+                    continue;
+                };
                 validate_client(&record, ctx, ids, servers, role)?;
                 all.insert(role.into(), record);
             }
@@ -1193,6 +1197,7 @@ mod tests {
             ("json", "server_record_read", Some(ROLES[0])),
             ("binding", "server_record_validate", Some(ROLES[0])),
             ("missing", "server_rendezvous_wait", None),
+            ("pending", "server_rendezvous_wait", None),
         ] {
             let root = tempfile::tempdir().unwrap();
             let (ctx, ids, mut records) = evidence();
@@ -1206,6 +1211,10 @@ mod tests {
             let path = root.path().join(format!("{}-server-ready.json", ROLES[0]));
             match mode {
                 "json" => fs::write(&path, b"{invalid-json").unwrap(),
+                "pending" => {
+                    fs::write(&path, b"not parsed while linked").unwrap();
+                    fs::hard_link(&path, root.path().join("staging")).unwrap();
+                }
                 "binding" => {
                     records.get_mut(ROLES[0]).unwrap().root_label = "wrong-root".into();
                     fs::write(&path, records::canonical(&records[ROLES[0]]).unwrap()).unwrap();
@@ -1293,7 +1302,7 @@ mod tests {
                 .any(|w| w == temp.path().as_os_str().as_encoded_bytes())
         );
     }
-    fn rollup_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+    pub(super) fn rollup_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
         let (ctx, ids, servers) = evidence();
         let temp = crate::journal::private_test_directory();
         let input = temp.path().join("input");
@@ -1499,3 +1508,7 @@ mod tests {
         assert!(common_budget(&servers).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "installed_streaming_publication_tests.rs"]
+mod publication_tests;

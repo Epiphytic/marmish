@@ -453,6 +453,9 @@ fn startup(entry: Option<&Entry>, client: &str, server: &str, case: Case) -> Res
         _ => Err(bad()),
     }
 }
+fn read_started_marker(path: &Path) -> Result<Option<Marker>> {
+    records::read_published(path, 8192)
+}
 async fn started(
     c: &Cohort<'_, '_>,
     stream: &str,
@@ -468,29 +471,31 @@ async fn started(
         let client = &c.identities.get(c.role).ok_or_else(bad)?.client_account;
         let phase = startup(observed.as_ref(), client, &c.ready.server_account, case)?;
         if phase.marker_eligible() && marker.try_exists()? {
-            let e = observed.ok_or_else(bad)?;
-            let m: Marker = records::read(&marker, 8192)?;
-            if m.schema != 1
-                || m.nonce != nonce
-                || m.executable_sha256 != c.ready.fixture_sha256
-                || !records::hexadecimal(&m.argv_sha256, 64)
-            {
-                return Err(bad());
+            let published = read_started_marker(&marker)?;
+            if let Some(m) = published {
+                let e = observed.ok_or_else(bad)?;
+                if m.schema != 1
+                    || m.nonce != nonce
+                    || m.executable_sha256 != c.ready.fixture_sha256
+                    || !records::hexadecimal(&m.argv_sha256, 64)
+                {
+                    return Err(bad());
+                }
+                if !matches!(case, Case::Failure) {
+                    let status = streaming_cleanup::status(
+                        *c.server.daemon.lock().await,
+                        c.server.socket,
+                        c.deadline,
+                    )
+                    .await?;
+                    streaming_cleanup::validate_charged(&status, 1)?;
+                }
+                return Ok((
+                    e,
+                    records::digest(&records::read_bytes(&marker, 8192)?),
+                    m.argv_sha256,
+                ));
             }
-            if !matches!(case, Case::Failure) {
-                let status = streaming_cleanup::status(
-                    *c.server.daemon.lock().await,
-                    c.server.socket,
-                    c.deadline,
-                )
-                .await?;
-                streaming_cleanup::validate_charged(&status, 1)?;
-            }
-            return Ok((
-                e,
-                records::digest(&records::read_bytes(&marker, 8192)?),
-                m.argv_sha256,
-            ));
         }
         tokio::time::sleep_until(c.deadline.min(Instant::now() + Duration::from_millis(50))).await;
     }
@@ -720,6 +725,55 @@ pub(super) fn validate(observations: &[Observation]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn marker_source_contract_defers_initial_read_but_keeps_digest_strict() {
+        // Wiring assertions supplement filesystem seams; they do not execute live IPC.
+        let source = include_str!("installed_edge_rsync.rs");
+        let body = source
+            .split("async fn started(")
+            .nth(1)
+            .unwrap()
+            .split("async fn terminal(")
+            .next()
+            .unwrap();
+        let helper = source
+            .split("fn read_started_marker(")
+            .nth(1)
+            .unwrap()
+            .split("async fn started(")
+            .next()
+            .unwrap();
+        assert!(helper.contains("records::read_published(path, 8192)"));
+        assert!(body.contains("read_started_marker(&marker)?"));
+        assert!(body.contains("records::digest(&records::read_bytes("));
+        assert!(
+            body.find("read_started_marker(&marker)?").unwrap()
+                < body.find("records::digest(&records::read_bytes(").unwrap()
+        );
+    }
+
+    #[test]
+    fn live_marker_defers_publication_then_reads_or_rejects_completed_json() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("marker");
+        let staging = root.path().join("staging");
+        std::fs::write(&path, b"malformed until publication completes").unwrap();
+        std::fs::hard_link(&path, &staging).unwrap();
+        assert!(read_started_marker(&path).unwrap().is_none());
+        assert!(records::read::<serde_json::Value>(&path, 8192).is_err());
+        std::fs::remove_file(&staging).unwrap();
+        assert!(read_started_marker(&path).is_err());
+        std::fs::write(
+            &path,
+            br#"{"schema":1,"nonce":"n","executable_sha256":"e","argv_sha256":"a"}"#,
+        )
+        .unwrap();
+        std::fs::hard_link(&path, &staging).unwrap();
+        assert!(read_started_marker(&path).unwrap().is_none());
+        std::fs::remove_file(&staging).unwrap();
+        assert!(read_started_marker(&path).unwrap().is_some());
+    }
+
     fn observation() -> Observation {
         Observation {
             case: "rsync-sigint".into(),

@@ -1,0 +1,105 @@
+{
+  "schema": 1,
+  "date": "2026-11-08",
+  "baseline_source": "e31b8afae452bb30a041916fbf6d2bac4e92f042",
+  "reviewer": {
+    "cli": "Claude Code",
+    "model": "claude-sonnet-5-5",
+    "permission_mode": "auto"
+  },
+  "reviews": [
+    {
+      "scope": "Integrated implementation, new tests and docs, corrected e31 evidence bytes",
+      "verdict": "APPROVE",
+      "session_id": "99b1416a-81f2-442a-a289-7cdcf965be69",
+      "duration_ms": 334818,
+      "turns": 35,
+      "raw_result_sha256": "c5924ea54f052a60a402579aa2bf937d1a2bc623cc8070021c0d0959249da3cc",
+      "reviewed_source_sha256": {
+        "crates/marmish-native/src/installed_edge_quota.rs": "75f7ad29474518338b699d0c379c2f1dd417e1ef1ce7b7eeec553f73d71b4d9c",
+        "crates/marmish-native/src/installed_edge_rsync.rs": "8da5b174ee9d4ba8b0e6a0c4acf76a3480fc3d1b652496a4267cfab32b7c776b",
+        "crates/marmish-native/src/installed_edge_signals.rs": "f88938e0bd6799ee2ed38e43a5e6642ee62c8561fbd72eed0134d073257dc2b9",
+        "crates/marmish-native/src/installed_matrix.rs": "1b9d51f4d12ecca5cdc082f482aed479f321851944e511bc89893d2e8ec9cc19",
+        "crates/marmish-native/src/installed_records.rs": "aa5ba933b50a08931acb081724f4fb61c7777467717b3a900f64b139748a2246",
+        "crates/marmish-native/src/installed_streaming.rs": "41645b0d09140e8d3d20430bf9a12b686458d4ec20beb0f996d9dfdc51b2a318",
+        "crates/marmish-native/src/installed_matrix_publication_tests.rs": "97b1597b09213e55e91890dcdc133ba6bb6eb9b49972f87c29b943865fb24df8",
+        "crates/marmish-native/src/installed_streaming_publication_tests.rs": "af29f7707b5001b0f4655b8bcde90e8eba85cf3a2656171f2181e1aedbfde324"
+      },
+      "checks": [
+        "fmt PASS",
+        "strict offline/locked installed-feature all-target Clippy PASS",
+        "71 focused test observations PASS; overlapping filters are not additive unique tests",
+        "Three parallel installed_check runs each263PASS0FAIL",
+        "Exact original/corrected evidence report hashes and live correction diff match; diagnostic fields match retained logs"
+      ],
+      "limits": [
+        "Did not rerun retained native validator, Node, ripwire or mutation checks.",
+        "Did not reverify92evidencepins, ZIPdigests or401/526comparison totals.",
+        "Marker tests are filesystem seams plus source guards, not live IPC.",
+        "Clean benchmark reruns do not reproduce or explain earlier failure.",
+        "No hosted qualification or release approval."
+      ]
+    },
+    {
+      "scope": "Bounded test-only followup, source pins and review/evidence metadata",
+      "verdict": "APPROVE",
+      "session_id": "d0a4ce08-cd34-4da7-a90c-6bcb9078c3e0",
+      "duration_ms": 81631,
+      "turns": 11,
+      "raw_result_sha256": "0873e59975cdd22379f4008aad5bb89bbe7b862d2d60e8a5b42509dfcaae0bc9",
+      "patch_sha256": "9ad98266d71e193088a01b5bb6a2bf40d31234a4c3c310fb4a00d0aa5c37b79e",
+      "checks": [
+        "All8 initial source snapshots match pins; only5 intended test-only files differ",
+        "Three bounded marker source guards PASS",
+        "Two matrix publication tests PASS",
+        "Two stream publication tests PASS",
+        "Existing matrix rollup PASS",
+        "fmt PASS",
+        "strict offline/locked installed-feature all-target Clippy PASS",
+        "git diff whitespace PASS"
+      ],
+      "limits": [
+        "No broad suites, Node, ripwire, mutation tests or underlying artifact/pin re-audit repeated.",
+        "Marker source guards checked by source reading and test execution, not mutation.",
+        "Local filesystem/timing tests do not qualify hosted IPC, historical cause or release."
+      ],
+      "metadata_nits_incorporated": [
+        "Replace5 private absolute log paths with basenames.",
+        "Mark initial matrix valid-completion limitation superseded by followup.",
+        "Record actual final verdict separately from initial approval and evidence-correction verification."
+      ]
+    }
+  ],
+  "useful_followups": {
+    "status": "Implemented, focused validation passed, actual Claude followup APPROVE",
+    "changes": [
+      "Bound marker helper source assertions to actual helper body to remove self-matching literal.",
+      "Add finite-matrix valid completion after staging unlink using existing fixture if practical.",
+      "Update post-review statuses and remove duplicate blank lines."
+    ],
+    "not_adopted": [
+      "Keep approved Result<Option<T>> internal API; all seven actual call sites explicitly handle pending, and must_use is not a type-level guarantee after the question-mark operator.",
+      "Keep rsync nested branch and its existing eligible/exists source assertion; style-only rewrite offers no behavior improvement.",
+      "Preserve actual RED log; do not rewrite historical failure evidence to add an error variant message.",
+      "Wrong-owner fixture remains unavailable to unprivileged test user."
+    ],
+    "patch_sha256": "9ad98266d71e193088a01b5bb6a2bf40d31234a4c3c310fb4a00d0aa5c37b79e"
+  },
+  "structural_findings": {
+    "quality_delta_exit": 2,
+    "total": 51,
+    "gating": 24,
+    "acked": 0,
+    "assessment": "Actual reviewer assessed minimal pending-decision complexity and duplicated isolated test fixtures as acceptable debt; strict-reader clone reports expose renamed halves of baseline code with differing security contracts elsewhere; harness tests falsely listed dead; unchanged candidate/legacy symbols conflated with generated JSON; churn retained as maintenance signal. Metrics are not called clean."
+  },
+  "qualified": false,
+  "final_source_quality": {
+    "command": "ripwire crates/marmish-native/src --quality-delta",
+    "exit_code": 2,
+    "total_findings": 33,
+    "gating_findings": 14,
+    "acked": 0,
+    "log_sha256": "672abdda1787bce146778133ae1e60681a1671b1200723cede299ee1c0d3f385",
+    "assessment": "Separate source-scoped final scan, not directly comparable to whole-repo51/24. Retains minimal pending complexity, strict-reader moved-body matches and independent test/source-guard duplication including matches to existing guards; no suppression/rebaseline. Root assessed final scan; reviewer inspected final source, not this scan output."
+  }
+}

@@ -967,3 +967,28 @@ workloads, deadlines, acceptance and cleanup behavior. The [integrated code revi
 the implementation and local validation; fresh complete hosted qualification
 remains required. Historical passes cannot qualify changed source. No new public version, release tag or installer pin is
 part of this increment. Public installation still selects v0.2.3.
+
+Candidate [42504599079/1](https://github.com/Epiphytic/marmish/actions/runs/42504599079)
+at `e31b8afae452bb30a041916fbf6d2bac4e92f042` passed all three native/package/tool
+jobs and rendering. The original stream cohort retained nine accepted observations;
+rsync [42510560482/1](https://github.com/Epiphytic/marmish/actions/runs/42510560482)
+failed with zero accepted cells despite eighteen raw successful client pairs.
+The macOS driver reported `remote_client_barrier`, origin `work_error`, category
+`invalid`; its server had no receipts. Six later cohorts were not dispatched and
+the final auditor did not run. The automatic legacy workflow also remains red
+with twenty failure identities versus nineteen previously retained; the new
+macOS identity and the historical nine unexplained failures remain unresolved.
+See [the stopped-chain evidence](validation/streaming-installed-e31b8af.md) and
+[its independent evidence review](reviews/streaming-installed-e31b8af-evidence-review.md).
+
+The [record-publication design](phases/streaming-record-publication.md) addresses
+a confirmed source contract defect: immutable publication exposes a target with
+two hard links until staging cleanup, while strict readers require one. The
+actual native validator passed retained results for three clients, six pairs
+each; this does not recover failure-time inbox metadata or establish the hosted
+initiating cause. [Three actual Claude design reviews](reviews/streaming-record-publication-design.md)
+resolved missing live marker readers and approved a narrowly bounded pending
+state at seven live read sites, preserving strict ordinary reads and original
+deadlines. [Integrated implementation and test-only followup reviews](reviews/streaming-record-publication-code.md) approved the correction;
+fresh exact-source hosted qualification remains pending. Earlier failed-chain facts and public v0.2.3
+installation remain unchanged; no new release qualification is claimed.

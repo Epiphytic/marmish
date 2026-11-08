@@ -317,3 +317,22 @@ source publication. A new exact-source three-platform candidate and all eight
 unchanged serial installed cohorts are still required before release qualification.
 The [review record](reviews/streaming-failure-observability.md) distinguishes
 design/code approval from pending full qualification.
+
+## Installed record-publication correction
+
+The e31 native candidate and original stream cohort passed, but the original
+rsync cohort stopped with zero accepted cells. Six remaining cohorts and the
+final auditor were not run; see [the retained evidence](validation/streaming-installed-e31b8af.md).
+The confirmed source defect is the two-link publication interval versus strict
+one-link readers. Its role in the hosted failure remains unproven.
+
+The [detailed design](phases/streaming-record-publication.md) received
+[actual Claude approval after three reviews](reviews/streaming-record-publication-design.md).
+It bounds pending reads to otherwise-safe two-link files at seven live sites,
+with unchanged writers, strict ordinary reads and original polling deadlines.
+The actual native retained-record validator passed three clients with six pairs
+each; this is payload validation, not historical cause or hosted qualification.
+Meaningful RED/GREEN, boundary and actual polling-loop tests pass; [integrated
+Claude code and followup reviews](reviews/streaming-record-publication-code.md) approve the correction. The initial parallel benchmark failure remains preserved and unexplained despite successful diagnostic reruns. A new exact-source
+three-platform native candidate, all eight unchanged serial installed cohorts
+and the actual final auditor are required before release qualification.

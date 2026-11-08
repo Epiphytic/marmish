@@ -1,0 +1,78 @@
+{
+  "schema": 1,
+  "date": "2026-11-08",
+  "scope": "Record-publication reader design only",
+  "baseline_source": "e31b8afae452bb30a041916fbf6d2bac4e92f042",
+  "reviewer": {
+    "cli": "Claude Code",
+    "model": "claude-sonnet-5-5",
+    "permission_mode": "auto"
+  },
+  "reviews": [
+    {
+      "version": 1,
+      "verdict": "NOT_APPROVED",
+      "session_id": "7852fab1-48ee-4570-ad9f-717183f7a459",
+      "duration_ms": 123292,
+      "turns": 21,
+      "raw_result_sha256": "48253d606e3d6656cb9f6e53887eaeb2f447de403c2f90229d55410d2cad42e9",
+      "disposition": "Added rsync and signals live marker readers; clarified strict ENOENT, deadline behavior and retained native validation."
+    },
+    {
+      "version": 2,
+      "verdict": "NOT_APPROVED",
+      "session_id": "b8058f3e-2cdf-43d0-9624-8418d0469246",
+      "duration_ms": 118629,
+      "turns": 20,
+      "raw_result_sha256": "d447cf53960e0f81b604df47224190033d5bb88ef31935184da07129d961fa66",
+      "disposition": "Added quota live marker reader, completing the seven identified live read sites."
+    },
+    {
+      "version": 3,
+      "verdict": "APPROVE",
+      "session_id": "1670a315-634f-472b-810f-3249668c5594",
+      "duration_ms": 105455,
+      "turns": 21,
+      "raw_result_sha256": "b76de4b83541b6f15f525aa9d7f3b8842ec1e00b1e6d7b64e76a4a4104f9dd17",
+      "disposition": "Design-only approval; integrated implementation review and fresh hosted qualification remain pending."
+    }
+  ],
+  "approved_snapshot_sha256": "c3a9eef82f54600c7a2437911d8e5c87b14ef0131dcedb3235957f7c103fbea8",
+  "repository_plan_note": "The repository plan adds approval metadata and a marker-count typo correction to the approved snapshot.",
+  "validation": {
+    "retained_native_validator": {
+      "verdict": "PASS",
+      "tests_passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "filtered_out": 887,
+      "clients": 3,
+      "pairs_per_client": 6,
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "-p",
+        "marmish-native",
+        "--features",
+        "installed-checks",
+        "--lib",
+        "retained_rsync_payloads_pass_actual_native_validate_client",
+        "--",
+        "--nocapture"
+      ],
+      "evidence_sha256": "5f448badbce63ca54bfadfa7c9185114a5a6d38cbf9079f39909d1e8d2772aba",
+      "log_sha256": "beb199241ee2498889e504a548adf64d61588202d8c300bfbabc663630f71441",
+      "temporary_patch_sha256": "5168137b4bc8e72487bb55cd2d6f70600645c3a0fce3bd582e31e0e4ab3b7f07",
+      "original_and_restored_source_sha256": "2d9b09a27a874f441165b17253eca66c19d907c0dd8cede6b526fe59b2253c6d",
+      "patched_source_sha256": "e831b2d9f671eb7caa4bd643c19d3f88a97acf331c3adc8ac77f1d6e0b31db4f"
+    }
+  },
+  "limits": [
+    "Design reviewers performed read-only inspection; they did not run Cargo, relay workloads or hosted CI.",
+    "The separate temporary native test validated retained published client records, not failure-time inbox metadata or missing server receipts.",
+    "The source publication/read contract defect is confirmed; the initiating hosted rsync cause remains unknown.",
+    "No implementation, new qualification or release approval is recorded here."
+  ]
+}

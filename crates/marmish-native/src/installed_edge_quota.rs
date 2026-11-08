@@ -110,6 +110,9 @@ fn args(c: &Cohort<'_, '_>, nonce: &str) -> Result<Vec<OsString>> {
     args.extend(hold_args(&c.ready.server_account, nonce, c.role)?);
     Ok(args)
 }
+fn read_started_marker(path: &std::path::Path) -> Result<Option<serde_json::Value>> {
+    records::read_published(path, 8192)
+}
 async fn started(c: &Cohort<'_, '_>, stream: &str, nonce: &str) -> Result<(Binding, String)> {
     let path = edge_fixture::marker(c.server.workspace, nonce)?;
     let argv = fixture::argv_digest(
@@ -130,9 +133,11 @@ async fn started(c: &Cohort<'_, '_>, stream: &str, nonce: &str) -> Result<(Bindi
             &c.ready.server_account,
             false,
         )?;
-        if phase == streaming_cleanup::StartupPhase::Running && path.try_exists()? {
+        if phase == streaming_cleanup::StartupPhase::Running
+            && path.try_exists()?
+            && let Some(marker) = read_started_marker(&path)?
+        {
             let e = selected.ok_or_else(bad)?;
-            let marker: serde_json::Value = records::read(&path, 8192)?;
             edge_fixture::validate_marker(&marker, nonce, &c.ready.fixture_sha256, &argv)?;
             return Ok((
                 Binding {
@@ -408,6 +413,55 @@ async fn run_inner(c: Cohort<'_, '_>, trace: &Trace<'_>) -> Result<Observation> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn marker_source_contract_defers_initial_read_but_keeps_digest_strict() {
+        // Wiring assertions supplement filesystem seams; they do not execute live IPC.
+        let source = include_str!("installed_edge_quota.rs");
+        let body = source
+            .split("async fn started(")
+            .nth(1)
+            .unwrap()
+            .split("async fn cancel(")
+            .next()
+            .unwrap();
+        let helper = source
+            .split("fn read_started_marker(")
+            .nth(1)
+            .unwrap()
+            .split("async fn started(")
+            .next()
+            .unwrap();
+        assert!(helper.contains("records::read_published(path, 8192)"));
+        assert!(body.contains("read_started_marker(&path)?"));
+        assert!(body.contains("records::digest(&records::read_bytes("));
+        assert!(
+            body.find("read_started_marker(&path)?").unwrap()
+                < body.find("records::digest(&records::read_bytes(").unwrap()
+        );
+    }
+
+    #[test]
+    fn live_marker_defers_publication_then_reads_or_rejects_completed_json() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("marker");
+        let staging = root.path().join("staging");
+        std::fs::write(&path, b"malformed until publication completes").unwrap();
+        std::fs::hard_link(&path, &staging).unwrap();
+        assert!(read_started_marker(&path).unwrap().is_none());
+        assert!(records::read::<serde_json::Value>(&path, 8192).is_err());
+        std::fs::remove_file(&staging).unwrap();
+        assert!(read_started_marker(&path).is_err());
+        std::fs::write(
+            &path,
+            br#"{"schema":1,"nonce":"n","executable_sha256":"e","argv_sha256":"a"}"#,
+        )
+        .unwrap();
+        std::fs::hard_link(&path, &staging).unwrap();
+        assert!(read_started_marker(&path).unwrap().is_none());
+        std::fs::remove_file(&staging).unwrap();
+        assert!(read_started_marker(&path).unwrap().is_some());
+    }
+
     #[test]
     fn quota_proof_requires_two_distinct_held_bindings_and_real_refusal() {
         let binding = |n| Binding {

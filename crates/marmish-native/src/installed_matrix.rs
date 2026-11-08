@@ -452,7 +452,9 @@ async fn wait_servers(
         for r in ROLES {
             let p = o.inbox.join(format!("{r}-server-ready.json"));
             if p.try_exists()? {
-                let v: ServerReady = records::read(&p, 65536)?;
+                let Some(v) = records::read_published::<ServerReady>(&p, 65536)? else {
+                    continue;
+                };
                 validate_ready(&v, ctx, ids, r)?;
                 all.insert(r.into(), v);
             }
@@ -707,7 +709,9 @@ async fn wait_clients(
         for role in ROLES {
             let path = o.inbox.join(format!("{role}-client-result.json"));
             if path.try_exists()? {
-                let c: ClientResult = records::read(&path, 1048576)?;
+                let Some(c) = records::read_published::<ClientResult>(&path, 1048576)? else {
+                    continue;
+                };
                 validate_client(&c, ctx, ids, servers, role)?;
                 all.insert(role.into(), c);
             }
@@ -1538,9 +1542,7 @@ exit {code}
             );
         }
     }
-    /// The supervisor downloads all twelve immutable records into one flat directory.
-    #[test]
-    fn flat_twelve_record_rollup_and_red_membership_or_results() {
+    pub(super) fn rollup_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
         use std::os::unix::fs::PermissionsExt;
         let d = tempfile::tempdir().unwrap();
         fs::set_permissions(d.path(), fs::Permissions::from_mode(0o700)).unwrap();
@@ -1714,6 +1716,24 @@ exit {code}
             .unwrap();
         }
         assert!(records::identities(&input, &ctx).is_err());
+        (d, context, input, output)
+    }
+
+    /// The supervisor downloads all twelve immutable records into one flat directory.
+    #[test]
+    fn flat_twelve_record_rollup_and_red_membership_or_results() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_root, context, input, output) = rollup_fixture();
+        let ctx: Context = records::read(&context, 65536).unwrap();
+        let ids = records::matrix_identities(&input, &ctx).unwrap();
+        let servers: BTreeMap<String, ServerReady> = ROLES
+            .into_iter()
+            .map(|role| {
+                let record =
+                    records::read(&input.join(format!("{role}-server-ready.json")), 65536).unwrap();
+                (role.into(), record)
+            })
+            .collect();
         let red = |job_result| {
             let fresh = tempfile::Builder::new()
                 .permissions(fs::Permissions::from_mode(0o700))
@@ -1792,3 +1812,7 @@ exit {code}
         assert_eq!(a.exit, 7);
     }
 }
+
+#[cfg(test)]
+#[path = "installed_matrix_publication_tests.rs"]
+mod publication_tests;

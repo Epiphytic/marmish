@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "date": "2026-11-08",
+  "scope": "Frozen e31 candidate and stopped installed-chain evidence only",
+  "baseline_source": "e31b8afae452bb30a041916fbf6d2bac4e92f042",
+  "reviewer": {
+    "cli": "Claude Code",
+    "model": "claude-sonnet-5-5",
+    "permission_mode": "auto"
+  },
+  "verdict": "APPROVE_EVIDENCE_ONLY",
+  "session_id": "66740290-4fc3-4b92-83eb-a07c164e8add",
+  "duration_ms": 141890,
+  "turns": 27,
+  "raw_result_sha256": "8da2fe3ce96262627755e9bf5ee0d5620606ed79090d2e8add2899cdd06e8c5e",
+  "report_sha256": {
+    "reviewed_v1": {
+      "json": "262e672eb6831935c2d35b753668d0e23c34b07adde661aeb632d6853ff12eea",
+      "md": "0ffbf59be2b445cfd96b3ad9db738933e3202b3c2aef8c629346f7e4e0a94465"
+    },
+    "corrected": {
+      "json": "ee106bcddfcc412aa7eb9794dbf283935c8aae379a9be386b60cfcc3022e0bae",
+      "md": "a9737d53b430090d8a8f7fd49eeb9f16745b139f81399440ee942a50cf6c09df"
+    }
+  },
+  "narrow_corrections_diff_sha256": "2f99c022107479cdd51dc0b1cddea18c39e25fb359be4e6774b8fadafd7564f7",
+  "corrected_bytes_review_status": "Verified by actual integrated Claude code/evidence review session99b1416a-81f2-442a-a289-7cdcf965be69: exact narrow diff and hashes only; original evidence approval remains bound to reviewed_v1 bytes.",
+  "corrections": [
+    "Diagnostic 0 event=failed and origin=work_error; diagnostic 1 event=failed.",
+    "Removed duplicated final-auditor NOT_RUN sentence.",
+    "Clarified native passed counts exclude ignored tests."
+  ],
+  "checks": [
+    "All 92 private pins and 23 nested legacy input pins rehashed without mismatch.",
+    "Actual REST ZIP digests/sizes checked for 8 candidate, 14 stream and 15 rsync archives.",
+    "Exact run/source/attempt and shared candidate context bindings checked.",
+    "Nine accepted stream cells and all wall/goodput values recomputed.",
+    "Eighteen raw successful rsync pairs distinguished from zero accepted rsync cells.",
+    "Twenty current legacy failure identities versus nineteen prior identities verified.",
+    "Six remaining cohorts not dispatched; final auditor NOT_RUN; 162 observations not qualified.",
+    "Sanitized report scan found no private payloads, paths, accounts or secrets."
+  ],
+  "limits": [
+    "Reviewer spot-checked record/binding comparisons but did not independently rederive the 401 and 526 totals.",
+    "Reviewer did not independently reproduce candidate tool-binary member hashes, harness git ls-tree digest or legacy test causes.",
+    "No downloaded content executed, Cargo or relay tests run, CI mutated, or git/Beads changed.",
+    "Hosted/API facts are observations at collection time; serialized cleanup flags do not prove physical cleanup.",
+    "Evidence approval does not approve code, design, a new run, or a release."
+  ],
+  "correction_verification": {
+    "session_id": "99b1416a-81f2-442a-a289-7cdcf965be69",
+    "raw_result_sha256": "c5924ea54f052a60a402579aa2bf937d1a2bc623cc8070021c0d0959249da3cc",
+    "scope": "Exact reviewed_v1-to-corrected diff, hashes and diagnostic log fields; no full underlying archive/pin re-audit."
+  }
+}

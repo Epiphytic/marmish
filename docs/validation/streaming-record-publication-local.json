@@ -1,0 +1,489 @@
+{
+  "schema": 1,
+  "date": "2026-11-08",
+  "baseline_source": "e31b8afae452bb30a041916fbf6d2bac4e92f042",
+  "scope": "Installed test-harness live record publication; no product/protocol/install/version changes",
+  "review_status": "Actual initial integrated and test-only followup Claude reviews APPROVE; hosted qualification pending",
+  "retained_native_validator": {
+    "passed": 1,
+    "clients": 3,
+    "pairs_each": 6,
+    "evidence_sha256": "5f448badbce63ca54bfadfa7c9185114a5a6d38cbf9079f39909d1e8d2772aba",
+    "temporary_test_restored_exactly": true,
+    "hosted_cause_proven": false
+  },
+  "deterministic_regression": {
+    "initial_fixture_error_preserved": true,
+    "corrected_compiling_stub": "RED: intended nlink2 pending assertion fails",
+    "corrected_red_log_sha256": "459db2b7795a7970c17ea01b4fe8ef7b0e8d66ce0cf43882d029d03adfbf5c5f",
+    "records_suite_passed": 8,
+    "green_log_sha256": "865a973f23966fb9558932734e47c2113cf446adcb1b1075362ad5e87c9f45d2",
+    "implementation_evidence_sha256": "a9ecb8e3e7e82dc8e71a8b9074efd4474a82d0907950d326f732134071c40990"
+  },
+  "root_checks": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--offline",
+        "--locked",
+        "-p",
+        "marmish-native",
+        "--features",
+        "installed-checks",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "log_sha256": "aa25d4eaebdb6baf2d5a878c479694eedaaa9d1b3a88713bc854a12a7f42d255"
+    },
+    {
+      "name": "serial-installed-diagnostic",
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "-p",
+        "marmish-native",
+        "--features",
+        "installed-checks",
+        "--lib",
+        "installed_check::",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "log_sha256": "5ef3e5cebc01bd08f935d68ee26f464349787c9549c1e60d9a25697808a70d2e"
+    }
+  ],
+  "serial_installed_diagnostic": {
+    "passed": 263,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 636,
+    "duration_seconds": 37.6,
+    "meaning": "Serial diagnostic only; earlier parallel failure remains and unchanged Linux hosted candidate gate is required"
+  },
+  "node_tests": {
+    "passed": 172,
+    "failed": 0,
+    "ignored": 0,
+    "log_sha256": "b4a05009bd6fb020e55c11829caa561f0043a721047f6ee2962333a58ca8979a",
+    "locked_npm_ci_exit": 0,
+    "npm_ci_log_sha256": "36891f72d12dd32600fdc4f7913ff805b1d4d55f892ffed73061dcecf57a4599",
+    "initial_absent_dependency_failure_preserved": true
+  },
+  "structural_checks": {
+    "quality_delta_exit": 2,
+    "total_findings": 51,
+    "gating_findings": 24,
+    "acked": 0,
+    "log_sha256": "1560e5496d47446163923338d73ab14ff66cdabeffc6dd13581fee44fa2ea7d4",
+    "change_check_exit": 0,
+    "change_check_log_sha256": "0ba03bbcfe638cfab9f2d01f9a3fefa5154c05da04978013e2248a94080981d2",
+    "assessment": "Review required: pending-decision complexity and repeated test fixtures; strict-reader factoring exposes existing-body clone matches; discovered tests listed dead; unchanged candidate/legacy symbols conflated by name; historical churn retained. No suppression, acknowledgement or baseline mutation."
+  },
+  "qualified": false,
+  "limits": [
+    "Local tests overlap and counts must not be added.",
+    "Wrong-owner descriptor fence remains source-preserved but no mismatched-owner fixture was constructed by the unprivileged test user.",
+    "Marker tests exercise filesystem seams and source wiring, not live IPC.",
+    "Exact-source three-platform candidate and eight unchanged serial cohorts with final auditor still required.",
+    "Initial parallel benchmark failure cause and historical macOS rsync initiating cause remain unknown.",
+    "Public installer remains v0.2.3; this is not release qualification.",
+    "Beads remains inaccessible because installed client schema66 has13 pending migrations over remote schema53; no database operations were attempted."
+  ],
+  "initial_integrated_review": {
+    "session_id": "99b1416a-81f2-442a-a289-7cdcf965be69",
+    "raw_result_sha256": "c5924ea54f052a60a402579aa2bf937d1a2bc623cc8070021c0d0959249da3cc",
+    "parallel_installed_check_runs": [
+      {
+        "passed": 263,
+        "failed": 0
+      },
+      {
+        "passed": 263,
+        "failed": 0
+      },
+      {
+        "passed": 263,
+        "failed": 0
+      }
+    ],
+    "focused_test_observations": 71,
+    "counts_overlap": true
+  },
+  "initial_callers": {
+    "files": {
+      "installed_streaming.rs": "41645b0d09140e8d3d20430bf9a12b686458d4ec20beb0f996d9dfdc51b2a318",
+      "installed_matrix.rs": "1b9d51f4d12ecca5cdc082f482aed479f321851944e511bc89893d2e8ec9cc19",
+      "installed_edge_rsync.rs": "8da5b174ee9d4ba8b0e6a0c4acf76a3480fc3d1b652496a4267cfab32b7c776b",
+      "installed_edge_signals.rs": "f88938e0bd6799ee2ed38e43a5e6642ee62c8561fbd72eed0134d073257dc2b9",
+      "installed_edge_quota.rs": "75f7ad29474518338b699d0c379c2f1dd417e1ef1ce7b7eeec553f73d71b4d9c",
+      "installed_streaming_publication_tests.rs": "af29f7707b5001b0f4655b8bcde90e8eba85cf3a2656171f2181e1aedbfde324",
+      "installed_matrix_publication_tests.rs": "97b1597b09213e55e91890dcdc133ba6bb6eb9b49972f87c29b943865fb24df8"
+    },
+    "new_tests": {
+      "actual_loop_tests": 3,
+      "filesystem_marker_seam_tests": 3,
+      "source_wiring_guards": 3,
+      "existing_stream_diagnostic_test_extended_with_pending_case": 1
+    },
+    "focused_results": [
+      {
+        "name": "caller-actual-loops",
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "marmish-native",
+          "--features",
+          "installed-checks",
+          "--lib",
+          "publication_tests",
+          "--",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "sha256": "d8d030665ed292afaec6b84f1fac71e876ab43a6956dfcc8952e27ab8f7523a8"
+      },
+      {
+        "name": "caller-marker-filesystems",
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "marmish-native",
+          "--features",
+          "installed-checks",
+          "--lib",
+          "live_marker_defers_publication_then_reads_or_rejects_completed_json",
+          "--",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "sha256": "8b62c3cbffd6155b211bebd22370f864a381341110285cac83be7bdde1813e09"
+      },
+      {
+        "name": "caller-marker-source",
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "marmish-native",
+          "--features",
+          "installed-checks",
+          "--lib",
+          "marker_source_contract_defers_initial_read_but_keeps_digest_strict",
+          "--",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "sha256": "29b360563c5fac3d368eff9c3abfa66ee1c94d81a340ecd5dcf8a592480d7174"
+      },
+      {
+        "name": "caller-rsync-source-existing",
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "marmish-native",
+          "--features",
+          "installed-checks",
+          "--lib",
+          "source_contract_keeps_eligible_only_marker_and_unchanged_reconciliation_gates",
+          "--",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "sha256": "2b790c2ca73123b7cf18ad495861fb36cd8298bdc1128106f7067407c8a360e6"
+      },
+      {
+        "name": "caller-diagnostic-wait",
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "marmish-native",
+          "--features",
+          "installed-checks",
+          "--lib",
+          "rendezvous_diagnostics_distinguish_read_validation_and_wait_without_peer_blame",
+          "--",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "sha256": "448570506ce2c2ac825f014a5778898629e54f74a6956ecf83c1ea22cab7715a"
+      },
+      {
+        "name": "benchmark-isolated-diagnosis",
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "marmish-native",
+          "--features",
+          "installed-checks",
+          "--lib",
+          "detached_submit_and_wait_preserve_exact_handle_bytes_and_one_deadline",
+          "--",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "sha256": "21c2d11ea0cd9c92e2b392150178a738eafef4bddc10021bee681afec0e29bf9"
+      }
+    ],
+    "first_affected_installed_suite": {
+      "passed": 262,
+      "failed": 1,
+      "failure": "benchmark::detached_submit_and_wait_preserve_exact_handle_bytes_and_one_deadline fixture case2 Io code26 ExecutableFileBusy/Text file busy",
+      "log": "caller-installed-tests.log",
+      "sha256": "be8b823b6b4d4dcaacd4abd59faa13871a7f71c6ac57e30eb385dcddf93c0e4f"
+    },
+    "interrupted_affected_rerun": {
+      "log": "caller-installed-tests-rerun.log",
+      "sha256": "b4ce216592bee96a851597316df6846a77ed1155b56b934ea1506d1ca580bf29",
+      "result": "interrupted with SIGINT during compilation after root directed isolated diagnosis only; not a test result"
+    },
+    "limitations": [
+      "All four inbox pollers exercised on real tempfiles with hard-link intervals and paused Tokio time: pending to original timeout and completed malformed JSON rejection.",
+      "Streaming server and client pollers additionally complete valid existing synthetic records after unlink. Finite matrix loops have pending/timeout/malformed coverage; no new valid-completion fixture at that initial snapshot; superseded by the positive matrix followup below.",
+      "Three marker filesystem read seams and source wiring guards are tested; live IPC marker paths are not executed.",
+      "Existing parallel installed-suite benchmark failure remains preserved; isolated diagnosis passes and does not establish full-suite green or explain the original failure.",
+      "No new live candidate or qualification cohorts have run."
+    ]
+  },
+  "followup": {
+    "scope": "Test-only improvements after initial approval; no product-function changes",
+    "focused_results": [
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "marmish-native",
+          "--features",
+          "installed-checks",
+          "--lib",
+          "published_matrix_rendezvous_waits_then_accepts_unchanged_validators",
+          "--",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "log": "followup-matrix-positive.log",
+        "sha256": "d109b276f33f0fe5d47ebfcea268632319223d71e0cd66e3e9089eee79295930",
+        "test_result": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 899 filtered out; finished in 0.67s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "marmish-native",
+          "--features",
+          "installed-checks",
+          "--lib",
+          "flat_twelve_record_rollup_and_red_membership_or_results",
+          "--",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "log": "followup-matrix-original-rollup.log",
+        "sha256": "fd6bbf8c0ffa6b0a341ce37a00d548b826125675072f96250116442ce03c176d",
+        "test_result": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 899 filtered out; finished in 0.90s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "marmish-native",
+          "--features",
+          "installed-checks",
+          "--lib",
+          "marker_source_contract_defers_initial_read_but_keeps_digest_strict",
+          "--",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "log": "followup-marker-source.log",
+        "sha256": "c5ee812f458094457624d8699a127439bd361bfd49f5fe9f13b4c3a65f365c85",
+        "test_result": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 897 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "marmish-native",
+          "--features",
+          "installed-checks",
+          "--lib",
+          "live_marker_defers_publication_then_reads_or_rejects_completed_json",
+          "--",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "log": "followup-marker-filesystems.log",
+        "sha256": "8727dc3ac540d19248ae690e463735903398079898dd21356fe4f5532420a789",
+        "test_result": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 897 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "marmish-native",
+          "--features",
+          "installed-checks",
+          "--lib",
+          "publication_tests",
+          "--",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "log": "followup-publication-loops.log",
+        "sha256": "1be76fda7b5e4aa3820135e60d3832b4d169e1574e6afc72a4436439155aee9f",
+        "test_result": [
+          "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 894 filtered out; finished in 0.87s"
+        ]
+      }
+    ],
+    "source_pins": [
+      {
+        "file": "crates/marmish-native/src/installed_edge_quota.rs",
+        "initial_sha256": "75f7ad29474518338b699d0c379c2f1dd417e1ef1ce7b7eeec553f73d71b4d9c",
+        "followup_sha256": "b63adc9e9f3e088201bb2c3fe27083aef7d2d5e76f6a41fee4bf66c990307eaf",
+        "changed": true
+      },
+      {
+        "file": "crates/marmish-native/src/installed_edge_rsync.rs",
+        "initial_sha256": "8da5b174ee9d4ba8b0e6a0c4acf76a3480fc3d1b652496a4267cfab32b7c776b",
+        "followup_sha256": "1ff0dfea755317b8d33aa9604ceb972292ac428f0ba0570aada5c23bb10db68c",
+        "changed": true
+      },
+      {
+        "file": "crates/marmish-native/src/installed_edge_signals.rs",
+        "initial_sha256": "f88938e0bd6799ee2ed38e43a5e6642ee62c8561fbd72eed0134d073257dc2b9",
+        "followup_sha256": "55b43009d7f374592fc750385ea7aefccdb40f592dc23c2f3090cc12c1e16079",
+        "changed": true
+      },
+      {
+        "file": "crates/marmish-native/src/installed_matrix.rs",
+        "initial_sha256": "1b9d51f4d12ecca5cdc082f482aed479f321851944e511bc89893d2e8ec9cc19",
+        "followup_sha256": "21902fd56c8621a2ac442cc75d81a52376fad3c4ae1448184c723f1afea6074a",
+        "changed": true
+      },
+      {
+        "file": "crates/marmish-native/src/installed_matrix_publication_tests.rs",
+        "initial_sha256": "97b1597b09213e55e91890dcdc133ba6bb6eb9b49972f87c29b943865fb24df8",
+        "followup_sha256": "2914aae7df68ce5126d3b69bd99765782f35ca7466c5b99d412750763cb64f5e",
+        "changed": true
+      },
+      {
+        "file": "crates/marmish-native/src/installed_records.rs",
+        "initial_sha256": "aa5ba933b50a08931acb081724f4fb61c7777467717b3a900f64b139748a2246",
+        "followup_sha256": "aa5ba933b50a08931acb081724f4fb61c7777467717b3a900f64b139748a2246",
+        "changed": false
+      },
+      {
+        "file": "crates/marmish-native/src/installed_streaming.rs",
+        "initial_sha256": "41645b0d09140e8d3d20430bf9a12b686458d4ec20beb0f996d9dfdc51b2a318",
+        "followup_sha256": "41645b0d09140e8d3d20430bf9a12b686458d4ec20beb0f996d9dfdc51b2a318",
+        "changed": false
+      },
+      {
+        "file": "crates/marmish-native/src/installed_streaming_publication_tests.rs",
+        "initial_sha256": "af29f7707b5001b0f4655b8bcde90e8eba85cf3a2656171f2181e1aedbfde324",
+        "followup_sha256": "af29f7707b5001b0f4655b8bcde90e8eba85cf3a2656171f2181e1aedbfde324",
+        "changed": false
+      }
+    ],
+    "patch_sha256": "9ad98266d71e193088a01b5bb6a2bf40d31234a4c3c310fb4a00d0aa5c37b79e",
+    "coverage": "Both real finite-matrix loops now additionally accept valid records after staging unlink; three helper guards are bounded to actual helper source bodies. Initial snapshot limitations and file hashes above describe that earlier state."
+  },
+  "final_review": {
+    "scope": "Bounded test-only followup, source pins and review/evidence metadata",
+    "verdict": "APPROVE",
+    "session_id": "d0a4ce08-cd34-4da7-a90c-6bcb9078c3e0",
+    "duration_ms": 81631,
+    "turns": 11,
+    "raw_result_sha256": "0873e59975cdd22379f4008aad5bb89bbe7b862d2d60e8a5b42509dfcaae0bc9",
+    "patch_sha256": "9ad98266d71e193088a01b5bb6a2bf40d31234a4c3c310fb4a00d0aa5c37b79e",
+    "checks": [
+      "All8 initial source snapshots match pins; only5 intended test-only files differ",
+      "Three bounded marker source guards PASS",
+      "Two matrix publication tests PASS",
+      "Two stream publication tests PASS",
+      "Existing matrix rollup PASS",
+      "fmt PASS",
+      "strict offline/locked installed-feature all-target Clippy PASS",
+      "git diff whitespace PASS"
+    ],
+    "limits": [
+      "No broad suites, Node, ripwire, mutation tests or underlying artifact/pin re-audit repeated.",
+      "Marker source guards checked by source reading and test execution, not mutation.",
+      "Local filesystem/timing tests do not qualify hosted IPC, historical cause or release."
+    ],
+    "metadata_nits_incorporated": [
+      "Replace5 private absolute log paths with basenames.",
+      "Mark initial matrix valid-completion limitation superseded by followup.",
+      "Record actual final verdict separately from initial approval and evidence-correction verification."
+    ]
+  },
+  "final_source_quality": {
+    "command": "ripwire crates/marmish-native/src --quality-delta",
+    "exit_code": 2,
+    "total_findings": 33,
+    "gating_findings": 14,
+    "acked": 0,
+    "log_sha256": "672abdda1787bce146778133ae1e60681a1671b1200723cede299ee1c0d3f385",
+    "assessment": "Separate source-scoped final scan, not directly comparable to whole-repo51/24. Retains minimal pending complexity, strict-reader moved-body matches and independent test/source-guard duplication including matches to existing guards; no suppression/rebaseline. Root assessed final scan; reviewer inspected final source, not this scan output."
+  }
+}

@@ -310,20 +310,45 @@ pub(super) fn canonical<T: Serialize>(value: &T) -> Result<Vec<u8>> {
 pub(super) fn read<T: serde::de::DeserializeOwned>(path: &Path, limit: u64) -> Result<T> {
     serde_json::from_slice(&read_bytes(path, limit)?).map_err(|_| invalid())
 }
+/// Read a live publication without accepting its transient staging hard link.
+/// `None` means unpublished: callers must poll within their existing deadline.
+#[must_use = "pending publication must be handled by the caller"]
+pub(super) fn read_published<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    limit: u64,
+) -> Result<Option<T>> {
+    let (file, links) = open_record(path, limit)?;
+    match links {
+        2 => Ok(None),
+        1 => serde_json::from_slice(&bounded_bytes(file, limit)?)
+            .map(Some)
+            .map_err(|_| invalid()),
+        _ => Err(invalid()),
+    }
+}
 pub(super) fn read_bytes(path: &Path, limit: u64) -> Result<Vec<u8>> {
-    let mut file = OpenOptions::new()
+    let (file, links) = open_record(path, limit)?;
+    if links != 1 {
+        return Err(invalid());
+    }
+    bounded_bytes(file, limit)
+}
+fn open_record(path: &Path, limit: u64) -> Result<(File, u64)> {
+    let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
         .open(path)?;
     let m = file.metadata()?;
     if !m.is_file()
         || m.uid() != unsafe { libc::geteuid() }
-        || m.nlink() != 1
         || m.mode() & 0o022 != 0
         || m.len() > limit
     {
         return Err(invalid());
     }
+    Ok((file, m.nlink()))
+}
+fn bounded_bytes(mut file: File, limit: u64) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     Read::by_ref(&mut file)
         .take(limit + 1)
@@ -588,6 +613,81 @@ pub(super) mod tests {
             1,
         );
         assert!(serde_json::from_str::<Context>(&duplicate).is_err());
+    }
+    #[test]
+    fn published_record_waits_for_staging_link_removal() {
+        let d = tempfile::tempdir().unwrap();
+        fs::set_permissions(d.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let staging = d.path().join("staging.json");
+        let published = d.path().join("published.json");
+        write(&staging, &ctx()).unwrap();
+        let before = fs::read(&staging).unwrap();
+        fs::hard_link(&staging, &published).unwrap();
+        assert_eq!(fs::metadata(&published).unwrap().nlink(), 2);
+        assert!(matches!(
+            read_published::<Context>(&published, 65536),
+            Ok(None)
+        ));
+        assert!(read::<Context>(&published, 65536).is_err());
+        assert!(read_bytes(&published, 65536).is_err());
+        fs::remove_file(&staging).unwrap();
+        let value = read_published::<Context>(&published, 65536)
+            .unwrap()
+            .unwrap();
+        assert_eq!(canonical(&value).unwrap(), before);
+        assert_eq!(read_bytes(&published, 65536).unwrap(), before);
+    }
+    #[test]
+    fn published_record_defers_parsing_only_until_staging_unlinks() {
+        let d = tempfile::tempdir().unwrap();
+        let staging = d.path().join("staging");
+        let published = d.path().join("published");
+        fs::write(&staging, b"{malformed").unwrap();
+        fs::set_permissions(&staging, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::hard_link(&staging, &published).unwrap();
+        assert!(matches!(
+            read_published::<Context>(&published, 65536),
+            Ok(None)
+        ));
+        fs::remove_file(staging).unwrap();
+        assert!(read_published::<Context>(&published, 65536).is_err());
+        assert!(read_published::<Context>(&d.path().join("missing"), 65536).is_err());
+    }
+    #[test]
+    fn published_record_keeps_all_metadata_fences_before_pending() {
+        let d = tempfile::tempdir().unwrap();
+        let staging = d.path().join("staging");
+        let published = d.path().join("published");
+        fs::write(&staging, b"{}").unwrap();
+        fs::set_permissions(&staging, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::hard_link(&staging, &published).unwrap();
+        for path in [&staging, &published] {
+            assert!(read_published::<serde_json::Value>(path, 1).is_err());
+        }
+        fs::set_permissions(&staging, fs::Permissions::from_mode(0o620)).unwrap();
+        assert!(read_published::<serde_json::Value>(&published, 2).is_err());
+        fs::set_permissions(&staging, fs::Permissions::from_mode(0o602)).unwrap();
+        assert!(read_published::<serde_json::Value>(&published, 2).is_err());
+        fs::set_permissions(&staging, fs::Permissions::from_mode(0o600)).unwrap();
+        let third = d.path().join("third");
+        fs::hard_link(&staging, &third).unwrap();
+        assert_eq!(fs::metadata(&published).unwrap().nlink(), 3);
+        assert!(read_published::<serde_json::Value>(&published, 2).is_err());
+        fs::remove_file(third).unwrap();
+        let symlink = d.path().join("symlink");
+        std::os::unix::fs::symlink(&published, &symlink).unwrap();
+        assert!(read_published::<serde_json::Value>(&symlink, 2).is_err());
+        // A directory commonly has two links: type checks must precede pending.
+        assert!(read_published::<serde_json::Value>(d.path(), 65536).is_err());
+        fs::remove_file(staging).unwrap();
+        fs::set_permissions(&published, fs::Permissions::from_mode(0o622)).unwrap();
+        assert!(read_published::<serde_json::Value>(&published, 2).is_err());
+        fs::set_permissions(&published, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(read_published::<serde_json::Value>(&published, 1).is_err());
+        assert_eq!(
+            read_published::<serde_json::Value>(&published, 2).unwrap(),
+            Some(serde_json::json!({}))
+        );
     }
     #[test]
     fn immutable_record_publication_and_bounded_nofollow_read() {

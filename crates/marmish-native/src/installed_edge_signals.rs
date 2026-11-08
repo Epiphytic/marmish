@@ -167,6 +167,18 @@ fn snapshot_decision(
     }
     Ok(running)
 }
+fn read_running_marker(
+    path: &std::path::Path,
+    established: bool,
+) -> Result<Option<serde_json::Value>> {
+    let marker = records::read_published(path, 8192)?;
+    snapshot_decision(
+        streaming_cleanup::StartupPhase::Running,
+        marker.is_some(),
+        established,
+    )?;
+    Ok(marker)
+}
 async fn running_snapshot(
     c: &Cohort<'_, '_>,
     stream: &str,
@@ -187,7 +199,9 @@ async fn running_snapshot(
         return Ok(None);
     }
     let e = selected.ok_or_else(bad)?;
-    let m: serde_json::Value = records::read(marker, 8192)?;
+    let Some(m) = read_running_marker(marker, established)? else {
+        return Ok(None);
+    };
     edge_fixture::validate_marker(&m, nonce, &c.ready.fixture_sha256, argv)?;
     let status =
         streaming_cleanup::status(*c.server.daemon.lock().await, c.server.socket, c.deadline)
@@ -456,6 +470,60 @@ pub(super) async fn run(c: Cohort<'_, '_>) -> Result<Vec<Observation>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn marker_source_contract_defers_initial_read_but_keeps_digest_strict() {
+        // Wiring assertions supplement filesystem seams; they do not execute live IPC.
+        let source = include_str!("installed_edge_signals.rs");
+        let body = source
+            .split("async fn running_snapshot(")
+            .nth(1)
+            .unwrap()
+            .split("async fn running(")
+            .next()
+            .unwrap();
+        let helper = source
+            .split("fn read_running_marker(")
+            .nth(1)
+            .unwrap()
+            .split("async fn running_snapshot(")
+            .next()
+            .unwrap();
+        assert!(helper.contains("records::read_published(path, 8192)"));
+        assert!(body.contains("read_running_marker(marker, established)?"));
+        assert!(body.contains("records::digest(&records::read_bytes("));
+        assert!(
+            body.find("read_running_marker(marker, established)?")
+                .unwrap()
+                < body.find("records::digest(&records::read_bytes(").unwrap()
+        );
+    }
+
+    #[test]
+    fn live_marker_defers_publication_then_reads_or_rejects_completed_json() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("marker");
+        let staging = root.path().join("staging");
+        std::fs::write(&path, b"malformed until publication completes").unwrap();
+        std::fs::hard_link(&path, &staging).unwrap();
+        assert!(read_running_marker(&path, false).unwrap().is_none());
+        assert!(read_running_marker(&path, true).is_err());
+        assert!(records::read::<serde_json::Value>(&path, 8192).is_err());
+        std::fs::remove_file(&staging).unwrap();
+        assert!(read_running_marker(&path, false).is_err());
+        std::fs::write(
+            &path,
+            br#"{"schema":1,"nonce":"n","executable_sha256":"e","argv_sha256":"a"}"#,
+        )
+        .unwrap();
+        std::fs::hard_link(&path, &staging).unwrap();
+        assert!(read_running_marker(&path, false).unwrap().is_none());
+        std::fs::remove_file(&staging).unwrap();
+        assert!(read_running_marker(&path, false).unwrap().is_some());
+        assert!(read_running_marker(&path, true).unwrap().is_some());
+        std::fs::hard_link(&path, &staging).unwrap();
+        assert!(read_running_marker(&path, true).is_err());
+    }
+
     #[test]
     fn detach_evidence_cannot_substitute_for_confirmed_interrupt() {
         let mut e = Observation {
