@@ -1,6 +1,6 @@
 # Runner cleanup: fresh signal times and final owned exit observation
 
-Status: independent actual Claude design re-review APPROVE ebdaef60-2eb4-4810-9c0d-f2e6da3852a9; implementation and code review required. The user directly authorized continued testing and fixes. Diagnostic increment is separate preceding commit651cb98. No source changes, builds, reruns or live tests were performed to produce the design.
+Status: independent actual Claude design re-review APPROVE ebdaef60-2eb4-4810-9c0d-f2e6da3852a9; implemented in 8d0dbf23 and independently approved in Claude code review 88378359-21f3-4260-8e07-eea41fffcea3. See [the integrated review](../reviews/streaming-runner-exit-observation.md). The user directly authorized continued testing and fixes. Diagnostic increment is separate preceding commit 651cb98. No source changes, builds, reruns or live tests were performed to produce the design.
 
 ## Evidence and limit of the claim
 

@@ -1,6 +1,6 @@
 # Runner cleanup diagnostic review
 
-Scope: test-only authority-withdrawal fixture lifetime and existing finite failure-context reporting. No product logic, budgets, expected terminal or original assertions change. Historical f96 macOS cleanup root cause is unknown. Product lifecycle amendment is separately planned and requires its own approval and commit.
+Scope: test-only authority-withdrawal fixture lifetime and existing finite failure-context reporting. No product logic, budgets, expected terminal or original assertions change. Historical f96 macOS cleanup root cause is unknown. Product lifecycle amendment was subsequently implemented as separate commit 8d0dbf23 after its own design and code approval; see [its integrated review](streaming-runner-exit-observation.md).
 
 ## design-review.json
 

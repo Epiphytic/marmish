@@ -1,6 +1,6 @@
 # Authority-withdrawal fixture cleanup diagnostics
 
-Status: actual independent Claude design approval bb9b6951-241e-4e99-976d-144f50d495e8 obtained for diagnostic plan, with the validation additions recorded below before implementation.
+Status: actual independent Claude design approval bb9b6951-241e-4e99-976d-144f50d495e8 obtained for diagnostic plan, with the validation additions recorded below before implementation. Implemented in 651cb989 and independently approved in [the integrated review](../reviews/streaming-runner-cleanup-diagnostics.md).
 
 Evidence: exact source f96b692194c4cc6c54dcbb142d03ace781803d42; candidate42446123377/1 macOS ARM64 job128625304714 failed installed-feature test stream_runner::tests::authority_withdrawal_halts_queued_input_irreversibly_without_cancel at1074: expected Cancelled, actual Failed(Uncertain). 874 passed,1 failed,3 ignored. Same test passed default suite earlier in that job. Raw log SHA25630e3c764c78eef5bb62fa2dd25f80ca3ded575ae9fc74be2b1bd35af378c97f8; retained privately. Revocation/input markers and pre-cancel assertions passed. Failure is cleanup; no runtime branch/error/lifecycle diagnostic was printed. No exact underlying production cause is established. Historical failure remains unqualified. Other candidatejobs may finish immutable source; coordinator cannot dispatch cohorts on a failed candidate.
 

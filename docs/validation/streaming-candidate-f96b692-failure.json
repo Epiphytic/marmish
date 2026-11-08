@@ -6,34 +6,327 @@
     "run_id": 42446123377,
     "run_attempt": 1,
     "url": "https://github.com/Epiphytic/marmish/actions/runs/42446123377",
-    "status": "FAILED_PLATFORM_GATE_OTHER_JOBS_PENDING",
-    "final_run_status": null,
-    "final_job_statuses_pending": true
+    "status": "completed",
+    "final_run_status": "failure",
+    "final_job_statuses_pending": false,
+    "conclusion": "failure",
+    "render": {
+      "job_id": 128645280379,
+      "name": "render",
+      "conclusion": "skipped"
+    }
   },
   "qualified": false,
   "installed_cohorts_dispatched": 0,
   "final_auditor": "NOT_RUN",
   "platforms": [
     {
-      "role": "linux-amd64",
       "job_id": 128625304446,
-      "status": "PENDING_FINAL_EVIDENCE"
+      "name": "package (ubuntu-24.04, x86_64-unknown-linux-gnu, none, glibc=2.39)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-08T04:16:18Z",
+      "completed_at": "2026-11-08T05:57:20Z",
+      "wall_seconds": 6062.0,
+      "log_sha256": "9a39f407202f735986fed1e0d8b30965fd9e09e012bba8c59ba4830764b4de3e",
+      "role": "linux-amd64",
+      "target": "x86_64-unknown-linux-gnu",
+      "log_bytes": 590311,
+      "default_library_suites": [
+        {
+          "package": "marmish-engine",
+          "passed": 141,
+          "failed": 0,
+          "ignored": 1,
+          "seconds": 9.71
+        },
+        {
+          "package": "marmish-native",
+          "passed": 630,
+          "failed": 0,
+          "ignored": 3,
+          "seconds": 1932.97
+        },
+        {
+          "package": "marmish-stream",
+          "passed": 29,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 0.26
+        },
+        {
+          "package": "marmish-vault",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 0.01
+        }
+      ],
+      "installed_feature_native_library": {
+        "passed": 876,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 1956.73
+      },
+      "default_and_feature_counts_overlap": true,
+      "gate_steps": [
+        {
+          "name": "Verify native components",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T04:16:31Z",
+          "completed_at": "2026-11-08T04:56:19Z"
+        },
+        {
+          "name": "Build final native executables",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T04:56:19Z",
+          "completed_at": "2026-11-08T05:06:23Z"
+        },
+        {
+          "name": "Ad hoc sign final macOS executables before hashing",
+          "status": "completed",
+          "conclusion": "skipped",
+          "started_at": "2026-11-08T05:06:23Z",
+          "completed_at": "2026-11-08T05:06:23Z"
+        },
+        {
+          "name": "Inspect final dependency allowlists and qualified ABI baselines",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T05:06:23Z",
+          "completed_at": "2026-11-08T05:06:24Z"
+        },
+        {
+          "name": "Collect locked production license texts (CI tooling only)",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T05:06:24Z",
+          "completed_at": "2026-11-08T05:06:33Z"
+        },
+        {
+          "name": "Package verified immutable candidate assets",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T05:06:33Z",
+          "completed_at": "2026-11-08T05:06:33Z"
+        },
+        {
+          "name": "Build isolated installed-test tools without changing product assets",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T05:06:33Z",
+          "completed_at": "2026-11-08T05:57:07Z"
+        },
+        {
+          "name": "Preserve pinned installed-test tools separately",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T05:57:07Z",
+          "completed_at": "2026-11-08T05:57:09Z"
+        },
+        {
+          "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T05:57:09Z",
+          "completed_at": "2026-11-08T05:57:15Z"
+        },
+        {
+          "name": "Preserve host render tool separately (never an install asset)",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T05:57:15Z",
+          "completed_at": "2026-11-08T05:57:17Z"
+        }
+      ],
+      "ignored_tests": [
+        {
+          "identity": "live::tests::fd_probe_child",
+          "reason": "exec-only descriptor probe, invoked by multithreaded live-spawn test"
+        },
+        {
+          "identity": "copy_integration_tests::helper_child",
+          "reason": "owned helper subprocess entrypoint"
+        },
+        {
+          "identity": "copy_integration_tests::large::large_raw_zlib_actual_helper_four_way",
+          "reason": "expensive >65MiB actual-helper four-way qualification; exact-name invocation only"
+        },
+        {
+          "identity": "stream_runner::tests::large_duplex_integrity_with_slow_consumers_and_bounded_windows",
+          "reason": "large 65 MiB duplex qualification; run explicitly"
+        },
+        {
+          "identity": "linux::isolated_gnome_keyring_round_trip_and_lock",
+          "reason": "explicit native gate: creates only an isolated temporary D-Bus/keyring session"
+        }
+      ],
+      "installer_log_observation": {
+        "retained_lines": 46,
+        "scope": "Installer-related test lines across overlapping configurations and subprocess output; not a count of unique successful tests."
+      }
     },
     {
-      "role": "linux-arm64",
       "job_id": 128625304518,
-      "status": "PENDING_FINAL_EVIDENCE"
+      "name": "package (ubuntu-24.04-arm, aarch64-unknown-linux-gnu, none, glibc=2.39)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-08T04:16:20Z",
+      "completed_at": "2026-11-08T05:19:04Z",
+      "wall_seconds": 3764.0,
+      "log_sha256": "2870fe641f4b2dc82bb8387bba1eda9ece4be6c7cebe7df288ebccd66f6ee360",
+      "role": "linux-arm64",
+      "target": "aarch64-unknown-linux-gnu",
+      "log_bytes": 570648,
+      "default_library_suites": [
+        {
+          "package": "marmish-engine",
+          "passed": 141,
+          "failed": 0,
+          "ignored": 1,
+          "seconds": 10.29
+        },
+        {
+          "package": "marmish-native",
+          "passed": 630,
+          "failed": 0,
+          "ignored": 3,
+          "seconds": 1050.83
+        },
+        {
+          "package": "marmish-stream",
+          "passed": 29,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 0.57
+        },
+        {
+          "package": "marmish-vault",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 0.01
+        }
+      ],
+      "installed_feature_native_library": {
+        "passed": 876,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 1105.53
+      },
+      "default_and_feature_counts_overlap": true,
+      "gate_steps": [
+        {
+          "name": "Verify native components",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T04:16:29Z",
+          "completed_at": "2026-11-08T04:40:07Z"
+        },
+        {
+          "name": "Build final native executables",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T04:40:07Z",
+          "completed_at": "2026-11-08T04:46:57Z"
+        },
+        {
+          "name": "Ad hoc sign final macOS executables before hashing",
+          "status": "completed",
+          "conclusion": "skipped",
+          "started_at": "2026-11-08T04:46:57Z",
+          "completed_at": "2026-11-08T04:46:57Z"
+        },
+        {
+          "name": "Inspect final dependency allowlists and qualified ABI baselines",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T04:46:57Z",
+          "completed_at": "2026-11-08T04:46:58Z"
+        },
+        {
+          "name": "Collect locked production license texts (CI tooling only)",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T04:46:58Z",
+          "completed_at": "2026-11-08T04:47:06Z"
+        },
+        {
+          "name": "Package verified immutable candidate assets",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T04:47:06Z",
+          "completed_at": "2026-11-08T04:47:07Z"
+        },
+        {
+          "name": "Build isolated installed-test tools without changing product assets",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T04:47:07Z",
+          "completed_at": "2026-11-08T05:18:56Z"
+        },
+        {
+          "name": "Preserve pinned installed-test tools separately",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T05:18:56Z",
+          "completed_at": "2026-11-08T05:18:58Z"
+        },
+        {
+          "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T05:18:58Z",
+          "completed_at": "2026-11-08T05:19:02Z"
+        },
+        {
+          "name": "Preserve host render tool separately (never an install asset)",
+          "status": "completed",
+          "conclusion": "skipped",
+          "started_at": "2026-11-08T05:19:02Z",
+          "completed_at": "2026-11-08T05:19:02Z"
+        }
+      ],
+      "ignored_tests": [
+        {
+          "identity": "live::tests::fd_probe_child",
+          "reason": "exec-only descriptor probe, invoked by multithreaded live-spawn test"
+        },
+        {
+          "identity": "copy_integration_tests::helper_child",
+          "reason": "owned helper subprocess entrypoint"
+        },
+        {
+          "identity": "copy_integration_tests::large::large_raw_zlib_actual_helper_four_way",
+          "reason": "expensive >65MiB actual-helper four-way qualification; exact-name invocation only"
+        },
+        {
+          "identity": "stream_runner::tests::large_duplex_integrity_with_slow_consumers_and_bounded_windows",
+          "reason": "large 65 MiB duplex qualification; run explicitly"
+        },
+        {
+          "identity": "linux::isolated_gnome_keyring_round_trip_and_lock",
+          "reason": "explicit native gate: creates only an isolated temporary D-Bus/keyring session"
+        }
+      ],
+      "installer_log_observation": {
+        "retained_lines": 46,
+        "scope": "Installer-related test lines across overlapping configurations and subprocess output; not a count of unique successful tests."
+      }
     },
     {
-      "role": "macos-arm64",
-      "target": "aarch64-apple-darwin",
       "job_id": 128625304714,
+      "name": "package (macos-15, aarch64-apple-darwin, adhoc, macos=15.0)",
       "status": "completed",
       "conclusion": "failure",
       "started_at": "2026-11-08T04:16:20Z",
       "completed_at": "2026-11-08T05:02:40Z",
-      "failed_step": "Build isolated installed-test tools without changing product assets",
+      "wall_seconds": 2780.0,
       "log_sha256": "30e3c764c78eef5bb62fa2dd25f80ca3ded575ae9fc74be2b1bd35af378c97f8",
+      "role": "macos-arm64",
+      "target": "aarch64-apple-darwin",
       "log_bytes": 462931,
       "default_library_suites": [
         {
@@ -72,48 +365,104 @@
         "seconds": 667.22
       },
       "default_and_feature_counts_overlap": true,
-      "completed_steps": [
+      "gate_steps": [
         {
           "name": "Verify native components",
-          "conclusion": "success"
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T04:16:37Z",
+          "completed_at": "2026-11-08T04:35:03Z"
         },
         {
           "name": "Build final native executables",
-          "conclusion": "success"
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T04:35:03Z",
+          "completed_at": "2026-11-08T04:45:43Z"
         },
         {
           "name": "Ad hoc sign final macOS executables before hashing",
-          "conclusion": "success"
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T04:45:43Z",
+          "completed_at": "2026-11-08T04:45:44Z"
         },
         {
           "name": "Inspect final dependency allowlists and qualified ABI baselines",
-          "conclusion": "success"
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T04:45:44Z",
+          "completed_at": "2026-11-08T04:45:48Z"
         },
         {
           "name": "Collect locked production license texts (CI tooling only)",
-          "conclusion": "success"
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T04:45:48Z",
+          "completed_at": "2026-11-08T04:46:01Z"
         },
         {
           "name": "Package verified immutable candidate assets",
-          "conclusion": "success"
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-08T04:46:01Z",
+          "completed_at": "2026-11-08T04:46:03Z"
         },
         {
           "name": "Build isolated installed-test tools without changing product assets",
-          "conclusion": "failure"
+          "status": "completed",
+          "conclusion": "failure",
+          "started_at": "2026-11-08T04:46:03Z",
+          "completed_at": "2026-11-08T05:02:34Z"
         },
         {
           "name": "Preserve pinned installed-test tools separately",
-          "conclusion": "skipped"
+          "status": "completed",
+          "conclusion": "skipped",
+          "started_at": "2026-11-08T05:02:34Z",
+          "completed_at": "2026-11-08T05:02:34Z"
         },
         {
           "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
-          "conclusion": "skipped"
+          "status": "completed",
+          "conclusion": "skipped",
+          "started_at": "2026-11-08T05:02:34Z",
+          "completed_at": "2026-11-08T05:02:34Z"
         },
         {
           "name": "Preserve host render tool separately (never an install asset)",
-          "conclusion": "skipped"
+          "status": "completed",
+          "conclusion": "skipped",
+          "started_at": "2026-11-08T05:02:34Z",
+          "completed_at": "2026-11-08T05:02:34Z"
         }
-      ]
+      ],
+      "ignored_tests": [
+        {
+          "identity": "live::tests::fd_probe_child",
+          "reason": "exec-only descriptor probe, invoked by multithreaded live-spawn test"
+        },
+        {
+          "identity": "copy_integration_tests::helper_child",
+          "reason": "owned helper subprocess entrypoint"
+        },
+        {
+          "identity": "copy_integration_tests::large::large_raw_zlib_actual_helper_four_way",
+          "reason": "expensive >65MiB actual-helper four-way qualification; exact-name invocation only"
+        },
+        {
+          "identity": "stream_runner::tests::large_duplex_integrity_with_slow_consumers_and_bounded_windows",
+          "reason": "large 65 MiB duplex qualification; run explicitly"
+        },
+        {
+          "identity": "macos::disposable_keychain_round_trip_lock_and_restart",
+          "reason": "explicit native gate: creates only an owned disposable macOS keychain"
+        }
+      ],
+      "installer_log_observation": {
+        "retained_lines": 46,
+        "scope": "Installer-related test lines across overlapping configurations and subprocess output; not a count of unique successful tests."
+      }
     }
   ],
   "failure": {
@@ -131,11 +480,20 @@
     "cleanup_physical_completion": "NOT_ESTABLISHED_BY_FAILURE_LOG"
   },
   "assessment": {
-    "fixture_diagnostic_proposal": "Reuse existing CleanupGuard to retain fixture directory until worker finished, and invoke its failure-context assertion before existing terminal checks. Preserve script, limits, markers, explicit cancellation and expected status.",
-    "independent_source_hazard": "Lifecycle signal timestamps are captured before signal completion; the expired post-KILL branch can rely on a stale negative exit observation. This is a separately demonstrated source-level hazard, not a proven historical cause.",
-    "proposed_product_amendment": "Fresh post-success signal times plus one fresh owned exit probe at the existing expired post-KILL failure boundary, preserving uncertainty on false/error and natural-exit meaning.",
-    "implementation_and_red_green_evidence": "PENDING_SEPARATE_REVIEW_AND_EXECUTION",
-    "historical_cause": "UNKNOWN"
+    "fixture_diagnostic_increment": {
+      "commit": "651cb989392f2d914b9126d87321ff3e20d22236",
+      "review": "docs/reviews/streaming-runner-cleanup-diagnostics.md",
+      "status": "IMPLEMENTED_AND_INDEPENDENTLY_APPROVED",
+      "scope": "Test-only CleanupGuard ownership and failure context; deliberate local diagnostic injections proved the new context is printed, not the historical macOS cause."
+    },
+    "lifecycle_increment": {
+      "commit": "8d0dbf23b6d3db1f4fb3ee742232efba41501045",
+      "review": "docs/reviews/streaming-runner-exit-observation.md",
+      "status": "IMPLEMENTED_AND_INDEPENDENTLY_APPROVED",
+      "scope": "Fresh post-success signal timestamps and a fresh owned exit probe at the existing expired post-KILL boundary address an independently demonstrated stale-observation hazard; not proof of the hosted failure cause."
+    },
+    "historical_cause": "UNKNOWN",
+    "qualification_of_corrected_source": "Requires a fresh candidate and complete same-source installed chain; these later increments are not part of the failed f96 candidate."
   },
   "history": {
     "partial_2f": "docs/validation/streaming-installed-2f98802.md",
@@ -146,11 +504,166 @@
     "new_release_or_tag": false,
     "source_only": true
   },
-  "independent_evidence_review": "PENDING",
+  "independent_evidence_review": {
+    "verdict": "APPROVE_EVIDENCE_ONLY",
+    "reviewer": "Claude Code",
+    "model": "claude-sonnet-5-5",
+    "permission_mode": "auto",
+    "session_id": "4d28fdc8-9eef-4f47-a39a-1d5f307dbff8",
+    "duration_ms": 78946,
+    "turns": 15,
+    "private_review_sha256": "5c2817cccea9b1590995bf07f7fc28b878a6ba792acb4bd8c3c042043ebd8c33",
+    "checks": "Independently matched retained run/jobs/artifact snapshots, five ZIP hashes/sizes, all claimed Linux product/tooling file bytes, suite summaries/ignored identities, log hashes and bounded Mac failure region; JSON/links/diff scope checked.",
+    "limitations": "Read-only local snapshots, not refreshed live API; no tests or workflows; no full raw-log read, historical cause, Mac artifact, skipped render, or installed qualification claim. Render-tool ZIP hash/size verified, binary contents not separately inspected.",
+    "findings": "No blockers. Fixed missing commit-name space and recorded this review."
+  },
   "limits": [
-    "No installed traffic or final-auditor result exists for this failed candidate.",
-    "Native success does not qualify installed interoperability.",
-    "Other jobs are pending in this draft, not inferred failed or passed.",
-    "The fixture and lifecycle proposals are not proven causes of the hosted failure."
-  ]
+    "No installed cohorts were dispatched and no final-auditor result exists for this failed candidate.",
+    "Default and feature suite counts overlap; ignored tests are separate and not executed by those suite invocations.",
+    "Only five uploaded ZIP artifacts exist; macOS product/tooling and pinned bootstrap are absent, and render was skipped.",
+    "Independent byte/provenance checks do not replace the skipped authoritative manifest-render validation.",
+    "The failure log does not establish the underlying engine/lifecycle branch or physical cleanup completion.",
+    "Subsequent reviewed fixture and lifecycle increments do not establish the historical macOS cause or qualify corrected source."
+  ],
+  "artifacts": [
+    {
+      "id": 13606700288,
+      "name": "v02-installed-tools-x86_64-unknown-linux-gnu-42446123377-1",
+      "bytes": 13281381,
+      "zip_sha256": "65bbf8bf30d96fa02d6f6d7d1be3513c6bb22c97d40d7c978fa88c94cd31d384"
+    },
+    {
+      "id": 13606188704,
+      "name": "v02-render-tool-42446123377-1",
+      "bytes": 5018753,
+      "zip_sha256": "932b0edc75c548daa6e5ed3647abbbf33d5426f69318c586d2c462527a16f42a"
+    },
+    {
+      "id": 13605914673,
+      "name": "v02-candidate-x86_64-unknown-linux-gnu-42446123377-1",
+      "bytes": 55625630,
+      "zip_sha256": "cb3fd1c740e3cd1a107bd20a113052db87d1f0f3a008e75f635a3501829b713f"
+    },
+    {
+      "id": 13605910142,
+      "name": "v02-installed-tools-aarch64-unknown-linux-gnu-42446123377-1",
+      "bytes": 10871956,
+      "zip_sha256": "5ffb949e6b29b4f3f1f6980439e4d2f90776e9b946d97aa1303da3c270078582"
+    },
+    {
+      "id": 13605870170,
+      "name": "v02-candidate-aarch64-unknown-linux-gnu-42446123377-1",
+      "bytes": 56160486,
+      "zip_sha256": "8f10fa955c6e51cb5e8bfe936a9e8544a4366a784a843e607bca3343ba21312b"
+    }
+  ],
+  "missing_artifacts": [
+    "v02-candidate-aarch64-apple-darwin-42446123377-1",
+    "v02-installed-tools-aarch64-apple-darwin-42446123377-1",
+    "v02-pinned-bootstrap-42446123377-1"
+  ],
+  "artifact_verification": {
+    "uploaded_zip_count": 5,
+    "zip_bytes_hash_and_size_verified": true,
+    "product_and_tooling_file_bytes_verified": true,
+    "provenance": [
+      {
+        "target": "x86_64-unknown-linux-gnu",
+        "kind": "tooling",
+        "source_commit": "f96b692194c4cc6c54dcbb142d03ace781803d42",
+        "harness_sha256": "863f3874bd7095eb76f5db78e1d33323c454d8a787fa61c9384482347ece4595",
+        "files": {
+          "marmish-installed-check": {
+            "bytes": 23365920,
+            "sha256": "b3b5ebabf3aa15128fb05a04f3546e30a1c6a3c5cdcbc81e9593edf4ed4e5fed"
+          },
+          "marmish-installed-fixture": {
+            "bytes": 13010280,
+            "sha256": "0e0288d38b8643e169213b2dc8af317338c27ae006b99f7e8d84b40e4ce85aff"
+          }
+        }
+      },
+      {
+        "target": "x86_64-unknown-linux-gnu",
+        "kind": "product",
+        "source_commit": "f96b692194c4cc6c54dcbb142d03ace781803d42",
+        "version": "0.2.3",
+        "manifest_sha256": "516276c56d433e551f157ea56aadf88eea643398206f656db823609094e799b7",
+        "files": {
+          "marmish": {
+            "sha256": "ba5bb09d5408d3d2864571900a42a0682e59f1b90e708eed7cc2378b92a41820",
+            "bytes": 73801624,
+            "mode": "0555"
+          },
+          "marmishd": {
+            "sha256": "e062873e4047baa9e9808e76949b06ba24c127d37fa6e448ac704cb21c90a6d8",
+            "bytes": 73801624,
+            "mode": "0555"
+          },
+          "marmish-worker": {
+            "sha256": "1168c2f2b0ae7f858f692608fdd434964190ee99f1b1c639b52a8209dffdb65b",
+            "bytes": 13263232,
+            "mode": "0555"
+          },
+          "THIRD-PARTY-LICENSES": {
+            "sha256": "fe713665a96c05c91d767709973b07b46b4c1c7e169333e2bc4c9636ff5ea0ce",
+            "bytes": 2137884,
+            "mode": "0444"
+          }
+        }
+      },
+      {
+        "target": "aarch64-unknown-linux-gnu",
+        "kind": "tooling",
+        "source_commit": "f96b692194c4cc6c54dcbb142d03ace781803d42",
+        "harness_sha256": "863f3874bd7095eb76f5db78e1d33323c454d8a787fa61c9384482347ece4595",
+        "files": {
+          "marmish-installed-check": {
+            "bytes": 18118840,
+            "sha256": "940fbde26a2d6413c1f15d8352f939272566a40d2d595d3d5c945a5ac42cdc25"
+          },
+          "marmish-installed-fixture": {
+            "bytes": 8364728,
+            "sha256": "ddcface6282a75a2914a3bd443862a10536bd894f219070121bbabdea6a33733"
+          }
+        }
+      },
+      {
+        "target": "aarch64-unknown-linux-gnu",
+        "kind": "product",
+        "source_commit": "f96b692194c4cc6c54dcbb142d03ace781803d42",
+        "version": "0.2.3",
+        "manifest_sha256": "90d38eca91cc0ff01206127d3e248b5eaebe370884437b7a8cf344df07372f83",
+        "files": {
+          "marmish": {
+            "sha256": "0eb81ea648aa337eb51f6c563d728ea65095c131da6fffa75f004bd7310a7faf",
+            "bytes": 68953528,
+            "mode": "0555"
+          },
+          "marmishd": {
+            "sha256": "f2e04e033480a358597bfc0c962a4ba8418fc91ae3ac71645c4b02ef0d64e9bb",
+            "bytes": 68953536,
+            "mode": "0555"
+          },
+          "marmish-worker": {
+            "sha256": "a4dc16073edb61e97dea312070b847983d99bf881745b996fbfd7d38d4c66471",
+            "bytes": 8733384,
+            "mode": "0555"
+          },
+          "THIRD-PARTY-LICENSES": {
+            "sha256": "0765adf2cc8f7da566520cdedec9bcf0e4ea408eb628781d13d2f5a69ab9d563",
+            "bytes": 2136788,
+            "mode": "0444"
+          }
+        }
+      }
+    ],
+    "harness_sha256": "863f3874bd7095eb76f5db78e1d33323c454d8a787fa61c9384482347ece4595",
+    "scope_limit": "Byte hashes and explicit provenance fields validated independently; authoritative full manifest validation is the successful candidate render step, not this bounded audit."
+  },
+  "input_evidence_sha256": {
+    "summary.json": "5e2505ec39330ece4410fd1ee909e17cac6be3d59a24870c56db04cc10df9232",
+    "verified-provenance.json": "42c08e17cefaa4744294d07e179f84dd3bc0d7e14bce7ad6dd5dbe29743a14b1",
+    "verified-artifacts.json": "f2236d15383e9f8086f827e55db1f5e4ae08d289bad499712052893848b6bec8"
+  }
 }
