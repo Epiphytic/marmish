@@ -4,7 +4,9 @@ use super::{
     process::Environment,
     records::{self, Context, IdentityReady, ROLES, TARGETS},
     streaming_cases::{self, Endpoint},
-    streaming_cleanup, streaming_fixture, streaming_prerequisites,
+    streaming_cleanup,
+    streaming_diagnostic::{Origin, Stage, Tracker},
+    streaming_fixture, streaming_prerequisites,
     streaming_records::{self, ClientResult, ServerReady, ServerReceipt, ServerResult},
     transfer_cases, transfer_fixture,
 };
@@ -112,13 +114,16 @@ async fn servers(
     ctx: &Context,
     ids: &BTreeMap<String, IdentityReady>,
     until: Instant,
+    diagnostic: &mut Tracker,
 ) -> Result<BTreeMap<String, ServerReady>> {
     loop {
         let mut all = BTreeMap::new();
         for role in ROLES {
+            diagnostic.peer(Stage::ServerRecordRead, role);
             let path = o.inbox.join(format!("{role}-server-ready.json"));
             if path.try_exists()? {
                 let record: ServerReady = records::read(&path, 65536)?;
+                diagnostic.peer(Stage::ServerRecordValidate, role);
                 record.validate(ctx, ids, role)?;
                 all.insert(role.into(), record);
             }
@@ -126,6 +131,7 @@ async fn servers(
         if all.len() == 3 {
             return Ok(all);
         }
+        diagnostic.enter(Stage::ServerRendezvousWait);
         if Instant::now() >= until {
             return Err(Error::Timeout);
         }
@@ -390,6 +396,14 @@ fn interruption_direction(cohort: &str) -> Option<bool> {
     }
 }
 pub(super) async fn run(o: Run) -> Result<()> {
+    let mut diagnostic = Tracker::new();
+    let result = run_tracked(o, &mut diagnostic).await;
+    if let Err(error) = &result {
+        diagnostic.emit(error, &super::streaming_observation::stderr_sink);
+    }
+    result
+}
+async fn run_tracked(o: Run, diagnostic: &mut Tracker) -> Result<()> {
     let inspection_origin = Instant::now();
     let ctx: Context = records::read(&o.context, 65536)?;
     ctx.validate()?;
@@ -405,6 +419,7 @@ pub(super) async fn run(o: Run) -> Result<()> {
         .position(|t| *t == crate::native_manifest::compiled_release_metadata().target)
         .ok_or_else(bad)?;
     let role = ROLES[index];
+    diagnostic.role(role);
     let own = records::own_identity(&o.workspace, &ctx)?;
     if records::canonical(&own)? != records::canonical(&ids[role])? {
         return Err(bad());
@@ -450,7 +465,9 @@ pub(super) async fn run(o: Run) -> Result<()> {
     let mut ready_hash = String::new();
     let mut termination =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    diagnostic.origin(Origin::WorkError);
     let work = async {
+        diagnostic.enter(Stage::DaemonStartup);
         runtime.server = Some(Daemon::start(
             &o.workspace,
             "server",
@@ -467,8 +484,10 @@ pub(super) async fn run(o: Run) -> Result<()> {
             &ctx.relays,
             1800,
         )?);
+        diagnostic.enter(Stage::DaemonReadiness);
         matrix::ready(runtime.server.as_mut().ok_or_else(bad)?, ready_by).await?;
         matrix::ready(runtime.client.as_mut().ok_or_else(bad)?, ready_by).await?;
+        diagnostic.enter(Stage::OwnReadyPublish);
         let record = ServerReady {
             schema: 1,
             kind: "server-ready".into(),
@@ -488,7 +507,8 @@ pub(super) async fn run(o: Run) -> Result<()> {
         record.validate(&ctx, &ids, role)?;
         ready_hash = records::digest(&records::canonical(&record)?);
         records::write(&o.output.join(format!("{role}-server-ready.json")), &record)?;
-        let all_servers = servers(&o, &ctx, &ids, ready_by).await?;
+        let all_servers = servers(&o, &ctx, &ids, ready_by, diagnostic).await?;
+        diagnostic.enter(Stage::CommonBudget);
         let common = common_budget(&all_servers)?;
         if super::now()? >= common.ready_by {
             return Err(Error::Timeout);
@@ -503,6 +523,7 @@ pub(super) async fn run(o: Run) -> Result<()> {
             workspace: &o.workspace,
         };
         if super::edges::is_edge(&ctx.cohort) {
+            diagnostic.enter(Stage::EdgeExecute);
             let server = runtime.server.as_mut().ok_or_else(bad)?;
             let server_ep = Endpoint {
                 daemon: std::sync::Arc::new(tokio::sync::Mutex::new(&mut server.child)),
@@ -522,6 +543,7 @@ pub(super) async fn run(o: Run) -> Result<()> {
                     .ok_or_else(bad)?,
             };
             let evidence = super::edges::run(edge_c).await?;
+            diagnostic.enter(Stage::CompletedResultValidation);
             let result = ClientResult {
                 schema: 1,
                 kind: "client-result".into(),
@@ -536,11 +558,14 @@ pub(super) async fn run(o: Run) -> Result<()> {
                 complete: true,
             };
             validate_client(&result, &ctx, &ids, &all_servers, role)?;
+            diagnostic.enter(Stage::ClientResultPublish);
             records::write(
                 &o.output.join(format!("{role}-client-result.json")),
                 &result,
             )?;
+            diagnostic.enter(Stage::RemoteClientBarrier);
             clients(&o, &ctx, &ids, &all_servers, traffic_by).await?;
+            diagnostic.enter(Stage::ServerConfirmation);
             super::edges::confirm_server(
                 &evidence,
                 &super::edge_signals::Cohort {
@@ -558,6 +583,7 @@ pub(super) async fn run(o: Run) -> Result<()> {
             return Ok(());
         }
         if let Some(put) = interruption_direction(&ctx.cohort) {
+            diagnostic.enter(Stage::InterruptionExecute);
             let server = runtime.server.as_mut().ok_or_else(bad)?;
             let server_ep = Endpoint {
                 daemon: std::sync::Arc::new(tokio::sync::Mutex::new(&mut server.child)),
@@ -580,6 +606,7 @@ pub(super) async fn run(o: Run) -> Result<()> {
                 put,
             )
             .await?;
+            diagnostic.enter(Stage::CompletedResultValidation);
             let result = ClientResult {
                 schema: 1,
                 kind: "client-result".into(),
@@ -594,11 +621,14 @@ pub(super) async fn run(o: Run) -> Result<()> {
                 complete: true,
             };
             validate_client(&result, &ctx, &ids, &all_servers, role)?;
+            diagnostic.enter(Stage::ClientResultPublish);
             records::write(
                 &o.output.join(format!("{role}-client-result.json")),
                 &result,
             )?;
+            diagnostic.enter(Stage::RemoteClientBarrier);
             clients(&o, &ctx, &ids, &all_servers, traffic_by).await?;
+            diagnostic.enter(Stage::ServerConfirmation);
             super::copy_interruption_cases::confirm_server(
                 &evidence,
                 &server_ep,
@@ -610,6 +640,7 @@ pub(super) async fn run(o: Run) -> Result<()> {
             interruption = Some(evidence);
             return Ok(());
         }
+        diagnostic.enter(Stage::LocalCells);
         let until = streaming_cases::cell_deadline(traffic_by);
         let (a, b, c) = tokio::join!(
             cell(
@@ -657,6 +688,7 @@ pub(super) async fn run(o: Run) -> Result<()> {
                 }
             }
         }
+        diagnostic.enter(Stage::CompletedResultValidation);
         let complete = failed_cells.is_empty();
         let result = ClientResult {
             schema: 1,
@@ -674,14 +706,18 @@ pub(super) async fn run(o: Run) -> Result<()> {
         if complete {
             validate_client(&result, &ctx, &ids, &all_servers, role)?;
         }
+        diagnostic.enter(Stage::ClientResultPublish);
         records::write(
             &o.output.join(format!("{role}-client-result.json")),
             &result,
         )?;
         if !complete {
+            diagnostic.enter(Stage::CellsIncomplete);
             return Err(bad());
         }
+        diagnostic.enter(Stage::RemoteClientBarrier);
         let all_clients = clients(&o, &ctx, &ids, &all_servers, traffic_by).await?;
+        diagnostic.enter(Stage::ServerReceipts);
         receipt_records = collect_receipts(
             &ctx,
             &ids,
@@ -694,7 +730,19 @@ pub(super) async fn run(o: Run) -> Result<()> {
         .await?;
         Ok::<_, Error>(())
     };
-    let result = tokio::select! {r=tokio::time::timeout_at(traffic_by,work)=>r.map_err(|_|Error::Timeout).and_then(|r|r),_=termination.recv()=>Err(Error::Invalid("installed_interrupted"))};
+    let (origin, result) = tokio::select! {
+        r = tokio::time::timeout_at(traffic_by, work) => match r {
+            Ok(result) => (Origin::WorkError, result),
+            Err(_) => (Origin::WorkDeadline, Err(Error::Timeout)),
+        },
+        _ = termination.recv() => (Origin::ExternalSignal, Err(Error::Invalid("installed_interrupted"))),
+    };
+    diagnostic.origin(origin);
+    if let Err(error) = &result {
+        diagnostic.emit(error, &super::streaming_observation::stderr_sink);
+    }
+    diagnostic.origin(Origin::PostWorkError);
+    diagnostic.enter(Stage::PostWorkFallback);
     let client_path = o.output.join(format!("{role}-client-result.json"));
     let failed_client_record = (|| -> Result<()> {
         if !client_path.try_exists()? {
@@ -742,6 +790,7 @@ pub(super) async fn run(o: Run) -> Result<()> {
     // Cleanup must run even when publishing failure evidence itself fails.
     let (clean, server, client) = runtime.close(stop_by).await;
     failed_client_record?;
+    diagnostic.enter(Stage::PostWorkCompletion);
     let complete = result.is_ok()
         && clean
         && server
@@ -753,6 +802,7 @@ pub(super) async fn run(o: Run) -> Result<()> {
         } else {
             receipt_records.len() == 3 * streaming_records::cases(&ctx.cohort)?.len()
         };
+    diagnostic.enter(Stage::ServerResultPublish);
     let report = ServerResult {
         schema: 1,
         kind: "server-result".into(),
@@ -772,6 +822,7 @@ pub(super) async fn run(o: Run) -> Result<()> {
         &o.output.join(format!("{role}-server-result.json")),
         &report,
     )?;
+    diagnostic.enter(Stage::PostWorkCompletion);
     if complete { Ok(()) } else { Err(bad()) }
 }
 
@@ -1136,6 +1187,52 @@ mod tests {
             .collect();
         (ctx, ids, servers)
     }
+    #[tokio::test]
+    async fn rendezvous_diagnostics_distinguish_read_validation_and_wait_without_peer_blame() {
+        for (mode, expected_stage, expected_peer) in [
+            ("json", "server_record_read", Some(ROLES[0])),
+            ("binding", "server_record_validate", Some(ROLES[0])),
+            ("missing", "server_rendezvous_wait", None),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let (ctx, ids, mut records) = evidence();
+            let options = Run {
+                context: root.path().join("context"),
+                workspace: root.path().join("workspace"),
+                identities: root.path().join("identities"),
+                inbox: root.path().into(),
+                output: root.path().join("output"),
+            };
+            let path = root.path().join(format!("{}-server-ready.json", ROLES[0]));
+            match mode {
+                "json" => fs::write(&path, b"{invalid-json").unwrap(),
+                "binding" => {
+                    records.get_mut(ROLES[0]).unwrap().root_label = "wrong-root".into();
+                    fs::write(&path, records::canonical(&records[ROLES[0]]).unwrap()).unwrap();
+                }
+                _ => {}
+            }
+            let mut diagnostic = Tracker::new();
+            diagnostic.origin(Origin::WorkError);
+            let error = match servers(&options, &ctx, &ids, Instant::now(), &mut diagnostic).await {
+                Ok(_) => panic!("invalid rendezvous unexpectedly succeeded"),
+                Err(error) => error,
+            };
+            let bytes = std::cell::RefCell::new(Vec::new());
+            diagnostic.emit(&error, &|line| {
+                bytes.borrow_mut().extend_from_slice(line);
+                Ok(())
+            });
+            let bytes = bytes.into_inner();
+            let prefix = b"marmish installed diagnostic: ";
+            let value: serde_json::Value =
+                serde_json::from_slice(&bytes[prefix.len()..bytes.len() - 1]).unwrap();
+            assert_eq!(value["stage"], expected_stage);
+            assert_eq!(value["peer_role"].as_str(), expected_peer);
+            assert_eq!(value["origin"], "work_error");
+        }
+    }
+
     fn pair(
         ctx: &Context,
         ids: &BTreeMap<String, IdentityReady>,

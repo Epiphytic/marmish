@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "verdict": "APPROVE_EVIDENCE_ONLY",
+  "reviewer": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "permission_mode": "auto",
+  "source_commit": "46c9cb46e382735a8678b17eca5e416f30b0c264",
+  "reviewed_reports": {
+    "streaming-installed-46c9cb4.json": "cd747bb6b2ffa72bf174bba9da390d7878cad67cd97b6774623071b9c5e311b9",
+    "streaming-installed-46c9cb4.md": "bb6a027b15e6edd277cb43156e8cb579098b93bfb4af2dd7d05f00bbf2d1a03c"
+  },
+  "session_id": "34a95756-1fbb-4418-9dbe-1ce06fb37c7e",
+  "duration_ms": 165516,
+  "turns": 30,
+  "private_review_sha256": "b4ee1a295fdff3feb9bc581d769252511ef5e63a43ae06260360881299acfd77",
+  "prior_review": {
+    "verdict": "NOT_APPROVED",
+    "session_id": "c22d349f-0a21-4044-9a91-25618d703804",
+    "duration_ms": 206504,
+    "turns": 22,
+    "private_review_sha256": "6491f78d140cc718e17546c197d57218a4a0bacb341aa98144189fe9a9428c36",
+    "blocker": "An in-progress concurrent design review output was falsely pinned as empty. Removed it and a subsequently changing design-review provenance file; 77 retained stable pins rehashed successfully.",
+    "nonblocking_changes": "Clarified five ignored identities span engine/native/vault integration binaries and corrected spacing."
+  },
+  "checks": [
+    "Frozen report SHA256 before/after and exact clean repository source.",
+    "All77 private evidence pins actual hashes/sizes and no duplicates.",
+    "All45 installed ZIP API digest/size, safe names/bounds and58members actual extracted bytes/report pins.",
+    "36 canonical records and12copydiagnostic duplicates, contexts/rollups/source/candidateattempt/harness/bootstrap/manifests/references.",
+    "All8 candidate ZIPs,3product manifests/fourfiles each,bootstrap and3toolingrecord/twofiles each.",
+    "Native counts,actualignoredidentities,authoritywithdrawalregressiontwiceperplatform and15installedrawlogpins/conclusions.",
+    "Bothcohort metric arithmetic/ranges/unique tuples;27passingrollupobservations vs failedcopy0 and8rawunqualifiedpairs.",
+    "Copyfallback/zero serverreceipts/serializedcleanupandbounded unknownfirstcause/normalartifacttimestamp claims.",
+    "Fresh read-only GitHub statuses four runs same source/attempt; existingv0.2.3 prerelease unchanged.",
+    "Sanitized JSON/Markdown and eventual documentation links."
+  ],
+  "limitations": [
+    "No final auditor or downloaded tools executed; no new ZIP re-download by reviewer; prior actual downloaded immutable bytes rehashed against API snapshots.",
+    "No fresh physical-process/transport absence check, Cargo/npm suites, workflows, pushes or release steps.",
+    "Host reboot narrative and AMDfirstcause not independently established.",
+    "Approval limited to exact evidence bytes; no approval of corrective observability design/productcode/fullqualification.",
+    "Frozen report retains pre-review PENDING field intentionally; this separate record supplies the actual later approval without changing reviewed hashes."
+  ]
+}

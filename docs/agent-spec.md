@@ -945,3 +945,25 @@ meaning and budget constants are preserved. This independently demonstrated
 defect is not established as the historical f96 macOS cleanup cause. Local checks
 do not replace the required fresh native candidate, all eight installed cohorts
 and actual final auditor qualification.
+
+
+Candidate [42453390792/1](https://github.com/Epiphytic/marmish/actions/runs/42453390792)
+at `46c9cb46e382735a8678b17eca5e416f30b0c264` passed all three native/package/tool
+jobs and rendering. Its original stream and rsync cohorts passed, retaining 27
+rollup observations. The original copy cohort
+[42501629829/1](https://github.com/Epiphytic/marmish/actions/runs/42501629829)
+then failed; the remaining five cohorts and final auditor were not run.
+The initial Linux AMD64 driver failed after 31.637 seconds with only a generic
+error. Its normal ready upload completed before failure, and normal terminal
+artifact uploads contradict the simple supervisor-poll-error-initiated kill
+theory. Neither empty fallback records nor cleanup flags establish whether a
+command ran or the physical state of the failed hosted processes. The initiating
+native cause remains unknown. See [retained results and application rates](validation/streaming-installed-46c9cb4.md)
+and the later [independent evidence approval](reviews/streaming-installed-46c9cb4-evidence-review.md),
+which reviews those frozen report bytes without claiming release qualification.
+The independently approved [failure-observability design](phases/streaming-failure-observability.md)
+adds bounded finite native and supervisor diagnostics while preserving existing
+workloads, deadlines, acceptance and cleanup behavior. The [integrated code review](reviews/streaming-failure-observability.md) approves
+the implementation and local validation; fresh complete hosted qualification
+remains required. Historical passes cannot qualify changed source. No new public version, release tag or installer pin is
+part of this increment. Public installation still selects v0.2.3.

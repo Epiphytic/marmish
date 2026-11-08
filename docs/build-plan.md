@@ -303,3 +303,17 @@ A separate Linux AMD64 install downloaded the public release assets without an
 asset-directory override and passed (exit 0), selecting active generation 2
 with the same version, source and format tuple. See the
 [initial release evidence](validation/v0.2/initial-release.md) for exact reports and boundaries.
+
+
+## Installed streaming qualification diagnostics
+
+The [failure-observability design](phases/streaming-failure-observability.md)
+follows the failed original copy cohort at source46c9. Independent Claude design
+review approves finite native stage/origin/error categories and a bounded
+supervisor diagnostic, with no transport retry or qualification predicate changes.
+The increment requires adversarial schema/sink tests, meaningful stub RED/GREEN,
+source-site reconciliation, independent integrated code approval and verified
+source publication. A new exact-source three-platform candidate and all eight
+unchanged serial installed cohorts are still required before release qualification.
+The [review record](reviews/streaming-failure-observability.md) distinguishes
+design/code approval from pending full qualification.

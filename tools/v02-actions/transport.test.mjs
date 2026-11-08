@@ -226,10 +226,11 @@ test('a long API backoff cannot delay local terminal publication or joined exit'
   const child = new EventEmitter();
   child.kill = () => {};
   const published = [];
+  const diagnostics = [];
   let listed = 0;
   await supervise({options: {mode: 'run', role: 'linux-amd64', context: '/context', driver: '/driver',
     workspace: dir, output: dir, inbox: dir, identities: dir, jobDeadline: 4300},
-    context, now: () => 1100_000, spawnChild: () => child,
+    context, now: () => 1100_000, spawnChild: () => child, diagnostic: line => diagnostics.push(line),
     artifact: {uploadArtifact: async name => { published.push(name); return {id: published.length}; }},
     transport: {list: async () => {
       listed++;
@@ -239,6 +240,7 @@ test('a long API backoff cannot delay local terminal publication or joined exit'
     }}, delay: () => new Promise(resolve => setImmediate(resolve))});
   assert.equal(listed, 1);
   assert.equal(published.length, 3);
+  assert.deepEqual(diagnostics, []);
 });
 test('driver exit during last upload gets a final complete scan', async t => {
   const dir = await temporary(t);
@@ -267,12 +269,13 @@ test('expired cleanup reserve forces but never fabricates a successful child joi
 });
 test('a malformed in-flight artifact racing the final scan cannot become success', async t => {
   const dir = await temporary(t);
+  const diagnostics = [];
   const child = new EventEmitter(); child.kill = () => {};
   let rejectPoll;
   let count = 0;
   await assert.rejects(supervise({options: {mode: 'run', role: 'linux-amd64', context: '/context',
     driver: '/driver', workspace: dir, output: dir, inbox: dir, identities: dir, jobDeadline: 4300},
-    context, now: () => 1100_000, spawnChild: () => child,
+    context, now: () => 1100_000, spawnChild: () => child, diagnostic: line => diagnostics.push(line),
     artifact: {uploadArtifact: async () => {
       if (++count === 2) setTimeout(() => rejectPoll(new Error('artifact_duplicate')), 40);
       return {id: count};
@@ -284,4 +287,9 @@ test('a malformed in-flight artifact racing the final scan cannot become success
       })().catch(reject);
     })}, delay: () => new Promise(resolve => setImmediate(resolve))}), /artifact_duplicate/);
   assert.equal(count, 2);
+  assert.equal(diagnostics.length, 1);
+  const diagnostic = JSON.parse(diagnostics[0].slice('marmish installed diagnostic: '.length));
+  assert.equal(diagnostic.stage, 'remote_list');
+  assert.equal(diagnostic.category, 'artifact_duplicate');
+  assert.equal(diagnostic.peer_role, null);
 });

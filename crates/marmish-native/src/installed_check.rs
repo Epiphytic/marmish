@@ -33,6 +33,8 @@ mod lifecycle_provider;
 mod local;
 #[path = "installed_macos_diagnostic.rs"]
 mod macos_diagnostic;
+#[path = "installed_streaming_diagnostic.rs"]
+mod streaming_diagnostic;
 #[path = "installed_streaming_inspection.rs"]
 mod streaming_inspection;
 #[path = "installed_streaming_observation.rs"]

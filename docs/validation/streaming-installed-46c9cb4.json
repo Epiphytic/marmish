@@ -1,0 +1,3337 @@
+{
+  "schema": 1,
+  "scope": "partial-installed-streaming-release-evidence",
+  "source_commit": "46c9cb46e382735a8678b17eca5e416f30b0c264",
+  "candidate_run_id": 42453390792,
+  "candidate_run_attempt": 1,
+  "version": "0.2.3",
+  "qualified": false,
+  "status": "stopped_at_copy_matrix_failure",
+  "passed_cohorts": 2,
+  "passed_rollup_observations": 27,
+  "qualified_chain_count": 0,
+  "not_dispatched": [
+    "edge-stream",
+    "edge-rsync",
+    "edge-copy",
+    "copy-interrupt-put",
+    "copy-interrupt-get"
+  ],
+  "final_auditor": {
+    "status": "NOT_RUN",
+    "qualified": false,
+    "reason": "Failed third cohort stops the serial chain; full 162-observation acceptance cannot pass."
+  },
+  "candidate": {
+    "schema": 1,
+    "source_revision": "46c9cb46e382735a8678b17eca5e416f30b0c264",
+    "candidate_run_id": 42453390792,
+    "candidate_run_attempt": 1,
+    "candidate_conclusion": "success",
+    "qualified": false,
+    "final_auditor": "NOT_RUN",
+    "scope": "Native candidate build/test/artifact provenance only; installed eight-cohort qualification is separate.",
+    "platforms": [
+      {
+        "role": "macos-arm64",
+        "job_id": 128647167875,
+        "name": "package (macos-15, aarch64-apple-darwin, adhoc, macos=15.0)",
+        "conclusion": "success",
+        "started_at": "2026-11-08T06:06:42Z",
+        "completed_at": "2026-11-08T07:09:58Z",
+        "wall_seconds": 3796.0,
+        "log_bytes": 540849,
+        "log_sha256": "b5e09452c46e8d4538fbcf671fbd64107613923ce189a3e19a4a3e21afdd7a1d",
+        "library_summaries": [
+          {
+            "package": "engine",
+            "configuration": "default",
+            "passed": 148,
+            "failed": 0,
+            "ignored": 1,
+            "seconds": 36.61
+          },
+          {
+            "package": "native",
+            "configuration": "default",
+            "passed": 632,
+            "failed": 0,
+            "ignored": 3,
+            "seconds": 719.6
+          },
+          {
+            "package": "stream",
+            "configuration": "default",
+            "passed": 29,
+            "failed": 0,
+            "ignored": 0,
+            "seconds": 0.39
+          },
+          {
+            "package": "vault",
+            "configuration": "default",
+            "passed": 13,
+            "failed": 0,
+            "ignored": 0,
+            "seconds": 0.04
+          },
+          {
+            "package": "native",
+            "configuration": "installed-feature",
+            "passed": 878,
+            "failed": 0,
+            "ignored": 3,
+            "seconds": 699.0
+          }
+        ],
+        "ignored_tests": [
+          {
+            "identity": "live::tests::fd_probe_child",
+            "reason": "exec-only descriptor probe, invoked by multithreaded live-spawn test"
+          },
+          {
+            "identity": "copy_integration_tests::helper_child",
+            "reason": "owned helper subprocess entrypoint"
+          },
+          {
+            "identity": "copy_integration_tests::large::large_raw_zlib_actual_helper_four_way",
+            "reason": "expensive >65MiB actual-helper four-way qualification; exact-name invocation only"
+          },
+          {
+            "identity": "stream_runner::tests::large_duplex_integrity_with_slow_consumers_and_bounded_windows",
+            "reason": "large 65 MiB duplex qualification; run explicitly"
+          },
+          {
+            "identity": "macos::disposable_keychain_round_trip_lock_and_restart",
+            "reason": "explicit native gate: creates only an owned disposable macOS keychain"
+          }
+        ],
+        "authority_withdrawal_log_lines": [
+          "test stream_runner::tests::authority_withdrawal_halts_queued_input_irreversibly_without_cancel ... ok",
+          "test stream_runner::tests::authority_withdrawal_halts_queued_input_irreversibly_without_cancel ... ok"
+        ],
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:06:43Z",
+            "completed_at": "2026-11-08T06:06:45Z"
+          },
+          {
+            "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:06:45Z",
+            "completed_at": "2026-11-08T06:06:47Z"
+          },
+          {
+            "name": "Verify immutable source and native target",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:06:47Z",
+            "completed_at": "2026-11-08T06:06:48Z"
+          },
+          {
+            "name": "Run dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:06:48Z",
+            "completed_at": "2026-11-08T06:06:59Z"
+          },
+          {
+            "name": "Set qualified macOS deployment minimum",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:06:59Z",
+            "completed_at": "2026-11-08T06:07:00Z"
+          },
+          {
+            "name": "Verify native components",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:07:00Z",
+            "completed_at": "2026-11-08T06:28:23Z"
+          },
+          {
+            "name": "Build final native executables",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:28:23Z",
+            "completed_at": "2026-11-08T06:39:56Z"
+          },
+          {
+            "name": "Ad hoc sign final macOS executables before hashing",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:39:56Z",
+            "completed_at": "2026-11-08T06:39:57Z"
+          },
+          {
+            "name": "Inspect final dependency allowlists and qualified ABI baselines",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:39:57Z",
+            "completed_at": "2026-11-08T06:39:59Z"
+          },
+          {
+            "name": "Collect locked production license texts (CI tooling only)",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:39:59Z",
+            "completed_at": "2026-11-08T06:40:11Z"
+          },
+          {
+            "name": "Package verified immutable candidate assets",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:40:11Z",
+            "completed_at": "2026-11-08T06:40:13Z"
+          },
+          {
+            "name": "Build isolated installed-test tools without changing product assets",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:40:13Z",
+            "completed_at": "2026-11-08T07:09:42Z"
+          },
+          {
+            "name": "Preserve pinned installed-test tools separately",
+            "conclusion": "success",
+            "started_at": "2026-11-08T07:09:42Z",
+            "completed_at": "2026-11-08T07:09:45Z"
+          },
+          {
+            "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+            "conclusion": "success",
+            "started_at": "2026-11-08T07:09:45Z",
+            "completed_at": "2026-11-08T07:09:49Z"
+          },
+          {
+            "name": "Preserve host render tool separately (never an install asset)",
+            "conclusion": "skipped",
+            "started_at": "2026-11-08T07:09:49Z",
+            "completed_at": "2026-11-08T07:09:49Z"
+          },
+          {
+            "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+            "conclusion": "success",
+            "started_at": "2026-11-08T07:09:49Z",
+            "completed_at": "2026-11-08T07:09:50Z"
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success",
+            "started_at": "2026-11-08T07:09:50Z",
+            "completed_at": "2026-11-08T07:09:53Z"
+          }
+        ]
+      },
+      {
+        "role": "linux-arm64",
+        "job_id": 128647167991,
+        "name": "package (ubuntu-24.04-arm, aarch64-unknown-linux-gnu, none, glibc=2.39)",
+        "conclusion": "success",
+        "started_at": "2026-11-08T06:06:44Z",
+        "completed_at": "2026-11-08T07:08:00Z",
+        "wall_seconds": 3676.0,
+        "log_bytes": 571326,
+        "log_sha256": "0a769b3c0ec9249bcd62a3c98292dcf6781e9b3d8836d0dd1edc51853ac30aed",
+        "library_summaries": [
+          {
+            "package": "engine",
+            "configuration": "default",
+            "passed": 141,
+            "failed": 0,
+            "ignored": 1,
+            "seconds": 9.67
+          },
+          {
+            "package": "native",
+            "configuration": "default",
+            "passed": 633,
+            "failed": 0,
+            "ignored": 3,
+            "seconds": 1025.44
+          },
+          {
+            "package": "stream",
+            "configuration": "default",
+            "passed": 29,
+            "failed": 0,
+            "ignored": 0,
+            "seconds": 0.58
+          },
+          {
+            "package": "vault",
+            "configuration": "default",
+            "passed": 12,
+            "failed": 0,
+            "ignored": 0,
+            "seconds": 0.01
+          },
+          {
+            "package": "native",
+            "configuration": "installed-feature",
+            "passed": 879,
+            "failed": 0,
+            "ignored": 3,
+            "seconds": 1104.94
+          }
+        ],
+        "ignored_tests": [
+          {
+            "identity": "live::tests::fd_probe_child",
+            "reason": "exec-only descriptor probe, invoked by multithreaded live-spawn test"
+          },
+          {
+            "identity": "copy_integration_tests::helper_child",
+            "reason": "owned helper subprocess entrypoint"
+          },
+          {
+            "identity": "copy_integration_tests::large::large_raw_zlib_actual_helper_four_way",
+            "reason": "expensive >65MiB actual-helper four-way qualification; exact-name invocation only"
+          },
+          {
+            "identity": "stream_runner::tests::large_duplex_integrity_with_slow_consumers_and_bounded_windows",
+            "reason": "large 65 MiB duplex qualification; run explicitly"
+          },
+          {
+            "identity": "linux::isolated_gnome_keyring_round_trip_and_lock",
+            "reason": "explicit native gate: creates only an isolated temporary D-Bus/keyring session"
+          }
+        ],
+        "authority_withdrawal_log_lines": [
+          "test stream_runner::tests::authority_withdrawal_halts_queued_input_irreversibly_without_cancel ... ok",
+          "test stream_runner::tests::authority_withdrawal_halts_queued_input_irreversibly_without_cancel ... ok"
+        ],
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:06:45Z",
+            "completed_at": "2026-11-08T06:06:45Z"
+          },
+          {
+            "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:06:45Z",
+            "completed_at": "2026-11-08T06:06:47Z"
+          },
+          {
+            "name": "Verify immutable source and native target",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:06:47Z",
+            "completed_at": "2026-11-08T06:06:47Z"
+          },
+          {
+            "name": "Run dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:06:47Z",
+            "completed_at": "2026-11-08T06:06:52Z"
+          },
+          {
+            "name": "Set qualified macOS deployment minimum",
+            "conclusion": "skipped",
+            "started_at": "2026-11-08T06:06:52Z",
+            "completed_at": "2026-11-08T06:06:52Z"
+          },
+          {
+            "name": "Verify native components",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:06:52Z",
+            "completed_at": "2026-11-08T06:29:43Z"
+          },
+          {
+            "name": "Build final native executables",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:29:43Z",
+            "completed_at": "2026-11-08T06:36:28Z"
+          },
+          {
+            "name": "Ad hoc sign final macOS executables before hashing",
+            "conclusion": "skipped",
+            "started_at": "2026-11-08T06:36:28Z",
+            "completed_at": "2026-11-08T06:36:28Z"
+          },
+          {
+            "name": "Inspect final dependency allowlists and qualified ABI baselines",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:36:28Z",
+            "completed_at": "2026-11-08T06:36:28Z"
+          },
+          {
+            "name": "Collect locked production license texts (CI tooling only)",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:36:28Z",
+            "completed_at": "2026-11-08T06:36:36Z"
+          },
+          {
+            "name": "Package verified immutable candidate assets",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:36:36Z",
+            "completed_at": "2026-11-08T06:36:38Z"
+          },
+          {
+            "name": "Build isolated installed-test tools without changing product assets",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:36:38Z",
+            "completed_at": "2026-11-08T07:07:52Z"
+          },
+          {
+            "name": "Preserve pinned installed-test tools separately",
+            "conclusion": "success",
+            "started_at": "2026-11-08T07:07:52Z",
+            "completed_at": "2026-11-08T07:07:54Z"
+          },
+          {
+            "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+            "conclusion": "success",
+            "started_at": "2026-11-08T07:07:54Z",
+            "completed_at": "2026-11-08T07:07:58Z"
+          },
+          {
+            "name": "Preserve host render tool separately (never an install asset)",
+            "conclusion": "skipped",
+            "started_at": "2026-11-08T07:07:58Z",
+            "completed_at": "2026-11-08T07:07:58Z"
+          },
+          {
+            "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+            "conclusion": "success",
+            "started_at": "2026-11-08T07:07:58Z",
+            "completed_at": "2026-11-08T07:07:58Z"
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success",
+            "started_at": "2026-11-08T07:07:58Z",
+            "completed_at": "2026-11-08T07:07:58Z"
+          }
+        ]
+      },
+      {
+        "role": "linux-amd64",
+        "job_id": 128647168067,
+        "name": "package (ubuntu-24.04, x86_64-unknown-linux-gnu, none, glibc=2.39)",
+        "conclusion": "success",
+        "started_at": "2026-11-08T06:06:41Z",
+        "completed_at": "2026-11-08T07:47:37Z",
+        "wall_seconds": 6056.0,
+        "log_bytes": 590994,
+        "log_sha256": "c57d71944822f9641d3bc49e51be42537472e5b19aca89b600aec859a9cbcf58",
+        "library_summaries": [
+          {
+            "package": "engine",
+            "configuration": "default",
+            "passed": 141,
+            "failed": 0,
+            "ignored": 1,
+            "seconds": 9.7
+          },
+          {
+            "package": "native",
+            "configuration": "default",
+            "passed": 633,
+            "failed": 0,
+            "ignored": 3,
+            "seconds": 1951.57
+          },
+          {
+            "package": "stream",
+            "configuration": "default",
+            "passed": 29,
+            "failed": 0,
+            "ignored": 0,
+            "seconds": 0.27
+          },
+          {
+            "package": "vault",
+            "configuration": "default",
+            "passed": 12,
+            "failed": 0,
+            "ignored": 0,
+            "seconds": 0.01
+          },
+          {
+            "package": "native",
+            "configuration": "installed-feature",
+            "passed": 879,
+            "failed": 0,
+            "ignored": 3,
+            "seconds": 1971.2
+          }
+        ],
+        "ignored_tests": [
+          {
+            "identity": "live::tests::fd_probe_child",
+            "reason": "exec-only descriptor probe, invoked by multithreaded live-spawn test"
+          },
+          {
+            "identity": "copy_integration_tests::helper_child",
+            "reason": "owned helper subprocess entrypoint"
+          },
+          {
+            "identity": "copy_integration_tests::large::large_raw_zlib_actual_helper_four_way",
+            "reason": "expensive >65MiB actual-helper four-way qualification; exact-name invocation only"
+          },
+          {
+            "identity": "stream_runner::tests::large_duplex_integrity_with_slow_consumers_and_bounded_windows",
+            "reason": "large 65 MiB duplex qualification; run explicitly"
+          },
+          {
+            "identity": "linux::isolated_gnome_keyring_round_trip_and_lock",
+            "reason": "explicit native gate: creates only an isolated temporary D-Bus/keyring session"
+          }
+        ],
+        "authority_withdrawal_log_lines": [
+          "test stream_runner::tests::authority_withdrawal_halts_queued_input_irreversibly_without_cancel ... ok",
+          "test stream_runner::tests::authority_withdrawal_halts_queued_input_irreversibly_without_cancel ... ok"
+        ],
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:06:42Z",
+            "completed_at": "2026-11-08T06:06:43Z"
+          },
+          {
+            "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:06:43Z",
+            "completed_at": "2026-11-08T06:06:45Z"
+          },
+          {
+            "name": "Verify immutable source and native target",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:06:45Z",
+            "completed_at": "2026-11-08T06:06:45Z"
+          },
+          {
+            "name": "Run dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:06:45Z",
+            "completed_at": "2026-11-08T06:06:53Z"
+          },
+          {
+            "name": "Set qualified macOS deployment minimum",
+            "conclusion": "skipped",
+            "started_at": "2026-11-08T06:06:53Z",
+            "completed_at": "2026-11-08T06:06:53Z"
+          },
+          {
+            "name": "Verify native components",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:06:53Z",
+            "completed_at": "2026-11-08T06:46:51Z"
+          },
+          {
+            "name": "Build final native executables",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:46:51Z",
+            "completed_at": "2026-11-08T06:56:50Z"
+          },
+          {
+            "name": "Ad hoc sign final macOS executables before hashing",
+            "conclusion": "skipped",
+            "started_at": "2026-11-08T06:56:50Z",
+            "completed_at": "2026-11-08T06:56:50Z"
+          },
+          {
+            "name": "Inspect final dependency allowlists and qualified ABI baselines",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:56:50Z",
+            "completed_at": "2026-11-08T06:56:50Z"
+          },
+          {
+            "name": "Collect locked production license texts (CI tooling only)",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:56:50Z",
+            "completed_at": "2026-11-08T06:56:58Z"
+          },
+          {
+            "name": "Package verified immutable candidate assets",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:56:58Z",
+            "completed_at": "2026-11-08T06:56:59Z"
+          },
+          {
+            "name": "Build isolated installed-test tools without changing product assets",
+            "conclusion": "success",
+            "started_at": "2026-11-08T06:56:59Z",
+            "completed_at": "2026-11-08T07:47:25Z"
+          },
+          {
+            "name": "Preserve pinned installed-test tools separately",
+            "conclusion": "success",
+            "started_at": "2026-11-08T07:47:25Z",
+            "completed_at": "2026-11-08T07:47:27Z"
+          },
+          {
+            "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+            "conclusion": "success",
+            "started_at": "2026-11-08T07:47:27Z",
+            "completed_at": "2026-11-08T07:47:33Z"
+          },
+          {
+            "name": "Preserve host render tool separately (never an install asset)",
+            "conclusion": "success",
+            "started_at": "2026-11-08T07:47:33Z",
+            "completed_at": "2026-11-08T07:47:35Z"
+          },
+          {
+            "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+            "conclusion": "success",
+            "started_at": "2026-11-08T07:47:35Z",
+            "completed_at": "2026-11-08T07:47:35Z"
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success",
+            "started_at": "2026-11-08T07:47:35Z",
+            "completed_at": "2026-11-08T07:47:35Z"
+          }
+        ]
+      },
+      {
+        "role": "render",
+        "job_id": 128667724873,
+        "name": "render",
+        "conclusion": "success",
+        "started_at": "2026-11-08T07:47:41Z",
+        "completed_at": "2026-11-08T07:47:50Z",
+        "wall_seconds": 9.0,
+        "log_bytes": 11434,
+        "log_sha256": "ef615d286961a7039f4ddc668e33075a56bd6c5eb7b383a10654f65281ef7de0",
+        "library_summaries": [],
+        "ignored_tests": [],
+        "authority_withdrawal_log_lines": [],
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success",
+            "started_at": "2026-11-08T07:47:41Z",
+            "completed_at": "2026-11-08T07:47:43Z"
+          },
+          {
+            "name": "Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
+            "conclusion": "success",
+            "started_at": "2026-11-08T07:47:43Z",
+            "completed_at": "2026-11-08T07:47:46Z"
+          },
+          {
+            "name": "Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
+            "conclusion": "success",
+            "started_at": "2026-11-08T07:47:46Z",
+            "completed_at": "2026-11-08T07:47:47Z"
+          },
+          {
+            "name": "Verify complete provenance tuple and render three pinned manifests",
+            "conclusion": "success",
+            "started_at": "2026-11-08T07:47:47Z",
+            "completed_at": "2026-11-08T07:47:48Z"
+          },
+          {
+            "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+            "conclusion": "success",
+            "started_at": "2026-11-08T07:47:48Z",
+            "completed_at": "2026-11-08T07:47:49Z"
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success",
+            "started_at": "2026-11-08T07:47:49Z",
+            "completed_at": "2026-11-08T07:47:49Z"
+          }
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "id": 13609620854,
+        "name": "v02-render-tool-42453390792-1",
+        "bytes": 5018756,
+        "zip_sha256": "2fb7c9e4d1a9c4debf82634be90188517d37e27ad831c907c2e51a5c4c8d8280",
+        "entries": [
+          [
+            "marmish-release-tool",
+            13157808
+          ]
+        ]
+      },
+      {
+        "id": 13609476002,
+        "name": "v02-pinned-bootstrap-42453390792-1",
+        "bytes": 3544,
+        "zip_sha256": "e9a12530b971017bfa0bef7ae3327260b69168f48e55b6e9a6ad5c2939c7543e",
+        "entries": [
+          [
+            "install.sh",
+            9120
+          ]
+        ]
+      },
+      {
+        "id": 13609402032,
+        "name": "v02-candidate-x86_64-unknown-linux-gnu-42453390792-1",
+        "bytes": 55625365,
+        "zip_sha256": "bb18b4e509f45dbd55f8f15d0c9d961a6b73dfe93068c116e2b343e709f033c7",
+        "entries": [
+          [
+            "THIRD-PARTY-LICENSES-0.2.3-x86_64-unknown-linux-gnu",
+            2137884
+          ],
+          [
+            "marmish-0.2.3-x86_64-unknown-linux-gnu",
+            73802816
+          ],
+          [
+            "marmish-0.2.3-x86_64-unknown-linux-gnu.manifest",
+            605
+          ],
+          [
+            "marmish-worker-0.2.3-x86_64-unknown-linux-gnu",
+            13263224
+          ],
+          [
+            "marmishd-0.2.3-x86_64-unknown-linux-gnu",
+            73802824
+          ]
+        ]
+      },
+      {
+        "id": 13609083759,
+        "name": "v02-installed-tools-x86_64-unknown-linux-gnu-42453390792-1",
+        "bytes": 13282119,
+        "zip_sha256": "80783df169e02ed3103a2b288761dd60cfb7047ed50058588b1055b8735ca40c",
+        "entries": [
+          [
+            "linux-amd64-tooling.json",
+            445
+          ],
+          [
+            "marmish-installed-check",
+            23362048
+          ],
+          [
+            "marmish-installed-fixture",
+            13010968
+          ]
+        ]
+      },
+      {
+        "id": 13608545478,
+        "name": "v02-installed-tools-aarch64-apple-darwin-42453390792-1",
+        "bytes": 9752699,
+        "zip_sha256": "c985fca6194c998504adaba809c1637216fb0f44a2121831825786fe51238168",
+        "entries": [
+          [
+            "macos-arm64-tooling.json",
+            440
+          ],
+          [
+            "marmish-installed-check",
+            15506512
+          ],
+          [
+            "marmish-installed-fixture",
+            6546928
+          ]
+        ]
+      },
+      {
+        "id": 13608196975,
+        "name": "v02-candidate-aarch64-apple-darwin-42453390792-1",
+        "bytes": 48073757,
+        "zip_sha256": "d072b333e1e17e521374f1c601a801de20c9bb6db25a79360b5f6f3e7a21d39c",
+        "entries": [
+          [
+            "marmish-0.2.3-aarch64-apple-darwin",
+            57785968
+          ],
+          [
+            "THIRD-PARTY-LICENSES-0.2.3-aarch64-apple-darwin",
+            2064104
+          ],
+          [
+            "marmish-worker-0.2.3-aarch64-apple-darwin",
+            6952704
+          ],
+          [
+            "marmish-0.2.3-aarch64-apple-darwin.manifest",
+            601
+          ],
+          [
+            "marmishd-0.2.3-aarch64-apple-darwin",
+            57785984
+          ]
+        ]
+      },
+      {
+        "id": 13608141945,
+        "name": "v02-candidate-aarch64-unknown-linux-gnu-42453390792-1",
+        "bytes": 56168080,
+        "zip_sha256": "34670b85ff26db67392533e368111bc5b800ee385a108b714a57562dfe18446a",
+        "entries": [
+          [
+            "THIRD-PARTY-LICENSES-0.2.3-aarch64-unknown-linux-gnu",
+            2136788
+          ],
+          [
+            "marmish-0.2.3-aarch64-unknown-linux-gnu",
+            69020376
+          ],
+          [
+            "marmish-0.2.3-aarch64-unknown-linux-gnu.manifest",
+            605
+          ],
+          [
+            "marmish-worker-0.2.3-aarch64-unknown-linux-gnu",
+            8733352
+          ],
+          [
+            "marmishd-0.2.3-aarch64-unknown-linux-gnu",
+            69020376
+          ]
+        ]
+      },
+      {
+        "id": 13607943592,
+        "name": "v02-installed-tools-aarch64-unknown-linux-gnu-42453390792-1",
+        "bytes": 10873786,
+        "zip_sha256": "ef527e665173187773b1da152cec20ca7f9b2396197434b351bca27676ff91a9",
+        "entries": [
+          [
+            "linux-arm64-tooling.json",
+            445
+          ],
+          [
+            "marmish-installed-check",
+            18120872
+          ],
+          [
+            "marmish-installed-fixture",
+            8365640
+          ]
+        ]
+      }
+    ],
+    "provenance": [
+      {
+        "kind": "render-tool",
+        "files": [
+          {
+            "name": "marmish-release-tool",
+            "bytes": 13157808,
+            "sha256": "8620b09439d44682a99d0f7fab78176e32d6fc7ce967afebf1b291fc6ef06aca"
+          }
+        ]
+      },
+      {
+        "kind": "bootstrap",
+        "files": [
+          {
+            "name": "install.sh",
+            "bytes": 9120,
+            "sha256": "3efa16ffc0aff6585e891a4622070e984bf331d9e1df21c8e2deab0a97ace0ad"
+          }
+        ]
+      },
+      {
+        "kind": "product",
+        "target": "x86_64-unknown-linux-gnu",
+        "manifest_sha256": "9ab491b24b8001456e0c6ed598495f73e4cd68a2964df32ef3e071517a267977",
+        "files": [
+          {
+            "name": "marmish-0.2.3-x86_64-unknown-linux-gnu",
+            "bytes": 73802816,
+            "sha256": "f5087de96e8c809ae53ae509e0aa27232d941958873ac107f17bff7ab62e8557"
+          },
+          {
+            "name": "marmishd-0.2.3-x86_64-unknown-linux-gnu",
+            "bytes": 73802824,
+            "sha256": "6c1bdcdf36723b13d199e8a8db0df32bbfce406b73a787b944344cdc1f283fb9"
+          },
+          {
+            "name": "marmish-worker-0.2.3-x86_64-unknown-linux-gnu",
+            "bytes": 13263224,
+            "sha256": "2b42cf7a758253fdf723d7678b4f782304a1cdad9e3fdbe1443d8f15f4c19cc6"
+          },
+          {
+            "name": "THIRD-PARTY-LICENSES-0.2.3-x86_64-unknown-linux-gnu",
+            "bytes": 2137884,
+            "sha256": "d4becb0c94c5c169b5920b3ce70a6f02f6497c1f7bf880a467d69e429c36bc5b"
+          }
+        ],
+        "manifest_text": "marmish-manifest 1\nversion 0.2.3\ntarget x86_64-unknown-linux-gnu\ncommit 46c9cb46e382735a8678b17eca5e416f30b0c264\nsigning none notarized=no\nminimum glibc=2.39\nstate profile=2 journal=7 engine=1 config=1 commands=1\nfile f5087de96e8c809ae53ae509e0aa27232d941958873ac107f17bff7ab62e8557 73802816 0555 marmish\nfile 6c1bdcdf36723b13d199e8a8db0df32bbfce406b73a787b944344cdc1f283fb9 73802824 0555 marmishd\nfile 2b42cf7a758253fdf723d7678b4f782304a1cdad9e3fdbe1443d8f15f4c19cc6 13263224 0555 marmish-worker\nfile d4becb0c94c5c169b5920b3ce70a6f02f6497c1f7bf880a467d69e429c36bc5b 2137884 0444 THIRD-PARTY-LICENSES\nend\n"
+      },
+      {
+        "kind": "tooling",
+        "record": {
+          "files": {
+            "marmish-installed-check": {
+              "bytes": 23362048,
+              "sha256": "10be11407ce580e2a3b820bd4dff4c0db4c73ff407452d2d40a836ca058701e8"
+            },
+            "marmish-installed-fixture": {
+              "bytes": 13010968,
+              "sha256": "cfe03f04d1a896771b614e527a79ff83e151559a3803353abf550e6690f805f2"
+            }
+          },
+          "harness_sha256": "6e7fdb3b7647930760ceed85ee050f5c20ba6d2e58d79d2fe1c9e33e5d7dced9",
+          "schema": 1,
+          "source_commit": "46c9cb46e382735a8678b17eca5e416f30b0c264",
+          "target": "x86_64-unknown-linux-gnu"
+        },
+        "record_sha256": "55ade69c81734aaf2661fd007547bd1c8951936ea3429cccffd0a76fc9e008b7",
+        "record_name": "linux-amd64-tooling.json",
+        "files": [
+          {
+            "name": "marmish-installed-check",
+            "bytes": 23362048,
+            "sha256": "10be11407ce580e2a3b820bd4dff4c0db4c73ff407452d2d40a836ca058701e8"
+          },
+          {
+            "name": "marmish-installed-fixture",
+            "bytes": 13010968,
+            "sha256": "cfe03f04d1a896771b614e527a79ff83e151559a3803353abf550e6690f805f2"
+          }
+        ]
+      },
+      {
+        "kind": "tooling",
+        "record": {
+          "files": {
+            "marmish-installed-check": {
+              "bytes": 15506512,
+              "sha256": "5040854c52a61700726837011a5082d85bcdbfe6687fe7a575e0018c60ebfadf"
+            },
+            "marmish-installed-fixture": {
+              "bytes": 6546928,
+              "sha256": "e772341598b70e8ea1366e7362561bfd62cb44a0e0b0cc718aece361f6ee36a7"
+            }
+          },
+          "harness_sha256": "6e7fdb3b7647930760ceed85ee050f5c20ba6d2e58d79d2fe1c9e33e5d7dced9",
+          "schema": 1,
+          "source_commit": "46c9cb46e382735a8678b17eca5e416f30b0c264",
+          "target": "aarch64-apple-darwin"
+        },
+        "record_sha256": "aafce0e8bc58227ca6a83281a303afcd8452332179c62d1ba64870b5e133fa5b",
+        "record_name": "macos-arm64-tooling.json",
+        "files": [
+          {
+            "name": "marmish-installed-check",
+            "bytes": 15506512,
+            "sha256": "5040854c52a61700726837011a5082d85bcdbfe6687fe7a575e0018c60ebfadf"
+          },
+          {
+            "name": "marmish-installed-fixture",
+            "bytes": 6546928,
+            "sha256": "e772341598b70e8ea1366e7362561bfd62cb44a0e0b0cc718aece361f6ee36a7"
+          }
+        ]
+      },
+      {
+        "kind": "product",
+        "target": "aarch64-apple-darwin",
+        "manifest_sha256": "1ae96966e3b6b24d1b00d62ead04227efb7a00c0700acfae90ee2d75803d3b48",
+        "files": [
+          {
+            "name": "marmish-0.2.3-aarch64-apple-darwin",
+            "bytes": 57785968,
+            "sha256": "08b92f6360504a13786df2c4f2c9552a41fb6fae22aa959c88c56d0d89cdb081"
+          },
+          {
+            "name": "marmishd-0.2.3-aarch64-apple-darwin",
+            "bytes": 57785984,
+            "sha256": "a988c7ff099f016615e9af8d939554181ec1d0416a9c6d0154ce9c9da55aeea8"
+          },
+          {
+            "name": "marmish-worker-0.2.3-aarch64-apple-darwin",
+            "bytes": 6952704,
+            "sha256": "9c11002c677aa8046b6d513f716d0f41c2e4b348bf9a4104be893614bdcf646d"
+          },
+          {
+            "name": "THIRD-PARTY-LICENSES-0.2.3-aarch64-apple-darwin",
+            "bytes": 2064104,
+            "sha256": "56a967affedf2f96bf70f87d170cc5bfd6b792108a2cc06a0ebffecab1deec52"
+          }
+        ],
+        "manifest_text": "marmish-manifest 1\nversion 0.2.3\ntarget aarch64-apple-darwin\ncommit 46c9cb46e382735a8678b17eca5e416f30b0c264\nsigning adhoc notarized=no\nminimum macos=15.0\nstate profile=2 journal=7 engine=1 config=1 commands=1\nfile 08b92f6360504a13786df2c4f2c9552a41fb6fae22aa959c88c56d0d89cdb081 57785968 0555 marmish\nfile a988c7ff099f016615e9af8d939554181ec1d0416a9c6d0154ce9c9da55aeea8 57785984 0555 marmishd\nfile 9c11002c677aa8046b6d513f716d0f41c2e4b348bf9a4104be893614bdcf646d 6952704 0555 marmish-worker\nfile 56a967affedf2f96bf70f87d170cc5bfd6b792108a2cc06a0ebffecab1deec52 2064104 0444 THIRD-PARTY-LICENSES\nend\n"
+      },
+      {
+        "kind": "product",
+        "target": "aarch64-unknown-linux-gnu",
+        "manifest_sha256": "679fd4c04ce3e4bdec724c86420ded19911407a7c4ea436115e5430a70cabf1c",
+        "files": [
+          {
+            "name": "marmish-0.2.3-aarch64-unknown-linux-gnu",
+            "bytes": 69020376,
+            "sha256": "81ef8d4f32783d17e658226700e4aebe8bed8333f695cb4b2839ddca48d84369"
+          },
+          {
+            "name": "marmishd-0.2.3-aarch64-unknown-linux-gnu",
+            "bytes": 69020376,
+            "sha256": "9992fc6491f58acb619673106464da3a2f2e5d65cebdf8678cb3fda6b7d02c26"
+          },
+          {
+            "name": "marmish-worker-0.2.3-aarch64-unknown-linux-gnu",
+            "bytes": 8733352,
+            "sha256": "7924a7308e8dddcb122e44a3c47f03bd21a766288cc9027df6826bfa836e24de"
+          },
+          {
+            "name": "THIRD-PARTY-LICENSES-0.2.3-aarch64-unknown-linux-gnu",
+            "bytes": 2136788,
+            "sha256": "67421d6fe0bee81f70f902d997ae1c9fcf5de9d3197c4872f1f602f79dc0c114"
+          }
+        ],
+        "manifest_text": "marmish-manifest 1\nversion 0.2.3\ntarget aarch64-unknown-linux-gnu\ncommit 46c9cb46e382735a8678b17eca5e416f30b0c264\nsigning none notarized=no\nminimum glibc=2.39\nstate profile=2 journal=7 engine=1 config=1 commands=1\nfile 81ef8d4f32783d17e658226700e4aebe8bed8333f695cb4b2839ddca48d84369 69020376 0555 marmish\nfile 9992fc6491f58acb619673106464da3a2f2e5d65cebdf8678cb3fda6b7d02c26 69020376 0555 marmishd\nfile 7924a7308e8dddcb122e44a3c47f03bd21a766288cc9027df6826bfa836e24de 8733352 0555 marmish-worker\nfile 67421d6fe0bee81f70f902d997ae1c9fcf5de9d3197c4872f1f602f79dc0c114 2136788 0444 THIRD-PARTY-LICENSES\nend\n"
+      },
+      {
+        "kind": "tooling",
+        "record": {
+          "files": {
+            "marmish-installed-check": {
+              "bytes": 18120872,
+              "sha256": "9caee2cd5c4ba72fb5047fb60c740dc31e84c48aaa6328d85ad5bb5befae2850"
+            },
+            "marmish-installed-fixture": {
+              "bytes": 8365640,
+              "sha256": "c2a8d66e642f3e13843692819acb41d3c85e3b6cbb0f054a9b1ebb60bfdfe76f"
+            }
+          },
+          "harness_sha256": "6e7fdb3b7647930760ceed85ee050f5c20ba6d2e58d79d2fe1c9e33e5d7dced9",
+          "schema": 1,
+          "source_commit": "46c9cb46e382735a8678b17eca5e416f30b0c264",
+          "target": "aarch64-unknown-linux-gnu"
+        },
+        "record_sha256": "b1ddb535912c1e75b867f25e54ba656ff53172bba77251826cd789cface6fdcd",
+        "record_name": "linux-arm64-tooling.json",
+        "files": [
+          {
+            "name": "marmish-installed-check",
+            "bytes": 18120872,
+            "sha256": "9caee2cd5c4ba72fb5047fb60c740dc31e84c48aaa6328d85ad5bb5befae2850"
+          },
+          {
+            "name": "marmish-installed-fixture",
+            "bytes": 8365640,
+            "sha256": "c2a8d66e642f3e13843692819acb41d3c85e3b6cbb0f054a9b1ebb60bfdfe76f"
+          }
+        ]
+      }
+    ],
+    "limits": [
+      "Default and installed-feature tests overlap; counts are not additive.",
+      "Ignored helper entrypoints, large duplex/copy suites and native keychain providers are not passed by ignored suite invocations.",
+      "Product version is 0.2.3 in source-only candidate; no new public release, tag or installer pin.",
+      "No execution of downloaded tooling or installed end-to-end command traffic performed by this evidence collector.",
+      "Artifact API ZIP digest/size and all three product manifests and tooling record file bytes verified; metadata provenance is not a claim of reproducible builds."
+    ]
+  },
+  "cohorts": [
+    {
+      "cohort": "stream-matrix",
+      "run_id": 42500831991,
+      "run_attempt": 1,
+      "status": "success",
+      "url": "https://github.com/Epiphytic/marmish/actions/runs/42500831991",
+      "conclusion": "success",
+      "jobs": [
+        {
+          "job_id": 128792997478,
+          "name": "resolve",
+          "conclusion": "success",
+          "started_at": "2026-11-08T16:37:29Z",
+          "completed_at": "2026-11-08T16:37:51Z",
+          "log_bytes": 31625,
+          "log_sha256": "bfce990a6516dc3322b99ee84163ac40b4b7964fc441711390c5efd1630c708e"
+        },
+        {
+          "job_id": 128793104754,
+          "name": "matrix (macos-15, macos-arm64, aarch64-apple-darwin)",
+          "conclusion": "success",
+          "started_at": "2026-11-08T16:37:54Z",
+          "completed_at": "2026-11-08T16:40:35Z",
+          "log_bytes": 60325,
+          "log_sha256": "4126417ea88ecaa50811e59469b7d9f41985dbdebdfe83f700ebcc43af0f8555"
+        },
+        {
+          "job_id": 128793104755,
+          "name": "matrix (ubuntu-24.04, linux-amd64, x86_64-unknown-linux-gnu)",
+          "conclusion": "success",
+          "started_at": "2026-11-08T16:37:54Z",
+          "completed_at": "2026-11-08T16:40:39Z",
+          "log_bytes": 59547,
+          "log_sha256": "81a8472fccd5ec3c6edb478abd6c9619b375c3adff768811e3b064664e092e4c"
+        },
+        {
+          "job_id": 128793104856,
+          "name": "matrix (ubuntu-24.04-arm, linux-arm64, aarch64-unknown-linux-gnu)",
+          "conclusion": "success",
+          "started_at": "2026-11-08T16:37:56Z",
+          "completed_at": "2026-11-08T16:40:53Z",
+          "log_bytes": 59590,
+          "log_sha256": "ceb37236b27c74629920ab506f1884808caacec28b7ac99123828ed9eae1030d"
+        },
+        {
+          "job_id": 128793880562,
+          "name": "rollup",
+          "conclusion": "success",
+          "started_at": "2026-11-08T16:40:56Z",
+          "completed_at": "2026-11-08T16:41:11Z",
+          "log_bytes": 31973,
+          "log_sha256": "2c0650784176209c0f7a649100f0c83d15b62c94a2c6fedccdf73aced474fe00"
+        }
+      ],
+      "context_sha256": "20d886d7b108e8e05404943c02f224ae2cd54cbd6fdbed9ed7e1270fb7f860df",
+      "context_bytes": 2499,
+      "harness_sha256": "6e7fdb3b7647930760ceed85ee050f5c20ba6d2e58d79d2fe1c9e33e5d7dced9",
+      "rollup_sha256": "e1f701f0cb0aa5ae64c3f2a4a920792b753b972e698b79f663a7f2d2179fcea2",
+      "rollup_bytes": 2692,
+      "canonical_record_count": 12,
+      "canonical_records": [
+        {
+          "role": "linux-amd64",
+          "kind": "identity-ready",
+          "bytes": 1167,
+          "sha256": "7c2e655acde73cb7b000ee8d5794aa4f8bc02e7e5ada64b75cdc2155d36365a2"
+        },
+        {
+          "role": "linux-amd64",
+          "kind": "server-ready",
+          "bytes": 730,
+          "sha256": "87b69ec4321b77a58ed0653db5a9e95e5a41e7e4e8ff258d2d7a9482e8bedd57"
+        },
+        {
+          "role": "linux-amd64",
+          "kind": "client-result",
+          "bytes": 3322,
+          "sha256": "5e19f4af6a5136fb07d77cd6974d1bf23dfc0b4921b36a6eb0e9b72b5599b682"
+        },
+        {
+          "role": "linux-amd64",
+          "kind": "server-result",
+          "bytes": 3720,
+          "sha256": "b32a75cc94616a39cfd2281ecd52748f3b68f1443173f3b5363b01ee2fbbc1b1"
+        },
+        {
+          "role": "linux-arm64",
+          "kind": "identity-ready",
+          "bytes": 1167,
+          "sha256": "bb608da208f818375238086c1a7a54b39f4c48993642fabbd68891e6a4e9ca1d"
+        },
+        {
+          "role": "linux-arm64",
+          "kind": "server-ready",
+          "bytes": 730,
+          "sha256": "34eda64d507ac6815b49542df2aa6a2d0a84ddc4d5370d9dad5e40222806a1fc"
+        },
+        {
+          "role": "linux-arm64",
+          "kind": "client-result",
+          "bytes": 3322,
+          "sha256": "1476eee9b6ce8d867bf9b73842072e7b2e7e9ed0e818f1da23d86acace84eb90"
+        },
+        {
+          "role": "linux-arm64",
+          "kind": "server-result",
+          "bytes": 3720,
+          "sha256": "de3ed7265942d18edc2a9728ef3492dfd5779bc8826076f44793571cc1e66dc3"
+        },
+        {
+          "role": "macos-arm64",
+          "kind": "identity-ready",
+          "bytes": 1162,
+          "sha256": "700a13ff451b22fd295fc9fc3d48c82a125b1d4f5a0038be51e9134dc343820f"
+        },
+        {
+          "role": "macos-arm64",
+          "kind": "server-ready",
+          "bytes": 730,
+          "sha256": "5397c800d98361e177f9d0a3413ec3b5c36a3ac3acbbef8ab0c0f12d29a20172"
+        },
+        {
+          "role": "macos-arm64",
+          "kind": "client-result",
+          "bytes": 3322,
+          "sha256": "6940eba53d819f7f7df6dc7ea6c17746856a153d21f9fdb67dc763db18b7c72e"
+        },
+        {
+          "role": "macos-arm64",
+          "kind": "server-result",
+          "bytes": 3720,
+          "sha256": "86e89a1bc2cd74de34af1916cdc7543125d4fd1519584f79166321426ffe418a"
+        }
+      ],
+      "diagnostic_duplicates": [],
+      "record_bindings_checked": "Context/source/candidate attempt, role/kind, ready/result identity bindings, available server-ready references, installed bootstrap/manifest/product bytes pins. This is finite offline inspection, not full final auditor or another physical observation.",
+      "role_results": [
+        {
+          "role": "linux-amd64",
+          "client_complete": true,
+          "client_pairs_count": 3,
+          "client_complete_exit0_pairs": 0,
+          "failed_cells": [],
+          "client_server_ready_pin_roles": [
+            "linux-amd64",
+            "linux-arm64",
+            "macos-arm64"
+          ],
+          "server_complete": true,
+          "server_receipts_count": 3,
+          "client_stop_complete": true,
+          "server_stop_complete": true,
+          "stream_cleanup_complete": true
+        },
+        {
+          "role": "linux-arm64",
+          "client_complete": true,
+          "client_pairs_count": 3,
+          "client_complete_exit0_pairs": 0,
+          "failed_cells": [],
+          "client_server_ready_pin_roles": [
+            "linux-amd64",
+            "linux-arm64",
+            "macos-arm64"
+          ],
+          "server_complete": true,
+          "server_receipts_count": 3,
+          "client_stop_complete": true,
+          "server_stop_complete": true,
+          "stream_cleanup_complete": true
+        },
+        {
+          "role": "macos-arm64",
+          "client_complete": true,
+          "client_pairs_count": 3,
+          "client_complete_exit0_pairs": 0,
+          "failed_cells": [],
+          "client_server_ready_pin_roles": [
+            "linux-amd64",
+            "linux-arm64",
+            "macos-arm64"
+          ],
+          "server_complete": true,
+          "server_receipts_count": 3,
+          "client_stop_complete": true,
+          "server_stop_complete": true,
+          "stream_cleanup_complete": true
+        }
+      ],
+      "reported_rollup": {
+        "administrative_cancel_operations": 0,
+        "artifact_prefix": "v02-installed-42500831991-1-46c9cb46e382-stream-matrix",
+        "candidate_run_attempt": 1,
+        "candidate_run_id": 42453390792,
+        "cells": [
+          {
+            "case": "duplex",
+            "client": "linux-amd64",
+            "passed": true,
+            "payload_bytes": 204800,
+            "payload_bytes_per_second": 4179.027311977393,
+            "server": "linux-amd64",
+            "wall_ns": 49006619175
+          },
+          {
+            "case": "duplex",
+            "client": "linux-arm64",
+            "passed": true,
+            "payload_bytes": 204800,
+            "payload_bytes_per_second": 3641.998030609233,
+            "server": "linux-amd64",
+            "wall_ns": 56232869507
+          },
+          {
+            "case": "duplex",
+            "client": "macos-arm64",
+            "passed": true,
+            "payload_bytes": 204800,
+            "payload_bytes_per_second": 3694.524895726151,
+            "server": "linux-amd64",
+            "wall_ns": 55433379333
+          },
+          {
+            "case": "duplex",
+            "client": "linux-amd64",
+            "passed": true,
+            "payload_bytes": 204800,
+            "payload_bytes_per_second": 4130.541009120132,
+            "server": "linux-arm64",
+            "wall_ns": 49581882748
+          },
+          {
+            "case": "duplex",
+            "client": "linux-arm64",
+            "passed": true,
+            "payload_bytes": 204800,
+            "payload_bytes_per_second": 3589.2375622865975,
+            "server": "linux-arm64",
+            "wall_ns": 57059471948
+          },
+          {
+            "case": "duplex",
+            "client": "macos-arm64",
+            "passed": true,
+            "payload_bytes": 204800,
+            "payload_bytes_per_second": 3666.6825201211705,
+            "server": "linux-arm64",
+            "wall_ns": 55854303959
+          },
+          {
+            "case": "duplex",
+            "client": "linux-amd64",
+            "passed": true,
+            "payload_bytes": 204800,
+            "payload_bytes_per_second": 4112.837102423936,
+            "server": "macos-arm64",
+            "wall_ns": 49795310366
+          },
+          {
+            "case": "duplex",
+            "client": "linux-arm64",
+            "passed": true,
+            "payload_bytes": 204800,
+            "payload_bytes_per_second": 3527.3514568754067,
+            "server": "macos-arm64",
+            "wall_ns": 58060559744
+          },
+          {
+            "case": "duplex",
+            "client": "macos-arm64",
+            "passed": true,
+            "payload_bytes": 204800,
+            "payload_bytes_per_second": 3680.556779363898,
+            "server": "macos-arm64",
+            "wall_ns": 55643755083
+          }
+        ],
+        "cohort": "stream-matrix",
+        "complete": true,
+        "context_sha256": "20d886d7b108e8e05404943c02f224ae2cd54cbd6fdbed9ed7e1270fb7f860df",
+        "edge_case_observations": 0,
+        "edge_receipt_seed_records": 0,
+        "edge_relay_cli_attempts": 0,
+        "expected_cells": 9,
+        "fixture_control_cli_operations": 0,
+        "limitations": [
+          "One sample per directed case; no percentile estimates",
+          "Candidate qualification does not publish or qualify a public release"
+        ],
+        "measured_cli_operations": 9,
+        "metric_definitions": {
+          "payload_bytes_per_second": "Validated application payload bytes divided by wall time; finite transfer modes use verified file bytes",
+          "resume_wall_ns": "Installed resume CLI lifetime including immutable-source revalidation and transfer; not RTT",
+          "wall_ns": "Monotonic installed CLI lifetime including transport, command and output; excludes independent receipt and cleanup validation; not RTT"
+        },
+        "passed_cells": 9,
+        "samples_per_directed_case": 1,
+        "schema": 1,
+        "scope": "installed-streaming",
+        "source_commit": "46c9cb46e382735a8678b17eca5e416f30b0c264"
+      },
+      "passed_rollup_observations": 9,
+      "accepted_copy_performance": false,
+      "wall_seconds_range": [
+        49.006619175,
+        58.060559744
+      ],
+      "application_bytes_per_second_range": [
+        3527.3514568754067,
+        4179.027311977393
+      ],
+      "artifacts": [
+        {
+          "run_id": 42500831991,
+          "artifact_id": 13625696699,
+          "name": "v02-installed-42500831991-1-46c9cb46e382-stream-matrix-macos-arm64-server-ready",
+          "bytes": 583,
+          "zip_sha256": "bdd1ba991a4d2825e9476685305a89b2529b79b0458ab164bd6e4804a4583e85",
+          "api_digest": "sha256:bdd1ba991a4d2825e9476685305a89b2529b79b0458ab164bd6e4804a4583e85",
+          "members": [
+            {
+              "name": "server-ready.json",
+              "bytes": 730,
+              "sha256": "5397c800d98361e177f9d0a3413ec3b5c36a3ac3acbbef8ab0c0f12d29a20172"
+            }
+          ]
+        },
+        {
+          "run_id": 42500831991,
+          "artifact_id": 13625676092,
+          "name": "v02-installed-42500831991-1-46c9cb46e382-stream-matrix-linux-arm64-identity-ready",
+          "bytes": 852,
+          "zip_sha256": "83514d286d0abf5d38243c7968f1bf2f92dc950a6869a96cfc03327d4f87e382",
+          "api_digest": "sha256:83514d286d0abf5d38243c7968f1bf2f92dc950a6869a96cfc03327d4f87e382",
+          "members": [
+            {
+              "name": "identity-ready.json",
+              "bytes": 1167,
+              "sha256": "bb608da208f818375238086c1a7a54b39f4c48993642fabbd68891e6a4e9ca1d"
+            }
+          ]
+        },
+        {
+          "run_id": 42500831991,
+          "artifact_id": 13625526693,
+          "name": "v02-installed-42500831991-1-46c9cb46e382-stream-matrix-linux-arm64-client-result",
+          "bytes": 1667,
+          "zip_sha256": "a59090727fcb3fafef42e276da0e7786f0ce8fe571b0411eff3a5ba66401d8fa",
+          "api_digest": "sha256:a59090727fcb3fafef42e276da0e7786f0ce8fe571b0411eff3a5ba66401d8fa",
+          "members": [
+            {
+              "name": "client-result.json",
+              "bytes": 3322,
+              "sha256": "1476eee9b6ce8d867bf9b73842072e7b2e7e9ed0e818f1da23d86acace84eb90"
+            }
+          ]
+        },
+        {
+          "run_id": 42500831991,
+          "artifact_id": 13625476548,
+          "name": "v02-installed-42500831991-1-46c9cb46e382-stream-matrix-macos-arm64-identity-ready",
+          "bytes": 847,
+          "zip_sha256": "79e8282df219156837c000eafc46df530311d7c16ecc53091834cc926984cbbc",
+          "api_digest": "sha256:79e8282df219156837c000eafc46df530311d7c16ecc53091834cc926984cbbc",
+          "members": [
+            {
+              "name": "identity-ready.json",
+              "bytes": 1162,
+              "sha256": "700a13ff451b22fd295fc9fc3d48c82a125b1d4f5a0038be51e9134dc343820f"
+            }
+          ]
+        },
+        {
+          "run_id": 42500831991,
+          "artifact_id": 13625437641,
+          "name": "v02-installed-42500831991-1-46c9cb46e382-stream-matrix-linux-amd64-server-ready",
+          "bytes": 585,
+          "zip_sha256": "6ce209a5eea0c8d40bd9e2ec4706a91936816ed8d2290b2edad813aba7a23256",
+          "api_digest": "sha256:6ce209a5eea0c8d40bd9e2ec4706a91936816ed8d2290b2edad813aba7a23256",
+          "members": [
+            {
+              "name": "server-ready.json",
+              "bytes": 730,
+              "sha256": "87b69ec4321b77a58ed0653db5a9e95e5a41e7e4e8ff258d2d7a9482e8bedd57"
+            }
+          ]
+        },
+        {
+          "run_id": 42500831991,
+          "artifact_id": 13625376807,
+          "name": "v02-installed-42500831991-1-46c9cb46e382-stream-matrix-linux-arm64-server-ready",
+          "bytes": 583,
+          "zip_sha256": "808558c760721c0e565589205c76d5b10f0e9153224a69cb02144c7992f30e93",
+          "api_digest": "sha256:808558c760721c0e565589205c76d5b10f0e9153224a69cb02144c7992f30e93",
+          "members": [
+            {
+              "name": "server-ready.json",
+              "bytes": 730,
+              "sha256": "34eda64d507ac6815b49542df2aa6a2d0a84ddc4d5370d9dad5e40222806a1fc"
+            }
+          ]
+        },
+        {
+          "run_id": 42500831991,
+          "artifact_id": 13625313018,
+          "name": "v02-installed-42500831991-1-46c9cb46e382-stream-matrix-linux-amd64-identity-ready",
+          "bytes": 854,
+          "zip_sha256": "915b226435890ea3c0db901fae32af85f622b3203a31987b66cbb13db0af8d98",
+          "api_digest": "sha256:915b226435890ea3c0db901fae32af85f622b3203a31987b66cbb13db0af8d98",
+          "members": [
+            {
+              "name": "identity-ready.json",
+              "bytes": 1167,
+              "sha256": "7c2e655acde73cb7b000ee8d5794aa4f8bc02e7e5ada64b75cdc2155d36365a2"
+            }
+          ]
+        },
+        {
+          "run_id": 42500831991,
+          "artifact_id": 13625263493,
+          "name": "v02-installed-42500831991-1-46c9cb46e382-stream-matrix-macos-arm64-client-result",
+          "bytes": 1666,
+          "zip_sha256": "1563fe830fef93468cd72ec582ebb3d2a16664f09a77d57f5e95269e016ba4b4",
+          "api_digest": "sha256:1563fe830fef93468cd72ec582ebb3d2a16664f09a77d57f5e95269e016ba4b4",
+          "members": [
+            {
+              "name": "client-result.json",
+              "bytes": 3322,
+              "sha256": "6940eba53d819f7f7df6dc7ea6c17746856a153d21f9fdb67dc763db18b7c72e"
+            }
+          ]
+        },
+        {
+          "run_id": 42500831991,
+          "artifact_id": 13625257234,
+          "name": "v02-installed-42500831991-1-46c9cb46e382-stream-matrix-linux-arm64-server-result",
+          "bytes": 1763,
+          "zip_sha256": "20e1d5519e8baf1c4c9b6bdf1b6167c7b25d61523fd0a0590dd9a2aa7901c00d",
+          "api_digest": "sha256:20e1d5519e8baf1c4c9b6bdf1b6167c7b25d61523fd0a0590dd9a2aa7901c00d",
+          "members": [
+            {
+              "name": "server-result.json",
+              "bytes": 3720,
+              "sha256": "de3ed7265942d18edc2a9728ef3492dfd5779bc8826076f44793571cc1e66dc3"
+            }
+          ]
+        },
+        {
+          "run_id": 42500831991,
+          "artifact_id": 13625039289,
+          "name": "v02-installed-42500831991-1-46c9cb46e382-stream-matrix-macos-arm64-server-result",
+          "bytes": 1757,
+          "zip_sha256": "d55834f0847e8a6a8b416285100f552f11a4faa72b45e789881e93c722705bfa",
+          "api_digest": "sha256:d55834f0847e8a6a8b416285100f552f11a4faa72b45e789881e93c722705bfa",
+          "members": [
+            {
+              "name": "server-result.json",
+              "bytes": 3720,
+              "sha256": "86e89a1bc2cd74de34af1916cdc7543125d4fd1519584f79166321426ffe418a"
+            }
+          ]
+        },
+        {
+          "run_id": 42500831991,
+          "artifact_id": 13624952912,
+          "name": "v02-installed-rollup-42500831991-1",
+          "bytes": 1871,
+          "zip_sha256": "834c626674c350966855e6a824d7002ee19f5423a95135f15a7253f08e347e3f",
+          "api_digest": "sha256:834c626674c350966855e6a824d7002ee19f5423a95135f15a7253f08e347e3f",
+          "members": [
+            {
+              "name": "matrix-rollup.json",
+              "bytes": 2692,
+              "sha256": "e1f701f0cb0aa5ae64c3f2a4a920792b753b972e698b79f663a7f2d2179fcea2"
+            },
+            {
+              "name": "matrix-rollup.md",
+              "bytes": 1430,
+              "sha256": "32b4a8629745d9fa8ea9578d11473ac5daa31741691be19abc05e2d7b14ff867"
+            }
+          ]
+        },
+        {
+          "run_id": 42500831991,
+          "artifact_id": 13624773452,
+          "name": "v02-installed-context-42500831991-1",
+          "bytes": 1177,
+          "zip_sha256": "7cabe85e93c463991f023afb05def59d9e629d5482e9b688ab9b7e56c0134b83",
+          "api_digest": "sha256:7cabe85e93c463991f023afb05def59d9e629d5482e9b688ab9b7e56c0134b83",
+          "members": [
+            {
+              "name": "context.json",
+              "bytes": 2499,
+              "sha256": "20d886d7b108e8e05404943c02f224ae2cd54cbd6fdbed9ed7e1270fb7f860df"
+            }
+          ]
+        },
+        {
+          "run_id": 42500831991,
+          "artifact_id": 13624574392,
+          "name": "v02-installed-42500831991-1-46c9cb46e382-stream-matrix-linux-amd64-client-result",
+          "bytes": 1664,
+          "zip_sha256": "666843358756ef1865006cedb4ab856d70114d91ed5c413bfec0b1bd4634af0a",
+          "api_digest": "sha256:666843358756ef1865006cedb4ab856d70114d91ed5c413bfec0b1bd4634af0a",
+          "members": [
+            {
+              "name": "client-result.json",
+              "bytes": 3322,
+              "sha256": "5e19f4af6a5136fb07d77cd6974d1bf23dfc0b4921b36a6eb0e9b72b5599b682"
+            }
+          ]
+        },
+        {
+          "run_id": 42500831991,
+          "artifact_id": 13624534697,
+          "name": "v02-installed-42500831991-1-46c9cb46e382-stream-matrix-linux-amd64-server-result",
+          "bytes": 1759,
+          "zip_sha256": "4182181e51e195c2c77bf29c15b5e71ecacb1de92acd2315d8679f08d4305078",
+          "api_digest": "sha256:4182181e51e195c2c77bf29c15b5e71ecacb1de92acd2315d8679f08d4305078",
+          "members": [
+            {
+              "name": "server-result.json",
+              "bytes": 3720,
+              "sha256": "b32a75cc94616a39cfd2281ecd52748f3b68f1443173f3b5363b01ee2fbbc1b1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "cohort": "rsync-matrix",
+      "run_id": 42501192017,
+      "run_attempt": 1,
+      "status": "success",
+      "url": "https://github.com/Epiphytic/marmish/actions/runs/42501192017",
+      "conclusion": "success",
+      "jobs": [
+        {
+          "job_id": 128794102056,
+          "name": "resolve",
+          "conclusion": "success",
+          "started_at": "2026-11-08T16:41:48Z",
+          "completed_at": "2026-11-08T16:42:04Z",
+          "log_bytes": 31617,
+          "log_sha256": "0fc592780e7fdcd2cd47860814fb2f124c02e7cb48aeb6ca433787bb1f443706"
+        },
+        {
+          "job_id": 128794182312,
+          "name": "matrix (macos-15, macos-arm64, aarch64-apple-darwin)",
+          "conclusion": "success",
+          "started_at": "2026-11-08T16:42:08Z",
+          "completed_at": "2026-11-08T16:45:59Z",
+          "log_bytes": 41943,
+          "log_sha256": "cbcfa9f6c452fba33a3306a96c6aba34d631405800f0ae7010aba8922f579925"
+        },
+        {
+          "job_id": 128794182321,
+          "name": "matrix (ubuntu-24.04-arm, linux-arm64, aarch64-unknown-linux-gnu)",
+          "conclusion": "success",
+          "started_at": "2026-11-08T16:42:10Z",
+          "completed_at": "2026-11-08T16:45:45Z",
+          "log_bytes": 38989,
+          "log_sha256": "3e9eacd2b5d37391bf4e2f49bfd1c610b838b24bc783215ac5c04246649ff0e0"
+        },
+        {
+          "job_id": 128794182372,
+          "name": "matrix (ubuntu-24.04, linux-amd64, x86_64-unknown-linux-gnu)",
+          "conclusion": "success",
+          "started_at": "2026-11-08T16:42:07Z",
+          "completed_at": "2026-11-08T16:46:10Z",
+          "log_bytes": 38955,
+          "log_sha256": "715461eb523a788b9659a6133815f3d0571963347ddc677cee20d33ab42441b7"
+        },
+        {
+          "job_id": 128795227255,
+          "name": "rollup",
+          "conclusion": "success",
+          "started_at": "2026-11-08T16:46:13Z",
+          "completed_at": "2026-11-08T16:46:34Z",
+          "log_bytes": 31965,
+          "log_sha256": "b12e06d6d7b3f2a6d8e0c1c07989fb3910e55e23b1bfda312a47b1bb00ef298b"
+        }
+      ],
+      "context_sha256": "4649734bd50358b27cb5fdf4af7c8cdc447a4d1731eeb0f4b1a35f838c73da79",
+      "context_bytes": 2498,
+      "harness_sha256": "6e7fdb3b7647930760ceed85ee050f5c20ba6d2e58d79d2fe1c9e33e5d7dced9",
+      "rollup_sha256": "204278881cedfd3f6e950093093064fd7cc5349fc4866fd9a7480c14c8519a8a",
+      "rollup_bytes": 4145,
+      "canonical_record_count": 12,
+      "canonical_records": [
+        {
+          "role": "linux-amd64",
+          "kind": "identity-ready",
+          "bytes": 1167,
+          "sha256": "b9697922b70e698d3755f719b4679bb19c63ad656922ebc094d0a6a5a02a6035"
+        },
+        {
+          "role": "linux-amd64",
+          "kind": "server-ready",
+          "bytes": 932,
+          "sha256": "c62e77b7af336afc26e1194e00bb579184b08ba92c8aa648918800438f923e80"
+        },
+        {
+          "role": "linux-amd64",
+          "kind": "client-result",
+          "bytes": 44922,
+          "sha256": "caee729c5af652c2d72b4a629c0e1295c4e61bc4c06af0ebed6bb1a1bbf8a245"
+        },
+        {
+          "role": "linux-amd64",
+          "kind": "server-result",
+          "bytes": 25668,
+          "sha256": "c7416d42fc953d263438f348c7b74e242a6609e7462d0eddc7a5371197cd14d3"
+        },
+        {
+          "role": "linux-arm64",
+          "kind": "identity-ready",
+          "bytes": 1167,
+          "sha256": "e51ab878b50fd11d54b99e56f49c10b7467e4b2229ee87c70cd46d28a63278ca"
+        },
+        {
+          "role": "linux-arm64",
+          "kind": "server-ready",
+          "bytes": 932,
+          "sha256": "eb2fb1d4bef8659ee8a7f3732d80ea30835864a1ca4649c5e9e7afbdaebb21dd"
+        },
+        {
+          "role": "linux-arm64",
+          "kind": "client-result",
+          "bytes": 44922,
+          "sha256": "06fcc25de3149cadadfe39041c7d375f44ef30712290fc2a353af78418587a5e"
+        },
+        {
+          "role": "linux-arm64",
+          "kind": "server-result",
+          "bytes": 25668,
+          "sha256": "4727172825116efc943a269a797bc3e20eb6d3a2c332c8f3ed94bc52d7fa256e"
+        },
+        {
+          "role": "macos-arm64",
+          "kind": "identity-ready",
+          "bytes": 1162,
+          "sha256": "cf37f8946ff533ea3a630b5500ba5ac03d545fe27f34b1730722545932851a54"
+        },
+        {
+          "role": "macos-arm64",
+          "kind": "server-ready",
+          "bytes": 1008,
+          "sha256": "db4054df3fe46ecc61bd54f8be76039aee0c33dba85c58ed76cbf5305287ef53"
+        },
+        {
+          "role": "macos-arm64",
+          "kind": "client-result",
+          "bytes": 44922,
+          "sha256": "3450e047e5f5d60711208b1d3e54b538f337ee512914f837d471d57ade957bc7"
+        },
+        {
+          "role": "macos-arm64",
+          "kind": "server-result",
+          "bytes": 25668,
+          "sha256": "1ff133049f8523653916e0b4dd987cff3c7cc57c6ccc25560959075d864687e0"
+        }
+      ],
+      "diagnostic_duplicates": [],
+      "record_bindings_checked": "Context/source/candidate attempt, role/kind, ready/result identity bindings, available server-ready references, installed bootstrap/manifest/product bytes pins. This is finite offline inspection, not full final auditor or another physical observation.",
+      "role_results": [
+        {
+          "role": "linux-amd64",
+          "client_complete": true,
+          "client_pairs_count": 6,
+          "client_complete_exit0_pairs": 6,
+          "failed_cells": [],
+          "client_server_ready_pin_roles": [
+            "linux-amd64",
+            "linux-arm64",
+            "macos-arm64"
+          ],
+          "server_complete": true,
+          "server_receipts_count": 6,
+          "client_stop_complete": true,
+          "server_stop_complete": true,
+          "stream_cleanup_complete": true
+        },
+        {
+          "role": "linux-arm64",
+          "client_complete": true,
+          "client_pairs_count": 6,
+          "client_complete_exit0_pairs": 6,
+          "failed_cells": [],
+          "client_server_ready_pin_roles": [
+            "linux-amd64",
+            "linux-arm64",
+            "macos-arm64"
+          ],
+          "server_complete": true,
+          "server_receipts_count": 6,
+          "client_stop_complete": true,
+          "server_stop_complete": true,
+          "stream_cleanup_complete": true
+        },
+        {
+          "role": "macos-arm64",
+          "client_complete": true,
+          "client_pairs_count": 6,
+          "client_complete_exit0_pairs": 6,
+          "failed_cells": [],
+          "client_server_ready_pin_roles": [
+            "linux-amd64",
+            "linux-arm64",
+            "macos-arm64"
+          ],
+          "server_complete": true,
+          "server_receipts_count": 6,
+          "client_stop_complete": true,
+          "server_stop_complete": true,
+          "stream_cleanup_complete": true
+        }
+      ],
+      "reported_rollup": {
+        "administrative_cancel_operations": 0,
+        "artifact_prefix": "v02-installed-42501192017-1-46c9cb46e382-rsync-matrix",
+        "candidate_run_attempt": 1,
+        "candidate_run_id": 42453390792,
+        "cells": [
+          {
+            "case": "push",
+            "client": "linux-amd64",
+            "passed": true,
+            "payload_bytes": 32768,
+            "payload_bytes_per_second": 806.1955013992291,
+            "server": "linux-amd64",
+            "wall_ns": 40645228041
+          },
+          {
+            "case": "pull",
+            "client": "linux-amd64",
+            "passed": true,
+            "payload_bytes": 32768,
+            "payload_bytes_per_second": 762.418318715481,
+            "server": "linux-amd64",
+            "wall_ns": 42979030272
+          },
+          {
+            "case": "push",
+            "client": "linux-arm64",
+            "passed": true,
+            "payload_bytes": 32768,
+            "payload_bytes_per_second": 808.0449613878691,
+            "server": "linux-amd64",
+            "wall_ns": 40552198907
+          },
+          {
+            "case": "pull",
+            "client": "linux-arm64",
+            "passed": true,
+            "payload_bytes": 32768,
+            "payload_bytes_per_second": 785.3401318764346,
+            "server": "linux-amd64",
+            "wall_ns": 41724596350
+          },
+          {
+            "case": "push",
+            "client": "macos-arm64",
+            "passed": true,
+            "payload_bytes": 32768,
+            "payload_bytes_per_second": 636.226030727894,
+            "server": "linux-amd64",
+            "wall_ns": 51503708458
+          },
+          {
+            "case": "pull",
+            "client": "macos-arm64",
+            "passed": true,
+            "payload_bytes": 32768,
+            "payload_bytes_per_second": 715.4568184170982,
+            "server": "linux-amd64",
+            "wall_ns": 45800108625
+          },
+          {
+            "case": "push",
+            "client": "linux-amd64",
+            "passed": true,
+            "payload_bytes": 32768,
+            "payload_bytes_per_second": 794.9849891861355,
+            "server": "linux-arm64",
+            "wall_ns": 41218388329
+          },
+          {
+            "case": "pull",
+            "client": "linux-amd64",
+            "passed": true,
+            "payload_bytes": 32768,
+            "payload_bytes_per_second": 819.5804703790366,
+            "server": "linux-arm64",
+            "wall_ns": 39981430969
+          },
+          {
+            "case": "push",
+            "client": "linux-arm64",
+            "passed": true,
+            "payload_bytes": 32768,
+            "payload_bytes_per_second": 837.3080395115138,
+            "server": "linux-arm64",
+            "wall_ns": 39134940134
+          },
+          {
+            "case": "pull",
+            "client": "linux-arm64",
+            "passed": true,
+            "payload_bytes": 32768,
+            "payload_bytes_per_second": 804.7205582213073,
+            "server": "linux-arm64",
+            "wall_ns": 40719725208
+          },
+          {
+            "case": "push",
+            "client": "macos-arm64",
+            "passed": true,
+            "payload_bytes": 32768,
+            "payload_bytes_per_second": 641.3142526881786,
+            "server": "linux-arm64",
+            "wall_ns": 51095075250
+          },
+          {
+            "case": "pull",
+            "client": "macos-arm64",
+            "passed": true,
+            "payload_bytes": 32768,
+            "payload_bytes_per_second": 735.9943326754521,
+            "server": "linux-arm64",
+            "wall_ns": 44522081958
+          },
+          {
+            "case": "push",
+            "client": "linux-amd64",
+            "passed": true,
+            "payload_bytes": 32768,
+            "payload_bytes_per_second": 803.4944836851146,
+            "server": "macos-arm64",
+            "wall_ns": 40781860567
+          },
+          {
+            "case": "pull",
+            "client": "linux-amd64",
+            "passed": true,
+            "payload_bytes": 32768,
+            "payload_bytes_per_second": 858.178915293355,
+            "server": "macos-arm64",
+            "wall_ns": 38183180006
+          },
+          {
+            "case": "push",
+            "client": "linux-arm64",
+            "passed": true,
+            "payload_bytes": 32768,
+            "payload_bytes_per_second": 807.327433319867,
+            "server": "macos-arm64",
+            "wall_ns": 40588240468
+          },
+          {
+            "case": "pull",
+            "client": "linux-arm64",
+            "passed": true,
+            "payload_bytes": 32768,
+            "payload_bytes_per_second": 872.8765877837038,
+            "server": "macos-arm64",
+            "wall_ns": 37540243900
+          },
+          {
+            "case": "push",
+            "client": "macos-arm64",
+            "passed": true,
+            "payload_bytes": 32768,
+            "payload_bytes_per_second": 653.9185683852133,
+            "server": "macos-arm64",
+            "wall_ns": 50110214917
+          },
+          {
+            "case": "pull",
+            "client": "macos-arm64",
+            "passed": true,
+            "payload_bytes": 32768,
+            "payload_bytes_per_second": 782.8498123431857,
+            "server": "macos-arm64",
+            "wall_ns": 41857326250
+          }
+        ],
+        "cohort": "rsync-matrix",
+        "complete": true,
+        "context_sha256": "4649734bd50358b27cb5fdf4af7c8cdc447a4d1731eeb0f4b1a35f838c73da79",
+        "edge_case_observations": 0,
+        "edge_receipt_seed_records": 0,
+        "edge_relay_cli_attempts": 0,
+        "expected_cells": 18,
+        "fixture_control_cli_operations": 36,
+        "limitations": [
+          "One sample per directed case; no percentile estimates",
+          "Candidate qualification does not publish or qualify a public release"
+        ],
+        "measured_cli_operations": 18,
+        "metric_definitions": {
+          "payload_bytes_per_second": "Validated application payload bytes divided by wall time; finite transfer modes use verified file bytes",
+          "resume_wall_ns": "Installed resume CLI lifetime including immutable-source revalidation and transfer; not RTT",
+          "wall_ns": "Monotonic installed CLI lifetime including transport, command and output; excludes independent receipt and cleanup validation; not RTT"
+        },
+        "passed_cells": 18,
+        "samples_per_directed_case": 1,
+        "schema": 1,
+        "scope": "installed-streaming",
+        "source_commit": "46c9cb46e382735a8678b17eca5e416f30b0c264"
+      },
+      "passed_rollup_observations": 18,
+      "accepted_copy_performance": false,
+      "wall_seconds_range": [
+        37.5402439,
+        51.503708458
+      ],
+      "application_bytes_per_second_range": [
+        636.226030727894,
+        872.8765877837038
+      ],
+      "artifacts": [
+        {
+          "run_id": 42501192017,
+          "artifact_id": 13626125024,
+          "name": "v02-installed-42501192017-1-46c9cb46e382-rsync-matrix-linux-amd64-client-result",
+          "bytes": 4507,
+          "zip_sha256": "cca6d5b61669c7a0d9ed30b9f2030274a5233fb3f78d468ad64de75337428ff9",
+          "api_digest": "sha256:cca6d5b61669c7a0d9ed30b9f2030274a5233fb3f78d468ad64de75337428ff9",
+          "members": [
+            {
+              "name": "client-result.json",
+              "bytes": 44922,
+              "sha256": "caee729c5af652c2d72b4a629c0e1295c4e61bc4c06af0ebed6bb1a1bbf8a245"
+            }
+          ]
+        },
+        {
+          "run_id": 42501192017,
+          "artifact_id": 13625881246,
+          "name": "v02-installed-42501192017-1-46c9cb46e382-rsync-matrix-linux-amd64-server-result",
+          "bytes": 3833,
+          "zip_sha256": "18df1da2bd14ab480ac0ac6d335e4359e23f3f7678a00fe2a5ed6c834544f64c",
+          "api_digest": "sha256:18df1da2bd14ab480ac0ac6d335e4359e23f3f7678a00fe2a5ed6c834544f64c",
+          "members": [
+            {
+              "name": "server-result.json",
+              "bytes": 25668,
+              "sha256": "c7416d42fc953d263438f348c7b74e242a6609e7462d0eddc7a5371197cd14d3"
+            }
+          ]
+        },
+        {
+          "run_id": 42501192017,
+          "artifact_id": 13625791810,
+          "name": "v02-installed-42501192017-1-46c9cb46e382-rsync-matrix-macos-arm64-client-result",
+          "bytes": 4525,
+          "zip_sha256": "4e9a8bd47b556bc09afeddc36f56cfe21fd80be3476290c60a650671cb018729",
+          "api_digest": "sha256:4e9a8bd47b556bc09afeddc36f56cfe21fd80be3476290c60a650671cb018729",
+          "members": [
+            {
+              "name": "client-result.json",
+              "bytes": 44922,
+              "sha256": "3450e047e5f5d60711208b1d3e54b538f337ee512914f837d471d57ade957bc7"
+            }
+          ]
+        },
+        {
+          "run_id": 42501192017,
+          "artifact_id": 13625542398,
+          "name": "v02-installed-rollup-42501192017-1",
+          "bytes": 2239,
+          "zip_sha256": "3191b341a5b4757c04860d9fb4b0706069bff16d24553f8a64a0bd2cf8a41619",
+          "api_digest": "sha256:3191b341a5b4757c04860d9fb4b0706069bff16d24553f8a64a0bd2cf8a41619",
+          "members": [
+            {
+              "name": "matrix-rollup.json",
+              "bytes": 4145,
+              "sha256": "204278881cedfd3f6e950093093064fd7cc5349fc4866fd9a7480c14c8519a8a"
+            },
+            {
+              "name": "matrix-rollup.md",
+              "bytes": 1997,
+              "sha256": "0eb17fdd4fa9c353ee7f80118ce7059657645dab377f4098c5e431094877e64d"
+            }
+          ]
+        },
+        {
+          "run_id": 42501192017,
+          "artifact_id": 13625488332,
+          "name": "v02-installed-42501192017-1-46c9cb46e382-rsync-matrix-linux-arm64-server-ready",
+          "bytes": 699,
+          "zip_sha256": "dbafea95a0036870b0f887a37312c53e7a2783718af27c1fa659897302e5a111",
+          "api_digest": "sha256:dbafea95a0036870b0f887a37312c53e7a2783718af27c1fa659897302e5a111",
+          "members": [
+            {
+              "name": "server-ready.json",
+              "bytes": 932,
+              "sha256": "eb2fb1d4bef8659ee8a7f3732d80ea30835864a1ca4649c5e9e7afbdaebb21dd"
+            }
+          ]
+        },
+        {
+          "run_id": 42501192017,
+          "artifact_id": 13625343593,
+          "name": "v02-installed-42501192017-1-46c9cb46e382-rsync-matrix-linux-amd64-identity-ready",
+          "bytes": 853,
+          "zip_sha256": "80e4e79869fb808bdd5263aedfc0acab2e38c15578cf90b710ef9260e0c9b108",
+          "api_digest": "sha256:80e4e79869fb808bdd5263aedfc0acab2e38c15578cf90b710ef9260e0c9b108",
+          "members": [
+            {
+              "name": "identity-ready.json",
+              "bytes": 1167,
+              "sha256": "b9697922b70e698d3755f719b4679bb19c63ad656922ebc094d0a6a5a02a6035"
+            }
+          ]
+        },
+        {
+          "run_id": 42501192017,
+          "artifact_id": 13625313693,
+          "name": "v02-installed-42501192017-1-46c9cb46e382-rsync-matrix-macos-arm64-server-ready",
+          "bytes": 740,
+          "zip_sha256": "20f73986ca76e51049bd0b6ea899c689eb99368dae4f3113d90f3f2a1ae33a70",
+          "api_digest": "sha256:20f73986ca76e51049bd0b6ea899c689eb99368dae4f3113d90f3f2a1ae33a70",
+          "members": [
+            {
+              "name": "server-ready.json",
+              "bytes": 1008,
+              "sha256": "db4054df3fe46ecc61bd54f8be76039aee0c33dba85c58ed76cbf5305287ef53"
+            }
+          ]
+        },
+        {
+          "run_id": 42501192017,
+          "artifact_id": 13625309214,
+          "name": "v02-installed-42501192017-1-46c9cb46e382-rsync-matrix-macos-arm64-server-result",
+          "bytes": 3827,
+          "zip_sha256": "15003a574708559ab7c5ee49addf35efb8b1ff12daa4bfbe6b6eda1e6c093128",
+          "api_digest": "sha256:15003a574708559ab7c5ee49addf35efb8b1ff12daa4bfbe6b6eda1e6c093128",
+          "members": [
+            {
+              "name": "server-result.json",
+              "bytes": 25668,
+              "sha256": "1ff133049f8523653916e0b4dd987cff3c7cc57c6ccc25560959075d864687e0"
+            }
+          ]
+        },
+        {
+          "run_id": 42501192017,
+          "artifact_id": 13625299275,
+          "name": "v02-installed-42501192017-1-46c9cb46e382-rsync-matrix-linux-arm64-client-result",
+          "bytes": 4517,
+          "zip_sha256": "6577fd9fb86e157e474a7f736f97025ea5287da78fb30a3bcf4482e397f9fe5c",
+          "api_digest": "sha256:6577fd9fb86e157e474a7f736f97025ea5287da78fb30a3bcf4482e397f9fe5c",
+          "members": [
+            {
+              "name": "client-result.json",
+              "bytes": 44922,
+              "sha256": "06fcc25de3149cadadfe39041c7d375f44ef30712290fc2a353af78418587a5e"
+            }
+          ]
+        },
+        {
+          "run_id": 42501192017,
+          "artifact_id": 13625283943,
+          "name": "v02-installed-42501192017-1-46c9cb46e382-rsync-matrix-linux-amd64-server-ready",
+          "bytes": 702,
+          "zip_sha256": "a66addd6ab63898d1197ef976a5e5ede9d3eff8aeed9c701b4c77913067aed11",
+          "api_digest": "sha256:a66addd6ab63898d1197ef976a5e5ede9d3eff8aeed9c701b4c77913067aed11",
+          "members": [
+            {
+              "name": "server-ready.json",
+              "bytes": 932,
+              "sha256": "c62e77b7af336afc26e1194e00bb579184b08ba92c8aa648918800438f923e80"
+            }
+          ]
+        },
+        {
+          "run_id": 42501192017,
+          "artifact_id": 13625254481,
+          "name": "v02-installed-42501192017-1-46c9cb46e382-rsync-matrix-linux-arm64-server-result",
+          "bytes": 3836,
+          "zip_sha256": "5600086e8903face48baa02ede5d8cb12d0dad87bb3d460ff65fbd053db2ac61",
+          "api_digest": "sha256:5600086e8903face48baa02ede5d8cb12d0dad87bb3d460ff65fbd053db2ac61",
+          "members": [
+            {
+              "name": "server-result.json",
+              "bytes": 25668,
+              "sha256": "4727172825116efc943a269a797bc3e20eb6d3a2c332c8f3ed94bc52d7fa256e"
+            }
+          ]
+        },
+        {
+          "run_id": 42501192017,
+          "artifact_id": 13625244016,
+          "name": "v02-installed-42501192017-1-46c9cb46e382-rsync-matrix-macos-arm64-identity-ready",
+          "bytes": 847,
+          "zip_sha256": "94bf077091915c22b88f8ea423b7dfb53675625bb8a8f2dd5694e443b64a1458",
+          "api_digest": "sha256:94bf077091915c22b88f8ea423b7dfb53675625bb8a8f2dd5694e443b64a1458",
+          "members": [
+            {
+              "name": "identity-ready.json",
+              "bytes": 1162,
+              "sha256": "cf37f8946ff533ea3a630b5500ba5ac03d545fe27f34b1730722545932851a54"
+            }
+          ]
+        },
+        {
+          "run_id": 42501192017,
+          "artifact_id": 13625009426,
+          "name": "v02-installed-context-42501192017-1",
+          "bytes": 1176,
+          "zip_sha256": "b1913b6d5ac860944943507d8c6da54e6836bb58392dfab4d28447ab2a521cc8",
+          "api_digest": "sha256:b1913b6d5ac860944943507d8c6da54e6836bb58392dfab4d28447ab2a521cc8",
+          "members": [
+            {
+              "name": "context.json",
+              "bytes": 2498,
+              "sha256": "4649734bd50358b27cb5fdf4af7c8cdc447a4d1731eeb0f4b1a35f838c73da79"
+            }
+          ]
+        },
+        {
+          "run_id": 42501192017,
+          "artifact_id": 13624724090,
+          "name": "v02-installed-42501192017-1-46c9cb46e382-rsync-matrix-linux-arm64-identity-ready",
+          "bytes": 852,
+          "zip_sha256": "dfd2f2caffcc9fabe3fb5d38ca3cd02e7aeb93935bf20f2074f8df25d6171714",
+          "api_digest": "sha256:dfd2f2caffcc9fabe3fb5d38ca3cd02e7aeb93935bf20f2074f8df25d6171714",
+          "members": [
+            {
+              "name": "identity-ready.json",
+              "bytes": 1167,
+              "sha256": "e51ab878b50fd11d54b99e56f49c10b7467e4b2229ee87c70cd46d28a63278ca"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "cohort": "copy-matrix",
+      "run_id": 42501629829,
+      "run_attempt": 1,
+      "status": "failed",
+      "url": "https://github.com/Epiphytic/marmish/actions/runs/42501629829",
+      "conclusion": "failure",
+      "jobs": [
+        {
+          "job_id": 128795431215,
+          "name": "resolve",
+          "conclusion": "success",
+          "started_at": "2026-11-08T16:47:02Z",
+          "completed_at": "2026-11-08T16:47:18Z",
+          "log_bytes": 31610,
+          "log_sha256": "9cb3fa78125445c639dac3840bbfeace72cd095dd3bf24878e5c1c232ce60882"
+        },
+        {
+          "job_id": 128795510315,
+          "name": "matrix (ubuntu-24.04, linux-amd64, x86_64-unknown-linux-gnu)",
+          "conclusion": "failure",
+          "started_at": "2026-11-08T16:47:20Z",
+          "completed_at": "2026-11-08T16:48:52Z",
+          "log_bytes": 39070,
+          "log_sha256": "ccd833c18f8b9e5397e14d4e2c01ddc33de44ba272ca854f7916b6fe192d6f58"
+        },
+        {
+          "job_id": 128795510342,
+          "name": "matrix (macos-15, macos-arm64, aarch64-apple-darwin)",
+          "conclusion": "failure",
+          "started_at": "2026-11-08T16:47:21Z",
+          "completed_at": "2026-11-08T16:54:05Z",
+          "log_bytes": 39887,
+          "log_sha256": "9056dd61911f91e30866d704ebe822a81e8574d6bdf6a8570392147f69808bd1"
+        },
+        {
+          "job_id": 128795510384,
+          "name": "matrix (ubuntu-24.04-arm, linux-arm64, aarch64-unknown-linux-gnu)",
+          "conclusion": "failure",
+          "started_at": "2026-11-08T16:47:23Z",
+          "completed_at": "2026-11-08T16:54:24Z",
+          "log_bytes": 39106,
+          "log_sha256": "4540868991903e10a4d65e9ee79fa3a9fba7bb97003b7f268806c25bd1c3cb93"
+        },
+        {
+          "job_id": 128797311947,
+          "name": "rollup",
+          "conclusion": "failure",
+          "started_at": "2026-11-08T16:54:27Z",
+          "completed_at": "2026-11-08T16:54:47Z",
+          "log_bytes": 32101,
+          "log_sha256": "159237a1b507aa86d5631611c8b141ab42c708d550bcc091bcca5f0b309a171e"
+        }
+      ],
+      "context_sha256": "8543ac602e3aa2c358b2ca1470d861dcf0ffa4032f5ca2fddbed068e70ed3a53",
+      "context_bytes": 2497,
+      "harness_sha256": "6e7fdb3b7647930760ceed85ee050f5c20ba6d2e58d79d2fe1c9e33e5d7dced9",
+      "rollup_sha256": "fe40d6e43dd658bf337b45e47437ea66c39dfe47ba69f555130ac715935ed18a",
+      "rollup_bytes": 347,
+      "canonical_record_count": 12,
+      "canonical_records": [
+        {
+          "role": "linux-amd64",
+          "kind": "identity-ready",
+          "bytes": 1167,
+          "sha256": "958337b4c6859283f7616199f430d6b91a3cb2323ef75ee59171b73b22dd7c78"
+        },
+        {
+          "role": "linux-amd64",
+          "kind": "server-ready",
+          "bytes": 730,
+          "sha256": "b9b16618c819838c68affe560ba733ac41f427d8c0e3b46dbdf0a6972d90e9b0"
+        },
+        {
+          "role": "linux-amd64",
+          "kind": "client-result",
+          "bytes": 1041,
+          "sha256": "6dd3bc109b2761b9cc33d742dfc673faaeb0e85edeba2cdd0fee692a40d17caf"
+        },
+        {
+          "role": "linux-amd64",
+          "kind": "server-result",
+          "bytes": 650,
+          "sha256": "99084cd03f52e6f9c941a026f2116507d75074a320dc57d3e0c46eaa85d3892f"
+        },
+        {
+          "role": "linux-arm64",
+          "kind": "identity-ready",
+          "bytes": 1167,
+          "sha256": "c12548faeffe78ee8c43e1c54b60645bba15a10b4d48bcd65def983a60686309"
+        },
+        {
+          "role": "linux-arm64",
+          "kind": "server-ready",
+          "bytes": 730,
+          "sha256": "7260c68e1b00f2a4af93abc04fbd7938314bf44e01dc905fd4c0c07647534a81"
+        },
+        {
+          "role": "linux-arm64",
+          "kind": "client-result",
+          "bytes": 11574,
+          "sha256": "f6acaf9c6bce04fb59e860ed87f0a4048b8aaf03730221c933815d349c068b2f"
+        },
+        {
+          "role": "linux-arm64",
+          "kind": "server-result",
+          "bytes": 650,
+          "sha256": "ee6c7e63eda1ae15083fccd05bb5729cc34a8a89fb8ef031d8010d790f4dd740"
+        },
+        {
+          "role": "macos-arm64",
+          "kind": "identity-ready",
+          "bytes": 1162,
+          "sha256": "63c54ff9c47771585cf88c892bec00b9c42b67b024257dd4241169d095afa3bf"
+        },
+        {
+          "role": "macos-arm64",
+          "kind": "server-ready",
+          "bytes": 730,
+          "sha256": "c5cf09e319f6e2bda83657dca930dd8cb9a7a59426ad57338ef1332943d7da44"
+        },
+        {
+          "role": "macos-arm64",
+          "kind": "client-result",
+          "bytes": 11574,
+          "sha256": "5e4d56e08c3ae7d6f4874e63d96ab5b3b4028f45ef4403d92ecc5a3e835ec378"
+        },
+        {
+          "role": "macos-arm64",
+          "kind": "server-result",
+          "bytes": 650,
+          "sha256": "60e9b40bd781c7581e666c3aaab89283ad790bda3d7d5c1e831c70cb2c8ec255"
+        }
+      ],
+      "diagnostic_duplicates": [
+        {
+          "role": "linux-amd64",
+          "kind": "identity-ready",
+          "sha256": "958337b4c6859283f7616199f430d6b91a3cb2323ef75ee59171b73b22dd7c78",
+          "identical": true
+        },
+        {
+          "role": "linux-amd64",
+          "kind": "server-ready",
+          "sha256": "b9b16618c819838c68affe560ba733ac41f427d8c0e3b46dbdf0a6972d90e9b0",
+          "identical": true
+        },
+        {
+          "role": "linux-amd64",
+          "kind": "client-result",
+          "sha256": "6dd3bc109b2761b9cc33d742dfc673faaeb0e85edeba2cdd0fee692a40d17caf",
+          "identical": true
+        },
+        {
+          "role": "linux-amd64",
+          "kind": "server-result",
+          "sha256": "99084cd03f52e6f9c941a026f2116507d75074a320dc57d3e0c46eaa85d3892f",
+          "identical": true
+        },
+        {
+          "role": "linux-arm64",
+          "kind": "identity-ready",
+          "sha256": "c12548faeffe78ee8c43e1c54b60645bba15a10b4d48bcd65def983a60686309",
+          "identical": true
+        },
+        {
+          "role": "linux-arm64",
+          "kind": "server-ready",
+          "sha256": "7260c68e1b00f2a4af93abc04fbd7938314bf44e01dc905fd4c0c07647534a81",
+          "identical": true
+        },
+        {
+          "role": "linux-arm64",
+          "kind": "client-result",
+          "sha256": "f6acaf9c6bce04fb59e860ed87f0a4048b8aaf03730221c933815d349c068b2f",
+          "identical": true
+        },
+        {
+          "role": "linux-arm64",
+          "kind": "server-result",
+          "sha256": "ee6c7e63eda1ae15083fccd05bb5729cc34a8a89fb8ef031d8010d790f4dd740",
+          "identical": true
+        },
+        {
+          "role": "macos-arm64",
+          "kind": "identity-ready",
+          "sha256": "63c54ff9c47771585cf88c892bec00b9c42b67b024257dd4241169d095afa3bf",
+          "identical": true
+        },
+        {
+          "role": "macos-arm64",
+          "kind": "server-ready",
+          "sha256": "c5cf09e319f6e2bda83657dca930dd8cb9a7a59426ad57338ef1332943d7da44",
+          "identical": true
+        },
+        {
+          "role": "macos-arm64",
+          "kind": "client-result",
+          "sha256": "5e4d56e08c3ae7d6f4874e63d96ab5b3b4028f45ef4403d92ecc5a3e835ec378",
+          "identical": true
+        },
+        {
+          "role": "macos-arm64",
+          "kind": "server-result",
+          "sha256": "60e9b40bd781c7581e666c3aaab89283ad790bda3d7d5c1e831c70cb2c8ec255",
+          "identical": true
+        }
+      ],
+      "record_bindings_checked": "Context/source/candidate attempt, role/kind, ready/result identity bindings, available server-ready references, installed bootstrap/manifest/product bytes pins. This is finite offline inspection, not full final auditor or another physical observation.",
+      "role_results": [
+        {
+          "role": "linux-amd64",
+          "client_complete": false,
+          "client_pairs_count": 0,
+          "client_complete_exit0_pairs": 0,
+          "failed_cells": [
+            {
+              "case": "put",
+              "category": "cohort_incomplete",
+              "server": "linux-amd64",
+              "status": "skipped"
+            },
+            {
+              "case": "get",
+              "category": "cohort_incomplete",
+              "server": "linux-amd64",
+              "status": "skipped"
+            },
+            {
+              "case": "put",
+              "category": "cohort_incomplete",
+              "server": "linux-arm64",
+              "status": "skipped"
+            },
+            {
+              "case": "get",
+              "category": "cohort_incomplete",
+              "server": "linux-arm64",
+              "status": "skipped"
+            },
+            {
+              "case": "put",
+              "category": "cohort_incomplete",
+              "server": "macos-arm64",
+              "status": "skipped"
+            },
+            {
+              "case": "get",
+              "category": "cohort_incomplete",
+              "server": "macos-arm64",
+              "status": "skipped"
+            }
+          ],
+          "client_server_ready_pin_roles": [],
+          "server_complete": false,
+          "server_receipts_count": 0,
+          "client_stop_complete": true,
+          "server_stop_complete": true,
+          "stream_cleanup_complete": true
+        },
+        {
+          "role": "linux-arm64",
+          "client_complete": false,
+          "client_pairs_count": 4,
+          "client_complete_exit0_pairs": 4,
+          "failed_cells": [
+            {
+              "case": "put",
+              "category": "timeout",
+              "server": "linux-amd64",
+              "status": "unqualified"
+            },
+            {
+              "case": "get",
+              "category": "timeout",
+              "server": "linux-amd64",
+              "status": "unqualified"
+            }
+          ],
+          "client_server_ready_pin_roles": [
+            "linux-amd64",
+            "linux-arm64",
+            "macos-arm64"
+          ],
+          "server_complete": false,
+          "server_receipts_count": 0,
+          "client_stop_complete": true,
+          "server_stop_complete": true,
+          "stream_cleanup_complete": true
+        },
+        {
+          "role": "macos-arm64",
+          "client_complete": false,
+          "client_pairs_count": 4,
+          "client_complete_exit0_pairs": 4,
+          "failed_cells": [
+            {
+              "case": "put",
+              "category": "timeout",
+              "server": "linux-amd64",
+              "status": "unqualified"
+            },
+            {
+              "case": "get",
+              "category": "timeout",
+              "server": "linux-amd64",
+              "status": "unqualified"
+            }
+          ],
+          "client_server_ready_pin_roles": [
+            "linux-amd64",
+            "linux-arm64",
+            "macos-arm64"
+          ],
+          "server_complete": false,
+          "server_receipts_count": 0,
+          "client_stop_complete": true,
+          "server_stop_complete": true,
+          "stream_cleanup_complete": true
+        }
+      ],
+      "reported_rollup": {
+        "category": "validation_or_platform_failure",
+        "cohort": "copy-matrix",
+        "complete": false,
+        "context_sha256": "8543ac602e3aa2c358b2ca1470d861dcf0ffa4032f5ca2fddbed068e70ed3a53",
+        "missing_records": [],
+        "passed_cells": 0,
+        "qualification": "none",
+        "schema": 1,
+        "scope": "installed-streaming",
+        "source_commit": "46c9cb46e382735a8678b17eca5e416f30b0c264",
+        "status": "FAIL"
+      },
+      "passed_rollup_observations": 0,
+      "accepted_copy_performance": false,
+      "wall_seconds_range": null,
+      "application_bytes_per_second_range": null,
+      "artifacts": [
+        {
+          "run_id": 42501629829,
+          "artifact_id": 13626455344,
+          "name": "v02-installed-42501629829-1-46c9cb46e382-copy-matrix-macos-arm64-client-result",
+          "bytes": 2982,
+          "zip_sha256": "cf89a1bc65a216af10a041b11a77b6ed7ce2496ac1d22f579f688df6407ba6e0",
+          "api_digest": "sha256:cf89a1bc65a216af10a041b11a77b6ed7ce2496ac1d22f579f688df6407ba6e0",
+          "members": [
+            {
+              "name": "client-result.json",
+              "bytes": 11574,
+              "sha256": "5e4d56e08c3ae7d6f4874e63d96ab5b3b4028f45ef4403d92ecc5a3e835ec378"
+            }
+          ]
+        },
+        {
+          "run_id": 42501629829,
+          "artifact_id": 13626160117,
+          "name": "v02-installed-context-42501629829-1",
+          "bytes": 1178,
+          "zip_sha256": "dc181c2e052f136984283dd572c2f1889251e9ad51516489b942d65a7de0b226",
+          "api_digest": "sha256:dc181c2e052f136984283dd572c2f1889251e9ad51516489b942d65a7de0b226",
+          "members": [
+            {
+              "name": "context.json",
+              "bytes": 2497,
+              "sha256": "8543ac602e3aa2c358b2ca1470d861dcf0ffa4032f5ca2fddbed068e70ed3a53"
+            }
+          ]
+        },
+        {
+          "run_id": 42501629829,
+          "artifact_id": 13626140641,
+          "name": "v02-installed-diagnostic-42501629829-1-linux-arm64",
+          "bytes": 5006,
+          "zip_sha256": "36b9a6573e3d826e447682b9429b399f4fbf01d844eb28ccd05dd2433050aec2",
+          "api_digest": "sha256:36b9a6573e3d826e447682b9429b399f4fbf01d844eb28ccd05dd2433050aec2",
+          "members": [
+            {
+              "name": "linux-arm64-identity-ready.json",
+              "bytes": 1167,
+              "sha256": "c12548faeffe78ee8c43e1c54b60645bba15a10b4d48bcd65def983a60686309"
+            },
+            {
+              "name": "linux-arm64-server-ready.json",
+              "bytes": 730,
+              "sha256": "7260c68e1b00f2a4af93abc04fbd7938314bf44e01dc905fd4c0c07647534a81"
+            },
+            {
+              "name": "linux-arm64-client-result.json",
+              "bytes": 11574,
+              "sha256": "f6acaf9c6bce04fb59e860ed87f0a4048b8aaf03730221c933815d349c068b2f"
+            },
+            {
+              "name": "linux-arm64-server-result.json",
+              "bytes": 650,
+              "sha256": "ee6c7e63eda1ae15083fccd05bb5729cc34a8a89fb8ef031d8010d790f4dd740"
+            }
+          ]
+        },
+        {
+          "run_id": 42501629829,
+          "artifact_id": 13626076453,
+          "name": "v02-installed-diagnostic-42501629829-1-macos-arm64",
+          "bytes": 4988,
+          "zip_sha256": "3fc51bb369aec3d848019a96fe8a3940dd9c0a4dfd4cee03879718c95a85d2d8",
+          "api_digest": "sha256:3fc51bb369aec3d848019a96fe8a3940dd9c0a4dfd4cee03879718c95a85d2d8",
+          "members": [
+            {
+              "name": "macos-arm64-identity-ready.json",
+              "bytes": 1162,
+              "sha256": "63c54ff9c47771585cf88c892bec00b9c42b67b024257dd4241169d095afa3bf"
+            },
+            {
+              "name": "macos-arm64-server-ready.json",
+              "bytes": 730,
+              "sha256": "c5cf09e319f6e2bda83657dca930dd8cb9a7a59426ad57338ef1332943d7da44"
+            },
+            {
+              "name": "macos-arm64-client-result.json",
+              "bytes": 11574,
+              "sha256": "5e4d56e08c3ae7d6f4874e63d96ab5b3b4028f45ef4403d92ecc5a3e835ec378"
+            },
+            {
+              "name": "macos-arm64-server-result.json",
+              "bytes": 650,
+              "sha256": "60e9b40bd781c7581e666c3aaab89283ad790bda3d7d5c1e831c70cb2c8ec255"
+            }
+          ]
+        },
+        {
+          "run_id": 42501629829,
+          "artifact_id": 13625961119,
+          "name": "v02-installed-42501629829-1-46c9cb46e382-copy-matrix-macos-arm64-identity-ready",
+          "bytes": 848,
+          "zip_sha256": "2d0572811f5d7a761f379e84aa725ff80f36922122e5f7e26b9557a975980c27",
+          "api_digest": "sha256:2d0572811f5d7a761f379e84aa725ff80f36922122e5f7e26b9557a975980c27",
+          "members": [
+            {
+              "name": "identity-ready.json",
+              "bytes": 1162,
+              "sha256": "63c54ff9c47771585cf88c892bec00b9c42b67b024257dd4241169d095afa3bf"
+            }
+          ]
+        },
+        {
+          "run_id": 42501629829,
+          "artifact_id": 13625816330,
+          "name": "v02-installed-diagnostic-42501629829-1-linux-amd64",
+          "bytes": 2562,
+          "zip_sha256": "787de5fa0354b474c9d841061e5bcc8e7d8d325bfff53c58e5fc831fb114cfd1",
+          "api_digest": "sha256:787de5fa0354b474c9d841061e5bcc8e7d8d325bfff53c58e5fc831fb114cfd1",
+          "members": [
+            {
+              "name": "linux-amd64-server-ready.json",
+              "bytes": 730,
+              "sha256": "b9b16618c819838c68affe560ba733ac41f427d8c0e3b46dbdf0a6972d90e9b0"
+            },
+            {
+              "name": "linux-amd64-server-result.json",
+              "bytes": 650,
+              "sha256": "99084cd03f52e6f9c941a026f2116507d75074a320dc57d3e0c46eaa85d3892f"
+            },
+            {
+              "name": "linux-amd64-identity-ready.json",
+              "bytes": 1167,
+              "sha256": "958337b4c6859283f7616199f430d6b91a3cb2323ef75ee59171b73b22dd7c78"
+            },
+            {
+              "name": "linux-amd64-client-result.json",
+              "bytes": 1041,
+              "sha256": "6dd3bc109b2761b9cc33d742dfc673faaeb0e85edeba2cdd0fee692a40d17caf"
+            }
+          ]
+        },
+        {
+          "run_id": 42501629829,
+          "artifact_id": 13625808123,
+          "name": "v02-installed-42501629829-1-46c9cb46e382-copy-matrix-macos-arm64-server-result",
+          "bytes": 544,
+          "zip_sha256": "7e0a8ee02ad4097368d531f4155731abb881e78aee80ceb93f9faa250af6068d",
+          "api_digest": "sha256:7e0a8ee02ad4097368d531f4155731abb881e78aee80ceb93f9faa250af6068d",
+          "members": [
+            {
+              "name": "server-result.json",
+              "bytes": 650,
+              "sha256": "60e9b40bd781c7581e666c3aaab89283ad790bda3d7d5c1e831c70cb2c8ec255"
+            }
+          ]
+        },
+        {
+          "run_id": 42501629829,
+          "artifact_id": 13625672212,
+          "name": "v02-installed-42501629829-1-46c9cb46e382-copy-matrix-linux-amd64-server-result",
+          "bytes": 542,
+          "zip_sha256": "172a1f5dafd04cde959daefd8defc64dff1dc4836927c84b8796bfc0deae8644",
+          "api_digest": "sha256:172a1f5dafd04cde959daefd8defc64dff1dc4836927c84b8796bfc0deae8644",
+          "members": [
+            {
+              "name": "server-result.json",
+              "bytes": 650,
+              "sha256": "99084cd03f52e6f9c941a026f2116507d75074a320dc57d3e0c46eaa85d3892f"
+            }
+          ]
+        },
+        {
+          "run_id": 42501629829,
+          "artifact_id": 13625573118,
+          "name": "v02-installed-42501629829-1-46c9cb46e382-copy-matrix-linux-arm64-server-result",
+          "bytes": 543,
+          "zip_sha256": "bac3fc91c10e7018c6a101185abfb19dd32d28b9ae9f3d022421ccdaf04f6b25",
+          "api_digest": "sha256:bac3fc91c10e7018c6a101185abfb19dd32d28b9ae9f3d022421ccdaf04f6b25",
+          "members": [
+            {
+              "name": "server-result.json",
+              "bytes": 650,
+              "sha256": "ee6c7e63eda1ae15083fccd05bb5729cc34a8a89fb8ef031d8010d790f4dd740"
+            }
+          ]
+        },
+        {
+          "run_id": 42501629829,
+          "artifact_id": 13625434301,
+          "name": "v02-installed-42501629829-1-46c9cb46e382-copy-matrix-linux-arm64-identity-ready",
+          "bytes": 851,
+          "zip_sha256": "c4c12fabd01637c32e8d31468713b87ff6c9e497da0f245b58096b2671161740",
+          "api_digest": "sha256:c4c12fabd01637c32e8d31468713b87ff6c9e497da0f245b58096b2671161740",
+          "members": [
+            {
+              "name": "identity-ready.json",
+              "bytes": 1167,
+              "sha256": "c12548faeffe78ee8c43e1c54b60645bba15a10b4d48bcd65def983a60686309"
+            }
+          ]
+        },
+        {
+          "run_id": 42501629829,
+          "artifact_id": 13625374349,
+          "name": "v02-installed-42501629829-1-46c9cb46e382-copy-matrix-macos-arm64-server-ready",
+          "bytes": 584,
+          "zip_sha256": "f5a77d12fe210b6e08900ecebbe5e7cd7dc0500ef7a319644d17bf116be8850e",
+          "api_digest": "sha256:f5a77d12fe210b6e08900ecebbe5e7cd7dc0500ef7a319644d17bf116be8850e",
+          "members": [
+            {
+              "name": "server-ready.json",
+              "bytes": 730,
+              "sha256": "c5cf09e319f6e2bda83657dca930dd8cb9a7a59426ad57338ef1332943d7da44"
+            }
+          ]
+        },
+        {
+          "run_id": 42501629829,
+          "artifact_id": 13625292995,
+          "name": "v02-installed-42501629829-1-46c9cb46e382-copy-matrix-linux-amd64-identity-ready",
+          "bytes": 852,
+          "zip_sha256": "2b413b17c9faafbc5ff7ed31f2d0e602c0af30da2edf251a648cc801c43d624a",
+          "api_digest": "sha256:2b413b17c9faafbc5ff7ed31f2d0e602c0af30da2edf251a648cc801c43d624a",
+          "members": [
+            {
+              "name": "identity-ready.json",
+              "bytes": 1167,
+              "sha256": "958337b4c6859283f7616199f430d6b91a3cb2323ef75ee59171b73b22dd7c78"
+            }
+          ]
+        },
+        {
+          "run_id": 42501629829,
+          "artifact_id": 13625078626,
+          "name": "v02-installed-42501629829-1-46c9cb46e382-copy-matrix-linux-amd64-client-result",
+          "bytes": 554,
+          "zip_sha256": "7387d2776893b43a8b1b4cbdb79c65c5486ba49f2a2ece8e100ba13caf592197",
+          "api_digest": "sha256:7387d2776893b43a8b1b4cbdb79c65c5486ba49f2a2ece8e100ba13caf592197",
+          "members": [
+            {
+              "name": "client-result.json",
+              "bytes": 1041,
+              "sha256": "6dd3bc109b2761b9cc33d742dfc673faaeb0e85edeba2cdd0fee692a40d17caf"
+            }
+          ]
+        },
+        {
+          "run_id": 42501629829,
+          "artifact_id": 13625003763,
+          "name": "v02-installed-42501629829-1-46c9cb46e382-copy-matrix-linux-arm64-server-ready",
+          "bytes": 583,
+          "zip_sha256": "7e02c667ca662747250ca13589a98fc7fb0fd77981afa54c0115c9bf1b181a0d",
+          "api_digest": "sha256:7e02c667ca662747250ca13589a98fc7fb0fd77981afa54c0115c9bf1b181a0d",
+          "members": [
+            {
+              "name": "server-ready.json",
+              "bytes": 730,
+              "sha256": "7260c68e1b00f2a4af93abc04fbd7938314bf44e01dc905fd4c0c07647534a81"
+            }
+          ]
+        },
+        {
+          "run_id": 42501629829,
+          "artifact_id": 13624998705,
+          "name": "v02-installed-42501629829-1-46c9cb46e382-copy-matrix-linux-amd64-server-ready",
+          "bytes": 584,
+          "zip_sha256": "8ef5bb56a045c9388a9dda58d35de9683da7565020e045d92e98770f7448af72",
+          "api_digest": "sha256:8ef5bb56a045c9388a9dda58d35de9683da7565020e045d92e98770f7448af72",
+          "members": [
+            {
+              "name": "server-ready.json",
+              "bytes": 730,
+              "sha256": "b9b16618c819838c68affe560ba733ac41f427d8c0e3b46dbdf0a6972d90e9b0"
+            }
+          ]
+        },
+        {
+          "run_id": 42501629829,
+          "artifact_id": 13624914601,
+          "name": "v02-installed-rollup-42501629829-1",
+          "bytes": 1029,
+          "zip_sha256": "d4afe66fed58ce5376324d64c52584638e772d6b2840add2d7c0d4a355e632fc",
+          "api_digest": "sha256:d4afe66fed58ce5376324d64c52584638e772d6b2840add2d7c0d4a355e632fc",
+          "members": [
+            {
+              "name": "matrix-rollup.failure.json",
+              "bytes": 347,
+              "sha256": "fe40d6e43dd658bf337b45e47437ea66c39dfe47ba69f555130ac715935ed18a"
+            },
+            {
+              "name": "matrix-rollup.md",
+              "bytes": 124,
+              "sha256": "37b33fcd265060ef62fa3d45b3725ead7aa011d9f254253599f57211db76c121"
+            },
+            {
+              "name": "matrix-rollup.json",
+              "bytes": 347,
+              "sha256": "fe40d6e43dd658bf337b45e47437ea66c39dfe47ba69f555130ac715935ed18a"
+            }
+          ]
+        },
+        {
+          "run_id": 42501629829,
+          "artifact_id": 13624909745,
+          "name": "v02-installed-42501629829-1-46c9cb46e382-copy-matrix-linux-arm64-client-result",
+          "bytes": 2999,
+          "zip_sha256": "b09f8a46b2e9453924f91b5a1840351b31ac45b1f5adadca3577f5db84b4878d",
+          "api_digest": "sha256:b09f8a46b2e9453924f91b5a1840351b31ac45b1f5adadca3577f5db84b4878d",
+          "members": [
+            {
+              "name": "client-result.json",
+              "bytes": 11574,
+              "sha256": "f6acaf9c6bce04fb59e860ed87f0a4048b8aaf03730221c933815d349c068b2f"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "copy_failure": {
+    "initiating_cause": "UNKNOWN",
+    "finite_observation": "Linux AMD64 installed-check emitted invalid_or_failed about 31.6 seconds after supervisor step started; subsequent supervisor error is generic. No retained first-error category or phase establishes originating cause.",
+    "linux_amd64_fallback": "No Pair records; six cohort_incomplete/skipped cells; empty client server-ready pin map. This fallback does not prove no remote command ran.",
+    "other_clients": "ARM64 and macOS each retain four complete exit0 Pair records targeting ARM64/macOS and two timeout/unqualified cells targeting AMD64. These eight raw pairs lack valid server receipt support and are not accepted copy matrix cells or performance results.",
+    "servers": "All three incomplete, zero receipts, all three serialized cleanup/stop flags true; these flags are not a new physical-process absence check.",
+    "rollup": "FAIL validation_or_platform_failure, zero passed cells, missing_records empty.",
+    "normal_amd64_terminal_artifact_uploads": [
+      {
+        "name": "v02-installed-42501629829-1-46c9cb46e382-copy-matrix-linux-amd64-server-result",
+        "artifact_id": 13625672212,
+        "created_at": "2026-11-08T16:48:49Z",
+        "updated_at": "2026-11-08T16:48:49Z"
+      },
+      {
+        "name": "v02-installed-42501629829-1-46c9cb46e382-copy-matrix-linux-amd64-client-result",
+        "artifact_id": 13625078626,
+        "created_at": "2026-11-08T16:48:48Z",
+        "updated_at": "2026-11-08T16:48:48Z"
+      }
+    ],
+    "normal_and_diagnostic_terminal_bytes": "Byte-identical checked; canonical records and diagnostic duplicates pinned in cohort evidence.",
+    "inference": "Normal terminal artifacts also exist and match diagnostic terminal bytes. This contradicts a simple narrative that only supervisor artifact error killed the child in final cleanup and then newly published those normal artifacts; it does not establish the actual first cause or exclude races.",
+    "historical_supervisor_kill_theory": "NOT_ESTABLISHED"
+  },
+  "local_recovery": {
+    "event": "host_reboot",
+    "lost": "Private temporary coordinator/auditor files; committed source and public artifacts survived.",
+    "action": "Reused exact successful candidate; durable private state; manually resumed original reviewed serial dispatch. Replacement coordinator not launched.",
+    "earlier_coordinator_review": {
+      "session_id": "33daf03b-a852-43a1-8004-b09c4a29d81a",
+      "result": "AUTHENTICATION_FAILED_BEFORE_INFERENCE",
+      "raw_result_sha256": "348f1b2ca4f1481a1bbedda66647b16cc6d2b4d380a4a6e1bd14567f3bea8a60",
+      "approval": false
+    },
+    "authentication_status": "Authentication subsequently recovered and an actual independent design review ran; prior failed coordinator authentication is historical, not a current global blocker.",
+    "first_failure_observability_design_review": {
+      "session_id": "5ddad58b-df7e-4420-8e3e-9d99a309c6c3",
+      "verdict": "NOT_APPROVED",
+      "scope": "Corrective observability design, separate from this evidence report; revised design review proceeds independently.",
+      "raw_result_sha256": "083dd92a6ba3e2d8a67070f5cbcd8b1b6ed28253c81d9ad2cd25652b8ab195be"
+    }
+  },
+  "independent_integrated_evidence_review": {
+    "status": "PENDING",
+    "approval": false
+  },
+  "private_input_pins": [
+    {
+      "collection": "candidate-evidence",
+      "name": "artifact-13607943592-entries.json",
+      "bytes": 159,
+      "sha256": "caca25d7ca6e7b249e31035dbf5955a32c0828ed34d5d1067c5f2e650f16b56c"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "artifact-13607943592.zip",
+      "bytes": 10873786,
+      "sha256": "ef527e665173187773b1da152cec20ca7f9b2396197434b351bca27676ff91a9"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "artifact-13608141945-entries.json",
+      "bytes": 371,
+      "sha256": "a28abdc3934f44dbb3ece74c6f85e0129262fcc5ea39faec1aa91bb59e2e40ff"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "artifact-13608141945.zip",
+      "bytes": 56168080,
+      "sha256": "34670b85ff26db67392533e368111bc5b800ee385a108b714a57562dfe18446a"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "artifact-13608196975-entries.json",
+      "bytes": 346,
+      "sha256": "0634f1d8ccb7e7c48baf012b21153027bca71512c17e8e565dbbe4d4e6362bdd"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "artifact-13608196975.zip",
+      "bytes": 48073757,
+      "sha256": "d072b333e1e17e521374f1c601a801de20c9bb6db25a79360b5f6f3e7a21d39c"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "artifact-13608545478-entries.json",
+      "bytes": 159,
+      "sha256": "5f38ea324b73e9ec6edfa2fcb6e543bd85845e942e4dabc49b394eb98d28ec3d"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "artifact-13608545478.zip",
+      "bytes": 9752699,
+      "sha256": "c985fca6194c998504adaba809c1637216fb0f44a2121831825786fe51238168"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "artifact-13609083759-entries.json",
+      "bytes": 160,
+      "sha256": "a53186e190f5a73ea126566c842e59a111e930c265393ffb72e604b38c2c8806"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "artifact-13609083759.zip",
+      "bytes": 13282119,
+      "sha256": "80783df169e02ed3103a2b288761dd60cfb7047ed50058588b1055b8735ca40c"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "artifact-13609402032-entries.json",
+      "bytes": 367,
+      "sha256": "f02c51a0561eeba2cdf07832f9239dce9fc4a9ea69b8cf07d3507d8be068e666"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "artifact-13609402032.zip",
+      "bytes": 55625365,
+      "sha256": "bb18b4e509f45dbd55f8f15d0c9d961a6b73dfe93068c116e2b343e709f033c7"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "artifact-13609476002-entries.json",
+      "bytes": 39,
+      "sha256": "0cc5b2c8874b9218e48c71ca337aa85bac6300dd7fb7fef8bc4621f6d146c0da"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "artifact-13609476002.zip",
+      "bytes": 3544,
+      "sha256": "e9a12530b971017bfa0bef7ae3327260b69168f48e55b6e9a6ad5c2939c7543e"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "artifact-13609620854-entries.json",
+      "bytes": 53,
+      "sha256": "866b377caf5789076af6f2c7cd391ba229a8c577e066ee1c18cb439e467294cb"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "artifact-13609620854.zip",
+      "bytes": 5018756,
+      "sha256": "2fb7c9e4d1a9c4debf82634be90188517d37e27ad831c907c2e51a5c4c8d8280"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "artifacts-verified.json",
+      "bytes": 3862,
+      "sha256": "cfe1177b9a8ba421118943632291ec250a555b4e619da186dd0e836637e9c2ed"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "artifacts.json",
+      "bytes": 5748,
+      "sha256": "b626ee8f3b56729613529f9bc192909174cc2151316d0e0afe148a74c7cd2cff"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "candidate-summary.json",
+      "bytes": 35391,
+      "sha256": "1a800472791e1dd974ed2e8b30c10bf84e3f3ab7afb8a84dccfae04722e145bf"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "job-128647167875.log",
+      "bytes": 540849,
+      "sha256": "b5e09452c46e8d4538fbcf671fbd64107613923ce189a3e19a4a3e21afdd7a1d"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "job-128647167991.log",
+      "bytes": 571326,
+      "sha256": "0a769b3c0ec9249bcd62a3c98292dcf6781e9b3d8836d0dd1edc51853ac30aed"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "job-128647168067.log",
+      "bytes": 590994,
+      "sha256": "c57d71944822f9641d3bc49e51be42537472e5b19aca89b600aec859a9cbcf58"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "job-128667724873.log",
+      "bytes": 11434,
+      "sha256": "ef615d286961a7039f4ddc668e33075a56bd6c5eb7b383a10654f65281ef7de0"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "jobs.json",
+      "bytes": 14604,
+      "sha256": "7c8a041fcce3258fc3235c36765aacb7b61b0974d246180999a39ef59b844980"
+    },
+    {
+      "collection": "candidate-evidence",
+      "name": "run.json",
+      "bytes": 12061,
+      "sha256": "c0b9f689ae98898f345a2ecb552bcfb061d7b2782cd810993ac8a6f382dd3f1f"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42500831991-artifacts.json",
+      "bytes": 10337,
+      "sha256": "7c923336c7db39ab0018928db91257ab5c6ff994e790d87b350ee5c0760559ca"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42500831991-job-128792997478.log",
+      "bytes": 31625,
+      "sha256": "bfce990a6516dc3322b99ee84163ac40b4b7964fc441711390c5efd1630c708e"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42500831991-job-128793104754.log",
+      "bytes": 60325,
+      "sha256": "4126417ea88ecaa50811e59469b7d9f41985dbdebdfe83f700ebcc43af0f8555"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42500831991-job-128793104755.log",
+      "bytes": 59547,
+      "sha256": "81a8472fccd5ec3c6edb478abd6c9619b375c3adff768811e3b064664e092e4c"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42500831991-job-128793104856.log",
+      "bytes": 59590,
+      "sha256": "ceb37236b27c74629920ab506f1884808caacec28b7ac99123828ed9eae1030d"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42500831991-job-128793880562.log",
+      "bytes": 31973,
+      "sha256": "2c0650784176209c0f7a649100f0c83d15b62c94a2c6fedccdf73aced474fe00"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42500831991-jobs.json",
+      "bytes": 18627,
+      "sha256": "caa83641a725a62ca759f3141f4ad389416ec9342361fb578f2d7f837dd07439"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42500831991-run.json",
+      "bytes": 12069,
+      "sha256": "db189c0da9a0e2f21bf4716594ac00a1400246a2b3680159b1e0df26b10c73a7"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42501192017-artifacts.json",
+      "bytes": 10325,
+      "sha256": "cc05ef3229946bc809abed6d4f375637c4f97d41bac30b229dba64bf2fb7d7b9"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42501192017-job-128794102056.log",
+      "bytes": 31617,
+      "sha256": "0fc592780e7fdcd2cd47860814fb2f124c02e7cb48aeb6ca433787bb1f443706"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42501192017-job-128794182312.log",
+      "bytes": 41943,
+      "sha256": "cbcfa9f6c452fba33a3306a96c6aba34d631405800f0ae7010aba8922f579925"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42501192017-job-128794182321.log",
+      "bytes": 38989,
+      "sha256": "3e9eacd2b5d37391bf4e2f49bfd1c610b838b24bc783215ac5c04246649ff0e0"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42501192017-job-128794182372.log",
+      "bytes": 38955,
+      "sha256": "715461eb523a788b9659a6133815f3d0571963347ddc677cee20d33ab42441b7"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42501192017-job-128795227255.log",
+      "bytes": 31965,
+      "sha256": "b12e06d6d7b3f2a6d8e0c1c07989fb3910e55e23b1bfda312a47b1bb00ef298b"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42501192017-jobs.json",
+      "bytes": 18627,
+      "sha256": "58ac28b8898cd3c7bd72532cd557bef179222729a754380dfeab9514f132d24e"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42501192017-run.json",
+      "bytes": 12069,
+      "sha256": "a22210bc6d1040a400031203c2ad98aedceea43b7dec1ed645b8e4bbf719771d"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42501629829-artifacts.json",
+      "bytes": 12448,
+      "sha256": "f965cf36d56d574b51aa03e70093c583cce16752fa7dfb356a851fd2401b9253"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42501629829-job-128795431215.log",
+      "bytes": 31610,
+      "sha256": "9cb3fa78125445c639dac3840bbfeace72cd095dd3bf24878e5c1c232ce60882"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42501629829-job-128795510315.log",
+      "bytes": 39070,
+      "sha256": "ccd833c18f8b9e5397e14d4e2c01ddc33de44ba272ca854f7916b6fe192d6f58"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42501629829-job-128795510342.log",
+      "bytes": 39887,
+      "sha256": "9056dd61911f91e30866d704ebe822a81e8574d6bdf6a8570392147f69808bd1"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42501629829-job-128795510384.log",
+      "bytes": 39106,
+      "sha256": "4540868991903e10a4d65e9ee79fa3a9fba7bb97003b7f268806c25bd1c3cb93"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42501629829-job-128797311947.log",
+      "bytes": 32101,
+      "sha256": "159237a1b507aa86d5631611c8b141ab42c708d550bcc091bcca5f0b309a171e"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42501629829-jobs.json",
+      "bytes": 18627,
+      "sha256": "a341739e41d4cd30295d51bd2424c0367bbfe3f7511f5e9b991f888e65f1df81"
+    },
+    {
+      "collection": "installed-api",
+      "name": "42501629829-run.json",
+      "bytes": 12069,
+      "sha256": "e72a63a61050371a185d4dceaffba2ebd2b25e76b3be93923c7adaee432e597c"
+    },
+    {
+      "collection": "installed-api",
+      "name": "zips-verified.json",
+      "bytes": 26434,
+      "sha256": "65fae22f715c937ff0611bf4dc9333c994ded84506a87fa60ca4ae854c1710ef"
+    },
+    {
+      "collection": "observer",
+      "name": "42500831991-context.json",
+      "bytes": 2499,
+      "sha256": "20d886d7b108e8e05404943c02f224ae2cd54cbd6fdbed9ed7e1270fb7f860df"
+    },
+    {
+      "collection": "observer",
+      "name": "42500831991-context.zip",
+      "bytes": 1177,
+      "sha256": "7cabe85e93c463991f023afb05def59d9e629d5482e9b688ab9b7e56c0134b83"
+    },
+    {
+      "collection": "observer",
+      "name": "42500831991-final-status.json",
+      "bytes": 13398,
+      "sha256": "d521939daea521459c09ce1baf773d2bf32ec4facb079616a6e7622bf2b4c198"
+    },
+    {
+      "collection": "observer",
+      "name": "42500831991-initial.json",
+      "bytes": 17871,
+      "sha256": "0379f7aec4fe91a0575ce076fef692e0ac7dab2ef2926df9d319f3297bf6b482"
+    },
+    {
+      "collection": "observer",
+      "name": "42501192017-context.json",
+      "bytes": 2498,
+      "sha256": "4649734bd50358b27cb5fdf4af7c8cdc447a4d1731eeb0f4b1a35f838c73da79"
+    },
+    {
+      "collection": "observer",
+      "name": "42501192017-context.zip",
+      "bytes": 1176,
+      "sha256": "b1913b6d5ac860944943507d8c6da54e6836bb58392dfab4d28447ab2a521cc8"
+    },
+    {
+      "collection": "observer",
+      "name": "42501192017-final-status.json",
+      "bytes": 13398,
+      "sha256": "14a3e7b2d90b32b8cf0f1235659cb0349a8528042a1e83a4b8bf764aacf33a34"
+    },
+    {
+      "collection": "observer",
+      "name": "42501192017-initial.json",
+      "bytes": 13395,
+      "sha256": "ecb05f0aa036eae087c6a45a7fa59568047508e0a9503323ed76a5938946d366"
+    },
+    {
+      "collection": "observer",
+      "name": "42501629829-context.json",
+      "bytes": 2497,
+      "sha256": "8543ac602e3aa2c358b2ca1470d861dcf0ffa4032f5ca2fddbed068e70ed3a53"
+    },
+    {
+      "collection": "observer",
+      "name": "42501629829-context.zip",
+      "bytes": 1178,
+      "sha256": "dc181c2e052f136984283dd572c2f1889251e9ad51516489b942d65a7de0b226"
+    },
+    {
+      "collection": "observer",
+      "name": "42501629829-failure-summary.json",
+      "bytes": 5209,
+      "sha256": "fe93719181009137d7286ccf8337bee102af33e357874a29310f63bbe77dff10"
+    },
+    {
+      "collection": "observer",
+      "name": "42501629829-final-status.json",
+      "bytes": 13398,
+      "sha256": "49a0252db5365c13d295ebaacbb6a06a6c47dbc3ea5228bf377bd13c7df1243d"
+    },
+    {
+      "collection": "observer",
+      "name": "42501629829-initial.json",
+      "bytes": 13395,
+      "sha256": "c656d062edb65314d413602b0538a33a996621ed5446a6bb44b71273fd098691"
+    },
+    {
+      "collection": "observer",
+      "name": "42501629829-linux-amd64-client-result.json",
+      "bytes": 1041,
+      "sha256": "6dd3bc109b2761b9cc33d742dfc673faaeb0e85edeba2cdd0fee692a40d17caf"
+    },
+    {
+      "collection": "observer",
+      "name": "42501629829-linux-amd64-diagnostic.zip",
+      "bytes": 2562,
+      "sha256": "787de5fa0354b474c9d841061e5bcc8e7d8d325bfff53c58e5fc831fb114cfd1"
+    },
+    {
+      "collection": "observer",
+      "name": "42501629829-linux-amd64-identity-ready.json",
+      "bytes": 1167,
+      "sha256": "958337b4c6859283f7616199f430d6b91a3cb2323ef75ee59171b73b22dd7c78"
+    },
+    {
+      "collection": "observer",
+      "name": "42501629829-linux-amd64-server-ready.json",
+      "bytes": 730,
+      "sha256": "b9b16618c819838c68affe560ba733ac41f427d8c0e3b46dbdf0a6972d90e9b0"
+    },
+    {
+      "collection": "observer",
+      "name": "42501629829-linux-amd64-server-result.json",
+      "bytes": 650,
+      "sha256": "99084cd03f52e6f9c941a026f2116507d75074a320dc57d3e0c46eaa85d3892f"
+    },
+    {
+      "collection": "observer",
+      "name": "42501629829-linux-amd64.log",
+      "bytes": 39070,
+      "sha256": "ccd833c18f8b9e5397e14d4e2c01ddc33de44ba272ca854f7916b6fe192d6f58"
+    },
+    {
+      "collection": "observer",
+      "name": "42501629829-linux-arm64.log",
+      "bytes": 39106,
+      "sha256": "4540868991903e10a4d65e9ee79fa3a9fba7bb97003b7f268806c25bd1c3cb93"
+    },
+    {
+      "collection": "observer",
+      "name": "42501629829-macos-arm64.log",
+      "bytes": 39887,
+      "sha256": "9056dd61911f91e30866d704ebe822a81e8574d6bdf6a8570392147f69808bd1"
+    },
+    {
+      "collection": "observer",
+      "name": "42501629829-rollup.log",
+      "bytes": 32101,
+      "sha256": "159237a1b507aa86d5631611c8b141ab42c708d550bcc091bcca5f0b309a171e"
+    },
+    {
+      "collection": "observer",
+      "name": "42501629829-watch.log",
+      "bytes": 37445,
+      "sha256": "31644a0fb28c3428c59a3609e57c9a9552e40e66f991f1af050f9fc314407f46"
+    },
+    {
+      "collection": "audit-recovery",
+      "name": "copy-matrix-failure-analysis-v1.json",
+      "bytes": 3585,
+      "sha256": "5ac8f2f2feeff3035e384b2bbcbbe601b7b4ca5565747325cc84bafe423a51f1"
+    },
+    {
+      "collection": "audit-recovery",
+      "name": "copy-matrix-failure-analysis.json",
+      "bytes": 4612,
+      "sha256": "042ea0eef17cc33125035fc8a461ac8d674986b8d307a29455fa21e897fbbe9b"
+    },
+    {
+      "collection": "audit-recovery",
+      "name": "failure-observability-design-review.json",
+      "bytes": 11561,
+      "sha256": "083dd92a6ba3e2d8a67070f5cbcd8b1b6ed28253c81d9ad2cd25652b8ab195be"
+    },
+    {
+      "collection": "audit-recovery",
+      "name": "recovery-provenance.json",
+      "bytes": 913,
+      "sha256": "4489b504d3df60bbc7caaaee1ebeff834cb15b8958e77ba88e67c884e161273f"
+    }
+  ],
+  "publication": {
+    "source_only": true,
+    "public_installer": "0.2.3",
+    "new_release_or_tag": false
+  },
+  "limitations": [
+    "All eight cohorts and refreshed independent final auditor are required for qualification; chain failed after two passing cohorts.",
+    "27 observations are passing hosted rollup results, not a qualified full chain or independent final-auditor PASS.",
+    "Application goodput divides validated payload bytes by installed CLI wall time; not RTT, wire speed, compression ratio or percentiles.",
+    "Default and installed-feature native counts overlap; ignored tests enumerated by exact platform identity/reason.",
+    "ZIP digest/size and extracted-file checks are offline provenance inspection, not reproducible-build or fresh physical transport claims.",
+    "Historical failed candidates and legacy CI failures remain separate and unwaived.",
+    "Actual independent integrated evidence/code review remains required before publication/closure."
+  ]
+}

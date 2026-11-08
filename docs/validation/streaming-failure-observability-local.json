@@ -1,0 +1,157 @@
+{
+  "schema": 1,
+  "base_source_commit": "46c9cb46e382735a8678b17eca5e416f30b0c264",
+  "qualification": false,
+  "native": {
+    "source_files": {
+      "crates/marmish-native/src/installed_check.rs": {
+        "bytes": 16047,
+        "sha256": "78c46e7356315810b12bc754d35eab59cb4173debb8060f7080282b85021d11d"
+      },
+      "crates/marmish-native/src/installed_streaming.rs": {
+        "bytes": 62853,
+        "sha256": "2d9b09a27a874f441165b17253eca66c19d907c0dd8cede6b526fe59b2253c6d"
+      },
+      "crates/marmish-native/src/installed_streaming_diagnostic.rs": {
+        "bytes": 3650,
+        "sha256": "c8e63890e06afb0c3b66088cbe5ade3ef42a87fbacb2ff4e4343b1f4a9cda458"
+      },
+      "crates/marmish-native/src/installed_streaming_diagnostic_tests.rs": {
+        "bytes": 6575,
+        "sha256": "8ec9f2547be8eaa71f17b555745a746dda91b752051199745f3b23238bf9280f"
+      }
+    },
+    "checks": [
+      {
+        "name": "compiling-stub RED",
+        "command": "cargo test -p marmish-native --features installed-checks --lib streaming_diagnostic::tests::finite_diagnostic_is_emitted_once -- --nocapture",
+        "exit_code": 101,
+        "executed": 1,
+        "failed": 1,
+        "expected": "assertion captured length0 instead of1; compile succeeded",
+        "log": "native-diagnostic-stub-red.log"
+      },
+      {
+        "name": "diagnostic pure GREEN",
+        "command": "cargo test -p marmish-native --features installed-checks --lib streaming_diagnostic -- --nocapture",
+        "exit_code": 0,
+        "passed": 4,
+        "log": "native-diagnostic-green.log"
+      },
+      {
+        "name": "streaming regression GREEN",
+        "command": "cargo test -p marmish-native --features installed-checks --lib installed_check::streaming::tests -- --nocapture",
+        "exit_code": 0,
+        "passed": 8,
+        "log": "native-streaming-regressions.log"
+      },
+      {
+        "name": "actual Display leak mutation RED",
+        "command": "cargo test -p marmish-native --features installed-checks --lib streaming_diagnostic::tests::closed_schema_filters_every_error_payload_and_bounds_large_messages -- --nocapture",
+        "exit_code": 101,
+        "executed": 1,
+        "failed": 1,
+        "expected": "closed category membership assertion rejects Error::Invalid Display payload",
+        "log": "native-diagnostic-mutation-red.log",
+        "mutant_sha256": "668ccb46b864197fc140e02a29359d58353c4644e49debfda766fa98413b8cb8",
+        "restored_sha256": "c8e63890e06afb0c3b66088cbe5ade3ef42a87fbacb2ff4e4343b1f4a9cda458",
+        "restored_with_fresh_mtime": true
+      },
+      {
+        "name": "restored broader GREEN",
+        "command": "cargo test -p marmish-native --features installed-checks --lib installed_check::streaming -- --nocapture",
+        "exit_code": 0,
+        "passed": 42,
+        "failed": 0,
+        "log": "native-diagnostic-restored-green.log"
+      },
+      {
+        "name": "strict Clippy",
+        "command": "cargo clippy -p marmish-native --features installed-checks --all-targets -- -D warnings",
+        "exit_code": 0,
+        "log": "native-clippy.log"
+      },
+      {
+        "name": "format",
+        "command": "cargo fmt --all -- --check",
+        "exit_code": 0
+      },
+      {
+        "name": "quality delta",
+        "command": "ripwire crates/marmish-native --quality-delta",
+        "exit_code": 2,
+        "log": "native-quality-delta.log",
+        "gating": 1,
+        "finding": "duplication classify | io_kind,154 normalized tokens",
+        "disposition": "Unacked/unrebaselined. Same exhaustive match shape over distinct Error vs io::ErrorKind types and categories; intentional semantic separation, independent reviewer to assess. New-symbol moved run_tracked verbosity/complexity and test dead-code/schema verbosity also reported."
+      }
+    ],
+    "logs": {
+      "native-diagnostic-stub-red.log": {
+        "bytes": 5130,
+        "sha256": "cd889c3ec91286df74e25e50e411c694ac788895ce335f4392558a5f8e4415c8"
+      },
+      "native-diagnostic-green.log": {
+        "bytes": 917,
+        "sha256": "c677a2717ad708ffb969d280f701b8514ad74853c0f4c95d63b63eb3e065414f"
+      },
+      "native-streaming-regressions.log": {
+        "bytes": 1417,
+        "sha256": "e17a8629a832fcf6d41f4a5b170d058357396f2ebc3f9e637e33bb6ecdb7c273"
+      },
+      "native-diagnostic-mutation-red.log": {
+        "bytes": 1290,
+        "sha256": "133cf300ce278797ff17a9666a23cc19111c9e6e0f256cb3ec8d3f820a82bde1"
+      },
+      "native-diagnostic-restored-green.log": {
+        "bytes": 5958,
+        "sha256": "c4d981f74ad61ee46c2508b80b83722e49b139287f1de348a05f426f644ed7a3"
+      },
+      "native-clippy.log": {
+        "bytes": 18643,
+        "sha256": "c0f5381407e234db6582bfac9f249b4b840aff7c1e03119f49b787d1a96ea8fc"
+      },
+      "native-quality-delta.log": {
+        "bytes": 4970,
+        "sha256": "1d75b51e78995551a06ff692500084942d350e29fa3ca3cae5686343af888bf9"
+      }
+    },
+    "source_site_reconciliation": {
+      "bytes": 10536,
+      "sha256": "86a8acacf44ec6aca0c506bcba7eebe586bfe233893e2d8ddeef56dfc4253b0d"
+    },
+    "limitations": [
+      "No run-level daemon/relay integration claimed; pure output tests plus actual temp-inbox servers() read/validate/wait fixtures.",
+      "No live Actions, protocol changes, artifact schema or qualification predicate changes, commits/pushes or bd operations by this agent.",
+      "No independent code approval claimed; integrated actual Claude review required.",
+      "First exact filter incorrectly selected0 tests and was corrected before RED claim; transient local compile/fixture failures fixed, final intended commands rerun."
+    ]
+  },
+  "javascript": {
+    "files": {
+      "tools/v02-actions/supervise.mjs": "2a0eb48b68eeb9773c8c4f762ec8e0213aa18826e4e46532d55fa669d1ee108b",
+      "tools/v02-actions/supervisor-diagnostic.mjs": "43bb6230e524611c53f104b86897d0c9f392aef3614ce51a2a6d0cfebfa25c23",
+      "tools/v02-actions/supervisor-diagnostic.test.mjs": "b35b5127546116a89f5051df22b1ac73b7f0a63d7c51bdb91924338c4d81c31e",
+      "tools/v02-actions/transport.test.mjs": "1496f6fba6ef0056d98d58b23df3a611ad7caa335896a7abbf67bdba0b562e14"
+    },
+    "validation": {
+      "baseline_red": "ignored diagnostic option: original error identity and cleanup assertions passed, empty capture failed expected1 actual0",
+      "focused": "38/38 pass",
+      "full_node_suite": "172/172 pass",
+      "syntax": "node --check all four owned files pass",
+      "diff_check": "git diff --check pass",
+      "leak_mutation": "actual sentinel leak caught, 1/1 failed; source exact bytes restored and fresh mtime; 38/38 green after restore"
+    },
+    "fixture_scope": "EventEmitter fake children wrapped by real ownedChild; no actual process/CI validation",
+    "evidence_sha256": {
+      "js-diagnostic-baseline-red.log": "49f606facb1024a7b5c85821263ec25b5975435382a0eb203bb0b6eb0eab1052",
+      "js-diagnostic-first-green.log": "56a9cd3f8532483284da5dfd7bdcdf34ead3695feb5a2183884d6ac74e4f8a4d",
+      "js-diagnostic-focused-green.log": "3346697ced1e275e42065fde981ea54d0155f43d381f715b56ec527a70d1c9df",
+      "js-diagnostic-leak-mutation-red.log": "161376205a332e099a3487a192ee2605eafde28a37a7390f25de194af2b0f5e7",
+      "js-diagnostic-post-mutation-green.log": "a89cb4e103fc024023748a812f7127ff5f8145ac955e2730ef6e34ddee05416d",
+      "js-diagnostic-full-suite-green.log": "18f3980981fece6b3f6b5843a5845611fac42bc8e5457beba074bef1e9bc049e",
+      "js-diagnostic-mutation-evidence.json": "19cd3580e0650abc198c565a453c5b52707b15a5c82fcf40feeedd73f885e22c"
+    }
+  },
+  "private_native_manifest_sha256": "51174cc598202444456d41e1dd47cf8f0c6bd4b0082fd77207ef615b8e94216e"
+}

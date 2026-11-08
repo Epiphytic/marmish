@@ -9,6 +9,7 @@ import {ArtifactTransport, ROLES, artifactName, binding, boundedFile,
   childEnvironment, digest, putImmutable, requireThat} from './transport.mjs';
 
 import {isStreamingCohort, STREAMING_BOUNDS} from './streaming-policy.mjs';
+import {supervisorDiagnostic} from './supervisor-diagnostic.mjs';
 
 export function timing(context, jobDeadline, mode, now = Date.now()) {
   const streaming = isStreamingCohort(context.cohort);
@@ -43,8 +44,14 @@ export function ownedChild(child) {
 
 // Remote API polling and local publication have independent clocks. A long
 // Retry-After must never prevent the driver's terminal records being uploaded.
-export async function supervise({options, context, transport, artifact, spawnChild = spawn,
-  now = Date.now, delay, signal, cancellation = {requested: false}}) {
+export async function supervise(args) {
+  const diagnostic = args.diagnosticState ?? supervisorDiagnostic(args.diagnostic, args.options?.role);
+  try { return await superviseOwned(args, diagnostic); }
+  catch (error) { diagnostic.failed(error); throw error; }
+}
+
+async function superviseOwned({options, context, transport, artifact, spawnChild = spawn,
+  now = Date.now, delay, signal, cancellation = {requested: false}}, diagnostic) {
   const prefix = binding(context, options.role);
   requireThat(['exchange', 'run'].includes(options.mode), 'invalid_mode');
   const bounds = timing(context, options.jobDeadline, options.mode, now());
@@ -54,7 +61,7 @@ export async function supervise({options, context, transport, artifact, spawnChi
   const received = new Set();
   const outgoing = options.mode === 'exchange' ? ['identity-ready'] : ['server-ready', 'client-result', 'server-result'];
   const incoming = options.mode === 'exchange' ? ['identity-ready'] : ['server-ready', 'client-result'];
-  let owner, remote, remoteError;
+  let owner, remote, remoteError, remoteFailure;
   let nextPoll = 0;
   let success = false;
   let wake = () => {};
@@ -71,14 +78,18 @@ export async function supervise({options, context, transport, artifact, spawnChi
   };
   const poll = async () => {
     let interval = 30_000;
+    let stage = 'remote_list';
+    let peerRole = null;
     try {
       const entries = await transport.list(bounds.deadline, controller.signal);
       for (const role of ROLES) for (const kind of incoming) {
         controller.signal.throwIfAborted();
         const name = artifactName(prefix, role, kind);
         if (received.has(name)) continue;
+        stage = 'remote_download'; peerRole = role;
         const bytes = await transport.download(entries, name, `${kind}.json`, bounds.deadline, controller.signal);
         if (bytes) {
+          stage = 'inbox_publish';
           await putImmutable(options.mode === 'exchange' ? options.identities : options.inbox,
             `${role}-${kind}.json`, bytes);
           received.add(name);
@@ -87,7 +98,7 @@ export async function supervise({options, context, transport, artifact, spawnChi
     } catch (error) {
       if (!controller.signal.aborted) {
         if (error.message === 'artifact_retry') interval = Math.max(interval, error.retryAfter ?? 0);
-        else remoteError = error;
+        else { remoteError = error; remoteFailure = {stage, peerRole}; }
       }
     } finally { nextPoll = now() + interval; wake(); }
   };
@@ -96,11 +107,13 @@ export async function supervise({options, context, transport, artifact, spawnChi
     // could mask a malformed artifact that raced the final local upload.
     if (remote) await remote;
     if (remoteError) throw remoteError;
+    diagnostic.at('bounds');
     requireThat(!controller.signal.aborted && !cancellation.requested, 'supervisor_cancelled');
     success = true;
   };
   try {
     if (options.mode === 'run') {
+      diagnostic.at('child_terminal');
       owner = ownedChild(spawnChild(options.driver, ['run', '--context', options.context,
         '--workspace', options.workspace, '--identities', options.identities,
         '--inbox', options.inbox, '--output', options.output],
@@ -109,6 +122,7 @@ export async function supervise({options, context, transport, artifact, spawnChi
     }
     if (signal?.aborted || cancellation.requested) cancel();
     for (;;) {
+      diagnostic.at('bounds');
       requireThat(!controller.signal.aborted && !cancellation.requested, 'supervisor_cancelled');
       requireThat(now() < bounds.deadline, 'artifact_deadline');
       if (remoteError) throw remoteError;
@@ -116,6 +130,7 @@ export async function supervise({options, context, transport, artifact, spawnChi
       // another complete scan, rather than falsely declaring a terminal missing.
       const exitedBeforeScan = owner?.result;
       for (const kind of outgoing) {
+        diagnostic.at('local_record_read');
         let bytes;
         try { bytes = await boundedFile(path.join(options.output, `${options.role}-${kind}.json`)); }
         catch (error) {
@@ -127,6 +142,7 @@ export async function supervise({options, context, transport, artifact, spawnChi
           requireThat(published.get(kind) === hash, 'published_record_changed');
           continue;
         }
+        diagnostic.at('local_record_publish');
         const directory = path.join(stage, kind);
         await fs.mkdir(directory, {mode: 0o700});
         const copy = path.join(directory, `${kind}.json`);
@@ -137,12 +153,14 @@ export async function supervise({options, context, transport, artifact, spawnChi
         published.set(kind, hash);
       }
       if (exitedBeforeScan) {
+        diagnostic.at('child_terminal');
         requireThat(exitedBeforeScan.code === 0 && exitedBeforeScan.signal === null, 'driver_failed');
         requireThat(published.has('client-result') && published.has('server-result'), 'terminal_records_missing');
         await finishSuccess();
         return;
       }
       if (options.mode === 'exchange' && received.size === ROLES.length) {
+        diagnostic.at('local_record_publish');
         requireThat(published.has('identity-ready'), 'local_identity_missing');
         await finishSuccess();
         return;
@@ -152,7 +170,12 @@ export async function supervise({options, context, transport, artifact, spawnChi
       }
       await pause(owner?.result ? 1 : 1000);
     }
+  } catch (error) {
+    if (remoteFailure && error === remoteError) diagnostic.at(remoteFailure.stage, remoteFailure.peerRole);
+    diagnostic.failed(error);
+    throw error;
   } finally {
+    diagnostic.at('cleanup');
     controller.abort(); wake();
     if (!success) owner?.terminate();
     signal?.removeEventListener('abort', cancel);
@@ -175,23 +198,33 @@ export async function supervise({options, context, transport, artifact, spawnChi
   }
 }
 
-export async function main() {
+export async function main({diagnostic, env = process.env} = {}) {
+  const reporter = supervisorDiagnostic(diagnostic);
+  try { await mainOwned(env, reporter); }
+  catch (error) { reporter.failed(error); throw error; }
+}
+
+async function mainOwned(env, diagnostic) {
   const input = name => {
-    const value = process.env[`INPUT_${name.toUpperCase()}`];
+    const value = env[`INPUT_${name.toUpperCase()}`];
     requireThat(value && value.length <= 4096, 'invalid_action_input');
     return value;
   };
   const options = Object.fromEntries(['mode', 'context', 'role', 'driver', 'workspace', 'identities', 'inbox', 'output']
-    .map(key => [key, input(key)]));
+    .map(key => {
+      const value = input(key);
+      if (key === 'role') diagnostic.role(value);
+      return [key, value];
+    }));
   options.jobDeadline = Number(input('job-deadline'));
   for (const key of ['context', 'driver', 'workspace', 'identities', 'inbox', 'output']) {
     requireThat(path.isAbsolute(options[key]), 'invalid_action_path');
   }
   const token = input('token');
   const context = JSON.parse(await boundedFile(options.context, 32768));
-  requireThat(process.env.GITHUB_REPOSITORY === context.repository
-    && process.env.GITHUB_RUN_ID === String(context.run_id)
-    && process.env.GITHUB_RUN_ATTEMPT === String(context.run_attempt), 'action_context_mismatch');
+  requireThat(env.GITHUB_REPOSITORY === context.repository
+    && env.GITHUB_RUN_ID === String(context.run_id)
+    && env.GITHUB_RUN_ATTEMPT === String(context.run_attempt), 'action_context_mismatch');
   const controller = new AbortController();
   const cancel = () => controller.abort();
   process.on('SIGINT', cancel);
@@ -199,8 +232,12 @@ export async function main() {
   try {
     const transport = new ArtifactTransport({context, token,
       budgetFile: path.join(options.workspace, '.actions-budget.json')});
-    await supervise({options, context, transport, artifact: new BoundedArtifactClient(), signal: controller.signal});
+    await supervise({options, context, transport, artifact: new BoundedArtifactClient(), signal: controller.signal, diagnosticState: diagnostic});
+  } catch (error) {
+    diagnostic.failed(error);
+    throw error;
   } finally {
+    diagnostic.at('cleanup');
     process.removeListener('SIGINT', cancel);
     process.removeListener('SIGTERM', cancel);
   }
