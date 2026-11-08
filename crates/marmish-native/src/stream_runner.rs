@@ -419,6 +419,18 @@ struct Lifecycle {
     killed: Option<Instant>,
 }
 impl Lifecycle {
+    fn record_exit_observed(&mut self, shared: &Shared) {
+        if self.exit_seen.is_none() {
+            self.exit_seen = Some(Instant::now());
+            // Leader exit fences input even while output remains backpressured.
+            let mut state = shared.state();
+            state.stdin_closed = true;
+            #[cfg(test)]
+            {
+                state.test_leader_exit_observed = true;
+            }
+        }
+    }
     fn step(&mut self, child: &mut LiveChild, shared: &Shared, limits: RunnerLimits) -> bool {
         let now = Instant::now();
         let exited = match child.try_exit() {
@@ -430,16 +442,8 @@ impl Lifecycle {
                 return false;
             }
         };
-        if exited && self.exit_seen.is_none() {
-            self.exit_seen = Some(now);
-            // Leader exit fences input even while output remains backpressured
-            // and terminal cannot be exposed until owned cleanup/reaping.
-            let mut state = shared.state();
-            state.stdin_closed = true;
-            #[cfg(test)]
-            {
-                state.test_leader_exit_observed = true;
-            }
+        if exited {
+            self.record_exit_observed(shared);
         }
         let cancellation = shared.cancel.load(Ordering::Acquire);
         // A late user request must not relabel an already-observed natural exit.
@@ -457,7 +461,7 @@ impl Lifecycle {
                 shared.failed(true);
                 return false;
             }
-            self.cancel_started = Some(now);
+            self.cancel_started = Some(Instant::now());
         }
         if self.killed.is_none()
             && self
@@ -470,7 +474,7 @@ impl Lifecycle {
                 shared.failed(true);
                 return false;
             }
-            self.killed = Some(now);
+            self.killed = Some(Instant::now());
         }
         true
     }
@@ -485,16 +489,30 @@ impl Lifecycle {
     ) -> bool {
         let now = Instant::now();
         if self.exit_seen.is_none() {
-            if self
+            if !self
                 .killed
                 .is_some_and(|at| now.duration_since(at) >= limits.drain_grace)
             {
-                #[cfg(test)]
-                shared.record_failure_context(None, Some(self));
-                shared.failed(true);
-                return true;
+                return false;
             }
-            return false;
+            // The last negative observation predates this deadline check. A
+            // descheduled supervisor must recheck its still-owned child before
+            // declaring cleanup uncertain; this does not grant another grace.
+            match child.try_exit() {
+                Ok(true) => self.record_exit_observed(shared),
+                Ok(false) => {
+                    #[cfg(test)]
+                    shared.record_failure_context(None, Some(self));
+                    shared.failed(true);
+                    return true;
+                }
+                Err(_error) => {
+                    #[cfg(test)]
+                    shared.record_failure_context(Some(_error), Some(self));
+                    shared.failed(true);
+                    return true;
+                }
+            }
         }
         let cancellation = self.cancelled_while_running;
         let abandon_output = shared.cancel.load(Ordering::Acquire);
@@ -541,7 +559,7 @@ impl Lifecycle {
                 shared.failed(true);
                 return true;
             }
-            self.killed = Some(now);
+            self.killed = Some(Instant::now());
         }
         let outcome = match child.reap_last() {
             Ok(outcome) => outcome,
@@ -1099,6 +1117,147 @@ pub(crate) mod tests {
         assert!(state.identity.is_none());
         assert_eq!(state.terminal, Some(Terminal::Cancelled));
         assert!(!dir.path().join("marker").exists());
+    }
+
+    // Controlled stale supervisor bookkeeping, not a scheduler or historical
+    // macOS reproduction. The actual child is gated solely by its stdin pipe.
+    fn stale_cleanup_fixture() -> (
+        tempfile::TempDir,
+        LiveChild,
+        marmish_engine::LivePipes,
+        Shared,
+        Lifecycle,
+    ) {
+        let (directory, prepared) = prepare("read x; exit 7");
+        let mut child = prepared.spawn().unwrap();
+        let pipes = child.take_pipes().unwrap();
+        assert!(!child.try_exit().unwrap());
+        let old = Instant::now()
+            .checked_sub(2 * limits().drain_grace)
+            .expect("test clock supports expired budget");
+        let shared = Shared {
+            state: Mutex::new(State::default()),
+            cancel: AtomicBool::new(true),
+            input_permitted: AtomicBool::new(false),
+            input_suspended: AtomicBool::new(false),
+            finished: AtomicBool::new(false),
+        };
+        let lifecycle = Lifecycle {
+            exit_seen: None,
+            cancel_started: Some(old),
+            cancelled_while_running: true,
+            killed: Some(old),
+        };
+        (directory, child, pipes, shared, lifecycle)
+    }
+
+    fn await_owned_exit(child: &LiveChild) {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while !child.try_exit().unwrap() {
+            assert!(Instant::now() < deadline, "owned exit timed out");
+            thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    fn stale_cleanup_refreshes_real_exit_before_declaring_uncertain() {
+        let (_directory, mut child, pipes, shared, mut lifecycle) = stale_cleanup_fixture();
+        drop(pipes.stdin);
+        await_owned_exit(&child); // WNOWAIT leaves lifecycle's negative stale.
+        // Honor final-group-signal-before-reap; this KILL did not cause exit.
+        child.signal_kill().unwrap();
+        let mut stdout = Some(pipes.stdout);
+        let mut stderr = Some(pipes.stderr);
+        assert!(lifecycle.finish(
+            &mut child,
+            &shared,
+            &mut stdout,
+            &mut stderr,
+            (false, false),
+            limits(),
+        ));
+        let state = shared.state();
+        assert_eq!(state.terminal, Some(Terminal::Cancelled));
+        assert!(!state.uncertain);
+        assert!(state.test_leader_exit_observed);
+        assert!(state.stdin_closed);
+        assert_eq!(state.stdout.eof(), Some(0));
+        assert_eq!(state.stderr.eof(), Some(0));
+        drop(state);
+        assert_eq!(
+            child.try_exit(),
+            Err(marmish_engine::EngineError::RecoveryUncertain)
+        );
+        assert_eq!(
+            child.reap_last(),
+            Err(marmish_engine::EngineError::RecoveryUncertain)
+        );
+    }
+
+    #[test]
+    fn stale_cleanup_still_running_remains_uncertain() {
+        let (_directory, mut child, pipes, shared, mut lifecycle) = stale_cleanup_fixture();
+        // Keep stdin open: this is a real negative probe, not SIGKILL survival.
+        let _stdin = pipes.stdin;
+        let mut stdout = Some(pipes.stdout);
+        let mut stderr = Some(pipes.stderr);
+        assert!(lifecycle.finish(
+            &mut child,
+            &shared,
+            &mut stdout,
+            &mut stderr,
+            (false, false),
+            limits(),
+        ));
+        let state = shared.state();
+        assert_eq!(
+            state.terminal,
+            Some(Terminal::Failed {
+                code: WireErrorCode::Uncertain
+            })
+        );
+        assert!(state.uncertain);
+        assert!(!state.test_leader_exit_observed);
+        drop(state);
+        assert!(!child.try_exit().unwrap());
+        child.signal_kill().unwrap();
+        await_owned_exit(&child);
+        assert_eq!(
+            child.reap_last().unwrap(),
+            ExitOutcome::Signal(libc::SIGKILL)
+        );
+    }
+
+    #[test]
+    fn stale_cleanup_already_reaped_remains_uncertain() {
+        let (_directory, mut child, pipes, shared, mut lifecycle) = stale_cleanup_fixture();
+        drop(pipes.stdin);
+        await_owned_exit(&child);
+        child.signal_kill().unwrap(); // Final group signal precedes final reap.
+        assert_eq!(child.reap_last().unwrap(), ExitOutcome::Code(7));
+        let mut stdout = Some(pipes.stdout);
+        let mut stderr = Some(pipes.stderr);
+        assert!(lifecycle.finish(
+            &mut child,
+            &shared,
+            &mut stdout,
+            &mut stderr,
+            (false, false),
+            limits(),
+        ));
+        let state = shared.state();
+        assert_eq!(
+            state.terminal,
+            Some(Terminal::Failed {
+                code: WireErrorCode::Uncertain
+            })
+        );
+        assert!(state.uncertain);
+        assert_eq!(
+            state.test_failure.as_ref().unwrap().engine_error,
+            Some(marmish_engine::EngineError::RecoveryUncertain)
+        );
+        assert!(!state.test_leader_exit_observed);
     }
 
     #[test]

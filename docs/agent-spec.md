@@ -934,3 +934,14 @@ See the [diagnostic phase](phases/streaming-runner-cleanup-diagnostics.md) and
 A separately demonstrated stale-observation lifecycle hazard requires its own
 review and tests. Fresh full qualification remains required; no new public
 version, release tag or installer pin is created. Source publication is separate from test qualification.
+
+
+The [runner exit-observation correction](phases/streaming-runner-exit-observation.md)
+starts existing grace budgets at successful signal completion and refreshes owned
+exit observation once at the existing expired post-KILL failure boundary. A real
+exited-child stale-state regression fails old code and passes the correction;
+real still-running and already-reaped controls remain uncertain. Cancellation
+meaning and budget constants are preserved. This independently demonstrated
+defect is not established as the historical f96 macOS cleanup cause. Local checks
+do not replace the required fresh native candidate, all eight installed cohorts
+and actual final auditor qualification.
