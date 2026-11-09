@@ -370,7 +370,8 @@ class InstalledStateTests(unittest.TestCase):
         archive = self.root / 'fixture.tar.gz'
         archive.write_bytes(archive_bytes(installer))
         prefix = Path(self.state['prefix'])
-        installer.install_archive(archive, prefix, prefix / 'bin', VERSION, TARGET)
+        with patch.object(installer.platform, 'libc_ver', return_value=('glibc', '2.39')):
+            installer.install_archive(archive, prefix, prefix / 'bin', VERSION, TARGET)
         result = state.cleanup_state(self.state)
         self.assertEqual(result['outcome'], 'complete', result)
         self.assertTrue(result['checks']['uninstall_complete'])
@@ -433,7 +434,8 @@ class InstalledStateTests(unittest.TestCase):
         archive = self.root / 'fixture.tar.gz'
         archive.write_bytes(archive_bytes(installer))
         prefix = Path(self.state['prefix'])
-        installer.install_archive(archive, prefix, prefix / 'bin', VERSION, TARGET)
+        with patch.object(installer.platform, 'libc_ver', return_value=('glibc', '2.39')):
+            installer.install_archive(archive, prefix, prefix / 'bin', VERSION, TARGET)
         Path(self.state['installer']).write_bytes(b'tampered installer\n')
         result = state.cleanup_state(self.state)
         self.assertEqual(result['error'], 'uninstall_failed')
