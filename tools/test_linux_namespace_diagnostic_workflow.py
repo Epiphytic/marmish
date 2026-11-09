@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -16,8 +17,28 @@ import marmish_managed_runtime_spike as spike
 
 class WorkflowTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(contextlib.chdir(Path(__file__).resolve().parent.parent))
         self.text = (Path(__file__).resolve().parent.parent / '.github/workflows/linux-namespace-diagnostic.yml').read_text()
         self.steps = re.split(r'^      - ', self.text, flags=re.M)[1:]
+
+    def test_fixture_pins_workflow_directory_and_restores_caller(self):
+        repository = Path(__file__).resolve().parent.parent
+        with tempfile.TemporaryDirectory() as temporary, contextlib.chdir(temporary):
+            caller = Path(temporary).resolve()
+            for fail in (False, True):
+                with self.subTest(fail=fail):
+                    case = WorkflowTests('test_manual_guard_exact_runner_permissions_and_concurrency')
+                    try:
+                        case.setUp()
+                        self.assertEqual(Path.cwd(), repository)
+                        self.assertEqual(Path('tools').resolve(), repository / 'tools')
+                        if fail:
+                            raise RuntimeError('simulated_test_body_failure')
+                    except RuntimeError as error:
+                        self.assertEqual(str(error), 'simulated_test_body_failure')
+                    finally:
+                        case.doCleanups()
+                    self.assertEqual(Path.cwd(), caller)
 
     def run_text(self, step):
         match = re.search(r'^        run: (.*)\n', step, re.M)

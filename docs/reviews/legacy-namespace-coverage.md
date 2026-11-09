@@ -32,3 +32,37 @@ integration tests with zero skips. Reduced legacy success cannot qualify full
 namespace coverage. Neither change adds a namespace requirement to native Rust
 Marmish or changes release, installer or runtime behavior. Historical failures
 remain failures; this selection does not establish their causes.
+
+## Hosted followup: wrapper mock working directory
+
+Actual source `fd30018`, run
+[42635497670/1](https://github.com/Epiphytic/marmish/actions/runs/42635497670),
+passed all three installer jobs. Both Linux reduced suites reported979 cases,
+11 skips and the exact two configured namespace skips, but failed six subcases
+of the new wrapper contract. The earlier migration-alarm failure did not recur.
+The macOS suite stopped at compiler admission, before discovery. These are
+failed runs, not completed reduced coverage.
+
+A narrow unchanged reproduction passed the seven contracts from repository root
+but failed five assertions and one error from the tools directory under both
+flag modes. The wrapper uses workflow-relative `tools`; the test fixture had
+inherited the full suite's isolated HOME. The correction makes only this mock
+fixture enter its explicit resolved repository directory with unittest-owned
+context cleanup. One regression checks restoration after normal and exceptional
+bodies. The real workflow and integration test bodies are untouched.
+
+Claude Opus5.5 independently approved the scaled design and completed code in
+auto mode, session `becbac15-7452-4e04-9928-5b40890f0e70`.
+Design record SHA256:
+`de1220d1febc21b2b31c2582d0c8cc46092734fe4f54ce05fd21e44586b2235f`.
+Completed-code record SHA256:
+`fb2d8b8cef7c789653581d9864b737ee72e44aaeac23a77cf4dd3f31384fa655`.
+Final test-file SHA256:
+`c02fd04b915e890334c44eacd2ed61f57feb166e52b5628b7c0f62454d13a88c`.
+Author and reviewer independently ran all eight contracts from repository root,
+tools and a disposable HOME, each with flag absent and literal1: all six
+combinations passed with zero skips. Caller working directories were restored.
+Diff check passes; quality-delta exits2 for test-class length153→173, disclosed
+and accepted. Actual corrected hosted-suite validation remains pending. Manual
+namespace run42635573924 stayed queued without a runner past five minutes;
+that is no integration result, and the user was notified.
