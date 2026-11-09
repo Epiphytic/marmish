@@ -75,10 +75,11 @@ but repetition 22 of the exact race failed after 21 passes; 78 were not run.
 The initial TERM proof observed `wait_pid=zero wait_code=zero`: no exit status
 was available from that successful nonblocking wait. The kernel cause remains
 unknown. See the [sanitized evidence](validation/macos-initial-no-status.md).
-At the 2026-11-09 17:58:50 UTC evidence cutoff, the proposed runtime correction
-under `marmish-d97.3` was in design review, with no runtime fix approved or
-implemented. Diagnostic execution is not release qualification; publication
-and operation benchmarks remain pending their required gates.
+The observed diagnostic source `e461754` contains no runtime correction.
+A subsequent correction is tracked under `marmish-d97.3`; its review and
+validation are separate from this evidence. Diagnostic execution is not
+release qualification; publication and operation benchmarks remain pending
+their required gates.
 
 At subsequent source `86119f1`, ordinary candidate 42594063209/1 and exact-source
 macOS regression 42594082226/1 passed. Installed qualification stopped at

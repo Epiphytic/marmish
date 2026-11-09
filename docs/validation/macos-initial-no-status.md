@@ -55,8 +55,9 @@ and zero code: no exit status was available at that observation. This does not
 prove the underlying kernel cause of the group TERM EPERM, establish a terminal
 leader or group, or authorize reaping. The diagnostic does not weaken strict
 failure, ownership, identity, membership or cleanup deadline requirements.
-The new runtime-correction proposal under `marmish-d97.3` was in design review
-at this cutoff; no runtime fix had been approved or implemented.
+The observed diagnostic source `e461754` contains no runtime correction.
+A subsequent correction is tracked under `marmish-d97.3`; its review and
+validation are separate from this evidence.
 
 The sanitized terminal summary SHA256 is
 `99d05120bbdaa0b08b35f8a5500dddc889623e1e928852a04108887a36cb21aa`.
