@@ -86,6 +86,65 @@ pub(crate) struct ZombieDetail {
     pub(crate) in_exit: bool,
 }
 
+#[cfg(all(debug_assertions, target_os = "macos"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WaitPidKind {
+    Zero,
+    Reserved,
+    Other,
+}
+#[cfg(all(debug_assertions, target_os = "macos"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WaitCodeKind {
+    Zero,
+    Exited,
+    Killed,
+    Dumped,
+    Other,
+}
+#[cfg(all(debug_assertions, target_os = "macos"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HeldDetail {
+    pub(crate) pid: WaitPidKind,
+    pub(crate) code: WaitCodeKind,
+}
+#[cfg(all(debug_assertions, target_os = "macos"))]
+impl HeldDetail {
+    pub(crate) fn from_returned(expected: i32, returned: i32, code: i32) -> Self {
+        Self {
+            pid: if returned == 0 {
+                WaitPidKind::Zero
+            } else if returned == expected {
+                WaitPidKind::Reserved
+            } else {
+                WaitPidKind::Other
+            },
+            code: match code {
+                0 => WaitCodeKind::Zero,
+                libc::CLD_EXITED => WaitCodeKind::Exited,
+                libc::CLD_KILLED => WaitCodeKind::Killed,
+                libc::CLD_DUMPED => WaitCodeKind::Dumped,
+                _ => WaitCodeKind::Other,
+            },
+        }
+    }
+    fn format(self) -> String {
+        let pid = match self.pid {
+            WaitPidKind::Zero => "zero",
+            WaitPidKind::Reserved => "reserved",
+            WaitPidKind::Other => "other",
+        };
+        let code = match self.code {
+            WaitCodeKind::Zero => "zero",
+            WaitCodeKind::Exited => "exited",
+            WaitCodeKind::Killed => "killed",
+            WaitCodeKind::Dumped => "dumped",
+            WaitCodeKind::Other => "other",
+        };
+        format!(" wait_pid={pid} wait_code={code}")
+    }
+}
+
 pub(crate) struct Failure {
     pub(crate) error: EngineError,
     #[cfg(target_os = "macos")]
@@ -100,6 +159,8 @@ pub(crate) struct Failure {
     context: Context,
     #[cfg(all(debug_assertions, target_os = "macos"))]
     zombie_detail: Option<ZombieDetail>,
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    held_detail: Option<HeldDetail>,
     #[cfg(debug_assertions)]
     errno: Option<i32>,
 }
@@ -120,9 +181,24 @@ impl Failure {
             context: Context::Probe,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             zombie_detail: None,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            held_detail: None,
             #[cfg(debug_assertions)]
             errno: _errno,
         }
+    }
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    pub(crate) fn with_held_detail(self, detail: HeldDetail) -> Self {
+        let held_detail =
+            matches!(self.stage, Stage::Darwin(DarwinStage::HeldStatus)).then_some(detail);
+        Self {
+            held_detail,
+            ..self
+        }
+    }
+    #[cfg(all(test, debug_assertions, target_os = "macos"))]
+    pub(crate) fn held_detail(&self) -> Option<HeldDetail> {
+        self.held_detail
     }
     #[cfg(all(debug_assertions, target_os = "macos"))]
     pub(crate) fn with_zombie_detail(self, detail: ZombieDetail) -> Self {
@@ -220,6 +296,8 @@ struct Record {
     context: Context,
     #[cfg(all(debug_assertions, target_os = "macos"))]
     zombie_detail: Option<ZombieDetail>,
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    held_detail: Option<HeldDetail>,
     errno: Option<i32>,
 }
 #[cfg(debug_assertions)]
@@ -235,6 +313,8 @@ fn record<T>(result: &Staged<T>, origin: Origin) -> Option<Record> {
         context: failure.context,
         #[cfg(target_os = "macos")]
         zombie_detail: failure.zombie_detail,
+        #[cfg(target_os = "macos")]
+        held_detail: failure.held_detail,
         errno: failure.errno,
     })
 }
@@ -323,6 +403,12 @@ impl Record {
         #[cfg(not(target_os = "macos"))]
         let detail = "";
         #[cfg(target_os = "macos")]
+        let held = self
+            .held_detail
+            .map_or_else(String::new, HeldDetail::format);
+        #[cfg(not(target_os = "macos"))]
+        let held = "";
+        #[cfg(target_os = "macos")]
         let member = match self.bsd_member {
             Some(MemberKind::Leader) => " member=leader",
             Some(MemberKind::Other) => " member=other",
@@ -337,7 +423,7 @@ impl Record {
         #[cfg(not(target_os = "macos"))]
         let (member, attempt) = ("", "");
         format!(
-            "marmish-engine-signal-failure origin={origin} stage={context}{} errno={errno}{detail}{member}{attempt}\n",
+            "marmish-engine-signal-failure origin={origin} stage={context}{} errno={errno}{detail}{member}{held}{attempt}\n",
             self.stage.label()
         )
     }
@@ -499,5 +585,55 @@ mod tests {
                 }
             }
         }
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn held_wait_records_are_closed_and_failure_only() {
+        for (pid, pid_label) in [
+            (WaitPidKind::Zero, "zero"),
+            (WaitPidKind::Reserved, "reserved"),
+            (WaitPidKind::Other, "other"),
+        ] {
+            for (code, code_label) in [
+                (WaitCodeKind::Zero, "zero"),
+                (WaitCodeKind::Exited, "exited"),
+                (WaitCodeKind::Killed, "killed"),
+                (WaitCodeKind::Dumped, "dumped"),
+                (WaitCodeKind::Other, "other"),
+            ] {
+                for (context, label) in [
+                    (Context::ProofHeld, "proof-held"),
+                    (Context::ProofFinalHeld, "proof-final-held"),
+                ] {
+                    let failure = Failure::darwin(
+                        EngineError::RecoveryUncertain,
+                        DarwinStage::HeldStatus,
+                        None,
+                    )
+                    .with_held_detail(HeldDetail { pid, code })
+                    .context(context)
+                    .with_proof_attempt(ProofAttempt::One);
+                    assert!(matches!(failure.error, EngineError::RecoveryUncertain));
+                    let text = record::<()>(&Err(failure), Origin::Term).unwrap().format();
+                    assert_eq!(text, format!(
+                        "marmish-engine-signal-failure origin=term stage={label}/darwin-held-status errno=none wait_pid={pid_label} wait_code={code_label} proof_attempt=1\n"
+                    ));
+                    assert!(text.len() < 512);
+                    assert_eq!(text.lines().count(), 1);
+                }
+            }
+        }
+        assert!(record::<()>(&Ok(()), Origin::Term).is_none());
+        let failure = Failure::darwin(EngineError::RecoveryUncertain, DarwinStage::HeldWait, None)
+            .with_held_detail(HeldDetail {
+                pid: WaitPidKind::Zero,
+                code: WaitCodeKind::Zero,
+            });
+        assert!(failure.held_detail().is_none());
+        let text = record::<()>(&Err(failure), Origin::Term).unwrap().format();
+        assert_eq!(
+            text,
+            "marmish-engine-signal-failure origin=term stage=darwin-held-wait errno=none\n"
+        );
     }
 }

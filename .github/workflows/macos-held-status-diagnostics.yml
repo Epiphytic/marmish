@@ -1,0 +1,126 @@
+name: macOS held-status diagnostics (not qualification)
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Reviewed full master commit; must equal this workflow commit
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: marmish-macos-held-status-diagnostics
+  cancel-in-progress: false
+env:
+  CARGO_TERM_COLOR: never
+  MARMISH_NATIVE_TOOLCHAIN: '1'
+jobs:
+  diagnostics:
+    if: github.ref == 'refs/heads/master'
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      MARMISH_BUILD_COMMIT: ${{ inputs.source_commit }}
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+      RUST_TEST_THREADS: '1'
+      MARMISH_REQUIRE_NONROOT_PERMISSION_TESTS: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_commit }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify immutable source and nonroot macOS ARM64 host
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$MARMISH_BUILD_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$MARMISH_BUILD_COMMIT" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$MARMISH_BUILD_COMMIT"
+          test "$GITHUB_REPOSITORY" = Epiphytic/marmish
+          test "$GITHUB_REF" = refs/heads/master
+          test "$(uname -s):$(uname -m)" = Darwin:arm64
+          test "$(id -u)" -ne 0
+          git merge-base --is-ancestor "$MARMISH_BUILD_COMMIT" refs/remotes/origin/master
+          git diff --quiet HEAD --
+      - uses: dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920 # 1.97.1
+        with:
+          toolchain: 1.97.1
+          components: clippy
+      - name: Identify worker metadata only without building native tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'held-status diagnostics stage=worker_metadata'
+          metadata=$(mktemp "$RUNNER_TEMP/marmish-held-metadata.XXXXXX")
+          trap 'rm -f "$metadata"' EXIT
+          cargo metadata --locked --no-deps --format-version 1 | tee "$metadata"
+          jq -e '[.packages[] | select(.name == "marmish-engine")] | if length == 1 then .[0].targets | map(select(.kind | index("bin"))) | sort_by(.name) | map({name, required_features: (.["required-features"] // [])}) == [{name: "marmish-engine-worker", required_features: []}, {name: "marmish-test-frontend", required_features: ["fault-injection"]}] else false end' "$metadata"
+          jq -e '[.packages[] | select(.name == "marmish-native")] | if length == 1 then .[0].targets | map(select(.kind | index("bin"))) | sort_by(.name) | map({name, required_features: (.["required-features"] // [])}) == [{name: "marmish", required_features: []}, {name: "marmish-installed-check", required_features: ["installed-checks"]}, {name: "marmish-installed-fixture", required_features: ["installed-checks"]}, {name: "marmish-worker", required_features: []}, {name: "marmishd", required_features: []}] else false end' "$metadata"
+          git diff --quiet HEAD --
+      - name: Validate held-status engine diagnostics in both profiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/held-status-engine-target"
+          test ! -e "$CARGO_TARGET_DIR"
+          log=$(mktemp "$RUNNER_TEMP/marmish-held-engine.XXXXXX")
+          trap 'rm -f "$log"' EXIT
+          for profile in debug release; do
+            flags=()
+            if [[ "$profile" = release ]]; then flags=(--release); fi
+            echo "held-status diagnostics stage=engine_tests profile=$profile"
+            cargo test --locked ${flags[@]+"${flags[@]}"} -p marmish-engine --lib platform::macos::tests::held_status_diagnostics_ -- --nocapture 2>&1 | tee "$log"
+            grep -Eq '^test result: ok\. 2 passed; 0 failed; 0 ignored;' "$log"
+            test "$(grep -c '^test result:' "$log")" -eq 1
+            for test_name in acceptance failure_detail; do
+              test "$(grep -c "^test platform::macos::tests::held_status_diagnostics_$test_name \.\.\." "$log")" -eq 1
+            done
+            echo "held-status diagnostics stage=engine_tests_passed profile=$profile"
+          done
+          echo 'held-status diagnostics stage=formatter_test'
+          cargo test --locked -p marmish-engine --lib process::diagnostic::tests::held_wait_records_are_closed_and_failure_only -- --exact --nocapture 2>&1 | tee "$log"
+          grep -Eq '^test result: ok\. 1 passed; 0 failed; 0 ignored;' "$log"
+          test "$(grep -c '^test result:' "$log")" -eq 1
+          test "$(grep -c '^test process::diagnostic::tests::held_wait_records_are_closed_and_failure_only \.\.\.' "$log")" -eq 1
+          echo 'held-status diagnostics stage=formatter_test_passed'
+          for profile in debug release; do
+            flags=()
+            if [[ "$profile" = release ]]; then flags=(--release); fi
+            echo "held-status diagnostics stage=engine_clippy profile=$profile"
+            cargo clippy --locked ${flags[@]+"${flags[@]}"} -p marmish-engine --all-targets -- -D warnings 2>&1 | tee "$log"
+            echo "held-status diagnostics stage=engine_clippy_passed profile=$profile"
+          done
+          git diff --quiet HEAD --
+      - name: Run exact full installed-checks native suite once
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/installed-tools-target"
+          test ! -e "$CARGO_TARGET_DIR"
+          log=$(mktemp "$RUNNER_TEMP/marmish-held-full.XXXXXX")
+          trap 'rm -f "$log"' EXIT
+          echo 'held-status diagnostics stage=full_installed_suite'
+          cargo test --locked -p marmish-native --features installed-checks 2>&1 | tee "$log"
+          test "$(grep -Ec '^test result: ok\. 907 passed; 0 failed; 3 ignored;' "$log")" -eq 1
+          test "$(grep -c '^test stream_runner::tests::final_handle_drop_releases_full_unacked_output_race \.\.\.' "$log")" -eq 1
+          echo 'held-status diagnostics stage=full_installed_suite_passed'
+          git diff --quiet HEAD --
+      - name: Repeat exact installed-checks race one hundred times after full success
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/installed-tools-target"
+          test -d "$CARGO_TARGET_DIR"
+          log=$(mktemp "$RUNNER_TEMP/marmish-held-repeat.XXXXXX")
+          trap 'rm -f "$log"' EXIT
+          test_name=stream_runner::tests::final_handle_drop_releases_full_unacked_output_race
+          for iteration in {1..100}; do
+            echo "held-status installed-checks iteration=$iteration test=$test_name"
+            cargo test --locked -p marmish-native --features installed-checks --lib "$test_name" -- --exact --nocapture 2>&1 | tee "$log"
+            grep -Eq '^test result: ok\. 1 passed; 0 failed; 0 ignored;' "$log"
+            test "$(grep -c '^test result:' "$log")" -eq 1
+            test "$(grep -c "^test $test_name \.\.\." "$log")" -eq 1
+          done
+          echo 'held-status diagnostics stage=one_hundred_repeats_passed'
+          git diff --quiet HEAD --

@@ -293,20 +293,24 @@ fn held_exit(pid: i32) -> Staged<(i32, i32, i32)> {
             errno,
         ));
     }
-    if unsafe { info.si_pid() } != pid
-        || !matches!(
-            info.si_code,
-            libc::CLD_EXITED | libc::CLD_KILLED | libc::CLD_DUMPED
-        )
-    {
-        return Err(Failure::darwin(
-            EngineError::RecoveryUncertain,
-            Ds::HeldStatus,
-            None,
-        ));
-    }
+    let returned = unsafe { info.si_pid() };
+    validate_held_status(pid, returned, info.si_code)?;
     Ok((pid, info.si_code, unsafe { info.si_status() }))
 }
+fn validate_held_status(expected: i32, returned: i32, code: i32) -> Staged<()> {
+    if returned != expected
+        || !matches!(code, libc::CLD_EXITED | libc::CLD_KILLED | libc::CLD_DUMPED)
+    {
+        let failure = Failure::darwin(EngineError::RecoveryUncertain, Ds::HeldStatus, None);
+        #[cfg(debug_assertions)]
+        let failure = failure.with_held_detail(
+            crate::process::diagnostic::HeldDetail::from_returned(expected, returned, code),
+        );
+        return Err(failure);
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 enum SnapshotPass {
     First,
@@ -818,6 +822,71 @@ pub(super) unsafe fn pre_exec() -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn held_status_diagnostics_acceptance() {
+        for expected in [0, 41, -41] {
+            for returned in [0, 41, -41, 42] {
+                for code in [
+                    0,
+                    libc::CLD_EXITED,
+                    libc::CLD_KILLED,
+                    libc::CLD_DUMPED,
+                    libc::CLD_STOPPED,
+                    i32::MIN,
+                    i32::MAX,
+                ] {
+                    assert_eq!(
+                        validate_held_status(expected, returned, code).is_ok(),
+                        expected == returned
+                            && matches!(
+                                code,
+                                libc::CLD_EXITED | libc::CLD_KILLED | libc::CLD_DUMPED
+                            )
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn held_status_diagnostics_failure_detail() {
+        #[cfg(debug_assertions)]
+        use crate::process::diagnostic::{HeldDetail, WaitCodeKind, WaitPidKind};
+        for (expected, returned) in [(0, 0), (41, 0), (41, 41), (41, 42), (41, -41)] {
+            for code in [
+                0,
+                libc::CLD_EXITED,
+                libc::CLD_KILLED,
+                libc::CLD_DUMPED,
+                libc::CLD_STOPPED,
+                i32::MIN,
+                i32::MAX,
+            ] {
+                let Err(failure) = validate_held_status(expected, returned, code) else {
+                    continue;
+                };
+                assert!(matches!(failure.error, EngineError::RecoveryUncertain));
+                #[cfg(debug_assertions)]
+                {
+                    let pid = if returned == 0 {
+                        WaitPidKind::Zero
+                    } else if returned == expected {
+                        WaitPidKind::Reserved
+                    } else {
+                        WaitPidKind::Other
+                    };
+                    let code = match code {
+                        0 => WaitCodeKind::Zero,
+                        libc::CLD_EXITED => WaitCodeKind::Exited,
+                        libc::CLD_KILLED => WaitCodeKind::Killed,
+                        libc::CLD_DUMPED => WaitCodeKind::Dumped,
+                        _ => WaitCodeKind::Other,
+                    };
+                    assert_eq!(failure.held_detail(), Some(HeldDetail { pid, code }));
+                    assert_eq!(failure.diagnostic_detail().0, "darwin-held-status");
+                }
+            }
+        }
+    }
     use super::*;
     // Pure post-read validation: the real BSD reader retains its identity checks.
     fn zombie_info() -> libc::proc_bsdinfo {

@@ -55,6 +55,18 @@ all cleanup proof predicates while adding precise debug-only observations and
 100 targeted repetitions. It is not a runtime correction or release qualification;
 the cause remains unknown and publication stays held.
 
+Fresh candidate42653492263/1 at `33138eb` failed the macOS debug installed-feature
+`final_handle_drop_releases_full_unacked_output_race` test with an initial TERM
+`proof-held/darwin-held-status` rejection; the returned wait status category was
+not recorded, and its cause remains unknown. The reviewed
+[held-status diagnostic increment](phases/macos-held-status-diagnostics.md)
+adds failure-only closed wait categories and a separate finite diagnostic
+workflow. It changes no cleanup predicate, syscall, signal, grace or fixture.
+Separate exact-source stress42653573013/1 passed its retained checks, including
+100 installed-feature authority iterations and 80 default-feature cleanup
+repetitions; those passes do not qualify the failed full installed-feature
+suite. Diagnostic execution is not release qualification or proof of a fix.
+
 At subsequent source `86119f1`, ordinary candidate 42594063209/1 and exact-source
 macOS regression 42594082226/1 passed. Installed qualification stopped at
 edge-copy 42611543208/1 after five passing workflows: the CI coordinator rejected
