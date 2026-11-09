@@ -1,5 +1,5 @@
 name: v0.2 native release candidates
-run-name: ${{ inputs.caveated_release && 'v0.2 initial CAVEATED release - full validation pending' || 'v0.2 native release candidates' }}
+run-name: ${{ inputs.caveated_release && 'v0.3.0 CAVEATED release - known test failures' || 'v0.2 native release candidates' }}
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       caveated_release:
-        description: Initial v0.2 release with macOS full testing pending (not full qualification)
+        description: Explicit v0.3.0 release with known macOS test failure (not full qualification)
         required: false
         default: false
         type: boolean
@@ -21,7 +21,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: marmish-v02-candidates
+  group: ${{ inputs.caveated_release && 'marmish-v02-candidates-caveated' || 'marmish-v02-candidates' }}
   cancel-in-progress: false
 
 env:
@@ -106,16 +106,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          baseline=347cf799ae5baa9e577ded1a00566c7a6b99b933
+          baseline=ddda8a010f6d8bb937176a4d44c8f6cb2027d780
           test "$MARMISH_BUILD_COMMIT" = "$GITHUB_SHA"
           test "$(git rev-parse HEAD)" = "$MARMISH_BUILD_COMMIT"
           test "$MARMISH_BUILD_COMMIT" != "$baseline"
           git merge-base --is-ancestor "$baseline" "$MARMISH_BUILD_COMMIT"
-          git cat-file -e "$MARMISH_BUILD_COMMIT:docs/phases/v0.2-initial-caveated-release.md"
+          git cat-file -e "$MARMISH_BUILD_COMMIT:docs/phases/v0.3-caveated-publication.md"
+          node --input-type=module -e '
+            import {execFileSync} from "node:child_process";
+            import {versionAt} from "./tools/v02-actions/eligibility.mjs";
+            const version = await versionAt(process.env.MARMISH_BUILD_COMMIT,
+              args => execFileSync("git", args, {encoding: "utf8"}));
+            if (version !== "0.3.0") throw new Error("caveated release: wrong version");
+          '
           git diff --no-renames --name-only -z "$baseline" "$MARMISH_BUILD_COMMIT" > "$RUNNER_TEMP/caveated-paths"
           while IFS= read -r -d '' changed; do
             case "$changed" in
-              .github/workflows/v02-release.yml|docs/phases/v0.2-initial-caveated-release.md|docs/reviews/v0.2-initial-release-design-r[1-9].md|docs/reviews/v0.2-initial-release-code-r[1-9].md) ;;
+              .github/workflows/v02-release.yml|docs/phases/v0.3-caveated-publication.md|docs/reviews/v0.3-caveated-publication-design-r[1-9].md|docs/reviews/v0.3-caveated-publication-code-r[1-9].md) ;;
               *) echo 'caveated release: unreviewed product/source change' >&2; exit 1 ;;
             esac
             entry=$(git ls-tree "$MARMISH_BUILD_COMMIT" -- "$changed")
@@ -125,10 +132,13 @@ jobs:
             esac
           done < "$RUNNER_TEMP/caveated-paths"
           {
-            echo '## Initial caveated v0.2.0 release'
-            echo 'macOS full testing remains in progress; fixes follow in v0.2.1.'
-            echo 'Native default tests passed on equivalent runtime source347 in candidate41655210565 attempt1.'
-            echo 'Installed feature tests, full cohorts/lifecycle/provider qualification remain pending.'
+            echo '## Caveated v0.3.0 release: known test failures, not full qualification'
+            echo 'Standard candidate 42551792315 attempt 1 failed macOS native verification on equivalent product source ddda8a0.'
+            echo 'Native library: 635 passed, 1 failed, 3 ignored. final_handle_drop_releases_full_unacked_output_race returned RecoveryUncertain on initial TERM cleanup; the cause remains unresolved.'
+            echo 'macOS Clippy did not run in that candidate because the preceding native test command failed.'
+            echo 'This caveated run deliberately skips native tests/Clippy, installed-feature tools/tests, and quickstart/provider prequalification on all targets; no skipped check is a pass.'
+            echo 'Earlier installed copy-edge journal assertions failed; copy interruption qualification remains pending. Follow-up runtime fixes require v0.3.1.'
+            echo 'Locked builds, macOS signing, dependency/ABI inspection, license collection, packaging and bootstrap rendering remain required.'
             echo 'This run builds new commit metadata; it is not full acceptance or byte-identical to the prior candidate.'
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920 # 1.97.1
@@ -395,7 +405,7 @@ jobs:
 # Re-run all jobs together: artifact bindings include the run attempt.
 # This creates workflow candidate artifacts only (not a public release). Public release/tag creation and
 # scripts/install.sh cutover normally require successful installed cross-platform qualification.
-# Explicit caveated_release follows docs/phases/v0.2-initial-caveated-release.md instead;
-# it never represents full qualification, and retains pending macOS/v0.2.1 gates.
+# Explicit caveated_release follows docs/phases/v0.3-caveated-publication.md instead;
+# it never represents full qualification and retains the failed/pending acceptance evidence.
 # Asset manifest commit is reviewed source A; publishing the rendered pinned bootstrap
 # later in source B deliberately avoids a self-referential source hash.
