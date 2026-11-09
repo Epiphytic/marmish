@@ -129,6 +129,11 @@ fn continuous_millis(ticks: u64, numer: u32, denom: u32) -> Result<u64> {
 }
 // Apple sys/proc_info.h: PROC_PGRP_ONLY. libc does not export this selector.
 const PROC_PGRP_ONLY: u32 = 2;
+// Current-main XNU bsd/sys/proc_info.h: PROC_FLAG_INEXIT. The diagnostic
+// workflow checks the selected SDK declaration; this is not kernel proof.
+// https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/sys/proc_info.h
+#[cfg(debug_assertions)]
+const PROC_FLAG_INEXIT: u32 = 4;
 const _: () = assert!(size_of::<libc::proc_bsdinfo>() == 136);
 
 fn bsd_info(pid: i32, include_zombie: bool) -> Result<libc::proc_bsdinfo> {
@@ -223,12 +228,33 @@ struct ZombieIdentity {
 }
 fn zombie_identity(pid: i32, group: i32) -> Staged<ZombieIdentity> {
     let info = bsd_info_staged(pid, true)?;
-    if info.pbi_pgid != group as u32 || info.pbi_status != libc::SZOMB {
-        return Err(Failure::darwin(
-            EngineError::RecoveryUncertain,
-            Ds::ZombieStatus,
-            None,
-        ));
+    zombie_identity_from_info(&info, group)
+}
+fn zombie_identity_from_info(info: &libc::proc_bsdinfo, group: i32) -> Staged<ZombieIdentity> {
+    let stage = if info.pbi_pgid != group as u32 {
+        Some(Ds::ZombieGroup)
+    } else if info.pbi_status != libc::SZOMB {
+        Some(Ds::ZombieStatus)
+    } else {
+        None
+    };
+    if let Some(stage) = stage {
+        let failure = Failure::darwin(EngineError::RecoveryUncertain, stage, None);
+        #[cfg(debug_assertions)]
+        let failure = {
+            use crate::process::diagnostic::{MemberKind, ZombieDetail};
+            failure.with_zombie_detail(ZombieDetail {
+                member: if info.pbi_pid == group as u32 {
+                    MemberKind::Leader
+                } else {
+                    MemberKind::Other
+                },
+                group_zero: info.pbi_pgid == 0,
+                status: info.pbi_status,
+                in_exit: info.pbi_flags & PROC_FLAG_INEXIT != 0,
+            })
+        };
+        return Err(failure);
     }
     Ok(ZombieIdentity {
         pid: info.pbi_pid,
@@ -685,6 +711,85 @@ pub(super) unsafe fn pre_exec() -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Pure post-read validation: the real BSD reader retains its identity checks.
+    fn zombie_info() -> libc::proc_bsdinfo {
+        let mut info: libc::proc_bsdinfo = unsafe { zeroed() };
+        info.pbi_pid = 41;
+        info.pbi_ppid = 7;
+        info.pbi_pgid = 41;
+        info.pbi_uid = 501;
+        info.pbi_ruid = 502;
+        info.pbi_start_tvsec = 10;
+        info.pbi_start_tvusec = 20;
+        info.pbi_status = libc::SZOMB;
+        info
+    }
+    #[test]
+    fn zombie_validator_retains_identity_and_rejects_group_or_live_status() {
+        let mut info = zombie_info();
+        let identity = zombie_identity_from_info(&info, 41)
+            .unwrap_or_else(|_| panic!("matching zombie rejected"));
+        assert_eq!((identity.pid, identity.parent, identity.group), (41, 7, 41));
+        assert_eq!(
+            (
+                identity.uid,
+                identity.ruid,
+                identity.seconds,
+                identity.micros
+            ),
+            (501, 502, 10, 20)
+        );
+        for (group, status) in [(41, 2), (0, libc::SZOMB), (42, libc::SZOMB), (42, 2)] {
+            info.pbi_pgid = group;
+            info.pbi_status = status;
+            assert!(matches!(
+                zombie_identity_from_info(&info, 41).map_err(|failure| failure.error),
+                Err(EngineError::RecoveryUncertain)
+            ));
+        }
+    }
+    #[cfg(debug_assertions)]
+    #[test]
+    fn zombie_validator_reports_order_member_group_status_and_exit_flag() {
+        use crate::process::diagnostic::{MemberKind, ZombieDetail};
+        for pid in [41, 42] {
+            for (group, status, stage) in [
+                (41, 2, "darwin-zombie-status"),
+                (0, libc::SZOMB, "darwin-zombie-group"),
+                (42, libc::SZOMB, "darwin-zombie-group"),
+                (42, 2, "darwin-zombie-group"),
+            ] {
+                for flags in [0, PROC_FLAG_INEXIT, 8, PROC_FLAG_INEXIT | 8] {
+                    let mut info = zombie_info();
+                    info.pbi_pid = pid;
+                    info.pbi_pgid = group;
+                    info.pbi_status = status;
+                    info.pbi_flags = flags;
+                    let failure = match zombie_identity_from_info(&info, 41) {
+                        Err(failure) => failure,
+                        Ok(_) => panic!("invalid zombie accepted"),
+                    };
+                    assert_eq!(
+                        failure.diagnostic_detail(),
+                        (
+                            stage,
+                            Some(ZombieDetail {
+                                member: if pid == 41 {
+                                    MemberKind::Leader
+                                } else {
+                                    MemberKind::Other
+                                },
+                                group_zero: group == 0,
+                                status,
+                                in_exit: flags & PROC_FLAG_INEXIT != 0,
+                            })
+                        )
+                    );
+                    assert!(matches!(failure.error, EngineError::RecoveryUncertain));
+                }
+            }
+        }
+    }
     #[test]
     fn uuid_clock_and_process_bounds() {
         assert_eq!(size_of::<libc::proc_bsdinfo>(), 136);

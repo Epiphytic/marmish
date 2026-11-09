@@ -16,7 +16,7 @@ test('manual regression is bounded, read-only and nonroot on Mac ARM64', () => {
   assert.match(workflow, /test "\$\(uname -s\):\$\(uname -m\)" = Darwin:arm64/);
   assert.match(workflow, /RUST_TEST_THREADS: '1'/);
   assert.match(workflow, /MARMISH_REQUIRE_NONROOT_PERMISSION_TESTS: '1'/);
-  assert.equal((workflow.match(/test "\$\(id -u\)" -ne 0/g) ?? []).length, 5);
+  assert.equal((workflow.match(/test "\$\(id -u\)" -ne 0/g) ?? []).length, 6);
 });
 
 test('source is exact workflow and checkout commit with pinned toolchain', () => {
@@ -38,6 +38,56 @@ test('combined compilation and structural worker proof precede original combined
   assert.ok(workflow.includes('required_features: ["fault-injection"]'));
   assert.ok(workflow.includes('for binary in marmish-engine-worker marmish-worker; do'));
   for (const check of ['test -f "target/debug/$binary"', 'test -x "target/debug/$binary"', 'shasum -a 256 "target/debug/$binary"']) assert.ok(workflow.includes(check));
+});
+
+test('optional authority observation checks the SDK before exactly matched installed-feature tests', () => {
+  assert.match(workflow, /authority_diagnostics:\n        description: [^\n]+\n        required: false\n        type: boolean\n        default: false/);
+  const observation = workflow.split('      - name: Observe exact installed-checks authority cleanup one hundred times\n')[1].split('      - name: Run original combined native suites\n')[0];
+  assert.match(observation, /^        if: always\(\) && inputs.authority_diagnostics && steps.compile.outcome == 'success'\n/);
+  assert.ok(observation.includes('set -euo pipefail'));
+  assert.ok(observation.includes('test "$(id -u)" -ne 0'));
+  const sdk = observation.indexOf("echo 'authority diagnostics stage=sdk_check'\n");
+  const assertion = observation.indexOf("printf '%s\\n' '#include <libproc.h>' '_Static_assert(PROC_FLAG_INEXIT == 4, \"marmish_inexit_abi\");' | xcrun clang -x c -fsyntax-only -");
+  const sdkPassed = observation.indexOf("echo 'authority diagnostics stage=sdk_check_passed'\n");
+  const tests = observation.indexOf("echo 'authority diagnostics stage=tests'\n");
+  const loop = observation.indexOf('for iteration in {1..100}; do\n');
+  assert.ok(sdk >= 0 && assertion > sdk && sdkPassed > assertion && tests > sdkPassed && loop > tests);
+  assert.ok(observation.includes('log=$(mktemp "$RUNNER_TEMP/marmish-authority-diagnostics.XXXXXX")'));
+  assert.ok(observation.includes("trap 'rm -f \"$log\"' EXIT"));
+  assert.ok(observation.includes('test_name=stream_runner::tests::authority_withdrawal_halts_queued_input_irreversibly_without_cancel\n'));
+  assert.ok(observation.includes('echo "authority installed-checks iteration=$iteration test=$test_name"'));
+  assert.ok(observation.includes('cargo test --locked -p marmish-native --features installed-checks --lib "$test_name" -- --exact --nocapture 2>&1 | tee "$log"'));
+  assert.ok(observation.includes("grep -Eq '^test result: ok\\. 1 passed; 0 failed; 0 ignored;' \"$log\""));
+  assert.ok(observation.includes('test "$(grep -c \'^test result:\' "$log")" -eq 1'));
+  assert.equal((observation.match(/cargo test /g) ?? []).length, 1);
+  assert.doesNotMatch(observation, /--no-fail-fast|--ignored|--include-ignored|--skip|continue-on-error|\|\| true/);
+});
+
+test('authority observation preserves original runtime checks and strict compilation', () => {
+  const compile = workflow.indexOf(`${combined} --no-run\n`);
+  const workers = workflow.indexOf('for binary in marmish-engine-worker marmish-worker; do');
+  const authority = workflow.indexOf('      - name: Observe exact installed-checks authority cleanup one hundred times\n');
+  const run = workflow.indexOf('      - name: Run original combined native suites\n');
+  const repeats = workflow.indexOf('      - name: Repeat exact cleanup regressions twenty times\n');
+  const clippy = workflow.indexOf('      - name: Verify strict ordinary-release diagnostics compilation\n');
+  assert.ok(compile >= 0 && workers > compile && authority > workers && run > authority && repeats > run && clippy > repeats);
+  const original = workflow.slice(run, repeats);
+  assert.match(original, /if: always\(\) && steps.compile.outcome == 'success'/);
+  assert.ok(original.includes(`${combined}\n`));
+  assert.doesNotMatch(original, /--features|--skip|--ignored|--include-ignored/);
+  const focused = workflow.slice(repeats, clippy);
+  assert.match(focused, /if: always\(\) && steps.compile.outcome == 'success'/);
+  assert.match(focused, /for iteration in \{1\.\.20\}; do/);
+  assert.equal((focused.match(/stream_runner::tests::/g) ?? []).length, 4);
+  assert.doesNotMatch(focused, /--features|authority_diagnostics/);
+  const strict = workflow.slice(clippy);
+  assert.match(strict, /if: always\(\) && steps.compile.outcome == 'success'/);
+  assert.ok(strict.includes('if [[ "${{ inputs.authority_diagnostics }}" == true ]]; then'));
+  const releaseClippy = strict.indexOf('cargo clippy --locked --release -p marmish-native -p marmish-engine --all-targets -- -D warnings\n');
+  const debugBegin = strict.indexOf("echo 'authority diagnostics stage=debug_clippy'\n");
+  const debugClippy = strict.indexOf('cargo clippy --locked -p marmish-native -p marmish-engine --features marmish-native/installed-checks --all-targets -- -D warnings\n');
+  const debugPassed = strict.indexOf("echo 'authority diagnostics stage=debug_clippy_passed'\n");
+  assert.ok(releaseClippy >= 0 && debugBegin > releaseClippy && debugClippy > debugBegin && debugPassed > debugClippy);
 });
 
 test('actual workflow jq accepts both declared engine targets and rejects ambiguous workers', () => {
@@ -74,7 +124,7 @@ test('focused collection survives suite failure, runs twenty times and rejects z
   ]) assert.ok(workflow.includes(`stream_runner::tests::${name}\n`));
   assert.ok(workflow.includes('cargo test --locked -p marmish-native --lib "$test_name" -- --exact --nocapture 2>&1 | tee "$log"'));
   assert.ok(workflow.includes("grep -Eq '^test result: ok\\. 1 passed; 0 failed; 0 ignored;' \"$log\""));
-  assert.equal((workflow.match(/set -euo pipefail/g) ?? []).length, 5);
+  assert.equal((workflow.match(/set -euo pipefail/g) ?? []).length, 6);
   assert.doesNotMatch(workflow, /continue-on-error|\|\| true/);
 });
 

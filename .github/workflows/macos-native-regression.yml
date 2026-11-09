@@ -6,6 +6,11 @@ on:
         description: Reviewed full master commit; must equal this workflow commit
         required: true
         type: string
+      authority_diagnostics:
+        description: Observe the exact installed-checks authority cleanup regression
+        required: false
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -65,7 +70,27 @@ jobs:
             shasum -a 256 "target/debug/$binary"
           done
           git diff --quiet HEAD --
+      - name: Observe exact installed-checks authority cleanup one hundred times
+        if: always() && inputs.authority_diagnostics && steps.compile.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          echo 'authority diagnostics stage=sdk_check'
+          printf '%s\n' '#include <libproc.h>' '_Static_assert(PROC_FLAG_INEXIT == 4, "marmish_inexit_abi");' | xcrun clang -x c -fsyntax-only -
+          echo 'authority diagnostics stage=sdk_check_passed'
+          log=$(mktemp "$RUNNER_TEMP/marmish-authority-diagnostics.XXXXXX")
+          trap 'rm -f "$log"' EXIT
+          test_name=stream_runner::tests::authority_withdrawal_halts_queued_input_irreversibly_without_cancel
+          echo 'authority diagnostics stage=tests'
+          for iteration in {1..100}; do
+            echo "authority installed-checks iteration=$iteration test=$test_name"
+            cargo test --locked -p marmish-native --features installed-checks --lib "$test_name" -- --exact --nocapture 2>&1 | tee "$log"
+            grep -Eq '^test result: ok\. 1 passed; 0 failed; 0 ignored;' "$log"
+            test "$(grep -c '^test result:' "$log")" -eq 1
+          done
       - name: Run original combined native suites
+        if: always() && steps.compile.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -99,4 +124,9 @@ jobs:
           set -euo pipefail
           test "$(id -u)" -ne 0
           cargo clippy --locked --release -p marmish-native -p marmish-engine --all-targets -- -D warnings
+          if [[ "${{ inputs.authority_diagnostics }}" == true ]]; then
+            echo 'authority diagnostics stage=debug_clippy'
+            cargo clippy --locked -p marmish-native -p marmish-engine --features marmish-native/installed-checks --all-targets -- -D warnings
+            echo 'authority diagnostics stage=debug_clippy_passed'
+          fi
           git diff --quiet HEAD --

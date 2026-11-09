@@ -45,6 +45,15 @@ required. Hold automatic publication with an explicit restoration duty before
 pushing the version bump, because the publisher does not gate these cohorts.
 No new rollback or lifecycle claim is made. Keep published 0.3.0 immutable.
 
+Candidate [42614762310](https://github.com/Epiphytic/marmish/actions/runs/42614762310),
+attempt 1 at `d23fce6`, failed the macOS installed-feature authority-withdrawal
+cleanup test: 902 passed, one failed and three ignored. Its combined group/status
+diagnostic cannot identify the rejected condition. The
+[diagnostic increment](phases/v0.3.1-macos-authority-diagnostics.md) preserves
+all cleanup proof predicates while adding precise debug-only observations and
+100 targeted repetitions. It is not a runtime correction or release qualification;
+the cause remains unknown and publication stays held.
+
 At subsequent source `86119f1`, ordinary candidate 42594063209/1 and exact-source
 macOS regression 42594082226/1 passed. Installed qualification stopped at
 edge-copy 42611543208/1 after five passing workflows: the CI coordinator rejected

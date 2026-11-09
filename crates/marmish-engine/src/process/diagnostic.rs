@@ -24,6 +24,7 @@ pub(crate) enum DarwinStage {
     BootId,
     ChildGroup,
     ChildParent,
+    ZombieGroup,
     ZombieStatus,
     HeldWait,
     HeldStatus,
@@ -54,12 +55,29 @@ pub(crate) enum Context {
     ProofFinalLeader,
 }
 
+#[cfg(all(debug_assertions, target_os = "macos"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MemberKind {
+    Leader,
+    Other,
+}
+#[cfg(all(debug_assertions, target_os = "macos"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ZombieDetail {
+    pub(crate) member: MemberKind,
+    pub(crate) group_zero: bool,
+    pub(crate) status: u32,
+    pub(crate) in_exit: bool,
+}
+
 pub(crate) struct Failure {
     pub(crate) error: EngineError,
     #[cfg(debug_assertions)]
     stage: Stage,
     #[cfg(all(debug_assertions, target_os = "macos"))]
     context: Context,
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    zombie_detail: Option<ZombieDetail>,
     #[cfg(debug_assertions)]
     errno: Option<i32>,
 }
@@ -72,9 +90,22 @@ impl Failure {
             stage: _stage,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             context: Context::Probe,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            zombie_detail: None,
             #[cfg(debug_assertions)]
             errno: _errno,
         }
+    }
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    pub(crate) fn with_zombie_detail(self, detail: ZombieDetail) -> Self {
+        Self {
+            zombie_detail: Some(detail),
+            ..self
+        }
+    }
+    #[cfg(all(test, debug_assertions, target_os = "macos"))]
+    pub(crate) fn diagnostic_detail(&self) -> (&'static str, Option<ZombieDetail>) {
+        (self.stage.label(), self.zombie_detail)
     }
     #[cfg(target_os = "macos")]
     pub(crate) fn context(self, _context: Context) -> Self {
@@ -109,6 +140,8 @@ struct Record {
     stage: Stage,
     #[cfg(all(debug_assertions, target_os = "macos"))]
     context: Context,
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    zombie_detail: Option<ZombieDetail>,
     errno: Option<i32>,
 }
 #[cfg(debug_assertions)]
@@ -118,6 +151,8 @@ fn record(result: &Staged<()>, origin: Origin) -> Option<Record> {
         stage: failure.stage,
         #[cfg(target_os = "macos")]
         context: failure.context,
+        #[cfg(target_os = "macos")]
+        zombie_detail: failure.zombie_detail,
         errno: failure.errno,
     })
 }
@@ -149,6 +184,7 @@ impl DarwinStage {
             Self::BootId => "darwin-boot-id",
             Self::ChildGroup => "darwin-child-group",
             Self::ChildParent => "darwin-child-parent",
+            Self::ZombieGroup => "darwin-zombie-group",
             Self::ZombieStatus => "darwin-zombie-status",
             Self::HeldWait => "darwin-held-wait",
             Self::HeldStatus => "darwin-held-status",
@@ -191,8 +227,21 @@ impl Record {
         };
         #[cfg(not(target_os = "macos"))]
         let context = "";
+        #[cfg(target_os = "macos")]
+        let detail = self.zombie_detail.map_or_else(String::new, |detail| {
+            let member = match detail.member {
+                MemberKind::Leader => "leader",
+                MemberKind::Other => "other",
+            };
+            format!(
+                " member={member} group_zero={} status={} in_exit={}",
+                detail.group_zero, detail.status, detail.in_exit
+            )
+        });
+        #[cfg(not(target_os = "macos"))]
+        let detail = "";
         format!(
-            "marmish-engine-signal-failure origin={origin} stage={context}{} errno={errno}\n",
+            "marmish-engine-signal-failure origin={origin} stage={context}{} errno={errno}{detail}\n",
             self.stage.label()
         )
     }
@@ -237,7 +286,12 @@ mod tests {
             };
             let result = Err(failure);
             let text = record(&result, Origin::Term).unwrap().format();
-            assert_eq!(text, format!("marmish-engine-signal-failure origin=term stage={expected}darwin-invalid-pid errno=none\n"));
+            assert_eq!(
+                text,
+                format!(
+                    "marmish-engine-signal-failure origin=term stage={expected}darwin-invalid-pid errno=none\n"
+                )
+            );
             assert!(matches!(
                 result.map_err(|failure| failure.error),
                 Err(EngineError::WorkerUnavailable)
@@ -262,9 +316,56 @@ mod tests {
                 ));
                 let text = record(&result, origin).unwrap().format();
                 let number = errno.map_or_else(|| "none".into(), |value| value.to_string());
-                assert_eq!(text, format!("marmish-engine-signal-failure origin={expected} stage=kill errno={number}\n"));
+                assert_eq!(
+                    text,
+                    format!(
+                        "marmish-engine-signal-failure origin={expected} stage=kill errno={number}\n"
+                    )
+                );
                 assert!(text.len() < 512);
                 assert_eq!(text.lines().count(), 1);
+            }
+        }
+    }
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    #[test]
+    fn zombie_records_preserve_context_errors_and_closed_detail() {
+        for (member, label) in [(MemberKind::Leader, "leader"), (MemberKind::Other, "other")] {
+            for group_zero in [false, true] {
+                for status in [0, libc::SZOMB, u32::MAX] {
+                    for in_exit in [false, true] {
+                        let detail = ZombieDetail {
+                            member,
+                            group_zero,
+                            status,
+                            in_exit,
+                        };
+                        for (stage, stage_label) in [
+                            (DarwinStage::ZombieGroup, "darwin-zombie-group"),
+                            (DarwinStage::ZombieStatus, "darwin-zombie-status"),
+                        ] {
+                            let failure =
+                                Failure::darwin(EngineError::RecoveryUncertain, stage, None)
+                                    .with_zombie_detail(detail)
+                                    .context(Context::ProofFirstMembers);
+                            assert_eq!(failure.diagnostic_detail(), (stage_label, Some(detail)));
+                            let result = Err(failure);
+                            let text = record(&result, Origin::Kill).unwrap().format();
+                            assert_eq!(
+                                text,
+                                format!(
+                                    "marmish-engine-signal-failure origin=kill stage=proof-first-members/{stage_label} errno=none member={label} group_zero={group_zero} status={status} in_exit={in_exit}\n"
+                                )
+                            );
+                            assert!(text.len() < 512);
+                            assert_eq!(text.lines().count(), 1);
+                            assert!(matches!(
+                                result.map_err(|failure| failure.error),
+                                Err(EngineError::RecoveryUncertain)
+                            ));
+                        }
+                    }
+                }
             }
         }
     }
