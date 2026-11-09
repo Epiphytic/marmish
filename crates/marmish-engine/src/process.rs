@@ -292,7 +292,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn pending_owned_cleanup_resolver_preserves_failure() {
-        use diagnostic::{Context, DarwinStage};
+        use crate::process::diagnostic::{Context, DarwinStage};
         let failure = || {
             Failure::darwin(
                 EngineError::RecoveryUncertain,

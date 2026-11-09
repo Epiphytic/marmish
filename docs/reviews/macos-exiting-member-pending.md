@@ -51,3 +51,28 @@ publisher. It is neither completed macOS validation nor release qualification.
 Pending never establishes terminality or authorizes reaping. Strict finite and
 Drop behavior remains unchanged; Drop may perform its own strict cleanup after
 a runner failure. Historical coarse failures remain unexplained.
+
+## Darwin import follow-up
+
+Guarded run `42645112715/1`, source
+`1ca0c46c4e7038eadf46bb10bd0ee7aee85353f0`, failed during compilation
+with E0659: the resolver test's unqualified `diagnostic` import conflicted
+with the tool namespace after a glob import. Cargo exited 101. The SDK, all
+deterministic tests, authority100, original combined suites, cleanup80 and
+Clippy were skipped. Private strict terminal summary SHA256:
+`c2b194381ae94837f11a21f3fd30f9903ae36c8f90652d79da9320d615057e7c`.
+
+The sole source correction qualifies that import through
+`crate::process::diagnostic`; runtime behavior and test selection are unchanged.
+The affected portable process tests passed (two tests), strict engine all-target
+Clippy passed, and formatting and diff checks passed. These Linux checks do not
+compile the Darwin-only test. Quality delta returned exit 2 for two churn
+findings on the edited test and its module, with no structural regression.
+
+Claude Code auto follow-up in session
+`42f03715-b8e9-482a-9f8e-3cfba9963640` returned **APPROVE**, verified both local
+log hashes, independently checked formatting and the diff, and inspected debug
+and release visibility plus the other new Darwin imports. Actual review JSON
+SHA256: `7855949400f7edade25cd0df241745af8997ba40babf28772afdae78d7bcc90b`.
+Approval covers one fresh guarded exact-source run; all hosted gates remain
+required. Neither Darwin runtime success nor release qualification is claimed.

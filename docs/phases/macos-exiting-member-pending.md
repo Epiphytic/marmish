@@ -67,3 +67,16 @@ V2 actual review SHA72f92278b97c88a756ac440d5487591dc48e55ac3f599241c99d2a66a30e
 ## Independent design approval
 
 Claude Code auto review session811c9a8c-395a-44f4-b4ed-a07263fb2085: original CHANGES_REQUIRED, v2 CHANGES_REQUIRED, v3 APPROVE. Approved design SHA256 b7acbd03fbc7dd81d10138ca281c9fb33bee5ad81df9ed8d1a2f914a9ca457b7; actual approval JSON SHA256 c7e55eed5efff4093d7cc9e910e0394c6c44c43410fc687fca078f20a6d0cf56. This approves design, not completed code or Darwin execution. Implementation authorization was explicitly supplied by the parent before review completed. Completed-code review and actual Darwin evidence remain required before publication.
+
+## Darwin test import correction
+
+The exact-source diagnostic run `42645112715/1` at
+`1ca0c46c4e7038eadf46bb10bd0ee7aee85353f0` failed during compilation:
+Rust E0659 identified an ambiguous unqualified `diagnostic` import in the
+Darwin-only resolver test. Qualify that import through
+`crate::process::diagnostic`; change no predicate, test selection or runtime
+behavior. Inspect the other new Darwin imports for the same ambiguity, run
+formatting and affected portable checks, and obtain an actual Claude follow-up
+review before committing. Every hosted test following compilation was skipped;
+the SDK assertion, deterministic tests in both profiles, authority100, combined
+suites, cleanup80 and strict Clippy remain required in a fresh guarded run.
