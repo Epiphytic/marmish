@@ -306,6 +306,11 @@ fn validate_held_status(expected: i32, returned: i32, code: i32) -> Staged<()> {
         let failure = failure.with_held_detail(
             crate::process::diagnostic::HeldDetail::from_returned(expected, returned, code),
         );
+        let failure = if returned == 0 && code == 0 {
+            failure.held_no_status()
+        } else {
+            failure
+        };
         return Err(failure);
     }
     Ok(())
@@ -320,6 +325,7 @@ enum ProofFailure {
     Hard(Failure),
     IncompleteSnapshot(Failure),
     ExitingMember(Failure),
+    AwaitingExit(Failure),
 }
 type ProofResult<T> = std::result::Result<T, ProofFailure>;
 impl From<Failure> for ProofFailure {
@@ -331,6 +337,7 @@ impl ProofFailure {
     fn context(self, context: Context) -> Self {
         match self {
             Self::Hard(failure) => Self::Hard(failure.context(context)),
+            Self::AwaitingExit(failure) => Self::AwaitingExit(failure.context(context)),
             Self::ExitingMember(failure) => Self::ExitingMember(failure.context(context)),
             Self::IncompleteSnapshot(failure) => Self::IncompleteSnapshot(failure.context(context)),
         }
@@ -339,7 +346,8 @@ impl ProofFailure {
         let failure = match self {
             Self::Hard(failure)
             | Self::IncompleteSnapshot(failure)
-            | Self::ExitingMember(failure) => failure,
+            | Self::ExitingMember(failure)
+            | Self::AwaitingExit(failure) => failure,
         };
         #[cfg(debug_assertions)]
         let failure = failure.with_proof_attempt(_attempt);
@@ -361,15 +369,18 @@ fn member_failure(failure: Failure, pid: i32, group: i32, pass: SnapshotPass) ->
 // A failed first snapshot invalidates the whole proof, never just one member.
 // This cap is two complete observations, not a wait or an extra cleanup grace.
 fn complete_zombie_proof(
-    mut observe: impl FnMut() -> ProofResult<()>,
+    mut observe: impl FnMut(ProofAttempt) -> ProofResult<()>,
 ) -> Staged<crate::process::CleanupObservation> {
     use crate::process::CleanupObservation;
-    let (result, attempt) = match observe() {
-        Err(ProofFailure::IncompleteSnapshot(_)) => (observe(), ProofAttempt::Two),
+    let (result, attempt) = match observe(ProofAttempt::One) {
+        Err(ProofFailure::IncompleteSnapshot(_)) => (observe(ProofAttempt::Two), ProofAttempt::Two),
         result => (result, ProofAttempt::One),
     };
     match result {
         Ok(()) => Ok(CleanupObservation::Complete),
+        Err(ProofFailure::AwaitingExit(failure)) => Ok(CleanupObservation::AwaitingExit(
+            ProofFailure::AwaitingExit(failure).into_failure(attempt),
+        )),
         Err(ProofFailure::ExitingMember(failure)) => Ok(CleanupObservation::Pending(
             ProofFailure::ExitingMember(failure).into_failure(attempt),
         )),
@@ -451,13 +462,32 @@ pub(super) fn owned_zombie_group_staged(identity: &ProcessIdentity, group: i32) 
     observe_owned_zombie_group_staged(identity, group)
         .and_then(crate::process::CleanupObservation::strict)
 }
+// Production callers signal_staged and observe_cleanup_staged have just
+// validated their owned child and reserve it unreaped. The test-only strict
+// wrapper bypasses that precondition but cannot admit provisional waiting.
 pub(super) fn observe_owned_zombie_group_staged(
     identity: &ProcessIdentity,
     group: i32,
 ) -> Staged<crate::process::CleanupObservation> {
-    complete_zombie_proof(|| owned_zombie_group_attempt(identity, group))
+    complete_zombie_proof(|attempt| owned_zombie_group_attempt(identity, group, attempt))
 }
-fn owned_zombie_group_attempt(identity: &ProcessIdentity, group: i32) -> ProofResult<()> {
+fn classify_initial_held(
+    result: Staged<(i32, i32, i32)>,
+    attempt: ProofAttempt,
+) -> ProofResult<(i32, i32, i32)> {
+    result.map_err(|failure| {
+        if attempt == ProofAttempt::One && failure.is_held_no_status() {
+            ProofFailure::AwaitingExit(failure)
+        } else {
+            ProofFailure::Hard(failure)
+        }
+    })
+}
+fn owned_zombie_group_attempt(
+    identity: &ProcessIdentity,
+    group: i32,
+    attempt: ProofAttempt,
+) -> ProofResult<()> {
     let uid = unsafe { libc::getuid() };
     if group <= 1 || group != identity.pid || uid == 0 || uid != unsafe { libc::geteuid() } {
         return Err(ProofFailure::Hard(Failure::darwin(
@@ -466,7 +496,8 @@ fn owned_zombie_group_attempt(identity: &ProcessIdentity, group: i32) -> ProofRe
             None,
         )));
     }
-    let exit = held_exit(group).map_err(|failure| failure.context(Context::ProofHeld))?;
+    let exit = classify_initial_held(held_exit(group), attempt)
+        .map_err(|failure| failure.context(Context::ProofHeld))?;
     if owned_child_identity_and_group_staged(group)
         .map_err(|failure| failure.context(Context::ProofOwner))?
         != (identity.clone(), group)
@@ -865,6 +896,7 @@ mod tests {
                     continue;
                 };
                 assert!(matches!(failure.error, EngineError::RecoveryUncertain));
+                assert_eq!(failure.is_held_no_status(), returned == 0 && code == 0);
                 #[cfg(debug_assertions)]
                 {
                     let pid = if returned == 0 {
@@ -888,6 +920,105 @@ mod tests {
         }
     }
     use super::*;
+    #[test]
+    fn initial_no_status_classification_truth_table() {
+        for expected in [0, 41] {
+            for returned in [0, 41, 42, -1] {
+                for code in [
+                    0,
+                    libc::CLD_EXITED,
+                    libc::CLD_KILLED,
+                    libc::CLD_DUMPED,
+                    libc::CLD_STOPPED,
+                    i32::MAX,
+                ] {
+                    match validate_held_status(expected, returned, code) {
+                        Ok(()) => assert!(
+                            returned == expected
+                                && matches!(
+                                    code,
+                                    libc::CLD_EXITED | libc::CLD_KILLED | libc::CLD_DUMPED
+                                )
+                        ),
+                        Err(failure) => {
+                            assert_eq!(failure.is_held_no_status(), returned == 0 && code == 0)
+                        }
+                    }
+                }
+            }
+        }
+        assert!(!Failure::darwin(
+            EngineError::RecoveryUncertain,
+            Ds::HeldWait,
+            Some(libc::ECHILD)
+        )
+        .is_held_no_status());
+    }
+    #[test]
+    fn initial_no_status_proof_attempt_and_tuple() {
+        let absent = || validate_held_status(41, 0, 0).map(|()| (41, 0, 0));
+        assert!(matches!(
+            classify_initial_held(absent(), ProofAttempt::One),
+            Err(ProofFailure::AwaitingExit(_))
+        ));
+        assert!(matches!(
+            classify_initial_held(absent(), ProofAttempt::Two),
+            Err(ProofFailure::Hard(_))
+        ));
+        let tuple = (41, libc::CLD_EXITED, 197);
+        assert_eq!(
+            classify_initial_held(Ok(tuple), ProofAttempt::One)
+                .unwrap_or_else(|_| panic!("terminal tuple must pass unchanged")),
+            tuple
+        );
+        for attempt in [ProofAttempt::One, ProofAttempt::Two] {
+            assert!(matches!(
+                classify_initial_held(
+                    Err(Failure::darwin(
+                        EngineError::WorkerUnavailable,
+                        Ds::HeldWait,
+                        Some(libc::ECHILD)
+                    )),
+                    attempt
+                ),
+                Err(ProofFailure::Hard(_))
+            ));
+        }
+        // Final-held still uses From<Failure>, never the provisional classifier.
+        assert!(matches!(
+            ProofFailure::from(absent().unwrap_err()),
+            ProofFailure::Hard(_)
+        ));
+        let mut calls = 0;
+        let observed = complete_zombie_proof(|attempt| {
+            calls += 1;
+            classify_initial_held(absent(), attempt)
+                .map(|_| ())
+                .map_err(|failure| failure.context(Context::ProofHeld))
+        })
+        .unwrap_or_else(|_| panic!("first absence remains typed, not success"));
+        let crate::process::CleanupObservation::AwaitingExit(failure) = observed else {
+            panic!("absence must remain distinct from complete proof");
+        };
+        assert!(failure.is_held_no_status());
+        #[cfg(debug_assertions)]
+        {
+            use crate::process::diagnostic::{HeldDetail, WaitCodeKind, WaitPidKind};
+            assert_eq!(
+                failure.proof_detail(),
+                (Context::ProofHeld, None, Some(ProofAttempt::One))
+            );
+            assert_eq!(
+                failure.held_detail(),
+                Some(HeldDetail {
+                    pid: WaitPidKind::Zero,
+                    code: WaitCodeKind::Zero
+                })
+            );
+            assert_eq!(failure.diagnostic_detail().0, "darwin-held-status");
+        }
+        assert_eq!(calls, 1);
+    }
     // Pure post-read validation: the real BSD reader retains its identity checks.
     fn zombie_info() -> libc::proc_bsdinfo {
         let mut info: libc::proc_bsdinfo = unsafe { zeroed() };
@@ -913,7 +1044,7 @@ mod tests {
     fn proof_script(outcomes: Vec<ProofResult<()>>) -> (Staged<()>, Vec<usize>) {
         let mut outcomes = outcomes.into_iter();
         let mut calls = Vec::new();
-        let result = complete_zombie_proof(|| {
+        let result = complete_zombie_proof(|_| {
             calls.push(calls.len() + 1);
             outcomes.next().expect("unexpected extra proof attempt")
         });
@@ -1004,7 +1135,7 @@ mod tests {
     fn pending_owned_cleanup_attempt_cap_and_strict_conversion() {
         for restart in [false, true] {
             let mut calls = 0;
-            let result = complete_zombie_proof(|| {
+            let result = complete_zombie_proof(|_| {
                 calls += 1;
                 if restart && calls == 1 {
                     Err(incomplete_read(EngineError::RecoveryUncertain))
@@ -1036,7 +1167,7 @@ mod tests {
             }
         }
         assert!(
-            complete_zombie_proof(|| Err(ProofFailure::Hard(Failure::darwin(
+            complete_zombie_proof(|_| Err(ProofFailure::Hard(Failure::darwin(
                 EngineError::RecoveryUncertain,
                 Ds::ZombieGroup,
                 None
@@ -1044,7 +1175,7 @@ mod tests {
             .is_err()
         );
         assert!(matches!(
-            complete_zombie_proof(|| Ok(())),
+            complete_zombie_proof(|_| Ok(())),
             Ok(crate::process::CleanupObservation::Complete)
         ));
     }

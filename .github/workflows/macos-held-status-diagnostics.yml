@@ -77,6 +77,19 @@ jobs:
               test "$(grep -c "^test platform::macos::tests::held_status_diagnostics_$test_name \.\.\." "$log")" -eq 1
             done
             echo "held-status diagnostics stage=engine_tests_passed profile=$profile"
+            echo "held-status diagnostics stage=initial_no_status_engine_tests profile=$profile"
+            cargo test --locked ${flags[@]+"${flags[@]}"} -p marmish-engine --lib initial_no_status_ -- --nocapture 2>&1 | tee "$log"
+            grep -Eq '^test result: ok\. 5 passed; 0 failed; 0 ignored;' "$log"
+            test "$(grep -c '^test result:' "$log")" -eq 1
+            for test_name in \
+              platform::macos::tests::initial_no_status_classification_truth_table \
+              platform::macos::tests::initial_no_status_proof_attempt_and_tuple \
+              process::tests::initial_no_status_strict_and_kill_remain_hard \
+              process::tests::initial_no_status_term_state \
+              process::tests::initial_no_status_reap_guard; do
+              test "$(grep -c "^test $test_name \.\.\." "$log")" -eq 1
+            done
+            echo "held-status diagnostics stage=initial_no_status_engine_tests_passed profile=$profile"
           done
           echo 'held-status diagnostics stage=formatter_test'
           cargo test --locked -p marmish-engine --lib process::diagnostic::tests::held_wait_records_are_closed_and_failure_only -- --exact --nocapture 2>&1 | tee "$log"
@@ -102,9 +115,26 @@ jobs:
           trap 'rm -f "$log"' EXIT
           echo 'held-status diagnostics stage=full_installed_suite'
           cargo test --locked -p marmish-native --features installed-checks 2>&1 | tee "$log"
-          test "$(grep -Ec '^test result: ok\. 907 passed; 0 failed; 3 ignored;' "$log")" -eq 1
+          test "$(grep -Ec '^test result: ok\. 909 passed; 0 failed; 3 ignored;' "$log")" -eq 1
           test "$(grep -c '^test stream_runner::tests::final_handle_drop_releases_full_unacked_output_race \.\.\.' "$log")" -eq 1
           echo 'held-status diagnostics stage=full_installed_suite_passed'
+          git diff --quiet HEAD --
+      - name: Validate native TERM budget after full installed-checks success
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/installed-tools-target"
+          test -d "$CARGO_TARGET_DIR"
+          log=$(mktemp "$RUNNER_TEMP/marmish-term-budget.XXXXXX")
+          trap 'rm -f "$log"' EXIT
+          echo 'held-status diagnostics stage=native_term_budget'
+          cargo test --locked -p marmish-native --features installed-checks --lib stream_runner::tests::initial_no_status_term_budget_ -- --nocapture 2>&1 | tee "$log"
+          grep -Eq '^test result: ok\. 2 passed; 0 failed; 0 ignored;' "$log"
+          test "$(grep -c '^test result:' "$log")" -eq 1
+          for test_name in preserves_single_attempt_and_deadlines zero_and_failures_cannot_complete_cleanup; do
+            test "$(grep -c "^test stream_runner::tests::initial_no_status_term_budget_$test_name \.\.\." "$log")" -eq 1
+          done
+          echo 'held-status diagnostics stage=native_term_budget_passed'
           git diff --quiet HEAD --
       - name: Repeat exact installed-checks race one hundred times after full success
         shell: bash

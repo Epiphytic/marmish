@@ -12,13 +12,15 @@ pub(crate) enum CleanupObservation {
     Complete,
     #[cfg(target_os = "macos")]
     Pending(Failure),
+    #[cfg(target_os = "macos")]
+    AwaitingExit(Failure),
 }
 impl CleanupObservation {
     pub(crate) fn strict(self) -> Staged<()> {
         match self {
             Self::Complete => Ok(()),
             #[cfg(target_os = "macos")]
-            Self::Pending(failure) => Err(failure),
+            Self::Pending(failure) | Self::AwaitingExit(failure) => Err(failure),
         }
     }
 }
@@ -73,9 +75,66 @@ fn resolve_cleanup(
     match result? {
         CleanupObservation::Complete => Ok(LiveCleanupProgress::Complete),
         #[cfg(target_os = "macos")]
+        CleanupObservation::AwaitingExit(failure) => Err(failure),
+        #[cfg(target_os = "macos")]
         CleanupObservation::Pending(failure) if _final_observation => Err(failure),
         #[cfg(target_os = "macos")]
         CleanupObservation::Pending(_) => Ok(LiveCleanupProgress::Pending),
+    }
+}
+
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TermCleanup {
+    #[default]
+    NotStarted,
+    Pending,
+    Complete,
+    Failed,
+}
+impl TermCleanup {
+    fn begin(
+        &mut self,
+        waiting_allowed: bool,
+        operation: impl FnOnce() -> Staged<LiveCleanupProgress>,
+    ) -> Staged<LiveCleanupProgress> {
+        let result = match *self {
+            Self::NotStarted => operation(),
+            Self::Complete => return Ok(LiveCleanupProgress::Complete),
+            Self::Pending if waiting_allowed => return Ok(LiveCleanupProgress::Pending),
+            Self::Pending | Self::Failed => Err(Failure::new(
+                EngineError::RecoveryUncertain,
+                Stage::LeaderIdentity,
+                None,
+            )),
+        };
+        *self = match result {
+            Ok(LiveCleanupProgress::Complete) => Self::Complete,
+            Ok(LiveCleanupProgress::Pending) => Self::Pending,
+            Err(_) => Self::Failed,
+        };
+        result
+    }
+    pub(crate) fn reap_allowed(self, kill: KillCleanup) -> bool {
+        kill.reap_allowed()
+            && match self {
+                Self::NotStarted | Self::Complete => true,
+                Self::Pending => kill == KillCleanup::Complete,
+                Self::Failed => false,
+            }
+    }
+}
+fn resolve_term(
+    result: Staged<CleanupObservation>,
+    _waiting_allowed: bool,
+) -> Staged<LiveCleanupProgress> {
+    match result? {
+        CleanupObservation::Complete => Ok(LiveCleanupProgress::Complete),
+        #[cfg(target_os = "macos")]
+        CleanupObservation::AwaitingExit(_) if _waiting_allowed => Ok(LiveCleanupProgress::Pending),
+        #[cfg(target_os = "macos")]
+        CleanupObservation::AwaitingExit(failure) | CleanupObservation::Pending(failure) => {
+            Err(failure)
+        }
     }
 }
 
@@ -162,6 +221,25 @@ impl ChildOwner {
             }
         }
         Ok(CleanupObservation::Complete)
+    }
+    pub(crate) fn begin_term_cleanup(
+        &self,
+        state: &mut TermCleanup,
+        waiting_allowed: bool,
+    ) -> Result<LiveCleanupProgress> {
+        if self.reaped {
+            return Err(EngineError::RecoveryUncertain);
+        }
+        let started = *state == TermCleanup::NotStarted;
+        let result = state.begin(waiting_allowed, || {
+            resolve_term(self.signal_staged(libc::SIGTERM), waiting_allowed)
+        });
+        // Cached state errors describe no new syscall and emit no fabricated
+        // probe record. Actual first-attempt failures retain their detail.
+        if started {
+            diagnostic::emit(&result, Origin::Term);
+        }
+        result.map_err(|failure| failure.error)
     }
     pub(crate) fn advance_kill_cleanup(
         &self,
@@ -259,6 +337,108 @@ impl Drop for ChildOwner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn initial_no_status_term_state() {
+        use std::cell::Cell;
+        let calls = Cell::new(0);
+        for progress in [LiveCleanupProgress::Complete, LiveCleanupProgress::Pending] {
+            let mut state = TermCleanup::default();
+            for _ in 0..3 {
+                let result = state
+                    .begin(true, || {
+                        calls.set(calls.get() + 1);
+                        Ok(progress)
+                    })
+                    .unwrap_or_else(|_| panic!("expected typed progress"));
+                assert_eq!(result, progress);
+            }
+            if progress == LiveCleanupProgress::Pending {
+                assert!(state
+                    .begin(false, || panic!("cached state must not signal"))
+                    .is_err());
+                assert_eq!(state, TermCleanup::Failed);
+                assert!(state
+                    .begin(true, || panic!("sticky failure must not signal"))
+                    .is_err());
+            }
+        }
+        assert_eq!(calls.get(), 2);
+        let mut state = TermCleanup::default();
+        let error = state
+            .begin(true, || {
+                Err(Failure::new(EngineError::StorageFailure, Stage::Kill, None))
+            })
+            .unwrap_err();
+        assert!(matches!(error.error, EngineError::StorageFailure));
+        assert!(state
+            .begin(true, || panic!("hard error must be sticky"))
+            .is_err());
+    }
+    #[test]
+    fn initial_no_status_reap_guard() {
+        for term in [
+            TermCleanup::NotStarted,
+            TermCleanup::Complete,
+            TermCleanup::Pending,
+            TermCleanup::Failed,
+        ] {
+            for kill in [
+                KillCleanup::NotStarted,
+                KillCleanup::Pending,
+                KillCleanup::Complete,
+                KillCleanup::Failed,
+            ] {
+                let expected = matches!(kill, KillCleanup::NotStarted | KillCleanup::Complete)
+                    && match term {
+                        TermCleanup::NotStarted | TermCleanup::Complete => true,
+                        TermCleanup::Pending => kill == KillCleanup::Complete,
+                        TermCleanup::Failed => false,
+                    };
+                assert_eq!(term.reap_allowed(kill), expected);
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn initial_no_status_strict_and_kill_remain_hard() {
+        use crate::process::diagnostic::{Context, DarwinStage, ProofAttempt};
+        let failure = || {
+            Failure::darwin(
+                EngineError::RecoveryUncertain,
+                DarwinStage::HeldStatus,
+                None,
+            )
+            .held_no_status()
+            .context(Context::ProofHeld)
+        };
+        assert!(CleanupObservation::AwaitingExit(failure())
+            .strict()
+            .is_err());
+        assert_eq!(
+            resolve_term(Ok(CleanupObservation::AwaitingExit(failure())), true)
+                .unwrap_or_else(|_| panic!("TERM may wait only")),
+            LiveCleanupProgress::Pending
+        );
+        assert!(resolve_term(Ok(CleanupObservation::AwaitingExit(failure())), false).is_err());
+        assert!(resolve_term(Ok(CleanupObservation::Pending(failure())), true).is_err());
+        for final_observation in [false, true] {
+            let failure = resolve_cleanup(
+                Ok(CleanupObservation::AwaitingExit(failure())),
+                final_observation,
+            )
+            .unwrap_err();
+            assert!(failure.is_held_no_status());
+            assert!(matches!(failure.error, EngineError::RecoveryUncertain));
+            #[cfg(debug_assertions)]
+            {
+                let failure = failure.with_proof_attempt(ProofAttempt::One);
+                assert_eq!(failure.diagnostic_detail().0, "darwin-held-status");
+            }
+        }
+        #[cfg(not(debug_assertions))]
+        let _ = ProofAttempt::One;
+    }
+
     #[test]
     fn pending_owned_cleanup_state_actions() {
         let mut state = KillCleanup::default();

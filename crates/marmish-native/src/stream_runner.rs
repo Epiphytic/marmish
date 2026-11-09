@@ -423,6 +423,28 @@ struct Lifecycle {
     killed: Option<Instant>,
 }
 impl Lifecycle {
+    fn begin_cancel(
+        &mut self,
+        now: Instant,
+        begin: impl FnOnce(bool) -> marmish_engine::Result<LiveCleanupProgress>,
+    ) -> marmish_engine::Result<()> {
+        if self.cancel_started.is_some() {
+            return Ok(());
+        }
+        // Anchor before the first TERM attempt; waiting cannot extend this grace.
+        self.cancel_started = Some(now);
+        match begin(self.exit_seen.is_none())? {
+            LiveCleanupProgress::Complete => Ok(()),
+            LiveCleanupProgress::Pending if self.exit_seen.is_none() => Ok(()),
+            LiveCleanupProgress::Pending => Err(marmish_engine::EngineError::RecoveryUncertain),
+        }
+    }
+    fn kill_due(&self, now: Instant, cancel_grace: Duration) -> bool {
+        self.kill_started.is_none()
+            && self
+                .cancel_started
+                .is_some_and(|at| now.duration_since(at) >= cancel_grace)
+    }
     fn advance_cleanup(
         &mut self,
         now: Instant,
@@ -477,19 +499,18 @@ impl Lifecycle {
         let drain_expired = self
             .exit_seen
             .is_some_and(|at| now.duration_since(at) >= limits.drain_grace);
-        if self.cancel_started.is_none() && (cancellation || drain_expired) {
-            if let Err(_error) = child.signal_term() {
-                #[cfg(test)]
-                shared.record_failure_context(Some(_error), Some(self));
-                shared.failed(true);
-                return false;
-            }
-            self.cancel_started = Some(Instant::now());
+        if self.cancel_started.is_none()
+            && (cancellation || drain_expired)
+            && let Err(_error) = self.begin_cancel(Instant::now(), |waiting_allowed| {
+                child.begin_term_cleanup(waiting_allowed)
+            })
+        {
+            #[cfg(test)]
+            shared.record_failure_context(Some(_error), Some(self));
+            shared.failed(true);
+            return false;
         }
-        let start_cleanup = self.kill_started.is_none()
-            && self
-                .cancel_started
-                .is_some_and(|at| now.duration_since(at) >= limits.cancel_grace);
+        let start_cleanup = self.kill_due(Instant::now(), limits.cancel_grace);
         let poll_cleanup = self.kill_started.is_some() && !self.cleanup_ready();
         if (start_cleanup || poll_cleanup)
             && let Err(_error) =
@@ -1153,6 +1174,93 @@ pub(crate) mod tests {
         assert!(state.identity.is_none());
         assert_eq!(state.terminal, Some(Terminal::Cancelled));
         assert!(!dir.path().join("marker").exists());
+    }
+
+    #[test]
+    fn initial_no_status_term_budget_preserves_single_attempt_and_deadlines() {
+        let start = Instant::now();
+        let cancel_grace = Duration::from_secs(2);
+        let drain_grace = Duration::from_secs(3);
+        let mut lifecycle = Lifecycle::default();
+        let mut term_calls = 0;
+        for now in [start, start + Duration::from_secs(1), start + cancel_grace] {
+            lifecycle
+                .begin_cancel(now, |waiting_allowed| {
+                    assert!(waiting_allowed);
+                    term_calls += 1;
+                    Ok(LiveCleanupProgress::Pending)
+                })
+                .unwrap();
+            assert_eq!(lifecycle.cancel_started, Some(start));
+            assert!(!lifecycle.cleanup_ready());
+        }
+        assert_eq!(term_calls, 1);
+        assert!(!lifecycle.kill_due(start + Duration::from_secs(1), cancel_grace));
+        let kill_start = start + cancel_grace;
+        assert!(lifecycle.kill_due(kill_start, cancel_grace));
+        assert!(
+            !lifecycle
+                .advance_cleanup(kill_start, drain_grace, |final_observation| {
+                    assert!(!final_observation);
+                    Ok(LiveCleanupProgress::Pending)
+                })
+                .unwrap()
+        );
+        assert!(!lifecycle.kill_due(kill_start + drain_grace, cancel_grace));
+        assert!(
+            lifecycle
+                .advance_cleanup(kill_start + drain_grace, drain_grace, |final_observation| {
+                    assert!(final_observation);
+                    Ok(LiveCleanupProgress::Complete)
+                })
+                .unwrap()
+        );
+        assert_eq!(lifecycle.kill_started, Some(kill_start));
+        assert_eq!(lifecycle.killed, Some(kill_start));
+    }
+
+    #[test]
+    fn initial_no_status_term_budget_zero_and_failures_cannot_complete_cleanup() {
+        use marmish_engine::EngineError;
+        let start = Instant::now();
+        let mut lifecycle = Lifecycle::default();
+        lifecycle
+            .begin_cancel(start, |_| Ok(LiveCleanupProgress::Pending))
+            .unwrap();
+        assert!(lifecycle.kill_due(start, Duration::ZERO));
+        let mut kill_calls = 0;
+        let final_pending = lifecycle.advance_cleanup(start, Duration::ZERO, |final_observation| {
+            assert!(final_observation);
+            kill_calls += 1;
+            // The engine rejects pending at the final observation.
+            Err(EngineError::RecoveryUncertain)
+        });
+        assert!(matches!(final_pending, Err(EngineError::RecoveryUncertain)));
+        assert_eq!(kill_calls, 1);
+        assert!(!lifecycle.kill_due(start, Duration::ZERO));
+        assert!(!lifecycle.cleanup_ready());
+        assert_eq!(lifecycle.killed, None);
+
+        let mut hard = Lifecycle::default();
+        assert!(matches!(
+            hard.begin_cancel(start, |_| Err(EngineError::WorkerUnavailable)),
+            Err(EngineError::WorkerUnavailable)
+        ));
+        assert_eq!(hard.cancel_started, Some(start));
+        assert!(!hard.cleanup_ready());
+        let mut exited = Lifecycle {
+            exit_seen: Some(start),
+            ..Lifecycle::default()
+        };
+        assert!(matches!(
+            exited.begin_cancel(start, |waiting_allowed| {
+                assert!(!waiting_allowed);
+                Ok(LiveCleanupProgress::Pending)
+            }),
+            Err(EngineError::RecoveryUncertain)
+        ));
+        assert!(!exited.cleanup_ready());
+        assert_eq!(exited.killed, None);
     }
 
     #[test]

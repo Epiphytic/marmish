@@ -2,7 +2,7 @@
 use crate::copy_launch::OwnedCopyContext;
 use crate::launcher::{self, ChildSpec};
 use crate::model::*;
-use crate::process::{ChildOwner, KillCleanup};
+use crate::process::{ChildOwner, KillCleanup, TermCleanup};
 use crate::Engine;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
@@ -94,6 +94,7 @@ pub struct LiveChild {
     owner: ChildOwner,
     pipes: Option<LivePipes>,
     kill_cleanup: KillCleanup,
+    term_cleanup: TermCleanup,
 }
 
 impl Engine {
@@ -177,6 +178,7 @@ impl PreparedLiveExec {
             owner,
             pipes: Some(pipes),
             kill_cleanup: KillCleanup::default(),
+            term_cleanup: TermCleanup::default(),
         })
     }
 }
@@ -196,6 +198,12 @@ impl LiveChild {
     pub fn signal_term(&self) -> Result<()> {
         self.owner.signal(libc::SIGTERM)
     }
+    /// Attempt TERM once. Pending authorizes only waiting within the caller's
+    /// cancellation grace; it claims neither delivery nor terminal cleanup.
+    pub fn begin_term_cleanup(&mut self, waiting_allowed: bool) -> Result<LiveCleanupProgress> {
+        self.owner
+            .begin_term_cleanup(&mut self.term_cleanup, waiting_allowed)
+    }
     pub fn signal_kill(&self) -> Result<()> {
         self.owner.signal(libc::SIGKILL)
     }
@@ -213,7 +221,7 @@ impl LiveChild {
     }
     /// Call only after the final required group signal; all future signals fail.
     pub fn reap_last(&mut self) -> Result<ExitOutcome> {
-        if self.owner.reaped || !self.kill_cleanup.reap_allowed() {
+        if self.owner.reaped || !self.term_cleanup.reap_allowed(self.kill_cleanup) {
             return Err(EngineError::RecoveryUncertain);
         }
         self.owner.reap()

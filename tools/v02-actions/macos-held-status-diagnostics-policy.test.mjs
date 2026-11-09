@@ -10,10 +10,10 @@ const race = 'stream_runner::tests::final_handle_drop_releases_full_unacked_outp
 const fullCommand = 'cargo test --locked -p marmish-native --features installed-checks';
 const blocks = [...workflow.matchAll(/        run: \|\n((?:          .*\n|\n)+)/g)]
   .map(match => match[1].replace(/^          /gm, ''));
-const [guard, metadata, engine, full, repeats] = blocks;
+const [guard, metadata, engine, full, nativeBudget, repeats] = blocks;
 
 test('manual diagnostic preserves exact immutable nonroot source guards and fixed budget', () => {
-  assert.equal(blocks.length, 5);
+  assert.equal(blocks.length, 6);
   assert.match(workflow, /^name: .*not qualification/m);
   assert.match(workflow, /on:\n  workflow_dispatch:\n    inputs:\n      source_commit:/);
   assert.match(workflow, /required: true\n        type: string/);
@@ -59,8 +59,19 @@ test('engine checks cover exact pure test family and formatter in isolated profi
   assert.ok(engine.includes('for test_name in acceptance failure_detail; do'));
   assert.ok(engine.includes('cargo test --locked -p marmish-engine --lib process::diagnostic::tests::held_wait_records_are_closed_and_failure_only -- --exact --nocapture 2>&1 | tee "$log"'));
   assert.ok(engine.includes("grep -Eq '^test result: ok\\. 1 passed; 0 failed; 0 ignored;'"));
-  assert.equal((engine.match(/grep -c '\^test result:'/g) ?? []).length, 2);
+  assert.equal((engine.match(/grep -c '\^test result:'/g) ?? []).length, 3);
   assert.ok(engine.includes('cargo clippy --locked ${flags[@]+"${flags[@]}"} -p marmish-engine --all-targets -- -D warnings 2>&1 | tee "$log"'));
+  assert.ok(engine.includes('cargo test --locked ${flags[@]+"${flags[@]}"} -p marmish-engine --lib initial_no_status_ -- --nocapture 2>&1 | tee "$log"'));
+  assert.ok(engine.includes("grep -Eq '^test result: ok\\. 5 passed; 0 failed; 0 ignored;'"));
+  for (const name of [
+    'platform::macos::tests::initial_no_status_classification_truth_table',
+    'platform::macos::tests::initial_no_status_proof_attempt_and_tuple',
+    'process::tests::initial_no_status_strict_and_kill_remain_hard',
+    'process::tests::initial_no_status_term_state',
+    'process::tests::initial_no_status_reap_guard',
+
+  ]) assert.ok(engine.includes(name));
+  assert.ok(engine.includes('test "$(grep -c "^test $test_name \\.\\.\\." "$log")" -eq 1'));
   assert.doesNotMatch(engine, /marmish-native|installed-checks/);
 });
 
@@ -69,8 +80,14 @@ test('full suite remains exact once before one hundred feature-matched repetitio
   assert.ok(full.includes(`${fullCommand} 2>&1 | tee "$log"`));
   assert.equal((full.match(/cargo /g) ?? []).length, 1);
   assert.doesNotMatch(full, /--lib|--exact|--nocapture/);
-  assert.ok(full.includes("grep -Ec '^test result: ok\\. 907 passed; 0 failed; 3 ignored;'"));
+  assert.ok(full.includes("grep -Ec '^test result: ok\\. 909 passed; 0 failed; 3 ignored;'"));
   assert.ok(full.includes(`grep -c '^test ${race} \\.\\.\\.'`));
+  assert.ok(nativeBudget.includes('export CARGO_TARGET_DIR="$RUNNER_TEMP/installed-tools-target"\ntest -d "$CARGO_TARGET_DIR"'));
+  assert.ok(nativeBudget.includes(`${fullCommand} --lib stream_runner::tests::initial_no_status_term_budget_ -- --nocapture 2>&1 | tee "$log"`));
+  assert.ok(nativeBudget.includes("grep -Eq '^test result: ok\\. 2 passed; 0 failed; 0 ignored;'"));
+  assert.ok(nativeBudget.includes('for test_name in preserves_single_attempt_and_deadlines zero_and_failures_cannot_complete_cleanup; do'));
+  assert.ok(nativeBudget.includes('test "$(grep -c \'^test result:\' "$log")" -eq 1'));
+  assert.doesNotMatch(nativeBudget, /--release/);
   assert.ok(repeats.includes('export CARGO_TARGET_DIR="$RUNNER_TEMP/installed-tools-target"\ntest -d "$CARGO_TARGET_DIR"'));
   assert.ok(repeats.includes(`test_name=${race}\n`));
   assert.ok(repeats.includes('for iteration in {1..100}; do'));
@@ -101,14 +118,19 @@ if [[ " $* " != *' --lib '* ]]; then
   [[ "$STUB_MODE" != full_failure ]] || exit 17
   printf 'test ${race} ... diagnostic-stderr\\nok\\n'
   if [[ "$STUB_MODE" = bad_full_count ]]; then
-    echo 'test result: ok. 906 passed; 0 failed; 3 ignored;'
-  else
     echo 'test result: ok. 907 passed; 0 failed; 3 ignored;'
+  else
+    echo 'test result: ok. 909 passed; 0 failed; 3 ignored;'
     echo 'test result: ok. 0 passed; 0 failed; 0 ignored;'
   fi
+elif [[ "$*" = *initial_no_status_term_budget_* ]]; then
+  [[ "$STUB_MODE" != budget_failure ]] || exit 23
+  echo 'test stream_runner::tests::initial_no_status_term_budget_preserves_single_attempt_and_deadlines ... ok'
+  echo 'test stream_runner::tests::initial_no_status_term_budget_zero_and_failures_cannot_complete_cleanup ... ok'
+  echo 'test result: ok. 2 passed; 0 failed; 0 ignored;'
 else
   count=$(wc -l < "$RUNNER_TEMP/invocations")
-  [[ "$STUB_MODE" != repeat_failure || "$count" -ne 2 ]] || exit 19
+  [[ "$STUB_MODE" != repeat_failure || "$count" -ne 3 ]] || exit 19
   printf 'test ${race} ... diagnostic-stderr\\nok\\n'
   echo 'test result: ok. 1 passed; 0 failed; 0 ignored;'
 fi
@@ -119,12 +141,15 @@ fi
     chmodSync(git, 0o700);
     const first = spawnSync('bash', ['-c', full], {encoding: 'utf8', timeout: 5000,
       env: {...process.env, PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: directory, STUB_MODE: mode}});
+    let budget;
     let second;
-    // Actions' default success() admission: no repeat step after a full failure.
-    if (first.status === 0) second = spawnSync('bash', ['-c', repeats], {encoding: 'utf8', timeout: 15000,
+    // Actions' default success() admission: every preceding check must succeed.
+    if (first.status === 0) budget = spawnSync('bash', ['-c', nativeBudget], {encoding: 'utf8', timeout: 5000,
+      env: {...process.env, PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: directory, STUB_MODE: mode}});
+    if (budget?.status === 0) second = spawnSync('bash', ['-c', repeats], {encoding: 'utf8', timeout: 15000,
       env: {...process.env, PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: directory, STUB_MODE: mode}});
     const invocations = readFileSync(join(directory, 'invocations'), 'utf8').trim().split('\n');
-    return {first, second, invocations};
+    return {first, budget, second, invocations};
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }
@@ -148,7 +173,7 @@ test('inert first failing repetition stops later invocations', () => {
   const result = stubbedSequence('repeat_failure');
   assert.equal(result.first.status, 0, result.first.stderr);
   assert.equal(result.second.status, 19);
-  assert.equal(result.invocations.length, 2);
+  assert.equal(result.invocations.length, 3);
   assert.equal((result.second.stdout.match(/iteration=/g) ?? []).length, 1);
 });
 
@@ -157,8 +182,10 @@ test('inert success runs one full suite and exactly one hundred repetitions', ()
   assert.equal(result.first.status, 0, result.first.stderr);
   assert.equal(result.second.status, 0, result.second.stderr);
   assert.equal(result.invocations[0], 'test --locked -p marmish-native --features installed-checks');
-  assert.equal(result.invocations.length, 101);
-  assert.ok(result.invocations.slice(1).every(args => args === `test --locked -p marmish-native --features installed-checks --lib ${race} -- --exact --nocapture`));
+  assert.equal(result.invocations.length, 102);
+  assert.equal(result.budget.status, 0, result.budget.stderr);
+  assert.equal(result.invocations[1], 'test --locked -p marmish-native --features installed-checks --lib stream_runner::tests::initial_no_status_term_budget_ -- --nocapture');
+  assert.ok(result.invocations.slice(2).every(args => args === `test --locked -p marmish-native --features installed-checks --lib ${race} -- --exact --nocapture`));
   const announcements = [...result.second.stdout.matchAll(/iteration=(\d+) test=/g)].map(match => Number(match[1]));
   assert.deepEqual(announcements, Array.from({length: 100}, (_, index) => index + 1));
 });
@@ -178,6 +205,13 @@ if [[ "$*" = *held_status_diagnostics_* ]]; then
   echo 'test platform::macos::tests::held_status_diagnostics_acceptance ... ok'
   echo 'test platform::macos::tests::held_status_diagnostics_failure_detail ... ok'
   echo 'test result: ok. 2 passed; 0 failed; 0 ignored;'
+elif [[ "$*" = *initial_no_status_* ]]; then
+  echo 'test platform::macos::tests::initial_no_status_classification_truth_table ... ok'
+  echo 'test platform::macos::tests::initial_no_status_proof_attempt_and_tuple ... ok'
+  echo 'test process::tests::initial_no_status_strict_and_kill_remain_hard ... ok'
+  echo 'test process::tests::initial_no_status_term_state ... ok'
+  echo 'test process::tests::initial_no_status_reap_guard ... ok'
+  echo 'test result: ok. 5 passed; 0 failed; 0 ignored;'
 else
   echo 'test process::diagnostic::tests::held_wait_records_are_closed_and_failure_only ... ok'
   echo 'test result: ok. 1 passed; 0 failed; 0 ignored;'
@@ -193,7 +227,9 @@ fi
     const invocations = readFileSync(join(directory, 'invocations'), 'utf8').trim().split('\n');
     assert.deepEqual(invocations, [
       'test --locked -p marmish-engine --lib platform::macos::tests::held_status_diagnostics_ -- --nocapture',
+      'test --locked -p marmish-engine --lib initial_no_status_ -- --nocapture',
       'test --locked --release -p marmish-engine --lib platform::macos::tests::held_status_diagnostics_ -- --nocapture',
+      'test --locked --release -p marmish-engine --lib initial_no_status_ -- --nocapture',
       'test --locked -p marmish-engine --lib process::diagnostic::tests::held_wait_records_are_closed_and_failure_only -- --exact --nocapture',
       'clippy --locked -p marmish-engine --all-targets -- -D warnings',
       'clippy --locked --release -p marmish-engine --all-targets -- -D warnings',
@@ -201,4 +237,13 @@ fi
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }
+});
+
+
+test('inert native TERM budget failure prevents every race repetition', () => {
+  const result = stubbedSequence('budget_failure');
+  assert.equal(result.first.status, 0, result.first.stderr);
+  assert.equal(result.budget.status, 23);
+  assert.equal(result.second, undefined);
+  assert.equal(result.invocations.length, 2);
 });

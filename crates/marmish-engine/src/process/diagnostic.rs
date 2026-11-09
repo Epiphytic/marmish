@@ -63,6 +63,7 @@ enum ObservationClass {
     Hard,
     BsdReadEsrch,
     ExitingNonleader,
+    HeldNoStatus,
 }
 #[cfg(target_os = "macos")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -235,6 +236,17 @@ impl Failure {
             },
             ..Self::new(error, Stage::Darwin(stage), errno)
         }
+    }
+    #[cfg(target_os = "macos")]
+    pub(crate) fn held_no_status(self) -> Self {
+        Self {
+            observation: ObservationClass::HeldNoStatus,
+            ..self
+        }
+    }
+    #[cfg(target_os = "macos")]
+    pub(crate) fn is_held_no_status(&self) -> bool {
+        matches!(self.observation, ObservationClass::HeldNoStatus)
     }
     #[cfg(target_os = "macos")]
     pub(crate) fn exiting_nonleader(self) -> Self {
@@ -615,9 +627,12 @@ mod tests {
                     .with_proof_attempt(ProofAttempt::One);
                     assert!(matches!(failure.error, EngineError::RecoveryUncertain));
                     let text = record::<()>(&Err(failure), Origin::Term).unwrap().format();
-                    assert_eq!(text, format!(
-                        "marmish-engine-signal-failure origin=term stage={label}/darwin-held-status errno=none wait_pid={pid_label} wait_code={code_label} proof_attempt=1\n"
-                    ));
+                    assert_eq!(
+                        text,
+                        format!(
+                            "marmish-engine-signal-failure origin=term stage={label}/darwin-held-status errno=none wait_pid={pid_label} wait_code={code_label} proof_attempt=1\n"
+                        )
+                    );
                     assert!(text.len() < 512);
                     assert_eq!(text.lines().count(), 1);
                 }
