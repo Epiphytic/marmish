@@ -6,10 +6,10 @@ main() {
     umask 077
     LC_ALL=C
     export LC_ALL
-    version='0.2.3'
-    sha_amd64='ee1d471eb188f9de7463c4d023518c2908c06e1a65bd55d3ea53b627e84ff18a'
-    sha_arm64='a0548539b23a3e69f36cbc5f66b68bd48ed6b90e480a375b28280f28ac0a3a9f'
-    sha_macos='bab54a90870175143e33c0dffa1a292c1a446947054f6cca47aa9b951a8ed4fa'
+    version='0.3.0'
+    sha_amd64='5973edf2eb4290a7cdcb268dfbec0b918ec0f474574177ed6a12743364f0c4fc'
+    sha_arm64='dcd6cc170954c58c534b8749575f375ec35e5060f65b15996356fe5ba065e50e'
+    sha_macos='1cffcbbac77cd46b7ffea7d41bbc946e3b9d044066489d5b0ecbfeb895b698cd'
     debug=no
     quickstart=no
     asset_dir=
@@ -34,7 +34,7 @@ main() {
                 case "$2" in /*) ;; *) fail absolute_path_required ;; esac
                 case "$option" in --prefix) prefix=$2 ;; --bin-dir) bin_dir=$2 ;; --asset-dir) asset_dir=$2 ;; --state-dir) state_dir=$2 ;; esac
                 shift 2 ;;
-            --help) printf '%s\n' 'Marmish native v0.2 installer: --quickstart --debug --prefix DIR --bin-dir DIR --asset-dir DIR --state-dir DIR --key-storage auto|file|keychain'; return 0 ;;
+            --help) printf '%s\n' 'Marmish native installer: --quickstart --debug --prefix DIR --bin-dir DIR --asset-dir DIR --state-dir DIR --key-storage auto|file|keychain'; return 0 ;;
             *) fail invalid_argument ;;
         esac
     done
@@ -60,7 +60,7 @@ main() {
     valid_hex() { [ "${#1}" = 64 ] && case "$1" in *[!0-9a-f]*) return 1 ;; *) return 0 ;; esac; }
     printf '%s\n' "$version" | awk '
         function bounded(s) {return length(s)<20 || (length(s)==20 && ("x" s)<="x18446744073709551615")}
-        /^0\.2\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$/ {s=substr($0,5);n=split(s,a,"-rc[.]");ok=bounded(a[1])&&(n==1||bounded(a[2]))} END {exit !ok}' || fail unqualified_release_template
+        /^0\.[23]\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$/ {s=substr($0,5);n=split(s,a,"-rc[.]");ok=bounded(a[1])&&(n==1||bounded(a[2]))} END {exit NR!=1 || !ok}' || fail unqualified_release_template
     valid_hex "$sha_amd64" && valid_hex "$sha_arm64" && valid_hex "$sha_macos" || fail unqualified_release_template
     if command -v sha256sum >/dev/null 2>&1; then
         checksum() { sha256sum "$1" | awk '{print $1}'; }
