@@ -1118,3 +1118,12 @@ namespace privileges. [Integrated review](reviews/legacy-namespace-coverage.md)
 and 62 focused contracts in each flag mode pass; actual reduced-suite and
 capable-runner integration evidence remain pending. This is source publication,
 not release qualification or an explanation of historical failures.
+
+
+The legacy fixture-cache report now retains bounded compiler-admission metadata
+(tool, stage, exit code, byte count and exact version/host comparison results).
+Raw output remains confined to the existing explicitly requested private log,
+and successful probes clear stale capture before later operations. The
+[reviewed diagnostics](reviews/legacy-compiler-admission-diagnostics.md) pass34
+focused mock tests; the macOS rejection still needs a fresh hosted report.
+Version admission and execution behavior are unchanged.

@@ -85,3 +85,30 @@ fixture and receipt assertions, with no skips. All six fixture tests also passed
 original full tools suite remains a subsequent validation boundary; unrelated
 failures remain failures. Linux AMD64, Linux ARM64 and macOS need their own
 source-bound evidence before this phase claims platform validation.
+
+## Compiler admission diagnostics follow-up
+
+Beads `marmish-d93.5`. Hosted macOS run `42632233855` at `6a4072c` failed
+compiler admission before fetch or the full tools suite. The rejecting command
+and predicate remain unknown despite successful toolchain provisioning. Claude
+independently approved diagnostic design V2 in session
+`51cd7d08-650d-4df1-8527-35ba2e3ce7f6`, record SHA256
+`27e004284661255cefe55575030918a4d33102f0416d3ffa672445cae5702712`.
+
+The two existing Python files add an optional current/last probe record to
+the existing dependency report: fixed tool and execution/validation stage, exit
+code, byte count, expected version/host and exact-match booleans. No raw output,
+paths or exception messages enter public reports. Commands, ordering, timeout,
+version grammar and admission predicates remain unchanged. Unknown host refuses
+before execution. Rejected returned/partial output uses only the existing
+explicitly requested private failure log; no additional writer or artifact.
+Clear the capture before every command and after all successful version checks
+so later provenance/fetch errors cannot inherit stale compiler output.
+
+Mock acceptance covers each tool, host/version mismatch, nonzero/oversize output,
+executor failure/partial capture, absent or occupied private log, adversarial raw
+bytes, and successful clearing before later failures. Reinspect the integrated
+namespace phase before edits. Independent completed-code review precedes source
+publication; hosted results must establish the rejecting predicate before any
+loader, version or timeout correction. This is diagnostic work, not a cause or
+platform qualification claim.

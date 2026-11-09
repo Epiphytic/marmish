@@ -47,7 +47,10 @@ class FixtureCacheTests(unittest.TestCase):
         if command[1] == 'fetch':
             self.fetches.append((command, env, kwargs))
             return 0, b''
-        self.assertEqual(kwargs, {'timeout': 10, 'capture': True})
+        self.assertEqual(set(kwargs), {'timeout', 'capture', 'failure_capture'})
+        self.assertEqual(kwargs['timeout'], 10)
+        self.assertIs(kwargs['capture'], True)
+        self.assertIsInstance(kwargs['failure_capture'], spike.FailureCapture)
         self.assertEqual(env['RUSTUP_AUTO_INSTALL'], '0')
         if name == 'rustc':
             return 0, b'rustc 1.97.1 (fixture)\nrelease: 1.97.1\nhost: x86_64-unknown-linux-gnu\n'
@@ -184,6 +187,160 @@ class FixtureCacheTests(unittest.TestCase):
                 self.prepare()
             for child in ('full-tools-cargo-home', 'full-tools-fetch-target'):
                 (self.root/child).rmdir()
+
+    def test_version_probe_exact_tool_and_closed_validation_fields(self):
+        host = 'x86_64-unknown-linux-gnu'
+        cases = [
+            ('rustc', 0, b'release: 1.97.0\nhost: ' + host.encode() + b'\n', False, True),
+            ('rustc', 0, b'release: 1.97.1\nhost: aarch64-apple-darwin\n', True, False),
+            ('cargo', 0, b'cargo wrong (/private/secret npub-marker)\n', False, None),
+            ('rustdoc', 0, b'rustdoc wrong (/private/secret npub-marker)\n', False, None),
+            ('cargo', 7, b'cargo 1.97.1 (fixture)\n', True, None),
+            ('rustc', 0, b'private-marker' * 400, None, None),
+        ]
+        original = self.execute
+        for tool, status, raw, version, host_match in cases:
+            def run(command, env, **options):
+                return (status, raw) if Path(command[0]).name == tool else original(command, env, **options)
+            self.run.side_effect = run
+            record, holder = {}, spike.FailureCapture()
+            with self.subTest(tool=tool, status=status, size=len(raw)), \
+                    self.assertRaisesRegex(spike.Refused, '^fixture_compiler_invalid$'):
+                spike.fixture_compiler_versions(self.compiler, self.env, diagnostics=record, failure_capture=holder)
+            self.assertEqual(record, {'stage': 'validation', 'tool': tool, 'exit_code': status,
+                'output_bytes': len(raw), 'expected_version': '1.97.1', 'expected_host': host,
+                'version_matches': version, 'host_matches': host_match})
+            self.assertEqual(holder.data, raw)
+            self.assertNotIn('private', json.dumps(record))
+            self.assertNotIn('npub', json.dumps(record))
+
+    def test_version_probe_success_defaults_and_unknown_host(self):
+        record, holder = {}, spike.FailureCapture()
+        holder.data = b'stale'
+        self.assertEqual(spike.fixture_compiler_versions(self.compiler, self.env,
+            diagnostics=record, failure_capture=holder)['version'], '1.97.1')
+        self.assertIsNone(holder.data)
+        self.assertEqual(record['tool'], 'rustdoc')
+        self.assertTrue(record['version_matches'])
+        self.assertIsNone(record['host_matches'])
+        self.assertEqual(record['stage'], 'validation')
+        self.assertEqual(record['exit_code'], 0)
+        # Existing callers without diagnostic arguments retain the original options.
+        self.run.side_effect = lambda command, env, **options: (0,
+            b'release: 1.97.1\nhost: x86_64-unknown-linux-gnu\n' if Path(command[0]).name == 'rustc'
+            else (Path(command[0]).name + ' 1.97.1 (fixture)\n').encode())
+        self.run.reset_mock()
+        spike.fixture_compiler_versions(self.compiler, self.env)
+        self.assertEqual(self.run.call_count, 3)
+        for call in self.run.call_args_list:
+            self.assertEqual(call.kwargs, {'timeout': 10, 'capture': True})
+        record = {}
+        self.run.reset_mock()
+        with patch.object(spike.platform, 'machine', return_value='unknown'), \
+                self.assertRaisesRegex(spike.Refused, '^fixture_compiler_invalid$'):
+            spike.fixture_compiler_versions(self.compiler, self.env, diagnostics=record)
+        self.assertEqual(record, {})
+        self.run.assert_not_called()
+
+    def test_version_probe_accepts_each_native_host(self):
+        for system, machine, host in [('Linux', 'x86_64', 'x86_64-unknown-linux-gnu'),
+                ('Linux', 'aarch64', 'aarch64-unknown-linux-gnu'),
+                ('Darwin', 'arm64', 'aarch64-apple-darwin')]:
+            def run(command, env, **options):
+                if Path(command[0]).name == 'rustc':
+                    return 0, ('release: 1.97.1\nhost: ' + host + '\n').encode()
+                return 0, (Path(command[0]).name + ' 1.97.1 (fixture)\n').encode()
+            self.run.side_effect = run
+            with self.subTest(host=host), patch.object(spike.platform, 'system', return_value=system), \
+                    patch.object(spike.platform, 'machine', return_value=machine):
+                self.assertEqual(spike.fixture_compiler_versions(self.compiler, self.env)['host'], host)
+
+    def test_version_errors_keep_execution_record_and_requested_private_capture(self):
+        for error in (spike.Refused('child_timeout'), spike.Refused('child_output_limit'),
+                      OSError(13, '/private/secret-npub')):
+            def fail(command, env, **options):
+                options['failure_capture'].data = b'/private/secret-npub'
+                raise error
+            self.run.side_effect = fail
+            log = self.root / (type(error).__name__ + str(error.errno if isinstance(error, OSError) else error) + '.log')
+            with self.subTest(error=type(error).__name__), self.assertRaises(type(error)) as caught:
+                self.prepare(log)
+            self.assertIs(caught.exception, error)
+            row = self.report['fixture_dependencies']
+            self.assertEqual(row['compiler_probe']['stage'], 'execution')
+            self.assertEqual(row['compiler_probe']['tool'], 'rustc')
+            for field in ('exit_code', 'output_bytes', 'version_matches', 'host_matches'):
+                self.assertIsNone(row['compiler_probe'][field])
+            self.assertIsNone(row['process_cleanup'])
+            self.assertEqual(row['failure_phase'], 'compiler_versions')
+            self.assertEqual(row['failure'], 'PermissionError' if isinstance(error, OSError)
+                             else 'fixture_compiler_invalid')
+            if isinstance(error, OSError):
+                self.assertEqual(row['error_type'], 'PermissionError')
+                self.assertEqual(row['errno'], 13)
+            self.assertEqual(log.read_bytes(), b'/private/secret-npub')
+            self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+            self.assertNotIn('/private/secret-npub', json.dumps(self.report))
+            for child in ('full-tools-cargo-home', 'full-tools-fetch-target'):
+                (self.root / child).rmdir()
+
+    def test_passing_probe_output_is_cleared_before_next_executor_error(self):
+        original = self.execute
+        error = OSError(13, 'private')
+        def fail(command, env, **options):
+            if Path(command[0]).name == 'cargo':
+                self.assertIsNone(options['failure_capture'].data)
+                raise error
+            return original(command, env, **options)
+        self.run.side_effect = fail
+        log = self.root / 'failure.log'
+        with self.assertRaises(OSError) as caught:
+            self.prepare(log)
+        self.assertIs(caught.exception, error)
+        self.assertFalse(log.exists())
+        self.assertEqual(self.report['fixture_dependencies']['compiler_probe']['tool'], 'cargo')
+        self.assertEqual(self.report['fixture_dependencies']['compiler_probe']['stage'], 'execution')
+
+    def test_rejected_version_returned_output_is_private_and_opt_in(self):
+        self.run.side_effect = None
+        self.run.return_value = (0, b'/private/secret-npub')
+        log = self.root / 'version.log'
+        with self.assertRaisesRegex(spike.Refused, '^fixture_compiler_invalid$'):
+            self.prepare(log)
+        self.assertEqual(log.read_bytes(), b'/private/secret-npub')
+        self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn('/private/secret-npub', json.dumps(self.report))
+        log.unlink()
+        for child in ('full-tools-cargo-home', 'full-tools-fetch-target'):
+            (self.root / child).rmdir()
+        with self.assertRaisesRegex(spike.Refused, '^fixture_compiler_invalid$'):
+            self.prepare()
+        self.assertFalse(log.exists())
+        for child in ('full-tools-cargo-home', 'full-tools-fetch-target'):
+            (self.root / child).rmdir()
+        log.write_bytes(b'preserve')
+        with self.assertRaisesRegex(spike.Refused, '^fixture_compiler_invalid$'):
+            self.prepare(log)
+        self.assertEqual(log.read_bytes(), b'preserve')
+        self.assertEqual(self.report['fixture_dependencies']['failure_log_error_type'], 'FileExistsError')
+
+    def test_successful_probes_never_leak_into_later_failure_capture(self):
+        original = self.execute
+        for error in (OSError(13, 'spawn'), spike.Refused('child_cwd_refused'), None):
+            def fail(command, env, **options):
+                if command[1] == 'fetch':
+                    raise error
+                return original(command, env, **options)
+            self.run.side_effect = fail
+            log = self.root / 'failure.log'
+            if error is None:
+                (self.root / 'full-tools-compiler.json').write_bytes(b'occupied')
+            with self.subTest(error=type(error).__name__), self.assertRaises(type(error) if error else FileExistsError):
+                self.prepare(log)
+            self.assertFalse(log.exists())
+            for child in ('full-tools-cargo-home', 'full-tools-fetch-target'):
+                (self.root / child).rmdir()
+            (self.root / 'full-tools-compiler.json').unlink()
 
     def test_proxy_siblings_are_refused_before_version_execution(self):
         cache = self.root/'cache-home'

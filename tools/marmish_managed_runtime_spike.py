@@ -987,20 +987,38 @@ def fixture_cache_snapshot(cache, env, compiler):
             'tool_identity': identities}
 
 
-def fixture_compiler_versions(compiler, env):
+def fixture_compiler_versions(compiler, env, *, diagnostics=None, failure_capture=None):
     host = TARGETS.get((platform.system(), platform.machine()))
     require(host is not None, 'fixture_compiler_invalid')
     version_env = dict(env, RUSTUP_AUTO_INSTALL='0')
     for name in ('rustc', 'cargo', 'rustdoc'):
+        record = {'stage': 'execution', 'tool': name, 'exit_code': None,
+                  'output_bytes': None, 'expected_version': '1.97.1',
+                  'expected_host': host, 'version_matches': None, 'host_matches': None}
+        if diagnostics is not None:
+            diagnostics.update(record)
+        options = {} if failure_capture is None else {'failure_capture': failure_capture}
+        if failure_capture is not None:
+            failure_capture.data = None
         status, raw = run([compiler / name, '-vV' if name == 'rustc' else '--version'],
-                          version_env, timeout=10, capture=True)
+                          version_env, timeout=10, capture=True, **options)
+        if failure_capture is not None:
+            failure_capture.data = raw
+        if len(raw) <= 4096:
+            if name == 'rustc':
+                record['version_matches'] = b'release: 1.97.1' in raw.splitlines()
+                record['host_matches'] = ('host: ' + host).encode() in raw.splitlines()
+            else:
+                record['version_matches'] = re.fullmatch(
+                    name.encode() + rb' 1\.97\.1 \([^\r\n]{1,200}\)\n?', raw) is not None
+        record.update(stage='validation', exit_code=status, output_bytes=len(raw))
+        if diagnostics is not None:
+            diagnostics.update(record)
         require(status == 0 and len(raw) <= 4096, 'fixture_compiler_invalid')
-        if name == 'rustc':
-            require(b'release: 1.97.1' in raw.splitlines()
-                    and ('host: ' + host).encode() in raw.splitlines(), 'fixture_compiler_invalid')
-        else:
-            require(re.fullmatch(name.encode() + rb' 1\.97\.1 \([^\r\n]{1,200}\)\n?', raw)
-                    is not None, 'fixture_compiler_invalid')
+        require(record['version_matches'] and (name != 'rustc' or record['host_matches']),
+                'fixture_compiler_invalid')
+    if failure_capture is not None:
+        failure_capture.data = None
     return {'version': '1.97.1', 'host': host}
 
 
@@ -1039,7 +1057,9 @@ def prepare_full_tools_fixture_cache(env, root, compiler, report, failure_log=No
         bound = fixture_cache_snapshot(cache, fetch_env, compiler)
         row.update({key: value for key, value in bound.items() if key != 'tool_identity'})
         phase = 'compiler_versions'
-        row.update(fixture_compiler_versions(compiler, fetch_env))
+        row['compiler_probe'] = {}
+        row.update(fixture_compiler_versions(compiler, fetch_env,
+                                            diagnostics=row['compiler_probe'], failure_capture=holder))
         phase = 'provenance'
         require(selection_kind in ('direct_pinned', 'rustup_explicit_1.97.1', 'supplied_direct_toolchain'),
                 'fixture_compiler_invalid')
