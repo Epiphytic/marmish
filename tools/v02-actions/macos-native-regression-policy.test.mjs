@@ -5,6 +5,7 @@ import {spawnSync} from 'node:child_process';
 
 const workflow = readFileSync(new URL('../../.github/workflows/macos-native-regression.yml', import.meta.url), 'utf8');
 const combined = 'cargo test --locked --no-fail-fast -p marmish-engine -p marmish-stream -p marmish-native -p marmish-vault';
+const followupCondition = "        if: always() && !cancelled() && steps.compile.outcome == 'success' && (!inputs.authority_diagnostics || steps.authority.outcome == 'success')\n";
 
 test('manual regression is bounded, read-only and nonroot on Mac ARM64', () => {
   assert.match(workflow, /on:\n  workflow_dispatch:\n    inputs:\n      source_commit:\n/);
@@ -43,7 +44,7 @@ test('combined compilation and structural worker proof precede original combined
 test('optional authority observation checks the SDK before exactly matched installed-feature tests', () => {
   assert.match(workflow, /authority_diagnostics:\n        description: [^\n]+\n        required: false\n        type: boolean\n        default: false/);
   const observation = workflow.split('      - name: Observe exact installed-checks authority cleanup one hundred times\n')[1].split('      - name: Run original combined native suites\n')[0];
-  assert.match(observation, /^        if: always\(\) && inputs.authority_diagnostics && steps.compile.outcome == 'success'\n/);
+  assert.ok(observation.startsWith("        id: authority\n        if: always() && !cancelled() && inputs.authority_diagnostics && steps.compile.outcome == 'success'\n"));
   assert.ok(observation.includes('set -euo pipefail'));
   assert.ok(observation.includes('test "$(id -u)" -ne 0'));
   const sdk = observation.indexOf("echo 'authority diagnostics stage=sdk_check'\n");
@@ -72,16 +73,17 @@ test('authority observation preserves original runtime checks and strict compila
   const clippy = workflow.indexOf('      - name: Verify strict ordinary-release diagnostics compilation\n');
   assert.ok(compile >= 0 && workers > compile && authority > workers && run > authority && repeats > run && clippy > repeats);
   const original = workflow.slice(run, repeats);
-  assert.match(original, /if: always\(\) && steps.compile.outcome == 'success'/);
+  assert.ok(original.includes(followupCondition));
   assert.ok(original.includes(`${combined}\n`));
   assert.doesNotMatch(original, /--features|--skip|--ignored|--include-ignored/);
   const focused = workflow.slice(repeats, clippy);
-  assert.match(focused, /if: always\(\) && steps.compile.outcome == 'success'/);
+  assert.ok(focused.includes(followupCondition));
   assert.match(focused, /for iteration in \{1\.\.20\}; do/);
   assert.equal((focused.match(/stream_runner::tests::/g) ?? []).length, 4);
-  assert.doesNotMatch(focused, /--features|authority_diagnostics/);
+  assert.equal((focused.match(/authority_diagnostics/g) ?? []).length, 1);
+  assert.doesNotMatch(focused.replace(followupCondition, ''), /--features|authority_diagnostics/);
   const strict = workflow.slice(clippy);
-  assert.match(strict, /if: always\(\) && steps.compile.outcome == 'success'/);
+  assert.ok(strict.includes(followupCondition));
   assert.ok(strict.includes('if [[ "${{ inputs.authority_diagnostics }}" == true ]]; then'));
   const releaseClippy = strict.indexOf('cargo clippy --locked --release -p marmish-native -p marmish-engine --all-targets -- -D warnings\n');
   const debugBegin = strict.indexOf("echo 'authority diagnostics stage=debug_clippy'\n");
@@ -113,8 +115,8 @@ test('actual workflow jq accepts both declared engine targets and rejects ambigu
   }
 });
 
-test('focused collection survives suite failure, runs twenty times and rejects zero tests', () => {
-  assert.match(workflow, /if: always\(\) && steps.compile.outcome == 'success'/);
+test('focused collection retains twenty repetitions and rejects zero tests when admitted', () => {
+  assert.equal(workflow.split(followupCondition).length - 1, 3);
   assert.match(workflow, /for iteration in \{1\.\.20\}; do/);
   for (const name of [
     'final_handle_drop_releases_full_unacked_output_after_exit',
@@ -126,6 +128,27 @@ test('focused collection survives suite failure, runs twenty times and rejects z
   assert.ok(workflow.includes("grep -Eq '^test result: ok\\. 1 passed; 0 failed; 0 ignored;' \"$log\""));
   assert.equal((workflow.match(/set -euo pipefail/g) ?? []).length, 6);
   assert.doesNotMatch(workflow, /continue-on-error|\|\| true/);
+});
+
+test('authority failure stops follow-ups while default and successful diagnostics retain them', () => {
+  assert.equal((workflow.match(/always\(\)/g) ?? []).length, 4);
+  assert.equal((workflow.match(/!cancelled\(\)/g) ?? []).length, 4);
+  assert.equal((workflow.match(/^        id: authority$/gm) ?? []).length, 1);
+  const cases = [
+    [false, 'skipped', 'success', false, true],
+    [true, 'success', 'success', false, true],
+    [true, 'failure', 'success', false, false],
+    [true, 'skipped', 'success', false, false],
+    [true, 'cancelled', 'success', false, false],
+    [false, 'skipped', 'success', true, false],
+    [true, 'success', 'success', true, false],
+    [false, 'skipped', 'failure', false, false],
+    [true, 'success', 'skipped', false, false],
+    [true, 'success', 'cancelled', false, false],
+  ];
+  for (const [diagnostics, authority, compile, cancelled, expected] of cases) {
+    assert.equal(!cancelled && compile === 'success' && (!diagnostics || authority === 'success'), expected);
+  }
 });
 
 test('no live traffic, provider, installation or publication authority is added', () => {
