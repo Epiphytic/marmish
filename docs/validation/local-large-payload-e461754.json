@@ -1,0 +1,136 @@
+{
+  "schema": 1,
+  "observations": {
+    "cases": [
+      {
+        "codec": "none",
+        "data_frames": 8463,
+        "direction": "put",
+        "encoded_payload_bytes": 69316709,
+        "file_bytes": 69206033,
+        "final_output_acknowledged": true,
+        "local_codec_payload_ratio": 1.0,
+        "max_data_bytes": 8179,
+        "natural_helper_exit": true,
+        "none_blocks": 8469,
+        "raw_stream_bytes": 69316709,
+        "retained_frame_samples": 1024,
+        "sha256": "023eff39a2963cf1653913ca8e7af127391bb8cfcca1a7a0f04b1f95804118cb",
+        "wall_seconds": 853.728060204,
+        "zlib_blocks": 0
+      },
+      {
+        "codec": "zlib",
+        "data_frames": 8463,
+        "direction": "put",
+        "encoded_payload_bytes": 36181620,
+        "file_bytes": 69206033,
+        "final_output_acknowledged": true,
+        "local_codec_payload_ratio": 0.5219754446218732,
+        "max_data_bytes": 8179,
+        "natural_helper_exit": true,
+        "none_blocks": 4205,
+        "raw_stream_bytes": 69316709,
+        "retained_frame_samples": 1024,
+        "sha256": "023eff39a2963cf1653913ca8e7af127391bb8cfcca1a7a0f04b1f95804118cb",
+        "wall_seconds": 852.00464553,
+        "zlib_blocks": 4264
+      },
+      {
+        "codec": "none",
+        "data_frames": 8462,
+        "direction": "get",
+        "encoded_payload_bytes": 69316508,
+        "file_bytes": 69206033,
+        "final_output_acknowledged": true,
+        "local_codec_payload_ratio": 1.0,
+        "max_data_bytes": 8179,
+        "natural_helper_exit": true,
+        "none_blocks": 8467,
+        "raw_stream_bytes": 69316508,
+        "retained_frame_samples": 1024,
+        "sha256": "023eff39a2963cf1653913ca8e7af127391bb8cfcca1a7a0f04b1f95804118cb",
+        "wall_seconds": 1072.811703388,
+        "zlib_blocks": 0
+      },
+      {
+        "codec": "zlib",
+        "data_frames": 8462,
+        "direction": "get",
+        "encoded_payload_bytes": 36181579,
+        "file_bytes": 69206033,
+        "final_output_acknowledged": true,
+        "local_codec_payload_ratio": 0.5219763667263793,
+        "max_data_bytes": 8179,
+        "natural_helper_exit": true,
+        "none_blocks": 4203,
+        "raw_stream_bytes": 69316508,
+        "retained_frame_samples": 1024,
+        "sha256": "023eff39a2963cf1653913ca8e7af127391bb8cfcca1a7a0f04b1f95804118cb",
+        "wall_seconds": 1071.434232807,
+        "zlib_blocks": 4264
+      }
+    ],
+    "schema": 1,
+    "scope": "local_ipc_codec_payload_not_network_wire",
+    "source_commit": "e4617547d77264dd733db5a924bffb36a46a1ebf",
+    "platform": "linux-amd64",
+    "profile": "debug",
+    "features": "default",
+    "concurrency": "four cases in one test",
+    "test_seconds": 1076.97,
+    "raw_log_sha256": "8a0ac6f54aae1a66324b7a3e69bf29a741adb05d287a54b18464c76c9684e51c"
+  },
+  "derived": {
+    "formula": "file_bytes / wall_seconds; KiB/s divides by 1024",
+    "scope": "whole-case local file goodput including verification and scheduling cost",
+    "cases": [
+      {
+        "codec": "none",
+        "direction": "put",
+        "file_bytes_per_wall_second": 81063.32241611349,
+        "file_kib_per_wall_second": 79.16340079698583
+      },
+      {
+        "codec": "zlib",
+        "direction": "put",
+        "file_bytes_per_wall_second": 81227.29537108279,
+        "file_kib_per_wall_second": 79.32353063582303
+      },
+      {
+        "codec": "none",
+        "direction": "get",
+        "file_bytes_per_wall_second": 64509.021276933716,
+        "file_kib_per_wall_second": 62.99709109075558
+      },
+      {
+        "codec": "zlib",
+        "direction": "get",
+        "file_bytes_per_wall_second": 64591.95616579319,
+        "file_kib_per_wall_second": 63.078082193157414
+      }
+    ]
+  },
+  "provenance": {
+    "parsed_input_sha256": "b0d41d4df5f74efd403c8e79b1b165db5f2a2e9e12d93467cdbf487537502372",
+    "sample_count_per_case": 1,
+    "execution": "four concurrent cases in one local test",
+    "duplex": {
+      "scope": "local process stdin/stdout/stderr integrity qualification, not network",
+      "test": "stream_runner::tests::large_duplex_integrity_with_slow_consumers_and_bounded_windows",
+      "bytes_per_channel": 68157457,
+      "result": "pass",
+      "test_seconds": 8.61,
+      "raw_log_sha256": "2c156a0749c42dcad2902a96823ef129ca53a91d06317ea88c4f2ad8c47f2db7"
+    },
+    "field_semantics": {
+      "natural_helper_exit": "literal true emitted only after successful natural-exit/cleanup assertions",
+      "final_output_acknowledged": "literal true emitted only after protocol/drain/ACK assertions",
+      "retained_frame_samples": "observer sample count capped at first 1024 data frames; not a product memory-bound measurement",
+      "metadata_verification": "permission mode bits 0o777 and mtime seconds/nanoseconds only",
+      "concurrency": "cooperatively polled FuturesUnordered; blocking generation/hash can delay siblings; staggered timers",
+      "helper": "debug test executable re-exec helper, not an installed package",
+      "codec_ledger": "put receive accounting; get ACK-boundary accounting; local protocol bytes only"
+    }
+  }
+}
