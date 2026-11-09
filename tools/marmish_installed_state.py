@@ -22,7 +22,8 @@ import sys
 import tempfile
 import time
 
-from marmish_platform import canonical_state_path, continuous_time, process_identity
+from marmish_platform import (canonical_state_path, continuous_time, linux_pidfd_open,
+                              linux_pidfd_send_signal, process_identity)
 from marmish_protocol import load_json, save_json
 from marmish_rpc import RpcError, strict_json
 from mdk_smoke import Processes, SmokeError, require
@@ -686,10 +687,10 @@ def _pidfd_signal(identity, number):
     if _process_absent(identity):
         return
     require(process_identity(identity['pid']) == identity, 'process_identity_changed')
-    descriptor = os.pidfd_open(identity['pid'])
+    descriptor = linux_pidfd_open(identity['pid'])
     try:
         require(process_identity(identity['pid']) == identity, 'process_identity_changed')
-        signal.pidfd_send_signal(descriptor, number)
+        linux_pidfd_send_signal(descriptor, number)
     except ProcessLookupError:
         require(_process_absent(identity), 'cleanup_incomplete')
     finally:

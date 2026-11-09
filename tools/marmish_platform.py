@@ -1,9 +1,11 @@
 """Small fail-closed native identity and suspend-inclusive timing boundary."""
 import ctypes
+import errno
 import functools
 import os
 from pathlib import Path
 import re
+import signal
 import socket
 import struct
 import sys
@@ -15,6 +17,67 @@ except ImportError:
     from mdk_smoke import SmokeError, require
 
 _UUID = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
+
+
+@functools.lru_cache(maxsize=1)
+def _linux_pidfd_libc():
+    """Load only for a missing Python API; never guess syscall numbers."""
+    try:
+        return ctypes.CDLL(None, use_errno=True)
+    except OSError as error:
+        raise OSError(error.errno or errno.ENOSYS, 'pidfd_libc_unavailable') from None
+
+
+def linux_pidfd_open(pid):
+    """Return an owned pidfd, preserving kernel errors on either backend."""
+    if not sys.platform.startswith('linux'):
+        raise OSError(errno.ENOSYS, 'pidfd_open_unavailable')
+    if type(pid) is not int or not 0 < pid < (1 << 31):
+        raise ValueError('invalid_pidfd_pid')
+    operation = getattr(os, 'pidfd_open', None)
+    if operation is not None:
+        if not callable(operation):
+            raise ValueError('invalid_pidfd_open_api')
+        return operation(pid, 0)
+    operation = getattr(_linux_pidfd_libc(), 'pidfd_open', None)
+    if operation is None:
+        raise OSError(errno.ENOSYS, 'pidfd_open_unavailable')
+    operation.argtypes = [ctypes.c_int, ctypes.c_uint]
+    operation.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    descriptor = operation(pid, 0)
+    error = ctypes.get_errno()
+    if descriptor < 0:
+        raise OSError(error or errno.EIO, 'pidfd_open_failed')
+    return descriptor
+
+
+def linux_pidfd_send_signal(descriptor, number):
+    """Signal only a pidfd; absent APIs never permit numeric-PID signaling."""
+    if not sys.platform.startswith('linux'):
+        raise OSError(errno.ENOSYS, 'pidfd_send_signal_unavailable')
+    if type(descriptor) is not int or not 0 <= descriptor < (1 << 31):
+        raise ValueError('invalid_pidfd_descriptor')
+    if not isinstance(number, int) or isinstance(number, bool):
+        raise ValueError('invalid_pidfd_signal')
+    number = int(number)
+    if not 0 <= number < signal.NSIG:
+        raise ValueError('invalid_pidfd_signal')
+    operation = getattr(signal, 'pidfd_send_signal', None)
+    if operation is not None:
+        if not callable(operation):
+            raise ValueError('invalid_pidfd_signal_api')
+        return operation(descriptor, number, None, 0)
+    operation = getattr(_linux_pidfd_libc(), 'pidfd_send_signal', None)
+    if operation is None:
+        raise OSError(errno.ENOSYS, 'pidfd_send_signal_unavailable')
+    operation.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint]
+    operation.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    result = operation(descriptor, number, None, 0)
+    error = ctypes.get_errno()
+    if result < 0:
+        raise OSError(error or errno.EIO, 'pidfd_send_signal_failed')
 
 
 def _uuid(value):

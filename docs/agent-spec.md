@@ -56,6 +56,15 @@ records bounded CI transport handling and diagnostic changes; it requires fresh
 source-bound qualification rather than reusing those partial results. Version
 0.3.1 remains unpublished and the public installer still selects 0.3.0.
 
+The retained Python reference and installed-test harness support Linux managed
+interpreters lacking Python's pidfd APIs through checked libc bindings. Each
+Python API is preferred independently; OS errors never trigger a fallback, and
+process identity checks and descriptor-only signalling remain required. The
+[focused validation](validation/legacy-managed-pidfd.md) passed 24 tests,
+including real libc and setsid operations. Full hosted reference coverage and
+global process-cleanup observation remain unqualified; this changes no native
+runtime behavior.
+
 ## Historical v0.2.3 publication
 
 **Native v0.2.3 was released.** Source is

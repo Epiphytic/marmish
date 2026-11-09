@@ -1,17 +1,20 @@
 """Ownership and real subprocess tests for installed CI's private boundary."""
+import errno
 import hashlib
 import io
 import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
 import marmish_installed_state as state
+import marmish_platform as native
 from mdk_smoke import SmokeError
 from test_marmish_install import archive_bytes, load_installer, INSTALLER, VERSION, TARGET
 
@@ -175,6 +178,105 @@ class FiniteDiagnostics(unittest.TestCase):
         self.assertNotIn('SECRET', output.getvalue())
 
 
+class PidfdSignalTests(unittest.TestCase):
+    """Keep ownership checks and descriptor lifetime independent of backend."""
+    def setUp(self):
+        self.identity = {'pid': 4321, 'start': 123, 'boot_id': 'test', 'uid': 1001}
+        self.absent = self.enterContext(patch.object(state, '_process_absent', return_value=False))
+        self.identity_check = self.enterContext(patch.object(state, 'process_identity', return_value=self.identity))
+        self.open = self.enterContext(patch.object(state, 'linux_pidfd_open', return_value=17))
+        self.send = self.enterContext(patch.object(state, 'linux_pidfd_send_signal'))
+        self.close = self.enterContext(patch.object(state.os, 'close'))
+        self.enterContext(patch.object(state.os, 'kill', side_effect=AssertionError('numeric_pid_signal')))
+        self.enterContext(patch.object(state.os, 'killpg', side_effect=AssertionError('numeric_group_signal')))
+
+    def test_absent_identity_never_opens_or_signals(self):
+        self.absent.return_value = True
+        state._pidfd_signal(self.identity, signal.SIGTERM)
+        self.identity_check.assert_not_called()
+        self.open.assert_not_called()
+        self.send.assert_not_called()
+        self.close.assert_not_called()
+
+    def test_changed_identity_before_open_never_opens_or_signals(self):
+        self.identity_check.return_value = dict(self.identity, start=124)
+        with self.assertRaisesRegex(SmokeError, 'process_identity_changed'):
+            state._pidfd_signal(self.identity, signal.SIGTERM)
+        self.open.assert_not_called()
+        self.send.assert_not_called()
+        self.close.assert_not_called()
+
+    def test_changed_identity_after_open_closes_without_signal(self):
+        self.identity_check.side_effect = [self.identity, dict(self.identity, start=124)]
+        with self.assertRaisesRegex(SmokeError, 'process_identity_changed'):
+            state._pidfd_signal(self.identity, signal.SIGKILL)
+        self.open.assert_called_once_with(4321)
+        self.send.assert_not_called()
+        self.close.assert_called_once_with(17)
+
+    def test_identity_checks_surround_open_then_signal_and_close(self):
+        trace = Mock()
+        for name, operation in (('identity', self.identity_check), ('open', self.open),
+                                ('send', self.send), ('close', self.close)):
+            trace.attach_mock(operation, name)
+        state._pidfd_signal(self.identity, signal.SIGINT)
+        self.assertEqual(trace.mock_calls, [call.identity(4321), call.open(4321),
+            call.identity(4321), call.send(17, signal.SIGINT), call.close(17)])
+
+    def test_send_esrch_requires_confirmed_absence_and_closes_once(self):
+        self.send.side_effect = ProcessLookupError(errno.ESRCH, 'gone')
+        self.absent.side_effect = [False, True]
+        state._pidfd_signal(self.identity, signal.SIGTERM)
+        self.send.assert_called_once_with(17, signal.SIGTERM)
+        self.close.assert_called_once_with(17)
+
+    def test_send_esrch_without_absence_refuses_and_closes_once(self):
+        self.send.side_effect = ProcessLookupError(errno.ESRCH, 'uncertain')
+        with self.assertRaisesRegex(SmokeError, 'cleanup_incomplete'):
+            state._pidfd_signal(self.identity, signal.SIGTERM)
+        self.send.assert_called_once_with(17, signal.SIGTERM)
+        self.close.assert_called_once_with(17)
+
+    def test_open_errors_propagate_without_send_or_closing_unowned_fd(self):
+        for code in (errno.ESRCH, errno.EPERM, errno.ENOSYS):
+            error = OSError(code, 'open_failed')
+            self.open.side_effect = error
+            with self.subTest(code=code), self.assertRaises(OSError) as caught:
+                state._pidfd_signal(self.identity, signal.SIGKILL)
+            self.assertIs(caught.exception, error)
+        self.send.assert_not_called()
+        self.close.assert_not_called()
+
+    def test_other_send_errors_propagate_and_close_the_owned_fd(self):
+        for code in (errno.EPERM, errno.ENOSYS, errno.EINTR):
+            error = OSError(code, 'send_failed')
+            self.send.side_effect = error
+            self.close.reset_mock()
+            with self.subTest(code=code), self.assertRaises(OSError) as caught:
+                state._pidfd_signal(self.identity, signal.SIGKILL)
+            self.assertIs(caught.exception, error)
+            self.close.assert_called_once_with(17)
+
+    def test_libc_send_esrch_reaches_authenticated_absence_handler(self):
+        native._linux_pidfd_libc.cache_clear()
+        self.addCleanup(native._linux_pidfd_libc.cache_clear)
+        previous_errno = native.ctypes.get_errno()
+        self.addCleanup(native.ctypes.set_errno, previous_errno)
+        def gone(*_args):
+            native.ctypes.set_errno(errno.ESRCH)
+            return -1
+        function = Mock(side_effect=gone)
+        library = SimpleNamespace(pidfd_send_signal=function)
+        self.absent.side_effect = [False, True]
+        with patch.object(native.sys, 'platform', 'linux'), \
+                patch.object(native.signal, 'pidfd_send_signal', None, create=True), \
+                patch.object(native.ctypes, 'CDLL', return_value=library), \
+                patch.object(state, 'linux_pidfd_send_signal', native.linux_pidfd_send_signal):
+            state._pidfd_signal(self.identity, signal.SIGTERM)
+        function.assert_called_once_with(17, int(signal.SIGTERM), None, 0)
+        self.close.assert_called_once_with(17)
+
+
 class InstalledStateTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -293,10 +395,11 @@ class InstalledStateTests(unittest.TestCase):
         self.assertEqual(result['cleanup'], 'complete')
         pid = int(result['stdout'])
         # Container PID1 may retain a dead orphan zombie; pidfd proves termination.
-        fd = os.pidfd_open(pid) if Path('/proc', str(pid)).exists() else None
+        fd = state.linux_pidfd_open(pid) if Path('/proc', str(pid)).exists() else None
         if fd is not None:
             import select
             self.addCleanup(os.close, fd)
+            self.assertFalse(os.get_inheritable(fd))
             self.assertTrue(select.select([fd], [], [], 1)[0])
         self.assertTrue(list((self.root / 'registry').glob('observed-*.json')))
 

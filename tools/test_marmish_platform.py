@@ -1,8 +1,11 @@
 """Native boundaries: exact layouts, fail-closed peer checks and private paths."""
 import ctypes
+import errno
+import importlib.util
 import os
 from pathlib import Path
 import socket
+import signal
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -10,6 +13,202 @@ from types import SimpleNamespace
 
 import marmish_platform as native
 from mdk_smoke import SmokeError
+
+
+class LinuxPidfdTests(unittest.TestCase):
+    """No real pidfd operations: independently exercise both API boundaries."""
+    def setUp(self):
+        native._linux_pidfd_libc.cache_clear()
+        self.addCleanup(native._linux_pidfd_libc.cache_clear)
+        previous_errno = ctypes.get_errno()
+        self.addCleanup(ctypes.set_errno, previous_errno)
+        self.enterContext(patch.object(native.sys, 'platform', 'linux'))
+        self.enterContext(patch.object(native.os, 'pidfd_open', None, create=True))
+        self.enterContext(patch.object(native.signal, 'pidfd_send_signal', None, create=True))
+        self.open = Mock(return_value=7)
+        self.send = Mock(return_value=0)
+        self.library = SimpleNamespace(pidfd_open=self.open, pidfd_send_signal=self.send)
+        self.loader = self.enterContext(patch.object(native.ctypes, 'CDLL', return_value=self.library))
+
+    def test_native_apis_accept_signal_enums_without_loading_libc(self):
+        opening, sending = Mock(return_value=7), Mock(return_value=None)
+        with patch.object(native.os, 'pidfd_open', opening), \
+                patch.object(native.signal, 'pidfd_send_signal', sending):
+            self.assertEqual(native.linux_pidfd_open(123), 7)
+            opening.assert_called_once_with(123, 0)
+            for number in (signal.SIGINT, signal.SIGTERM, signal.SIGKILL):
+                self.assertIsNone(native.linux_pidfd_send_signal(7, number))
+                sending.assert_called_with(7, int(number), None, 0)
+                self.assertIs(type(sending.call_args.args[1]), int)
+        self.loader.assert_not_called()
+
+    def test_libc_signatures_flags_enums_and_descriptor_zero(self):
+        self.open.return_value = 0
+        self.assertEqual(native.linux_pidfd_open(123), 0)
+        self.open.assert_called_once_with(123, 0)
+        self.assertEqual(self.open.argtypes, [ctypes.c_int, ctypes.c_uint])
+        self.assertIs(self.open.restype, ctypes.c_int)
+        with patch.object(native.os, 'close') as close:
+            for number in (signal.SIGINT, signal.SIGTERM, signal.SIGKILL):
+                self.assertIsNone(native.linux_pidfd_send_signal(0, number))
+                self.send.assert_called_with(0, int(number), None, 0)
+                self.assertIs(type(self.send.call_args.args[1]), int)
+            close.assert_not_called()
+        self.assertEqual(self.send.argtypes,
+                         [ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint])
+        self.assertIs(self.send.restype, ctypes.c_int)
+        self.loader.assert_called_once_with(None, use_errno=True)
+
+    def test_backend_selection_is_independent_per_operation(self):
+        opening, sending = Mock(return_value=9), Mock(return_value=None)
+        with patch.object(native.os, 'pidfd_open', opening):
+            self.assertEqual(native.linux_pidfd_open(123), 9)
+            native.linux_pidfd_send_signal(9, signal.SIGTERM)
+        self.open.assert_not_called()
+        self.send.assert_called_once_with(9, int(signal.SIGTERM), None, 0)
+        self.send.reset_mock()
+        with patch.object(native.signal, 'pidfd_send_signal', sending):
+            self.assertEqual(native.linux_pidfd_open(123), 7)
+            native.linux_pidfd_send_signal(7, signal.SIGKILL)
+        self.open.assert_called_once_with(123, 0)
+        sending.assert_called_once_with(7, int(signal.SIGKILL), None, 0)
+        self.send.assert_not_called()
+
+    def test_invalid_arguments_never_reach_either_backend(self):
+        opening, sending = Mock(), Mock()
+        with patch.object(native.os, 'pidfd_open', opening), \
+                patch.object(native.signal, 'pidfd_send_signal', sending):
+            for pid in (True, False, 0, -1, 1 << 31, '123', 1.5, signal.SIGINT):
+                with self.subTest(pid=pid), self.assertRaises(ValueError):
+                    native.linux_pidfd_open(pid)
+            for fd in (True, False, -1, 1 << 31, '7', 1.5, signal.SIGINT):
+                with self.subTest(fd=fd), self.assertRaises(ValueError):
+                    native.linux_pidfd_send_signal(fd, signal.SIGINT)
+            for number in (True, False, -1, signal.NSIG, 1 << 100, '2', 2.0):
+                with self.subTest(number=number), self.assertRaises(ValueError):
+                    native.linux_pidfd_send_signal(7, number)
+        opening.assert_not_called()
+        sending.assert_not_called()
+        self.loader.assert_not_called()
+
+    def test_valid_integer_boundaries_reach_the_abi_without_truncation(self):
+        self.assertEqual(native.linux_pidfd_open((1 << 31) - 1), 7)
+        self.open.assert_called_once_with((1 << 31) - 1, 0)
+        for number in (0, signal.NSIG - 1):
+            native.linux_pidfd_send_signal((1 << 31) - 1, number)
+            self.send.assert_called_with((1 << 31) - 1, number, None, 0)
+
+    def test_non_linux_refuses_before_native_or_libc_calls(self):
+        opening, sending = Mock(), Mock()
+        with patch.object(native.sys, 'platform', 'darwin'), \
+                patch.object(native.os, 'pidfd_open', opening), \
+                patch.object(native.signal, 'pidfd_send_signal', sending):
+            for operation, args in ((native.linux_pidfd_open, (123,)),
+                                    (native.linux_pidfd_send_signal, (7, signal.SIGINT))):
+                with self.assertRaises(OSError) as caught:
+                    operation(*args)
+                self.assertEqual(caught.exception.errno, errno.ENOSYS)
+        opening.assert_not_called()
+        sending.assert_not_called()
+        self.loader.assert_not_called()
+
+    def test_libc_errors_preserve_errno_subclasses_and_never_retry(self):
+        cases = ((native.linux_pidfd_open, (123,), self.open),
+                 (native.linux_pidfd_send_signal, (7, signal.SIGINT), self.send))
+        for operation, args, function in cases:
+            for code in (errno.ESRCH, errno.EPERM, errno.ENOSYS, errno.EINVAL, errno.EINTR, 0):
+                def fail(*_args):
+                    self.assertEqual(ctypes.get_errno(), 0)
+                    ctypes.set_errno(code)
+                    return -1
+                function.reset_mock()
+                function.side_effect = fail
+                ctypes.set_errno(errno.EBUSY)
+                with self.subTest(operation=operation.__name__, code=code), \
+                        patch.object(native.os, 'close') as close, self.assertRaises(OSError) as caught:
+                    operation(*args)
+                self.assertEqual(caught.exception.errno, code or errno.EIO)
+                if code == errno.ESRCH:
+                    self.assertIsInstance(caught.exception, ProcessLookupError)
+                if code == errno.EPERM:
+                    self.assertIsInstance(caught.exception, PermissionError)
+                function.assert_called_once()
+                close.assert_not_called()
+            function.side_effect = None
+
+    def test_native_errors_propagate_without_libc_fallback(self):
+        for operation, args, module, name in (
+                (native.linux_pidfd_open, (123,), native.os, 'pidfd_open'),
+                (native.linux_pidfd_send_signal, (7, signal.SIGINT), native.signal, 'pidfd_send_signal')):
+            for code in (errno.ESRCH, errno.EPERM, errno.ENOSYS, errno.EINTR):
+                error = OSError(code, 'original')
+                function = Mock(side_effect=error)
+                with self.subTest(operation=operation.__name__, code=code), \
+                        patch.object(module, name, function), self.assertRaises(OSError) as caught:
+                    operation(*args)
+                self.assertIs(caught.exception, error)
+                function.assert_called_once()
+        self.loader.assert_not_called()
+
+    def test_missing_libc_symbols_are_independent_and_fail_closed(self):
+        del self.library.pidfd_open
+        with self.assertRaises(OSError) as caught:
+            native.linux_pidfd_open(123)
+        self.assertEqual(caught.exception.errno, errno.ENOSYS)
+        native.linux_pidfd_send_signal(7, signal.SIGTERM)
+        self.library.pidfd_open = self.open
+        del self.library.pidfd_send_signal
+        self.assertEqual(native.linux_pidfd_open(123), 7)
+        with self.assertRaises(OSError) as caught:
+            native.linux_pidfd_send_signal(7, signal.SIGTERM)
+        self.assertEqual(caught.exception.errno, errno.ENOSYS)
+
+    def test_libc_load_error_preserves_errno_or_uses_enosys(self):
+        for error, expected in ((OSError(errno.EPERM, 'load'), errno.EPERM),
+                                (OSError('no errno'), errno.ENOSYS)):
+            for operation, args in ((native.linux_pidfd_open, (123,)),
+                                    (native.linux_pidfd_send_signal, (7, signal.SIGINT))):
+                native._linux_pidfd_libc.cache_clear()
+                self.loader.side_effect = error
+                with self.subTest(operation=operation.__name__, expected=expected), \
+                        self.assertRaises(OSError) as caught:
+                    operation(*args)
+                self.assertEqual(caught.exception.errno, expected)
+        self.open.assert_not_called()
+        self.send.assert_not_called()
+
+    def test_noncallable_native_api_does_not_trigger_fallback(self):
+        with patch.object(native.os, 'pidfd_open', 123), \
+                patch.object(native.signal, 'pidfd_send_signal', 456):
+            with self.assertRaises(ValueError):
+                native.linux_pidfd_open(123)
+            with self.assertRaises(ValueError):
+                native.linux_pidfd_send_signal(7, signal.SIGINT)
+        self.loader.assert_not_called()
+
+    def test_import_never_loads_libc(self):
+        spec = importlib.util.spec_from_file_location('_pidfd_import_test', native.__file__)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.loader.assert_not_called()
+        self.assertEqual(module._linux_pidfd_libc.cache_info().currsize, 0)
+
+
+@unittest.skipUnless(native.sys.platform.startswith('linux'), 'Linux pidfd ABI')
+class LinuxPidfdIntegrationTests(unittest.TestCase):
+    def test_libc_own_process_descriptor_is_noninheritable(self):
+        native._linux_pidfd_libc.cache_clear()
+        self.addCleanup(native._linux_pidfd_libc.cache_clear)
+        self.addCleanup(ctypes.set_errno, ctypes.get_errno())
+        with patch.object(native.os, 'pidfd_open', None, create=True), \
+                patch.object(native.signal, 'pidfd_send_signal', None, create=True):
+            descriptor = native.linux_pidfd_open(os.getpid())
+            try:
+                self.assertFalse(os.get_inheritable(descriptor))
+                # Signal zero checks the own-process descriptor, delivering no signal.
+                self.assertIsNone(native.linux_pidfd_send_signal(descriptor, 0))
+            finally:
+                os.close(descriptor)
 
 
 class NativeTests(unittest.TestCase):
