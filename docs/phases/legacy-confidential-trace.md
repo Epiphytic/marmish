@@ -65,3 +65,53 @@ OpenSSL3.0.13 CMS roundtrip preserved2097152 synthetic bytes exactly; DER size
 2097725 stayed under2162688. This proves local crypto only, not hosted Mac CMS.
 Public recipient certificate SHA256:
 `aff49d908e50a4a3c7f6955224c9f6e0adcb43dea935df991d8110fd23f01a78`.
+
+## Retirement amendment
+
+The V2 G/R binding here supersedes the diagnostic's original source baseline
+and prospective instructions above. Claude independently approved retirement
+before implementation in session `6f72a512-c27d-4123-b906-b4bce4a42c35`:
+design SHA256 `2a38c603160026dc02f19bfa556512cabdbb184ddeb773549f02b60803d3d529`,
+review SHA256 `89e343635b9769119a2f44c01d0e557fc05c0723e4a259b2ccde6597ccc378fe`.
+Beads tracks this bounded increment as `marmish-d93.7`.
+
+G is `2b951aee49b10825cf66997aa2892ee4352a8d79`. Its accepted legacy workflow
+`42649925720`, attempt1, passed all six jobs. Linux AMD64 and ARM64 each reported
+1024 total tests including11 skips, exit0, explicit reduced reference scope,
+full packaging incomplete and independent offline retention unselected. macOS
+reported1016 total tests including45 skips, exit0, default full packaging and
+final integrity-aware completion=true. Its offline guarantee remains
+`uv_offline_only_not_independently_enforced`. These are legacy results, not
+native release qualification. Sanitized accepted-record SHA256:
+`1141ec06fc8905b21838e47197db38fc3a4914845c8fa23e21c6637a9056d5b2`.
+
+R is the next single source commit, with parent exactly G, containing only the
+three deletions and this increment's phase/spec/review documentation. Delete the
+temporary workflow, public recipient certificate and its nine mock-only tests.
+Retain historical documents, GitHub Actions registration/runs/artifacts, all
+private evidence/key material and the existing private failure-log mechanism.
+Historical instructions above no longer describe an available workflow; no
+diagnostic dispatch is pending. Operational consumers were audited before
+retirement. No runtime, ordinary workflow, scope or acceptance predicate changes.
+
+After local relevant mock/contract checks in both flag modes and actual Claude
+auto code review, commit R locally. The coordinator publishes R to both mirrors;
+only the GitHub push starts its automatic legacy workflow. Verify that run's
+source/ref/attempt and all six jobs/reports, expecting Linux1015 total/11 skips
+and macOS1007 total/45 skips, exactly nine fewer than G. No R hosted success is
+claimed before that verification. G's results do not qualify R. Publisher remains
+disabled under `marmish-xon`; no release, tag or installer change occurs here.
+See the [retirement evidence and review](../reviews/legacy-diagnostic-retirement.md).
+
+Sequencing amendment: R is diagnostic retirement only, not the final native
+release freeze. A subsequent local native test run at G reported
+`store::tests::denial_precheck_does_not_exhaust_execute_tokens` failing with
+`AlreadyOpen` while transferring its fixture into an engine. The competing
+holder is unknown; this does not establish a production runtime defect or waive
+the failed test. Beads `marmish-d97.1` tracks a separately reviewed test-only
+guard-transfer correction. Its later source increment N follows R; N, or a
+later corrected source if needed, becomes final A only under fresh qualification.
+This invokes V2's additional-source-fix rule: all release gates must use exact A,
+and neither G's evidence nor R's own legacy checks can qualify N/A. R retains
+parent exactly G and still requires its own hosted legacy checks on all three
+platforms. No native code, tests or gate predicates are changed in retirement.

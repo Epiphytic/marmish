@@ -1116,9 +1116,11 @@ lane for the two preserved namespace integration tests. Only literal
 invalid values and any supplied value on macOS are refused. Reports distinguish
 reduced coverage from default full selection. Native Rust requires no Linux
 namespace privileges. [Integrated review](reviews/legacy-namespace-coverage.md)
-and 62 focused contracts in each flag mode pass; actual reduced-suite and
-capable-runner integration evidence remain pending. This is source publication,
-not release qualification or an explanation of historical failures.
+and 62 focused contracts in each flag mode pass. At accepted source `2b951ae`,
+both hosted Linux reduced suites passed; the capable manual two-test lane still
+has not executed and would not alone qualify full legacy packaging. These are
+reference results, not native release qualification or an explanation of
+historical failures.
 
 
 The legacy fixture-cache report now retains bounded compiler-admission metadata
@@ -1126,8 +1128,9 @@ The legacy fixture-cache report now retains bounded compiler-admission metadata
 Raw output remains confined to the existing explicitly requested private log,
 and successful probes clear stale capture before later operations. The
 [reviewed diagnostics](reviews/legacy-compiler-admission-diagnostics.md) pass34
-focused mock tests; the macOS rejection still needs a fresh hosted report.
-Version admission and execution behavior are unchanged.
+focused mock tests. Later hosted compiler/cache preparation passed on all three
+platforms at `2b951ae`; the historical rejected probe's OS cause is not inferred
+from that success. Version admission remains unchanged.
 
 
 The [reviewed macOS proof restart](reviews/macos-proof-snapshot-restart.md)
@@ -1153,13 +1156,14 @@ and fresh complete release qualification remain required. This does not explain
 every historical macOS failure or qualify unpublished version 0.3.1.
 
 The temporary [confidential legacy diagnostic](phases/legacy-confidential-trace.md)
-and its [independent review](reviews/legacy-confidential-trace.md) add a manual
-three-platform workflow that encrypts the existing private failure log before
-upload. Only the public recipient certificate enters Git; plaintext and the
-private key are never uploaded. Nine new mock-only contracts pass with zero
-skips, making the expected comparable Linux count996 with11 skips. Actual hosted
-failure causes and macOS CMS availability remain unverified. This changes no
-native runtime, acceptance predicate or release qualification claim.
+is retired after accepted source `2b951ae` passed all six ordinary legacy jobs
+in run42649925720/attempt1. Its manual workflow, public recipient certificate
+and nine associated mock tests are removed; historical documentation and private
+evidence/key material remain preserved. The existing explicitly requested private
+failure-log mechanism remains available. GitHub's registered workflow history
+remains, but the deleted workflow cannot be dispatched on the new source. See
+the [retirement evidence and review](reviews/legacy-diagnostic-retirement.md).
+This changes no native runtime or acceptance predicate.
 
 The [managed test-environment correction](phases/legacy-managed-environment.md)
 uses an executable Rustup sibling of the selected compiler, or the existing
@@ -1169,8 +1173,10 @@ Two workflow test modules now use scoped standard-library assertions instead
 of requiring PyYAML in the isolated interpreter; unsupported scalar forms
 are refused, with mutation tests covering the retained guards. The
 [independent review](reviews/legacy-managed-environment.md) approves the source
-and 102 focused tests in four configurations. Full hosted reference-suite
-validation remains pending; this adds no installed product dependency.
+and 102 focused tests in four configurations. Hosted reference suites subsequently
+passed on all three platforms at `2b951ae`, with the explicit Linux reduced scope
+and existing macOS offline limitation described below. This adds no installed
+product dependency.
 
 The [explicit reduced-reference amendment](phases/legacy-namespace-coverage.md#amendment-explicit-hosted-linux-reference-scope)
 requires both `--reduced-linux-reference-only` and the existing Linux namespace
@@ -1181,9 +1187,17 @@ full acceptance path and macOS remain unchanged. The
 [independent review](reviews/legacy-reduced-reference-scope.md) passed all 126
 focused contracts in both flag modes. Earlier hosted Linux full tools suites
 completed 1,011 tests with 11 configured skips before their separate namespace-bound
-packaging check failed. Fresh hosted results for the new explicit scope remain
-required; the capable manual two-test lane has not executed and would not alone
-qualify full legacy packaging. Installed Rust Marmish needs no namespace privileges.
+packaging check failed. Accepted run42649925720/attempt1 at `2b951ae` passed the
+explicit reduced scope on both Linux architectures: 1,024 total tests including
+11 skips each, exit0, full packaging incomplete and independent offline retention
+explicitly unselected. macOS passed its default full legacy packaging scope with
+1,016 total tests including45 skips and final completion=true; its guarantee
+remains `uv_offline_only_not_independently_enforced`. These results qualify only
+that source and those legacy scopes. The nine retired mock tests imply expected
+new totals of1,015/11 skips on Linux and1,007/45 skips on macOS; actual results on
+the retirement commit are still required. The capable manual two-test lane has
+not executed and would not alone qualify full legacy packaging. Installed Rust
+Marmish needs no namespace privileges.
 
 The [legacy HTTP worker cleanup correction](phases/legacy-http-watchdog.md)
 handles Darwin EPERM only after an existing double-observation proof confirms
@@ -1193,6 +1207,15 @@ There are no real signals after reap, and failed or uncertain cleanup remains
 an error. Pipe cleanup and bounded wait are attempted even after signal failure.
 The [independent review](reviews/legacy-http-watchdog.md) passed 29 focused tests,
 including a simulated-Darwin own-child EPERM regression that failed before the
-fix. Actual hosted Darwin success remains pending, and the underlying kernel
-reason for the historical EPERM is not established. This changes reference and
+fix. Hosted Darwin full-tools and packaging passed at `2b951ae` in the accepted
+run above; the underlying kernel reason for the historical EPERM is not
+established. This changes reference and
 installed-test tooling, not native Rust command execution.
+
+Diagnostic retirement is a separate source increment R, not the final release
+freeze. A later local native test at accepted G (`2b951ae`) failed with
+`AlreadyOpen` in `store::tests::denial_precheck_does_not_exhaust_execute_tokens`;
+the competing holder remains unknown. Separately reviewed test-only fixture
+correction under `marmish-d97.1` follows retirement. The final corrected source A
+requires fresh native/release qualification; neither G's results nor R's pending
+legacy checks qualify that later source. No native gate is waived.
