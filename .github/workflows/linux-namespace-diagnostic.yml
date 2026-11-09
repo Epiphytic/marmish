@@ -14,7 +14,7 @@ jobs:
     runs-on:
       group: epiphytic-ci
       labels: [self-hosted, Linux, ARM64, laptop-ci]
-    timeout-minutes: 18
+    timeout-minutes: 22
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         id: checkout
@@ -30,6 +30,56 @@ jobs:
       - name: Diagnose keyless cumulative namespace stages
         timeout-minutes: 2
         run: python3 tools/marmish_ci_bwrap.py diagnostic-probe
+      - name: Run fixed legacy namespace integration contracts (host Python)
+        timeout-minutes: 2
+        run: |
+          python3 -I -B - <<'PY_NAMESPACE'
+          import json
+          from pathlib import Path
+          import re
+          import sys
+          import tempfile
+          spike = None
+          try:
+              sys.path.insert(0, str(Path('tools').resolve(strict=True)))
+              import marmish_managed_runtime_spike as spike
+              spike.require('MARMISH_LEGACY_SKIP_NAMESPACE_TESTS' not in spike.os.environ,
+                            'namespace_opt_out_present')
+              interpreter = Path(sys.executable).resolve(strict=True)
+              spike.require(sys.version_info >= (3, 11), 'namespace_python_invalid')
+              pair = spike.verified_helper_pair()
+              spike.require(bool(pair) and set(pair) == {'MARMISH_BWRAP', 'MARMISH_BWRAP_SHA256'},
+                            'namespace_helper_pair_invalid')
+              with tempfile.TemporaryDirectory(prefix='marmish-ns-lane-', dir=Path('/tmp').resolve(strict=True)) as temporary:
+                  env = spike.environment(Path(temporary))
+                  env['PATH'] = '/usr/bin:/bin:/usr/sbin:/sbin'
+                  env.update(pair)
+                  spike.require(all(env[key] == value for key, value in pair.items()), 'namespace_helper_pair_invalid')
+                  code = """import sys,unittest
+          sys.path.insert(0,sys.argv[1])
+          suite=unittest.defaultTestLoader.loadTestsFromNames([
+           'test_marmish_bootstrap.LinuxHandoffTests.test_actual_unshare_bwrap_inner_chain_and_public_configuration',
+           'test_marmish_transport_sandbox.NamespaceTests.test_approved_bridge_decoy_denial_capabilities_and_cleanup'])
+          assert suite.countTestCases()==2
+          result=unittest.TextTestRunner(verbosity=2).run(suite)
+          ok=(result.testsRun==2 and result.wasSuccessful() and not any((result.skipped,result.failures,result.errors,result.expectedFailures,result.unexpectedSuccesses)))
+          if ok: print('MARMISH_LEGACY_NAMESPACE_RESULT count=2 skipped=0 failures=0 errors=0 ok=1',flush=True)
+          sys.exit(0 if ok else 1)
+          """
+                  status, raw = spike.run([interpreter, '-I', '-B', '-c', code, str(Path('tools').resolve(strict=True))],
+                                          env, timeout=90, capture=True)
+                  marker = rb'^MARMISH_LEGACY_NAMESPACE_RESULT count=2 skipped=0 failures=0 errors=0 ok=1$'
+                  marker_lines = [line for line in raw.splitlines() if line.startswith(b'MARMISH_LEGACY_NAMESPACE_RESULT')]
+                  spike.require(status == 0 and len(marker_lines) == 1 and len(re.findall(marker, raw, re.M)) == 1, 'namespace_result_invalid')
+              print(json.dumps({'lane': 'legacy_namespace_host_python', 'count': 2, 'skipped': 0,
+                                'failures': 0, 'errors': 0, 'ok': True}, sort_keys=True))
+          except Exception as error:
+              category = str(error) if spike is not None and isinstance(error, spike.Refused) and str(error) in {
+                  'namespace_opt_out_present', 'namespace_python_invalid', 'namespace_helper_pair_invalid',
+                  'namespace_result_invalid', 'child_timeout', 'child_output_limit', 'child_cwd_refused'} else 'namespace_lane_failed'
+              print(json.dumps({'lane': 'legacy_namespace_host_python', 'ok': False, 'category': category}, sort_keys=True))
+              raise SystemExit(1)
+          PY_NAMESPACE
       - name: Remove owned Bubblewrap prefix
         if: always()
         timeout-minutes: 3

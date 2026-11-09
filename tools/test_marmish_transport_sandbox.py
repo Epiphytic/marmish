@@ -580,30 +580,32 @@ class FixtureCleanupTests(unittest.TestCase):
             child.wait(timeout=3)
 
     def test_namespace_classification_keeps_linux_required(self):
-        expected = not sys.platform.startswith('linux')
-        self.assertEqual(getattr(NamespaceTests, '__unittest_skip__', False), expected)
-        if expected:
-            self.assertEqual(NamespaceTests.__unittest_skip_why__, NAMESPACE_REASON)
-        for name in unittest.defaultTestLoader.getTestCaseNames(NamespaceTests):
-            self.assertFalse(getattr(getattr(NamespaceTests, name), '__unittest_skip__', False))
-        # Re-evaluate the actual class definition's decorator on each platform;
-        # no namespace method executes during this classification check.
         import ast
         tree = ast.parse(Path(__file__).read_text())
         definition = next(node for node in tree.body
                           if isinstance(node, ast.ClassDef) and node.name == 'NamespaceTests')
         self.assertFalse(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                              and node.func.attr == 'skipTest' for node in ast.walk(definition)))
-        for platform, skipped in [('linux', False), ('linux2', False), ('darwin', True)]:
-            with self.subTest(platform=platform):
+        positive = 'test_approved_bridge_decoy_denial_capabilities_and_cleanup'
+        for method in definition.body:
+            if isinstance(method, ast.FunctionDef):
+                self.assertEqual(len(method.decorator_list), 1 if method.name == positive else 0)
+        for platform, value in [('linux', None), ('linux2', None), ('linux', '1'),
+                                 ('linux', '0'), ('linux', ''), ('darwin', '1')]:
+            with self.subTest(platform=platform, value=value):
                 scope = {'sys': SimpleNamespace(platform=platform), 'unittest': unittest,
+                         'os': SimpleNamespace(environ={} if value is None else
+                                               {'MARMISH_LEGACY_SKIP_NAMESPACE_TESTS': value}),
                          'NAMESPACE_REASON': NAMESPACE_REASON}
-                code = compile(ast.Module(body=[definition], type_ignores=[]), __file__, 'exec')
-                exec(code, scope)
+                exec(compile(ast.Module(body=[definition], type_ignores=[]), __file__, 'exec'), scope)
                 classified = scope['NamespaceTests']
-                self.assertEqual(getattr(classified, '__unittest_skip__', False), skipped)
-                if skipped:
+                self.assertEqual(classified.__dict__.get('__unittest_skip__', False),
+                                 not platform.startswith('linux'))
+                if not platform.startswith('linux'):
                     self.assertEqual(classified.__unittest_skip_why__, NAMESPACE_REASON)
+                for name in unittest.defaultTestLoader.getTestCaseNames(classified):
+                    self.assertEqual(getattr(getattr(classified, name), '__unittest_skip__', False),
+                                     name == positive and platform.startswith('linux') and value == '1')
 
 
 NAMESPACE_REASON = 'Linux network namespace confinement contract'
@@ -611,6 +613,8 @@ NAMESPACE_REASON = 'Linux network namespace confinement contract'
 
 @unittest.skipUnless(sys.platform.startswith('linux'), NAMESPACE_REASON)
 class NamespaceTests(unittest.TestCase):
+    @unittest.skipIf(sys.platform.startswith('linux') and os.environ.get('MARMISH_LEGACY_SKIP_NAMESPACE_TESTS') == '1',
+                     'explicit reduced legacy coverage: namespace integration not selected')
     def test_approved_bridge_decoy_denial_capabilities_and_cleanup(self):
         # This is a required test: unsupported namespaces fail, not silently skip.
         with tempfile.TemporaryDirectory(prefix='marmish-ns-test-') as temp:

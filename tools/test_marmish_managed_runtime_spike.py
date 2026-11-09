@@ -16,6 +16,9 @@ import marmish_managed_runtime_spike as spike
 class FixtureCacheTests(unittest.TestCase):
     """Mock-only fetch/tool admission; never execute Cargo or namespaces."""
     def setUp(self):
+        self.enterContext(patch.dict(os.environ))
+        os.environ.pop("MARMISH_LEGACY_SKIP_NAMESPACE_TESTS", None)
+        self.enterContext(patch.object(spike.platform, "system", return_value="Linux"))
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
@@ -31,7 +34,6 @@ class FixtureCacheTests(unittest.TestCase):
         self.run = self.enterContext(patch.object(spike, 'run', side_effect=self.execute))
         self.lookup = spike.compiler_lookup
         self.enterContext(patch.object(spike, 'compiler_lookup', side_effect=AssertionError('unrequested_lookup')))
-        self.enterContext(patch.object(spike.platform, 'system', return_value='Linux'))
         self.enterContext(patch.object(spike.platform, 'machine', return_value='x86_64'))
         self.which = spike.shutil.which
         self.enterContext(patch.object(spike.shutil, 'which', side_effect=self.find_tool))
@@ -496,8 +498,99 @@ class FixtureCacheTests(unittest.TestCase):
         self.assertNotIn('${{ secrets.', workflow)
 
 
+class NamespaceSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.dict(os.environ))
+        os.environ.pop('MARMISH_LEGACY_SKIP_NAMESPACE_TESTS', None)
+        self.enterContext(patch.object(spike.platform, 'system', return_value='Linux'))
+        temporary = self.enterContext(tempfile.TemporaryDirectory())
+        self.root = Path(temporary).resolve()
+        self.env = spike.environment(self.root)
+        self.enterContext(patch.object(spike, '_run_process', side_effect=AssertionError('real_executor_forbidden')))
+        self.enterContext(patch.object(spike, 'test_compiler_directory', return_value=self.root))
+        self.probe = self.enterContext(patch.object(spike, 'linux_namespace_preflight'))
+        self.enterContext(patch.object(spike, 'test_supervisor', side_effect=lambda env: dict(env, MARMISH_TEST_SUPERVISOR='verified')))
+        self.prepare = self.enterContext(patch.object(spike, 'prepare_full_tools_fixture_cache', return_value=self.root/'cache'))
+        self.enterContext(patch.object(spike, 'verify_full_tools_fixture_cache'))
+        self.run = self.enterContext(patch.object(spike, 'run'))
+
+    def test_default_and_explicit_reduced_selection_are_child_only_and_truthful(self):
+        expected_ids = [
+            'test_marmish_bootstrap.LinuxHandoffTests.test_actual_unshare_bwrap_inner_chain_and_public_configuration',
+            'test_marmish_transport_sandbox.NamespaceTests.test_approved_bridge_decoy_denial_capabilities_and_cleanup']
+        for value in (None, '1'):
+            with self.subTest(value=value):
+                os.environ.pop('MARMISH_LEGACY_SKIP_NAMESPACE_TESTS', None)
+                if value is not None: os.environ['MARMISH_LEGACY_SKIP_NAMESPACE_TESTS'] = value
+                self.run.return_value = (0, b'Ran 9 tests in 0.1s\nOK (skipped=2)\n')
+                report = {'assertions': []}
+                spike.full_tools_acceptance(self.root/'python', self.env, self.root, report)
+                child = self.run.call_args.args[1]
+                self.assertEqual(child.get('MARMISH_LEGACY_SKIP_NAMESPACE_TESTS'), value)
+                self.assertNotIn('MARMISH_LEGACY_SKIP_NAMESPACE_TESTS', self.env)
+                self.assertNotIn('MARMISH_LEGACY_SKIP_NAMESPACE_TESTS', self.probe.call_args.args[0])
+                self.assertIs(self.prepare.call_args.args[0], self.env)
+                self.assertEqual(report['full_tools_tests']['count'], 9)
+                self.assertEqual(report['full_tools_tests']['skipped'], 2)
+                expected = {'selection': 'default'} if value is None else {
+                    'selection': 'explicitly_skipped', 'test_ids': expected_ids}
+                self.assertEqual(report['full_tools_tests']['namespace_coverage'], expected)
+                self.assertEqual(report['assertions'], [
+                    'full_tools_suite_under_managed_python' if value is None else
+                    'legacy_reduced_tools_suite_under_managed_python'])
+
+    def test_invalid_and_nonlinux_values_refuse_direct_and_main_before_work(self):
+        for platform, value in [('Linux', ''), ('Linux', '0'), ('Linux', 'true'),
+                                 ('Darwin', '1'), ('Darwin', ''), ('Darwin', '0')]:
+            with self.subTest(platform=platform, value=value), \
+                    patch.object(spike.platform, 'system', return_value=platform), \
+                    patch.object(spike, 'install_interrupt_handlers') as handlers, \
+                    patch.object(spike, 'initialize_helper') as helper, \
+                    patch.object(spike, 'proof') as proof:
+                os.environ['MARMISH_LEGACY_SKIP_NAMESPACE_TESTS'] = value
+                with self.assertRaisesRegex(spike.Refused, '^legacy_namespace_selection_invalid$'):
+                    spike.full_tools_acceptance(self.root/'python', self.env, self.root, {'assertions': []})
+                path = self.root/(platform + str(len(value)) + value + '.json')
+                self.assertEqual(spike.main(['--report', str(path)]), 1)
+                self.assertEqual(json.loads(path.read_text())['failure'], 'legacy_namespace_selection_invalid')
+                handlers.assert_not_called(); helper.assert_not_called(); proof.assert_not_called()
+                self.run.assert_not_called(); self.prepare.assert_not_called(); self.probe.assert_not_called()
+        os.environ.pop('MARMISH_LEGACY_SKIP_NAMESPACE_TESTS', None)
+        with patch.object(spike.platform, 'system', return_value='Darwin'):
+            self.assertFalse(spike.legacy_namespace_selection())
+
+    def test_existing_default_mocks_preserve_host_platform(self):
+        for fixture in (ManagedRuntimeTests, SelfHostedRuntimeTests, ProgressDiagnosticTests):
+            with self.subTest(fixture=fixture.__name__), patch.object(spike.platform, 'system', return_value='Darwin'):
+                case = fixture('runTest')
+                try:
+                    case.setUp()
+                    self.assertEqual(spike.platform.system(), 'Darwin')
+                    self.assertNotIn('MARMISH_LEGACY_SKIP_NAMESPACE_TESTS', os.environ)
+                finally:
+                    case.doCleanups()
+                self.assertEqual(spike.platform.system(), 'Darwin')
+
+    def test_managed_workflow_flag_is_exact_and_linux_step_only(self):
+        text = (spike.REPO/'.github/workflows/installer-validation.yml').read_text()
+        self.assertEqual(text.count('MARMISH_LEGACY_SKIP_NAMESPACE_TESTS'), 1)
+        steps = re.split(r'^      - ', text, flags=re.M)[1:]
+        linux = next(step for step in steps if 'reduced Linux reference coverage' in step)
+        macos = next(step for step in steps if 'default reference coverage' in step)
+        self.assertIn("        if: runner.os == 'Linux'\n", linux)
+        self.assertIn("        env:\n          MARMISH_LEGACY_SKIP_NAMESPACE_TESTS: '1'\n", linux)
+        self.assertIn("        if: runner.os != 'Linux'\n", macos)
+        self.assertNotIn('        env:', macos)
+        for step in steps:
+            if step != linux: self.assertNotIn('MARMISH_LEGACY_SKIP_NAMESPACE_TESTS', step)
+        command = 'python3 tools/marmish_managed_runtime_spike.py\n          --report "$RUNNER_TEMP/managed-runtime-report.json"'
+        self.assertIn(command, linux); self.assertIn(command, macos)
+
+
 class ManagedRuntimeTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.dict(os.environ))
+        os.environ.pop("MARMISH_LEGACY_SKIP_NAMESPACE_TESTS", None)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
@@ -1181,6 +1274,8 @@ class ManagedRuntimeTests(unittest.TestCase):
 
 class SelfHostedRuntimeTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.dict(os.environ))
+        os.environ.pop("MARMISH_LEGACY_SKIP_NAMESPACE_TESTS", None)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
@@ -1393,6 +1488,8 @@ class SelfHostedRuntimeTests(unittest.TestCase):
 
 class ProgressDiagnosticTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.dict(os.environ))
+        os.environ.pop("MARMISH_LEGACY_SKIP_NAMESPACE_TESTS", None)
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
 
     def test_prefix_parser_partial_docstrings_crlf_noise_suffix_and_owner_validation(self):

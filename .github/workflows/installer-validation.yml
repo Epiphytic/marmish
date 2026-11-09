@@ -61,7 +61,15 @@ jobs:
           toolchain: 1.97.1
       - name: Offline legacy managed packaging contract tests
         run: python3 -m unittest discover -s tools -p test_marmish_managed_runtime_spike.py -v
-      - name: Validate pinned v0.1 runtime and published legacy archive
+      - name: Validate pinned v0.1 runtime and published legacy archive (reduced Linux reference coverage)
+        if: runner.os == 'Linux'
+        env:
+          MARMISH_LEGACY_SKIP_NAMESPACE_TESTS: '1'
+        run: >-
+          python3 tools/marmish_managed_runtime_spike.py
+          --report "$RUNNER_TEMP/managed-runtime-report.json"
+      - name: Validate pinned v0.1 runtime and published legacy archive (default reference coverage)
+        if: runner.os != 'Linux'
         run: >-
           python3 tools/marmish_managed_runtime_spike.py
           --report "$RUNNER_TEMP/managed-runtime-report.json"

@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -55,6 +56,42 @@ class BootstrapTests(unittest.TestCase):
                         self.fail('contended lock acquired')
             with transport.acquire_profile_home_lock(home):
                 pass
+
+    def test_namespace_selection_preserves_platform_and_negative_admission(self):
+        import ast
+        import builtins
+        from types import SimpleNamespace
+        tree = ast.parse(Path(__file__).read_text())
+        definitions = [node for node in tree.body if isinstance(node, ast.ClassDef)
+                       and node.name in ('BootstrapTests', 'LinuxHandoffTests')]
+        positive = 'test_actual_unshare_bwrap_inner_chain_and_public_configuration'
+        flag = 'MARMISH_LEGACY_SKIP_NAMESPACE_TESTS'
+        for definition in definitions:
+            self.assertFalse(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                                 and node.func.attr == 'skipTest' for node in ast.walk(definition)))
+            for method in definition.body:
+                if isinstance(method, ast.FunctionDef):
+                    dependent = [decorator for decorator in method.decorator_list
+                                 if any(isinstance(node, ast.Constant) and node.value == flag
+                                        for node in ast.walk(decorator))]
+                    self.assertEqual(len(dependent), 1 if method.name == positive else 0)
+        for platform, value in [('linux', None), ('linux', '1'), ('linux', '0'),
+                                 ('linux', ''), ('darwin', '1')]:
+            with self.subTest(platform=platform, value=value):
+                shim = SimpleNamespace(platform=platform)
+                def scoped_import(name, *args, **kwargs):
+                    return shim if name == 'sys' else builtins.__import__(name, *args, **kwargs)
+                scope = {'sys': shim, 'os': SimpleNamespace(environ={} if value is None else {flag: value}),
+                         'unittest': unittest, '__builtins__': dict(vars(builtins), __import__=scoped_import)}
+                exec(compile(ast.Module(body=definitions, type_ignores=[]), __file__, 'exec'), scope)
+                for definition in definitions:
+                    classified = scope[definition.name]
+                    self.assertFalse(classified.__dict__.get('__unittest_skip__', False))
+                    for name in unittest.defaultTestLoader.getTestCaseNames(classified):
+                        expected = ((name in (positive, 'test_migration_lock_excludes_transport_inode')
+                                     and not platform.startswith('linux'))
+                                    or (name == positive and platform.startswith('linux') and value == '1'))
+                        self.assertEqual(getattr(getattr(classified, name), '__unittest_skip__', False), expected)
 
 
 class LinuxHandoffTests(unittest.TestCase):
@@ -115,6 +152,8 @@ class LinuxHandoffTests(unittest.TestCase):
         self.assertTrue(all(call.kwargs['stdin'] == subprocess.DEVNULL for call in output.call_args_list))
 
     @unittest.skipUnless(__import__('sys').platform.startswith('linux'), 'Linux namespace boundary')
+    @unittest.skipIf(sys.platform.startswith('linux') and os.environ.get('MARMISH_LEGACY_SKIP_NAMESPACE_TESTS') == '1',
+                     'explicit reduced legacy coverage: namespace integration not selected')
     def test_actual_unshare_bwrap_inner_chain_and_public_configuration(self):
         import hashlib
         import json

@@ -1106,3 +1106,15 @@ state at seven live read sites, preserving strict ordinary reads and original
 deadlines. [Integrated implementation and test-only followup reviews](reviews/streaming-record-publication-code.md) approved the correction;
 fresh exact-source hosted qualification remains pending. Earlier failed-chain facts and public v0.2.3
 installation remain unchanged; no new release qualification is claimed.
+
+
+The [legacy namespace selection phase](phases/legacy-namespace-coverage.md)
+adds an explicit Linux-only reduced reference-test lane and a separate manual
+lane for the two preserved namespace integration tests. Only literal
+`MARMISH_LEGACY_SKIP_NAMESPACE_TESTS=1` selects the two configured skips;
+invalid values and any supplied value on macOS are refused. Reports distinguish
+reduced coverage from default full selection. Native Rust requires no Linux
+namespace privileges. [Integrated review](reviews/legacy-namespace-coverage.md)
+and 62 focused contracts in each flag mode pass; actual reduced-suite and
+capable-runner integration evidence remain pending. This is source publication,
+not release qualification or an explanation of historical failures.

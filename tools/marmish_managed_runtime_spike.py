@@ -1107,7 +1107,15 @@ def verify_full_tools_fixture_cache(cache, env, compiler, report):
     require(fixture_cache_snapshot(cache, env, compiler) == expected, 'fixture_inputs_changed')
 
 
+def legacy_namespace_selection():
+    value = os.environ.get('MARMISH_LEGACY_SKIP_NAMESPACE_TESTS')
+    require(value is None or (value == '1' and platform.system() == 'Linux'),
+            'legacy_namespace_selection_invalid')
+    return value == '1'
+
+
 def full_tools_acceptance(interpreter, env, root, report, failure_log=None):
+    reduced = legacy_namespace_selection()
     report['stage'] = 'full_tools'
     selection = {}
     compiler = test_compiler_directory(selection=selection)
@@ -1118,8 +1126,15 @@ def full_tools_acceptance(interpreter, env, root, report, failure_log=None):
                                             selection_kind=selection.get('kind', 'supplied_direct_toolchain'))
     test_env = dict(test_env, CARGO_HOME=str(cache))
     verify_full_tools_fixture_cache(cache, test_env, compiler, report)
+    coverage = {'selection': 'default'}
+    if reduced:
+        test_env['MARMISH_LEGACY_SKIP_NAMESPACE_TESTS'] = '1'
+        coverage = {'selection': 'explicitly_skipped', 'test_ids': [
+            'test_marmish_bootstrap.LinuxHandoffTests.test_actual_unshare_bwrap_inner_chain_and_public_configuration',
+            'test_marmish_transport_sandbox.NamespaceTests.test_approved_bridge_decoy_denial_capabilities_and_cleanup']}
     report['full_tools_tests'] = {'top_level_and_path_children': 'managed_interpreter',
                                   'compiler': 'existing_host_toolchain_test_only', 'exit_code': None,
+                                  'namespace_coverage': coverage,
                                   **suite_output_defaults()}
     status, raw = None, None
     holder = FailureCapture()
@@ -1150,7 +1165,8 @@ def full_tools_acceptance(interpreter, env, root, report, failure_log=None):
         if failure_log is not None:
             private_failure_output(failure_log, raw)
     require(status == 0, 'full_tools_suite_failed')
-    report['assertions'].append('full_tools_suite_under_managed_python')
+    report['assertions'].append('legacy_reduced_tools_suite_under_managed_python' if reduced
+                                else 'full_tools_suite_under_managed_python')
 
 
 def offline_acceptance(slots, stage, env, launch_env, touched, report):
@@ -1440,6 +1456,7 @@ def main(argv=None):
     owned_root = None
     handler_state = None
     try:
+        legacy_namespace_selection()
         handler_state = install_interrupt_handlers(options.total_timeout)
         report['total_timeout_seconds'] = options.total_timeout
         require(os.geteuid() != 0, 'root_refused')
