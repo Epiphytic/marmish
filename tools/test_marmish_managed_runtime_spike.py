@@ -587,6 +587,103 @@ class FixtureCacheTests(unittest.TestCase):
             with self.assertRaisesRegex(spike.Refused, 'test_compiler_resolution_failed'):
                 spike.test_compiler_directory()
 
+    def test_distinct_rustup_installations_select_wrapper_sibling(self):
+        sibling = self.compiler/'rustup'
+        sibling.write_bytes(b'wrapper installation rustup')
+        sibling.chmod(0o700)
+        unrelated = self.root/'rustup'
+        unrelated.write_bytes(b'different PATH installation')
+        unrelated.chmod(0o700)
+        direct = self.root/'pinned/bin/rustc'
+        direct.parent.mkdir(parents=True)
+        direct.write_bytes(b'real pinned compiler')
+        direct.chmod(0o700)
+        for system in ('Linux', 'Darwin'):
+            selection = {}
+            with self.subTest(system=system), patch.object(spike.platform, 'system', return_value=system), \
+                    patch.object(spike.shutil, 'which', side_effect=[str(self.compiler/'rustc'), str(unrelated)]), \
+                    patch.object(spike, 'compiler_lookup', return_value=(0, str(direct).encode())) as lookup:
+                self.assertEqual(spike.test_compiler_directory(selection=selection), direct.parent)
+                self.assertEqual(lookup.call_args.args[0], sibling)
+                self.assertEqual(selection, {'kind': 'rustup_explicit_1.97.1'})
+
+    def test_sibling_lookup_without_path_rustup_and_symlink_admission(self):
+        installed = self.root/'installed-rustup'
+        installed.write_bytes(b'installed rustup')
+        installed.chmod(0o700)
+        sibling = self.compiler/'rustup'
+        sibling.symlink_to(installed)
+        with patch.object(spike.shutil, 'which', side_effect=[str(self.compiler/'rustc'), None]), \
+                patch.object(spike, 'compiler_lookup', return_value=(0, str(self.compiler/'rustc').encode())) as lookup:
+            self.assertEqual(spike.test_compiler_directory(), self.compiler)
+        self.assertEqual(lookup.call_args.args[0], installed)
+        self.run.assert_not_called()
+
+    def test_invalid_siblings_refuse_before_lookup_or_version_execution(self):
+        sibling = self.compiler/'rustup'
+        for kind in ('broken_symlink', 'symlink_loop', 'directory', 'nonexecutable'):
+            if kind in ('broken_symlink', 'symlink_loop'):
+                sibling.symlink_to(sibling if kind == 'symlink_loop' else self.root/'missing')
+            elif kind == 'directory':
+                sibling.mkdir()
+            else:
+                sibling.write_bytes(b'not executable')
+                sibling.chmod(0o600)
+            selection = {}
+            with self.subTest(kind=kind), patch.object(spike.shutil, 'which',
+                    side_effect=[str(self.compiler/'rustc'), None]), \
+                    patch.object(spike, 'compiler_lookup') as lookup:
+                with self.assertRaisesRegex(spike.Refused, '^test_compiler_resolution_failed$'):
+                    spike.test_compiler_directory(selection=selection)
+                lookup.assert_not_called()
+                self.assertEqual(selection, {})
+            sibling.rmdir() if kind == 'directory' else sibling.unlink()
+        with patch.object(spike.shutil, 'which', return_value='relative/rustc'):
+            with self.assertRaisesRegex(spike.Refused, '^test_compiler_resolution_failed$'):
+                spike.test_compiler_directory()
+        self.run.assert_not_called()
+
+    def test_sibling_lookup_failure_never_falls_back_or_records_selection(self):
+        sibling = self.compiler/'rustup'
+        sibling.write_bytes(b'installed rustup')
+        sibling.chmod(0o700)
+        for status, output in ((1, b''), (0, b'relative/rustc'), (0, b'\xff'),
+                               (0, str(self.root/'missing/rustc').encode()),
+                               (0, str(self.compiler/'rustc').encode() + b'\nwarning: private')):
+            selection = {}
+            with self.subTest(status=status, output=output), patch.object(spike.shutil, 'which',
+                    side_effect=[str(self.compiler/'rustc'), None]), \
+                    patch.object(spike, 'compiler_lookup', return_value=(status, output)):
+                with self.assertRaisesRegex(spike.Refused, '^test_compiler_resolution_failed$'):
+                    spike.test_compiler_directory(selection=selection)
+            self.assertEqual(selection, {})
+        self.run.assert_not_called()
+
+    def test_lookup_result_refuses_proxies_of_either_installation(self):
+        sibling = self.compiler/'rustup'
+        sibling.write_bytes(b'sibling proxy')
+        sibling.chmod(0o700)
+        unrelated = self.root/'rustup'
+        unrelated.write_bytes(b'PATH proxy')
+        unrelated.chmod(0o700)
+        returned = self.root/'returned/rustc'
+        returned.parent.mkdir()
+        for proxy in (sibling, unrelated):
+            returned.write_bytes(proxy.read_bytes())
+            returned.chmod(0o700)
+            with self.subTest(proxy=proxy.name), patch.object(spike.shutil, 'which',
+                    side_effect=[str(self.compiler/'rustc'), str(unrelated)]), \
+                    patch.object(spike, 'compiler_lookup', return_value=(0, str(returned).encode())):
+                with self.assertRaisesRegex(spike.Refused, '^test_compiler_invalid$'):
+                    spike.test_compiler_directory()
+        returned.write_bytes(b'direct compiler')
+        returned.chmod(0o600)
+        with patch.object(spike.shutil, 'which', side_effect=[str(self.compiler/'rustc'), str(unrelated)]), \
+                patch.object(spike, 'compiler_lookup', return_value=(0, str(returned).encode())):
+            with self.assertRaisesRegex(spike.Refused, '^test_compiler_invalid$'):
+                spike.test_compiler_directory()
+        self.run.assert_not_called()
+
     def test_wrong_cargo_and_rustdoc_versions_refuse_before_fetch(self):
         original = self.execute
         for wrong in ('cargo', 'rustdoc'):
@@ -977,7 +1074,8 @@ class ManagedRuntimeTests(unittest.TestCase):
         for optional in ({}, {'RUSTUP_HOME': '/fixture/rustup'},
                          {'CARGO_HOME': '/fixture/cargo'},
                          {'RUSTUP_HOME': '/fixture/rustup', 'CARGO_HOME': '/fixture/cargo'}):
-            ambient = {'HOME': str(self.root), 'UNRELATED_SECRET': 'must-not-forward', **optional}
+            ambient = {'HOME': str(self.root), 'UNRELATED_SECRET': 'must-not-forward',
+                       'RUSTUP_TOOLCHAIN': 'stable', **optional}
             with self.subTest(optional=tuple(optional)), \
                     patch.dict(spike.os.environ, ambient, clear=True), \
                     patch.object(spike.shutil, 'which', return_value=str(shim)), \

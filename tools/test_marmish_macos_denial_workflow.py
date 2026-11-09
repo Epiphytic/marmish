@@ -1,52 +1,60 @@
-"""Static workflow contracts; no CI dispatch or log access."""
-from pathlib import Path
+"""Static workflow contracts; stdlib only, no CI dispatch or log access."""
+import re
 import unittest
+from unittest.mock import patch
 
-import yaml
-
-
-ROOT = Path(__file__).resolve().parent.parent
+from test_marmish_release_automation_workflow import SOURCES, block, fields, run_text, source, steps
 
 
 class WorkflowTests(unittest.TestCase):
     def setUp(self):
-        self.text = (ROOT / '.github/workflows/macos-probe-diagnostic.yml').read_text()
-        self.workflow = yaml.safe_load(self.text)
-        self.job = self.workflow['jobs']['diagnostic']
+        self.text = source('macos-probe-diagnostic.yml')
+        fields(self.text, 0)
+        self.job = block(block(self.text, 'jobs:'), '  diagnostic:')
+        fields(self.job, 4)
+        self.steps = steps(block(self.job, '    steps:'))
 
     def test_manual_host_permissions_pins_and_preserved_concurrency(self):
-        triggers = self.workflow.get('on', self.workflow.get(True))
-        self.assertEqual(triggers, {'workflow_dispatch': None})
-        self.assertEqual(self.workflow['permissions'], {'contents': 'read'})
-        self.assertEqual(self.workflow['concurrency'], {'group': 'marmish-macos-probe-diagnostic', 'cancel-in-progress': False})
-        self.assertEqual(self.job['runs-on'], 'macos-15')
-        self.assertEqual(self.job['timeout-minutes'], 10)
-        for step in self.job['steps']:
-            if 'uses' in step:
-                self.assertRegex(step['uses'], r'^(actions/checkout|actions/upload-artifact)@[0-9a-f]{40}$')
-        checkout = self.job['steps'][0]
-        self.assertEqual(checkout['with'], {'persist-credentials': False})
+        self.assertEqual(block(self.text, 'on:'), 'on:\n  workflow_dispatch:\n')
+        self.assertEqual(fields(block(self.text, 'permissions:'), 2), {'contents': 'read'})
+        self.assertEqual(fields(block(self.text, 'concurrency:'), 2),
+                         {'group': 'marmish-macos-probe-diagnostic', 'cancel-in-progress': 'false'})
+        self.assertEqual(fields(self.job, 4)['runs-on'], 'macos-15')
+        self.assertEqual(fields(self.job, 4)['timeout-minutes'], '10')
+        identities = [
+            'uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+            'name: Prepare private report directory', 'name: Run disposable native probe diagnostic',
+            'name: Preserve bounded diagnostic report', 'name: Prepare private owned-crash report directory',
+            'name: Inspect owned synthetic probe crash', 'name: Preserve bounded owned-crash context',
+            'name: Prepare private owned-denial report directory',
+            'name: Inspect owned synthetic probe denial candidate',
+            'name: Preserve bounded owned-denial candidate report',
+        ]
+        self.assertEqual([step.splitlines()[0] for step in self.steps], identities)
+        for step in self.steps:
+            for action in re.findall(r'^(?:uses:|        uses:) (.*)$', step, re.M):
+                self.assertRegex(action, r'^(actions/checkout|actions/upload-artifact)@[0-9a-f]{40}$')
+        self.assertEqual(fields(block(self.steps[0], '        with:'), 10), {'persist-credentials': 'false'})
 
     def test_denial_steps_are_independent_always_and_exact_report_only(self):
-        steps = self.job['steps']
-        preparation = next(step for step in steps if step.get('id') == 'denial_report')
-        invocation = next(step for step in steps if 'marmish_macos_denial_diagnostic.py' in step.get('run', ''))
-        upload = next(step for step in steps if step.get('with', {}).get('name') == 'macos-owned-probe-denial-candidate')
-        self.assertLess(steps.index(preparation), steps.index(invocation))
-        self.assertLess(steps.index(invocation), steps.index(upload))
+        preparation, invocation, upload = self.steps[7:10]
+        self.assertEqual(fields(preparation, 8)['id'], 'denial_report')
         for step in (preparation, invocation, upload):
-            self.assertEqual(step['if'], 'always()')
-        self.assertIn('umask 077', preparation['run'])
-        self.assertIn('mktemp -d "$RUNNER_TEMP/marmish-denial-diagnostic.XXXXXX"', preparation['run'])
-        self.assertIn('path=%s/report.json', preparation['run'])
-        self.assertEqual(invocation['env'], {'REPORT_PATH': '${{ steps.denial_report.outputs.path }}'})
-        self.assertIn('python3 tools/marmish_macos_denial_diagnostic.py --output "$REPORT_PATH"', invocation['run'])
-        self.assertIn('set -o noclobber', invocation['run'])
-        self.assertEqual(upload['with'], {'name': 'macos-owned-probe-denial-candidate',
-            'path': '${{ steps.denial_report.outputs.path }}', 'if-no-files-found': 'error', 'retention-days': 7})
+            self.assertEqual(fields(step, 8)['if'], 'always()')
+        self.assertIn('umask 077', run_text(preparation))
+        self.assertIn('mktemp -d "$RUNNER_TEMP/marmish-denial-diagnostic.XXXXXX"', run_text(preparation))
+        self.assertIn('path=%s/report.json', run_text(preparation))
+        self.assertEqual(fields(block(invocation, '        env:'), 10),
+                         {'REPORT_PATH': '${{ steps.denial_report.outputs.path }}'})
+        self.assertIn('python3 tools/marmish_macos_denial_diagnostic.py --output "$REPORT_PATH"', run_text(invocation))
+        self.assertIn('set -o noclobber', run_text(invocation))
+        self.assertEqual(fields(block(upload, '        with:'), 10), {
+            'name': 'macos-owned-probe-denial-candidate', 'path': '${{ steps.denial_report.outputs.path }}',
+            'if-no-files-found': 'error', 'retention-days': '7'})
 
     def test_existing_artifacts_and_no_raw_or_privileged_actions(self):
-        artifacts = [step['with'] for step in self.job['steps'] if step.get('uses', '').startswith('actions/upload-artifact@')]
+        artifacts = [fields(block(step, '        with:'), 10) for step in self.steps
+                     if re.search(r'^(?:uses:|        uses:) actions/upload-artifact@', step, re.M)]
         self.assertEqual(len(artifacts), 3)
         self.assertEqual({item['name'] for item in artifacts}, {'macos-confined-probe-diagnostic',
             'macos-owned-probe-crash-context', 'macos-owned-probe-denial-candidate'})
@@ -56,9 +64,46 @@ class WorkflowTests(unittest.TestCase):
         for forbidden in ('sudo ', 'log stream', 'log config', 'secrets.', 'actions/cache', '*.ips',
                           'enable-private-data', 'entitlements', '/usr/bin/log'):
             self.assertNotIn(forbidden, self.text)
-        # Serial worst-case children: old probe <=115s; old crash <=120s;
-        # denial <=90s compilation +2s preflight +3*7s child budgets +20s crash.
         self.assertLess(115 + 120 + 90 + 2 + 3 * 7 + 20, 10 * 60)
+
+
+class MutationTests(unittest.TestCase):
+    def check_source(self, before, after, passes=False):
+        name = 'macos-probe-diagnostic.yml'
+        original = source(name)
+        self.assertIn(before, original)
+        with patch.dict(SOURCES, {name: original.replace(before, after, 1)}):
+            result = unittest.TestResult()
+            unittest.defaultTestLoader.loadTestsFromTestCase(WorkflowTests).run(result)
+        self.assertEqual(result.testsRun, 3)
+        self.assertEqual(result.skipped, [])
+        self.assertEqual(result.wasSuccessful(), passes, (result.errors, result.failures))
+
+    def test_scoped_workflow_mutations(self):
+        for before, after in [
+            ('  contents: read', '    contents: read'),
+            ('  cancel-in-progress: false', '  cancel-in-progress: true'),
+            ('          persist-credentials: false', '          persist-credentials: true'),
+            ('        id: denial_report\n        if: always()', '        id: denial_report\n        # if: always()'),
+            ('name: Inspect owned synthetic probe denial candidate\n        if: always()',
+             'name: Inspect owned synthetic probe denial candidate\n          if: always()'),
+            ('REPORT_PATH: ${{ steps.denial_report.outputs.path }}', 'REPORT_PATH: ${{ steps.report.outputs.path }}'),
+            ('name: macos-owned-probe-denial-candidate', 'name: unrelated-report'),
+            ('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02', 'actions/upload-artifact@main'),
+            ('name: Prepare private owned-denial report directory', 'name: Inspect owned synthetic probe denial candidate'),
+        ]:
+            with self.subTest(before=before):
+                self.check_source(before, after)
+        extra = ('      - name: Unexpected artifact\n'
+                 '        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02\n'
+                 '        with:\n          name: unexpected\n          path: unexpected.outputs.path }}\n')
+        self.check_source('  loader-matrix:', extra + '  loader-matrix:')
+        self.check_source('name: macOS confined probe diagnostic',
+                          '# benign comment\nname: macOS confined probe diagnostic', passes=True)
+
+    def test_always_scalar_continuation_refuses(self):
+        self.check_source('        id: denial_report\n        if: always()',
+                          '        id: denial_report\n        if: always()\n          && false')
 
 
 if __name__ == '__main__':

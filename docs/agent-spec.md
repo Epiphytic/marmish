@@ -1160,3 +1160,14 @@ private key are never uploaded. Nine new mock-only contracts pass with zero
 skips, making the expected comparable Linux count996 with11 skips. Actual hosted
 failure causes and macOS CMS availability remain unverified. This changes no
 native runtime, acceptance predicate or release qualification claim.
+
+The [managed test-environment correction](phases/legacy-managed-environment.md)
+uses an executable Rustup sibling of the selected compiler, or the existing
+proxy match, to request the pinned fixture toolchain explicitly. Standalone
+direct compilers retain their existing selection path and version checks.
+Two workflow test modules now use scoped standard-library assertions instead
+of requiring PyYAML in the isolated interpreter; unsupported scalar forms
+are refused, with mutation tests covering the retained guards. The
+[independent review](reviews/legacy-managed-environment.md) approves the source
+and 102 focused tests in four configurations. Full hosted reference-suite
+validation remains pending; this adds no installed product dependency.

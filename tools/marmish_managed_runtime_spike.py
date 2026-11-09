@@ -797,16 +797,37 @@ def compiler_lookup(rustup, env):
                         dict(env, RUSTUP_AUTO_INSTALL='0'), cwd=Path('/'), timeout=10, capture=True)
 
 
+def compiler_lookup_tool(unresolved, selected, proxies):
+    """Prefer the wrapper's own installation without replacing direct toolchains."""
+    sibling = unresolved.parent / 'rustup'
+    # A selected rustup itself is not its own rustc-wrapper sibling.
+    if sibling != unresolved and os.path.lexists(sibling):
+        try:
+            sibling = sibling.resolve(strict=True)
+            require(sibling.is_file() and os.access(sibling, os.X_OK), 'test_compiler_resolution_failed')
+        except (OSError, RuntimeError):
+            raise Refused('test_compiler_resolution_failed') from None
+        proxies.append(sibling)
+        return sibling
+    if proxies and compiler_is_proxy(selected, proxies[0]):
+        return proxies[0]
+    return None
+
+
 def test_compiler_directory(*, selection=None):
     """Resolve existing compiler once; rustup lookup alone may read its host config."""
     compiler = shutil.which('rustc')
     require(compiler is not None, 'test_compiler_missing')
-    selected = Path(compiler).resolve(strict=True)
+    unresolved = Path(compiler)
+    require(unresolved.is_absolute(), 'test_compiler_resolution_failed')
+    selected = unresolved.resolve(strict=True)
     rustup = shutil.which('rustup')
+    proxies = [Path(rustup).resolve(strict=True)] if rustup is not None else []
+    lookup = compiler_lookup_tool(unresolved, selected, proxies)
     kind = 'direct_pinned'
-    if rustup is None:
+    if lookup is None and rustup is None:
         require(selected.name != 'rustup', 'test_compiler_resolution_failed')
-    if rustup is not None and compiler_is_proxy(selected, Path(rustup).resolve(strict=True)):
+    if lookup is not None:
         kind = 'rustup_explicit_1.97.1'
         # Never run a rustup shim with the disposable HOME: it has no toolchain.
         lookup_env = {'HOME': str(Path.home()), 'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C',
@@ -814,7 +835,7 @@ def test_compiler_directory(*, selection=None):
         for name in ('RUSTUP_HOME', 'CARGO_HOME'):
             if name in os.environ:
                 lookup_env[name] = os.environ[name]
-        status, raw = compiler_lookup(Path(rustup).resolve(strict=True), lookup_env)
+        status, raw = compiler_lookup(lookup, lookup_env)
         require(status == 0, 'test_compiler_resolution_failed')
         try:
             selected = Path(raw.decode('utf-8').strip())
@@ -824,8 +845,8 @@ def test_compiler_directory(*, selection=None):
             raise Refused('test_compiler_resolution_failed') from None
     require(selected.is_file() and selected.name == 'rustc' and os.access(selected, os.X_OK),
             'test_compiler_invalid')
-    if rustup is not None:
-        require(not compiler_is_proxy(selected, Path(rustup).resolve(strict=True)), 'test_compiler_invalid')
+    for proxy in dict.fromkeys(proxies):
+        require(not compiler_is_proxy(selected, proxy), 'test_compiler_invalid')
     if selection is not None:
         selection['kind'] = kind
     return selected.parent
