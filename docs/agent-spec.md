@@ -1184,3 +1184,15 @@ completed 1,011 tests with 11 configured skips before their separate namespace-b
 packaging check failed. Fresh hosted results for the new explicit scope remain
 required; the capable manual two-test lane has not executed and would not alone
 qualify full legacy packaging. Installed Rust Marmish needs no namespace privileges.
+
+The [legacy HTTP worker cleanup correction](phases/legacy-http-watchdog.md)
+handles Darwin EPERM only after an existing double-observation proof confirms
+the unreaped direct child has exited. That proof authorizes reaping, never a
+claim that its group is absent: a separate bounded observation must reach ESRCH.
+There are no real signals after reap, and failed or uncertain cleanup remains
+an error. Pipe cleanup and bounded wait are attempted even after signal failure.
+The [independent review](reviews/legacy-http-watchdog.md) passed 29 focused tests,
+including a simulated-Darwin own-child EPERM regression that failed before the
+fix. Actual hosted Darwin success remains pending, and the underlying kernel
+reason for the historical EPERM is not established. This changes reference and
+installed-test tooling, not native Rust command execution.

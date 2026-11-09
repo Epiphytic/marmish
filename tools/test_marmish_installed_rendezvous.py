@@ -1,16 +1,19 @@
 """Offline contract and real HTTP watchdog tests for installed rendezvous."""
 import copy
+import errno
 import hashlib
 import http.server
 import io
 import json
 import os
+import signal
+from types import SimpleNamespace
 from pathlib import Path
 import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import zipfile
 
 import marmish_installed_rendezvous as rv
@@ -194,6 +197,112 @@ class Artifacts(unittest.TestCase):
             self.assertEqual(output.stat().st_mode & 0o777, 0o600)
 
 
+class WorkerCleanup(unittest.TestCase):
+    def setUp(self):
+        self.child = SimpleNamespace(pid=4321, returncode=None)
+        self.child.wait = Mock(side_effect=self.reap)
+        self.status = SimpleNamespace(si_pid=4321, si_code=os.CLD_EXITED, si_status=7)
+        self.platform = SimpleNamespace(platform='darwin', executable=rv.sys.executable)
+        self.enterContext(patch.object(rv, 'sys', self.platform))
+        self.waitid = self.enterContext(patch.object(os, 'waitid', return_value=self.status))
+        self.calls = []
+        self.kill = self.enterContext(patch.object(os, 'killpg', side_effect=self.signal))
+        self.enterContext(patch.object(rv, 'continuous_time', side_effect=iter(n / 2 for n in range(20))))
+        self.enterContext(patch.object(rv.time, 'sleep'))
+
+    def reap(self, **_kwargs):
+        self.child.returncode = 7
+        return 7
+
+    def signal(self, pid, number):
+        self.assertEqual(pid, self.child.pid)
+        self.calls.append((number, self.child.returncode))
+        raise OSError(errno.EPERM if number else errno.ESRCH, 'private')
+
+    def refused(self):
+        with self.assertRaisesRegex(SmokeError, '^artifact_worker_cleanup_failed$'):
+            rv._finish_request_worker(self.child)
+        self.child.wait.assert_called_once_with(timeout=2)
+
+    def test_confirmed_exit_then_absence_preserves_reserved_order(self):
+        rv._finish_request_worker(self.child)
+        self.assertEqual(self.calls, [(signal.SIGKILL, None), (0, 7)])
+        self.assertEqual(self.waitid.call_count, 2)
+        self.child.wait.assert_called_once_with(timeout=2)
+
+    def test_live_proof_is_not_permission_to_ignore_denial(self):
+        self.waitid.return_value = None
+        self.refused()
+        self.assertEqual(self.calls, [(signal.SIGKILL, None)])
+
+    def test_changed_reaped_or_unobservable_leader_refuses(self):
+        for returned, statuses in [
+            (7, []),
+            (None, [self.status, None]),
+            (None, [self.status, SimpleNamespace(si_pid=4321, si_code=os.CLD_EXITED, si_status=8)]),
+            (None, OSError(errno.ECHILD, 'private')),
+        ]:
+            with self.subTest(returned=returned, statuses=statuses):
+                self.child.returncode = returned
+                self.child.wait.reset_mock()
+                self.waitid.side_effect = statuses
+                self.calls.clear()
+                self.refused()
+                self.assertEqual(len(self.calls), 1)
+
+    def test_wrong_platform_or_errno_refuses_but_reaps(self):
+        for platform, error in [('linux', errno.EPERM), ('darwin', errno.EACCES)]:
+            with self.subTest(platform=platform, error=error):
+                self.platform.platform = platform
+                self.child.returncode = None
+                self.child.wait.reset_mock()
+                self.kill.side_effect = OSError(error, 'private')
+                self.refused()
+        self.waitid.assert_not_called()
+
+    def test_waited_status_must_match_proof(self):
+        self.child.wait.side_effect = lambda **_kwargs: 8
+        self.refused()
+        self.assertEqual(self.calls, [(signal.SIGKILL, None)])
+
+    def test_wait_timeout_remains_cleanup_failure(self):
+        self.child.wait.side_effect = rv.subprocess.TimeoutExpired('private', 2)
+        self.refused()
+        self.assertEqual(self.calls, [(signal.SIGKILL, None)])
+
+    def test_surviving_or_unobservable_group_fails_after_reap(self):
+        for result in (None, OSError(errno.EPERM, 'private')):
+            with self.subTest(result=result):
+                self.child.returncode = None
+                self.child.wait.reset_mock()
+                self.calls.clear()
+                self.enterContext(patch.object(rv, 'continuous_time', side_effect=iter(n / 2 for n in range(20))))
+                def kill(pid, number):
+                    self.calls.append((number, self.child.returncode))
+                    if number:
+                        raise OSError(errno.EPERM, 'private')
+                    if result is not None:
+                        raise result
+                self.kill.side_effect = kill
+                self.refused()
+                self.assertEqual(self.calls[0], (signal.SIGKILL, None))
+                self.assertTrue(all(number == 0 and code == 7 for number, code in self.calls[1:]))
+
+    def test_transient_darwin_denial_then_absence_and_linux_denial(self):
+        self.kill.side_effect = [OSError(errno.EPERM, 'private'),
+                                 OSError(errno.EPERM, 'private'),
+                                 ProcessLookupError(errno.ESRCH, 'private')]
+        rv._finish_request_worker(self.child)
+        self.assertEqual([call.args[1] for call in self.kill.call_args_list], [signal.SIGKILL, 0, 0])
+        self.platform.platform = 'linux'
+        self.child.returncode = None
+        self.child.wait.reset_mock()
+        self.kill.reset_mock()
+        self.kill.side_effect = [None, OSError(errno.EPERM, 'private')]
+        self.refused()
+        self.assertEqual([call.args[1] for call in self.kill.call_args_list], [signal.SIGKILL, 0])
+
+
 class Watchdog(unittest.TestCase):
     def test_unreapable_worker_is_a_finite_cleanup_failure(self):
         original = rv.subprocess.Popen
@@ -209,10 +318,13 @@ class Watchdog(unittest.TestCase):
             children.append(child)
             return child
 
-        with patch.object(rv.subprocess, 'Popen', side_effect=spawn):
+        close = rv.selectors.DefaultSelector.close
+        with patch.object(rv.subprocess, 'Popen', side_effect=spawn), \
+                patch.object(rv.selectors.DefaultSelector, 'close', autospec=True, side_effect=close) as closed:
             with self.assertRaisesRegex(SmokeError, 'artifact_worker_cleanup_failed'):
                 rv._request_process({'url': 'https://api.github.com/repos/Epiphytic/marmish/a',
                     'token': None, 'limit': 100, 'deadline': continuous_time() - 1})
+        closed.assert_called_once()
         self.assertTrue(children[0].stdin.closed and children[0].stdout.closed)
         self.assertIsNotNone(children[0].returncode)
 
@@ -262,6 +374,40 @@ class Watchdog(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+    def test_darwin_exited_worker_permission_denial_is_reaped(self):
+        original_spawn, original_kill = rv.subprocess.Popen, os.killpg
+        children, denied = [], []
+
+        def spawn(argv, **kwargs):
+            child = original_spawn(argv, **kwargs)
+            children.append(child)
+            return child
+
+        def kill(pid, number):
+            if number == signal.SIGKILL:
+                status = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                if status is not None:
+                    self.assertEqual(status.si_pid, pid)
+                    denied.append(pid)
+                    raise PermissionError(errno.EPERM, 'simulated exited group')
+            return original_kill(pid, number)
+
+        try:
+            with patch.object(rv, 'sys', SimpleNamespace(platform='darwin', executable=rv.sys.executable)), \
+                    patch.object(rv.subprocess, 'Popen', side_effect=spawn), \
+                    patch.object(rv.os, 'killpg', side_effect=kill):
+                self.test_real_worker_success_limit_and_credential_pipe()
+            self.assertTrue(denied)
+            for child in children:
+                self.assertIsNotNone(child.returncode)
+                self.assertTrue(child.stdin.closed and child.stdout.closed)
+        finally:
+            # RED leaves an already-exited owned worker unreaped; reclaim only it.
+            for child in children:
+                child.wait(timeout=2)
+                child.stdin.close()
+                child.stdout.close()
 
     def test_real_slow_headers_and_body_have_total_parent_deadline(self):
         class Handler(http.server.BaseHTTPRequestHandler):

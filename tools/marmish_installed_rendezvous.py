@@ -1,6 +1,7 @@
 """Strict public-only three-platform rendezvous for installed acceptance."""
 import argparse
 import base64
+import errno
 import hashlib
 import math
 import os
@@ -207,6 +208,41 @@ def _exchange(config):
         raise SmokeError('artifact_network_failed') from None
 
 
+def _finish_request_worker(child):
+    """Reserve the worker group through signaling, then prove absence after reap."""
+    expected = None
+    try:
+        try:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError as error:
+                require(sys.platform == 'darwin' and error.errno == errno.EPERM,
+                        'artifact_worker_cleanup_failed')
+                from marmish_installed_state import _confirmed_exit
+                expected = _confirmed_exit(child)
+                require(expected is not None, 'artifact_worker_cleanup_failed')
+        finally:
+            code = child.wait(timeout=2)
+        require(expected is None or code == expected, 'artifact_worker_cleanup_failed')
+        # Reaping releases the numeric group: only observation is permitted now.
+        deadline = continuous_time() + 2
+        while True:
+            try:
+                os.killpg(child.pid, 0)
+            except OSError as error:
+                if error.errno == errno.ESRCH:
+                    return
+                require(sys.platform == 'darwin' and error.errno == errno.EPERM,
+                        'artifact_worker_cleanup_failed')
+            require(sys.platform == 'darwin' and continuous_time() < deadline,
+                    'artifact_worker_cleanup_failed')
+            time.sleep(.02)
+    except (OSError, SmokeError, subprocess.TimeoutExpired):
+        raise SmokeError('artifact_worker_cleanup_failed') from None
+
+
 def _request_process(config):
     """Run a fixed adapter child; credentials travel only over its stdin pipe."""
     directory = str(Path(__file__).resolve().parent)
@@ -245,26 +281,15 @@ def _request_process(config):
     except (OSError, ValueError):
         raise SmokeError('artifact_network_failed') from None
     finally:
-        # The unreaped leader reserves its process group through the last signal.
         try:
-            os.killpg(child.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        try:
-            child.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            raise SmokeError('artifact_worker_cleanup_failed') from None
+            _finish_request_worker(child)
         finally:
-            selector.close()
-            for pipe in (child.stdin, child.stdout):
-                if not pipe.closed:
-                    pipe.close()
-        try:
-            os.killpg(child.pid, 0)
-        except ProcessLookupError:
-            pass
-        else:
-            raise SmokeError('artifact_worker_cleanup_failed')
+            try:
+                selector.close()
+            finally:
+                for pipe in (child.stdin, child.stdout):
+                    if not pipe.closed:
+                        pipe.close()
     try:
         value = strict_json(bytes(output))
         if isinstance(value, dict) and set(value) == {'error'}:
