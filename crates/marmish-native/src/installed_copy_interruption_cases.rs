@@ -1,7 +1,7 @@
 //! Actual installed CLI detach/cancel/resume orchestration for one owned host.
 use super::{
     cleanup, copy_checkpoint, copy_detach,
-    copy_interrupt::{Binding, Evidence},
+    copy_interrupt::{AdmissionBusy, Binding, Evidence},
     matrix, process,
     records::{self, Context, IdentityReady},
     streaming_cases::Endpoint,
@@ -44,6 +44,9 @@ fn copy_operands(account: &str, source: &Path, target: &Path) -> Result<Vec<OsSt
 
 fn bad() -> Error {
     Error::Invalid("installed_copy_interruption_case")
+}
+fn progress(stage: &'static str) {
+    eprintln!("marmish installed interruption: {stage}");
 }
 pub(super) struct Cohort<'a, 'b> {
     pub context: &'a Context,
@@ -198,21 +201,40 @@ fn arguments(
 fn busy_ids(stderr: &[u8], transfer: &str, old: &str) -> Result<String> {
     let end = stderr.iter().position(|b| *b == b'\n').ok_or_else(bad)? + 1;
     let (stream, id) = copy_detach::start_line(&stderr[..end])?;
-    if id != transfer
-        || stream == old
-        || &stderr[end..] != b"marmish copy: transport codec zlib\nmarmish: copy: transfer_busy\n"
-    {
+    let expected = format!(
+        "marmish copy: admission Busy\nmarmish copy: prior stream {old}; inspect or cancel it before retrying resume\nmarmish copy: attachment ended; remote stream {stream} may continue; use cancel --stream {stream} to request cleanup\nmarmish: copy: transfer_busy\n"
+    );
+    if id != transfer || stream == old || stderr[end..] != *expected.as_bytes() {
         return Err(bad());
     }
     Ok(stream)
+}
+fn refused_entry_matches(
+    e: &Entry,
+    client: &str,
+    server: &str,
+    session_sha256: &str,
+    group_sha256: &str,
+) -> bool {
+    e.direction == "server"
+        && e.client == client
+        && e.server == server
+        && records::digest(e.session.as_bytes()) == session_sha256
+        && e.group_sha256 == group_sha256
+        && e.state == "hello"
+        && !e.active
+        && e.open_digest.is_none()
+        && e.child_disposition.is_none()
+        && e.terminal.is_none()
+        && !e.cancel_requested
 }
 async fn busy(
     c: &Cohort<'_, '_>,
     source: &Path,
     target: &Path,
     transfer: &str,
-    old: &str,
-) -> Result<Binding> {
+    old: &Entry,
+) -> Result<AdmissionBusy> {
     let out = process::run(
         &c.client.workspace.join("bin/marmish"),
         &arguments(c, source, target, true, Some(transfer))?,
@@ -225,18 +247,39 @@ async fn busy(
     if out.status.code() != Some(1) || !out.stdout.is_empty() {
         return Err(bad());
     }
-    let stream = busy_ids(&out.stderr, transfer, old)?;
-    let e = terminal(c, &stream, false).await?;
-    if !matches!(e.terminal, Some(Terminal::Exited { code }) if code != 0) {
+    let stream = busy_ids(&out.stderr, transfer, &old.stream)?;
+    let refused = entry(c.server, &stream, c.deadline)
+        .await?
+        .ok_or_else(bad)?;
+    let session_sha256 = records::digest(old.session.as_bytes());
+    if !refused_entry_matches(
+        &refused,
+        &c.identities[c.role].client_account,
+        &c.identities[c.role].server_account,
+        &session_sha256,
+        &old.group_sha256,
+    ) {
         return Err(bad());
     }
-    binding(&e)
+    // A refused Hello is retained, but it admits no second helper. Recheck the
+    // original live attempt and its exact active/unfinished-runner counts.
+    charged(c, &old.stream).await?;
+    Ok(AdmissionBusy {
+        attempted_stream_sha256: records::digest(stream.as_bytes()),
+        prior_stream_sha256: records::digest(old.stream.as_bytes()),
+        session_sha256,
+        group_sha256: old.group_sha256.clone(),
+        admission_busy: true,
+        no_new_helper: true,
+    })
 }
 /// All paths and handles are created by this cohort. A receipt never selects an
 /// executable, filesystem root, process ID or signaling target.
 pub(super) async fn run(c: Cohort<'_, '_>, put: bool) -> Result<Evidence> {
     let start = Instant::now();
+    progress("roots_begin");
     let (source, target) = roots(&c, put)?;
+    progress("roots_complete");
     let receiver = target.parent().ok_or_else(bad)?.canonicalize()?;
     let digest: [u8; 32] = Sha256::digest(bytes()).into();
     let make_launch = |transfer: &str, mode| -> Result<Launch> {
@@ -254,6 +297,7 @@ pub(super) async fn run(c: Cohort<'_, '_>, put: bool) -> Result<Evidence> {
             preserve_mtime: true,
         })
     };
+    progress("detach_begin");
     let detached = copy_detach::run(
         &c.client.workspace.join("bin/marmish"),
         &arguments(&c, &source, &target, put, None)?,
@@ -278,12 +322,19 @@ pub(super) async fn run(c: Cohort<'_, '_>, put: bool) -> Result<Evidence> {
         },
     )
     .await?;
+    progress("detach_complete");
+    progress("charged_begin");
     let old = charged(&c, &detached.stream).await?;
+    progress("charged_complete");
     let put_busy = if put {
-        Some(busy(&c, &source, &target, &detached.transfer, &detached.stream).await?)
+        progress("busy_admission_begin");
+        let proof = busy(&c, &source, &target, &detached.transfer, &old).await?;
+        progress("busy_admission_complete");
+        Some(proof)
     } else {
         None
     };
+    progress("cancellation_begin");
     let cancelled = cleanup::stream_request(
         *c.server.daemon.lock().await,
         c.server.socket,
@@ -296,7 +347,11 @@ pub(super) async fn run(c: Cohort<'_, '_>, put: bool) -> Result<Evidence> {
     if matches!(cancelled, StreamLocalResult::Failure { .. }) {
         return Err(bad());
     }
+    progress("cancellation_complete");
+    progress("cancelled_terminal_begin");
     terminal(&c, &detached.stream, true).await?;
+    progress("cancelled_terminal_complete");
+    progress("idle_begin");
     let after_cancel = loop {
         let status =
             streaming_cleanup::status(*c.server.daemon.lock().await, c.server.socket, c.deadline)
@@ -309,10 +364,12 @@ pub(super) async fn run(c: Cohort<'_, '_>, put: bool) -> Result<Evidence> {
         }
         tokio::time::sleep_until(c.deadline.min(Instant::now() + Duration::from_millis(100))).await;
     };
+    progress("idle_complete");
     // The first live observation proves interruption opportunity, but may lag
     // later writes. Re-sample only after the old helper is physically stopped;
     // this stable prefix is the exact logical payload omitted by the resume.
     let launch = make_launch(&detached.transfer, AttemptMode::Create)?;
+    progress("stable_prefix_begin");
     let resume_prefix = copy_checkpoint::observe(copy_checkpoint::Expected {
         parent: &receiver,
         launch: &launch,
@@ -321,6 +378,8 @@ pub(super) async fn run(c: Cohort<'_, '_>, put: bool) -> Result<Evidence> {
         sha256: digest,
         committed: false,
     })?;
+    progress("stable_prefix_complete");
+    progress("resume_begin");
     let resume_start = Instant::now();
     let result = process::run(
         &c.client.workspace.join("bin/marmish"),
@@ -347,6 +406,8 @@ pub(super) async fn run(c: Cohort<'_, '_>, put: bool) -> Result<Evidence> {
         return Err(bad());
     }
     let resumed = terminal(&c, &stream, false).await?;
+    progress("resume_complete");
+    progress("committed_validation_begin");
     let launch = make_launch(&transfer, AttemptMode::Resume)?;
     let committed = copy_checkpoint::observe(copy_checkpoint::Expected {
         parent: &receiver,
@@ -376,6 +437,7 @@ pub(super) async fn run(c: Cohort<'_, '_>, put: bool) -> Result<Evidence> {
         final_mtime: metadata.mtime(),
     };
     evidence.validate()?;
+    progress("committed_validation_complete");
     Ok(evidence)
 }
 
@@ -391,13 +453,9 @@ pub(super) async fn confirm_server(
         streaming_cleanup::entries(*endpoint.daemon.lock().await, endpoint.socket, deadline)
             .await?;
     for (expected, cancelled, success) in [
-        Some((&evidence.old, true, false)),
-        Some((&evidence.resumed, false, true)),
-        evidence.put_busy.as_ref().map(|b| (b, false, false)),
-    ]
-    .into_iter()
-    .flatten()
-    {
+        (&evidence.old, true, false),
+        (&evidence.resumed, false, true),
+    ] {
         let entry = entries
             .iter()
             .find(|e| records::digest(e.stream.as_bytes()) == expected.stream_sha256)
@@ -415,8 +473,22 @@ pub(super) async fn confirm_server(
         match (&entry.terminal, cancelled, success) {
             (Some(Terminal::Cancelled), true, _) => {}
             (Some(Terminal::Exited { code: 0 }), false, true) => {}
-            (Some(Terminal::Exited { code }), false, false) if *code != 0 => {}
             _ => return Err(bad()),
+        }
+    }
+    if let Some(proof) = &evidence.put_busy {
+        let refused = entries
+            .iter()
+            .find(|e| records::digest(e.stream.as_bytes()) == proof.attempted_stream_sha256)
+            .ok_or_else(bad)?;
+        if !refused_entry_matches(
+            refused,
+            client,
+            server,
+            &proof.session_sha256,
+            &proof.group_sha256,
+        ) {
+            return Err(bad());
         }
     }
     streaming_cleanup::status(*endpoint.daemon.lock().await, endpoint.socket, deadline)
@@ -427,28 +499,89 @@ pub(super) async fn confirm_server(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn busy_stderr(transfer: &str, attempted: &str, prior: &str) -> String {
+        format!(
+            "marmish copy: transfer {transfer} stream {attempted}\nmarmish copy: admission Busy\nmarmish copy: prior stream {prior}; inspect or cancel it before retrying resume\nmarmish copy: attachment ended; remote stream {attempted} may continue; use cancel --stream {attempted} to request cleanup\nmarmish: copy: transfer_busy\n"
+        )
+    }
     #[test]
-    fn busy_requires_exact_failure_and_fresh_stream_on_same_transfer() {
+    fn busy_requires_exact_admission_refusal_and_owned_prior_stream() {
         let transfer = "a".repeat(64);
         let old = "b".repeat(32);
         let fresh = "c".repeat(32);
-        let stderr = format!(
-            "marmish copy: transfer {transfer} stream {fresh}\nmarmish copy: transport codec zlib\nmarmish: copy: transfer_busy\n"
-        );
+        let stderr = busy_stderr(&transfer, &fresh, &old);
         assert_eq!(busy_ids(stderr.as_bytes(), &transfer, &old).unwrap(), fresh);
         assert!(busy_ids(stderr.as_bytes(), &"d".repeat(64), &old).is_err());
         assert!(busy_ids(stderr.as_bytes(), &transfer, &fresh).is_err());
-        assert!(
-            busy_ids(
-                stderr
-                    .replace("transfer_busy", "transfer_conflict")
-                    .as_bytes(),
-                &transfer,
-                &old
-            )
-            .is_err()
-        );
-        assert!(busy_ids(format!("{stderr}extra\n").as_bytes(), &transfer, &old).is_err());
+        for text in [
+            stderr.replace("transfer_busy", "transfer_conflict"),
+            stderr.replace("admission Busy", "admission RecoveryRequired"),
+            stderr.replace("admission Busy", "admission Conflict"),
+            stderr.replace("admission Busy", "admission Denied"),
+            stderr.replace("admission Busy", "admission Capacity"),
+            stderr.replace("admission Busy", "remote Busy"),
+            stderr.replace(
+                &format!("prior stream {old}"),
+                &format!("prior stream {fresh}"),
+            ),
+            stderr.replace(
+                &format!("prior stream {old}; inspect or cancel it before retrying resume\n"),
+                "",
+            ),
+            stderr.replace(
+                &format!("remote stream {fresh}"),
+                &format!("remote stream {old}"),
+            ),
+            stderr.replace(&format!("--stream {fresh}"), &format!("--stream {old}")),
+            stderr.replace("admission Busy\n", "transport codec zlib\n"),
+            format!("{stderr}extra\n"),
+            format!(
+                "marmish copy: transfer {transfer} stream {fresh}\nmarmish copy: transport codec zlib\nmarmish: copy: transfer_busy\n"
+            ),
+        ] {
+            assert!(busy_ids(text.as_bytes(), &transfer, &old).is_err());
+        }
+    }
+    fn refused() -> Entry {
+        Entry {
+            stream: "a".repeat(32),
+            session: "session".into(),
+            client: "client".into(),
+            server: "server".into(),
+            direction: "server".into(),
+            state: "hello".into(),
+            cancel_requested: false,
+            terminal: None,
+            child_disposition: None,
+            open_digest: None,
+            group_sha256: "b".repeat(64),
+            active: false,
+        }
+    }
+    #[test]
+    fn refused_attempt_requires_authenticated_hello_without_any_admission() {
+        let e = refused();
+        let session = records::digest(e.session.as_bytes());
+        let group = e.group_sha256.clone();
+        let valid = |e: &Entry| refused_entry_matches(e, "client", "server", &session, &group);
+        assert!(valid(&e));
+        for change in 0..11 {
+            let mut bad = e.clone();
+            match change {
+                0 => bad.active = true,
+                1 => bad.open_digest = Some("c".repeat(64)),
+                2 => bad.child_disposition = Some(crate::stream_service::ChildDisposition::Unknown),
+                3 => bad.terminal = Some(Terminal::Exited { code: 1 }),
+                4 => bad.cancel_requested = true,
+                5 => bad.state = "terminal".into(),
+                6 => bad.client = "other".into(),
+                7 => bad.server = "other".into(),
+                8 => bad.session = "other".into(),
+                9 => bad.group_sha256 = "c".repeat(64),
+                _ => bad.direction = "client".into(),
+            }
+            assert!(!valid(&bad));
+        }
     }
 }
 

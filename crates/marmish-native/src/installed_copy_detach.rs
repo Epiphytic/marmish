@@ -8,6 +8,9 @@ use tokio::{io::AsyncReadExt, time::Instant};
 fn bad() -> Error {
     Error::Invalid("installed_copy_detach")
 }
+fn progress(stage: &'static str) {
+    eprintln!("marmish installed detach: {stage}");
+}
 pub(super) struct Detached {
     /// These identifiers remain private; public receipts use digests.
     pub stream: String,
@@ -45,6 +48,7 @@ pub(super) async fn run(
     let stdout = child.stdout.take().ok_or_else(bad)?;
     let mut stderr = child.stderr.take().ok_or_else(bad)?;
     let mut out = tokio::spawn(process::drain(stdout, 65536));
+    progress("initiating_line_begin");
     let first = tokio::time::timeout_at(deadline, async {
         let mut line = Vec::new();
         loop {
@@ -72,8 +76,10 @@ pub(super) async fn run(
             });
         }
     };
+    progress("initiating_line_complete");
     let mut err = tokio::spawn(process::drain(stderr, 65536));
     let mut last_observer_error = None;
+    progress("checkpoint_observation_begin");
     let observed = loop {
         match child.try_wait() {
             Ok(Some(_)) => break Err(bad()),
@@ -107,8 +113,12 @@ pub(super) async fn run(
         }
         tokio::time::sleep_until(deadline.min(Instant::now() + Duration::from_millis(20))).await;
     };
+    if observed.is_ok() {
+        progress("checkpoint_observation_complete");
+    }
     // This still-owned leader fences process-group identity; never signal IDs
     // recovered from a receipt or checkpoint. Always reap before returning.
+    progress("owned_termination_begin");
     let cleanup = process::terminate(&mut child).await;
     let partial = match observed {
         Ok(proof) => proof,
@@ -116,6 +126,7 @@ pub(super) async fn run(
             out.abort();
             err.abort();
             cleanup?;
+            progress("owned_termination_complete");
             return Err(error);
         }
     };
@@ -130,6 +141,8 @@ pub(super) async fn run(
         err.abort();
         return Err(bad());
     }
+    progress("owned_termination_complete");
+    progress("pipe_contract_begin");
     let pipes = tokio::time::timeout_at(deadline, async {
         Ok::<_, Error>((
             (&mut out).await.map_err(|_| bad())??,
@@ -152,6 +165,7 @@ pub(super) async fn run(
     if out_overflow || err_overflow || !stdout.is_empty() || stderr != expected_codec {
         return Err(bad());
     }
+    progress("pipe_contract_complete");
     Ok(Detached {
         stream,
         transfer,

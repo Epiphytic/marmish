@@ -202,6 +202,17 @@ the daemon after changing it. Executable policies remain additive and do not
 confine rsync or copy to a directory. Child processes receive minimal PATH
 `/usr/bin:/bin`. Both peers must upgrade together for exact-version native copy.
 
+The [C2 validation report](validation/v0.3.1-c2-validation.md) records exact-source
+`4e76ec5` package/macOS checks, six accepted live cohorts and an interrupted-PUT
+failure; the chain is not qualified. Its [45 operation measurements](validation/v0.3.1-c2-benchmarks.md)
+retain whole-operation timing and compression-request limitations. The exact
+hosted interruption subcall remains unknown. A separate real Journal test confirms
+the production Busy refusal contract; source inspection establishes that the
+fixture's admitted-helper expectation contradicts that contract. The [admission-proof correction](phases/installed-put-admission-proof.md)
+changes installed-test evidence only and needs fresh source-bound qualification.
+No C2 measurement qualifies rebuilt later-source artifacts. Public v0.3.0 and
+the installer default remain unchanged; v0.3.1 remains unpublished.
+
 The following increment history preserves each result's original scope; the
 [current release summary](validation/v0.3-release.md) supersedes statements
 that installed positive matrices are still pending, without erasing failures.

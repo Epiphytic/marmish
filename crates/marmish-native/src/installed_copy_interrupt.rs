@@ -14,6 +14,17 @@ pub(super) struct Binding {
     pub open_digest: String,
     pub group_sha256: String,
 }
+/// Durable admission refusal: this attempt never launched a copy helper.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AdmissionBusy {
+    pub(super) attempted_stream_sha256: String,
+    pub(super) prior_stream_sha256: String,
+    pub(super) session_sha256: String,
+    pub(super) group_sha256: String,
+    pub(super) admission_busy: bool,
+    pub(super) no_new_helper: bool,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Evidence {
@@ -25,8 +36,8 @@ pub(super) struct Evidence {
     pub resume_prefix: Proof,
     pub old: Binding,
     pub old_charged_while_client_detached: bool,
-    /// A PUT receiver retains its lock after client death; a GET receiver does not.
-    pub put_busy: Option<Binding>,
+    /// PUT resume is refused by durable admission while the old helper remains charged.
+    pub put_busy: Option<AdmissionBusy>,
     pub old_cancelled: bool,
     pub after_cancel: StreamStatus,
     pub resumed: Binding,
@@ -93,11 +104,23 @@ impl Evidence {
         }
         match (&self.put_busy, self.direction.as_str()) {
             (Some(busy), "put") => {
-                busy.validate()?;
-                if busy.stream_sha256 == self.old.stream_sha256
-                    || busy.stream_sha256 == self.resumed.stream_sha256
+                if [
+                    &busy.attempted_stream_sha256,
+                    &busy.prior_stream_sha256,
+                    &busy.session_sha256,
+                    &busy.group_sha256,
+                ]
+                .into_iter()
+                .any(|value| !digest(value))
+                    || !busy.admission_busy
+                    || !busy.no_new_helper
+                    || busy.prior_stream_sha256 != self.old.stream_sha256
+                    || busy.attempted_stream_sha256 == self.old.stream_sha256
+                    || busy.attempted_stream_sha256 == self.resumed.stream_sha256
                     || busy.session_sha256 != self.old.session_sha256
+                    || busy.session_sha256 != self.resumed.session_sha256
                     || busy.group_sha256 != self.old.group_sha256
+                    || busy.group_sha256 != self.resumed.group_sha256
                 {
                     return Err(bad());
                 }
@@ -175,6 +198,16 @@ mod tests {
             group_sha256: hex::encode([9; 32]),
         }
     }
+    fn admission_busy() -> AdmissionBusy {
+        AdmissionBusy {
+            attempted_stream_sha256: hex::encode([3; 32]),
+            prior_stream_sha256: hex::encode([1; 32]),
+            session_sha256: hex::encode([4; 32]),
+            group_sha256: hex::encode([9; 32]),
+            admission_busy: true,
+            no_new_helper: true,
+        }
+    }
     pub(super) fn evidence(direction: &str) -> Evidence {
         let old = binding(1);
         let resumed = binding(2);
@@ -201,7 +234,7 @@ mod tests {
             partial,
             old,
             old_charged_while_client_detached: true,
-            put_busy: (direction == "put").then(|| binding(3)),
+            put_busy: (direction == "put").then(admission_busy),
             old_cancelled: true,
             after_cancel: StreamStatus {
                 active: 0,
@@ -236,7 +269,7 @@ mod tests {
             bad.put_busy = if direction == "put" {
                 None
             } else {
-                Some(binding(3))
+                Some(admission_busy())
             };
             assert!(bad.validate().is_err());
         }
@@ -264,6 +297,89 @@ mod tests {
         bad.committed.prefix_sha256 = "aa".repeat(32);
         bad.final_sha256 = "aa".repeat(32);
         assert!(bad.validate().is_err());
+    }
+    #[test]
+    fn admission_busy_requires_canonical_hashes_and_true_attestations() {
+        let valid = evidence("put");
+        for field in [
+            "attempted_stream_sha256",
+            "prior_stream_sha256",
+            "session_sha256",
+            "group_sha256",
+        ] {
+            for malformed in [
+                "".to_owned(),
+                "a".repeat(63),
+                "A".repeat(64),
+                "g".repeat(64),
+            ] {
+                let mut value = serde_json::to_value(&valid).unwrap();
+                value["put_busy"][field] = malformed.into();
+                let parsed: Evidence = serde_json::from_value(value).unwrap();
+                assert!(parsed.validate().is_err(), "accepted malformed {field}");
+            }
+        }
+        for field in ["admission_busy", "no_new_helper"] {
+            let mut value = serde_json::to_value(&valid).unwrap();
+            value["put_busy"][field] = false.into();
+            let parsed: Evidence = serde_json::from_value(value).unwrap();
+            assert!(parsed.validate().is_err(), "accepted false {field}");
+        }
+    }
+    #[test]
+    fn admission_busy_binds_prior_attempt_and_room_without_an_admitted_helper() {
+        let valid = evidence("put");
+        for attempted in [&valid.old.stream_sha256, &valid.resumed.stream_sha256] {
+            let mut value = valid.clone();
+            value.put_busy.as_mut().unwrap().attempted_stream_sha256 = attempted.clone();
+            assert!(value.validate().is_err());
+        }
+        let mut value = valid.clone();
+        value.put_busy.as_mut().unwrap().prior_stream_sha256 = "aa".repeat(32);
+        assert!(value.validate().is_err());
+        for field in ["session_sha256", "group_sha256"] {
+            for binding in ["old", "resumed"] {
+                let mut value = serde_json::to_value(&valid).unwrap();
+                value[binding][field] = "aa".repeat(32).into();
+                let parsed: Evidence = serde_json::from_value(value).unwrap();
+                assert!(
+                    parsed.validate().is_err(),
+                    "accepted different {binding} {field}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn admission_busy_json_is_closed_and_rejects_legacy_helper_binding() {
+        let valid = evidence("put");
+        let value = serde_json::to_value(&valid).unwrap();
+        let roundtrip: Evidence = serde_json::from_value(value.clone()).unwrap();
+        roundtrip.validate().unwrap();
+        let mut legacy = value.clone();
+        legacy["put_busy"] = serde_json::to_value(binding(3)).unwrap();
+        assert!(serde_json::from_value::<Evidence>(legacy).is_err());
+        let fields = value["put_busy"].as_object().unwrap();
+        for field in fields.keys() {
+            let mut missing = value.clone();
+            missing["put_busy"].as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_value::<Evidence>(missing).is_err(),
+                "accepted missing {field}"
+            );
+        }
+        for field in ["open_digest", "stream_sha256", "terminal", "unknown"] {
+            let mut extra = value.clone();
+            extra["put_busy"][field] = "aa".repeat(32).into();
+            assert!(
+                serde_json::from_value::<Evidence>(extra).is_err(),
+                "accepted extra {field}"
+            );
+        }
+        for field in ["admission_busy", "no_new_helper"] {
+            let mut wrong_type = value.clone();
+            wrong_type["put_busy"][field] = "true".into();
+            assert!(serde_json::from_value::<Evidence>(wrong_type).is_err());
+        }
     }
     #[test]
     fn resume_requires_intermediate_prefix_same_transfer_and_fresh_stream() {

@@ -22,7 +22,10 @@ its first TERM attempt; its cause remains unresolved. Interactive macOS Keychain
 consent remains unverified and Tor is experimental.
 See [v0.3 release status and measured results](docs/validation/v0.3-release.md).
 The [operation benchmark guide](docs/validation/v0.3-operation-benchmarks.md)
-defines reproducible workloads and timing boundaries; fresh results remain pending.
+defines reproducible workloads and timing boundaries. New [C2 measurements](docs/validation/v0.3.1-c2-benchmarks.md)
+contain 45 source-bound operation observations; [C2 qualification](docs/validation/v0.3.1-c2-validation.md)
+failed in the interrupted-copy cohort. These are candidate results,
+not tests of released v0.3.0 bytes.
 
 **v0.3.1 is in preparation, not published.** It retains the copy refusal-test
 correction and debug-only cleanup diagnostics. The [patch release plan](docs/phases/v0.3.1-release.md)
