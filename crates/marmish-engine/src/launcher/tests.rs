@@ -46,7 +46,13 @@ fn root_locks_are_ofd_and_presence_does_not_acquire() {
         root.lock_frontend(),
         Err(EngineError::AlreadyOpen)
     ));
+    let alias = guard._file.try_clone().unwrap();
     drop(guard);
+    assert!(
+        matches!(root.lock_frontend(), Err(EngineError::AlreadyOpen)),
+        "an alias retains the original open-file-description lock"
+    );
+    drop(alias);
     root.lock_frontend().unwrap();
     let job = JobId([1; 16]);
     root.prepare_job(job, &WorkerCredential([2; 32])).unwrap();

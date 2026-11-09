@@ -3,6 +3,7 @@ use crate::admission;
 
 struct Fixture {
     _dir: tempfile::TempDir,
+    guard: Option<launcher::FrontendGuard>,
     root: StateRoot,
     store: Store,
     keys: crate::cipher::StorageKeys,
@@ -41,6 +42,7 @@ impl Fixture {
         };
         Self {
             _dir: dir,
+            guard: Some(guard),
             root,
             store,
             keys,
@@ -1515,7 +1517,9 @@ fn shared_presence_probe_cannot_silently_discard_worker_start() {
 
 impl Fixture {
     fn into_engine(self) -> (tempfile::TempDir, crate::Engine, InputOwner) {
-        let guard = self.root.lock_frontend().unwrap();
+        let guard = self
+            .guard
+            .expect("fixture frontend guard released before engine conversion");
         let policy = self.store.config.policy.clone();
         let account = self.store.config.account.clone();
         let engine = crate::Engine {
@@ -1544,6 +1548,20 @@ impl Fixture {
             })
             .unwrap();
     }
+}
+
+#[test]
+fn fixture_retains_frontend_ownership_through_engine_conversion() {
+    let fixture = Fixture::new();
+    assert!(
+        matches!(fixture.root.lock_frontend(), Err(EngineError::AlreadyOpen)),
+        "fixture must retain its initialization frontend guard"
+    );
+    let (_directory, engine, _) = fixture.into_engine();
+    assert!(
+        matches!(engine.root.lock_frontend(), Err(EngineError::AlreadyOpen)),
+        "engine conversion must preserve exclusive frontend ownership"
+    );
 }
 fn test_context(engine: &crate::Engine, owner: &InputOwner) -> AuthorizedContext {
     engine
@@ -2044,6 +2062,8 @@ fn rejected_native_worker_frames_leave_an_accepted_job_unclaimed() {
 fn wrong_native_master_reopen_leaves_an_inflight_accepted_job_unchanged() {
     use std::os::unix::fs::PermissionsExt;
     let mut fixture = Fixture::new();
+    // Preserve this reopen test's original early frontend release boundary.
+    drop(fixture.guard.take());
     let job = fixture.admit(83);
     fixture
         .root
