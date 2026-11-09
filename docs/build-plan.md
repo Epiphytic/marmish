@@ -43,6 +43,16 @@ not qualified by the current release. The separate approved
 cleanup decisions while exposing failed proof stages in debug builds; it does
 not establish a root cause or fix. Retained product changes require v0.3.1.
 
+The [v0.3.1 patch plan](phases/v0.3.1-release.md), Beads `marmish-d97`, now
+orders the remaining work: final version and neutral release notes first, then
+one fresh final candidate, macOS regression, the eight installed cohorts and
+separate finite benchmark, followed by trusted publication and HTTPS installation
+checks. The unlaunched `11e93a1` cohort package is superseded; its 0.3.0 candidate
+is preflight only. Automatic publication is held during final qualification,
+with a durable restoration obligation; no early release or relabeling of old
+measurements is permitted. [Current macOS preflight](validation/v0.3.1-preflight.md)
+is successful, without identifying the historical cleanup cause.
+
 ## Historical native v0.2 baseline
 
 The user's 2026-11-02 reset selected the [native Rust v0.2 plan](v0.2-plan.md),

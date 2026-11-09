@@ -314,9 +314,14 @@ test('0.3 publication preserves guards and static qualification disclosures',asy
     assert.equal(f.state.release.prerelease,true);assert.equal(f.state.release.make_latest,'false');
     for(const required of ['stdin/stdout/stderr','rsync','transfer-ID resume','zlib','cancellation',
       'Disconnect does not cancel','exactly matching peer versions','directory confinement','glibc 2.39','macOS 15',
-      'ad-hoc signed, not notarized','Keychain','Tor','copy-edge journal assertion failed','two interruption cohorts were not dispatched',
+      'ad-hoc signed, not notarized','Keychain','Tor','checks gate publication on all three platforms',
+      'Streaming qualification is run separately against these exact binaries',
+      'historical macOS first-TERM cleanup failure remains unexplained','diagnostics do not establish a fix',
       '3e93fa4 carrying 0.2.3','not these release binaries','marmish install --select 0.2.3','old binaries reject 0.3'])
       assert.ok(f.state.release.body.includes(required),required);
+    for(const stale of ['copy-edge journal assertion failed','two interruption cohorts were not dispatched',
+      'Full streaming qualification has not passed','marmish install --select 0.3.0'])
+      assert.equal(f.state.release.body.includes(stale),false,stale);
   }
 });
 test('publisher authority rejects cross-minor newer or equal drafts and malformed native tags before writes',async()=>{

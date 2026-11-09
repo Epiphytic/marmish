@@ -27,6 +27,24 @@ The reviewed [post-release test phase](phases/v0.3-test-cleanup.md) addresses co
 refusal evidence and fresh qualification. Its [benchmark guide](validation/v0.3-operation-benchmarks.md)
 defines existing operation clocks and byte numerators; it does not claim new results.
 
+## Pending v0.3.1 patch
+
+Beads `marmish-d97` tracks the [reviewed patch plan](phases/v0.3.1-release.md).
+Only the native package version changes to 0.3.1; there is no protocol or stored
+format change in this increment. Product-source cleanup diagnostics are retained,
+while ordinary release binaries omit their debug emission. The copy refusal
+validator and legacy uninstall changes correct test evidence and fixtures.
+
+The public installer remains pinned to 0.3.0 until trusted publication creates
+its installer-only child. Current `11e93a1` candidate/preflight evidence is not
+qualification of future 0.3.1 bytes. [macOS preflight](validation/v0.3.1-preflight.md)
+passed the original combined suites, 80 repetitions and strict release Clippy;
+the historical first-TERM cause remains unknown. Final source-bound candidate,
+macOS regression, eight cohorts, finite benchmarks and independent audits remain
+required. Hold automatic publication with an explicit restoration duty before
+pushing the version bump, because the publisher does not gate these cohorts.
+No new rollback or lifecycle claim is made. Keep published 0.3.0 immutable.
+
 ## Historical v0.2.3 publication
 
 **Native v0.2.3 was released.** Source is

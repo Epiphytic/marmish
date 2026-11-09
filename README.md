@@ -24,6 +24,14 @@ See [v0.3 release status and measured results](docs/validation/v0.3-release.md).
 The [operation benchmark guide](docs/validation/v0.3-operation-benchmarks.md)
 defines reproducible workloads and timing boundaries; fresh results remain pending.
 
+**v0.3.1 is in preparation, not published.** It retains the copy refusal-test
+correction and debug-only cleanup diagnostics. The [patch release plan](docs/phases/v0.3.1-release.md)
+requires a fresh versioned candidate, all eight installed streaming cohorts and
+separate finite benchmarks before publication. The installer still selects 0.3.0.
+The [macOS preflight](docs/validation/v0.3.1-preflight.md) passed the combined
+native suites, 80 cleanup repetitions and strict release Clippy at `11e93a1`;
+this is bounded non-reproduction, not a fix for the historical first-TERM cause.
+
 Source: [GitHub](https://github.com/Epiphytic/marmish) ·
 [Radicle](https://radicle.network/nodes/iris.radicle.network/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg)
 (`rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg`).
