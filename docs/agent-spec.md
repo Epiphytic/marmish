@@ -1137,3 +1137,12 @@ final debug failures identify member role and attempt using fixed vocabulary.
 Portable checks pass; Darwin execution and full release qualification remain
 pending. Historical group/status and role-unknown BSD-read failures remain
 unexplained. No extra signal, reap or timing budget is introduced.
+
+The temporary [confidential legacy diagnostic](phases/legacy-confidential-trace.md)
+and its [independent review](reviews/legacy-confidential-trace.md) add a manual
+three-platform workflow that encrypts the existing private failure log before
+upload. Only the public recipient certificate enters Git; plaintext and the
+private key are never uploaded. Nine new mock-only contracts pass with zero
+skips, making the expected comparable Linux count996 with11 skips. Actual hosted
+failure causes and macOS CMS availability remain unverified. This changes no
+native runtime, acceptance predicate or release qualification claim.
