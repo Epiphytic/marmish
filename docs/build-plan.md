@@ -7,10 +7,16 @@ publication of the existing Rust streaming, rsync and native-copy product as
 0.3.0, tracked by Beads `marmish-8ka.7`. Product behavior is frozen at
 `3e93fa46e9f3b96f8ab36581ffe51688ff74eb4a`; this release increment changes
 version-family acceptance and release metadata, not transport semantics.
-The public installer remains pinned to 0.2.3 until a successful gated publisher
-updates it. Fresh three-platform candidate, provider, installed-tool and
-quickstart gates remain mandatory; release publication and public-URL checks
-must be reported from their actual runs.
+v0.3.0 is now [published on GitHub](https://github.com/Epiphytic/marmish/releases/tag/v0.3.0)
+under the reviewed [publication amendment](phases/v0.3-caveated-publication.md).
+Caveated candidate 42555204478 attempt 1 built all three platforms from source
+`72d730f0f99e5029ffcf6e4d83086da2c598fc0c`: five jobs passed and two acceptance
+jobs were skipped. Native tests/Clippy, installed-feature tools and
+provider/quickstart prequalification were skipped, preserving the separate
+macOS cleanup failure and incomplete copy qualification. The installer selects
+0.3.0. Public HTTPS installer run [42557032770](https://github.com/Epiphytic/marmish/actions/runs/42557032770),
+attempt 1, passed all six GitHub/Iris × platform installations and its combined
+validation using file-backed test identities. Full gates remain the target for subsequent qualification.
 
 The [pre-release evidence](validation/v0.3-release.md) contains five passing
 installed cohorts and the failed edge-copy cohort. Both interruption cohorts
@@ -112,7 +118,7 @@ criteria. Installed cross-platform qualification remains the following phase. Se
 actual source/platform test boundaries and failures. The current
 [v0.3 summary](validation/v0.3-release.md) records the later positive installed
 matrices and incomplete edge qualification. These increments are absent from
-the public v0.2.3 installer, which remains selected during v0.3 publication.
+the historical v0.2.3 release; the public installer now selects v0.3.0.
 
 ## Historical v0.1 plans and evidence
 

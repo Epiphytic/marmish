@@ -1,10 +1,21 @@
 # Marmish native v0.3 agent specification
 
-**v0.3.0 publication is in progress.** The reviewed [release plan](phases/v0.3-release.md)
-adds release-version support and publishes existing streaming, rsync and native
-copy behavior. Public installation still selects v0.2.3 until the gated publisher
-updates it. Both peers need v0.3 for the new commands, and native copy requires
-an exact peer version match. The [release evidence](validation/v0.3-release.md)
+**[v0.3.0 is published](https://github.com/Epiphytic/marmish/releases/tag/v0.3.0).**
+The reviewed [publication amendment](phases/v0.3-caveated-publication.md) permits
+this explicitly caveated release of the existing streaming, rsync and native
+copy behavior. Public installation selects v0.3.0. Both peers need v0.3 for the
+new commands, and native copy requires an exact peer version match.
+Release source is `72d730f0f99e5029ffcf6e4d83086da2c598fc0c`; annotated tag object
+is `f68b659443e9bbfa5dc3c012599add4e6811b838`. Caveated candidate
+[42555204478](https://github.com/Epiphytic/marmish/actions/runs/42555204478),
+attempt 1, built all three platforms: five jobs passed and two acceptance jobs
+were skipped. Native tests/Clippy, installed-feature tools and provider/quickstart
+prequalification were skipped; this is packaging evidence, not full qualification.
+The earlier macOS cleanup test failed with `RecoveryUncertain` on first TERM;
+its cause remains unresolved. Public HTTPS installer run
+[42557032770](https://github.com/Epiphytic/marmish/actions/runs/42557032770),
+attempt 1, passed all six GitHub/Iris × platform installations and the combined
+validation using file-backed test identities. The [release evidence](validation/v0.3-release.md)
 records the frozen pre-release source, five passing installed cohorts, failed
 copy edge cohort and two undispatched interruption cohorts. These are version
 0.2.3 source-build observations, not measurements of released v0.3 binaries.
@@ -24,7 +35,7 @@ native tests per platform, provider checks and installed quickstarts. Publisher
 passed all four jobs and published the
 [v0.2.3 assets](https://github.com/Epiphytic/marmish/releases/tag/v0.2.3).
 
-Both public scripts install v0.2.3 and matched SHA256
+At that historical publication, both public scripts installed v0.2.3 and matched SHA256
 `164a59a2672b1f2a74afbcd6556d4eed87df80170cabc00bd5638ffad2c88a30`.
 The two-source, three-platform HTTPS installer run
 [41937495649](https://github.com/Epiphytic/marmish/actions/runs/41937495649)
@@ -298,7 +309,7 @@ profile migration or automatic disk cleanup. Receipt generation determines
 rollback versus roll-forward after interruption, with recovery on the next
 installer invocation. Native uninstall removes native links, not the retained
 legacy backups. See the [reviewed design](phases/v0.2.1-native-legacy-upgrade.md).
-The public bootstrap now selects 0.2.3 with this behavior. Native suites and
+At that publication, the public bootstrap selected 0.2.3 with this behavior. Native suites and
 provider qualification passed on all three release targets; actual user upgrade
 and interactive macOS consent remain separate observations.
 
@@ -631,9 +642,11 @@ force acceptance. Runtime requires the installed sibling marmish-worker.
 
 The release bootstrap is served byte-for-byte from Radicle/Iris and GitHub,
 with GitHub the independent script backup. Both routes download GitHub-hosted
-release assets. The v0.2.3 script digests and six-cell HTTPS install/setup checks
-passed for both sources, as recorded in
-[current evidence](validation/native-automatic-release.md). Source replication,
+release assets. The current v0.3.0 bootstrap SHA256 is
+`d766bf1078de5f721c97e79ee7af675bd2d8b2cbcdedb88195087050c288d16b`;
+both public routes matched it and passed all six install/setup checks in
+run 42557032770 attempt 1. The historical v0.2.3 results remain in
+[earlier evidence](validation/native-automatic-release.md). Source replication,
 HTTPS delivery and installed behavior remain separately recorded observations.
 
 Ordinary shutdown preserves jobs and durable native work. Hidden same-UID fixture
@@ -741,7 +754,7 @@ The installed lifecycle checker derives synthetic A/C versions from the frozen
 stable `0.2.N` candidate and matching native lock entry, rather than pinning
 `0.2.0`. See the [patch-version amendment](phases/v0.2-lifecycle-patch-versions.md).
 This changes qualification tooling only; hosted lifecycle qualification remains
-pending. The public installer now pins 0.2.3.
+pending. At that time, the public installer pinned 0.2.3.
 
 The canonical credential-helper correction (`marmish-far`) makes managed and ordinary sibling `marmish`, `marmishd` and worker entrypoints select validated same-version `marmish` for provider operations. Exact downloaded standalone CLI behavior is preserved. This fixes an inconsistent helper identity; reported macOS Keychain denial causation and interactive recovery remain unverified. Current v0.2.3 automated provider checks passed separately; they do not validate user consent dialogs. No ACL or file-fallback policy changes. See [design](phases/v0.2-canonical-credential-helper.md).
 
@@ -824,7 +837,7 @@ A separate publisher checks the completed whole attempt, source, reports and
 artifact hashes. It reproduces the Rust-rendered bootstrap without repository
 credentials, publishes exactly 15 immutable GitHub assets, then fast-forwards
 master with a direct-child change to scripts/install.sh. Publication succeeded
-for v0.2.3, and the bootstrap now selects its verified assets. Recovery cannot replace
+for v0.2.3, and the bootstrap then selected its verified assets. Recovery cannot replace
 assets or move tags. Source and tag mirroring to Radicle/Iris remains manual;
 GitHub Actions has no Radicle credentials or release-publication responsibility.
 The independent six-cell public HTTPS installer run remains a separate gate;
@@ -871,7 +884,7 @@ repeats four focused cleanup cases. It uses no relay and is diagnostic only.
 See the [approved design](phases/macos-candidate-worker-and-cleanup.md) and
 [actual reviews](reviews/macos-candidate-worker-and-cleanup.md). All-platform
 candidate and installed qualification remain required; the public installer
-still selects v0.2.3, with no new release implied by this source increment.
+selected v0.2.3 at that time, with no new release implied by that source increment.
 
 The first local combined rerun passed the engine integrations but failed the
 closed-stdin fixture (delivered13, expected0). A controlled inherited-reader
@@ -926,7 +939,7 @@ explicit confirmed cancellation, existing acceptance, deadlines and workloads
 remain required. A corrected source requires a new complete three-platform
 candidate and all eight original serial cohorts; historical passes cannot be
 combined into a new qualification. No public release, version or installer pin
-change is part of this correction. Public installation still selects v0.2.3.
+change is part of this correction. At that time, public installation selected v0.2.3.
 
 Fresh candidate [42424780330/1](https://github.com/Epiphytic/marmish/actions/runs/42424780330)
 at `a7c3db4b30a953c3f3413226566e7650b282d33f` passed all three native/package/tool
@@ -959,7 +972,7 @@ Legacy managed CI remains red: 10 of 19 unique failed identities locally reprodu
 obsolete assumptions; nine locally pass with hosted causes unresolved. No failure
 is waived. GitHub exact source bytes matched, but Iris HTTP timed out despite
 verified remote refs/sync. This source-only increment changes no public version,
-release tag or installer pin; public installation still selects v0.2.3.
+release tag or installer pin; public installation selected v0.2.3 at that time.
 
 The subsequent f96 candidate failed the macOS installed-feature native suite before
 any installed cohort could run: source control flow shows the test reached its final cancellation assertion, but
@@ -1006,7 +1019,7 @@ adds bounded finite native and supervisor diagnostics while preserving existing
 workloads, deadlines, acceptance and cleanup behavior. The [integrated code review](reviews/streaming-failure-observability.md) approves
 the implementation and local validation; fresh complete hosted qualification
 remains required. Historical passes cannot qualify changed source. No new public version, release tag or installer pin is
-part of this increment. Public installation still selects v0.2.3.
+part of this increment. At that time, public installation selected v0.2.3.
 
 Candidate [42504599079/1](https://github.com/Epiphytic/marmish/actions/runs/42504599079)
 at `e31b8afae452bb30a041916fbf6d2bac4e92f042` passed all three native/package/tool
