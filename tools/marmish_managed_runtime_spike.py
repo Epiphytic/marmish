@@ -20,6 +20,7 @@ import tarfile
 import tempfile
 import time
 import traceback
+import tomllib
 import urllib.parse
 
 from marmish_installed import file_digest as digest
@@ -774,20 +775,42 @@ def installed_acceptance(slots, root, launch_env, env, report, cwd=None):
     accept_native_results(native_results, manifest_contracts, report)
 
 
+def compiler_is_proxy(selected, rustup):
+    """Recognize symlink, hardlinked and copied proxies without executing them."""
+    from marmish_installed_fixture import _fence
+    try:
+        before = (_fence(selected.stat()), _fence(rustup.stat()))
+        require(all(path.is_file() and os.access(path, os.X_OK) for path in (selected, rustup)),
+                'fixture_compiler_invalid')
+        result = selected.name == 'rustup' or os.path.samefile(selected, rustup)
+        if not result:
+            result = digest(selected) == digest(rustup)
+        require(before == (_fence(selected.stat()), _fence(rustup.stat())), 'fixture_compiler_invalid')
+        return result
+    except OSError:
+        raise Refused('fixture_compiler_invalid') from None
+
+
 def compiler_lookup(rustup, env):
     # Dedicated host lookup: fixed argv and cwd, never an installed launcher.
-    return _run_process([rustup, 'which', 'rustc'], env, cwd=Path('/'), timeout=10, capture=True)
+    return _run_process([rustup, 'which', '--toolchain', '1.97.1', 'rustc'],
+                        dict(env, RUSTUP_AUTO_INSTALL='0'), cwd=Path('/'), timeout=10, capture=True)
 
 
-def test_compiler_directory():
+def test_compiler_directory(*, selection=None):
     """Resolve existing compiler once; rustup lookup alone may read its host config."""
     compiler = shutil.which('rustc')
     require(compiler is not None, 'test_compiler_missing')
     selected = Path(compiler).resolve(strict=True)
     rustup = shutil.which('rustup')
-    if rustup is not None and selected.name == 'rustup':
+    kind = 'direct_pinned'
+    if rustup is None:
+        require(selected.name != 'rustup', 'test_compiler_resolution_failed')
+    if rustup is not None and compiler_is_proxy(selected, Path(rustup).resolve(strict=True)):
+        kind = 'rustup_explicit_1.97.1'
         # Never run a rustup shim with the disposable HOME: it has no toolchain.
-        lookup_env = {'HOME': str(Path.home()), 'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}
+        lookup_env = {'HOME': str(Path.home()), 'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C',
+                      'RUSTUP_AUTO_INSTALL': '0'}
         for name in ('RUSTUP_HOME', 'CARGO_HOME'):
             if name in os.environ:
                 lookup_env[name] = os.environ[name]
@@ -801,6 +824,10 @@ def test_compiler_directory():
             raise Refused('test_compiler_resolution_failed') from None
     require(selected.is_file() and selected.name == 'rustc' and os.access(selected, os.X_OK),
             'test_compiler_invalid')
+    if rustup is not None:
+        require(not compiler_is_proxy(selected, Path(rustup).resolve(strict=True)), 'test_compiler_invalid')
+    if selection is not None:
+        selection['kind'] = kind
     return selected.parent
 
 
@@ -906,12 +933,191 @@ def guarded_suite_diagnostics(raw):
         return suite_output_defaults()
 
 
+def fixture_cache_config(cache, env):
+    from marmish_installed_fixture import _no_cargo_config
+    try:
+        _no_cargo_config(cache)
+    except ValueError:
+        raise Refused('fixture_cargo_config') from None
+    home = Path(env['HOME'])
+    for base in (home, *home.parents):
+        require(not any(os.path.lexists(base / '.cargo' / name)
+                        for name in ('config', 'config.toml')), 'fixture_cargo_config')
+    for base in (cache, home / '.cargo'):
+        require(not any(os.path.lexists(base / name)
+                        for name in ('config', 'config.toml', 'credentials', 'credentials.toml')),
+                'fixture_cargo_config')
+
+
+def fixture_cache_snapshot(cache, env, compiler):
+    from marmish_installed_fixture import SOURCE, _fence, source_sha256
+    fixture_cache_config(cache, env)
+    info = cache.lstat()
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+            and stat.S_IMODE(info.st_mode) == 0o700 and cache.resolve() == cache,
+            'fixture_cache_invalid')
+    try:
+        lock = tomllib.loads((SOURCE / 'Cargo.lock').read_text())['package']
+    except (OSError, ValueError, KeyError):
+        raise Refused('fixture_lock_invalid') from None
+    require(len(lock) == 22 and sum('source' in row for row in lock) == 21
+            and all(row.get('source') == 'registry+https://github.com/rust-lang/crates.io-index'
+                    and re.fullmatch('[0-9a-f]{64}', row.get('checksum', ''))
+                    for row in lock if 'source' in row), 'fixture_lock_invalid')
+    tools, identities = {}, {}
+    rustup = shutil.which('rustup')
+    for name in ('cargo', 'rustc', 'rustdoc'):
+        try:
+            path = (compiler / name).resolve(strict=True)
+        except OSError:
+            raise Refused('fixture_compiler_invalid') from None
+        require(path.parent == compiler and path.is_file() and os.access(path, os.X_OK),
+                'fixture_compiler_invalid')
+        if rustup is not None:
+            require(not compiler_is_proxy(path, Path(rustup).resolve(strict=True)), 'fixture_compiler_invalid')
+        selected = shutil.which(name, path=env['PATH'])
+        require(selected is not None and Path(selected).resolve(strict=True) == path,
+                'fixture_compiler_invalid')
+        before = _fence(path.stat())
+        tools[name] = digest(path)
+        require(before == _fence(path.stat()), 'fixture_compiler_invalid')
+        identities[name] = list(before)
+    return {'source_sha256': source_sha256(), 'manifest_sha256': digest(SOURCE / 'Cargo.toml'),
+            'lock_sha256': digest(SOURCE / 'Cargo.lock'), 'tool_sha256': tools,
+            'tool_identity': identities}
+
+
+def fixture_compiler_versions(compiler, env):
+    host = TARGETS.get((platform.system(), platform.machine()))
+    require(host is not None, 'fixture_compiler_invalid')
+    version_env = dict(env, RUSTUP_AUTO_INSTALL='0')
+    for name in ('rustc', 'cargo', 'rustdoc'):
+        status, raw = run([compiler / name, '-vV' if name == 'rustc' else '--version'],
+                          version_env, timeout=10, capture=True)
+        require(status == 0 and len(raw) <= 4096, 'fixture_compiler_invalid')
+        if name == 'rustc':
+            require(b'release: 1.97.1' in raw.splitlines()
+                    and ('host: ' + host).encode() in raw.splitlines(), 'fixture_compiler_invalid')
+        else:
+            require(re.fullmatch(name.encode() + rb' 1\.97\.1 \([^\r\n]{1,200}\)\n?', raw)
+                    is not None, 'fixture_compiler_invalid')
+    return {'version': '1.97.1', 'host': host}
+
+
+def private_failure_output(path, raw):
+    if path is not None and raw is not None:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(raw[:2 << 20])
+
+
+def prepare_full_tools_fixture_cache(env, root, compiler, report, failure_log=None,
+                                    *, selection_kind='supplied_direct_toolchain'):
+    """One locked public-dependency fetch for the later offline test builds."""
+    from marmish_installed_fixture import SOURCE
+    row = {'status': 'not_started', 'locked': True, 'online_fetch': True,
+           'offline_fixture_build_required': True, 'cache_scope': 'fresh_test_only',
+           'duration_seconds': None, 'exit_code': None, 'cache_bytes': None,
+           'process_cleanup': None, 'failure': None}
+    report['fixture_dependencies'] = row
+    cache, target = root / 'full-tools-cargo-home', root / 'full-tools-fetch-target'
+    started, raw, holder = time.monotonic(), None, FailureCapture()
+    phase = 'input_admission'
+    try:
+        for path in (cache, target):
+            require(not os.path.lexists(path), 'fixture_cache_exists')
+            path.mkdir(mode=0o700)
+        # Only the original fresh base environment is admitted here, not the
+        # supervisor-bearing unittest environment or ambient Cargo settings.
+        keys = {'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME'}
+        fetch_env = {key: env[key] for key in keys}
+        fetch_env.update(PATH=str(compiler) + ':/usr/bin:/bin:/usr/sbin:/sbin',
+                         CARGO_HOME=str(cache), CARGO_TARGET_DIR=str(target),
+                         RUSTC=str(compiler / 'rustc'), RUSTDOC=str(compiler / 'rustdoc'),
+                         RUSTC_WRAPPER='', RUSTC_WORKSPACE_WRAPPER='',
+                         CARGO_REGISTRIES_CRATES_IO_PROTOCOL='sparse', CARGO_NET_RETRY='0', CARGO_HTTP_TIMEOUT='30')
+        bound = fixture_cache_snapshot(cache, fetch_env, compiler)
+        row.update({key: value for key, value in bound.items() if key != 'tool_identity'})
+        phase = 'compiler_versions'
+        row.update(fixture_compiler_versions(compiler, fetch_env))
+        phase = 'provenance'
+        require(selection_kind in ('direct_pinned', 'rustup_explicit_1.97.1', 'supplied_direct_toolchain'),
+                'fixture_compiler_invalid')
+        row['selection_kind'] = selection_kind
+        private_failure_output(root / 'full-tools-compiler.json',
+                               json.dumps({'compiler_directory': str(compiler), **row,
+                                           'tool_identity': bound['tool_identity']}, sort_keys=True).encode())
+        row['status'] = 'running'
+        phase = 'fetch'
+        status, raw = run([compiler / 'cargo', 'fetch', '--locked', '--manifest-path', SOURCE / 'Cargo.toml'],
+                          fetch_env, timeout=120, monitor=cache, limit=512 << 20,
+                          capture=True, failure_capture=holder)
+        row['process_cleanup'] = 'leader_reaped_group_signal_attempted_group_absence_unverified'
+        row['exit_code'] = status
+        require(status == 0, 'fetch_failed')
+        phase = 'post_fetch'
+        require(fixture_cache_snapshot(cache, fetch_env, compiler) == bound, 'fixture_inputs_changed')
+        row['cache_bytes'] = total_bytes(cache)
+        require(row['cache_bytes'] <= 512 << 20, 'runtime_expansion_limit')
+        row['status'] = 'PASS'
+        return cache
+    except BaseException as error:
+        row['status'] = 'FAIL'
+        cause = str(error) if isinstance(error, Refused) else type(error).__name__
+        row['failure'] = {'runtime_expansion_limit': 'cache_limit',
+                          'runtime_entry_count_limit': 'cache_entry_limit'}.get(cause, cause)
+        row['failure_phase'] = phase
+        if phase == 'compiler_versions' and cause in ('child_timeout', 'child_output_limit'):
+            row['failure'] = 'fixture_compiler_invalid'
+        if phase == 'fetch':
+            row['failure'] = {'child_timeout': 'fetch_timeout',
+                              'child_output_limit': 'fetch_output_limit'}.get(cause, row['failure'])
+            row['process_cleanup'] = (None if cause == 'child_cwd_refused' else
+                                      'leader_reaped_group_signal_attempted_group_absence_unverified')
+        if isinstance(error, OSError):
+            row['error_type'], row['errno'] = type(error).__name__, error.errno
+            if phase == 'fetch':
+                row['process_cleanup'] = 'spawn_or_cleanup_error_group_absence_unverified'
+                row['failure'] = 'fetch_failed'
+        if isinstance(error, Refused) and cause in ('interrupted', 'total_timeout'):
+            raise
+        try:
+            private_failure_output(failure_log, raw if raw is not None else holder.data)
+        except OSError as capture_error:
+            row['failure_log_error_type'] = type(capture_error).__name__
+        raise
+    finally:
+        holder.data = None
+        row['duration_seconds'] = round(time.monotonic() - started, 3)
+
+
+def verify_full_tools_fixture_cache(cache, env, compiler, report):
+    from marmish_installed_fixture import _fence
+    row = report['fixture_dependencies']
+    fd = os.open(cache.parent / 'full-tools-compiler.json', os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, 'rb') as stream:
+        before = os.fstat(stream.fileno())
+        require(stat.S_ISREG(before.st_mode) and before.st_uid == os.geteuid()
+                and stat.S_IMODE(before.st_mode) == 0o600 and before.st_nlink == 1
+                and before.st_size <= 16384, 'fixture_provenance_invalid')
+        record = json.loads(stream.read(16385))
+        require(_fence(before) == _fence(os.fstat(stream.fileno())), 'fixture_provenance_invalid')
+    expected = {key: row[key] for key in ('source_sha256', 'manifest_sha256', 'lock_sha256', 'tool_sha256')}
+    expected['tool_identity'] = record['tool_identity']
+    require(fixture_cache_snapshot(cache, env, compiler) == expected, 'fixture_inputs_changed')
+
+
 def full_tools_acceptance(interpreter, env, root, report, failure_log=None):
     report['stage'] = 'full_tools'
-    compiler = test_compiler_directory()
+    selection = {}
+    compiler = test_compiler_directory(selection=selection)
     test_env = dict(env, PATH=str(interpreter.parent) + ':' + str(compiler) + ':/usr/bin:/bin:/usr/sbin:/sbin')
     linux_namespace_preflight(test_env, report)
     test_env = test_supervisor(test_env)
+    cache = prepare_full_tools_fixture_cache(env, root, compiler, report, failure_log,
+                                            selection_kind=selection.get('kind', 'supplied_direct_toolchain'))
+    test_env = dict(test_env, CARGO_HOME=str(cache))
+    verify_full_tools_fixture_cache(cache, test_env, compiler, report)
     report['full_tools_tests'] = {'top_level_and_path_children': 'managed_interpreter',
                                   'compiler': 'existing_host_toolchain_test_only', 'exit_code': None,
                                   **suite_output_defaults()}
@@ -924,6 +1130,14 @@ def full_tools_acceptance(interpreter, env, root, report, failure_log=None):
         try:
             diagnostics = guarded_suite_diagnostics(raw if raw is not None else holder.data)
             report['full_tools_tests'] = {**report['full_tools_tests'], 'exit_code': status, **diagnostics}
+            try:
+                verify_full_tools_fixture_cache(cache, test_env, compiler, report)
+            except Exception as error:
+                report['fixture_verification_failure'] = (str(error) if isinstance(error, Refused)
+                                                          else type(error).__name__)
+                if status == 0 or (isinstance(error, Refused)
+                                   and str(error) in ('interrupted', 'total_timeout')):
+                    raise
         finally:
             holder.data = None
             del holder
@@ -934,9 +1148,7 @@ def full_tools_acceptance(interpreter, env, root, report, failure_log=None):
             {'method': method.decode('ascii'), 'class': owner.decode('ascii')}
             for method, owner in failures[:64]]
         if failure_log is not None:
-            fd = os.open(failure_log, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-            with os.fdopen(fd, 'wb') as output:
-                output.write(raw)
+            private_failure_output(failure_log, raw)
     require(status == 0, 'full_tools_suite_failed')
     report['assertions'].append('full_tools_suite_under_managed_python')
 

@@ -4,12 +4,496 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import tarfile
 import tempfile
 import unittest
 from unittest.mock import mock_open, patch
 
 import marmish_managed_runtime_spike as spike
+
+
+class FixtureCacheTests(unittest.TestCase):
+    """Mock-only fetch/tool admission; never execute Cargo or namespaces."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.env = spike.environment(self.root)
+        self.compiler = self.root / 'toolchain/bin'
+        self.compiler.mkdir(parents=True)
+        for name in ('cargo', 'rustc', 'rustdoc'):
+            path = self.compiler / name
+            path.write_bytes(('direct-' + name).encode())
+            path.chmod(0o700)
+        self.report = {'assertions': []}
+        self.enterContext(patch.object(spike, '_run_process', side_effect=AssertionError('real_executor_forbidden')))
+        self.run = self.enterContext(patch.object(spike, 'run', side_effect=self.execute))
+        self.lookup = spike.compiler_lookup
+        self.enterContext(patch.object(spike, 'compiler_lookup', side_effect=AssertionError('unrequested_lookup')))
+        self.enterContext(patch.object(spike.platform, 'system', return_value='Linux'))
+        self.enterContext(patch.object(spike.platform, 'machine', return_value='x86_64'))
+        self.which = spike.shutil.which
+        self.enterContext(patch.object(spike.shutil, 'which', side_effect=self.find_tool))
+        self.fetches = []
+
+    def find_tool(self, name, path=None):
+        return (None if name == 'rustup' else str(self.compiler / name)) if path is None else self.which(name, path=path)
+
+    def execute(self, command, env, **kwargs):
+        name = Path(command[0]).name
+        if command[1] == 'fetch':
+            self.fetches.append((command, env, kwargs))
+            return 0, b''
+        self.assertEqual(kwargs, {'timeout': 10, 'capture': True})
+        self.assertEqual(env['RUSTUP_AUTO_INSTALL'], '0')
+        if name == 'rustc':
+            return 0, b'rustc 1.97.1 (fixture)\nrelease: 1.97.1\nhost: x86_64-unknown-linux-gnu\n'
+        return 0, (name + ' 1.97.1 (fixture)\n').encode()
+
+    def prepare(self, failure_log=None):
+        return spike.prepare_full_tools_fixture_cache(self.env, self.root, self.compiler, self.report, failure_log)
+
+    def test_fresh_fetch_is_locked_bounded_and_ambient_free(self):
+        from marmish_installed_fixture import SOURCE
+        with patch.dict(os.environ, {'CARGO_REGISTRY_TOKEN': 'private', 'RUSTFLAGS': 'private',
+                                     'HTTPS_PROXY': 'private', 'RUSTUP_HOME': 'private'}):
+            cache = self.prepare()
+        self.assertEqual(len(self.fetches), 1)
+        command, env, options = self.fetches[0]
+        self.assertEqual(command, [self.compiler/'cargo', 'fetch', '--locked', '--manifest-path', SOURCE/'Cargo.toml'])
+        self.assertEqual(env['CARGO_HOME'], str(cache))
+        self.assertEqual(env['RUSTDOC'], str(self.compiler/'rustdoc'))
+        for name in ('CARGO_REGISTRY_TOKEN', 'RUSTFLAGS', 'HTTPS_PROXY', 'RUSTUP_HOME', 'MARMISH_TEST_SUPERVISOR'):
+            self.assertNotIn(name, env)
+        self.assertEqual(options['timeout'], 120)
+        self.assertEqual(options['limit'], 512 << 20)
+        self.assertEqual(options['monitor'], cache)
+        self.assertEqual(cache.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(self.report['fixture_dependencies']['status'], 'PASS')
+        self.assertNotIn(str(self.root), json.dumps(self.report))
+        provenance = self.root/'full-tools-compiler.json'
+        self.assertEqual(provenance.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(json.loads(provenance.read_text())['compiler_directory'], str(self.compiler))
+        self.assertIn('tool_identity', json.loads(provenance.read_text()))
+        self.assertNotIn('tool_identity', self.report['fixture_dependencies'])
+        self.assertEqual(json.loads(provenance.read_text())['selection_kind'], 'supplied_direct_toolchain')
+        self.assertNotIn('CARGO_HOME', self.env)
+        with self.assertRaisesRegex(spike.Refused, 'fixture_cache_exists'):
+            self.prepare()
+
+    def test_existing_symlink_cache_refused_before_any_execution(self):
+        (self.root/'full-tools-cargo-home').symlink_to(self.root)
+        with self.assertRaisesRegex(spike.Refused, 'fixture_cache_exists'):
+            self.prepare()
+        self.run.assert_not_called()
+
+    def test_configs_and_credentials_refused_before_execution(self):
+        for name in ('config', 'config.toml', 'credentials', 'credentials.toml'):
+            cargo = Path(self.env['HOME'])/'.cargo'
+            cargo.mkdir(exist_ok=True)
+            marker = cargo/name
+            marker.write_text('private')
+            with self.subTest(name=name), self.assertRaisesRegex(spike.Refused, 'fixture_cargo_config'):
+                self.prepare()
+            self.run.assert_not_called()
+            marker.unlink()
+            for child in ('full-tools-cargo-home', 'full-tools-fetch-target'):
+                (self.root/child).rmdir()
+
+    def test_missing_rustdoc_refuses_before_execution(self):
+        (self.compiler/'rustdoc').unlink()
+        with self.assertRaisesRegex(spike.Refused, 'fixture_compiler_invalid'):
+            self.prepare()
+        self.run.assert_not_called()
+
+    def test_shadowed_tool_refused_without_path_reordering(self):
+        cache = self.root/'cache-home'
+        cache.mkdir(mode=0o700)
+        fake = self.root/'fake'
+        fake.mkdir()
+        for name in ('cargo', 'rustc', 'rustdoc'):
+            (fake/name).write_text('shadow')
+            (fake/name).chmod(0o700)
+            env = dict(self.env, PATH=str(fake)+':'+str(self.compiler))
+            with self.subTest(name=name), self.assertRaisesRegex(spike.Refused, 'fixture_compiler_invalid'):
+                spike.fixture_cache_snapshot(cache, env, self.compiler)
+            (fake/name).unlink()
+
+    def test_post_fetch_source_mutation_refused_and_private_nonzero_capture(self):
+        original = spike.fixture_cache_snapshot
+        count = 0
+        def changed(*args):
+            nonlocal count
+            value = original(*args)
+            count += 1
+            if count > 1:
+                value['lock_sha256'] = '0'*64
+            return value
+        with patch.object(spike, 'fixture_cache_snapshot', side_effect=changed):
+            with self.assertRaisesRegex(spike.Refused, 'fixture_inputs_changed'):
+                self.prepare()
+        self.assertEqual(self.report['fixture_dependencies']['status'], 'FAIL')
+
+    def test_fetch_nonzero_captures_returned_raw_exclusively(self):
+        original = self.execute
+        def fail(command, env, **kwargs):
+            return (101, b'private-stderr') if command[1] == 'fetch' else original(command, env, **kwargs)
+        self.run.side_effect = fail
+        log = self.root/'failure.log'
+        with self.assertRaisesRegex(spike.Refused, 'fetch_failed'):
+            self.prepare(log)
+        self.assertEqual(log.read_bytes(), b'private-stderr')
+        self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn('private-stderr', json.dumps(self.report))
+        with self.assertRaises(FileExistsError):
+            spike.private_failure_output(log, b'replacement')
+        self.assertEqual(log.read_bytes(), b'private-stderr')
+
+    def test_failure_mapping_holder_output_and_cleanup_uncertainty(self):
+        cases = {'child_timeout': 'fetch_timeout', 'child_output_limit': 'fetch_output_limit',
+                 'runtime_expansion_limit': 'cache_limit', 'runtime_entry_count_limit': 'cache_entry_limit'}
+        original = self.execute
+        for cause, expected in cases.items():
+            def fail(command, env, **kwargs):
+                if command[1] == 'fetch':
+                    kwargs['failure_capture'].data = b'private-marker'
+                    raise spike.Refused(cause)
+                return original(command, env, **kwargs)
+            self.run.side_effect = fail
+            log = self.root/(cause+'.log')
+            with self.subTest(cause=cause), self.assertRaisesRegex(spike.Refused, cause):
+                self.prepare(log)
+            row = self.report['fixture_dependencies']
+            self.assertEqual(row['failure'], expected)
+            self.assertTrue(row['process_cleanup'].endswith('group_absence_unverified'))
+            self.assertEqual(log.read_bytes(), b'private-marker')
+            self.assertNotIn('private-marker', json.dumps(self.report))
+            for child in ('full-tools-cargo-home', 'full-tools-fetch-target'):
+                (self.root/child).rmdir()
+            (self.root/'full-tools-compiler.json').unlink()
+
+    def test_compiler_version_and_host_are_exact(self):
+        for raw in (b'release: 1.97.0\nhost: x86_64-unknown-linux-gnu\n',
+                    b'release: 1.97.1\nhost: aarch64-unknown-linux-gnu\n'):
+            self.run.return_value = (0, raw)
+            self.run.side_effect = None
+            with self.subTest(raw=raw), self.assertRaisesRegex(spike.Refused, 'fixture_compiler_invalid'):
+                self.prepare()
+            for child in ('full-tools-cargo-home', 'full-tools-fetch-target'):
+                (self.root/child).rmdir()
+
+    def test_proxy_siblings_are_refused_before_version_execution(self):
+        cache = self.root/'cache-home'
+        cache.mkdir(mode=0o700)
+        rustup = self.root/'rustup'
+        rustup.write_bytes(b'proxy')
+        rustup.chmod(0o700)
+        for name in ('cargo', 'rustdoc'):
+            path = self.compiler/name
+            original = path.read_bytes()
+            path.write_bytes(b'proxy')
+            with self.subTest(name=name), patch.object(spike.shutil, 'which',
+                    side_effect=lambda selected, path=None: str(rustup) if selected == 'rustup'
+                    else str(self.compiler/selected)):
+                with self.assertRaisesRegex(spike.Refused, 'fixture_compiler_invalid'):
+                    spike.fixture_cache_snapshot(cache, self.env, self.compiler)
+            path.write_bytes(original)
+        self.run.assert_not_called()
+
+    def test_unreadable_or_changing_proxy_refuses(self):
+        rustup = self.root/'rustup'
+        rustup.write_bytes(b'proxy')
+        rustup.chmod(0o700)
+        selected = self.compiler/'rustc'
+        with patch.object(spike, 'digest', side_effect=PermissionError(13, 'private-path')):
+            with self.assertRaisesRegex(spike.Refused, 'fixture_compiler_invalid'):
+                spike.compiler_is_proxy(selected, rustup)
+        original = spike.digest
+        def changed(path):
+            value = original(path)
+            if path == selected:
+                selected.write_bytes(b'changed')
+            return value
+        with patch.object(spike, 'digest', side_effect=changed):
+            with self.assertRaisesRegex(spike.Refused, 'fixture_compiler_invalid'):
+                spike.compiler_is_proxy(selected, rustup)
+        self.run.assert_not_called()
+
+    def test_fetch_spawn_failure_never_claims_reaping_and_keeps_primary_error(self):
+        original = self.execute
+        error = OSError(13, 'private-path')
+        def fail(command, env, **kwargs):
+            if command[1] == 'fetch':
+                kwargs['failure_capture'].data = b'private-stderr'
+                raise error
+            return original(command, env, **kwargs)
+        self.run.side_effect = fail
+        log = self.root/'occupied.log'
+        log.write_bytes(b'preserved')
+        with self.assertRaises(OSError) as caught:
+            self.prepare(log)
+        self.assertIs(caught.exception, error)
+        row = self.report['fixture_dependencies']
+        self.assertEqual(row['failure'], 'fetch_failed')
+        self.assertEqual(row['process_cleanup'], 'spawn_or_cleanup_error_group_absence_unverified')
+        self.assertEqual(row['failure_log_error_type'], 'FileExistsError')
+        self.assertEqual(log.read_bytes(), b'preserved')
+        self.assertNotIn('private-path', json.dumps(self.report))
+
+    def test_version_probe_failures_never_receive_fetch_labels(self):
+        for error in (spike.Refused('child_timeout'), spike.Refused('child_output_limit'), OSError(13, 'private')):
+            self.run.side_effect = error
+            with self.subTest(error=type(error).__name__), self.assertRaises(type(error)):
+                self.prepare()
+            row = self.report['fixture_dependencies']
+            self.assertEqual(row['failure_phase'], 'compiler_versions')
+            self.assertEqual(row['failure'], 'fixture_compiler_invalid' if isinstance(error, spike.Refused) else 'PermissionError')
+            self.assertIsNone(row['process_cleanup'])
+            self.assertIsNone(row['exit_code'])
+            self.assertFalse(self.fetches)
+            for child in ('full-tools-cargo-home', 'full-tools-fetch-target'):
+                (self.root/child).rmdir()
+
+    def test_admission_oserror_and_postfetch_oserror_keep_their_phase(self):
+        original = spike.fixture_cache_snapshot
+        for phase in ('input_admission', 'post_fetch'):
+            values = [OSError(5, 'private')] if phase == 'input_admission' else [original, OSError(5, 'private')]
+            count = 0
+            def snapshot(*args):
+                nonlocal count
+                value = values[count]
+                count += 1
+                if isinstance(value, Exception):
+                    raise value
+                return value(*args)
+            with self.subTest(phase=phase), patch.object(spike, 'fixture_cache_snapshot', side_effect=snapshot):
+                with self.assertRaises(OSError):
+                    self.prepare()
+            row = self.report['fixture_dependencies']
+            self.assertEqual(row['failure_phase'], phase)
+            self.assertEqual(row['failure'], 'OSError')
+            self.assertEqual(row['exit_code'], 0 if phase == 'post_fetch' else None)
+            self.assertEqual(row['process_cleanup'],
+                             'leader_reaped_group_signal_attempted_group_absence_unverified' if phase == 'post_fetch' else None)
+            for child in ('full-tools-cargo-home', 'full-tools-fetch-target'):
+                (self.root/child).rmdir()
+            (self.root/'full-tools-compiler.json').unlink(missing_ok=True)
+
+    def test_fetch_interrupts_keep_cleanup_label_and_propagate(self):
+        original = self.execute
+        for cause in ('interrupted', 'total_timeout'):
+            def execute(command, env, **kwargs):
+                if command[1] == 'fetch':
+                    raise spike.Refused(cause)
+                return original(command, env, **kwargs)
+            self.run.side_effect = execute
+            with self.subTest(cause=cause), self.assertRaisesRegex(spike.Refused, cause):
+                self.prepare(self.root/'failure.log')
+            row = self.report['fixture_dependencies']
+            self.assertEqual(row['failure_phase'], 'fetch')
+            self.assertEqual(row['failure'], cause)
+            self.assertEqual(row['process_cleanup'], 'leader_reaped_group_signal_attempted_group_absence_unverified')
+            self.assertFalse((self.root/'failure.log').exists())
+            for child in ('full-tools-cargo-home', 'full-tools-fetch-target'):
+                (self.root/child).rmdir()
+            (self.root/'full-tools-compiler.json').unlink()
+
+    def test_final_cache_bound_keeps_successful_fetch_outcome(self):
+        with patch.object(spike, 'total_bytes', return_value=(512 << 20)+1):
+            with self.assertRaisesRegex(spike.Refused, 'runtime_expansion_limit'):
+                self.prepare()
+        row = self.report['fixture_dependencies']
+        self.assertEqual((row['failure'], row['failure_phase'], row['exit_code']), ('cache_limit', 'post_fetch', 0))
+        self.assertEqual(row['process_cleanup'], 'leader_reaped_group_signal_attempted_group_absence_unverified')
+
+    def test_post_suite_mutation_is_fatal_after_pass_but_preserves_failed_suite(self):
+        for status in (0, 1):
+            report = {'assertions': []}
+            with self.subTest(status=status), \
+                    patch.object(spike, 'test_compiler_directory', return_value=self.compiler), \
+                    patch.object(spike, 'linux_namespace_preflight'), \
+                    patch.object(spike, 'test_supervisor', side_effect=lambda env: env), \
+                    patch.object(spike, 'prepare_full_tools_fixture_cache', return_value=self.root/'stub-cache'), \
+                    patch.object(spike, 'verify_full_tools_fixture_cache',
+                                 side_effect=[None, spike.Refused('fixture_inputs_changed')]):
+                self.run.side_effect = None
+                self.run.return_value = (status, b'Ran 1 test in 0.1s\nFAILED (failures=1)\n')
+                expected = 'fixture_inputs_changed' if status == 0 else 'full_tools_suite_failed'
+                with self.assertRaisesRegex(spike.Refused, expected):
+                    spike.full_tools_acceptance(self.root/'python', self.env, self.root, report)
+                self.assertEqual(report['fixture_verification_failure'], 'fixture_inputs_changed')
+                self.assertEqual(report['full_tools_tests']['exit_code'], status)
+                self.assertEqual(report['full_tools_tests']['count'], 1)
+
+    def test_postcheck_interrupt_is_never_swallowed_after_failed_suite(self):
+        for cause in ('interrupted', 'total_timeout'):
+            report = {'assertions': []}
+            with self.subTest(cause=cause), \
+                    patch.object(spike, 'test_compiler_directory', return_value=self.compiler), \
+                    patch.object(spike, 'linux_namespace_preflight'), \
+                    patch.object(spike, 'test_supervisor', side_effect=lambda env: env), \
+                    patch.object(spike, 'prepare_full_tools_fixture_cache', return_value=self.root/'stub-cache'), \
+                    patch.object(spike, 'verify_full_tools_fixture_cache', side_effect=[None, spike.Refused(cause)]):
+                self.run.side_effect = None
+                self.run.return_value = (1, b'Ran 1 test in 0.1s\nFAILED (failures=1)\n')
+                with self.assertRaisesRegex(spike.Refused, cause):
+                    spike.full_tools_acceptance(self.root/'python', self.env, self.root, report)
+                self.assertEqual(report['full_tools_tests']['exit_code'], 1)
+                self.assertEqual(report['full_tools_tests']['count'], 1)
+
+    def test_verification_rejects_each_bound_input_and_cargo_config(self):
+        cache = self.prepare()
+        env = dict(self.env, PATH=str(self.compiler)+':'+self.env['PATH'])
+        original = spike.fixture_cache_snapshot
+        for key in ('source_sha256', 'manifest_sha256', 'lock_sha256', 'tool_sha256', 'tool_identity'):
+            changed = original(cache, env, self.compiler)
+            changed[key] = None
+            with self.subTest(key=key), patch.object(spike, 'fixture_cache_snapshot', return_value=changed):
+                with self.assertRaisesRegex(spike.Refused, 'fixture_inputs_changed'):
+                    spike.verify_full_tools_fixture_cache(cache, env, self.compiler, self.report)
+        (cache/'credentials.toml').symlink_to(self.root/'missing')
+        with self.assertRaisesRegex(spike.Refused, 'fixture_cargo_config'):
+            spike.verify_full_tools_fixture_cache(cache, env, self.compiler, self.report)
+
+    def test_private_provenance_permissions_and_symlink_are_refused(self):
+        cache = self.prepare()
+        env = dict(self.env, PATH=str(self.compiler)+':'+self.env['PATH'])
+        provenance = self.root/'full-tools-compiler.json'
+        provenance.chmod(0o644)
+        with self.assertRaisesRegex(spike.Refused, 'fixture_provenance_invalid'):
+            spike.verify_full_tools_fixture_cache(cache, env, self.compiler, self.report)
+        provenance.chmod(0o600)
+        backup = provenance.with_suffix('.saved')
+        provenance.rename(backup)
+        provenance.symlink_to(backup)
+        with self.assertRaises(OSError):
+            spike.verify_full_tools_fixture_cache(cache, env, self.compiler, self.report)
+
+    def test_hardlinked_and_copied_rustup_proxies_require_explicit_lookup(self):
+        rustup = self.root/'rustup'
+        rustup.write_bytes(b'proxy')
+        rustup.chmod(0o700)
+        proxy = self.root/'rustc'
+        for kind in ('hardlink', 'copy', 'symlink'):
+            if kind == 'hardlink':
+                os.link(rustup, proxy)
+            elif kind == 'copy':
+                proxy.write_bytes(rustup.read_bytes())
+                proxy.chmod(0o700)
+            else:
+                proxy.symlink_to(rustup)
+            with patch.object(spike.shutil, 'which', side_effect=[str(proxy), str(rustup)]), \
+                    patch.object(spike, 'compiler_lookup', return_value=(0, str(self.compiler/'rustc').encode())) as lookup:
+                selection = {}
+                self.assertEqual(spike.test_compiler_directory(selection=selection), self.compiler)
+                self.assertEqual(selection, {'kind': 'rustup_explicit_1.97.1'})
+                self.assertEqual(lookup.call_count, 1)
+                self.assertEqual(lookup.call_args.args[1]['RUSTUP_AUTO_INSTALL'], '0')
+            with patch.object(spike.shutil, 'which', side_effect=[str(proxy), str(rustup)]), \
+                    patch.object(spike, 'compiler_lookup', return_value=(1, b'')):
+                with self.assertRaisesRegex(spike.Refused, 'test_compiler_resolution_failed'):
+                    spike.test_compiler_directory()
+            proxy.unlink()
+        self.run.assert_not_called()
+
+    def test_lookup_output_cannot_be_another_proxy(self):
+        rustup = self.root/'rustup'
+        rustup.write_bytes(b'proxy')
+        rustup.chmod(0o700)
+        compiler = self.root/'rustc'
+        for kind in ('hardlink', 'copy'):
+            if kind == 'hardlink':
+                os.link(rustup, compiler)
+            else:
+                compiler.write_bytes(rustup.read_bytes())
+                compiler.chmod(0o700)
+            with self.subTest(kind=kind), patch.object(spike.shutil, 'which', side_effect=[str(compiler), str(rustup)]), \
+                    patch.object(spike, 'compiler_lookup', return_value=(0, str(compiler).encode())):
+                with self.assertRaisesRegex(spike.Refused, 'test_compiler_invalid'):
+                    spike.test_compiler_directory()
+            compiler.unlink()
+
+    def test_direct_compiler_and_missing_rustup_record_actual_decision(self):
+        selection = {}
+        with patch.object(spike.shutil, 'which', side_effect=[str(self.compiler/'rustc'), None]), \
+                patch.object(spike, 'compiler_lookup') as lookup:
+            self.assertEqual(spike.test_compiler_directory(selection=selection), self.compiler)
+        lookup.assert_not_called()
+        self.assertEqual(selection, {'kind': 'direct_pinned'})
+        proxy = self.root/'rustup'
+        proxy.write_bytes(b'proxy')
+        proxy.chmod(0o700)
+        with patch.object(spike.shutil, 'which', side_effect=[str(proxy), None]):
+            with self.assertRaisesRegex(spike.Refused, 'test_compiler_resolution_failed'):
+                spike.test_compiler_directory()
+
+    def test_wrong_cargo_and_rustdoc_versions_refuse_before_fetch(self):
+        original = self.execute
+        for wrong in ('cargo', 'rustdoc'):
+            def execute(command, env, **kwargs):
+                return (0, (wrong+' 1.97.0 (fixture)\n').encode()) if Path(command[0]).name == wrong else original(command, env, **kwargs)
+            self.run.side_effect = execute
+            with self.subTest(name=wrong), self.assertRaisesRegex(spike.Refused, 'fixture_compiler_invalid'):
+                self.prepare()
+            self.assertFalse(self.fetches)
+            self.assertIsNone(self.report['fixture_dependencies']['process_cleanup'])
+            for child in ('full-tools-cargo-home', 'full-tools-fetch-target'):
+                (self.root/child).rmdir()
+
+    def test_fixed_lookup_disables_auto_install(self):
+        with patch.object(spike, '_run_process', return_value=(1, b'')) as execute:
+            self.lookup(Path('/fixture/rustup'), {'HOME': '/fixture/home'})
+        self.assertEqual(execute.call_args.args[0], [Path('/fixture/rustup'), 'which', '--toolchain', '1.97.1', 'rustc'])
+        self.assertEqual(execute.call_args.args[1]['RUSTUP_AUTO_INSTALL'], '0')
+        self.assertEqual(execute.call_args.kwargs['cwd'], Path('/'))
+
+    def test_supervisor_and_probe_order_keeps_cache_test_only(self):
+        events = []
+        env = self.env
+        def probe(value, report):
+            events.append('probe')
+            self.assertNotIn('CARGO_HOME', value)
+            self.assertNotIn('MARMISH_TEST_SUPERVISOR', value)
+        def prep(value, *args, **kwargs):
+            events.append('prepare')
+            self.assertIs(value, env)
+            return self.root/'stub-cache'
+        with patch.object(spike, 'test_compiler_directory', return_value=self.compiler), \
+                patch.object(spike, 'linux_namespace_preflight', side_effect=probe), \
+                patch.object(spike, 'test_supervisor', side_effect=lambda value: dict(value, MARMISH_TEST_SUPERVISOR='verified')), \
+                patch.object(spike, 'prepare_full_tools_fixture_cache', side_effect=prep), \
+                patch.object(spike, 'verify_full_tools_fixture_cache') as verify:
+            self.run.side_effect = lambda command, child_env, **kwargs: (0, b'Ran 1 test in 0.1s\nOK\n')
+            spike.full_tools_acceptance(self.root/'python', env, self.root, self.report)
+        self.assertEqual(events, ['probe', 'prepare'])
+        suite_env = self.run.call_args.args[1]
+        self.assertEqual(suite_env['CARGO_HOME'], str(self.root/'stub-cache'))
+        self.assertEqual(suite_env['MARMISH_TEST_SUPERVISOR'], 'verified')
+        self.assertEqual(verify.call_count, 2)
+        self.assertNotIn('CARGO_HOME', env)
+
+    def test_workflow_pins_toolchain_only_for_managed_job(self):
+        workflow = (spike.REPO/'.github/workflows/installer-validation.yml').read_text()
+        jobs = re.split(r'^  ([a-z][a-z-]+):\n', workflow, flags=re.M)
+        blocks = dict(zip(jobs[1::2], jobs[2::2]))
+        job = blocks['legacy-managed-packaging']
+        expected = ('      - name: Provision pinned test-only fixture toolchain\n'
+                    '        uses: dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920\n'
+                    '        timeout-minutes: 5\n'
+                    '        with:\n'
+                    '          toolchain: 1.97.1\n')
+        self.assertEqual(job.count(expected), 1)
+        self.assertLess(job.index(expected), job.index('- name: Offline legacy managed packaging contract tests'))
+        self.assertLess(job.index(expected), job.index('- name: Validate pinned v0.1 runtime and published legacy archive'))
+        self.assertIn('    timeout-minutes: 30\n', job)
+        self.assertEqual(workflow.count('uses: dtolnay/rust-toolchain@'), 1)
+        self.assertTrue(all('rust-toolchain' not in block for name, block in blocks.items()
+                            if name != 'legacy-managed-packaging'))
+        self.assertEqual(workflow.count('permissions:'), 1)
+        self.assertIn('permissions:\n  contents: read\n', workflow)
+        self.assertNotIn('secrets:', workflow)
+        self.assertNotIn('${{ secrets.', workflow)
 
 
 class ManagedRuntimeTests(unittest.TestCase):
@@ -222,7 +706,9 @@ class ManagedRuntimeTests(unittest.TestCase):
         report = {'assertions': []}
         private = self.root / 'private.log'
         with patch.object(spike, 'run', return_value=(1, raw)), \
-                patch.object(spike, 'test_compiler_directory', return_value=self.root):
+                patch.object(spike, 'test_compiler_directory', return_value=self.root), \
+                patch.object(spike, 'prepare_full_tools_fixture_cache', return_value=self.root/'fixture-cache'), \
+                patch.object(spike, 'verify_full_tools_fixture_cache'):
             with self.assertRaisesRegex(spike.Refused, 'full_tools_suite_failed'):
                 spike.full_tools_acceptance(self.root / 'python', {}, self.root, report, private)
         self.assertNotIn('disposable-secret-value', json.dumps(report))
@@ -232,7 +718,8 @@ class ManagedRuntimeTests(unittest.TestCase):
 
     def test_compiler_resolves_rustup_without_inheriting_ambient_environment(self):
         shim = self.root / 'rustup'
-        shim.write_bytes(b'fixture')
+        shim.write_bytes(b'proxy')
+        shim.chmod(0o700)
         compiler = self.root / 'toolchain/bin/rustc'
         compiler.parent.mkdir(parents=True)
         compiler.write_bytes(b'fixture')
@@ -250,7 +737,7 @@ class ManagedRuntimeTests(unittest.TestCase):
             command, env = lookup.call_args.args
             self.assertEqual(command, shim)
             self.assertEqual(env, {'HOME': str(self.root), 'PATH': '/usr/bin:/bin',
-                                   'LANG': 'C', 'LC_ALL': 'C', **optional})
+                                   'LANG': 'C', 'LC_ALL': 'C', 'RUSTUP_AUTO_INSTALL': '0', **optional})
 
     def test_direct_compiler_ignores_unrelated_rustup(self):
         compiler = self.root / 'toolchain/bin/rustc'
@@ -258,7 +745,8 @@ class ManagedRuntimeTests(unittest.TestCase):
         compiler.write_bytes(b'fixture')
         compiler.chmod(0o700)
         unrelated = self.root / 'rustup'
-        unrelated.write_bytes(b'fixture')
+        unrelated.write_bytes(b'unrelated rustup')
+        unrelated.chmod(0o700)
         with patch.object(spike.shutil, 'which', side_effect=[str(compiler), str(unrelated)]), \
                 patch.object(spike, 'compiler_lookup') as lookup:
             self.assertEqual(spike.test_compiler_directory(), compiler.parent)
@@ -311,7 +799,9 @@ class ManagedRuntimeTests(unittest.TestCase):
         report = {'assertions': []}
         raw = b'ERROR: setUpClass (test_fixture.NativeTests)\nRan 2 tests in 0.1s\n'
         with patch.object(spike, 'run', return_value=(1, raw)), \
-                patch.object(spike, 'test_compiler_directory', return_value=self.root):
+                patch.object(spike, 'test_compiler_directory', return_value=self.root), \
+                patch.object(spike, 'prepare_full_tools_fixture_cache', return_value=self.root/'fixture-cache'), \
+                patch.object(spike, 'verify_full_tools_fixture_cache'):
             with self.assertRaises(spike.Refused):
                 spike.full_tools_acceptance(self.root / 'python', {}, self.root, report)
         self.assertEqual(report['full_tools_tests']['failed_tests'],
@@ -789,6 +1279,8 @@ class SelfHostedRuntimeTests(unittest.TestCase):
         with patch.object(spike.platform, 'system', return_value='Linux'), \
                 patch.object(spike, 'verified_helper_pair', return_value=pair), \
                 patch.object(spike, 'test_compiler_directory', return_value=self.root), \
+                patch.object(spike, 'prepare_full_tools_fixture_cache', return_value=self.root/'fixture-cache'), \
+                patch.object(spike, 'verify_full_tools_fixture_cache'), \
                 patch.object(spike, 'linux_namespace_preflight') as probe, \
                 patch.object(spike, 'run', return_value=(0, b'Ran 1 test in 0.1s')) as run:
             spike.full_tools_acceptance(self.root / 'python', env, self.root, {'assertions': []})
@@ -1006,6 +1498,8 @@ class ProgressDiagnosticTests(unittest.TestCase):
         report = {'assertions': []}
         env = spike.environment(self.root)
         with patch.object(spike, 'test_compiler_directory', return_value=self.root), \
+                patch.object(spike, 'prepare_full_tools_fixture_cache', return_value=self.root/'fixture-cache'), \
+                patch.object(spike, 'verify_full_tools_fixture_cache'), \
                 patch.object(spike, 'linux_namespace_preflight'), \
                 patch.object(spike, 'test_supervisor', side_effect=lambda value:dict(value, MARMISH_TEST_SUPERVISOR='fixture-only')), \
                 patch.object(spike, 'run', side_effect=invoke):
@@ -1022,6 +1516,7 @@ class ProgressDiagnosticTests(unittest.TestCase):
             expected = spike.environment(self.root)
             expected['PATH'] = str(self.root) + ':' + str(self.root) + ':/usr/bin:/bin:/usr/sbin:/sbin'
             expected['MARMISH_TEST_SUPERVISOR'] = 'fixture-only'
+            expected['CARGO_HOME'] = str(self.root/'fixture-cache')
             self.assertEqual(env, expected)
             return 0,b'test_ok (test_fixture.Suite.test_ok) ... ok\nRan 1 test in 0.1s\nOK\n'
         report = self.suite_report(invoke)
@@ -1044,6 +1539,8 @@ class ProgressDiagnosticTests(unittest.TestCase):
             return real_run([sys.executable,'-I','-c',code],child_env,timeout=3,
                             capture=kwargs['capture'],failure_capture=kwargs['failure_capture'])
         with patch.object(spike,'test_compiler_directory',return_value=self.root), \
+                patch.object(spike, 'prepare_full_tools_fixture_cache', return_value=self.root/'fixture-cache'), \
+                patch.object(spike, 'verify_full_tools_fixture_cache'), \
                 patch.object(spike,'linux_namespace_preflight'), \
                 patch.object(spike,'test_supervisor',side_effect=lambda value:dict(value)), \
                 patch.object(spike,'run',side_effect=invoke):
@@ -1063,6 +1560,8 @@ class ProgressDiagnosticTests(unittest.TestCase):
                                       (KeyboardInterrupt(),None)]:
             with self.subTest(error=type(parse_error).__name__), \
                     patch.object(spike,'test_compiler_directory',return_value=self.root), \
+                    patch.object(spike, 'prepare_full_tools_fixture_cache', return_value=self.root/'fixture-cache'), \
+                    patch.object(spike, 'verify_full_tools_fixture_cache'), \
                     patch.object(spike,'linux_namespace_preflight'), \
                     patch.object(spike,'test_supervisor',side_effect=lambda value:dict(value)), \
                     patch.object(spike,'run',side_effect=spike.Refused('child_timeout')), \

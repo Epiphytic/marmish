@@ -74,6 +74,16 @@ including real libc and setsid operations. Full hosted reference coverage and
 global process-cleanup observation remain unqualified; this changes no native
 runtime behavior.
 
+The optional reference harness now prepares a fresh, pinned test-only dependency
+cache before its existing locked offline fixture builds. A local managed-Python
+matched control reproduced an empty-cache setup failure, then passed the same
+test and all six fixture tests after preparation. All 27 cache contracts also
+passed on managed Python. See [the phase](phases/legacy-offline-fixture-cache.md),
+[reviews](reviews/legacy-offline-fixture-cache.md) and
+[validation limits](validation/legacy-offline-fixture-cache.md). This adds no
+Python, Cargo or namespace prerequisite to installed Rust Marmish; full hosted
+reference-suite and platform validation remain pending.
+
 ## Historical v0.2.3 publication
 
 **Native v0.2.3 was released.** Source is
