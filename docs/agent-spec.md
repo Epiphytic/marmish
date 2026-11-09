@@ -55,17 +55,30 @@ all cleanup proof predicates while adding precise debug-only observations and
 100 targeted repetitions. It is not a runtime correction or release qualification;
 the cause remains unknown and publication stays held.
 
-Fresh candidate42653492263/1 at `33138eb` failed the macOS debug installed-feature
-`final_handle_drop_releases_full_unacked_output_race` test with an initial TERM
-`proof-held/darwin-held-status` rejection; the returned wait status category was
-not recorded, and its cause remains unknown. The reviewed
-[held-status diagnostic increment](phases/macos-held-status-diagnostics.md)
-adds failure-only closed wait categories and a separate finite diagnostic
-workflow. It changes no cleanup predicate, syscall, signal, grace or fixture.
-Separate exact-source stress42653573013/1 passed its retained checks, including
-100 installed-feature authority iterations and 80 default-feature cleanup
-repetitions; those passes do not qualify the failed full installed-feature
-suite. Diagnostic execution is not release qualification or proof of a fix.
+Candidate [42653492263/1](https://github.com/Epiphytic/marmish/actions/runs/42653492263)
+at `33138eb` failed the macOS debug installed-feature
+`final_handle_drop_releases_full_unacked_output_race` test: 906 passed, one
+failed and three ignored. Both Linux package jobs passed, but the downstream
+cohorts were skipped; the candidate remains unqualified. Separate exact-source
+stress [42653573013/1](https://github.com/Epiphytic/marmish/actions/runs/42653573013)
+passed 100 installed-feature authority iterations and 80 default-feature cleanup
+repetitions. Those different fixtures and features do not substitute for the
+failed full installed-feature suite.
+
+The reviewed [held-status diagnostic increment](phases/macos-held-status-diagnostics.md)
+adds failure-only closed wait categories without changing cleanup predicates,
+syscalls, signals, grace or fixtures. Its first hosted run failed the worker
+metadata guard before tests; the corrected guard at `e461754` then admitted
+[run42666220530/1](https://github.com/Epiphytic/marmish/actions/runs/42666220530).
+The full macOS installed-feature suite passed 907/0/3 (passed/failed/ignored),
+but repetition 22 of the exact race failed after 21 passes; 78 were not run.
+The initial TERM proof observed `wait_pid=zero wait_code=zero`: no exit status
+was available from that successful nonblocking wait. The kernel cause remains
+unknown. See the [sanitized evidence](validation/macos-initial-no-status.md).
+At the 2026-11-09 17:58:50 UTC evidence cutoff, the proposed runtime correction
+under `marmish-d97.3` was in design review, with no runtime fix approved or
+implemented. Diagnostic execution is not release qualification; publication
+and operation benchmarks remain pending their required gates.
 
 At subsequent source `86119f1`, ordinary candidate 42594063209/1 and exact-source
 macOS regression 42594082226/1 passed. Installed qualification stopped at
@@ -1205,11 +1218,19 @@ explicit reduced scope on both Linux architectures: 1,024 total tests including
 explicitly unselected. macOS passed its default full legacy packaging scope with
 1,016 total tests including45 skips and final completion=true; its guarantee
 remains `uv_offline_only_not_independently_enforced`. These results qualify only
-that source and those legacy scopes. The nine retired mock tests imply expected
-new totals of1,015/11 skips on Linux and1,007/45 skips on macOS; actual results on
-the retirement commit are still required. The capable manual two-test lane has
-not executed and would not alone qualify full legacy packaging. Installed Rust
-Marmish needs no namespace privileges.
+that source and those legacy scopes. The retirement source R (`ae309a5`)
+subsequently passed all six jobs in
+[run42652134004, attempt1](https://github.com/Epiphytic/marmish/actions/runs/42652134004).
+Both Linux architectures completed 1,015 total tests including11 skips, exit0,
+with explicit reduced-reference scope, full legacy packaging complete=false,
+and independent offline retention unselected and unmet. macOS completed 1,007
+total tests including45 skips, exit0, with default full legacy packaging
+complete=true and the same `uv_offline_only_not_independently_enforced`
+limitation. These actual totals are G's totals minus the nine retired mock
+tests, with skip counts unchanged. The capable manual two-test lane has not
+executed and would not alone qualify full legacy packaging. Full Linux
+namespace-capable packaging remains unqualified on hosted infrastructure.
+Installed Rust Marmish needs no namespace privileges.
 
 The [legacy HTTP worker cleanup correction](phases/legacy-http-watchdog.md)
 handles Darwin EPERM only after an existing double-observation proof confirms
@@ -1224,10 +1245,20 @@ run above; the underlying kernel reason for the historical EPERM is not
 established. This changes reference and
 installed-test tooling, not native Rust command execution.
 
-Diagnostic retirement is a separate source increment R, not the final release
-freeze. A later local native test at accepted G (`2b951ae`) failed with
-`AlreadyOpen` in `store::tests::denial_precheck_does_not_exhaust_execute_tokens`;
-the competing holder remains unknown. Separately reviewed test-only fixture
-correction under `marmish-d97.1` follows retirement. The final corrected source A
-requires fresh native/release qualification; neither G's results nor R's pending
-legacy checks qualify that later source. No native gate is waived.
+Diagnostic retirement R is a separate source increment; its successful legacy
+checks do not qualify a later source. A local native test at accepted G
+(`2b951ae`) failed with `AlreadyOpen` in
+`store::tests::denial_precheck_does_not_exhaust_execute_tokens`; the actual
+competing holder remains unknown. The
+[fixture ownership correction](phases/native-fixture-frontend.md), independently
+[reviewed under `marmish-d97.1`](reviews/native-fixture-frontend.md), is now
+implemented in N, source A (`33138eb`). It retains and transfers the same
+frontend guard from fixture initialization into the engine, removing the
+fixture handoff gap while preserving the wrong-master test's deliberate early
+release. The regression and descriptor-alias control establish fixture
+ownership behavior, not the historical holder. This changes test fixtures
+only; production locking, retries, timeouts and thread counts are unchanged.
+The later exact-A candidate failed the separate macOS cleanup race described
+above. G's and R's legacy results cannot substitute for fresh native/release
+qualification of a corrected source. No native gate is waived, and no operation
+benchmark or release qualification result is claimed here.
