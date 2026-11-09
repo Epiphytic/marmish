@@ -1,6 +1,6 @@
 //! Darwin APIs; native runner tests remain the authority for filesystem support.
 use super::*;
-use crate::process::diagnostic::{Context, DarwinStage as Ds, Failure, Staged};
+use crate::process::diagnostic::{Context, DarwinStage as Ds, Failure, ProofAttempt, Staged};
 use std::ffi::CString;
 use std::mem::{size_of, zeroed};
 
@@ -298,7 +298,57 @@ fn held_exit(pid: i32) -> Staged<(i32, i32, i32)> {
     }
     Ok((pid, info.si_code, unsafe { info.si_status() }))
 }
-fn zombie_members(group: i32) -> Staged<Vec<ZombieIdentity>> {
+#[derive(Clone, Copy)]
+enum SnapshotPass {
+    First,
+    Second,
+}
+enum ProofFailure {
+    Hard(Failure),
+    IncompleteSnapshot(Failure),
+}
+type ProofResult<T> = std::result::Result<T, ProofFailure>;
+impl From<Failure> for ProofFailure {
+    fn from(failure: Failure) -> Self {
+        Self::Hard(failure)
+    }
+}
+impl ProofFailure {
+    fn context(self, context: Context) -> Self {
+        match self {
+            Self::Hard(failure) => Self::Hard(failure.context(context)),
+            Self::IncompleteSnapshot(failure) => Self::IncompleteSnapshot(failure.context(context)),
+        }
+    }
+    fn into_failure(self, _attempt: ProofAttempt) -> Failure {
+        let failure = match self {
+            Self::Hard(failure) | Self::IncompleteSnapshot(failure) => failure,
+        };
+        #[cfg(debug_assertions)]
+        let failure = failure.with_proof_attempt(_attempt);
+        failure
+    }
+}
+fn member_failure(failure: Failure, pid: i32, group: i32, pass: SnapshotPass) -> ProofFailure {
+    #[cfg(debug_assertions)]
+    let failure = failure.with_bsd_member(pid == group);
+    if matches!(pass, SnapshotPass::First) && pid != group && failure.is_bsd_read_esrch() {
+        ProofFailure::IncompleteSnapshot(failure)
+    } else {
+        ProofFailure::Hard(failure)
+    }
+}
+// A failed first snapshot invalidates the whole proof, never just one member.
+// This cap is two complete observations, not a wait or an extra cleanup grace.
+fn complete_zombie_proof(mut observe: impl FnMut() -> ProofResult<()>) -> Staged<()> {
+    match observe() {
+        Err(ProofFailure::IncompleteSnapshot(_)) => {
+            observe().map_err(|failure| failure.into_failure(ProofAttempt::Two))
+        }
+        result => result.map_err(|failure| failure.into_failure(ProofAttempt::One)),
+    }
+}
+fn zombie_members(group: i32, pass: SnapshotPass) -> ProofResult<Vec<ZombieIdentity>> {
     let mut pids = [0i32; 257];
     let capacity = std::mem::size_of_val(&pids) as i32;
     let count = unsafe {
@@ -311,18 +361,18 @@ fn zombie_members(group: i32) -> Staged<Vec<ZombieIdentity>> {
     };
     if count <= 0 {
         let errno = std::io::Error::last_os_error().raw_os_error();
-        return Err(Failure::darwin(
+        return Err(ProofFailure::Hard(Failure::darwin(
             EngineError::RecoveryUncertain,
             Ds::MembersRead,
             errno,
-        ));
+        )));
     }
     if count >= capacity || !(count as usize).is_multiple_of(size_of::<i32>()) {
-        return Err(Failure::darwin(
+        return Err(ProofFailure::Hard(Failure::darwin(
             EngineError::RecoveryUncertain,
             Ds::MembersCount,
             None,
-        ));
+        )));
     }
     let pids = &mut pids[..count as usize / size_of::<i32>()];
     pids.sort_unstable();
@@ -330,14 +380,17 @@ fn zombie_members(group: i32) -> Staged<Vec<ZombieIdentity>> {
         || pids.windows(2).any(|p| p[0] == p[1])
         || pids.iter().filter(|pid| **pid == group).count() != 1
     {
-        return Err(Failure::darwin(
+        return Err(ProofFailure::Hard(Failure::darwin(
             EngineError::RecoveryUncertain,
             Ds::MembersIds,
             None,
-        ));
+        )));
     }
     pids.iter()
-        .map(|pid| zombie_identity(*pid, group))
+        .map(|pid| {
+            zombie_identity(*pid, group)
+                .map_err(|failure| member_failure(failure, *pid, group, pass))
+        })
         .collect()
 }
 /// EPERM is acceptable only for an unchanged, entirely terminal owned group.
@@ -347,61 +400,65 @@ pub(super) fn owned_zombie_group(identity: &ProcessIdentity, group: i32) -> Resu
     owned_zombie_group_staged(identity, group).map_err(|failure| failure.error)
 }
 pub(super) fn owned_zombie_group_staged(identity: &ProcessIdentity, group: i32) -> Staged<()> {
+    complete_zombie_proof(|| owned_zombie_group_attempt(identity, group))
+}
+fn owned_zombie_group_attempt(identity: &ProcessIdentity, group: i32) -> ProofResult<()> {
     let uid = unsafe { libc::getuid() };
     if group <= 1 || group != identity.pid || uid == 0 || uid != unsafe { libc::geteuid() } {
-        return Err(Failure::darwin(
+        return Err(ProofFailure::Hard(Failure::darwin(
             EngineError::RecoveryUncertain,
             Ds::ProofGuard,
             None,
-        ));
+        )));
     }
     let exit = held_exit(group).map_err(|failure| failure.context(Context::ProofHeld))?;
     if owned_child_identity_and_group_staged(group)
         .map_err(|failure| failure.context(Context::ProofOwner))?
         != (identity.clone(), group)
     {
-        return Err(Failure::darwin(
+        return Err(ProofFailure::Hard(Failure::darwin(
             EngineError::RecoveryUncertain,
             Ds::ProofIdentity,
             None,
-        ));
+        )));
     }
     let leader =
         zombie_identity(group, group).map_err(|failure| failure.context(Context::ProofLeader))?;
-    let first =
-        zombie_members(group).map_err(|failure| failure.context(Context::ProofFirstMembers))?;
+    let first = zombie_members(group, SnapshotPass::First)
+        .map_err(|failure| failure.context(Context::ProofFirstMembers))?;
     if !first.iter().any(|member| member == &leader) {
-        return Err(Failure::darwin(
+        return Err(ProofFailure::Hard(Failure::darwin(
             EngineError::RecoveryUncertain,
             Ds::ProofLeaderMissing,
             None,
-        ));
+        )));
     }
     if first
-        != zombie_members(group).map_err(|failure| failure.context(Context::ProofSecondMembers))?
+        != zombie_members(group, SnapshotPass::Second)
+            .map_err(|failure| failure.context(Context::ProofSecondMembers))?
     {
-        return Err(Failure::darwin(
+        return Err(ProofFailure::Hard(Failure::darwin(
             EngineError::RecoveryUncertain,
             Ds::ProofMembersChanged,
             None,
-        ));
+        )));
     }
     if exit != held_exit(group).map_err(|failure| failure.context(Context::ProofFinalHeld))? {
-        return Err(Failure::darwin(
+        return Err(ProofFailure::Hard(Failure::darwin(
             EngineError::RecoveryUncertain,
             Ds::ProofExitChanged,
             None,
-        ));
+        )));
     }
     if leader
         != zombie_identity(group, group)
             .map_err(|failure| failure.context(Context::ProofFinalLeader))?
     {
-        return Err(Failure::darwin(
+        return Err(ProofFailure::Hard(Failure::darwin(
             EngineError::RecoveryUncertain,
             Ds::ProofLeaderChanged,
             None,
-        ));
+        )));
     }
     Ok(())
 }
@@ -723,6 +780,231 @@ mod tests {
         info.pbi_start_tvusec = 20;
         info.pbi_status = libc::SZOMB;
         info
+    }
+    fn incomplete_read(error: EngineError) -> ProofFailure {
+        member_failure(
+            Failure::darwin(error, Ds::BsdRead, Some(libc::ESRCH)),
+            42,
+            41,
+            SnapshotPass::First,
+        )
+    }
+    // Synthetic complete-attempt outcomes exercise the production cap, not FFI.
+    fn proof_script(outcomes: Vec<ProofResult<()>>) -> (Staged<()>, Vec<usize>) {
+        let mut outcomes = outcomes.into_iter();
+        let mut calls = Vec::new();
+        let result = complete_zombie_proof(|| {
+            calls.push(calls.len() + 1);
+            outcomes.next().expect("unexpected extra proof attempt")
+        });
+        (result, calls)
+    }
+    #[test]
+    fn zombie_proof_restart_classifier_truth_table() {
+        for pass in [SnapshotPass::First, SnapshotPass::Second] {
+            for pid in [41, 42] {
+                for errno in [None, Some(libc::ESRCH), Some(libc::EPERM), Some(libc::EIO)] {
+                    let failure =
+                        Failure::darwin(EngineError::WorkerUnavailable, Ds::BsdRead, errno);
+                    let expected = matches!(pass, SnapshotPass::First)
+                        && pid != 41
+                        && errno == Some(libc::ESRCH);
+                    assert_eq!(
+                        matches!(
+                            member_failure(failure, pid, 41, pass),
+                            ProofFailure::IncompleteSnapshot(_)
+                        ),
+                        expected,
+                    );
+                }
+            }
+        }
+        // Nonleader negatives avoid vacuously passing the leader gate. These
+        // synthetic stages test classification, not production reachability.
+        for stage in [
+            Ds::InvalidPid,
+            Ds::BsdMetadata,
+            Ds::StartTime,
+            Ds::BootId,
+            Ds::ChildGroup,
+            Ds::ChildParent,
+            Ds::ZombieGroup,
+            Ds::ZombieStatus,
+            Ds::HeldWait,
+            Ds::HeldStatus,
+            Ds::MembersRead,
+            Ds::MembersCount,
+            Ds::MembersIds,
+            Ds::ProofGuard,
+            Ds::ProofIdentity,
+            Ds::ProofLeaderMissing,
+            Ds::ProofMembersChanged,
+            Ds::ProofExitChanged,
+            Ds::ProofLeaderChanged,
+        ] {
+            let failure = Failure::darwin(EngineError::RecoveryUncertain, stage, Some(libc::ESRCH));
+            assert!(matches!(
+                member_failure(failure, 42, 41, SnapshotPass::First),
+                ProofFailure::Hard(_)
+            ));
+        }
+        for (group, status) in [(41, 2), (0, libc::SZOMB), (42, libc::SZOMB)] {
+            let mut info = zombie_info();
+            info.pbi_pid = 42;
+            info.pbi_pgid = group;
+            info.pbi_status = status;
+            let failure = zombie_identity_from_info(&info, 41)
+                .err()
+                .expect("invalid member accepted");
+            assert!(matches!(
+                member_failure(failure, 42, 41, SnapshotPass::First),
+                ProofFailure::Hard(_)
+            ));
+        }
+    }
+    #[test]
+    fn zombie_proof_restart_context_and_detail_preservation() {
+        for context in [Context::ProofFirstMembers, Context::ProofSecondMembers] {
+            for incomplete in [false, true] {
+                let failure = member_failure(
+                    Failure::darwin(
+                        EngineError::WorkerUnavailable,
+                        Ds::BsdRead,
+                        Some(libc::ESRCH),
+                    ),
+                    42,
+                    41,
+                    if incomplete {
+                        SnapshotPass::First
+                    } else {
+                        SnapshotPass::Second
+                    },
+                )
+                .context(context);
+                assert_eq!(
+                    matches!(&failure, ProofFailure::IncompleteSnapshot(_)),
+                    incomplete
+                );
+                #[cfg(debug_assertions)]
+                match &failure {
+                    ProofFailure::Hard(inner) | ProofFailure::IncompleteSnapshot(inner) => {
+                        assert_eq!(inner.proof_detail().2, None);
+                    }
+                }
+                let failure = failure.into_failure(ProofAttempt::Two);
+                assert!(matches!(failure.error, EngineError::WorkerUnavailable));
+                assert!(failure.is_bsd_read_esrch());
+                #[cfg(debug_assertions)]
+                assert_eq!(
+                    failure.proof_detail(),
+                    (
+                        context,
+                        Some(crate::process::diagnostic::MemberKind::Other),
+                        Some(ProofAttempt::Two)
+                    )
+                );
+            }
+        }
+    }
+    #[test]
+    fn zombie_proof_restart_success_first_attempt() {
+        let (result, calls) = proof_script(vec![Ok(())]);
+        assert!(result.is_ok());
+        assert_eq!(calls, [1]);
+    }
+    #[test]
+    fn zombie_proof_restart_hard_first_attempt() {
+        for stage in [
+            Ds::ProofIdentity,
+            Ds::ProofMembersChanged,
+            Ds::ZombieStatus,
+            Ds::HeldWait,
+        ] {
+            let (result, calls) = proof_script(vec![Err(Failure::darwin(
+                EngineError::RecoveryUncertain,
+                stage,
+                None,
+            )
+            .into())]);
+            let failure = result.expect_err("hard proof accepted");
+            assert!(matches!(failure.error, EngineError::RecoveryUncertain));
+            assert_eq!(calls, [1]);
+            #[cfg(debug_assertions)]
+            assert_eq!(failure.proof_detail().2, Some(ProofAttempt::One));
+        }
+    }
+    #[test]
+    fn zombie_proof_restart_incomplete_then_success() {
+        let (result, calls) = proof_script(vec![
+            Err(incomplete_read(EngineError::WorkerUnavailable)),
+            Ok(()),
+        ]);
+        assert!(result.is_ok());
+        assert_eq!(calls, [1, 2]);
+        // Fresh locals come from calling the same complete proof function;
+        // this synthetic test verifies orchestration, not snapshot contents.
+    }
+    #[test]
+    fn zombie_proof_restart_incomplete_twice() {
+        // Distinct synthetic errors make second-failure preservation observable
+        // in release too. Actual BSD reads always return WorkerUnavailable.
+        let (result, calls) = proof_script(vec![
+            Err(incomplete_read(EngineError::WorkerUnavailable)),
+            Err(incomplete_read(EngineError::RecoveryUncertain)),
+        ]);
+        let failure = result.expect_err("incomplete proof accepted");
+        assert!(matches!(failure.error, EngineError::RecoveryUncertain));
+        assert_eq!(calls, [1, 2]);
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            failure.proof_detail(),
+            (
+                Context::Probe,
+                Some(crate::process::diagnostic::MemberKind::Other),
+                Some(ProofAttempt::Two)
+            )
+        );
+    }
+    #[test]
+    fn zombie_proof_restart_incomplete_then_hard() {
+        for stage in [
+            Ds::BsdMetadata,
+            Ds::HeldWait,
+            Ds::ProofIdentity,
+            Ds::ProofMembersChanged,
+            Ds::MembersIds,
+            Ds::ProofExitChanged,
+            Ds::ProofLeaderChanged,
+        ] {
+            let (result, calls) = proof_script(vec![
+                Err(incomplete_read(EngineError::WorkerUnavailable)),
+                Err(Failure::darwin(EngineError::RecoveryUncertain, stage, None).into()),
+            ]);
+            assert!(matches!(
+                result.map_err(|failure| failure.error),
+                Err(EngineError::RecoveryUncertain)
+            ));
+            assert_eq!(calls, [1, 2]);
+        }
+        for (group, status) in [(41, 2), (42, libc::SZOMB)] {
+            let mut info = zombie_info();
+            info.pbi_pid = 42;
+            info.pbi_pgid = group;
+            info.pbi_status = status;
+            let failure = zombie_identity_from_info(&info, 41)
+                .err()
+                .expect("invalid member accepted");
+            let hard = member_failure(failure, 42, 41, SnapshotPass::First);
+            let (result, calls) = proof_script(vec![
+                Err(incomplete_read(EngineError::WorkerUnavailable)),
+                Err(hard),
+            ]);
+            assert!(matches!(
+                result.map_err(|failure| failure.error),
+                Err(EngineError::RecoveryUncertain)
+            ));
+            assert_eq!(calls, [1, 2]);
+        }
     }
     #[test]
     fn zombie_validator_retains_identity_and_rejects_group_or_live_status() {

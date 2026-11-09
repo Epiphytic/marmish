@@ -40,7 +40,7 @@ pub(crate) enum DarwinStage {
 }
 
 #[cfg(target_os = "macos")]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Context {
     #[cfg(debug_assertions)]
     Probe,
@@ -53,6 +53,21 @@ pub(crate) enum Context {
     ProofSecondMembers,
     ProofFinalHeld,
     ProofFinalLeader,
+}
+
+// This closed classification is part of Darwin proof control flow in BOTH
+// profiles. Diagnostic stage/errno fields below remain debug-only.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+enum ObservationClass {
+    Hard,
+    BsdReadEsrch,
+}
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProofAttempt {
+    One,
+    Two,
 }
 
 #[cfg(all(debug_assertions, target_os = "macos"))]
@@ -72,6 +87,12 @@ pub(crate) struct ZombieDetail {
 
 pub(crate) struct Failure {
     pub(crate) error: EngineError,
+    #[cfg(target_os = "macos")]
+    observation: ObservationClass,
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    bsd_member: Option<MemberKind>,
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    proof_attempt: Option<ProofAttempt>,
     #[cfg(debug_assertions)]
     stage: Stage,
     #[cfg(all(debug_assertions, target_os = "macos"))]
@@ -86,6 +107,12 @@ impl Failure {
     pub(crate) fn new(error: EngineError, _stage: Stage, _errno: Option<i32>) -> Self {
         Self {
             error,
+            #[cfg(target_os = "macos")]
+            observation: ObservationClass::Hard,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            bsd_member: None,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            proof_attempt: None,
             #[cfg(debug_assertions)]
             stage: _stage,
             #[cfg(all(debug_assertions, target_os = "macos"))]
@@ -123,7 +150,42 @@ impl Failure {
     }
     #[cfg(target_os = "macos")]
     pub(crate) fn darwin(error: EngineError, stage: DarwinStage, errno: Option<i32>) -> Self {
-        Self::new(error, Stage::Darwin(stage), errno)
+        Self {
+            observation: if matches!(stage, DarwinStage::BsdRead) && errno == Some(libc::ESRCH) {
+                ObservationClass::BsdReadEsrch
+            } else {
+                ObservationClass::Hard
+            },
+            ..Self::new(error, Stage::Darwin(stage), errno)
+        }
+    }
+    #[cfg(target_os = "macos")]
+    pub(crate) fn is_bsd_read_esrch(&self) -> bool {
+        matches!(self.observation, ObservationClass::BsdReadEsrch)
+    }
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    pub(crate) fn with_bsd_member(self, leader: bool) -> Self {
+        let bsd_member = if matches!(self.stage, Stage::Darwin(DarwinStage::BsdRead)) {
+            Some(if leader {
+                MemberKind::Leader
+            } else {
+                MemberKind::Other
+            })
+        } else {
+            None
+        };
+        Self { bsd_member, ..self }
+    }
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    pub(crate) fn with_proof_attempt(self, attempt: ProofAttempt) -> Self {
+        Self {
+            proof_attempt: Some(attempt),
+            ..self
+        }
+    }
+    #[cfg(all(test, debug_assertions, target_os = "macos"))]
+    pub(crate) fn proof_detail(&self) -> (Context, Option<MemberKind>, Option<ProofAttempt>) {
+        (self.context, self.bsd_member, self.proof_attempt)
     }
 }
 #[derive(Clone, Copy)]
@@ -137,6 +199,10 @@ pub(super) enum Origin {
 #[cfg(debug_assertions)]
 struct Record {
     origin: Origin,
+    #[cfg(target_os = "macos")]
+    bsd_member: Option<MemberKind>,
+    #[cfg(target_os = "macos")]
+    proof_attempt: Option<ProofAttempt>,
     stage: Stage,
     #[cfg(all(debug_assertions, target_os = "macos"))]
     context: Context,
@@ -148,6 +214,10 @@ struct Record {
 fn record(result: &Staged<()>, origin: Origin) -> Option<Record> {
     result.as_ref().err().map(|failure| Record {
         origin,
+        #[cfg(target_os = "macos")]
+        bsd_member: failure.bsd_member,
+        #[cfg(target_os = "macos")]
+        proof_attempt: failure.proof_attempt,
         stage: failure.stage,
         #[cfg(target_os = "macos")]
         context: failure.context,
@@ -240,8 +310,22 @@ impl Record {
         });
         #[cfg(not(target_os = "macos"))]
         let detail = "";
+        #[cfg(target_os = "macos")]
+        let member = match self.bsd_member {
+            Some(MemberKind::Leader) => " member=leader",
+            Some(MemberKind::Other) => " member=other",
+            None => "",
+        };
+        #[cfg(target_os = "macos")]
+        let attempt = match self.proof_attempt {
+            Some(ProofAttempt::One) => " proof_attempt=1",
+            Some(ProofAttempt::Two) => " proof_attempt=2",
+            None => "",
+        };
+        #[cfg(not(target_os = "macos"))]
+        let (member, attempt) = ("", "");
         format!(
-            "marmish-engine-signal-failure origin={origin} stage={context}{} errno={errno}{detail}\n",
+            "marmish-engine-signal-failure origin={origin} stage={context}{} errno={errno}{detail}{member}{attempt}\n",
             self.stage.label()
         )
     }
@@ -326,6 +410,41 @@ mod tests {
                 assert_eq!(text.lines().count(), 1);
             }
         }
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn member_read_records_discriminate_final_attempt_without_identifiers() {
+        for (leader, label) in [(true, "leader"), (false, "other")] {
+            for (attempt, number) in [(ProofAttempt::One, 1), (ProofAttempt::Two, 2)] {
+                let failure = Failure::darwin(
+                    EngineError::WorkerUnavailable,
+                    DarwinStage::BsdRead,
+                    Some(libc::ESRCH),
+                )
+                .with_bsd_member(leader)
+                .context(Context::ProofFirstMembers)
+                .with_proof_attempt(attempt);
+                let text = record(&Err(failure), Origin::Kill).unwrap().format();
+                assert_eq!(
+                    text,
+                    format!(
+                        "marmish-engine-signal-failure origin=kill stage=proof-first-members/darwin-bsd-read errno={} member={label} proof_attempt={number}\n",
+                        libc::ESRCH
+                    )
+                );
+                assert!(text.len() < 512);
+                assert_eq!(text.lines().count(), 1);
+            }
+        }
+        let failure = Failure::darwin(
+            EngineError::WorkerUnavailable,
+            DarwinStage::BsdMetadata,
+            None,
+        )
+        .with_bsd_member(false);
+        let text = record(&Err(failure), Origin::Kill).unwrap().format();
+        assert!(!text.contains("member="));
+        assert!(!text.contains("proof_attempt="));
     }
     #[cfg(all(debug_assertions, target_os = "macos"))]
     #[test]

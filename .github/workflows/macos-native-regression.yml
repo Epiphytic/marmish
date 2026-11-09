@@ -82,6 +82,16 @@ jobs:
           echo 'authority diagnostics stage=sdk_check_passed'
           log=$(mktemp "$RUNNER_TEMP/marmish-authority-diagnostics.XXXXXX")
           trap 'rm -f "$log"' EXIT
+          echo 'authority diagnostics stage=deterministic_proof_tests'
+          cargo test --locked -p marmish-engine --lib platform::macos::tests::zombie_proof_restart_ -- --nocapture 2>&1 | tee "$log"
+          grep -Eq '^test result: ok\. 7 passed; 0 failed; 0 ignored;' "$log"
+          test "$(grep -c '^test result:' "$log")" -eq 1
+          echo 'authority diagnostics stage=deterministic_proof_tests_debug_passed'
+          echo 'authority diagnostics stage=deterministic_proof_tests_release'
+          cargo test --locked --release -p marmish-engine --lib platform::macos::tests::zombie_proof_restart_ -- --nocapture 2>&1 | tee "$log"
+          grep -Eq '^test result: ok\. 7 passed; 0 failed; 0 ignored;' "$log"
+          test "$(grep -c '^test result:' "$log")" -eq 1
+          echo 'authority diagnostics stage=deterministic_proof_tests_release_passed'
           test_name=stream_runner::tests::authority_withdrawal_halts_queued_input_irreversibly_without_cancel
           echo 'authority diagnostics stage=tests'
           for iteration in {1..100}; do

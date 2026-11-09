@@ -60,7 +60,22 @@ test('optional authority observation checks the SDK before exactly matched insta
   assert.ok(observation.includes('cargo test --locked -p marmish-native --features installed-checks --lib "$test_name" -- --exact --nocapture 2>&1 | tee "$log"'));
   assert.ok(observation.includes("grep -Eq '^test result: ok\\. 1 passed; 0 failed; 0 ignored;' \"$log\""));
   assert.ok(observation.includes('test "$(grep -c \'^test result:\' "$log")" -eq 1'));
-  assert.equal((observation.match(/cargo test /g) ?? []).length, 1);
+  const proofDebug = 'cargo test --locked -p marmish-engine --lib platform::macos::tests::zombie_proof_restart_ -- --nocapture 2>&1 | tee "$log"';
+  const proofRelease = 'cargo test --locked --release -p marmish-engine --lib platform::macos::tests::zombie_proof_restart_ -- --nocapture 2>&1 | tee "$log"';
+  const proofOrder = [
+    sdkPassed,
+    observation.indexOf("echo 'authority diagnostics stage=deterministic_proof_tests'\n"),
+    observation.indexOf(proofDebug),
+    observation.indexOf("echo 'authority diagnostics stage=deterministic_proof_tests_debug_passed'\n"),
+    observation.indexOf("echo 'authority diagnostics stage=deterministic_proof_tests_release'\n"),
+    observation.indexOf(proofRelease),
+    observation.indexOf("echo 'authority diagnostics stage=deterministic_proof_tests_release_passed'\n"),
+    tests, loop,
+  ];
+  assert.ok(proofOrder.every((position, index) => position >= 0 && (index === 0 || position > proofOrder[index - 1])));
+  const proofChecks = /grep -Eq '\^test result: ok\\\. 7 passed; 0 failed; 0 ignored;' "\$log"\n          test "\$\(grep -c '\^test result:' "\$log"\)" -eq 1\n/g;
+  assert.equal((observation.match(proofChecks) ?? []).length, 2);
+  assert.equal((observation.match(/cargo test /g) ?? []).length, 3);
   assert.doesNotMatch(observation, /--no-fail-fast|--ignored|--include-ignored|--skip|continue-on-error|\|\| true/);
 });
 

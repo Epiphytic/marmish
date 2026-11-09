@@ -1127,3 +1127,13 @@ and successful probes clear stale capture before later operations. The
 [reviewed diagnostics](reviews/legacy-compiler-admission-diagnostics.md) pass34
 focused mock tests; the macOS rejection still needs a fresh hosted report.
 Version admission and execution behavior are unchanged.
+
+
+The [reviewed macOS proof restart](reviews/macos-proof-snapshot-restart.md)
+permits one fresh complete cleanup proof only after a first-snapshot nonleader
+BSD-read ESRCH. It never accepts a missing member or weakens terminality,
+ownership or identity checks. Debug/release share the same classification;
+final debug failures identify member role and attempt using fixed vocabulary.
+Portable checks pass; Darwin execution and full release qualification remain
+pending. Historical group/status and role-unknown BSD-read failures remain
+unexplained. No extra signal, reap or timing budget is introduced.
