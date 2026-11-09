@@ -54,3 +54,44 @@ Mock/static acceptance covers absent default, both exact decorator admissions, u
 After integrated code review, separately authorize bounded actual workloads: reduced managed lane must genuinely pass its selected remaining tests and report actual totals; capable manual lane must genuinely run exactly2 with zero skips and pass cleanup. Failure/timeout/setup uncertainty remains a failure, never capability-unavailable or pass. Until those results exist, report only implemented/mock-tested selection and pending integration evidence. Publication, Beads transitions and actual Claude reviews remain centrally owned.
 
 V4 review disposition: every new and existing flag-sensitive mocked spike test must explicitly isolate this one environment key, absent or set per branch, and patch its platform; no inherited hosted flag may decide unit expectations. Validate the complete fixed mock/contract inventory twice on Linux, once with parent flag absent and once set1. This does not authorize real namespace-positive module discovery on an incapable local host: unchanged integration positives remain for the explicit capable manual lane, and the genuine reduced hosted suite still must pass. Use standard-library workflow contracts, permit existing platform-only decorators while banning extra flag-dependent ones, use a scope-local sys import shim for the bootstrap AST test, merge the admitted helper pair directly, and handle unexpected manual-wrapper exceptions using one fixed failure category. Preserve resolved /tmp private allocation admission. Named historical report identities are a lower bound, not complete original tracebacks.
+
+## Amendment: explicit hosted Linux reference scope
+
+Actual Claude independently approved the bounded V2 amendment in session
+`262af560-ac3a-4a2f-a67a-e8cb6b59fd33`: design SHA256
+`cfb0d2cb210d3418fb4041a744cb38d6ae62bcf57998f3c5f4929b03452845ba`,
+review SHA256 `e3e5b3037bab86bbb9612180f4c70af75e9a48baf55b6f1372d0b90cdf593b42`.
+Approval precedes implementation on source `28db4a1`.
+
+Hosted run42646145332 at7ac1a2c passed both Linux full-tools suites
+(1011 discovered/started,11 actual skips,exit0), then failed independent offline
+network admission. Those failures remain failures. The capable manual lane has
+not executed its two tests because runner setup failed; even those two tests
+would not establish full offline-retention acceptance. Native Rust requires no
+namespace privileges and its gates remain unchanged.
+
+Add the explicit `--reduced-linux-reference-only` scope, admitted only with the
+existing exact Linux namespace opt-out. Absent option retains full packaging,
+including when the opt-out alone is set. Invalid pairing refuses before work.
+Direct proof callers receive the same admission check. The reduced scope retains
+all existing proof stages and security negatives through full-tools success,
+then explicitly ends before offline retention. It does not catch a failed
+namespace/offline assertion into success. Report `acceptance_scope`, the explicit
+not-selected offline-retention reason, and the additional unmet independent
+retention criterion. Set `full_legacy_packaging_complete` only after main's final
+cleanup/home checks, from overall success and full scope. Scoped success cannot
+claim full packaging, and failed integrity checks cannot claim either success.
+
+Only the automatic Linux invocation selects this scope. Give its step and the
+managed matrix job an explicit reduced-coverage display name. Preserve Mac,
+default self-hosted full packaging, manual fixed-two tests, negative assertions,
+permissions, timeouts and native workflows. Existing macOS full packaging retains
+its current uv-offline-only meaning; independent OS denial is not newly proved.
+Linux full packaging remains unqualified on hosted infrastructure. Visible check
+names change; external branch-protection settings have not been inspected.
+
+Implementation scope is the existing spike, its contract tests and automatic
+legacy workflow. Mock-only checks cover scope pairing, report identity, stage
+ordering, failure propagation, unchanged default offline denial, and final
+integrity failures. Completed-code review and fresh hosted evidence remain
+required; local mocks are not full packaging or namespace qualification.

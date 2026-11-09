@@ -1171,3 +1171,16 @@ are refused, with mutation tests covering the retained guards. The
 [independent review](reviews/legacy-managed-environment.md) approves the source
 and 102 focused tests in four configurations. Full hosted reference-suite
 validation remains pending; this adds no installed product dependency.
+
+The [explicit reduced-reference amendment](phases/legacy-namespace-coverage.md#amendment-explicit-hosted-linux-reference-scope)
+requires both `--reduced-linux-reference-only` and the existing Linux namespace
+selection for automatic Linux reference checks. It completes through the full
+tools suite, then explicitly leaves independent offline retention unselected;
+reports never mark full legacy packaging complete for that scope. The default
+full acceptance path and macOS remain unchanged. The
+[independent review](reviews/legacy-reduced-reference-scope.md) passed all 126
+focused contracts in both flag modes. Earlier hosted Linux full tools suites
+completed 1,011 tests with 11 configured skips before their separate namespace-bound
+packaging check failed. Fresh hosted results for the new explicit scope remain
+required; the capable manual two-test lane has not executed and would not alone
+qualify full legacy packaging. Installed Rust Marmish needs no namespace privileges.

@@ -1415,7 +1415,9 @@ def hostile_ambient(root, env):
         require(restored and dict(os.environ) == before, 'ambient_restore_failed')
 
 
-def proof(root, fixture, target, report, failure_log=None):
+def proof(root, fixture, target, report, failure_log=None, reduced_reference_only=False):
+    if reduced_reference_only:
+        require(legacy_namespace_selection(), 'reduced_reference_scope_invalid')
     row = fixture['targets'][target]
     env = environment(root)
     stage = root / 'downloads'
@@ -1475,6 +1477,12 @@ def proof(root, fixture, target, report, failure_log=None):
         report['system_python_dependency'] = ('linux_doctor_and_sandbox_still_require_usr_bin_python3'
                                               if platform.system() == 'Linux' else 'no_linux_dependency_claim')
     full_tools_acceptance(slots[1][1], env, root, report, failure_log)
+    if reduced_reference_only:
+        report['stage'] = 'reduced_reference_complete'
+        report['offline_retention'] = {'selection': 'not_selected',
+                                       'reason': 'explicit_reduced_linux_reference_scope'}
+        report['assertions'].append('reduced_linux_reference_scope_completed_without_full_packaging')
+        return
     offline_acceptance(slots, stage, env, launch_env, touched, report)
 
 
@@ -1483,6 +1491,8 @@ def main(argv=None):
     parser.add_argument('--total-timeout', type=int, default=1320)
     parser.add_argument('--ci-context')
     parser.add_argument('--require-bwrap-helper', action='store_true')
+    parser.add_argument('--reduced-linux-reference-only', action='store_true',
+                        help='Explicit reduced Linux reference scope; not full packaging acceptance')
     parser.add_argument('--report', required=True, type=Path)
     parser.add_argument('--failure-log', type=Path, help='Private local diagnostic only; never upload this file')
     options = parser.parse_args(argv)
@@ -1490,14 +1500,20 @@ def main(argv=None):
     if options.failure_log is not None:
         options.failure_log = options.failure_log.absolute()
     report = {'schema': 1, 'ok': False, 'assertions': [], 'failure': None,
+              'acceptance_scope': ('reduced_linux_reference' if options.reduced_linux_reference_only
+                                   else 'full_legacy_packaging'),
+              'full_legacy_packaging_complete': False,
               'cleanup': 'not_started', 'home_unchanged': False,
               'unmet_acceptance': ['interrupted_extraction', 'substituted_archive_after_rehash',
                                    'complete_hostile_ambient_and_cwd_combinations']}
+    if options.reduced_linux_reference_only:
+        report['unmet_acceptance'].append('independent_offline_retention')
     before = None
     owned_root = None
     handler_state = None
     try:
-        legacy_namespace_selection()
+        reduced = legacy_namespace_selection()
+        require(not options.reduced_linux_reference_only or reduced, 'reduced_reference_scope_invalid')
         handler_state = install_interrupt_handlers(options.total_timeout)
         report['total_timeout_seconds'] = options.total_timeout
         require(os.geteuid() != 0, 'root_refused')
@@ -1519,7 +1535,7 @@ def main(argv=None):
             require(root.stat().st_uid == os.geteuid() and stat.S_IMODE(root.stat().st_mode) == 0o700
                     and root.name.isascii() and not root.is_symlink(), 'unsafe_scratch')
             report['cleanup'] = 'pending'
-            proof(root, fixture, target, report, options.failure_log)
+            proof(root, fixture, target, report, options.failure_log, options.reduced_linux_reference_only)
             report['ok'] = True
     except Refused as error:
         report['failure'] = str(error)
@@ -1548,6 +1564,7 @@ def main(argv=None):
                 report['ok'] = False
                 report['prior_failure'] = report['failure']
                 report['failure'] = 'real_uv_home_changed'
+        report['full_legacy_packaging_complete'] = report['ok'] and not options.reduced_linux_reference_only
         fd = os.open(options.report, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, 'w') as output:
             json.dump(report, output, indent=2, sort_keys=True)

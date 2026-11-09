@@ -1,5 +1,6 @@
 """Offline security contracts for the disposable managed packaging proof."""
 import copy
+from contextlib import ExitStack, nullcontext
 import io
 import json
 import os
@@ -829,7 +830,7 @@ class NamespaceSelectionTests(unittest.TestCase):
         text = (spike.REPO/'.github/workflows/installer-validation.yml').read_text()
         self.assertEqual(text.count('MARMISH_LEGACY_SKIP_NAMESPACE_TESTS'), 1)
         steps = re.split(r'^      - ', text, flags=re.M)[1:]
-        linux = next(step for step in steps if 'reduced Linux reference coverage' in step)
+        linux = next(step for step in steps if 'reduced Linux legacy reference scope' in step)
         macos = next(step for step in steps if 'default reference coverage' in step)
         self.assertIn("        if: runner.os == 'Linux'\n", linux)
         self.assertIn("        env:\n          MARMISH_LEGACY_SKIP_NAMESPACE_TESTS: '1'\n", linux)
@@ -838,7 +839,121 @@ class NamespaceSelectionTests(unittest.TestCase):
         for step in steps:
             if step != linux: self.assertNotIn('MARMISH_LEGACY_SKIP_NAMESPACE_TESTS', step)
         command = 'python3 tools/marmish_managed_runtime_spike.py\n          --report "$RUNNER_TEMP/managed-runtime-report.json"'
-        self.assertIn(command, linux); self.assertIn(command, macos)
+        self.assertIn(command, macos)
+        self.assertIn(command.replace('\n', '\n          --reduced-linux-reference-only\n', 1), linux)
+        self.assertEqual(text.count('--reduced-linux-reference-only'), 1)
+        self.assertIn('    name: Legacy managed checks (Linux reduced reference; macOS full packaging)\n', text)
+
+
+class ReducedReferenceScopeTests(unittest.TestCase):
+    """Explicit scope contracts; all external operations are mocked or forbidden."""
+    def setUp(self):
+        self.enterContext(patch.dict(os.environ))
+        os.environ.pop('MARMISH_LEGACY_SKIP_NAMESPACE_TESTS', None)
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+        self.enterContext(patch.object(spike.platform, 'system', return_value='Linux'))
+        self.enterContext(patch.object(spike.platform, 'machine', return_value='x86_64'))
+        self.enterContext(patch.object(spike, '_run_process', side_effect=AssertionError('external_executor_forbidden')))
+
+    def test_invalid_cli_scope_refuses_before_handlers_helper_or_proof(self):
+        for index, (system, flag, failure) in enumerate([
+                ('Linux', None, 'reduced_reference_scope_invalid'),
+                ('Darwin', None, 'reduced_reference_scope_invalid'),
+                ('Darwin', '1', 'legacy_namespace_selection_invalid'),
+                ('Linux', '0', 'legacy_namespace_selection_invalid')]):
+            os.environ.pop('MARMISH_LEGACY_SKIP_NAMESPACE_TESTS', None)
+            if flag is not None: os.environ['MARMISH_LEGACY_SKIP_NAMESPACE_TESTS'] = flag
+            report = self.root / ('refused-' + str(index) + '.json')
+            with self.subTest(system=system, flag=flag), \
+                    patch.object(spike.platform, 'system', return_value=system), \
+                    patch.object(spike, 'install_interrupt_handlers') as handlers, \
+                    patch.object(spike, 'initialize_helper') as helper, \
+                    patch.object(spike, 'proof') as proof:
+                self.assertEqual(spike.main(['--report', str(report), '--reduced-linux-reference-only']), 1)
+                result = json.loads(report.read_text())
+                self.assertEqual(result['failure'], failure)
+                self.assertFalse(result['ok'])
+                self.assertFalse(result['full_legacy_packaging_complete'])
+                self.assertEqual(result['acceptance_scope'], 'reduced_linux_reference')
+                handlers.assert_not_called(); helper.assert_not_called(); proof.assert_not_called()
+
+    def test_requested_scope_and_final_integrity_determine_completion(self):
+        # Even flag1 without the CLI scope still selects full packaging.
+        os.environ['MARMISH_LEGACY_SKIP_NAMESPACE_TESTS'] = '1'
+        for reduced in (False, True):
+            for integrity in ('ok', 'home_changed', 'cleanup_incomplete'):
+                path = self.root / (str(reduced) + '-' + integrity + '.json')
+                snapshots = [{}, {'changed': True}] if integrity == 'home_changed' else [{}, {}]
+                with self.subTest(reduced=reduced, integrity=integrity), \
+                        patch.object(spike, 'install_interrupt_handlers', return_value=None), \
+                        patch.object(spike, 'initialize_helper'), \
+                        patch.object(spike, 'host_facts', return_value={}), \
+                        patch.object(spike, 'home_snapshot', side_effect=snapshots), \
+                        patch.object(spike, 'proof') as proof, ExitStack() as stack:
+                    if integrity == 'cleanup_incomplete':
+                        stack.enter_context(patch.object(spike.Path, 'exists', return_value=True))
+                    arguments = ['--report', str(path)] + (['--reduced-linux-reference-only'] if reduced else [])
+                    self.assertEqual(spike.main(arguments), 0 if integrity == 'ok' else 1)
+                    result = json.loads(path.read_text())
+                    self.assertEqual(result['acceptance_scope'], 'reduced_linux_reference' if reduced else 'full_legacy_packaging')
+                    self.assertEqual(result['ok'], integrity == 'ok')
+                    self.assertEqual(result['full_legacy_packaging_complete'], integrity == 'ok' and not reduced)
+                    self.assertEqual('independent_offline_retention' in result['unmet_acceptance'], reduced)
+                    self.assertEqual(proof.call_args.args[-1], reduced)
+
+    def test_direct_reduced_proof_rejects_before_downloads(self):
+        with patch.object(spike, 'download') as download, \
+                self.assertRaisesRegex(spike.Refused, '^reduced_reference_scope_invalid$'):
+            spike.proof(self.root, {}, 'unused', {'assertions': []}, None, True)
+        download.assert_not_called()
+
+    def test_proof_retains_negative_checks_and_only_explicitly_ends_after_full_tools(self):
+        fixture = json.loads(spike.FIXTURE.read_text())
+        target = 'x86_64-unknown-linux-gnu'
+        stages = ['uv_negative_acceptance', 'interruption_acceptance', 'substitution_acceptance',
+                  'installed_acceptance', 'full_tools_acceptance', 'offline_acceptance']
+        scenarios = [(True, None), (False, None), (False, 'offline_acceptance')]
+        scenarios += [(True, stage) for stage in stages[:-1]]
+        for index, (reduced, failure) in enumerate(scenarios):
+            root = self.root / str(index)
+            root.mkdir()
+            os.environ['MARMISH_LEGACY_SKIP_NAMESPACE_TESTS'] = '1'
+            report = {'assertions': [], 'full_legacy_packaging_complete': False}
+            events = []
+            slots = [(root / 'first', root / 'python1', root / 'app1'),
+                     (root / 'second', root / 'python2', root / 'app2')]
+            def observe(stage):
+                def call(*args, **kwargs):
+                    events.append(stage)
+                    if stage == failure: raise spike.Refused('fixed_test_refusal')
+                return call
+            with self.subTest(reduced=reduced, failure=failure), ExitStack() as stack:
+                for operation in ('download', 'verify_asset', 'extract_uv', 'verify_architecture',
+                                  'argv_acceptance'):
+                    stack.enter_context(patch.object(spike, operation))
+                for operation in stages:
+                    stack.enter_context(patch.object(spike, operation, side_effect=observe(operation)))
+                stack.enter_context(patch.object(spike, 'run', return_value=(0, ('uv ' + fixture['uv_version']).encode())))
+                stack.enter_context(patch.object(spike, 'embedded_verifier', return_value='fixture_hash'))
+                stack.enter_context(patch.object(spike, 'audit_runtime', return_value={}))
+                stack.enter_context(patch.object(spike, 'prepare_slots', return_value=nullcontext((slots, {'prerequisites': {}}, root))))
+                if failure:
+                    with self.assertRaisesRegex(spike.Refused, '^fixed_test_refusal$'):
+                        spike.proof(root, fixture, target, report, None, reduced)
+                    self.assertEqual(events, stages[:stages.index(failure) + 1])
+                    self.assertNotEqual(report['stage'], 'reduced_reference_complete')
+                    self.assertNotIn('offline_retention', report)
+                    self.assertNotIn('reduced_linux_reference_scope_completed_without_full_packaging', report['assertions'])
+                else:
+                    spike.proof(root, fixture, target, report, None, reduced)
+                    self.assertEqual(events, stages[:-1] if reduced else stages)
+                    if reduced:
+                        self.assertEqual(report['stage'], 'reduced_reference_complete')
+                        self.assertEqual(report['offline_retention'], {'selection': 'not_selected', 'reason': 'explicit_reduced_linux_reference_scope'})
+                        self.assertIn('reduced_linux_reference_scope_completed_without_full_packaging', report['assertions'])
+                    else:
+                        self.assertNotIn('offline_retention', report)
+                self.assertFalse(report['full_legacy_packaging_complete'])
 
 
 class ManagedRuntimeTests(unittest.TestCase):
