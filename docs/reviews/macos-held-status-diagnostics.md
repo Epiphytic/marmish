@@ -61,3 +61,21 @@ it passes, stopping on first failure within45minutes. Passing supplies
 observations, not release qualification or proof the race is fixed. The
 historical cause and actual rejected wait-status category remain unknown.
 Root retains publication and one-shot dispatch ownership.
+
+
+## B2 actual metadata inventory correction
+
+Diagnostic42665195683/1 at40ab515 failed the metadata guard before all engine/native checks; no cleanup category was captured. Actual cargo auto-discovers the ordinary marmish-release-tool binary, omitted by the original exact five-bin list. Add that empty-feature binary to the sorted exact native list and matching policy assertion only. Engine/spec bytes and all diagnostic test commands/guards/budgets remain unchanged.
+
+Actual Claude auto design and separate-gate clarification APPROVE in the same independent session. The nine Node-only policy tests remain Node-only and pass. A separate mandatory gate ran `RUSTUP_AUTO_INSTALL=0 cargo +1.97.1 metadata --offline --locked --no-deps --format-version 1`, bounded30seconds, then extracted exactlytwo production jq predicates by package selector and evaluated them against actual output with5second bounds. Both real inventories passed; removing one bin from each corresponding package was rejected (jq exit1/false). No build/test or product process was invoked by this gate.
+
+Evidence SHA256:
+
+- held-status-metadata-design-review.json: `0c3d9c3cb41da9f7167ea70febd77748432b20b012fc68d2f8a27bc2a6d2c739`.
+- held-status-metadata-design-followup.json: `362a1c1cb798d2e1a48ef4a98040010e2a29572a0ab59a3bc4862c493ccd22ef`.
+- held-status-metadata-real-gate.py: `918899c7f37e6050a4431e2c0d1416fe0595a1ede1d67a4d7df08383a4d2163e`.
+- held-status-metadata-real-gate-result.json: `8fc695507a0c4958e7968fa4579bb168d03dcee6504367e7fbde764bb9028662`.
+
+Actual completed-code review remains required before local commit. Parent alone publishes and dispatches; no original race resolution or release qualification is claimed.
+
+Actual Claude auto completed-code B2 followup APPROVE, sessionff71191a-e796-4335-ba47-e626ccae1e0d, review JSON SHA256bad9208b7e78d46268bc2c45d4c2f274b95ea6779d3d2611b1a13cdcadd0566b. Reviewer independently reran9Node policies PASS and actual offline metadata predicates PASS; removing exactly the newly inventoried release-tool target was rejected. Ripwire quality-delta against40ab515 reports0regressions/0gating; diff check PASS. No Darwin compile/runtime observation yet. Parent owns publication and one diagnostic dispatch.

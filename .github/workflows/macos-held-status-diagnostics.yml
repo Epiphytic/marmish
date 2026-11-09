@@ -56,7 +56,7 @@ jobs:
           trap 'rm -f "$metadata"' EXIT
           cargo metadata --locked --no-deps --format-version 1 | tee "$metadata"
           jq -e '[.packages[] | select(.name == "marmish-engine")] | if length == 1 then .[0].targets | map(select(.kind | index("bin"))) | sort_by(.name) | map({name, required_features: (.["required-features"] // [])}) == [{name: "marmish-engine-worker", required_features: []}, {name: "marmish-test-frontend", required_features: ["fault-injection"]}] else false end' "$metadata"
-          jq -e '[.packages[] | select(.name == "marmish-native")] | if length == 1 then .[0].targets | map(select(.kind | index("bin"))) | sort_by(.name) | map({name, required_features: (.["required-features"] // [])}) == [{name: "marmish", required_features: []}, {name: "marmish-installed-check", required_features: ["installed-checks"]}, {name: "marmish-installed-fixture", required_features: ["installed-checks"]}, {name: "marmish-worker", required_features: []}, {name: "marmishd", required_features: []}] else false end' "$metadata"
+          jq -e '[.packages[] | select(.name == "marmish-native")] | if length == 1 then .[0].targets | map(select(.kind | index("bin"))) | sort_by(.name) | map({name, required_features: (.["required-features"] // [])}) == [{name: "marmish", required_features: []}, {name: "marmish-installed-check", required_features: ["installed-checks"]}, {name: "marmish-installed-fixture", required_features: ["installed-checks"]}, {name: "marmish-release-tool", required_features: []}, {name: "marmish-worker", required_features: []}, {name: "marmishd", required_features: []}] else false end' "$metadata"
           git diff --quiet HEAD --
       - name: Validate held-status engine diagnostics in both profiles
         shell: bash

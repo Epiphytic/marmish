@@ -45,7 +45,7 @@ test('manual diagnostic preserves exact immutable nonroot source guards and fixe
 test('metadata guards identify actual manifest workers without native builds', () => {
   assert.ok(metadata.includes('cargo metadata --locked --no-deps --format-version 1 | tee "$metadata"'));
   assert.ok(metadata.includes('{name: "marmish-engine-worker", required_features: []}, {name: "marmish-test-frontend", required_features: ["fault-injection"]}'));
-  assert.ok(metadata.includes('{name: "marmish", required_features: []}, {name: "marmish-installed-check", required_features: ["installed-checks"]}, {name: "marmish-installed-fixture", required_features: ["installed-checks"]}, {name: "marmish-worker", required_features: []}, {name: "marmishd", required_features: []}'));
+  assert.ok(metadata.includes('{name: "marmish", required_features: []}, {name: "marmish-installed-check", required_features: ["installed-checks"]}, {name: "marmish-installed-fixture", required_features: ["installed-checks"]}, {name: "marmish-release-tool", required_features: []}, {name: "marmish-worker", required_features: []}, {name: "marmishd", required_features: []}'));
   assert.equal((metadata.match(/if length == 1/g) ?? []).length, 2);
   assert.doesNotMatch(workflow, /cargo build|--no-run|shasum|authority_withdrawal|pending_cleanup_budget_/);
 });
