@@ -24,7 +24,7 @@ on:
         required: true
         type: string
       version:
-        description: Explicit qualified 0.2.N or 0.2.N-rc.N version
+        description: Explicit qualified 0.2.N or 0.3.N version (optional -rc.N)
         required: true
         type: string
 

@@ -158,7 +158,7 @@ jobs:
             tools/marmish_v02_lifecycle_build.py tools/test_marmish_v02_lifecycle_build.py tools/marmish_native_https_check.py \
             tools/marmish_native_keychain_check.py tools/marmish_native_quickstart_check.py \
             tools/test_marmish_native_inspection.py \
-            tools/marmish_native_licenses.py tools/test_marmish_native_licenses.py \
+            tools/marmish_native_licenses.py tools/test_marmish_native_licenses.py tools/release-version-vectors.json \
             | shasum -a 256 | cut -d ' ' -f 1)
           target/release/marmish-release-tool package-tooling \
             --input-dir "$RUNNER_TEMP/tooling-input" --output-dir "$RUNNER_TEMP/installed-tools" \

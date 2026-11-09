@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
-import {checkJobs,checkReport,checkManifest,unpack,inspectCandidate,expectedArtifacts} from './release-candidate.mjs';
-import {TARGETS,releaseNames,canonicalInventory} from './release-schema.mjs';
+import {checkJobs,checkReport,checkManifest,unpack,inspectCandidate,expectedArtifacts,releaseFormats} from './release-candidate.mjs';
+import {TARGETS,releaseNames,canonicalInventory,parseVersion} from './release-schema.mjs';
 import {digest,ROLES} from './transport.mjs';
 const source='a'.repeat(40),publisher='b'.repeat(40),harness='c'.repeat(64),version='0.2.3';
 const selection={run_id:'12',run_attempt:'2',publisher_sha:publisher};
@@ -18,26 +19,28 @@ function jobs(skip=false) {
     `install-quickstart (${runners[i]}, ${target})`,`provider-qualification (${runners[i]}, ${target})`])]
     .map(name=>({name,status:'completed',conclusion:skip&&name!=='release-eligibility'?'skipped':'success'}));
 }
-function report(kind,target) {
+function report(kind,target,version='0.2.3',relaySelection='explicit') {
   const common={schema:1,ok:true,python_in_runtime_path:false,network_activation:false,owned_state_removed:true,elapsed_ms:10};
   if(kind==='quickstart') return {...common,kind:'installed_quickstart_pty',key_storage:'file',role:'both',inbound_enabled:false,
-    prompts_completed:5,identity_created:true,repeat_same_identity:true,repeat_owner_opened:false,stop_complete:true};
+    prompts_completed:5,identity_created:true,repeat_same_identity:true,repeat_owner_opened:false,stop_complete:true,
+    ...(parseVersion(version).minor===3?{relay_selection:relaySelection}:{})};
   return {...common,kind:'installed_auto_provider',owned_children_reaped:true,auto_keychain:true,distinct_named_identities:true,
     fresh_reload:true,item_count:4,locked_refused:true,unlocked_fresh_reload:true,no_plaintext_fallback:true,...(target.endsWith('darwin')?{}:{absent_provider_files:true}),
     source_commit:source,target,run_id:'12',run_attempt:'2',provider_packages:['test-provider=1'],
     ...(target.endsWith('darwin')?{owned_account_removed:true,runner_keychain_unchanged:true,supervisor_interpreter_unchanged:true}:{})};
 }
-function product(target) {
+function product(target,version='0.2.3') {
   const files=new Map(['marmish','marmishd','marmish-worker','THIRD-PARTY-LICENSES'].map(prefix=>[
     `${prefix}-${version}-${target}`,Buffer.from(`${prefix}:${target}`)]));
   const text=['marmish-manifest 1',`version ${version}`,`target ${target}`,`commit ${source}`,
     `signing ${target.endsWith('darwin')?'adhoc':'none'} notarized=no`,
-    `minimum ${target.endsWith('darwin')?'macos=15.0':'glibc=2.39'}`,'state profile=2 journal=6 engine=1 config=1 commands=1',
+    `minimum ${target.endsWith('darwin')?'macos=15.0':'glibc=2.39'}`,`state profile=2 journal=${releaseFormats(version)[1]} engine=1 config=1 commands=1`,
     ...[...files].map(([name,bytes],i)=>`file ${digest(bytes)} ${bytes.length} ${i===3?'0444':'0555'} ${name.slice(0,-1-version.length-1-target.length)}`),'end',''].join('\n');
   files.set(`marmish-${version}-${target}.manifest`,Buffer.from(text));return files;
 }
-let base;
-function fixture() {
+const bases=new Map();
+function fixture(version='0.2.3') {
+  let base=bases.get(version);
   if(!base) {
     const artifacts=[],blobs=new Map();
     function add(name,files) {
@@ -49,16 +52,20 @@ function fixture() {
       run_attempt:'2',event:'workflow_dispatch',source,before:null,version,caveated:false,decision:'build',reason:'eligible_version'};
     add('v02-eligibility-12-2',new Map([['eligibility.json',Buffer.from(JSON.stringify(eligibility)+'\n')]]));
     for(const [i,target] of TARGETS.entries()) {
-      add(`v02-candidate-${target}-12-2`,product(target));
+      add(`v02-candidate-${target}-12-2`,product(target,version));
       const bin=Buffer.from('not executed fixture'),record={schema:1,target,source_commit:source,harness_sha256:harness,
         files:Object.fromEntries(['marmish-installed-check','marmish-installed-fixture'].map(name=>[name,{sha256:digest(bin),bytes:bin.length}]))};
       add(`v02-installed-tools-${target}-12-2`,new Map([[`${ROLES[i]}-tooling.json`,Buffer.from(JSON.stringify(record))],
         ['marmish-installed-check',bin],['marmish-installed-fixture',bin]]));
-      for(const kind of ['quickstart','provider']) add(`v02-${kind}-${target}-12-2`,new Map([[`${kind}.json`,Buffer.from(JSON.stringify(report(kind,target)))]]));
+      for(const kind of ['quickstart','provider']) {
+        const files=new Map([[`${kind}.json`,Buffer.from(JSON.stringify(report(kind,target,version)))]]);
+        if(kind==='quickstart'&&parseVersion(version).minor===3) files.set('quickstart-default-relays.json',Buffer.from(JSON.stringify(report(kind,target,version,'default'))));
+        add(`v02-${kind}-${target}-12-2`,files);
+      }
     }
     add('v02-render-tool-12-2',new Map([['marmish-release-tool',Buffer.from('not executed renderer')]]));
     add('v02-pinned-bootstrap-12-2',new Map([['install.sh',Buffer.from('#!/bin/sh\nexit 0\n')]]));
-    base={artifacts,blobs};
+    base={artifacts,blobs};bases.set(version,base);
   }
   const artifacts=structuredClone(base.artifacts),blobs=new Map(base.blobs),calls=[];
   const run={id:12,run_attempt:2,status:'completed',conclusion:'success',event:'workflow_dispatch',head_branch:'master',head_sha:source,
@@ -98,11 +105,11 @@ test('job gate requires exact completed successful matrix or exact designed skip
 });
 test('qualification reports are closed and bind platform/source/run with negative invariants',()=>{
   for(const target of TARGETS) for(const kind of ['quickstart','provider']) {
-    const good=report(kind,target);checkReport(good,kind,target,source,'12','2');
+    const good=report(kind,target);checkReport(good,kind,{target,source,run:'12',attempt:'2'});
     for(const change of [{extra:true},{ok:false},{network_activation:true},{owned_state_removed:false},{elapsed_ms:900000}])
-      assert.throws(()=>checkReport({...good,...change},kind,target,source,'12','2'));
+      assert.throws(()=>checkReport({...good,...change},kind,{target,source,run:'12',attempt:'2'}));
     if(kind==='provider') for(const change of [{source_commit:publisher},{target:'other'},{run_attempt:'1'},{item_count:3},{auto_keychain:false},{provider_packages:['$(bad)']}])
-      assert.throws(()=>checkReport({...good,...change},kind,target,source,'12','2'));
+      assert.throws(()=>checkReport({...good,...change},kind,{target,source,run:'12',attempt:'2'}));
   }
 });
 test('manifest authenticates exact source/format/modes and each product byte',()=>{
@@ -208,4 +215,55 @@ test('caveated troubleshooting build remains unpublishable',async()=>{
     event:'workflow_dispatch',source,before:null,version,caveated:true,decision:'build',reason:'eligible_version'};
   replaceArtifact(f,'v02-eligibility-12-2',[{name:'eligibility.json',bytes:JSON.stringify(eligibility)}]);
   await assert.rejects(inspectCandidate(selection,f.adapters),/eligibility_binding/);
+});
+
+test('0.3.0 and 0.3.1 candidates authenticate both relay reports and ten exact report pins',async()=>{
+  for(const current of ['0.3.0','0.3.1']) {
+    const f=fixture(current),result=await inspectCandidate(selection,f.adapters);
+    assert.equal(result.inventory.version,current);assert.equal(result.inventory.reports.length,10);
+    assert.equal(result.inventory.assets.length,15);canonicalInventory(result.inventory);
+    for(const target of TARGETS) {
+      const base=`v02-quickstart-${target}-12-2`;
+      for(const [suffix,relay] of [['','explicit'],['-default-relays','default']]) {
+        assert.equal(result.inventory.reports.find(r=>r.name===base+suffix).sha256,
+          digest(Buffer.from(JSON.stringify(report('quickstart',target,current,relay)))));
+      }
+    }
+  }
+});
+test('0.3 quickstart rejects absent, duplicate, extra, swapped, missing and tampered relay reports',async()=>{
+  const target=TARGETS[0],name=`v02-quickstart-${target}-12-2`;
+  const good=()=>[{name:'quickstart.json',bytes:JSON.stringify(report('quickstart',target,'0.3.0','explicit'))},
+    {name:'quickstart-default-relays.json',bytes:JSON.stringify(report('quickstart',target,'0.3.0','default'))}];
+  const changes=[entries=>entries.pop(),entries=>entries.push(entries[0]),entries=>entries.push({name:'extra.json',bytes:'{}'}),
+    entries=>{[entries[0].bytes,entries[1].bytes]=[entries[1].bytes,entries[0].bytes];},
+    entries=>{const value=JSON.parse(entries[1].bytes);delete value.relay_selection;entries[1].bytes=JSON.stringify(value);},
+    entries=>{const value=JSON.parse(entries[1].bytes);value.stop_complete=false;entries[1].bytes=JSON.stringify(value);},
+    entries=>{const value=JSON.parse(entries[0].bytes);value.relay_selection='unknown';entries[0].bytes=JSON.stringify(value);}];
+  for(const change of changes) {
+    const f=fixture('0.3.0'),entries=good();change(entries);replaceArtifact(f,name,entries);
+    await assert.rejects(inspectCandidate(selection,f.adapters));
+  }
+  const old=fixture();replaceArtifact(old,name,good());await assert.rejects(inspectCandidate(selection,old.adapters),/invalid_archive/);
+});
+test('manifest journal formats are closed and bound to release family in both directions',()=>{
+  for(const current of ['0.2.3','0.3.0','0.3.1']) for(const target of TARGETS) {
+    const files=product(target,current),bytes=files.get(`marmish-${current}-${target}.manifest`);
+    checkManifest(bytes,files,current,source,target);
+    const expected=releaseFormats(current)[1],wrong=expected===7?6:7;
+    assert.throws(()=>checkManifest(Buffer.from(bytes.toString().replace(`journal=${expected}`,`journal=${wrong}`)),files,current,source,target),/manifest_provenance/);
+  }
+});
+test('current Rust format constants equal the authenticated 0.3 release tuple',()=>{
+  const read=(file,name)=>{
+    const text=readFileSync(new URL(`../../${file}`,import.meta.url),'utf8');
+    const found=new RegExp(`const ${name}: [a-z0-9]+ = ([0-9]+);`).exec(text);
+    assert.ok(found,`${file}:${name}`);return Number(found[1]);
+  };
+  const actual=[read('crates/marmish-native/src/identity.rs','PROFILE_FORMAT'),
+    read('crates/marmish-native/src/journal.rs','JOURNAL_FORMAT'),read('crates/marmish-engine/src/store.rs','ENGINE_FORMAT'),
+    read('crates/marmish-native/src/command_config.rs','CONFIG_FORMAT'),read('crates/marmish-native/src/command_wire.rs','COMMAND_FORMAT')];
+  assert.deepEqual(actual,releaseFormats('0.3.0'));
+  const metadata=readFileSync(new URL('../../crates/marmish-native/src/native_manifest.rs',import.meta.url),'utf8');
+  for(const constant of ['PROFILE_FORMAT','JOURNAL_FORMAT','ENGINE_FORMAT','CONFIG_FORMAT','COMMAND_FORMAT']) assert.ok(metadata.includes(constant));
 });

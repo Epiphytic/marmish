@@ -3627,7 +3627,7 @@ dependencies = [
 
 [[package]]
 name = "marmish-native"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "arti-client",
  "async-trait",

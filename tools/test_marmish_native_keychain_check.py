@@ -233,9 +233,37 @@ class LifecycleProviderSupervisor(unittest.TestCase):
                         qualification.provider.unlock.assert_called_once()
                         self.assertEqual(result['lifecycle_stage'], 'complete')
 
+    def test_copied_inner_version_parser_loads_with_isolated_python(self):
+        # Mirror the provider stage's closed helper set; -I excludes repo sys.path.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for source in (Path(check.__file__), Path(check.__file__).with_name('marmish_native_quickstart_check.py')):
+                (root / source.name).write_bytes(source.read_bytes())
+            code = ("import importlib.util,sys;from pathlib import Path;"
+                "p=Path(sys.argv[1]);s=importlib.util.spec_from_file_location('isolated_provider',p);"
+                "m=importlib.util.module_from_spec(s);s.loader.exec_module(m);"
+                "assert m.lifecycle_versions('0.3.0')==('0.3.0','0.3.0-rc.1');"
+                "assert m.lifecycle_versions('0.2.3')==('0.2.3','0.2.3-rc.1')")
+            result = subprocess.run([sys.executable, '-I', '-c', code, str(root / Path(check.__file__).name)],
+                cwd=root, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+
+    def test_shared_lifecycle_versions_are_stable_and_strict(self):
+        vectors = json.loads(Path(__file__).with_name('release-version-vectors.json').read_text())
+        for value in vectors['valid']:
+            if '-rc.' in value:
+                with self.assertRaisesRegex(check.Refused, 'lifecycle_arguments'):
+                    check.lifecycle_versions(value)
+            else:
+                self.assertEqual(check.lifecycle_versions(value), (value, value + '-rc.1'))
+        for value in vectors['invalid'] + [None, 1, {}, []]:
+            with self.subTest(value=value), self.assertRaisesRegex(check.Refused, 'lifecycle_arguments'):
+                check.lifecycle_versions(value)
+
     def test_derived_provider_versions_and_closed_argument_triplet(self):
         self.assertFalse(check.lifecycle_arguments(None, None, None))
-        for version in ('0.2.0', '0.2.1', '0.2.12', '0.2.18446744073709551615'):
+        for version in ('0.2.0', '0.2.1', '0.2.12', '0.2.18446744073709551615',
+                        '0.3.0', '0.3.1', '0.3.18446744073709551615'):
             self.assertEqual(check.lifecycle_versions(version), (version, version + '-rc.1'))
             with tempfile.TemporaryDirectory() as tmp:
                 qualification, execute, reloads, old, new = self.lifecycle_fixture(Path(tmp), version)
@@ -249,7 +277,7 @@ class LifecycleProviderSupervisor(unittest.TestCase):
             with self.assertRaises(check.Refused):
                 check.lifecycle_arguments(*args)
         for version in ('0.2.01', '0.2.18446744073709551616', '0.2.100000000000000000000', '0.2.1-rc.1',
-                        '0.2.1+build', '0.3.1', '0.2.1\n'):
+                        '0.2.1+build', '0.4.1', '0.2.1\n'):
             with self.subTest(version=version), self.assertRaises(check.Refused):
                 check.lifecycle_arguments(Path('a'), '0' * 64, version)
 

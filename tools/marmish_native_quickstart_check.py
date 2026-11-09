@@ -7,12 +7,27 @@ import os
 from pathlib import Path
 import pty
 import pwd
+import re
 import select
 import shutil
 import signal
 import subprocess
 import tempfile
 import time
+
+
+def parse_release_version(value):
+    """Shared strict CI parser; this helper is also copied into isolated provider stages."""
+    if not isinstance(value, str) or len(value) > 48:
+        raise ValueError('invalid_version')
+    found = re.fullmatch(r'0\.([23])\.(0|[1-9][0-9]{0,19})(?:-rc\.([1-9][0-9]{0,19}))?', value)
+    if found is None:
+        raise ValueError('invalid_version')
+    patch = int(found[2])
+    rc = int(found[3]) if found[3] is not None else None
+    if patch > 18446744073709551615 or (rc is not None and rc > 18446744073709551615):
+        raise ValueError('invalid_version')
+    return int(found[1]), patch, rc
 
 
 UTILITIES = ('curl', 'uname', 'id', 'mktemp', 'chmod', 'mkdir', 'rm', 'rmdir',

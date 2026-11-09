@@ -71,13 +71,15 @@ def hex_value(value, size):
     return value
 
 
+def parse_version(value):
+    try:
+        return quick.parse_release_version(value)
+    except ValueError:
+        require(False, 'invalid_version')
+
+
 def version_value(value):
-    require(isinstance(value, str) and len(value) <= 48, 'invalid_version')
-    found = re.fullmatch(r'0\.2\.(0|[1-9][0-9]*)(?:-rc\.([1-9][0-9]*))?', value)
-    require(found is not None, 'invalid_version')
-    decimal(found[1], False)
-    if found[2]:
-        decimal(found[2])
+    parse_version(value)
     return value
 
 

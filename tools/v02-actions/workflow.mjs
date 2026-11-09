@@ -5,6 +5,7 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {ArtifactTransport, ROLES, artifactName, binding, boundedFile, childEnvironment, digest, requireThat} from './transport.mjs';
 import {isStreamingCohort} from './streaming-policy.mjs';
+import {validVersion} from './release-schema.mjs';
 export const TARGETS = ['x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu', 'aarch64-apple-darwin'];
 const TOOLS = ['marmish-installed-check', 'marmish-installed-fixture'];
 export const SOURCE_PATHS = ['crates/marmish-native', 'crates/marmish-engine', 'crates/marmish-stream',
@@ -16,7 +17,7 @@ export const SOURCE_PATHS = ['crates/marmish-native', 'crates/marmish-engine', '
   'tools/test_marmish_v02_lifecycle_build.py', 'tools/marmish_native_https_check.py',
   'tools/marmish_native_keychain_check.py', 'tools/marmish_native_quickstart_check.py',
   'tools/test_marmish_native_inspection.py', 'tools/marmish_native_licenses.py',
-  'tools/test_marmish_native_licenses.py'];
+  'tools/test_marmish_native_licenses.py', 'tools/release-version-vectors.json'];
 const hex = (s, n) => typeof s === 'string' && new RegExp(`^[0-9a-f]{${n}}$`).test(s);
 export const PROVIDER_DIAGNOSTIC = Object.freeze({run:'41898839617', attempt:'1',
   source:'61f47606c5e7ba9048f196165a8025e7c2662839'});
@@ -131,7 +132,7 @@ export function probeTool(file, source, target) {
     timeout: 10_000, killSignal: 'SIGKILL', maxBuffer: 4096, stdio: ['ignore', 'pipe', 'pipe']});
   const record = JSON.parse(reply);
   keys(record, ['schema', 'version', 'target', 'commit', 'formats']);
-  requireThat(record.schema === 1 && /^0\.2\.[0-9]+(?:-rc\.[1-9][0-9]*)?$/.test(record.version)
+  requireThat(record.schema === 1 && validVersion(record.version)
     && record.commit === source && record.target === target
     && Array.isArray(record.formats) && record.formats.length === 5
     && record.formats.every(n => Number.isSafeInteger(n) && n > 0), 'tool_metadata');

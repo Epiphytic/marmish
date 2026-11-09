@@ -42,7 +42,16 @@ fn variants(ctx: &LifecycleContext) -> Variants {
 #[test]
 fn stable_patch_versions_require_exact_derived_variants() {
     for index in 0..3 {
-        for version in ["0.2.0", "0.2.1", "0.2.12", "0.2.18446744073709551615"] {
+        for version in [
+            "0.2.0",
+            "0.2.1",
+            "0.2.12",
+            "0.2.18446744073709551615",
+            "0.3.0",
+            "0.3.1",
+            "0.3.12",
+            "0.3.18446744073709551615",
+        ] {
             let mut ctx = context(index);
             ctx.candidate.version = version.into();
             ctx.validate().unwrap();
@@ -62,7 +71,7 @@ fn stable_patch_versions_require_exact_derived_variants() {
         "0.2.100000000000000000000",
         "0.2.1-rc.1",
         "0.2.1+build",
-        "0.3.1",
+        "0.4.1",
         "0.2.1\n",
     ] {
         let mut ctx = context(0);

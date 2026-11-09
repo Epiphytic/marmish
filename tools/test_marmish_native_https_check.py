@@ -40,6 +40,19 @@ class HttpsInstallerContracts(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(check.Refused):
                 check.version_value(value)
 
+    def test_shared_release_version_vectors(self):
+        vectors = json.loads(Path(__file__).with_name('release-version-vectors.json').read_text())
+        for value in vectors['valid']:
+            with self.subTest(value=value):
+                self.assertEqual(check.version_value(value), value)
+                minor, patch, rc = check.parse_version(value)
+                self.assertIn(minor, (2, 3))
+                self.assertIsInstance(patch, int)
+                self.assertTrue(rc is None or isinstance(rc, int))
+        for value in vectors['invalid'] + [None, 1, {}, []]:
+            with self.subTest(value=value), self.assertRaises(check.Refused):
+                check.version_value(value)
+
     def test_decimal_and_digest_no_shell_fragments(self):
         for value in ('0', '01', '-1', '1;echo', '18446744073709551616'):
             with self.subTest(value=value), self.assertRaises(check.Refused):
@@ -132,6 +145,25 @@ class HttpsInstallerContracts(unittest.TestCase):
                 script + b"    sha_amd64='" + b'1' * 64 + b"'\n", template):
             with self.subTest(length=len(invalid)), self.assertRaises(check.Refused):
                 check.pins_from_script(invalid, template, '0.2.0')
+
+    def test_v03_bootstrap_context_and_manifest_roundtrip(self):
+        template = (Path(__file__).parents[1] / 'scripts/install-native.sh').read_bytes()
+        for version in ('0.3.0', '0.3.1'):
+            value = context()
+            value['version'] = version
+            self.assertEqual(check.validate_context(value), value)
+            script = template
+            for key, replacement in (('VERSION', version), ('SHA_AMD64', '1' * 64),
+                    ('SHA_ARM64', '2' * 64), ('SHA_MACOS', '3' * 64)):
+                script = script.replace(('@MARMISH_' + key + '@').encode(), replacement.encode())
+            self.assertEqual(check.pins_from_script(script, template, version),
+                dict(zip(check.TARGETS, ('1' * 64, '2' * 64, '3' * 64))))
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                raw = self.create_manifest(root, value)
+                raw = raw.replace(b'profile=1 journal=5', b'profile=2 journal=7')
+                value['manifest_pins'][check.TARGETS[0]] = check.sha(raw)
+                self.assertEqual(check.check_manifest(raw, value, check.TARGETS[0], root), [2, 7, 1, 1, 1])
 
     def test_artifact_rejects_extra_and_symlink_entries(self):
         with tempfile.TemporaryDirectory() as directory:

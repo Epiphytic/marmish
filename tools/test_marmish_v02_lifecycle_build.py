@@ -38,7 +38,7 @@ class PatchTests(unittest.TestCase):
         self.assertEqual(original, sources())
 
     def test_stable_patch_versions_derive_exact_distinct_variants(self):
-        for version in ('0.2.0', '0.2.1', '0.2.12', '0.2.18446744073709551615'):
+        for version in ('0.2.0', '0.2.1', '0.2.12', '0.2.18446744073709551615', '0.3.0', '0.3.1'):
             with self.subTest(version=version):
                 original = sources(version)
                 self.assertEqual(build.candidate_version(original), version)
@@ -47,7 +47,7 @@ class PatchTests(unittest.TestCase):
                     for name in build.SOURCE_FILES[:2]:
                         self.assertEqual(changed[name].replace(version + suffix, version), original[name])
         for version in ('0.2.01', '0.2.18446744073709551616', '0.2.100000000000000000000', '0.2.1-rc.1',
-                        '0.2.1+build', '0.3.1', '0.2.-1', '0.2.1\n'):
+                        '0.2.1+build', '0.4.1', '0.2.-1', '0.2.1\n'):
             with self.subTest(invalid=version), self.assertRaises(build.Refused):
                 build.patch_sources(sources(version), 'a')
 

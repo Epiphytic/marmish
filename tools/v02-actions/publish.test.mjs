@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {publishRelease, githubAdapters, verifyArtifactZip, transferDeadlineMs} from './publish.mjs';
-import {canonicalInventory, inventoryDigest, releaseNames} from './release-schema.mjs';
+import {canonicalInventory, inventoryDigest, releaseNames, releaseReportNames} from './release-schema.mjs';
 function zipFiles(files) {
   const parts = [], central = []; let offset = 0;
   for (const [name, content] of files) {
@@ -21,21 +21,21 @@ function zipFiles(files) {
   end.writeUInt32LE(directory.length, 12); end.writeUInt32LE(offset, 16);
   return Buffer.concat([...parts, directory, end]);
 }
-function fixture() {
+function fixture(version = '0.2.3') {
   const source = 'a'.repeat(40), bootstrapCommit = 'b'.repeat(40), tagObject = 'c'.repeat(40);
   const bootstrap = Buffer.from('#!/bin/sh\necho pinned\n');
-  const archives = new Map([[10, zipFiles(releaseNames('0.2.3').map(name => [name, Buffer.from(name)]))],
+  const archives = new Map([[10, zipFiles(releaseNames(version).map(name => [name, Buffer.from(name)]))],
     [11, zipFiles([['install.sh', bootstrap]])]]);
-  const inventory = {schema: 1, repository: 'Epiphytic/marmish', publisher_sha: source, source, version: '0.2.3',
+  const inventory = {schema: 1, repository: 'Epiphytic/marmish', publisher_sha: source, source, version,
     candidate: {run_id: '101', run_attempt: '1'}, artifacts: [...archives].map(([id, bytes]) => ({id, name: id === 10 ? 'candidate-101-1' : 'v02-pinned-bootstrap-101-1', digest: `sha256:${inventoryDigest(bytes)}`})),
-    assets: releaseNames('0.2.3').map(name => ({name, size: Buffer.byteLength(name), sha256: inventoryDigest(Buffer.from(name))})),
-    bootstrap_sha256: inventoryDigest(bootstrap), reports: [{name: 'provider.json', sha256: 'e'.repeat(64)}]};
+    assets: releaseNames(version).map(name => ({name, size: Buffer.byteLength(name), sha256: inventoryDigest(Buffer.from(name))})),
+    bootstrap_sha256: inventoryDigest(bootstrap), reports: releaseReportNames(version, {run_id:'101',run_attempt:'1'}).map(name => ({name,sha256:'e'.repeat(64)}))};
   const inventoryBytes = canonicalInventory(inventory), hash = inventoryDigest(inventoryBytes);
-  const proof = `Marmish-Publication: ${JSON.stringify({schema: 1, source, version: '0.2.3', run_id: '101', run_attempt: '1', inventory_sha256: hash})}`;
+  const proof = `Marmish-Publication: ${JSON.stringify({schema: 1, source, version, run_id: '101', run_attempt: '1', inventory_sha256: hash})}`;
   const state = {master: source, tag: null, release: null, assets: [], drafts: [], tags: [], writes: [], uploads: [], snapshots: [], hook: () => {}};
   const notFound = () => { const e = new Error('not_found'); e.status = 404; throw e; };
   const asset = pin => ({id: inventory.assets.indexOf(pin) + 1, name: pin.name, state: 'uploaded', size: pin.size,
-    digest: `sha256:${pin.sha256}`, browser_download_url: `https://github.com/Epiphytic/marmish/releases/download/v0.2.3/${pin.name}`});
+    digest: `sha256:${pin.sha256}`, browser_download_url: `https://github.com/Epiphytic/marmish/releases/download/v${version}/${pin.name}`});
   const api = async (route, options = {}) => {
     const method = options.method ?? 'GET';
     const r = route.replace('/repos/Epiphytic/marmish', '').split('?')[0];
@@ -50,8 +50,8 @@ function fixture() {
     if (r === '/rulesets') return [];
     if (r === '/tags') return state.tags;
     if (r === '/git/ref/heads/master') return {object: {type: 'commit', sha: state.master}};
-    if (r === '/git/ref/tags/v0.2.3') return state.tag ? {object: {type: 'tag', sha: tagObject}} : notFound();
-    if (r === `/git/tags/${tagObject}`) return {object: {type: 'commit', sha: state.tag}, tag: 'v0.2.3', message: `release\n${proof}`};
+    if (r === `/git/ref/tags/v${version}`) return state.tag ? {object: {type: 'tag', sha: tagObject}} : notFound();
+    if (r === `/git/tags/${tagObject}`) return {object: {type: 'commit', sha: state.tag}, tag: `v${version}`, message: `release\n${proof}`};
     if (r === '/git/tags' && method === 'POST') return {sha: tagObject};
     if (r === '/git/refs' && method === 'POST') { state.tag = source; return {}; }
     if (r === '/releases' && method === 'GET') return [...state.drafts, ...(state.release ? [state.release] : [])];
@@ -78,7 +78,7 @@ function fixture() {
     downloadPublic: async url => url.includes('raw.githubusercontent.com') ? bootstrap : Buffer.from(decodeURIComponent(url.split('/').at(-1))),
     writeState: async value => state.snapshots.push(value)};
   const input = {inventoryBytes, inventorySha256: hash, payloadRoot: '/payload', bootstrapPath: '/bootstrap.sh', publisherSha: source};
-  const seed = () => { state.tag = source; state.release = {id: 20, tag_name: 'v0.2.3', prerelease: true, draft: true, body: proof}; };
+  const seed = () => { state.tag = source; state.release = {id: 20, tag_name: `v${version}`, prerelease: true, draft: true, body: proof}; };
   return {inventory, input, adapters, state, seed, asset, source, bootstrapCommit};
 }
 test('publishes exact fifteen immutable assets and script-only direct-child bootstrap', async () => {
@@ -304,4 +304,30 @@ test('large binary uploads and downloads get ten bounded minutes; API JSON stays
   assert.equal(transferDeadlineMs({raw: true}), 600000);
   assert.equal(transferDeadlineMs({limit: 1024 * 1024 * 1024}), 600000);
   assert.equal(transferDeadlineMs({limit: 1024 * 1024}), 60000);
+});
+
+test('0.3 publication preserves guards and static qualification disclosures',async()=>{
+  for(const version of ['0.3.0','0.3.1']) {
+    const f=fixture(version);await publishRelease(f.input,f.adapters);
+    assert.equal(f.state.release.tag_name,`v${version}`);
+    const uploads=f.state.uploads.length;await publishRelease({...f.input,publisherSha:f.bootstrapCommit},f.adapters);assert.equal(f.state.uploads.length,uploads);
+    assert.equal(f.state.release.prerelease,true);assert.equal(f.state.release.make_latest,'false');
+    for(const required of ['stdin/stdout/stderr','rsync','transfer-ID resume','zlib','cancellation',
+      'Disconnect does not cancel','exactly matching peer versions','directory confinement','glibc 2.39','macOS 15',
+      'ad-hoc signed, not notarized','Keychain','Tor','copy-edge journal assertion failed','two interruption cohorts were not dispatched',
+      '3e93fa4 carrying 0.2.3','not these release binaries','marmish install --select 0.2.3','old binaries reject 0.3'])
+      assert.ok(f.state.release.body.includes(required),required);
+  }
+});
+test('publisher authority rejects cross-minor newer or equal drafts and malformed native tags before writes',async()=>{
+  for(const [version,tag] of [['0.2.3','v0.3.0'],['0.3.0','v0.3.0'],['0.3.0','v0.3.1'],['0.3.0','v0.3.01'],['0.3.0','v0.3.bad']]) {
+    const f=fixture(version);f.state.drafts.push({id:99,tag_name:tag,draft:true,body:'unrelated'});
+    await assert.rejects(publishRelease(f.input,f.adapters));assert.equal(f.state.writes.length,0);
+  }
+  for(const tag of ['v0.3.01','v0.3.1+build','v0.2.bogus']) {
+    const malformed=fixture('0.3.0');malformed.state.tags.push({name:tag});
+    await assert.rejects(publishRelease(malformed.input,malformed.adapters),/invalid_native_tag/);assert.equal(malformed.state.writes.length,0);
+  }
+  const f=fixture('0.3.0');f.state.tags.push({name:'v0.2.18446744073709551615'});
+  await publishRelease(f.input,f.adapters);assert.equal(f.state.release.tag_name,'v0.3.0');
 });

@@ -97,7 +97,7 @@ test('source fingerprint closes native local path dependencies and build inputs'
   await visit('crates/marmish-native');
   for(const name of ['engine','stream','core','vault']) assert.ok(visited.has(`crates/marmish-${name}`));
   for(const name of ['Cargo.toml','Cargo.lock','rust-toolchain.toml','scripts',
-    '.github/workflows/streaming-candidate.yml','.github/workflows/streaming-installed.yml']) {
+    '.github/workflows/streaming-candidate.yml','.github/workflows/streaming-installed.yml','tools/release-version-vectors.json']) {
     assert.ok(SOURCE_PATHS.includes(name),name);
   }
 });

@@ -1,6 +1,20 @@
-# Marmish native v0.2 agent specification
+# Marmish native v0.3 agent specification
 
-**Native v0.2.3 is released.** Source is
+**v0.3.0 publication is in progress.** The reviewed [release plan](phases/v0.3-release.md)
+adds release-version support and publishes existing streaming, rsync and native
+copy behavior. Public installation still selects v0.2.3 until the gated publisher
+updates it. Both peers need v0.3 for the new commands, and native copy requires
+an exact peer version match. The [release evidence](validation/v0.3-release.md)
+records the frozen pre-release source, five passing installed cohorts, failed
+copy edge cohort and two undispatched interruption cohorts. These are version
+0.2.3 source-build observations, not measurements of released v0.3 binaries.
+Full eight-cohort qualification is incomplete; the user authorized publishing
+with this disclosed boundary before a separate reviewed correction/benchmark phase.
+Tor remains experimental; unattended tests do not establish interactive Keychain consent.
+
+## Historical v0.2.3 publication
+
+**Native v0.2.3 was released.** Source is
 `0d849fe4dd92b447aa16591b168fff70abcd732c`; bootstrap-only commit is
 `84af2ac715b6af3dcf2e553359200c8834b6bf99`. Candidate
 [41926462226](https://github.com/Epiphytic/marmish/actions/runs/41926462226)
@@ -49,14 +63,38 @@ Other operating systems, architectures and older runtime platforms are not
 covered by those assets. Target availability is separate from full qualification. Darwin ad-hoc signing is not Developer ID signing or
 notarization; the actual manifest records the signing state.
 
-Direct relays are the intended v0.2 command route; the full nine-pair installed
-command matrix and version-lifecycle qualification remain pending. Working Tor command
-transport is deferred to v0.3. Embedded Arti and its foundation evidence remain
+Direct relays are the route exercised by the passing streaming matrices below.
+Full finite-command nine-pair and version-lifecycle qualification remain separate
+from those results. Embedded Arti and its foundation evidence remain
 experimental command capabilities, with no direct-network fallback after a
 Tor failure. No PTY, tmux, interactive shell, Unix-login mapping, root execution
 service or general process sandbox is promised by this release.
 
-## Streaming initiative (source only)
+## v0.3 streaming and file transfer
+
+Current usage is in the [README](../README.md). Use rsync 3.x on both ends with
+`rsync -as -e 'marmish rsh' ./source/ SERVER_NPUB:destination/`; `-s` is mandatory.
+Global identity/relay options precede `rsh`. `stream`, `rsh` and native copy use
+660-second idle and 300-second keepalive defaults; configurable values are
+1–86400 seconds with keepalive strictly below idle. Compression is opt-in via
+`--compress`, with 8192-byte blocks and a 256 KiB byte window, not a file-size cap.
+Copy paths are literal regular-file paths, at most 4096 bytes with no NUL and
+subject to filesystem limits. Existing targets require `--overwrite`.
+`put/get --resume TRANSFER_ID` must repeat every original path and option,
+including overwrite and metadata preservation; resume creates a fresh stream.
+A lost commit acknowledgement is uncertainty and can leave a committed target.
+Ctrl-C requests confirmed remote cancellation; disconnection/idle timeout does
+not terminate execution. Cancellation preserves durable partial data, and
+already committed destinations remain committed. `stream-reconcile` acknowledges
+possible orphan execution and releases credit; it does not kill a process.
+Executable resolution uses the running server daemon's inherited PATH; restart
+the daemon after changing it. Executable policies remain additive and do not
+confine rsync or copy to a directory. Child processes receive minimal PATH
+`/usr/bin:/bin`. Both peers must upgrade together for exact-version native copy.
+
+The following increment history preserves each result's original scope; the
+[current release summary](validation/v0.3-release.md) supersedes statements
+that installed positive matrices are still pending, without erasing failures.
 
 The [streaming plan](phases/streaming-transfer-plan.md) adds a separate bounded
 full-duplex execution path, rsync remote-shell mode, native regular-file copy
@@ -222,8 +260,9 @@ or active ownership is retained. `copy-receipts` supports inspection and explici
 index-only forgetting with revision and retained-state acknowledgement. The
 `limits.copy_receipt_retention` setting is distinct from room expiry and command
 payload retention; it defaults to and normalizes to at least 604860 seconds,
-with a maximum of 365 days. This implementation is not yet a qualified platform
-capability. See [current copy evidence](validation/copy-runtime-live.md), including
+with a maximum of 365 days. Positive installed platform matrices passed, but
+edge-copy and interruption qualification remain incomplete. See [earlier copy
+evidence](validation/copy-runtime-live.md), including
 the failed early relay attempt, and [integrated review](reviews/streaming-copy-integrated-code.md).
 
 Cancellation must be explicit and independent of blocked stream data. The runtime
@@ -232,7 +271,7 @@ confirmed versus uncertain outcomes, and safe process-group cleanup. Disconnect
 alone must not cancel a command. Cross-platform and live-relay qualification are
 required before claiming the new capabilities.
 
-The source-only stream snapshot has a mandatory `stdin_closed` flag. Closing
+The v0.3 stream snapshot has a mandatory `stdin_closed` flag. Closing
 stdin early does not fail the command: accepted/delivered cursors remain truthful,
 valid output ACKs still apply, and the client stops sending unaccepted input while
 draining output and the natural exit status. A client fingerprints Open before
@@ -318,13 +357,14 @@ serializing the test suite or weakening encryption. Private files, ownership,
 link/type checks and canonical path requirements remain enforced.
 
 Released v0.2.3 format constants are profile 2, journal 6, engine 1, config 1
-and commands 1. The unreleased native-copy source advances the journal to 7,
+and commands 1. The v0.3 native-copy implementation advances the journal to 7,
 recognizing formats 0, 3, 4, 5, 6 and 7; checked initialization creates the copy
 index/replay state and stamps 7. Do not downgrade a format-7 profile into the
 released format-6 owner. Command tables share the journal's persisted compatibility gate; commands=1
 is not an independent database version check. Journal opening recognizes the
 implemented older native formats 0, 3, 4 and 5 before checked initialization and
-stamping 6. This does not promise migration of historical Python profiles.
+stamping 6 in the released v0.2.3 implementation. This does not promise migration
+of historical Python profiles.
 Newer unsupported formats fail preflight before ordinary owner opening.
 
 Read-only preflight can cause the pinned SQLite stack to create/open bounded
@@ -336,7 +376,7 @@ Never delete databases, change format markers or bypass checks to recover access
 
 ## Relay selection, destinations and routing
 
-Unreleased source defaults new setup profiles to
+v0.3 defaults new setup profiles to
 `wss://relay.eu.whitenoise.chat/` and `wss://relay.us.whitenoise.chat/` when no
 relay is supplied. Setup writes this concrete pair to disk. Existing profiles
 keep their relays, and missing/empty/null config fields still fail validation.

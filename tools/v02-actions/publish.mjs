@@ -3,22 +3,14 @@ import {inflateRawSync} from 'node:zlib';
 import {constants, promises as fs} from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {REPOSITORY, HEX40, HEX64, VERSION, MAX_ASSET, inventoryDigest, parseInventory,
+import {REPOSITORY, HEX40, HEX64, NATIVE_TAG, validVersion, compareVersions, MAX_ASSET, inventoryDigest, parseInventory,
   parsePublicationInputs, requireRelease as need} from './release-schema.mjs';
 
-const nativeTag = /^v0\.2\.[0-9]+(?:-rc\.[0-9]+)?$/;
-function versionParts(tag) {
-  need(nativeTag.test(tag), 'invalid_native_tag');
-  const [patch, rc] = tag.slice(5).split('-rc.');
-  return [BigInt(patch), rc === undefined ? null : BigInt(rc)];
-}
+const nativeTag = NATIVE_TAG;
 function compareTags(a, b) {
-  const x = versionParts(a), y = versionParts(b);
-  if (x[0] !== y[0]) return x[0] > y[0] ? 1 : -1;
-  if (x[1] === y[1]) return 0;
-  if (x[1] === null) return 1;
-  if (y[1] === null) return -1;
-  return x[1] > y[1] ? 1 : -1;
+  need(typeof a === 'string' && typeof b === 'string' && nativeTag.test(a) && nativeTag.test(b)
+    && validVersion(a.slice(1)) && validVersion(b.slice(1)), 'invalid_native_tag');
+  return compareVersions(a.slice(1), b.slice(1));
 }
 export async function readPublicFile(file, limit = MAX_ASSET) {
   const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -337,7 +329,7 @@ export async function publishRelease(input, adapters) {
     need(await tagTarget(api, base, tag, proof) === inventory.source, 'tag_source_conflict');
     release = await api(`${base}/releases`, {method: 'POST', body: {tag_name: tag, target_commitish: inventory.source,
       name: `Marmish ${inventory.version}`, draft: true, prerelease: true, make_latest: 'false',
-      body: `Experimental native release. marmishd now detaches by default with private daemon.log output and --foreground for supervision. Remote executables resolve using the daemon inherited PATH; command_not_found, command_not_executable and finite launch errors distinguish lookup from policy denial. Both peers must upgrade; do not downgrade profiles after using the new command protocol. Candidate package, installed-feature, quickstart and provider checks passed on Linux AMD64/ARM64 and macOS ARM64. macOS is ad-hoc signed, not notarized; interactive Keychain consent recovery remains unverified. Tor remains optional. Installed nine-pair command/lifecycle and public HTTPS qualification are separate, not implied by this candidate. Source-bound live latency and throughput measurements are in docs/validation/native-command-path-errors.md; they are not measurements of these release binaries.\n\n${proof}`}});
+      body: `Experimental Rust streaming release: streaming stdin/stdout/stderr, native file put/get with transfer-ID resume, rsync remote-shell support, streaming zlib compression and explicit cancellation. Disconnect does not cancel commands. Copy requires exactly matching peer versions; upgrade both peers together. Executable policies do not provide directory confinement. Linux AMD64/ARM64 requires glibc 2.39; macOS ARM64 requires macOS 15. macOS is ad-hoc signed, not notarized; interactive Keychain consent recovery remains unverified. Tor is optional and not a release gate. Candidate package, installed-feature, quickstart and provider checks passed on all three platforms. Full streaming qualification has not passed: the copy-edge journal assertion failed, and the two interruption cohorts were not dispatched. Historical performance figures describe source 3e93fa4 carrying 0.2.3 metadata, not these release binaries. Public HTTPS installer verification is separate and not implied by the candidate. Rollback using this new binary: marmish install --select 0.2.3; old binaries reject 0.3 version directories. Do not downgrade profiles after using newer state formats.\n\n${proof}`}});
     need(matchingRelease(release, tag, proof) && release.draft === true, 'invalid_created_release');
     await save('draft_created');
   }

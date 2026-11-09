@@ -3,35 +3,22 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {promises as fs} from 'node:fs';
 import {pathToFileURL} from 'node:url';
-import {validateEligibility, validVersion, ELIGIBILITY_REASONS} from './release-schema.mjs';
+import {validateEligibility, validVersion, compareVersions, NATIVE_TAG, ELIGIBILITY_REASONS} from './release-schema.mjs';
 export {ELIGIBILITY_REASONS} from './release-schema.mjs';
 
 const REPOSITORY = 'Epiphytic/marmish';
 const WORKFLOW = '.github/workflows/v02-release.yml';
 const SHA = /^[0-9a-f]{40}$/;
 const ID = /^[1-9][0-9]{0,15}$/;
-const NATIVE_TAG = /^v0\.2\.[0-9]+(?:-rc\.[0-9]+)?$/;
 function insist(ok, reason) { if (!ok) throw new Error(reason); }
-function parts(version) {
-  const match = typeof version === 'string' && /^0\.2\.(0|[1-9][0-9]{0,19})(?:-rc\.([1-9][0-9]{0,19}))?$/.exec(version);
-  insist(match && validVersion(version), 'invalid_version');
-  return [BigInt(match[1]), match[2] ? BigInt(match[2]) : null];
-}
-export function compareVersions(a, b) {
-  const [ap, ar] = parts(a), [bp, br] = parts(b);
-  if (ap !== bp) return ap < bp ? -1 : 1;
-  if (ar === br) return 0;
-  if (ar === null) return 1;
-  if (br === null) return -1;
-  return ar < br ? -1 : 1;
-}
+export {compareVersions} from './release-schema.mjs';
 function packageVersion(text, name) {
   const matches = text.split(/^\[\[?[^\n]+\]\]?\s*$/m).slice(1);
   const found = matches.filter(block => new RegExp(`^name\\s*=\\s*"${name}"\\s*$`, 'm').test(block));
   insist(found.length === 1, 'invalid_version');
   const versions = [...found[0].matchAll(/^version\s*=\s*"([^"\n]+)"\s*$/gm)];
   insist(versions.length === 1, 'invalid_version');
-  parts(versions[0][1]);
+  insist(validVersion(versions[0][1]), 'invalid_version');
   return versions[0][1];
 }
 export async function versionAt(source, git) {
@@ -59,13 +46,13 @@ async function releaseState(api) {
   const releases = allReleases.filter(release => typeof release.tag_name === 'string' && NATIVE_TAG.test(release.tag_name));
   const names = new Set();
   for (const tag of tags) {
-    parts(tag.name.slice(1));
+    insist(validVersion(tag.name.slice(1)), 'invalid_version');
     insist(!names.has(tag.name) && SHA.test(tag.commit?.sha), 'inconsistent_release_state');
     names.add(tag.name);
   }
   const released = new Set();
   for (const release of releases) {
-    parts(release.tag_name.slice(1));
+    insist(validVersion(release.tag_name.slice(1)), 'invalid_version');
     insist(!released.has(release.tag_name) && release.draft === false && names.has(release.tag_name), 'inconsistent_release_state');
     released.add(release.tag_name);
   }

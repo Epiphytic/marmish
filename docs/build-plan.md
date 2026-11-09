@@ -1,6 +1,40 @@
 # Marmish build plan
 
-## Active plan: v0.2
+## Active plan: v0.3 publication, then qualification corrections and benchmarks
+
+The [v0.3 release plan](phases/v0.3-release.md) governs the user-authorized
+publication of the existing Rust streaming, rsync and native-copy product as
+0.3.0, tracked by Beads `marmish-8ka.7`. Product behavior is frozen at
+`3e93fa46e9f3b96f8ab36581ffe51688ff74eb4a`; this release increment changes
+version-family acceptance and release metadata, not transport semantics.
+The public installer remains pinned to 0.2.3 until a successful gated publisher
+updates it. Fresh three-platform candidate, provider, installed-tool and
+quickstart gates remain mandatory; release publication and public-URL checks
+must be reported from their actual runs.
+
+The [pre-release evidence](validation/v0.3-release.md) contains five passing
+installed cohorts and the failed edge-copy cohort. Both interruption cohorts
+were not dispatched. These source builds identify as 0.2.3, and neither their
+measurements nor a publication authorization establish full v0.3 qualification.
+Preserve that failed chain and historical evidence; do not retry it into a pass.
+
+After publication, Beads `marmish-8ka.6.1` and the existing benchmark task
+`marmish-7nw.5.3` track the follow-up. A separate detailed design and Claude review
+will address
+the copy harness's local-intent versus server-admission contract, preserving
+all authority, group/session/stream bindings and no-side-effect requirements.
+Then run a fresh exact-source candidate and all eight serial installed cohorts.
+This later phase also implements the user's requested main-operation benchmarks:
+finite commands, binary streams, rsync and native copy. Reuse existing installed
+fixtures and independently validated receipts, with bounded reproducible datasets,
+explicit cold/warm setup, whole-operation latency, application-byte goodput,
+resume and cancellation timing where actually instrumented, and retained failure
+and cleanup outcomes. Separate setup from steady transfer only with real timing
+boundaries; publish sample counts and raw measurements without inventing RTT,
+wire rate, compression ratios or small-sample tail percentiles. This scope is
+planned, not implemented or qualified by the current release.
+
+## Historical native v0.2 baseline
 
 The user's 2026-11-02 reset selected the [native Rust v0.2 plan](v0.2-plan.md),
 tracked by Beads `marmish-7nw`. v0.1 development and experimental.3 were stopped.
@@ -31,8 +65,9 @@ results, and unchanged source does not imply byte-identical binaries or provenan
 See the [README](../README.md) for the native POSIX-shell/curl quickstart and its
 current validation caveat. Iris and GitHub provide independent script source
 URLs; release assets use GitHub Releases. Native installation/runtime require
-no Python, uv, Cargo or Rust compiler. Tor command qualification is optional,
-experimental v0.3 work. PTY/tmux, forwarding, multi-device conformance and
+no Python, uv, Cargo or Rust compiler. Tor command qualification remains optional,
+experimental work; the v0.3 release number does not establish support. PTY/tmux,
+forwarding, multi-device conformance and
 privileged Unix-user mapping remain separate future scope.
 
 The original full-qualification exit criteria remain the validation target,
@@ -56,7 +91,7 @@ separate finite explanations. Existing invocation recovery and original-request
 identity remain stable. Claude design/code reviews and dual-mirror publication
 remain the exit gates; release assets are a separate publication step.
 
-## Streaming commands and file transfer
+## Streaming commands and file transfer: increment history
 
 The active [streaming/file-transfer initiative](phases/streaming-transfer-plan.md),
 Beads `marmish-8ka`, adds reliable duplex remote shell support for rsync,
@@ -74,8 +109,10 @@ Native resumable copy has independent integrated source approval and a passing
 12-case Linux relay small smoke; default large-file qualification is running. Its [design](phases/streaming-copy.md) and
 [local cleanup contract](phases/streaming-copy-local-gc.md) define the phase exit
 criteria. Installed cross-platform qualification remains the following phase. See [runtime evidence](validation/streaming-runtime.md) for
-actual source/platform test boundaries and failures. None of these increments is
-a capability of the currently published v0.2.3 binary installer.
+actual source/platform test boundaries and failures. The current
+[v0.3 summary](validation/v0.3-release.md) records the later positive installed
+matrices and incomplete edge qualification. These increments are absent from
+the public v0.2.3 installer, which remains selected during v0.3 publication.
 
 ## Historical v0.1 plans and evidence
 

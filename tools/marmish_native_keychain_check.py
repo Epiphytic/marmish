@@ -542,9 +542,11 @@ class Qualification:
 
 
 def lifecycle_versions(version):
-    require(isinstance(version, str) and len(version) <= 43
-        and re.fullmatch(r'0\.2\.(0|[1-9][0-9]{0,19})', version)
-        and int(version[4:]) <= 18446744073709551615, 'lifecycle_arguments')
+    try:
+        _, _, rc = _fixture.parse_release_version(version)
+    except ValueError:
+        require(False, 'lifecycle_arguments')
+    require(rc is None, 'lifecycle_arguments')
     return version, version + '-rc.1'
 
 

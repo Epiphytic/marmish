@@ -34,7 +34,7 @@ main() {
                 case "$2" in /*) ;; *) fail absolute_path_required ;; esac
                 case "$option" in --prefix) prefix=$2 ;; --bin-dir) bin_dir=$2 ;; --asset-dir) asset_dir=$2 ;; --state-dir) state_dir=$2 ;; esac
                 shift 2 ;;
-            --help) printf '%s\n' 'Marmish native v0.2 installer: --quickstart --debug --prefix DIR --bin-dir DIR --asset-dir DIR --state-dir DIR --key-storage auto|file|keychain'; return 0 ;;
+            --help) printf '%s\n' 'Marmish native installer: --quickstart --debug --prefix DIR --bin-dir DIR --asset-dir DIR --state-dir DIR --key-storage auto|file|keychain'; return 0 ;;
             *) fail invalid_argument ;;
         esac
     done
@@ -60,7 +60,7 @@ main() {
     valid_hex() { [ "${#1}" = 64 ] && case "$1" in *[!0-9a-f]*) return 1 ;; *) return 0 ;; esac; }
     printf '%s\n' "$version" | awk '
         function bounded(s) {return length(s)<20 || (length(s)==20 && ("x" s)<="x18446744073709551615")}
-        /^0\.2\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$/ {s=substr($0,5);n=split(s,a,"-rc[.]");ok=bounded(a[1])&&(n==1||bounded(a[2]))} END {exit !ok}' || fail unqualified_release_template
+        /^0\.[23]\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$/ {s=substr($0,5);n=split(s,a,"-rc[.]");ok=bounded(a[1])&&(n==1||bounded(a[2]))} END {exit NR!=1 || !ok}' || fail unqualified_release_template
     valid_hex "$sha_amd64" && valid_hex "$sha_arm64" && valid_hex "$sha_macos" || fail unqualified_release_template
     if command -v sha256sum >/dev/null 2>&1; then
         checksum() { sha256sum "$1" | awk '{print $1}'; }

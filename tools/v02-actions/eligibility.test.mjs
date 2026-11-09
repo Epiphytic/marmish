@@ -177,3 +177,21 @@ test('intermediate version transitions require matching native manifest and lock
     ? '[[package]]\nname = "marmish-native"\nversion = "0.2.1"\n' : git(args);
   assert.equal((await evaluateEligibility(input,adapters)).reason,'invalid_version');
 });
+
+test('cross-minor progression and bounded recovery reject downgrade and malformed native tags',async()=>{
+  for(const current of ['0.3.0','0.3.1']) {
+    const adapters=fixtures({versions:['0.2.18446744073709551615',current,current],
+      tags:[{name:'v0.2.18446744073709551615',commit:{sha:sha(1)}}]});
+    assert.equal((await evaluateEligibility(input,adapters)).decision,'build');
+    const original=await evaluateEligibility(input,fixtures({versions:['0.2.3',current,current]}));
+    const recovery=fixtures({versions:['0.2.3',current,current],tags:[{name:`v${current}`,commit:{sha:sha(3)}}],allowSelectedTag:true});
+    assert.deepEqual(await verifyEligibility(original,{...recovery,allowSelectedTag:true}),original);
+  }
+  const lower=fixtures({tags:[{name:'v0.3.0',commit:{sha:sha(1)}}]});
+  assert.equal((await evaluateEligibility(input,lower)).reason,'nonadvancing_version');
+  const old=await evaluateEligibility(input,fixtures());
+  await assert.rejects(verifyEligibility(old,{...fixtures({tags:[{name:'v0.2.2',commit:{sha:sha(3)}},{name:'v0.3.0',commit:{sha:sha(1)}}]}),allowSelectedTag:true}),/recomputation/);
+  for(const bad of ['v0.3.01','v0.3.1-rc.0','v0.3.1+build','v0.3.bogus','v0.2.1-bogus','v0.3.']) {
+    assert.equal((await evaluateEligibility(input,fixtures({tags:[{name:bad,commit:{sha:sha(1)}}]}))).reason,'invalid_version');
+  }
+});

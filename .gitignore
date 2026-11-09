@@ -4,6 +4,7 @@
 *.db
 .beads-credential-key
 .beads/proxieddb/
+.beads.gate.lock
 
 # Private runtime state (may contain identities, commands and output)
 .marmish/

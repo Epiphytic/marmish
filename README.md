@@ -1,17 +1,21 @@
 # Marmish
 
-Run remote commands over Marmot's MLS-encrypted Nostr transport. Marmish v0.2
-uses native Rust clients and daemons, with one named Nostr identity per daemon.
+Run remote commands over Marmot's MLS-encrypted Nostr transport. Marmish uses
+native Rust clients and daemons, with one named Nostr identity per daemon.
 The same identity can send commands and accept authorized commands.
 
-**Native v0.2.3 is available.** It includes background daemon startup, server
-PATH resolution and distinct command lookup, policy and launch errors. All three
-platforms passed native verification, packaging, installed tests, provider checks
-and file-backed quickstart checks. Both public installer sources passed the
-six-cell HTTPS install/setup matrix. Interactive macOS Keychain consent and
-recovery of the reported user denial remain unverified; full nine-pair remote
-command and version-lifecycle qualification remain incomplete. Tor is experimental.
-See the [current release evidence](docs/validation/native-automatic-release.md).
+**v0.3.0 publication is in progress.** This version adds binary streaming,
+rsync remote-shell operation, resumable regular-file copy, optional compression
+and explicit stream cancellation. The public installer still selects **0.2.3**
+until the gated publisher updates it; the new commands below require v0.3 on
+both peers. Check `marmish --version` before using them.
+
+The pre-release source passed installed three-platform stream, rsync and copy
+matrices plus streaming and rsync edge cohorts. The copy edge cohort failed on
+all three platforms; the two copy-interruption cohorts were not dispatched.
+This is **incomplete qualification**, disclosed for the user-authorized release.
+Interactive macOS Keychain consent remains unverified and Tor is experimental.
+See [v0.3 release status and measured results](docs/validation/v0.3-release.md).
 
 Source: [GitHub](https://github.com/Epiphytic/marmish) ·
 [Radicle](https://radicle.network/nodes/iris.radicle.network/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg)
@@ -32,11 +36,13 @@ If Iris is unavailable, the same installer is available independently on GitHub:
 curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/Epiphytic/marmish/master/scripts/install.sh | sh -s -- --quickstart --debug
 ```
 
-The installer pins v0.2.3 and verifies its manifest and binary checksums. It does
-not select a legacy v0.1 release. The Iris and GitHub URLs are independent script sources; both were verified to
-serve the same pinned native bootstrap. Versioned binary assets
-are downloaded from GitHub Releases. See [Scope and validation](#scope-and-validation) for the evidence boundary. No Python, uv,
-Cargo or Rust compiler is needed to install or run it.
+During publication, the installer still pins v0.2.3 and verifies its manifest
+and binary checksums. It does not select a legacy v0.1 release. The Iris and
+GitHub URLs are independent script sources; both were verified to serve the
+same pinned native bootstrap. Versioned binary assets are downloaded from
+GitHub Releases. See [Scope and validation](#scope-and-validation) for the
+evidence boundary. No Python, uv, Cargo or Rust compiler is needed to install
+or run it.
 
 The native 0.2.1 installer adds automatic upgrades of recognized v0.1 installer
 launchers. It verifies the old marker and exact wrappers, replaces the launchers,
@@ -52,14 +58,14 @@ approval. Linux musl and Intel macOS binaries are not provided.
 Quickstart creates the `default` identity and asks for:
 
 - A role: enter `c`, `s` or `b`, then Return. Return alone selects **both**.
-- Relay URL(s), separated by spaces. **Unreleased source:** Return selects
+- Relay URL(s), separated by spaces. **v0.3:** Return selects
   `wss://relay.eu.whitenoise.chat/` and `wss://relay.us.whitenoise.chat/` for new
   profiles, or keeps an existing profile’s relays. Published v0.2.3 still requires
   explicit URLs; enter the two URLs above when installing that version.
 - Tor routing (`auto`, `always` or `off`): `always` routes all relays through Tor;
   `off` refuses onion relays. Return selects experimental `auto`, which
   connects directly to non-onion relays. Tor remains
-  experimental and is not a v0.2 release qualification claim.
+  experimental; the v0.3 version number does not imply qualified Tor operation.
 - Client npubs allowed to execute here. Leave this empty to disable inbound
   execution, even when the role is **both**.
 - For client or both roles, trusted remote server npubs, separately from inbound client permissions.
@@ -81,7 +87,7 @@ your shell's PATH. On a machine accepting commands, start the daemon:
 marmishd
 ```
 
-Version 0.2.3 uses the configured `default` identity and detaches by
+The native daemon uses the configured `default` identity and detaches by
 default. Successful startup is quiet and waits for credentials, storage, IPC and
 transport readiness; startup errors return to the caller's terminal. Normal
 output appends to the identity profile's private `daemon.log` (mode 0600), with
@@ -99,9 +105,9 @@ client dies before acknowledging readiness, the new unacknowledged daemon shuts
 down; an acknowledged daemon survives the caller. This does not install a login
 or boot service.
 
-## Rsync over Marmish (unreleased source)
+## Rsync over Marmish (v0.3)
 
-Install a modern rsync on both machines and use secluded arguments (`-s`):
+Install rsync 3.x on both machines and use secluded arguments (`-s`):
 
 ```sh
 rsync -as -e 'marmish rsh' ./source/ SERVER_NPUB:destination/
@@ -134,22 +140,24 @@ local output alone leaves the remote command running. Use `marmish streams` and
 
 The adapter requires `-s`; old argument escaping, rsync daemon mode, `rsync://`,
 SSH options and interactive shells are unsupported. See the [rsync phase design](docs/phases/streaming-rsync.md)
-for limits and qualification requirements; this source addition is not a released
-cross-platform interoperability claim.
+for limits and qualification requirements. The pre-release source passed all nine
+platform pairs in both directions; see the [qualification boundary](docs/validation/v0.3-release.md).
 
-## Native file copy (implementation under qualification)
+## Native file copy (v0.3)
 
-The streaming source branch adds literal regular-file transfers. These commands
-are not in the v0.2.3 installer. Independent source review, Linux relay tests
-and four-way 66 MiB local helper tests passed. Installed platform qualification
-and transfers above 65 MiB through a relay remain pending. See
-[copy validation](docs/validation/copy-runtime-live.md).
+`put` and `get` transfer a single regular file. **Both peers must use the exact
+same native-copy version; upgrade both ends.** Positive installed tests passed
+all nine platform pairs in both directions. The copy edge cohort failed, and
+installed interruption/resume qualification was not run. Large relay transfers
+remain unqualified. See [release evidence](docs/validation/v0.3-release.md) and
+[earlier copy validation](docs/validation/copy-runtime-live.md).
 
 ```sh
-marmish put SERVER_NPUB ./local-file 'remote file'
-marmish get SERVER_NPUB 'remote file' ./downloaded-file
-marmish put --compress --preserve-mode --preserve-mtime -- SERVER_NPUB ./local-file 'remote file'
-marmish put --resume TRANSFER_ID -- SERVER_NPUB ./local-file 'remote file'
+marmish put --compress -- SERVER_NPUB ./local-file 'remote file'
+marmish get -- SERVER_NPUB 'remote file' ./downloaded-file
+marmish put --overwrite --preserve-mode --preserve-mtime -- SERVER_NPUB ./local-file 'remote file'
+# If that last transfer is interrupted, repeat its original flags and paths:
+marmish put --overwrite --preserve-mode --preserve-mtime --resume TRANSFER_ID -- SERVER_NPUB ./local-file 'remote file'
 ```
 
 Paths are literal, including spaces and shell characters; no shell expands them.
@@ -187,7 +195,7 @@ transfer directory that cannot be resumed or automatically reclaimed. Stop and
 confirm the owning work has exited before manually inspecting such retained
 state; never delete a live or uncertain transfer's files to bypass a conflict.
 
-## Cancel running work (unreleased streaming source)
+## Cancel running work (v0.3)
 
 Press Ctrl-C during a streaming command or transfer to request authenticated
 remote cancellation. Marmish waits for confirmation that the owned remote process
@@ -225,7 +233,7 @@ marmish setup --update --trust SERVER_NPUB
 marmish SERVER_NPUB@relay.example -- /usr/bin/printf '%s\n' 'Hello from Marmish'
 ```
 
-With the unreleased source, omit the hostname to use the profile’s relay set:
+With v0.3, omit the hostname to use the profile’s relay set:
 
 ```sh
 marmish SERVER_NPUB -- printf '%s\n' 'Hello from Marmish'
@@ -282,7 +290,7 @@ stopped. For example, add an entry to its existing `aliases` object:
 ```
 
 Alias names beginning `npub`, `nsec` or `nprofile`, or consisting of 64 hex
-characters, are reserved for identities in the unreleased source; rename such
+characters, are reserved for identities in v0.3; rename such
 aliases. A valid npub always identifies its own key.
 
 The alias must include the profile's complete relay set. Then run
@@ -307,10 +315,10 @@ ordinary work. There is also a lifetime limit of 4096 fresh-room preparation
 markers per profile and 4096 lifetime command-room metadata rows. These are separate from command handles, which identify
 individual invocations.
 
-## Streaming commands (unreleased source)
+## Streaming commands (v0.3)
 
-The source build adds a separate bounded binary stream path; the published
-v0.2.3 installer does not include it. Both ends need the new source build.
+Use `stream` for bounded binary stdin/stdout without a PTY. Both ends need v0.3;
+the public v0.2.3 installer does not include it.
 
 ```sh
 marmish stream SERVER_NPUB -- /bin/cat < input.bin > output.bin
@@ -321,9 +329,9 @@ marmish cancel --stream STREAM_ID
 
 Arguments remain literal and remote executable restrictions still apply. Stderr
 carries the stream ID and diagnostics; stdout carries only remote stdout.
-Optional compression uses independent bounded zlib blocks, falling back to raw
-blocks when compression does not help. This is binary execution without a PTY.
-Rsync remote-shell syntax and native file-copy commands are separate increments.
+Compression is off by default. `--compress` uses independent bounded zlib
+blocks, falling back to raw blocks when compression does not help. This is binary execution without a PTY.
+Rsync remote-shell syntax and native file-copy commands are shown above.
 
 Ctrl-C requests remote cancellation independently of blocked stream data. Marmish
 reports confirmation only after receiving a confirmed remote terminal result;
@@ -331,7 +339,10 @@ a second Ctrl-C leaves locally without claiming the process stopped. An ordinary
 disconnect, broken pipe or idle timeout leaves the remote command running with
 bounded output buffers, which can cause it to block until explicitly cancelled.
 The default attachment idle limit is 11 minutes (`--idle-seconds 660`), with
-`--keepalive-seconds 300`; adaptive polling remains responsive to output.
+`--keepalive-seconds 300`; adaptive polling remains responsive to output. Both
+options accept 1–86400 seconds, and keepalive must be less than idle. These
+defaults also apply to rsync and copy. Ordinary-command `--wait-seconds` does
+not configure streaming timeouts.
 
 On the server, `marmish cancel --stream STREAM_ID --local` cancels an owned
 process even after its remote grant is removed. Abrupt daemon failure can leave
@@ -423,11 +434,13 @@ expiry is not a guarantee that every relay or backup erases a message.
 
 ## Scope and validation
 
-The implemented v0.2 feature set provides noninteractive remote execution, durable command recovery and
-explicit cancellation. Interactive terminals, tmux attachment, X11 forwarding,
-port forwarding and file transfer are future work. Embedded Arti/Tor support is
-experimental; working Tor command execution is deferred to v0.3 and is not
-a v0.2 qualification claim.
+The v0.3 implementation provides noninteractive remote execution, durable command
+recovery, binary streams, rsync remote-shell operation, resumable single-file
+copy, compression and explicit cancellation. Qualification remains incomplete
+as described in [the release evidence](docs/validation/v0.3-release.md).
+Interactive terminals, tmux attachment, X11 and port forwarding remain future
+work. Embedded Arti/Tor is experimental and has no qualified command-transport
+claim in this release. There is no process or directory sandbox.
 
 Inspect the installed version with `marmish --version` and its source/target
 metadata with `marmish release-info`. Inspect the default managed installation with:
@@ -438,9 +451,9 @@ marmish install-status --prefix "$HOME/.local/share/marmish-native" --bin-dir "$
 
 Use `marmish --help` for command options.
 The old Python distribution's `--doctor` and namespace requirements do not apply
-to the native v0.2 distribution.
+to the native distribution.
 
-## Current release validation
+## Historical v0.2.3 release validation
 
 The [v0.2.3 release](https://github.com/Epiphytic/marmish/releases/tag/v0.2.3)
 contains 15 verified assets from source
@@ -485,13 +498,32 @@ latency/goodput and qualification limits. Historical
 [v0.2.1](docs/validation/v0.2/corrective-release-0.2.1.md) and
 [v0.2.0](docs/validation/v0.2/initial-release.md) evidence remain separately labeled.
 
+## Retained versions and rollback
+
+Stop the daemon before changing the selected binaries. Use the **new v0.3
+binary** to select a retained v0.2.3 installation at the default locations:
+
+```sh
+marmish install --select 0.2.3 --prefix "$HOME/.local/share/marmish-native" --bin-dir "$HOME/.local/bin"
+```
+
+The old v0.2.3 installer binary cannot inspect v0.3 version directories.
+Selection reverifies retained files; it does not make old binaries compatible
+with newer profile state. Any profile opened by v0.3 has its journal stamped
+format 7, even without file copy; v0.2.3 cannot open that journal. Preserve
+private state and restore only a compatible backup or use a separate profile;
+never change format markers to force access.
+
 ## Release process
 
 Releases require an explicit reviewed native Cargo version bump. The new GitHub
 workflow runs the full three-platform candidate checks before publishing
 immutable assets and updating the installer. It does not infer version numbers
-from commit messages. The v0.2.3 candidate and publisher passed hosted
-qualification, and the installer selects v0.2.3.
+from commit messages. The v0.2.3 candidate and publisher passed their hosted
+gates, and the installer still selects v0.2.3 during v0.3 publication. The
+[v0.3 release plan](docs/phases/v0.3-release.md) preserves fresh candidate,
+provider, installed-tool and quickstart gates; earlier source qualification
+does not stand in for the new release checks.
 
 Binary releases are hosted on GitHub. Source branches and tags are also mirrored
 to Radicle/Iris separately; GitHub Actions does not publish Radicle releases.

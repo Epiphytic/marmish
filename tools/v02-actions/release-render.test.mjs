@@ -5,14 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 import {reproduce, loadInspection, rendererEnvironment} from './release-render.mjs';
 import {writeInspection} from './release-candidate.mjs';
-import {releaseNames, inventoryDigest as sha} from './release-schema.mjs';
+import {releaseNames, releaseReportNames, inventoryDigest as sha} from './release-schema.mjs';
 async function fixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(),'marmish-render-test-'));
   const payload = new Map(releaseNames('0.2.3').map(name=>[name,Buffer.from(name)]));
   const bootstrap = Buffer.from('#!/bin/sh\nexit 0\n'), renderer = Buffer.from('renderer');
   const inventory = {schema:1,repository:'Epiphytic/marmish',publisher_sha:'a'.repeat(40),source:'a'.repeat(40),version:'0.2.3',
     candidate:{run_id:'12',run_attempt:'1'},artifacts:[{id:1,name:'artifact',digest:`sha256:${'b'.repeat(64)}`}],
-    assets:[...payload].map(([name,b])=>({name,size:b.length,sha256:sha(b)})),bootstrap_sha256:sha(bootstrap),reports:[{name:'report',sha256:'c'.repeat(64)}]};
+    assets:[...payload].map(([name,b])=>({name,size:b.length,sha256:sha(b)})),bootstrap_sha256:sha(bootstrap),reports:releaseReportNames('0.2.3',{run_id:'12',run_attempt:'1'}).map(name=>({name,sha256:'c'.repeat(64)}))};
   const inputs=path.join(root,'inputs'),hash=await writeInspection({skip:false,inventory,payload,bootstrap,renderer},inputs);
   return {root,inputs,hash,bootstrap};
 }

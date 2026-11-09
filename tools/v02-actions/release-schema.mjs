@@ -4,12 +4,34 @@ export const TARGETS = ['x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu',
 export const REPOSITORY = 'Epiphytic/marmish';
 export const HEX40 = /^[0-9a-f]{40}$/;
 export const HEX64 = /^[0-9a-f]{64}$/;
-export const VERSION = /^0\.2\.(0|[1-9][0-9]{0,19})(?:-rc\.([1-9][0-9]{0,19}))?$/;
-export function validVersion(value) {
-  if (typeof value !== 'string') return false;
-  const match = VERSION.exec(value);
-  return !!match && BigInt(match[1]) <= 18446744073709551615n
-    && (match[2] === undefined || BigInt(match[2]) <= 18446744073709551615n);
+export const VERSION = /^0\.([23])\.(0|[1-9][0-9]{0,19})(?:-rc\.([1-9][0-9]{0,19}))?$/;
+// Discovery is deliberately broader than parsing: malformed native tags fail closed.
+export const NATIVE_TAG = /^v0\.[23]\./;
+export function parseVersion(value) {
+  const match = typeof value === 'string' && VERSION.exec(value);
+  if (!match || match[0] !== value) return null;
+  const patch = BigInt(match[2]), rc = match[3] === undefined ? null : BigInt(match[3]);
+  if (patch > 18446744073709551615n || (rc !== null && rc > 18446744073709551615n)) return null;
+  return {minor: Number(match[1]), patch, rc};
+}
+export function validVersion(value) { return parseVersion(value) !== null; }
+export function compareVersions(a, b) {
+  const x = parseVersion(a), y = parseVersion(b);
+  requireRelease(x && y, 'invalid_version');
+  for (const field of ['minor', 'patch']) if (x[field] !== y[field]) return x[field] < y[field] ? -1 : 1;
+  if (x.rc === y.rc) return 0;
+  if (x.rc === null) return 1;
+  if (y.rc === null) return -1;
+  return x.rc < y.rc ? -1 : 1;
+}
+export function releaseReportNames(version, candidate) {
+  const parsed = parseVersion(version);
+  requireRelease(parsed && validId(candidate.run_id) && validId(candidate.run_attempt), 'invalid_inventory_reports');
+  const suffix = `${candidate.run_id}-${candidate.run_attempt}`;
+  return [`v02-eligibility-${suffix}`, ...TARGETS.flatMap(target => {
+    const quickstart = `v02-quickstart-${target}-${suffix}`;
+    return [quickstart, ...(parsed.minor === 3 ? [`${quickstart}-default-relays`] : []), `v02-provider-${target}-${suffix}`];
+  })].sort();
 }
 export const MAX_ASSET = 256 * 1024 * 1024;
 export function requireRelease(ok, code) { if (!ok) throw new Error(code); }
@@ -50,6 +72,7 @@ export function canonicalInventory(value) {
     ids.add(a.id);
   }
   namedDigests(value.reports, ['name', 'sha256'], 20, 'invalid_inventory_reports');
+  requireRelease(value.reports.map(r => r.name).sort().join('\0') === releaseReportNames(value.version, value.candidate).join('\0'), 'invalid_inventory_reports');
   for (const r of value.reports) requireRelease(HEX64.test(r.sha256), 'invalid_inventory_report');
   const byName = (a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
   return Buffer.from(JSON.stringify({schema: 1, repository: value.repository, publisher_sha: value.publisher_sha,

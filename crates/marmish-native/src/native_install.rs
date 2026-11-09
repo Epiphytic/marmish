@@ -1063,6 +1063,107 @@ mod tests {
         assert!(f.install().unwrap().active);
     }
     #[test]
+    fn current_binary_selects_a_verified_owned_v02_rollback() {
+        let f = Fixture::new();
+        f.install().unwrap();
+        let receipt = read_receipt(&f.prefix()).unwrap();
+        let current = f
+            .prefix()
+            .join("versions")
+            .join(receipt.active.as_ref().unwrap());
+        // Model a historical owned installation, keeping real hashes, modes
+        // and ownership receipts. These are fixture bytes, not an old binary.
+        let historical = "0.2.3";
+        let text = fs::read_to_string(current.join("manifest"))
+            .unwrap()
+            .replace(
+                &format!("version {}\n", env!("CARGO_PKG_VERSION")),
+                &format!("version {historical}\n"),
+            );
+        let parsed = Manifest::parse(text.as_bytes()).unwrap();
+        let old = f.prefix().join("versions").join(parsed.id());
+        fs::create_dir(&old).unwrap();
+        for name in NAMES {
+            fs::copy(current.join(name), old.join(name)).unwrap();
+        }
+        fs::write(old.join("manifest"), &text).unwrap();
+        fs::set_permissions(old.join("manifest"), fs::Permissions::from_mode(0o444)).unwrap();
+        let mut owned: VersionReceipt = json(&current.join(VERSION_RECEIPT), 0o444, 4096).unwrap();
+        owned.id = parsed.id();
+        owned.manifest_sha256 = hex::encode(Sha256::digest(text.as_bytes()));
+        fs::write(
+            old.join(VERSION_RECEIPT),
+            serde_json::to_vec(&owned).unwrap(),
+        )
+        .unwrap();
+        fs::set_permissions(old.join(VERSION_RECEIPT), fs::Permissions::from_mode(0o444)).unwrap();
+        let selected = run(f.options(InstallAction::Select {
+            version: historical.into(),
+        }))
+        .unwrap();
+        assert!(selected.active);
+        assert_eq!(selected.version.as_deref(), Some(historical));
+        assert_eq!(
+            fs::read_link(f.prefix().join("current")).unwrap(),
+            Path::new("versions").join(parsed.id())
+        );
+        assert!(
+            run(f.options(InstallAction::Select {
+                version: env!("CARGO_PKG_VERSION").into()
+            }))
+            .unwrap()
+            .active
+        );
+        // Recovery selection still verifies the historical content digest.
+        fs::set_permissions(old.join("marmish"), fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(old.join("marmish"), b"tampered").unwrap();
+        fs::set_permissions(old.join("marmish"), fs::Permissions::from_mode(0o555)).unwrap();
+        assert!(
+            run(f.options(InstallAction::Select {
+                version: historical.into()
+            }))
+            .is_err()
+        );
+        assert_eq!(read_receipt(&f.prefix()).unwrap().active, receipt.active);
+    }
+
+    #[test]
+    fn bootstrap_shares_release_version_vectors_before_asset_lookup() {
+        let root = tempfile::tempdir().unwrap();
+        let vectors: serde_json::Value =
+            serde_json::from_str(include_str!("../../../tools/release-version-vectors.json"))
+                .unwrap();
+        let assets = root.path().join("empty-assets");
+        fs::create_dir(&assets).unwrap();
+        for (kind, valid) in [("valid", true), ("invalid", false)] {
+            for value in vectors[kind].as_array().unwrap() {
+                let version = value.as_str().unwrap();
+                let template = include_str!("../../../scripts/install-native.sh")
+                    .replace("@MARMISH_VERSION@", version)
+                    .replace("@MARMISH_SHA_AMD64@", &"a".repeat(64))
+                    .replace("@MARMISH_SHA_ARM64@", &"a".repeat(64))
+                    .replace("@MARMISH_SHA_MACOS@", &"a".repeat(64));
+                let script = root.path().join("bootstrap.sh");
+                fs::write(&script, template).unwrap();
+                let output = std::process::Command::new("/bin/sh")
+                    .arg(&script)
+                    .arg("--asset-dir")
+                    .arg(&assets)
+                    .env("TMPDIR", root.path())
+                    .output()
+                    .unwrap();
+                assert!(!output.status.success(), "{version:?}");
+                let error = String::from_utf8(output.stderr).unwrap();
+                let expected = if valid {
+                    "missing_asset"
+                } else {
+                    "unqualified_release_template"
+                };
+                assert!(error.contains(expected), "{version:?}: {error}");
+            }
+        }
+    }
+    #[test]
     fn every_commit_boundary_recovers_without_adopting_version() {
         for checkpoint in ["transaction", "copy", "version", "selector", "commit"] {
             let f = Fixture::new();

@@ -65,7 +65,10 @@ pub(crate) fn compiled_release_metadata() -> ReleaseMetadata {
     }
 }
 pub(crate) fn version(value: &str) -> bool {
-    let Some(rest) = value.strip_prefix("0.2.") else {
+    let Some(rest) = value
+        .strip_prefix("0.2.")
+        .or_else(|| value.strip_prefix("0.3."))
+    else {
         return false;
     };
     match rest.split_once("-rc.") {
@@ -272,10 +275,10 @@ pub(crate) fn verify_directory(
         AssetNaming::VersionedDownloads => {
             let entries = fs::read_dir(dir)?.collect::<std::io::Result<Vec<_>>>()?;
             let mut candidates = entries.into_iter().filter(|entry| {
-                entry
-                    .file_name()
-                    .to_str()
-                    .is_some_and(|n| n.starts_with("marmish-0.2.") && n.ends_with(".manifest"))
+                entry.file_name().to_str().is_some_and(|n| {
+                    (n.starts_with("marmish-0.2.") || n.starts_with("marmish-0.3."))
+                        && n.ends_with(".manifest")
+                })
             });
             let first = candidates
                 .next()
@@ -349,5 +352,60 @@ mod tests {
         assert!(Manifest::parse(s.trim_end().as_bytes()).is_err());
         assert!(version("0.2.0-rc.1"));
         assert!(!version("0.2.0-rc.01"));
+    }
+
+    #[test]
+    fn shared_release_version_vectors() {
+        let vectors: serde_json::Value =
+            serde_json::from_str(include_str!("../../../tools/release-version-vectors.json"))
+                .unwrap();
+        for (kind, expected) in [("valid", true), ("invalid", false)] {
+            for value in vectors[kind].as_array().unwrap() {
+                let value = value.as_str().unwrap();
+                assert_eq!(version(value), expected, "{value:?}");
+                assert_eq!(
+                    Manifest::parse(
+                        sample()
+                            .replace("version 0.2.0\n", &format!("version {value}\n"))
+                            .as_bytes()
+                    )
+                    .is_ok(),
+                    expected,
+                    "manifest {value:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn versioned_directory_discovery_supports_both_families_and_rejects_ambiguity() {
+        for version in ["0.2.3", "0.3.0", "0.3.1"] {
+            let root = tempfile::tempdir().unwrap();
+            let digest = hex::encode(Sha256::digest(b"x"));
+            let text = sample()
+                .replace("0.2.0", version)
+                .replace(&"b".repeat(64), &digest);
+            let parsed = Manifest::parse(text.as_bytes()).unwrap();
+            for name in NAMES {
+                fs::write(root.path().join(parsed.asset_name(name)), b"x").unwrap();
+            }
+            let path = root
+                .path()
+                .join(format!("marmish-{version}-{}.manifest", TARGETS[0]));
+            fs::write(&path, &text).unwrap();
+            let pin = Sha256::digest(text.as_bytes()).into();
+            assert_eq!(
+                verify_directory(root.path(), AssetNaming::VersionedDownloads, pin)
+                    .unwrap()
+                    .version,
+                version
+            );
+            // A matching malformed name must remain visible to discovery so
+            // adding a second candidate cannot silently bypass ambiguity.
+            fs::write(root.path().join("marmish-0.3.invalid.manifest"), b"bad").unwrap();
+            assert!(verify_directory(root.path(), AssetNaming::VersionedDownloads, pin).is_err());
+            fs::remove_file(&path).unwrap();
+            assert!(verify_directory(root.path(), AssetNaming::VersionedDownloads, pin).is_err());
+        }
     }
 }

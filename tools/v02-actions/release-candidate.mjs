@@ -8,7 +8,7 @@ import {ArtifactTransport, boundedFile, digest, safeBlobUrl, childEnvironment, R
 import {checkRun, checkTooling, sourceDigest} from './workflow.mjs';
 import {loadInspection} from './release-render.mjs';
 import {verifyEligibility, versionAt} from './eligibility.mjs';
-import {TARGETS, REPOSITORY, HEX40, HEX64, MAX_ASSET, validId, exactKeys, canonicalInventory, releaseNames, requireRelease as need, validateEligibility} from './release-schema.mjs';
+import {TARGETS, REPOSITORY, HEX40, HEX64, MAX_ASSET, validId, parseVersion, exactKeys, canonicalInventory, releaseNames, requireRelease as need, validateEligibility} from './release-schema.mjs';
 const LIMIT = 800 * 1024 * 1024;
 export async function unpack(zip, expected) {
   need(Buffer.isBuffer(zip) && zip.length <= LIMIT, 'archive_bound');
@@ -52,13 +52,19 @@ function checkSkippedJobs(jobs, names) {
   }
   need(remaining.length === expected.length && expected.every(name => remaining.some(job => job.name === name)), 'candidate_jobs_incomplete');
 }
-export function checkReport(value, kind, target, source, run, attempt) {
+function checkQuickstart(value, common, minor, relaySelection) {
+  exactKeys(value, [...common,'key_storage','role','inbound_enabled','prompts_completed','identity_created','repeat_same_identity','repeat_owner_opened','stop_complete', ...(minor === 3 ? ['relay_selection'] : [])]);
+  if (minor === 3) need(['explicit', 'default'].includes(relaySelection) && value.relay_selection === relaySelection, 'quickstart_relay_selection');
+  need(value.kind === 'installed_quickstart_pty' && value.key_storage === 'file' && value.role === 'both'
+    && value.inbound_enabled === false && value.prompts_completed === 5 && value.identity_created === true
+    && value.repeat_same_identity === true && value.repeat_owner_opened === false && value.stop_complete === true, 'quickstart_failed');
+}
+export function checkReport(value, kind, {target, source, run, attempt, version = '0.2.3', relaySelection = 'explicit'}) {
+  const parsed = parseVersion(version);
+  need(parsed, 'invalid_release_version');
   const common = ['schema','kind','ok','python_in_runtime_path','network_activation','owned_state_removed','elapsed_ms'];
   if (kind === 'quickstart') {
-    exactKeys(value, [...common,'key_storage','role','inbound_enabled','prompts_completed','identity_created','repeat_same_identity','repeat_owner_opened','stop_complete']);
-    need(value.kind === 'installed_quickstart_pty' && value.key_storage === 'file' && value.role === 'both'
-      && value.inbound_enabled === false && value.prompts_completed === 5 && value.identity_created === true
-      && value.repeat_same_identity === true && value.repeat_owner_opened === false && value.stop_complete === true, 'quickstart_failed');
+    checkQuickstart(value, common, parsed.minor, relaySelection);
   } else {
     const platform = target.endsWith('darwin') ? ['owned_account_removed','runner_keychain_unchanged','supervisor_interpreter_unchanged'] : [];
     // The supervisor preserves the inner fixture's finite failure field on macOS.
@@ -76,6 +82,11 @@ export function checkReport(value, kind, target, source, run, attempt) {
     && value.network_activation === false && value.owned_state_removed === true
     && Number.isSafeInteger(value.elapsed_ms) && value.elapsed_ms >= 0 && value.elapsed_ms < 900000, 'qualification_failed');
 }
+export function releaseFormats(version) {
+  const parsed = parseVersion(version);
+  need(parsed, 'invalid_release_version');
+  return [2, parsed.minor === 2 ? 6 : 7, 1, 1, 1];
+}
 export function checkManifest(bytes, files, version, source, target) {
   need(bytes.length <= 4096, 'manifest_bound');
   const text = bytes.toString('ascii'), lines = text.split('\n');
@@ -83,7 +94,7 @@ export function checkManifest(bytes, files, version, source, target) {
     && lines[0] === 'marmish-manifest 1' && lines[1] === `version ${version}` && lines[2] === `target ${target}`
     && lines[3] === `commit ${source}` && lines[4] === `signing ${target.endsWith('darwin') ? 'adhoc' : 'none'} notarized=no`
     && lines[5] === `minimum ${target.endsWith('darwin') ? 'macos=15.0' : 'glibc=2.39'}`
-    && lines[6] === 'state profile=2 journal=6 engine=1 config=1 commands=1' && lines[11] === 'end', 'manifest_provenance');
+    && lines[6] === `state ${['profile','journal','engine','config','commands'].map((key, i) => `${key}=${releaseFormats(version)[i]}`).join(' ')}` && lines[11] === 'end', 'manifest_provenance');
   for (const [i, prefix] of ['marmish','marmishd','marmish-worker','THIRD-PARTY-LICENSES'].entries()) {
     const name = `${prefix}-${version}-${target}`, payload = files.get(name);
     const match = /^file ([0-9a-f]{64}) ([1-9][0-9]*) (0555|0444) ([A-Za-z0-9._-]+)$/.exec(lines[i + 7]);
@@ -101,6 +112,16 @@ async function download(transport, artifact, names, context, deadline) {
   const blob = await transport.request(safeBlobUrl(reply.redirect), false, LIMIT, deadline);
   need(blob.bytes && `sha256:${digest(blob.bytes)}` === artifact.digest, 'artifact_digest_mismatch');
   return unpack(blob.bytes, names);
+}
+function reportFiles(kind, version) {
+  return [`${kind}.json`, ...(kind === 'quickstart' && parseVersion(version).minor === 3 ? ['quickstart-default-relays.json'] : [])];
+}
+function inspectReports(files, kind, context) {
+  return [...files].map(([name, bytes]) => {
+    const isDefault = name === 'quickstart-default-relays.json';
+    checkReport(JSON.parse(bytes), kind, {...context, relaySelection: isDefault ? 'default' : 'explicit'});
+    return {name: context.artifactName + (isDefault ? '-default-relays' : ''), sha256: digest(bytes)};
+  });
 }
 export async function inspectCandidate(input, {api, git, transport, harnessDigest = sourceDigest}) {
   need(validId(input.run_id) && validId(input.run_attempt) && HEX40.test(input.publisher_sha), 'invalid_candidate_selection');
@@ -146,10 +167,10 @@ export async function inspectCandidate(input, {api, git, transport, harnessDiges
     checkTooling(record, ROLES[index], context.source, harnessDigest(context.source));
     for (const [name, pin] of Object.entries(record.files)) need(digest(tooling.get(name)) === pin.sha256 && tooling.get(name).length === pin.bytes, 'tooling_digest');
     for (const kind of ['quickstart','provider']) {
-      const artifactName = `v02-${kind}-${suffix}`, file = `${kind}.json`;
-      const bytes = (await take(artifactName, [file])).get(file);
-      checkReport(JSON.parse(bytes), kind, target, context.source, input.run_id, input.run_attempt);
-      reports.push({name: artifactName, sha256: digest(bytes)});
+      const artifactName = `v02-${kind}-${suffix}`;
+      const files = await take(artifactName, reportFiles(kind, version));
+      reports.push(...inspectReports(files, kind, {artifactName, target, source: context.source,
+        run: input.run_id, attempt: input.run_attempt, version}));
     }
   }
   const bootstrap = (await take(`v02-pinned-bootstrap-${input.run_id}-${input.run_attempt}`, ['install.sh'])).get('install.sh');
