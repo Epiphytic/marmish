@@ -1,5 +1,9 @@
 //! Owned, unreaped child supervision shared by finite and live execution.
-use crate::{launcher, model::*, store::ProcessIdentity};
+#[cfg(target_os = "linux")]
+use crate::launcher;
+use crate::{model::*, store::ProcessIdentity};
+pub(crate) mod diagnostic;
+use diagnostic::{Failure, Origin, Stage, Staged};
 use std::os::unix::process::ExitStatusExt;
 use std::process::Child;
 use std::time::{Duration, Instant};
@@ -16,33 +20,65 @@ pub(crate) struct ChildOwner {
 }
 impl ChildOwner {
     pub(crate) fn signal(&self, signal: i32) -> Result<()> {
-        if self.reaped
-            || self.child.id() != self.identity.pid as u32
-            || launcher::process_identity(self.worker.pid)? != self.worker
-            || self.pgid != self.identity.pid
-        {
-            return Err(EngineError::RecoveryUncertain);
+        let origin = match signal {
+            libc::SIGTERM => Origin::Term,
+            libc::SIGKILL => Origin::Kill,
+            _ => Origin::Other,
+        };
+        self.signal_with(signal, origin)
+    }
+    fn signal_with(&self, signal: i32, origin: Origin) -> Result<()> {
+        let result = self.signal_staged(signal);
+        diagnostic::emit(&result, origin);
+        result.map_err(|failure| failure.error)
+    }
+    fn signal_staged(&self, signal: i32) -> Staged<()> {
+        let uncertain = |stage| Failure::new(EngineError::RecoveryUncertain, stage, None);
+        if self.reaped {
+            return Err(uncertain(Stage::Reaped));
+        }
+        if self.child.id() != self.identity.pid as u32 {
+            return Err(uncertain(Stage::ChildIdentity));
         }
         #[cfg(target_os = "linux")]
-        if launcher::process_identity(self.identity.pid)? != self.identity
+        let worker = launcher::process_identity(self.worker.pid)
+            .map_err(|error| Failure::new(error, Stage::WorkerLookup, None))?;
+        #[cfg(target_os = "macos")]
+        let worker = crate::platform::process_identity_staged(self.worker.pid)
+            .map_err(|failure| failure.context(diagnostic::Context::Worker))?;
+        if worker != self.worker {
+            return Err(uncertain(Stage::WorkerIdentity));
+        }
+        if self.pgid != self.identity.pid {
+            return Err(uncertain(Stage::GroupIdentity));
+        }
+        #[cfg(target_os = "linux")]
+        if launcher::process_identity(self.identity.pid)
+            .map_err(|error| Failure::new(error, Stage::LeaderIdentity, None))?
+            != self.identity
             || unsafe { libc::getpgid(self.identity.pid) } != self.pgid
         {
-            return Err(EngineError::RecoveryUncertain);
+            return Err(uncertain(Stage::LeaderIdentity));
         }
         #[cfg(target_os = "macos")]
-        if crate::platform::owned_child_identity_and_group(self.identity.pid)?
+        if crate::platform::owned_child_identity_and_group_staged(self.identity.pid)
+            .map_err(|failure| failure.context(diagnostic::Context::Leader))?
             != (self.identity.clone(), self.pgid)
         {
-            return Err(EngineError::RecoveryUncertain);
+            return Err(uncertain(Stage::LeaderIdentity));
         }
         if unsafe { libc::kill(-self.pgid, signal) } < 0 {
             let errno = std::io::Error::last_os_error().raw_os_error();
             #[cfg(target_os = "macos")]
             if errno == Some(libc::EPERM) {
-                return crate::platform::owned_zombie_group(&self.identity, self.pgid);
+                return crate::platform::owned_zombie_group_staged(&self.identity, self.pgid);
             }
             if errno != Some(libc::ESRCH) {
-                return Err(EngineError::RecoveryUncertain);
+                return Err(Failure::new(
+                    EngineError::RecoveryUncertain,
+                    Stage::Kill,
+                    errno,
+                ));
             }
         }
         Ok(())
@@ -83,7 +119,7 @@ impl Drop for ChildOwner {
         if self.reaped {
             return;
         }
-        if self.signal(libc::SIGKILL).is_err() {
+        if self.signal_with(libc::SIGKILL, Origin::DropKill).is_err() {
             return;
         }
         let deadline = Instant::now() + Duration::from_secs(2);

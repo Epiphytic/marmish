@@ -21,6 +21,9 @@ class PublicationTests(unittest.TestCase):
         environment = patch.dict(os.environ, {'GITHUB_RUN_ID': '12345'})
         environment.start()
         self.addCleanup(environment.stop)
+        installer_patch = patch.object(publication, 'installer', load_installer)
+        installer_patch.start()
+        self.addCleanup(installer_patch.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.base = Path(self.temporary.name)
         self.inputs = self.base / 'inputs'
@@ -73,7 +76,7 @@ class PublicationTests(unittest.TestCase):
     def test_payload_corruption_blocks_publication(self):
         path = next(self.inputs.glob('*.tar.gz'))
         path.write_bytes(b'corrupted archive')
-        with self.assertRaises(Exception):
+        with self.assertRaisesRegex(ValueError, '^invalid_release_archive:invalid gzip archive$'):
             self.aggregate()
 
     def test_live_evidence_must_match_the_exact_archive(self):

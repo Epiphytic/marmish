@@ -4322,3 +4322,393 @@ async fn stream_failed_bootstrap_never_retires_an_owned_runner() {
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
 }
+
+// The installer qualification consumes only real actor List projections. These
+// facts originate in the authenticated requests, independently of those Lists.
+#[cfg(feature = "installed-checks")]
+pub(crate) struct ActualCopyRefusal {
+    pub client_entries: serde_json::Value,
+    pub server_entries: serde_json::Value,
+    pub launch: marmish_stream::copy_protocol::Launch,
+    pub binding: marmish_stream::wire::Binding,
+    pub seed_binding: marmish_stream::wire::Binding,
+    pub group: Vec<u8>,
+}
+
+impl Fixture {
+    fn copy_journal_snapshot(&self, owner: usize, table: &str) -> Vec<(String, Vec<u8>)> {
+        assert!(matches!(table, "copy_attempts" | "copy_local_receivers"));
+        // Read-only inspection avoids widening Journal's production interface.
+        let conn = rusqlite::Connection::open_with_flags(
+            self.profiles[owner].journal_database(),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let hk = Hkdf::<Sha256>::new(
+            Some(b"marmish/v2/storage"),
+            self.materials[owner].sqlcipher_root(),
+        );
+        let mut key = Zeroizing::new([0; 32]);
+        hk.expand(b"journal", key.as_mut()).unwrap();
+        let raw = Zeroizing::new(format!("x'{}'", hex::encode(key.as_ref())));
+        conn.pragma_update(None, "key", raw.as_str()).unwrap();
+        conn.execute_batch("PRAGMA cipher_compatibility=4; PRAGMA cipher_memory_security=ON; PRAGMA cipher_page_size=4096;").unwrap();
+        let mut statement = conn
+            .prepare(&format!("SELECT k,record FROM {table} ORDER BY k"))
+            .unwrap();
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    fn copy_list(&mut self, owner: usize) -> serde_json::Value {
+        use crate::stream_service::{StreamLocalRequest, StreamLocalResult};
+        let StreamLocalResult::Entries { entries } = self.owners[owner]
+            .stream_request_local(StreamLocalRequest::List { remote: None })
+            .unwrap()
+        else {
+            panic!("expected production List entries")
+        };
+        serde_json::to_value(entries).unwrap()
+    }
+
+    fn copy_client_frame(&mut self, request: &marmish_stream::wire::Request) {
+        use crate::stream_service::{StreamLocalRequest, StreamLocalResult};
+        let result = self.owners[0]
+            .stream_request_local(StreamLocalRequest::Frame {
+                frame_base64: STANDARD
+                    .encode(marmish_stream::wire::encode_request(request).unwrap()),
+                relays: vec!["wss://127.0.0.1:9/".into()],
+            })
+            .unwrap();
+        assert!(matches!(result, StreamLocalResult::Pending));
+    }
+
+    fn copy_client_config(&mut self, server: [u8; 32]) {
+        let config = crate::command_config::CommandConfig::from_bytes(
+            &serde_json::to_vec(&serde_json::json!({
+                "version":1,"role":"client","relays":["wss://127.0.0.1:9/"],
+                "tor":"off","trusted_remotes":[hex::encode(server)],"execution_clients":[],
+                "command_policy":{"version":1},"cwd":"/","limits":{},"aliases":{}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        self.owners[0].commands = Some(crate::command_service::CommandService::new(config, None));
+    }
+}
+
+#[cfg(feature = "installed-checks")]
+pub(crate) async fn actual_changed_binding_put_refusal() -> ActualCopyRefusal {
+    use marmish_stream::{codec::Codec, copy_protocol as cp, wire as w};
+    use std::os::unix::{ffi::OsStrExt, fs::MetadataExt};
+    let mut f = Fixture::new(2);
+    let (group, seed_binding) = f.stream_fixture().await;
+    f.copy_client_config(seed_binding.server);
+    let sentinel = f._root.path().join("protected destination");
+    std::fs::write(&sentinel, b"unchanged\0'\nbytes").unwrap();
+    let sentinel_before = std::fs::metadata(&sentinel).unwrap();
+    let mut seed_launch = native_copy_test_launch(&seed_binding);
+    seed_launch.destination = sentinel.as_os_str().as_bytes().to_vec();
+    let mut request = w::Request {
+        binding: seed_binding.clone(),
+        sequence: 0,
+        body: w::RequestBody::CopyHello {
+            versions: vec![1],
+            codecs: vec![Codec::None],
+        },
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    request.body = w::RequestBody::OpenCopy {
+        launch: seed_launch.clone(),
+        codec: Codec::None,
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    let seed_key = crate::stream_service::key(group.as_slice(), &seed_binding.stream);
+    let seed = f.owners[1].journal.stream_get(&seed_key).unwrap().unwrap();
+    assert!(seed.active && seed.state == "preparing");
+    assert!(f.owners[1].journal.copy_attempt_matches(&seed).unwrap());
+    let seed_bytes = serde_json::to_value(&seed).unwrap();
+    let index_before = f.copy_journal_snapshot(1, "copy_attempts");
+    assert_eq!(index_before.len(), 1);
+    let mut binding = seed_binding.clone();
+    binding.stream[15] ^= 1;
+    let mut launch = seed_launch;
+    launch.mode = cp::AttemptMode::Resume;
+    launch.destination = f
+        ._root
+        .path()
+        .join("absent alternate")
+        .as_os_str()
+        .as_bytes()
+        .to_vec();
+    request.binding = binding.clone();
+    request.body = w::RequestBody::CopyHello {
+        versions: vec![1],
+        codecs: vec![Codec::None],
+    };
+    let event = f.stream_event(&group, &request, None).await;
+    f.owners[1].project_stream_message(event).unwrap();
+    request.body = w::RequestBody::OpenCopy {
+        launch: launch.clone(),
+        codec: Codec::None,
+    };
+    f.copy_client_frame(&request);
+    let key = crate::stream_service::key(group.as_slice(), &binding.stream);
+    let mut previous_reply: Option<String> = None;
+    for replay in 0..3 {
+        if let Some(event_id) = previous_reply.take() {
+            // Complete the previous publication, then respect production's
+            // first retry backoff so an identical replay must queue a new reply.
+            f.owners[1]
+                .journal
+                .stream_publication_state(group.as_slice(), &event_id, "acked")
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        if replay == 2 {
+            let w::RequestBody::OpenCopy { launch, .. } = &mut request.body else {
+                unreachable!()
+            };
+            launch.destination.extend_from_slice(b" altered");
+        }
+        // Restore only the test-owned control budgets so every replay must answer.
+        f.owners[1].streams.live.get_mut(&key).unwrap().control_rate =
+            crate::stream_service::Rate::new(2);
+        f.owners[1].streams.control_rate = crate::stream_service::Rate::new(32);
+        f.owners[1].streams.peer_rates.insert(
+            binding.client,
+            (
+                crate::stream_service::Rate::new(32),
+                crate::stream_service::Rate::new(8),
+            ),
+        );
+        let previous_ids: Vec<_> = f.owners[1]
+            .journal
+            .stream_publications()
+            .unwrap()
+            .into_iter()
+            .map(|publication| publication.event_id)
+            .collect();
+        // Distinct authenticated carrier IDs let identical logical requests
+        // reach actor replay handling rather than native transport deduplication.
+        let app = cgka_traits::app_event::MarmotAppEvent::new(
+            f.owners[0].identity.clone(),
+            now().unwrap() + replay + 1,
+            30101,
+            vec![vec!["marmish".into(), "stream/1".into()]],
+            String::from_utf8(w::encode_request(&request).unwrap()).unwrap(),
+        );
+        let event = f.encrypted_app(&group, app).await;
+        f.owners[1].project_stream_message(event).unwrap();
+        let digest = w::request_digest(&w::encode_request(&request).unwrap());
+        let replies: Vec<_> = f.owners[1]
+            .journal
+            .stream_publications()
+            .unwrap()
+            .into_iter()
+            .filter(|publication| {
+                publication.stream_key == key && !previous_ids.contains(&publication.event_id)
+            })
+            .collect();
+        assert_eq!(
+            replies.len(),
+            1,
+            "every authenticated refusal explicitly queues a new reply"
+        );
+        previous_reply = Some(replies[0].event_id.clone());
+        let app = cgka_traits::app_event::MarmotAppEvent::decode(&replies[0].payload).unwrap();
+        let decoded = w::decode_response(app.content.as_bytes()).unwrap();
+        assert!(decoded.binding == binding);
+        assert_eq!(decoded.request_sha256, digest);
+        assert!(matches!(
+            decoded.body,
+            w::ResponseBody::CopyRefused {
+                code: w::CopyAdmissionError::Conflict,
+                prior_binding: None
+            }
+        ));
+        let refused = f.owners[1].journal.stream_get(&key).unwrap().unwrap();
+        assert!(refused.open_digest.is_none() && !refused.active && !refused.cancel);
+        assert!(refused.copy_hello && refused.state == "hello");
+        let live = f.owners[1].streams.live.get(&key).unwrap();
+        assert!(live.runner.is_none());
+        assert_eq!(
+            serde_json::to_value(f.owners[1].journal.stream_get(&seed_key).unwrap().unwrap())
+                .unwrap(),
+            seed_bytes
+        );
+        assert_eq!(f.copy_journal_snapshot(1, "copy_attempts"), index_before);
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"unchanged\0'\nbytes");
+        let after = std::fs::metadata(&sentinel).unwrap();
+        assert_eq!(
+            (
+                after.dev(),
+                after.ino(),
+                after.mode(),
+                after.len(),
+                after.mtime(),
+                after.mtime_nsec()
+            ),
+            (
+                sentinel_before.dev(),
+                sentinel_before.ino(),
+                sentinel_before.mode(),
+                sentinel_before.len(),
+                sentinel_before.mtime(),
+                sentinel_before.mtime_nsec()
+            )
+        );
+        assert!(!f._root.path().join("absent alternate").exists());
+    }
+    let client = f.owners[0].journal.stream_get(&key).unwrap().unwrap();
+    assert_eq!(
+        client.open_digest,
+        Some(launch.digest(Codec::None).unwrap())
+    );
+    assert!(!client.active && !client.cancel);
+    ActualCopyRefusal {
+        client_entries: f.copy_list(0),
+        server_entries: f.copy_list(1),
+        launch,
+        binding,
+        seed_binding,
+        group: group.as_slice().to_vec(),
+    }
+}
+
+#[cfg(feature = "installed-checks")]
+#[tokio::test]
+async fn copy_actor_changed_binding_refusal_preserves_attempted_client_intent() {
+    let _ = actual_changed_binding_put_refusal().await;
+}
+
+#[tokio::test]
+async fn copy_actor_changed_get_destination_refuses_before_fresh_open() {
+    use crate::copy_local_gc::{
+        Disposition, Identity, Location, Operation, ReceiverBase, Request, Response,
+    };
+    use crate::stream_service::{StreamLocalRequest, StreamLocalResult};
+    use marmish_stream::{codec::Codec, copy_protocol as cp, wire as w};
+    let mut f = Fixture::new(2);
+    let (group, binding) = f.stream_fixture().await;
+    f.copy_client_config(binding.server);
+    let mut launch = native_copy_test_launch(&binding);
+    launch.direction = cp::Direction::Get;
+    let base = ReceiverBase {
+        path: b"/local/receiver".to_vec(),
+        identity: Identity {
+            device: 1,
+            inode: 2,
+        },
+    };
+    let mut id = binding.stream;
+    id[15] = 31;
+    let result = f.owners[0]
+        .stream_request_local(StreamLocalRequest::CopyReceiver {
+            request: Box::new(Request {
+                id,
+                operation: Operation::Reserve {
+                    launch: launch.clone(),
+                    binding: binding.clone(),
+                    base: base.clone(),
+                },
+            }),
+        })
+        .unwrap();
+    let StreamLocalResult::CopyReceiver { response } = result else {
+        panic!("receiver response")
+    };
+    let Response::Reserved { lease, .. } = *response else {
+        panic!("initial receiver lease")
+    };
+    // Use the real local authenticated Open projection required by Activate.
+    f.copy_client_frame(&w::Request {
+        binding: binding.clone(),
+        sequence: 0,
+        body: w::RequestBody::OpenCopy {
+            launch: launch.clone(),
+            codec: Codec::None,
+        },
+    });
+    for (offset, operation) in [
+        Operation::Activate {
+            lease: lease.clone(),
+        },
+        Operation::Release {
+            lease,
+            disposition: Disposition::Established {
+                location: Location {
+                    base: base.clone(),
+                    parent: Identity {
+                        device: 3,
+                        inode: 4,
+                    },
+                    stream: binding.stream,
+                },
+            },
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        id[15] = 32 + offset as u8;
+        let result = f.owners[0]
+            .stream_request_local(StreamLocalRequest::CopyReceiver {
+                request: Box::new(Request { id, operation }),
+            })
+            .unwrap();
+        assert!(
+            matches!(result, StreamLocalResult::CopyReceiver { response } if matches!(*response, Response::Ok))
+        );
+    }
+    let retained = f.copy_journal_snapshot(0, "copy_local_receivers");
+    assert_eq!(retained.len(), 1);
+    let row: serde_json::Value = serde_json::from_slice(&retained[0].1).unwrap();
+    assert_eq!(row["state"], "closed");
+    assert!(row["location"].is_object());
+    let mut fresh = binding.clone();
+    fresh.stream[15] ^= 1;
+    launch.mode = cp::AttemptMode::Resume;
+    launch.destination = b"different local destination".to_vec();
+    id[15] = 34;
+    let result = f.owners[0]
+        .stream_request_local(StreamLocalRequest::CopyReceiver {
+            request: Box::new(Request {
+                id,
+                operation: Operation::Reserve {
+                    launch,
+                    binding: fresh.clone(),
+                    base,
+                },
+            }),
+        })
+        .unwrap();
+    assert!(
+        matches!(result, StreamLocalResult::CopyReceiver { response }
+        if matches!(*response, Response::Rejected { code: cp::CopyError::Conflict }))
+    );
+    // Production CLI stops at Reserve failure; deliberately send no synthetic
+    // CopyHello/OpenCopy. Both actual owner Lists must lack the fresh stream.
+    for owner in 0..2 {
+        assert!(
+            !f.copy_list(owner)
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["stream"] == hex::encode(fresh.stream))
+        );
+        assert!(
+            f.owners[owner]
+                .journal
+                .stream_get(&crate::stream_service::key(group.as_slice(), &fresh.stream))
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert_eq!(f.copy_journal_snapshot(0, "copy_local_receivers"), retained);
+}

@@ -46,6 +46,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920 # 1.97.1
         with:
           toolchain: 1.97.1
+          components: clippy
       - name: Compile original combined native suites and identify both workers
         id: compile
         shell: bash
@@ -91,3 +92,11 @@ jobs:
               grep -Eq '^test result: ok\. 1 passed; 0 failed; 0 ignored;' "$log"
             done
           done
+      - name: Verify strict ordinary-release diagnostics compilation
+        if: always() && steps.compile.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          cargo clippy --locked --release -p marmish-native -p marmish-engine --all-targets -- -D warnings
+          git diff --quiet HEAD --

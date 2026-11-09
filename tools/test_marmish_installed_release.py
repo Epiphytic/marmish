@@ -10,7 +10,7 @@ from unittest.mock import patch
 import urllib.error
 
 import marmish_installed_release as release
-from test_marmish_install import archive_bytes, load_installer
+from test_marmish_install import INSTALLER, archive_bytes, load_installer
 
 CTX = {'run': '12345', 'attempt': '2', 'sha': 'a' * 40}
 
@@ -224,11 +224,15 @@ class InstalledReleaseTests(unittest.TestCase):
         self.verify(prefix, pin, raw)
 
     def test_helper_load_uses_supplied_exact_bytes(self):
-        raw = (release.REPO / 'scripts/install.sh').read_bytes()
-        helper = release.installer_from_bytes(raw.replace(b'MAX_FILES = 4096', b'MAX_FILES = 17'))
+        raw = INSTALLER.read_bytes()
+        changed = raw.replace(b'MAX_FILES = 4096', b'MAX_FILES = 17')
+        self.assertNotEqual(changed, raw)
+        helper = release.installer_from_bytes(changed)
         self.assertEqual(helper.MAX_FILES, 17)
         with self.assertRaises(ValueError):
             release.installer_from_bytes(raw + b'\n# END MARMISH INSTALLER PYTHON')
+        with self.assertRaises(ValueError):
+            release.installer_from_bytes((release.REPO / 'scripts/install.sh').read_bytes())
 
     def test_rejects_wrong_marker_types_hardlinks_and_release_drift(self):
         prefix, pin, raw = self.installed_fixture()

@@ -1,5 +1,6 @@
 //! Darwin APIs; native runner tests remain the authority for filesystem support.
 use super::*;
+use crate::process::diagnostic::{Context, DarwinStage as Ds, Failure, Staged};
 use std::ffi::CString;
 use std::mem::{size_of, zeroed};
 
@@ -131,8 +132,15 @@ const PROC_PGRP_ONLY: u32 = 2;
 const _: () = assert!(size_of::<libc::proc_bsdinfo>() == 136);
 
 fn bsd_info(pid: i32, include_zombie: bool) -> Result<libc::proc_bsdinfo> {
+    bsd_info_staged(pid, include_zombie).map_err(|failure| failure.error)
+}
+fn bsd_info_staged(pid: i32, include_zombie: bool) -> Staged<libc::proc_bsdinfo> {
     if pid <= 0 {
-        return Err(EngineError::WorkerUnavailable);
+        return Err(Failure::darwin(
+            EngineError::WorkerUnavailable,
+            Ds::InvalidPid,
+            None,
+        ));
     }
     let mut info: libc::proc_bsdinfo = unsafe { zeroed() };
     let count = unsafe {
@@ -144,33 +152,64 @@ fn bsd_info(pid: i32, include_zombie: bool) -> Result<libc::proc_bsdinfo> {
             size_of::<libc::proc_bsdinfo>() as i32,
         )
     };
-    if count != size_of::<libc::proc_bsdinfo>() as i32
-        || info.pbi_pid != pid as u32
+    if count != size_of::<libc::proc_bsdinfo>() as i32 {
+        let errno = if count <= 0 {
+            std::io::Error::last_os_error().raw_os_error()
+        } else {
+            None
+        };
+        return Err(Failure::darwin(
+            EngineError::WorkerUnavailable,
+            Ds::BsdRead,
+            errno,
+        ));
+    }
+    if info.pbi_pid != pid as u32
         || info.pbi_uid != unsafe { libc::geteuid() }
         || info.pbi_ruid != unsafe { libc::getuid() }
     {
-        return Err(EngineError::WorkerUnavailable);
+        return Err(Failure::darwin(
+            EngineError::WorkerUnavailable,
+            Ds::BsdMetadata,
+            None,
+        ));
     }
-    process_start(info.pbi_start_tvsec, info.pbi_start_tvusec)?;
+    process_start(info.pbi_start_tvsec, info.pbi_start_tvusec)
+        .map_err(|error| Failure::darwin(error, Ds::StartTime, None))?;
     Ok(info)
 }
 fn info_identity(info: &libc::proc_bsdinfo) -> Result<ProcessIdentity> {
+    info_identity_staged(info).map_err(|failure| failure.error)
+}
+fn info_identity_staged(info: &libc::proc_bsdinfo) -> Staged<ProcessIdentity> {
     Ok(ProcessIdentity {
-        boot_id: boot_id()?,
+        boot_id: boot_id().map_err(|error| Failure::darwin(error, Ds::BootId, None))?,
         pid: info.pbi_pid as i32,
-        start_ticks: process_start(info.pbi_start_tvsec, info.pbi_start_tvusec)?,
+        start_ticks: process_start(info.pbi_start_tvsec, info.pbi_start_tvusec)
+            .map_err(|error| Failure::darwin(error, Ds::StartTime, None))?,
     })
 }
 pub(super) fn process_identity(pid: i32) -> Result<ProcessIdentity> {
     info_identity(&bsd_info(pid, false)?)
 }
+pub(super) fn process_identity_staged(pid: i32) -> Staged<ProcessIdentity> {
+    info_identity_staged(&bsd_info_staged(pid, false)?)
+}
 pub(super) fn owned_child_identity_and_group(pid: i32) -> Result<(ProcessIdentity, i32)> {
-    let info = bsd_info(pid, true)?;
-    let group = i32::try_from(info.pbi_pgid).map_err(|_| EngineError::WorkerUnavailable)?;
+    owned_child_identity_and_group_staged(pid).map_err(|failure| failure.error)
+}
+pub(super) fn owned_child_identity_and_group_staged(pid: i32) -> Staged<(ProcessIdentity, i32)> {
+    let info = bsd_info_staged(pid, true)?;
+    let group = i32::try_from(info.pbi_pgid)
+        .map_err(|_| Failure::darwin(EngineError::WorkerUnavailable, Ds::ChildGroup, None))?;
     if info.pbi_ppid != std::process::id() || group <= 0 {
-        return Err(EngineError::WorkerUnavailable);
+        return Err(Failure::darwin(
+            EngineError::WorkerUnavailable,
+            Ds::ChildParent,
+            None,
+        ));
     }
-    Ok((info_identity(&info)?, group))
+    Ok((info_identity_staged(&info)?, group))
 }
 #[derive(PartialEq, Eq)]
 struct ZombieIdentity {
@@ -182,10 +221,14 @@ struct ZombieIdentity {
     seconds: u64,
     micros: u64,
 }
-fn zombie_identity(pid: i32, group: i32) -> Result<ZombieIdentity> {
-    let info = bsd_info(pid, true)?;
+fn zombie_identity(pid: i32, group: i32) -> Staged<ZombieIdentity> {
+    let info = bsd_info_staged(pid, true)?;
     if info.pbi_pgid != group as u32 || info.pbi_status != libc::SZOMB {
-        return Err(EngineError::RecoveryUncertain);
+        return Err(Failure::darwin(
+            EngineError::RecoveryUncertain,
+            Ds::ZombieStatus,
+            None,
+        ));
     }
     Ok(ZombieIdentity {
         pid: info.pbi_pid,
@@ -197,7 +240,7 @@ fn zombie_identity(pid: i32, group: i32) -> Result<ZombieIdentity> {
         micros: info.pbi_start_tvusec,
     })
 }
-fn held_exit(pid: i32) -> Result<(i32, i32, i32)> {
+fn held_exit(pid: i32) -> Staged<(i32, i32, i32)> {
     let mut info: libc::siginfo_t = unsafe { zeroed() };
     if unsafe {
         libc::waitid(
@@ -207,17 +250,29 @@ fn held_exit(pid: i32) -> Result<(i32, i32, i32)> {
             libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
         )
     } != 0
-        || unsafe { info.si_pid() } != pid
+    {
+        let errno = std::io::Error::last_os_error().raw_os_error();
+        return Err(Failure::darwin(
+            EngineError::RecoveryUncertain,
+            Ds::HeldWait,
+            errno,
+        ));
+    }
+    if unsafe { info.si_pid() } != pid
         || !matches!(
             info.si_code,
             libc::CLD_EXITED | libc::CLD_KILLED | libc::CLD_DUMPED
         )
     {
-        return Err(EngineError::RecoveryUncertain);
+        return Err(Failure::darwin(
+            EngineError::RecoveryUncertain,
+            Ds::HeldStatus,
+            None,
+        ));
     }
     Ok((pid, info.si_code, unsafe { info.si_status() }))
 }
-fn zombie_members(group: i32) -> Result<Vec<ZombieIdentity>> {
+fn zombie_members(group: i32) -> Staged<Vec<ZombieIdentity>> {
     let mut pids = [0i32; 257];
     let capacity = std::mem::size_of_val(&pids) as i32;
     let count = unsafe {
@@ -228,8 +283,20 @@ fn zombie_members(group: i32) -> Result<Vec<ZombieIdentity>> {
             capacity,
         )
     };
-    if count <= 0 || count >= capacity || !(count as usize).is_multiple_of(size_of::<i32>()) {
-        return Err(EngineError::RecoveryUncertain);
+    if count <= 0 {
+        let errno = std::io::Error::last_os_error().raw_os_error();
+        return Err(Failure::darwin(
+            EngineError::RecoveryUncertain,
+            Ds::MembersRead,
+            errno,
+        ));
+    }
+    if count >= capacity || !(count as usize).is_multiple_of(size_of::<i32>()) {
+        return Err(Failure::darwin(
+            EngineError::RecoveryUncertain,
+            Ds::MembersCount,
+            None,
+        ));
     }
     let pids = &mut pids[..count as usize / size_of::<i32>()];
     pids.sort_unstable();
@@ -237,7 +304,11 @@ fn zombie_members(group: i32) -> Result<Vec<ZombieIdentity>> {
         || pids.windows(2).any(|p| p[0] == p[1])
         || pids.iter().filter(|pid| **pid == group).count() != 1
     {
-        return Err(EngineError::RecoveryUncertain);
+        return Err(Failure::darwin(
+            EngineError::RecoveryUncertain,
+            Ds::MembersIds,
+            None,
+        ));
     }
     pids.iter()
         .map(|pid| zombie_identity(*pid, group))
@@ -245,23 +316,66 @@ fn zombie_members(group: i32) -> Result<Vec<ZombieIdentity>> {
 }
 /// EPERM is acceptable only for an unchanged, entirely terminal owned group.
 /// This proof neither signals nor reaps; the held child reserves its PGID.
+#[cfg(test)]
 pub(super) fn owned_zombie_group(identity: &ProcessIdentity, group: i32) -> Result<()> {
+    owned_zombie_group_staged(identity, group).map_err(|failure| failure.error)
+}
+pub(super) fn owned_zombie_group_staged(identity: &ProcessIdentity, group: i32) -> Staged<()> {
     let uid = unsafe { libc::getuid() };
     if group <= 1 || group != identity.pid || uid == 0 || uid != unsafe { libc::geteuid() } {
-        return Err(EngineError::RecoveryUncertain);
+        return Err(Failure::darwin(
+            EngineError::RecoveryUncertain,
+            Ds::ProofGuard,
+            None,
+        ));
     }
-    let exit = held_exit(group)?;
-    if owned_child_identity_and_group(group)? != (identity.clone(), group) {
-        return Err(EngineError::RecoveryUncertain);
-    }
-    let leader = zombie_identity(group, group)?;
-    let first = zombie_members(group)?;
-    if !first.iter().any(|member| member == &leader)
-        || first != zombie_members(group)?
-        || exit != held_exit(group)?
-        || leader != zombie_identity(group, group)?
+    let exit = held_exit(group).map_err(|failure| failure.context(Context::ProofHeld))?;
+    if owned_child_identity_and_group_staged(group)
+        .map_err(|failure| failure.context(Context::ProofOwner))?
+        != (identity.clone(), group)
     {
-        return Err(EngineError::RecoveryUncertain);
+        return Err(Failure::darwin(
+            EngineError::RecoveryUncertain,
+            Ds::ProofIdentity,
+            None,
+        ));
+    }
+    let leader =
+        zombie_identity(group, group).map_err(|failure| failure.context(Context::ProofLeader))?;
+    let first =
+        zombie_members(group).map_err(|failure| failure.context(Context::ProofFirstMembers))?;
+    if !first.iter().any(|member| member == &leader) {
+        return Err(Failure::darwin(
+            EngineError::RecoveryUncertain,
+            Ds::ProofLeaderMissing,
+            None,
+        ));
+    }
+    if first
+        != zombie_members(group).map_err(|failure| failure.context(Context::ProofSecondMembers))?
+    {
+        return Err(Failure::darwin(
+            EngineError::RecoveryUncertain,
+            Ds::ProofMembersChanged,
+            None,
+        ));
+    }
+    if exit != held_exit(group).map_err(|failure| failure.context(Context::ProofFinalHeld))? {
+        return Err(Failure::darwin(
+            EngineError::RecoveryUncertain,
+            Ds::ProofExitChanged,
+            None,
+        ));
+    }
+    if leader
+        != zombie_identity(group, group)
+            .map_err(|failure| failure.context(Context::ProofFinalLeader))?
+    {
+        return Err(Failure::darwin(
+            EngineError::RecoveryUncertain,
+            Ds::ProofLeaderChanged,
+            None,
+        ));
     }
     Ok(())
 }

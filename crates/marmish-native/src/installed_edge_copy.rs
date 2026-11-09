@@ -329,14 +329,15 @@ fn case_error(case: Case, error: Error) -> Error {
         Error::Invalid(case.failure())
     }
 }
-fn validate_refusal_records(
-    entries: &[streaming_cleanup::Entry],
+fn validate_refusal_records<'a>(
+    entries: &'a [streaming_cleanup::Entry],
     stream: &str,
     client: &str,
     server: &str,
     endpoint: &str,
     required: bool,
-) -> Result<()> {
+    expected_open_digest: Option<&str>,
+) -> Result<Option<&'a streaming_cleanup::Entry>> {
     let matching: Vec<_> = entries
         .iter()
         .filter(|entry| entry.stream == stream)
@@ -345,7 +346,7 @@ fn validate_refusal_records(
         || (required && matching.is_empty())
         || matching.iter().any(|entry| {
             entry.active
-                || entry.open_digest.is_some()
+                || entry.open_digest.as_deref() != expected_open_digest
                 || entry.cancel_requested
                 || entry.client != client
                 || entry.server != server
@@ -354,7 +355,7 @@ fn validate_refusal_records(
     {
         return Err(bad());
     }
-    Ok(())
+    Ok(matching.into_iter().next())
 }
 struct Attempt<'a> {
     direction: &'a str,
@@ -363,6 +364,54 @@ struct Attempt<'a> {
     overwrite: bool,
     resume: Option<&'a str>,
     protected: Option<&'a Path>,
+    refusal: Option<(&'a Launch, &'a Binding)>,
+}
+fn refusal_context<'a>(
+    case: Case,
+    attempt: &Attempt<'a>,
+    transfer: &str,
+) -> Result<Option<(&'a Launch, &'a Binding)>> {
+    if attempt.refusal.is_some() != matches!(case, Case::ResumeChangedBinding) {
+        return Err(bad());
+    }
+    if let Some((launch, _)) = attempt.refusal
+        && hex::encode(launch.transfer) != transfer
+    {
+        return Err(bad());
+    }
+    Ok(attempt.refusal)
+}
+fn validate_refusal_binding(
+    entry: Option<&streaming_cleanup::Entry>,
+    baseline: &Binding,
+) -> Result<()> {
+    if let Some(entry) = entry
+        && (records::digest(entry.session.as_bytes()) != baseline.session_sha256
+            || entry.group_sha256 != baseline.group_sha256)
+    {
+        return Err(bad());
+    }
+    Ok(())
+}
+fn validate_admitted_pair(
+    entry: &streaming_cleanup::Entry,
+    server_entry: &streaming_cleanup::Entry,
+    case: Case,
+) -> Result<()> {
+    if server_entry.direction != "server"
+        || server_entry.client != entry.client
+        || server_entry.server != entry.server
+        || server_entry.session != entry.session
+        || server_entry.group_sha256 != entry.group_sha256
+        || server_entry.open_digest != entry.open_digest
+        || server_entry.active
+        || server_entry.terminal.is_none()
+        || (case.diagnostic().is_none()
+            && server_entry.terminal != Some(marmish_stream::wire::Terminal::Exited { code: 0 }))
+    {
+        return Err(bad());
+    }
+    Ok(())
 }
 struct Completed {
     observation: Observation,
@@ -493,6 +542,7 @@ async fn invoke_inner(
     .await?;
     trace.stage(Stage::Prefix);
     let (stream, transfer) = ids(&out.stderr, case, attempt.direction)?;
+    let refusal = refusal_context(case, &attempt, &transfer)?;
     trace.stage(Stage::DiagnosticCheck);
     if !out.stdout.is_empty() || out.status.code() != Some(i32::from(case.diagnostic().is_some())) {
         return Err(bad());
@@ -500,8 +550,13 @@ async fn invoke_inner(
     trace.stage(Stage::Idle);
     let (client_cleanup, server_cleanup) = idle(c).await?;
     trace.stage(Stage::JournalCheck);
-    let (binding, remote_terminal) = if matches!(case, Case::ResumeChangedBinding) {
-        // A hello-only record is allowed, but never an accepted Open.
+    let (binding, remote_terminal) = if let Some((launch, baseline)) = refusal {
+        // Client launch intent and server admission have separate projections.
+        let digest = hex::encode(
+            launch
+                .digest(marmish_stream::codec::Codec::None)
+                .map_err(|_| bad())?,
+        );
         for (endpoint, label) in [(c.client, "client"), (c.server, "server")] {
             let entries = streaming_cleanup::entries(
                 *endpoint.daemon.lock().await,
@@ -509,14 +564,16 @@ async fn invoke_inner(
                 c.deadline,
             )
             .await?;
-            validate_refusal_records(
+            let entry = validate_refusal_records(
                 &entries,
                 &stream,
                 &c.identities[c.role].client_account,
                 &c.ready.server_account,
                 label,
                 attempt.direction == "put",
+                (attempt.direction == "put" && label == "client").then_some(digest.as_str()),
             )?;
+            validate_refusal_binding(entry, baseline)?;
         }
         (None, None)
     } else {
@@ -539,20 +596,7 @@ async fn invoke_inner(
                 .into_iter()
                 .find(|e| e.stream == stream)
                 .ok_or_else(bad)?;
-        if server_entry.direction != "server"
-            || server_entry.client != entry.client
-            || server_entry.server != entry.server
-            || server_entry.session != entry.session
-            || server_entry.group_sha256 != entry.group_sha256
-            || server_entry.open_digest != entry.open_digest
-            || server_entry.active
-            || server_entry.terminal.is_none()
-            || (case.diagnostic().is_none()
-                && server_entry.terminal
-                    != Some(marmish_stream::wire::Terminal::Exited { code: 0 }))
-        {
-            return Err(bad());
-        }
+        validate_admitted_pair(&entry, &server_entry, case)?;
         (
             Some(Binding {
                 stream_sha256: records::digest(stream.as_bytes()),
@@ -647,6 +691,7 @@ pub(super) async fn run(mut c: Cohort<'_, '_>) -> Result<Vec<Observation>> {
                         overwrite: false,
                         resume: None,
                         protected: None,
+                        refusal: None,
                     },
                     &trace,
                 )
@@ -679,6 +724,7 @@ pub(super) async fn run(mut c: Cohort<'_, '_>) -> Result<Vec<Observation>> {
                         overwrite: false,
                         resume: None,
                         protected: None,
+                        refusal: None,
                     },
                     &trace,
                 )
@@ -703,6 +749,7 @@ pub(super) async fn run(mut c: Cohort<'_, '_>) -> Result<Vec<Observation>> {
                         overwrite: true,
                         resume: None,
                         protected: None,
+                        refusal: None,
                     },
                     &trace,
                 )
@@ -737,6 +784,7 @@ pub(super) async fn run(mut c: Cohort<'_, '_>) -> Result<Vec<Observation>> {
                             overwrite: true,
                             resume: None,
                             protected: None,
+                            refusal: None,
                         },
                         &trace,
                     )
@@ -958,6 +1006,7 @@ async fn destination_cases(
                     overwrite: true,
                     resume: None,
                     protected: Some(&sentinel),
+                    refusal: None,
                 },
                 &trace,
             )
@@ -1142,6 +1191,7 @@ async fn receipt_cases(
                 overwrite: true,
                 resume: None,
                 protected: None,
+                refusal: None,
             },
             &trace,
         )
@@ -1235,6 +1285,9 @@ async fn receipt_cases(
                 corrupt_committed(expected(&receiver_parent, &launch, stream, bytes)?, &proof)
                     .map_err(|error| case_error(case, error))?;
             }
+            let mut attempted = launch.clone();
+            attempted.mode = AttemptMode::Resume;
+            attempted.destination = destination.as_os_str().as_bytes().to_vec();
             let mut result = invoke(
                 &scoped,
                 case,
@@ -1245,6 +1298,8 @@ async fn receipt_cases(
                     overwrite: true,
                     resume: Some(&transfer),
                     protected: Some(&target),
+                    refusal: matches!(case, Case::ResumeChangedBinding)
+                        .then_some((&attempted, &baseline)),
                 },
                 &trace,
             )
@@ -1279,6 +1334,192 @@ async fn receipt_cases(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn actual_changed_binding_put_refusal_matches_installed_evidence() {
+        let actual = crate::mdk_adapter::trust_tests::actual_changed_binding_put_refusal().await;
+        let client: Vec<streaming_cleanup::Entry> =
+            serde_json::from_value(actual.client_entries).unwrap();
+        let server: Vec<streaming_cleanup::Entry> =
+            serde_json::from_value(actual.server_entries).unwrap();
+        let stream = hex::encode(actual.binding.stream);
+        let client_account = hex::encode(actual.binding.client);
+        let server_account = hex::encode(actual.binding.server);
+        let expected_digest = hex::encode(
+            actual
+                .launch
+                .digest(marmish_stream::codec::Codec::None)
+                .unwrap(),
+        );
+        let client_entry = client.iter().find(|entry| entry.stream == stream).unwrap();
+        let server_entry = server.iter().find(|entry| entry.stream == stream).unwrap();
+        assert_eq!(
+            client_entry.open_digest.as_deref(),
+            Some(expected_digest.as_str())
+        );
+        assert_eq!(server_entry.open_digest, None);
+        for entry in [client_entry, server_entry] {
+            assert_eq!(entry.session, hex::encode(actual.seed_binding.session));
+            assert_eq!(entry.group_sha256, records::digest(&actual.group));
+        }
+        validate_refusal_records(
+            &server,
+            &stream,
+            &client_account,
+            &server_account,
+            "server",
+            true,
+            None,
+        )
+        .unwrap();
+        // A local launch digest records attempted intent, not server admission.
+        validate_refusal_records(
+            &client,
+            &stream,
+            &client_account,
+            &server_account,
+            "client",
+            true,
+            Some(&expected_digest),
+        )
+        .unwrap();
+        let baseline = Binding {
+            stream_sha256: records::digest(hex::encode(actual.seed_binding.stream).as_bytes()),
+            session_sha256: records::digest(hex::encode(actual.seed_binding.session).as_bytes()),
+            open_digest: expected_digest.clone(),
+            group_sha256: records::digest(&actual.group),
+        };
+        for (entries, endpoint, expected) in [
+            (&client, "client", Some(expected_digest.as_str())),
+            (&server, "server", None),
+        ] {
+            let check = |entries: &[streaming_cleanup::Entry]| -> Result<()> {
+                let entry = validate_refusal_records(
+                    entries,
+                    &stream,
+                    &client_account,
+                    &server_account,
+                    endpoint,
+                    true,
+                    expected,
+                )?;
+                validate_refusal_binding(entry, &baseline)
+            };
+            check(entries).unwrap();
+            assert!(check(&[]).is_err());
+            let entry = entries.iter().find(|entry| entry.stream == stream).unwrap();
+            assert!(check(&[entry.clone(), entry.clone()]).is_err());
+            for field in 0..10 {
+                let mut wrong = entry.clone();
+                match field {
+                    0 => wrong.client = "wrong".into(),
+                    1 => wrong.server = "wrong".into(),
+                    2 => wrong.direction = "wrong".into(),
+                    3 => wrong.session = "wrong".into(),
+                    4 => wrong.group_sha256 = "wrong".into(),
+                    5 => wrong.stream = "wrong".into(),
+                    6 => wrong.active = true,
+                    7 => wrong.cancel_requested = true,
+                    8 => wrong.open_digest = Some("ff".repeat(32)),
+                    _ => wrong.open_digest = Some("not-a-digest".into()),
+                }
+                assert!(check(&[wrong]).is_err(), "{endpoint} mutation {field}");
+            }
+            if endpoint == "client" {
+                let mut missing = entry.clone();
+                missing.open_digest = None;
+                assert!(check(&[missing]).is_err());
+            }
+            let mut unrelated = entry.clone();
+            unrelated.stream = "unrelated".into();
+            unrelated.active = true;
+            check(&[entry.clone(), unrelated]).unwrap();
+        }
+        for change in 0..4 {
+            let mut launch = actual.launch.clone();
+            let codec = match change {
+                0 => {
+                    launch.destination.push(b'x');
+                    marmish_stream::codec::Codec::None
+                }
+                1 => {
+                    launch.mode = AttemptMode::Create;
+                    marmish_stream::codec::Codec::None
+                }
+                2 => {
+                    launch.transfer[0] ^= 1;
+                    marmish_stream::codec::Codec::None
+                }
+                _ => marmish_stream::codec::Codec::Zlib,
+            };
+            let wrong = hex::encode(launch.digest(codec).unwrap());
+            assert!(
+                validate_refusal_records(
+                    &client,
+                    &stream,
+                    &client_account,
+                    &server_account,
+                    "client",
+                    true,
+                    Some(&wrong),
+                )
+                .is_err()
+            );
+        }
+        let transfer = hex::encode(actual.launch.transfer);
+        let mut attempt = Attempt {
+            direction: "put",
+            source: Path::new("source"),
+            destination: Path::new("destination"),
+            overwrite: true,
+            resume: Some(&transfer),
+            protected: None,
+            refusal: None,
+        };
+        for case in [
+            Case::Empty,
+            Case::ExistingRefusal,
+            Case::Overwrite,
+            Case::ReceiptSeed,
+            Case::SymlinkSource,
+            Case::DirectorySource,
+            Case::DestinationSymlink,
+            Case::DestinationDirectory,
+            Case::ResumeChangedSource,
+            Case::ResumeChangedBinding,
+            Case::ResumeCorruptCheckpoint,
+        ] {
+            assert_eq!(
+                refusal_context(case, &attempt, &transfer).is_err(),
+                matches!(case, Case::ResumeChangedBinding)
+            );
+            attempt.refusal = Some((&actual.launch, &baseline));
+            assert_eq!(
+                refusal_context(case, &attempt, &transfer).is_ok(),
+                matches!(case, Case::ResumeChangedBinding)
+            );
+            attempt.refusal = None;
+        }
+        attempt.refusal = Some((&actual.launch, &baseline));
+        assert!(refusal_context(Case::ResumeChangedBinding, &attempt, &"ff".repeat(16)).is_err());
+        let mut admitted_server = server_entry.clone();
+        admitted_server.open_digest = client_entry.open_digest.clone();
+        admitted_server.terminal = Some(marmish_stream::wire::Terminal::Exited { code: 1 });
+        for case in [
+            Case::ExistingRefusal,
+            Case::ResumeChangedSource,
+            Case::ResumeCorruptCheckpoint,
+        ] {
+            validate_admitted_pair(client_entry, &admitted_server, case).unwrap();
+            let mut wrong_digest = admitted_server.clone();
+            wrong_digest.open_digest = None;
+            assert!(validate_admitted_pair(client_entry, &wrong_digest, case).is_err());
+            wrong_digest.open_digest = Some("ff".repeat(32));
+            assert!(validate_admitted_pair(client_entry, &wrong_digest, case).is_err());
+            assert!(refusal_context(case, &attempt, &transfer).is_err());
+        }
+    }
+
     #[test]
     fn source_operands_actual_setup_reports_only_one_family_result() {
         use std::cell::RefCell;
@@ -1459,10 +1700,12 @@ mod tests {
             child_disposition: None,
         };
         assert!(
-            validate_refusal_records(&[], "stream", "client", "server", "server", true).is_err()
+            validate_refusal_records(&[], "stream", "client", "server", "server", true, None)
+                .is_err()
         );
         assert!(
-            validate_refusal_records(&[], "stream", "client", "server", "server", false).is_ok()
+            validate_refusal_records(&[], "stream", "client", "server", "server", false, None)
+                .is_ok()
         );
         assert!(
             validate_refusal_records(
@@ -1471,13 +1714,34 @@ mod tests {
                 "client",
                 "server",
                 "server",
-                true
+                true,
+                None,
             )
             .is_ok()
         );
+        // A seeded GET receiver can refuse locally before either endpoint has
+        // an OpenCopy; optional inventory still validates every present hello.
+        for endpoint in ["client", "server"] {
+            let mut hello = entry.clone();
+            hello.direction = endpoint.into();
+            let check = |entries: &[streaming_cleanup::Entry]| {
+                validate_refusal_records(
+                    entries, "stream", "client", "server", endpoint, false, None,
+                )
+                .map(|_| ())
+            };
+            check(&[]).unwrap();
+            check(&[hello.clone()]).unwrap();
+            assert!(check(&[hello.clone(), hello.clone()]).is_err());
+            let mut digest = hello.clone();
+            digest.open_digest = Some("ab".repeat(32));
+            assert!(check(&[digest]).is_err());
+            hello.client = "wrong".into();
+            assert!(check(&[hello]).is_err());
+        }
         entry.client = "wrong".into();
         assert!(
-            validate_refusal_records(&[entry], "stream", "client", "server", "server", true)
+            validate_refusal_records(&[entry], "stream", "client", "server", "server", true, None)
                 .is_err()
         );
     }
@@ -1673,6 +1937,7 @@ mod tests {
                 overwrite: true,
                 resume: Some("id"),
                 protected: None,
+                refusal: None,
             },
         )
         .unwrap();
@@ -1749,6 +2014,7 @@ mod public_destination_tests {
                 overwrite: true,
                 resume: Some("id"),
                 protected: None,
+                refusal: None,
             };
             let args = attempt_args(&account, &attempt).unwrap();
             records::assert_public_target(&args[8], &account);

@@ -37,9 +37,29 @@ pub(crate) fn process_identity(pid: i32) -> Result<ProcessIdentity> {
 pub(crate) fn owned_child_identity_and_group(pid: i32) -> Result<(ProcessIdentity, i32)> {
     native::owned_child_identity_and_group(pid)
 }
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", test))]
 pub(crate) fn owned_zombie_group(identity: &ProcessIdentity, group: i32) -> Result<()> {
     native::owned_zombie_group(identity, group)
+}
+// Signal-only detail pass-throughs; ordinary shared probes stay silent.
+#[cfg(target_os = "macos")]
+pub(crate) fn process_identity_staged(
+    pid: i32,
+) -> crate::process::diagnostic::Staged<ProcessIdentity> {
+    native::process_identity_staged(pid)
+}
+#[cfg(target_os = "macos")]
+pub(crate) fn owned_child_identity_and_group_staged(
+    pid: i32,
+) -> crate::process::diagnostic::Staged<(ProcessIdentity, i32)> {
+    native::owned_child_identity_and_group_staged(pid)
+}
+#[cfg(target_os = "macos")]
+pub(crate) fn owned_zombie_group_staged(
+    identity: &ProcessIdentity,
+    group: i32,
+) -> crate::process::diagnostic::Staged<()> {
+    native::owned_zombie_group_staged(identity, group)
 }
 pub(crate) fn lock_exclusive(file: &File) -> Result<()> {
     native::lock_exclusive(file)

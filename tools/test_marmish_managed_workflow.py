@@ -43,7 +43,9 @@ class ManagedWorkflowContracts(unittest.TestCase):
 
     def test_admission_and_independent_scheduling(self):
         self.assertIn('  workflow_dispatch:\npermissions:\n  contents: read\n', SOURCE)
-        self.assertIn('    branches: [master]\n', SOURCE)
+        self.assertIn('on:\n  workflow_dispatch:\npermissions:', SOURCE)
+        self.assertNotIn('push:', SOURCE)
+        self.assertNotIn('branches:', SOURCE)
         self.assertNotIn('pull_request', SOURCE)
         self.assertTrue(self.proof.startswith('    if: ' + MANAGED_GUARD + '\n'))
         for name in ('native', 'live'):

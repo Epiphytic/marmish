@@ -23,6 +23,10 @@ Full eight-cohort qualification is incomplete; the user authorized publishing
 with this disclosed boundary before a separate reviewed correction/benchmark phase.
 Tor remains experimental; unattended tests do not establish interactive Keychain consent.
 
+The reviewed [post-release test phase](phases/v0.3-test-cleanup.md) addresses copy
+refusal evidence and fresh qualification. Its [benchmark guide](validation/v0.3-operation-benchmarks.md)
+defines existing operation clocks and byte numerators; it does not claim new results.
+
 ## Historical v0.2.3 publication
 
 **Native v0.2.3 was released.** Source is

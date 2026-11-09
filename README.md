@@ -21,6 +21,8 @@ A separate macOS native cleanup test also failed with `RecoveryUncertain` on
 its first TERM attempt; its cause remains unresolved. Interactive macOS Keychain
 consent remains unverified and Tor is experimental.
 See [v0.3 release status and measured results](docs/validation/v0.3-release.md).
+The [operation benchmark guide](docs/validation/v0.3-operation-benchmarks.md)
+defines reproducible workloads and timing boundaries; fresh results remain pending.
 
 Source: [GitHub](https://github.com/Epiphytic/marmish) ·
 [Radicle](https://radicle.network/nodes/iris.radicle.network/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg)

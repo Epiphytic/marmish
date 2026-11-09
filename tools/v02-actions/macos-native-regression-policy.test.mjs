@@ -16,7 +16,7 @@ test('manual regression is bounded, read-only and nonroot on Mac ARM64', () => {
   assert.match(workflow, /test "\$\(uname -s\):\$\(uname -m\)" = Darwin:arm64/);
   assert.match(workflow, /RUST_TEST_THREADS: '1'/);
   assert.match(workflow, /MARMISH_REQUIRE_NONROOT_PERMISSION_TESTS: '1'/);
-  assert.equal((workflow.match(/test "\$\(id -u\)" -ne 0/g) ?? []).length, 4);
+  assert.equal((workflow.match(/test "\$\(id -u\)" -ne 0/g) ?? []).length, 5);
 });
 
 test('source is exact workflow and checkout commit with pinned toolchain', () => {
@@ -74,7 +74,7 @@ test('focused collection survives suite failure, runs twenty times and rejects z
   ]) assert.ok(workflow.includes(`stream_runner::tests::${name}\n`));
   assert.ok(workflow.includes('cargo test --locked -p marmish-native --lib "$test_name" -- --exact --nocapture 2>&1 | tee "$log"'));
   assert.ok(workflow.includes("grep -Eq '^test result: ok\\. 1 passed; 0 failed; 0 ignored;' \"$log\""));
-  assert.equal((workflow.match(/set -euo pipefail/g) ?? []).length, 4);
+  assert.equal((workflow.match(/set -euo pipefail/g) ?? []).length, 5);
   assert.doesNotMatch(workflow, /continue-on-error|\|\| true/);
 });
 

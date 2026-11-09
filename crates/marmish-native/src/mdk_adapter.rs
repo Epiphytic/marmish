@@ -2892,7 +2892,7 @@ mod tests {
 
 #[cfg(test)]
 #[path = "mdk_adapter_tests.rs"]
-mod trust_tests;
+pub(crate) mod trust_tests;
 
 #[cfg(test)]
 mod scheduler_tests {

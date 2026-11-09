@@ -219,7 +219,9 @@ class CoordinatorTests(unittest.TestCase):
 
     def test_workflow_has_fixed_trust_boundary_and_token_only_in_polling_steps(self):
         workflow = (Path(__file__).parents[1] / '.github/workflows/native-validation.yml').read_text()
-        self.assertIn('branches: [master]', workflow)
+        self.assertIn('on:\n  workflow_dispatch:\npermissions:', workflow)
+        self.assertNotIn('push:', workflow)
+        self.assertNotIn('branches:', workflow)
         self.assertIn('  workflow_dispatch:\npermissions:', workflow)
         self.assertNotIn('pull_request', workflow)
         push_guard = ("    if: github.repository == 'Epiphytic/marmish' && "

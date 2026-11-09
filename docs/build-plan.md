@@ -25,8 +25,8 @@ measurements nor a publication authorization establish full v0.3 qualification.
 Preserve that failed chain and historical evidence; do not retry it into a pass.
 
 After publication, Beads `marmish-8ka.6.1` and the existing benchmark task
-`marmish-7nw.5.3` track the follow-up. A separate detailed design and Claude review
-will address
+`marmish-7nw.5.3` track the follow-up. The Claude-approved
+[test-cleanup design](phases/v0.3-test-cleanup.md) addresses
 the copy harness's local-intent versus server-admission contract, preserving
 all authority, group/session/stream bindings and no-side-effect requirements.
 Then run a fresh exact-source candidate and all eight serial installed cohorts.
@@ -38,7 +38,10 @@ resume and cancellation timing where actually instrumented, and retained failure
 and cleanup outcomes. Separate setup from steady transfer only with real timing
 boundaries; publish sample counts and raw measurements without inventing RTT,
 wire rate, compression ratios or small-sample tail percentiles. This scope is
-planned, not implemented or qualified by the current release.
+not qualified by the current release. The separate approved
+[macOS diagnostic increment](phases/v0.3-macos-cleanup-diagnostic.md) preserves
+cleanup decisions while exposing failed proof stages in debug builds; it does
+not establish a root cause or fix. Retained product changes require v0.3.1.
 
 ## Historical native v0.2 baseline
 
