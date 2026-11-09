@@ -63,6 +63,11 @@ One central main wrapper owns setup failures before supervise starts; supervise 
 
 Meaningful RED: fake remote download throws known artifact_http while controlled real owned child is running, pass diagnostic sink option, assert one bounded closed remote_download/artifact_http line plus unchanged failure exit/termination. Baseline capture is empty. GREEN keeps exit/failure/cleanup semantics. Extend existing race test: hard remote error after local PASS still fails and captured stage remains remote_download. Setup errors emit setup once. Cleanup failure cannot overwrite initiating diagnostic. Sink throw stays failure with cleanup intact. Whole-line public schema and mutation secret tests apply. Existing 24 transport/upload-client tests remain GREEN; retry intervals/API budget/deadlines/missing-pending/fatal classes/no fallback unchanged. HTTP-status precision is explicitly deferred; no speculative 404 change to explain this incident.
 
+The later [v0.3.1 artifact-list amendment](v0.3.1-release.md) adds a separate,
+bounded count observation for shape-valid list mismatches. It supersedes the
+original silent-retry/no-annotation constraint above for that case only; the
+terminal diagnostic and aborted-poll behavior remain unchanged.
+
 ## Execution and qualification gates
 
 Actual independent Claude auto design approval is required before implementation. Then use disjoint native and JS agents, local stub-RED/GREEN and relevant existing native/JS suites, exact diff/quality review, actual independent Claude auto code review with every run-site table entry reconciled, sanitized evidence/spec updates, explicit reviewed increment commit and push to GitHub and Radicle with verified refs/availability. No phase closes with unresolved blocking findings. Preserve original failed run and corrected analysis. New diagnostic source requires its own candidate and original serial eight cohorts; source46c9 results cannot silently qualify changed source. Only new finite evidence can justify a targeted semantic fix; no relaxed retries, schemas, workload or qualification gates to force GREEN. No live qualification before approved implementation and code review.

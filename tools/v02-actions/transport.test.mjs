@@ -85,7 +85,7 @@ test('list refuses silent truncation and persisted call budget cannot reset betw
   await fs.writeFile(file, '{"used":119}');
   const fetcher = async () => new Response('{"total_count":101,"artifacts":[]}');
   const first = new ArtifactTransport({context, token: 'x', budgetFile: file, fetcher});
-  await assert.rejects(first.list(Date.now() + 1000), /list_bound/);
+  await assert.rejects(first.list(Date.now() + 1000), /artifact_list_total/);
   const second = new ArtifactTransport({context, token: 'x', budgetFile: file, fetcher});
   await assert.rejects(second.list(Date.now() + 1000), /artifact_budget/);
 });
@@ -292,4 +292,189 @@ test('a malformed in-flight artifact racing the final scan cannot become success
   assert.equal(diagnostic.stage, 'remote_list');
   assert.equal(diagnostic.category, 'artifact_duplicate');
   assert.equal(diagnostic.peer_role, null);
+});
+
+
+test('list validates fatal shapes and bounds without retrying or accepting partial inventories', async t => {
+  const dir = await temporary(t);
+  const cases = [
+    ['{', 'artifact_list_json'], ['null', 'artifact_list_shape'], ['[]', 'artifact_list_shape'],
+    ['1', 'artifact_list_shape'],
+    ...[undefined, '3', 0.5, -1, Number.MAX_SAFE_INTEGER + 1].map(total_count =>
+      [JSON.stringify({total_count, artifacts: []}), 'artifact_list_total']),
+    [JSON.stringify({total_count: 101, artifacts: []}), 'artifact_list_total'],
+    [JSON.stringify({total_count: 0}), 'artifact_list_items'],
+    [JSON.stringify({total_count: 0, artifacts: {}}), 'artifact_list_items'],
+    [JSON.stringify({total_count: 3, artifacts: Array(101).fill({})}), 'artifact_list_items'],
+  ];
+  for (const [index, [body, category]] of cases.entries()) {
+    let calls = 0;
+    const transport = new ArtifactTransport({context, token: 'x', budgetFile: path.join(dir, String(index)),
+      fetcher: async () => { calls++; return new Response(body); }});
+    await assert.rejects(transport.list(Date.now() + 30_000), {message: category});
+    assert.equal(calls, 1);
+  }
+  for (const size of [0, 100]) {
+    const entries = Array(size).fill({});
+    const transport = new ArtifactTransport({context, token: 'x', budgetFile: path.join(dir, `complete-${size}`),
+      fetcher: async () => new Response(JSON.stringify({total_count: size, artifacts: entries}))});
+    assert.deepEqual(await transport.list(Date.now() + 30_000), entries);
+  }
+});
+
+// Exercise actual listing, authenticated downloads and immutable inbox writes;
+// only GitHub/blob HTTP and the passage of time are deterministic fixtures.
+async function listExchange(t, snapshots, used = 0) {
+  const directory = await temporary(t);
+  const created = Math.floor(Date.now() / 1000);
+  const ctx = {...context, created_at: created, expires_at: created + 2220};
+  const state = {now: (created + 100) * 1000, lists: 0, downloads: 0, pending: false,
+    diagnostics: [], deadlines: [], signals: [], polls: [], onPause: async () => {}};
+  const identities = path.join(directory, 'identities');
+  const budgetFile = path.join(directory, 'budget');
+  await fs.writeFile(budgetFile, JSON.stringify({used}));
+  await fs.writeFile(path.join(directory, 'linux-amd64-identity-ready.json'), '{}');
+  const entries = ['linux-amd64', 'linux-arm64', 'macos-arm64'].map((role, index) => ({
+    name: artifactName(binding(ctx, role), role, 'identity-ready'), id: index + 1,
+    expired: false, size_in_bytes: one.length, digest: `sha256:${digest(one)}`,
+  }));
+  const fetcher = async url => {
+    if (String(url).endsWith('artifacts?per_page=100')) {
+      const snapshot = snapshots[Math.min(state.lists++, snapshots.length - 1)];
+      return new Response(JSON.stringify(snapshot(entries)));
+    }
+    if (String(url).endsWith('/zip')) {
+      state.downloads++;
+      return new Response(null, {status: 302, headers: {location: 'https://x.blob.core.windows.net/fixture'}});
+    }
+    return new Response(one);
+  };
+  const transport = new ArtifactTransport({context: ctx, token: 'x', budgetFile, fetcher});
+  const list = transport.list.bind(transport);
+  transport.list = async (deadline, signal) => {
+    state.polls.push(state.now);
+    state.deadlines.push(deadline); state.signals.push(signal); state.pending = true;
+    try { return await list(deadline, signal); } finally { state.pending = false; }
+  };
+  return {state, entries, directory, identities, budgetFile, transport,
+    run: extra => supervise({options: {mode: 'exchange', role: 'linux-amd64', output: directory,
+      identities, jobDeadline: created + 4300}, context: ctx, now: () => state.now,
+      artifact: {uploadArtifact: async () => ({id: 1})}, transport,
+      diagnostic: line => state.diagnostics.push(JSON.parse(line.slice('marmish installed diagnostic: '.length))),
+      delay: async () => {
+        await new Promise(resolve => setImmediate(resolve));
+        if (!state.pending) state.now += 1000;
+        await state.onPause();
+      }, ...extra})};
+}
+const completeList = entries => ({total_count: entries.length, artifacts: entries});
+
+test('bounded shorter and longer list snapshots admit nothing until a complete exchange', async t => {
+  for (const total of [3, 1]) {
+    const fixture = await listExchange(t, [entries => ({total_count: total, artifacts: entries.slice(0, 2)}), completeList]);
+    const {state} = fixture;
+    let observedEmpty = false;
+    state.onPause = async () => {
+      if (state.diagnostics.length && state.lists === 1) {
+        assert.equal(state.downloads, 0);
+        await assert.rejects(fs.access(fixture.identities), {code: 'ENOENT'});
+        observedEmpty = true;
+      }
+    };
+    await fixture.run();
+    assert.equal(observedEmpty, true);
+    assert.equal(state.lists, 2);
+    assert.ok(state.polls[1] - state.polls[0] >= 30_000);
+    assert.equal(state.downloads, 3);
+    assert.equal(new Set(state.deadlines).size, 1);
+    assert.equal(new Set(state.signals).size, 1);
+    assert.equal(JSON.parse(await fs.readFile(fixture.budgetFile)).used, 5);
+    assert.equal(state.diagnostics.length, 1);
+    assert.equal(state.diagnostics[0].reason, 'count_mismatch');
+    assert.deepEqual((await fs.readdir(fixture.identities)).sort(),
+      ['linux-amd64', 'linux-arm64', 'macos-arm64'].map(role => `${role}-identity-ready.json`));
+    for (const name of await fs.readdir(fixture.identities)) {
+      assert.equal(await fs.readFile(path.join(fixture.identities, name), 'utf8'), '{"schema":1}');
+    }
+  }
+});
+
+test('persistent list mismatch stops at the original deadline without identity admission', async t => {
+  const fixture = await listExchange(t, [entries => ({total_count: 3, artifacts: entries.slice(0, 2)})]);
+  await assert.rejects(fixture.run(), {message: 'artifact_deadline'});
+  assert.equal(fixture.state.downloads, 0);
+  assert.equal(new Set(fixture.state.deadlines).size, 1);
+  assert.ok(fixture.state.now >= fixture.state.deadlines[0]);
+  assert.ok(fixture.state.lists > 1 && fixture.state.lists < 120);
+  await assert.rejects(fs.access(fixture.identities), {code: 'ENOENT'});
+  assert.equal(fixture.state.diagnostics.at(-1).category, 'artifact_deadline');
+  assert.equal(fixture.state.diagnostics.filter(event => event.event === 'failed').length, 1);
+});
+
+test('mismatch consumes the shared budget and another transport cannot reset it', async t => {
+  const fixture = await listExchange(t, [entries => ({total_count: 3, artifacts: entries.slice(0, 2)})], 119);
+  await assert.rejects(fixture.run(), {message: 'artifact_budget'});
+  assert.equal(fixture.state.lists, 1);
+  assert.equal(fixture.state.downloads, 0);
+  const second = new ArtifactTransport({context, token: 'x', budgetFile: fixture.budgetFile,
+    fetcher: async () => { assert.fail('exhausted budget must not fetch'); }});
+  await assert.rejects(second.list(Date.now() + 30_000), {message: 'artifact_budget'});
+  assert.equal(JSON.parse(await fs.readFile(fixture.budgetFile)).used, 120);
+  await assert.rejects(fs.access(fixture.identities), {code: 'ENOENT'});
+});
+
+test('abort during mismatch wait makes no further requests or identity admission', async t => {
+  const fixture = await listExchange(t, [entries => ({total_count: 3, artifacts: entries.slice(0, 2)})]);
+  const controller = new AbortController();
+  fixture.state.onPause = async () => {
+    if (fixture.state.diagnostics.length) controller.abort();
+  };
+  await assert.rejects(fixture.run({signal: controller.signal}), {message: 'supervisor_cancelled'});
+  assert.equal(fixture.state.lists, 1);
+  assert.equal(fixture.state.downloads, 0);
+  await assert.rejects(fs.access(fixture.identities), {code: 'ENOENT'});
+});
+
+test('a list mismatch followed by a duplicate stays fatal at remote_download', async t => {
+  const fixture = await listExchange(t, [entries => ({total_count: 3, artifacts: entries.slice(0, 2)}),
+    entries => ({total_count: 4, artifacts: [...entries, entries[0]]})]);
+  await assert.rejects(fixture.run(), {message: 'artifact_duplicate'});
+  assert.equal(fixture.state.lists, 2);
+  assert.equal(fixture.state.downloads, 0);
+  assert.equal(fixture.state.diagnostics[0].event, 'artifact_list_observation');
+  const failure = fixture.state.diagnostics.at(-1);
+  assert.equal(failure.category, 'artifact_duplicate');
+  assert.equal(failure.stage, 'remote_download');
+  assert.equal(failure.peer_role, 'linux-amd64');
+  await assert.rejects(fs.access(fixture.identities), {code: 'ENOENT'});
+});
+
+test('a local fatal after mismatch observation keeps its own diagnostic stage', async t => {
+  const fixture = await listExchange(t, [entries => ({total_count: 3, artifacts: entries.slice(0, 2)})]);
+  fixture.state.onPause = async () => {
+    if (fixture.state.diagnostics.length) {
+      await fs.writeFile(path.join(fixture.directory, 'linux-amd64-identity-ready.json'), '[]');
+    }
+  };
+  await assert.rejects(fixture.run(), {message: 'published_record_changed'});
+  assert.equal(fixture.state.diagnostics[0].stage, 'remote_list');
+  const failure = fixture.state.diagnostics.at(-1);
+  assert.equal(failure.event, 'failed');
+  assert.equal(failure.stage, 'local_record_read');
+  assert.equal(failure.category, 'published_record_changed');
+});
+
+
+test('an aborted poll suppresses the mismatch observation', async t => {
+  const fixture = await listExchange(t, [entries => ({total_count: 3, artifacts: entries.slice(0, 2)})]);
+  const controller = new AbortController();
+  const list = fixture.transport.list.bind(fixture.transport);
+  fixture.transport.list = async (...args) => {
+    try { return await list(...args); }
+    catch (error) { controller.abort(); throw error; }
+  };
+  await assert.rejects(fixture.run({signal: controller.signal}), {message: 'supervisor_cancelled'});
+  assert.equal(fixture.state.lists, 1);
+  assert.equal(fixture.state.downloads, 0);
+  assert.equal(fixture.state.diagnostics.filter(event => event.event === 'artifact_list_observation').length, 0);
 });

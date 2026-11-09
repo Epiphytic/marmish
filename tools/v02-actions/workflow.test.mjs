@@ -7,7 +7,7 @@ import {candidateInputs, checkRun, checkTooling, verifyTools, verifyContext, gat
 import {inspectCandidate} from './release-candidate.mjs';
 import {INSTALLED_CANDIDATE_PATHS} from './workflow.mjs';
 import {LOCAL_COHORTS} from './local.mjs';
-import {digest, ROLES} from './transport.mjs';
+import {ArtifactTransport, digest, ROLES} from './transport.mjs';
 import {execFileSync} from 'node:child_process';
 const source = 'a'.repeat(40), harness = 'b'.repeat(64);
 const env = {CANDIDATE_RUN_ID:'12', CANDIDATE_RUN_ATTEMPT:'3', GITHUB_REPOSITORY:'Epiphytic/marmish',
@@ -255,4 +255,23 @@ test('diagnostic guard refusal preserves separate finite product and supervisor 
   assert.equal(record.guard,'metadata_refused');
   assert.equal(record.diagnostic,true);
   assert.ok(!JSON.stringify(record).includes('Error:'));
+});
+
+
+test('validateCandidate fails closed on a bounded list mismatch without retry or artifact admission', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'marmish-candidate-list-'));
+  t.after(() => fs.rm(directory, {recursive: true, force: true}));
+  const calls = [];
+  const transport = new ArtifactTransport({context: {repository: env.GITHUB_REPOSITORY, run_id: '12'},
+    token: 'private-token', budgetFile: path.join(directory, 'budget'), fetcher: async url => {
+      calls.push(String(url));
+      if (String(url).endsWith('/attempts/3')) return new Response(JSON.stringify({...run, head_sha: source}));
+      assert.ok(String(url).endsWith('/artifacts?per_page=100'));
+      return new Response(JSON.stringify({total_count: 3, artifacts: [{}, {}]}));
+    }});
+  transport.download = async () => { assert.fail('incomplete inventory must never be admitted'); };
+  await assert.rejects(validateCandidate(env, 0, transport), {message: 'artifact_retry'});
+  assert.equal(calls.length, 2);
+  assert.equal(calls.filter(url => url.endsWith('/artifacts?per_page=100')).length, 1);
+  assert.equal(JSON.parse(await fs.readFile(path.join(directory, 'budget'))).used, 2);
 });

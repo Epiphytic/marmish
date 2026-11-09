@@ -97,6 +97,7 @@ async function superviseOwned({options, context, transport, artifact, spawnChild
       }
     } catch (error) {
       if (!controller.signal.aborted) {
+        if (stage === 'remote_list') diagnostic.listObservation(error);
         if (error.message === 'artifact_retry') interval = Math.max(interval, error.retryAfter ?? 0);
         else { remoteError = error; remoteFailure = {stage, peerRole}; }
       }

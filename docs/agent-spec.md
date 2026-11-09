@@ -36,7 +36,7 @@ while ordinary release binaries omit their debug emission. The copy refusal
 validator and legacy uninstall changes correct test evidence and fixtures.
 
 The public installer remains pinned to 0.3.0 until trusted publication creates
-its installer-only child. Current `11e93a1` candidate/preflight evidence is not
+its installer-only child. Earlier `11e93a1` candidate/preflight evidence is not
 qualification of future 0.3.1 bytes. [macOS preflight](validation/v0.3.1-preflight.md)
 passed the original combined suites, 80 repetitions and strict release Clippy;
 the historical first-TERM cause remains unknown. Final source-bound candidate,
@@ -44,6 +44,17 @@ macOS regression, eight cohorts, finite benchmarks and independent audits remain
 required. Hold automatic publication with an explicit restoration duty before
 pushing the version bump, because the publisher does not gate these cohorts.
 No new rollback or lifecycle claim is made. Keep published 0.3.0 immutable.
+
+At subsequent source `86119f1`, ordinary candidate 42594063209/1 and exact-source
+macOS regression 42594082226/1 passed. Installed qualification stopped at
+edge-copy 42611543208/1 after five passing workflows: the CI coordinator rejected
+a GitHub artifact listing before copy execution. Its original response was not
+retained, so the failing list predicate remains unknown. Final native semantic
+replay, interruption cohorts and finite benchmarks did not execute. The
+[artifact-list amendment](phases/v0.3.1-release.md#artifact-list-coordination-amendment)
+records bounded CI transport handling and diagnostic changes; it requires fresh
+source-bound qualification rather than reusing those partial results. Version
+0.3.1 remains unpublished and the public installer still selects 0.3.0.
 
 ## Historical v0.2.3 publication
 

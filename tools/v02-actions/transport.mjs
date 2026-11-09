@@ -140,6 +140,31 @@ async function body(response, limit) {
   return Buffer.concat(chunks);
 }
 
+function parseArtifactList(bytes) {
+  let result;
+  const fail = (category, reason) => {
+    const total = result?.total_count;
+    const count = Array.isArray(result?.artifacts) ? result.artifacts.length : null;
+    const error = new Error(category);
+    error.artifactList = {reason,
+      total_count: Number.isSafeInteger(total) && total >= 0 && total <= 100 ? total : null,
+      artifact_count: count !== null && count <= 100 ? count : null};
+    if (category === 'artifact_retry') error.retryAfter = 30_000;
+    throw error;
+  };
+  try { result = JSON.parse(bytes); }
+  catch { fail('artifact_list_json', 'invalid_json'); }
+  if (!result || typeof result !== 'object' || Array.isArray(result)) fail('artifact_list_shape', 'invalid_object');
+  if (!Number.isSafeInteger(result.total_count) || result.total_count < 0) fail('artifact_list_total', 'invalid_total');
+  if (result.total_count > 100) fail('artifact_list_total', 'total_bound');
+  if (!Array.isArray(result.artifacts)) fail('artifact_list_items', 'invalid_items');
+  if (result.artifacts.length > 100) fail('artifact_list_items', 'items_bound');
+  // Never return or scan a partial snapshot. Only the supervisor retries this
+  // typed, bounded inconsistency, under its original deadline and API budget.
+  if (result.artifacts.length !== result.total_count) fail('artifact_retry', 'count_mismatch');
+  return result.artifacts;
+}
+
 export class ArtifactTransport {
   constructor({context, token, budgetFile, fetcher = fetch}) {
     requireThat(typeof token === 'string' && token.length > 0, 'missing_api_token');
@@ -190,10 +215,7 @@ export class ArtifactTransport {
     const url = `https://api.github.com/repos/${this.context.repository}/actions/runs/${this.context.run_id}/artifacts?per_page=100`;
     const reply = await this.request(url, true, 2 * 1024 * 1024, deadline, signal);
     requireThat(reply.bytes, 'artifact_api_redirect');
-    const result = JSON.parse(reply.bytes);
-    requireThat(Number.isInteger(result.total_count) && result.total_count <= 100
-      && Array.isArray(result.artifacts) && result.artifacts.length === result.total_count, 'artifact_list_bound');
-    return result.artifacts;
+    return parseArtifactList(reply.bytes);
   }
   async download(entries, name, basename, deadline, signal) {
     const matching = entries.filter(entry => entry.name === name);

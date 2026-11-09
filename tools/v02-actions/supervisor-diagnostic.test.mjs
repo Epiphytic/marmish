@@ -47,6 +47,7 @@ const CATEGORIES = ['invalid_context', 'invalid_repository', 'invalid_run', 'inv
   'record_changed', 'invalid_basename', 'record_conflict', 'archive_oversized', 'invalid_archive',
   'response_oversized', 'response_body_missing', 'missing_api_token', 'artifact_deadline',
   'artifact_budget', 'artifact_http', 'artifact_api_redirect', 'artifact_list_bound',
+  'artifact_list_json', 'artifact_list_shape', 'artifact_list_total', 'artifact_list_items',
   'artifact_duplicate', 'artifact_metadata', 'artifact_redirect_missing', 'artifact_digest',
   'artifact_upload', 'invalid_deadline', 'invalid_mode', 'supervisor_cancelled',
   'published_record_changed', 'driver_failed', 'terminal_records_missing', 'local_identity_missing',
@@ -334,4 +335,33 @@ test('supervise temporary-directory setup failure emits once before a child is c
   assert.equal(captured.length, 1);
   assert.equal(publicDiagnostic(captured[0]).stage, 'setup');
   assert.equal(publicDiagnostic(captured[0]).category, 'unknown_error');
+});
+
+
+test('list observations use a separate closed schema without changing terminal diagnostic state', () => {
+  const captured = [];
+  const diagnostic = supervisorDiagnostic(line => captured.push(line), 'linux-arm64');
+  diagnostic.at('local_record_read', 'macos-arm64');
+  diagnostic.listObservation({artifactList: {reason: 'count_mismatch', total_count: 3, artifact_count: 2}});
+  assert.equal(captured.length, 1);
+  assert.ok(Buffer.byteLength(captured[0] + '\n') <= 1024);
+  assert.deepEqual(JSON.parse(captured[0].slice(PREFIX.length)), {schema: 1, component: 'supervisor',
+    event: 'artifact_list_observation', stage: 'remote_list', role: 'linux-arm64', peer_role: null,
+    reason: 'count_mismatch', total_count: 3, artifact_count: 2});
+  diagnostic.failed(new Error('published_record_changed'));
+  diagnostic.failed(new Error('artifact_http'));
+  assert.equal(captured.length, 2);
+  assert.deepEqual(publicDiagnostic(captured[1]), {schema: 1, component: 'supervisor', event: 'failed',
+    stage: 'local_record_read', category: 'published_record_changed', role: 'linux-arm64', peer_role: 'macos-arm64'});
+});
+
+test('list observation rejects hostile getters and non-whitelisted descriptors without leaking', () => {
+  const captured = [];
+  const diagnostic = supervisorDiagnostic(line => captured.push(line), 'linux-amd64');
+  diagnostic.listObservation({get artifactList() { throw new Error(SECRET); }});
+  for (const change of [{reason: SECRET}, {total_count: Number.MAX_SAFE_INTEGER + 1},
+    {artifact_count: 101}, {total_count: SECRET}]) {
+    diagnostic.listObservation({artifactList: {reason: 'count_mismatch', total_count: 3, artifact_count: 2, ...change}});
+  }
+  assert.deepEqual(captured, []);
 });
