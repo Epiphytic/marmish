@@ -55,12 +55,13 @@ pub(crate) fn owned_child_identity_and_group_staged(
     native::owned_child_identity_and_group_staged(pid)
 }
 #[cfg(target_os = "macos")]
-pub(crate) fn owned_zombie_group_staged(
+pub(crate) fn observe_owned_zombie_group_staged(
     identity: &ProcessIdentity,
     group: i32,
-) -> crate::process::diagnostic::Staged<()> {
-    native::owned_zombie_group_staged(identity, group)
+) -> crate::process::diagnostic::Staged<crate::process::CleanupObservation> {
+    native::observe_owned_zombie_group_staged(identity, group)
 }
+
 pub(crate) fn lock_exclusive(file: &File) -> Result<()> {
     native::lock_exclusive(file)
 }

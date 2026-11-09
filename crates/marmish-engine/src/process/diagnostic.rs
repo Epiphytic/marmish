@@ -62,6 +62,7 @@ pub(crate) enum Context {
 enum ObservationClass {
     Hard,
     BsdReadEsrch,
+    ExitingNonleader,
 }
 #[cfg(target_os = "macos")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,6 +161,17 @@ impl Failure {
         }
     }
     #[cfg(target_os = "macos")]
+    pub(crate) fn exiting_nonleader(self) -> Self {
+        Self {
+            observation: ObservationClass::ExitingNonleader,
+            ..self
+        }
+    }
+    #[cfg(target_os = "macos")]
+    pub(crate) fn is_exiting_nonleader(&self) -> bool {
+        matches!(self.observation, ObservationClass::ExitingNonleader)
+    }
+    #[cfg(target_os = "macos")]
     pub(crate) fn is_bsd_read_esrch(&self) -> bool {
         matches!(self.observation, ObservationClass::BsdReadEsrch)
     }
@@ -211,7 +223,7 @@ struct Record {
     errno: Option<i32>,
 }
 #[cfg(debug_assertions)]
-fn record(result: &Staged<()>, origin: Origin) -> Option<Record> {
+fn record<T>(result: &Staged<T>, origin: Origin) -> Option<Record> {
     result.as_ref().err().map(|failure| Record {
         origin,
         #[cfg(target_os = "macos")]
@@ -330,7 +342,7 @@ impl Record {
         )
     }
 }
-pub(super) fn emit(_result: &Staged<()>, _origin: Origin) {
+pub(super) fn emit<T>(_result: &Staged<T>, _origin: Origin) {
     #[cfg(debug_assertions)]
     if let Some(record) = record(_result, _origin) {
         use std::io::Write;
@@ -369,7 +381,7 @@ mod tests {
                 Err(failure) => failure.context(context),
             };
             let result = Err(failure);
-            let text = record(&result, Origin::Term).unwrap().format();
+            let text = record::<()>(&result, Origin::Term).unwrap().format();
             assert_eq!(
                 text,
                 format!(
@@ -385,7 +397,7 @@ mod tests {
 
     #[test]
     fn only_failed_outcomes_produce_complete_closed_records() {
-        assert!(record(&Ok(()), Origin::Term).is_none());
+        assert!(record::<()>(&Ok(()), Origin::Term).is_none());
         for (origin, expected) in [
             (Origin::Term, "term"),
             (Origin::Kill, "kill"),
@@ -398,7 +410,7 @@ mod tests {
                     Stage::Kill,
                     errno,
                 ));
-                let text = record(&result, origin).unwrap().format();
+                let text = record::<()>(&result, origin).unwrap().format();
                 let number = errno.map_or_else(|| "none".into(), |value| value.to_string());
                 assert_eq!(
                     text,
@@ -424,7 +436,7 @@ mod tests {
                 .with_bsd_member(leader)
                 .context(Context::ProofFirstMembers)
                 .with_proof_attempt(attempt);
-                let text = record(&Err(failure), Origin::Kill).unwrap().format();
+                let text = record::<()>(&Err(failure), Origin::Kill).unwrap().format();
                 assert_eq!(
                     text,
                     format!(
@@ -442,7 +454,7 @@ mod tests {
             None,
         )
         .with_bsd_member(false);
-        let text = record(&Err(failure), Origin::Kill).unwrap().format();
+        let text = record::<()>(&Err(failure), Origin::Kill).unwrap().format();
         assert!(!text.contains("member="));
         assert!(!text.contains("proof_attempt="));
     }
@@ -469,7 +481,7 @@ mod tests {
                                     .context(Context::ProofFirstMembers);
                             assert_eq!(failure.diagnostic_detail(), (stage_label, Some(detail)));
                             let result = Err(failure);
-                            let text = record(&result, Origin::Kill).unwrap().format();
+                            let text = record::<()>(&result, Origin::Kill).unwrap().format();
                             assert_eq!(
                                 text,
                                 format!(

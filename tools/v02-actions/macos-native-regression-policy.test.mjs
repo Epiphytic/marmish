@@ -62,6 +62,22 @@ test('optional authority observation checks the SDK before exactly matched insta
   assert.ok(observation.includes('test "$(grep -c \'^test result:\' "$log")" -eq 1'));
   const proofDebug = 'cargo test --locked -p marmish-engine --lib platform::macos::tests::zombie_proof_restart_ -- --nocapture 2>&1 | tee "$log"';
   const proofRelease = 'cargo test --locked --release -p marmish-engine --lib platform::macos::tests::zombie_proof_restart_ -- --nocapture 2>&1 | tee "$log"';
+  const pendingOrder = [];
+  for (const [family, packageName, filter, count] of [
+    ['pending_owned_cleanup', 'marmish-engine', 'pending_owned_cleanup_', 5],
+    ['pending_cleanup_budget', 'marmish-native', 'stream_runner::tests::pending_cleanup_budget_', 4],
+  ]) {
+    for (const [profile, flag] of [['debug', ''], ['release', ' --release']]) {
+      const begin = `echo 'authority diagnostics stage=${family}_${profile}'\n`;
+      const command = `cargo test --locked${flag} -p ${packageName} --lib ${filter} -- --nocapture 2>&1 | tee "$log"`;
+      const passed = `echo 'authority diagnostics stage=${family}_${profile}_passed'\n`;
+      const block = observation.slice(observation.indexOf(begin), observation.indexOf(passed));
+      assert.ok(block.includes(`grep -Eq '^test result: ok\\. ${count} passed; 0 failed; 0 ignored;' "$log"`));
+      assert.ok(block.includes('test "$(grep -c \'^test result:\' "$log")" -eq 1'));
+      assert.ok(block.includes(`test "$(grep -E '^test .*${filter}[^ ]+ \\.\\.\\. ok$' "$log" | sort -u | wc -l | tr -d ' ')" -eq ${count}`));
+      pendingOrder.push(observation.indexOf(begin), observation.indexOf(command), observation.indexOf(passed));
+    }
+  }
   const proofOrder = [
     sdkPassed,
     observation.indexOf("echo 'authority diagnostics stage=deterministic_proof_tests'\n"),
@@ -70,12 +86,13 @@ test('optional authority observation checks the SDK before exactly matched insta
     observation.indexOf("echo 'authority diagnostics stage=deterministic_proof_tests_release'\n"),
     observation.indexOf(proofRelease),
     observation.indexOf("echo 'authority diagnostics stage=deterministic_proof_tests_release_passed'\n"),
+    ...pendingOrder,
     tests, loop,
   ];
   assert.ok(proofOrder.every((position, index) => position >= 0 && (index === 0 || position > proofOrder[index - 1])));
   const proofChecks = /grep -Eq '\^test result: ok\\\. 7 passed; 0 failed; 0 ignored;' "\$log"\n          test "\$\(grep -c '\^test result:' "\$log"\)" -eq 1\n/g;
   assert.equal((observation.match(proofChecks) ?? []).length, 2);
-  assert.equal((observation.match(/cargo test /g) ?? []).length, 3);
+  assert.equal((observation.match(/cargo test /g) ?? []).length, 7);
   assert.doesNotMatch(observation, /--no-fail-fast|--ignored|--include-ignored|--skip|continue-on-error|\|\| true/);
 });
 

@@ -132,7 +132,6 @@ const PROC_PGRP_ONLY: u32 = 2;
 // Current-main XNU bsd/sys/proc_info.h: PROC_FLAG_INEXIT. The diagnostic
 // workflow checks the selected SDK declaration; this is not kernel proof.
 // https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/sys/proc_info.h
-#[cfg(debug_assertions)]
 const PROC_FLAG_INEXIT: u32 = 4;
 const _: () = assert!(size_of::<libc::proc_bsdinfo>() == 136);
 
@@ -240,6 +239,16 @@ fn zombie_identity_from_info(info: &libc::proc_bsdinfo, group: i32) -> Staged<Zo
     };
     if let Some(stage) = stage {
         let failure = Failure::darwin(EngineError::RecoveryUncertain, stage, None);
+        let failure = if group > 0
+            && info.pbi_pid != group as u32
+            && info.pbi_pgid == group as u32
+            && info.pbi_status == libc::SRUN
+            && info.pbi_flags & PROC_FLAG_INEXIT != 0
+        {
+            failure.exiting_nonleader()
+        } else {
+            failure
+        };
         #[cfg(debug_assertions)]
         let failure = {
             use crate::process::diagnostic::{MemberKind, ZombieDetail};
@@ -306,6 +315,7 @@ enum SnapshotPass {
 enum ProofFailure {
     Hard(Failure),
     IncompleteSnapshot(Failure),
+    ExitingMember(Failure),
 }
 type ProofResult<T> = std::result::Result<T, ProofFailure>;
 impl From<Failure> for ProofFailure {
@@ -317,12 +327,15 @@ impl ProofFailure {
     fn context(self, context: Context) -> Self {
         match self {
             Self::Hard(failure) => Self::Hard(failure.context(context)),
+            Self::ExitingMember(failure) => Self::ExitingMember(failure.context(context)),
             Self::IncompleteSnapshot(failure) => Self::IncompleteSnapshot(failure.context(context)),
         }
     }
     fn into_failure(self, _attempt: ProofAttempt) -> Failure {
         let failure = match self {
-            Self::Hard(failure) | Self::IncompleteSnapshot(failure) => failure,
+            Self::Hard(failure)
+            | Self::IncompleteSnapshot(failure)
+            | Self::ExitingMember(failure) => failure,
         };
         #[cfg(debug_assertions)]
         let failure = failure.with_proof_attempt(_attempt);
@@ -334,20 +347,53 @@ fn member_failure(failure: Failure, pid: i32, group: i32, pass: SnapshotPass) ->
     let failure = failure.with_bsd_member(pid == group);
     if matches!(pass, SnapshotPass::First) && pid != group && failure.is_bsd_read_esrch() {
         ProofFailure::IncompleteSnapshot(failure)
+    } else if matches!(pass, SnapshotPass::First) && pid != group && failure.is_exiting_nonleader()
+    {
+        ProofFailure::ExitingMember(failure)
     } else {
         ProofFailure::Hard(failure)
     }
 }
 // A failed first snapshot invalidates the whole proof, never just one member.
 // This cap is two complete observations, not a wait or an extra cleanup grace.
-fn complete_zombie_proof(mut observe: impl FnMut() -> ProofResult<()>) -> Staged<()> {
-    match observe() {
-        Err(ProofFailure::IncompleteSnapshot(_)) => {
-            observe().map_err(|failure| failure.into_failure(ProofAttempt::Two))
-        }
-        result => result.map_err(|failure| failure.into_failure(ProofAttempt::One)),
+fn complete_zombie_proof(
+    mut observe: impl FnMut() -> ProofResult<()>,
+) -> Staged<crate::process::CleanupObservation> {
+    use crate::process::CleanupObservation;
+    let (result, attempt) = match observe() {
+        Err(ProofFailure::IncompleteSnapshot(_)) => (observe(), ProofAttempt::Two),
+        result => (result, ProofAttempt::One),
+    };
+    match result {
+        Ok(()) => Ok(CleanupObservation::Complete),
+        Err(ProofFailure::ExitingMember(failure)) => Ok(CleanupObservation::Pending(
+            ProofFailure::ExitingMember(failure).into_failure(attempt),
+        )),
+        Err(failure) => Err(failure.into_failure(attempt)),
     }
 }
+// Pending grants no proof. Continue this snapshot so it cannot hide a later
+// hard member or an incomplete read; those retain their original precedence.
+fn collect_zombie_members(
+    members: impl Iterator<Item = ProofResult<ZombieIdentity>>,
+) -> ProofResult<Vec<ZombieIdentity>> {
+    let mut zombies = Vec::new();
+    let mut pending = None;
+    for member in members {
+        match member {
+            Ok(zombie) => zombies.push(zombie),
+            Err(ProofFailure::ExitingMember(failure)) => {
+                pending.get_or_insert(failure);
+            }
+            Err(failure) => return Err(failure),
+        }
+    }
+    match pending {
+        Some(failure) => Err(ProofFailure::ExitingMember(failure)),
+        None => Ok(zombies),
+    }
+}
+
 fn zombie_members(group: i32, pass: SnapshotPass) -> ProofResult<Vec<ZombieIdentity>> {
     let mut pids = [0i32; 257];
     let capacity = std::mem::size_of_val(&pids) as i32;
@@ -386,12 +432,9 @@ fn zombie_members(group: i32, pass: SnapshotPass) -> ProofResult<Vec<ZombieIdent
             None,
         )));
     }
-    pids.iter()
-        .map(|pid| {
-            zombie_identity(*pid, group)
-                .map_err(|failure| member_failure(failure, *pid, group, pass))
-        })
-        .collect()
+    collect_zombie_members(pids.iter().map(|pid| {
+        zombie_identity(*pid, group).map_err(|failure| member_failure(failure, *pid, group, pass))
+    }))
 }
 /// EPERM is acceptable only for an unchanged, entirely terminal owned group.
 /// This proof neither signals nor reaps; the held child reserves its PGID.
@@ -399,7 +442,15 @@ fn zombie_members(group: i32, pass: SnapshotPass) -> ProofResult<Vec<ZombieIdent
 pub(super) fn owned_zombie_group(identity: &ProcessIdentity, group: i32) -> Result<()> {
     owned_zombie_group_staged(identity, group).map_err(|failure| failure.error)
 }
+#[cfg(test)]
 pub(super) fn owned_zombie_group_staged(identity: &ProcessIdentity, group: i32) -> Staged<()> {
+    observe_owned_zombie_group_staged(identity, group)
+        .and_then(crate::process::CleanupObservation::strict)
+}
+pub(super) fn observe_owned_zombie_group_staged(
+    identity: &ProcessIdentity,
+    group: i32,
+) -> Staged<crate::process::CleanupObservation> {
     complete_zombie_proof(|| owned_zombie_group_attempt(identity, group))
 }
 fn owned_zombie_group_attempt(identity: &ProcessIdentity, group: i32) -> ProofResult<()> {
@@ -797,7 +848,136 @@ mod tests {
             calls.push(calls.len() + 1);
             outcomes.next().expect("unexpected extra proof attempt")
         });
-        (result, calls)
+        (
+            result.and_then(crate::process::CleanupObservation::strict),
+            calls,
+        )
+    }
+    fn exiting_member() -> ProofFailure {
+        let mut info = zombie_info();
+        info.pbi_pid = 42;
+        info.pbi_status = libc::SRUN;
+        info.pbi_flags = PROC_FLAG_INEXIT;
+        let failure = zombie_identity_from_info(&info, 41)
+            .err()
+            .expect("exiting is not terminal");
+        member_failure(failure, 42, 41, SnapshotPass::First)
+    }
+    #[test]
+    fn pending_owned_cleanup_classifier_truth_table() {
+        for pid in [41, 42] {
+            for group in [0, 41, 99] {
+                for status in [libc::SRUN, libc::SZOMB, libc::SSLEEP] {
+                    for flags in [0, PROC_FLAG_INEXIT] {
+                        for pass in [SnapshotPass::First, SnapshotPass::Second] {
+                            let mut info = zombie_info();
+                            info.pbi_pid = pid;
+                            info.pbi_pgid = group;
+                            info.pbi_status = status;
+                            info.pbi_flags = flags;
+                            let result = zombie_identity_from_info(&info, 41);
+                            if group == 41 && status == libc::SZOMB {
+                                assert!(result.is_ok());
+                            } else {
+                                let failure = result.err().expect("nonterminal must fail");
+                                let expected = pid != 41
+                                    && group == 41
+                                    && status == libc::SRUN
+                                    && flags == PROC_FLAG_INEXIT
+                                    && matches!(pass, SnapshotPass::First);
+                                assert_eq!(
+                                    matches!(
+                                        member_failure(failure, pid as i32, 41, pass),
+                                        ProofFailure::ExitingMember(_)
+                                    ),
+                                    expected
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // A provisional Pending must never hide a later unsafe member/read.
+        let hard = ProofFailure::Hard(Failure::darwin(
+            EngineError::RecoveryUncertain,
+            Ds::ZombieStatus,
+            None,
+        ));
+        assert!(matches!(
+            collect_zombie_members(vec![Err(exiting_member()), Err(hard)].into_iter()),
+            Err(ProofFailure::Hard(_))
+        ));
+        assert!(matches!(
+            collect_zombie_members(
+                vec![
+                    Err(exiting_member()),
+                    Err(incomplete_read(EngineError::WorkerUnavailable))
+                ]
+                .into_iter()
+            ),
+            Err(ProofFailure::IncompleteSnapshot(_))
+        ));
+        assert!(matches!(
+            collect_zombie_members(
+                vec![
+                    Err(exiting_member()),
+                    Ok(zombie_identity_from_info(&zombie_info(), 41)
+                        .unwrap_or_else(|_| panic!("zombie"))),
+                    Err(exiting_member())
+                ]
+                .into_iter()
+            ),
+            Err(ProofFailure::ExitingMember(_))
+        ));
+    }
+    #[test]
+    fn pending_owned_cleanup_attempt_cap_and_strict_conversion() {
+        for restart in [false, true] {
+            let mut calls = 0;
+            let result = complete_zombie_proof(|| {
+                calls += 1;
+                if restart && calls == 1 {
+                    Err(incomplete_read(EngineError::RecoveryUncertain))
+                } else {
+                    Err(exiting_member())
+                }
+            });
+            assert_eq!(calls, if restart { 2 } else { 1 });
+            let observation = result.unwrap_or_else(|_| panic!("exiting observation is pending"));
+            assert!(matches!(
+                observation,
+                crate::process::CleanupObservation::Pending(_)
+            ));
+            let failure = observation
+                .strict()
+                .expect_err("pending must remain strict failure");
+            assert!(matches!(failure.error, EngineError::RecoveryUncertain));
+            #[cfg(debug_assertions)]
+            {
+                assert_eq!(failure.diagnostic_detail().0, "darwin-zombie-status");
+                assert_eq!(
+                    failure.proof_detail().2,
+                    Some(if restart {
+                        ProofAttempt::Two
+                    } else {
+                        ProofAttempt::One
+                    })
+                );
+            }
+        }
+        assert!(
+            complete_zombie_proof(|| Err(ProofFailure::Hard(Failure::darwin(
+                EngineError::RecoveryUncertain,
+                Ds::ZombieGroup,
+                None
+            ))))
+            .is_err()
+        );
+        assert!(matches!(
+            complete_zombie_proof(|| Ok(())),
+            Ok(crate::process::CleanupObservation::Complete)
+        ));
     }
     #[test]
     fn zombie_proof_restart_classifier_truth_table() {
@@ -889,6 +1069,9 @@ mod tests {
                 match &failure {
                     ProofFailure::Hard(inner) | ProofFailure::IncompleteSnapshot(inner) => {
                         assert_eq!(inner.proof_detail().2, None);
+                    }
+                    ProofFailure::ExitingMember(_) => {
+                        panic!("BSD read is not a full exiting record")
                     }
                 }
                 let failure = failure.into_failure(ProofAttempt::Two);

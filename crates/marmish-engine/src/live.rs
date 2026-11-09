@@ -2,7 +2,7 @@
 use crate::copy_launch::OwnedCopyContext;
 use crate::launcher::{self, ChildSpec};
 use crate::model::*;
-use crate::process::ChildOwner;
+use crate::process::{ChildOwner, KillCleanup};
 use crate::Engine;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
@@ -81,10 +81,19 @@ pub struct LivePipes {
     pub stderr: File,
 }
 
+/// Progress of the live owner's final group-signal obligation. Pending is
+/// neither successful signalling nor permission to reap the reserved leader.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LiveCleanupProgress {
+    Complete,
+    Pending,
+}
+
 /// A process owner retaining its unreaped leader until final group signalling.
 pub struct LiveChild {
     owner: ChildOwner,
     pipes: Option<LivePipes>,
+    kill_cleanup: KillCleanup,
 }
 
 impl Engine {
@@ -167,6 +176,7 @@ impl PreparedLiveExec {
         Ok(LiveChild {
             owner,
             pipes: Some(pipes),
+            kill_cleanup: KillCleanup::default(),
         })
     }
 }
@@ -189,6 +199,12 @@ impl LiveChild {
     pub fn signal_kill(&self) -> Result<()> {
         self.owner.signal(libc::SIGKILL)
     }
+    /// Send KILL at most once, then observe an incomplete owned terminal proof.
+    /// The caller owns the deadline and requests a final fresh observation.
+    pub fn advance_kill_cleanup(&mut self, final_observation: bool) -> Result<LiveCleanupProgress> {
+        self.owner
+            .advance_kill_cleanup(&mut self.kill_cleanup, final_observation)
+    }
     pub fn try_exit(&self) -> Result<bool> {
         if self.owner.reaped {
             return Err(EngineError::RecoveryUncertain);
@@ -197,7 +213,7 @@ impl LiveChild {
     }
     /// Call only after the final required group signal; all future signals fail.
     pub fn reap_last(&mut self) -> Result<ExitOutcome> {
-        if self.owner.reaped {
+        if self.owner.reaped || !self.kill_cleanup.reap_allowed() {
             return Err(EngineError::RecoveryUncertain);
         }
         self.owner.reap()

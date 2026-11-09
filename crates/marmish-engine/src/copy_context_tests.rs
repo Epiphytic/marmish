@@ -65,6 +65,7 @@ fn assert_launcher_failure(
                     reaped: false,
                 },
                 pipes: None,
+                kill_cleanup: KillCleanup::default(),
             };
             kill_and_reap(child);
             panic!("negative launcher test unexpectedly spawned a child");

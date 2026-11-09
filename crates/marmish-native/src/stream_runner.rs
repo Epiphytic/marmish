@@ -1,6 +1,9 @@
 //! Owned, off-actor live pipes. Network detachment never invokes cancellation.
 use crate::{Error, Result};
-use marmish_engine::{ExitOutcome, LiveChild, LiveProcessRecord, LiveSpawnError, PreparedLiveExec};
+use marmish_engine::{
+    ExitOutcome, LiveChild, LiveCleanupProgress, LiveProcessRecord, LiveSpawnError,
+    PreparedLiveExec,
+};
 use marmish_stream::{
     MAX_BLOCK,
     windows::{ReceiveWindow, SendWindow},
@@ -416,9 +419,29 @@ struct Lifecycle {
     exit_seen: Option<Instant>,
     cancel_started: Option<Instant>,
     cancelled_while_running: bool,
+    kill_started: Option<Instant>,
     killed: Option<Instant>,
 }
 impl Lifecycle {
+    fn advance_cleanup(
+        &mut self,
+        now: Instant,
+        drain_grace: Duration,
+        observe: impl FnOnce(bool) -> marmish_engine::Result<LiveCleanupProgress>,
+    ) -> marmish_engine::Result<bool> {
+        let started = *self.kill_started.get_or_insert(now);
+        let final_observation = now.duration_since(started) >= drain_grace;
+        match observe(final_observation)? {
+            LiveCleanupProgress::Complete => {
+                self.killed = Some(started);
+                Ok(true)
+            }
+            LiveCleanupProgress::Pending => Ok(false),
+        }
+    }
+    fn cleanup_ready(&self) -> bool {
+        self.killed.is_some()
+    }
     fn record_exit_observed(&mut self, shared: &Shared) {
         if self.exit_seen.is_none() {
             self.exit_seen = Some(Instant::now());
@@ -463,18 +486,21 @@ impl Lifecycle {
             }
             self.cancel_started = Some(Instant::now());
         }
-        if self.killed.is_none()
+        let start_cleanup = self.kill_started.is_none()
             && self
                 .cancel_started
-                .is_some_and(|at| now.duration_since(at) >= limits.cancel_grace)
+                .is_some_and(|at| now.duration_since(at) >= limits.cancel_grace);
+        let poll_cleanup = self.kill_started.is_some() && !self.cleanup_ready();
+        if (start_cleanup || poll_cleanup)
+            && let Err(_error) =
+                self.advance_cleanup(Instant::now(), limits.drain_grace, |final_observation| {
+                    child.advance_kill_cleanup(final_observation)
+                })
         {
-            if let Err(_error) = child.signal_kill() {
-                #[cfg(test)]
-                shared.record_failure_context(Some(_error), Some(self));
-                shared.failed(true);
-                return false;
-            }
-            self.killed = Some(Instant::now());
+            #[cfg(test)]
+            shared.record_failure_context(Some(_error), Some(self));
+            shared.failed(true);
+            return false;
         }
         true
     }
@@ -552,14 +578,24 @@ impl Lifecycle {
         if stdout.is_some() || stderr.is_some() {
             return false;
         }
-        if self.killed.is_none() {
-            if let Err(_error) = child.signal_kill() {
-                #[cfg(test)]
-                shared.record_failure_context(Some(_error), Some(self));
-                shared.failed(true);
-                return true;
+        if !self.cleanup_ready() {
+            // step already observed a pending cleanup this turn. Never reap or
+            // start another allowance while the owned proof remains pending.
+            if self.kill_started.is_some() {
+                return false;
             }
-            self.killed = Some(Instant::now());
+            match self.advance_cleanup(Instant::now(), limits.drain_grace, |final_observation| {
+                child.advance_kill_cleanup(final_observation)
+            }) {
+                Ok(true) => (),
+                Ok(false) => return false,
+                Err(_error) => {
+                    #[cfg(test)]
+                    shared.record_failure_context(Some(_error), Some(self));
+                    shared.failed(true);
+                    return true;
+                }
+            }
         }
         let outcome = match child.reap_last() {
             Ok(outcome) => outcome,
@@ -1119,6 +1155,118 @@ pub(crate) mod tests {
         assert!(!dir.path().join("marker").exists());
     }
 
+    #[test]
+    fn pending_cleanup_budget_first_observation_anchors_time() {
+        let mut lifecycle = Lifecycle::default();
+        let start = Instant::now();
+        let mut calls = Vec::new();
+        assert!(
+            !lifecycle
+                .advance_cleanup(start, Duration::from_secs(2), |final_observation| {
+                    calls.push(final_observation);
+                    Ok(LiveCleanupProgress::Pending)
+                })
+                .unwrap()
+        );
+        assert_eq!(calls, [false]);
+        assert_eq!(lifecycle.kill_started, Some(start));
+        assert_eq!(lifecycle.killed, None);
+        assert!(!lifecycle.cleanup_ready());
+    }
+
+    #[test]
+    fn pending_cleanup_budget_repeated_observations_keep_exact_boundary() {
+        let mut lifecycle = Lifecycle::default();
+        let start = Instant::now();
+        let grace = Duration::from_secs(2);
+        let mut calls = Vec::new();
+        for elapsed in [Duration::ZERO, Duration::from_secs(1), grace] {
+            assert!(
+                !lifecycle
+                    .advance_cleanup(start + elapsed, grace, |final_observation| {
+                        calls.push(final_observation);
+                        Ok(LiveCleanupProgress::Pending)
+                    })
+                    .unwrap()
+            );
+            assert_eq!(lifecycle.kill_started, Some(start));
+            assert_eq!(lifecycle.killed, None);
+        }
+        assert_eq!(calls, [false, false, true]);
+    }
+
+    #[test]
+    fn pending_cleanup_budget_final_complete_keeps_original_start() {
+        let mut lifecycle = Lifecycle::default();
+        let start = Instant::now();
+        let grace = Duration::from_secs(2);
+        let mut calls = Vec::new();
+        assert!(
+            !lifecycle
+                .advance_cleanup(start, grace, |final_observation| {
+                    calls.push(final_observation);
+                    Ok(LiveCleanupProgress::Pending)
+                })
+                .unwrap()
+        );
+        assert!(
+            lifecycle
+                .advance_cleanup(start + grace, grace, |final_observation| {
+                    calls.push(final_observation);
+                    Ok(LiveCleanupProgress::Complete)
+                })
+                .unwrap()
+        );
+        assert_eq!(calls, [false, true]);
+        assert_eq!(lifecycle.kill_started, Some(start));
+        assert_eq!(lifecycle.killed, Some(start));
+        assert!(lifecycle.cleanup_ready());
+        assert!((start + grace).duration_since(lifecycle.killed.unwrap()) >= grace);
+    }
+
+    #[test]
+    fn pending_cleanup_budget_final_and_hard_errors_never_authorize_completion() {
+        use marmish_engine::EngineError;
+        let start = Instant::now();
+        let grace = Duration::from_secs(2);
+        let mut lifecycle = Lifecycle::default();
+        assert!(
+            !lifecycle
+                .advance_cleanup(start, grace, |_| Ok(LiveCleanupProgress::Pending))
+                .unwrap()
+        );
+        assert!(!lifecycle.cleanup_ready());
+        let mut calls = Vec::new();
+        let final_result = lifecycle.advance_cleanup(start + grace, grace, |final_observation| {
+            calls.push(final_observation);
+            Err(EngineError::RecoveryUncertain)
+        });
+        assert!(matches!(final_result, Err(EngineError::RecoveryUncertain)));
+        assert_eq!(calls, [true]);
+        assert_eq!(lifecycle.killed, None);
+        assert!(!lifecycle.cleanup_ready());
+        let mut hard = Lifecycle::default();
+        assert!(matches!(
+            hard.advance_cleanup(start, grace, |final_observation| {
+                assert!(!final_observation);
+                Err(EngineError::WorkerUnavailable)
+            }),
+            Err(EngineError::WorkerUnavailable)
+        ));
+        assert_eq!(hard.killed, None);
+        assert!(!hard.cleanup_ready());
+        let mut zero = Lifecycle::default();
+        assert!(matches!(
+            zero.advance_cleanup(start, Duration::ZERO, |final_observation| {
+                assert!(final_observation);
+                Err(EngineError::RecoveryUncertain)
+            }),
+            Err(EngineError::RecoveryUncertain)
+        ));
+        assert_eq!(zero.kill_started, Some(start));
+        assert!(!zero.cleanup_ready());
+    }
+
     // Controlled stale supervisor bookkeeping, not a scheduler or historical
     // macOS reproduction. The actual child is gated solely by its stdin pipe.
     fn stale_cleanup_fixture() -> (
@@ -1146,6 +1294,7 @@ pub(crate) mod tests {
             exit_seen: None,
             cancel_started: Some(old),
             cancelled_while_running: true,
+            kill_started: Some(old),
             killed: Some(old),
         };
         (directory, child, pipes, shared, lifecycle)

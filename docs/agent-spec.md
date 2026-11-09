@@ -30,8 +30,9 @@ defines existing operation clocks and byte numerators; it does not claim new res
 ## Pending v0.3.1 patch
 
 Beads `marmish-d97` tracks the [reviewed patch plan](phases/v0.3.1-release.md).
-Only the native package version changes to 0.3.1; there is no protocol or stored
-format change in this increment. Product-source cleanup diagnostics are retained,
+The native package version changes to 0.3.1; there is no protocol or stored
+format change. The patch also includes the bounded live cleanup correction
+described below. Product-source cleanup diagnostics are retained,
 while ordinary release binaries omit their debug emission. The copy refusal
 validator and legacy uninstall changes correct test evidence and fixtures.
 
@@ -1137,6 +1138,19 @@ final debug failures identify member role and attempt using fixed vocabulary.
 Portable checks pass; Darwin execution and full release qualification remain
 pending. Historical group/status and role-unknown BSD-read failures remain
 unexplained. No extra signal, reap or timing budget is introduced.
+
+The [exiting-member cleanup phase](phases/macos-exiting-member-pending.md)
+addresses a later observed macOS failure: a validated nonleader was still
+reported as running with the exit-in-progress flag. That observation is never
+accepted as terminal. Only the live runner may keep observing the complete
+owned-group proof within one existing drain allowance, anchored at its first
+KILL attempt. Hard ownership, identity and membership failures remain errors;
+pending or failed cleanup cannot authorize reaping or a new KILL attempt.
+Ordinary signal completion still requires the existing exit/drain conditions.
+Strict finite-worker and destructor signal paths retain their prior behavior.
+Local Linux tests cover portable state and deadline behavior; Darwin execution
+and fresh complete release qualification remain required. This does not explain
+every historical macOS failure or qualify unpublished version 0.3.1.
 
 The temporary [confidential legacy diagnostic](phases/legacy-confidential-trace.md)
 and its [independent review](reviews/legacy-confidential-trace.md) add a manual
