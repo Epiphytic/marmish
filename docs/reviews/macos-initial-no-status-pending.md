@@ -61,3 +61,35 @@ Final integrated followup in the same Claude auto session approved local commit
 and handoff after rechecking all eight code hashes, docs-only integration and
 all 205 Node tests. Review JSON SHA:
 3009fcdb9c1b89f1a005ecf7ea3a0545c4c1b757063ac682733201078fd07c59.
+
+## First Darwin compile failure and bounded correction
+
+Diagnostic run [42674014384/1](https://github.com/Epiphytic/marmish/actions/runs/42674014384)
+at source 9b12b14 failed before any tests. Rust E0004 identified the existing
+debug-only `zombie_proof_restart_context_and_detail_preservation` match, which
+omitted `ProofFailure::AwaitingExit`. Raw terminal log SHA:
+ce0ad6a1ac1f20fa2ef7f38bef595254526078fcc21637b6ca4b17745a0183f7.
+The earlier static audit and independent review missed this helper; they did
+not establish Darwin compilation. No candidate or macOS stress was dispatched.
+
+The correction adds only an explicit rejecting panic arm for the impossible
+held-status variant in this BSD-read test. Every `ProofFailure` occurrence was
+audited across the engine, including constructors, exhaustive matches and
+debug/release cfg boundaries. Production classification, proof ordering,
+signals, deadlines, strict callers and workflow counts are unchanged. Fresh
+corrected-source Darwin compilation and all hosted gates remain pending.
+
+Claude Code auto followup in session cb9f188b-8045-4488-a824-1e86233bbd04
+(claude-opus-5-5) approved the three-file correction and independently
+acknowledged the earlier missed helper. It audited all `ProofFailure` uses and
+the related `CleanupObservation`, `ObservationClass` and `TermCleanup` matches;
+no further static exhaustiveness issue was found. Review JSON SHA:
+82bd4e661ea9ed5d87672f13203caf5213db852f94071ad8d07a3c43687880bd.
+
+Local Linux AMD64 portable `initial_no_status_` tests passed two/two in debug
+and two/two in release. Workspace formatting and whitespace checks passed;
+edit-check reported the helper contract unchanged. Quality-delta had zero
+gating findings and two minor ambient churn findings in the changed test
+area. These checks do not compile the Darwin-only helper. The reviewer noted
+that rustc may reveal later issues after this first error is corrected; Darwin
+debug/release tests, Clippy, live execution and qualification remain pending.

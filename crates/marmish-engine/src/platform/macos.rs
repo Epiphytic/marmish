@@ -1273,6 +1273,9 @@ mod tests {
                     ProofFailure::ExitingMember(_) => {
                         panic!("BSD read is not a full exiting record")
                     }
+                    ProofFailure::AwaitingExit(_) => {
+                        panic!("BSD read is not an initial held-status absence")
+                    }
                 }
                 let failure = failure.into_failure(ProofAttempt::Two);
                 assert!(matches!(failure.error, EngineError::WorkerUnavailable));

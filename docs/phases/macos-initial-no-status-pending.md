@@ -51,3 +51,16 @@ Narrow scope decision: zero/zero may also be an ordinary running owned child, so
 ## Actual design review before implementation
 
 Claude Code auto (claude-opus-5-5), session bdbe37b5-7d7a-4896-91ce-e645f67dca9e, approved design SHA f634d94fda8ac09016030712b99520d8bf1b9dff049f9b04d89d790ffee47ba0 after resolving attempt-two loss, shared post-exit TERM trigger, production helper seam and full three-field status preservation. Final review JSON SHA b0a10c06961a55acdedb258a06b75970af9c9961fdb63e91cb2dfd36526f2ffe. Root explicitly authorized this approved implementation. TERM-only waiting was independently accepted: every KILL no-status remains hard with original Failure; no new KILL semantics or cross-signal terminal bookkeeping. Owner admission without post-absence metadata was audited against every production caller; all validate fresh owned identity before signalling/observation and retain the unreaped Child.
+
+## First hosted compile followup
+
+Source 9b12b14's diagnostic run 42674014384/1 failed before tests: Darwin
+debug test compilation reported E0004 in the existing
+`zombie_proof_restart_context_and_detail_preservation` helper. Its exhaustive
+`ProofFailure` match lacked the new `AwaitingExit` variant. Correct only that
+test match with an explicit panic: a BSD-read failure cannot be an initial
+held-status absence. Audit every variant match and constructor, including
+debug-only tests and release paths; preserve production behavior and all
+workflow counts. Obtain actual Claude auto followup review. Linux checks cannot
+establish Darwin compilation; a fresh corrected-source diagnostic run remains
+required. No candidate or macOS stress was dispatched for this failed source.
