@@ -155,6 +155,35 @@ test('gather writes available exact role records and preserves missing records f
   assert.deepEqual(await fs.readdir(path.join(directory,'missing')),[]);
 });
 
+test('gather keeps listed ZIP API 404 hard through the real default transport', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'marmish-gather-'));
+  t.after(() => fs.rm(directory, {recursive: true, force: true}));
+  const context = {schema: 1, repository: 'Epiphytic/marmish', source_commit: source,
+    run_id: 12, run_attempt: 3, cohort: 'matrix'};
+  const file = path.join(directory, 'context.json');
+  await fs.writeFile(file, JSON.stringify(context));
+  const e = {GITHUB_REPOSITORY: context.repository, GITHUB_SHA: source,
+    GITHUB_RUN_ID: '12', GITHUB_RUN_ATTEMPT: '3', CONTEXT: file,
+    RECORDS_ROOT: path.join(directory, 'records')};
+  const entry = {name: 'v02-installed-12-3-aaaaaaaaaaaa-matrix-linux-amd64-identity-ready',
+    id: 42, expired: false, size_in_bytes: 100, digest: `sha256:${'b'.repeat(64)}`};
+  let requests = 0;
+  const transport = new ArtifactTransport({context, token: 'private-sentinel',
+    budgetFile: path.join(directory, 'budget'), fetcher: async () => {
+      if (++requests === 1) return new Response(JSON.stringify({total_count: 1, artifacts: [entry]}));
+      return new Response(null, {status: 404});
+    }});
+  await assert.rejects(gather(e, transport), error => {
+    assert.equal(error.message, 'artifact_http');
+    assert.deepEqual(Object.keys(error), ['artifactHttp']);
+    assert.deepEqual(error.artifactHttp, {status: 404, target: 'api'});
+    return true;
+  });
+  assert.equal(requests, 2);
+  assert.equal(transport.used, 2);
+  assert.deepEqual(await fs.readdir(e.RECORDS_ROOT), []);
+});
+
 // Source parity supplements typed Rust tests: every advertised wave must route.
 test('workflow choices, JS routing and Rust routing advertise the same closed cohorts', async () => {
   const root = new URL('../../', import.meta.url);

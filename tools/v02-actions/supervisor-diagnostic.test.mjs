@@ -427,37 +427,84 @@ test('HTTP metadata and its values are read once and never touched for other cat
   }
 });
 
-test('actual HTTP download failure survives supervisor polling and emits detail before child cleanup', async t => {
-  for (const target of ['api', 'blob']) {
+test('actual blob HTTP failure emits detail before child cleanup', async t => {
+  const directory = await temporary(t);
+  const created = Math.floor(Date.now() / 1000);
+  const ctx = {...context, created_at: created, expires_at: created + 2220};
+  const entry = {name: artifactName(binding(ctx, 'linux-amd64'), 'linux-amd64', 'server-ready'),
+    id: 42, expired: false, size_in_bytes: 100, digest: `sha256:${'b'.repeat(64)}`};
+  let requests = 0;
+  const transport = new ArtifactTransport({context: ctx, token: SECRET,
+    budgetFile: path.join(directory, 'budget'), fetcher: async () => {
+      requests++;
+      if (requests === 1) return new Response(JSON.stringify({total_count: 1, artifacts: [entry]}));
+      if (requests === 2) return new Response(null, {status: 302,
+        headers: {location: 'https://x.blob.core.windows.net/private?secret'}});
+      return new Response(null, {status: 404});
+    }});
+  const {child, signals} = childFixture();
+  const captured = [];
+  await assert.rejects(supervise({options: options(directory, {jobDeadline: created + 3300}),
+    context: ctx, now: Date.now, artifact: {}, transport, spawnChild: () => child, delay: immediate,
+    diagnostic: line => { assert.deepEqual(signals, []); captured.push(line); }}), error => {
+    assert.equal(error.message, 'artifact_http');
+    assert.deepEqual(error.artifactHttp, {status: 404, target: 'blob'});
+    return true;
+  });
+  assert.deepEqual(signals, ['SIGTERM']);
+  assert.equal(requests, 3);
+  assert.equal(transport.used, 2);
+  assert.equal(captured.length, 1);
+  assert.deepEqual(publicDiagnostic(captured[0]), {schema: 1, component: 'supervisor', event: 'failed',
+    stage: 'remote_download', category: 'artifact_http', role: 'linux-amd64', peer_role: 'linux-amd64',
+    http_status: 404, request_target: 'blob'});
+});
+
+test('listed ZIP API 404 retries terminate with closed deadline or shared budget diagnostics', async t => {
+  for (const used of [0, 118]) {
     const directory = await temporary(t);
     const created = Math.floor(Date.now() / 1000);
     const ctx = {...context, created_at: created, expires_at: created + 2220};
-    const entry = {name: artifactName(binding(ctx, 'linux-amd64'), 'linux-amd64', 'server-ready'),
+    const identities = path.join(directory, 'identities');
+    const budgetFile = path.join(directory, 'budget');
+    await fs.writeFile(budgetFile, JSON.stringify({used}));
+    await fs.writeFile(path.join(directory, 'linux-amd64-identity-ready.json'), '{}');
+    const entry = {name: artifactName(binding(ctx, 'linux-amd64'), 'linux-amd64', 'identity-ready'),
       id: 42, expired: false, size_in_bytes: 100, digest: `sha256:${'b'.repeat(64)}`};
-    let requests = 0;
-    const transport = new ArtifactTransport({context: ctx, token: SECRET,
-      budgetFile: path.join(directory, 'budget'), fetcher: async () => {
-        requests++;
-        if (requests === 1) return new Response(JSON.stringify({total_count: 1, artifacts: [entry]}));
-        if (requests === 2 && target === 'blob') return new Response(null, {status: 302,
-          headers: {location: 'https://x.blob.core.windows.net/private?secret'}});
-        return new Response(null, {status: 404});
+    let clock = (created + 100) * 1000, active = 0, downloads = 0;
+    const polls = [], captured = [];
+    const transport = new ArtifactTransport({context: ctx, token: SECRET, budgetFile,
+      fetcher: async url => {
+        if (String(url).endsWith('/zip')) {
+          downloads++;
+          return new Response(null, {status: 404});
+        }
+        return new Response(JSON.stringify({total_count: 1, artifacts: [entry]}));
       }});
-    const {child, signals} = childFixture();
-    const captured = [];
-    await assert.rejects(supervise({options: options(directory, {jobDeadline: created + 3300}),
-      context: ctx, now: Date.now, artifact: {}, transport, spawnChild: () => child, delay: immediate,
-      diagnostic: line => { assert.deepEqual(signals, []); captured.push(line); }}), error => {
-      assert.equal(error.message, 'artifact_http');
-      assert.deepEqual(error.artifactHttp, {status: 404, target});
-      return true;
-    });
-    assert.deepEqual(signals, ['SIGTERM']);
-    assert.equal(requests, target === 'api' ? 2 : 3);
-    assert.equal(transport.used, 2);
+    for (const method of ['list', 'download']) {
+      const original = transport[method].bind(transport);
+      transport[method] = async (...args) => {
+        if (method === 'list') polls.push(clock);
+        active++;
+        try { return await original(...args); } finally { active--; }
+      };
+    }
+    const category = used ? 'artifact_budget' : 'artifact_deadline';
+    await assert.rejects(supervise({options: options(directory,
+      {mode: 'exchange', identities, jobDeadline: created + 3300}), context: ctx,
+      now: () => clock, artifact: {uploadArtifact: async () => ({id: 1})}, transport,
+      delay: async () => { await immediate(); if (!active) clock += 1000; },
+      diagnostic: line => captured.push(line)}), {message: category});
+    assert.ok(downloads >= 1);
+    assert.ok(polls.length >= 2);
+    for (let index = 1; index < polls.length; index++) assert.ok(polls[index] - polls[index - 1] >= 30_000);
+    await assert.rejects(fs.access(identities), {code: 'ENOENT'});
     assert.equal(captured.length, 1);
-    assert.deepEqual(publicDiagnostic(captured[0]), {schema: 1, component: 'supervisor', event: 'failed',
-      stage: 'remote_download', category: 'artifact_http', role: 'linux-amd64', peer_role: 'linux-amd64',
-      http_status: 404, request_target: target});
+    const result = publicDiagnostic(captured[0]);
+    assert.equal(result.category, category);
+    assert.equal(result.stage, used ? 'remote_list' : 'bounds');
+    assert.equal(Object.hasOwn(result, 'http_status'), false);
+    if (used) assert.equal(JSON.parse(await fs.readFile(budgetFile)).used, 120);
+    else assert.ok(transport.used < 120);
   }
 });

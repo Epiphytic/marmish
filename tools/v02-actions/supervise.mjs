@@ -87,7 +87,7 @@ async function superviseOwned({options, context, transport, artifact, spawnChild
         const name = artifactName(prefix, role, kind);
         if (received.has(name)) continue;
         stage = 'remote_download'; peerRole = role;
-        const bytes = await transport.download(entries, name, `${kind}.json`, bounds.deadline, controller.signal);
+        const bytes = await transport.download(entries, name, `${kind}.json`, bounds.deadline, controller.signal, true);
         if (bytes) {
           stage = 'inbox_publish';
           await putImmutable(options.mode === 'exchange' ? options.identities : options.inbox,

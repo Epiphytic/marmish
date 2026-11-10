@@ -29,6 +29,14 @@ defines existing operation clocks and byte numerators; it does not claim new res
 
 ## Pending v0.3.1 patch
 
+The `4fcb107` qualification chain failed at a listed identity artifact ZIP API404
+in [edge-stream 42744796757](https://github.com/Epiphytic/marmish/actions/runs/42744796757),
+attempt 1, before server enable on AMD. The backend/visibility cause remains
+unknown. The [listed-artifact retry phase](phases/v0.3.1-listed-artifact-retry.md)
+adds supervisor-only bounded retries for that narrow HTTP outcome; gather,
+listing and blob failures retain hard behavior. Fresh source-bound qualification
+is pending; this correction does not qualify the failed source or publish 0.3.1.
+
 Beads `marmish-d97` tracks the [reviewed patch plan](phases/v0.3.1-release.md).
 The native package version changes to 0.3.1; there is no protocol or stored
 format change. The patch also includes the bounded live cleanup correction

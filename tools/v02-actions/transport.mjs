@@ -171,7 +171,7 @@ export class ArtifactTransport {
     this.context = context; this.token = token; this.budgetFile = budgetFile;
     this.fetcher = fetcher; this.used = null;
   }
-  async request(url, api, limit, deadline, signal) {
+  async request(url, api, limit, deadline, signal, retryListedZip404 = false) {
     signal?.throwIfAborted();
     requireThat(Date.now() < deadline, 'artifact_deadline');
     if (api) {
@@ -211,6 +211,15 @@ export class ArtifactTransport {
     if (response.status !== 200) {
       const error = new Error('artifact_http');
       error.artifactHttp = {status: response.status, target: api ? 'api' : 'blob'};
+      try { await response.body?.cancel(); }
+      catch { signal?.throwIfAborted(); throw error; }
+      signal?.throwIfAborted();
+      // Only supervisor-selected ZIP downloads opt in; list, rollup and blob stay hard.
+      if (retryListedZip404 === true && api && response.status === 404) {
+        const retry = new Error('artifact_retry');
+        retry.retryAfter = 30_000; retry.artifactHttp = error.artifactHttp;
+        throw retry;
+      }
       throw error;
     }
     return {bytes: await body(response, limit)};
@@ -221,7 +230,7 @@ export class ArtifactTransport {
     requireThat(reply.bytes, 'artifact_api_redirect');
     return parseArtifactList(reply.bytes);
   }
-  async download(entries, name, basename, deadline, signal) {
+  async download(entries, name, basename, deadline, signal, retryListedZip404 = false) {
     const matching = entries.filter(entry => entry.name === name);
     requireThat(matching.length <= 1, 'artifact_duplicate');
     if (!matching.length) return null;
@@ -230,7 +239,7 @@ export class ArtifactTransport {
       && Number.isSafeInteger(entry.size_in_bytes) && entry.size_in_bytes > 0 && entry.size_in_bytes <= RECORD_LIMIT
       && /^sha256:[0-9a-f]{64}$/.test(entry.digest), 'artifact_metadata');
     const url = `https://api.github.com/repos/${this.context.repository}/actions/artifacts/${entry.id}/zip`;
-    const redirect = await this.request(url, true, RECORD_LIMIT, deadline, signal);
+    const redirect = await this.request(url, true, RECORD_LIMIT, deadline, signal, retryListedZip404);
     requireThat(redirect.redirect, 'artifact_redirect_missing');
     const reply = await this.request(safeBlobUrl(redirect.redirect), false, RECORD_LIMIT, deadline, signal);
     requireThat(reply.bytes && `sha256:${digest(reply.bytes)}` === entry.digest, 'artifact_digest');

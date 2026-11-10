@@ -330,7 +330,7 @@ test('list validates fatal shapes and bounds without retrying or accepting parti
 
 // Exercise actual listing, authenticated downloads and immutable inbox writes;
 // only GitHub/blob HTTP and the passage of time are deterministic fixtures.
-async function listExchange(t, snapshots, used = 0) {
+async function listExchange(t, snapshots, used = 0, zip404s = 0) {
   const directory = await temporary(t);
   const created = Math.floor(Date.now() / 1000);
   const ctx = {...context, created_at: created, expires_at: created + 2220};
@@ -344,15 +344,17 @@ async function listExchange(t, snapshots, used = 0) {
     name: artifactName(binding(ctx, role), role, 'identity-ready'), id: index + 1,
     expired: false, size_in_bytes: one.length, digest: `sha256:${digest(one)}`,
   }));
-  const fetcher = async url => {
+  const fetcher = async (url, options) => {
     if (String(url).endsWith('artifacts?per_page=100')) {
       const snapshot = snapshots[Math.min(state.lists++, snapshots.length - 1)];
       return new Response(JSON.stringify(snapshot(entries)));
     }
     if (String(url).endsWith('/zip')) {
       state.downloads++;
+      if (state.downloads <= zip404s) return new Response(null, {status: 404});
       return new Response(null, {status: 302, headers: {location: 'https://x.blob.core.windows.net/fixture'}});
     }
+    assert.deepEqual(options.headers, {});
     return new Response(one);
   };
   const transport = new ArtifactTransport({context: ctx, token: 'x', budgetFile, fetcher});
@@ -504,4 +506,111 @@ test('terminal HTTP errors retain only exact status and trusted request class wi
     assert.equal(calls, 1);
     assert.equal(transport.used, api ? 1 : null);
   }
+});
+
+
+test('listed ZIP404 requires explicit opt-in and successful body cancellation', async t => {
+  const directory = await temporary(t);
+  const entry = {name: 'selected', id: 42, expired: false, size_in_bytes: one.length,
+    digest: `sha256:${digest(one)}`};
+  for (const optIn of [false, true]) for (const outcome of ['cancelled', 'cancel-error', 'abort']) {
+    let cancelled = 0, fetched = 0;
+    const controller = new AbortController();
+    const transport = new ArtifactTransport({context, token: 'private-token',
+      budgetFile: path.join(directory, `${optIn}-${outcome}`), fetcher: async () => {
+        fetched++;
+        return {status: 404, body: {cancel: async () => {
+          cancelled++;
+          if (outcome === 'cancel-error') throw new Error('PRIVATE cancellation payload');
+          if (outcome === 'abort') controller.abort(new Error('fixture_abort'));
+        }}};
+      }});
+    await assert.rejects(transport.download([entry], 'selected', 'identity-ready.json',
+      Date.now() + 30_000, controller.signal, optIn), error => {
+      assert.equal(cancelled, 1);
+      if (outcome === 'abort') { assert.equal(error.message, 'fixture_abort'); return true; }
+      assert.equal(error.message, optIn && outcome === 'cancelled' ? 'artifact_retry' : 'artifact_http');
+      assert.deepEqual(error.artifactHttp, {status: 404, target: 'api'});
+      assert.deepEqual(Object.keys(error).sort(), optIn && outcome === 'cancelled'
+        ? ['artifactHttp', 'retryAfter'] : ['artifactHttp']);
+      if (error.message === 'artifact_retry') assert.equal(error.retryAfter, 30_000);
+      return true;
+    });
+    assert.equal(fetched, 1);
+    assert.equal(transport.used, 1);
+  }
+});
+
+test('listed ZIP retry opt-in does not alter hard API or blob outcomes', async t => {
+  const directory = await temporary(t);
+  const entry = {name: 'selected', id: 42, expired: false, size_in_bytes: one.length,
+    digest: `sha256:${digest(one)}`};
+  for (const status of [401, 403, 410, 422]) {
+    const transport = new ArtifactTransport({context, token: 'x', budgetFile: path.join(directory, String(status)),
+      fetcher: async () => new Response(null, {status})});
+    await assert.rejects(transport.download([entry], 'selected', 'identity-ready.json',
+      Date.now() + 30_000, undefined, true), {message: 'artifact_http'});
+  }
+  let calls = 0;
+  const transport = new ArtifactTransport({context, token: 'x', budgetFile: path.join(directory, 'blob'),
+    fetcher: async () => ++calls === 1
+      ? new Response(null, {status: 302, headers: {location: 'https://x.blob.core.windows.net/fixture'}})
+      : new Response(null, {status: 404})});
+  await assert.rejects(transport.download([entry], 'selected', 'identity-ready.json',
+    Date.now() + 30_000, undefined, true), error => {
+    assert.equal(error.message, 'artifact_http');
+    assert.deepEqual(error.artifactHttp, {status: 404, target: 'blob'});
+    return true;
+  });
+  assert.equal(calls, 2);
+});
+
+test('listed ZIP404 retries through the original supervisor poll into a verified exchange', async t => {
+  const fixture = await listExchange(t, [completeList], 0, 1);
+  await fixture.run();
+  assert.equal(fixture.state.lists, 2);
+  assert.equal(fixture.state.downloads, 4);
+  assert.ok(fixture.state.polls[1] - fixture.state.polls[0] >= 30_000);
+  assert.equal(new Set(fixture.state.deadlines).size, 1);
+  assert.equal(new Set(fixture.state.signals).size, 1);
+  assert.equal(JSON.parse(await fs.readFile(fixture.budgetFile)).used, 6);
+  assert.deepEqual(fixture.state.diagnostics, []);
+  assert.equal((await fs.readdir(fixture.identities)).length, 3);
+  for (const name of await fs.readdir(fixture.identities)) {
+    assert.equal(await fs.readFile(path.join(fixture.identities, name), 'utf8'), '{"schema":1}');
+  }
+});
+
+test('persistent listed ZIP404 stops at original deadline or persisted shared budget', async t => {
+  for (const used of [0, 118]) {
+    const fixture = await listExchange(t, [completeList], used, Infinity);
+    await assert.rejects(fixture.run(), {message: used ? 'artifact_budget' : 'artifact_deadline'});
+    assert.equal(new Set(fixture.state.deadlines).size, 1);
+    assert.equal(new Set(fixture.state.signals).size, 1);
+    await assert.rejects(fs.access(fixture.identities), {code: 'ENOENT'});
+    assert.equal(fixture.state.diagnostics.at(-1).category, used ? 'artifact_budget' : 'artifact_deadline');
+    if (used) {
+      assert.equal(JSON.parse(await fs.readFile(fixture.budgetFile)).used, 120);
+      const fresh = new ArtifactTransport({context, token: 'x', budgetFile: fixture.budgetFile,
+        fetcher: async () => assert.fail('persisted budget must prevent another fetch')});
+      await assert.rejects(fresh.list(Date.now() + 30_000), {message: 'artifact_budget'});
+    }
+  }
+});
+
+test('listed ZIP opt-in cannot bypass metadata validation or a preexisting abort', async t => {
+  const directory = await temporary(t);
+  const entry = {name: 'selected', id: 42, expired: false, size_in_bytes: one.length,
+    digest: `sha256:${digest(one)}`};
+  const transport = new ArtifactTransport({context, token: 'x', budgetFile: path.join(directory, 'budget'),
+    fetcher: async () => assert.fail('invalid metadata or aborted request must not fetch')});
+  for (const entries of [[entry, entry], [{...entry, expired: true}], [{...entry, id: 0}],
+    [{...entry, digest: 'invalid'}]]) {
+    await assert.rejects(transport.download(entries, 'selected', 'identity-ready.json',
+      Date.now() + 30_000, undefined, true), /artifact_(metadata|duplicate)/);
+  }
+  const controller = new AbortController(); controller.abort(new Error('fixture_abort'));
+  await assert.rejects(transport.download([entry], 'selected', 'identity-ready.json',
+    Date.now() + 30_000, controller.signal, true), {message: 'fixture_abort'});
+  assert.equal(transport.used, null);
 });
