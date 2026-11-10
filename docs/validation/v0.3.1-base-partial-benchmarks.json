@@ -1,0 +1,1645 @@
+{
+  "schema": 1,
+  "status": "PARTIAL_ACCEPTED_BASE_COHORT_OBSERVATIONS_NOT_QUALIFIED",
+  "created_at": "2026-11-09T23:39:35.242714+00:00",
+  "source_commit": "cf2f948bfed63e848b7e79d7f7a292aee9f39dd9",
+  "candidate_run_id": 42702191638,
+  "candidate_run_attempt": 1,
+  "qualification_pass": false,
+  "native162": "PENDING",
+  "finite12": "PENDING",
+  "github_release": "PENDING",
+  "cohorts": [
+    {
+      "cohort": "stream-matrix",
+      "run_id": 42719574550,
+      "run_attempt": 1,
+      "run_url": "https://github.com/Epiphytic/marmish/actions/runs/42719574550",
+      "accepted_at": "2026-11-09T23:24:51.747279+00:00",
+      "archive_count": 14,
+      "semantic_checks": 459,
+      "all_checks_strict_true": true,
+      "canonical_actual_expected_equal": true,
+      "semantic_mismatches": [],
+      "observation_count": 9,
+      "root_acceptance_sha256": "053e0081d52d0fa2ff5e40f1755f4ea63d4ae46ad6fefafcff688f87ceb55d1f",
+      "record_metrics_audit_sha256": "49dbb13e05112307ae5f1ff37c0336d4a7442f8c9a406d0570c07048e93ca3b1",
+      "archive_audit_sha256": "e9be495ff46dc68f83f66b36392ee20e1a3175510deefb074430e55b1204f080",
+      "ranges": {
+        "wall_seconds_min": 56.581490833,
+        "wall_seconds_max": 63.090892606,
+        "application_bytes_per_second_min": 3246.1103582567375,
+        "application_bytes_per_second_max": 3619.5582156798628
+      }
+    },
+    {
+      "cohort": "rsync-matrix",
+      "run_id": 42720213051,
+      "run_attempt": 1,
+      "run_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051",
+      "accepted_at": "2026-11-09T23:30:45.783318+00:00",
+      "archive_count": 14,
+      "semantic_checks": 789,
+      "all_checks_strict_true": true,
+      "canonical_actual_expected_equal": true,
+      "semantic_mismatches": [],
+      "observation_count": 18,
+      "root_acceptance_sha256": "fdef6ee388d1e8121df8e5bf386ad05b596a7ef462fb4280ef79468046c71214",
+      "record_metrics_audit_sha256": "8627b675f4343a812525a289c74941952315bc2664c3f12d8cabc1d7f89f2e3b",
+      "archive_audit_sha256": "f18a13994f860db03babfd2f06e80a33691d2571c384bc625d00c31a788f70e8",
+      "ranges": {
+        "wall_seconds_min": 31.232688871,
+        "wall_seconds_max": 49.756143958,
+        "application_bytes_per_second_min": 658.5719349083807,
+        "application_bytes_per_second_max": 1049.1571870530033
+      }
+    },
+    {
+      "cohort": "copy-matrix",
+      "run_id": 42720943882,
+      "run_attempt": 1,
+      "run_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882",
+      "accepted_at": "2026-11-09T23:36:18.217779+00:00",
+      "archive_count": 14,
+      "semantic_checks": 897,
+      "all_checks_strict_true": true,
+      "canonical_actual_expected_equal": true,
+      "semantic_mismatches": [],
+      "observation_count": 18,
+      "root_acceptance_sha256": "27facec72a6338bf2328393c097b86ac088bd7d44af0e98ee4e70881889f679c",
+      "record_metrics_audit_sha256": "ca0057d2f6163db7723258515eda90d29663430067bb387b3c0beac57cca0336",
+      "archive_audit_sha256": "a91bf2a7c056fbeacfc4e339f7c24769cd9cdde3bd083dc95d37ffe8859f98d8",
+      "ranges": {
+        "wall_seconds_min": 25.078269902,
+        "wall_seconds_max": 48.846116042,
+        "application_bytes_per_second_min": 1341.682928150302,
+        "application_bytes_per_second_max": 2613.2584207801942
+      }
+    }
+  ],
+  "observation_count": 45,
+  "observations": [
+    {
+      "cohort": "stream-matrix",
+      "run_id": 42719574550,
+      "run_attempt": 1,
+      "client": "linux-amd64",
+      "server": "linux-amd64",
+      "case": "duplex",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "stdin+stdout+stderr application bytes",
+      "verified_payload_bytes": 204800,
+      "wall_ns": 62549738651,
+      "whole_operation_seconds": 62.549738651,
+      "whole_operation_application_bytes_per_second": 3274.1943358499675,
+      "sources": [
+        {
+          "role": "linux-amd64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/0",
+          "member_sha256": "cbfc34f1369f423528456c96fed5195716aaab19b5dc7126c7d67e7c12f4fb23",
+          "artifact_id": 13719064670,
+          "artifact_zip_sha256": "46f04f9e25dfe5d58ae342d99bcaed36a843a24009e05c2932b5b241a06f6eec",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42719574550/artifacts/13719064670"
+        },
+        {
+          "role": "linux-amd64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/0",
+          "member_sha256": "4d9716920c38d2865dac90557c1a0051c9697c69dd9c8a7d18f5bd4193b1a176",
+          "artifact_id": 13719413303,
+          "artifact_zip_sha256": "30bbc4082f9e9af43e87a3176ce4f1fccdafa8a6c151279c5ff50988bdaf0f45",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42719574550/artifacts/13719413303"
+        }
+      ]
+    },
+    {
+      "cohort": "stream-matrix",
+      "run_id": 42719574550,
+      "run_attempt": 1,
+      "client": "linux-amd64",
+      "server": "linux-arm64",
+      "case": "duplex",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "stdin+stdout+stderr application bytes",
+      "verified_payload_bytes": 204800,
+      "wall_ns": 63090892606,
+      "whole_operation_seconds": 63.090892606,
+      "whole_operation_application_bytes_per_second": 3246.1103582567375,
+      "sources": [
+        {
+          "role": "linux-amd64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/1",
+          "member_sha256": "cbfc34f1369f423528456c96fed5195716aaab19b5dc7126c7d67e7c12f4fb23",
+          "artifact_id": 13719064670,
+          "artifact_zip_sha256": "46f04f9e25dfe5d58ae342d99bcaed36a843a24009e05c2932b5b241a06f6eec",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42719574550/artifacts/13719064670"
+        },
+        {
+          "role": "linux-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/0",
+          "member_sha256": "e9772725cc0fc5cb491663f1fbfc646daa1aa9aa004c425c602e10ab3ce1a7aa",
+          "artifact_id": 13720190289,
+          "artifact_zip_sha256": "353456586d2f2c7706102ae6fd04ea23568ec1e90e276729bb0278e525d2a7c0",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42719574550/artifacts/13720190289"
+        }
+      ]
+    },
+    {
+      "cohort": "stream-matrix",
+      "run_id": 42719574550,
+      "run_attempt": 1,
+      "client": "linux-amd64",
+      "server": "macos-arm64",
+      "case": "duplex",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "stdin+stdout+stderr application bytes",
+      "verified_payload_bytes": 204800,
+      "wall_ns": 60839060423,
+      "whole_operation_seconds": 60.839060423,
+      "whole_operation_application_bytes_per_second": 3366.2584296350515,
+      "sources": [
+        {
+          "role": "linux-amd64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/2",
+          "member_sha256": "cbfc34f1369f423528456c96fed5195716aaab19b5dc7126c7d67e7c12f4fb23",
+          "artifact_id": 13719064670,
+          "artifact_zip_sha256": "46f04f9e25dfe5d58ae342d99bcaed36a843a24009e05c2932b5b241a06f6eec",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42719574550/artifacts/13719064670"
+        },
+        {
+          "role": "macos-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/0",
+          "member_sha256": "f54f538a0bf116ba764335ef9abeab395f452f71fdfea11463ec0892edd1bc4b",
+          "artifact_id": 13720445207,
+          "artifact_zip_sha256": "82daabe76143913390f266e0fdd6e6e02fea87c6325e50e3a5df9cf404aa0ffe",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42719574550/artifacts/13720445207"
+        }
+      ]
+    },
+    {
+      "cohort": "stream-matrix",
+      "run_id": 42719574550,
+      "run_attempt": 1,
+      "client": "linux-arm64",
+      "server": "linux-amd64",
+      "case": "duplex",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "stdin+stdout+stderr application bytes",
+      "verified_payload_bytes": 204800,
+      "wall_ns": 61811283381,
+      "whole_operation_seconds": 61.811283381,
+      "whole_operation_application_bytes_per_second": 3313.3109166756585,
+      "sources": [
+        {
+          "role": "linux-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/0",
+          "member_sha256": "c9c58bc73a1c7cc440788be0e73c34a4dd5dcbe419929ef8b7268e4438c4b0f7",
+          "artifact_id": 13718863785,
+          "artifact_zip_sha256": "7db0510aa3bb0e5c8815cc81bb7c26c32037f76401dea45582efe5bcb48478f7",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42719574550/artifacts/13718863785"
+        },
+        {
+          "role": "linux-amd64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/1",
+          "member_sha256": "4d9716920c38d2865dac90557c1a0051c9697c69dd9c8a7d18f5bd4193b1a176",
+          "artifact_id": 13719413303,
+          "artifact_zip_sha256": "30bbc4082f9e9af43e87a3176ce4f1fccdafa8a6c151279c5ff50988bdaf0f45",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42719574550/artifacts/13719413303"
+        }
+      ]
+    },
+    {
+      "cohort": "stream-matrix",
+      "run_id": 42719574550,
+      "run_attempt": 1,
+      "client": "linux-arm64",
+      "server": "linux-arm64",
+      "case": "duplex",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "stdin+stdout+stderr application bytes",
+      "verified_payload_bytes": 204800,
+      "wall_ns": 62225224225,
+      "whole_operation_seconds": 62.225224225,
+      "whole_operation_application_bytes_per_second": 3291.2697792693248,
+      "sources": [
+        {
+          "role": "linux-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/1",
+          "member_sha256": "c9c58bc73a1c7cc440788be0e73c34a4dd5dcbe419929ef8b7268e4438c4b0f7",
+          "artifact_id": 13718863785,
+          "artifact_zip_sha256": "7db0510aa3bb0e5c8815cc81bb7c26c32037f76401dea45582efe5bcb48478f7",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42719574550/artifacts/13718863785"
+        },
+        {
+          "role": "linux-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/1",
+          "member_sha256": "e9772725cc0fc5cb491663f1fbfc646daa1aa9aa004c425c602e10ab3ce1a7aa",
+          "artifact_id": 13720190289,
+          "artifact_zip_sha256": "353456586d2f2c7706102ae6fd04ea23568ec1e90e276729bb0278e525d2a7c0",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42719574550/artifacts/13720190289"
+        }
+      ]
+    },
+    {
+      "cohort": "stream-matrix",
+      "run_id": 42719574550,
+      "run_attempt": 1,
+      "client": "linux-arm64",
+      "server": "macos-arm64",
+      "case": "duplex",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "stdin+stdout+stderr application bytes",
+      "verified_payload_bytes": 204800,
+      "wall_ns": 59904331615,
+      "whole_operation_seconds": 59.904331615,
+      "whole_operation_application_bytes_per_second": 3418.7844931854347,
+      "sources": [
+        {
+          "role": "linux-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/2",
+          "member_sha256": "c9c58bc73a1c7cc440788be0e73c34a4dd5dcbe419929ef8b7268e4438c4b0f7",
+          "artifact_id": 13718863785,
+          "artifact_zip_sha256": "7db0510aa3bb0e5c8815cc81bb7c26c32037f76401dea45582efe5bcb48478f7",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42719574550/artifacts/13718863785"
+        },
+        {
+          "role": "macos-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/1",
+          "member_sha256": "f54f538a0bf116ba764335ef9abeab395f452f71fdfea11463ec0892edd1bc4b",
+          "artifact_id": 13720445207,
+          "artifact_zip_sha256": "82daabe76143913390f266e0fdd6e6e02fea87c6325e50e3a5df9cf404aa0ffe",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42719574550/artifacts/13720445207"
+        }
+      ]
+    },
+    {
+      "cohort": "stream-matrix",
+      "run_id": 42719574550,
+      "run_attempt": 1,
+      "client": "macos-arm64",
+      "server": "linux-amd64",
+      "case": "duplex",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "stdin+stdout+stderr application bytes",
+      "verified_payload_bytes": 204800,
+      "wall_ns": 58343688417,
+      "whole_operation_seconds": 58.343688417,
+      "whole_operation_application_bytes_per_second": 3510.234021137512,
+      "sources": [
+        {
+          "role": "macos-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/0",
+          "member_sha256": "f69380cbcbe86da3c62563f468fd76741c3e2afb9b53359e960610014bb553b5",
+          "artifact_id": 13720315200,
+          "artifact_zip_sha256": "85c1a94d13d70680cbf190939a5b5986bd28f4af072d409105dc0f9c20c75891",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42719574550/artifacts/13720315200"
+        },
+        {
+          "role": "linux-amd64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/2",
+          "member_sha256": "4d9716920c38d2865dac90557c1a0051c9697c69dd9c8a7d18f5bd4193b1a176",
+          "artifact_id": 13719413303,
+          "artifact_zip_sha256": "30bbc4082f9e9af43e87a3176ce4f1fccdafa8a6c151279c5ff50988bdaf0f45",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42719574550/artifacts/13719413303"
+        }
+      ]
+    },
+    {
+      "cohort": "stream-matrix",
+      "run_id": 42719574550,
+      "run_attempt": 1,
+      "client": "macos-arm64",
+      "server": "linux-arm64",
+      "case": "duplex",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "stdin+stdout+stderr application bytes",
+      "verified_payload_bytes": 204800,
+      "wall_ns": 57572355875,
+      "whole_operation_seconds": 57.572355875,
+      "whole_operation_application_bytes_per_second": 3557.262802388317,
+      "sources": [
+        {
+          "role": "macos-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/1",
+          "member_sha256": "f69380cbcbe86da3c62563f468fd76741c3e2afb9b53359e960610014bb553b5",
+          "artifact_id": 13720315200,
+          "artifact_zip_sha256": "85c1a94d13d70680cbf190939a5b5986bd28f4af072d409105dc0f9c20c75891",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42719574550/artifacts/13720315200"
+        },
+        {
+          "role": "linux-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/2",
+          "member_sha256": "e9772725cc0fc5cb491663f1fbfc646daa1aa9aa004c425c602e10ab3ce1a7aa",
+          "artifact_id": 13720190289,
+          "artifact_zip_sha256": "353456586d2f2c7706102ae6fd04ea23568ec1e90e276729bb0278e525d2a7c0",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42719574550/artifacts/13720190289"
+        }
+      ]
+    },
+    {
+      "cohort": "stream-matrix",
+      "run_id": 42719574550,
+      "run_attempt": 1,
+      "client": "macos-arm64",
+      "server": "macos-arm64",
+      "case": "duplex",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "stdin+stdout+stderr application bytes",
+      "verified_payload_bytes": 204800,
+      "wall_ns": 56581490833,
+      "whole_operation_seconds": 56.581490833,
+      "whole_operation_application_bytes_per_second": 3619.5582156798628,
+      "sources": [
+        {
+          "role": "macos-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/2",
+          "member_sha256": "f69380cbcbe86da3c62563f468fd76741c3e2afb9b53359e960610014bb553b5",
+          "artifact_id": 13720315200,
+          "artifact_zip_sha256": "85c1a94d13d70680cbf190939a5b5986bd28f4af072d409105dc0f9c20c75891",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42719574550/artifacts/13720315200"
+        },
+        {
+          "role": "macos-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/2",
+          "member_sha256": "f54f538a0bf116ba764335ef9abeab395f452f71fdfea11463ec0892edd1bc4b",
+          "artifact_id": 13720445207,
+          "artifact_zip_sha256": "82daabe76143913390f266e0fdd6e6e02fea87c6325e50e3a5df9cf404aa0ffe",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42719574550/artifacts/13720445207"
+        }
+      ]
+    },
+    {
+      "cohort": "rsync-matrix",
+      "run_id": 42720213051,
+      "run_attempt": 1,
+      "client": "linux-amd64",
+      "server": "linux-amd64",
+      "case": "pull",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 32768,
+      "wall_ns": 38453528885,
+      "whole_operation_seconds": 38.453528885,
+      "whole_operation_application_bytes_per_second": 852.1454584310513,
+      "sources": [
+        {
+          "role": "linux-amd64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/1",
+          "member_sha256": "bd433dd9ee15f92e3e552e7f2bfce845df2127243708f9ae67101e300304d549",
+          "artifact_id": 13720130973,
+          "artifact_zip_sha256": "3bd32fdb8fd65009cbbb192d7b41436dc8cc5f5d68f7e23dcb44cad581cbca40",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720130973"
+        },
+        {
+          "role": "linux-amd64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/1",
+          "member_sha256": "7b95ee5e1e85a7d408c25c457a26f332c583185c7ae6f126a6ab11199c74c04d",
+          "artifact_id": 13719926223,
+          "artifact_zip_sha256": "d9acc6cc6c78c2415b25c13f8b62ee585e8c2b62711aae59aa6f1d817cf24281",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13719926223"
+        }
+      ]
+    },
+    {
+      "cohort": "rsync-matrix",
+      "run_id": 42720213051,
+      "run_attempt": 1,
+      "client": "linux-amd64",
+      "server": "linux-amd64",
+      "case": "push",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 32768,
+      "wall_ns": 34549621307,
+      "whole_operation_seconds": 34.549621307,
+      "whole_operation_application_bytes_per_second": 948.4329714884883,
+      "sources": [
+        {
+          "role": "linux-amd64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/0",
+          "member_sha256": "bd433dd9ee15f92e3e552e7f2bfce845df2127243708f9ae67101e300304d549",
+          "artifact_id": 13720130973,
+          "artifact_zip_sha256": "3bd32fdb8fd65009cbbb192d7b41436dc8cc5f5d68f7e23dcb44cad581cbca40",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720130973"
+        },
+        {
+          "role": "linux-amd64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/0",
+          "member_sha256": "7b95ee5e1e85a7d408c25c457a26f332c583185c7ae6f126a6ab11199c74c04d",
+          "artifact_id": 13719926223,
+          "artifact_zip_sha256": "d9acc6cc6c78c2415b25c13f8b62ee585e8c2b62711aae59aa6f1d817cf24281",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13719926223"
+        }
+      ]
+    },
+    {
+      "cohort": "rsync-matrix",
+      "run_id": 42720213051,
+      "run_attempt": 1,
+      "client": "linux-amd64",
+      "server": "linux-arm64",
+      "case": "pull",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 32768,
+      "wall_ns": 34310273152,
+      "whole_operation_seconds": 34.310273152,
+      "whole_operation_application_bytes_per_second": 955.0492313142631,
+      "sources": [
+        {
+          "role": "linux-amd64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/3",
+          "member_sha256": "bd433dd9ee15f92e3e552e7f2bfce845df2127243708f9ae67101e300304d549",
+          "artifact_id": 13720130973,
+          "artifact_zip_sha256": "3bd32fdb8fd65009cbbb192d7b41436dc8cc5f5d68f7e23dcb44cad581cbca40",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720130973"
+        },
+        {
+          "role": "linux-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/1",
+          "member_sha256": "d488017573750eda10dce0b0b131989ccab9c47cef2a2c03446a1450f1f82f36",
+          "artifact_id": 13720785324,
+          "artifact_zip_sha256": "5e79e36ad6419523ab3f270f51e6d7c088e29f83eeba0ea33ee4ec3460bb3004",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720785324"
+        }
+      ]
+    },
+    {
+      "cohort": "rsync-matrix",
+      "run_id": 42720213051,
+      "run_attempt": 1,
+      "client": "linux-amd64",
+      "server": "linux-arm64",
+      "case": "push",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 32768,
+      "wall_ns": 37213129795,
+      "whole_operation_seconds": 37.213129795,
+      "whole_operation_application_bytes_per_second": 880.5494238327341,
+      "sources": [
+        {
+          "role": "linux-amd64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/2",
+          "member_sha256": "bd433dd9ee15f92e3e552e7f2bfce845df2127243708f9ae67101e300304d549",
+          "artifact_id": 13720130973,
+          "artifact_zip_sha256": "3bd32fdb8fd65009cbbb192d7b41436dc8cc5f5d68f7e23dcb44cad581cbca40",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720130973"
+        },
+        {
+          "role": "linux-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/0",
+          "member_sha256": "d488017573750eda10dce0b0b131989ccab9c47cef2a2c03446a1450f1f82f36",
+          "artifact_id": 13720785324,
+          "artifact_zip_sha256": "5e79e36ad6419523ab3f270f51e6d7c088e29f83eeba0ea33ee4ec3460bb3004",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720785324"
+        }
+      ]
+    },
+    {
+      "cohort": "rsync-matrix",
+      "run_id": 42720213051,
+      "run_attempt": 1,
+      "client": "linux-amd64",
+      "server": "macos-arm64",
+      "case": "pull",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 32768,
+      "wall_ns": 31232688871,
+      "whole_operation_seconds": 31.232688871,
+      "whole_operation_application_bytes_per_second": 1049.1571870530033,
+      "sources": [
+        {
+          "role": "linux-amd64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/5",
+          "member_sha256": "bd433dd9ee15f92e3e552e7f2bfce845df2127243708f9ae67101e300304d549",
+          "artifact_id": 13720130973,
+          "artifact_zip_sha256": "3bd32fdb8fd65009cbbb192d7b41436dc8cc5f5d68f7e23dcb44cad581cbca40",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720130973"
+        },
+        {
+          "role": "macos-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/1",
+          "member_sha256": "2661166b515a379705d264bdd695519d01646e9b4014050ed0a34cf28a064e4a",
+          "artifact_id": 13720630792,
+          "artifact_zip_sha256": "30080b76df33de2aaed0e954226aaf15e847be8c6027854a31fa56a650803885",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720630792"
+        }
+      ]
+    },
+    {
+      "cohort": "rsync-matrix",
+      "run_id": 42720213051,
+      "run_attempt": 1,
+      "client": "linux-amd64",
+      "server": "macos-arm64",
+      "case": "push",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 32768,
+      "wall_ns": 37219902565,
+      "whole_operation_seconds": 37.219902565,
+      "whole_operation_application_bytes_per_second": 880.3891934637578,
+      "sources": [
+        {
+          "role": "linux-amd64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/4",
+          "member_sha256": "bd433dd9ee15f92e3e552e7f2bfce845df2127243708f9ae67101e300304d549",
+          "artifact_id": 13720130973,
+          "artifact_zip_sha256": "3bd32fdb8fd65009cbbb192d7b41436dc8cc5f5d68f7e23dcb44cad581cbca40",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720130973"
+        },
+        {
+          "role": "macos-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/0",
+          "member_sha256": "2661166b515a379705d264bdd695519d01646e9b4014050ed0a34cf28a064e4a",
+          "artifact_id": 13720630792,
+          "artifact_zip_sha256": "30080b76df33de2aaed0e954226aaf15e847be8c6027854a31fa56a650803885",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720630792"
+        }
+      ]
+    },
+    {
+      "cohort": "rsync-matrix",
+      "run_id": 42720213051,
+      "run_attempt": 1,
+      "client": "linux-arm64",
+      "server": "linux-amd64",
+      "case": "pull",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 32768,
+      "wall_ns": 41708916271,
+      "whole_operation_seconds": 41.708916271,
+      "whole_operation_application_bytes_per_second": 785.6353731919769,
+      "sources": [
+        {
+          "role": "linux-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/1",
+          "member_sha256": "9e9d460f5e54b2a1cecc874ad5e5190e230d101dcf178a027e1f9a5dee7e30e3",
+          "artifact_id": 13720250787,
+          "artifact_zip_sha256": "9e62c8373a9185751e287ff3d41257a918fc5d24d72461329b8205110a759968",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720250787"
+        },
+        {
+          "role": "linux-amd64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/3",
+          "member_sha256": "7b95ee5e1e85a7d408c25c457a26f332c583185c7ae6f126a6ab11199c74c04d",
+          "artifact_id": 13719926223,
+          "artifact_zip_sha256": "d9acc6cc6c78c2415b25c13f8b62ee585e8c2b62711aae59aa6f1d817cf24281",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13719926223"
+        }
+      ]
+    },
+    {
+      "cohort": "rsync-matrix",
+      "run_id": 42720213051,
+      "run_attempt": 1,
+      "client": "linux-arm64",
+      "server": "linux-amd64",
+      "case": "push",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 32768,
+      "wall_ns": 38655623446,
+      "whole_operation_seconds": 38.655623446,
+      "whole_operation_application_bytes_per_second": 847.6903766867266,
+      "sources": [
+        {
+          "role": "linux-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/0",
+          "member_sha256": "9e9d460f5e54b2a1cecc874ad5e5190e230d101dcf178a027e1f9a5dee7e30e3",
+          "artifact_id": 13720250787,
+          "artifact_zip_sha256": "9e62c8373a9185751e287ff3d41257a918fc5d24d72461329b8205110a759968",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720250787"
+        },
+        {
+          "role": "linux-amd64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/2",
+          "member_sha256": "7b95ee5e1e85a7d408c25c457a26f332c583185c7ae6f126a6ab11199c74c04d",
+          "artifact_id": 13719926223,
+          "artifact_zip_sha256": "d9acc6cc6c78c2415b25c13f8b62ee585e8c2b62711aae59aa6f1d817cf24281",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13719926223"
+        }
+      ]
+    },
+    {
+      "cohort": "rsync-matrix",
+      "run_id": 42720213051,
+      "run_attempt": 1,
+      "client": "linux-arm64",
+      "server": "linux-arm64",
+      "case": "pull",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 32768,
+      "wall_ns": 38655475870,
+      "whole_operation_seconds": 38.65547587,
+      "whole_operation_application_bytes_per_second": 847.6936129359827,
+      "sources": [
+        {
+          "role": "linux-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/3",
+          "member_sha256": "9e9d460f5e54b2a1cecc874ad5e5190e230d101dcf178a027e1f9a5dee7e30e3",
+          "artifact_id": 13720250787,
+          "artifact_zip_sha256": "9e62c8373a9185751e287ff3d41257a918fc5d24d72461329b8205110a759968",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720250787"
+        },
+        {
+          "role": "linux-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/3",
+          "member_sha256": "d488017573750eda10dce0b0b131989ccab9c47cef2a2c03446a1450f1f82f36",
+          "artifact_id": 13720785324,
+          "artifact_zip_sha256": "5e79e36ad6419523ab3f270f51e6d7c088e29f83eeba0ea33ee4ec3460bb3004",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720785324"
+        }
+      ]
+    },
+    {
+      "cohort": "rsync-matrix",
+      "run_id": 42720213051,
+      "run_attempt": 1,
+      "client": "linux-arm64",
+      "server": "linux-arm64",
+      "case": "push",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 32768,
+      "wall_ns": 38521939951,
+      "whole_operation_seconds": 38.521939951,
+      "whole_operation_application_bytes_per_second": 850.6321343546294,
+      "sources": [
+        {
+          "role": "linux-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/2",
+          "member_sha256": "9e9d460f5e54b2a1cecc874ad5e5190e230d101dcf178a027e1f9a5dee7e30e3",
+          "artifact_id": 13720250787,
+          "artifact_zip_sha256": "9e62c8373a9185751e287ff3d41257a918fc5d24d72461329b8205110a759968",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720250787"
+        },
+        {
+          "role": "linux-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/2",
+          "member_sha256": "d488017573750eda10dce0b0b131989ccab9c47cef2a2c03446a1450f1f82f36",
+          "artifact_id": 13720785324,
+          "artifact_zip_sha256": "5e79e36ad6419523ab3f270f51e6d7c088e29f83eeba0ea33ee4ec3460bb3004",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720785324"
+        }
+      ]
+    },
+    {
+      "cohort": "rsync-matrix",
+      "run_id": 42720213051,
+      "run_attempt": 1,
+      "client": "linux-arm64",
+      "server": "macos-arm64",
+      "case": "pull",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 32768,
+      "wall_ns": 35967693447,
+      "whole_operation_seconds": 35.967693447,
+      "whole_operation_application_bytes_per_second": 911.0397932045631,
+      "sources": [
+        {
+          "role": "linux-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/5",
+          "member_sha256": "9e9d460f5e54b2a1cecc874ad5e5190e230d101dcf178a027e1f9a5dee7e30e3",
+          "artifact_id": 13720250787,
+          "artifact_zip_sha256": "9e62c8373a9185751e287ff3d41257a918fc5d24d72461329b8205110a759968",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720250787"
+        },
+        {
+          "role": "macos-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/3",
+          "member_sha256": "2661166b515a379705d264bdd695519d01646e9b4014050ed0a34cf28a064e4a",
+          "artifact_id": 13720630792,
+          "artifact_zip_sha256": "30080b76df33de2aaed0e954226aaf15e847be8c6027854a31fa56a650803885",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720630792"
+        }
+      ]
+    },
+    {
+      "cohort": "rsync-matrix",
+      "run_id": 42720213051,
+      "run_attempt": 1,
+      "client": "linux-arm64",
+      "server": "macos-arm64",
+      "case": "push",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 32768,
+      "wall_ns": 39804435789,
+      "whole_operation_seconds": 39.804435789,
+      "whole_operation_application_bytes_per_second": 823.2248328729099,
+      "sources": [
+        {
+          "role": "linux-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/4",
+          "member_sha256": "9e9d460f5e54b2a1cecc874ad5e5190e230d101dcf178a027e1f9a5dee7e30e3",
+          "artifact_id": 13720250787,
+          "artifact_zip_sha256": "9e62c8373a9185751e287ff3d41257a918fc5d24d72461329b8205110a759968",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720250787"
+        },
+        {
+          "role": "macos-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/2",
+          "member_sha256": "2661166b515a379705d264bdd695519d01646e9b4014050ed0a34cf28a064e4a",
+          "artifact_id": 13720630792,
+          "artifact_zip_sha256": "30080b76df33de2aaed0e954226aaf15e847be8c6027854a31fa56a650803885",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720630792"
+        }
+      ]
+    },
+    {
+      "cohort": "rsync-matrix",
+      "run_id": 42720213051,
+      "run_attempt": 1,
+      "client": "macos-arm64",
+      "server": "linux-amd64",
+      "case": "pull",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 32768,
+      "wall_ns": 44650607833,
+      "whole_operation_seconds": 44.650607833,
+      "whole_operation_application_bytes_per_second": 733.8757878181023,
+      "sources": [
+        {
+          "role": "macos-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/1",
+          "member_sha256": "a4754fb2fb17b3fa5193b2281d54f7c274b5b1f5ac09e19728d8168b92bd79a1",
+          "artifact_id": 13719514096,
+          "artifact_zip_sha256": "b0d58adf7efd834f6aefcc6b86d6b4d3d513fb22489201e9246cfffedc9dda7e",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13719514096"
+        },
+        {
+          "role": "linux-amd64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/5",
+          "member_sha256": "7b95ee5e1e85a7d408c25c457a26f332c583185c7ae6f126a6ab11199c74c04d",
+          "artifact_id": 13719926223,
+          "artifact_zip_sha256": "d9acc6cc6c78c2415b25c13f8b62ee585e8c2b62711aae59aa6f1d817cf24281",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13719926223"
+        }
+      ]
+    },
+    {
+      "cohort": "rsync-matrix",
+      "run_id": 42720213051,
+      "run_attempt": 1,
+      "client": "macos-arm64",
+      "server": "linux-amd64",
+      "case": "push",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 32768,
+      "wall_ns": 49634290959,
+      "whole_operation_seconds": 49.634290959,
+      "whole_operation_application_bytes_per_second": 660.1887398183594,
+      "sources": [
+        {
+          "role": "macos-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/0",
+          "member_sha256": "a4754fb2fb17b3fa5193b2281d54f7c274b5b1f5ac09e19728d8168b92bd79a1",
+          "artifact_id": 13719514096,
+          "artifact_zip_sha256": "b0d58adf7efd834f6aefcc6b86d6b4d3d513fb22489201e9246cfffedc9dda7e",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13719514096"
+        },
+        {
+          "role": "linux-amd64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/4",
+          "member_sha256": "7b95ee5e1e85a7d408c25c457a26f332c583185c7ae6f126a6ab11199c74c04d",
+          "artifact_id": 13719926223,
+          "artifact_zip_sha256": "d9acc6cc6c78c2415b25c13f8b62ee585e8c2b62711aae59aa6f1d817cf24281",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13719926223"
+        }
+      ]
+    },
+    {
+      "cohort": "rsync-matrix",
+      "run_id": 42720213051,
+      "run_attempt": 1,
+      "client": "macos-arm64",
+      "server": "linux-arm64",
+      "case": "pull",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 32768,
+      "wall_ns": 45358561916,
+      "whole_operation_seconds": 45.358561916,
+      "whole_operation_application_bytes_per_second": 722.4214925659109,
+      "sources": [
+        {
+          "role": "macos-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/3",
+          "member_sha256": "a4754fb2fb17b3fa5193b2281d54f7c274b5b1f5ac09e19728d8168b92bd79a1",
+          "artifact_id": 13719514096,
+          "artifact_zip_sha256": "b0d58adf7efd834f6aefcc6b86d6b4d3d513fb22489201e9246cfffedc9dda7e",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13719514096"
+        },
+        {
+          "role": "linux-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/5",
+          "member_sha256": "d488017573750eda10dce0b0b131989ccab9c47cef2a2c03446a1450f1f82f36",
+          "artifact_id": 13720785324,
+          "artifact_zip_sha256": "5e79e36ad6419523ab3f270f51e6d7c088e29f83eeba0ea33ee4ec3460bb3004",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720785324"
+        }
+      ]
+    },
+    {
+      "cohort": "rsync-matrix",
+      "run_id": 42720213051,
+      "run_attempt": 1,
+      "client": "macos-arm64",
+      "server": "linux-arm64",
+      "case": "push",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 32768,
+      "wall_ns": 49756143958,
+      "whole_operation_seconds": 49.756143958,
+      "whole_operation_application_bytes_per_second": 658.5719349083807,
+      "sources": [
+        {
+          "role": "macos-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/2",
+          "member_sha256": "a4754fb2fb17b3fa5193b2281d54f7c274b5b1f5ac09e19728d8168b92bd79a1",
+          "artifact_id": 13719514096,
+          "artifact_zip_sha256": "b0d58adf7efd834f6aefcc6b86d6b4d3d513fb22489201e9246cfffedc9dda7e",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13719514096"
+        },
+        {
+          "role": "linux-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/4",
+          "member_sha256": "d488017573750eda10dce0b0b131989ccab9c47cef2a2c03446a1450f1f82f36",
+          "artifact_id": 13720785324,
+          "artifact_zip_sha256": "5e79e36ad6419523ab3f270f51e6d7c088e29f83eeba0ea33ee4ec3460bb3004",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720785324"
+        }
+      ]
+    },
+    {
+      "cohort": "rsync-matrix",
+      "run_id": 42720213051,
+      "run_attempt": 1,
+      "client": "macos-arm64",
+      "server": "macos-arm64",
+      "case": "pull",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 32768,
+      "wall_ns": 42982723250,
+      "whole_operation_seconds": 42.98272325,
+      "whole_operation_application_bytes_per_second": 762.3528134644191,
+      "sources": [
+        {
+          "role": "macos-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/5",
+          "member_sha256": "a4754fb2fb17b3fa5193b2281d54f7c274b5b1f5ac09e19728d8168b92bd79a1",
+          "artifact_id": 13719514096,
+          "artifact_zip_sha256": "b0d58adf7efd834f6aefcc6b86d6b4d3d513fb22489201e9246cfffedc9dda7e",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13719514096"
+        },
+        {
+          "role": "macos-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/5",
+          "member_sha256": "2661166b515a379705d264bdd695519d01646e9b4014050ed0a34cf28a064e4a",
+          "artifact_id": 13720630792,
+          "artifact_zip_sha256": "30080b76df33de2aaed0e954226aaf15e847be8c6027854a31fa56a650803885",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720630792"
+        }
+      ]
+    },
+    {
+      "cohort": "rsync-matrix",
+      "run_id": 42720213051,
+      "run_attempt": 1,
+      "client": "macos-arm64",
+      "server": "macos-arm64",
+      "case": "push",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 32768,
+      "wall_ns": 49028047250,
+      "whole_operation_seconds": 49.02804725,
+      "whole_operation_application_bytes_per_second": 668.3521338900562,
+      "sources": [
+        {
+          "role": "macos-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/4",
+          "member_sha256": "a4754fb2fb17b3fa5193b2281d54f7c274b5b1f5ac09e19728d8168b92bd79a1",
+          "artifact_id": 13719514096,
+          "artifact_zip_sha256": "b0d58adf7efd834f6aefcc6b86d6b4d3d513fb22489201e9246cfffedc9dda7e",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13719514096"
+        },
+        {
+          "role": "macos-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/4",
+          "member_sha256": "2661166b515a379705d264bdd695519d01646e9b4014050ed0a34cf28a064e4a",
+          "artifact_id": 13720630792,
+          "artifact_zip_sha256": "30080b76df33de2aaed0e954226aaf15e847be8c6027854a31fa56a650803885",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720213051/artifacts/13720630792"
+        }
+      ]
+    },
+    {
+      "cohort": "copy-matrix",
+      "run_id": 42720943882,
+      "run_attempt": 1,
+      "client": "linux-amd64",
+      "server": "linux-amd64",
+      "case": "get",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 65536,
+      "wall_ns": 27361446935,
+      "whole_operation_seconds": 27.361446935,
+      "whole_operation_application_bytes_per_second": 2395.1949674184875,
+      "sources": [
+        {
+          "role": "linux-amd64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/1",
+          "member_sha256": "4a3627d71277a6a48ef5466e54e80108098b6e5c39a262eab19f9e712f0cd544",
+          "artifact_id": 13720406311,
+          "artifact_zip_sha256": "174458eb9c1f4bf8e86d3077fdcd1cf7c5b58b0c44055f458bd96347d64a1978",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13720406311"
+        },
+        {
+          "role": "linux-amd64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/1",
+          "member_sha256": "418cd11efd61c5f1dca6724f97fc5a394b30808d942b2b149b82e4fd56ee757a",
+          "artifact_id": 13720041686,
+          "artifact_zip_sha256": "9520769f757b36f561f8064397e205181c7a24a05ef6d64972f77b9bedd27ae9",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13720041686"
+        }
+      ]
+    },
+    {
+      "cohort": "copy-matrix",
+      "run_id": 42720943882,
+      "run_attempt": 1,
+      "client": "linux-amd64",
+      "server": "linux-amd64",
+      "case": "put",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 65536,
+      "wall_ns": 35622269074,
+      "whole_operation_seconds": 35.622269074,
+      "whole_operation_application_bytes_per_second": 1839.7480481621944,
+      "sources": [
+        {
+          "role": "linux-amd64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/0",
+          "member_sha256": "4a3627d71277a6a48ef5466e54e80108098b6e5c39a262eab19f9e712f0cd544",
+          "artifact_id": 13720406311,
+          "artifact_zip_sha256": "174458eb9c1f4bf8e86d3077fdcd1cf7c5b58b0c44055f458bd96347d64a1978",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13720406311"
+        },
+        {
+          "role": "linux-amd64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/0",
+          "member_sha256": "418cd11efd61c5f1dca6724f97fc5a394b30808d942b2b149b82e4fd56ee757a",
+          "artifact_id": 13720041686,
+          "artifact_zip_sha256": "9520769f757b36f561f8064397e205181c7a24a05ef6d64972f77b9bedd27ae9",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13720041686"
+        }
+      ]
+    },
+    {
+      "cohort": "copy-matrix",
+      "run_id": 42720943882,
+      "run_attempt": 1,
+      "client": "linux-amd64",
+      "server": "linux-arm64",
+      "case": "get",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 65536,
+      "wall_ns": 28591107923,
+      "whole_operation_seconds": 28.591107923,
+      "whole_operation_application_bytes_per_second": 2292.181197612137,
+      "sources": [
+        {
+          "role": "linux-amd64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/3",
+          "member_sha256": "4a3627d71277a6a48ef5466e54e80108098b6e5c39a262eab19f9e712f0cd544",
+          "artifact_id": 13720406311,
+          "artifact_zip_sha256": "174458eb9c1f4bf8e86d3077fdcd1cf7c5b58b0c44055f458bd96347d64a1978",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13720406311"
+        },
+        {
+          "role": "linux-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/1",
+          "member_sha256": "6a12edb04a479c003277971b3b235ba8b494e80030c18c18e4249c0eff5fb24b",
+          "artifact_id": 13720226808,
+          "artifact_zip_sha256": "60209ddf00101d48e68b29839327a669a0fa9c6392deb784644cc0ff4d0fe664",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13720226808"
+        }
+      ]
+    },
+    {
+      "cohort": "copy-matrix",
+      "run_id": 42720943882,
+      "run_attempt": 1,
+      "client": "linux-amd64",
+      "server": "linux-arm64",
+      "case": "put",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 65536,
+      "wall_ns": 36361139617,
+      "whole_operation_seconds": 36.361139617,
+      "whole_operation_application_bytes_per_second": 1802.3637512549199,
+      "sources": [
+        {
+          "role": "linux-amd64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/2",
+          "member_sha256": "4a3627d71277a6a48ef5466e54e80108098b6e5c39a262eab19f9e712f0cd544",
+          "artifact_id": 13720406311,
+          "artifact_zip_sha256": "174458eb9c1f4bf8e86d3077fdcd1cf7c5b58b0c44055f458bd96347d64a1978",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13720406311"
+        },
+        {
+          "role": "linux-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/0",
+          "member_sha256": "6a12edb04a479c003277971b3b235ba8b494e80030c18c18e4249c0eff5fb24b",
+          "artifact_id": 13720226808,
+          "artifact_zip_sha256": "60209ddf00101d48e68b29839327a669a0fa9c6392deb784644cc0ff4d0fe664",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13720226808"
+        }
+      ]
+    },
+    {
+      "cohort": "copy-matrix",
+      "run_id": 42720943882,
+      "run_attempt": 1,
+      "client": "linux-amd64",
+      "server": "macos-arm64",
+      "case": "get",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 65536,
+      "wall_ns": 25078269902,
+      "whole_operation_seconds": 25.078269902,
+      "whole_operation_application_bytes_per_second": 2613.2584207801942,
+      "sources": [
+        {
+          "role": "linux-amd64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/5",
+          "member_sha256": "4a3627d71277a6a48ef5466e54e80108098b6e5c39a262eab19f9e712f0cd544",
+          "artifact_id": 13720406311,
+          "artifact_zip_sha256": "174458eb9c1f4bf8e86d3077fdcd1cf7c5b58b0c44055f458bd96347d64a1978",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13720406311"
+        },
+        {
+          "role": "macos-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/1",
+          "member_sha256": "2231bac01ac741adc0826ab579b19a527bf8f89a33e4f070141fdfd016cf2edf",
+          "artifact_id": 13719957273,
+          "artifact_zip_sha256": "e852feb57b435b50bab8c9ea2d47684100bb64daa231d850ce4e78863ea1dae9",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13719957273"
+        }
+      ]
+    },
+    {
+      "cohort": "copy-matrix",
+      "run_id": 42720943882,
+      "run_attempt": 1,
+      "client": "linux-amd64",
+      "server": "macos-arm64",
+      "case": "put",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 65536,
+      "wall_ns": 35439149341,
+      "whole_operation_seconds": 35.439149341,
+      "whole_operation_application_bytes_per_second": 1849.2543195493852,
+      "sources": [
+        {
+          "role": "linux-amd64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/4",
+          "member_sha256": "4a3627d71277a6a48ef5466e54e80108098b6e5c39a262eab19f9e712f0cd544",
+          "artifact_id": 13720406311,
+          "artifact_zip_sha256": "174458eb9c1f4bf8e86d3077fdcd1cf7c5b58b0c44055f458bd96347d64a1978",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13720406311"
+        },
+        {
+          "role": "macos-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/0",
+          "member_sha256": "2231bac01ac741adc0826ab579b19a527bf8f89a33e4f070141fdfd016cf2edf",
+          "artifact_id": 13719957273,
+          "artifact_zip_sha256": "e852feb57b435b50bab8c9ea2d47684100bb64daa231d850ce4e78863ea1dae9",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13719957273"
+        }
+      ]
+    },
+    {
+      "cohort": "copy-matrix",
+      "run_id": 42720943882,
+      "run_attempt": 1,
+      "client": "linux-arm64",
+      "server": "linux-amd64",
+      "case": "get",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 65536,
+      "wall_ns": 25572489052,
+      "whole_operation_seconds": 25.572489052,
+      "whole_operation_application_bytes_per_second": 2562.7540544347007,
+      "sources": [
+        {
+          "role": "linux-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/1",
+          "member_sha256": "cf4bced6439c1e3efac670141c61f6eb4db1134b1153a17d2495094385c6d9f8",
+          "artifact_id": 13719629387,
+          "artifact_zip_sha256": "9295eabb5186783e3146ada0e21699e45be4d2ffdcbfc41e1449953af0510053",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13719629387"
+        },
+        {
+          "role": "linux-amd64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/3",
+          "member_sha256": "418cd11efd61c5f1dca6724f97fc5a394b30808d942b2b149b82e4fd56ee757a",
+          "artifact_id": 13720041686,
+          "artifact_zip_sha256": "9520769f757b36f561f8064397e205181c7a24a05ef6d64972f77b9bedd27ae9",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13720041686"
+        }
+      ]
+    },
+    {
+      "cohort": "copy-matrix",
+      "run_id": 42720943882,
+      "run_attempt": 1,
+      "client": "linux-arm64",
+      "server": "linux-amd64",
+      "case": "put",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 65536,
+      "wall_ns": 36338341697,
+      "whole_operation_seconds": 36.338341697,
+      "whole_operation_application_bytes_per_second": 1803.4945167960288,
+      "sources": [
+        {
+          "role": "linux-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/0",
+          "member_sha256": "cf4bced6439c1e3efac670141c61f6eb4db1134b1153a17d2495094385c6d9f8",
+          "artifact_id": 13719629387,
+          "artifact_zip_sha256": "9295eabb5186783e3146ada0e21699e45be4d2ffdcbfc41e1449953af0510053",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13719629387"
+        },
+        {
+          "role": "linux-amd64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/2",
+          "member_sha256": "418cd11efd61c5f1dca6724f97fc5a394b30808d942b2b149b82e4fd56ee757a",
+          "artifact_id": 13720041686,
+          "artifact_zip_sha256": "9520769f757b36f561f8064397e205181c7a24a05ef6d64972f77b9bedd27ae9",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13720041686"
+        }
+      ]
+    },
+    {
+      "cohort": "copy-matrix",
+      "run_id": 42720943882,
+      "run_attempt": 1,
+      "client": "linux-arm64",
+      "server": "linux-arm64",
+      "case": "get",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 65536,
+      "wall_ns": 27437246945,
+      "whole_operation_seconds": 27.437246945,
+      "whole_operation_application_bytes_per_second": 2388.577838416944,
+      "sources": [
+        {
+          "role": "linux-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/3",
+          "member_sha256": "cf4bced6439c1e3efac670141c61f6eb4db1134b1153a17d2495094385c6d9f8",
+          "artifact_id": 13719629387,
+          "artifact_zip_sha256": "9295eabb5186783e3146ada0e21699e45be4d2ffdcbfc41e1449953af0510053",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13719629387"
+        },
+        {
+          "role": "linux-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/3",
+          "member_sha256": "6a12edb04a479c003277971b3b235ba8b494e80030c18c18e4249c0eff5fb24b",
+          "artifact_id": 13720226808,
+          "artifact_zip_sha256": "60209ddf00101d48e68b29839327a669a0fa9c6392deb784644cc0ff4d0fe664",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13720226808"
+        }
+      ]
+    },
+    {
+      "cohort": "copy-matrix",
+      "run_id": 42720943882,
+      "run_attempt": 1,
+      "client": "linux-arm64",
+      "server": "linux-arm64",
+      "case": "put",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 65536,
+      "wall_ns": 36075053628,
+      "whole_operation_seconds": 36.075053628,
+      "whole_operation_application_bytes_per_second": 1816.6570360725286,
+      "sources": [
+        {
+          "role": "linux-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/2",
+          "member_sha256": "cf4bced6439c1e3efac670141c61f6eb4db1134b1153a17d2495094385c6d9f8",
+          "artifact_id": 13719629387,
+          "artifact_zip_sha256": "9295eabb5186783e3146ada0e21699e45be4d2ffdcbfc41e1449953af0510053",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13719629387"
+        },
+        {
+          "role": "linux-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/2",
+          "member_sha256": "6a12edb04a479c003277971b3b235ba8b494e80030c18c18e4249c0eff5fb24b",
+          "artifact_id": 13720226808,
+          "artifact_zip_sha256": "60209ddf00101d48e68b29839327a669a0fa9c6392deb784644cc0ff4d0fe664",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13720226808"
+        }
+      ]
+    },
+    {
+      "cohort": "copy-matrix",
+      "run_id": 42720943882,
+      "run_attempt": 1,
+      "client": "linux-arm64",
+      "server": "macos-arm64",
+      "case": "get",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 65536,
+      "wall_ns": 26172347010,
+      "whole_operation_seconds": 26.17234701,
+      "whole_operation_application_bytes_per_second": 2504.01692958449,
+      "sources": [
+        {
+          "role": "linux-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/5",
+          "member_sha256": "cf4bced6439c1e3efac670141c61f6eb4db1134b1153a17d2495094385c6d9f8",
+          "artifact_id": 13719629387,
+          "artifact_zip_sha256": "9295eabb5186783e3146ada0e21699e45be4d2ffdcbfc41e1449953af0510053",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13719629387"
+        },
+        {
+          "role": "macos-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/3",
+          "member_sha256": "2231bac01ac741adc0826ab579b19a527bf8f89a33e4f070141fdfd016cf2edf",
+          "artifact_id": 13719957273,
+          "artifact_zip_sha256": "e852feb57b435b50bab8c9ea2d47684100bb64daa231d850ce4e78863ea1dae9",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13719957273"
+        }
+      ]
+    },
+    {
+      "cohort": "copy-matrix",
+      "run_id": 42720943882,
+      "run_attempt": 1,
+      "client": "linux-arm64",
+      "server": "macos-arm64",
+      "case": "put",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 65536,
+      "wall_ns": 35074280316,
+      "whole_operation_seconds": 35.074280316,
+      "whole_operation_application_bytes_per_second": 1868.491652845237,
+      "sources": [
+        {
+          "role": "linux-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/4",
+          "member_sha256": "cf4bced6439c1e3efac670141c61f6eb4db1134b1153a17d2495094385c6d9f8",
+          "artifact_id": 13719629387,
+          "artifact_zip_sha256": "9295eabb5186783e3146ada0e21699e45be4d2ffdcbfc41e1449953af0510053",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13719629387"
+        },
+        {
+          "role": "macos-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/2",
+          "member_sha256": "2231bac01ac741adc0826ab579b19a527bf8f89a33e4f070141fdfd016cf2edf",
+          "artifact_id": 13719957273,
+          "artifact_zip_sha256": "e852feb57b435b50bab8c9ea2d47684100bb64daa231d850ce4e78863ea1dae9",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13719957273"
+        }
+      ]
+    },
+    {
+      "cohort": "copy-matrix",
+      "run_id": 42720943882,
+      "run_attempt": 1,
+      "client": "macos-arm64",
+      "server": "linux-amd64",
+      "case": "get",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 65536,
+      "wall_ns": 33545424791,
+      "whole_operation_seconds": 33.545424791,
+      "whole_operation_application_bytes_per_second": 1953.649429342831,
+      "sources": [
+        {
+          "role": "macos-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/1",
+          "member_sha256": "d8d422d64fe6360176da0825dfbee7e921395ced7d4d0529d4af32675f57abb7",
+          "artifact_id": 13721300129,
+          "artifact_zip_sha256": "7944c3571f0afc2170f9473dca1a7614440c538eecfc6619e954af6ef5f4a394",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13721300129"
+        },
+        {
+          "role": "linux-amd64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/5",
+          "member_sha256": "418cd11efd61c5f1dca6724f97fc5a394b30808d942b2b149b82e4fd56ee757a",
+          "artifact_id": 13720041686,
+          "artifact_zip_sha256": "9520769f757b36f561f8064397e205181c7a24a05ef6d64972f77b9bedd27ae9",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13720041686"
+        }
+      ]
+    },
+    {
+      "cohort": "copy-matrix",
+      "run_id": 42720943882,
+      "run_attempt": 1,
+      "client": "macos-arm64",
+      "server": "linux-amd64",
+      "case": "put",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 65536,
+      "wall_ns": 48618736416,
+      "whole_operation_seconds": 48.618736416,
+      "whole_operation_application_bytes_per_second": 1347.9576976096128,
+      "sources": [
+        {
+          "role": "macos-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/0",
+          "member_sha256": "d8d422d64fe6360176da0825dfbee7e921395ced7d4d0529d4af32675f57abb7",
+          "artifact_id": 13721300129,
+          "artifact_zip_sha256": "7944c3571f0afc2170f9473dca1a7614440c538eecfc6619e954af6ef5f4a394",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13721300129"
+        },
+        {
+          "role": "linux-amd64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/4",
+          "member_sha256": "418cd11efd61c5f1dca6724f97fc5a394b30808d942b2b149b82e4fd56ee757a",
+          "artifact_id": 13720041686,
+          "artifact_zip_sha256": "9520769f757b36f561f8064397e205181c7a24a05ef6d64972f77b9bedd27ae9",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13720041686"
+        }
+      ]
+    },
+    {
+      "cohort": "copy-matrix",
+      "run_id": 42720943882,
+      "run_attempt": 1,
+      "client": "macos-arm64",
+      "server": "linux-arm64",
+      "case": "get",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 65536,
+      "wall_ns": 31292595334,
+      "whole_operation_seconds": 31.292595334,
+      "whole_operation_application_bytes_per_second": 2094.29736653367,
+      "sources": [
+        {
+          "role": "macos-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/3",
+          "member_sha256": "d8d422d64fe6360176da0825dfbee7e921395ced7d4d0529d4af32675f57abb7",
+          "artifact_id": 13721300129,
+          "artifact_zip_sha256": "7944c3571f0afc2170f9473dca1a7614440c538eecfc6619e954af6ef5f4a394",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13721300129"
+        },
+        {
+          "role": "linux-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/5",
+          "member_sha256": "6a12edb04a479c003277971b3b235ba8b494e80030c18c18e4249c0eff5fb24b",
+          "artifact_id": 13720226808,
+          "artifact_zip_sha256": "60209ddf00101d48e68b29839327a669a0fa9c6392deb784644cc0ff4d0fe664",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13720226808"
+        }
+      ]
+    },
+    {
+      "cohort": "copy-matrix",
+      "run_id": 42720943882,
+      "run_attempt": 1,
+      "client": "macos-arm64",
+      "server": "linux-arm64",
+      "case": "put",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 65536,
+      "wall_ns": 48827035292,
+      "whole_operation_seconds": 48.827035292,
+      "whole_operation_application_bytes_per_second": 1342.2072343339194,
+      "sources": [
+        {
+          "role": "macos-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/2",
+          "member_sha256": "d8d422d64fe6360176da0825dfbee7e921395ced7d4d0529d4af32675f57abb7",
+          "artifact_id": 13721300129,
+          "artifact_zip_sha256": "7944c3571f0afc2170f9473dca1a7614440c538eecfc6619e954af6ef5f4a394",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13721300129"
+        },
+        {
+          "role": "linux-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/4",
+          "member_sha256": "6a12edb04a479c003277971b3b235ba8b494e80030c18c18e4249c0eff5fb24b",
+          "artifact_id": 13720226808,
+          "artifact_zip_sha256": "60209ddf00101d48e68b29839327a669a0fa9c6392deb784644cc0ff4d0fe664",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13720226808"
+        }
+      ]
+    },
+    {
+      "cohort": "copy-matrix",
+      "run_id": 42720943882,
+      "run_attempt": 1,
+      "client": "macos-arm64",
+      "server": "macos-arm64",
+      "case": "get",
+      "transport_compression_requested": false,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 65536,
+      "wall_ns": 30512323166,
+      "whole_operation_seconds": 30.512323166,
+      "whole_operation_application_bytes_per_second": 2147.85349655142,
+      "sources": [
+        {
+          "role": "macos-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/5",
+          "member_sha256": "d8d422d64fe6360176da0825dfbee7e921395ced7d4d0529d4af32675f57abb7",
+          "artifact_id": 13721300129,
+          "artifact_zip_sha256": "7944c3571f0afc2170f9473dca1a7614440c538eecfc6619e954af6ef5f4a394",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13721300129"
+        },
+        {
+          "role": "macos-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/5",
+          "member_sha256": "2231bac01ac741adc0826ab579b19a527bf8f89a33e4f070141fdfd016cf2edf",
+          "artifact_id": 13719957273,
+          "artifact_zip_sha256": "e852feb57b435b50bab8c9ea2d47684100bb64daa231d850ce4e78863ea1dae9",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13719957273"
+        }
+      ]
+    },
+    {
+      "cohort": "copy-matrix",
+      "run_id": 42720943882,
+      "run_attempt": 1,
+      "client": "macos-arm64",
+      "server": "macos-arm64",
+      "case": "put",
+      "transport_compression_requested": true,
+      "verified_payload_basis": "verified file content bytes",
+      "verified_payload_bytes": 65536,
+      "wall_ns": 48846116042,
+      "whole_operation_seconds": 48.846116042,
+      "whole_operation_application_bytes_per_second": 1341.682928150302,
+      "sources": [
+        {
+          "role": "macos-arm64",
+          "member": "client-result.json",
+          "json_pointer": "/pairs/4",
+          "member_sha256": "d8d422d64fe6360176da0825dfbee7e921395ced7d4d0529d4af32675f57abb7",
+          "artifact_id": 13721300129,
+          "artifact_zip_sha256": "7944c3571f0afc2170f9473dca1a7614440c538eecfc6619e954af6ef5f4a394",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13721300129"
+        },
+        {
+          "role": "macos-arm64",
+          "member": "server-result.json",
+          "json_pointer": "/receipts/4",
+          "member_sha256": "2231bac01ac741adc0826ab579b19a527bf8f89a33e4f070141fdfd016cf2edf",
+          "artifact_id": 13719957273,
+          "artifact_zip_sha256": "e852feb57b435b50bab8c9ea2d47684100bb64daa231d850ce4e78863ea1dae9",
+          "artifact_url": "https://github.com/Epiphytic/marmish/actions/runs/42720943882/artifacts/13719957273"
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "Three base cohorts only. All edge/interruption observations, native162 replay, finite12 and release qualification are outside this report.",
+    "One observation per directed case; no pooling of platforms, percentiles, variance estimate, performance threshold or controlled compression comparison.",
+    "Verified application/file bytes divided by whole installed-operation wall time; not network bandwidth, RTT, steady-state throughput, transfer-only speed or isolated command latency.",
+    "Wall clocks include the installed operation and local terminal/evidence collection; fixture setup and later receipt verification are outside that timer.",
+    "Stream numerator sums verified stdin/stdout/stderr; rsync and copy use verified file-content bytes, excluding protocol/MLS/Nostr/relay overhead.",
+    "Compression requests are source-defined asymmetric fixture settings. Copy validates a CLI-reported transport codec; no negotiated-codec/wire-byte measurement is inferred for stream or rsync; rsync -z was not requested.",
+    "No C2 observations are imported. C2 remains failed/not qualified with its historical failure preserved.",
+    "Raw source records are linked through admitted workflow artifacts and member hashes; identities, addresses, nonce/session/group/stream fields and private paths are intentionally omitted."
+  ],
+  "excluded_runs": [
+    {
+      "run_id": 42722743507,
+      "run_attempt": 1,
+      "cohort": "edge-copy",
+      "status": "FAILED_NOT_QUALIFIED"
+    },
+    {
+      "run_id": 42724923331,
+      "run_attempt": 1,
+      "cohort": "edge-copy",
+      "status": "FAILED_NOT_QUALIFIED"
+    }
+  ],
+  "scope": "Three base cohorts only; excludes all edge cohorts, interruption PUT/GET, native162 replay and finite12.",
+  "excluded_cohorts": [
+    "edge-stream",
+    "edge-rsync",
+    "edge-copy",
+    "copy-interrupt-put",
+    "copy-interrupt-get"
+  ]
+}
