@@ -57,8 +57,22 @@ export function supervisorDiagnostic(diagnostic = line => console.error(line), l
       if (emitted) return;
       emitted = true;
       try {
+        const selectedCategory = category(error);
+        const detail = {};
+        if (selectedCategory === 'artifact_http') {
+          try {
+            const observation = error?.artifactHttp;
+            const status = observation?.status;
+            const target = observation?.target;
+            if (Number.isInteger(status) && status >= 100 && status <= 599
+              && (target === 'api' || target === 'blob')) {
+              detail.http_status = status;
+              detail.request_target = target;
+            }
+          } catch { /* Invalid metadata must not suppress the original failure diagnostic. */ }
+        }
         const line = PREFIX + JSON.stringify({schema: 1, component: 'supervisor', event: 'failed',
-          stage, category: category(error), role: selectedRole, peer_role: peerRole});
+          stage, category: selectedCategory, role: selectedRole, peer_role: peerRole, ...detail});
         if (Buffer.byteLength(line + '\n') <= 1024) {
           Promise.resolve(diagnostic(line)).catch(() => {});
         }

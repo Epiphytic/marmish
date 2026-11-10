@@ -173,7 +173,13 @@ test('only network/ratelimit failures retry; malformed responses fail immediatel
   const limited = make(async () => new Response(null, {status: 429, headers: {'retry-after': '300'}}));
   await assert.rejects(limited.list(deadline), error => error.message === 'artifact_retry' && error.retryAfter === 300_000);
   assert.equal(limited.used, 1);
-  await assert.rejects(make(async () => new Response(null, {status: 403})).list(deadline), /artifact_http/);
+  const forbidden = make(async () => new Response(null, {status: 403}));
+  await assert.rejects(forbidden.list(deadline), error => {
+    assert.equal(error.message, 'artifact_http');
+    assert.deepEqual(error.artifactHttp, {status: 403, target: 'api'});
+    return true;
+  });
+  assert.equal(forbidden.used, 1);
   await assert.rejects(make(async () => new Response(null)).list(deadline), /response_body_missing/);
   const invalid = make(async () => new Response(null, {status: 302, headers: {location: 'not a url'}}));
   const entry = {name: 'expected', id: 42, expired: false, size_in_bytes: one.length, digest: `sha256:${digest(one)}`};
@@ -477,4 +483,25 @@ test('an aborted poll suppresses the mismatch observation', async t => {
   assert.equal(fixture.state.lists, 1);
   assert.equal(fixture.state.downloads, 0);
   assert.equal(fixture.state.diagnostics.filter(event => event.event === 'artifact_list_observation').length, 0);
+});
+
+
+test('terminal HTTP errors retain only exact status and trusted request class without retry', async t => {
+  const dir = await temporary(t);
+  for (const api of [true, false]) for (const status of [204, 304, 401, 403, 404, 410, 422, 599]) {
+    let calls = 0;
+    const transport = new ArtifactTransport({context, token: 'private-token',
+      budgetFile: path.join(dir, `budget-${api}-${status}`), fetcher: async () => {
+        calls++; return new Response(null, {status, statusText: 'PRIVATE response text'});
+      }});
+    await assert.rejects(transport.request('https://api.github.com/private?secret', api, 1024,
+      Date.now() + 30_000), error => {
+      assert.equal(error.message, 'artifact_http');
+      assert.deepEqual(error.artifactHttp, {status, target: api ? 'api' : 'blob'});
+      assert.deepEqual(Object.keys(error).sort(), ['artifactHttp']);
+      return true;
+    });
+    assert.equal(calls, 1);
+    assert.equal(transport.used, api ? 1 : null);
+  }
 });

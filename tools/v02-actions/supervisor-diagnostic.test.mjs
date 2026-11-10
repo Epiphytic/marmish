@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {EventEmitter} from 'node:events';
 import {supervise} from './supervise.mjs';
+import {ArtifactTransport, artifactName, binding} from './transport.mjs';
 
 const context = {schema: 1, repository: 'Epiphytic/marmish', run_id: '12', run_attempt: '2',
   source_commit: 'a'.repeat(40), cohort: 'matrix', created_at: 1000, expires_at: 3220};
@@ -62,8 +63,14 @@ function publicDiagnostic(line) {
   assert.ok(Buffer.byteLength(line + '\n') <= 1024);
   assert.ok(!line.includes(SECRET));
   const value = JSON.parse(line.slice(PREFIX.length));
-  assert.deepEqual(Object.keys(value).sort(),
-    ['category', 'component', 'event', 'peer_role', 'role', 'schema', 'stage']);
+  const keys = ['category', 'component', 'event', 'peer_role', 'role', 'schema', 'stage'];
+  if (Object.hasOwn(value, 'http_status') || Object.hasOwn(value, 'request_target')) {
+    assert.equal(value.category, 'artifact_http');
+    assert.ok(Number.isInteger(value.http_status) && value.http_status >= 100 && value.http_status <= 599);
+    assert.ok(['api', 'blob'].includes(value.request_target));
+    keys.push('http_status', 'request_target');
+  }
+  assert.deepEqual(Object.keys(value).sort(), keys.sort());
   assert.equal(value.schema, 1);
   assert.equal(value.component, 'supervisor');
   assert.equal(value.event, 'failed');
@@ -364,4 +371,93 @@ test('list observation rejects hostile getters and non-whitelisted descriptors w
     diagnostic.listObservation({artifactList: {reason: 'count_mismatch', total_count: 3, artifact_count: 2, ...change}});
   }
   assert.deepEqual(captured, []);
+});
+
+
+test('HTTP failure detail has a closed paired schema and rejects malformed or hostile metadata', () => {
+  const throwing = new Proxy({}, {get() { throw new Error(SECRET); }});
+  const metadata = [null, undefined, SECRET, {}, {status: 404}, {target: 'api'},
+    ...[99, 600, 404.5, NaN, Infinity, '404', SECRET].map(status => ({status, target: 'api'})),
+    ...[null, 0, {}, SECRET].map(target => ({status: 404, target})), throwing];
+  for (const observation of metadata) {
+    const captured = [];
+    const error = Object.assign(new Error('artifact_http'), {artifactHttp: observation});
+    supervisorDiagnostic(line => captured.push(line)).failed(error);
+    assert.equal(captured.length, 1);
+    assert.equal(Object.hasOwn(publicDiagnostic(captured[0]), 'http_status'), false);
+  }
+  const captured = [];
+  supervisorDiagnostic(line => captured.push(line)).failed(Object.defineProperty(
+    new Error('artifact_http'), 'artifactHttp', {get() { throw new Error(SECRET); }}));
+  assert.equal(captured.length, 1);
+  assert.equal(Object.hasOwn(publicDiagnostic(captured[0]), 'http_status'), false);
+  for (const target of ['api', 'blob']) for (const status of [100, 204, 304, 404, 599]) {
+    const captured = [];
+    const error = Object.assign(new Error('artifact_http'),
+      {artifactHttp: {status, target, secret: SECRET, toJSON() { throw new Error(SECRET); }}});
+    supervisorDiagnostic(line => captured.push(line)).failed(error);
+    const result = publicDiagnostic(captured[0]);
+    assert.equal(result.http_status, status);
+    assert.equal(result.request_target, target);
+  }
+});
+
+test('HTTP metadata and its values are read once and never touched for other categories', () => {
+  let metadataReads = 0, statusReads = 0, targetReads = 0;
+  const observation = {
+    get status() { return ++statusReads === 1 ? 404 : SECRET; },
+    get target() { return ++targetReads === 1 ? 'blob' : SECRET; },
+  };
+  const error = Object.defineProperty(new Error('artifact_http'), 'artifactHttp',
+    {get() { return ++metadataReads === 1 ? observation : SECRET; }});
+  const captured = [];
+  const diagnostic = supervisorDiagnostic(line => captured.push(line));
+  diagnostic.failed(error); diagnostic.failed(error);
+  assert.deepEqual([metadataReads, statusReads, targetReads], [1, 1, 1]);
+  assert.equal(captured.length, 1);
+  assert.equal(publicDiagnostic(captured[0]).http_status, 404);
+  assert.equal(publicDiagnostic(captured[0]).request_target, 'blob');
+  for (const category of ['artifact_budget', SECRET]) {
+    let reads = 0;
+    const lines = [];
+    supervisorDiagnostic(line => lines.push(line)).failed(Object.defineProperty(
+      new Error(category), 'artifactHttp', {get() { reads++; throw new Error('must not read'); }}));
+    assert.equal(reads, 0);
+    assert.equal(Object.hasOwn(publicDiagnostic(lines[0]), 'http_status'), false);
+  }
+});
+
+test('actual HTTP download failure survives supervisor polling and emits detail before child cleanup', async t => {
+  for (const target of ['api', 'blob']) {
+    const directory = await temporary(t);
+    const created = Math.floor(Date.now() / 1000);
+    const ctx = {...context, created_at: created, expires_at: created + 2220};
+    const entry = {name: artifactName(binding(ctx, 'linux-amd64'), 'linux-amd64', 'server-ready'),
+      id: 42, expired: false, size_in_bytes: 100, digest: `sha256:${'b'.repeat(64)}`};
+    let requests = 0;
+    const transport = new ArtifactTransport({context: ctx, token: SECRET,
+      budgetFile: path.join(directory, 'budget'), fetcher: async () => {
+        requests++;
+        if (requests === 1) return new Response(JSON.stringify({total_count: 1, artifacts: [entry]}));
+        if (requests === 2 && target === 'blob') return new Response(null, {status: 302,
+          headers: {location: 'https://x.blob.core.windows.net/private?secret'}});
+        return new Response(null, {status: 404});
+      }});
+    const {child, signals} = childFixture();
+    const captured = [];
+    await assert.rejects(supervise({options: options(directory, {jobDeadline: created + 3300}),
+      context: ctx, now: Date.now, artifact: {}, transport, spawnChild: () => child, delay: immediate,
+      diagnostic: line => { assert.deepEqual(signals, []); captured.push(line); }}), error => {
+      assert.equal(error.message, 'artifact_http');
+      assert.deepEqual(error.artifactHttp, {status: 404, target});
+      return true;
+    });
+    assert.deepEqual(signals, ['SIGTERM']);
+    assert.equal(requests, target === 'api' ? 2 : 3);
+    assert.equal(transport.used, 2);
+    assert.equal(captured.length, 1);
+    assert.deepEqual(publicDiagnostic(captured[0]), {schema: 1, component: 'supervisor', event: 'failed',
+      stage: 'remote_download', category: 'artifact_http', role: 'linux-amd64', peer_role: 'linux-amd64',
+      http_status: 404, request_target: target});
+  }
 });

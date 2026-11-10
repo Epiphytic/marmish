@@ -208,7 +208,11 @@ export class ArtifactTransport {
       await response.body?.cancel();
       return {redirect: response.headers.get('location')};
     }
-    requireThat(response.status === 200, 'artifact_http');
+    if (response.status !== 200) {
+      const error = new Error('artifact_http');
+      error.artifactHttp = {status: response.status, target: api ? 'api' : 'blob'};
+      throw error;
+    }
     return {bytes: await body(response, limit)};
   }
   async list(deadline, signal) {
