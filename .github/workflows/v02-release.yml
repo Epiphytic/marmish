@@ -27,6 +27,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: never
   MARMISH_NATIVE_TOOLCHAIN: '1'
+  MARMISH_CANDIDATE_LAYOUT: split-v1
 
 jobs:
   release-eligibility:
@@ -41,6 +42,8 @@ jobs:
           ref: ${{ inputs.source_commit || github.sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Validate native workflow trust policy
+        run: PYTHONPATH=tools python3 -m unittest test_marmish_release_automation_workflow
       - name: Validate explicit native version transition
         id: eligibility
         env:
@@ -60,6 +63,7 @@ jobs:
     if: needs.release-eligibility.outputs.decision == 'build'
     strategy:
       fail-fast: false
+      max-parallel: 3
       matrix:
         include:
           - runner: ubuntu-24.04
@@ -150,6 +154,32 @@ jobs:
         run: |
           echo 'MACOSX_DEPLOYMENT_TARGET=15.0' >> "$GITHUB_ENV"
           echo 'RUST_TEST_THREADS=1' >> "$GITHUB_ENV"
+      - name: Restore isolated dependency cache
+        id: rust-cache
+        if: ${{ !inputs.caveated_release }}
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: marmish-v02-release-split-v1
+          # Bump the baseline suffix when supported deployment minima change.
+          key: package-${{ matrix.runner }}-${{ matrix.target }}-macos15-glibc239
+          cache-all-crates: false
+          cache-workspace-crates: false
+          cache-bin: false
+          cache-on-failure: false
+          cache-targets: true
+          save-if: ${{ github.ref == 'refs/heads/master' && !inputs.caveated_release }}
+          env-vars: MACOSX_DEPLOYMENT_TARGET SDKROOT ImageOS ImageVersion
+      - name: Record dependency cache context
+        if: ${{ !inputs.caveated_release }}
+        env:
+          CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+          BUILD_LANE: product
+        run: |
+          case "$CACHE_HIT" in true|false|'') ;; *) exit 1 ;; esac
+          printf 'marmish CI cache: lane=%s exact_hit=%s incremental=%s\n' \
+            "$BUILD_LANE" "${CACHE_HIT:-false}" "$CARGO_INCREMENTAL"
+          printf '### Native CI: %s\n\nDependency cache exact hit: %s. Incremental: %s.\n\n' \
+            "$BUILD_LANE" "${CACHE_HIT:-false}" "$CARGO_INCREMENTAL" >> "$GITHUB_STEP_SUMMARY"
       - name: Verify native components
         if: ${{ !inputs.caveated_release }}
         run: |
@@ -164,13 +194,14 @@ jobs:
                 if (++n <= 512) print
               }'
           fi
-          cargo test --locked --no-fail-fast -p marmish-engine -p marmish-native -p marmish-vault
-          cargo clippy --locked -p marmish-native -p marmish-engine --all-targets -- -D warnings
+          sh scripts/v02-ci-timed.sh default-tests cargo test --locked --no-fail-fast -p marmish-engine -p marmish-native -p marmish-vault
+          sh scripts/v02-ci-timed.sh default-clippy cargo clippy --locked -p marmish-native -p marmish-engine --all-targets -- -D warnings
       - name: Build final native executables
         run: |
           git diff --quiet HEAD --
-          cargo build --locked --release -p marmish-native --bins
+          sh scripts/v02-ci-timed.sh product-release cargo build --locked --release -p marmish-native --bins
           git diff --quiet HEAD --
+          test "$(git rev-parse HEAD)" = "$MARMISH_BUILD_COMMIT"
       - name: Ad hoc sign final macOS executables before hashing
         if: runner.os == 'macOS'
         run: |
@@ -201,30 +232,130 @@ jobs:
           target/release/marmish-release-tool package --input-dir "$RUNNER_TEMP/package-input" \
             --output-dir "$RUNNER_TEMP/native-assets" --licenses "$RUNNER_TEMP/THIRD-PARTY-LICENSES" \
             --signing "$SIGNING" --minimum "$MINIMUM"
-      - name: Build isolated installed-test tools without changing product assets
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: v02-candidate-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-assets/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve host render tool separately (never an install asset)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: v02-render-tool-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/release/marmish-release-tool
+          if-no-files-found: error
+          retention-days: 14
+      - name: Record dependency build sizes
+        if: ${{ always() && !inputs.caveated_release }}
+        shell: bash
+        run: |
+          for name in target registry git; do
+            case "$name" in
+              target) directory=target ;;
+              *) directory="${CARGO_HOME:-$HOME/.cargo}/$name" ;;
+            esac
+            if [ -d "$directory" ]; then
+              size_kib=$(du -sk "$directory" | cut -f 1)
+              printf 'marmish CI disk: directory=%s size_kib=%s\n' "$name" "$size_kib"
+              printf -- '- Build storage %s: %s KiB before cache pruning.\n' "$name" "$size_kib" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+  installed-tools:
+    needs: release-eligibility
+    if: needs.release-eligibility.outputs.decision == 'build' && !inputs.caveated_release
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      MARMISH_BUILD_COMMIT: ${{ inputs.source_commit || github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_commit || github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify immutable source and native target
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$MARMISH_BUILD_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$MARMISH_BUILD_COMMIT"
+          git merge-base --is-ancestor "$MARMISH_BUILD_COMMIT" refs/remotes/origin/master
+          for source_path in crates/marmish-native Cargo.lock tools/v02-actions .github/workflows/v02-installed.yml; do
+            git cat-file -e "$MARMISH_BUILD_COMMIT:$source_path"
+          done
+          git diff --quiet HEAD --
+          case "$EXPECTED_TARGET:$(uname -s):$(uname -m)" in
+            x86_64-unknown-linux-gnu:Linux:x86_64|aarch64-unknown-linux-gnu:Linux:aarch64|aarch64-apple-darwin:Darwin:arm64) ;;
+            *) exit 1 ;;
+          esac
+      - uses: dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920 # 1.97.1
+        with:
+          toolchain: 1.97.1
+          components: clippy
+      - name: Set qualified macOS deployment minimum
+        if: runner.os == 'macOS'
+        run: |
+          echo 'MACOSX_DEPLOYMENT_TARGET=15.0' >> "$GITHUB_ENV"
+          echo 'RUST_TEST_THREADS=1' >> "$GITHUB_ENV"
+      - name: Restore isolated dependency cache
+        id: rust-cache
         if: ${{ !inputs.caveated_release }}
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: marmish-v02-release-split-v1
+          # Bump the baseline suffix when supported deployment minima change.
+          key: installed-tools-${{ matrix.runner }}-${{ matrix.target }}-macos15-glibc239
+          cache-all-crates: false
+          cache-workspace-crates: false
+          cache-bin: false
+          cache-on-failure: false
+          cache-targets: true
+          save-if: ${{ github.ref == 'refs/heads/master' && !inputs.caveated_release }}
+          env-vars: MACOSX_DEPLOYMENT_TARGET SDKROOT ImageOS ImageVersion
+      - name: Record dependency cache context
+        if: ${{ !inputs.caveated_release }}
+        env:
+          CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+          BUILD_LANE: installed-tools
+        run: |
+          case "$CACHE_HIT" in true|false|'') ;; *) exit 1 ;; esac
+          printf 'marmish CI cache: lane=%s exact_hit=%s incremental=%s\n' \
+            "$BUILD_LANE" "${CACHE_HIT:-false}" "$CARGO_INCREMENTAL"
+          printf '### Native CI: %s\n\nDependency cache exact hit: %s. Incremental: %s.\n\n' \
+            "$BUILD_LANE" "${CACHE_HIT:-false}" "$CARGO_INCREMENTAL" >> "$GITHUB_STEP_SUMMARY"
+      - name: Build isolated installed-test tools
         env:
           EXPECTED_TARGET: ${{ matrix.target }}
         shell: bash
         run: |
           set -euo pipefail
           git diff --quiet HEAD --
-          shasum -a 256 "$RUNNER_TEMP"/native-assets/* > "$RUNNER_TEMP/product-before.sha256"
-          export CARGO_TARGET_DIR="$RUNNER_TEMP/installed-tools-target"
-          cargo test --locked -p marmish-native --features installed-checks
-          cargo clippy --locked -p marmish-native --features installed-checks --all-targets -- -D warnings
-          cargo build --locked --release -p marmish-native --features installed-checks \
-            --bin marmish-installed-check --bin marmish-installed-fixture
+          sh scripts/v02-ci-timed.sh installed-tests cargo test --locked -p marmish-native --features installed-checks
+          sh scripts/v02-ci-timed.sh installed-clippy cargo clippy --locked -p marmish-native --features installed-checks --all-targets -- -D warnings
+          sh scripts/v02-ci-timed.sh installed-release cargo build --locked --release -p marmish-native --features installed-checks \
+            --bin marmish-installed-check --bin marmish-installed-fixture --bin marmish-release-tool
           mkdir "$RUNNER_TEMP/tooling-input"
           for binary in marmish-installed-check marmish-installed-fixture; do
-            cp "$CARGO_TARGET_DIR/release/$binary" "$RUNNER_TEMP/tooling-input/$binary"
+            cp "target/release/$binary" "$RUNNER_TEMP/tooling-input/$binary"
             if [ "$EXPECTED_TARGET" = aarch64-apple-darwin ]; then
               codesign --force --sign - "$RUNNER_TEMP/tooling-input/$binary"
               codesign --verify --strict "$RUNNER_TEMP/tooling-input/$binary"
             fi
           done
-          shasum -a 256 "$RUNNER_TEMP"/native-assets/* > "$RUNNER_TEMP/product-after.sha256"
-          cmp "$RUNNER_TEMP/product-before.sha256" "$RUNNER_TEMP/product-after.sha256"
           git diff --quiet HEAD --
           test "$(git rev-parse HEAD)" = "$MARMISH_BUILD_COMMIT"
           harness_sha256=$(git ls-tree -r "$MARMISH_BUILD_COMMIT" -- \
@@ -242,29 +373,30 @@ jobs:
             --input-dir "$RUNNER_TEMP/tooling-input" --output-dir "$RUNNER_TEMP/installed-tools" \
             --harness-sha256 "$harness_sha256"
       - name: Preserve pinned installed-test tools separately
-        if: ${{ !inputs.caveated_release }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: v02-installed-tools-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/installed-tools/*
           if-no-files-found: error
           retention-days: 14
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: v02-candidate-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/native-assets/*
-          if-no-files-found: error
-          retention-days: 14
-      - name: Preserve host render tool separately (never an install asset)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: v02-render-tool-${{ github.run_id }}-${{ github.run_attempt }}
-          path: target/release/marmish-release-tool
-          if-no-files-found: error
-          retention-days: 14
+      - name: Record dependency build sizes
+        if: ${{ always() && !inputs.caveated_release }}
+        shell: bash
+        run: |
+          for name in target registry git; do
+            case "$name" in
+              target) directory=target ;;
+              *) directory="${CARGO_HOME:-$HOME/.cargo}/$name" ;;
+            esac
+            if [ -d "$directory" ]; then
+              size_kib=$(du -sk "$directory" | cut -f 1)
+              printf 'marmish CI disk: directory=%s size_kib=%s\n' "$name" "$size_kib"
+              printf -- '- Build storage %s: %s KiB before cache pruning.\n' "$name" "$size_kib" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
   render:
-    needs: package
+    needs: [package, installed-tools]
+    if: ${{ !cancelled() && needs.package.result == 'success' && (needs.installed-tools.result == 'success' || (inputs.caveated_release && needs.installed-tools.result == 'skipped')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

@@ -102,7 +102,7 @@ export async function guard(env, deps={}) {
     checkRun(r,{repository:ORIGINAL.repository,run_id:ORIGINAL.candidate,run_attempt:'1',source:ORIGINAL.source});
     runIdentity(r,ORIGINAL.candidate,'1','.github/workflows/v02-release.yml','success');
   }
-  const candidateJobs=await jobs(t,ORIGINAL.candidate,deadline);checkJobs(candidateJobs);
+  const candidateJobs=await jobs(t,ORIGINAL.candidate,deadline);checkJobs(candidateJobs, {layout:'legacy-v1',skip:false});
   need(new Set(candidateJobs.map(j=>j.id)).size===11 && candidateJobs.every(j=>Number.isSafeInteger(j.id)
     && String(j.run_id)===ORIGINAL.candidate && String(j.run_attempt)==='1' && j.head_sha===ORIGINAL.source),'replay_candidate_jobs');
   const candidates=await api(t,`${ORIGINAL.candidate}/artifacts?per_page=100`,deadline);

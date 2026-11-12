@@ -7,6 +7,13 @@ Radicle publication from GitHub Actions: binaries remain GitHub release assets;
 source/tag mirroring and Iris synchronization remain manual agent duties. CI gets
 no Radicle credentials, commands, release assets or replication gate.
 
+The [native CI optimization amendment](native-ci-optimization.md) splits ordinary
+candidate builds into independent package and installed-tools matrices. Its
+source-bound `split-v1` layout requires fourteen successful jobs; legacy sources
+retain their eleven-job inventory, including fixed historical replay. Both
+layouts retain the same fifteen artifacts and qualification report contracts.
+The amendment does not enable the held publisher or authorize a new release.
+
 ## Phases and exit criteria
 
 1. Finish and publish the diagnostic-only ancestor increment while the native

@@ -55,6 +55,20 @@ then passed all five jobs and all nine directed platform pairings. See the
 [CI validation and timing measurements](validation/ci-report-gather.md). This
 completes the CI increment, not the remaining release qualification cohorts.
 
+The [native CI optimization](phases/native-ci-optimization.md) separates default
+production and installed-feature build/test lanes onto independent hosted VMs,
+bounded to six build jobs including two macOS jobs. Dependency-only caches have
+separate lane/target keys; all tests, strict Clippy and package/installer/provider
+checks still execute. Candidate inspection selects exact legacy eleven-job or
+new fourteen-job inventories from the authenticated source workflow; historical
+replay explicitly retains its legacy contract. Hosted cold/warm measurements and
+cross-source cache/stamping validation are pending; see [capacity and baseline
+evidence](validation/native-ci-optimization.md). This changes CI, not runtime
+behavior, public installer pins or release qualification requirements.
+
+Candidate eligibility also runs the stdlib workflow trust-policy tests before
+version evaluation; drift in the native or provider workflow can fail this gate.
+
 Beads `marmish-d97` tracks the [reviewed patch plan](phases/v0.3.1-release.md).
 The native package version changes to 0.3.1; there is no protocol or stored
 format change. The patch also includes the bounded live cleanup correction

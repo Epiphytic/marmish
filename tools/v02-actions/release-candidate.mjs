@@ -20,30 +20,60 @@ export function expectedArtifacts(run, attempt) {
   const suffix = `${run}-${attempt}`;
   return [`v02-eligibility-${suffix}`, ...TARGETS.flatMap(t => [`v02-candidate-${t}-${suffix}`, `v02-installed-tools-${t}-${suffix}`, `v02-quickstart-${t}-${suffix}`, `v02-provider-${t}-${suffix}`]), `v02-render-tool-${suffix}`, `v02-pinned-bootstrap-${suffix}`];
 }
-export function checkJobs(jobs, skip = false) {
+const CANDIDATE_WORKFLOW = '.github/workflows/v02-release.yml';
+const WORKFLOW_LIMIT = 256 * 1024;
+const LAYOUT_MARKER = 'MARMISH_CANDIDATE_LAYOUT';
+export async function candidateLayout(source, git) {
+  need(HEX40.test(source), 'invalid_candidate_layout');
+  const entry = await git(['ls-tree', source, '--', CANDIDATE_WORKFLOW], {maxBuffer: 1024});
+  const match = /^100644 blob ([0-9a-f]{40})\t\.github\/workflows\/v02-release\.yml\n?$/.exec(entry);
+  need(match && match[0] === entry, 'invalid_candidate_layout');
+  const sizeText = await git(['cat-file', '-s', match[1]], {maxBuffer: 128});
+  need(/^[1-9][0-9]*\n?$/.test(sizeText), 'invalid_candidate_layout');
+  const size = Number(sizeText.trim());
+  need(Number.isSafeInteger(size) && size <= WORKFLOW_LIMIT
+    && (sizeText === String(size) || sizeText === `${size}\n`), 'invalid_candidate_layout');
+  const text = await git(['show', `${source}:${CANDIDATE_WORKFLOW}`], {maxBuffer: WORKFLOW_LIMIT});
+  need(typeof text === 'string' && Buffer.byteLength(text) === size
+    && !text.includes('\uFEFF') && !text.includes('\r'), 'invalid_candidate_layout');
+  const count = text.split(LAYOUT_MARKER).length - 1;
+  if (count === 0) return 'legacy-v1';
+  need(count === 1, 'invalid_candidate_layout');
+  const lines = text.split('\n'), environments = lines.flatMap((line, index) => line === 'env:' ? [index] : []);
+  need(environments.length === 1, 'invalid_candidate_layout');
+  const start = environments[0];
+  const next = lines.findIndex((line, index) => index > start && /^[^\s]/.test(line));
+  const end = next === -1 ? lines.length : next;
+  const marker = lines.findIndex(line => line.includes(LAYOUT_MARKER));
+  need(marker > start && marker < end && lines[marker] === `  ${LAYOUT_MARKER}: split-v1`, 'invalid_candidate_layout');
+  return 'split-v1';
+}
+export function checkJobs(jobs, options) {
+  need(options && ['legacy-v1', 'split-v1'].includes(options.layout) && typeof options.skip === 'boolean', 'invalid_candidate_layout');
   need(Array.isArray(jobs), 'invalid_jobs');
+  const {layout, skip} = options;
   const runners = ['ubuntu-24.04', 'ubuntu-24.04-arm', 'macos-15'];
   const names = ['release-eligibility', 'render', ...TARGETS.flatMap((t, i) => [
     `package (${runners[i]}, ${t}, ${i === 2 ? 'adhoc, macos=15.0' : 'none, glibc=2.39'})`,
+    ...(layout === 'split-v1' ? [`installed-tools (${runners[i]}, ${t})`] : []),
     `install-quickstart (${runners[i]}, ${t})`, `provider-qualification (${runners[i]}, ${t})`])];
   if (skip) {
-    checkSkippedJobs(jobs, names);
+    checkSkippedJobs(jobs, names, layout);
     return;
   }
   need(jobs.length === names.length && names.every(name => {
     const selected = jobs.filter(j => j.name === name);
-    return selected.length === 1 && selected[0].status === 'completed'
-      && selected[0].conclusion === (skip && name !== 'release-eligibility' ? 'skipped' : 'success');
+    return selected.length === 1 && selected[0].status === 'completed' && selected[0].conclusion === 'success';
   }), 'candidate_jobs_incomplete');
 }
-function checkSkippedJobs(jobs, names) {
+function checkSkippedJobs(jobs, names, layout) {
   const eligibility = jobs.filter(job => job.name === 'release-eligibility');
   need(eligibility.length === 1 && eligibility[0].status === 'completed' && eligibility[0].conclusion === 'success'
     && new Set(jobs.map(job => job.name)).size === jobs.length, 'candidate_jobs_incomplete');
   const remaining = jobs.filter(job => job.name !== 'release-eligibility');
   need(remaining.every(job => job.status === 'completed' && job.conclusion === 'skipped'), 'candidate_jobs_incomplete');
   const expected = ['render'];
-  for (const category of ['package','install-quickstart','provider-qualification']) {
+  for (const category of ['package', ...(layout === 'split-v1' ? ['installed-tools'] : []), 'install-quickstart','provider-qualification']) {
     const expanded = names.filter(name => name.startsWith(`${category} (`));
     const actual = remaining.filter(job => job.name === category || expanded.includes(job.name));
     const collapsed = actual.length === 1 && actual[0].name === category;
@@ -148,7 +178,7 @@ export async function inspectCandidate(input, {api, git, transport, harnessDiges
   const jobsReply = await api(`${base}/actions/runs/${input.run_id}/attempts/${input.run_attempt}/jobs?per_page=100`);
   need(jobsReply.total_count === jobsReply.jobs?.length && jobsReply.total_count <= 100, 'jobs_bound');
   const skip = eligibility.decision === 'skip-by-design';
-  checkJobs(jobsReply.jobs, skip);
+  checkJobs(jobsReply.jobs, {layout: await candidateLayout(context.source, git), skip});
   if (skip) return {skip: true, reason: eligibility.reason};
   need(eligibility.decision === 'build', 'candidate_ineligible');
   const names = expectedArtifacts(input.run_id, input.run_attempt);
@@ -201,7 +231,7 @@ async function main(env) {
   need(env.GITHUB_REPOSITORY === REPOSITORY && HEX40.test(env.GITHUB_SHA ?? ''), 'invalid_publisher');
   const transport = new ArtifactTransport({context:{repository:REPOSITORY,run_id:env.CANDIDATE_RUN_ID},token:env.GH_TOKEN,budgetFile:path.join(env.RUNNER_TEMP,'release-api-budget.json')});
   const api = async route => { const r = await transport.request(`https://api.github.com${route}`,true,2*1024*1024,Date.now()+120000); need(r.bytes,'api_redirect'); return JSON.parse(r.bytes); };
-  const git = args => Promise.resolve(execFileSync('git',args,{env:childEnvironment(env),maxBuffer:2*1024*1024}).toString());
+  const git = (args, options = {}) => Promise.resolve(execFileSync('git',args,{env:childEnvironment(env),maxBuffer:options.maxBuffer ?? 2*1024*1024}).toString());
   const result = await inspectCandidate({run_id:env.CANDIDATE_RUN_ID,run_attempt:env.CANDIDATE_RUN_ATTEMPT,publisher_sha:env.GITHUB_SHA},{api,git,transport});
   if (process.argv[2] === 'verify') {
     need(!result.skip, 'unexpected_verify_skip');
