@@ -45,8 +45,15 @@ diagnostics retain a closed stage/category instead of hiding every error.
 Original streaming run 42885236657/1 passed its three platform jobs and failed
 before native rollup; its historical exception is unknown. Exact retained
 reports subsequently passed local collection and native validation (9/9 pairs).
-A separately identified hosted replay validates collection over those original
-executions; it does not relabel the failed run or claim new product tests.
+The [hosted replay 43173887015](https://github.com/Epiphytic/marmish/actions/runs/43173887015)
+passed collection and native validation over those original executions; it does
+not relabel the failed run or claim new product tests. At CI-only source
+`05bec8b`, [fresh candidate 43174030584](https://github.com/Epiphytic/marmish/actions/runs/43174030584)
+passed all eleven jobs and full fifteen-artifact inspection. The ordinary
+[streaming workflow 43182899512](https://github.com/Epiphytic/marmish/actions/runs/43182899512)
+then passed all five jobs and all nine directed platform pairings. See the
+[CI validation and timing measurements](validation/ci-report-gather.md). This
+completes the CI increment, not the remaining release qualification cohorts.
 
 Beads `marmish-d97` tracks the [reviewed patch plan](phases/v0.3.1-release.md).
 The native package version changes to 0.3.1; there is no protocol or stored

@@ -31,8 +31,12 @@ their original source/run/attempt identity. A targeted hosted rollup-only workfl
 must validate original run provenance, successful platform jobs and exact context
 and tooling bindings before executing verified tools. New coordinator success
 does not relabel the original failed workflow or claim new platform executions.
-No unrelated product qualification or full candidate rebuild is required for a
-CI-only change; product inputs must be shown unchanged explicitly.
+Product inputs must be shown unchanged explicitly. The original-report replay
+preserves the successful executions. Following the integrated review, the
+increment also requires one fresh source-bound candidate and one normal
+`stream-matrix` workflow to cover
+the ordinary entrypoint's strict source checks. This does not require restarting
+all eight product qualification cohorts.
 
 Obtain independent Claude design review before implementation and integrated
 code review afterward. Publish reviewed source to both configured mirrors, then
