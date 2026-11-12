@@ -214,7 +214,7 @@ export class ArtifactTransport {
       try { await response.body?.cancel(); }
       catch { signal?.throwIfAborted(); throw error; }
       signal?.throwIfAborted();
-      // Only supervisor-selected ZIP downloads opt in; list, rollup and blob stay hard.
+      // Only validated selected ZIP downloads opt in; list and blob stay hard.
       if (retryListedZip404 === true && api && response.status === 404) {
         const retry = new Error('artifact_retry');
         retry.retryAfter = 30_000; retry.artifactHttp = error.artifactHttp;

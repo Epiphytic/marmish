@@ -1,0 +1,28 @@
+name: Installed coordinator checks
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'tools/v02-actions/**'
+      - '.github/workflows/installed-coordinator.yml'
+  pull_request:
+    paths:
+      - 'tools/v02-actions/**'
+      - '.github/workflows/installed-coordinator.yml'
+permissions:
+  contents: read
+jobs:
+  coordinator:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tools/v02-actions
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install coordinator test dependencies
+        run: npm ci --ignore-scripts
+      - name: Test installed coordinator
+        run: npm test

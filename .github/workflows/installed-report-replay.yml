@@ -1,0 +1,60 @@
+name: Fixed original installed report replay
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: marmish-original-report-replay
+  cancel-in-progress: false
+jobs:
+  replay:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RESOLVE_ROOT: ${{ runner.temp }}/replay-resolve
+      CONTEXT: ${{ runner.temp }}/context/context.json
+      TOOLS_ROOT: ${{ runner.temp }}/tools
+      BOOTSTRAP_ROOT: ${{ runner.temp }}/bootstrap
+      RECORDS_ROOT: ${{ runner.temp }}/records
+      REPLAY_OUTPUT: ${{ runner.temp }}/rollup
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install locked coordinator dependencies
+        working-directory: tools/v02-actions
+        run: npm ci --ignore-scripts
+      - name: Validate complete coordinator unit suite
+        working-directory: tools/v02-actions
+        run: npm test
+      - name: Authenticate original immutable execution and context
+        run: |
+          mkdir -m 700 "$RESOLVE_ROOT" "$(dirname "$CONTEXT")" "$REPLAY_OUTPUT"
+          node tools/v02-actions/report-replay.mjs guard
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-installed-tools-x86_64-unknown-linux-gnu-42747078282-1
+          path: ${{ env.TOOLS_ROOT }}
+          run-id: '42747078282'
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v02-pinned-bootstrap-42747078282-1
+          path: ${{ env.BOOTSTRAP_ROOT }}
+          run-id: '42747078282'
+          github-token: ${{ github.token }}
+      - name: Verify original executable bytes and render original reports
+        run: node tools/v02-actions/report-replay.mjs render
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: installed-report-replay-42885236657-1-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.REPLAY_OUTPUT }}/provenance.json
+            ${{ env.REPLAY_OUTPUT }}/report/matrix-rollup.*
+          if-no-files-found: error
+          retention-days: 14

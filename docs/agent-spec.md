@@ -37,6 +37,17 @@ adds supervisor-only bounded retries for that narrow HTTP outcome; gather,
 listing and blob failures retain hard behavior. Fresh source-bound qualification
 is pending; this correction does not qualify the failed source or publish 0.3.1.
 
+The subsequent [CI report collection increment](phases/ci-report-gather.md)
+extends bounded transient retries to the rollup collector, within its original
+120-second deadline and persisted API budget. Listed ZIP API404 can retry;
+authentication, metadata, digest, archive and blob404 errors remain hard. CLI
+diagnostics retain a closed stage/category instead of hiding every error.
+Original streaming run 42885236657/1 passed its three platform jobs and failed
+before native rollup; its historical exception is unknown. Exact retained
+reports subsequently passed local collection and native validation (9/9 pairs).
+A separately identified hosted replay validates collection over those original
+executions; it does not relabel the failed run or claim new product tests.
+
 Beads `marmish-d97` tracks the [reviewed patch plan](phases/v0.3.1-release.md).
 The native package version changes to 0.3.1; there is no protocol or stored
 format change. The patch also includes the bounded live cleanup correction

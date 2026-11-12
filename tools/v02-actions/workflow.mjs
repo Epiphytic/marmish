@@ -6,6 +6,7 @@ import {pathToFileURL} from 'node:url';
 import {ArtifactTransport, ROLES, artifactName, binding, boundedFile, childEnvironment, digest, requireThat} from './transport.mjs';
 import {isStreamingCohort} from './streaming-policy.mjs';
 import {validVersion} from './release-schema.mjs';
+import {workflowDiagnostic} from './workflow-diagnostic.mjs';
 export const TARGETS = ['x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu', 'aarch64-apple-darwin'];
 const TOOLS = ['marmish-installed-check', 'marmish-installed-fixture'];
 export const SOURCE_PATHS = ['crates/marmish-native', 'crates/marmish-engine', 'crates/marmish-stream',
@@ -235,18 +236,38 @@ export async function verifyContext(env) {
   requireThat(digest(bootstrap) === context.bootstrap_sha256, 'bootstrap_digest');
   for (const name of TOOLS) probeTool(path.join(env.TOOLS_ROOT, name), context.source_commit, TARGETS[ROLES.indexOf(role)]);
 }
-export async function gather(env, injectedTransport) {
+async function gatherRetry(operation, deadline, now, delay) {
+  for (;;) {
+    requireThat(now() < deadline, 'artifact_deadline');
+    try {
+      const result = await operation();
+      requireThat(now() < deadline, 'artifact_deadline');
+      return result;
+    } catch (error) {
+      if (error.message !== 'artifact_retry') throw error;
+      const wait = Number.isFinite(error.retryAfter) ? Math.max(30_000, error.retryAfter) : 30_000;
+      const remaining = deadline - now();
+      requireThat(remaining > 0, 'artifact_deadline');
+      await delay(Math.min(wait, remaining));
+    }
+  }
+}
+export async function gather(env, injectedTransport, {
+  now = Date.now, delay = ms => new Promise(resolve => setTimeout(resolve, ms))
+} = {}) {
   const context = JSON.parse(await boundedFile(env.CONTEXT, 65536));
   requireThat(context.repository === env.GITHUB_REPOSITORY && context.source_commit === env.GITHUB_SHA
     && String(context.run_id) === env.GITHUB_RUN_ID && String(context.run_attempt) === env.GITHUB_RUN_ATTEMPT, 'rollup_context');
   const transport = injectedTransport ?? new ArtifactTransport({context, token: env.GH_TOKEN,
     budgetFile: path.join(env.RESOLVE_ROOT, 'api-budget.json')});
-  const deadline = Date.now() + 120_000;
-  const artifacts = await transport.list(deadline);
+  const deadline = now() + 120_000;
+  const artifacts = await gatherRetry(() => transport.list(deadline), deadline, now, delay);
   await fs.mkdir(env.RECORDS_ROOT, {mode: 0o700});
   for (const role of ROLES) {
     for (const kind of ['identity-ready', 'server-ready', 'client-result', 'server-result']) {
-      const bytes = await transport.download(artifacts, artifactName(binding(context, role), role, kind), `${kind}.json`, deadline);
+      const bytes = await gatherRetry(() => transport.download(artifacts,
+        artifactName(binding(context, role), role, kind), `${kind}.json`, deadline, undefined, true),
+      deadline, now, delay);
       // Missing records stay absent: the pinned native rollup emits a sanitized FAIL.
       if (!bytes) continue;
       await fs.writeFile(path.join(env.RECORDS_ROOT, `${role}-${kind}.json`), bytes, {flag: 'wx', mode: 0o600});
@@ -316,5 +337,5 @@ async function main() {
   else throw new Error('invalid_workflow_mode');
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(() => { console.error('marmish installed workflow: verification failed'); process.exitCode = 1; });
+  main().catch(error => { workflowDiagnostic(process.argv[2], error); process.exitCode = 1; });
 }

@@ -155,7 +155,8 @@ test('gather writes available exact role records and preserves missing records f
   assert.deepEqual(await fs.readdir(path.join(directory,'missing')),[]);
 });
 
-test('gather keeps listed ZIP API 404 hard through the real default transport', async t => {
+const gatherZip = Buffer.from('UEsDBBQAAAAAABIGY12MwfuJDAAAAAwAAAATAAAAaWRlbnRpdHktcmVhZHkuanNvbnsic2NoZW1hIjoxfVBLAQIUAxQAAAAAABIGY12MwfuJDAAAAAwAAAATAAAAAAAAAAAAAACAAQAAAABpZGVudGl0eS1yZWFkeS5qc29uUEsFBgAAAAABAAEAQQAAAD0AAAAAAA==', 'base64');
+async function gatherFixture(t) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'marmish-gather-'));
   t.after(() => fs.rm(directory, {recursive: true, force: true}));
   const context = {schema: 1, repository: 'Epiphytic/marmish', source_commit: source,
@@ -166,23 +167,144 @@ test('gather keeps listed ZIP API 404 hard through the real default transport', 
     GITHUB_RUN_ID: '12', GITHUB_RUN_ATTEMPT: '3', CONTEXT: file,
     RECORDS_ROOT: path.join(directory, 'records')};
   const entry = {name: 'v02-installed-12-3-aaaaaaaaaaaa-matrix-linux-amd64-identity-ready',
-    id: 42, expired: false, size_in_bytes: 100, digest: `sha256:${'b'.repeat(64)}`};
+    id: 42, expired: false, size_in_bytes: gatherZip.length, digest: `sha256:${digest(gatherZip)}`};
+  let clock = Date.now();
+  const sleeps = [];
+  const timing = {now: () => clock, delay: async ms => {sleeps.push(ms); clock += ms;}};
+  const transport = fetcher => new ArtifactTransport({context, token: 'private-sentinel',
+    budgetFile: path.join(directory, 'budget'), fetcher});
+  return {directory, context, e, entry, sleeps, timing, transport};
+}
+const artifactRetry = retryAfter => Object.assign(new Error('artifact_retry'), {retryAfter});
+
+test('gather retries listed ZIP API 404 then succeeds through real transport', async t => {
+  const f = await gatherFixture(t);
   let requests = 0;
-  const transport = new ArtifactTransport({context, token: 'private-sentinel',
-    budgetFile: path.join(directory, 'budget'), fetcher: async () => {
-      if (++requests === 1) return new Response(JSON.stringify({total_count: 1, artifacts: [entry]}));
-      return new Response(null, {status: 404});
-    }});
-  await assert.rejects(gather(e, transport), error => {
-    assert.equal(error.message, 'artifact_http');
-    assert.deepEqual(Object.keys(error), ['artifactHttp']);
-    assert.deepEqual(error.artifactHttp, {status: 404, target: 'api'});
-    return true;
+  const transport = f.transport(async (_url, options) => {
+    requests++;
+    if (requests === 1) return new Response(JSON.stringify({total_count: 1, artifacts: [f.entry]}));
+    if (requests === 2) return new Response(null, {status: 404});
+    if (requests === 3) return new Response(null, {status: 302,
+      headers: {location: 'https://test.blob.core.windows.net/archive'}});
+    assert.equal(options.headers.Authorization, undefined);
+    return new Response(gatherZip);
   });
-  assert.equal(requests, 2);
-  assert.equal(transport.used, 2);
-  assert.deepEqual(await fs.readdir(e.RECORDS_ROOT), []);
+  await gather(f.e, transport, f.timing);
+  assert.deepEqual(f.sleeps, [30_000]);
+  assert.equal(requests, 4);
+  assert.equal(transport.used, 3);
+  assert.equal(await fs.readFile(path.join(f.e.RECORDS_ROOT, 'linux-amd64-identity-ready.json'), 'utf8'), '{"schema":1}');
 });
+
+test('gather retries list and each record without replaying previous writes or extending deadline', async t => {
+  const f = await gatherFixture(t);
+  let lists = 0;
+  const calls = new Map(), deadlines = [];
+  const transport = {
+    list: async deadline => {deadlines.push(deadline); if (++lists === 1) throw artifactRetry(1); return [];},
+    download: async (_entries, name, _basename, deadline, signal, retry404) => {
+      deadlines.push(deadline); assert.equal(signal, undefined); assert.equal(retry404, true);
+      const count = (calls.get(name) ?? 0) + 1; calls.set(name, count);
+      if (name.endsWith('linux-amd64-server-ready') && count === 1) throw artifactRetry(45_000);
+      if (name.endsWith('linux-arm64-client-result') && count === 1) throw artifactRetry(30_000);
+      return Buffer.from('{}');
+    }
+  };
+  await gather(f.e, transport, f.timing);
+  assert.deepEqual(f.sleeps, [30_000, 45_000, 30_000]);
+  assert.equal(lists, 2);
+  assert.equal(new Set(deadlines).size, 1);
+  assert.equal(calls.get('v02-installed-12-3-aaaaaaaaaaaa-matrix-linux-amd64-identity-ready'), 1);
+  assert.equal((await fs.readdir(f.e.RECORDS_ROOT)).length, 12);
+});
+
+for (const stage of ['list', 'download']) test(`gather persistent ${stage} retry stops at original deadline`, async t => {
+  const f = await gatherFixture(t);
+  let attempts = 0;
+  const fail = async () => {attempts++; throw artifactRetry(30_000);};
+  const transport = {list: stage === 'list' ? fail : async () => [], download: fail};
+  await assert.rejects(gather(f.e, transport, f.timing), /artifact_deadline/);
+  assert.equal(attempts, 4);
+  assert.deepEqual(f.sleeps, [30_000, 30_000, 30_000, 30_000]);
+});
+
+test('gather honors longer Retry-After but caps sleep at remaining deadline', async t => {
+  const f = await gatherFixture(t);
+  let attempts = 0;
+  await assert.rejects(gather(f.e, {list: async () => {attempts++; throw artifactRetry(300_000);}}, f.timing), /artifact_deadline/);
+  assert.equal(attempts, 1);
+  assert.deepEqual(f.sleeps, [120_000]);
+});
+
+test('gather shares list and record deadline while preserving earlier exclusive writes', async t => {
+  const f = await gatherFixture(t);
+  let lists = 0, downloads = 0;
+  const transport = {
+    list: async () => {if (++lists === 1) throw artifactRetry(60_000); return [];},
+    download: async () => {
+      if (++downloads === 1) return Buffer.from('{"original":true}');
+      throw artifactRetry(90_000);
+    }
+  };
+  await assert.rejects(gather(f.e, transport, f.timing), /artifact_deadline/);
+  assert.deepEqual(f.sleeps, [60_000, 60_000]);
+  assert.equal(downloads, 2);
+  assert.deepEqual(await fs.readdir(f.e.RECORDS_ROOT), ['linux-amd64-identity-ready.json']);
+  assert.equal(await fs.readFile(path.join(f.e.RECORDS_ROOT, 'linux-amd64-identity-ready.json'), 'utf8'), '{"original":true}');
+  await assert.rejects(gather(f.e, {list: async () => []}, f.timing), {code: 'EEXIST'});
+});
+
+test('gather never retries unknown transport failures', async t => {
+  const f = await gatherFixture(t);
+  const original = new Error('unknown_failure');
+  await assert.rejects(gather(f.e, {list: async () => {throw original;}}, f.timing), error => error === original);
+  assert.deepEqual(f.sleeps, []);
+});
+
+test('gather preserves one real persisted API budget across retries', async t => {
+  const f = await gatherFixture(t);
+  await fs.writeFile(path.join(f.directory, 'budget'), JSON.stringify({used: 119}));
+  let requests = 0;
+  const transport = f.transport(async () => {requests++; return new Response(null, {status: 503});});
+  await assert.rejects(gather(f.e, transport, f.timing), /artifact_budget/);
+  assert.equal(requests, 1);
+  assert.equal(transport.used, 120);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(f.directory, 'budget'))), {used: 120});
+  assert.deepEqual(f.sleeps, [30_000]);
+});
+
+for (const failure of ['auth', 'list404', 'metadata', 'duplicate', 'digest', 'archive', 'blob404']) {
+  test(`gather keeps ${failure} terminal through real transport`, async t => {
+    const f = await gatherFixture(t);
+    let requests = 0;
+    const entry = {...f.entry};
+    let zip = gatherZip;
+    if (failure === 'metadata') entry.expired = true;
+    if (failure === 'digest') entry.digest = `sha256:${'0'.repeat(64)}`;
+    if (failure === 'archive') {zip = Buffer.from('invalid ZIP'); entry.digest = `sha256:${digest(zip)}`;}
+    const transport = f.transport(async () => {
+      requests++;
+      if (requests === 1) {
+        if (failure === 'auth') return new Response(null, {status: 401});
+        if (failure === 'list404') return new Response(null, {status: 404});
+        const artifacts = failure === 'duplicate' ? [entry, entry] : [entry];
+        return new Response(JSON.stringify({total_count: artifacts.length, artifacts}));
+      }
+      if (requests === 2) return new Response(null, {status: 302,
+        headers: {location: 'https://test.blob.core.windows.net/archive'}});
+      return failure === 'blob404' ? new Response(null, {status: 404}) : new Response(zip);
+    });
+    const expected = {auth: 'artifact_http', list404: 'artifact_http', metadata: 'artifact_metadata',
+      duplicate: 'artifact_duplicate', digest: 'artifact_digest', blob404: 'artifact_http'};
+    await assert.rejects(gather(f.e, transport, f.timing), error => {
+      if (expected[failure]) assert.equal(error.message, expected[failure]);
+      if (failure === 'blob404') assert.deepEqual(error.artifactHttp, {status: 404, target: 'blob'});
+      return true;
+    });
+    assert.deepEqual(f.sleeps, []);
+    assert.ok(requests <= 3);
+  });
+}
 
 // Source parity supplements typed Rust tests: every advertised wave must route.
 test('workflow choices, JS routing and Rust routing advertise the same closed cohorts', async () => {

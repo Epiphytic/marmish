@@ -232,14 +232,14 @@ jobs:
           path: ${{ runner.temp }}/bootstrap
           run-id: ${{ inputs.candidate_run_id }}
           github-token: ${{ github.token }}
-      - name: Verify context and gather exact current-run records
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RESOLVE_ROOT: ${{ runner.temp }}/resolve
+      - name: Verify original context and pinned tooling
         run: |
           mkdir -m 700 "$RESOLVE_ROOT"
           node tools/v02-actions/workflow.mjs verify-context
-          node tools/v02-actions/workflow.mjs gather
+      - name: Gather exact current-run records with bounded retries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node tools/v02-actions/workflow.mjs gather
       - name: Validate all nine cells and cleanup proofs
         run: |
           mkdir -m 700 "$RUNNER_TEMP/rollup"
