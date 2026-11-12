@@ -118,6 +118,9 @@ test('workflow is manual bounded read-only replay with guarded downloads and ful
  assert.ok(yaml.indexOf('actions/download-artifact@')<yaml.indexOf('report-replay.mjs render'));
  for(const forbidden of ['strategy:','matrix:','cargo ','--cohort','prepare --','mode: run','contents: write','actions: write','pull_request:'])assert.ok(!yaml.includes(forbidden),forbidden);
  assert.equal((yaml.match(/run-id: '42747078282'/g)??[]).length,2);
+ assert.doesNotMatch(yaml.split('    steps:')[0],/runner\.temp/,'runner context is unavailable in job-level env');
+ for(const name of ['RESOLVE_ROOT','CONTEXT','TOOLS_ROOT','BOOTSTRAP_ROOT','RECORDS_ROOT','REPLAY_OUTPUT'])
+  assert.match(yaml,new RegExp(`echo "${name}=\\$RUNNER_TEMP/[^"\\n]+" >> "\\$GITHUB_ENV"`));
 });
 test('candidate artifact count/pins and original Context substitution refuse guard publication',async t=>{
  const key=`${ORIGINAL.candidate}/artifacts?per_page=100`;

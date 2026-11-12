@@ -14,13 +14,15 @@ jobs:
     timeout-minutes: 15
     env:
       GH_TOKEN: ${{ github.token }}
-      RESOLVE_ROOT: ${{ runner.temp }}/replay-resolve
-      CONTEXT: ${{ runner.temp }}/context/context.json
-      TOOLS_ROOT: ${{ runner.temp }}/tools
-      BOOTSTRAP_ROOT: ${{ runner.temp }}/bootstrap
-      RECORDS_ROOT: ${{ runner.temp }}/records
-      REPLAY_OUTPUT: ${{ runner.temp }}/rollup
     steps:
+      - name: Set owned coordinator paths
+        run: |
+          echo "RESOLVE_ROOT=$RUNNER_TEMP/replay-resolve" >> "$GITHUB_ENV"
+          echo "CONTEXT=$RUNNER_TEMP/context/context.json" >> "$GITHUB_ENV"
+          echo "TOOLS_ROOT=$RUNNER_TEMP/tools" >> "$GITHUB_ENV"
+          echo "BOOTSTRAP_ROOT=$RUNNER_TEMP/bootstrap" >> "$GITHUB_ENV"
+          echo "RECORDS_ROOT=$RUNNER_TEMP/records" >> "$GITHUB_ENV"
+          echo "REPLAY_OUTPUT=$RUNNER_TEMP/rollup" >> "$GITHUB_ENV"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
