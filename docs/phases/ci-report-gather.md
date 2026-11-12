@@ -129,3 +129,7 @@ CI-only delta allowlist with exactly those three files (including legacy YAML).
 This routes Node edits to their actual tests; it does not mark the old failing
 reference tests passed or change their assertions. Obtain Claude approval for
 this bounded routing addition before implementation.
+
+## Asynchronous child-death assertion
+
+Hosted replay 43173341776 exposed an existing coordinator fixture race: the test inspected `/proc` immediately after SIGKILL and observed state R before asynchronous signal delivery completed. The parallel full coordinator suite passed. Keep `runOwned` and native product code unchanged. Add a test-local helper with a fixed one-second observation deadline accepting only Linux absence/zombie or macOS ESRCH. Unexpected errors and a live survivor at the deadline must fail. Cover delayed death and permanent survival deterministically; retain both must-reject fixture cases. Clean only exact owned fixture PIDs whose death has not been confirmed, and preserve the original assertion if PID-file cleanup is unavailable. Extend the replay delta allowlist with only `tools/v02-actions/local.test.mjs`. Claude design review session `c987f827-045a-40b5-a089-fa5351a8ec03` approved this amendment before implementation, with these conditions.

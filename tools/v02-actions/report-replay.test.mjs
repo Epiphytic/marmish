@@ -50,7 +50,8 @@ test('fixed retained Context digest and original environment preserve current pr
 test('source delta admits only exact regular allowlist entries',()=>{
  const git=args=>args[0]==='rev-parse'?coordinator:args[0]==='diff'?'M\0tools/v02-actions/workflow.mjs\0':args[0]==='ls-tree'?'100644 blob abc\tfile':'';
  checkCoordinator(base,git);
- for(const delta of ['D\0tools/v02-actions/workflow.mjs\0','M\0Cargo.lock\0','M\0scripts/install.sh\0','A\0elsewhere\0',''])
+ checkCoordinator(base,args=>args[0]==='diff'?'M\0tools/v02-actions/local.test.mjs\0':git(args));
+ for(const delta of ['D\0tools/v02-actions/workflow.mjs\0','M\0Cargo.lock\0','M\0tools/v02-actions/local.mjs\0','M\0scripts/install.sh\0','A\0elsewhere\0',''])
   assert.throws(()=>checkCoordinator(base,args=>args[0]==='diff'?delta:git(args)));
  assert.throws(()=>checkCoordinator(base,args=>args[0]==='ls-tree'?'120000 blob abc':git(args)));
  for(const change of [{GITHUB_REF:'refs/heads/other'},{GITHUB_REPOSITORY:'fork/marmish'},{GITHUB_EVENT_NAME:'push'},{GITHUB_RUN_ID:'0'}])assert.throws(()=>checkCoordinator({...base,...change},git));

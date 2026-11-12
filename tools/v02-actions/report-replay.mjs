@@ -22,7 +22,7 @@ export const REPLAY_PATHS = Object.freeze([
   '.github/workflows/streaming-installed.yml','.github/workflows/v02-installed.yml',
   '.github/workflows/installed-report-replay.yml','docs/phases/ci-report-gather.md',
   '.github/workflows/installer-validation.yml','.github/workflows/installed-coordinator.yml',
-  'tools/v02-actions/coordinator-policy.test.mjs',
+  'tools/v02-actions/coordinator-policy.test.mjs','tools/v02-actions/local.test.mjs',
   'docs/reviews/ci-report-gather.md','docs/validation/ci-report-gather.md','docs/agent-spec.md']);
 const hex = (s,n)=>typeof s==='string' && new RegExp(`^[0-9a-f]{${n}}$`).test(s);
 const gitCommand = args=>execFileSync('git',args,{encoding:'utf8',env:childEnvironment(process.env),maxBuffer:2*1024*1024});

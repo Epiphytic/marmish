@@ -80,22 +80,86 @@ test('local rollup collects exactly six regular records and refuses extras and l
   } finally { await fs.rm(root, {recursive: true, force: true}); }
 });
 
+// Signal delivery is asynchronous; only absence or a Linux zombie proves death.
+async function fixtureDead(pid, {platform = process.platform, read = fs.readFile, kill = process.kill} = {}) {
+  if (platform === 'linux') {
+    try {
+      const status = await read(`/proc/${pid}/stat`, 'utf8');
+      return status.slice(status.lastIndexOf(')') + 2).split(' ')[0] === 'Z';
+    } catch (error) { if (error.code === 'ENOENT') return true; throw error; }
+  }
+  try { kill(pid, 0); return false; }
+  catch (error) { if (error.code === 'ESRCH') return true; throw error; }
+}
+
+async function waitForFixtureDeath(pid, {probe = fixtureDead, clock = () => performance.now(),
+  delay = ms => new Promise(resolve => setTimeout(resolve, ms))} = {}) {
+  const deadline = clock() + 1000;
+  while (true) {
+    const dead = await probe(pid);
+    const remaining = deadline - clock();
+    assert.ok(remaining >= 0, 'owned fixture observation exceeded one second');
+    if (dead) return;
+    assert.ok(remaining > 0, 'owned fixture remained live after one second');
+    await delay(Math.min(20, remaining));
+  }
+}
+
+test('fixture death observation accepts delayed exit but rejects a live survivor at its fixed bound', async () => {
+  for (const dies of [true, false]) {
+    let now = 0, calls = 0;
+    const options = {probe: async pid => { assert.equal(pid, 123); calls++; return dies && now >= 40; },
+      clock: () => now, delay: async ms => { now += ms; }};
+    if (dies) { await waitForFixtureDeath(123, options); assert.equal(now, 40); }
+    else {
+      await assert.rejects(waitForFixtureDeath(123, options), /owned fixture remained live/);
+      assert.equal(now, 1000); assert.equal(calls, 51);
+    }
+  }
+  let now = 0;
+  await assert.rejects(waitForFixtureDeath(123, {clock: () => now,
+    probe: async () => { now = 1001; return true; }}), /observation exceeded one second/);
+});
+
+test('fixture death probe accepts only Linux ENOENT or zombie and Darwin ESRCH', async () => {
+  const error = code => Object.assign(new Error(code), {code});
+  const read = async () => '123 (name with spaces) Z 1 2';
+  assert.equal(await fixtureDead(123, {platform: 'linux', read}), true);
+  assert.equal(await fixtureDead(123, {platform: 'linux', read: async () => '123 (name) R 1 2'}), false);
+  for (const code of ['ENOENT', 'EACCES', 'EIO']) {
+    const result = fixtureDead(123, {platform: 'linux', read: async () => { throw error(code); }});
+    if (code === 'ENOENT') assert.equal(await result, true);
+    else await assert.rejects(result, {code});
+  }
+  assert.equal(await fixtureDead(123, {platform: 'darwin', kill: () => {}}), false);
+  assert.equal(await fixtureDead(123, {platform: 'darwin', kill: () => { throw error('ESRCH'); }}), true);
+  await assert.rejects(waitForFixtureDeath(123, {probe: pid => fixtureDead(pid,
+    {platform: 'darwin', kill: () => { throw error('EPERM'); }})}), {code: 'EPERM'});
+});
+
 test('owned child rejects clean-exit residue and kills TERM-ignoring descendants', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'marmish-local-residue-'));
   try {
     for (const timed of [false, true]) {
       const pidFile = path.join(root, timed ? 'timed' : 'clean');
       const script = `(/bin/sh -c 'trap "" TERM; echo $$ > "$1"; exec sleep 30' child "$1") </dev/null >/dev/null 2>&1 &\nwhile [ ! -s "$1" ]; do sleep 0.01; done\n${timed ? 'wait' : 'exit 0'}`;
-      await assert.rejects(runOwned('/bin/sh', ['-c', script, 'owner', pidFile],
-        {cwd: root, env: process.env, deadline: Date.now() + (timed ? 150 : 3000), graceMs: 30, closeMs: 500}), /local_child_failed/);
-      const pid = Number(await fs.readFile(pidFile, 'utf8'));
-      // A killed orphan can briefly remain a zombie under a container PID 1.
-      if (process.platform === 'linux') {
-        const status = await fs.readFile(`/proc/${pid}/stat`, 'utf8').catch(() => 'gone');
-        assert.ok(status === 'gone' || status.split(' ')[2] === 'Z', status);
-      } else {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        assert.throws(() => process.kill(pid, 0));
+      let dead = false;
+      try {
+        await assert.rejects(runOwned('/bin/sh', ['-c', script, 'owner', pidFile],
+          {cwd: root, env: process.env, deadline: Date.now() + (timed ? 150 : 3000), graceMs: 30, closeMs: 500}), /local_child_failed/);
+        const pid = Number(await fs.readFile(pidFile, 'utf8'));
+        assert.ok(Number.isSafeInteger(pid) && pid > 1);
+        await waitForFixtureDeath(pid);
+        dead = true;
+      } finally {
+        // Every unsuccessful path already has a primary error. Do not replace it
+        // with a missing PID file or cleanup error, or signal a confirmed-dead PID.
+        if (!dead) {
+          const pid = Number(await fs.readFile(pidFile, 'utf8').catch(() => ''));
+          if (Number.isSafeInteger(pid) && pid > 1) {
+            try { process.kill(pid, 'SIGKILL'); } catch {}
+          }
+        }
       }
     }
   } finally { await fs.rm(root, {recursive: true, force: true}); }
