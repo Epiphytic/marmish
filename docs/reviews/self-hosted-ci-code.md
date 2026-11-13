@@ -81,3 +81,19 @@ N2 incorporated: require exactly the inventory job and one runner selection, wit
 - The pool check you described is a snapshot: nothing is in progress, 28 runs are queued, but none has an unfinished job eligible for the pool. That only says what the token can see right now. It does not reserve capacity.
 - Apply the five-minute cancellation rule to each matrix job when it becomes eligible.
 - All nine pairs stay pending until capacity exists. Nothing here counts as migration evidence until the real dispatch produces sanitized reports from all three native jobs.
+
+## Post-dispatch evidence review
+
+Actual Claude Code auto-mode follow-up, same session and `claude-opus-5-5`,
+2026-11-13: **APPROVE** `docs/validation/self-hosted-ci-preflight.md` as an
+accurate report, with no blocking factual issues. The reviewer read the private
+sanitized AMD64 capability report and independently queried run/job metadata
+for run 43384760030. It confirmed incomplete Phase A acceptance, ARM64 cancelled
+before checkout, macOS unexecuted, and no cleanup or migration claim inferred
+from cancellation. All reported AMD64 capability values matched the sanitized
+report. The reviewer did not dispatch, cancel, edit, or fetch raw logs.
+
+The log endpoint's HTTP 404 responses, dual-source push, Iris timeout, author
+actionlint result and pool snapshot remain author evidence; the reviewer did
+not independently reproduce those facts. Approval of the report does not
+approve Phase B or complete Phase A.
