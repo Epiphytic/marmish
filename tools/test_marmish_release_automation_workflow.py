@@ -147,7 +147,10 @@ class ReleaseAutomation(unittest.TestCase):
             strategy = fields(block(job, '    strategy:'), 6)
             self.assertEqual(strategy['max-parallel'], '3')
             self.assertEqual(strategy['fail-fast'], 'false')
-            self.assertEqual(fields(block(job, '    env:'), 6)['MARMISH_BUILD_COMMIT'],
+            environment = block(job, '    env:')
+            if name == 'installed-tools':
+                environment = environment.replace("      CARGO_INCREMENTAL: '0'\n", '')
+            self.assertEqual(fields(environment, 6)['MARMISH_BUILD_COMMIT'],
                              '${{ inputs.source_commit || github.sha }}')
             self.assertNotIn('CARGO_TARGET_DIR', job)
         tools = block(jobs, '  installed-tools:')
@@ -169,7 +172,7 @@ class ReleaseAutomation(unittest.TestCase):
             job = block(jobs, '  ' + name + ':')
             selected = steps(job)
             cache = [s for s in selected if 'uses: Swatinem/rust-cache@' in s]
-            if name not in ('package', 'installed-tools'):
+            if name != 'package':
                 self.assertEqual(cache, [])
                 continue
             self.assertEqual(len(cache), 1)
@@ -178,7 +181,7 @@ class ReleaseAutomation(unittest.TestCase):
             self.assertEqual(options['prefix-key'], 'marmish-v02-release-split-v2')
             for option in ('cache-all-crates', 'cache-workspace-crates', 'cache-bin', 'cache-on-failure'):
                 self.assertEqual(options[option], 'false')
-            self.assertEqual(options['cache-targets'], 'true' if name == 'package' else 'false')
+            self.assertEqual(options['cache-targets'], 'true')
             self.assertEqual(options['save-if'], "${{ github.ref == 'refs/heads/master' && !inputs.caveated_release }}")
             self.assertEqual(set(options['env-vars'].split()),
                              {'MACOSX_DEPLOYMENT_TARGET', 'SDKROOT', 'ImageOS', 'ImageVersion'})
@@ -194,6 +197,27 @@ class ReleaseAutomation(unittest.TestCase):
             self.assertTrue(any("MACOSX_DEPLOYMENT_TARGET=15.0" in s
                                 and 'RUST_TEST_THREADS=1' in s for s in before))
             self.assertFalse(any(re.search(r'\bcargo (test|clippy|build)\b', run_text(s)) for s in before))
+
+    def test_installed_tools_disable_caching_and_incremental_compilation(self):
+        text = source('v02-release.yml')
+        jobs = block(text, 'jobs:')
+        self.assertNotIn('CARGO_INCREMENTAL', block(text, 'env:'))
+        self.assertNotIn('CARGO_INCREMENTAL', block(block(jobs, '  package:'), '    env:'))
+        tools = block(jobs, '  installed-tools:')
+        environment = block(tools, '    env:')
+        # This single exact quoted value is intentional; keep generic scalar
+        # parsing strict for every other workflow value.
+        incremental = "      CARGO_INCREMENTAL: '0'\n"
+        self.assertEqual(environment.count(incremental), 1)
+        self.assertEqual(tools.count('CARGO_INCREMENTAL'), 2)
+        self.assertIn('echo "marmish CI tooling: cache=disabled incremental=$CARGO_INCREMENTAL"',
+                      run_text(next(step for step in steps(tools)
+                                    if step.startswith('name: Build isolated installed-test tools\n'))))
+        self.assertEqual(fields(environment.replace(incremental, ''), 6),
+                         {'MARMISH_BUILD_COMMIT': '${{ inputs.source_commit || github.sha }}'})
+        self.assertNotIn('Swatinem/rust-cache', tools)
+        self.assertNotIn('steps.rust-cache', tools)
+        self.assertNotIn('before cache pruning', tools)
 
     def test_candidate_cache_namespace_and_existing_writers_are_pinned(self):
         prefix = 'marmish-v02-release-split-v2'
@@ -315,7 +339,6 @@ class MutationTests(unittest.TestCase):
             ('cache-workspace-crates: false', 'cache-workspace-crates: true'),
             ('cache-on-failure: false', 'cache-on-failure: true'),
             ('cache-targets: true', 'cache-targets: false'),
-            ('cache-targets: false', 'cache-targets: true'),
             ('Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0', 'Swatinem/rust-cache@v2'),
             ('MACOSX_DEPLOYMENT_TARGET=15.0', 'MACOSX_DEPLOYMENT_TARGET=14.0'),
             ('RUST_TEST_THREADS=1', 'RUST_TEST_THREADS=2'),
@@ -327,6 +350,19 @@ class MutationTests(unittest.TestCase):
             ('-p marmish-engine -p marmish-native -p marmish-vault', '-p marmish-engine -p marmish-native -p marmish-vault -- --skip mdk'),
             ('installed-tests cargo test --locked -p marmish-native --features installed-checks', 'installed-tests cargo test --locked -p marmish-native --features installed-checks --lib'),
             ('  installed-tools:\n', '  installed-tools:\n    continue-on-error: true\n'),
+            ('  CARGO_TERM_COLOR: never\n',
+             '  CARGO_TERM_COLOR: never\n  CARGO_INCREMENTAL: 0\n'),
+            ('      MARMISH_BUILD_COMMIT: ${{ inputs.source_commit || github.sha }}\n',
+             '      MARMISH_BUILD_COMMIT: ${{ inputs.source_commit || github.sha }}\n'
+             '      CARGO_INCREMENTAL: 0\n'),
+            ("      CARGO_INCREMENTAL: '0'\n", ''),
+            ("      CARGO_INCREMENTAL: '0'", "      CARGO_INCREMENTAL: '1'"),
+            ('      - name: Build isolated installed-test tools\n',
+             '      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0\n'
+             '      - name: Build isolated installed-test tools\n'),
+            ('          echo \"marmish CI tooling: cache=disabled incremental=$CARGO_INCREMENTAL\"',
+             '          echo \"marmish CI tooling: cache=disabled incremental=$CARGO_INCREMENTAL\"\n'
+             '          echo \"${{ steps.rust-cache.outputs.cache-hit }}\"'),
             ('      - name: Build isolated installed-test tools\n', '      - name: Build isolated installed-test tools\n        continue-on-error: true\n'),
             ('git merge-base --is-ancestor', 'true # git merge-base --is-ancestor'),
         ]:

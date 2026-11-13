@@ -57,15 +57,18 @@ completes the CI increment, not the remaining release qualification cohorts.
 
 The [native CI optimization](phases/native-ci-optimization.md) separates default
 production and installed-feature build/test lanes onto independent hosted VMs,
-bounded to six build jobs including two macOS jobs. Dependency-only caches have
-separate lane/target keys; installed tooling caches downloads only after the
-initial six full caches exceeded the 7 GB budget. All tests, strict Clippy and
-package/installer/provider
-checks still execute. Candidate inspection selects exact legacy eleven-job or
+bounded to six build jobs including two macOS jobs. Product dependency caches have separate target/environment keys. Installed
+tooling runs without caches, with explicit incremental compilation disabled:
+its download caches showed no measurable whole-job benefit and image variants
+pushed retained storage above the 7 GB experiment target. All tests, strict
+Clippy and package/installer/provider checks still execute. Candidate inspection selects exact legacy eleven-job or
 new fourteen-job inventories from the authenticated source workflow; historical
-replay explicitly retains its legacy contract. Hosted cold/warm measurements and
-cross-source cache/stamping validation are pending; see [capacity and baseline
-evidence](validation/native-ci-optimization.md). This changes CI, not runtime
+replay explicitly retains its legacy contract. Earlier cold/repeated candidates and source stamps passed on all platforms,
+with nine installed directed streaming pairs, but their original simultaneous
+hit/storage criteria failed during hosted image rollover. The independently
+reviewed correction removes tooling caches and requires a fresh source-bound
+candidate and installed proof; that final validation is pending. See
+[capacity, timing and cache evidence](validation/native-ci-optimization.md). This changes CI, not runtime
 behavior, public installer pins or release qualification requirements.
 
 Candidate eligibility also runs the stdlib workflow trust-policy tests before

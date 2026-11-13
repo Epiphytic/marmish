@@ -87,3 +87,86 @@ new cold/warm pair cannot restore the larger superseded target archives. Delete
 only this task's six retired v1 cache IDs, after recording their sizes; preserve
 all unrelated entries. This avoids eviction churn while measuring the new
 six-entry footprint. All tests, source stamps and acceptance gates remain.
+
+## Hosted image rollover evidence amendment
+
+The first warm candidate 43345491416 passed all 14 jobs in 36m03s, but only
+five lanes had exact hits. The cold run itself used mixed ARM images: product
+20261101.172.1 and installed tooling 20261111.182.1. The warm run assigned
+installed tooling 20261101.172.1, a correct cache miss; it is not six-hit warm
+acceptance. Both installed-tool image variants
+are now recorded, with seven task-owned entries totaling 4,993,467,856 bytes
+and none of the six cold entries evicted.
+
+Repeat all jobs on the same documentation-only source, with a new exact
+attempt binding. Require all six exact hits and unchanged tests, provenance,
+installer, provider and subsequent nine-cell streaming gates. Hosted image
+revisions cannot be selected through these standard runner labels. Therefore
+bind each warm lane to an observed cold save with its exact image/key: either
+the original cold attempt or the correctly missed lane in the intervening
+attempt. Report these bindings and the intervening miss explicitly. Do not
+describe timings from differing image sets as a controlled matched-image pair.
+No cache key, image invalidation or qualification check is relaxed. Retain
+the observed caches through the repeat, and record the actual footprint,
+including image variants, against the same 7 GB budget. This validation-only
+amendment received Claude auto-mode APPROVE, with the mixed-image wording
+correction incorporated before dispatch. Record each restored full key against
+the saving run, attempt, job and retained cache ID, not just a hit boolean.
+The observed 40-second cold/warm difference is small; tests still dominate.
+Allow at most two all-job repeats under this amendment. If another correct
+rollover miss remains after those repeats, stop automatic repetition and
+reassess the evidence with independent review. If variants exceed 7 GB, stop
+and report that result; do not silently delete entries to manufacture a fit.
+
+
+## Reassessment after the bounded rollover experiment
+
+The two allowed repeats both passed all qualification jobs but correctly missed
+one newly assigned image each. Final attempt 43345491416/3 passed 14 jobs and
+15-artifact/10-report inspection in 52m13s; nine retained caches totaled
+7,578,184,296 bytes. The original 7 GB retained-storage target failed.
+Automatic repetitions stopped; no entries were deleted or allowances raised.
+Claude's independent reassessment approved removing the download-only tooling
+caches, conditional on this small code change and fresh hosted qualification.
+
+Remove only the installed-tools rust-cache and cache-context steps. Explicitly
+set that job's `CARGO_INCREMENTAL: 0`, preserving the prior cache action's
+compiler setting for ordinary runs. Caveated mode now also receives explicit
+zero; this path has static policy coverage only, and the fresh hosted run will
+qualify the ordinary path. Reject global/product incremental overrides. Keep product cache action/key/prefix/options unchanged, along
+with every test/Clippy/release command, immutable-source check, matrix cap,
+artifact contract and source stamp. Update policy tests to reject any tooling
+cache action or cache-hit output reference and nonzero incremental setting;
+retain product cache mutations. The split-v1 inventory remains 14 jobs.
+
+Acceptance changes from six simultaneous hits to actual per-product-lane exact
+restorations from recorded saving keys/jobs/IDs across completed runs. Tooling
+caches are disabled, so no tooling hit is required. Prior hits validate only
+the keys actually restored; the saved new ARM and AMD product variants have
+not yet been restored. No image/env key is weakened, and no matched-image or
+guaranteed timing gain is claimed. A new source-bound candidate must pass all
+14 jobs, unchanged test totals, installer/provider checks and complete
+15-artifact/10-report inspection, followed by normal installed nine-pair
+streaming qualification of those exact new products/tools. Record actual
+product hits or correct misses, source stamps, tooling timings and repo-wide
+cache footprint. Do not repeat merely to manufacture simultaneous hits.
+
+Storage remains an explicit limitation: one product image per target is about
+3.77 GB; the five observed product variants occupy 6,354,145,521 bytes. Two
+variants for every product target would be about 7.54 GB, exceeding the 7 GB
+target. Four now-orphaned tooling entries add 1,224,038,775 bytes until normal
+expiry/eviction, making a modeled overlap about 8.76 GB under the documented
+10 GB default. Other workflows share that allowance. These are measurements
+and models, not a guarantee of staying below 7 GB or avoiding eviction. Preserve
+the actual failed peaks in the report and list the final repo-wide total;
+perform no deletion under this amendment. Cache eviction affects compilation
+time, never whether tests or integrity checks run.
+
+This is direct user-authorized CI optimization, not shared task-queue pickup.
+The standing phased implementation authorization in AGENTS.md permits this
+bounded correction after independent design/code review; the reviewer's generic
+suggestion to seek fresh human approval does not create an additional gate.
+Obtain explicit Claude confirmation of this concrete amendment before coding,
+review its integrated diff in auto mode, run local gates, commit/push to both
+mirrors, and perform one fresh hosted candidate plus installed proof. Keep the
+publisher disabled and public installer/version unchanged.

@@ -71,4 +71,73 @@ installed tooling caches downloads only. A v2 prefix and removal of only this
 task's retired v1 entries ensure a genuinely cold new pair without competing
 obsolete storage. Claude reviewed the fallback against `c57f8a9` and returned
 **APPROVE** in the same auto-mode session, with 13 policy tests, actionlint and
-whitespace checks passing. Replacement hosted evidence remains pending.
+whitespace checks passing. The replacement cold and initial warm candidates
+subsequently passed all 14 jobs and complete 15-artifact/10-report inspection.
+
+## Hosted image rollover evidence review
+
+The same actual Claude auto-mode session reviewed the validation-only amendment
+after the initial warm run correctly missed one ARM tools cache. Verdict
+**APPROVE**, requiring one wording correction before dispatch: the cold run
+itself used mixed ARM images, so there was never one common ARM image to pin.
+That correction was incorporated before repeating all jobs on unchanged warm
+source. The reviewer independently checked private image lines, cache keys,
+retained IDs/sizes and timing observations, without executing artifacts or
+accessing credentials.
+
+Useful recommendations were incorporated: at most two further all-job repeats
+before independent reassessment, stop/report if variants exceed 7 GB, preserve
+entries rather than manufacturing a fit through deletion, bind each restored
+key to its actual cold saving run/attempt/job/cache ID, and avoid describing
+the small 40-second initial warm improvement as a controlled timing result.
+Those original simultaneous-hit criteria are superseded by the reassessment
+below; fresh corrected-source qualification remains pending.
+
+
+## Bounded experiment reassessment and correction design
+
+Actual Claude Code in the same auto-mode Opus session independently reassessed
+the two allowed repeats and final nine-cache inventory. Verdict: **APPROVE
+conditional on removing tooling caches**; keeping the current code and raising
+the allowance was blocked. Download-only tooling showed no measurable whole-job
+speed benefit. Product cache keys remain strict; actual independent product-lane
+hits can establish reuse without repeatedly chasing simultaneous hits during
+uncontrollable image rollover. New product image variants were saved but had
+not yet been restored. Failed 7 GB peaks must remain visible.
+
+The concrete design amendment then received **APPROVE before coding**. It adds
+explicit tools-only `CARGO_INCREMENTAL: '0'`, removes both cache and hit-reporting
+steps, updates misleading size-summary wording and adds missing/nonzero/env and
+cache-reintroduction policy mutations. The reviewer confirmed the standing
+direct-user implementation authorization applies; its earlier generic request
+for fresh human approval was not a gate. Required follow-through is integrated
+code review, local checks, one fresh candidate with 14 jobs/15 artifacts/10
+reports, product-key provenance and installed nine-pair proof on that new source.
+
+Storage limitations remain explicit: five observed product variants use 6.35 GB;
+modeled two-image product retention is 7.54 GB, and overlap with four orphaned
+tooling entries is about 8.76 GB. Neither 7 GB nor immunity from eviction is
+guaranteed. No caches are deleted and no allowance is raised under this amendment.
+
+
+## Integrated product-only correction review
+
+Actual Claude Code 2.1.301, claude-opus-5-5, in the same auto-mode session
+reviewed the integrated workflow, policy mutations and evidence. Verdict:
+**APPROVE**. Local checks passed: 14 workflow policy tests, 255 Node tests
+and actionlint for all three affected workflows. The reviewer assessed the
+Ripwire churn/class-size findings and reflective-test reachability flag as
+nonblocking for this focused policy change; no suppressions were added.
+
+Useful low-severity findings were incorporated: explicitly mark historical
+six-hit criteria superseded, reject incremental overrides in global/product
+environments, and document the caveated-mode setting separately. The ordinary
+tools lane preserves its prior incremental=0 setting; caveated mode now also
+sets it explicitly, with static policy coverage only. Fresh hosted qualification
+will exercise the ordinary path, not establish caveated-path runtime coverage.
+
+The narrow follow-up independently received **APPROVE, no blockers** in the
+same actual Claude auto-mode session. The reviewer reran all 14 policy tests
+and actionlint and verified both environment mutations target the intended
+YAML blocks. The next gates are the one fresh candidate and exact-source
+installed proof; no hosted success is claimed for this correction yet.
