@@ -97,3 +97,12 @@ The log endpoint's HTTP 404 responses, dual-source push, Iris timeout, author
 actionlint result and pool snapshot remain author evidence; the reviewer did
 not independently reproduce those facts. Approval of the report does not
 approve Phase B or complete Phase A.
+
+Retry evidence follow-up, same actual auto-mode session/model, 2026-11-13:
+**APPROVE, no blocking factual issues.** The reviewer checked the new retry
+section against run 43468866156/job metadata, both sanitized Linux capability
+files and the local diff. It confirmed the unchanged probe, both Linux passes
+and cleanup evidence, macOS unassigned with no steps, final normal cancellation
+at 17:08:46 UTC, and incomplete Phase A acceptance. The precise pre-cancellation
+queue observation remains operator evidence; metadata agrees with its outcome.
+The reviewer performed no edits, dispatches or cancellations and fetched no logs.

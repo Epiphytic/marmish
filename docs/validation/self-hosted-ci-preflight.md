@@ -53,3 +53,27 @@ have not yet been migrated. The release publisher remains disabled.
 Source was pushed to GitHub and Radicle (two seeds synchronized). Iris external
 readback timed out after 12 seconds with no bytes, so Iris availability was not
 verified.
+
+## Retry after runner recovery
+
+The user requested a retry on 2026-11-13. [Run 43468866156, attempt 1](https://github.com/Epiphytic/marmish/actions/runs/43468866156)
+used source `dcb31f78591f5d27f713b43b400f9f1b0ce4d16d`, with unchanged probe
+code, and was dispatched at 17:03:07 UTC.
+
+| Platform | Actual execution (UTC) | Result |
+| --- | --- | --- |
+| Linux AMD64 | 17:03:13–17:03:23, 10 seconds | Probe and cleanup passed. |
+| Linux ARM64 | 17:03:24–17:03:39, 15 seconds | Probe and cleanup passed; previous startup stall did not recur. |
+| macOS ARM64 | Eligible 17:03:39; still queued at 17:08:38 | No runner assignment or steps; cancellation requested at the five-minute boundary. |
+
+Both Linux platforms proved nonroot native self-hosted execution and rootless
+Ubuntu24 native container smoke with glibc 2.39; cleanup proved the owned
+container absent. Both hosts lacked Node and GNOME Keyring. AMD64 capabilities
+matched the first run. ARM64 reported Python 3.12.3, Git 2.43.0, curl 8.5.0,
+C compiler 13.3.0, make 4.3, Perl 5.38.2, host glibc 2.39 and Docker 29.9.0.
+Archive tools, readelf, D-Bus and setpriv were available. Image layers remained
+cached as declared. No product builds, provider checks or live transport tests
+were run, and no GitHub-hosted fallback was used. Phase A remains incomplete
+because macOS has not executed.
+Normal cancellation completed at 17:08:46 UTC, with macOS cancelled and no
+steps executed. No force-cancel was needed for this retry.
