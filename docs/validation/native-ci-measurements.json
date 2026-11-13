@@ -1,0 +1,3936 @@
+{
+  "schema": 1,
+  "scope": "native CI timing and cache observations",
+  "repository": "Epiphytic/marmish",
+  "definitions": {
+    "wall_s": "Exact attempt API run_started_at to last exact-attempt job completion, including scheduling and downstream qualification.",
+    "created_to_last_job_s": "Exact-attempt API created_at to last job completion; initial runs match wall_s; rerun API timestamps can differ.",
+    "aggregate_job_s": "Sum of exact-attempt started_at-to-completed_at job durations; excludes job queue time.",
+    "stage_seconds": "Timing helper elapsed whole seconds for actual Cargo test, Clippy or release commands; tests include compilation.",
+    "cache_action_costs": "Actions API step elapsed seconds; post includes pruning/cleanup/archive work and any upload.",
+    "cargo_counts": "Complete numeric harness summary tuples, counting executions across lanes; identical repeated summaries remain separate.",
+    "cargo_durations": "Independently observed finished-in durations; interleaved fragments do not receive invented status or duration.",
+    "cache_bytes": "Compressed archive sizes reported by repository cache inventory; decimal 7GB=7,000,000,000 bytes."
+  },
+  "limitations": [
+    "Selected observations, not an exhaustive history of dispatched runs; the initial full-target cache trial is documented separately and omitted from these samples.",
+    "One observation per listed attempt; no percentile or statistically established speedup.",
+    "Hosted image rollover can change environment hashes and cause cache misses.",
+    "Historical combined baseline did not emit timing-helper/cache events; unavailable observations remain absent/null.",
+    "Cache identities are matched using full keys and exact archive sizes; no inference from abbreviated hash alone.",
+    "Public release qualification and streaming matrix validation are separate evidence."
+  ],
+  "samples": [
+    {
+      "label": "baseline",
+      "run_id": 43174030584,
+      "attempt": 1,
+      "source_commit": "05bec8b2b4c4ea0a161a1adbc494b0d180a92ba8",
+      "url": "https://github.com/Epiphytic/marmish/actions/runs/43174030584/attempts/1",
+      "status": "completed",
+      "conclusion": "success",
+      "original_run_created_at": "2026-11-12T07:16:21Z",
+      "created_at": "2026-11-12T07:16:21Z",
+      "run_started_at": "2026-11-12T07:16:21Z",
+      "updated_at": "2026-11-12T08:24:35Z",
+      "last_job_completed_at": "2026-11-12T08:24:34Z",
+      "wall_s": 4093.0,
+      "created_to_last_job_s": 4093.0,
+      "aggregate_job_s": 11552.0,
+      "peak_jobs": 6,
+      "peak_macos": 2,
+      "job_count": 11,
+      "all_jobs_successful": true,
+      "layout": "three combined platform jobs",
+      "lanes": [
+        {
+          "job_id": 131033892805,
+          "lane": "combined-product-and-tools",
+          "target": "x86_64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-12T07:16:32Z",
+          "started_at": "2026-11-12T07:16:34Z",
+          "completed_at": "2026-11-12T08:17:16Z",
+          "elapsed_s": 3642.0,
+          "queued_s": 2.0,
+          "runner_image": {
+            "name": "ubuntu-24.04",
+            "version": "20261101.360.1"
+          },
+          "stages": [],
+          "stage_telemetry_available": false,
+          "cargo_test_totals": {
+            "passed": 1762,
+            "failed": 0,
+            "ignored": 8,
+            "measured": 0,
+            "filtered_out": 5073,
+            "execution_seconds": 2361.92
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 44,
+            "numeric_tuple_count": 44,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 44
+          },
+          "cache": {
+            "exact_hit": null,
+            "resolved_key": null,
+            "cache_id_in_snapshot": null,
+            "archive_bytes_in_snapshot": null,
+            "restoration": [],
+            "action_costs": [],
+            "transfer_observations": [],
+            "saving_provenance": []
+          }
+        },
+        {
+          "job_id": 131033892841,
+          "lane": "combined-product-and-tools",
+          "target": "aarch64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-12T07:16:32Z",
+          "started_at": "2026-11-12T07:16:37Z",
+          "completed_at": "2026-11-12T08:17:53Z",
+          "elapsed_s": 3676.0,
+          "queued_s": 5.0,
+          "runner_image": {
+            "name": "ubuntu-24.04-arm",
+            "version": "20261101.172.1"
+          },
+          "stages": [],
+          "stage_telemetry_available": false,
+          "cargo_test_totals": {
+            "passed": 1762,
+            "failed": 0,
+            "ignored": 8,
+            "measured": 0,
+            "filtered_out": 5073,
+            "execution_seconds": 2164.22
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 44,
+            "numeric_tuple_count": 44,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 44
+          },
+          "cache": {
+            "exact_hit": null,
+            "resolved_key": null,
+            "cache_id_in_snapshot": null,
+            "archive_bytes_in_snapshot": null,
+            "restoration": [],
+            "action_costs": [],
+            "transfer_observations": [],
+            "saving_provenance": []
+          }
+        },
+        {
+          "job_id": 131033892873,
+          "lane": "combined-product-and-tools",
+          "target": "aarch64-apple-darwin",
+          "conclusion": "success",
+          "created_at": "2026-11-12T07:16:32Z",
+          "started_at": "2026-11-12T07:16:36Z",
+          "completed_at": "2026-11-12T08:23:15Z",
+          "elapsed_s": 3999.0,
+          "queued_s": 4.0,
+          "runner_image": {
+            "name": "macos-15-arm64",
+            "version": "20261104.0514.1"
+          },
+          "stages": [],
+          "stage_telemetry_available": false,
+          "cargo_test_totals": {
+            "passed": 1789,
+            "failed": 0,
+            "ignored": 8,
+            "measured": 0,
+            "filtered_out": 5439,
+            "execution_seconds": 1481.56
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 45,
+            "numeric_tuple_count": 45,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 45
+          },
+          "cache": {
+            "exact_hit": null,
+            "resolved_key": null,
+            "cache_id_in_snapshot": null,
+            "archive_bytes_in_snapshot": null,
+            "restoration": [],
+            "action_costs": [],
+            "transfer_observations": [],
+            "saving_provenance": []
+          }
+        }
+      ],
+      "platform_test_totals": {
+        "x86_64-unknown-linux-gnu": {
+          "passed": 1762,
+          "failed": 0,
+          "ignored": 8,
+          "measured": 0,
+          "filtered_out": 5073,
+          "execution_seconds": 2361.92
+        },
+        "aarch64-unknown-linux-gnu": {
+          "passed": 1762,
+          "failed": 0,
+          "ignored": 8,
+          "measured": 0,
+          "filtered_out": 5073,
+          "execution_seconds": 2164.22
+        },
+        "aarch64-apple-darwin": {
+          "passed": 1789,
+          "failed": 0,
+          "ignored": 8,
+          "measured": 0,
+          "filtered_out": 5439,
+          "execution_seconds": 1481.56
+        }
+      },
+      "exact_cache_hits": 0,
+      "exact_cache_hit_observations": 0,
+      "cache_inventory": {
+        "observed_at": null,
+        "collection_note": "Historical repository-wide API snapshot retained after this attempt; exact collection timestamp unavailable.",
+        "entries": [],
+        "entry_count": 0,
+        "archive_bytes": 0,
+        "below_7GB": true,
+        "original_six_retention": [],
+        "all_original_six_retained": null
+      },
+      "all_platform_test_counts_match_baseline": true
+    },
+    {
+      "label": "cold2",
+      "run_id": 43340461715,
+      "attempt": 1,
+      "source_commit": "559415fec078c41d6057159d8e485fe9a0930e70",
+      "url": "https://github.com/Epiphytic/marmish/actions/runs/43340461715/attempts/1",
+      "status": "completed",
+      "conclusion": "success",
+      "original_run_created_at": "2026-11-13T00:52:04Z",
+      "created_at": "2026-11-13T00:52:04Z",
+      "run_started_at": "2026-11-13T00:52:04Z",
+      "updated_at": "2026-11-13T01:28:48Z",
+      "last_job_completed_at": "2026-11-13T01:28:47Z",
+      "wall_s": 2203.0,
+      "created_to_last_job_s": 2203.0,
+      "aggregate_job_s": 12145.0,
+      "peak_jobs": 6,
+      "peak_macos": 2,
+      "job_count": 14,
+      "all_jobs_successful": true,
+      "layout": "six independent product/tool platform jobs",
+      "lanes": [
+        {
+          "job_id": 131607277910,
+          "lane": "installed-tools",
+          "target": "aarch64-apple-darwin",
+          "conclusion": "success",
+          "created_at": "2026-11-13T00:52:15Z",
+          "started_at": "2026-11-13T00:52:18Z",
+          "completed_at": "2026-11-13T01:25:38Z",
+          "elapsed_s": 2000.0,
+          "queued_s": 3.0,
+          "runner_image": {
+            "name": "macos-15-arm64",
+            "version": "20261104.0514.1"
+          },
+          "stages": [
+            {
+              "stage": "installed-tests",
+              "elapsed_seconds": 1150,
+              "exit": 0
+            },
+            {
+              "stage": "installed-clippy",
+              "elapsed_seconds": 92,
+              "exit": 0
+            },
+            {
+              "stage": "installed-release",
+              "elapsed_seconds": 711,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 918,
+            "failed": 0,
+            "ignored": 3,
+            "measured": 0,
+            "filtered_out": 2745,
+            "execution_seconds": 720.56
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 12,
+            "numeric_tuple_count": 12,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 12
+          },
+          "cache": {
+            "exact_hit": false,
+            "resolved_key": "marmish-v02-release-split-v2-installed-tools-macos-15-aarch64-apple-darwin-macos15-glibc239-installed-tools-Darwin-arm64-61a98fb3-4db97c9b",
+            "cache_id_in_snapshot": 10450268619,
+            "archive_bytes_in_snapshot": 306127799,
+            "restoration": [
+              {
+                "status": "miss",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 1.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 17.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "save",
+                "bytes": 306127799,
+                "reported_rate": 138.1,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277910,
+                "cache_ids": [
+                  10450268619
+                ],
+                "archive_bytes": [
+                  306127799
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131607277915,
+          "lane": "product",
+          "target": "x86_64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-13T00:52:15Z",
+          "started_at": "2026-11-13T00:52:18Z",
+          "completed_at": "2026-11-13T01:24:37Z",
+          "elapsed_s": 1939.0,
+          "queued_s": 3.0,
+          "runner_image": {
+            "name": "ubuntu-24.04",
+            "version": "20261101.360.1"
+          },
+          "stages": [
+            {
+              "stage": "default-tests",
+              "elapsed_seconds": 1458,
+              "exit": 0
+            },
+            {
+              "stage": "default-clippy",
+              "elapsed_seconds": 56,
+              "exit": 0
+            },
+            {
+              "stage": "product-release",
+              "elapsed_seconds": 382,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 843,
+            "failed": 0,
+            "ignored": 5,
+            "measured": 0,
+            "filtered_out": 2325,
+            "execution_seconds": 1243.8
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 32,
+            "numeric_tuple_count": 32,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 32
+          },
+          "cache": {
+            "exact_hit": false,
+            "resolved_key": "marmish-v02-release-split-v2-package-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-package-Linux-x64-985a2716-4db97c9b",
+            "cache_id_in_snapshot": 10450236189,
+            "archive_bytes_in_snapshot": 1294728875,
+            "restoration": [
+              {
+                "status": "miss",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 3.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 13.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "save",
+                "bytes": 1294728875,
+                "reported_rate": 364.6,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277915,
+                "cache_ids": [
+                  10450236189
+                ],
+                "archive_bytes": [
+                  1294728875
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131607277923,
+          "lane": "product",
+          "target": "aarch64-apple-darwin",
+          "conclusion": "success",
+          "created_at": "2026-11-13T00:52:15Z",
+          "started_at": "2026-11-13T00:52:18Z",
+          "completed_at": "2026-11-13T01:27:30Z",
+          "elapsed_s": 2112.0,
+          "queued_s": 3.0,
+          "runner_image": {
+            "name": "macos-15-arm64",
+            "version": "20261104.0514.1"
+          },
+          "stages": [
+            {
+              "stage": "default-tests",
+              "elapsed_seconds": 1216,
+              "exit": 0
+            },
+            {
+              "stage": "default-clippy",
+              "elapsed_seconds": 97,
+              "exit": 0
+            },
+            {
+              "stage": "product-release",
+              "elapsed_seconds": 694,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 871,
+            "failed": 0,
+            "ignored": 5,
+            "measured": 0,
+            "filtered_out": 2694,
+            "execution_seconds": 774.14
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 33,
+            "numeric_tuple_count": 33,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 33
+          },
+          "cache": {
+            "exact_hit": false,
+            "resolved_key": "marmish-v02-release-split-v2-package-macos-15-aarch64-apple-darwin-macos15-glibc239-package-Darwin-arm64-61a98fb3-4db97c9b",
+            "cache_id_in_snapshot": 10450320364,
+            "archive_bytes_in_snapshot": 1185265417,
+            "restoration": [
+              {
+                "status": "miss",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 2.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 49.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "save",
+                "bytes": 1185265417,
+                "reported_rate": 86.8,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277923,
+                "cache_ids": [
+                  10450320364
+                ],
+                "archive_bytes": [
+                  1185265417
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131607277941,
+          "lane": "product",
+          "target": "aarch64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-13T00:52:15Z",
+          "started_at": "2026-11-13T00:52:20Z",
+          "completed_at": "2026-11-13T01:23:44Z",
+          "elapsed_s": 1884.0,
+          "queued_s": 5.0,
+          "runner_image": {
+            "name": "ubuntu-24.04-arm",
+            "version": "20261101.172.1"
+          },
+          "stages": [
+            {
+              "stage": "default-tests",
+              "elapsed_seconds": 1359,
+              "exit": 0
+            },
+            {
+              "stage": "default-clippy",
+              "elapsed_seconds": 63,
+              "exit": 0
+            },
+            {
+              "stage": "product-release",
+              "elapsed_seconds": 420,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 843,
+            "failed": 0,
+            "ignored": 5,
+            "measured": 0,
+            "filtered_out": 2325,
+            "execution_seconds": 1084.29
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 32,
+            "numeric_tuple_count": 32,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 32
+          },
+          "cache": {
+            "exact_hit": false,
+            "resolved_key": "marmish-v02-release-split-v2-package-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-package-Linux-arm64-307d303d-4db97c9b",
+            "cache_id_in_snapshot": 10450205526,
+            "archive_bytes_in_snapshot": 1289434789,
+            "restoration": [
+              {
+                "status": "miss",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 1.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 15.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "save",
+                "bytes": 1289434789,
+                "reported_rate": 270.1,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277941,
+                "cache_ids": [
+                  10450205526
+                ],
+                "archive_bytes": [
+                  1289434789
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131607277976,
+          "lane": "installed-tools",
+          "target": "aarch64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-13T00:52:15Z",
+          "started_at": "2026-11-13T00:52:20Z",
+          "completed_at": "2026-11-13T01:25:46Z",
+          "elapsed_s": 2006.0,
+          "queued_s": 5.0,
+          "runner_image": {
+            "name": "ubuntu-24.04-arm",
+            "version": "20261111.182.1"
+          },
+          "stages": [
+            {
+              "stage": "installed-tests",
+              "elapsed_seconds": 1433,
+              "exit": 0
+            },
+            {
+              "stage": "installed-clippy",
+              "elapsed_seconds": 79,
+              "exit": 0
+            },
+            {
+              "stage": "installed-release",
+              "elapsed_seconds": 472,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 919,
+            "failed": 0,
+            "ignored": 3,
+            "measured": 0,
+            "filtered_out": 2748,
+            "execution_seconds": 1136.06
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 12,
+            "numeric_tuple_count": 12,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 12
+          },
+          "cache": {
+            "exact_hit": false,
+            "resolved_key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-arm64-891dcbf1-4db97c9b",
+            "cache_id_in_snapshot": 10450274392,
+            "archive_bytes_in_snapshot": 305909795,
+            "restoration": [
+              {
+                "status": "miss",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 2.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 8.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "save",
+                "bytes": 305909795,
+                "reported_rate": 88.6,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277976,
+                "cache_ids": [
+                  10450274392
+                ],
+                "archive_bytes": [
+                  305909795
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131607277977,
+          "lane": "installed-tools",
+          "target": "x86_64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-13T00:52:15Z",
+          "started_at": "2026-11-13T00:52:18Z",
+          "completed_at": "2026-11-13T01:25:21Z",
+          "elapsed_s": 1983.0,
+          "queued_s": 3.0,
+          "runner_image": {
+            "name": "ubuntu-24.04",
+            "version": "20261101.360.1"
+          },
+          "stages": [
+            {
+              "stage": "installed-tests",
+              "elapsed_seconds": 1455,
+              "exit": 0
+            },
+            {
+              "stage": "installed-clippy",
+              "elapsed_seconds": 59,
+              "exit": 0
+            },
+            {
+              "stage": "installed-release",
+              "elapsed_seconds": 446,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 919,
+            "failed": 0,
+            "ignored": 3,
+            "measured": 0,
+            "filtered_out": 2748,
+            "execution_seconds": 1224.62
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 12,
+            "numeric_tuple_count": 12,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 12
+          },
+          "cache": {
+            "exact_hit": false,
+            "resolved_key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-x64-985a2716-4db97c9b",
+            "cache_id_in_snapshot": 10450261337,
+            "archive_bytes_in_snapshot": 306153586,
+            "restoration": [
+              {
+                "status": "miss",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 2.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 6.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "save",
+                "bytes": 306153586,
+                "reported_rate": 154.7,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277977,
+                "cache_ids": [
+                  10450261337
+                ],
+                "archive_bytes": [
+                  306153586
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "platform_test_totals": {
+        "x86_64-unknown-linux-gnu": {
+          "passed": 1762,
+          "failed": 0,
+          "ignored": 8,
+          "measured": 0,
+          "filtered_out": 5073,
+          "execution_seconds": 2468.42
+        },
+        "aarch64-unknown-linux-gnu": {
+          "passed": 1762,
+          "failed": 0,
+          "ignored": 8,
+          "measured": 0,
+          "filtered_out": 5073,
+          "execution_seconds": 2220.35
+        },
+        "aarch64-apple-darwin": {
+          "passed": 1789,
+          "failed": 0,
+          "ignored": 8,
+          "measured": 0,
+          "filtered_out": 5439,
+          "execution_seconds": 1494.7
+        }
+      },
+      "exact_cache_hits": 0,
+      "exact_cache_hit_observations": 6,
+      "cache_inventory": {
+        "observed_at": null,
+        "collection_note": "Historical repository-wide API snapshot retained after this attempt; exact collection timestamp unavailable.",
+        "entries": [
+          {
+            "id": 10450320364,
+            "key": "marmish-v02-release-split-v2-package-macos-15-aarch64-apple-darwin-macos15-glibc239-package-Darwin-arm64-61a98fb3-4db97c9b",
+            "size_in_bytes": 1185265417
+          },
+          {
+            "id": 10450274392,
+            "key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-arm64-891dcbf1-4db97c9b",
+            "size_in_bytes": 305909795
+          },
+          {
+            "id": 10450268619,
+            "key": "marmish-v02-release-split-v2-installed-tools-macos-15-aarch64-apple-darwin-macos15-glibc239-installed-tools-Darwin-arm64-61a98fb3-4db97c9b",
+            "size_in_bytes": 306127799
+          },
+          {
+            "id": 10450261337,
+            "key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-x64-985a2716-4db97c9b",
+            "size_in_bytes": 306153586
+          },
+          {
+            "id": 10450236189,
+            "key": "marmish-v02-release-split-v2-package-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-package-Linux-x64-985a2716-4db97c9b",
+            "size_in_bytes": 1294728875
+          },
+          {
+            "id": 10450205526,
+            "key": "marmish-v02-release-split-v2-package-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-package-Linux-arm64-307d303d-4db97c9b",
+            "size_in_bytes": 1289434789
+          }
+        ],
+        "entry_count": 6,
+        "archive_bytes": 4687620261,
+        "below_7GB": true,
+        "original_six_retention": [
+          {
+            "cache_id": 10450320364,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450274392,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450268619,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450261337,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450236189,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450205526,
+            "present": true,
+            "key_and_size_unchanged": true
+          }
+        ],
+        "all_original_six_retained": true
+      },
+      "all_platform_test_counts_match_baseline": true
+    },
+    {
+      "label": "warm1",
+      "run_id": 43345491416,
+      "attempt": 1,
+      "source_commit": "fe9a2e4d707e1754562bca34db9718601a97f996",
+      "url": "https://github.com/Epiphytic/marmish/actions/runs/43345491416/attempts/1",
+      "status": "completed",
+      "conclusion": "success",
+      "original_run_created_at": "2026-11-13T01:30:57Z",
+      "created_at": "2026-11-13T01:30:57Z",
+      "run_started_at": "2026-11-13T01:30:57Z",
+      "updated_at": "2026-11-13T02:07:01Z",
+      "last_job_completed_at": "2026-11-13T02:07:00Z",
+      "wall_s": 2163.0,
+      "created_to_last_job_s": 2163.0,
+      "aggregate_job_s": 10585.0,
+      "peak_jobs": 6,
+      "peak_macos": 2,
+      "job_count": 14,
+      "all_jobs_successful": true,
+      "layout": "six independent product/tool platform jobs",
+      "lanes": [
+        {
+          "job_id": 131623838049,
+          "lane": "installed-tools",
+          "target": "x86_64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-13T01:31:09Z",
+          "started_at": "2026-11-13T01:31:12Z",
+          "completed_at": "2026-11-13T02:05:15Z",
+          "elapsed_s": 2043.0,
+          "queued_s": 3.0,
+          "runner_image": {
+            "name": "ubuntu-24.04",
+            "version": "20261101.360.1"
+          },
+          "stages": [
+            {
+              "stage": "installed-tests",
+              "elapsed_seconds": 1526,
+              "exit": 0
+            },
+            {
+              "stage": "installed-clippy",
+              "elapsed_seconds": 68,
+              "exit": 0
+            },
+            {
+              "stage": "installed-release",
+              "elapsed_seconds": 425,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 919,
+            "failed": 0,
+            "ignored": 3,
+            "measured": 0,
+            "filtered_out": 2748,
+            "execution_seconds": 1291.36
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 12,
+            "numeric_tuple_count": 12,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 12
+          },
+          "cache": {
+            "exact_hit": true,
+            "resolved_key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-x64-985a2716-4db97c9b",
+            "cache_id_in_snapshot": 10450261337,
+            "archive_bytes_in_snapshot": 306153586,
+            "restoration": [
+              {
+                "status": "hit",
+                "restored_key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-x64-985a2716-4db97c9b",
+                "full_match": true
+              },
+              {
+                "status": "already_up_to_date",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 6.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 0.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "restore",
+                "bytes": 306153586,
+                "reported_rate": 90.7,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277977,
+                "cache_ids": [
+                  10450261337
+                ],
+                "archive_bytes": [
+                  306153586
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131623838068,
+          "lane": "installed-tools",
+          "target": "aarch64-apple-darwin",
+          "conclusion": "success",
+          "created_at": "2026-11-13T01:31:09Z",
+          "started_at": "2026-11-13T01:31:14Z",
+          "completed_at": "2026-11-13T02:05:31Z",
+          "elapsed_s": 2057.0,
+          "queued_s": 5.0,
+          "runner_image": {
+            "name": "macos-15-arm64",
+            "version": "20261104.0514.1"
+          },
+          "stages": [
+            {
+              "stage": "installed-tests",
+              "elapsed_seconds": 1123,
+              "exit": 0
+            },
+            {
+              "stage": "installed-clippy",
+              "elapsed_seconds": 128,
+              "exit": 0
+            },
+            {
+              "stage": "installed-release",
+              "elapsed_seconds": 770,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 918,
+            "failed": 0,
+            "ignored": 3,
+            "measured": 0,
+            "filtered_out": 2745,
+            "execution_seconds": 733.85
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 12,
+            "numeric_tuple_count": 12,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 12
+          },
+          "cache": {
+            "exact_hit": true,
+            "resolved_key": "marmish-v02-release-split-v2-installed-tools-macos-15-aarch64-apple-darwin-macos15-glibc239-installed-tools-Darwin-arm64-61a98fb3-4db97c9b",
+            "cache_id_in_snapshot": 10450268619,
+            "archive_bytes_in_snapshot": 306127799,
+            "restoration": [
+              {
+                "status": "hit",
+                "restored_key": "marmish-v02-release-split-v2-installed-tools-macos-15-aarch64-apple-darwin-macos15-glibc239-installed-tools-Darwin-arm64-61a98fb3-4db97c9b",
+                "full_match": true
+              },
+              {
+                "status": "already_up_to_date",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 7.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 1.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "restore",
+                "bytes": 306127799,
+                "reported_rate": 125.2,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277910,
+                "cache_ids": [
+                  10450268619
+                ],
+                "archive_bytes": [
+                  306127799
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131623838111,
+          "lane": "installed-tools",
+          "target": "aarch64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-13T01:31:09Z",
+          "started_at": "2026-11-13T01:31:14Z",
+          "completed_at": "2026-11-13T02:03:32Z",
+          "elapsed_s": 1938.0,
+          "queued_s": 5.0,
+          "runner_image": {
+            "name": "ubuntu-24.04-arm",
+            "version": "20261101.172.1"
+          },
+          "stages": [
+            {
+              "stage": "installed-tests",
+              "elapsed_seconds": 1397,
+              "exit": 0
+            },
+            {
+              "stage": "installed-clippy",
+              "elapsed_seconds": 73,
+              "exit": 0
+            },
+            {
+              "stage": "installed-release",
+              "elapsed_seconds": 448,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 919,
+            "failed": 0,
+            "ignored": 3,
+            "measured": 0,
+            "filtered_out": 2748,
+            "execution_seconds": 1097.5
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 12,
+            "numeric_tuple_count": 12,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 12
+          },
+          "cache": {
+            "exact_hit": false,
+            "resolved_key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-arm64-307d303d-4db97c9b",
+            "cache_id_in_snapshot": 10451484818,
+            "archive_bytes_in_snapshot": 305847595,
+            "restoration": [
+              {
+                "status": "miss",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 1.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 6.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "save",
+                "bytes": 305847595,
+                "reported_rate": 216.5,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43345491416,
+                "saving_attempt": 1,
+                "saving_job_id": 131623838111,
+                "cache_ids": [
+                  10451484818
+                ],
+                "archive_bytes": [
+                  305847595
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131623838127,
+          "lane": "product",
+          "target": "aarch64-apple-darwin",
+          "conclusion": "success",
+          "created_at": "2026-11-13T01:31:09Z",
+          "started_at": "2026-11-13T01:31:14Z",
+          "completed_at": "2026-11-13T01:51:08Z",
+          "elapsed_s": 1194.0,
+          "queued_s": 5.0,
+          "runner_image": {
+            "name": "macos-15-arm64",
+            "version": "20261104.0514.1"
+          },
+          "stages": [
+            {
+              "stage": "default-tests",
+              "elapsed_seconds": 911,
+              "exit": 0
+            },
+            {
+              "stage": "default-clippy",
+              "elapsed_seconds": 28,
+              "exit": 0
+            },
+            {
+              "stage": "product-release",
+              "elapsed_seconds": 161,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 871,
+            "failed": 0,
+            "ignored": 5,
+            "measured": 0,
+            "filtered_out": 2694,
+            "execution_seconds": 807.14
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 33,
+            "numeric_tuple_count": 33,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 33
+          },
+          "cache": {
+            "exact_hit": true,
+            "resolved_key": "marmish-v02-release-split-v2-package-macos-15-aarch64-apple-darwin-macos15-glibc239-package-Darwin-arm64-61a98fb3-4db97c9b",
+            "cache_id_in_snapshot": 10450320364,
+            "archive_bytes_in_snapshot": 1185265417,
+            "restoration": [
+              {
+                "status": "hit",
+                "restored_key": "marmish-v02-release-split-v2-package-macos-15-aarch64-apple-darwin-macos15-glibc239-package-Darwin-arm64-61a98fb3-4db97c9b",
+                "full_match": true
+              },
+              {
+                "status": "already_up_to_date",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 41.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 0.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "restore",
+                "bytes": 1185265417,
+                "reported_rate": 48.2,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277923,
+                "cache_ids": [
+                  10450320364
+                ],
+                "archive_bytes": [
+                  1185265417
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131623838133,
+          "lane": "product",
+          "target": "x86_64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-13T01:31:09Z",
+          "started_at": "2026-11-13T01:31:12Z",
+          "completed_at": "2026-11-13T02:01:36Z",
+          "elapsed_s": 1824.0,
+          "queued_s": 3.0,
+          "runner_image": {
+            "name": "ubuntu-24.04",
+            "version": "20261101.360.1"
+          },
+          "stages": [
+            {
+              "stage": "default-tests",
+              "elapsed_seconds": 1679,
+              "exit": 0
+            },
+            {
+              "stage": "default-clippy",
+              "elapsed_seconds": 16,
+              "exit": 0
+            },
+            {
+              "stage": "product-release",
+              "elapsed_seconds": 78,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 843,
+            "failed": 0,
+            "ignored": 5,
+            "measured": 0,
+            "filtered_out": 2325,
+            "execution_seconds": 1637.91
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 32,
+            "numeric_tuple_count": 32,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 32
+          },
+          "cache": {
+            "exact_hit": true,
+            "resolved_key": "marmish-v02-release-split-v2-package-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-package-Linux-x64-985a2716-4db97c9b",
+            "cache_id_in_snapshot": 10450236189,
+            "archive_bytes_in_snapshot": 1294728875,
+            "restoration": [
+              {
+                "status": "hit",
+                "restored_key": "marmish-v02-release-split-v2-package-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-package-Linux-x64-985a2716-4db97c9b",
+                "full_match": true
+              },
+              {
+                "status": "already_up_to_date",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 24.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 0.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "restore",
+                "bytes": 1294728875,
+                "reported_rate": 255.4,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277915,
+                "cache_ids": [
+                  10450236189
+                ],
+                "archive_bytes": [
+                  1294728875
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131623838139,
+          "lane": "product",
+          "target": "aarch64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-13T01:31:09Z",
+          "started_at": "2026-11-13T01:31:14Z",
+          "completed_at": "2026-11-13T01:52:19Z",
+          "elapsed_s": 1265.0,
+          "queued_s": 5.0,
+          "runner_image": {
+            "name": "ubuntu-24.04-arm",
+            "version": "20261101.172.1"
+          },
+          "stages": [
+            {
+              "stage": "default-tests",
+              "elapsed_seconds": 1123,
+              "exit": 0
+            },
+            {
+              "stage": "default-clippy",
+              "elapsed_seconds": 16,
+              "exit": 0
+            },
+            {
+              "stage": "product-release",
+              "elapsed_seconds": 83,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 843,
+            "failed": 0,
+            "ignored": 5,
+            "measured": 0,
+            "filtered_out": 2325,
+            "execution_seconds": 1059.45
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 32,
+            "numeric_tuple_count": 32,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 2,
+            "duration_count": 32
+          },
+          "cache": {
+            "exact_hit": true,
+            "resolved_key": "marmish-v02-release-split-v2-package-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-package-Linux-arm64-307d303d-4db97c9b",
+            "cache_id_in_snapshot": 10450205526,
+            "archive_bytes_in_snapshot": 1289434789,
+            "restoration": [
+              {
+                "status": "hit",
+                "restored_key": "marmish-v02-release-split-v2-package-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-package-Linux-arm64-307d303d-4db97c9b",
+                "full_match": true
+              },
+              {
+                "status": "already_up_to_date",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 18.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 0.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "restore",
+                "bytes": 1289434789,
+                "reported_rate": 226.5,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277941,
+                "cache_ids": [
+                  10450205526
+                ],
+                "archive_bytes": [
+                  1289434789
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "platform_test_totals": {
+        "x86_64-unknown-linux-gnu": {
+          "passed": 1762,
+          "failed": 0,
+          "ignored": 8,
+          "measured": 0,
+          "filtered_out": 5073,
+          "execution_seconds": 2929.27
+        },
+        "aarch64-unknown-linux-gnu": {
+          "passed": 1762,
+          "failed": 0,
+          "ignored": 8,
+          "measured": 0,
+          "filtered_out": 5073,
+          "execution_seconds": 2156.95
+        },
+        "aarch64-apple-darwin": {
+          "passed": 1789,
+          "failed": 0,
+          "ignored": 8,
+          "measured": 0,
+          "filtered_out": 5439,
+          "execution_seconds": 1540.99
+        }
+      },
+      "exact_cache_hits": 5,
+      "exact_cache_hit_observations": 6,
+      "cache_inventory": {
+        "observed_at": null,
+        "collection_note": "Historical repository-wide API snapshot retained after this attempt; exact collection timestamp unavailable.",
+        "entries": [
+          {
+            "id": 10451484818,
+            "key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-arm64-307d303d-4db97c9b",
+            "size_in_bytes": 305847595
+          },
+          {
+            "id": 10450268619,
+            "key": "marmish-v02-release-split-v2-installed-tools-macos-15-aarch64-apple-darwin-macos15-glibc239-installed-tools-Darwin-arm64-61a98fb3-4db97c9b",
+            "size_in_bytes": 306127799
+          },
+          {
+            "id": 10450320364,
+            "key": "marmish-v02-release-split-v2-package-macos-15-aarch64-apple-darwin-macos15-glibc239-package-Darwin-arm64-61a98fb3-4db97c9b",
+            "size_in_bytes": 1185265417
+          },
+          {
+            "id": 10450261337,
+            "key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-x64-985a2716-4db97c9b",
+            "size_in_bytes": 306153586
+          },
+          {
+            "id": 10450236189,
+            "key": "marmish-v02-release-split-v2-package-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-package-Linux-x64-985a2716-4db97c9b",
+            "size_in_bytes": 1294728875
+          },
+          {
+            "id": 10450205526,
+            "key": "marmish-v02-release-split-v2-package-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-package-Linux-arm64-307d303d-4db97c9b",
+            "size_in_bytes": 1289434789
+          },
+          {
+            "id": 10450274392,
+            "key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-arm64-891dcbf1-4db97c9b",
+            "size_in_bytes": 305909795
+          }
+        ],
+        "entry_count": 7,
+        "archive_bytes": 4993467856,
+        "below_7GB": true,
+        "original_six_retention": [
+          {
+            "cache_id": 10450320364,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450274392,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450268619,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450261337,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450236189,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450205526,
+            "present": true,
+            "key_and_size_unchanged": true
+          }
+        ],
+        "all_original_six_retained": true
+      },
+      "all_platform_test_counts_match_baseline": true
+    },
+    {
+      "label": "warm2",
+      "run_id": 43345491416,
+      "attempt": 2,
+      "source_commit": "fe9a2e4d707e1754562bca34db9718601a97f996",
+      "url": "https://github.com/Epiphytic/marmish/actions/runs/43345491416/attempts/2",
+      "status": "completed",
+      "conclusion": "success",
+      "original_run_created_at": "2026-11-13T01:30:57Z",
+      "created_at": "2026-11-13T02:12:02Z",
+      "run_started_at": "2026-11-13T02:12:00Z",
+      "updated_at": "2026-11-13T02:52:19Z",
+      "last_job_completed_at": "2026-11-13T02:52:18Z",
+      "wall_s": 2418.0,
+      "created_to_last_job_s": 2416.0,
+      "aggregate_job_s": 11659.0,
+      "peak_jobs": 6,
+      "peak_macos": 2,
+      "job_count": 14,
+      "all_jobs_successful": true,
+      "layout": "six independent product/tool platform jobs",
+      "lanes": [
+        {
+          "job_id": 131640011189,
+          "lane": "product",
+          "target": "aarch64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-13T02:12:15Z",
+          "started_at": "2026-11-13T02:12:21Z",
+          "completed_at": "2026-11-13T02:45:38Z",
+          "elapsed_s": 1997.0,
+          "queued_s": 6.0,
+          "runner_image": {
+            "name": "ubuntu-24.04-arm",
+            "version": "20261111.182.1"
+          },
+          "stages": [
+            {
+              "stage": "default-tests",
+              "elapsed_seconds": 1417,
+              "exit": 0
+            },
+            {
+              "stage": "default-clippy",
+              "elapsed_seconds": 65,
+              "exit": 0
+            },
+            {
+              "stage": "product-release",
+              "elapsed_seconds": 443,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 843,
+            "failed": 0,
+            "ignored": 5,
+            "measured": 0,
+            "filtered_out": 2325,
+            "execution_seconds": 1131.05
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 32,
+            "numeric_tuple_count": 32,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 32
+          },
+          "cache": {
+            "exact_hit": false,
+            "resolved_key": "marmish-v02-release-split-v2-package-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-package-Linux-arm64-891dcbf1-4db97c9b",
+            "cache_id_in_snapshot": 10452806916,
+            "archive_bytes_in_snapshot": 1290150377,
+            "restoration": [
+              {
+                "status": "miss",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 2.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 42.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "save",
+                "bytes": 1290150377,
+                "reported_rate": 41.4,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43345491416,
+                "saving_attempt": 2,
+                "saving_job_id": 131640011189,
+                "cache_ids": [
+                  10452806916
+                ],
+                "archive_bytes": [
+                  1290150377
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131640011234,
+          "lane": "product",
+          "target": "x86_64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-13T02:12:15Z",
+          "started_at": "2026-11-13T02:12:18Z",
+          "completed_at": "2026-11-13T02:48:48Z",
+          "elapsed_s": 2190.0,
+          "queued_s": 3.0,
+          "runner_image": {
+            "name": "ubuntu-24.04",
+            "version": "20261101.360.1"
+          },
+          "stages": [
+            {
+              "stage": "default-tests",
+              "elapsed_seconds": 2014,
+              "exit": 0
+            },
+            {
+              "stage": "default-clippy",
+              "elapsed_seconds": 19,
+              "exit": 0
+            },
+            {
+              "stage": "product-release",
+              "elapsed_seconds": 100,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 843,
+            "failed": 0,
+            "ignored": 5,
+            "measured": 0,
+            "filtered_out": 2325,
+            "execution_seconds": 1960.97
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 32,
+            "numeric_tuple_count": 32,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 32
+          },
+          "cache": {
+            "exact_hit": true,
+            "resolved_key": "marmish-v02-release-split-v2-package-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-package-Linux-x64-985a2716-4db97c9b",
+            "cache_id_in_snapshot": 10450236189,
+            "archive_bytes_in_snapshot": 1294728875,
+            "restoration": [
+              {
+                "status": "hit",
+                "restored_key": "marmish-v02-release-split-v2-package-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-package-Linux-x64-985a2716-4db97c9b",
+                "full_match": true
+              },
+              {
+                "status": "already_up_to_date",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 20.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 0.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "restore",
+                "bytes": 1294728875,
+                "reported_rate": 160.5,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277915,
+                "cache_ids": [
+                  10450236189
+                ],
+                "archive_bytes": [
+                  1294728875
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131640011237,
+          "lane": "installed-tools",
+          "target": "aarch64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-13T02:12:15Z",
+          "started_at": "2026-11-13T02:12:20Z",
+          "completed_at": "2026-11-13T02:43:40Z",
+          "elapsed_s": 1880.0,
+          "queued_s": 5.0,
+          "runner_image": {
+            "name": "ubuntu-24.04-arm",
+            "version": "20261111.182.1"
+          },
+          "stages": [
+            {
+              "stage": "installed-tests",
+              "elapsed_seconds": 1360,
+              "exit": 0
+            },
+            {
+              "stage": "installed-clippy",
+              "elapsed_seconds": 68,
+              "exit": 0
+            },
+            {
+              "stage": "installed-release",
+              "elapsed_seconds": 429,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 919,
+            "failed": 0,
+            "ignored": 3,
+            "measured": 0,
+            "filtered_out": 2748,
+            "execution_seconds": 1106.13
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 12,
+            "numeric_tuple_count": 12,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 12
+          },
+          "cache": {
+            "exact_hit": true,
+            "resolved_key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-arm64-891dcbf1-4db97c9b",
+            "cache_id_in_snapshot": 10450274392,
+            "archive_bytes_in_snapshot": 305909795,
+            "restoration": [
+              {
+                "status": "hit",
+                "restored_key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-arm64-891dcbf1-4db97c9b",
+                "full_match": true
+              },
+              {
+                "status": "already_up_to_date",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 5.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 0.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "restore",
+                "bytes": 305909795,
+                "reported_rate": 83.7,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277976,
+                "cache_ids": [
+                  10450274392
+                ],
+                "archive_bytes": [
+                  305909795
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131640011277,
+          "lane": "installed-tools",
+          "target": "x86_64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-13T02:12:15Z",
+          "started_at": "2026-11-13T02:12:18Z",
+          "completed_at": "2026-11-13T02:44:56Z",
+          "elapsed_s": 1958.0,
+          "queued_s": 3.0,
+          "runner_image": {
+            "name": "ubuntu-24.04",
+            "version": "20261101.360.1"
+          },
+          "stages": [
+            {
+              "stage": "installed-tests",
+              "elapsed_seconds": 1469,
+              "exit": 0
+            },
+            {
+              "stage": "installed-clippy",
+              "elapsed_seconds": 63,
+              "exit": 0
+            },
+            {
+              "stage": "installed-release",
+              "elapsed_seconds": 403,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 919,
+            "failed": 0,
+            "ignored": 3,
+            "measured": 0,
+            "filtered_out": 2748,
+            "execution_seconds": 1265.96
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 12,
+            "numeric_tuple_count": 12,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 12
+          },
+          "cache": {
+            "exact_hit": true,
+            "resolved_key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-x64-985a2716-4db97c9b",
+            "cache_id_in_snapshot": 10450261337,
+            "archive_bytes_in_snapshot": 306153586,
+            "restoration": [
+              {
+                "status": "hit",
+                "restored_key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-x64-985a2716-4db97c9b",
+                "full_match": true
+              },
+              {
+                "status": "already_up_to_date",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 6.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 0.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "restore",
+                "bytes": 306153586,
+                "reported_rate": 69.3,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277977,
+                "cache_ids": [
+                  10450261337
+                ],
+                "archive_bytes": [
+                  306153586
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131640011315,
+          "lane": "product",
+          "target": "aarch64-apple-darwin",
+          "conclusion": "success",
+          "created_at": "2026-11-13T02:12:15Z",
+          "started_at": "2026-11-13T02:12:19Z",
+          "completed_at": "2026-11-13T02:30:24Z",
+          "elapsed_s": 1085.0,
+          "queued_s": 4.0,
+          "runner_image": {
+            "name": "macos-15-arm64",
+            "version": "20261104.0514.1"
+          },
+          "stages": [
+            {
+              "stage": "default-tests",
+              "elapsed_seconds": 855,
+              "exit": 0
+            },
+            {
+              "stage": "default-clippy",
+              "elapsed_seconds": 22,
+              "exit": 0
+            },
+            {
+              "stage": "product-release",
+              "elapsed_seconds": 121,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 871,
+            "failed": 0,
+            "ignored": 5,
+            "measured": 0,
+            "filtered_out": 2694,
+            "execution_seconds": 777.35
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 33,
+            "numeric_tuple_count": 33,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 33
+          },
+          "cache": {
+            "exact_hit": true,
+            "resolved_key": "marmish-v02-release-split-v2-package-macos-15-aarch64-apple-darwin-macos15-glibc239-package-Darwin-arm64-61a98fb3-4db97c9b",
+            "cache_id_in_snapshot": 10450320364,
+            "archive_bytes_in_snapshot": 1185265417,
+            "restoration": [
+              {
+                "status": "hit",
+                "restored_key": "marmish-v02-release-split-v2-package-macos-15-aarch64-apple-darwin-macos15-glibc239-package-Darwin-arm64-61a98fb3-4db97c9b",
+                "full_match": true
+              },
+              {
+                "status": "already_up_to_date",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 37.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 0.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "restore",
+                "bytes": 1185265417,
+                "reported_rate": 53.2,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277923,
+                "cache_ids": [
+                  10450320364
+                ],
+                "archive_bytes": [
+                  1185265417
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131640011632,
+          "lane": "installed-tools",
+          "target": "aarch64-apple-darwin",
+          "conclusion": "success",
+          "created_at": "2026-11-13T02:12:15Z",
+          "started_at": "2026-11-13T02:12:19Z",
+          "completed_at": "2026-11-13T02:51:08Z",
+          "elapsed_s": 2329.0,
+          "queued_s": 4.0,
+          "runner_image": {
+            "name": "macos-15-arm64",
+            "version": "20261104.0514.1"
+          },
+          "stages": [
+            {
+              "stage": "installed-tests",
+              "elapsed_seconds": 1282,
+              "exit": 0
+            },
+            {
+              "stage": "installed-clippy",
+              "elapsed_seconds": 131,
+              "exit": 0
+            },
+            {
+              "stage": "installed-release",
+              "elapsed_seconds": 875,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 918,
+            "failed": 0,
+            "ignored": 3,
+            "measured": 0,
+            "filtered_out": 2745,
+            "execution_seconds": 825.66
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 12,
+            "numeric_tuple_count": 12,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 12
+          },
+          "cache": {
+            "exact_hit": true,
+            "resolved_key": "marmish-v02-release-split-v2-installed-tools-macos-15-aarch64-apple-darwin-macos15-glibc239-installed-tools-Darwin-arm64-61a98fb3-4db97c9b",
+            "cache_id_in_snapshot": 10450268619,
+            "archive_bytes_in_snapshot": 306127799,
+            "restoration": [
+              {
+                "status": "hit",
+                "restored_key": "marmish-v02-release-split-v2-installed-tools-macos-15-aarch64-apple-darwin-macos15-glibc239-installed-tools-Darwin-arm64-61a98fb3-4db97c9b",
+                "full_match": true
+              },
+              {
+                "status": "already_up_to_date",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 11.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 1.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "restore",
+                "bytes": 306127799,
+                "reported_rate": 52.6,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277910,
+                "cache_ids": [
+                  10450268619
+                ],
+                "archive_bytes": [
+                  306127799
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "platform_test_totals": {
+        "x86_64-unknown-linux-gnu": {
+          "passed": 1762,
+          "failed": 0,
+          "ignored": 8,
+          "measured": 0,
+          "filtered_out": 5073,
+          "execution_seconds": 3226.93
+        },
+        "aarch64-unknown-linux-gnu": {
+          "passed": 1762,
+          "failed": 0,
+          "ignored": 8,
+          "measured": 0,
+          "filtered_out": 5073,
+          "execution_seconds": 2237.18
+        },
+        "aarch64-apple-darwin": {
+          "passed": 1789,
+          "failed": 0,
+          "ignored": 8,
+          "measured": 0,
+          "filtered_out": 5439,
+          "execution_seconds": 1603.01
+        }
+      },
+      "exact_cache_hits": 5,
+      "exact_cache_hit_observations": 6,
+      "cache_inventory": {
+        "observed_at": "2026-11-13T02:54:41.464259+00:00",
+        "collection_note": "Repository-wide live API snapshot at observed_at, after attempt completion; not an atomic historical run boundary.",
+        "entries": [
+          {
+            "id": 10452806916,
+            "key": "marmish-v02-release-split-v2-package-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-package-Linux-arm64-891dcbf1-4db97c9b",
+            "size_in_bytes": 1290150377
+          },
+          {
+            "id": 10450268619,
+            "key": "marmish-v02-release-split-v2-installed-tools-macos-15-aarch64-apple-darwin-macos15-glibc239-installed-tools-Darwin-arm64-61a98fb3-4db97c9b",
+            "size_in_bytes": 306127799
+          },
+          {
+            "id": 10450320364,
+            "key": "marmish-v02-release-split-v2-package-macos-15-aarch64-apple-darwin-macos15-glibc239-package-Darwin-arm64-61a98fb3-4db97c9b",
+            "size_in_bytes": 1185265417
+          },
+          {
+            "id": 10450236189,
+            "key": "marmish-v02-release-split-v2-package-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-package-Linux-x64-985a2716-4db97c9b",
+            "size_in_bytes": 1294728875
+          },
+          {
+            "id": 10450274392,
+            "key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-arm64-891dcbf1-4db97c9b",
+            "size_in_bytes": 305909795
+          },
+          {
+            "id": 10450261337,
+            "key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-x64-985a2716-4db97c9b",
+            "size_in_bytes": 306153586
+          },
+          {
+            "id": 10451484818,
+            "key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-arm64-307d303d-4db97c9b",
+            "size_in_bytes": 305847595
+          },
+          {
+            "id": 10450205526,
+            "key": "marmish-v02-release-split-v2-package-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-package-Linux-arm64-307d303d-4db97c9b",
+            "size_in_bytes": 1289434789
+          }
+        ],
+        "entry_count": 8,
+        "archive_bytes": 6283618233,
+        "below_7GB": true,
+        "original_six_retention": [
+          {
+            "cache_id": 10450320364,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450274392,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450268619,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450261337,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450236189,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450205526,
+            "present": true,
+            "key_and_size_unchanged": true
+          }
+        ],
+        "all_original_six_retained": true
+      },
+      "all_platform_test_counts_match_baseline": true
+    },
+    {
+      "label": "final3",
+      "run_id": 43345491416,
+      "attempt": 3,
+      "source_commit": "fe9a2e4d707e1754562bca34db9718601a97f996",
+      "url": "https://github.com/Epiphytic/marmish/actions/runs/43345491416/attempts/3",
+      "status": "completed",
+      "conclusion": "success",
+      "original_run_created_at": "2026-11-13T01:30:57Z",
+      "created_at": "2026-11-13T02:56:38Z",
+      "run_started_at": "2026-11-13T02:56:37Z",
+      "updated_at": "2026-11-13T03:48:51Z",
+      "last_job_completed_at": "2026-11-13T03:48:50Z",
+      "wall_s": 3133.0,
+      "created_to_last_job_s": 3132.0,
+      "aggregate_job_s": 11701.0,
+      "peak_jobs": 6,
+      "peak_macos": 2,
+      "job_count": 14,
+      "all_jobs_successful": true,
+      "layout": "six independent product/tool platform jobs",
+      "lanes": [
+        {
+          "job_id": 131656858218,
+          "lane": "product",
+          "target": "aarch64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-13T02:56:59Z",
+          "started_at": "2026-11-13T02:57:06Z",
+          "completed_at": "2026-11-13T03:19:21Z",
+          "elapsed_s": 1335.0,
+          "queued_s": 7.0,
+          "runner_image": {
+            "name": "ubuntu-24.04-arm",
+            "version": "20261101.172.1"
+          },
+          "stages": [
+            {
+              "stage": "default-tests",
+              "elapsed_seconds": 1173,
+              "exit": 0
+            },
+            {
+              "stage": "default-clippy",
+              "elapsed_seconds": 18,
+              "exit": 0
+            },
+            {
+              "stage": "product-release",
+              "elapsed_seconds": 85,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 843,
+            "failed": 0,
+            "ignored": 5,
+            "measured": 0,
+            "filtered_out": 2325,
+            "execution_seconds": 1114.15
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 32,
+            "numeric_tuple_count": 32,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 32
+          },
+          "cache": {
+            "exact_hit": true,
+            "resolved_key": "marmish-v02-release-split-v2-package-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-package-Linux-arm64-307d303d-4db97c9b",
+            "cache_id_in_snapshot": 10450205526,
+            "archive_bytes_in_snapshot": 1289434789,
+            "restoration": [
+              {
+                "status": "hit",
+                "restored_key": "marmish-v02-release-split-v2-package-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-package-Linux-arm64-307d303d-4db97c9b",
+                "full_match": true
+              },
+              {
+                "status": "already_up_to_date",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 27.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 0.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "restore",
+                "bytes": 1289434789,
+                "reported_rate": 102.1,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277941,
+                "cache_ids": [
+                  10450205526
+                ],
+                "archive_bytes": [
+                  1289434789
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131656858238,
+          "lane": "product",
+          "target": "aarch64-apple-darwin",
+          "conclusion": "success",
+          "created_at": "2026-11-13T02:56:59Z",
+          "started_at": "2026-11-13T02:57:02Z",
+          "completed_at": "2026-11-13T03:16:09Z",
+          "elapsed_s": 1147.0,
+          "queued_s": 3.0,
+          "runner_image": {
+            "name": "macos-15-arm64",
+            "version": "20261104.0514.1"
+          },
+          "stages": [
+            {
+              "stage": "default-tests",
+              "elapsed_seconds": 877,
+              "exit": 0
+            },
+            {
+              "stage": "default-clippy",
+              "elapsed_seconds": 29,
+              "exit": 0
+            },
+            {
+              "stage": "product-release",
+              "elapsed_seconds": 161,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 871,
+            "failed": 0,
+            "ignored": 5,
+            "measured": 0,
+            "filtered_out": 2694,
+            "execution_seconds": 789.51
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 33,
+            "numeric_tuple_count": 33,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 33
+          },
+          "cache": {
+            "exact_hit": true,
+            "resolved_key": "marmish-v02-release-split-v2-package-macos-15-aarch64-apple-darwin-macos15-glibc239-package-Darwin-arm64-61a98fb3-4db97c9b",
+            "cache_id_in_snapshot": 10450320364,
+            "archive_bytes_in_snapshot": 1185265417,
+            "restoration": [
+              {
+                "status": "hit",
+                "restored_key": "marmish-v02-release-split-v2-package-macos-15-aarch64-apple-darwin-macos15-glibc239-package-Darwin-arm64-61a98fb3-4db97c9b",
+                "full_match": true
+              },
+              {
+                "status": "already_up_to_date",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 32.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 0.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "restore",
+                "bytes": 1185265417,
+                "reported_rate": 107.1,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277923,
+                "cache_ids": [
+                  10450320364
+                ],
+                "archive_bytes": [
+                  1185265417
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131656858286,
+          "lane": "installed-tools",
+          "target": "aarch64-apple-darwin",
+          "conclusion": "success",
+          "created_at": "2026-11-13T02:56:59Z",
+          "started_at": "2026-11-13T02:57:03Z",
+          "completed_at": "2026-11-13T03:24:34Z",
+          "elapsed_s": 1651.0,
+          "queued_s": 4.0,
+          "runner_image": {
+            "name": "macos-15-arm64",
+            "version": "20261104.0514.1"
+          },
+          "stages": [
+            {
+              "stage": "installed-tests",
+              "elapsed_seconds": 935,
+              "exit": 0
+            },
+            {
+              "stage": "installed-clippy",
+              "elapsed_seconds": 72,
+              "exit": 0
+            },
+            {
+              "stage": "installed-release",
+              "elapsed_seconds": 604,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 918,
+            "failed": 0,
+            "ignored": 3,
+            "measured": 0,
+            "filtered_out": 2745,
+            "execution_seconds": 637.73
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 12,
+            "numeric_tuple_count": 12,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 12
+          },
+          "cache": {
+            "exact_hit": true,
+            "resolved_key": "marmish-v02-release-split-v2-installed-tools-macos-15-aarch64-apple-darwin-macos15-glibc239-installed-tools-Darwin-arm64-61a98fb3-4db97c9b",
+            "cache_id_in_snapshot": 10450268619,
+            "archive_bytes_in_snapshot": 306127799,
+            "restoration": [
+              {
+                "status": "hit",
+                "restored_key": "marmish-v02-release-split-v2-installed-tools-macos-15-aarch64-apple-darwin-macos15-glibc239-installed-tools-Darwin-arm64-61a98fb3-4db97c9b",
+                "full_match": true
+              },
+              {
+                "status": "already_up_to_date",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 15.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 0.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "restore",
+                "bytes": 306127799,
+                "reported_rate": 67.4,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277910,
+                "cache_ids": [
+                  10450268619
+                ],
+                "archive_bytes": [
+                  306127799
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131656858305,
+          "lane": "installed-tools",
+          "target": "aarch64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-13T02:56:59Z",
+          "started_at": "2026-11-13T02:57:04Z",
+          "completed_at": "2026-11-13T03:28:59Z",
+          "elapsed_s": 1915.0,
+          "queued_s": 5.0,
+          "runner_image": {
+            "name": "ubuntu-24.04-arm",
+            "version": "20261101.172.1"
+          },
+          "stages": [
+            {
+              "stage": "installed-tests",
+              "elapsed_seconds": 1364,
+              "exit": 0
+            },
+            {
+              "stage": "installed-clippy",
+              "elapsed_seconds": 75,
+              "exit": 0
+            },
+            {
+              "stage": "installed-release",
+              "elapsed_seconds": 457,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 919,
+            "failed": 0,
+            "ignored": 3,
+            "measured": 0,
+            "filtered_out": 2748,
+            "execution_seconds": 1086.05
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 12,
+            "numeric_tuple_count": 12,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 12
+          },
+          "cache": {
+            "exact_hit": true,
+            "resolved_key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-arm64-307d303d-4db97c9b",
+            "cache_id_in_snapshot": 10451484818,
+            "archive_bytes_in_snapshot": 305847595,
+            "restoration": [
+              {
+                "status": "hit",
+                "restored_key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-arm64-307d303d-4db97c9b",
+                "full_match": true
+              },
+              {
+                "status": "already_up_to_date",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 5.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 0.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "restore",
+                "bytes": 305847595,
+                "reported_rate": 187.1,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43345491416,
+                "saving_attempt": 1,
+                "saving_job_id": 131623838111,
+                "cache_ids": [
+                  10451484818
+                ],
+                "archive_bytes": [
+                  305847595
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131656858345,
+          "lane": "installed-tools",
+          "target": "x86_64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-13T02:56:59Z",
+          "started_at": "2026-11-13T02:57:02Z",
+          "completed_at": "2026-11-13T03:36:55Z",
+          "elapsed_s": 2393.0,
+          "queued_s": 3.0,
+          "runner_image": {
+            "name": "ubuntu-24.04",
+            "version": "20261101.360.1"
+          },
+          "stages": [
+            {
+              "stage": "installed-tests",
+              "elapsed_seconds": 1676,
+              "exit": 0
+            },
+            {
+              "stage": "installed-clippy",
+              "elapsed_seconds": 83,
+              "exit": 0
+            },
+            {
+              "stage": "installed-release",
+              "elapsed_seconds": 611,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 919,
+            "failed": 0,
+            "ignored": 3,
+            "measured": 0,
+            "filtered_out": 2748,
+            "execution_seconds": 1382.74
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 12,
+            "numeric_tuple_count": 12,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 12
+          },
+          "cache": {
+            "exact_hit": true,
+            "resolved_key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-x64-985a2716-4db97c9b",
+            "cache_id_in_snapshot": 10450261337,
+            "archive_bytes_in_snapshot": 306153586,
+            "restoration": [
+              {
+                "status": "hit",
+                "restored_key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-x64-985a2716-4db97c9b",
+                "full_match": true
+              },
+              {
+                "status": "already_up_to_date",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 4.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 1.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "restore",
+                "bytes": 306153586,
+                "reported_rate": 139.0,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277977,
+                "cache_ids": [
+                  10450261337
+                ],
+                "archive_bytes": [
+                  306153586
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131656858407,
+          "lane": "product",
+          "target": "x86_64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-13T02:56:59Z",
+          "started_at": "2026-11-13T02:57:02Z",
+          "completed_at": "2026-11-13T03:47:37Z",
+          "elapsed_s": 3035.0,
+          "queued_s": 3.0,
+          "runner_image": {
+            "name": "ubuntu-24.04",
+            "version": "20261111.370.1"
+          },
+          "stages": [
+            {
+              "stage": "default-tests",
+              "elapsed_seconds": 2309,
+              "exit": 0
+            },
+            {
+              "stage": "default-clippy",
+              "elapsed_seconds": 84,
+              "exit": 0
+            },
+            {
+              "stage": "product-release",
+              "elapsed_seconds": 594,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 843,
+            "failed": 0,
+            "ignored": 5,
+            "measured": 0,
+            "filtered_out": 2325,
+            "execution_seconds": 1981.17
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 32,
+            "numeric_tuple_count": 32,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 32
+          },
+          "cache": {
+            "exact_hit": false,
+            "resolved_key": "marmish-v02-release-split-v2-package-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-package-Linux-x64-a6056e7b-4db97c9b",
+            "cache_id_in_snapshot": 10454762856,
+            "archive_bytes_in_snapshot": 1294566063,
+            "restoration": [
+              {
+                "status": "miss",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 2.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 19.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "save",
+                "bytes": 1294566063,
+                "reported_rate": 317.2,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43345491416,
+                "saving_attempt": 3,
+                "saving_job_id": 131656858407,
+                "cache_ids": [
+                  10454762856
+                ],
+                "archive_bytes": [
+                  1294566063
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "platform_test_totals": {
+        "x86_64-unknown-linux-gnu": {
+          "passed": 1762,
+          "failed": 0,
+          "ignored": 8,
+          "measured": 0,
+          "filtered_out": 5073,
+          "execution_seconds": 3363.91
+        },
+        "aarch64-unknown-linux-gnu": {
+          "passed": 1762,
+          "failed": 0,
+          "ignored": 8,
+          "measured": 0,
+          "filtered_out": 5073,
+          "execution_seconds": 2200.2
+        },
+        "aarch64-apple-darwin": {
+          "passed": 1789,
+          "failed": 0,
+          "ignored": 8,
+          "measured": 0,
+          "filtered_out": 5439,
+          "execution_seconds": 1427.24
+        }
+      },
+      "exact_cache_hits": 5,
+      "exact_cache_hit_observations": 6,
+      "cache_inventory": {
+        "observed_at": "2026-11-13T03:49:06.933003+00:00",
+        "collection_note": "Repository-wide live API snapshot at observed_at, after attempt completion; not an atomic historical run boundary.",
+        "entries": [
+          {
+            "id": 10454762856,
+            "key": "marmish-v02-release-split-v2-package-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-package-Linux-x64-a6056e7b-4db97c9b",
+            "size_in_bytes": 1294566063
+          },
+          {
+            "id": 10450320364,
+            "key": "marmish-v02-release-split-v2-package-macos-15-aarch64-apple-darwin-macos15-glibc239-package-Darwin-arm64-61a98fb3-4db97c9b",
+            "size_in_bytes": 1185265417
+          },
+          {
+            "id": 10450268619,
+            "key": "marmish-v02-release-split-v2-installed-tools-macos-15-aarch64-apple-darwin-macos15-glibc239-installed-tools-Darwin-arm64-61a98fb3-4db97c9b",
+            "size_in_bytes": 306127799
+          },
+          {
+            "id": 10450205526,
+            "key": "marmish-v02-release-split-v2-package-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-package-Linux-arm64-307d303d-4db97c9b",
+            "size_in_bytes": 1289434789
+          },
+          {
+            "id": 10450261337,
+            "key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-x64-985a2716-4db97c9b",
+            "size_in_bytes": 306153586
+          },
+          {
+            "id": 10451484818,
+            "key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-arm64-307d303d-4db97c9b",
+            "size_in_bytes": 305847595
+          },
+          {
+            "id": 10452806916,
+            "key": "marmish-v02-release-split-v2-package-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-package-Linux-arm64-891dcbf1-4db97c9b",
+            "size_in_bytes": 1290150377
+          },
+          {
+            "id": 10450236189,
+            "key": "marmish-v02-release-split-v2-package-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-package-Linux-x64-985a2716-4db97c9b",
+            "size_in_bytes": 1294728875
+          },
+          {
+            "id": 10450274392,
+            "key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-arm64-891dcbf1-4db97c9b",
+            "size_in_bytes": 305909795
+          }
+        ],
+        "entry_count": 9,
+        "archive_bytes": 7578184296,
+        "below_7GB": false,
+        "original_six_retention": [
+          {
+            "cache_id": 10450320364,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450274392,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450268619,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450261337,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450236189,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450205526,
+            "present": true,
+            "key_and_size_unchanged": true
+          }
+        ],
+        "all_original_six_retained": true
+      },
+      "all_platform_test_counts_match_baseline": true
+    },
+    {
+      "label": "product-only-candidate",
+      "run_id": 43363338143,
+      "attempt": 1,
+      "source_commit": "9131926f85ce2cacc04805027871bdfe92dafc61",
+      "url": "https://github.com/Epiphytic/marmish/actions/runs/43363338143/attempts/1",
+      "status": "completed",
+      "conclusion": "success",
+      "original_run_created_at": "2026-11-13T04:06:40Z",
+      "created_at": "2026-11-13T04:06:40Z",
+      "run_started_at": "2026-11-13T04:06:40Z",
+      "updated_at": "2026-11-13T04:44:51Z",
+      "last_job_completed_at": "2026-11-13T04:44:50Z",
+      "wall_s": 2290.0,
+      "created_to_last_job_s": 2290.0,
+      "aggregate_job_s": 10677.0,
+      "peak_jobs": 6,
+      "peak_macos": 2,
+      "job_count": 14,
+      "all_jobs_successful": true,
+      "layout": "six independent product/tool platform jobs",
+      "lanes": [
+        {
+          "job_id": 131681859008,
+          "lane": "product",
+          "target": "x86_64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-13T04:06:56Z",
+          "started_at": "2026-11-13T04:06:59Z",
+          "completed_at": "2026-11-13T04:37:39Z",
+          "elapsed_s": 1840.0,
+          "queued_s": 3.0,
+          "runner_image": {
+            "name": "ubuntu-24.04",
+            "version": "20261101.360.1"
+          },
+          "stages": [
+            {
+              "stage": "default-tests",
+              "elapsed_seconds": 1677,
+              "exit": 0
+            },
+            {
+              "stage": "default-clippy",
+              "elapsed_seconds": 17,
+              "exit": 0
+            },
+            {
+              "stage": "product-release",
+              "elapsed_seconds": 80,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 843,
+            "failed": 0,
+            "ignored": 5,
+            "measured": 0,
+            "filtered_out": 2325,
+            "execution_seconds": 1632.7
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 32,
+            "numeric_tuple_count": 32,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 1,
+            "duration_count": 32
+          },
+          "cache": {
+            "exact_hit": true,
+            "resolved_key": "marmish-v02-release-split-v2-package-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-package-Linux-x64-985a2716-4db97c9b",
+            "cache_id_in_snapshot": 10450236189,
+            "archive_bytes_in_snapshot": 1294728875,
+            "restoration": [
+              {
+                "status": "hit",
+                "restored_key": "marmish-v02-release-split-v2-package-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-package-Linux-x64-985a2716-4db97c9b",
+                "full_match": true
+              },
+              {
+                "status": "already_up_to_date",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 29.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 0.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "restore",
+                "bytes": 1294728875,
+                "reported_rate": 135.1,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277915,
+                "cache_ids": [
+                  10450236189
+                ],
+                "archive_bytes": [
+                  1294728875
+                ]
+              }
+            ],
+            "status": "enabled",
+            "disabled_evidence": []
+          }
+        },
+        {
+          "job_id": 131681859047,
+          "lane": "product",
+          "target": "aarch64-apple-darwin",
+          "conclusion": "success",
+          "created_at": "2026-11-13T04:06:56Z",
+          "started_at": "2026-11-13T04:07:00Z",
+          "completed_at": "2026-11-13T04:25:47Z",
+          "elapsed_s": 1127.0,
+          "queued_s": 4.0,
+          "runner_image": {
+            "name": "macos-15-arm64",
+            "version": "20261104.0514.1"
+          },
+          "stages": [
+            {
+              "stage": "default-tests",
+              "elapsed_seconds": 865,
+              "exit": 0
+            },
+            {
+              "stage": "default-clippy",
+              "elapsed_seconds": 28,
+              "exit": 0
+            },
+            {
+              "stage": "product-release",
+              "elapsed_seconds": 151,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 871,
+            "failed": 0,
+            "ignored": 5,
+            "measured": 0,
+            "filtered_out": 2694,
+            "execution_seconds": 780.03
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 33,
+            "numeric_tuple_count": 33,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 33
+          },
+          "cache": {
+            "exact_hit": true,
+            "resolved_key": "marmish-v02-release-split-v2-package-macos-15-aarch64-apple-darwin-macos15-glibc239-package-Darwin-arm64-61a98fb3-4db97c9b",
+            "cache_id_in_snapshot": 10450320364,
+            "archive_bytes_in_snapshot": 1185265417,
+            "restoration": [
+              {
+                "status": "hit",
+                "restored_key": "marmish-v02-release-split-v2-package-macos-15-aarch64-apple-darwin-macos15-glibc239-package-Darwin-arm64-61a98fb3-4db97c9b",
+                "full_match": true
+              },
+              {
+                "status": "already_up_to_date",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 34.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 1.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "restore",
+                "bytes": 1185265417,
+                "reported_rate": 53.9,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43340461715,
+                "saving_attempt": 1,
+                "saving_job_id": 131607277923,
+                "cache_ids": [
+                  10450320364
+                ],
+                "archive_bytes": [
+                  1185265417
+                ]
+              }
+            ],
+            "status": "enabled",
+            "disabled_evidence": []
+          }
+        },
+        {
+          "job_id": 131681859057,
+          "lane": "product",
+          "target": "aarch64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-13T04:06:56Z",
+          "started_at": "2026-11-13T04:07:01Z",
+          "completed_at": "2026-11-13T04:28:39Z",
+          "elapsed_s": 1298.0,
+          "queued_s": 5.0,
+          "runner_image": {
+            "name": "ubuntu-24.04-arm",
+            "version": "20261111.182.1"
+          },
+          "stages": [
+            {
+              "stage": "default-tests",
+              "elapsed_seconds": 1146,
+              "exit": 0
+            },
+            {
+              "stage": "default-clippy",
+              "elapsed_seconds": 17,
+              "exit": 0
+            },
+            {
+              "stage": "product-release",
+              "elapsed_seconds": 84,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 843,
+            "failed": 0,
+            "ignored": 5,
+            "measured": 0,
+            "filtered_out": 2325,
+            "execution_seconds": 1082.94
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 32,
+            "numeric_tuple_count": 32,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 32
+          },
+          "cache": {
+            "exact_hit": true,
+            "resolved_key": "marmish-v02-release-split-v2-package-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-package-Linux-arm64-891dcbf1-4db97c9b",
+            "cache_id_in_snapshot": 10452806916,
+            "archive_bytes_in_snapshot": 1290150377,
+            "restoration": [
+              {
+                "status": "hit",
+                "restored_key": "marmish-v02-release-split-v2-package-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-package-Linux-arm64-891dcbf1-4db97c9b",
+                "full_match": true
+              },
+              {
+                "status": "already_up_to_date",
+                "restored_key": null,
+                "full_match": null
+              }
+            ],
+            "action_costs": [
+              {
+                "phase": "restore",
+                "elapsed_seconds": 23.0,
+                "conclusion": "success"
+              },
+              {
+                "phase": "post_save_cleanup",
+                "elapsed_seconds": 0.0,
+                "conclusion": "success"
+              }
+            ],
+            "transfer_observations": [
+              {
+                "direction": "restore",
+                "bytes": 1290150377,
+                "reported_rate": 134.1,
+                "rate_unit": "MB/s"
+              }
+            ],
+            "saving_provenance": [
+              {
+                "saving_run_id": 43345491416,
+                "saving_attempt": 2,
+                "saving_job_id": 131640011189,
+                "cache_ids": [
+                  10452806916
+                ],
+                "archive_bytes": [
+                  1290150377
+                ]
+              }
+            ],
+            "status": "enabled",
+            "disabled_evidence": []
+          }
+        },
+        {
+          "job_id": 131681859070,
+          "lane": "installed-tools",
+          "target": "aarch64-apple-darwin",
+          "conclusion": "success",
+          "created_at": "2026-11-13T04:06:56Z",
+          "started_at": "2026-11-13T04:06:59Z",
+          "completed_at": "2026-11-13T04:43:42Z",
+          "elapsed_s": 2203.0,
+          "queued_s": 3.0,
+          "runner_image": {
+            "name": "macos-15-arm64",
+            "version": "20261104.0514.1"
+          },
+          "stages": [
+            {
+              "stage": "installed-tests",
+              "elapsed_seconds": 1229,
+              "exit": 0
+            },
+            {
+              "stage": "installed-clippy",
+              "elapsed_seconds": 119,
+              "exit": 0
+            },
+            {
+              "stage": "installed-release",
+              "elapsed_seconds": 830,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 918,
+            "failed": 0,
+            "ignored": 3,
+            "measured": 0,
+            "filtered_out": 2745,
+            "execution_seconds": 742.52
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 12,
+            "numeric_tuple_count": 12,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 12
+          },
+          "cache": {
+            "exact_hit": null,
+            "resolved_key": null,
+            "cache_id_in_snapshot": null,
+            "archive_bytes_in_snapshot": null,
+            "restoration": [],
+            "action_costs": [],
+            "transfer_observations": [],
+            "saving_provenance": [],
+            "status": "disabled",
+            "disabled_evidence": [
+              {
+                "lane": "installed-tools",
+                "disabled": true,
+                "incremental": 0,
+                "evidence": "explicit_log_marker"
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131681859073,
+          "lane": "installed-tools",
+          "target": "x86_64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-13T04:06:56Z",
+          "started_at": "2026-11-13T04:06:59Z",
+          "completed_at": "2026-11-13T04:41:12Z",
+          "elapsed_s": 2053.0,
+          "queued_s": 3.0,
+          "runner_image": {
+            "name": "ubuntu-24.04",
+            "version": "20261101.360.1"
+          },
+          "stages": [
+            {
+              "stage": "installed-tests",
+              "elapsed_seconds": 1536,
+              "exit": 0
+            },
+            {
+              "stage": "installed-clippy",
+              "elapsed_seconds": 66,
+              "exit": 0
+            },
+            {
+              "stage": "installed-release",
+              "elapsed_seconds": 436,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 919,
+            "failed": 0,
+            "ignored": 3,
+            "measured": 0,
+            "filtered_out": 2748,
+            "execution_seconds": 1300.34
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 12,
+            "numeric_tuple_count": 12,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 12
+          },
+          "cache": {
+            "exact_hit": null,
+            "resolved_key": null,
+            "cache_id_in_snapshot": null,
+            "archive_bytes_in_snapshot": null,
+            "restoration": [],
+            "action_costs": [],
+            "transfer_observations": [],
+            "saving_provenance": [],
+            "status": "disabled",
+            "disabled_evidence": [
+              {
+                "lane": "installed-tools",
+                "disabled": true,
+                "incremental": 0,
+                "evidence": "explicit_log_marker"
+              }
+            ]
+          }
+        },
+        {
+          "job_id": 131681859229,
+          "lane": "installed-tools",
+          "target": "aarch64-unknown-linux-gnu",
+          "conclusion": "success",
+          "created_at": "2026-11-13T04:06:56Z",
+          "started_at": "2026-11-13T04:07:02Z",
+          "completed_at": "2026-11-13T04:39:23Z",
+          "elapsed_s": 1941.0,
+          "queued_s": 6.0,
+          "runner_image": {
+            "name": "ubuntu-24.04-arm",
+            "version": "20261111.182.1"
+          },
+          "stages": [
+            {
+              "stage": "installed-tests",
+              "elapsed_seconds": 1411,
+              "exit": 0
+            },
+            {
+              "stage": "installed-clippy",
+              "elapsed_seconds": 68,
+              "exit": 0
+            },
+            {
+              "stage": "installed-release",
+              "elapsed_seconds": 447,
+              "exit": 0
+            }
+          ],
+          "stage_telemetry_available": true,
+          "cargo_test_totals": {
+            "passed": 919,
+            "failed": 0,
+            "ignored": 3,
+            "measured": 0,
+            "filtered_out": 2748,
+            "execution_seconds": 1121.01
+          },
+          "cargo_summary_integrity": {
+            "prefix_count": 12,
+            "numeric_tuple_count": 12,
+            "prefix_tuple_counts_match": true,
+            "fragmented_tuple_count": 0,
+            "duration_count": 12
+          },
+          "cache": {
+            "exact_hit": null,
+            "resolved_key": null,
+            "cache_id_in_snapshot": null,
+            "archive_bytes_in_snapshot": null,
+            "restoration": [],
+            "action_costs": [],
+            "transfer_observations": [],
+            "saving_provenance": [],
+            "status": "disabled",
+            "disabled_evidence": [
+              {
+                "lane": "installed-tools",
+                "disabled": true,
+                "incremental": 0,
+                "evidence": "explicit_log_marker"
+              }
+            ]
+          }
+        }
+      ],
+      "platform_test_totals": {
+        "x86_64-unknown-linux-gnu": {
+          "passed": 1762,
+          "failed": 0,
+          "ignored": 8,
+          "measured": 0,
+          "filtered_out": 5073,
+          "execution_seconds": 2933.04
+        },
+        "aarch64-unknown-linux-gnu": {
+          "passed": 1762,
+          "failed": 0,
+          "ignored": 8,
+          "measured": 0,
+          "filtered_out": 5073,
+          "execution_seconds": 2203.95
+        },
+        "aarch64-apple-darwin": {
+          "passed": 1789,
+          "failed": 0,
+          "ignored": 8,
+          "measured": 0,
+          "filtered_out": 5439,
+          "execution_seconds": 1522.55
+        }
+      },
+      "exact_cache_hits": 3,
+      "exact_cache_hit_observations": 3,
+      "cache_inventory": {
+        "observed_at": "2026-11-13T04:45:31.566698+00:00",
+        "collection_note": "Repository-wide live API snapshot at observed_at, after attempt completion; not an atomic historical run boundary.",
+        "entries": [
+          {
+            "id": 10450320364,
+            "key": "marmish-v02-release-split-v2-package-macos-15-aarch64-apple-darwin-macos15-glibc239-package-Darwin-arm64-61a98fb3-4db97c9b",
+            "size_in_bytes": 1185265417
+          },
+          {
+            "id": 10452806916,
+            "key": "marmish-v02-release-split-v2-package-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-package-Linux-arm64-891dcbf1-4db97c9b",
+            "size_in_bytes": 1290150377
+          },
+          {
+            "id": 10450236189,
+            "key": "marmish-v02-release-split-v2-package-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-package-Linux-x64-985a2716-4db97c9b",
+            "size_in_bytes": 1294728875
+          },
+          {
+            "id": 10454762856,
+            "key": "marmish-v02-release-split-v2-package-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-package-Linux-x64-a6056e7b-4db97c9b",
+            "size_in_bytes": 1294566063
+          },
+          {
+            "id": 10450268619,
+            "key": "marmish-v02-release-split-v2-installed-tools-macos-15-aarch64-apple-darwin-macos15-glibc239-installed-tools-Darwin-arm64-61a98fb3-4db97c9b",
+            "size_in_bytes": 306127799
+          },
+          {
+            "id": 10450205526,
+            "key": "marmish-v02-release-split-v2-package-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-package-Linux-arm64-307d303d-4db97c9b",
+            "size_in_bytes": 1289434789
+          },
+          {
+            "id": 10450261337,
+            "key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-x64-985a2716-4db97c9b",
+            "size_in_bytes": 306153586
+          },
+          {
+            "id": 10451484818,
+            "key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-arm64-307d303d-4db97c9b",
+            "size_in_bytes": 305847595
+          },
+          {
+            "id": 10450274392,
+            "key": "marmish-v02-release-split-v2-installed-tools-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-installed-tools-Linux-arm64-891dcbf1-4db97c9b",
+            "size_in_bytes": 305909795
+          }
+        ],
+        "entry_count": 9,
+        "archive_bytes": 7578184296,
+        "below_7GB": false,
+        "original_six_retention": [
+          {
+            "cache_id": 10450320364,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450274392,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450268619,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450261337,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450236189,
+            "present": true,
+            "key_and_size_unchanged": true
+          },
+          {
+            "cache_id": 10450205526,
+            "present": true,
+            "key_and_size_unchanged": true
+          }
+        ],
+        "all_original_six_retained": true,
+        "below_10GB_default": true,
+        "active_product_archive_bytes": 6354145521,
+        "orphan_tools_archive_bytes": 1224038775
+      },
+      "all_platform_test_counts_match_baseline": true,
+      "cache_policy_validation": {
+        "policy": "product-only",
+        "product_contexts_expected": 3,
+        "tools_disabled_expected": 3,
+        "product_checks": [
+          {
+            "job_id": 131681859008,
+            "one_product_context": true,
+            "cache_action_observed": true,
+            "no_disabled_marker": true
+          },
+          {
+            "job_id": 131681859047,
+            "one_product_context": true,
+            "cache_action_observed": true,
+            "no_disabled_marker": true
+          },
+          {
+            "job_id": 131681859057,
+            "one_product_context": true,
+            "cache_action_observed": true,
+            "no_disabled_marker": true
+          }
+        ],
+        "tools_checks": [
+          {
+            "job_id": 131681859070,
+            "explicit_disabled_incremental_zero": true,
+            "no_cache_context_or_action": true
+          },
+          {
+            "job_id": 131681859073,
+            "explicit_disabled_incremental_zero": true,
+            "no_cache_context_or_action": true
+          },
+          {
+            "job_id": 131681859229,
+            "explicit_disabled_incremental_zero": true,
+            "no_cache_context_or_action": true
+          }
+        ],
+        "validated": true
+      },
+      "acceptance_note": "Amended policy: three product caches; tooling caches disabled. Earlier 7GB criterion failed and remains visible in prior observations. Repository inventory is compared with documented decimal 10GB default; retained tooling entries expire normally without deletion."
+    }
+  ],
+  "amended_product_cache_bindings": {
+    "definition": "Exact full-key restoration observations tied to actual saved archive bytes/cache ID; un-restored variants remain explicitly unproven.",
+    "product_variants": [
+      {
+        "id": 10450320364,
+        "key": "marmish-v02-release-split-v2-package-macos-15-aarch64-apple-darwin-macos15-glibc239-package-Darwin-arm64-61a98fb3-4db97c9b",
+        "size_in_bytes": 1185265417,
+        "saving_provenance": [
+          {
+            "saving_run_id": 43340461715,
+            "saving_attempt": 1,
+            "saving_job_id": 131607277923,
+            "cache_ids": [
+              10450320364
+            ],
+            "archive_bytes": [
+              1185265417
+            ]
+          }
+        ],
+        "actual_restorations": [
+          {
+            "restoring_run_id": 43345491416,
+            "restoring_attempt": 1,
+            "restoring_job_id": 131623838127,
+            "full_match": true
+          },
+          {
+            "restoring_run_id": 43345491416,
+            "restoring_attempt": 2,
+            "restoring_job_id": 131640011315,
+            "full_match": true
+          },
+          {
+            "restoring_run_id": 43345491416,
+            "restoring_attempt": 3,
+            "restoring_job_id": 131656858238,
+            "full_match": true
+          },
+          {
+            "restoring_run_id": 43363338143,
+            "restoring_attempt": 1,
+            "restoring_job_id": 131681859047,
+            "full_match": true
+          }
+        ],
+        "restoration_proven": true
+      },
+      {
+        "id": 10452806916,
+        "key": "marmish-v02-release-split-v2-package-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-package-Linux-arm64-891dcbf1-4db97c9b",
+        "size_in_bytes": 1290150377,
+        "saving_provenance": [
+          {
+            "saving_run_id": 43345491416,
+            "saving_attempt": 2,
+            "saving_job_id": 131640011189,
+            "cache_ids": [
+              10452806916
+            ],
+            "archive_bytes": [
+              1290150377
+            ]
+          }
+        ],
+        "actual_restorations": [
+          {
+            "restoring_run_id": 43363338143,
+            "restoring_attempt": 1,
+            "restoring_job_id": 131681859057,
+            "full_match": true
+          }
+        ],
+        "restoration_proven": true
+      },
+      {
+        "id": 10450236189,
+        "key": "marmish-v02-release-split-v2-package-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-package-Linux-x64-985a2716-4db97c9b",
+        "size_in_bytes": 1294728875,
+        "saving_provenance": [
+          {
+            "saving_run_id": 43340461715,
+            "saving_attempt": 1,
+            "saving_job_id": 131607277915,
+            "cache_ids": [
+              10450236189
+            ],
+            "archive_bytes": [
+              1294728875
+            ]
+          }
+        ],
+        "actual_restorations": [
+          {
+            "restoring_run_id": 43345491416,
+            "restoring_attempt": 1,
+            "restoring_job_id": 131623838133,
+            "full_match": true
+          },
+          {
+            "restoring_run_id": 43345491416,
+            "restoring_attempt": 2,
+            "restoring_job_id": 131640011234,
+            "full_match": true
+          },
+          {
+            "restoring_run_id": 43363338143,
+            "restoring_attempt": 1,
+            "restoring_job_id": 131681859008,
+            "full_match": true
+          }
+        ],
+        "restoration_proven": true
+      },
+      {
+        "id": 10454762856,
+        "key": "marmish-v02-release-split-v2-package-ubuntu-24.04-x86_64-unknown-linux-gnu-macos15-glibc239-package-Linux-x64-a6056e7b-4db97c9b",
+        "size_in_bytes": 1294566063,
+        "saving_provenance": [
+          {
+            "saving_run_id": 43345491416,
+            "saving_attempt": 3,
+            "saving_job_id": 131656858407,
+            "cache_ids": [
+              10454762856
+            ],
+            "archive_bytes": [
+              1294566063
+            ]
+          }
+        ],
+        "actual_restorations": [],
+        "restoration_proven": false
+      },
+      {
+        "id": 10450205526,
+        "key": "marmish-v02-release-split-v2-package-ubuntu-24.04-arm-aarch64-unknown-linux-gnu-macos15-glibc239-package-Linux-arm64-307d303d-4db97c9b",
+        "size_in_bytes": 1289434789,
+        "saving_provenance": [
+          {
+            "saving_run_id": 43340461715,
+            "saving_attempt": 1,
+            "saving_job_id": 131607277941,
+            "cache_ids": [
+              10450205526
+            ],
+            "archive_bytes": [
+              1289434789
+            ]
+          }
+        ],
+        "actual_restorations": [
+          {
+            "restoring_run_id": 43345491416,
+            "restoring_attempt": 1,
+            "restoring_job_id": 131623838139,
+            "full_match": true
+          },
+          {
+            "restoring_run_id": 43345491416,
+            "restoring_attempt": 3,
+            "restoring_job_id": 131656858218,
+            "full_match": true
+          }
+        ],
+        "restoration_proven": true
+      }
+    ],
+    "unrestored_variant_count": 1
+  }
+}

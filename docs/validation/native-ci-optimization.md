@@ -1,9 +1,11 @@
 # Native CI optimization: measurements and capacity
 
-Measured on 2026-11-12–13 for Beads `marmish-poz`. The split passed repeated qualification and installed streaming on all three
-platforms. Hosted image variants broke the experiment's simultaneous-hit and
-7 GB storage criteria. An independently reviewed correction removes tooling
-caches; its fresh source-bound hosted validation remains pending.
+Measured on 2026-11-12–13 for Beads `marmish-poz`. The corrected split passed all 14 qualification jobs and all nine installed
+streaming pairs on three platforms at source `9131926f85ce2cacc04805027871bdfe92dafc61`.
+Its final observation took 38m10s versus 68m13s baseline, with unchanged test
+counts. Hosted image variants broke the original simultaneous-hit and 7 GB
+storage criteria; independently reviewed reassessment removed tooling caches
+and retained strict product keys. The failed storage target remains explicit.
 Results below are observations, not projected or statistically guaranteed
 runtimes.
 
@@ -62,11 +64,14 @@ At the initial audit, Marmish's cache usage and inventory APIs reported
 **zero caches and zero stored bytes**. GitHub's documented default cache budget is **10 GB per repository**;
 an account-specific override was not verified. The measured cache sizes and restore/save costs below qualify the final policy;
 the initial audit alone did not establish a warm-build improvement.
-Six independent platform/lane caches must share that budget, so retaining full
-build trees without measurement risks eviction churn. [Cache limits](https://docs.github.com/en/actions/reference/limits)
+The initial six platform/lane caches shared that budget; the corrected policy
+retains only three product cache writers. Retaining full build trees without
+measurement risks eviction churn. [Cache limits](https://docs.github.com/en/actions/reference/limits)
 
-The implemented split is bounded to six build jobs/two macOS while
-serializing native candidate workflows. This matches the observed overall peak but sustains compiler
+The implemented split is bounded to six build jobs/two macOS per ordinary
+candidate run, while serializing ordinary native candidate runs. Caveated runs
+retain their separate existing concurrency group; these limits do not cap
+other organization workflows. This matches the observed overall peak but sustains compiler
 load longer; it leaves three macOS slots under the documented default for
 other organization work. Measured candidate peaks remained six jobs/two macOS
 jobs; the audit does not reserve organization-wide capacity.
@@ -123,9 +128,9 @@ recorded; no unrelated entries were deleted.
 
 The documentation-only warm source is
 `fe9a2e4d707e1754562bca34db9718601a97f996`. Runtime code, workflows,
-source-digest inputs, Cargo manifests and lockfiles are unchanged. Exact warm
-hits, fresh embedded source stamps and nine directed installed streaming cells
-remain required before acceptance.
+source-digest inputs, Cargo manifests and lockfiles are unchanged. The next chronological observations test exact warm hits, fresh embedded
+source stamps and nine directed installed streaming cells; the reassessment
+below supersedes the original simultaneous-hit criterion.
 
 ## Warm qualification and hosted image rollover
 
@@ -162,7 +167,7 @@ passed. Re-extraction confirms unchanged platform totals on every run.
 |---|---:|---:|---:|
 | Original baseline, 43174030584/1 | 68m13s | 11,552 | 6 / 2 |
 | Initial full-target cache trial, 43332758455/1 | 53m24s | 13,504 | 6 / 2 |
-| Final-policy cold, 43340461715/1 | 36m43s | 12,145 | 6 / 2 |
+| Intermediate-policy cold, 43340461715/1 | 36m43s | 12,145 | 6 / 2 |
 | Initial warm with one image miss, 43345491416/1 | 36m03s | 10,585 | 6 / 2 |
 | Second warm with product image miss, 43345491416/2 | 40m18s | 11,659 | 6 / 2 |
 | Final bounded repeat, AMD image miss, 43345491416/3 | 52m13s | 11,701 | 6 / 2 |
@@ -194,11 +199,12 @@ set. Both execute tests, strict Clippy and release builds on every run.
 | ARM64 tooling | 1,433 | 79 | 472 | 2,006 | 1,397 | 73 | 448 | 1,938 |
 | macOS tooling | 1,150 | 92 | 711 | 2,000 | 1,123 | 128 | 770 | 2,057 |
 
-These compare final-policy cold attempt 43340461715/1 with initial warm
+These compare intermediate-policy cold attempt 43340461715/1 with initial warm
 43345491416/1, which includes the documented ARM tooling image miss.
 Product dependency reuse substantially reduced Clippy/release time in this
-observation. Tooling deliberately recompiles from downloaded sources to keep
-the repository cache footprint bounded; it sets the initial warm critical path.
+observation. Under this intermediate policy tooling recompiled from cached
+downloaded sources; it set the initial warm critical path. The final correction
+removes those tooling download caches.
 Cold cache restore steps took 1–3 seconds; warm product restores took
 24 seconds (AMD64), 18 seconds (ARM64) and 41 seconds (macOS).
 Warm tooling restores took 6 seconds (AMD64), 1 second (ARM64 miss) and
@@ -307,3 +313,101 @@ passed all five jobs and all nine directed duplex cells using exact candidate
 43345491416/3 and source `fe9a2e4d707e1754562bca34db9718601a97f996`.
 Read-only digest/context/rollup validation also passed. This is regression
 evidence for the previous policy, not qualification of the upcoming correction.
+
+
+## Final corrected-source native qualification
+
+[Candidate 43363338143/1](https://github.com/Epiphytic/marmish/actions/runs/43363338143)
+qualified source `9131926f85ce2cacc04805027871bdfe92dafc61`: **all 14 jobs
+passed in 38m10s**, with **10,677 aggregate job seconds** and peak **six
+jobs/two macOS**. Against the 68m13s/11,552-second baseline this observation
+used 44% less elapsed time and 8% less aggregate job time. It is one hosted
+observation, not a guaranteed runtime or a controlled causal benchmark.
+
+Actual read-only inspection passed all **15 artifacts/10 closed reports**,
+bound to that source and attempt. Actual bootstrap/default and explicit
+quickstart plus real keychain-provider qualification passed on Linux AMD64,
+Linux ARM64 and macOS ARM64. All 18 timed Cargo stages exited zero. Platform
+counts match baseline: Linux each 1,762 passing executions/eight ignored,
+macOS 1,789/eight ignored; these count subprocess executions, not unique tests.
+
+| Platform / lane | Tests, seconds | Clippy | Release | Whole job |
+|---|---:|---:|---:|---:|
+| AMD64 / product | 1,677 | 17 | 80 | 1,840 |
+| ARM64 / product | 1,146 | 17 | 84 | 1,298 |
+| macOS / product | 865 | 28 | 151 | 1,127 |
+| AMD64 / tooling | 1,536 | 66 | 436 | 2,053 |
+| ARM64 / tooling | 1,411 | 68 | 447 | 1,941 |
+| macOS / tooling | 1,229 | 119 | 830 | 2,203 |
+
+Exactly three product cache-context lines show exact hits, and exactly three
+tooling markers show `cache=disabled incremental=0`. No tooling cache action,
+restore or save ran. AMD64 restored original cache `10450236189`, macOS
+`10450320364`, and ARM64 restored newer-image cache `10452806916`. That ARM
+variant now has actual reuse proof; the newer AMD variant `10454762856`
+remains saved but unproven as a restore. Full keys and saving/restore bindings
+are in the [machine-readable observations](native-ci-measurements.json).
+
+The final repository inventory remains nine entries/**7,578,184,296 bytes**:
+6,354,145,521 product bytes and 1,224,038,775 orphaned tooling bytes. This is
+unchanged, above the failed original 7 GB target and below the documented
+10 GB default. No entries were deleted, keys weakened or allowance raised.
+Old tooling entries await ordinary expiry/eviction. Future image variants and
+other workflows can cause eviction and recompilation.
+
+A second bounded log-parser correction accounts for one apparent missing AMD
+execution: its actual complete numeric summary ends `147 filtered outok`,
+joined to a parent status. The missing tuple explicitly reports one pass and
+147 filtered tests, exactly the observed discrepancy. Both parent tests have
+explicit success lines. The private parser accepts only that tightly shaped
+interleaving and leaves fragmented status/duration unknown. All 44 AMD64 numeric
+suite tuples match the baseline multiset exactly;
+the 32 AMD product tuples also match ARM product tuples exactly. Eight focused
+positive/negative cases passed, including rejection of arbitrary suffixes and
+malformed counts. Re-extraction preserves all five earlier published sample
+objects and restores the exact C baseline count comparison; no test or runtime
+code changed, and no CI rerun was used to hide the discrepancy.
+
+
+## Final installed nine-pair proof and operation observations
+
+[Installed stream 43367612858/1](https://github.com/Epiphytic/marmish/actions/runs/43367612858)
+passed all **five jobs/nine directed duplex cells**, using exact candidate
+43363338143/1 and source `9131926f85ce2cacc04805027871bdfe92dafc61`.
+Read-only validation checked successful job inventory, complete directed pair
+coverage, archive digests, canonical context digest, exact source/candidate
+pins and rollup metrics. No artifact was executed by the evidence collector.
+The workflow itself executed the installed clients/servers through the explicit
+relay `wss://relay.us.whitenoise.chat/`.
+
+| Client | Server | Payload bytes | Command wall, seconds | Payload bytes/second |
+|---|---|---:|---:|---:|
+| linux-amd64 | linux-amd64 | 204,800 | 58.146 | 3,522.1 |
+| linux-amd64 | linux-arm64 | 204,800 | 59.090 | 3,465.9 |
+| linux-amd64 | macos-arm64 | 204,800 | 55.958 | 3,659.9 |
+| linux-arm64 | linux-amd64 | 204,800 | 62.049 | 3,300.6 |
+| linux-arm64 | linux-arm64 | 204,800 | 63.206 | 3,240.2 |
+| linux-arm64 | macos-arm64 | 204,800 | 59.341 | 3,451.2 |
+| macos-arm64 | linux-amd64 | 204,800 | 62.735 | 3,264.5 |
+| macos-arm64 | linux-arm64 | 204,800 | 63.575 | 3,221.4 |
+| macos-arm64 | macos-arm64 | 204,800 | 61.175 | 3,347.8 |
+
+These are one duplex sample per pair, including command/startup/transport
+overhead. Wall time is not network RTT; payload throughput is not an isolated
+link-capacity benchmark. There are no percentile or saturation claims. See the
+[source-bound machine-readable rollup](native-ci-installed-stream.json) for
+exact nanoseconds, byte counts, rates and verified archive identifiers. This
+normal streaming cohort is regression evidence for this CI increment, not a
+substitute for other release-qualification cohorts.
+
+The final code and validation changes leave runtime, Cargo manifests/lockfiles,
+versions and public installer pins untouched. The release publisher remains
+`disabled_manually`; no release or tag was created. The final evidence commit
+contains documentation/aggregate JSON only; the tested executable source is
+the full commit above.
+
+At the publication check, GitHub and Radicle refs both matched that source and
+Radicle reported three synchronized seeds. Iris raw/head/exact-source and root
+requests timed out or failed TLS from this host; direct Iris node connection
+was also unavailable. Iris external readback remains unverified, so it must not
+be reported as current. No Radicle security setting was weakened.

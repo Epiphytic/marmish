@@ -63,11 +63,14 @@ its download caches showed no measurable whole-job benefit and image variants
 pushed retained storage above the 7 GB experiment target. All tests, strict
 Clippy and package/installer/provider checks still execute. Candidate inspection selects exact legacy eleven-job or
 new fourteen-job inventories from the authenticated source workflow; historical
-replay explicitly retains its legacy contract. Earlier cold/repeated candidates and source stamps passed on all platforms,
-with nine installed directed streaming pairs, but their original simultaneous
-hit/storage criteria failed during hosted image rollover. The independently
-reviewed correction removes tooling caches and requires a fresh source-bound
-candidate and installed proof; that final validation is pending. See
+replay explicitly retains its legacy contract. The corrected source `9131926f85ce2cacc04805027871bdfe92dafc61` passed all 14
+candidate jobs, 15-artifact/10-report inspection and nine installed directed
+streaming pairs on all three platforms. Its observed 38m10s elapsed and 10,677
+aggregate runner seconds compare with 68m13s/11,552 baseline; timing varies.
+Three product caches hit exactly; tooling caches are disabled. The original
+7 GB target failed at 7,578,184,296 retained bytes and remains a documented
+limitation; no cache was deleted to hide it. Iris external source readback is
+currently unavailable despite verified GitHub/Radicle refs and three seeds. See
 [capacity, timing and cache evidence](validation/native-ci-optimization.md). This changes CI, not runtime
 behavior, public installer pins or release qualification requirements.
 

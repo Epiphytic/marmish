@@ -141,3 +141,46 @@ same actual Claude auto-mode session. The reviewer reran all 14 policy tests
 and actionlint and verified both environment mutations target the intended
 YAML blocks. The next gates are the one fresh candidate and exact-source
 installed proof; no hosted success is claimed for this correction yet.
+
+A separate agent's read-only audit of committed source
+`9131926f85ce2cacc04805027871bdfe92dafc61` independently compared whole YAML
+sections with its predecessor. Product caching, eligibility, rendering, all
+installer/provider jobs and the candidate inspector are byte-identical.
+Installed-tools workloads, source/harness/artifact checks, matrix limits and
+14-job/15-artifact/10-report contracts are unchanged. Only caching, its explicit
+compiler setting and diagnostic wording changed. The publisher was separately
+confirmed `disabled_manually`; no runtime, Cargo, version or public installer
+file changed. No live tests were duplicated by this audit.
+
+The final documentation/evidence quality scan flags large JSON arrays as
+verbosity and associates the new `cells`/`samples` keys with two unchanged
+historical JSON paths. The final diff changes only Markdown and adds aggregate
+JSON; neither historical file was edited. The new arrays preserve measurements
+and provenance, rather than executable functions. This data-only finding is
+recorded for independent assessment; no quality baseline or suppression changed.
+
+
+## Final evidence review
+
+Actual Claude Code 2.1.301, claude-opus-5-5, using `--permission-mode auto`
+in the same independent review session returned **APPROVE** for the final
+documentation and aggregate JSON. It independently checked all six samples,
+unchanged first-five observations, exact cache/save/restore bindings, inventory,
+three disabled tooling lanes, installed source/candidate/digest bindings and
+the limitations on timing, throughput, storage and release scope.
+
+The reviewer independently reproduced the private parser correction on raw
+completed logs and synthetic positive/negative cases: 32 AMD product tuples
+match ARM and all 44 Linux tuples match baseline exactly. Unknown fragment
+status/duration stays null; arbitrary suffixes, malformed counts and suffixes
+without the observed interleaving prefix are rejected. No artifact was executed,
+credential accessed or live test duplicated. JSON-array quality warnings were
+assessed as measurement data, not substantive code regressions.
+
+Useful low findings were incorporated: make phase wording explicitly say
+GitHub/Radicle refs verified and Iris readback unverified, and retain a runnable
+private eight-case parser regression script beside the measurement helper.
+CI qualification passed; Iris readback is externally blocked and remains
+tracked separately as `marmish-j3r`. The parent task stays open until this
+publication check is resolved. No further native rerun is required for the
+final documentation/aggregate-JSON commit.

@@ -170,3 +170,21 @@ Obtain explicit Claude confirmation of this concrete amendment before coding,
 review its integrated diff in auto mode, run local gates, commit/push to both
 mirrors, and perform one fresh hosted candidate plus installed proof. Keep the
 publisher disabled and public installer/version unchanged.
+
+
+## Corrected-source acceptance evidence
+
+Source `9131926f85ce2cacc04805027871bdfe92dafc61` passed candidate
+43363338143/1: 14 jobs, all baseline test counts, 18 successful Cargo stages
+and actual 15-artifact/10-report inspection. Three exact product restorations
+and three cache-disabled tooling markers met the revised policy. Installed
+stream 43367612858/1 passed five jobs and all nine directed duplex cells, with
+independently checked context/archive digests and exact candidate/source pins.
+Detailed timing, provenance, cache limitations and operation measurements are
+in [the validation report](../validation/native-ci-optimization.md).
+
+The code and tests meet this increment's revised qualification gates; this
+does not waive other release cohorts or enable the publisher. Final documentation
+records the failed original 7 GB target and uses observations rather than
+guaranteed speedup claims. GitHub and Radicle refs are verified; Iris
+external readback remains unverified and must be tracked honestly.

@@ -1,0 +1,148 @@
+{
+  "schema": 1,
+  "status": "PASS",
+  "repository": "Epiphytic/marmish",
+  "run_id": 43367612858,
+  "run_attempt": 1,
+  "source_commit": "9131926f85ce2cacc04805027871bdfe92dafc61",
+  "candidate_run_id": 43363338143,
+  "candidate_run_attempt": 1,
+  "cohort": "stream-matrix",
+  "run_conclusion": "success",
+  "candidate_conclusion": "success",
+  "complete": true,
+  "passed_cells": 9,
+  "expected_cells": 9,
+  "failure_marker_absent": true,
+  "context_digest_verified": true,
+  "artifact_archive_digests_verified": true,
+  "artifacts": [
+    {
+      "id": 14010757334,
+      "name": "v02-installed-context-43367612858-1",
+      "sha256": "eb7a98ed27785bb01526db4487b3a0b279e27a8655ce5bc406824c43afe37333",
+      "size_in_bytes": 1179
+    },
+    {
+      "id": 14011277521,
+      "name": "v02-installed-rollup-43367612858-1",
+      "sha256": "df4d7a1843442ca8656680a6ab27c45f687aeb61a0aacdd85a53e1f4de271976",
+      "size_in_bytes": 2000
+    }
+  ],
+  "jobs": [
+    {
+      "id": 131695619552,
+      "name": "resolve",
+      "conclusion": "success"
+    },
+    {
+      "id": 131695758262,
+      "name": "matrix (ubuntu-24.04, linux-amd64, x86_64-unknown-linux-gnu)",
+      "conclusion": "success"
+    },
+    {
+      "id": 131695758297,
+      "name": "matrix (ubuntu-24.04-arm, linux-arm64, aarch64-unknown-linux-gnu)",
+      "conclusion": "success"
+    },
+    {
+      "id": 131695758307,
+      "name": "matrix (macos-15, macos-arm64, aarch64-apple-darwin)",
+      "conclusion": "success"
+    },
+    {
+      "id": 131696805359,
+      "name": "rollup",
+      "conclusion": "success"
+    }
+  ],
+  "cells": [
+    {
+      "client": "linux-amd64",
+      "server": "linux-amd64",
+      "case": "duplex",
+      "passed": true,
+      "wall_ns": 58146465904,
+      "payload_bytes": 204800,
+      "payload_bytes_per_second": 3522.140113177737
+    },
+    {
+      "client": "linux-arm64",
+      "server": "linux-amd64",
+      "case": "duplex",
+      "passed": true,
+      "wall_ns": 62048841973,
+      "payload_bytes": 204800,
+      "payload_bytes_per_second": 3300.6256601713358
+    },
+    {
+      "client": "macos-arm64",
+      "server": "linux-amd64",
+      "case": "duplex",
+      "passed": true,
+      "wall_ns": 62734853708,
+      "payload_bytes": 204800,
+      "payload_bytes_per_second": 3264.532997131764
+    },
+    {
+      "client": "linux-amd64",
+      "server": "linux-arm64",
+      "case": "duplex",
+      "passed": true,
+      "wall_ns": 59090295858,
+      "payload_bytes": 204800,
+      "payload_bytes_per_second": 3465.882122034983
+    },
+    {
+      "client": "linux-arm64",
+      "server": "linux-arm64",
+      "case": "duplex",
+      "passed": true,
+      "wall_ns": 63205664056,
+      "payload_bytes": 204800,
+      "payload_bytes_per_second": 3240.215937270241
+    },
+    {
+      "client": "macos-arm64",
+      "server": "linux-arm64",
+      "case": "duplex",
+      "passed": true,
+      "wall_ns": 63575045625,
+      "payload_bytes": 204800,
+      "payload_bytes_per_second": 3221.38974477535
+    },
+    {
+      "client": "linux-amd64",
+      "server": "macos-arm64",
+      "case": "duplex",
+      "passed": true,
+      "wall_ns": 55957912053,
+      "payload_bytes": 204800,
+      "payload_bytes_per_second": 3659.893525084096
+    },
+    {
+      "client": "linux-arm64",
+      "server": "macos-arm64",
+      "case": "duplex",
+      "passed": true,
+      "wall_ns": 59341290000,
+      "payload_bytes": 204800,
+      "payload_bytes_per_second": 3451.2225804326126
+    },
+    {
+      "client": "macos-arm64",
+      "server": "macos-arm64",
+      "case": "duplex",
+      "passed": true,
+      "wall_ns": 61174894416,
+      "payload_bytes": 204800,
+      "payload_bytes_per_second": 3347.778561043753
+    }
+  ],
+  "limitations": [
+    "Evidence consumer only; does not rerun the native validator or prove public release qualification.",
+    "One sample per directed pair; command wall time is not network RTT.",
+    "Archive digests and successful exact-attempt hosted jobs bind this report to published CI evidence."
+  ]
+}
