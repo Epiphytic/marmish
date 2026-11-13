@@ -99,3 +99,26 @@ and advances the cache epoch to v2. The initial run demonstrates passing cold
 qualification, but is not acceptance of the final storage policy. A fresh
 cold/warm pair with the smaller policy remains required. Only the six retired
 v1 entries owned by this task may be removed; unrelated caches stay intact.
+
+## Final-policy cold qualification
+
+[Candidate 43340461715, attempt 1](https://github.com/Epiphytic/marmish/actions/runs/43340461715)
+qualified source `559415fec078c41d6057159d8e485fe9a0930e70` using the v2 cache
+policy. All **14 jobs passed in 36m43s** (2,203 seconds), with 12,145 aggregate
+job seconds, peak six jobs/two macOS jobs and unchanged target test totals.
+All six cache contexts recorded an exact miss and `CARGO_INCREMENTAL=0`.
+The read-only candidate inspector passed the complete **15-artifact/10-report**
+inventory, including installed default/explicit quickstart and actual provider
+qualification on all three platforms.
+
+Six retained v2 archives total **4,687,620,261 bytes**, below the 7 GB budget.
+Product archives are 1,294,728,875 bytes (AMD64), 1,289,434,789 bytes (ARM64)
+and 1,185,265,417 bytes (macOS); installed download-only archives are
+306,153,586, 305,909,795 and 306,127,799 bytes respectively. Exactly the six
+task-owned retired v1 entries were removed after their IDs and sizes were
+recorded; no unrelated entries were deleted.
+
+The source following this documentation-only update is the intended warm
+candidate. Runtime code, workflows, source-digest inputs, Cargo manifests and
+lockfiles are unchanged. Exact warm hits, fresh embedded source stamps and the
+nine directed installed streaming cells remain required before acceptance.
