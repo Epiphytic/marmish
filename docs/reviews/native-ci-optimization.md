@@ -62,3 +62,13 @@ The real test assertion/duplication concerns were addressed as described above.
 
 Hosted cold/warm measurements and final qualification remain pending. Local
 code approval is not hosted qualification or authorization to release.
+
+## Planned cache fallback implementation
+
+Initial hosted evidence exceeded the approved 7 GB threshold. The existing
+design's fallback is now implemented: product dependency targets remain cached;
+installed tooling caches downloads only. A v2 prefix and removal of only this
+task's retired v1 entries ensure a genuinely cold new pair without competing
+obsolete storage. Claude reviewed the fallback against `c57f8a9` and returned
+**APPROVE** in the same auto-mode session, with 13 policy tests, actionlint and
+whitespace checks passing. Replacement hosted evidence remains pending.

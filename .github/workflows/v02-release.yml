@@ -159,7 +159,7 @@ jobs:
         if: ${{ !inputs.caveated_release }}
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          prefix-key: marmish-v02-release-split-v1
+          prefix-key: marmish-v02-release-split-v2
           # Bump the baseline suffix when supported deployment minima change.
           key: package-${{ matrix.runner }}-${{ matrix.target }}-macos15-glibc239
           cache-all-crates: false
@@ -316,14 +316,14 @@ jobs:
         if: ${{ !inputs.caveated_release }}
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          prefix-key: marmish-v02-release-split-v1
+          prefix-key: marmish-v02-release-split-v2
           # Bump the baseline suffix when supported deployment minima change.
           key: installed-tools-${{ matrix.runner }}-${{ matrix.target }}-macos15-glibc239
           cache-all-crates: false
           cache-workspace-crates: false
           cache-bin: false
           cache-on-failure: false
-          cache-targets: true
+          cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/master' && !inputs.caveated_release }}
           env-vars: MACOSX_DEPLOYMENT_TARGET SDKROOT ImageOS ImageVersion
       - name: Record dependency cache context

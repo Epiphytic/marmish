@@ -58,7 +58,9 @@ completes the CI increment, not the remaining release qualification cohorts.
 The [native CI optimization](phases/native-ci-optimization.md) separates default
 production and installed-feature build/test lanes onto independent hosted VMs,
 bounded to six build jobs including two macOS jobs. Dependency-only caches have
-separate lane/target keys; all tests, strict Clippy and package/installer/provider
+separate lane/target keys; installed tooling caches downloads only after the
+initial six full caches exceeded the 7 GB budget. All tests, strict Clippy and
+package/installer/provider
 checks still execute. Candidate inspection selects exact legacy eleven-job or
 new fourteen-job inventories from the authenticated source workflow; historical
 replay explicitly retains its legacy contract. Hosted cold/warm measurements and

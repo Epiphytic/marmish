@@ -175,10 +175,10 @@ class ReleaseAutomation(unittest.TestCase):
             self.assertEqual(len(cache), 1)
             self.assertIn('uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0', cache[0])
             options = fields(block(cache[0], '        with:'), 10)
-            self.assertEqual(options['prefix-key'], 'marmish-v02-release-split-v1')
+            self.assertEqual(options['prefix-key'], 'marmish-v02-release-split-v2')
             for option in ('cache-all-crates', 'cache-workspace-crates', 'cache-bin', 'cache-on-failure'):
                 self.assertEqual(options[option], 'false')
-            self.assertEqual(options['cache-targets'], 'true')
+            self.assertEqual(options['cache-targets'], 'true' if name == 'package' else 'false')
             self.assertEqual(options['save-if'], "${{ github.ref == 'refs/heads/master' && !inputs.caveated_release }}")
             self.assertEqual(set(options['env-vars'].split()),
                              {'MACOSX_DEPLOYMENT_TARGET', 'SDKROOT', 'ImageOS', 'ImageVersion'})
@@ -196,7 +196,7 @@ class ReleaseAutomation(unittest.TestCase):
             self.assertFalse(any(re.search(r'\bcargo (test|clippy|build)\b', run_text(s)) for s in before))
 
     def test_candidate_cache_namespace_and_existing_writers_are_pinned(self):
-        prefix = 'marmish-v02-release-split-v1'
+        prefix = 'marmish-v02-release-split-v2'
         paths = {p.name for p in (ROOT / '.github/workflows').glob('*.yml')} | set(SOURCES)
         for name in paths:
             text = source(name)
@@ -315,6 +315,7 @@ class MutationTests(unittest.TestCase):
             ('cache-workspace-crates: false', 'cache-workspace-crates: true'),
             ('cache-on-failure: false', 'cache-on-failure: true'),
             ('cache-targets: true', 'cache-targets: false'),
+            ('cache-targets: false', 'cache-targets: true'),
             ('Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0', 'Swatinem/rust-cache@v2'),
             ('MACOSX_DEPLOYMENT_TARGET=15.0', 'MACOSX_DEPLOYMENT_TARGET=14.0'),
             ('RUST_TEST_THREADS=1', 'RUST_TEST_THREADS=2'),
@@ -334,7 +335,7 @@ class MutationTests(unittest.TestCase):
         self.check_source('v02-native.yml', 'Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0',
                           'Swatinem/rust-cache@v2')
         self.check_source('v02-provider.yml', 'name: v0.2 macOS selected keychain provider',
-                          '# marmish-v02-release-split-v1\nname: v0.2 macOS selected keychain provider')
+                          '# marmish-v02-release-split-v2\nname: v0.2 macOS selected keychain provider')
 
     def test_scalar_continuations_and_quoted_tokens_refuse(self):
         for before, after in [

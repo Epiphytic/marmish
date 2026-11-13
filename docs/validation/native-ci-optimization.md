@@ -75,3 +75,27 @@ paths under separate `native-…` and `hosted-distribution-…` namespaces. They
 cannot accidentally restore the new unique prefix, but they compete for the
 same repository storage allowance if dispatched. No entries from either existed
 in the audited zero-cache snapshot; they were neither deleted nor expanded.
+
+## Initial split candidate and cache fallback
+
+[Candidate 43332758455, attempt 1](https://github.com/Epiphytic/marmish/actions/runs/43332758455)
+built source `c57f8a9f1d2121e2dfb68bdfcf72337c38516fff`. All 14 jobs passed in
+**53m24s**, versus 68m13s baseline (22% less elapsed time). Peak concurrency was
+six jobs including two macOS jobs, with build queues of 3–5 seconds. Aggregate
+job time was 13,504 seconds. This is one observation, not a statistical benchmark.
+All target test totals matched the baseline: Linux platforms each executed
+1,762 passing tests with eight ignored, and macOS 1,789 with eight ignored.
+These totals include subprocess executions, not unique test names.
+
+The Linux AMD64 installed-tools critical lane took 3,124 seconds, including
+2,362 seconds for its test command; harness execution alone was 2,023.37 seconds.
+Its Clippy and release build took 94 and 629 seconds. No test, compiler or
+packaging failure occurred; this run's longer test execution explains the
+critical path. Supported APIs did not expose the active job log until completion.
+
+Six retained archives totaled **7,538,607,536 bytes**, above the planned 7 GB
+budget. The approved fallback changes installed-tools to download-only caches
+and advances the cache epoch to v2. The initial run demonstrates passing cold
+qualification, but is not acceptance of the final storage policy. A fresh
+cold/warm pair with the smaller policy remains required. Only the six retired
+v1 entries owned by this task may be removed; unrelated caches stay intact.
