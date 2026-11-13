@@ -1,5 +1,14 @@
 # Marmish native v0.3 agent specification
 
+**CI execution direction (2026-11-13):** prefer Epiphytic self-hosted runners;
+do not launch GitHub-hosted qualification as an implicit fallback. The
+[self-hosted migration plan](phases/self-hosted-ci.md) preserves the earlier
+hosted measurements as historical evidence. Its first increment is a manual,
+trusted-master native prerequisite inventory, not a migrated candidate or
+release qualification. Native builds must retain the Linux glibc2.39 baseline,
+macOS keychain isolation and all acceptance checks. Full nine-pair live transfer
+qualification currently needs capacity beyond the shared laptop ARM64 slot.
+
 **[v0.3.0 is published](https://github.com/Epiphytic/marmish/releases/tag/v0.3.0).**
 The reviewed [publication amendment](phases/v0.3-caveated-publication.md) permits
 this explicitly caveated release of the existing streaming, rsync and native

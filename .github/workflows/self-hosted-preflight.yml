@@ -1,0 +1,44 @@
+name: Self-hosted native capability inventory
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: marmish-self-hosted-preflight
+  cancel-in-progress: false
+jobs:
+  inventory:
+    if: github.repository == 'Epiphytic/marmish' && github.ref == 'refs/heads/master' && github.event_name == 'workflow_dispatch'
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - platform: linux-amd64
+            labels: [self-hosted, Linux, X64, bel-ci]
+          - platform: linux-arm64
+            labels: [self-hosted, Linux, ARM64, laptop-ci]
+          - platform: macos-arm64
+            labels: [self-hosted, macOS, ARM64, laptop-ci]
+    runs-on:
+      group: epiphytic-ci
+      labels: ${{ matrix.labels }}
+    env:
+      PREFLIGHT_PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Inventory native prerequisites and bounded rootless container
+        id: probe
+        env:
+          PREFLIGHT_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        timeout-minutes: 2
+        run: sh scripts/self-hosted-preflight.sh probe
+      - name: Remove only the owned probe container and prove absence
+        if: always()
+        timeout-minutes: 1
+        env:
+          PREFLIGHT_DOCKER_READY: ${{ steps.probe.outputs.docker_ready }}
+        run: sh scripts/self-hosted-preflight.sh cleanup
