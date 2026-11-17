@@ -550,3 +550,11 @@ Binary releases are hosted on GitHub. Source branches and tags are also mirrored
 to Radicle/Iris separately; GitHub Actions does not publish Radicle releases.
 See [the release design](docs/phases/native-automatic-release.md) for gates and
 same-source recovery rules.
+
+## Acknowledgments
+
+Thanks to the [Marmot Protocol and MDK contributors](https://github.com/marmot-protocol/mdk)
+for the MLS-encrypted transport and development kit that Marmish uses.
+We plan to evaluate the PTY and redraw techniques in David Beesley's
+[Claude Chill](https://github.com/davidbeesley/claude-chill) for Marmish's
+[interactive terminal mode](docs/phases/interactive-peers-roadmap.md).

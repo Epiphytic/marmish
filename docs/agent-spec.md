@@ -1,5 +1,12 @@
 # Marmish native v0.3 agent specification
 
+**Interactive terminal and peer operations are planned.** The
+[native roadmap](phases/interactive-peers-roadmap.md) covers PTY/tmux,
+display update reduction, pinned-key onboarding, inbound server invitations
+and encrypted per-peer status. The proposed shell grant is separate from
+command policy. Discovery suggests keys for confirmation and never modifies
+existing grants on its own. The roadmap describes future behavior.
+
 **CI execution direction (2026-11-13):** prefer Epiphytic self-hosted runners;
 do not launch GitHub-hosted qualification as an implicit fallback. The
 [self-hosted migration plan](phases/self-hosted-ci.md) preserves the earlier
