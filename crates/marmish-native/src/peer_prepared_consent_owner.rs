@@ -24,6 +24,8 @@ pub(crate) use consent_checkpoint::wire::Delivery;
 mod joined_tests;
 #[path = "peer_postjoin_proof_tests.rs"]
 mod postjoin_tests;
+#[path = "peer_pending_terminal_retirement.rs"]
+pub(in crate::peer_invitation) mod terminal_retirement;
 #[path = "peer_prepared_consent_owner_tests.rs"]
 mod tests;
 
@@ -343,7 +345,7 @@ impl<'a> PreparedConsentOwner<'a> {
         })
     }
 
-    fn sample(&self) -> Result<Duration> {
+    pub(in crate::peer_invitation) fn sample(&self) -> Result<Duration> {
         if matches!(self.role, Role::Client | Role::Both) {
             self.state.provisional_sample()
         } else {

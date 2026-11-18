@@ -1,4 +1,4 @@
-//! Fixed dirfd-relative removal for a never-exported stage.
+//! Fixed dirfd-relative removal for a private provisional stage.
 
 use std::ffi::CStr;
 use std::io;
@@ -26,6 +26,21 @@ pub(in super::super) struct Witness {
 }
 
 impl Witness {
+    pub(in super::super) fn require_prepared(self, stage: State) -> Result<()> {
+        let State::Prepared(file, _) = stage else {
+            return Err(Error::StageIdentityMismatch);
+        };
+        if self.leaf
+            != Some((
+                u64::from_be_bytes(file.device),
+                u64::from_be_bytes(file.inode),
+            ))
+        {
+            return Err(Error::StageIdentityMismatch);
+        }
+        Ok(())
+    }
+
     pub(in super::super) fn encode(self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(48);
         for identity in [Some(self.profile), Some(self.peer), self.leaf]
@@ -226,5 +241,126 @@ fn stat(parent: &File, name: &CStr) -> Result<Option<libc::stat>> {
         Ok(None)
     } else {
         Err(Error::Path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::peer_invitation::{
+        provisional::tests::Fixture,
+        store::consent_checkpoint::provisioning::stage_journal::{Artifact, FileWitness},
+    };
+
+    fn prepared(path: &Path) -> State {
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .unwrap();
+        file.set_len(4096).unwrap();
+        let meta = file.metadata().unwrap();
+        State::Prepared(
+            FileWitness {
+                device: meta.dev().to_be_bytes(),
+                inode: meta.ino().to_be_bytes(),
+            },
+            Artifact::new([1; 32], b"test artifact", 300),
+        )
+    }
+
+    #[test]
+    fn joined_retirement_distinguishes_absence_before_and_after_intent() {
+        for known in [false, true] {
+            let fixture = Fixture::new();
+            let paths = Paths::new(&fixture.lease, &fixture.identity).unwrap();
+            let path = if known {
+                fixture.lease.root().join("peer/provisional-known.db")
+            } else {
+                fixture.stage()
+            };
+            let stage = prepared(&path);
+            let dir = RetirementDir::open(&paths, known).unwrap();
+            let witness = dir.capture(stage).unwrap();
+            witness.require_prepared(stage).unwrap();
+            assert_eq!(witness.encode().len(), 48);
+            dir.unlink(witness, stage).unwrap();
+            assert_eq!(dir.capture(stage), Err(Error::StageIdentityMismatch));
+            drop(dir);
+
+            // A committed exact Intent can resume after unlink but before sync.
+            let dir = RetirementDir::open(&paths, known).unwrap();
+            let witness = Witness::decode(&witness.encode()).unwrap();
+            witness.require_prepared(stage).unwrap();
+            dir.unlink(witness, stage).unwrap();
+            dir.sync_removed(witness).unwrap();
+            dir.ensure_absent(witness).unwrap();
+            assert!(!path.exists());
+        }
+    }
+
+    #[test]
+    fn joined_retirement_preserves_replacement_leaf_and_sidecar() {
+        let fixture = Fixture::new();
+        let paths = Paths::new(&fixture.lease, &fixture.identity).unwrap();
+        let path = fixture.stage();
+        let stage = prepared(&path);
+        let dir = RetirementDir::open(&paths, false).unwrap();
+        let witness = dir.capture(stage).unwrap();
+        let sidecar = path.with_file_name("provisional-unknown.db-wal");
+        prepared(&sidecar);
+        assert_eq!(dir.capture(stage), Err(Error::StageIdentityMismatch));
+        assert_eq!(
+            dir.unlink(witness, stage),
+            Err(Error::StageIdentityMismatch)
+        );
+        assert!(sidecar.exists());
+        assert!(path.exists());
+        fs::remove_file(sidecar).unwrap();
+
+        // Retain the original under another name to prevent inode-number reuse.
+        let original = path.with_file_name("original.db");
+        fs::rename(&path, &original).unwrap();
+        let replacement = prepared(&path);
+        assert_eq!(
+            witness.require_prepared(replacement),
+            Err(Error::StageIdentityMismatch)
+        );
+        assert_eq!(
+            dir.unlink(witness, stage),
+            Err(Error::StageIdentityMismatch)
+        );
+        assert_eq!(dir.sync_removed(witness), Err(Error::StageIdentityMismatch));
+        assert_eq!(
+            dir.ensure_absent(witness),
+            Err(Error::StageIdentityMismatch)
+        );
+        assert_eq!(fs::metadata(&path).unwrap().len(), 4096);
+        assert_eq!(fs::metadata(original).unwrap().len(), 4096);
+    }
+
+    #[test]
+    fn joined_retirement_refuses_a_replaced_private_directory() {
+        let fixture = Fixture::new();
+        let paths = Paths::new(&fixture.lease, &fixture.identity).unwrap();
+        let path = fixture.stage();
+        let stage = prepared(&path);
+        let dir = RetirementDir::open(&paths, false).unwrap();
+        let witness = dir.capture(stage).unwrap();
+        let peer = path.parent().unwrap();
+        let original = peer.with_file_name("original-peer");
+        fs::rename(peer, &original).unwrap();
+        paths.initialize().unwrap();
+        assert_eq!(
+            dir.unlink(witness, stage),
+            Err(Error::StageIdentityMismatch)
+        );
+        let replacement = RetirementDir::open(&paths, false).unwrap();
+        assert_eq!(
+            replacement.ensure_absent(witness),
+            Err(Error::StageIdentityMismatch)
+        );
+        assert!(original.join(path.file_name().unwrap()).exists());
     }
 }

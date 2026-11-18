@@ -26,12 +26,15 @@ fn deadline() -> Instant {
 #[tokio::test]
 #[ignore = "explicit bounded loopback TLS and SQLCipher qualification"]
 async fn peer_private_wss_offer_consent_delivery() {
-    tokio::time::timeout(Duration::from_secs(120), enroll(None, false))
-        .await
-        .expect("bounded native Peer exchange");
+    tokio::time::timeout(
+        Duration::from_secs(120),
+        enroll(None, custody::Scenario::Standard),
+    )
+    .await
+    .expect("bounded native Peer exchange");
 }
 
-async fn enroll(custody_mode: Option<consent_checkpoint::Mode>, stop_before_ingest: bool) {
+async fn enroll(custody_mode: Option<consent_checkpoint::Mode>, scenario: custody::Scenario) {
     let (private, lease, material) = tests::client();
     let founder_private = tempfile::Builder::new()
         .permissions(Permissions::from_mode(0o700))
@@ -188,7 +191,7 @@ async fn enroll(custody_mode: Option<consent_checkpoint::Mode>, stop_before_inge
         let guarded = paths.reopen_provisional(binding, witness).unwrap();
         let context = custody::Round {
             mode,
-            stop_before_ingest,
+            scenario,
             wall,
             fixed_wall: &fixed_wall,
             stage_image: &stage_image,
@@ -210,6 +213,8 @@ async fn enroll(custody_mode: Option<consent_checkpoint::Mode>, stop_before_inge
         context.exchange(&mut client, &mut server).await;
         let writes = relay.peer_transcript();
         assert_eq!(writes.len(), 4);
+        assert!(relay.peer_only_publications());
+        assert_eq!(relay.publication_attempts(7435), writes.len());
         assert_eq!(
             writes
                 .iter()
