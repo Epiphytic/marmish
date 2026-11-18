@@ -436,6 +436,14 @@ impl NativeRouteWindow<'_> {
         self.fence.horizon
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_live_ends_exclusive(&self) -> (u64, u64) {
+        (
+            self.route.route.qualification.end_exclusive().unwrap(),
+            self.route.window.end_exclusive().unwrap(),
+        )
+    }
+
     pub(crate) fn window(
         &self,
         readiness: crate::peer_candidate_startup::Readiness,

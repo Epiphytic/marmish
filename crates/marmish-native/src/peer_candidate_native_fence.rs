@@ -256,6 +256,11 @@ impl NativeWindow {
     }
 
     #[cfg(test)]
+    pub(crate) fn test_end_exclusive(&self) -> Duration {
+        self.0.ceiling.wall
+    }
+
+    #[cfg(test)]
     pub(super) fn stop_after_signing(&self) {
         self.0.stop_after_signing.store(true, Ordering::Release);
     }
