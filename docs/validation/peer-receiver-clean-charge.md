@@ -23,3 +23,7 @@ cargo clippy --offline --locked -p marmish-native --all-targets --features insta
 The Linux test executable for the recorded runs had SHA-256 `21cde54dbee3b476743dcde21d1dd80e9c4aff51aab0645b574f4b7a6f765397`. Run the two ignored parent cases individually with `--ignored --exact` after the full namespace `peer_invitation::receiver_inventory::tests::`. The unfiltered namespace runs the four deterministic cases and leaves the subprocess cases ignored by default.
 
 The [capped Pending bridge](../phases/peer-installed-capped-pending-bridge.md) owns the later native Welcome proof. This increment establishes local quota measurement and the sealed copy scope for the fixed prepare and readback operations. Original Welcome effects, actual Pending readback, cross-platform qualification, and installed behavior remain separate acceptance tests.
+
+## Composed Linux validation
+
+The same five Rust files were replayed unchanged onto `d26c570` and validated at `b2a0ccc2f2157c93ce58bac523db66ba3499b521`. The exact native libtest linked in 1 min 39 s and had SHA-256 `52e91679fd106b15969327e84fabec2304213bf41df1c7acbcae8ba49603605e`. The keyed copy passed in 0.44 s, managed rollback in 2.69 s, four inventory cases in 0.56 s, and two quota VFS cases in under 0.01 s. Native dispatcher and ordinary routes passed in 8.15 s and receiver registration in 0.11 s. Strict all-target Clippy with `installed-checks` passed in 48.17 s. Scope and qualification limits are unchanged. [Integrated Claude review](../reviews/peer-receiver-clean-charge.md#integrated-review)
