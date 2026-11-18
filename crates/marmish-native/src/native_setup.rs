@@ -572,8 +572,14 @@ mod tests {
     }
     #[test]
     fn terminal_grants_survive_setup_except_for_execution_revocation() {
-        let granted = nostr::key::Keys::generate().public_key().to_bech32().unwrap();
-        let second = nostr::key::Keys::generate().public_key().to_bech32().unwrap();
+        let granted = nostr::key::Keys::generate()
+            .public_key()
+            .to_bech32()
+            .unwrap();
+        let second = nostr::key::Keys::generate()
+            .public_key()
+            .to_bech32()
+            .unwrap();
         let mut opt = options();
         opt.no_grants = false;
         opt.grants = vec![granted.clone(), second.clone()];

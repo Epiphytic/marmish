@@ -22,13 +22,13 @@ pub use cleanup::CleanupGuard;
 pub use copy_launch::RegisteredCopyHelper;
 use launcher::{FrontendGuard, LaunchSpec, StateRoot, WorkerPresence};
 pub use live::{
-    LiveChild, LiveCleanupProgress, LivePipes, LiveProcessRecord, LiveSpawnError, PreparedLiveExec,
-    RecordedProcessDisposition, probe_recorded_process,
+    probe_recorded_process, LiveChild, LiveCleanupProgress, LivePipes, LiveProcessRecord,
+    LiveSpawnError, PreparedLiveExec, RecordedProcessDisposition,
 };
 pub use model::*;
 pub use policy::{
-    CanonicalExecOutcome, CommandPolicy, CommandPolicyDescriptionV1, KeyRestrictions, Restrictions,
-    inspect_canonical_exec,
+    inspect_canonical_exec, CanonicalExecOutcome, CommandPolicy, CommandPolicyDescriptionV1,
+    KeyRestrictions, Restrictions,
 };
 use std::collections::HashMap;
 use std::time::Duration;
