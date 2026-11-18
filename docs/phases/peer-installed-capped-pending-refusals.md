@@ -1,50 +1,132 @@
 # Capped Pending refusal evidence
 
 This addendum to [the capped Pending bridge design](peer-installed-capped-pending-bridge.md)
-covers the refusal matrix from independent review `e3c8b15e`. Its source
-baseline is accounting commit `7d725d0` on `d9ea132`. The proof remains
-an opt-in Linux AMD64 test. Reuse the private NIP-42 WSS run and its existing
-Held, JoinStarted and cold Pending subprocesses. Run focused pure test cases
-only where the live path cannot construct the negative input by design.
+addresses independent review `e3c8b15e` using accounting source `7d725d0`.
+It remains opt-in Linux AMD64. Reuse the three existing private NIP-42
+WSS scenarios and the independently signed fixture used by
+`peer_installed_custody_reopens_signed_prepared_consent_and_held_delivery`.
+No installed runtime mount, permission, or wire change.
 
-## Cases and observations
+For every runtime case measure `Effects::read/assert_since` or the same
+thread-local counters around the named guard, and require the stated error.
+Counters track actual MDK Welcome future polls, closed successful native
+turns, and committed changes by the installed Start/Pending CAS only.
+Verify exact prior custody after a refusal when the guard allows it.
+For legacy entry points also compare durable rows because no installed
+CAS counter observes those entry points. Preserve the existing relay
+publication-attempt delta across the same WSS windows.
 
-For each executable case, take a fresh `Effects::read` snapshot immediately
-before the operation under test and read it again after the typed refusal.
-Assert deltas for actual `JoinTurn` future polls, closed native success and
-committed custody rows. Check the retained stage/custody and existing relay
-publication counter for cases touching the real Held row. Report proof
-boundaries rather than combining zeros from unrelated tests.
+## Local guards
 
-| Required refusal | Exact exercise and expected effect |
-| --- | --- |
-| Legacy or uncapped witness | Source inspection demonstrates the private constructors and by-value `ArmedWelcome` plus quota identity guard prevent a legacy/uncapped native result from entering either installed CAS. The current installed checkpoint policy also explicitly requires a v2 Offer and Manual inactive custody. Test a real v1 Delivery at the local negotiation guard if constructible with the existing signed fixture without introducing a bridge constructor. A legacy fixture passing its own native test establishes no installed effect. |
-| Wrong signed ancestry and generation | The existing child measures wrong generation at Start. Extend its same genuine Held path with a changed signed Offer revision selector and reread the exact Held. The adjacent `peer_installed_delivery_recovers_after_lost_ack` case rejects a competing authenticated carrier and a signed Delivery for a swapped package. A changed selector alone proves exact row selection, while the competing signed carrier case proves authentication and ancestry mismatch at ingress. |
-| Wrong owner, lease or family | Exercise a foreign lease against the original `ReceiverQuota` at `PendingReceiver::open`, without a second quota registration. At the native boundary exercise the existing measured CleanFiles begin refusal using the wrong family (or changed physical stage identity on the existing Held file, restored before positive Start). For a foreign checkpoint owner exercise exact current Held evidence in a freshly reopened checkpoint's local owner check. All refuse before any Welcome poll or custody transition. |
-| Deadline and route or role loss | On an actual retained Held, require refusal at its exact signed effective deadline with existing fixture wall or a narrow test-only internal clock argument to the existing fence and checkpoint read. Use real port retirement and repeat actual Start with that port. If the existing fresh physical/config observation can be invalidated by changing only the owner-controlled receive config, isolate a role-loss example from a fresh same-origin scope before Start. Do not conflate the already-tested explicit stop flag with role loss or time expiry. |
-| Missing or mismatched negotiation | `Delivery::status_negotiation` is absent for v1 and derives the v2 coordinates solely from authenticated Offer/Consent/Delivery. Test mismatch by comparing the exact sealed Held against an independently otherwise valid signed competing v2 Delivery or by asking the existing guard to reopen independently signed but mismatched retained transcript. Do not mutate the private typed Delivery or create an alternate source of negotiation. |
-| Swapped or unconsumed package | Cite the signed swapped-package ingress test plus its `Invalid` result and unchanged custody. The bridge's cold pre-effect and capacity cuts already test zero polls and no qualifying Pending from an unjoined image with an unconsumed KeyPackage. They do not isolate the native consumed-bit predicate. If needed, give the real joined artifact reader a disposable SQLCipher snapshot carrying only a cleared native consumption field, through existing storage APIs, then call the same checked readback and assert no qualification. |
-| Wrong roster or epoch on cold readback | On cold Pending, use the normal checked readback against a deliberately wrong stored expectation of epoch/identity in a disposable fixture row and assert exact mismatch fails with no rewrite and zero Welcome polls. The first JoinStarted readback gets its epoch pin from native storage and has no separately stored expected pre-join epoch. For roster, the native checker requires an active exact two-member roster, exact founder and local leaf, and exact sole founder admin. Exercise its shared checked predicate on an independent MDK alternate-roster or wrong-founder witness if reachable without adding native authority. A self-invented group ID does not test the roster. |
-| Uncertain after Start | Reuse the positive joined round, or add one bounded scenario only if necessary. Run the actual original MDK Welcome once and close its scoped VFS. Inject loss of its result at the final native-to-custody handoff for one call after the checked native closure, so the bridge caller observes an error and cannot report success or move to Pending. Measure one real poll and one observed closed native success below the handoff, zero custody writes or relay publication in that window, durable JoinStarted and refused rearm. Reopen cold with no old witness and qualify only if the independently checked native state exactly matches the founder. This is ambiguous to the custody caller. It does not claim the inner MDK future returned Pending or the VFS failed. The existing pre-effect process cut and real quota refusal retain their separate evidence. |
+- **Legacy or uncapped authority.** Call `start_custody_join` on the same
+  real installed Held and require `Error::Layout`, zero polls, and exact
+  retained custody. The first checks in `commit_custody_pending` and
+  `commit_custody_activating` also refuse installed layout before using a
+  legacy `JoinedReadback`. Cover their refusal dynamically only if the
+  existing legacy test already has this sealed witness to lend. The
+  installed checkpoint takes distinct types with private constructors and
+  a same-quota pointer guard. The by-value installed token cannot be
+  cast from a legacy/uncapped witness. The existing WSS
+  `peer_installed_delivery_recovers_after_lost_ack` refuses a signed v1
+  Offer. A v1 Held cannot reach `Enrollment::from_delivery`, where missing
+  negotiation is also explicitly refused.
+- **Exact signed ancestry and v2 negotiation.** Reuse the real signed
+  Held pair built by `peer_installed_custody_reopens_signed_prepared_consent_and_held_delivery`.
+  Verify that pair yields v2 negotiation and build a separately signed
+  competing Delivery from its same Consent and Welcome, changing signed
+  Delivery expiry or timestamp so the signed revision differs. Open it
+  using the same codec and saved Consent, assert the changed negotiation
+  revision, and pass it with the original Held to
+  `Enrollment::from_delivery` (test child of `v2_pending`). Require
+  `Error::Binding` and zero effects. This covers the mismatched signed pair;
+  the exact guard may fail earlier on the distinct signed carrier. The
+  same store fixture can change the retained signed frame with
+  `fixture_statement` in a disposable cursor; the checked reopen must
+  refuse lexical/signature drift before any native work. Existing exact
+  Offer ancestry/drift tests and WSS competing-carrier and signed swapped
+  KeyPackage reference tests cover independently verified inbound ancestry.
+  A changed selector is only row selection evidence (`Error::Missing`).
+- **Policy and deadline.** Reopen the same signed Held cursor as
+  `ReceivePolicy::AutoAny`, using the existing `open_custody` fixture.
+  Call `current_installed_delivery` and require `Error::Policy`. Open
+  as `Off` and require `Error::Policy` at `read_custody` if reachable.
+  This tests Manual policy; physical role eligibility is independently
+  covered by `receiver_eligibility_reads_only_its_lease_config`, which
+  refuses server-only and changed lease/config. Use a local test child of
+  `peer_installed_pending_checkpoint.rs` for private access to
+  `current_installed_delivery`: `deadline - 1` accepts with the known
+  signed validity, exact deadline returns `Error::Expired`, both measured
+  separately if wall and signed bounds permit. The continuous fence uses
+  `TurnFence::new` with its existing fixture wall/ticks. Never pass a
+  synthetic future wall to a cursor writer or advance its durable floor.
 
-Keep case inputs narrow and never add a public mutation API, installed mount
-or transport permission. Test-only helpers may be local children of the
-existing private receiver/fixture modules. Use existing clock, SQLCipher
-and native verification seams. A direct test of a dynamic guard may satisfy
-one matrix row where a full WSS replay would only repeat ingress. Count
-zero only when the real tested operation is invoked and instrumented. Any
-unreachable row must distinguish type evidence from runtime behavior.
+## Real Held/Joined guards and cut
+
+- **Foreign lease, owner or family.** With the existing real Held, call
+  `PendingReceiver::open` with another same-UID lease and the original
+  quota and require `Error::Path`, without registering another quota.
+  Rename the original stage file aside, put a distinct inode at its path,
+  run regular `arm` and require `Error::StageIdentityMismatch` at the
+  checked family/extent boundary. Restore the original by rename. For old
+  checkpoint authority, use the pre-effect scenario where one exact
+  `ArmedWelcome` already exists. Drop receiver #1, reopen receiver #2 on
+  the same profile and call normal `ingest` with the stale token. Require
+  `Error::Binding` at `JoinStarted::matches_installed_turn`, before the
+  normal Welcome poll. The preexisting wrong-generation and retry checks
+  retain their separate zero observations.
+- **Physical retirement.** At the end of an existing child after the other
+  cases, retire its actual physical port via `stop` or change a held scope
+  file and trigger ordinary recheck. Invoke the normal bridge read/arm
+  on the now-retired port and require `Error::Source` with zero effects.
+  The pure Manual policy refusal above separately covers the admission
+  predicate. The unmounted proof does not promise lifecycle role-loss
+  detection by a future daemon.
+- **Native roster, epoch and package.** On final cold Pending replay
+  first observe exact positive readback. With the disposable profile
+  about to be discarded, use `fixture_statement` to change only
+  `peer_pending_custody.epoch_identity` for the exact carrier. Run the
+  ordinary checked Pending readback and require
+  `Error::Cursor(CursorError::Stale)` at the retained-vs-native
+  coordinates compare with zero effects. Verify it did not rewrite the
+  changed expectation. If storage validation blocks before that compare,
+  it is a different test and must be reported as such. The first
+  JoinStarted readback learns its epoch from authenticated native
+  storage. The shared roster/admin guard in
+  `peer_stage_joined.rs::joined_authority` is exercised positively by the
+  same native readback. Exercise a negative third-member or wrong-admin
+  group only if the existing fixture can reach the guard, or record the
+  negative by inspection. The signed swapped KeyPackage WSS ingress
+  case and unjoined cold readbacks are executable. The latter fail before
+  the consumed-bit check. A joined image with only native `consumed_at`
+  cleared on a disposable SQLCipher copy is an optional focused negative
+  if the existing native storage setter is available. A genuine reached
+  check must return `StageError::Invalid`, not `Unavailable`.
+- **Uncertain after actual Start and one actual Welcome poll.** Add one
+  one-shot thread-local fixture flag in `peer_receiver_v2_pending.rs`.
+  Consume it after `files.finish` and unpacking the exact successful
+  native result, before returning confirmation of that result to custody.
+  Its sole transition is success to `Err(Error::Source)`. The private
+  test child is the only setter (narrow visibility if cross-module) and
+  cannot turn failure into success. Reuse the existing joined scenario.
+  Assert `(1, 1, 0)` for actual polls, closed successes and custody CAS in
+  the injected loss window, the exact `JoinStarted` row and rearm refusal
+  (`Error::Binding`, zero new effects). Subsequent processes see no old
+  token or result and qualify only if independent cold verification
+  matches the exact founder coordinates. The effect is deliberately
+  ambiguous to the custody caller. This does not model MDK returning
+  Pending or VFS close failing. A measured one poll with zero closed
+  success alone would not establish that nothing persisted.
 
 Managed rollback is qualified independently by
 `managed_recovery_hot_journal_and_stock_wal`, source `6a8846ec` and
 [measured evidence](../validation/peer-receiver-charge-recovery.md).
 It executes journal-sync/main-write interrupted native SQLite and keyed
-playback using the same managed quota/owner. Preserve that prerequisite and
-do not describe the WSS fixture's clean process exits as hot-journal recovery.
+playback with the same managed quota/owner primitives. The clean WSS
+process cuts do not establish hot-journal recovery.
 
-The accounting owner retains the existing WSS file and counters. A small
-one-line child module mount and call sites can be composed with that owner;
-a test author owns the new sibling file and any narrow test-only seams.
-Re-run only the selected WSS and pure negative cases plus focused strict
-installed/stock checks, with an exclusive warm Cargo target. Get a fresh
-Claude Auto review of the resulting code and observed measurements.
+The refusal author owns narrow test-only WSS and existing signed-store
+fixture additions, local children of the bridge/checkpoint as needed,
+and the uncertainty seam. The sibling's accounting measurements stay
+unchanged. Use the existing warm exclusive target when available. Review
+the exact composed source and measured evidence independently before
+counting this proof.
