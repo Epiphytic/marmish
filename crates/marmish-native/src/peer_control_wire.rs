@@ -8,6 +8,7 @@ use nostr::key::{Keys, PublicKey};
 use nostr::nips::nip44::{self, Version};
 use nostr::types::Timestamp;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
 #[path = "peer_control_wire_artifact.rs"]
@@ -21,6 +22,8 @@ mod seal;
 pub(crate) use prepared_consent::{
     ClientCarrier, IncomingDelivery, Transcript, VerifiedDeliveryPackage,
 };
+
+use crate::peer_control_version::{ControlVersion, ReceiptCoordinates};
 
 pub(crate) use self::artifact::PackageBinding;
 use self::artifact::VerifiedPackage;
@@ -58,6 +61,7 @@ type Result<T> = std::result::Result<T, Error>;
 
 pub(crate) struct Codec {
     outer_cap: usize,
+    version: ControlVersion,
 }
 
 pub(crate) struct Prepared<T> {
@@ -84,6 +88,7 @@ pub(crate) struct Flight {
 
 #[derive(Clone)]
 pub(crate) struct Offer {
+    version: ControlVersion,
     flight: Flight,
     offer_id: [u8; 16],
     room_id: [u8; 16],
@@ -91,6 +96,10 @@ pub(crate) struct Offer {
 }
 
 impl Offer {
+    pub(crate) fn version(&self) -> ControlVersion {
+        self.version
+    }
+
     pub(crate) fn flight(&self) -> Flight {
         self.flight
     }
@@ -175,6 +184,70 @@ impl Delivery {
     pub(crate) fn welcome_digest(&self) -> [u8; 32] {
         self.welcome_digest
     }
+
+    pub(crate) fn status_negotiation(&self) -> Option<StatusNegotiation> {
+        if self.offer.version() != ControlVersion::V2 {
+            return None;
+        }
+        let offer = &self.offer;
+        let receipt = ReceiptCoordinates {
+            founder: offer.flight.author,
+            recipient: offer.flight.recipient,
+            room_id: offer.room_id,
+            offer_id: offer.offer_id,
+            offer_revision: offer.flight.revision.to_bytes(),
+            welcome_id: self.welcome_id.to_bytes(),
+        };
+        Some(StatusNegotiation {
+            app_room: status_app_room(&receipt),
+            receipt,
+            consent_revision: self.consent_revision.to_bytes(),
+            delivery_revision: self.flight.revision.to_bytes(),
+            routing: offer.routing.clone(),
+        })
+    }
+}
+
+/// Signed enrollment coordinates. The installed owner still has to verify
+/// native acceptance, the authenticated MLS sender, and current group authority.
+pub(crate) struct StatusNegotiation {
+    receipt: ReceiptCoordinates,
+    consent_revision: [u8; 32],
+    delivery_revision: [u8; 32],
+    routing: NostrRoutingV1,
+    app_room: [u8; 32],
+}
+
+impl StatusNegotiation {
+    pub(crate) fn receipt_coordinates(&self) -> &ReceiptCoordinates {
+        &self.receipt
+    }
+
+    pub(crate) fn consent_revision(&self) -> [u8; 32] {
+        self.consent_revision
+    }
+
+    pub(crate) fn delivery_revision(&self) -> [u8; 32] {
+        self.delivery_revision
+    }
+
+    pub(crate) fn routing(&self) -> &NostrRoutingV1 {
+        &self.routing
+    }
+
+    pub(crate) fn app_room(&self) -> [u8; 32] {
+        self.app_room
+    }
+}
+
+fn status_app_room(receipt: &ReceiptCoordinates) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"marmish/peer/status-room/v1\0");
+    digest.update(receipt.founder.to_bytes());
+    digest.update(receipt.recipient.to_bytes());
+    digest.update(receipt.room_id);
+    digest.update(receipt.offer_id);
+    digest.finalize().into()
 }
 
 #[derive(Serialize, Deserialize)]
@@ -219,10 +292,14 @@ struct DeliveryWire {
 
 impl Codec {
     pub(crate) fn new(outer_cap: usize) -> Result<Self> {
+        Self::for_version(outer_cap, ControlVersion::V1)
+    }
+
+    pub(crate) fn for_version(outer_cap: usize, version: ControlVersion) -> Result<Self> {
         if !(1..=MAX_OUTER_BYTES).contains(&outer_cap) {
             return Err(Error::Size);
         }
-        Ok(Self { outer_cap })
+        Ok(Self { outer_cap, version })
     }
 
     pub(crate) fn prepare_offer(
@@ -238,7 +315,7 @@ impl Codec {
         let routing = validate_routing(routing.nostr_group_id, &routing.relays)?;
         let expires_at = deadline(now, FLIGHT_TTL)?;
         let wire = OfferWire {
-            v: 1,
+            v: self.version as u8,
             expires_at,
             offer_id: hex::encode(offer_id),
             room_id: hex::encode(room_id),
@@ -250,6 +327,7 @@ impl Codec {
         Ok(Prepared {
             frame,
             flight: Offer {
+                version: self.version,
                 flight,
                 offer_id,
                 room_id,
@@ -268,9 +346,7 @@ impl Codec {
     ) -> Result<Offer> {
         let (carrier_id, rumor) = self.open(local, frame, expected_server, OFFER)?;
         let wire: OfferWire = serde_json::from_str(&rumor.content).map_err(|_| Error::Body)?;
-        if wire.v != 1 {
-            return Err(Error::Body);
-        }
+        check_body(self.version, wire.v, &rumor.content, &wire)?;
         let flight = flight(carrier_id, &rumor, local.public_key(), wire.expires_at, now)?;
         if wire.expires_at != deadline(flight.created_at, FLIGHT_TTL)? {
             return Err(Error::Time);
@@ -284,6 +360,7 @@ impl Codec {
             return Err(Error::Route);
         }
         Ok(Offer {
+            version: self.version,
             flight,
             offer_id: fixed_hex(&wire.offer_id, Error::Body)?,
             room_id: fixed_hex(&wire.room_id, Error::Body)?,
@@ -299,7 +376,7 @@ impl Codec {
         now: u64,
         expires_at: u64,
     ) -> Result<Prepared<Consent>> {
-        if signer.public_key() != offer.flight.recipient {
+        if self.version != offer.version() || signer.public_key() != offer.flight.recipient {
             return Err(Error::Binding);
         }
         let created_at = child_time(offer.flight, now)?;
@@ -311,7 +388,7 @@ impl Codec {
         )?;
         consent_times(offer.flight, native.lifetime(), created_at, expires_at, now)?;
         let wire = ConsentWire {
-            v: 1,
+            v: self.version as u8,
             expires_at,
             offer_id: hex::encode(offer.offer_id),
             offer_revision: offer.flight.revision.to_hex(),
@@ -341,14 +418,12 @@ impl Codec {
         offer: &Offer,
         now: u64,
     ) -> Result<Consent> {
-        if local.public_key() != offer.flight.author {
+        if self.version != offer.version() || local.public_key() != offer.flight.author {
             return Err(Error::Binding);
         }
         let (carrier_id, rumor) = self.open(local, frame, Some(offer.flight.recipient), CONSENT)?;
         let wire: ConsentWire = serde_json::from_str(&rumor.content).map_err(|_| Error::Body)?;
-        if wire.v != 1 {
-            return Err(Error::Body);
-        }
+        check_body(self.version, wire.v, &rumor.content, &wire)?;
         match_offer(offer, &wire.offer_id, &wire.offer_revision)?;
         let flight = flight(carrier_id, &rumor, local.public_key(), wire.expires_at, now)?;
         stage_window(offer.flight, flight.created_at)?;
@@ -390,7 +465,9 @@ impl Codec {
         now: u64,
         expires_at: u64,
     ) -> Result<Prepared<Delivery>> {
-        if signer.public_key() != consent.flight.recipient {
+        if self.version != consent.offer.version()
+            || signer.public_key() != consent.flight.recipient
+        {
             return Err(Error::Binding);
         }
         let created_at = child_time(consent.flight, now)?;
@@ -405,7 +482,7 @@ impl Codec {
         let (welcome_id, welcome_digest) = artifact::verify_welcome(exact_welcome, client)?;
         let package = consent.native.binding;
         let wire = DeliveryWire {
-            v: 1,
+            v: self.version as u8,
             expires_at,
             offer_id: hex::encode(consent.offer.offer_id),
             offer_revision: consent.offer.flight.revision.to_hex(),
@@ -440,7 +517,7 @@ impl Codec {
         consent: &Consent,
         now: u64,
     ) -> Result<Delivery> {
-        if local.public_key() != consent.flight.author {
+        if self.version != consent.offer.version() || local.public_key() != consent.flight.author {
             return Err(Error::Binding);
         }
         let (carrier_id, rumor) =
@@ -468,9 +545,7 @@ impl Codec {
         authority: DeliveryAuthority<'_>,
         now: u64,
     ) -> Result<Delivery> {
-        if wire.v != 1 {
-            return Err(Error::Body);
-        }
+        check_body(authority.offer.version(), wire.v, &rumor.content, &wire)?;
         match_offer(authority.offer, &wire.offer_id, &wire.offer_revision)?;
         let consent_revision = event_id(&wire.consent_revision)?;
         let package = package_binding(
@@ -624,6 +699,21 @@ impl Codec {
         }
         Ok((outer.id, outer.created_at.as_secs(), rumor))
     }
+}
+
+fn check_body(
+    version: ControlVersion,
+    wire_version: u8,
+    content: &str,
+    body: &impl Serialize,
+) -> Result<()> {
+    if wire_version != version as u8
+        || (version == ControlVersion::V2
+            && serde_json::to_string(body).map_err(|_| Error::Body)? != content)
+    {
+        return Err(Error::Body);
+    }
+    Ok(())
 }
 
 fn create_rumor<T: Serialize>(

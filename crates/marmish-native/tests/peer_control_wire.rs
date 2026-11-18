@@ -1,10 +1,16 @@
 //! Offline qualification of the Peer control codec before product integration.
+
+#[path = "../src/peer_accept_receipt_wire.rs"]
+pub(crate) mod peer_accept_receipt_wire;
+#[path = "../src/peer_control_version.rs"]
+mod peer_control_version;
 #[allow(dead_code, unused_imports)] // Custody callers live in the checkpoint fixture.
 #[path = "../src/peer_control_wire.rs"]
 mod peer_control_wire;
 
 // Standalone wire tests have no checkpoint and cannot issue Held evidence.
 mod peer_invitation {
+    pub(crate) use crate::peer_accept_receipt_wire as accept_receipt_wire;
     use crate::peer_control_wire::{Offer, PackageBinding, Transcript};
 
     pub(crate) enum HeldEvidence {}

@@ -1,4 +1,7 @@
 //! Offline SQLCipher scan and retry qualification before carrier integration.
+
+#[path = "../src/peer_control_version.rs"]
+mod peer_control_version;
 #[allow(dead_code)] // This target also compiles the private production methods.
 #[path = "../src/peer_cursor_store.rs"]
 mod peer_cursor_store;
@@ -6,6 +9,7 @@ mod peer_cursor_store;
 // This storage-only target includes the cursor source directly. Native artifact
 // and local ACK authority exist in the library fixture, so there are no values
 // of either capability in this target.
+#[allow(dead_code)] // Standalone cursor storage exercises only the legacy v1 receipt format.
 #[path = "../src/peer_accept_receipt_wire.rs"]
 pub(crate) mod receipt_wire;
 

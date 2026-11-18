@@ -5,7 +5,7 @@
 mod accept_receipt_verify;
 #[cfg(test)]
 #[path = "peer_accept_receipt_wire.rs"]
-mod accept_receipt_wire;
+pub(crate) mod accept_receipt_wire;
 
 #[cfg(test)]
 #[path = "peer_daemon_worker.rs"]

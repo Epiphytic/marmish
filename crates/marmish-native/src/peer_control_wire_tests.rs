@@ -1,18 +1,21 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cgka_engine::EngineBuilder;
 use cgka_engine::account_identity_proof::{
     AccountIdentityProofRequest, AccountIdentityProofSigner,
 };
-use cgka_traits::app_components::{NOSTR_ROUTING_COMPONENT_ID, default_group_components};
-use cgka_traits::engine::CgkaEngine;
+use cgka_engine::{Engine, EngineBuilder};
+use cgka_traits::app_components::{
+    AppComponentData, NOSTR_ROUTING_COMPONENT_ID, default_group_components, encode_nostr_routing_v1,
+};
+use cgka_traits::engine::{CgkaEngine, CreateGroupRequest, SendResult};
 use nostr::event::Event;
 use serde_json::{Value, json};
 use storage_sqlite::{SqliteAccountStorage, SqliteStorageOptions};
 use transport_nostr_peeler::NostrMlsPeeler;
 
 use super::*;
+use crate::peer_invitation::accept_receipt_wire;
 
 const ROUTE: &str = "wss://peer.example/";
 const CLOCK: u64 = 1_800_000_000;
@@ -79,26 +82,31 @@ impl AccountIdentityProofSigner for ProofSigner {
     }
 }
 
-async fn native_package(fixture: &Fixture) -> (Vec<u8>, u64) {
+fn native_engine(keys: &Keys) -> Engine<SqliteAccountStorage> {
     marmish_engine::initialize_storage().unwrap();
     let storage = SqliteAccountStorage::in_memory_with_options(SqliteStorageOptions {
         cipher_memory_security: false,
         ..Default::default()
     })
     .unwrap();
-    let client = &fixture.client;
-    let mut engine = EngineBuilder::new(storage)
-        .identity(client.public_key().to_bytes().to_vec())
-        .account_identity_proof_signer(Arc::new(ProofSigner(client.clone())))
+    EngineBuilder::new(storage)
+        .identity(keys.public_key().to_bytes().to_vec())
+        .account_identity_proof_signer(Arc::new(ProofSigner(keys.clone())))
         .supported_app_components(
             default_group_components()
                 .into_iter()
                 .chain([NOSTR_ROUTING_COMPONENT_ID]),
         )
-        .peeler(Box::new(NostrMlsPeeler::new()))
+        .peeler(Box::new(
+            NostrMlsPeeler::new().with_welcome_signer(keys.clone()),
+        ))
         .build()
-        .unwrap();
-    let package = engine.fresh_key_package().await.unwrap();
+        .unwrap()
+}
+
+async fn native_package(fixture: &Fixture) -> (Vec<u8>, u64) {
+    let client = &fixture.client;
+    let package = native_engine(client).fresh_key_package().await.unwrap();
     let meta = cgka_engine::key_package_metadata(&package).unwrap();
     assert!(meta.last_resort);
     let now = Timestamp::now().as_secs();
@@ -235,6 +243,7 @@ async fn peer_control_core_three_flights_preserve_exact_signed_bytes() {
         consent.flight().revision
     );
     assert_eq!(from_transcript.welcome_bytes(), welcome);
+    assert!(from_transcript.status_negotiation().is_none());
 
     let client_context = &authored.flight;
     let delivery = f
@@ -897,8 +906,16 @@ fn print_measurement(label: &str, mut times: Vec<Duration>, bytes: usize) {
 #[tokio::test]
 #[ignore = "offline benchmark"]
 async fn peer_control_benchmark() {
-    let f = Fixture::new();
-    let (package, now) = native_package(&f).await;
+    for version in [ControlVersion::V1, ControlVersion::V2] {
+        let mut fixture = Fixture::new();
+        fixture.codec = Codec::for_version(MAX_OUTER_BYTES, version).unwrap();
+        println!("Peer control {version:?}");
+        benchmark_control_version(&fixture).await;
+    }
+}
+
+async fn benchmark_control_version(f: &Fixture) {
+    let (package, now) = native_package(f).await;
     let welcome = welcome_for(f.client.public_key(), "x".repeat(2048));
     let mut measurements: [Vec<Duration>; 6] = std::array::from_fn(|_| Vec::with_capacity(100));
     let mut sizes = [0; 3];
@@ -959,5 +976,360 @@ async fn peer_control_benchmark() {
     .enumerate()
     {
         print_measurement(label, times, sizes[index / 2]);
+    }
+}
+
+async fn native_welcome(fixture: &Fixture, consent: &Consent) -> Vec<u8> {
+    let (_, result) = native_engine(&fixture.server)
+        .create_group(CreateGroupRequest {
+            name: "Marmish Peer".to_owned(),
+            description: String::new(),
+            members: vec![consent.key_package().clone()],
+            required_features: Vec::new(),
+            app_components: vec![AppComponentData {
+                component_id: NOSTR_ROUTING_COMPONENT_ID,
+                data: encode_nostr_routing_v1(&fixture.routing).unwrap(),
+            }],
+            initial_admins: Vec::new(),
+        })
+        .await
+        .unwrap();
+    let SendResult::FoundingGroupCreated { mut welcomes } = result else {
+        panic!("expected a native founding group");
+    };
+    assert_eq!(welcomes.len(), 1);
+    welcomes.remove(0).payload
+}
+
+fn reauthor_body(
+    codec: &Codec,
+    frame: &[u8],
+    signer: &Keys,
+    recipient: &Keys,
+    expires_at: u64,
+    edit: impl FnOnce(&str) -> String,
+) -> Vec<u8> {
+    let (_, _, mut rumor) = open_layers(recipient, frame);
+    rumor.content = edit(&rumor.content);
+    rumor.id = Some(rumor.compute_id());
+    codec
+        .prepare(signer, recipient.public_key(), &rumor, expires_at)
+        .unwrap()
+        .0
+}
+
+#[test]
+fn peer_control_v2_offer_requires_selected_numeric_canonical_body() {
+    let mut f = Fixture::new();
+    let legacy = f.offer(CLOCK);
+    let (_, _, rumor) = open_layers(&f.client, legacy.frame());
+    assert_eq!(
+        rumor.content,
+        format!(
+            r#"{{"v":1,"expires_at":{},"offer_id":"{}","room_id":"{}","transport_group_id":"{}","relays":["{ROUTE}"]}}"#,
+            CLOCK + FLIGHT_TTL,
+            hex::encode(legacy.flight.offer_id()),
+            hex::encode(ROOM),
+            hex::encode(f.routing.nostr_group_id),
+        )
+    );
+    let v1 = f.codec;
+    f.codec = Codec::for_version(MAX_OUTER_BYTES, ControlVersion::V2).unwrap();
+    let authored = f.offer(CLOCK);
+    let expires = authored.flight.flight().expires_at;
+    assert_eq!(
+        f.open_offer(authored.frame(), CLOCK).unwrap().version(),
+        ControlVersion::V2
+    );
+    assert!(matches!(
+        f.open_offer(legacy.frame(), CLOCK),
+        Err(Error::Body)
+    ));
+    assert!(matches!(
+        v1.open_offer(&f.client, authored.frame(), None, &f.routing.relays, CLOCK),
+        Err(Error::Body)
+    ));
+
+    for replacement in [
+        r#""v":3,"#,
+        r#""v":"2","#,
+        r#""v":2.0,"#,
+        r#""v":2,"v":2,"#,
+        r#""v":2,"unknown":0,"#,
+        r#""\u0076":2,"#,
+        r#""v": 2,"#,
+        "",
+    ] {
+        let frame = reauthor_body(
+            &f.codec,
+            authored.frame(),
+            &f.server,
+            &f.client,
+            expires,
+            |body| body.replacen(r#""v":2,"#, replacement, 1),
+        );
+        assert!(
+            matches!(f.open_offer(&frame, CLOCK), Err(Error::Body)),
+            "{replacement}"
+        );
+    }
+    let reordered = reauthor_body(
+        &f.codec,
+        authored.frame(),
+        &f.server,
+        &f.client,
+        expires,
+        |body| {
+            body.replacen(r#"{"v":2,"#, "{", 1)
+                .replacen('}', r#","v":2}"#, 1)
+        },
+    );
+    assert!(matches!(f.open_offer(&reordered, CLOCK), Err(Error::Body)));
+}
+
+#[tokio::test]
+async fn peer_control_v2_native_enrollment_binds_transcript_and_same_status_room() {
+    let mut f = Fixture::new();
+    let v1 = f.codec;
+    f.codec = Codec::for_version(MAX_OUTER_BYTES, ControlVersion::V2).unwrap();
+    let (package, now) = native_package(&f).await;
+    let authored = f.offer(now);
+    let offer = f.open_offer(authored.frame(), now).unwrap();
+    let consent = f.consent(&offer, &package, now);
+    let transcript = Transcript::from_consent(&consent.flight);
+    transcript
+        .verify(&f.client, &offer, consent.frame(), &package, now)
+        .unwrap();
+    let mut wrong_version_offer = offer.clone();
+    wrong_version_offer.version = ControlVersion::V1;
+    assert_eq!(
+        transcript.verify(
+            &f.client,
+            &wrong_version_offer,
+            consent.frame(),
+            &package,
+            now
+        ),
+        Err(Error::Binding)
+    );
+    assert!(matches!(
+        v1.prepare_consent(&f.client, &offer, &package, now, now + 100),
+        Err(Error::Binding)
+    ));
+
+    let malformed_consent = reauthor_body(
+        &f.codec,
+        consent.frame(),
+        &f.client,
+        &f.server,
+        transcript.expires,
+        |body| {
+            let mut wire: ConsentWire = serde_json::from_str(body).unwrap();
+            wire.offer_revision = EventId::from_byte_array([0x55; 32]).to_hex();
+            serde_json::to_string(&wire).unwrap()
+        },
+    );
+    assert!(matches!(
+        f.codec
+            .open_consent(&f.server, &malformed_consent, &authored.flight, now),
+        Err(Error::Binding)
+    ));
+    let legacy_consent = reauthor_body(
+        &f.codec,
+        consent.frame(),
+        &f.client,
+        &f.server,
+        transcript.expires,
+        |body| body.replacen(r#""v":2,"#, r#""v":1,"#, 1),
+    );
+    assert!(matches!(
+        f.codec
+            .open_consent(&f.server, &legacy_consent, &authored.flight, now),
+        Err(Error::Body)
+    ));
+    let opened = f
+        .codec
+        .open_consent(&f.server, consent.frame(), &authored.flight, now)
+        .unwrap();
+    let welcome = native_welcome(&f, &opened).await;
+    assert!(matches!(
+        v1.prepare_delivery(&f.server, &opened, &welcome, now, now + 100),
+        Err(Error::Binding)
+    ));
+    let delivery = f.delivery(&opened, &welcome, now);
+    let found = f
+        .codec
+        .open_delivery(&f.client, delivery.frame(), &consent.flight, now)
+        .unwrap();
+    assert_eq!(found.welcome_bytes(), welcome);
+    let classified = f
+        .codec
+        .classify_client(&f.client, delivery.frame())
+        .unwrap();
+    let ClientCarrier::Delivery(incoming) = classified else {
+        panic!("expected signed v2 Delivery");
+    };
+    assert_eq!(incoming.offer().version, ControlVersion::V2);
+    let recovered = transcript
+        .verify_delivery(&f.client, &offer, consent.frame(), &package, now, *incoming)
+        .unwrap();
+    let left = delivery.flight.status_negotiation().unwrap();
+    for candidate in [found, recovered] {
+        let right = candidate.status_negotiation().unwrap();
+        assert_eq!(left.app_room(), right.app_room());
+        assert_eq!(left.receipt_coordinates(), right.receipt_coordinates());
+        assert_eq!(left.consent_revision(), right.consent_revision());
+        assert_eq!(left.delivery_revision(), right.delivery_revision());
+        assert_eq!(left.routing(), right.routing());
+    }
+    assert_eq!(left.routing(), &f.routing);
+    assert_eq!(
+        left.receipt_coordinates().welcome_id,
+        delivery.flight.welcome_id().to_bytes()
+    );
+    assert_eq!(
+        left.receipt_coordinates().offer_revision,
+        offer.flight().revision.to_bytes()
+    );
+    assert!(matches!(
+        v1.classify_client(&f.client, delivery.frame()),
+        Err(Error::Body)
+    ));
+
+    assert_v2_receipt(left.receipt_coordinates(), now);
+
+    assert!(matches!(
+        v1.open_consent(&f.server, consent.frame(), &authored.flight, now),
+        Err(Error::Binding)
+    ));
+    assert!(matches!(
+        v1.open_delivery(&f.client, delivery.frame(), &consent.flight, now),
+        Err(Error::Binding)
+    ));
+
+    assert_v2_delivery_refusals(&f, &delivery, &consent.flight, now);
+}
+
+fn assert_v2_receipt(coordinates: &ReceiptCoordinates, now: u64) {
+    let receipt = accept_receipt_wire::Receipt {
+        founder: coordinates.founder,
+        recipient: coordinates.recipient,
+        room_id: coordinates.room_id,
+        offer_id: coordinates.offer_id,
+        offer_revision: coordinates.offer_revision,
+        welcome_id: coordinates.welcome_id,
+        epoch: 1,
+        epoch_identity: [0x91; 32],
+    };
+    let v2_receipt = accept_receipt_wire::prepare_v2(&receipt, now).unwrap();
+    let decoded = accept_receipt_wire::decode_v2(v2_receipt.payload()).unwrap();
+    assert_eq!(decoded.decoded().event_id, v2_receipt.event_id());
+    assert!(decoded.matches_coordinates(coordinates));
+    assert!(accept_receipt_wire::decode(v2_receipt.payload()).is_err());
+    let old_receipt = accept_receipt_wire::prepare(&receipt, now).unwrap();
+    assert!(accept_receipt_wire::decode_v2(old_receipt.payload()).is_err());
+}
+
+fn assert_v2_delivery_refusals(
+    f: &Fixture,
+    delivery: &Prepared<Delivery>,
+    consent: &Consent,
+    now: u64,
+) {
+    let delivery_expires = delivery.flight.flight().expires_at;
+    for change_consent in [true, false] {
+        let changed = reauthor_body(
+            &f.codec,
+            delivery.frame(),
+            &f.server,
+            &f.client,
+            delivery_expires,
+            |body| {
+                let mut wire: DeliveryWire = serde_json::from_str(body).unwrap();
+                if change_consent {
+                    wire.consent_revision = EventId::from_byte_array([0x66; 32]).to_hex();
+                } else {
+                    wire.offer_id = hex::encode([0x77; 16]);
+                }
+                serde_json::to_string(&wire).unwrap()
+            },
+        );
+        assert!(matches!(
+            f.codec.open_delivery(&f.client, &changed, consent, now),
+            Err(Error::Binding)
+        ));
+    }
+    let legacy_delivery = reauthor_body(
+        &f.codec,
+        delivery.frame(),
+        &f.server,
+        &f.client,
+        delivery_expires,
+        |body| body.replacen(r#""v":2,"#, r#""v":1,"#, 1),
+    );
+    assert!(matches!(
+        f.codec
+            .open_delivery(&f.client, &legacy_delivery, consent, now),
+        Err(Error::Body)
+    ));
+    assert!(matches!(
+        f.codec.classify_client(&f.client, &legacy_delivery),
+        Err(Error::Body)
+    ));
+
+    let noncanonical = reauthor_body(
+        &f.codec,
+        delivery.frame(),
+        &f.server,
+        &f.client,
+        delivery_expires,
+        |body| format!(" {body}"),
+    );
+    assert!(matches!(
+        f.codec
+            .open_delivery(&f.client, &noncanonical, consent, now),
+        Err(Error::Body)
+    ));
+}
+
+#[test]
+fn peer_control_status_room_pins_domain_and_every_ordered_input() {
+    let coordinates = ReceiptCoordinates {
+        founder: PublicKey::from_byte_array([1; 32]),
+        recipient: PublicKey::from_byte_array([2; 32]),
+        room_id: [3; 16],
+        offer_id: [4; 16],
+        offer_revision: [5; 32],
+        welcome_id: [6; 32],
+    };
+    let room = status_app_room(&coordinates);
+    assert_eq!(
+        hex::encode(room),
+        "0e31574ef3903ee44ad3e33be97e5b84467005a600d741292175c547ef94dc78"
+    );
+    for changed in [
+        ReceiptCoordinates {
+            founder: PublicKey::from_byte_array([8; 32]),
+            ..coordinates
+        },
+        ReceiptCoordinates {
+            recipient: PublicKey::from_byte_array([8; 32]),
+            ..coordinates
+        },
+        ReceiptCoordinates {
+            room_id: [8; 16],
+            ..coordinates
+        },
+        ReceiptCoordinates {
+            offer_id: [8; 16],
+            ..coordinates
+        },
+        ReceiptCoordinates {
+            founder: coordinates.recipient,
+            recipient: coordinates.founder,
+            ..coordinates
+        },
+    ] {
+        assert_ne!(status_app_room(&changed), room);
     }
 }

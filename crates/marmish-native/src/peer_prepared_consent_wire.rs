@@ -22,6 +22,7 @@ pub(crate) enum ClientCarrier {
 }
 
 pub(crate) struct DeliveryOffer {
+    pub(crate) version: ControlVersion,
     pub(crate) server: PublicKey,
     pub(crate) id: [u8; 16],
     pub(crate) revision: [u8; 32],
@@ -66,6 +67,9 @@ impl IncomingDelivery {
     }
 
     fn verify_with(self, authority: DeliveryAuthority<'_>, wall: u64) -> Result<Delivery> {
+        if self.offer.version != authority.offer.version() {
+            return Err(Error::Binding);
+        }
         Codec::bind_delivery(self.carrier, &self.rumor, self.wire, authority, wall)
     }
 }
@@ -228,7 +232,7 @@ impl Transcript {
             return Err(Error::Binding);
         }
         let wire = ConsentWire {
-            v: 1,
+            v: offer.version() as u8,
             expires_at: self.expires,
             offer_id: hex::encode(offer.offer_id),
             offer_revision: offer.flight.revision.to_hex(),
@@ -271,7 +275,9 @@ impl Codec {
             kind if kind == DELIVERY => {
                 let wire: DeliveryWire =
                     serde_json::from_str(&rumor.content).map_err(|_| Error::Body)?;
+                check_body(self.version, wire.v, &rumor.content, &wire)?;
                 let offer = DeliveryOffer {
+                    version: self.version,
                     server: rumor.pubkey,
                     id: fixed_hex(&wire.offer_id, Error::Body)?,
                     revision: event_id(&wire.offer_revision)?.to_bytes(),

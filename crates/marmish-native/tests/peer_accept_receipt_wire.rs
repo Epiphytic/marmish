@@ -1,5 +1,7 @@
 #[path = "../src/peer_accept_receipt_wire.rs"]
 mod peer_accept_receipt_wire;
+#[path = "../src/peer_control_version.rs"]
+mod peer_control_version;
 
 use cgka_traits::app_event::MarmotAppEvent;
 use nostr::key::PublicKey;
@@ -183,4 +185,88 @@ fn rejects_invalid_envelope_and_authorship() {
     assert_eq!(decode(duplicate.as_bytes()), Err(InvalidReceipt));
     let oversized = format!("{envelope}{}", " ".repeat(3_000));
     assert_eq!(decode(oversized.as_bytes()), Err(InvalidReceipt));
+}
+
+#[test]
+fn v2_receipt_binds_every_coordinate_and_cannot_be_decoded_as_v1() {
+    use peer_accept_receipt_wire::{decode_v2, prepare_v2};
+    use peer_control_version::ReceiptCoordinates;
+
+    let receipt = receipt();
+    let prepared = prepare_v2(&receipt, CREATED_AT).unwrap();
+    let decoded = decode_v2(prepared.payload()).unwrap();
+    let app = MarmotAppEvent::decode(prepared.payload()).unwrap();
+    assert_eq!(app.content, CONTENT.replacen(r#""v":1"#, r#""v":2"#, 1));
+    assert_eq!(
+        hex::encode(prepared.event_id()),
+        "abd47b5ad42f9f9f891147caa92923e13bc7f59073218fa1b56ba5950cde99b6"
+    );
+    assert_eq!(
+        *decoded.decoded(),
+        Decoded {
+            receipt,
+            event_id: prepared.event_id(),
+            created_at: CREATED_AT
+        }
+    );
+    assert_eq!(decode(prepared.payload()), Err(InvalidReceipt));
+    assert_eq!(
+        decode_v2(prepare(&receipt, CREATED_AT).unwrap().payload()),
+        Err(InvalidReceipt)
+    );
+
+    let coordinates = ReceiptCoordinates {
+        founder: receipt.founder,
+        recipient: receipt.recipient,
+        room_id: receipt.room_id,
+        offer_id: receipt.offer_id,
+        offer_revision: receipt.offer_revision,
+        welcome_id: receipt.welcome_id,
+    };
+    assert!(decoded.matches_coordinates(&coordinates));
+    for mismatch in [
+        ReceiptCoordinates {
+            founder: receipt.recipient,
+            ..coordinates
+        },
+        ReceiptCoordinates {
+            recipient: receipt.founder,
+            ..coordinates
+        },
+        ReceiptCoordinates {
+            room_id: [0; 16],
+            ..coordinates
+        },
+        ReceiptCoordinates {
+            offer_id: [0; 16],
+            ..coordinates
+        },
+        ReceiptCoordinates {
+            offer_revision: [0; 32],
+            ..coordinates
+        },
+        ReceiptCoordinates {
+            welcome_id: [0; 32],
+            ..coordinates
+        },
+    ] {
+        assert!(!decoded.matches_coordinates(&mismatch));
+    }
+
+    let noncanonical = MarmotAppEvent::new(
+        RECIPIENT,
+        CREATED_AT,
+        30102,
+        Vec::new(),
+        format!(" {}", app.content),
+    );
+    assert_eq!(
+        decode_v2(&noncanonical.encode().unwrap()),
+        Err(InvalidReceipt)
+    );
+    let false_author = MarmotAppEvent::new(FOUNDER, CREATED_AT, 30102, Vec::new(), app.content);
+    assert_eq!(
+        decode_v2(&false_author.encode().unwrap()),
+        Err(InvalidReceipt)
+    );
 }
