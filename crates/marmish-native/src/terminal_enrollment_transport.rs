@@ -531,9 +531,10 @@ impl Authority {
         &self,
         future: impl std::future::Future<Output = Result<T>>,
     ) -> Result<T> {
+        let deadline = self.deadline()?;
         let result = self
             .through_physical_stop(async {
-                tokio::time::timeout_at(self.deadline()?, future)
+                tokio::time::timeout_at(deadline, future)
                     .await
                     .map_err(|_| Error::Timeout)?
             })
@@ -1595,8 +1596,17 @@ async fn stop_lane(
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 #[tokio::test]
 async fn terminal_fatal_deactivation_cancels_before_second_poll() {
+    use futures_util::task::{ArcWake, waker};
     use std::cell::Cell;
-    use std::task::Poll;
+    use std::task::{Context, Poll};
+
+    #[derive(Default)]
+    struct WakeCount(AtomicUsize);
+    impl ArcWake for WakeCount {
+        fn wake_by_ref(this: &Arc<Self>) {
+            this.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 
     struct DropFlag<'a>(&'a Cell<bool>);
     impl Drop for DropFlag<'_> {
@@ -1624,10 +1634,15 @@ async fn terminal_fatal_deactivation_cancels_before_second_poll() {
         })
         .await
     }));
-    assert!(futures_util::poll!(&mut deactivation).is_pending());
+    let wakes = Arc::new(WakeCount::default());
+    let waker = waker(wakes.clone());
+    let mut context = Context::from_waker(&waker);
+    assert!(deactivation.as_mut().poll(&mut context).is_pending());
     assert_eq!(polls.get(), 1);
     assert!(!dropped.get());
-    trip.mark_cut();
+    assert_eq!(wakes.0.load(Ordering::Relaxed), 0);
+    trip.trip();
+    assert!(wakes.0.load(Ordering::Relaxed) > 0);
     assert!(matches!(
         deactivation.await,
         Err(Error::Transport("dispatcher_fatal"))
