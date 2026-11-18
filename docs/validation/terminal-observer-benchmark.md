@@ -22,9 +22,11 @@ These figures describe local receipt and acknowledgment, on this single-host ser
 
 The same fixture ran in a debug test controller against the
 [checksum-verified optimized package](mdk-master-3548.md#optimized-linux-installer-and-private-terminal)
-from source `d091cc8`, installed using `scripts/install.sh`. The test
-controller used the package's build stamp and the exact controls test
-source `8fa94ff`. The run took 37.49 s and its first named observer
+from source `d091cc8`, installed using `scripts/install.sh`. The debug
+controller used the release build stamp, source `d091cc8` and the reviewed
+test-only fixture files from `8fa94ff`. It ran the MLS and local IPC readers
+and collected timings. The worker and daemon were optimized. The run took
+37.49 s and its first named observer
 attach reached Ready in 6.767 s. The relay accepted 321 publications.
 
 | Local reader | Timed sends | Minimum | p50 | p95 | Maximum |
