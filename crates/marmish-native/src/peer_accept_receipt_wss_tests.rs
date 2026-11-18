@@ -333,6 +333,7 @@ pub(super) async fn finish(mut run: ReceiptRun<'_, '_>) {
     let (row, armed) = run.read(&mut owner, Step::Armed { number: 2 });
     let recipient = run.open(&owner, &row, ReceiptGate::closed(run.round.wall.clone()));
     assert!(outbound::acknowledge_published(&recipient, run.image, &armed, run.wall()).is_err());
+    assert!(outbound::acknowledge_published(&recipient, run.image, &armed, deadline).is_err());
     let accepted = outbound::confirm(&recipient, run.image, &armed, run.wall()).unwrap();
     assert_eq!(accepted.event_id(), candidate);
     assert_eq!(accepted.signed_digest(), digest);
@@ -346,6 +347,8 @@ pub(super) async fn finish(mut run: ReceiptRun<'_, '_>) {
 
     // Reopen after the recipient SQL commit and acknowledge exactly the
     // MessageId/app-id selected by the retained native publication evidence.
+    assert!(run.wall() < deadline);
+    run.round.wall.store(deadline, Ordering::Release);
     let mut owner = (run.reopen)();
     let (row, published) = run.read(&mut owner, Step::Published { number: 2 });
     let mut recipient = run.open(&owner, &row, ReceiptGate::closed(run.round.wall.clone()));
@@ -596,6 +599,22 @@ fn project_founder(
         .unwrap();
     assert_eq!(proof.native_id(), native_id);
     assert_eq!(proof.app_id(), run.inner);
+
+    // Native readback alone cannot substitute a different authorization
+    // deadline for the one recorded from the already verified Delivery.
+    let wrong_deadline = founder_proof::Expectation {
+        deadline: expected.deadline + 1,
+        ..*expected
+    };
+    let same_native = founder_proof::pending(founder.runtime(), &wrong_deadline, run.wall())
+        .unwrap()
+        .unwrap();
+    assert_eq!(same_native.native_id(), native_id);
+    assert!(
+        db.accept_verified_receipt(&source, &same_native, run.wall())
+            .is_err()
+    );
+
     let durable = db
         .accept_verified_receipt(&source, &proof, run.wall())
         .unwrap();
@@ -612,7 +631,7 @@ async fn retire_founder(
     delivery: TransportDelivery,
 ) {
     run.round.wall.fetch_add(1, Ordering::AcqRel);
-    let founder = run.founder.closed();
+    let mut founder = run.founder.closed();
     let mut db = projection.checkpoint(run);
     let source = db.bind_source(run.round.relay.url.as_str()).unwrap();
     let durable = DurableExpectation::read(run, &mut db, &source);
@@ -626,10 +645,27 @@ async fn retire_founder(
     assert_eq!(repeated.accepted_at(), saved_at);
     assert!(repeated.accepted_at() < run.wall());
     assert_eq!(repeated.source().native_id, proof.native_id().as_slice());
+
+    // Retire once, then exercise re-delivery while acceptance is still live.
+    // A native duplicate may restore only the original application source.
+    assert!(founder_proof::retire(&mut founder, &repeated, expected, native_id).unwrap());
+    assert!(!founder_proof::retire(&mut founder, &repeated, expected, native_id).unwrap());
+    let re_emitted = replay_founder(&mut founder, &delivery, native_id).await;
+    let next = founder_proof::pending(founder.runtime(), expected, run.wall()).unwrap();
+    assert_eq!(next.is_some(), re_emitted);
+    if let Some(next) = next {
+        assert_eq!(next.native_id(), native_id);
+        let same = db
+            .accept_verified_receipt(&source, &next, run.wall())
+            .unwrap();
+        assert_eq!(same.accepted_at(), saved_at);
+        assert_eq!(same.source().native_id, native_id.as_slice());
+    }
     drop((proof, repeated, db, founder));
 
     // Already-accepted rows can retire their exact native delivery after
     // the acceptance deadline; no new acceptance becomes possible.
+    assert!(run.wall() < expected.deadline);
     run.round.wall.store(expected.deadline, Ordering::Release);
     let mut founder = run.founder.closed();
     let mut db = projection.checkpoint(run);
@@ -644,24 +680,53 @@ async fn retire_founder(
     ));
     let mut wrong = native_id.as_slice().to_vec();
     wrong[0] ^= 1;
+    let wrong_leaf = founder_proof::Expectation {
+        recipient_leaf: expected.recipient_leaf ^ 1,
+        ..*expected
+    };
     assert!(matches!(
         founder_proof::retire(&mut founder, &late, expected, &MessageId::new(wrong)),
         Err(founder_proof::Refusal::Binding)
     ));
-    assert!(founder_proof::retire(&mut founder, &late, expected, native_id).unwrap());
+    assert!(matches!(
+        founder_proof::retire(&mut founder, &late, &wrong_leaf, native_id),
+        Err(founder_proof::Refusal::Binding)
+    ));
+    assert_eq!(
+        founder_proof::retire(&mut founder, &late, expected, native_id).unwrap(),
+        re_emitted
+    );
     assert!(!founder_proof::retire(&mut founder, &late, expected, native_id).unwrap());
 
-    let replay = founder.ingest_delivery(&delivery).await.unwrap();
-    assert!(replay.effects.events.iter().all(|event| {
-        !matches!(event, GroupEvent::MessageReceived { message_id, .. } if message_id != native_id)
-    }));
-    // Native can present an already observed delivery again. The application
-    // decision is the same durable row, and only that row can retire it.
+    let late_emitted = replay_founder(&mut founder, &delivery, native_id).await;
     let saved = db
         .read_founder_acceptance(&source, run.round.signer, run.wall())
         .unwrap();
     assert_eq!(saved.accepted_at(), saved_at);
     assert_eq!(saved.source().native_id, native_id.as_slice());
-    founder_proof::retire(&mut founder, &saved, expected, native_id).unwrap();
+    assert_eq!(
+        founder_proof::retire(&mut founder, &saved, expected, native_id).unwrap(),
+        late_emitted
+    );
     assert!(!founder_proof::retire(&mut founder, &saved, expected, native_id).unwrap());
+    eprintln!(
+        "peer_founder_replay predeadline_reemitted={re_emitted} expired_reemitted={late_emitted}"
+    );
+}
+
+async fn replay_founder(
+    founder: &mut PeerFounderRuntime,
+    delivery: &TransportDelivery,
+    native_id: &MessageId,
+) -> bool {
+    let replay = founder.ingest_delivery(delivery).await.unwrap();
+    let mut emitted = false;
+    for event in &replay.effects.events {
+        if let GroupEvent::MessageReceived { message_id, .. } = event {
+            assert_eq!(message_id, native_id);
+            assert!(!emitted);
+            emitted = true;
+        }
+    }
+    emitted
 }

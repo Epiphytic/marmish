@@ -349,19 +349,79 @@ fn founder_accepts_only_one_durable_exact_source_and_refuses_late_first_receipt(
             .err(),
         Some(Error::Cursor(CursorError::Binding))
     );
-    cp.record_founder_enrollment(
-        &source,
-        &FounderEnrollment {
-            receipt,
-            group: exact.group.clone(),
-            route: exact.route,
-            leaf: exact.sender_leaf,
-            valid_from: WALL,
-            deadline: exact.deadline,
-        },
-        WALL,
-    )
-    .unwrap();
+    let mut enrollment = FounderEnrollment {
+        receipt,
+        group: exact.group.clone(),
+        route: exact.route,
+        leaf: exact.sender_leaf,
+        valid_from: WALL,
+        deadline: exact.deadline,
+    };
+    let binding = Some(Error::Cursor(CursorError::Binding));
+    assert_eq!(
+        cp.record_founder_enrollment(&source, &enrollment, WALL - 1)
+            .err(),
+        binding
+    );
+    assert_eq!(
+        cp.record_founder_enrollment(&source, &enrollment, exact.deadline)
+            .err(),
+        binding
+    );
+    cp.record_founder_enrollment(&source, &enrollment, WALL)
+        .unwrap();
+    cp.record_founder_enrollment(&source, &enrollment, WALL)
+        .unwrap();
+    enrollment.leaf ^= 1;
+    assert_eq!(
+        cp.record_founder_enrollment(&source, &enrollment, WALL + 1)
+            .err(),
+        Some(Error::Cursor(CursorError::Stale))
+    );
+
+    let source_mismatches: [fn(&mut ReceiptSourceCoordinates); 4] = [
+        |candidate| candidate.group[0] ^= 1,
+        |candidate| candidate.route[0] ^= 1,
+        |candidate| candidate.sender_leaf ^= 1,
+        |candidate| candidate.deadline -= 1,
+    ];
+    let check_refused = |cp: &mut Checkpoint, candidate: &ReceiptSourceCoordinates| {
+        assert_eq!(
+            cp.accept_receipt_coordinates(&source, candidate, WALL + 1)
+                .err(),
+            Some(Error::Cursor(CursorError::Binding))
+        );
+    };
+    for mismatch in source_mismatches {
+        mismatch(&mut exact);
+        check_refused(&mut cp, &exact);
+        exact.group = enrollment.group.clone();
+        exact.route = enrollment.route;
+        exact.sender_leaf = enrollment.leaf ^ 1;
+        exact.deadline = enrollment.deadline;
+    }
+    for (changed, authored_at) in [
+        (
+            Receipt {
+                epoch: receipt.epoch - 1,
+                ..receipt
+            },
+            WALL,
+        ),
+        (
+            Receipt {
+                epoch_identity: [9; 32],
+                ..receipt
+            },
+            WALL,
+        ),
+        (receipt, WALL - 1),
+    ] {
+        let candidate = receipt_wire::prepare(&changed, authored_at).unwrap();
+        exact.decoded = receipt_wire::decode(candidate.payload()).unwrap();
+        check_refused(&mut cp, &exact);
+    }
+    exact.decoded = receipt_wire::decode(prepared.payload()).unwrap();
     assert_eq!(
         cp.accept_receipt_coordinates(&source, &exact, WALL + 10)
             .err(),
