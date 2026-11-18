@@ -26,13 +26,21 @@ pub struct KeyRestrictions {
     pub restrictions: Restrictions,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Restrictions {
     #[serde(default)]
     pub allow_exec: Option<Vec<String>>,
     #[serde(default)]
     pub deny_exec: Vec<String>,
+}
+
+/// The applicable restrictions in evaluation order for one principal.
+/// This description does not grant command or shell access.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct CommandPolicyDescriptionV1 {
+    pub version: u32,
+    pub layers: Vec<Restrictions>,
 }
 
 impl CommandPolicy {
@@ -61,13 +69,22 @@ impl CommandPolicy {
         Ok(())
     }
 
-    fn layers(&self, principal: PrincipalId) -> impl Iterator<Item = &Restrictions> {
-        std::iter::once(&self.defaults).chain(
-            self.keys
-                .iter()
-                .filter(move |k| k.principal == principal)
-                .map(|k| &k.restrictions),
-        )
+    fn effective_layers(&self, principal: PrincipalId) -> impl Iterator<Item = &Restrictions> {
+        std::iter::once(&self.defaults)
+            .chain(
+                self.keys
+                    .iter()
+                    .filter(move |k| k.principal == principal)
+                    .map(|k| &k.restrictions),
+            )
+            .filter(|layer| layer.effective())
+    }
+
+    pub fn describe_for_principal(&self, principal: PrincipalId) -> CommandPolicyDescriptionV1 {
+        CommandPolicyDescriptionV1 {
+            version: 1,
+            layers: self.effective_layers(principal).cloned().collect(),
+        }
     }
 }
 
@@ -147,10 +164,7 @@ pub(crate) fn check_command(
     let Some(commands) = &policy.command_policy else {
         return Ok(false);
     };
-    let layers: Vec<_> = commands
-        .layers(principal)
-        .filter(|l| l.effective())
-        .collect();
+    let layers: Vec<_> = commands.effective_layers(principal).collect();
     if layers.is_empty() {
         return Ok(false);
     }
@@ -286,5 +300,8 @@ impl EnginePolicy {
     }
 }
 
+#[cfg(test)]
+#[path = "policy/inventory_tests.rs"]
+mod inventory_core_tests;
 #[cfg(test)]
 mod tests;

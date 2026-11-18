@@ -1,4 +1,7 @@
 //! Bounded same-user IPC. Network operations remain in the single MDK owner.
+use crate::client_inventory::{
+    ClientInventoryReply, INVENTORY_VERSION, InventoryError, InventoryRequest, InventoryResult,
+};
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -18,6 +21,9 @@ const IO_TIMEOUT: Duration = Duration::from_secs(15);
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Request {
+    ClientInventory {
+        request: InventoryRequest,
+    },
     Stream {
         request: crate::stream_service::StreamLocalRequest,
     },
@@ -99,10 +105,14 @@ impl Request {
         !matches!(
             self,
             Self::Status {}
+                | Self::ClientInventory { .. }
                 | Self::OpenConversation { .. }
                 | Self::Send { .. }
                 | Self::Received { .. }
         )
+    }
+    pub(crate) fn uses_short_exchange(&self) -> bool {
+        self.is_command() || matches!(self, Self::ClientInventory { .. })
     }
 }
 
@@ -157,6 +167,24 @@ impl Response {
             error: None,
             command: None,
             stream: Some(result),
+        }
+    }
+
+    pub(crate) fn inventory(
+        result: std::result::Result<ClientInventoryReply, InventoryError>,
+    ) -> Self {
+        let reply = match result {
+            Ok(reply) => reply,
+            Err(error) => return Self::failure(error.category()),
+        };
+        let response = Self::success(reply);
+        if !response.ok {
+            return Self::failure(InventoryError::ResponseEncoding.category());
+        }
+        match serde_json::to_vec(&response) {
+            Ok(bytes) if bytes.len() <= FRAME_LIMIT => response,
+            Ok(_) => Self::failure(InventoryError::ResponseTooLarge.category()),
+            Err(_) => Self::failure(InventoryError::ResponseEncoding.category()),
         }
     }
 }
@@ -225,8 +253,8 @@ async fn write_frame(stream: &mut UnixStream, value: &impl Serialize) -> Result<
     Ok(())
 }
 
-pub(crate) async fn request(path: &Path, request: &Request) -> Result<Response> {
-    tokio::time::timeout(Duration::from_secs(180), async {
+async fn exchange(path: &Path, request: &Request, timeout: Duration) -> Result<Response> {
+    tokio::time::timeout(timeout, async {
         let mut stream = UnixStream::connect(path).await?;
         verify_peer(&stream)?;
         write_frame(&mut stream, request).await?;
@@ -234,6 +262,41 @@ pub(crate) async fn request(path: &Path, request: &Request) -> Result<Response> 
     })
     .await
     .map_err(|_| Error::Timeout)?
+}
+
+pub(crate) async fn request(path: &Path, request: &Request) -> Result<Response> {
+    exchange(path, request, Duration::from_secs(180)).await
+}
+
+/// Read-only local query with one deadline and an exclusive typed reply.
+pub(crate) async fn client_inventory_request(
+    path: &Path,
+    request: InventoryRequest,
+) -> Result<ClientInventoryReply> {
+    let listing = matches!(request, InventoryRequest::List { .. });
+    let response = exchange(path, &Request::ClientInventory { request }, IO_TIMEOUT).await?;
+    if response.command.is_some() || response.stream.is_some() {
+        return Err(Error::Invalid("inventory_response"));
+    }
+    match (response.ok, response.result, response.error.as_deref()) {
+        (true, Some(result), None) => {
+            let reply: ClientInventoryReply =
+                serde_json::from_value(result).map_err(|_| Error::Invalid("inventory_response"))?;
+            if reply.version != INVENTORY_VERSION
+                || listing != matches!(reply.result, InventoryResult::List { .. })
+            {
+                return Err(Error::Invalid("inventory_response"));
+            }
+            Ok(reply)
+        }
+        (false, None, Some("busy")) => Err(Error::Invalid("inventory_busy")),
+        (false, None, Some("operation_uncertain")) => Err(Error::Timeout),
+        (false, None, Some(category)) => Err(Error::Invalid(
+            InventoryError::from_category(category)
+                .map_or("inventory_response", |error| error.category()),
+        )),
+        _ => Err(Error::Invalid("inventory_response")),
+    }
 }
 
 /// One absolute budget for connect, request IO and the actor's response. Failure
@@ -349,12 +412,11 @@ pub(crate) async fn serve(
                     let _permit = permit;
                     let exchange_deadline = tokio::time::Instant::now() + IO_TIMEOUT;
                     let result = tokio::time::timeout(IO_TIMEOUT, read_frame::<Request>(&mut stream)).await;
-                    let command = matches!(&result,Ok(Ok(request)) if request.is_command());
+                    let short_exchange = matches!(&result,Ok(Ok(request)) if request.uses_short_exchange());
                     let response = match result {
                         Ok(Ok(Request::Status {})) => status.borrow().clone(),
                         Ok(Ok(request)) => {
-                            let command = request.is_command();
-                            let deadline = if command {exchange_deadline - Duration::from_millis(100)} else {tokio::time::Instant::now() + Duration::from_secs(150)};
+                            let deadline = if short_exchange {exchange_deadline - Duration::from_millis(100)} else {tokio::time::Instant::now() + Duration::from_secs(150)};
                             let (respond, receiver) = oneshot::channel();
                             if queue.try_send(Pending { request, respond, deadline }).is_err() {
                                 Response::failure("busy")
@@ -367,7 +429,7 @@ pub(crate) async fn serve(
                         }
                         _ => Response::failure("invalid_request"),
                     };
-                    let write_deadline = if command {exchange_deadline} else {tokio::time::Instant::now() + IO_TIMEOUT};
+                    let write_deadline = if short_exchange {exchange_deadline} else {tokio::time::Instant::now() + IO_TIMEOUT};
                     let _ = tokio::time::timeout_at(write_deadline, write_frame(&mut stream, &response)).await;
                 });
             }

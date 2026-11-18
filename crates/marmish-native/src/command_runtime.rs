@@ -83,6 +83,9 @@ impl MdkOwner {
             account,
             &historical,
         )?;
+        let inventory_policy = policy
+            .as_ref()
+            .and_then(|policy| policy.command_policy.clone());
         self.journal.command_configure(config.limits())?;
         let material = crate::command_identity::derive(
             profile.profile_id(),
@@ -108,8 +111,36 @@ impl MdkOwner {
             )?),
             None => None,
         };
-        self.commands = Some(CommandService::new(config, engine));
+        self.commands = Some(CommandService::new_with_policy(
+            config,
+            engine,
+            inventory_policy,
+        ));
         Ok(())
+    }
+
+    pub(crate) fn reconcile_client_inventory(
+        &mut self,
+        config: Option<&CommandConfig>,
+    ) -> Result<()> {
+        let empty = BTreeSet::new();
+        let clients = config
+            .filter(|config| config.role() != crate::command_config::Role::Client)
+            .map_or(&empty, CommandConfig::execution_clients);
+        self.journal.reconcile_client_inventory(clients)
+    }
+
+    pub(crate) fn client_inventory(
+        &self,
+        request: crate::client_inventory::InventoryRequest,
+    ) -> std::result::Result<
+        crate::client_inventory::ClientInventoryReply,
+        crate::client_inventory::InventoryError,
+    > {
+        self.commands
+            .as_ref()
+            .ok_or(crate::client_inventory::InventoryError::ServerUnavailable)?
+            .client_inventory(&self.journal, request)
     }
     pub(super) fn progress_commands(&mut self) -> Result<()> {
         if let Some(service) = &mut self.commands {

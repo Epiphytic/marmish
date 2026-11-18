@@ -30,6 +30,7 @@ struct CleanupPreparation {
 
 pub(crate) struct CommandService {
     config: CommandConfig,
+    inventory_policy: Option<marmish_engine::CommandPolicy>,
     stopping: bool,
     engine: Option<CommandEngine>,
     completion: Option<EngineCompletion>,
@@ -42,9 +43,19 @@ pub(crate) struct CommandService {
     lifetime: Option<std::sync::Arc<crate::command_limits::ServiceLifetime>>,
 }
 impl CommandService {
+    #[cfg(test)]
     pub(crate) fn new(config: CommandConfig, engine: Option<CommandEngine>) -> Self {
+        Self::new_with_policy(config, engine, None)
+    }
+
+    pub(crate) fn new_with_policy(
+        config: CommandConfig,
+        engine: Option<CommandEngine>,
+        inventory_policy: Option<marmish_engine::CommandPolicy>,
+    ) -> Self {
         Self {
             config,
+            inventory_policy,
             stopping: false,
             engine,
             completion: None,
@@ -56,6 +67,22 @@ impl CommandService {
             cleanup: None,
             lifetime: None,
         }
+    }
+
+    pub(crate) fn client_inventory(
+        &self,
+        journal: &Journal,
+        request: crate::client_inventory::InventoryRequest,
+    ) -> std::result::Result<
+        crate::client_inventory::ClientInventoryReply,
+        crate::client_inventory::InventoryError,
+    > {
+        crate::client_inventory::query(
+            journal,
+            &self.config,
+            self.inventory_policy.as_ref(),
+            request,
+        )
     }
     pub(crate) fn close_admission(&mut self) {
         self.stopping = true;

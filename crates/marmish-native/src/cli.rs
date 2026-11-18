@@ -160,7 +160,32 @@ enum ProfileCommand {
 }
 
 #[derive(Subcommand)]
+enum ClientInventoryCommand {
+    /// List this server's configured clients and their recorded access.
+    List {
+        #[arg(long, value_name = "NPUB")]
+        after: Option<String>,
+        #[arg(long, default_value_t = 32, value_parser = clap::value_parser!(u8).range(1..=64))]
+        limit: u8,
+    },
+    /// Show access history and the effective executable policy for this client.
+    Show {
+        #[arg(value_name = "NPUB")]
+        npub: String,
+        #[arg(long, requires = "policy_generation", value_parser = clap::value_parser!(u8).range(1..=63))]
+        policy_page: Option<u8>,
+        #[arg(long, requires = "policy_page")]
+        policy_generation: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum FrontendCommand {
+    #[command(skip)]
+    Clients {
+        #[command(subcommand)]
+        action: ClientInventoryCommand,
+    },
     /// Inspect retained local download receipts or acknowledge an uncertain record.
     CopyReceipts {
         #[arg(long, requires_all = ["revision", "acknowledge_retained_state"])]
@@ -444,6 +469,36 @@ async fn run(
             "{}",
             serde_json::to_string(&report).map_err(|_| Error::Invalid("report_encoding"))?
         );
+        return Ok(0);
+    }
+    if let Some(FrontendCommand::Clients { action }) = &args.command {
+        if !daemon_binary {
+            return Err(Error::Invalid("inventory_daemon_cli_required"));
+        }
+        use crate::client_inventory::InventoryRequest;
+        let request = match action {
+            ClientInventoryCommand::List { after, limit } => InventoryRequest::List {
+                after: after.clone(),
+                limit: usize::from(*limit),
+            },
+            ClientInventoryCommand::Show {
+                npub,
+                policy_page,
+                policy_generation,
+            } => InventoryRequest::Show {
+                npub: npub.clone(),
+                policy_page: usize::from(policy_page.unwrap_or(0)),
+                policy_generation: policy_generation.clone(),
+            },
+        };
+        let socket = match &args.socket {
+            Some(path) => path.clone(),
+            None => socket_path_for(&state_dir(args.state_dir.clone())?, &args.identity)?,
+        };
+        let reply = ipc::client_inventory_request(&socket, request).await?;
+        let json = serde_json::to_string(&reply).map_err(|_| Error::Invalid("report_encoding"))?;
+        use std::io::Write as _;
+        writeln!(std::io::stdout().lock(), "{json}")?;
         return Ok(0);
     }
     let mode: RouteMode = args.tor.as_deref().unwrap_or("auto").parse()?;
@@ -1231,11 +1286,32 @@ fn usage_exit_code(error: &clap::Error) -> u8 {
     }
 }
 
+#[cfg(test)]
 fn parse_public(raw: &[OsString]) -> std::result::Result<Args, clap::Error> {
+    parse_frontend(raw, false)
+}
+
+fn parse_frontend(raw: &[OsString], daemon_binary: bool) -> std::result::Result<Args, clap::Error> {
     let rsh = crate::rsync_cli::split(raw, Args::command())?;
     let root = rsh.as_ref().map_or(raw, |rsh| rsh.root.as_slice());
-    let matches = Args::command().try_get_matches_from(root)?;
+    let mut parser = Args::command();
+    if daemon_binary {
+        let clients = clap::Command::new("clients")
+            .about("Inspect local admission policy and access history")
+            .subcommand_required(true);
+        parser = parser.subcommand(ClientInventoryCommand::augment_subcommands(clients));
+    }
+    let mut matches = parser.try_get_matches_from(root)?;
+    let inventory = if daemon_binary && matches.subcommand_name() == Some("clients") {
+        let (_, client_matches) = matches.remove_subcommand().expect("matched clients");
+        Some(ClientInventoryCommand::from_arg_matches(&client_matches)?)
+    } else {
+        None
+    };
     let mut args = Args::from_arg_matches(&matches)?;
+    if let Some(action) = inventory {
+        args.command = Some(FrontendCommand::Clients { action });
+    }
     if rsh.is_some() && !matches!(args.command, Some(FrontendCommand::Rsh)) {
         return Err(clap::Error::raw(
             clap::error::ErrorKind::InvalidValue,
@@ -1311,7 +1387,7 @@ pub fn main(daemon_binary: bool) -> ExitCode {
             _ => marmish_vault::helper::run(),
         };
     }
-    let mut args = match parse_public(&raw) {
+    let mut args = match parse_frontend(&raw, daemon_binary) {
         Ok(args) => args,
         Err(error) => {
             let code = usage_exit_code(&error);
@@ -1442,6 +1518,44 @@ fn print_error(error: &Error) {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    #[test]
+    fn client_inventory_does_not_start_daemon_and_requires_bound_continuations() {
+        let parse = |items: &[&str]| {
+            parse_frontend(&items.iter().map(OsString::from).collect::<Vec<_>>(), true)
+        };
+        let args = parse(&["marmishd", "-i", "work", "clients", "list", "--limit", "1"]).unwrap();
+        assert_eq!(args.identity, "work");
+        assert!(!is_daemon(&args, true));
+        assert!(matches!(
+            args.command,
+            Some(FrontendCommand::Clients {
+                action: ClientInventoryCommand::List {
+                    after: None,
+                    limit: 1
+                }
+            })
+        ));
+        for tail in [
+            vec!["list", "--limit", "65"],
+            vec!["show", "npub", "--policy-page", "2"],
+            vec!["show", "npub", "--policy-generation", "digest"],
+            vec![
+                "show",
+                "npub",
+                "--policy-page",
+                "0",
+                "--policy-generation",
+                "digest",
+            ],
+        ] {
+            assert!(parse(&[vec!["marmishd", "clients"], tail].concat()).is_err());
+        }
+        let alias =
+            parse_public(&["marmish", "clients", "--", "/bin/true"].map(OsString::from)).unwrap();
+        assert!(matches!(alias.command, Some(FrontendCommand::Remote(_))));
+    }
+
     #[test]
     fn forgetting_copy_index_requires_exact_revision_and_retention_acknowledgement() {
         assert!(Args::try_parse_from(["marmish", "copy-receipts"]).is_ok());

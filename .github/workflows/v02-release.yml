@@ -28,6 +28,7 @@ env:
   CARGO_TERM_COLOR: never
   MARMISH_NATIVE_TOOLCHAIN: '1'
   MARMISH_CANDIDATE_LAYOUT: split-v1
+  MARMISH_CANDIDATE_JOURNAL: journal-v8
 
 jobs:
   release-eligibility:

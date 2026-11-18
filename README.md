@@ -116,6 +116,27 @@ no automatic rotation. With default paths, logs are under
 Stop the daemon before rotating its log. Use
 `marmishd --foreground` for attached diagnostics or service supervision.
 
+On the server, query the running daemon for configured client keys, access
+history, and effective executable rules:
+
+```sh
+marmishd clients list
+marmishd clients show CLIENT_NPUB
+```
+
+Add `-i NAME` for a named identity. The JSON output includes the last
+authenticated command submission and the last command admitted by the engine
+for each key, when available. An admitted command may subsequently fail to
+launch or exit with an error. Activity before this feature is unavailable.
+`list` returns a `next` npub when more results are available. Pass it to
+`list --after NPUB`. `show` returns one page of effective allow and deny rules.
+Use `--policy-page` and `--policy-generation` with the returned values to
+continue. The queries use the same-user daemon socket and work while the relay
+is disconnected.
+This feature upgrades the encrypted profile journal. To keep a rollback path,
+back up the entire profile directory while its daemon is stopped before
+starting the new binary. An older binary requires the pre-upgrade backup.
+
 On a client, the first command starts its local daemon automatically if needed.
 Client autostart has a 300-second startup budget, including failed-start
 cleanup, independent of command `--wait-seconds`. If the launching parent or

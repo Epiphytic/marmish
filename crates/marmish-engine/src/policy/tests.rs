@@ -1,6 +1,6 @@
 use super::*;
 
-fn policy(defaults: Restrictions, keys: Vec<KeyRestrictions>) -> EnginePolicy {
+pub(super) fn policy(defaults: Restrictions, keys: Vec<KeyRestrictions>) -> EnginePolicy {
     EnginePolicy {
         state_root: "/tmp/not-opened".into(),
         worker_executable: "/usr/bin/true".into(),
@@ -16,13 +16,13 @@ fn policy(defaults: Restrictions, keys: Vec<KeyRestrictions>) -> EnginePolicy {
         limits: Default::default(),
     }
 }
-fn allow(patterns: &[&str]) -> Restrictions {
+pub(super) fn allow(patterns: &[&str]) -> Restrictions {
     Restrictions {
         allow_exec: Some(patterns.iter().map(|p| p.to_string()).collect()),
         deny_exec: vec![],
     }
 }
-fn exec(path: &[u8]) -> CommandRequest {
+pub(super) fn exec(path: &[u8]) -> CommandRequest {
     CommandRequest::Exec {
         argv: vec![path.to_vec(), vec![255, b'*', b';']],
     }

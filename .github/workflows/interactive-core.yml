@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/interactive-core.yml
       - Cargo.lock
+      - crates/marmish-engine/**
       - crates/marmish-native/**
       - rust-toolchain.toml
 permissions:
@@ -35,3 +36,8 @@ jobs:
           cargo test --locked -p marmish-native --lib profile_directory::core_tests
           cargo test --locked -p marmish-native --lib profile_metadata::core_tests
           cargo test --locked -p marmish-native --lib identifier_proposal_cannot_grant_until_the_full_key_is_confirmed
+      - name: Check client policy and access inventory
+        run: |
+          cargo test --locked -p marmish-engine --lib policy::inventory_core_tests
+          cargo test --locked -p marmish-native --lib client_inventory::core_tests
+          cargo test --locked -p marmish-native --lib journal::client_inventory_store::core_tests

@@ -134,10 +134,9 @@ fn defer_gc(conn: &Connection, key: &str, timestamp: u64) -> Result<()> {
     Ok(())
 }
 impl Journal {
-    /// Format upgrade and copy-only replay floor are one atomic transaction.
     /// Old argv records become Exec, preserving their exact stored Open digest.
-    pub(crate) fn copy_init(&mut self, old_format: i64) -> Result<()> {
-        let tx = self.conn.transaction().map_err(db)?;
+    /// The caller commits this copy step with the rest of the schema migration.
+    pub(super) fn copy_init_in(tx: &rusqlite::Transaction<'_>, old_format: i64) -> Result<()> {
         tx.execute_batch("CREATE TABLE IF NOT EXISTS copy_attempts(k TEXT PRIMARY KEY,principal BLOB NOT NULL,record BLOB NOT NULL,expires INTEGER NOT NULL,cleanup_confirmed INTEGER NOT NULL,stream_key TEXT NOT NULL); CREATE TABLE IF NOT EXISTS copy_open_receipts(k TEXT PRIMARY KEY,principal BLOB NOT NULL,digest BLOB NOT NULL,request BLOB NOT NULL,response BLOB NOT NULL,expires INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS copy_gc_claims(k TEXT PRIMARY KEY,revision INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS copy_refusals(k TEXT PRIMARY KEY,principal BLOB NOT NULL,digest BLOB NOT NULL,request BLOB NOT NULL,response BLOB NOT NULL,expires INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS copy_replay_state(id INTEGER PRIMARY KEY CHECK(id=1),floor INTEGER NOT NULL); INSERT OR IGNORE INTO copy_replay_state VALUES(1,0);").map_err(db)?;
         tx.execute_batch("CREATE INDEX IF NOT EXISTS copy_attempt_gc ON copy_attempts(cleanup_confirmed,expires,k); CREATE INDEX IF NOT EXISTS copy_attempt_principal ON copy_attempts(principal); CREATE INDEX IF NOT EXISTS copy_receipt_expiry ON copy_open_receipts(expires); CREATE INDEX IF NOT EXISTS copy_refusal_expiry ON copy_refusals(expires); CREATE INDEX IF NOT EXISTS copy_refusal_principal ON copy_refusals(principal);").map_err(db)?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS copy_gc_schedule(k TEXT PRIMARY KEY,turn INTEGER NOT NULL,retry_after INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS copy_gc_turn ON copy_gc_schedule(turn); DELETE FROM copy_gc_schedule WHERE k NOT IN (SELECT k FROM copy_attempts);").map_err(db)?;
@@ -202,8 +201,12 @@ impl Journal {
             )
             .map_err(db)?;
         }
-        tx.pragma_update(None, "user_version", JOURNAL_FORMAT)
-            .map_err(db)?;
+        Ok(())
+    }
+    #[cfg(test)]
+    fn copy_init(&mut self, old_format: i64) -> Result<()> {
+        let tx = self.conn.transaction().map_err(db)?;
+        Self::copy_init_in(&tx, old_format)?;
         tx.commit().map_err(db)
     }
     pub(crate) fn copy_attempt_matches(&self, record: &StreamRecord) -> Result<bool> {
@@ -1218,6 +1221,63 @@ mod tests {
             .unwrap()
     }
     #[test]
+    fn inventory_migration_rollback_preserves_legacy_copy_records_and_version() {
+        let dir = super::super::private_test_directory();
+        let path = dir.path().join("journal.db");
+        let key = [7; 32];
+        let account = "ab".repeat(32);
+        let journal = Journal::open(&path, &key, &account).unwrap();
+        journal
+            .conn
+            .execute_batch(
+                "DROP TABLE client_inventory;
+             ALTER TABLE command_invocations DROP COLUMN inventory_generation;
+             PRAGMA user_version=6;",
+            )
+            .unwrap();
+
+        let (legacy, expected, _) = legacy_exec_fixture();
+        let before = legacy_rows(&legacy);
+        let (stream, principal, server_side, active, bytes) = &before[0];
+        journal.conn.execute(
+            "INSERT INTO live_streams(k,principal,server_side,active,record) VALUES(?1,?2,?3,?4,?5)",
+            params![stream,principal,server_side,active,bytes],
+        ).unwrap();
+        // Fail inventory DDL after the existing migration has rewritten the stream.
+        journal
+            .conn
+            .execute("CREATE TABLE client_inventory(collision INTEGER)", [])
+            .unwrap();
+        assert!(matches!(
+            Journal::open(&path, &key, &account),
+            Err(Error::Storage("client_inventory_migration"))
+        ));
+        let stamp = || {
+            journal
+                .conn
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap()
+        };
+        assert_eq!(stamp(), 6);
+        assert_eq!(legacy_rows(&journal), before);
+        let added_column: i64 = journal.conn.query_row(
+            "SELECT count(*) FROM pragma_table_info('command_invocations') WHERE name='inventory_generation'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(added_column, 0);
+
+        journal
+            .conn
+            .execute("DROP TABLE client_inventory", [])
+            .unwrap();
+        let migrated = Journal::open(&path, &key, &account).unwrap();
+        assert_eq!(stamp(), super::super::JOURNAL_FORMAT);
+        assert!(![0, 3, 4, 5, 6, 7].contains(&stamp()));
+        let after = legacy_rows(&migrated);
+        assert_eq!(after[0].4, serde_json::to_vec(&expected).unwrap());
+    }
+
+    #[test]
     fn format_six_component_upgrade_preserves_exact_exec_record_and_creates_copy_schema() {
         let (mut journal, expected, old_bytes) = legacy_exec_fixture();
         let before = legacy_rows(&journal);
@@ -1257,7 +1317,7 @@ mod tests {
                 .conn
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            7
+            6
         );
     }
     #[test]

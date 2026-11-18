@@ -1583,14 +1583,11 @@ async fn command_source_replay_states_defer_without_revocation_or_ack() {
     );
 }
 
-// Build owned response obligations from real authenticated command events. The
-// effects below are controlled offline inputs, not evidence of relay delivery.
-async fn owned_command_refusal(
+async fn inventory_submit(
     fixture: &mut Fixture,
     group: &GroupId,
-) -> crate::journal::PreparedCommandPublication {
+) -> (crate::command_wire::Request, GroupEvent) {
     use crate::command_wire as wire;
-    use crate::journal::{AdmissionDecision, CommandProjection, Owner};
     let context = fixture.owners[1].command_context(group).unwrap();
     let id = hex::decode(foundation::fresh_id(now().unwrap()).unwrap())
         .unwrap()
@@ -1622,6 +1619,122 @@ async fn owned_command_refusal(
             ),
         )
         .await;
+    (request, event)
+}
+
+#[tokio::test]
+async fn inventory_authenticated_native_receipt_replay_denial_and_delayed_invalidation() {
+    use crate::command_wire::{ErrorCode, WireError};
+    use crate::journal::{EngineCompletion, EngineObservation, EngineOperation, InvocationKey};
+
+    let mut fixture = Fixture::new(2);
+    let (group, binding) = fixture.stream_fixture().await;
+    let client = binding.client;
+    fixture.owners[1]
+        .journal
+        .reconcile_client_inventory(&BTreeSet::from([client]))
+        .unwrap();
+
+    let (delayed_request, delayed) = inventory_submit(&mut fixture, &group).await;
+    let (message_id, epoch) = match &delayed {
+        GroupEvent::MessageReceived {
+            message_id, epoch, ..
+        } => (message_id.clone(), *epoch),
+        _ => unreachable!(),
+    };
+    let bob = &mut fixture.owners[1];
+    assert!(bob.decode_command_event(&delayed).is_ok());
+    // MDK 8abc51b persists this state before reporting the invalidation effect.
+    // Recreate that ordering on the real signed, encrypted source without a fork
+    // only to force the actor to see the committed state before delayed delivery.
+    bob.storage
+        .update_message_state(&message_id, cgka_traits::MessageState::EpochInvalidated)
+        .unwrap();
+    let mut effects = AccountDeviceEffects::default();
+    effects.events.push(GroupEvent::AppMessageInvalidated {
+        group_id: group.clone(),
+        message_id: message_id.clone(),
+        epoch,
+        reason: cgka_traits::engine::AppMessageInvalidationReason::LosingBranch,
+        decrypted_payload_ref: None,
+    });
+    bob.apply_effects(effects, Instant::now() + Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert!(bob.storage.list_pending_application_events().unwrap().iter().all(
+        |event| !matches!(event, GroupEvent::MessageReceived { message_id:id, .. } if id == &message_id)
+    ));
+    assert!(matches!(
+        bob.decode_command_event(&delayed),
+        Err(Error::Mdk("command_message_authority"))
+    ));
+    bob.project_command_message(delayed).unwrap();
+    assert!(
+        bob.journal
+            .command_get(&InvocationKey {
+                server: binding.server,
+                principal: client,
+                invocation: delayed_request.op.invocation(),
+            })
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        bob.journal
+            .client_inventory_access(&client)
+            .unwrap()
+            .last_authenticated_submit_at,
+        None
+    );
+
+    let (request, event) = inventory_submit(&mut fixture, &group).await;
+    let bob = &mut fixture.owners[1];
+    bob.project_command_message(event.clone()).unwrap();
+    let receipt = bob.journal.client_inventory_access(&client).unwrap();
+    assert!(receipt.last_authenticated_submit_at.is_some());
+    assert_eq!(receipt.last_engine_admitted_submit_at, None);
+    let key = InvocationKey {
+        server: binding.server,
+        principal: client,
+        invocation: request.op.invocation(),
+    };
+    let record = bob.journal.command_get(&key).unwrap().unwrap();
+    let operation = bob
+        .journal
+        .command_begin_operation(&key, record.revision, EngineOperation::Observe)
+        .unwrap();
+    bob.journal
+        .command_commit_completion(
+            &EngineCompletion {
+                operation: operation.id,
+                key,
+                revision: operation.revision,
+                result: EngineObservation::Refused(WireError {
+                    code: ErrorCode::CommandDenied,
+                    detail: None,
+                }),
+            },
+            &[],
+        )
+        .unwrap();
+    bob.project_command_message(event).unwrap();
+    assert_eq!(
+        bob.journal.client_inventory_access(&client).unwrap(),
+        receipt
+    );
+}
+
+// Build owned response obligations from real authenticated command events. The
+// effects below are controlled offline inputs, not evidence of relay delivery.
+async fn owned_command_refusal(
+    fixture: &mut Fixture,
+    group: &GroupId,
+) -> crate::journal::PreparedCommandPublication {
+    use crate::command_wire as wire;
+    use crate::journal::{AdmissionDecision, CommandProjection, Owner};
+    let (request, event) = inventory_submit(fixture, group).await;
+    let id = request.id;
+    let bytes = wire::encode_request(&request).unwrap();
     let bob = &mut fixture.owners[1];
     let (context, source, _) = bob.decode_command_event(&event).unwrap();
     let refusal = wire::WireError {

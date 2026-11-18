@@ -1,6 +1,6 @@
 //! Command ledger on the actor's existing SQLCipher connection.
 //! No engine authority, network work or second connection is created here.
-use super::{Journal, db, sql_u64};
+use super::{Journal, client_inventory_store, db, sql_u64};
 use crate::command_evidence::PublishedEvidence;
 use crate::command_wire::{
     self as wire, Account, Admission, Binding, Chunk, Digest, ErrorCode, Id, InputHealth, Op,
@@ -411,6 +411,21 @@ pub(crate) struct CommandProjection {
     pub decision: AdmissionDecision,
     pub response: Option<PreparedCommandPublication>,
 }
+impl CommandProjection {
+    fn qualifies_inventory_submit(&self) -> bool {
+        // Quota exhaustion is the sole definitive projection-time refusal
+        // for a fresh Submit. Engine admission is tracked separately.
+        matches!(self.request.op, RequestOp::Submit(_))
+            && matches!(
+                self.decision,
+                AdmissionDecision::New
+                    | AdmissionDecision::Refused(WireError {
+                        code: ErrorCode::QuotaExceeded,
+                        detail: None,
+                    })
+            )
+    }
+}
 pub(crate) struct ProjectedRequest {
     #[cfg(test)]
     pub key: InvocationKey,
@@ -435,6 +450,7 @@ pub(crate) struct SourceKey {
 pub(crate) enum SourceKind {
     Incoming,
     Outgoing,
+    Inventory,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SourceCursor {
@@ -450,6 +466,25 @@ pub(crate) struct NativeBinding {
     pub quarantined: bool,
     pub evidence: Option<PublishedEvidence>,
 }
+// The latest receipt can outlive command source GC. Include its exact
+// provenance in the durable terminal-state sweep after that GC.
+const COMMAND_NATIVE_BINDINGS_PAGE: &str =
+    "SELECT kind,row_id,group_id,native_id,event_id,acked,invalidated,quarantined
+ FROM (
+   SELECT 0 AS kind,row_id,group_id,native_id,NULL AS event_id,acked,
+          0 AS invalidated,0 AS quarantined FROM command_incoming_sources
+   UNION ALL
+   SELECT 1 AS kind,row_id,group_id,native_id,event_id,acked,invalidated,
+          quarantined FROM command_outgoing_sources
+   UNION ALL
+   SELECT 2 AS kind,submit_cursor AS row_id,submit_group AS group_id,
+          submit_native_id AS native_id,NULL AS event_id,1 AS acked,
+          0 AS invalidated,0 AS quarantined FROM client_inventory AS i
+   WHERE submit_group IS NOT NULL AND NOT EXISTS (
+       SELECT 1 FROM command_incoming_sources AS s
+       WHERE s.group_id=i.submit_group AND s.native_id=i.submit_native_id)
+ ) WHERE kind>?1 OR(kind=?1 AND row_id>?2) ORDER BY kind,row_id LIMIT ?3";
+
 pub(crate) struct SourcePage {
     pub rows: Vec<NativeBinding>,
     pub next: Option<SourceCursor>,
@@ -830,6 +865,15 @@ impl Journal {
             }
         }
         attach_source(&tx, &plan.source, plan.request.id)?;
+        if !existing && record.is_none() && plan.qualifies_inventory_submit() {
+            client_inventory_store::record_submit(
+                &tx,
+                &key_bytes(&key),
+                &plan.owner.binding.client,
+                &plan.source.group,
+                &plan.source.native_id,
+            )?;
+        }
         if let Some(response) = &plan.response {
             insert_publication(&tx, response)?;
             tx.execute("UPDATE command_requests SET response_id=?3,slot_state='answered' WHERE group_id=?1 AND request_id=?2",params![plan.owner.group(),plan.request.id.as_slice(),response.key.app_event_id]).map_err(db)?;
@@ -2471,6 +2515,13 @@ impl Journal {
             if n != 1 {
                 return Err(invalid("command_counter"));
             }
+            if record.owner.server_side {
+                client_inventory_store::record_admission(
+                    &tx,
+                    &key_bytes(&record.key),
+                    &record.owner.binding.client,
+                )?;
+            }
         }
         let n=tx.execute("UPDATE command_replay_state SET sequence=sequence+1 WHERE id=1 AND sequence<9223372036854775807",[]).map_err(db)?;
         if n != 1 {
@@ -2833,15 +2884,26 @@ impl Journal {
     ) -> Result<SourcePage> {
         let max = limit(max)?;
         let (kind, row) = after
-            .map(|c| (if c.kind == SourceKind::Incoming { 0 } else { 1 }, c.row_id))
+            .map(|c| {
+                let kind = match c.kind {
+                    SourceKind::Incoming => 0,
+                    SourceKind::Outgoing => 1,
+                    SourceKind::Inventory => 2,
+                };
+                (kind, c.row_id)
+            })
             .unwrap_or((0, 0));
-        let mut stmt=self.conn.prepare("SELECT kind,row_id,group_id,native_id,event_id,acked,invalidated,quarantined,evidence FROM (SELECT 0 AS kind,row_id,group_id,native_id,NULL AS event_id,acked,0 AS invalidated,0 AS quarantined,NULL AS evidence FROM command_incoming_sources UNION ALL SELECT 1 AS kind,row_id,group_id,native_id,event_id,acked,invalidated,quarantined,evidence FROM command_outgoing_sources) WHERE kind>?1 OR(kind=?1 AND row_id>?2) ORDER BY kind,row_id LIMIT ?3").map_err(db)?;
+        let mut stmt = self
+            .conn
+            .prepare(COMMAND_NATIVE_BINDINGS_PAGE)
+            .map_err(db)?;
         let rows = stmt
             .query_map(params![kind, bound(row)?, max + 1], |r| {
-                let kind = if r.get::<_, i64>(0)? == 0 {
-                    SourceKind::Incoming
-                } else {
-                    SourceKind::Outgoing
+                let kind = match r.get::<_, i64>(0)? {
+                    0 => SourceKind::Incoming,
+                    1 => SourceKind::Outgoing,
+                    2 => SourceKind::Inventory,
+                    _ => return Err(rusqlite::Error::InvalidQuery),
                 };
                 let group: Vec<u8> = r.get(2)?;
                 let event: Option<String> = r.get(4)?;
@@ -3306,6 +3368,7 @@ fn record_published(
     }
     let early:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM command_early_invalidations WHERE group_id=?1 AND native_id=?2)",params![key.group,native_id],|r|r.get(0)).map_err(db)?;
     if early {
+        client_inventory_store::invalidate_source(conn, &key.group, native_id)?;
         invalidate_publication(conn, key)?;
         conn.execute(
             "UPDATE command_outgoing_sources SET invalidated=1 WHERE group_id=?1 AND native_id=?2",
@@ -3331,6 +3394,7 @@ fn record_invalidation(
     if group.is_empty() || group.len() > 1024 || native_id.is_empty() || native_id.len() > 1024 {
         return Err(invalid("command_native_binding"));
     }
+    client_inventory_store::invalidate_source(conn, group, native_id)?;
     let outgoing: Option<String> = conn
         .query_row(
             "SELECT event_id FROM command_outgoing_sources WHERE group_id=?1 AND native_id=?2",
@@ -3430,6 +3494,7 @@ fn revoke_record(conn: &Connection, key: &InvocationKey) -> Result<()> {
 }
 
 pub(super) fn revoke_group_in(conn: &Connection, group: &[u8]) -> Result<()> {
+    client_inventory_store::invalidate_group(conn, group)?;
     let mut statement=conn.prepare("SELECT DISTINCT k FROM command_requests WHERE group_id=?1 UNION SELECT k FROM command_invocations WHERE json_extract(CAST(owner AS TEXT),'$.group')=json(?2)").map_err(db)?;
     let keys: Vec<Vec<u8>> = statement
         .query_map(params![group, encode(&group)?], |r| r.get(0))
@@ -4126,19 +4191,19 @@ pub(super) fn stream_payload_retention(conn: &Connection) -> Result<u64> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::journal) mod tests {
     use super::*;
     use crate::command_evidence::PublishedEvidence;
     use crate::command_wire::{Disposition, InputStatus, OutputStatus, ResponseResult};
     use std::fs;
-    const NOW: u64 = 1_000_000;
+    pub(in crate::journal) const NOW: u64 = 1_000_000;
     fn id(sequence: u16) -> Id {
         let mut id = [0; 16];
         id[..6].copy_from_slice(&NOW.to_be_bytes()[2..]);
         id[14..].copy_from_slice(&sequence.to_be_bytes());
         id
     }
-    fn setup() -> (tempfile::TempDir, Journal) {
+    pub(in crate::journal) fn setup() -> (tempfile::TempDir, Journal) {
         let tmp = super::super::private_test_directory();
         let mut journal = Journal::open(
             &tmp.path().join("journal.db"),
@@ -4149,7 +4214,7 @@ mod tests {
         journal.command_init().unwrap();
         (tmp, journal)
     }
-    fn owner() -> Owner {
+    pub(in crate::journal) fn owner() -> Owner {
         Owner::from_context(&AuthenticatedCommandContext::test_fixture(
             [2; 32],
             [1; 32],
@@ -4158,7 +4223,7 @@ mod tests {
             CommandDirection::Server,
         ))
     }
-    fn submit(sequence: u16) -> Request {
+    pub(in crate::journal) fn submit(sequence: u16) -> Request {
         Request {
             binding: owner().binding.clone(),
             id: id(sequence + 100),
@@ -4216,7 +4281,7 @@ mod tests {
             authority: None,
         })
     }
-    fn response(request: &Request) -> Response {
+    pub(in crate::journal) fn response(request: &Request) -> Response {
         let s = status(request);
         let result = match request.op {
             RequestOp::Submit(_) => ResponseResult::Submit {
@@ -4246,7 +4311,10 @@ mod tests {
             result: Ok(result),
         }
     }
-    fn publication(owner: &Owner, response: &Response) -> PreparedCommandPublication {
+    pub(in crate::journal) fn publication(
+        owner: &Owner,
+        response: &Response,
+    ) -> PreparedCommandPublication {
         crate::mdk_adapter::prepare_command_publication(
             owner.group(),
             owner.binding.clone(),
@@ -4257,7 +4325,7 @@ mod tests {
         )
         .unwrap()
     }
-    fn projection(request: Request) -> CommandProjection {
+    pub(in crate::journal) fn projection(request: Request) -> CommandProjection {
         let owner = owner();
         let bytes = wire::encode_request(&request).unwrap();
         let request_event = crate::mdk_adapter::prepare_command_publication(
@@ -4283,12 +4351,15 @@ mod tests {
             decision: AdmissionDecision::New,
         }
     }
-    fn admitted(journal: &mut Journal, sequence: u16) -> (CommandProjection, InvocationKey) {
+    pub(in crate::journal) fn admitted(
+        journal: &mut Journal,
+        sequence: u16,
+    ) -> (CommandProjection, InvocationKey) {
         let plan = projection(submit(sequence));
         let key = journal.command_project_request(&plan, NOW).unwrap().key;
         (plan, key)
     }
-    fn fact(j: &mut Journal, key: &InvocationKey, state: State) -> Status {
+    pub(in crate::journal) fn fact(j: &mut Journal, key: &InvocationKey, state: State) -> Status {
         let r = j.command_get(key).unwrap().unwrap();
         let op = j
             .command_begin_operation(key, r.revision, EngineOperation::Observe)
@@ -4624,6 +4695,7 @@ mod tests {
             CREATE TABLE command_invocations(cursor INTEGER PRIMARY KEY AUTOINCREMENT,k BLOB NOT NULL UNIQUE,server BLOB NOT NULL,principal BLOB NOT NULL,invocation BLOB NOT NULL,owner BLOB NOT NULL,submit BLOB,stdin_length INTEGER NOT NULL CHECK(stdin_length BETWEEN 0 AND 16384),stdout_delivered INTEGER NOT NULL DEFAULT 0,stderr_delivered INTEGER NOT NULL DEFAULT 0,digest BLOB NOT NULL,facts BLOB NOT NULL,active INTEGER NOT NULL,created INTEGER NOT NULL,operation BLOB,operation_revision INTEGER,operation_kind TEXT,operation_request BLOB,server_side INTEGER NOT NULL);
             INSERT INTO command_invocations SELECT cursor,k,server,principal,invocation,owner,submit,stdin_length,stdout_delivered,stderr_delivered,digest,facts,active,created,operation,operation_revision,operation_kind,operation_request,server_side FROM old_invocations;
             DROP TABLE old_invocations;
+            DROP TABLE client_inventory;
             ALTER TABLE command_replay_state DROP COLUMN finished; PRAGMA user_version=4;").unwrap();
         drop(j);
         let mut j = Journal::open(
@@ -5799,8 +5871,14 @@ mod tests {
             (ErrorCode::CommandResolutionFailed, Some("symlink_loop")),
             (ErrorCode::CommandDenied, Some("policy_restriction")),
             (ErrorCode::CommandPolicyError, None),
+            (ErrorCode::InvalidRequest, None),
+            (ErrorCode::QuotaExceeded, None),
+            (ErrorCode::Unauthorized, None),
         ] {
             let (tmp, mut journal) = setup();
+            let account = owner().binding.client;
+            let configured = BTreeSet::from([account]);
+            journal.reconcile_client_inventory(&configured).unwrap();
             let settings = limits();
             journal.command_configure(&settings).unwrap();
             let (_, key) = admitted(&mut journal, 1);
@@ -5846,7 +5924,10 @@ mod tests {
                 &hex::encode([2; 32]),
             )
             .unwrap();
-            journal.command_init().unwrap();
+            journal.reconcile_client_inventory(&configured).unwrap();
+            let receipt = journal.client_inventory_access(&account).unwrap();
+            assert_eq!(receipt.last_authenticated_submit_at, Some(NOW));
+            assert_eq!(receipt.last_engine_admitted_submit_at, None);
             let row = journal.command_get(&key).unwrap().unwrap();
             assert!(row.refusal == Some(refusal));
             assert!(!row.engine_known && !row.active() && !row.uncertain);

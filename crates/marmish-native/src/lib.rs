@@ -1,5 +1,8 @@
 //! Native v0.2 Marmish. Legacy Python tooling is a separate test fixture.
 pub mod cli;
+mod client_inventory;
+#[cfg(test)]
+mod client_inventory_ipc_tests;
 mod command_cli;
 mod command_client;
 mod command_config;

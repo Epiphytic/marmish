@@ -8,7 +8,10 @@ command policy. Discovery suggests keys for confirmation and never modifies
 existing grants on its own. The [NIP-05 onboarding increment](phases/nip05-onboarding.md) adds explicit
 public profile publication and `setup --grant-identifier` with full npub
 confirmation. Daemon admission continues to use pinned configuration. The
-other roadmap phases describe intended behavior.
+[local client inventory](phases/local-client-inventory.md) exposes configured
+inbound grants, per-key normalized executable policy, and qualified access
+history from the local daemon socket. Inbound network invitations, remote
+heartbeat and interactive terminals are future phases.
 
 **CI execution direction (2026-11-13):** prefer Epiphytic self-hosted runners;
 do not launch GitHub-hosted qualification as an implicit fallback. The
@@ -544,15 +547,14 @@ cache. This addresses the reviewed parallel initialization race without
 serializing the test suite or weakening encryption. Private files, ownership,
 link/type checks and canonical path requirements remain enforced.
 
-Released v0.2.3 format constants are profile 2, journal 6, engine 1, config 1
-and commands 1. The v0.3 native-copy implementation advances the journal to 7,
-recognizing formats 0, 3, 4, 5, 6 and 7; checked initialization creates the copy
-index/replay state and stamps 7. Do not downgrade a format-7 profile into the
-released format-6 owner. Command tables share the journal's persisted compatibility gate; commands=1
-is not an independent database version check. Journal opening recognizes the
-implemented older native formats 0, 3, 4 and 5 before checked initialization and
-stamping 6 in the released v0.2.3 implementation. This does not promise migration
-of historical Python profiles.
+Released v0.2.3 uses profile 2, journal 6, engine 1, config 1 and commands 1.
+Released v0.3 uses journal 7 for the copy index and replay state. The client
+inventory implementation advances the journal to 8 and migrates supported
+older native formats in one transaction. Stop the owner and back up its profile
+before upgrading if you need to return to an older owner. Restore that backup
+before reopening the profile with the older version. Command tables share the
+journal's compatibility gate. No historical Python profile migration is
+supported.
 Newer unsupported formats fail preflight before ordinary owner opening.
 
 Read-only preflight can cause the pinned SQLite stack to create/open bounded

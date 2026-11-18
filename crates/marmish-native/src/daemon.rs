@@ -98,6 +98,7 @@ pub async fn open(config: Config) -> Result<(ProfileLease, MdkOwner)> {
     crate::native_preflight::check(&profile, &material)?;
     let mut owner = MdkOwner::open(&profile, &material, connector, peers)?;
     owner.set_retention(retention)?;
+    owner.reconcile_client_inventory(commands.as_ref())?;
     profile.mark_ready(owner.opened_binding())?;
     if let Some(commands) = commands {
         let worker = crate::native_layout::resolve(&std::env::current_exe()?)?.worker;
@@ -128,6 +129,9 @@ async fn dispatch(
     rooms: &mut crate::command_local::RoomIntents,
     request: Request,
 ) -> Result<Response> {
+    if let Request::ClientInventory { request } = request {
+        return Ok(Response::inventory(owner.client_inventory(request)));
+    }
     if let Request::Stream { request } = request {
         let result = owner.stream_request_local(request).unwrap_or_else(|error| {
             crate::stream_service::StreamLocalResult::Failure {
@@ -305,7 +309,7 @@ async fn serve_owner(
                 _ = &mut expired => break,
                 pending = receive.recv() => {
                     let Some(pending) = pending else { break };
-                    if pending.request.is_command() && (pending.deadline<=Instant::now() || pending.respond.is_closed()) {continue;}
+                    if pending.request.uses_short_exchange() && (pending.deadline<=Instant::now() || pending.respond.is_closed()) {continue;}
                     let response = tokio::select! {
                         _ = &mut shutdown_signal => break,
                         _ = &mut expired => break,

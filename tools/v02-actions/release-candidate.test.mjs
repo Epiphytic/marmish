@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
-import {checkJobs,candidateLayout,checkReport,checkManifest,unpack,inspectCandidate,expectedArtifacts,releaseFormats} from './release-candidate.mjs';
-import {TARGETS,releaseNames,canonicalInventory,parseVersion} from './release-schema.mjs';
+import {checkJobs,candidateLayout,candidateSourceContract,checkReport,checkManifest,unpack,inspectCandidate,expectedArtifacts,releaseFormats} from './release-candidate.mjs';
+import {TARGETS,releaseNames,canonicalInventory,parseVersion,compareVersions} from './release-schema.mjs';
+import {versionAt} from './eligibility.mjs';
 import {digest,ROLES} from './transport.mjs';
 const source='a'.repeat(40),publisher='b'.repeat(40),harness='c'.repeat(64),version='0.2.3';
 const selection={run_id:'12',run_attempt:'2',publisher_sha:publisher};
@@ -30,12 +31,12 @@ function report(kind,target,version='0.2.3',relaySelection='explicit') {
     source_commit:source,target,run_id:'12',run_attempt:'2',provider_packages:['test-provider=1'],
     ...(target.endsWith('darwin')?{owned_account_removed:true,runner_keychain_unchanged:true,supervisor_interpreter_unchanged:true}:{})};
 }
-function product(target,version='0.2.3') {
+function product(target,version='0.2.3',journal=null) {
   const files=new Map(['marmish','marmishd','marmish-worker','THIRD-PARTY-LICENSES'].map(prefix=>[
     `${prefix}-${version}-${target}`,Buffer.from(`${prefix}:${target}`)]));
   const text=['marmish-manifest 1',`version ${version}`,`target ${target}`,`commit ${source}`,
     `signing ${target.endsWith('darwin')?'adhoc':'none'} notarized=no`,
-    `minimum ${target.endsWith('darwin')?'macos=15.0':'glibc=2.39'}`,`state profile=2 journal=${releaseFormats(version)[1]} engine=1 config=1 commands=1`,
+    `minimum ${target.endsWith('darwin')?'macos=15.0':'glibc=2.39'}`,`state profile=2 journal=${releaseFormats(version,journal)[1]} engine=1 config=1 commands=1`,
     ...[...files].map(([name,bytes],i)=>`file ${digest(bytes)} ${bytes.length} ${i===3?'0444':'0555'} ${name.slice(0,-1-version.length-1-target.length)}`),'end',''].join('\n');
   files.set(`marmish-${version}-${target}.manifest`,Buffer.from(text));return files;
 }
@@ -110,21 +111,21 @@ test('job gate requires exact completed successful matrix or exact designed skip
   }
   assert.throws(()=>checkJobs(jobs(),{layout:'split-v1',skip:true}),/candidate_jobs_incomplete/);
 });
-function layoutGit(text, {entry, size, fail}={}) {
+function layoutGit(text, {entry, size, fail, commit=source, blob='e'.repeat(40)}={}) {
   const calls=[];
   const git=async(args,options)=>{
     calls.push({args,options});
     if(args[0]===fail)throw Error('git read failed');
     assert.ok(options.maxBuffer>0&&options.maxBuffer<=256*1024);
     if(args[0]==='ls-tree') {
-      assert.deepEqual(args,['ls-tree',source,'--','.github/workflows/v02-release.yml']);
-      return entry??`100644 blob ${'e'.repeat(40)}\t.github/workflows/v02-release.yml\n`;
+      assert.deepEqual(args,['ls-tree',commit,'--','.github/workflows/v02-release.yml']);
+      return entry??`100644 blob ${blob}\t.github/workflows/v02-release.yml\n`;
     }
     if(args[0]==='cat-file') {
-      assert.deepEqual(args,['cat-file','-s','e'.repeat(40)]);
+      assert.deepEqual(args,['cat-file','-s',blob]);
       return size??`${Buffer.byteLength(text)}\n`;
     }
-    assert.deepEqual(args,['show',`${source}:.github/workflows/v02-release.yml`]);
+    assert.deepEqual(args,['show',`${commit}:.github/workflows/v02-release.yml`]);
     return text;
   };
   return {git,calls};
@@ -361,16 +362,74 @@ test('manifest journal formats are closed and bound to release family in both di
     assert.throws(()=>checkManifest(Buffer.from(bytes.toString().replace(`journal=${expected}`,`journal=${wrong}`)),files,current,source,target),/manifest_provenance/);
   }
 });
-test('current Rust format constants equal the authenticated 0.3 release tuple',()=>{
+const splitWorkflow='env:\n  MARMISH_CANDIDATE_LAYOUT: split-v1\n';
+const journalLine='  MARMISH_CANDIDATE_JOURNAL: journal-v8\n';
+
+test('journal marker is exact, source-bound and requires the split workflow',async()=>{
+  const current=`${splitWorkflow}${journalLine}jobs:\n`;
+  const historical=`${splitWorkflow}jobs:\n`;
+  for(const [commit,blob,workflow,journal] of [
+    [source,'d'.repeat(40),historical,null],
+    ['b'.repeat(40),'e'.repeat(40),current,8],
+    ['c'.repeat(40),'f'.repeat(40),current,8],
+  ]) {
+    const {git,calls}=layoutGit(workflow,{commit,blob});
+    assert.deepEqual(await candidateSourceContract(commit,git),{layout:'split-v1',journal});
+    assert.deepEqual(calls.map(call=>call.args[0]),['ls-tree','cat-file','show']);
+  }
+  for(const wrong of [
+    journalLine.repeat(2),
+    journalLine.replace('journal-v8','journal-v08'),
+    journalLine.replace('journal-v8','journal-v9'),
+    journalLine.replace('journal-v8','"journal-v8"'),
+    journalLine.replace('JOURNAL:','JOURNAL":').replace('  MARMISH','  "MARMISH'),
+    `#${journalLine}`,
+    `jobs:\n  test:\n    env:\n    ${journalLine}`,
+    `jobs:\n  test:\n    run: |\n    ${journalLine}`,
+  ]) {
+    await assert.rejects(candidateSourceContract(source,layoutGit(splitWorkflow+wrong).git),/invalid_candidate_layout/);
+  }
+  await assert.rejects(candidateSourceContract(source,layoutGit(`env:\n${journalLine}`).git),/invalid_candidate_layout/);
+});
+
+test('inspection binds journal v8 to the exact authenticated source version and rejects crossed manifests',async()=>{
+  for(const current of ['0.2.3','0.3.0','0.3.0-rc.1']) {
+    assert.throws(()=>releaseFormats(current,8),/invalid_candidate_layout/);
+  }
+  for(const [marker,manifest,expected] of [
+    [false,7,null],[true,8,null],[false,8,'manifest_provenance'],[true,7,'manifest_provenance'],
+  ]) {
+    const current='0.3.1',f=fixture(current),original=f.adapters.git;
+    const workflow=layoutGit(`${splitWorkflow}${marker?journalLine:''}jobs:\n`);
+    f.adapters.git=(args,options)=>args[0]==='ls-tree'||args[0]==='cat-file'||args[1]?.endsWith('v02-release.yml')
+      ?workflow.git(args,options):original(args,options);
+    if(manifest===8) for(const target of TARGETS) {
+      replaceArtifact(f,`v02-candidate-${target}-12-2`,[...product(target,current,8)].map(([name,bytes])=>({name,bytes})));
+    }
+    if(expected) await assert.rejects(inspectCandidate(selection,f.adapters), new RegExp(expected));
+    else assert.equal((await inspectCandidate(selection,f.adapters)).inventory.version,current);
+  }
+});
+
+test('current Rust format constants equal the authenticated current source tuple',async()=>{
+  const readSource=file=>readFileSync(new URL(`../../${file}`,import.meta.url),'utf8');
   const read=(file,name)=>{
-    const text=readFileSync(new URL(`../../${file}`,import.meta.url),'utf8');
-    const found=new RegExp(`const ${name}: [a-z0-9]+ = ([0-9]+);`).exec(text);
+    const found=new RegExp(`const ${name}: [a-z0-9]+ = ([0-9]+);`).exec(readSource(file));
     assert.ok(found,`${file}:${name}`);return Number(found[1]);
   };
   const actual=[read('crates/marmish-native/src/identity.rs','PROFILE_FORMAT'),
     read('crates/marmish-native/src/journal.rs','JOURNAL_FORMAT'),read('crates/marmish-engine/src/store.rs','ENGINE_FORMAT'),
     read('crates/marmish-native/src/command_config.rs','CONFIG_FORMAT'),read('crates/marmish-native/src/command_wire.rs','COMMAND_FORMAT')];
-  assert.deepEqual(actual,releaseFormats('0.3.0'));
-  const metadata=readFileSync(new URL('../../crates/marmish-native/src/native_manifest.rs',import.meta.url),'utf8');
+  const {journal}=await candidateSourceContract(source,layoutGit(readSource('.github/workflows/v02-release.yml')).git);
+  const current=await versionAt(source,async ([verb,ref])=>{
+    assert.equal(verb,'show');
+    assert.ok(ref.startsWith(`${source}:`));
+    return readSource(ref.slice(source.length+1));
+  });
+  assert.equal(journal===8,actual[1]===8);
+  if(journal!==null) assert.ok(compareVersions(current,'0.3.0')>0);
+  assert.deepEqual(actual,releaseFormats(current,journal));
+  assert.equal(releaseFormats('0.3.0')[1],7);
+  const metadata=readSource('crates/marmish-native/src/native_manifest.rs');
   for(const constant of ['PROFILE_FORMAT','JOURNAL_FORMAT','ENGINE_FORMAT','CONFIG_FORMAT','COMMAND_FORMAT']) assert.ok(metadata.includes(constant));
 });

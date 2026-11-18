@@ -27,7 +27,8 @@ pub use live::{
 };
 pub use model::*;
 pub use policy::{
-    inspect_canonical_exec, CanonicalExecOutcome, CommandPolicy, KeyRestrictions, Restrictions,
+    inspect_canonical_exec, CanonicalExecOutcome, CommandPolicy, CommandPolicyDescriptionV1,
+    KeyRestrictions, Restrictions,
 };
 use std::collections::HashMap;
 use std::time::Duration;

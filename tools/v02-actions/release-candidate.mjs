@@ -8,7 +8,7 @@ import {ArtifactTransport, boundedFile, digest, safeBlobUrl, childEnvironment, R
 import {checkRun, checkTooling, sourceDigest} from './workflow.mjs';
 import {loadInspection} from './release-render.mjs';
 import {verifyEligibility, versionAt} from './eligibility.mjs';
-import {TARGETS, REPOSITORY, HEX40, HEX64, MAX_ASSET, validId, parseVersion, exactKeys, canonicalInventory, releaseNames, requireRelease as need, validateEligibility} from './release-schema.mjs';
+import {TARGETS, REPOSITORY, HEX40, HEX64, MAX_ASSET, validId, parseVersion, compareVersions, exactKeys, canonicalInventory, releaseNames, requireRelease as need, validateEligibility} from './release-schema.mjs';
 const LIMIT = 800 * 1024 * 1024;
 export async function unpack(zip, expected) {
   need(Buffer.isBuffer(zip) && zip.length <= LIMIT, 'archive_bound');
@@ -23,7 +23,8 @@ export function expectedArtifacts(run, attempt) {
 const CANDIDATE_WORKFLOW = '.github/workflows/v02-release.yml';
 const WORKFLOW_LIMIT = 256 * 1024;
 const LAYOUT_MARKER = 'MARMISH_CANDIDATE_LAYOUT';
-export async function candidateLayout(source, git) {
+const JOURNAL_MARKER = 'MARMISH_CANDIDATE_JOURNAL';
+export async function candidateSourceContract(source, git) {
   need(HEX40.test(source), 'invalid_candidate_layout');
   const entry = await git(['ls-tree', source, '--', CANDIDATE_WORKFLOW], {maxBuffer: 1024});
   const match = /^100644 blob ([0-9a-f]{40})\t\.github\/workflows\/v02-release\.yml\n?$/.exec(entry);
@@ -36,17 +37,25 @@ export async function candidateLayout(source, git) {
   const text = await git(['show', `${source}:${CANDIDATE_WORKFLOW}`], {maxBuffer: WORKFLOW_LIMIT});
   need(typeof text === 'string' && Buffer.byteLength(text) === size
     && !text.includes('\uFEFF') && !text.includes('\r'), 'invalid_candidate_layout');
-  const count = text.split(LAYOUT_MARKER).length - 1;
-  if (count === 0) return 'legacy-v1';
-  need(count === 1, 'invalid_candidate_layout');
+  const layoutCount = text.split(LAYOUT_MARKER).length - 1;
+  const journalCount = text.split(JOURNAL_MARKER).length - 1;
+  if (layoutCount === 0 && journalCount === 0) return {layout: 'legacy-v1', journal: null};
+  need(layoutCount === 1 && journalCount <= 1, 'invalid_candidate_layout');
   const lines = text.split('\n'), environments = lines.flatMap((line, index) => line === 'env:' ? [index] : []);
   need(environments.length === 1, 'invalid_candidate_layout');
   const start = environments[0];
   const next = lines.findIndex((line, index) => index > start && /^[^\s]/.test(line));
   const end = next === -1 ? lines.length : next;
-  const marker = lines.findIndex(line => line.includes(LAYOUT_MARKER));
-  need(marker > start && marker < end && lines[marker] === `  ${LAYOUT_MARKER}: split-v1`, 'invalid_candidate_layout');
-  return 'split-v1';
+  const checkMarker = (name, value) => {
+    const marker = lines.findIndex(line => line.includes(name));
+    need(marker > start && marker < end && lines[marker] === `  ${name}: ${value}`, 'invalid_candidate_layout');
+  };
+  checkMarker(LAYOUT_MARKER, 'split-v1');
+  if (journalCount) checkMarker(JOURNAL_MARKER, 'journal-v8');
+  return {layout: 'split-v1', journal: journalCount === 1 ? 8 : null};
+}
+export async function candidateLayout(source, git) {
+  return (await candidateSourceContract(source, git)).layout;
 }
 export function checkJobs(jobs, options) {
   need(options && ['legacy-v1', 'split-v1'].includes(options.layout) && typeof options.skip === 'boolean', 'invalid_candidate_layout');
@@ -112,19 +121,20 @@ export function checkReport(value, kind, {target, source, run, attempt, version 
     && value.network_activation === false && value.owned_state_removed === true
     && Number.isSafeInteger(value.elapsed_ms) && value.elapsed_ms >= 0 && value.elapsed_ms < 900000, 'qualification_failed');
 }
-export function releaseFormats(version) {
+export function releaseFormats(version, journal = null) {
   const parsed = parseVersion(version);
   need(parsed, 'invalid_release_version');
-  return [2, parsed.minor === 2 ? 6 : 7, 1, 1, 1];
+  need(journal === null || (journal === 8 && compareVersions(version, '0.3.0') > 0), 'invalid_candidate_layout');
+  return [2, journal ?? (parsed.minor === 2 ? 6 : 7), 1, 1, 1];
 }
-export function checkManifest(bytes, files, version, source, target) {
+export function checkManifest(bytes, files, version, source, target, journal = null) {
   need(bytes.length <= 4096, 'manifest_bound');
   const text = bytes.toString('ascii'), lines = text.split('\n');
   need(Buffer.from(text, 'ascii').equals(bytes) && lines.length === 13 && lines[12] === ''
     && lines[0] === 'marmish-manifest 1' && lines[1] === `version ${version}` && lines[2] === `target ${target}`
     && lines[3] === `commit ${source}` && lines[4] === `signing ${target.endsWith('darwin') ? 'adhoc' : 'none'} notarized=no`
     && lines[5] === `minimum ${target.endsWith('darwin') ? 'macos=15.0' : 'glibc=2.39'}`
-    && lines[6] === `state ${['profile','journal','engine','config','commands'].map((key, i) => `${key}=${releaseFormats(version)[i]}`).join(' ')}` && lines[11] === 'end', 'manifest_provenance');
+    && lines[6] === `state ${['profile','journal','engine','config','commands'].map((key, i) => `${key}=${releaseFormats(version, journal)[i]}`).join(' ')}` && lines[11] === 'end', 'manifest_provenance');
   for (const [i, prefix] of ['marmish','marmishd','marmish-worker','THIRD-PARTY-LICENSES'].entries()) {
     const name = `${prefix}-${version}-${target}`, payload = files.get(name);
     const match = /^file ([0-9a-f]{64}) ([1-9][0-9]*) (0555|0444) ([A-Za-z0-9._-]+)$/.exec(lines[i + 7]);
@@ -178,19 +188,21 @@ export async function inspectCandidate(input, {api, git, transport, harnessDiges
   const jobsReply = await api(`${base}/actions/runs/${input.run_id}/attempts/${input.run_attempt}/jobs?per_page=100`);
   need(jobsReply.total_count === jobsReply.jobs?.length && jobsReply.total_count <= 100, 'jobs_bound');
   const skip = eligibility.decision === 'skip-by-design';
-  checkJobs(jobsReply.jobs, {layout: await candidateLayout(context.source, git), skip});
+  const {layout, journal} = await candidateSourceContract(context.source, git);
+  checkJobs(jobsReply.jobs, {layout, skip});
   if (skip) return {skip: true, reason: eligibility.reason};
   need(eligibility.decision === 'build', 'candidate_ineligible');
   const names = expectedArtifacts(input.run_id, input.run_attempt);
   need(artifacts.length === names.length && names.every(n => artifacts.some(a => a.name === n)), 'candidate_artifact_inventory');
   const version = await versionAt(context.source, git);
   need(version === eligibility.version, 'candidate_version_changed');
+  releaseFormats(version, journal);
   const payload = new Map(), reports = [{name: eligibilityName, sha256: digest(eligibilityBytes)}];
   for (const [index, target] of TARGETS.entries()) {
     const suffix = `${target}-${input.run_id}-${input.run_attempt}`;
     const productNames = releaseNames(version).filter(n => n.endsWith(target) || n.endsWith(`${target}.manifest`));
     const product = await take(`v02-candidate-${suffix}`, productNames);
-    checkManifest(product.get(`marmish-${version}-${target}.manifest`), product, version, context.source, target);
+    checkManifest(product.get(`marmish-${version}-${target}.manifest`), product, version, context.source, target, journal);
     for (const [name, bytes] of product) payload.set(name, bytes);
     const tooling = await take(`v02-installed-tools-${suffix}`, [`${ROLES[index]}-tooling.json`, 'marmish-installed-check','marmish-installed-fixture']);
     const record = JSON.parse(tooling.get(`${ROLES[index]}-tooling.json`));

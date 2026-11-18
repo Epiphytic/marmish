@@ -1,4 +1,6 @@
 //! Actor-owned encrypted application journal. Never opens the MDK database.
+#[path = "client_inventory_store.rs"]
+mod client_inventory_store;
 #[path = "command_preparation.rs"]
 mod command_preparation;
 #[path = "command_rooms.rs"]
@@ -15,6 +17,7 @@ mod stream_inspect_store;
 mod stream_store;
 use crate::foundation::{Body, Envelope};
 use crate::{Error, Result};
+pub(crate) use client_inventory_store::ClientInventoryAccess;
 pub(crate) use command_preparation::*;
 pub(crate) use command_rooms::*;
 pub(crate) use command_store::*;
@@ -28,8 +31,8 @@ use std::time::Duration;
 pub(crate) use stream_store::*;
 use zeroize::Zeroizing;
 
-pub(crate) const JOURNAL_FORMAT: i64 = 7;
-pub(crate) const JOURNAL_SUPPORTED_FORMATS: &[i64] = &[0, 3, 4, 5, 6, 7];
+pub(crate) const JOURNAL_FORMAT: i64 = 8;
+pub(crate) const JOURNAL_SUPPORTED_FORMATS: &[i64] = &[0, 3, 4, 5, 6, 7, 8];
 
 #[derive(Clone, Serialize)]
 pub struct Conversation {
@@ -182,15 +185,18 @@ impl Journal {
         let mut journal = Self { conn };
         journal.command_init()?;
         journal.stream_schema_init()?;
-        journal.copy_init(schema)?;
         journal.copy_local_init()?;
-        journal.stream_init()?;
         journal.command_rooms_init()?;
         journal.command_preparations_init()?;
-        journal
-            .conn
-            .pragma_update(None, "user_version", JOURNAL_FORMAT)
-            .map_err(db)?;
+        let tx = journal.conn.transaction().map_err(db)?;
+        Self::copy_init_in(&tx, schema)?;
+        client_inventory_store::inventory_init_in(&tx, schema)?;
+        if schema != JOURNAL_FORMAT {
+            tx.pragma_update(None, "user_version", JOURNAL_FORMAT)
+                .map_err(db)?;
+        }
+        tx.commit().map_err(db)?;
+        journal.stream_init()?;
         Ok(journal)
     }
     pub(crate) fn publication_owned(&self, group: &[u8], event: &str) -> Result<bool> {
