@@ -89,8 +89,8 @@ projection. Do not emit metrics content or peer IDs.
 
 Exercise stable accepted-state negatives before release, including status
 before acceptance, current grant loss and revision changes. Each checks
-zero WSS writes. A separate bounded private WSS test proves refusal of an unregistered
-account, wrong transport group tag, extra filters and other kinds. Use a
+zero WSS writes. A separate bounded private WSS test proves refusal of an
+unregistered account, wrong transport group tag, extra filters and other kinds. Use a
 fresh disposable third signer for the refused account.
 Reject wrong author, epoch, leaf, application room, kind and marker,
 nonempty tags, noncanonical bytes and expired or future creation time in
@@ -110,8 +110,10 @@ projection form a separate increment under the original activation plan.
 Run each application/relay step with a 5-second local bound, except
 where the underlying integration requires the existing longer enrollment
 deadline. Use one in-flight application event, a one-second send floor
-and at most two positive records and sixteen negative cases in this
-test. Keep the opt-in whole fixture out of ordinary CI.
+and at most two positive records in this test. The negative workload is
+bounded by seven non-sending armed adapter turns and eleven in-memory
+receiver and protocol-lane checks. Keep the opt-in whole fixture out of
+ordinary CI.
 
 Run the benchmark in a separate owned process with twelve fresh heartbeat
 reservations over one new accepted native group. Use the normal MDK retry,
@@ -129,8 +131,9 @@ Report elapsed timings, writes, projections, total encoded and signed wire
 bytes, and largest application size without reporting host or identity
 contents. Use nearest-rank monotonic p50/p95 for each stage. With twelve
 samples p95 is the maximum. Wall time only supplies created_at and freshness
-checks. The already measured 200-sample [local planner and codec path](../validation/peer-heartbeat-planner.md) has separate results and exercises
-none of the native retry or WSS path.
+checks. The already measured 200-sample
+[local planner and codec path](../validation/peer-heartbeat-planner.md)
+has separate results and exercises none of the native retry or WSS path.
 
 All new authority and transport proof code is under `#[cfg(test)]`. A
 non-test compiler probe confirms that fixture constructors and adapters
