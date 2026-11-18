@@ -63,6 +63,11 @@ jobs:
         run: |
           cargo test --locked -p marmish-native --lib terminal_ipc_wire_core
           cargo test --locked -p marmish-native --lib terminal_fence_core
+      - name: Check Terminal socket byte boundaries
+        run: |
+          cargo test --locked -p marmish-native --lib terminal_socket_core_ordinary_bytes_and_half_close
+          cargo test --locked -p marmish-native --lib terminal_socket_core_exact_ready_frame_and_early_binary_suffix
+          cargo test --locked -p marmish-native --test terminal_local_tmux terminal_socket_display_core
       - name: Check private Peer invitation records
         run: cargo test --locked -p marmish-native --test peer_control_wire peer_control_core
       - name: Check Peer cursor reopening and effect rollback

@@ -18,9 +18,17 @@ use tokio::{
 const FRAME_LIMIT: usize = 65_536;
 const IO_TIMEOUT: Duration = Duration::from_secs(15);
 
+#[cfg(test)]
+#[path = "terminal_socket_handshake.rs"]
+pub(crate) mod terminal_handshake;
+
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Request {
+    #[cfg(test)]
+    TerminalStart {
+        request: terminal_handshake::Start,
+    },
     ClientInventory {
         request: InventoryRequest,
     },
@@ -102,6 +110,10 @@ pub(crate) enum Request {
 
 impl Request {
     pub(crate) fn is_command(&self) -> bool {
+        #[cfg(test)]
+        if matches!(self, Self::TerminalStart { .. }) {
+            return false;
+        }
         !matches!(
             self,
             Self::Status {}
@@ -126,6 +138,9 @@ pub struct Response {
     pub(crate) command: Option<crate::command_local::LocalResult>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) stream: Option<crate::stream_service::StreamLocalResult>,
+    #[cfg(test)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) terminal_stream: Option<crate::terminal_ipc_wire::Role>,
 }
 
 impl Response {
@@ -137,6 +152,8 @@ impl Response {
                 error: None,
                 command: None,
                 stream: None,
+                #[cfg(test)]
+                terminal_stream: None,
             },
             Err(_) => Self::failure("response_encoding"),
         }
@@ -149,6 +166,8 @@ impl Response {
             error: Some(category.to_owned()),
             command: None,
             stream: None,
+            #[cfg(test)]
+            terminal_stream: None,
         }
     }
     pub(crate) fn command(result: crate::command_local::LocalResult) -> Self {
@@ -158,6 +177,8 @@ impl Response {
             error: None,
             command: Some(result),
             stream: None,
+            #[cfg(test)]
+            terminal_stream: None,
         }
     }
     pub(crate) fn stream(result: crate::stream_service::StreamLocalResult) -> Self {
@@ -167,6 +188,8 @@ impl Response {
             error: None,
             command: None,
             stream: Some(result),
+            #[cfg(test)]
+            terminal_stream: None,
         }
     }
 
@@ -242,13 +265,18 @@ async fn read_frame<T: for<'de> Deserialize<'de>>(stream: &mut UnixStream) -> Re
     serde_json::from_slice(&bytes).map_err(|_| Error::Invalid("ipc_frame_json"))
 }
 
-async fn write_frame(stream: &mut UnixStream, value: &impl Serialize) -> Result<()> {
+async fn write_frame_body(stream: &mut UnixStream, value: &impl Serialize) -> Result<()> {
     let bytes = serde_json::to_vec(value).map_err(|_| Error::Invalid("ipc_frame_json"))?;
     if bytes.is_empty() || bytes.len() > FRAME_LIMIT {
         return Err(Error::Invalid("ipc_frame_size"));
     }
     stream.write_u32(bytes.len() as u32).await?;
     stream.write_all(&bytes).await?;
+    Ok(())
+}
+
+async fn write_frame(stream: &mut UnixStream, value: &impl Serialize) -> Result<()> {
+    write_frame_body(stream, value).await?;
     stream.shutdown().await?;
     Ok(())
 }
@@ -275,6 +303,10 @@ pub(crate) async fn client_inventory_request(
 ) -> Result<ClientInventoryReply> {
     let listing = matches!(request, InventoryRequest::List { .. });
     let response = exchange(path, &Request::ClientInventory { request }, IO_TIMEOUT).await?;
+    #[cfg(test)]
+    if response.terminal_stream.is_some() {
+        return Err(Error::Invalid("inventory_response"));
+    }
     if response.command.is_some() || response.stream.is_some() {
         return Err(Error::Invalid("inventory_response"));
     }
@@ -313,6 +345,10 @@ pub(crate) async fn command_request(
         verify_peer(&stream)?;
         write_frame(&mut stream, request).await?;
         let response: Response = read_frame(&mut stream).await?;
+        #[cfg(test)]
+        if response.terminal_stream.is_some() {
+            return Err(Error::Invalid("command_local_response"));
+        }
         if let Some(result) = response.command {
             if !response.ok
                 || response.result.is_some()
@@ -346,6 +382,10 @@ pub(crate) async fn stream_request(
         verify_peer(&stream)?;
         write_frame(&mut stream, &Request::Stream { request }).await?;
         let response: Response = read_frame(&mut stream).await?;
+        #[cfg(test)]
+        if response.terminal_stream.is_some() {
+            return Err(Error::Invalid("stream_local_response"));
+        }
         if response.result.is_some() || response.command.is_some() {
             return Err(Error::Invalid("stream_local_response"));
         }
@@ -391,6 +431,22 @@ pub(crate) async fn serve(
     queue: mpsc::Sender<Pending>,
     status: watch::Receiver<Response>,
 ) -> Result<()> {
+    serve_inner(
+        listener,
+        queue,
+        status,
+        #[cfg(test)]
+        None,
+    )
+    .await
+}
+
+async fn serve_inner(
+    listener: UnixListener,
+    queue: mpsc::Sender<Pending>,
+    status: watch::Receiver<Response>,
+    #[cfg(test)] terminal: Option<terminal_handshake::Intake>,
+) -> Result<()> {
     let clients = std::sync::Arc::new(tokio::sync::Semaphore::new(64));
     let mut tasks = tokio::task::JoinSet::new();
     loop {
@@ -408,10 +464,17 @@ pub(crate) async fn serve(
                 let Ok(permit) = clients.clone().try_acquire_owned() else { continue };
                 let queue = queue.clone();
                 let status = status.clone();
+                #[cfg(test)]
+                let terminal = terminal.clone();
                 tasks.spawn(async move {
                     let _permit = permit;
                     let exchange_deadline = tokio::time::Instant::now() + IO_TIMEOUT;
                     let result = tokio::time::timeout(IO_TIMEOUT, read_frame::<Request>(&mut stream)).await;
+                    #[cfg(test)]
+                    if let Ok(Ok(Request::TerminalStart { request })) = result {
+                        terminal_handshake::transfer(terminal, request, stream, _permit, exchange_deadline).await;
+                        return;
+                    }
                     let short_exchange = matches!(&result,Ok(Ok(request)) if request.uses_short_exchange());
                     let response = match result {
                         Ok(Ok(Request::Status {})) => status.borrow().clone(),

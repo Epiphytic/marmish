@@ -36,6 +36,10 @@ mod terminal_bootstrap;
 mod terminal_fence;
 #[cfg(test)]
 mod terminal_ipc_wire;
+#[cfg(test)]
+mod terminal_output;
+#[cfg(test)]
+mod terminal_output_batches;
 pub mod transport;
 pub use error::{Error, Result};
 pub(crate) use mdk_adapter::command_local;

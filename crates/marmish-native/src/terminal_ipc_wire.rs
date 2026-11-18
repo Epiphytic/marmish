@@ -2,7 +2,7 @@
 use std::num::NonZeroU64;
 
 const VERSION: u8 = 1;
-const MAX_DATA: usize = 4096;
+pub(crate) const MAX_DATA: usize = 4096;
 const MAX_BODY: usize = 2 + 8 + MAX_DATA;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -11,7 +11,8 @@ pub(crate) enum Direction {
     ToClient,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum Role {
     Writer,
     Observer,
@@ -51,13 +52,14 @@ pub(crate) enum Record<'a> {
     Output { id: NonZeroU64, bytes: &'a [u8] },
     Credit(NonZeroU64),
     Close(Close),
+    ResizeApplied,
 }
 
 impl Record<'_> {
     fn allowed(self, direction: Direction, role: Role) -> bool {
         match (direction, self) {
             (Direction::ToDaemon, Self::Input(_) | Self::Resize { .. })
-            | (Direction::ToClient, Self::Credit(_)) => role == Role::Writer,
+            | (Direction::ToClient, Self::Credit(_) | Self::ResizeApplied) => role == Role::Writer,
             (Direction::ToDaemon, Self::Ack(_) | Self::Detach)
             | (Direction::ToClient, Self::Output { .. } | Self::Close(_)) => true,
             _ => false,
@@ -83,6 +85,7 @@ impl Record<'_> {
             }
             Self::Credit(_) => (6, 10),
             Self::Close(_) => (7, 3),
+            Self::ResizeApplied => (8, 2),
             _ => return Err(WireError::Invalid),
         })
     }
@@ -121,7 +124,7 @@ pub(crate) fn encode(
             out.extend_from_slice(&rows.to_be_bytes());
             out.extend_from_slice(&columns.to_be_bytes());
         }
-        Record::Detach => {}
+        Record::Detach | Record::ResizeApplied => {}
         Record::Output { id, bytes } => {
             out.extend_from_slice(&id.get().to_be_bytes());
             out.extend_from_slice(bytes);
@@ -154,6 +157,7 @@ fn decode(body: &[u8], direction: Direction, role: Role) -> Result<Record<'_>, W
             Record::Credit(id(bytes.try_into().map_err(|_| WireError::Invalid)?)?)
         }
         [VERSION, 7, code] => Record::Close(Close::decode(*code)?),
+        [VERSION, 8] => Record::ResizeApplied,
         _ => return Err(WireError::Invalid),
     };
     let (_, exact_length) = record.body_spec()?;

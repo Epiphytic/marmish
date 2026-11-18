@@ -25,7 +25,10 @@ against real Linux PTYs and tmux. The [room enrollment fixture](validation/termi
 uses a separate native room, a pinned direct WSS origin, exact 4 KiB frame
 checks and an ordinary Command after room teardown. The [local stream records and
 authority fence](validation/terminal-ipc-fence.md) qualify fixed-storage framing,
-role checks and revocation ordering in test builds. Remote Terminal admission, reattach,
+role checks and revocation ordering in test builds. The [local socket and
+display commit](validation/terminal-socket-handshake.md) qualify same-user
+handshake, independent socket limits, and acknowledgment after display
+writes in test builds. Remote Terminal admission, reattach,
 inbound Peer invitations and network heartbeat remain in development.
 The [Peer aggregate ingress proof](validation/peer-aggregate-ingress-proof.md)
 qualifies one shared canonical origin in a native loopback fixture. A copy

@@ -45,9 +45,13 @@ impl DisplayUnit {
 }
 
 impl Filter {
+    pub(super) fn is_ground(&self) -> bool {
+        matches!(self.state, State::Ground)
+    }
+
     /// The frontend calls this only for elapsed time when it can consume data.
     pub(super) fn advance(&mut self, elapsed: Duration) -> Result<()> {
-        if matches!(self.state, State::Ground) {
+        if self.is_ground() {
             return Ok(());
         }
         self.elapsed = self.elapsed.saturating_add(elapsed);
@@ -58,7 +62,7 @@ impl Filter {
     }
 
     pub(super) fn deadline(&self) -> Option<Duration> {
-        (!matches!(self.state, State::Ground)).then(|| TIME_LIMIT.saturating_sub(self.elapsed))
+        (!self.is_ground()).then(|| TIME_LIMIT.saturating_sub(self.elapsed))
     }
 
     pub(super) fn push(&mut self, byte: u8) -> Result<Option<DisplayUnit>> {

@@ -38,6 +38,16 @@ impl Display {
         !self.pending.is_empty()
     }
 
+    pub(super) fn record_committed(&self, remaining: usize) -> Result<bool> {
+        if remaining != 0 {
+            return Ok(false);
+        }
+        if !self.filter.is_ground() {
+            return Err(OUTPUT);
+        }
+        Ok(!self.has_pending())
+    }
+
     pub(super) fn advance(&mut self, elapsed: Duration) -> Result<()> {
         if self.can_ingest() {
             self.filter.advance(elapsed)?;
@@ -208,6 +218,32 @@ fn normalization(alternate: bool, incomplete: bool, marker: &Marker) -> Vec<u8> 
 #[cfg(test)]
 mod core_tests_terminal_frontend {
     use super::*;
+
+    #[test]
+    fn terminal_socket_display_core_ack_waits_for_independent_written_records() -> Result<()> {
+        let mut display = Display::default();
+        let bytes = b"\xe2\x98\x83\x1b[?1049h";
+        assert_eq!(display.ingest(bytes)?, bytes.len());
+        assert!(!display.record_committed(0)?);
+        display.write(|pending| {
+            assert_eq!(pending, bytes);
+            Ok(Some(1))
+        })?;
+        assert!(!display.record_committed(0)?);
+        display.write(|pending| {
+            assert_eq!(pending, &bytes[1..]);
+            Ok(Some(pending.len()))
+        })?;
+        assert!(display.record_committed(0)?);
+        assert!(!display.record_committed(1)?);
+        let discarded = b"\x1b]52;c;AA==\x07";
+        assert_eq!(display.ingest(discarded)?, discarded.len());
+        assert!(display.record_committed(0)?);
+        let incomplete = b"\x1b[";
+        assert_eq!(display.ingest(incomplete)?, incomplete.len());
+        assert!(display.record_committed(0).is_err());
+        Ok(())
+    }
 
     #[test]
     fn partial_controls_commit_only_after_the_boundary() -> Result<()> {

@@ -660,6 +660,7 @@ impl Bridge {
                                 stream: Some(StreamLocalResult::Frame {
                                     frame_base64: STANDARD.encode(response),
                                 }),
+                                terminal_stream: None,
                             };
                             let bytes = serde_json::to_vec(&response).unwrap();
                             if post_receipt && observed.lock().unwrap().gated {

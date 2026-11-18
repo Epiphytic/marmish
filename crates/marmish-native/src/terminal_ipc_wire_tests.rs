@@ -55,6 +55,7 @@ fn terminal_ipc_wire_core_exact_records_and_roles() {
             &[0, 3, 1, 7, 5],
             true,
         ),
+        (CLIENT, Record::ResizeApplied, &[0, 2, 1, 8], false),
     ];
     for &(direction, record, bytes, observer) in fixtures {
         for input_direction in [DAEMON, CLIENT] {
