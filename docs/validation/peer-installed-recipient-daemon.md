@@ -29,3 +29,15 @@ On Linux AMD64, exact source `d64dd85865c40d770e909ac2978fbcf581212746` passed t
 The checks cover preexisting Ready Manual Client and Both after reacquisition, an Initializing profile that remains ineligible even after Ready is written on the same lease, absent/Off/automatic receive modes, server-only startup, and Tor Always. They also cover a different lease or prepared identity, a mismatched opened binding, byte changes, inode replacement, and refusal after restoration. The preserved opened binding check is read-only. The ordinary Ready write still updates the manifest, and a later mounted qualified startup must use the read-only check to preserve its captured inode. [Design](../phases/peer-installed-recipient-daemon.md)
 
 The composed source `fe0f28f` passed all three Ready scope tests in 18.33 s, all 23 identity tests in 1.25 s, and strict all-target native Clippy with the installed-checks feature. All 36 selectors in the trusted-master core workflow passed on local Linux AMD64 in 118.09 s across 160 test executions, including overlapping selectors. The publication rebase preserves the reviewed Cargo inputs, workflow, and Rust source byte for byte. [Integrated review](../reviews/peer-installed-recipient-daemon.md)
+
+## Recovered recipient inventory
+
+On Linux AMD64, exact source `9adbe329e2e4ebbbaff0303eb60993ee15622f0f` passed scoped rustfmt, whitespace checks, and `cargo clippy --offline --locked -p marmish-native --all-targets -j2 -- -D warnings`. The exact native library test binary passed the following groups.
+
+| Filter | Result |
+| --- | --- |
+| `peer_receiver_inventory` | 3 passed in 1.56 s |
+| `peer_installed_custody` | 6 passed in 3.10 s |
+| `joined_retirement` | 3 passed in 0.38 s |
+
+The focused tests reopened the exact cursor and retained identified or ambiguous charges under the same profile lease. They cover persisted rows, rollback of sampled time, stage file identity and main extent, unsafe sidecars or private directory replacement, and an unfinished receiver snapshot. The inventory reserves 49 MiB for the stock cursor and caps the aggregate at 128 MiB. Known stays charged and unavailable. A measured managed rollback journal remains fenced for native use until the dispatcher can verify it independently. The test-only owner grants no network or native join capability. Installed startup and macOS remain unverified. [Code review](../reviews/peer-installed-recipient-daemon.md)
