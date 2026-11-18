@@ -1471,12 +1471,12 @@ fn classify_auth_timer(
     if authority.fence_state() != FenceState::Live {
         return Err(UNAVAILABLE);
     }
+    if challenged.load(Ordering::Acquire) {
+        return Err(Error::Timeout);
+    }
     if *quiet == QuietObservation::Watching {
         *quiet = QuietObservation::Elapsed;
         return Err(Error::Transport(RELAY_AUTH_CHALLENGE_TIMEOUT));
-    }
-    if challenged.load(Ordering::Acquire) {
-        return Err(Error::Timeout);
     }
     Err(UNAVAILABLE)
 }

@@ -184,7 +184,10 @@ on the same relay, and an end-of-stored-events response can arrive before AUTH.
 `terminal_bootstrap_no_challenge` means a later encrypted Terminal exchange
 did not receive its peer's response after relay authentication.
 `terminal_transport_unavailable` is the generic failure when the relay inbox
-cannot be qualified. After the CLI issues a takeover, an ambiguous response
+cannot be qualified. If the whole attach budget expires during bootstrap,
+`terminal_attach_deadline` applies. An older CLI may show `terminal_start_response`
+for the new diagnostic, and an older daemon can still report the generic
+transport failure. After the CLI issues a takeover, an ambiguous response
 reports `terminal_takeover_uncertain`. The CLI does not retry that takeover.
 
 The command history feature upgrades the encrypted profile journal. To keep a rollback path,
