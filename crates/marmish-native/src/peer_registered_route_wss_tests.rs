@@ -2,6 +2,8 @@ use super::{Keys, PeerRecipientPort, ReceiverRouteAdmission, time_limit};
 use crate::{
     command_config::CommandConfig,
     identity::ProfileLease,
+    peer_candidate_startup,
+    peer_invitation::NativeFence,
     peer_relay_trust::{
         candidate_registration::{ReceiverPreflight, RegistrationFailure},
         qualified_manual_recipient_fixture,
@@ -14,7 +16,7 @@ use std::{
     path::Path,
     process::{Command, Stdio},
     ptr,
-    sync::Arc,
+    sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
@@ -37,6 +39,17 @@ fn peer_registered_route_private_wss_handoff() {
         "dropped_registration",
         "revoked_before_open",
         "revoked_live",
+    ]);
+}
+
+#[test]
+#[ignore = "uses fresh subprocesses and qualified private WSS"]
+fn peer_registered_native_window_private_wss() {
+    run_cases(&[
+        "native_fatal",
+        "native_cancel",
+        "native_horizon",
+        "native_no_fatal",
     ]);
 }
 
@@ -86,6 +99,18 @@ async fn registered_route_subprocess() {
         qualified_manual_recipient_fixture(founder.public_key(), third, parent).await;
     assert_eq!(relay.qualification_connections(), 4);
     let account = material.public_key();
+    if case == "native_no_fatal" {
+        let admission = ReceiverRouteAdmission::fixture(lease.clone(), &material).unwrap();
+        let mut port = PeerRecipientPort::open(admission, time_limit())
+            .await
+            .unwrap();
+        assert!(relay.authenticated(account));
+        assert_eq!(relay.recipient_requests(account), 1);
+        assert_native_port_retired(&mut port);
+        assert_eq!(relay.all_publication_attempts(), 0);
+        relay.stop().await;
+        return;
+    }
     let config = CommandConfig::load(lease.root()).unwrap();
     let mut registered = ReceiverPreflight::prepare(&lease, &material, &config)
         .unwrap()
@@ -95,6 +120,60 @@ async fn registered_route_subprocess() {
     let forwarding = registered.forwarding_verifier();
     let (_, _, custody) = registered.take_command_fence().unwrap().into_parts();
     let mut attached = registered.attach(&lease, &material).unwrap();
+    if let Some(case) = case.strip_prefix("native_") {
+        let token = attached.take_route(&lease, &material).unwrap();
+        let (admission, _) = ReceiverRouteAdmission::registered(token).unwrap();
+        let mut port = PeerRecipientPort::open(admission, time_limit())
+            .await
+            .unwrap();
+        assert!(relay.authenticated(account));
+        assert_eq!(relay.recipient_requests(account), 1);
+        let (startup, listener, worker) = peer_candidate_startup::pair();
+        startup.ordinary_ready();
+        listener.registered();
+        let ready = worker.ready().await.unwrap();
+        let (window, horizon) = port
+            .use_current_native(|scope| {
+                assert_eq!(scope.account(), account);
+                assert_eq!(scope.origin(), relay.url.as_str());
+                let horizon = scope.horizon();
+                assert!(horizon > tokio::time::Instant::now());
+                let (qualified_end, tls_end) = scope.test_live_ends_exclusive();
+                let route_end = qualified_end.min(tls_end);
+                assert!(route_end > scope.wall().as_secs());
+                let window = scope
+                    .window(
+                        ready.readiness(),
+                        Arc::new(AtomicBool::new(false)),
+                        route_end + 30,
+                    )
+                    .unwrap();
+                assert_eq!(window.test_end_exclusive(), Duration::from_secs(route_end));
+                (window, horizon)
+            })
+            .unwrap();
+        assert!(NativeFence::Candidate(&window).check().is_ok());
+        if case == "horizon" {
+            tokio::time::pause();
+            tokio::time::advance(horizon.saturating_duration_since(tokio::time::Instant::now()))
+                .await;
+            assert!(NativeFence::Candidate(&window).check().is_err());
+            assert_native_port_retired(&mut port);
+            tokio::time::resume();
+        } else {
+            match case {
+                "fatal" => custody.report(),
+                "cancel" => drop(attached),
+                _ => panic!("unrecognized registered native-window test case"),
+            }
+            assert!(NativeFence::Candidate(&window).check().is_err());
+            assert_native_port_retired(&mut port);
+        }
+        assert_eq!(forwarding.recheck_default().is_err(), case == "fatal");
+        assert_eq!(relay.all_publication_attempts(), 0);
+        relay.stop().await;
+        return;
+    }
     if let Some(case) = case.strip_prefix("fatal_") {
         let token = attached.take_route(&lease, &material).unwrap();
         let (admission, drain) = ReceiverRouteAdmission::registered(token).unwrap();
@@ -273,6 +352,19 @@ async fn registered_route_subprocess() {
         verify_ordinary_sql(lease.root());
     }
     relay.stop().await;
+}
+
+fn assert_native_port_retired(port: &mut PeerRecipientPort) {
+    use super::Failure;
+
+    assert_eq!(
+        port.use_current_native(|_| panic!("retired native scope exposed")),
+        Err(Failure::Retired)
+    );
+    assert_eq!(
+        port.use_current_recipient(|_, _, _| panic!("retired recipient exposed")),
+        Err(Failure::Retired)
+    );
 }
 
 fn replace_config_inode(root: &Path) {

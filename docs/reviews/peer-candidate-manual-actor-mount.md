@@ -30,3 +30,18 @@ Pin the independently reviewed composed publication base before source work
 and coordinate ownership of the daemon, receiver, and managed Consent turns.
 This review covered design only. It did not build or test the candidate or
 qualify any installed activation, cross-platform behavior, or latency claim.
+
+## Checked native route window
+
+Claude Code Sonnet 5.5 Auto approved exact source
+`de4c852cae819ce391f6153d3fd6db68f1a343c3` in session
+`bfe61129-9a98-4876-807f-61e9b67469b8`. The reviewer inspected the complete
+window delta and independently ran eight deterministic fence and startup
+cases using the author's archived executable. The author ran the private WSS
+cases. See [the validation record](../validation/peer-candidate-manual-native-window.md).
+
+The earlier review requested exercising the actual registered WSS port and
+showing both the signed/physical clamp and the route's authority cuts. The
+approved revision adds those cases. At mount, the actor must supply the
+readiness and stop handles held by its own owner generation. The fixture
+privately tests a missing Fatal through refusal and zero publications.
