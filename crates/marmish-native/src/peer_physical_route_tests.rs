@@ -147,6 +147,44 @@ pub(crate) async fn qualified_recipient_fixture(
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) async fn qualified_manual_recipient_fixture(
+    founder: PublicKey,
+    third: PublicKey,
+    parent: &Path,
+) -> (
+    Relay,
+    tempfile::TempDir,
+    Arc<ProfileLease>,
+    IdentityMaterial,
+) {
+    qualified_control_fixture(
+        founder,
+        third,
+        Duration::from_secs(90),
+        Some(parent),
+        |relay, temp, lease| {
+            QualificationFixture::from_ready_configured(
+                relay,
+                temp,
+                lease,
+                |lease, origin, trust| {
+                    let config = serde_json::json!({
+                        "version":1, "role":"client", "relays":[origin], "tor":"off",
+                        "trusted_remotes":[], "execution_clients":[],
+                        "command_policy":{"version":1}, "cwd":null, "limits":{}, "aliases":{},
+                        "peer":{"relay":origin, "relay_trust":trust, "receive":{"mode":"manual"}}
+                    });
+                    let bytes = serde_json::to_vec(&config).unwrap();
+                    private_write(&lease.root().join(CONFIG), &bytes);
+                    crate::command_config::CommandConfig::from_bytes(&bytes).unwrap()
+                },
+            )
+        },
+    )
+    .await
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub(crate) async fn qualified_founder_fixture(
     recipient: PublicKey,
     third: PublicKey,
