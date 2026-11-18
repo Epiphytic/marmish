@@ -77,7 +77,15 @@ fn scope(root: &Path) -> (Arc<ProfileLease>, IdentityMaterial, CommandConfig) {
 
 #[test]
 fn candidate_registration_scope_and_irreversible_dispatch() {
-    for mode in ["local", "ordinary", "topology", "displaced", "dead_lease"] {
+    for mode in [
+        "local",
+        "ordinary",
+        "topology",
+        "displaced",
+        "dead_lease",
+        "displaced_before_take",
+        "displaced_after_take",
+    ] {
         let root = start_profile();
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args(["--ignored", "--exact", CHILD, "--nocapture"])
@@ -193,13 +201,43 @@ fn registration_subprocess() {
                 Err(RegistrationFailure::Indeterminate)
             ));
         }
+        "displaced_before_take" => {
+            let mut attached = registered.attach(&lease, &material).unwrap();
+            let cancel = attached.scope.ready.profile.cancel.clone();
+            let config = lease.root().join("config.json");
+            let mut changed = fs::read(&config).unwrap();
+            changed.push(b'\n');
+            fs::write(config, changed).unwrap();
+            displace_default();
+            assert!(matches!(
+                attached.take_route(&lease, &material),
+                Err(RegistrationFailure::Indeterminate)
+            ));
+            assert!(attached.route.is_some());
+            assert!(!cancel.is_cancelled());
+        }
+        "displaced_after_take" => {
+            let mut attached = registered.attach(&lease, &material).unwrap();
+            let cancel = attached.scope.ready.profile.cancel.clone();
+            assert!(matches!(
+                attached.take_route_checked(&lease, &material, || {
+                    assert!(!cancel.is_cancelled());
+                    displace_default();
+                }),
+                Err(RegistrationFailure::Indeterminate)
+            ));
+            assert!(attached.route.is_none());
+            assert!(cancel.is_cancelled());
+        }
         "dead_lease" => {
             let RegisteredReceiver {
                 scope: old_scope,
                 dispatch,
+                route,
             } = registered;
             lease.cleanup_runtime().unwrap();
             drop(old_scope);
+            drop(route);
             drop(lease);
             let (new, material, config) = scope(Path::new(&root));
             let mut prepared = ReceiverPreflight::prepare(&new, &material, &config)
@@ -222,6 +260,17 @@ fn registration_subprocess() {
         _ => panic!("unrecognized registration test case"),
     }
     lease.cleanup_runtime().unwrap();
+}
+
+fn displace_default() {
+    // SAFETY: the isolated subprocess owns the default mutation and the
+    // initialized stock VFS and registered shim outlive the subprocess.
+    unsafe {
+        let stock = sql::sqlite3_vfs_find(c"unix".as_ptr());
+        assert!(!stock.is_null());
+        assert_ne!(sql::sqlite3_vfs_find(ptr::null()), stock);
+        assert_eq!(sql::sqlite3_vfs_register(stock, 1), sql::SQLITE_OK);
+    }
 }
 
 fn verify_sticky_displacement(

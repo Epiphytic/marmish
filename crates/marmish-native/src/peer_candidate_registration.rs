@@ -12,6 +12,7 @@ use crate::{
         candidate_registration::{self as quota, RegisteredDispatch},
     },
 };
+use nostr::key::Keys;
 use std::{
     fs::File,
     io,
@@ -53,13 +54,18 @@ impl ReceiverPreflight {
         material: &IdentityMaterial,
     ) -> std::result::Result<RegisteredReceiver, RegistrationFailure> {
         let (dispatch, directories) = quota::register(&mut self, lease, material)?;
+        let Self {
+            scope: ready,
+            route,
+        } = self;
         Ok(RegisteredReceiver {
             scope: RegisteredScope {
                 forwarding: dispatch.forwarding_verifier(),
-                prepared: self,
+                ready,
                 directories,
             },
             dispatch,
+            route,
         })
     }
 
@@ -78,6 +84,7 @@ impl ReceiverPreflight {
 pub(crate) struct RegisteredReceiver {
     scope: RegisteredScope,
     dispatch: RegisteredDispatch,
+    route: CheckedPeerRoute,
 }
 
 impl RegisteredReceiver {
@@ -90,21 +97,28 @@ impl RegisteredReceiver {
         lease: &Arc<ProfileLease>,
         material: &IdentityMaterial,
     ) -> std::result::Result<(), RegistrationFailure> {
-        self.scope.recheck(lease, material, |directories| {
-            self.dispatch.recheck_lease(lease, directories)
-        })
+        self.scope.forwarding.recheck_default()?;
+        let result =
+            self.scope
+                .check_local(lease, material, Some(&mut self.route), |directories| {
+                    self.dispatch.recheck_lease(lease, directories)
+                });
+        self.scope.forwarding.recheck_default()?;
+        result
     }
 
     pub(crate) fn attach<'lease>(
         mut self,
         lease: &'lease Arc<ProfileLease>,
-        material: &IdentityMaterial,
+        material: &'lease IdentityMaterial,
     ) -> std::result::Result<LocalReceiverRegistration<'lease>, RegistrationFailure> {
         self.recheck(lease, material)?;
         let quota = self.dispatch.attach(lease, &self.scope.directories)?;
         Ok(LocalReceiverRegistration {
             quota,
             scope: self.scope,
+            route: Some(self.route),
+            material,
         })
     }
 }
@@ -112,6 +126,8 @@ impl RegisteredReceiver {
 pub(crate) struct LocalReceiverRegistration<'lease> {
     quota: ReceiverQuota<'lease>,
     scope: RegisteredScope,
+    route: Option<CheckedPeerRoute>,
+    material: &'lease IdentityMaterial,
 }
 
 impl<'lease> LocalReceiverRegistration<'lease> {
@@ -120,9 +136,62 @@ impl<'lease> LocalReceiverRegistration<'lease> {
         lease: &Arc<ProfileLease>,
         material: &IdentityMaterial,
     ) -> std::result::Result<(), RegistrationFailure> {
-        self.scope.recheck(lease, material, |directories| {
-            self.quota.recheck_registered_lease(lease, directories)
+        self.scope.forwarding.recheck_default()?;
+        let result = self.check_local(lease, material);
+        self.scope.forwarding.recheck_default()?;
+        result
+    }
+
+    pub(crate) fn take_route(
+        &mut self,
+        lease: &Arc<ProfileLease>,
+        material: &IdentityMaterial,
+    ) -> std::result::Result<RegisteredRoute, RegistrationFailure> {
+        self.take_route_checked(
+            lease,
+            material,
+            #[cfg(test)]
+            || {},
+        )
+    }
+
+    fn take_route_checked(
+        &mut self,
+        lease: &Arc<ProfileLease>,
+        material: &IdentityMaterial,
+        #[cfg(test)] after_take: impl FnOnce(),
+    ) -> std::result::Result<RegisteredRoute, RegistrationFailure> {
+        self.scope.forwarding.recheck_default()?;
+        if self.route.is_none() {
+            return Err(RegistrationFailure::LocalUnavailable);
+        }
+        let taken = self.check_local(lease, material).and_then(|()| {
+            self.route
+                .take()
+                .ok_or(RegistrationFailure::LocalUnavailable)
+        });
+        #[cfg(test)]
+        after_take();
+        self.scope.forwarding.recheck_default()?;
+        Ok(RegisteredRoute {
+            route: taken?,
+            signer: self.material.signer(),
         })
+    }
+
+    fn check_local(
+        &mut self,
+        lease: &Arc<ProfileLease>,
+        material: &IdentityMaterial,
+    ) -> std::result::Result<(), RegistrationFailure> {
+        if !std::ptr::eq(self.material, material) {
+            self.scope.ready.profile.cancel.cancel();
+            return Err(RegistrationFailure::LocalUnavailable);
+        }
+        self.scope
+            .check_local(lease, material, self.route.as_mut(), |directories| {
+                self.quota.recheck_registered_lease(lease, directories)
+            })
     }
 
     pub(crate) fn quota(&self) -> &ReceiverQuota<'lease> {
@@ -130,25 +199,48 @@ impl<'lease> LocalReceiverRegistration<'lease> {
     }
 }
 
+impl Drop for LocalReceiverRegistration<'_> {
+    fn drop(&mut self) {
+        self.scope.ready.profile.cancel.cancel();
+    }
+}
+
+pub(crate) struct RegisteredRoute {
+    route: CheckedPeerRoute,
+    signer: Arc<Keys>,
+}
+
+impl RegisteredRoute {
+    pub(in crate::peer_relay_trust) fn into_parts(self) -> (CheckedPeerRoute, Arc<Keys>) {
+        (self.route, self.signer)
+    }
+}
+
 struct RegisteredScope {
     forwarding: ForwardingVerifier,
-    prepared: ReceiverPreflight,
+    ready: ReadyReceiverScope,
     directories: CheckedDirectories,
 }
 
 impl RegisteredScope {
-    fn recheck(
-        &mut self,
+    fn check_local(
+        &self,
         lease: &Arc<ProfileLease>,
         material: &IdentityMaterial,
+        route: Option<&mut CheckedPeerRoute>,
         check_topology: impl FnOnce(&CheckedDirectories) -> std::result::Result<(), &'static str>,
     ) -> std::result::Result<(), RegistrationFailure> {
-        self.forwarding.recheck_default()?;
-        let local = self.prepared.recheck(lease, material).is_ok()
-            && check_topology(&self.directories).is_ok();
-        self.forwarding.recheck_default()?;
-        if !local {
-            self.prepared.scope.profile.cancel.cancel();
+        let checked = (|| {
+            self.ready.recheck(lease)?;
+            lease.check_prepared_peer_identity(material)?;
+            if let Some(route) = route {
+                route.recheck_material(&self.ready.config, material)?;
+            }
+            check_topology(&self.directories).map_err(|_| PROFILE_CHANGED)?;
+            self.ready.recheck(lease)
+        })();
+        if checked.is_err() {
+            self.ready.profile.cancel.cancel();
             return Err(RegistrationFailure::LocalUnavailable);
         }
         Ok(())

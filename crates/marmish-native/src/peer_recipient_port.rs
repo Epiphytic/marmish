@@ -292,7 +292,12 @@ impl PeerRecipientPort {
         })
     }
 
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    #[allow(dead_code, reason = "candidate actor mounting is reviewed separately")]
     pub(in crate::peer_invitation) fn use_current_recipient<T>(
         &mut self,
         use_checked: impl FnOnce(PublicKey, &str, u64) -> T,

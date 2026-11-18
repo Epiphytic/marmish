@@ -103,7 +103,10 @@ impl CheckedPeerRoute {
         material: &IdentityMaterial,
     ) -> Result<()> {
         let result = (|| {
-            if !self.qualification.matches_config(config) {
+            if !self.qualification.matches_config(config)
+                || self.account != material.public_key()
+                || self.device_slot != *material.device_slot()
+            {
                 return Err(super::PROFILE_CHANGED);
             }
             let key = self
@@ -151,6 +154,21 @@ pub(crate) struct ReceiverRouteAdmission {
     reason = "receiver admission waits for the installed quota and cursor mount"
 )]
 impl ReceiverRouteAdmission {
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn registered(
+        token: super::candidate_registration::RegisteredRoute,
+    ) -> Result<Self> {
+        let (route, signer) = token.into_parts();
+        if signer.public_key() != route.account {
+            return Err(Error::Invalid("peer_identity_binding"));
+        }
+        Ok(Self { route, signer })
+    }
+
     #[cfg(test)]
     pub(crate) fn fixture(lease: Arc<ProfileLease>, material: &IdentityMaterial) -> Result<Self> {
         Ok(Self {
