@@ -1494,3 +1494,11 @@ Peer work. Checked filesystem retirement releases the reservation only
 after exact file absence while retaining the terminal reason and replay
 fence. Decline also applies a cooldown to subsequent offers and
 provisioning. This increment records native membership as Unconfirmed.
+
+The [native SelfRemove proof](validation/peer-native-leave.md) exercises
+both participants with the explicit MLS SelfRemove capability required by
+the locked OpenMLS. The founder incorporates the recipient's exact proposal
+through native maintenance. The recipient independently verifies its
+removal after closing and reopening SQLCipher. The fixture uses a local
+transport sink and an in-memory seal. Durable terminal custody and
+installed capability negotiation still need validation.
