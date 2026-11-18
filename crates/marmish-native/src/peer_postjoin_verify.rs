@@ -15,7 +15,7 @@ use cgka_traits::maintenance::{
     MaintenancePhase, MaintenanceTrigger, PostJoinHistoryFetchOutcome,
 };
 use cgka_traits::storage::{
-    GroupStorage, MaintenanceStorage, OutboundFanoutStorage, StorageProvider,
+    GroupStorage, MaintenanceStorage, MessageStorage, OutboundFanoutStorage, StorageProvider,
 };
 use cgka_traits::transport_adapter::{FanoutPendingKind, TransportEndpointFailureKind};
 use cgka_traits::{
@@ -32,8 +32,19 @@ use openmls::prelude::{GroupId as MlsGroupId, MlsGroup};
 use sha2::{Digest, Sha256};
 use transport_nostr_peeler::NostrTransportEvent;
 
+use super::store::consent_checkpoint::provisioning::prepared_consent::custody::publication::{
+    Kind, Step, UncertainPostJoin,
+};
+
 const MAX_SIGNED_EVENT_BYTES: usize = 65_536;
 const MAX_REFUSALS: u32 = 2;
+const MAX_RECOVERY_ATTEMPTS: u32 = MAX_REFUSALS + 1;
+
+#[derive(Clone, Copy)]
+enum Exposure {
+    BeforeSend,
+    PossiblyExposed,
+}
 
 pub(super) struct Scope<'a> {
     pub(super) image: &'a Path,
@@ -92,7 +103,7 @@ struct NativePending {
     reference: PendingStateRef,
 }
 
-pub(super) struct Baseline {
+pub(crate) struct Baseline {
     image: PathBuf,
     inode: (u64, u64),
     group: GroupId,
@@ -103,11 +114,56 @@ pub(super) struct Baseline {
     wall: u64,
     authority: Authority,
     obligation: MessageId,
+    welcome: MessageId,
 }
 
 impl Baseline {
     pub(super) fn obligation_id(&self) -> &MessageId {
         &self.obligation
+    }
+
+    pub(super) fn group(&self) -> &GroupId {
+        &self.group
+    }
+
+    pub(super) fn recipient(&self) -> &MemberId {
+        &self.account
+    }
+
+    pub(super) fn founder(&self) -> &MemberId {
+        &self.founder
+    }
+
+    pub(super) fn route(&self) -> [u8; 32] {
+        self.authority.route.nostr_group_id
+    }
+
+    pub(super) fn origin(&self) -> &str {
+        &self.authority.route.relays[0]
+    }
+
+    pub(super) fn inode(&self) -> (u64, u64) {
+        self.inode
+    }
+
+    pub(super) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(super) fn deadline(&self) -> u64 {
+        self.deadline
+    }
+
+    pub(super) fn welcome(&self) -> &MessageId {
+        &self.welcome
+    }
+
+    pub(super) fn source(&self) -> &EpochPin {
+        &self.authority.pin
+    }
+
+    pub(super) fn recipient_leaf(&self) -> u32 {
+        self.authority.local_leaf
     }
 
     fn check_image(&self, wall: u64) -> Result<()> {
@@ -136,7 +192,7 @@ impl Baseline {
 }
 
 /// Only a coherent retained native cut can produce this capability.
-pub(super) struct Capture {
+pub(crate) struct Capture {
     request: TransportPublishRequest,
     evolution: MessageId,
     obligation: MessageId,
@@ -164,6 +220,19 @@ impl Capture {
 
     pub(super) fn pending_ref(&self) -> &PendingStateRef {
         &self.pending
+    }
+
+    pub(super) fn event_id(&self) -> [u8; 32] {
+        self.request
+            .message
+            .id
+            .as_slice()
+            .try_into()
+            .expect("verified signed Nostr event ID")
+    }
+
+    pub(super) fn signed_digest(&self) -> [u8; 32] {
+        Sha256::digest(&self.request.message.payload).into()
     }
 
     pub(super) fn target(&self) -> &EpochPin {
@@ -248,6 +317,7 @@ where
         wall,
         authority,
         obligation: obligation.id,
+        welcome: scope.welcome.clone(),
     })
 }
 
@@ -270,7 +340,7 @@ where
     if refusals != 1 {
         return Err(Refusal::Invalid);
     }
-    let capture = verify_pending(runtime, baseline, candidate, wall)?;
+    let capture = verify_pending(runtime, baseline, candidate, Exposure::BeforeSend, wall)?;
     if capture.attempts != refusals {
         return Err(Refusal::Invalid);
     }
@@ -298,11 +368,15 @@ where
     S: TransportRoutingPolicy,
     Q: KeyPackagePublisher,
 {
-    let capture = verify_pending(runtime, baseline, &prior.request, wall)?;
-    if !capture.same_publication(prior)
+    let capture = verify_pending(
+        runtime,
+        baseline,
+        &prior.request,
+        Exposure::BeforeSend,
+        wall,
+    )?;
+    if !advances_exact_capture(prior, &capture)
         || !(prior.attempts..=prior.attempts + 1).contains(&capture.attempts)
-        || capture.last_attempt_ms < prior.last_attempt_ms
-        || (capture.attempts == prior.attempts && capture.last_attempt_ms != prior.last_attempt_ms)
     {
         return Err(Refusal::Invalid);
     }
@@ -315,11 +389,166 @@ where
     Ok(capture)
 }
 
+fn advances_exact_capture(prior: &Capture, candidate: &Capture) -> bool {
+    candidate.same_publication(prior)
+        && candidate.last_attempt_ms >= prior.last_attempt_ms
+        && (candidate.attempts != prior.attempts
+            || candidate.last_attempt_ms == prior.last_attempt_ms)
+}
+
+pub(super) struct RecoveredPostJoin {
+    capture: Capture,
+}
+
+impl RecoveredPostJoin {
+    pub(super) fn capture(&self) -> &Capture {
+        &self.capture
+    }
+}
+
+/// Reconstitute one pending request only after the journal proves that this
+/// exact capture was durably armed. The founder must have processed it at
+/// the target pin before the owner can offer this capture to the retry gate.
+pub(super) fn recover_exposed<A, R, K, F, S, Q>(
+    runtime: &AccountDeviceRuntime<A, R, K>,
+    founder: &AccountDeviceRuntime<F, S, Q>,
+    baseline: &Baseline,
+    prior: &Capture,
+    witness: &UncertainPostJoin,
+    wall: u64,
+) -> Result<RecoveredPostJoin>
+where
+    A: TransportAdapter,
+    R: TransportRoutingPolicy,
+    K: KeyPackagePublisher,
+    F: TransportAdapter,
+    S: TransportRoutingPolicy,
+    Q: KeyPackagePublisher,
+{
+    baseline.check_image(wall)?;
+    let publication = witness.publication();
+    let (_, file) = publication.stage();
+    let (device, inode) = baseline.inode();
+    let candidate = publication.candidate().ok_or(Refusal::Invalid)?;
+    let source = publication.source_pin();
+    let target = publication.target_pin().ok_or(Refusal::Invalid)?;
+    let armed_at = publication.attempt_wall().ok_or(Refusal::Invalid)?;
+    if publication.kind() != Kind::PostJoin
+        || publication.step() != (Step::Uncertain { number: 1 })
+        || publication.generation() != baseline.generation()
+        || publication.deadline() != baseline.deadline()
+        || publication.group() != baseline.group().as_slice()
+        || publication.recipient().to_bytes().as_slice() != baseline.recipient().as_slice()
+        || publication.founder().to_bytes().as_slice() != baseline.founder().as_slice()
+        || publication.route() != baseline.route()
+        || publication.origin() != baseline.origin()
+        || publication.semantic_id() != baseline.obligation_id().as_slice()
+        || file.device != device.to_be_bytes()
+        || file.inode != inode.to_be_bytes()
+        || candidate.event_id != prior.event_id()
+        || candidate.signed_digest != prior.signed_digest()
+        || source.ordinal != baseline.source().epoch.0
+        || source.authenticator != baseline.source().identity
+        || source.recipient_leaf != baseline.recipient_leaf()
+        || target.ordinal != prior.target().epoch.0
+        || target.authenticator != prior.target().identity
+        || target.recipient_leaf != baseline.recipient_leaf()
+        || armed_at < prior.last_attempt_ms / 1_000
+        || armed_at > wall
+    {
+        return Err(Refusal::Invalid);
+    }
+
+    let recovered = verify_pending(
+        runtime,
+        baseline,
+        prior.request(),
+        Exposure::PossiblyExposed,
+        wall,
+    )?;
+    if !advances_exact_capture(prior, &recovered)
+        || prior.attempts.checked_add(1) != Some(recovered.attempts)
+        || recovered.last_attempt_ms / 1_000 < armed_at
+    {
+        return Err(Refusal::Invalid);
+    }
+    verify_founder_cut(
+        founder,
+        baseline.group(),
+        baseline.founder(),
+        &baseline.authority,
+        recovered.target(),
+        Some(&recovered.request().message.id),
+    )?;
+    baseline.check_image(wall)?;
+    Ok(RecoveredPostJoin { capture: recovered })
+}
+
+pub(crate) struct ConfirmedRotation<'a> {
+    baseline: &'a Baseline,
+    capture: &'a Capture,
+}
+
+impl<'a> ConfirmedRotation<'a> {
+    pub(super) fn baseline(&self) -> &'a Baseline {
+        self.baseline
+    }
+
+    pub(super) fn capture(&self) -> &'a Capture {
+        self.capture
+    }
+}
+
 pub(super) fn post_confirm<A, R, K, F, S, Q>(
     runtime: &AccountDeviceRuntime<A, R, K>,
     founder: &AccountDeviceRuntime<F, S, Q>,
     baseline: &Baseline,
     capture: &Capture,
+    wall: u64,
+) -> Result<()>
+where
+    A: TransportAdapter,
+    R: TransportRoutingPolicy,
+    K: KeyPackagePublisher,
+    F: TransportAdapter,
+    S: TransportRoutingPolicy,
+    Q: KeyPackagePublisher,
+{
+    verify_confirmation(runtime, founder, baseline, capture, None, wall)
+}
+
+pub(super) fn confirm_rotation<'a, A, R, K, F, S, Q>(
+    runtime: &AccountDeviceRuntime<A, R, K>,
+    founder: &AccountDeviceRuntime<F, S, Q>,
+    baseline: &'a Baseline,
+    capture: &'a Capture,
+    wall: u64,
+) -> Result<ConfirmedRotation<'a>>
+where
+    A: TransportAdapter,
+    R: TransportRoutingPolicy,
+    K: KeyPackagePublisher,
+    F: TransportAdapter,
+    S: TransportRoutingPolicy,
+    Q: KeyPackagePublisher,
+{
+    verify_confirmation(
+        runtime,
+        founder,
+        baseline,
+        capture,
+        Some(&capture.request().message.id),
+        wall,
+    )?;
+    Ok(ConfirmedRotation { baseline, capture })
+}
+
+fn verify_confirmation<A, R, K, F, S, Q>(
+    runtime: &AccountDeviceRuntime<A, R, K>,
+    founder: &AccountDeviceRuntime<F, S, Q>,
+    baseline: &Baseline,
+    capture: &Capture,
+    founder_message: Option<&MessageId>,
     wall: u64,
 ) -> Result<()>
 where
@@ -355,7 +584,14 @@ where
     {
         return Err(Refusal::Invalid);
     }
-    verify_founder(founder, &baseline.group, &baseline.founder, &rows.authority)?;
+    verify_founder_cut(
+        founder,
+        baseline.group(),
+        baseline.founder(),
+        &rows.authority,
+        &rows.authority.pin,
+        founder_message,
+    )?;
     baseline.check_image(wall)
 }
 
@@ -377,6 +613,7 @@ fn verify_pending<A, R, K>(
     runtime: &AccountDeviceRuntime<A, R, K>,
     baseline: &Baseline,
     candidate: &TransportPublishRequest,
+    exposure: Exposure,
     wall: u64,
 ) -> Result<Capture>
 where
@@ -409,7 +646,15 @@ where
     if native.reference != pending_ref || native.target.epoch != evolution.target_epoch {
         return Err(Refusal::Invalid);
     }
-    let capture = verify_fanout(baseline, fanout, pending, pending_ref, candidate, wall)?;
+    let capture = verify_fanout(
+        baseline,
+        fanout,
+        pending,
+        pending_ref,
+        candidate,
+        exposure,
+        wall,
+    )?;
     baseline.check_image(wall)?;
     Ok(Capture {
         request: candidate.clone(),
@@ -455,6 +700,7 @@ fn verify_fanout(
     pending: &PendingCommit,
     pending_ref: PendingStateRef,
     candidate: &TransportPublishRequest,
+    exposure: Exposure,
     wall: u64,
 ) -> Result<(u32, u64, u64)> {
     let durable = fanout.request();
@@ -500,7 +746,6 @@ fn verify_fanout(
         return Err(Refusal::Invalid);
     }
 
-    let failure = fanout.target_failure(0).ok_or(Refusal::Invalid)?;
     let attempts = fanout.target_attempt_count(0);
     let first = fanout.first_attempt_at_ms().ok_or(Refusal::Invalid)?;
     let last = fanout
@@ -518,12 +763,8 @@ fn verify_fanout(
         || fanout.host_change_kind().is_some()
         || fanout.application_message().is_some()
         || !fanout.pending_post_confirmation_welcomes().is_empty()
-        || fanout.target_statuses() != [FanoutTargetStatus::RetryableUnavailable]
-        || fanout.possible_exposure()
-        || !failure.pre_send
-        || failure.kind != TransportEndpointFailureKind::RetryableUnavailable
-        || &failure.endpoint != endpoint
-        || !(1..=MAX_REFUSALS).contains(&attempts)
+        || !exact_exposure(fanout, pending, endpoint, exposure)
+        || !(1..=exposure.max_attempts()).contains(&attempts)
         || first > last
         || first / 1_000 < baseline.wall
         || last / 1_000 > wall
@@ -532,13 +773,62 @@ fn verify_fanout(
         || pending.intent_kind.is_some()
         || pending.state != PendingCommitState::Sending
         || pending.endpoint_count != 1
-        || pending.owed_endpoints.as_slice() != endpoints
-        || !pending.unconfirmed_endpoints.is_empty()
         || !pending.refused_endpoints.is_empty()
     {
         return Err(Refusal::Invalid);
     }
     Ok((attempts, first, last))
+}
+
+impl Exposure {
+    fn max_attempts(self) -> u32 {
+        match self {
+            Self::BeforeSend => MAX_REFUSALS,
+            Self::PossiblyExposed => MAX_RECOVERY_ATTEMPTS,
+        }
+    }
+}
+
+fn exact_exposure(
+    fanout: &OutboundFanout,
+    pending: &PendingCommit,
+    endpoint: &cgka_traits::TransportEndpoint,
+    exposure: Exposure,
+) -> bool {
+    let failure = fanout.target_failure(0);
+    let endpoints = std::slice::from_ref(endpoint);
+    match exposure {
+        Exposure::BeforeSend => {
+            fanout.target_statuses() == [FanoutTargetStatus::RetryableUnavailable]
+                && !fanout.possible_exposure()
+                && failure.is_some_and(|failure| {
+                    failure.pre_send
+                        && failure.kind == TransportEndpointFailureKind::RetryableUnavailable
+                        && &failure.endpoint == endpoint
+                })
+                && pending.owed_endpoints.as_slice() == endpoints
+                && pending.unconfirmed_endpoints.is_empty()
+        }
+        Exposure::PossiblyExposed => {
+            let exposure_recorded = match fanout.target_statuses() {
+                [FanoutTargetStatus::PossiblyExposed] => failure.is_some_and(|failure| {
+                    !failure.pre_send
+                        && failure.kind == TransportEndpointFailureKind::PossiblyExposed
+                        && &failure.endpoint == endpoint
+                        && failure.rejection_category.is_none()
+                        && failure.size_class.is_none()
+                }),
+                // A process cut can leave the frozen fanout durably Attempting.
+                // Independent founder readback still has to prove receipt.
+                [FanoutTargetStatus::Attempting] => failure.is_none(),
+                _ => false,
+            };
+            exposure_recorded
+                && fanout.possible_exposure()
+                && pending.owed_endpoints.is_empty()
+                && pending.unconfirmed_endpoints.as_slice() == endpoints
+        }
+    }
 }
 
 fn read_pending_epoch<A, R, K>(
@@ -648,6 +938,22 @@ where
     R: TransportRoutingPolicy,
     K: KeyPackagePublisher,
 {
+    verify_founder_cut(founder, group, account, recipient, &recipient.pin, None)
+}
+
+fn verify_founder_cut<A, R, K>(
+    founder: &AccountDeviceRuntime<A, R, K>,
+    group: &GroupId,
+    account: &MemberId,
+    recipient: &Authority,
+    pin: &EpochPin,
+    processed: Option<&MessageId>,
+) -> Result<()>
+where
+    A: TransportAdapter,
+    R: TransportRoutingPolicy,
+    K: KeyPackagePublisher,
+{
     founder
         .group_authority_view()
         .with_group_authority_snapshot(group, |storage, snapshot| {
@@ -659,12 +965,16 @@ where
                 snapshot,
                 GroupLifecycleState::Stable,
             )?;
-            if authority.pin != recipient.pin
+            if &authority.pin != pin
                 || authority.leaves != recipient.leaves
                 || authority.local_leaf == recipient.local_leaf
                 || authority.route != recipient.route
                 || !authority.admission.created_locally
                 || authority.admission.via_welcome.is_some()
+                || match processed {
+                    Some(id) => !storage.has_processed_transport_id(id)?,
+                    None => false,
+                }
             {
                 return Err(Refusal::Invalid);
             }
@@ -751,4 +1061,124 @@ fn check_image(image: &Path, inode: (u64, u64)) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cgka_traits::{
+        Timestamp, TransportEndpoint, TransportEndpointFailure, TransportMessage, TransportSource,
+        transport::TransportEnvelope,
+    };
+
+    #[test]
+    fn possible_exposure_needs_one_exact_unconfirmed_endpoint() {
+        let endpoint = TransportEndpoint::from("wss://relay.invalid/");
+        let group = GroupId::new([1; 32]);
+        let id = MessageId::new([2; 32]);
+        let transport_group_id = vec![3; 32];
+        let request = TransportPublishRequest {
+            account_id: MemberId::new([4; 32]),
+            message: TransportMessage {
+                id: id.clone(),
+                payload: vec![0],
+                timestamp: Timestamp(1),
+                causal_deps: Vec::new(),
+                source: TransportSource("marmot.transport.nostr".into()),
+                envelope: TransportEnvelope::GroupMessage {
+                    transport_group_id: transport_group_id.clone(),
+                },
+            },
+            target: TransportPublishTarget::Group {
+                group_id: group.clone(),
+                transport_group_id,
+                endpoints: vec![endpoint.clone()],
+            },
+            required_acks: 1,
+        };
+        let mut fanout =
+            OutboundFanout::stage(request, Some(PendingStateRef::new(5)), Some(group), 1000)
+                .unwrap();
+        let mut pending = PendingCommit {
+            message_id: id,
+            origin: None,
+            intent_kind: None,
+            first_attempt_at: Some(Timestamp(1)),
+            state: PendingCommitState::Sending,
+            unconfirmed_endpoints: Vec::new(),
+            owed_endpoints: vec![endpoint.clone()],
+            refused_endpoints: Vec::new(),
+            endpoint_count: 1,
+        };
+        let failure = |kind, pre_send| TransportEndpointFailure {
+            endpoint: endpoint.clone(),
+            reason: "fixture exposure".into(),
+            kind,
+            rejection_category: None,
+            size_class: None,
+            pre_send,
+        };
+
+        fanout.mark_attempt_started_at(0, 1000).unwrap();
+        fanout
+            .record_target_failure(
+                0,
+                failure(TransportEndpointFailureKind::RetryableUnavailable, true),
+            )
+            .unwrap();
+        assert!(exact_exposure(
+            &fanout,
+            &pending,
+            &endpoint,
+            Exposure::BeforeSend
+        ));
+        assert!(!exact_exposure(
+            &fanout,
+            &pending,
+            &endpoint,
+            Exposure::PossiblyExposed
+        ));
+
+        fanout.mark_attempt_started_at(0, 2000).unwrap();
+        assert!(!exact_exposure(
+            &fanout,
+            &pending,
+            &endpoint,
+            Exposure::PossiblyExposed
+        ));
+        pending.owed_endpoints.clear();
+        pending.unconfirmed_endpoints.push(endpoint.clone());
+        assert!(exact_exposure(
+            &fanout,
+            &pending,
+            &endpoint,
+            Exposure::PossiblyExposed
+        ));
+
+        fanout
+            .record_target_failure(
+                0,
+                failure(TransportEndpointFailureKind::PossiblyExposed, false),
+            )
+            .unwrap();
+        assert!(exact_exposure(
+            &fanout,
+            &pending,
+            &endpoint,
+            Exposure::PossiblyExposed
+        ));
+        assert!(!exact_exposure(
+            &fanout,
+            &pending,
+            &endpoint,
+            Exposure::BeforeSend
+        ));
+        pending.unconfirmed_endpoints[0] = TransportEndpoint::from("wss://other.invalid/");
+        assert!(!exact_exposure(
+            &fanout,
+            &pending,
+            &endpoint,
+            Exposure::PossiblyExposed
+        ));
+    }
 }
