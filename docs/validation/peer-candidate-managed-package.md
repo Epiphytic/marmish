@@ -84,7 +84,48 @@ and the package regression tests a distinct logical owner.
 The current stock check compiled all targets without candidate
 configuration. A linked stock binary symbol audit is a separate gate.
 
-On a very fast filesystem the expiry case's two-second wall deadline
-may outlast the first schema open. The exact run exercised the expired
-turn. The registered route must remain current when the actor uses this
-aperture, and the actor must reacquire the owner following route change.
+The registered route must remain current whenever the actor uses this
+aperture. The actor must reacquire the owner following route change.
+
+## Integrated source
+
+The Linux AMD64 candidate was linked from exact source
+`194d1902cb7838f376c8229e0377d14ce511341d`. It includes the same-profile
+quota and route-controller borrow, exact origin lookup and the file
+creation and fixture hardening from `c47418e`. The upstream MDK lock
+resolves to `bdf9833e340909f29c628f4fc2f9a3d6873f1cf5`.
+
+The candidate test link took 43.06 s. Strict candidate all-target Clippy
+passed in 28.98 s, two fast package checks passed, six receiver inventory
+and managed recovery checks passed in 4.20 s, and the independent
+registered-profile forwarding and irreversible-dispatch test passed in
+53.92 s. Both builds used offline Cargo, two jobs, no incremental
+compilation, no debuginfo and the same candidate configuration above.
+The actual native matrix passed all 15 independent subprocess sequences
+in 139.81 s. The retained test executable's SHA-256 is
+`aa42016ca86ed09246e9451b247c1cfc798f395b9d821629071bb8ecf8550174`.
+
+| Operation in the first positive native sequence | Elapsed |
+| --- | ---: |
+| Newly allocated encrypted schema, 189 migrations | 6,596.311 ms |
+| Historical migrations within first open | 6,543.123 ms |
+| Cold keyed original reopen after schema prestage | 25.280 ms |
+| Entire bounded original issue | 248.082 ms |
+| Separate cold signed readback | 348.810 ms |
+| Cold Prepared replay | 341.717 ms |
+
+Issuance plus separate attestation took 596.892 ms. Each retains its
+five-second bound. The schema-only turn retains its separate 15-second
+bound. The expiry fixture waits for the real boot-time window to close
+if schema completes early, then requires the precise clock refusal.
+Successful fresh schema opens logged by the matrix took 5.40–6.99 s.
+The positive sequence uses umask `0200` at allocation and checks `0600`
+mode on the resulting encrypted original. The matrix also requires the
+specific foreign checkpoint-owner refusal and clean retirement after
+intentionally discarding the schema witness.
+
+The managed recovery run covers a wrong key. The separate clean-charge
+proof exercises the one-byte overlap cap. The package test neither fills
+the aggregate 128 MiB quota nor supplies an incorrect key to signed
+readback. [Clean-charge validation](peer-receiver-clean-charge.md)
+[Managed recovery validation](peer-receiver-charge-recovery.md)

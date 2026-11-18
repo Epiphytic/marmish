@@ -59,3 +59,30 @@ discarded schema witness fixture, and qualifications for stock symbols,
 aggregate quota and the isolated route and key mismatch cases. The
 recorded local result does not assert those additional runtime
 conditions or a packaged actor.
+
+## Integrated review
+
+Claude Code Sonnet 5.5 in Auto mode approved exact integrated source
+`194d1902cb7838f376c8229e0377d14ce511341d` in session
+`f5aa9a07-ab8b-42ee-a32f-d80f1e28509c`. The review checked the actual
+registered route controller and quota pointer, the shared borrow of one
+attached registration, the checked origin and one-use route, and the
+author hardening amendment `c47418e`. The exact review found no
+blocking source findings. It inspected the completed candidate test
+link. Runtime cases and strict Clippy completed independently.
+[Composed Linux validation](../validation/peer-candidate-managed-package.md#integrated-source)
+
+The amendment sets mode 0600 on the already-owned exclusive creation
+descriptor. It also makes the expiry cut use the real schema window,
+asserts the precise foreign checkpoint-owner refusal and preserves
+fixture cleanup when the prestage witness is discarded. Review session
+`a696d5ef-7720-4f4d-8b83-7b1a076f4e68` caught an incorrect test error
+type. A later intermediate fixture run found an old wall sample could
+regress against the persisted floor. The final source fixes both.
+
+Actor composition must recheck the registered controller immediately
+after opening the cursor owner and before use. It must also keep the
+window's cancellation token tied to the current checked route.
+A retired or replaced route requires discarding the old owner. These
+are actor requirements, which the unmounted package helper does not
+enforce by itself.
