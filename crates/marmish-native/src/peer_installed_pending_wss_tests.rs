@@ -27,10 +27,13 @@ use crate::{
 use super::*;
 use crate::peer_invitation::{
     founder_ledger::{Ledger, Outbound, ledger_binding},
-    receiver_inventory::v2_pending::{PendingReceiver, committed_custody_changes},
+    receiver_inventory::v2_pending::{
+        PendingReceiver, committed_custody_changes, fixture_join_result_lost,
+        fixture_lose_join_result,
+    },
     socket::owner::recipient::PublicationOutcome,
     store::consent_checkpoint::{
-        Status,
+        Error as CheckpointError, Status,
         provisioning::prepared_consent::custody::CustodyState,
         wire::{Codec, MAX_OUTER_BYTES},
     },
@@ -137,48 +140,56 @@ impl Drop for Running {
 #[ignore = "private real NIP-42 WSS, native Welcome and repeated process exits"]
 async fn private_v2_pending_survives_cold_cuts() {
     for scenario in ["joined", "before-native", "capacity"] {
-        let public = tempfile::tempdir().unwrap();
-        let founder_root = public.path().join("founder-profile");
-        fs::create_dir(&founder_root).unwrap();
-        fs::set_permissions(&founder_root, fs::Permissions::from_mode(0o700)).unwrap();
-        let mut lease = ProfileLease::acquire(&founder_root, "test").unwrap();
-        let founder = prepare(&mut lease).public_key();
-        drop(lease);
-        let unrelated = Keys::generate().public_key();
-        let (mut relay, home, lease, material) =
-            qualified_recipient_fixture(founder, unrelated, Duration::from_secs(240)).await;
-        let account = material.public_key();
-        assert_ne!(account, founder);
-        drop(material);
-        drop(lease);
-        let setup = PublicSetup {
-            founder: founder.to_bytes(),
-            receiver: account.to_bytes(),
-            origin: relay.url.to_string(),
-        };
-        write_public(public.path(), "setup", &setup);
-        fs::write(public.path().join("relay-ca"), relay.qualification_ca()).unwrap();
-        let founder_job = Running::spawn("founder", scenario, public.path(), home.path());
-        let ingress_job = Running::spawn("held", scenario, public.path(), home.path());
-        founder_job.wait("founder").await;
-        ingress_job.wait("Held").await;
-        assert!(relay.authenticated(founder));
-        assert!(relay.authenticated(account));
-        assert_eq!(relay.peer_transcript().len(), 3);
-        let before = relay.all_publication_attempts();
-        for step in ["start", "qualify", "replay"] {
-            Running::spawn(step, scenario, public.path(), home.path())
-                .wait(step)
-                .await;
-        }
-        assert_eq!(relay.peer_transcript().len(), 3);
-        let bridge_publications = relay.all_publication_attempts() - before;
-        assert_eq!(bridge_publications, 0);
-        relay.stop().await;
-        println!(
-            "private-v2-pending scenario={scenario} bridge_publications={bridge_publications}"
-        );
+        run_pending_scenario(scenario).await;
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "private real NIP-42 WSS with withheld native completion"]
+async fn private_v2_pending_recovers_uncertain_join() {
+    run_pending_scenario("uncertain").await;
+}
+
+async fn run_pending_scenario(scenario: &str) {
+    let public = tempfile::tempdir().unwrap();
+    let founder_root = public.path().join("founder-profile");
+    fs::create_dir(&founder_root).unwrap();
+    fs::set_permissions(&founder_root, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut lease = ProfileLease::acquire(&founder_root, "test").unwrap();
+    let founder = prepare(&mut lease).public_key();
+    drop(lease);
+    let unrelated = Keys::generate().public_key();
+    let (mut relay, home, lease, material) =
+        qualified_recipient_fixture(founder, unrelated, Duration::from_secs(240)).await;
+    let account = material.public_key();
+    assert_ne!(account, founder);
+    drop(material);
+    drop(lease);
+    let setup = PublicSetup {
+        founder: founder.to_bytes(),
+        receiver: account.to_bytes(),
+        origin: relay.url.to_string(),
+    };
+    write_public(public.path(), "setup", &setup);
+    fs::write(public.path().join("relay-ca"), relay.qualification_ca()).unwrap();
+    let founder_job = Running::spawn("founder", scenario, public.path(), home.path());
+    let ingress_job = Running::spawn("held", scenario, public.path(), home.path());
+    founder_job.wait("founder").await;
+    ingress_job.wait("Held").await;
+    assert!(relay.authenticated(founder));
+    assert!(relay.authenticated(account));
+    assert_eq!(relay.peer_transcript().len(), 3);
+    let before = relay.all_publication_attempts();
+    for step in ["start", "qualify", "replay"] {
+        Running::spawn(step, scenario, public.path(), home.path())
+            .wait(step)
+            .await;
+    }
+    assert_eq!(relay.peer_transcript().len(), 3);
+    let bridge_publications = relay.all_publication_attempts() - before;
+    assert_eq!(bridge_publications, 0);
+    relay.stop().await;
+    println!("private-v2-pending scenario={scenario} bridge_publications={bridge_publications}");
 }
 
 #[test]
@@ -487,6 +498,38 @@ async fn run_recipient(
                     .is_err()
             );
             effects.assert_since("start-refusals", (0, 0, 0));
+            if scenario == "before-native" {
+                assert_eq!(
+                    receiver.fixture_legacy_start(&held),
+                    Err(Error::Checkpoint(CheckpointError::Layout))
+                );
+                effects.assert_since("legacy-start-refusal", (0, 0, 0));
+                let other_lease = ProfileLease::acquire(home, "foreign").unwrap();
+                assert_eq!(
+                    PendingReceiver::open(
+                        &other_lease,
+                        &quota,
+                        &material,
+                        &setup.origin,
+                        &mut port,
+                    )
+                    .err(),
+                    Some(Error::Path)
+                );
+                effects.assert_since("foreign-lease-refusal", (0, 0, 0));
+                refuse_another_stage_inode(&lease, || {
+                    receiver
+                        .arm(&mut port, selector, exact.generation, &stop)
+                        .err()
+                });
+                effects.assert_since("stage-inode-refusal", (0, 0, 0));
+                let unchanged = receiver
+                    .saved_custody(&mut port, selector, exact.generation)
+                    .unwrap();
+                assert_eq!(unchanged.state(), CustodyState::Held);
+                assert_eq!(unchanged.stage(), held.stage());
+                assert_eq!(unchanged.signed_delivery(), held.signed_delivery());
+            }
             let armed = observe_turn("preflight-and-start", signed_end, || {
                 receiver
                     .arm(&mut port, selector, exact.generation, &stop)
@@ -537,20 +580,49 @@ async fn run_recipient(
                     metrics.peak, metrics.rejected[1], metrics.main_opens
                 );
                 native_effects.assert_since("journal-refusal", (1, 0, 0));
-            } else if scenario == "joined" {
-                let (result, metrics) = observe_turn("welcome-ingest", signed_end, || {
+            } else if matches!(scenario, "joined" | "uncertain") {
+                let uncertain = scenario == "uncertain";
+                if uncertain {
+                    fixture_lose_join_result();
+                }
+                let window = if uncertain {
+                    "uncertain-welcome-ingest"
+                } else {
+                    "welcome-ingest"
+                };
+                let (result, metrics) = observe_turn(window, signed_end, || {
                     receiver.ingest(&mut port, armed, &stop).unwrap()
                 });
-                result.unwrap();
+                if uncertain {
+                    assert_eq!(result, Err(Error::Checkpoint(CheckpointError::Source)));
+                    assert!(fixture_join_result_lost());
+                    let retry = Effects::read();
+                    assert_eq!(
+                        receiver
+                            .arm(&mut port, selector, exact.generation, &stop)
+                            .err(),
+                        Some(Error::Binding)
+                    );
+                    retry.assert_since("uncertain-retry-refusal", (0, 0, 0));
+                } else {
+                    result.unwrap();
+                }
                 assert_eq!(metrics.polls, 1);
                 assert!(metrics.main_opens > 0);
                 assert_eq!(metrics.rejected, [0; 2]);
                 assert!(metrics.peak > 0);
-                native_effects.assert_since("welcome-ingest", (1, 1, 0));
+                native_effects.assert_since(window, (1, 1, 0));
             } else {
                 assert_eq!(scenario, "before-native");
-                drop(armed);
-                native_effects.assert_since("pre-effect-cut", (0, 0, 0));
+                drop(receiver);
+                receiver =
+                    PendingReceiver::open(&lease, &quota, &material, &setup.origin, &mut port)
+                        .unwrap();
+                assert_eq!(
+                    receiver.ingest(&mut port, armed, &stop).err(),
+                    Some(Error::Binding)
+                );
+                native_effects.assert_since("replacement-owner-pre-effect-cut", (0, 0, 0));
             }
             assert_eq!(
                 receiver
@@ -567,7 +639,7 @@ async fn run_recipient(
                 (held.state(), held.delivery_carrier()),
                 (CustodyState::JoinStarted, exact.carrier)
             );
-            if scenario == "joined" {
+            if matches!(scenario, "joined" | "uncertain") {
                 let joined =
                     observe_turn("joined-readback-and-pending", held.held_deadline(), || {
                         receiver
@@ -604,7 +676,7 @@ async fn run_recipient(
             }
         }
         "replay" => {
-            if scenario == "joined" {
+            if matches!(scenario, "joined" | "uncertain") {
                 let pending = receiver
                     .saved_custody(&mut port, selector, exact.generation)
                     .unwrap();
@@ -654,6 +726,30 @@ async fn run_recipient(
                     "retained Pending changed during replay"
                 );
                 effects.assert_since("pending-and-delivery-replay", (0, 0, 0));
+                if scenario == "joined" {
+                    assert_ne!(native.identity, [0; 32]);
+                    receiver
+                        .fixture_change_pending_epoch(exact.carrier)
+                        .unwrap();
+                    let changed = receiver
+                        .saved_custody(&mut port, selector, exact.generation)
+                        .unwrap();
+                    assert!(!pending.same_saved_pending(&changed));
+                    let comparison = Effects::read();
+                    assert_eq!(
+                        receiver
+                            .qualify(&mut port, selector, exact.generation, &stop)
+                            .err(),
+                        Some(Error::Checkpoint(CheckpointError::Cursor(
+                            store::Error::Stale
+                        )))
+                    );
+                    comparison.assert_since("retained-epoch-mismatch", (0, 0, 0));
+                    let still_changed = receiver
+                        .saved_custody(&mut port, selector, exact.generation)
+                        .unwrap();
+                    assert!(changed.same_saved_pending(&still_changed));
+                }
             } else {
                 assert_eq!(
                     receiver
@@ -667,10 +763,46 @@ async fn run_recipient(
                         .is_err()
                 );
                 effects.assert_since("unjoined-replay", (0, 0, 0));
+                if scenario == "before-native" {
+                    port.stop(deadline()).await.unwrap();
+                    let stopped = Effects::read();
+                    assert_eq!(
+                        receiver
+                            .arm(&mut port, selector, exact.generation, &stop)
+                            .err(),
+                        Some(Error::Checkpoint(CheckpointError::Source))
+                    );
+                    stopped.assert_since("retired-port-refusal", (0, 0, 0));
+                }
             }
         }
         _ => panic!("unknown Pending child step"),
     }
+}
+
+fn refuse_another_stage_inode(lease: &ProfileLease, arm: impl FnOnce() -> Option<Error>) {
+    let stage = lease.root().join("peer/provisional-unknown.db");
+    // Rename within the same directory to preserve the real owned image,
+    // and put a byte-identical file with a different inode at its path.
+    let saved = stage.with_extension("fixture-backup");
+    fs::rename(&stage, &saved).unwrap();
+    let bytes = fs::read(&saved).unwrap();
+    let mut decoy = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&stage)
+        .unwrap();
+    std::io::Write::write_all(&mut decoy, &bytes).unwrap();
+    drop(decoy);
+    assert_ne!(
+        fs::metadata(&stage).unwrap().ino(),
+        fs::metadata(&saved).unwrap().ino()
+    );
+    let refusal = arm();
+    fs::remove_file(&stage).unwrap();
+    fs::rename(&saved, &stage).unwrap();
+    assert_eq!(refusal, Some(Error::StageIdentityMismatch));
 }
 
 async fn drive_held(

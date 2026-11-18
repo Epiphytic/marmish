@@ -27,6 +27,7 @@ use prepared_consent::{read_image, snapshot_inode, snapshot_sidecars};
 use socket::owner::recipient::PeerRecipientPort;
 
 thread_local! {
+    static LOSE_JOIN_RESULT: Cell<bool> = const { Cell::new(false) };
     static CUSTODY_CHANGES: Cell<usize> = const { Cell::new(0) };
 }
 
@@ -187,6 +188,44 @@ impl<'lease> PendingReceiver<'lease> {
         )?;
         Ok(joined)
     }
+}
+
+impl PendingReceiver<'_> {
+    pub(in crate::peer_invitation) fn fixture_legacy_start(
+        &mut self,
+        held: &HeldEvidence,
+    ) -> Result<()> {
+        let wall = Wall::System.sample()?.as_secs();
+        self.owner
+            .checkpoint
+            .start_custody_join(&self.owner.source, held, wall)?;
+        Ok(())
+    }
+
+    pub(in crate::peer_invitation) fn fixture_change_pending_epoch(
+        &mut self,
+        carrier: [u8; 32],
+    ) -> Result<()> {
+        self.owner
+            .checkpoint
+            .fixture_change_pending_epoch(carrier)?;
+        Ok(())
+    }
+}
+
+pub(in crate::peer_invitation) fn fixture_lose_join_result() {
+    assert!(!LOSE_JOIN_RESULT.replace(true));
+}
+
+pub(in crate::peer_invitation) fn fixture_join_result_lost() -> bool {
+    !LOSE_JOIN_RESULT.get()
+}
+
+pub(in crate::peer_invitation) fn fixture_check_enrollment(
+    held: &HeldEvidence,
+    delivery: &Delivery,
+) -> Result<()> {
+    Enrollment::from_delivery(held, delivery).map(drop)
 }
 
 pub(in crate::peer_invitation) struct PreparedWelcome<'lease> {
@@ -397,7 +436,13 @@ impl<'lease> NativePending<'lease> {
             }
             Ok(())
         })??;
-        Ok((result.map_err(Into::into), metrics))
+        let result = result.map_err(Into::into);
+        let result = if result.is_ok() && LOSE_JOIN_RESULT.replace(false) {
+            Err(Error::Checkpoint(consent_checkpoint::Error::Source))
+        } else {
+            result
+        };
+        Ok((result, metrics))
     }
 
     fn read_joined(

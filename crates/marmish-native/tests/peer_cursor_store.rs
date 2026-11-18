@@ -27,6 +27,11 @@ macro_rules! native_installed_pending_fixture {
         }
     };
 }
+// The separate native fixture needs quota instrumentation and the bridge.
+macro_rules! native_pending_store_checks {
+    ($body:block) => {};
+}
+
 #[allow(dead_code)] // This target also compiles the private production methods.
 #[path = "../src/peer_cursor_store.rs"]
 mod peer_cursor_store;
