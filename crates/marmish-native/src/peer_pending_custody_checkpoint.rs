@@ -18,6 +18,7 @@ use super::*;
 mod custody_schema;
 pub(crate) use custody_schema::Epoch;
 
+#[cfg(test)]
 #[path = "peer_daemon_checkpoint.rs"]
 pub(crate) mod daemon;
 

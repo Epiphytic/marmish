@@ -31,13 +31,9 @@ impl Service<'_> {
             .owner
             .state
             .checkpoint
-            .daemon_inventory(&self.owner.state.source, wall)
+            .daemon_inventory(&self.owner.state.source, wall, self.founder)
             .map_err(|error| local_failure(error.into()))?;
-        let entries = rows
-            .into_iter()
-            .filter(|row| row.key.server == self.founder)
-            .map(entry)
-            .collect();
+        let entries = rows.into_iter().map(entry).collect();
         work.can_reply()?;
         Ok(Reply::List { entries })
     }
@@ -87,17 +83,8 @@ impl Service<'_> {
                 cas_started = true;
                 Ok(CustodyDecision::Manual(local))
             });
-        let at = committed.map_err(|error| {
-            if cas_started
-                && matches!(
-                    error,
-                    Error::Checkpoint(consent_checkpoint::Error::Cursor(store::Error::Storage))
-                )
-            {
-                return IpcFailure::Uncertain;
-            }
-            denied.unwrap_or_else(|| local_failure(error))
-        })?;
+        let at = committed
+            .map_err(|error| denied.unwrap_or_else(|| decision_failure(error, cas_started)))?;
         if std::mem::take(&mut self.uncertain_approval) || work.can_reply().is_err() {
             return Err(IpcFailure::Uncertain);
         }
@@ -144,6 +131,24 @@ impl Service<'_> {
     }
 }
 
+fn decision_failure(error: Error, cas_started: bool) -> IpcFailure {
+    // These typed refusals are emitted only before the checkpoint UPDATE.
+    // Once admitted to CAS, every other failure requires a separate readback.
+    if cas_started
+        && !matches!(
+            error,
+            Error::Checkpoint(
+                consent_checkpoint::Error::Expired
+                    | consent_checkpoint::Error::Policy
+                    | consent_checkpoint::Error::LocalOwner
+            )
+        )
+    {
+        return IpcFailure::Uncertain;
+    }
+    local_failure(error)
+}
+
 fn local_failure(error: Error) -> IpcFailure {
     match error {
         Error::Checkpoint(consent_checkpoint::Error::Expired) => IpcFailure::Expired,
@@ -176,5 +181,41 @@ fn entry(found: Inventory) -> Entry {
         qualified_at: found.qualified_at,
         expires_at: found.expires_at,
         activating_at: found.activating_at,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decision_requires_readback_after_admitted_cas_failure() {
+        use consent_checkpoint::Error as CheckpointError;
+        for (error, expected) in [
+            (
+                Error::Checkpoint(CheckpointError::Expired),
+                IpcFailure::Expired,
+            ),
+            (
+                Error::Checkpoint(CheckpointError::Policy),
+                IpcFailure::Forbidden,
+            ),
+            (
+                Error::Checkpoint(CheckpointError::LocalOwner),
+                IpcFailure::Forbidden,
+            ),
+        ] {
+            assert_eq!(decision_failure(error, true), expected);
+        }
+        let stale = Error::Checkpoint(CheckpointError::Cursor(store::Error::Stale));
+        assert_eq!(decision_failure(stale, false), IpcFailure::Stale);
+        assert_eq!(decision_failure(stale, true), IpcFailure::Uncertain);
+        for error in [
+            Error::Binding,
+            Error::Checkpoint(CheckpointError::Cursor(store::Error::Storage)),
+        ] {
+            assert_eq!(decision_failure(error, false), IpcFailure::Unavailable);
+            assert_eq!(decision_failure(error, true), IpcFailure::Uncertain);
+        }
     }
 }

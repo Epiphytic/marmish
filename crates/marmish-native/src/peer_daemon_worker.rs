@@ -21,7 +21,7 @@ use super::{
     prepared_consent::{CustodyProgress, History, PreparedConsentOwner},
     store::consent_checkpoint::{
         Mode,
-        provisioning::prepared_consent::custody::daemon::{Due, Inventory, Rotation},
+        provisioning::prepared_consent::custody::daemon::{Due, Inventory},
     },
     *,
 };
@@ -139,7 +139,6 @@ impl Bootstrap {
             recovery: true,
             poll_next: false,
             retry_next: true,
-            rotation: Rotation::default(),
             uncertain_approval: self.uncertain_approval,
         })
     }
@@ -213,7 +212,6 @@ struct Service<'a> {
     recovery: bool,
     poll_next: bool,
     retry_next: bool,
-    rotation: Rotation,
     uncertain_approval: bool,
 }
 
@@ -250,10 +248,20 @@ impl Service<'_> {
         if retry && self.socket.is_some() {
             match self.owner.retry_custody_due() {
                 Ok(None) => {}
-                Ok(Some(_)) | Err(_) => return None,
+                Ok(Some(_)) => return None,
+                Err(_) => {
+                    crate::diagnostics::event("peer_owner", "deferred_turn_unavailable");
+                    return None;
+                }
             }
         }
-        let due = self.next_due().ok().flatten()?;
+        let due = match self.next_due() {
+            Ok(due) => due?,
+            Err(_) => {
+                crate::diagnostics::event("peer_owner", "due_projection_unavailable");
+                return None;
+            }
+        };
         if worker.stopped() {
             return None;
         }
@@ -279,7 +287,6 @@ impl Service<'_> {
         Ok(self.owner.state.checkpoint.daemon_due(
             &self.owner.state.source,
             wall,
-            &mut self.rotation,
             self.socket.is_some(),
             self.founder,
         )?)

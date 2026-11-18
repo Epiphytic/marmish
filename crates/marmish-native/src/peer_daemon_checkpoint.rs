@@ -4,8 +4,6 @@ use nostr::key::PublicKey;
 
 use super::*;
 
-const INVENTORY_LIMIT: usize = 16;
-
 #[derive(Clone, Copy)]
 pub(crate) struct Inventory {
     pub(crate) key: Selector,
@@ -45,106 +43,79 @@ pub(crate) enum Due {
     Automatic(Selector, u64),
 }
 
-#[derive(Default)]
-pub(crate) struct Rotation {
-    class: usize,
-    previous: [Option<[u8; 32]>; 5],
-}
-
-impl Rotation {
-    fn take(&mut self, class: usize, rows: &[(Selector, u64)]) -> Option<(Selector, u64)> {
-        let next = rows.iter().copied().find(|(key, _)| {
-            self.previous[class].is_none_or(|older| key.server.to_bytes() > older)
-        });
-        let selected = next.or_else(|| rows.first().copied())?;
-        self.previous[class] = Some(selected.0.server.to_bytes());
-        self.class = (class + 1) % self.previous.len();
-        Some(selected)
-    }
-}
-
 impl Checkpoint {
     pub(crate) fn daemon_inventory(
         &mut self,
         source: &Source,
         wall: u64,
+        founder: PublicKey,
     ) -> Result<Vec<Inventory>> {
         let cx = self.custody_context(source)?;
         let tx = self.cursor.with_wall(cx.origin, wall)?;
         cx.verify(&tx, wall)?;
-        let selected = coordinates(
+        if !self.policy.permits(founder) {
+            return Ok(Vec::new());
+        }
+        let Some((selector, _)) = coordinates(
             &tx,
             "SELECT server,offer_id,offer_revision,generation
-             FROM peer_pending_custody WHERE origin=?1 AND ?2>=0 AND state IN (2,3)
-             ORDER BY server LIMIT 17",
+             FROM peer_pending_custody
+             WHERE origin=?1 AND pending_deadline>?2 AND server=?3 AND state IN (2,3)",
             cx.origin,
             wall,
-        )?;
-        let mut inventory = Vec::with_capacity(selected.len());
-        for (selector, _) in selected {
-            if !self.policy.permits(selector.server) {
-                continue;
-            }
-            let consent = cx
-                .exact_consent(&tx, selector)?
-                .ok_or(CursorError::Binding)?;
-            let evidence = cx
-                .read_evidence(&tx, consent)?
-                .ok_or(CursorError::Binding)?;
-            inventory.push(evidence.inventory().ok_or(CursorError::Binding)?);
-        }
-        Ok(inventory)
+            founder,
+        )?
+        else {
+            return Ok(Vec::new());
+        };
+        let consent = cx
+            .exact_consent(&tx, selector)?
+            .ok_or(CursorError::Binding)?;
+        let evidence = cx
+            .read_evidence(&tx, consent)?
+            .ok_or(CursorError::Binding)?;
+        Ok(vec![evidence.inventory().ok_or(CursorError::Binding)?])
     }
 
     pub(crate) fn daemon_due(
         &mut self,
         source: &Source,
         wall: u64,
-        rotation: &mut Rotation,
         online: bool,
         founder: PublicKey,
     ) -> Result<Option<Due>> {
         let cx = self.custody_context(source)?;
         let tx = self.cursor.with_wall(cx.origin, wall)?;
         cx.verify(&tx, wall)?;
-        let slot_available = |known| -> Result<bool> {
-            Ok(tx.query_row(
+        if !self.policy.permits(founder) {
+            return Ok(None);
+        }
+        // This fixture binds one founder with one unique invite, slot, outbox
+        // and custody row. The checked schema makes these work classes exclusive.
+        let find = |statement| coordinates(&tx, statement, cx.origin, wall, founder);
+        if let Some((key, generation)) = find(JOIN)? {
+            return Ok(Some(Due::Join(key, generation)));
+        }
+        if matches!(self.policy.mode, Mode::Automatic)
+            && let Some((key, generation)) = find(AUTOMATIC)?
+        {
+            return Ok(Some(Due::Automatic(key, generation)));
+        }
+        if online && let Some((key, _)) = find(PUBLISH)? {
+            return Ok(Some(Due::Publish(key)));
+        }
+        if let Some((key, _)) = find(RESUME)? {
+            return Ok(Some(Due::Resume(key)));
+        }
+        if let Some((key, _)) = find(PROVISION)? {
+            let slot_available: bool = tx.query_row(
                 "SELECT server IS NULL AND next_start_at<=?2
                  FROM peer_provisioning_slot WHERE class=?1",
-                params![known, seconds(wall)?],
+                params![self.policy.reserved.contains(&founder), seconds(wall)?],
                 |row| row.get(0),
-            )?)
-        };
-        for distance in 0..rotation.previous.len() {
-            let class = (rotation.class + distance) % rotation.previous.len();
-            let statement = match class {
-                0 => PROVISION,
-                1 => RESUME,
-                2 if online => PUBLISH,
-                3 => JOIN,
-                4 if matches!(self.policy.mode, Mode::Automatic) => AUTOMATIC,
-                _ => continue,
-            };
-            let mut rows = coordinates(&tx, statement, cx.origin, wall)?;
-            rows.retain(|(selector, _)| {
-                selector.server == founder && self.policy.permits(selector.server)
-            });
-            if class == 0 {
-                let slots = [slot_available(false)?, slot_available(true)?];
-                rows.retain(|(selector, _)| {
-                    slots[usize::from(self.policy.reserved.contains(&selector.server))]
-                });
-            }
-            if let Some((selector, generation)) = rotation.take(class, &rows) {
-                let due = match class {
-                    0 => Due::Provision(selector),
-                    1 => Due::Resume(selector),
-                    2 => Due::Publish(selector),
-                    3 => Due::Join(selector, generation),
-                    4 => Due::Automatic(selector, generation),
-                    _ => unreachable!("bounded due-work class"),
-                };
-                return Ok(Some(due));
+            )?;
+            if slot_available {
+                return Ok(Some(Due::Provision(key)));
             }
         }
         Ok(None)
@@ -156,56 +127,52 @@ fn coordinates(
     statement: &str,
     origin: Origin,
     wall: u64,
-) -> Result<Vec<(Selector, u64)>> {
-    let mut statement = tx.prepare(statement)?;
-    let rows = statement.query_map(params![origin, seconds(wall)?], |row| {
-        Ok((
-            Selector {
-                server: PublicKey::from_byte_array(row.get(0)?),
-                id: row.get(1)?,
-                revision: row.get(2)?,
+    founder: PublicKey,
+) -> Result<Option<(Selector, u64)>> {
+    Ok(tx
+        .query_row(
+            statement,
+            params![origin, seconds(wall)?, founder.to_bytes()],
+            |row| {
+                Ok((
+                    Selector {
+                        server: PublicKey::from_byte_array(row.get(0)?),
+                        id: row.get(1)?,
+                        revision: row.get(2)?,
+                    },
+                    read_seconds(row, 3)?,
+                ))
             },
-            read_seconds(row, 3)?,
-        ))
-    })?;
-    let rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-    if rows.len() > INVENTORY_LIMIT {
-        return Err(CursorError::Binding.into());
-    }
-    Ok(rows)
+        )
+        .optional()?)
 }
 
 const PROVISION: &str = "
     SELECT i.server,i.offer_id,i.revision,0 FROM peer_consent_invite i
-    WHERE i.origin=?1 AND i.expires>?2 AND i.decision_at IS NULL
+    WHERE i.origin=?1 AND i.expires>?2 AND i.server=?3 AND i.decision_at IS NULL
     AND NOT EXISTS (SELECT 1 FROM peer_provisioning_slot p WHERE p.server=i.server)
     AND NOT EXISTS (SELECT 1 FROM peer_prepared_consent_outbox o WHERE o.server=i.server)
     AND NOT EXISTS (SELECT 1 FROM peer_consent_outbox o WHERE o.server=i.server)
-    AND NOT EXISTS (SELECT 1 FROM peer_pending_custody c WHERE c.server=i.server)
-    ORDER BY i.server LIMIT 17";
+    AND NOT EXISTS (SELECT 1 FROM peer_pending_custody c WHERE c.server=i.server)";
 
 const RESUME: &str = "
     SELECT p.server,p.offer_id,p.revision,p.generation FROM peer_provisioning_slot p
     JOIN peer_consent_invite i ON i.server=p.server AND i.offer_id=p.offer_id
         AND i.revision=p.revision AND i.origin=p.origin
-    WHERE p.origin=?1 AND i.expires>?2 AND i.decision_at IS NULL
+    WHERE p.origin=?1 AND i.expires>?2 AND p.server=?3 AND i.decision_at IS NULL
     AND NOT EXISTS (SELECT 1 FROM peer_prepared_consent_outbox o WHERE o.class=p.class)
-    AND NOT EXISTS (SELECT 1 FROM peer_pending_custody c WHERE c.class=p.class)
-    ORDER BY p.server LIMIT 17";
+    AND NOT EXISTS (SELECT 1 FROM peer_pending_custody c WHERE c.class=p.class)";
 
 const PUBLISH: &str = "
     SELECT o.server,o.offer_id,o.offer_revision,o.generation FROM peer_prepared_consent_outbox o
-    WHERE o.origin=?1 AND o.ack_at IS NULL AND o.expires>?2 AND o.package_expires>?2
+    WHERE o.origin=?1 AND o.server=?3 AND o.ack_at IS NULL AND o.expires>?2 AND o.package_expires>?2
     AND (o.retry_at IS NULL OR o.retry_at<=?2)
-    AND NOT EXISTS (SELECT 1 FROM peer_pending_custody c WHERE c.class=o.class)
-    ORDER BY o.server LIMIT 17";
+    AND NOT EXISTS (SELECT 1 FROM peer_pending_custody c WHERE c.class=o.class)";
 
 const JOIN: &str = "
     SELECT server,offer_id,offer_revision,generation FROM peer_pending_custody
-    WHERE origin=?1 AND held_deadline>?2 AND state IN (0,1)
-    ORDER BY server LIMIT 17";
+    WHERE origin=?1 AND held_deadline>?2 AND server=?3 AND state IN (0,1)";
 
 const AUTOMATIC: &str = "
     SELECT server,offer_id,offer_revision,generation FROM peer_pending_custody
-    WHERE origin=?1 AND pending_deadline>?2 AND state=2 AND mode=1
-    ORDER BY server LIMIT 17";
+    WHERE origin=?1 AND pending_deadline>?2 AND server=?3 AND state=2 AND mode=1";
