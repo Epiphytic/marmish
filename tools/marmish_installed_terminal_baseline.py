@@ -92,7 +92,6 @@ def package_contract(target):
 def package(root, source, version, target, env, budget, report):
     inputs, assets = root / 'inputs', root / 'assets'
     inputs.mkdir(mode=0o700)
-    assets.mkdir(mode=0o700)
     bin_dir = root / 'target' / 'release'
     for name in PAYLOADS:
         shutil.copyfile(bin_dir / name, inputs / name)
@@ -107,7 +106,7 @@ def package(root, source, version, target, env, budget, report):
             _, details = supervisor.execute(['/bin/sh', '-c',
                 'exec /usr/bin/codesign -dv --verbose=4 "$1" 2>&1', 'sh', path], env,
                 timeout=budget.remaining(15))
-            require(b'Signature=adhoc' in details.splitlines() and b'Authority=' not in details,
+            require(b'Signature=adhoc' in details.splitlines() and not any(line.startswith(b'Authority=') for line in details.splitlines()),
                     'adhoc_signature')
     report['stage'] = 'native_abi'
     code, _ = supervisor.execute(['/bin/sh', source / 'scripts/v02-inspect-native.sh', inputs],
@@ -121,6 +120,10 @@ def package(root, source, version, target, env, budget, report):
     lines = bounded_read(manifest, 4096).decode('ascii').splitlines()
     require(lines[4:6] == [f'signing {signing} notarized=no', f'minimum {minimum}'], 'manifest_metadata')
     report['manifest_sha256'] = digest(manifest, limit=4096)
+    report['package_asset_sha256'] = {
+        name: digest(assets / f'{name}-{version}-{target}')
+        for name in (*PAYLOADS, 'THIRD-PARTY-LICENSES')
+    }
     report['package_inputs_sha256'] = {name: digest(inputs / name) for name in PAYLOADS}
     return assets
 
@@ -202,18 +205,25 @@ def installed_fixture(root, installed, controller, tmux, env, budget, report, ch
     report['stage'] = 'installed_terminal_controls'
     report['fixture_case'] = CONTROLS
     began = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix='mq-', dir=Path('/tmp').resolve()) as path:
-        runtime_root = Path(path)
-        run_env = dict(env, **{RUNTIME_ROOT_ENV: str(runtime_root)})
-        try:
-            result = supervisor.execute([executable_path, CONTROLS, '--ignored', '--exact',
-                                         '--test-threads=1'], run_env,
-                                        timeout=budget.remaining(240), success=False)
-            check_case(*result, report)
-        finally:
-            cleanup_tmux(runtime_root, tmux, run_env)
-            report['fixture_tmux_cleanup'] = 'checked'
-    report['fixture_root_removed'] = True
+    runtime_root = None
+    try:
+        with tempfile.TemporaryDirectory(prefix='mq-', dir=Path('/tmp').resolve()) as path:
+            runtime_root = Path(path)
+            run_env = dict(env, **{RUNTIME_ROOT_ENV: str(runtime_root)})
+            try:
+                result = supervisor.execute([executable_path, CONTROLS, '--ignored', '--exact',
+                                             '--test-threads=1'], run_env,
+                                            timeout=budget.remaining(240), success=False)
+                check_case(*result, report)
+            except supervisor.Refused as failure:
+                report['fixture_failure'] = str(failure)
+                raise
+            finally:
+                cleanup_tmux(runtime_root, tmux, run_env)
+                report['fixture_tmux_cleanup'] = 'checked'
+    finally:
+        if runtime_root is not None:
+            report['fixture_root_removed'] = not os.path.lexists(runtime_root)
     report['owned_fixture_join'] = 'checked'
     report['controls_elapsed_ms'] = round((time.monotonic() - began) * 1000)
     require({name: digest(shadow / name) for name in PAYLOADS} == original

@@ -64,6 +64,47 @@ class InstalledTerminalBaselineTests(unittest.TestCase):
             self.assertEqual(baseline.package_contract(target), ('none', 'glibc=2.39'))
         self.assertEqual(baseline.package_contract('aarch64-apple-darwin'), ('adhoc', 'macos=15.0'))
 
+    def test_package_producer_creates_fresh_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = root / 'target/release'
+            release.mkdir(parents=True)
+            for name in baseline.PAYLOADS:
+                (release / name).write_bytes(name.encode())
+            target = 'x86_64-unknown-linux-gnu'
+            report = {}
+            calls = []
+
+            def produce(argv, _environment, *, timeout, success=True):
+                self.assertLessEqual(timeout, 120)
+                calls.append(Path(argv[0]).name)
+                if not success:
+                    self.assertEqual(argv, ['/bin/sh', root / 'scripts/v02-inspect-native.sh',
+                                            root / 'inputs'])
+                    return 0, b''
+                self.assertEqual(argv, [release / 'marmish-release-tool', 'package',
+                    '--input-dir', root / 'inputs', '--output-dir', root / 'assets',
+                    '--licenses', root / 'licenses', '--signing', 'none', '--minimum', 'glibc=2.39'])
+                output = root / 'assets'
+                self.assertFalse(output.exists())
+                output.mkdir()
+                stem = f'-0.3.1-{target}'
+                (output / f'marmish{stem}.manifest').write_text(
+                    '1\n2\n3\n4\nsigning none notarized=no\nminimum glibc=2.39\n')
+                for name in (*baseline.PAYLOADS, 'THIRD-PARTY-LICENSES'):
+                    (output / f'{name}{stem}').write_bytes(name.encode())
+                return 0, b''
+
+            with patch.object(baseline.supervisor, 'execute', side_effect=produce):
+                output = baseline.package(root, root, '0.3.1', target, {},
+                                          SimpleNamespace(remaining=lambda _cap: 42), report)
+            self.assertEqual(calls, ['sh', 'marmish-release-tool'])
+            self.assertEqual(output, root / 'assets')
+            self.assertEqual(set(report['package_asset_sha256']),
+                             set(baseline.PAYLOADS) | {'THIRD-PARTY-LICENSES'})
+            self.assertEqual(report['package_asset_sha256']['marmish'],
+                             report['package_inputs_sha256']['marmish'])
+
     def test_cleanup_only_names_the_exact_owned_tmux_socket(self):
         with tempfile.TemporaryDirectory(prefix='mq-', dir=Path('/tmp').resolve()) as path:
             root = Path(path)
