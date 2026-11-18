@@ -45,3 +45,48 @@ The native libtest executable SHA-256 was
 `2e4aa63ba2ecd02432c16e6301af175f4d96f1946acb8dec31cbbf11d296bdd4`.
 The standalone cursor executable SHA-256 was
 `8ac88abc01609c3da804c1d3cae3a1e27254604d42f858beb057e413683863b6`.
+
+## Integrated validation
+
+Exact source `f7bb53fcce407cb7d1ca407cd9fb8e7d61811c29`, source tree
+`1996a6c1125ca98ce0f76ce7cdb37cc2b67704b5`, was tested on Linux AMD64.
+A warm locked build of the native library and standalone cursor test
+executables took 44.11 s. The SHA-256 digests were
+`c9e54e175e32992c4dc29f4a2bcbac7424cb2905476ed32e62a62427942bd168`
+and `dc6c799c1f8652289b3758985c8c04b7c1569ecf988661f42ad5e220540c0e3f`,
+respectively.
+
+| Exact check | Result | Wall time |
+| --- | --- | ---: |
+| Private WSS cold cuts | All 3 scenarios passed | 66.00 s |
+| Private WSS uncertain join recovery | Passed | 24.15 s |
+| Custody suite, including the exact prepared Consent and Held Delivery reopen | 21 passed, 1 ignored | 20.70 s |
+| Native capped Welcome and managed hot-journal recovery with stock WAL | Both passed, including four Welcome subprocess cases | 48.28 s |
+| Receiver inventory | 5 passed, 3 ignored | 0.81 s |
+| Standalone cursor store | 76 passed, 4 ignored | 59.47 s |
+| Managed dispatch | 2 passed | 9.49 s |
+| Inert daemon private WSS startup | 5 passed | 25.79 s |
+| Locked binary smoke, default and installed checks | Both passed | 8.31 s and 15.20 s |
+| Strict all-target Clippy, default and explicit candidate | Both passed | 30.05 s and 30.53 s |
+
+Each of the four private relay scenarios asserted exactly three signed
+enrollment flights and zero new relay publication attempts inside the bridge.
+The measured windows below count Welcome polls, successful native joins with
+checked close, and committed Start or Qualify rows.
+
+| Measured window | Polls | Closed joins | Custody rows |
+| --- | ---: | ---: | ---: |
+| Preflight and Start in each run | 0 | 0 | 1 |
+| Normal Welcome | 1 | 1 | 0 |
+| Replacement owner, pre-effect cut | 0 | 0 | 0 |
+| Managed journal capacity refusal | 1 | 0 | 0 |
+| Welcome with withheld result after checked close | 1 | 1 | 0 |
+| Cold verified joined readback and Qualify in each successful run | 0 | 0 | 1 |
+| Start, repeated Start, legacy Start, foreign lease, stage inode and retired route refusals | 0 | 0 | 0 |
+| Unjoined cold readback and replay, uncertain retry, retained epoch refusal | 0 | 0 | 0 |
+| Successful Pending readback and exact Delivery replay | 0 | 0 | 0 |
+
+The typed refusals and exact saved custody comparisons passed. The signed
+expiry test covers Held. The roster and administrator negative case,
+wrong native package, the legacy refusal at `commit_custody_pending` and a
+hot-journal cut during an uncommitted WSS Welcome remain outside this proof.

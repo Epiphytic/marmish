@@ -58,14 +58,20 @@ authenticated carrier, file replacement, digest, deadline, stop, real journal
 refusal and incomplete native futures. The v2 wire and installed custody tests
 verify authenticated transcript and negotiation reconstruction.
 
-Direct bridge coverage is still open for wrong signed ancestry, foreign owner
-or quota, expiration in each state, lost route or role, unequal v2 negotiation,
-wrong native package, roster or epoch, and a separately injected uncertain
-native effect. Cold pre-effect and capacity readback prove that qualification
-was withheld. Their generic refusal assertion leaves the precise readback
-error unmeasured. The supervised daemon, installed
-approvals, application status, application or receipt egress and other
-architectures need separate qualification.
+The integrated refusal matrix exercises expired Held custody, changed policy,
+legacy Start, competing Delivery, a damaged retained frame, foreign lease,
+wrong stage inode, stale owner, retired route, and retained epoch mismatch.
+An injected lost native result recovers exactly one Pending transition from a
+verified closed join. The earlier cold refusal checks measured the absence of
+effects. The expanded matrix checks typed refusals for the added cases.
+[Integrated refusal and uncertain completion results](peer-installed-capped-pending-refusals.md)
+
+Expiry after Held, legacy refusal at `commit_custody_pending`, wrong native
+package and joined roster or administrator integrity need additional direct
+coverage. A crash during an uncommitted WSS Welcome is a separate case from
+the local managed hot-journal test. The supervised daemon, installed approvals,
+application status, receipt and application egress, and other architectures
+need separate qualification.
 
 ## Measured accounting on the composed source
 
@@ -129,6 +135,8 @@ Strict all-target Clippy with `installed-checks` passed in 39.59 s.
 
 ```sh
 cargo test --offline --locked -p marmish-native --lib -j2 private_v2_pending_survives_cold_cuts -- --ignored --nocapture
+cargo test --offline --locked -p marmish-native --lib -j2 private_v2_pending_recovers_uncertain_join -- --ignored --nocapture
+cargo test --offline --locked -p marmish-native --lib -j2 peer_installed_custody_reopens_signed_prepared_consent_and_held_delivery
 cargo test --offline --locked -p marmish-native --lib -j2 peer_capped_welcome_native_proof -- --ignored --nocapture
 cargo test --offline --locked -p marmish-native --lib -j2 managed_recovery_hot_journal_and_stock_wal -- --ignored --nocapture
 cargo check --offline --locked -p marmish-native --bins -j2

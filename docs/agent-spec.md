@@ -1630,9 +1630,13 @@ native group in a fresh recipient process. A successful one-poll Welcome
 allows a local Pending transition. Pre-effect exit and a managed journal
 write refusal leave charged JoinStarted custody and prevent retries. The
 test measures one native poll, the committed custody changes, and exact
-Pending custody across replay. The bridge runs in the opt-in Linux AMD64
-test suite. Direct bridge coverage of
-wrong scope, expiry and an injected uncertain native effect remains open.
+Pending custody across replay. The opt-in Linux AMD64 fixture also covers the
+exact Held expiry boundary, signed custody drift, foreign lease, wrong stage
+inode, stale owner, retired route and retained epoch mismatch. A lost result
+after a verified native close leaves JoinStarted until a fresh process
+verifies the join and commits Pending without polling Welcome again.
+[Integrated refusal validation](validation/peer-installed-capped-pending-refusals.md)
+records the covered transitions, exact counts and remaining gaps.
 Installed daemon and application activation require separate qualification.
 
 The [terminal custody fixture](validation/peer-terminal-custody.md) makes
