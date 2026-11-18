@@ -472,6 +472,12 @@ async fn prove_lost_ack(with_receipt: bool) {
     recipient.resume_outbound_fanouts().await.unwrap();
     assert_eq!(gate.observe().unwrap().commit_calls, 0);
     assert_eq!(round.relay.group_writes(), writes);
+    retry_socket
+        .lock()
+        .await
+        .stop(Instant::now() + STEP)
+        .await
+        .unwrap();
     if with_receipt {
         let rotation = verify::confirm_rotation_cold(
             &recipient,
@@ -498,7 +504,6 @@ async fn prove_lost_ack(with_receipt: bool) {
             founder: setup.founder_reopen,
             founder_runtime: Some(founder),
             founder_socket: &mut founder_socket,
-            sender_socket: retry_socket.clone(),
             recipient_signer: recipient_signer.clone(),
             inner,
             started,
@@ -506,12 +511,6 @@ async fn prove_lost_ack(with_receipt: bool) {
         .await;
     }
     founder_socket.stop(Instant::now() + STEP).await.unwrap();
-    retry_socket
-        .lock()
-        .await
-        .stop(Instant::now() + STEP)
-        .await
-        .unwrap();
     assert_eq!(round.relay.peer_transcript().len(), 3);
     assert_eq!(round.ordinary.publication_attempts(7435), 0);
     if !with_receipt {

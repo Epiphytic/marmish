@@ -6,6 +6,7 @@ use crate::peer_invitation::{
     accept_receipt_wire::{self, Receipt},
     publication_socket::ReceiptGate,
     receipt_publication_verify as outbound,
+    socket::wire::Failure as SocketFailure,
     store::consent_checkpoint::provisioning::prepared_consent::custody::publication::{
         FounderEnrollment, ReceiptReservation,
     },
@@ -77,7 +78,6 @@ pub(super) struct ReceiptRun<'a, 'profile> {
     pub(super) founder: PeerFounderReopen,
     pub(super) founder_runtime: Option<PeerFounderRuntime<FounderTransport>>,
     pub(super) founder_socket: &'a mut Owner,
-    pub(super) sender_socket: Arc<Mutex<Owner>>,
     pub(super) recipient_signer: Arc<Keys>,
     pub(super) inner: [u8; 32],
     pub(super) started: Instant,
@@ -103,6 +103,27 @@ impl ReceiptRun<'_, '_> {
             gate,
             Gate::unscoped_closed(self.round.wall.clone()),
         )
+    }
+
+    async fn open_sender(&self) -> Arc<Mutex<Owner>> {
+        let config = QualifiedOrigin::for_daemon_peer_fixture(
+            self.round.relay.peer_mode().unwrap(),
+            self.round.root.path(),
+            self.round.signer,
+            self.round.founder.public_key(),
+        )
+        .unwrap();
+        Arc::new(Mutex::new(
+            Owner::open(
+                &config.connector,
+                self.round.relay.url.as_str(),
+                self.round.signer,
+                &self.recipient_signer,
+                Instant::now() + WAIT,
+            )
+            .await
+            .unwrap(),
+        ))
     }
 
     fn read(
@@ -169,8 +190,9 @@ pub(super) async fn finish(mut run: ReceiptRun<'_, '_>) {
     let request = outbound::check_captured(&recipient, run.image, &recorded, run.wall()).unwrap();
     let capture_reopen_ms = reopen_started.elapsed().as_millis();
     advance_retry(&recipient, &run.stage.group, &run.round.wall, deadline);
+    let sender = run.open_sender().await;
     let socket = ReservedSocket::reserve(
-        run.sender_socket.clone(),
+        sender.clone(),
         &recorded,
         run.round.wall.clone(),
         Instant::now() + STEP,
@@ -200,6 +222,11 @@ pub(super) async fn finish(mut run: ReceiptRun<'_, '_>) {
     );
     assert!(effects.unwrap().published_app_messages.is_empty());
     let ack_loss_ms = ack_loss_start.elapsed().as_millis();
+    assert!(matches!(
+        sender.lock().await.stop(Instant::now() + STEP).await,
+        Err(SocketFailure::Retired)
+    ));
+    drop(sender);
 
     // Stop the recipient before its terminal SQL decision. The founder has
     // not yet changed the durable acceptance journal.
@@ -260,25 +287,7 @@ pub(super) async fn finish(mut run: ReceiptRun<'_, '_>) {
     assert_eq!(writes[3].record, record.fingerprint());
     assert!(!writes[3].acknowledged && !writes[3].duplicate);
 
-    let connector = QualifiedOrigin::for_daemon_peer_fixture(
-        run.round.relay.peer_mode().unwrap(),
-        run.round.root.path(),
-        run.round.signer,
-        run.round.founder.public_key(),
-    )
-    .unwrap()
-    .connector;
-    let retry = Arc::new(Mutex::new(
-        Owner::open(
-            &connector,
-            run.round.relay.url.as_str(),
-            run.round.signer,
-            &run.recipient_signer,
-            Instant::now() + WAIT,
-        )
-        .await
-        .unwrap(),
-    ));
+    let retry = run.open_sender().await;
     let retry_started = Instant::now();
     advance_retry(&recipient, &run.stage.group, &run.round.wall, deadline);
     let recovered = outbound::recover(&recipient, run.image, &uncertain, run.wall()).unwrap();
