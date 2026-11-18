@@ -12,7 +12,8 @@ qualify an installed Pending or Healthy Empty.
 
 The daemon composition mints the nonzero listener generation. A
 candidate-only, non-Clone constructor accepts the generation and calls
-`pending_view::pair` itself, returning `(Offer, Producer)`. The offer
+`pending_view::pair` itself, returning `Option<(Offer, Producer)>` and
+propagating its actor counter exhaustion. The offer
 holds the resulting reader and generation, the existing one-use
 `ListenerRegistration`, and the exact registered read-only `Fatal`.
 It contains no lease, route, queue, key or storage.
@@ -22,10 +23,11 @@ Give the offer the identical `profile.socket_path()` pathname passed to
 and check that `UnixListener::local_addr().as_pathname()` is that path.
 This one-time check uses the name as bound. Later path changes in the
 same-UID private directory are bounded by that directory and the held
-lease, and the comparison does not attest to any later inode. A mismatch,
-failed check or already Stopped registration drops the offer while the
-ordinary listener continues serving. Only a valid listener records
-Registered. OrdinaryReady remains the daemon's responsibility.
+lease, and the comparison does not attest to any later inode. A mismatch or failed check drops the offer while the ordinary listener
+continues serving. A validated offer records Registered with the existing
+API. A previously Stopped handshake ignores that event and never becomes
+Ready, so its reads remain unavailable. OrdinaryReady remains the daemon's
+responsibility.
 
 The offer retains a drop guard before and after consumption. On mismatch,
 early exit and future drop it calls `reader.stop()` and drops the
@@ -69,19 +71,30 @@ short exchange where possible. The existing 64-connection limit drops
 the connection before reading any request. There is no forwarding to the ordinary
 queue and no direct or refresh request to the actor. Keep the bounded
 typed List and Show decoder, fixture-only decision IPC and all other
-requests unchanged. Add an offer parameter only under
-`cfg(marmish_peer_receiver_candidate)`, independent of the existing
-`cfg(test)` inert listener fixture. The current `serve_inner` and
-daemon calls pass None in candidate builds until installed composition.
-Stock has no offer parameter. The dedicated no-offer `PeerRead` reply
-stays ahead of the ordinary queue arm.
+requests unchanged. Use
+`all(marmish_peer_receiver_candidate, target_os = "linux", target_arch = "x86_64")`
+for the offer module, type, constructor, accept-loop parameter and
+candidate-only call-site arguments. The build script permits the
+candidate cfg only on that target. Other targets build stock and omit the
+offer. Keep the existing test-only fixture and test Peer arguments.
+Compile the existing drain argument for tests or the Linux AMD64
+candidate so the future mount can use it. In this slice the existing
+`serve_inner` path passes None for drain where it exists and None for
+offer in candidate builds. The direct daemon fixture call and the
+`serve_with_peer` test wrapper keep their existing drain/fixture
+arguments and pass explicit None for the offer only in candidate tests.
+The listener test module alone passes Some. The dedicated no-offer
+`PeerRead` reply stays ahead of the ordinary queue arm.
 
 ## Qualification
 
 Use the actual same-UID socket and shared accept loop on Linux AMD64.
 Exercise wrong path, already Stopped or dropped offer, not Ready, no
 view, wrong generation, Show with mismatched selection, stopped
-readiness and a fifth concurrent read. Test a cut between admission
+readiness and a fifth concurrent read. Wrong path and dropped offer
+stop the view and leave readiness unavailable. Test normal drain and
+confirm it stops the view and revokes readiness before joined task
+termination, including an accepted task parked at its write boundary. Test a cut between admission
 and the pre-write check with a deterministic test seam. Verify that
 aborting the serve future stops the view, any PeerRead result leaves
 the ordinary request queue untouched, and ordinary Status still works.
@@ -89,6 +102,9 @@ Check that a stock build cannot use PeerRead. Add an exact synthetic test view i
 to verify the positive wire path mechanically. Qualifying the
 application's Pending and Empty proof still requires the actual actor
 and its real v2 and capped SQLCipher tests, with no installed synthetic
-constructor. Confirm candidate and stock source checks and run the
-existing view, readiness and IPC tests. Obtain Claude Auto code review
+constructor. Confirm candidate source and tests with
+`CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="--cfg marmish_peer_receiver_candidate"`
+and `--target x86_64-unknown-linux-gnu`. Run stock checks without the
+extra cfg, and verify the build-script refusal for a non-x86_64 Linux
+target and for macOS. Run the existing view, readiness and IPC tests. Obtain Claude Auto code review
 before publishing this slice.
