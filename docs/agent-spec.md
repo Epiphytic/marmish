@@ -64,7 +64,9 @@ qualifies local-asset quickstart, repeat setup, tamper refusal and an ordinary
 command over an explicit relay. The [installed foreground report](validation/terminal-installed-foreground.md)
 qualifies a shell-installed Linux AMD64 frontend against private
 loopback WSS with native tmux, literal UTF-8 output and terminal
-restoration. Standalone external-relay and cross-platform validation,
+restoration. The [installed controls report](validation/terminal-installed-controls.md)
+also checks actual CLI resize, Ctrl-C and tilde-dot detach with recovery of
+the same tmux shell and its state. Standalone external-relay and cross-platform validation,
 inbound Peer invitations and installed network heartbeat remain in
 development.
 The [Peer aggregate ingress proof](validation/peer-aggregate-ingress-proof.md)

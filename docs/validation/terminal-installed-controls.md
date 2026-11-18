@@ -18,21 +18,21 @@ passed before and after this sequence.
 
 | Linux AMD64 payload | Total | Raw attach | Key echo | Raw resume |
 | --- | ---: | ---: | ---: | ---: |
-| Cargo debug, exact test source `014d754` | 29.46 s | 6.871 s | 149.113 ms | 7.700 s |
-| Shell-installed optimized package, source `d091cc8` | 28.76 s | 6.858 s | 137.629 ms | 6.958 s |
+| Cargo debug, exact test source `8fa94ff` | 32.28 s | 7.196 s | 169.452 ms | 7.550 s |
+| Shell-installed optimized package, source `d091cc8` | 32.15 s | 7.997 s | 148.237 ms | 8.653 s |
 
 The installed run used the [exact optimized build](mdk-master-3548.md#optimized-linux-installer-and-private-terminal).
-Installation took 0.888 s and all three installed executable payloads
+Installation took 0.939 s and all three installed executable payloads
 matched their package inputs. The harness used the package build stamp,
 the same MDK lock and the exact reviewed test files. Timings are
 single-run wall samples on loopback. The longer
 [backend benchmark](terminal-installed-runtime.md#benchmark-with-the-refreshed-upstream-mdk-lock)
 reports distributions.
 
-The separate positive foreground regression passed in 20.32 s and the
-quiet AUTH refusal passed in 16.98 s. Both reused the normal debug
-binaries. The normal build took 20.25 s and strict all-target Clippy
-with `installed-checks` passed in 35.28 s. The core CI selection is
+The separate positive foreground regression passed in 27.41 s and the
+quiet AUTH refusal passed in 17.41 s. Both reused the normal debug
+binaries. The normal build took 21.47 s and strict all-target Clippy
+with `installed-checks` passed in 34.54 s. The core CI selection is
 unchanged. To reproduce with matching binaries already built, run:
 
 ```sh
@@ -46,3 +46,8 @@ on macOS or Linux ARM64. Bracketed paste and takeover are covered
 separately by the local frontend and backend fixtures. The cooked Busy
 response is a distinct failure checkpoint for default resume in this
 test. It did not occur in either run.
+
+The 36 unchanged core CI selectors passed locally on parent source
+`5e056c9cb8f674d881a0902abaa8a2c81c924288` with the actual workflow helper.
+They recorded 160 passing executions in 106.32 s, including compilation.
+The selectors overlap. This local replay did not run on GitHub Actions.
