@@ -2274,6 +2274,8 @@ mod tests {
             &["servers", "approve"],
             &["servers", "list", "--", "extra"],
             &["servers", "list", "extra"],
+            &["servers", "list", "--identity", "--socket"],
+            &["servers", "list", "--socket", "--identity"],
             &["-u", "other", "servers", "list"],
             &["servers", "list", "--tor", "always"],
             &["servers", "list", "--relay", "wss://relay.example"],
@@ -2295,6 +2297,13 @@ mod tests {
 
     #[test]
     fn explicit_servers_destinations_and_rsync_use_ordinary_parser() {
+        use nostr::nips::nip19::ToBech32 as _;
+
+        let npub = nostr::key::Keys::generate()
+            .public_key()
+            .to_bech32()
+            .unwrap();
+        let relay_target = format!("{npub}@relay.example");
         for values in [
             &[
                 "marmish",
@@ -2312,12 +2321,22 @@ mod tests {
                 "/bin/echo",
                 "show",
             ],
+            &["marmish", &relay_target, "--", "/bin/echo", "list"],
             &["marmish", "-u", "name", "--", "servers", "list"],
         ] {
-            let args = public(values).unwrap();
+            let raw = values.iter().map(OsString::from).collect::<Vec<_>>();
+            let ordinary = parse_frontend(&raw, true).unwrap();
+            let args = parse_frontend(&raw, false).unwrap();
             let Some(FrontendCommand::Remote(values)) = args.command else {
                 panic!("expected a remote command");
             };
+            let Some(FrontendCommand::Remote(ordinary_values)) = ordinary.command else {
+                panic!("expected an ordinary remote command");
+            };
+            assert_eq!(values, ordinary_values);
+            assert_eq!(args.trailing, ordinary.trailing);
+            assert_eq!(args.user, ordinary.user);
+            assert_eq!(args.state_dir, ordinary.state_dir);
             let trailing = args.trailing.unwrap();
             assert!(validate_separator(&values, &trailing, values != trailing).is_ok());
         }
