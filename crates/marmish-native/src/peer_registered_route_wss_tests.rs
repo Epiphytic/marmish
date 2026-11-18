@@ -1,7 +1,6 @@
 use super::{Keys, PeerRecipientPort, ReceiverRouteAdmission, time_limit};
 use crate::{
     command_config::CommandConfig,
-    dispatcher_fatal::Trip,
     identity::ProfileLease,
     peer_relay_trust::{
         candidate_registration::{ReceiverPreflight, RegistrationFailure},
@@ -86,28 +85,47 @@ async fn registered_route_subprocess() {
     assert_eq!(relay.qualification_connections(), 4);
     let account = material.public_key();
     let config = CommandConfig::load(lease.root()).unwrap();
-    let registered = ReceiverPreflight::prepare(&lease, &material, &config)
+    let mut registered = ReceiverPreflight::prepare(&lease, &material, &config)
         .unwrap()
         .unwrap()
         .register(&lease, &material)
         .unwrap();
     let forwarding = registered.forwarding_verifier();
+    let (_, _, custody) = registered.take_command_fence().unwrap().into_parts();
     let mut attached = registered.attach(&lease, &material).unwrap();
-    let (trip, fatal) = Trip::new();
     if let Some(case) = case.strip_prefix("fatal_") {
         let token = attached.take_route(&lease, &material).unwrap();
-        let (admission, drain) = ReceiverRouteAdmission::registered(token, fatal).unwrap();
+        let (admission, drain) = ReceiverRouteAdmission::registered(token).unwrap();
         raw_fatal::run(
             case,
             &relay,
             &lease,
             &material,
             &founder,
-            trip,
+            || {
+                if case == "displaced_idle" {
+                    // SAFETY: this subprocess owns the process-default mutation.
+                    let stock = unsafe { sql::sqlite3_vfs_find(c"unix".as_ptr()) };
+                    assert!(!stock.is_null());
+                    assert_eq!(
+                        unsafe { sql::sqlite3_vfs_register(stock, 1) },
+                        sql::SQLITE_OK
+                    );
+                    assert_eq!(
+                        forwarding.recheck_default(),
+                        Err(RegistrationFailure::Indeterminate)
+                    );
+                } else {
+                    custody.report();
+                }
+            },
             (admission, drain),
         )
         .await;
-        forwarding.recheck_default().unwrap();
+        assert_eq!(
+            forwarding.recheck_default().is_err(),
+            !matches!(case, "drop_open" | "bad_eose")
+        );
         relay.stop().await;
         return;
     }
@@ -117,7 +135,7 @@ async fn registered_route_subprocess() {
             let (quota, mut control) = attached.actor_parts();
             quota.receiver_files(&lease).unwrap();
             let route = control.take_route(&lease, &material).unwrap();
-            let (admission, _drain) = ReceiverRouteAdmission::registered(route, fatal).unwrap();
+            let (admission, _drain) = ReceiverRouteAdmission::registered(route).unwrap();
             let mut port = PeerRecipientPort::open(admission, time_limit())
                 .await
                 .unwrap();
@@ -185,7 +203,7 @@ async fn registered_route_subprocess() {
         }
         "unused_admission" => {
             let route = attached.take_route(&lease, &material).unwrap();
-            let (admission, _drain) = ReceiverRouteAdmission::registered(route, fatal).unwrap();
+            let (admission, _drain) = ReceiverRouteAdmission::registered(route).unwrap();
             drop(admission);
             assert_eq!(
                 attached.recheck(&lease, &material),

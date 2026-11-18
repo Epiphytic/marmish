@@ -179,9 +179,8 @@ impl ReceiverRouteAdmission {
     ))]
     pub(crate) fn registered(
         token: super::candidate_registration::RegisteredRoute,
-        fatal: Fatal,
     ) -> Result<(Self, PeerSocketDrain)> {
-        let (route, signer) = token.into_parts();
+        let (route, signer, fatal) = token.into_parts();
         if signer.public_key() != route.account {
             return Err(Error::Invalid("peer_identity_binding"));
         }

@@ -1,5 +1,5 @@
 use super::super::{ControlOutcome, Failure, Operation, Owner, offer, permit, wall_now};
-use super::{Keys, PeerRecipientPort, ReceiverRouteAdmission, Trip, run_cases, time_limit};
+use super::{Keys, PeerRecipientPort, ReceiverRouteAdmission, run_cases, time_limit};
 use crate::{
     Error,
     identity::{IdentityMaterial, ProfileLease},
@@ -25,6 +25,7 @@ fn peer_registered_raw_fatal_private_wss() {
         "fatal_drop_open",
         "fatal_bad_eose",
         "fatal_idle",
+        "fatal_displaced_idle",
         "fatal_stop",
         "fatal_page",
         "fatal_use_page",
@@ -42,12 +43,12 @@ pub(super) async fn run(
     lease: &ProfileLease,
     material: &IdentityMaterial,
     founder: &Keys,
-    trip: Trip,
+    cut: impl Fn(),
     (admission, drain): (ReceiverRouteAdmission, PeerSocketDrain),
 ) {
     let account = material.public_key();
     if case == "before_open" {
-        trip.trip();
+        cut();
         assert!(matches!(
             drain.reap(Instant::now() + Duration::from_millis(25)).await,
             Err(Error::Timeout)
@@ -80,7 +81,7 @@ pub(super) async fn run(
                 assert_eq!(relay.recipient_requests(account), 0);
                 assert!(relay.runtime_socket_active(RUNTIME_SOCKET));
                 if case == "startup" {
-                    trip.trip();
+                    cut();
                     assert!(matches!(
                         timeout(PROMPT, open.as_mut()).await.unwrap(),
                         Err(Failure::Retired)
@@ -110,7 +111,7 @@ pub(super) async fn run(
                 matches!(challenge, Some(Ok(Message::Text(text))) if text.starts_with("[\"AUTH\","))
             );
             let cancellation = route.cancellation();
-            trip.trip();
+            cut();
             assert!(!cancellation.is_cancelled());
             if case == "split_sink" {
                 drop(stream);
@@ -147,7 +148,7 @@ pub(super) async fn run(
             let wall = port.use_current_recipient(|_, _, wall| wall).unwrap();
             let bounds = [wall - 1, wall];
             match case {
-                "idle" => {
+                "idle" | "displaced_idle" => {
                     let pending = port.wait_live(time_limit());
                     tokio::pin!(pending);
                     assert!(
@@ -156,7 +157,7 @@ pub(super) async fn run(
                         ))
                         .await
                     );
-                    trip.trip();
+                    cut();
                     assert!(matches!(
                         timeout(PROMPT, pending).await.unwrap(),
                         Err(Failure::Retired)
@@ -164,7 +165,7 @@ pub(super) async fn run(
                     0
                 }
                 "stop" => {
-                    trip.trip();
+                    cut();
                     assert!(matches!(
                         port.stop(time_limit()).await,
                         Err(Failure::Retired)
@@ -172,7 +173,7 @@ pub(super) async fn run(
                     0
                 }
                 "page" => {
-                    trip.trip();
+                    cut();
                     assert!(matches!(
                         port.page(bounds, time_limit()).await,
                         Err(Failure::Retired)
@@ -185,7 +186,7 @@ pub(super) async fn run(
                     port.use_page(&page, |checked| assert!(checked.records.is_empty()))
                         .unwrap();
                     eventually(|| relay.recipient_closes(account) == 1).await;
-                    trip.trip();
+                    cut();
                     assert!(matches!(
                         port.use_page(&page, |_| panic!("retired page callback")),
                         Err(Failure::Retired)
@@ -213,7 +214,7 @@ pub(super) async fn run(
                         panic!("exact successful acknowledgment required");
                     };
                     port.use_accepted(&ack, |_| ()).unwrap();
-                    trip.trip();
+                    cut();
                     assert!(matches!(
                         port.use_accepted(&ack, |_| panic!("retired acknowledgment callback")),
                         Err(Failure::Retired)
@@ -225,7 +226,7 @@ pub(super) async fn run(
                     let record =
                         reserve_live(&mut port, relay, lease.root(), material, founder).await;
                     assert_eq!(port.0.live_records.len(), 1);
-                    trip.trip();
+                    cut();
                     if case == "buffered_live" {
                         assert!(matches!(
                             port.wait_live(time_limit()).await,

@@ -3,7 +3,10 @@
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::OwnedSemaphorePermit;
@@ -201,6 +204,36 @@ mod tests {
         drop(stream);
         assert!(observed.load(std::sync::atomic::Ordering::Relaxed));
         assert_eq!(slot.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn cut_is_visible_before_notify_and_during_waiter_registration() {
+        let (trip, fatal) = Trip::new();
+        let (raw, mut remote) = tokio::io::duplex(1);
+        let mut fenced = FencedStream::new(raw, &fatal);
+        assert!(!fatal.is_tripped());
+        trip.mark_cut();
+        assert!(fatal.is_tripped());
+        tokio::time::timeout(Duration::from_millis(100), fatal.tripped())
+            .await
+            .unwrap();
+        assert_eq!(
+            fenced.write(b"a").await.unwrap_err().kind(),
+            io::ErrorKind::ConnectionAborted
+        );
+        assert!(
+            poll_fn(|cx| {
+                let mut bytes = [0];
+                let pending = Pin::new(&mut remote)
+                    .poll_read(cx, &mut ReadBuf::new(&mut bytes))
+                    .is_pending();
+                Poll::Ready(pending)
+            })
+            .await
+        );
+        trip.notify();
+        trip.notify();
+        assert!(fatal.is_tripped());
     }
 
     #[tokio::test]

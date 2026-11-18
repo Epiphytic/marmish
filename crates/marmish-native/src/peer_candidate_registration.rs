@@ -6,6 +6,7 @@ use super::{
     private_mode, ready_scope::ReadyReceiverScope,
 };
 use crate::{
+    dispatcher_fatal::Fatal,
     identity::{IdentityMaterial, ProfileLease},
     peer_quota_vfs::dispatch::{
         ReceiverQuota,
@@ -20,7 +21,7 @@ use std::{
     sync::Arc,
 };
 
-pub(crate) use quota::{ForwardingVerifier, RegistrationFailure};
+pub(crate) use quota::{CustodyFault, ForwardingVerifier, RegistrationFailure};
 
 pub(crate) struct ReceiverPreflight {
     scope: ReadyReceiverScope,
@@ -58,9 +59,16 @@ impl ReceiverPreflight {
             scope: ready,
             route,
         } = self;
+        let forwarding = dispatch.forwarding_verifier();
+        let command_fence = RegisteredCommandFence {
+            fatal: forwarding.fatal(),
+            forwarding: forwarding.clone(),
+            custody: dispatch.custody_fault(),
+        };
         Ok(RegisteredReceiver {
+            command_fence: Some(command_fence),
             scope: RegisteredScope {
-                forwarding: dispatch.forwarding_verifier(),
+                forwarding,
                 ready,
                 directories,
             },
@@ -81,13 +89,35 @@ impl ReceiverPreflight {
     }
 }
 
+pub(crate) struct RegisteredCommandFence {
+    fatal: Fatal,
+    forwarding: ForwardingVerifier,
+    custody: CustodyFault,
+}
+
+impl RegisteredCommandFence {
+    pub(crate) fn into_parts(self) -> (Fatal, ForwardingVerifier, CustodyFault) {
+        (self.fatal, self.forwarding, self.custody)
+    }
+}
+
 pub(crate) struct RegisteredReceiver {
+    command_fence: Option<RegisteredCommandFence>,
     scope: RegisteredScope,
     dispatch: RegisteredDispatch,
     route: CheckedPeerRoute,
 }
 
 impl RegisteredReceiver {
+    pub(crate) fn take_command_fence(
+        &mut self,
+    ) -> std::result::Result<RegisteredCommandFence, RegistrationFailure> {
+        self.scope.forwarding.recheck_default()?;
+        self.command_fence
+            .take()
+            .ok_or(RegistrationFailure::LocalUnavailable)
+    }
+
     pub(crate) fn forwarding_verifier(&self) -> ForwardingVerifier {
         self.scope.forwarding.clone()
     }
@@ -227,6 +257,7 @@ impl ReceiverRouteControl<'_, '_> {
         Ok(RegisteredRoute {
             route: taken?,
             signer: self.route_scope.material.signer(),
+            fatal: self.route_scope.scope.forwarding.fatal(),
         })
     }
 
@@ -251,11 +282,12 @@ impl ReceiverRouteControl<'_, '_> {
 pub(crate) struct RegisteredRoute {
     route: CheckedPeerRoute,
     signer: Arc<Keys>,
+    fatal: Fatal,
 }
 
 impl RegisteredRoute {
-    pub(in crate::peer_relay_trust) fn into_parts(self) -> (CheckedPeerRoute, Arc<Keys>) {
-        (self.route, self.signer)
+    pub(in crate::peer_relay_trust) fn into_parts(self) -> (CheckedPeerRoute, Arc<Keys>, Fatal) {
+        (self.route, self.signer, self.fatal)
     }
 }
 

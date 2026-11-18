@@ -85,6 +85,12 @@ fn candidate_registration_scope_and_irreversible_dispatch() {
         "dead_lease",
         "displaced_before_take",
         "displaced_after_take",
+        "duplicate_displacement",
+        "wake_after_unlock",
+        "delayed_notifier",
+        "guard_unwind",
+        "poison_backstop",
+        "custody_under_lock",
     ] {
         let root = start_profile();
         let mut child = Command::new(std::env::current_exe().unwrap())
@@ -158,6 +164,14 @@ fn registration_subprocess() {
     let mut registered = prepared.register(&lease, &material).unwrap();
     let forwarding = registered.forwarding_verifier();
     registered.recheck(&lease, &material).unwrap();
+    let (ordinary_fatal, exact_forwarding, custody) =
+        registered.take_command_fence().unwrap().into_parts();
+    assert!(matches!(
+        registered.take_command_fence(),
+        Err(RegistrationFailure::LocalUnavailable)
+    ));
+    assert!(!ordinary_fatal.is_tripped());
+    exact_forwarding.recheck_default().unwrap();
     assert_eq!(fs::read_dir(&peer).unwrap().count(), 0);
     assert!(matches!(
         prepare().register(&lease, &material),
@@ -180,6 +194,7 @@ fn registration_subprocess() {
             );
             drop(attached);
             independent.recheck_default().unwrap();
+            assert!(!ordinary_fatal.is_tripped());
             verify_forwarded_ordinary_and_fenced_names(lease.root());
         }
         "topology" => {
@@ -193,6 +208,7 @@ fn registration_subprocess() {
                 Err(RegistrationFailure::LocalUnavailable)
             );
             forwarding.recheck_default().unwrap();
+            assert!(!ordinary_fatal.is_tripped());
         }
         "displaced" => {
             verify_sticky_displacement(registered, &lease, &material, &forwarding);
@@ -231,11 +247,30 @@ fn registration_subprocess() {
             assert!(attached.route_scope.route.is_none());
             assert!(cancel.is_cancelled());
         }
+        "duplicate_displacement" => {
+            let mut attached = registered.attach(&lease, &material).unwrap();
+            let _route = attached.take_route(&lease, &material).unwrap();
+            let duplicate = prepare();
+            displace_default();
+            assert!(!ordinary_fatal.is_tripped());
+            assert!(matches!(
+                duplicate.register(&lease, &material),
+                Err(RegistrationFailure::Indeterminate)
+            ));
+            assert!(ordinary_fatal.is_tripped());
+            assert!(forwarding.fatal().is_tripped());
+        }
+        "wake_after_unlock" | "delayed_notifier" | "guard_unwind" | "poison_backstop"
+        | "custody_under_lock" => {
+            quota::verify_notification_case(&mode, &forwarding, &custody);
+            assert!(ordinary_fatal.is_tripped());
+        }
         "dead_lease" => {
             let RegisteredReceiver {
                 scope: old_scope,
                 dispatch,
                 route,
+                ..
             } = registered;
             lease.cleanup_runtime().unwrap();
             drop(old_scope);
@@ -260,6 +295,10 @@ fn registration_subprocess() {
             return;
         }
         _ => panic!("unrecognized registration test case"),
+    }
+    if mode.starts_with("displaced") {
+        assert!(ordinary_fatal.is_tripped());
+        assert!(forwarding.fatal().is_tripped());
     }
     lease.cleanup_runtime().unwrap();
 }

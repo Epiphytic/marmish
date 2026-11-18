@@ -109,7 +109,9 @@ impl RegistryTurn {
     }
 
     fn state(&mut self) -> &mut State {
-        self.guard.as_deref_mut().expect("registry turn holds its lock")
+        self.guard
+            .as_deref_mut()
+            .expect("registry turn holds its lock")
     }
 
     fn fail(&mut self, backstop: Option<&Arc<Trip>>) -> RegistrationFailure {
@@ -153,10 +155,6 @@ impl ForwardingVerifier {
         self.0.trip.observe()
     }
 
-    pub(crate) fn custody_fault(&self) -> CustodyFault {
-        CustodyFault(Arc::clone(&self.0.trip))
-    }
-
     pub(crate) fn recheck_default(&self) -> std::result::Result<(), RegistrationFailure> {
         let mut turn = RegistryTurn::acquire(Some(&self.0.trip))?;
         if !matches!(turn.state(), State::Registered(current)
@@ -186,6 +184,10 @@ pub(crate) struct RegisteredDispatch(Installed);
 impl RegisteredDispatch {
     pub(crate) fn forwarding_verifier(&self) -> ForwardingVerifier {
         ForwardingVerifier(self.0.clone())
+    }
+
+    pub(crate) fn custody_fault(&self) -> CustodyFault {
+        CustodyFault(Arc::clone(&self.0.trip))
     }
 
     pub(crate) fn recheck_lease(
@@ -357,4 +359,107 @@ pub(crate) fn supported_directory_volume(directory: &File) -> Result<bool> {
     }
     // SAFETY: successful fstatfs initialized the result.
     Ok(supported_linux_volume(&unsafe { status.assume_init() }))
+}
+
+#[cfg(test)]
+pub(crate) fn verify_notification_case(
+    case: &str,
+    forwarding: &ForwardingVerifier,
+    custody: &CustodyFault,
+) {
+    use std::{
+        future::Future,
+        panic::catch_unwind,
+        sync::atomic::{AtomicUsize, Ordering},
+        task::{Context, Wake, Waker},
+    };
+
+    struct ObservedWake {
+        observer: Fatal,
+        count: AtomicUsize,
+        try_registry: bool,
+    }
+
+    impl Wake for ObservedWake {
+        fn wake(self: Arc<Self>) {
+            assert!(self.observer.is_tripped());
+            if self.try_registry {
+                assert!(!matches!(
+                    REGISTRY.try_lock(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                ));
+            }
+            self.count.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let fatal = forwarding.fatal();
+    let state = Arc::new(ObservedWake {
+        observer: fatal.clone(),
+        count: AtomicUsize::new(0),
+        try_registry: case != "custody_under_lock",
+    });
+    let waker = Waker::from(Arc::clone(&state));
+    let mut cx = Context::from_waker(&waker);
+    let mut waiting = std::pin::pin!(fatal.tripped());
+    assert!(waiting.as_mut().poll(&mut cx).is_pending());
+    match case {
+        "wake_after_unlock" => {
+            let mut turn = RegistryTurn::acquire(None).unwrap();
+            assert_eq!(turn.fail(None), RegistrationFailure::Indeterminate);
+            assert!(fatal.is_tripped());
+            assert_eq!(state.count.load(Ordering::Relaxed), 0);
+            drop(turn);
+        }
+        "delayed_notifier" => {
+            let mut turn = RegistryTurn::acquire(None).unwrap();
+            turn.fail(None);
+            let delayed = turn.unlock().unwrap();
+            assert!(fatal.is_tripped());
+            assert_eq!(state.count.load(Ordering::Relaxed), 0);
+            assert_eq!(
+                forwarding.recheck_default(),
+                Err(RegistrationFailure::Indeterminate)
+            );
+            assert!(state.count.load(Ordering::Relaxed) > 0);
+            delayed.notify();
+        }
+        "guard_unwind" => {
+            assert!(
+                catch_unwind(|| {
+                    let _turn = RegistryTurn::acquire(None).unwrap();
+                    panic!("test registry unwind");
+                })
+                .is_err()
+            );
+        }
+        "poison_backstop" => {
+            assert!(
+                catch_unwind(|| {
+                    let _raw = REGISTRY.lock().unwrap();
+                    panic!("test raw registry poison");
+                })
+                .is_err()
+            );
+            assert!(!fatal.is_tripped());
+            assert_eq!(
+                forwarding.recheck_default(),
+                Err(RegistrationFailure::Indeterminate)
+            );
+        }
+        "custody_under_lock" => {
+            let guard = REGISTRY.lock().unwrap();
+            custody.report();
+            assert!(fatal.is_tripped());
+            assert!(matches!(&*guard, State::Registered(_)));
+            drop(guard);
+        }
+        _ => panic!("unrecognized registry notification case"),
+    }
+    assert!(state.count.load(Ordering::Relaxed) > 0);
+    assert!(waiting.as_mut().poll(&mut cx).is_ready());
+    assert_eq!(
+        forwarding.recheck_default(),
+        Err(RegistrationFailure::Indeterminate)
+    );
 }

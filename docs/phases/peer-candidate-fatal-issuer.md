@@ -5,7 +5,7 @@ requires one process-wide cut when exact forwarding cannot be proved.
 The existing registration detects an unsafe default and persists
 Indeterminate. The Command prerequisite and raw transport need that
 same failure signal. This phase connects signal provenance to the
-registry. It does not mount the actor or the daemon stop path.
+registry. The actor and the daemon stop path remain separate phases.
 
 ## Ownership and ordering
 
@@ -61,7 +61,8 @@ from normal stop or local refusal.
 ## Sealed construction
 
 The registry module owns `RegistryMint`, with private fields and
-a private constructor. The only production call to
+a private constructor. Neither the mint nor the Command fence implements
+Clone, Copy or Default. The only production call to
 `Trip::registered(RegistryMint)` is the registrar after the physical
 post-install checks succeed. `Trip::new` for an independent pair is
 `cfg(test)`. The keeper's `Arc<Trip>` is never exported. A crate
@@ -85,8 +86,10 @@ take on `RegisteredReceiver` before ordinary initialization, after
 a fresh global check. Do not require a second local lease check at
 this point. The approved startup order must keep ordinary work
 available when subsequent Peer-only checks fail, and attaching the
-actor waits for ordinary readiness. A second take is refused.
-The fence authorizes only use of the exact registered forwarding
+actor waits for ordinary readiness. A second take is refused. A global failure on take returns
+`RegistrationFailure::Indeterminate`. A registered startup that cannot take
+the fence propagates the refusal. Stock admission is available only when no
+candidate registration succeeded. The fence authorizes only use of the exact registered forwarding
 monitor for ordinary setup and custody, never Peer SQL or relay use.
 
 The Command composition consumes this one sealed fence in
