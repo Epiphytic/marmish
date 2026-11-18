@@ -53,9 +53,7 @@ pub(crate) mod publication;
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 #[path = "peer_receiver_inventory_store.rs"]
-mod receiver_inventory_store;
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
-pub(crate) use receiver_inventory_store::Charge;
+pub(crate) mod receiver_inventory_store;
 
 #[cfg(test)]
 #[path = "peer_daemon_checkpoint.rs"]

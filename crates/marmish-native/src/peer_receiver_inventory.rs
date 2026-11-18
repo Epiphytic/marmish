@@ -10,7 +10,7 @@ use super::store::{
     HardenedPeerConnection,
     consent_checkpoint::provisioning::{
         Binding,
-        prepared_consent::custody::{Charge, ReceivePolicy},
+        prepared_consent::custody::{ReceivePolicy, receiver_inventory_store::Charge},
         stage_journal::State,
     },
     installed::RESERVED_BYTES,
