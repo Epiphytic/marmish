@@ -34,7 +34,9 @@ another relay in the SDK's account-wide seen-ID tracker. Production Peer
 activation is specified in the reviewed [Peer live routing and recovery
 plan](phases/peer-live.md). The [offline invitation codec](validation/peer-control-codec.md)
 verifies the three signed Offer, Consent and Delivery flights, with sizes and
-local timing for each. The
+local timing for each. The [offline Peer cursor store](validation/peer-cursor-store.md)
+verifies encrypted page and retry persistence, bounded replay, and transaction
+rollback. It remains a test target pending live carrier wiring. The
 [private Peer record codec](validation/peer-status-codec.md) verifies
 heartbeat fields, capability states and complete permission snapshot
 assembly in deterministic tests. Status publication and reception remain
