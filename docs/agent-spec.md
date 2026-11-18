@@ -1611,7 +1611,16 @@ The [capped Welcome fixture](validation/peer-capped-welcome.md) uses the
 real native ingest and a metered cold readback on Linux AMD64. It
 exercises exact snapshot admission, cancellation and a refused rollback
 journal write. This proof uses isolated v1 enrollment and disables all
-relay I/O. The installed v2 capped Pending turn is still separate.
+relay I/O.
+
+The [v2 capped Pending bridge](validation/peer-installed-capped-pending-bridge.md)
+starts from real signed Held on private WSS and verifies the founder's exact
+native group in a fresh recipient process. A successful one-poll Welcome
+allows a local Pending transition. Pre-effect exit and a managed journal
+write refusal leave charged JoinStarted custody and prevent retries. The
+bridge runs in the opt-in Linux AMD64 test suite. Direct bridge coverage of
+wrong scope, expiry and an injected uncertain native effect remains open.
+Installed daemon and application activation require separate qualification.
 
 The [terminal custody fixture](validation/peer-terminal-custody.md) makes
 Declined and Expired durable for an exact joined Pending invitation.

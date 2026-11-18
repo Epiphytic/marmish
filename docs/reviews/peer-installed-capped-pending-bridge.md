@@ -34,3 +34,26 @@ egress. These are R3 nonblocking implementation notes.
 Exact managed receiver recovery and settled signed v2 Consent plus
 admitted v2 Delivery still need to converge in one tested base. The
 private proof can then be implemented and reviewed independently.
+
+## Completed code
+
+Claude Code Sonnet 5.5 independently reviewed the completed source in Auto
+permission mode. Reviews inspected the exact bridge source and recorded author
+results. The WSS resource slot was reserved for the author's isolated run.
+
+| Round | Exact source commit | Session | Verdict |
+| --- | --- | --- | --- |
+| R1 | `37e82e7ad28f213d36bdcf124f44bae978ddb452` | `a4257c7a-0546-4cdc-a21f-5fc9027d2bb2` | Approved subject to exact live evidence. Raised after-close sampling and fresh retained evidence issues and identified untested refusal cases. |
+| R2 | `4689d29c79be65cdf4b5b4b3d35fa26e05397c6b` | `e02c2725-485e-4715-a756-3d2a7f14e106` | Approved the bounded private proof. Verified exact WSS success, pre-effect exit and journal refusal. Requested the legacy regression, exact binary and Clippy commands, and explicit validation limits. |
+
+R2 result text SHA-256 with one trailing newline is
+`2f945c1755faa86f26fa80a2a85b2f50e4cb2f870c19636f158152fd41dc420a`.
+R2 confirmed that close checks run before metrics, native ingest reloads the
+saved Delivery and durable JoinStarted row, and widening the test harness
+window leaves the native and signed deadlines unchanged. It identified
+uninstrumented SQL statement counts, generic cold refusal assertions and
+partial direct negative tests. The broader refusal matrix and separate
+uncertain-effect injection remain open. The earlier 36.91-second author test
+covered two scenarios. The exact R2 source passed all three scenarios in
+57.50 seconds. Approval conditions and commands are recorded in the
+[author validation](../validation/peer-installed-capped-pending-bridge.md).
