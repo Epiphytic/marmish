@@ -45,3 +45,15 @@ showing both the signed/physical clamp and the route's authority cuts. The
 approved revision adds those cases. At mount, the actor must supply the
 readiness and stop handles held by its own owner generation. The fixture
 privately tests a missing Fatal through refusal and zero publications.
+
+Claude Code Sonnet 5.5 Auto separately approved composed source
+`80dad0f` in session `5d1a7a55-7d24-4236-8ac5-94108fcb8df7`.
+The integration review checked the shared cancellation token and both
+test paths, and confirmed the earlier review record was preserved.
+The exact composed Linux AMD64 stock library test executable
+`83f1a9907f4ff1a52e1bb0baebd9d0e17b8b14285d5a9fa89fb0806aef667bfe`
+then passed all eight registered route handoff cases in 55.38 s and
+all four native window cases in 26.70 s over private WSS. The paired
+runs included revocation before connection and after connection,
+Fatal, cancellation, horizon expiry and absence of a registry-issued
+Fatal. Runtime activation remains a separate qualification.
