@@ -16,11 +16,14 @@ listener threads on independent runtimes.
 
 The worker's Ready observation borrows the existing watch and retains
 the recorded instant. Expose a candidate-only `startup_remaining` helper
-on that observation for the actor's initial local and WSS checks. It
-returns None when the watcher is stopped or closed, when the supplied
-clock observation predates the readiness edge, or at and after the
-15-second boundary. The actor will use a local duration together with
-its independent liveness, signed expiry and TLS validity checks. This
+on that observation for the actor's initial local and WSS checks. The
+helper samples the process monotonic clock and returns None when
+readiness has been revoked, when the observation predates the edge, or
+at and after the 15-second boundary. A private same-clock instant input
+enables deterministic tests of that calculation. Both local and WSS
+checks measure the remainder against the original edge. The actor will
+use that duration together with independent liveness, signed expiry and
+TLS validity checks. The latter use wall time across suspend. This
 budget is an admission guard. It does not interrupt blocking operating
 system or database operations. The first native five-second turn and
 its own liveness checks stay separate. This prerequisite adds no
@@ -33,3 +36,6 @@ sleeping or cross-runtime clock emulation. Rerun the existing
 startup and private WSS lifecycle regressions, stock and candidate
 all-target Clippy. Preserve the existing loss tests and behavior in the
 stock shipping binary.
+
+Claude Code Auto approved the design at `2cea9fb` in session
+`a8d71ed3-be89-43a4-999c-00e98a134442`.
