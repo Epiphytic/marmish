@@ -48,6 +48,7 @@ impl Installed {
         // SAFETY: descriptors are initialized for process life, and project
         // default writers share the registration lock held by the caller.
         let wrapper = unsafe { &*self.dispatch.wrapper };
+        // SAFETY: NAME is a static, NUL-terminated C string.
         if unsafe { sql::sqlite3_vfs_find(NAME.as_ptr()) } != self.dispatch.wrapper
             || Descriptor::read(wrapper) != self.descriptor
             || wrapper.pAppData != ptr::from_ref(self.dispatch).cast_mut().cast()
@@ -147,6 +148,7 @@ pub(crate) fn register(
     let (stock, managed, mut wrapper) = checked_stock().inspect_err(|_| {
         *state = State::Indeterminate;
     })?;
+    // SAFETY: checked_stock returns the initialized process-owned descriptor.
     let stock_descriptor = Descriptor::read(unsafe { &*stock });
     let local = prepared
         .admit_directory(lease, material)
@@ -158,6 +160,7 @@ pub(crate) fn register(
 
     // Recheck even on local refusal. A refusal can preserve ordinary startup
     // only while the exact captured stock contract is still current.
+    // SAFETY: stock still points to the process-owned descriptor.
     if !same_stock_default(stock, managed)
         || Descriptor::read(unsafe { &*stock }) != stock_descriptor
     {
@@ -180,6 +183,7 @@ pub(crate) fn register(
     if unsafe { sql::sqlite3_vfs_register(dispatch.wrapper, 1) } != sql::SQLITE_OK
         || installed.verify().is_err()
         // SQLite puts the old VFS list head immediately after the new default.
+        // SAFETY: the leaked wrapper is live and this caller owns registration.
         || unsafe { (*dispatch.wrapper).pNext } != stock
     {
         return Err(Indeterminate);
@@ -208,7 +212,7 @@ fn checked_stock() -> std::result::Result<
 }
 
 fn same_stock_default(stock: *mut sql::sqlite3_vfs, managed: *mut sql::sqlite3_vfs) -> bool {
-    // Candidate only builds on Linux, where the managed wrapper uses unix too.
+    // SAFETY: each name is a static C string or the null selector for default.
     unsafe {
         sql::sqlite3_vfs_find(ptr::null()) == stock
             && sql::sqlite3_vfs_find(c"unix".as_ptr()) == managed

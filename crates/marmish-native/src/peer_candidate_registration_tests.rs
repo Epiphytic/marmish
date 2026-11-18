@@ -110,7 +110,10 @@ fn candidate_registration_scope_and_irreversible_dispatch() {
 #[test]
 #[ignore = "run only through candidate_registration_scope_and_irreversible_dispatch"]
 fn registration_subprocess() {
-    let root = std::env::var_os(DIR_ENV).unwrap();
+    let Some(root) = std::env::var_os(DIR_ENV) else {
+        return;
+    };
+    let mode = std::env::var(CASE_ENV).unwrap();
     let (lease, material, config) = scope(Path::new(&root));
     let profile = ProfileFiles::open(Arc::clone(&lease)).unwrap();
     let key = lease
@@ -129,7 +132,6 @@ fn registration_subprocess() {
     };
     let prepared = prepare();
     assert!(!peer.exists(), "prepare must remain read-only");
-    let mode = std::env::var(CASE_ENV).unwrap();
     if mode == "local" {
         let mut wrong_root = zeroize::Zeroizing::new(*material.sqlcipher_root());
         wrong_root[0] ^= 1;
@@ -175,15 +177,28 @@ fn registration_subprocess() {
             ));
         }
         "dead_lease" => {
+            let RegisteredReceiver {
+                prepared,
+                directories,
+                dispatch,
+            } = registered;
             lease.cleanup_runtime().unwrap();
-            drop(registered);
+            drop(prepared);
+            drop(directories);
             drop(lease);
             let (new, material, config) = scope(Path::new(&root));
+            let mut prepared = ReceiverPreflight::prepare(&new, &material, &config)
+                .unwrap()
+                .unwrap();
+            let directories = prepared.admit_directory(&new, &material).unwrap();
+            assert_eq!(
+                dispatch.recheck_lease(&new, &directories),
+                Err("dispatch_lease_conflict")
+            );
+            assert!(dispatch.recheck_default().is_ok());
+            // With the old lease gone, the process still cannot register again.
             assert!(matches!(
-                ReceiverPreflight::prepare(&new, &material, &config)
-                    .unwrap()
-                    .unwrap()
-                    .register(&new, &material),
+                prepared.register(&new, &material),
                 Err(RegistrationFailure::LocalUnavailable)
             ));
             new.cleanup_runtime().unwrap();
@@ -228,6 +243,15 @@ fn local_refusals(
     fs::write(&manifest, &changed).unwrap();
     assert_untouched(pending, lease, material);
     fs::write(manifest, original).unwrap();
+
+    let pending = prepare();
+    let config = lease.root().join("config.json");
+    let original = fs::read(&config).unwrap();
+    let mut changed = original.clone();
+    changed.push(b'\n');
+    fs::write(&config, changed).unwrap();
+    assert_untouched(pending, lease, material);
+    fs::write(config, original).unwrap();
 }
 
 fn corrupt_records_refuse(
