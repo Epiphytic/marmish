@@ -1025,6 +1025,9 @@ mod tests {
         let mut row = record(scope.lease.profile_id(), relay);
         row.schema = 3;
         row.trust = trust_expression(&relay.trust);
+        row.probe_suite = super::VERSIONS.suite.to_owned();
+        row.bounds_version = super::VERSIONS.bounds.to_owned();
+        row.relay_contract = super::VERSIONS.contract.to_owned();
         row.operator_evidence = hex::encode(checked.digest);
         row.qualified_at = now;
         row.last_observed_at = now;
