@@ -91,6 +91,7 @@ impl PreparedConsentOwner<'_> {
             .checkpoint
             .terminal_check(&self.state.source, &record, wall)?;
         RetirementDir::open(&self.state.paths, known)?.ensure_absent(witness)?;
+        let wall = self.sample()?.as_secs();
         Ok(self
             .state
             .checkpoint

@@ -519,11 +519,12 @@ impl Round<'_> {
         let mut local = open_closed();
         let record = self.terminal_record(&mut local);
         self.fixed_wall.store(wall - 1, Ordering::Relaxed);
-        assert!(
-            local
-                .retire_terminal_at_cut(record, |_| unreachable!())
-                .is_err()
-        );
+        assert!(matches!(
+            local.retire_terminal_at_cut(record, |_| unreachable!()),
+            Err(Error::Checkpoint(consent_checkpoint::Error::Cursor(
+                store::Error::ClockRegressed
+            )))
+        ));
         assert_eq!((self.stage_image)(), joined_digest);
         self.fixed_wall.store(wall, Ordering::Relaxed);
         drop(local);
