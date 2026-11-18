@@ -33,7 +33,7 @@ use sha2::{Digest, Sha256};
 use transport_nostr_peeler::NostrTransportEvent;
 
 use super::store::consent_checkpoint::provisioning::prepared_consent::custody::publication::{
-    Kind, Step, UncertainPostJoin,
+    Kind, Pin, Publication, Step, UncertainPostJoin,
 };
 
 const MAX_SIGNED_EVENT_BYTES: usize = 65_536;
@@ -411,6 +411,57 @@ impl RecoveredPostJoin {
     }
 }
 
+/// Recovers an initial native capture after the owner forgot the closed gate.
+/// The relay must still be unreachable to the stage during this readback.
+pub(super) fn recover_reserved<A, R, K, F, S, Q>(
+    runtime: &AccountDeviceRuntime<A, R, K>,
+    founder: &AccountDeviceRuntime<F, S, Q>,
+    image: &Path,
+    publication: &Publication,
+    wall: u64,
+) -> Result<RecoveredPostJoin>
+where
+    A: TransportAdapter,
+    R: TransportRoutingPolicy,
+    K: KeyPackagePublisher,
+    F: TransportAdapter,
+    S: TransportRoutingPolicy,
+    Q: KeyPackagePublisher,
+{
+    if wall < publication.created_at() || wall >= publication.deadline() {
+        return Err(Refusal::Expired);
+    }
+    if publication.kind() != Kind::PostJoin
+        || publication.step() != Step::Reserved
+        || publication.candidate().is_some()
+        || publication.target_pin().is_some()
+        || publication.attempt_wall().is_some()
+    {
+        return Err(Refusal::Invalid);
+    }
+    let stage = JournalStage::from_publication(publication);
+    check_image(image, stage.inode)?;
+    let rows = read_rows(
+        runtime,
+        &stage.group,
+        &stage.account,
+        GroupLifecycleState::PendingPublish,
+    )?;
+    let baseline = stage.baseline(image, publication, &rows)?;
+    let capture = bind_frozen_pending(&rows, &baseline, Exposure::BeforeSend, wall)?;
+    if capture.attempts != 1 || capture.first_attempt_ms != capture.last_attempt_ms {
+        return Err(Refusal::Invalid);
+    }
+    verify_founder(
+        founder,
+        baseline.group(),
+        baseline.founder(),
+        &rows.authority,
+    )?;
+    baseline.check_image(wall)?;
+    Ok(RecoveredPostJoin { baseline, capture })
+}
+
 /// Reconstitute one pending request only after the journal proves that this
 /// exact capture was durably armed. The founder must have processed it at
 /// the target pin before the owner can offer this capture to the retry gate.
@@ -443,56 +494,16 @@ where
         return Err(Refusal::Invalid);
     }
 
-    let (_, file) = publication.stage();
-    let inode = (
-        u64::from_be_bytes(file.device),
-        u64::from_be_bytes(file.inode),
-    );
-    check_image(image, inode)?;
-    let group = GroupId::new(publication.group());
-    let account = MemberId::new(publication.recipient().to_bytes());
-    let founder_id = MemberId::new(publication.founder().to_bytes());
-    let welcome = MessageId::new(publication.welcome_id());
+    let stage = JournalStage::from_publication(publication);
+    check_image(image, stage.inode)?;
     let rows = read_rows(
         runtime,
-        &group,
-        &account,
+        &stage.group,
+        &stage.account,
         GroupLifecycleState::PendingPublish,
     )?;
-    let authority = &rows.authority;
-    let source = publication.source_pin();
-    if account == founder_id
-        || authority.admission.created_locally
-        || authority.admission.via_welcome.as_ref() != Some(&welcome)
-        || authority.route.nostr_group_id != publication.route()
-        || authority.route.relays.as_slice() != [publication.origin()]
-        || authority.pin.epoch.0 != source.ordinal
-        || authority.pin.identity != source.authenticator
-        || authority.local_leaf != source.recipient_leaf
-        || rows.obligation.id.as_slice() != publication.semantic_id()
-    {
-        return Err(Refusal::Invalid);
-    }
-
-    let baseline = Baseline {
-        image: image.to_owned(),
-        inode,
-        group,
-        account,
-        founder: founder_id,
-        generation: publication.generation(),
-        deadline: publication.deadline(),
-        wall: reserved_at,
-        authority: authority.clone(),
-        obligation: rows.obligation.id.clone(),
-        welcome,
-    };
-    let fanout = rows.fanout.as_ref().ok_or(Refusal::Invalid)?;
-    let mut request = fanout.request().clone();
-    // Match MDK's exact per-target request for a single endpoint. The
-    // journal records the signed payload; the wrapper is canonical here.
-    request.required_acks = 1;
-    let capture = bind_pending(&rows, &baseline, &request, Exposure::PossiblyExposed, wall)?;
+    let baseline = stage.baseline(image, publication, &rows)?;
+    let capture = bind_frozen_pending(&rows, &baseline, Exposure::PossiblyExposed, wall)?;
     let candidate = publication.candidate().ok_or(Refusal::Invalid)?;
     let target = publication.target_pin().ok_or(Refusal::Invalid)?;
     if candidate.event_id != capture.event_id()
@@ -520,9 +531,189 @@ where
     Ok(RecoveredPostJoin { baseline, capture })
 }
 
+struct JournalStage {
+    inode: (u64, u64),
+    group: GroupId,
+    account: MemberId,
+    founder: MemberId,
+    welcome: MessageId,
+}
+
+impl JournalStage {
+    fn from_publication(publication: &Publication) -> Self {
+        let (_, file) = publication.stage();
+        Self {
+            inode: (
+                u64::from_be_bytes(file.device),
+                u64::from_be_bytes(file.inode),
+            ),
+            group: GroupId::new(publication.group()),
+            account: MemberId::new(publication.recipient().to_bytes()),
+            founder: MemberId::new(publication.founder().to_bytes()),
+            welcome: MessageId::new(publication.welcome_id()),
+        }
+    }
+
+    fn verify_rows(&self, publication: &Publication, rows: &Rows, expected: Pin) -> Result<()> {
+        let authority = &rows.authority;
+        if self.account == self.founder
+            || authority.admission.created_locally
+            || authority.admission.via_welcome.as_ref() != Some(&self.welcome)
+            || authority.route.nostr_group_id != publication.route()
+            || authority.route.relays.as_slice() != [publication.origin()]
+            || authority.pin.epoch.0 != expected.ordinal
+            || authority.pin.identity != expected.authenticator
+            || authority.local_leaf != expected.recipient_leaf
+            || rows.obligation.id.as_slice() != publication.semantic_id()
+        {
+            return Err(Refusal::Invalid);
+        }
+        Ok(())
+    }
+
+    fn baseline(self, image: &Path, publication: &Publication, rows: &Rows) -> Result<Baseline> {
+        self.verify_rows(publication, rows, publication.source_pin())?;
+        Ok(Baseline {
+            image: image.to_owned(),
+            inode: self.inode,
+            group: self.group,
+            account: self.account,
+            founder: self.founder,
+            generation: publication.generation(),
+            deadline: publication.deadline(),
+            wall: publication.created_at(),
+            authority: rows.authority.clone(),
+            obligation: rows.obligation.id.clone(),
+            welcome: self.welcome,
+        })
+    }
+}
+
+fn bind_frozen_pending(
+    rows: &Rows,
+    baseline: &Baseline,
+    exposure: Exposure,
+    wall: u64,
+) -> Result<Capture> {
+    let fanout = rows.fanout.as_ref().ok_or(Refusal::Invalid)?;
+    let mut request = fanout.request().clone();
+    // MDK's per-endpoint handoff requires one acknowledgment. The frozen
+    // request still supplies the exact account, envelope, route and payload.
+    request.required_acks = 1;
+    bind_pending(rows, baseline, &request, exposure, wall)
+}
+
 pub(crate) struct ConfirmedRotation<'a> {
     baseline: &'a Baseline,
     capture: &'a Capture,
+}
+
+/// A completed native rotation bound to one exact durable journal turn.
+/// Native confirmation discards the frozen request, so this cannot arm egress.
+pub(crate) struct ColdConfirmedRotation<'a> {
+    publication: &'a Publication,
+    observed_at: u64,
+}
+
+impl<'a> ColdConfirmedRotation<'a> {
+    pub(crate) fn publication(&self) -> &'a Publication {
+        self.publication
+    }
+
+    pub(crate) fn observed_at(&self) -> u64 {
+        self.observed_at
+    }
+}
+
+pub(super) fn confirm_rotation_cold<'a, A, R, K, F, S, Q>(
+    runtime: &AccountDeviceRuntime<A, R, K>,
+    founder: &AccountDeviceRuntime<F, S, Q>,
+    image: &Path,
+    publication: &'a Publication,
+    wall: u64,
+) -> Result<ColdConfirmedRotation<'a>>
+where
+    A: TransportAdapter,
+    R: TransportRoutingPolicy,
+    K: KeyPackagePublisher,
+    F: TransportAdapter,
+    S: TransportRoutingPolicy,
+    Q: KeyPackagePublisher,
+{
+    if wall < publication.created_at() || wall >= publication.deadline() {
+        return Err(Refusal::Expired);
+    }
+    if publication.kind() != Kind::PostJoin
+        || !matches!(
+            publication.step(),
+            Step::Armed { number: 1 | 2 }
+                | Step::Uncertain { number: 1 | 2 }
+                | Step::Published { number: 1 | 2 }
+        )
+        || publication
+            .attempt_wall()
+            .is_none_or(|armed| !(publication.created_at()..=wall).contains(&armed))
+    {
+        return Err(Refusal::Invalid);
+    }
+
+    let source = publication.source_pin();
+    let target = publication.target_pin().ok_or(Refusal::Invalid)?;
+    let candidate = publication.candidate().ok_or(Refusal::Invalid)?;
+    if source.ordinal.checked_add(1) != Some(target.ordinal)
+        || source.authenticator == target.authenticator
+        || source.recipient_leaf != target.recipient_leaf
+    {
+        return Err(Refusal::Invalid);
+    }
+    let stage = JournalStage::from_publication(publication);
+    check_image(image, stage.inode)?;
+    let rows = read_rows(
+        runtime,
+        &stage.group,
+        &stage.account,
+        GroupLifecycleState::Stable,
+    )?;
+    stage.verify_rows(publication, &rows, target)?;
+    let obligation = &rows.obligation;
+    let previous_leaf = obligation
+        .own_leaf_baseline_hash
+        .as_deref()
+        .and_then(|hash| <&[u8; 32]>::try_from(hash).ok())
+        .ok_or(Refusal::Invalid)?;
+    let event_id = MessageId::new(candidate.event_id);
+    let evolution = checked_evolution(
+        rows.evolution.as_ref(),
+        &stage.group,
+        EpochId(source.ordinal),
+        EpochId(target.ordinal),
+        &obligation.id,
+        previous_leaf,
+    )?;
+    if rows.authority.leaf_hash == *previous_leaf
+        || obligation.phase != MaintenancePhase::Complete
+        || obligation.semantic_rearm_count != 0
+        || rows.fanout.is_some()
+        || rows.pending.is_some()
+        || evolution.phase != GroupEvolutionPhase::Confirmed
+        || evolution.signed_message_id.as_ref() != Some(&event_id)
+        || evolution.pending_ref.is_none()
+    {
+        return Err(Refusal::Invalid);
+    }
+    verify_founder_cut(
+        founder,
+        &stage.group,
+        &stage.founder,
+        &rows.authority,
+        &rows.authority.pin,
+        Some(&event_id),
+    )?;
+    check_image(image, stage.inode)?;
+    Ok(ColdConfirmedRotation {
+        publication,
+        observed_at: wall,
+    })
 }
 
 impl<'a> ConfirmedRotation<'a> {
@@ -721,19 +912,36 @@ fn exact_evolution<'a>(
     evolution: Option<&'a DurableGroupEvolution>,
     baseline: &Baseline,
 ) -> Result<&'a DurableGroupEvolution> {
+    checked_evolution(
+        evolution,
+        &baseline.group,
+        baseline.authority.pin.epoch,
+        baseline.next_epoch()?,
+        &baseline.obligation,
+        &baseline.authority.leaf_hash,
+    )
+}
+
+fn checked_evolution<'a>(
+    evolution: Option<&'a DurableGroupEvolution>,
+    group: &GroupId,
+    source: EpochId,
+    target: EpochId,
+    obligation: &MessageId,
+    previous_leaf: &[u8; 32],
+) -> Result<&'a DurableGroupEvolution> {
     let evolution = evolution.ok_or(Refusal::Invalid)?;
-    if evolution.group_id != baseline.group
-        || evolution.source_epoch != baseline.authority.pin.epoch
-        || evolution.target_epoch != baseline.next_epoch()?
-        || evolution.own_leaf_before_hash.as_deref()
-            != Some(baseline.authority.leaf_hash.as_slice())
+    if &evolution.group_id != group
+        || evolution.source_epoch != source
+        || evolution.target_epoch != target
+        || evolution.own_leaf_before_hash.as_deref() != Some(previous_leaf.as_slice())
         || !evolution.removal_members.is_empty()
         || !matches!(
             &evolution.semantic,
             GroupEvolutionSemantic::SelfUpdate {
                 trigger: MaintenanceTrigger::PostJoin,
                 obligation_id: Some(id),
-            } if id == &baseline.obligation
+            } if id == obligation
         )
     {
         return Err(Refusal::Invalid);
@@ -1089,7 +1297,7 @@ where
     })
 }
 
-fn check_image(image: &Path, inode: (u64, u64)) -> Result<()> {
+pub(super) fn check_image(image: &Path, inode: (u64, u64)) -> Result<()> {
     let metadata = fs::symlink_metadata(image).map_err(|_| Refusal::Storage)?;
     if !metadata.is_file()
         || metadata.nlink() != 1
