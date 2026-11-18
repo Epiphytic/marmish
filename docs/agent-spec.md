@@ -1478,6 +1478,14 @@ acceptance receipts, and installed Peer authorization have separate gates.
 The [MDK master refresh](reviews/mdk-master-private-wss-refresh.md) revalidated
 this history cut and ordinary Command during a Peer relay outage on Linux
 AMD64. It includes a forward schema migration in native account databases.
+The [installed Peer design](phases/peer-installed.md) records the current
+join-before-decision behavior, operator interface and separate platform and
+relay gates. A join can expose Pending only after exact native custody.
+The planned installed owner, private relay qualification and status
+transmission remain gated on separate validation. The [configuration parser
+increment](reviews/peer-installed-config.md) validates optional Peer intent and
+preserves it through ordinary setup. The parsed fields currently have no
+runtime consumer, so this increment does not open Peer relay connections.
 
 The [terminal custody fixture](validation/peer-terminal-custody.md) makes
 Declined and Expired durable for an exact joined Pending invitation.
@@ -1486,3 +1494,11 @@ Peer work. Checked filesystem retirement releases the reservation only
 after exact file absence while retaining the terminal reason and replay
 fence. Decline also applies a cooldown to subsequent offers and
 provisioning. This increment records native membership as Unconfirmed.
+
+The [native SelfRemove proof](validation/peer-native-leave.md) exercises
+both participants with the explicit MLS SelfRemove capability required by
+the locked OpenMLS. The founder incorporates the recipient's exact proposal
+through native maintenance. The recipient independently verifies its
+removal after closing and reopening SQLCipher. The fixture uses a local
+transport sink and an in-memory seal. Durable terminal custody and
+installed capability negotiation still need validation.

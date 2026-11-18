@@ -1,5 +1,8 @@
 # Peer invitations
 
+The [installed Peer design](peer-installed.md) supersedes this proposal's
+pre-Join approval and sets the current admission and command-line design.
+
 Proposed design for the server invitation increment of the
 [interactive peers roadmap](interactive-peers-roadmap.md). This phase adds a
 nonexecuting peer channel and local invitation inventories. It provides the

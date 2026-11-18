@@ -387,3 +387,6 @@ async fn peer_pending_unrouted_leave_recovers_exact_event() {
     exact_fanout(&runtime, &group, &request);
     retained_leave(&runtime, &group).assert_same(&recovered);
 }
+
+#[path = "peer_native_leave_proof_tests.rs"]
+mod native_leave;

@@ -4,7 +4,7 @@ use crate::command_wire::Account;
 use crate::transport::{RelayPolicy, RouteMode, TransportLimits};
 use crate::{Error, Result};
 use nostr::key::PublicKey;
-use nostr::nips::nip19::FromBech32;
+use nostr::nips::nip19::{FromBech32, ToBech32};
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,6 +19,7 @@ pub(crate) const CONFIG_FORMAT: u32 = 1;
 const MAX_CONFIG: u64 = 1024 * 1024;
 const DAY: u64 = 86400;
 const MAX_TERMINAL_CLIENTS: usize = 256;
+const MAX_PEER_FOUNDERS: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -72,6 +73,7 @@ pub(crate) struct CommandConfig {
     // Preserve ordered additive layers for the later gated engine wrappers.
     // Loading does not compile globs, check admitted principals, or authorize exec.
     policy: RawPolicy,
+    _peer: peer_intent::PeerIntent,
 }
 impl CommandConfig {
     pub(crate) fn load(profile_root: &Path) -> Result<Self> {
@@ -141,6 +143,8 @@ impl CommandConfig {
                 },
             );
         }
+        let limits = raw.limits.normalize()?;
+        let peer = raw.peer.normalize(raw.role)?;
         Ok(Self {
             role: raw.role,
             relay_policy,
@@ -149,8 +153,9 @@ impl CommandConfig {
             terminal_clients,
             aliases,
             cwd,
-            limits: raw.limits.normalize()?,
+            limits,
             policy: raw.command_policy,
+            _peer: peer,
         })
     }
     fn command_policy(&self) -> Result<marmish_engine::CommandPolicy> {
@@ -333,6 +338,8 @@ struct RawConfig {
     execution_clients: Vec<String>,
     #[serde(default)]
     terminal: RawTerminal,
+    #[serde(default, deserialize_with = "peer_object")]
+    peer: RawPeer,
     command_policy: RawPolicy,
     #[serde(deserialize_with = "required_cwd")]
     cwd: Option<String>,
@@ -345,6 +352,192 @@ struct RawConfig {
 struct RawTerminal {
     clients: Vec<String>,
 }
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPeer {
+    #[serde(default, deserialize_with = "peer_object")]
+    receive: RawPeerReceive,
+    #[serde(default)]
+    originate: bool,
+    #[serde(default, deserialize_with = "non_null_optional")]
+    relay: Option<String>,
+    #[serde(default, deserialize_with = "non_null_optional")]
+    relay_trust: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+enum RawPeerReceive {
+    // Empty struct variants enforce the closed schema. Serde unit variants
+    // would discard fields other than the tag.
+    Off {},
+    Manual {},
+    AutoAny {},
+    AutoFounders { founders: Vec<String> },
+}
+
+impl Default for RawPeerReceive {
+    fn default() -> Self {
+        Self::Off {}
+    }
+}
+
+// Serde's derived structs and internally tagged enums also accept sequences.
+// Peer and receive are JSON objects, while the underlying decoder still sees duplicates.
+fn peer_object<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    d: D,
+) -> std::result::Result<T, D::Error> {
+    struct ObjectVisitor<T>(std::marker::PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> Visitor<'de> for ObjectVisitor<T> {
+        type Value = T;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a Peer configuration object")
+        }
+
+        fn visit_map<M: MapAccess<'de>>(self, map: M) -> std::result::Result<T, M::Error> {
+            T::deserialize(de::value::MapAccessDeserializer::new(map))
+        }
+    }
+    d.deserialize_map(ObjectVisitor(std::marker::PhantomData))
+}
+
+#[allow(
+    dead_code,
+    reason = "validated intent has no installed Peer consumer yet"
+)]
+mod peer_intent {
+    use super::{BTreeSet, PublicKey};
+    use nostr::types::Url;
+
+    #[derive(Clone)]
+    #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
+    pub(super) struct PeerIntent {
+        pub(super) receive: Receive,
+        pub(super) originate: bool,
+        pub(super) relay: Option<Relay>,
+    }
+
+    #[derive(Clone)]
+    #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
+    pub(super) enum Receive {
+        Off,
+        Manual,
+        AutoAny,
+        AutoFounders(BTreeSet<PublicKey>),
+    }
+
+    #[derive(Clone)]
+    #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
+    pub(super) struct Relay {
+        pub(super) origin: Url,
+        pub(super) trust: Trust,
+    }
+
+    #[derive(Clone)]
+    #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
+    pub(super) enum Trust {
+        SpkiSha256([u8; 32]),
+        CaSha256([u8; 32]),
+    }
+}
+
+impl RawPeer {
+    fn normalize(self, role: Role) -> Result<peer_intent::PeerIntent> {
+        use peer_intent::{PeerIntent, Relay};
+        let receives = !matches!(self.receive, RawPeerReceive::Off {});
+        if (receives && role == Role::Server) || (self.originate && role == Role::Client) {
+            return Err(Error::Invalid("config_peer_directions"));
+        }
+        let receive = self.receive.normalize()?;
+        let relay = match self.relay {
+            Some(url) => {
+                let origin = peer_origin(url)?;
+                let trust = self
+                    .relay_trust
+                    .as_deref()
+                    .ok_or(Error::Invalid("config_peer_relay_trust"))?;
+                Some(Relay {
+                    origin,
+                    trust: peer_trust(trust)?,
+                })
+            }
+            None if receives || self.originate || self.relay_trust.is_some() => {
+                return Err(Error::Invalid("config_peer_relay"));
+            }
+            None => None,
+        };
+        Ok(PeerIntent {
+            receive,
+            originate: self.originate,
+            relay,
+        })
+    }
+}
+
+impl RawPeerReceive {
+    fn normalize(self) -> Result<peer_intent::Receive> {
+        use peer_intent::Receive;
+        match self {
+            Self::Off {} => Ok(Receive::Off),
+            Self::Manual {} => Ok(Receive::Manual),
+            Self::AutoAny {} => Ok(Receive::AutoAny),
+            Self::AutoFounders { founders } => {
+                let invalid = || Error::Invalid("config_peer_founders");
+                if !(1..=MAX_PEER_FOUNDERS).contains(&founders.len()) {
+                    return Err(invalid());
+                }
+                let mut keys = BTreeSet::new();
+                for founder in founders {
+                    let key = PublicKey::from_bech32(&founder).map_err(|_| invalid())?;
+                    if key.to_bech32().ok().as_deref() != Some(founder.as_str())
+                        || !keys.insert(key)
+                    {
+                        return Err(invalid());
+                    }
+                }
+                Ok(Receive::AutoFounders(keys))
+            }
+        }
+    }
+}
+
+fn peer_origin(input: String) -> Result<nostr::types::Url> {
+    let invalid = || Error::Invalid("config_peer_relay");
+    let (scheme, endpoint) = input.split_once("://").ok_or_else(invalid)?;
+    let authority = endpoint.strip_suffix('/').unwrap_or(endpoint);
+    if !scheme.eq_ignore_ascii_case("wss")
+        || authority.is_empty()
+        || authority.contains(['/', '%', '@', '?', '#'])
+    {
+        return Err(invalid());
+    }
+    // The transport parser also rejects controls, whitespace, backslashes and invalid ports.
+    RelayPolicy::parse(&[input], RouteMode::Off, TransportLimits::default())
+        .map_err(|_| invalid())?
+        .urls()
+        .first()
+        .cloned()
+        .ok_or_else(invalid)
+}
+
+fn peer_trust(input: &str) -> Result<peer_intent::Trust> {
+    use peer_intent::Trust;
+    let invalid = || Error::Invalid("config_peer_relay_trust");
+    let (model, hex) = input.split_once(':').ok_or_else(invalid)?;
+    let mut digest = [0; 32];
+    if !crate::foundation::valid_hex(hex, 64) {
+        return Err(invalid());
+    }
+    hex::decode_to_slice(hex, &mut digest).map_err(|_| invalid())?;
+    match model {
+        "spki-sha256" => Ok(Trust::SpkiSha256(digest)),
+        "ca-sha256" => Ok(Trust::CaSha256(digest)),
+        _ => Err(invalid()),
+    }
+}
+
 // deserialize_with keeps this nullable field required in the containing object.
 fn required_cwd<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<String>, D::Error> {
     Option::deserialize(d)
@@ -604,7 +797,6 @@ impl RawLimits {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nostr::nips::nip19::ToBech32;
     use serde_json::{Value, json};
     use std::fs::{self, OpenOptions};
     use std::io::Write;
@@ -615,6 +807,269 @@ mod tests {
             "trusted_remotes":[],"execution_clients":[],"command_policy":{"version":1},
             "cwd":null,"limits":{},"aliases":{}})
     }
+
+    fn parse_document(value: &Value) -> Result<CommandConfig> {
+        CommandConfig::from_bytes(&serde_json::to_vec(value).unwrap())
+    }
+
+    fn peer_relay_fields() -> Value {
+        json!({
+            "relay": "wss://private.example/",
+            "relay_trust": format!("spki-sha256:{}", "ab".repeat(32)),
+        })
+    }
+
+    fn assert_config_error(result: Result<CommandConfig>, reason: &'static str) {
+        assert!(matches!(result, Err(Error::Invalid(found)) if found == reason));
+    }
+
+    #[test]
+    fn peer_config_default_off_preserves_ordinary_authority() {
+        use peer_intent::{Receive, Trust};
+        let key = nostr::key::Keys::generate()
+            .public_key()
+            .to_bech32()
+            .unwrap();
+        let mut value = document();
+        value["trusted_remotes"] = json!([key]);
+        value["execution_clients"] = json!([key]);
+        value["terminal"] = json!({"clients":[key]});
+        value["aliases"] = json!({"host":{"remote":key,"relays":value["relays"]}});
+        value["tor"] = json!("always");
+        let ordinary = parse_document(&value).unwrap();
+        assert_eq!(ordinary._peer.receive, Receive::Off);
+        assert!(!ordinary._peer.originate);
+        assert!(ordinary._peer.relay.is_none());
+        for off in [
+            json!({}),
+            json!({"receive":{"mode":"off"},"originate":false}),
+        ] {
+            value["peer"] = off;
+            assert_eq!(parse_document(&value).unwrap()._peer, ordinary._peer);
+        }
+        value["peer"] = peer_relay_fields();
+        assert_eq!(parse_document(&value).unwrap()._peer.receive, Receive::Off);
+        value["peer"]["receive"] = json!({"mode":"manual"});
+        let with_peer = parse_document(&value).unwrap();
+        assert_eq!(with_peer._peer.receive, Receive::Manual);
+        let peer_relay = with_peer._peer.relay.unwrap();
+        assert_eq!(peer_relay.origin.as_str(), "wss://private.example/");
+        assert_eq!(peer_relay.trust, Trust::SpkiSha256([0xab; 32]));
+        assert_eq!(with_peer.relay_policy.urls(), ordinary.relay_policy.urls());
+        assert_eq!(with_peer.relay_policy.mode(), RouteMode::Always);
+        assert!(with_peer.relay_policy.needs_tor());
+        assert_eq!(with_peer.trusted_remotes, ordinary.trusted_remotes);
+        assert_eq!(with_peer.execution_clients, ordinary.execution_clients);
+        assert_eq!(with_peer.terminal_clients, ordinary.terminal_clients);
+        assert_eq!(
+            with_peer.aliases["host"].remote,
+            ordinary.aliases["host"].remote
+        );
+        assert_eq!(
+            with_peer.aliases["host"].relays.urls(),
+            ordinary.aliases["host"].relays.urls()
+        );
+    }
+
+    #[test]
+    fn peer_config_validates_role_matrix_and_explicit_modes() {
+        use peer_intent::Receive;
+        let founder = nostr::key::Keys::generate().public_key();
+        let cases = [
+            (json!({"mode":"off"}), Receive::Off),
+            (json!({"mode":"manual"}), Receive::Manual),
+            (json!({"mode":"auto_any"}), Receive::AutoAny),
+            (
+                json!({"mode":"auto_founders","founders":[founder.to_bech32().unwrap()]}),
+                Receive::AutoFounders(BTreeSet::from([founder])),
+            ),
+        ];
+        let mut value = document();
+        value["peer"] = peer_relay_fields();
+        for role in ["client", "server", "both"] {
+            value["role"] = json!(role);
+            for originate in [false, true] {
+                value["peer"]["originate"] = json!(originate);
+                for (receive_value, expected) in &cases {
+                    value["peer"]["receive"] = receive_value.clone();
+                    let decoded = parse_document(&value);
+                    if (role == "server" && *expected != Receive::Off)
+                        || (role == "client" && originate)
+                    {
+                        assert_config_error(decoded, "config_peer_directions");
+                    } else {
+                        let intent = decoded.unwrap()._peer;
+                        assert_eq!(&intent.receive, expected);
+                        assert_eq!(intent.originate, originate);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn peer_config_rejects_open_or_nullable_schema_at_every_level() {
+        let ordinary = serde_json::to_string(&document()).unwrap();
+        let prefix = ordinary.strip_suffix('}').unwrap();
+        let check = |fields: &str| {
+            let raw = format!("{prefix},{fields}}}");
+            assert_config_error(CommandConfig::from_bytes(raw.as_bytes()), "config_schema");
+        };
+        for fields in [
+            r#""peer":null"#,
+            r#""peer":[]"#,
+            r#""peer":[{"mode":"off"},false]"#,
+            r#""peer":{},"peer":{}"#,
+            r#""peer":{"unknown":false}"#,
+            r#""peer":{"originate":false,"originate":true}"#,
+            r#""peer":{"originate":null}"#,
+            r#""peer":{"originate":"false"}"#,
+            r#""peer":{"relay":null}"#,
+            r#""peer":{"relay":false}"#,
+            r#""peer":{"relay_trust":null}"#,
+            r#""peer":{"relay_trust":false}"#,
+            r#""peer":{"receive":{}}"#,
+            r#""peer":{"receive":null}"#,
+            r#""peer":{"receive":"manual"}"#,
+            r#""peer":{"receive":["manual"]}"#,
+            r#""peer":{"receive":{"mode":"auto"}}"#,
+            r#""peer":{"receive":{"mode":0}}"#,
+            r#""peer":{"receive":{"mode":"auto_founders"}}"#,
+            r#""peer":{"receive":{"mode":"auto_founders","founders":null}}"#,
+            r#""peer":{"receive":{"mode":"auto_founders","founders":[],"founders":[]}}"#,
+            r#""peer":{"receive":{"mode":"auto_founders","founders":[],"unknown":true}}"#,
+        ] {
+            check(fields);
+        }
+        for mode in ["off", "manual", "auto_any"] {
+            for extra in [
+                r#""unknown":false"#,
+                r#""unknown":false,"unknown":false"#,
+                r#""mode":"off""#,
+                r#""founders":["not-a-canonical-npub"]"#,
+                r#""founders":[]"#,
+            ] {
+                check(&format!(
+                    r#""peer":{{"receive":{{"mode":"{mode}",{extra}}}}}"#
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn peer_config_bounds_founders_and_requires_exact_npub() {
+        let keys: Vec<_> = (0..=MAX_PEER_FOUNDERS)
+            .map(|_| {
+                nostr::key::Keys::generate()
+                    .public_key()
+                    .to_bech32()
+                    .unwrap()
+            })
+            .collect();
+        let key = &keys[0];
+        let mut value = document();
+        value["peer"] = peer_relay_fields();
+        value["peer"]["receive"] =
+            json!({"mode":"auto_founders","founders":&keys[..MAX_PEER_FOUNDERS]});
+        assert!(parse_document(&value).is_ok());
+        let secret = nostr::key::Keys::generate()
+            .secret_key()
+            .to_bech32()
+            .unwrap();
+        for founders in [
+            json!(keys),
+            json!([]),
+            json!([key, key]),
+            json!([key.to_uppercase()]),
+            json!([format!("N{}", &key[1..])]),
+            json!([format!("{key} ")]),
+            json!([&key[..12]]),
+            json!(["alice"]),
+            json!(["ab".repeat(32)]),
+            json!([secret]),
+        ] {
+            value["peer"]["receive"] = json!({"mode":"auto_founders","founders":founders});
+            assert_config_error(parse_document(&value), "config_peer_founders");
+        }
+        value["role"] = json!("server");
+        assert_config_error(parse_document(&value), "config_peer_directions");
+    }
+
+    #[test]
+    fn peer_config_canonicalizes_only_a_direct_wss_origin() {
+        let mut value = document();
+        value["peer"] = peer_relay_fields();
+        for (raw, canonical) in [
+            ("WSS://PRIVATE.Example:443", "wss://private.example/"),
+            ("wss://private.example/", "wss://private.example/"),
+            ("wss://private.example:8443", "wss://private.example:8443/"),
+            ("wss://127.1", "wss://127.0.0.1/"),
+            ("wss://[::1]:443", "wss://[::1]/"),
+        ] {
+            value["peer"]["relay"] = json!(raw);
+            let relay = parse_document(&value).unwrap()._peer.relay.unwrap();
+            assert_eq!(relay.origin.as_str(), canonical);
+        }
+        for raw in [
+            "wss://",
+            "wss:///",
+            "wss:////private.example",
+            "ws://private.example/",
+            "https://private.example/",
+            "wss://private.example/path",
+            "wss://private.example/.",
+            "wss://private.example/%2e",
+            "wss://private.example//",
+            "wss://priv%61te.example/",
+            "wss://@private.example/",
+            "wss://alice:secret@private.example/",
+            "wss://private.example/?",
+            "wss://private.example/#",
+            "wss://private.example\\x",
+            "wss://private.example\t",
+            "wss://private.ex\nample/",
+            "wss://private.example\u{007f}",
+            "wss://private.example:0",
+            "wss://private.example:",
+            "wss://private.example:0443",
+            "wss://private.example:65536",
+            "wss://private.example./",
+            "wss://private.onion/",
+        ] {
+            value["peer"]["relay"] = json!(raw);
+            assert_config_error(parse_document(&value), "config_peer_relay");
+        }
+    }
+
+    #[test]
+    fn peer_config_pairs_origin_with_exact_typed_trust() {
+        use peer_intent::Trust;
+        let mut value = document();
+        value["peer"] = json!({"originate":true});
+        assert_config_error(parse_document(&value), "config_peer_relay");
+        value["peer"] = json!({"relay_trust":format!("ca-sha256:{}", "ab".repeat(32))});
+        assert_config_error(parse_document(&value), "config_peer_relay");
+        value["peer"] = json!({"relay":"wss://private.example/"});
+        assert_config_error(parse_document(&value), "config_peer_relay_trust");
+        for trust in [
+            "ca-sha256".to_owned(),
+            format!("SPKI-sha256:{}", "ab".repeat(32)),
+            format!("sha256:{}", "ab".repeat(32)),
+            format!("ca-sha256:{}", "AB".repeat(32)),
+            format!("ca-sha256:{}", "ab".repeat(31)),
+            format!("ca-sha256:{}", "gg".repeat(32)),
+        ] {
+            value["peer"]["relay_trust"] = json!(trust);
+            assert_config_error(parse_document(&value), "config_peer_relay_trust");
+        }
+        value["peer"]["relay"] = json!("wss://private.example/invalid");
+        assert_config_error(parse_document(&value), "config_peer_relay");
+        value["peer"]["relay"] = json!("wss://private.example/");
+        value["peer"]["relay_trust"] = json!(format!("ca-sha256:{}", "ab".repeat(32)));
+        let relay = parse_document(&value).unwrap()._peer.relay.unwrap();
+        assert_eq!(relay.trust, Trust::CaSha256([0xab; 32]));
+    }
+
     struct Fixture(tempfile::TempDir);
     impl Fixture {
         fn new() -> Self {
