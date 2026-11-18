@@ -28,6 +28,7 @@ mod leave_proof;
 #[cfg(test)]
 pub(crate) use leave_proof::{CapturedLeave, LeaveInspection};
 
+#[derive(Clone, Copy)]
 pub(crate) enum WelcomeFence<'a> {
     #[cfg(test)]
     Fixture(&'a crate::peer_invitation::TurnFence<'a>),

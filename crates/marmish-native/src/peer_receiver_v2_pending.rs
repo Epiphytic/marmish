@@ -11,7 +11,7 @@ use std::{
 
 use crate::{
     mdk_adapter::peer_native_signer::{JoinWitness, JoinedAuthority, WelcomeFence},
-    peer_quota_vfs::dispatch::{JoinMetrics, JoinTurn},
+    peer_quota_vfs::dispatch::{ClosedJoin, JoinMetrics, JoinTurn},
 };
 
 use super::*;
@@ -169,7 +169,9 @@ impl<'turn, 'lease> PendingTurn<'turn, 'lease> {
         )?;
         let clock = Wall::System;
         let fence = TurnFence::new(&clock, stop, None, wall, held.held_deadline())?;
-        let prepared = self.native.prepare(self.owner, &held, &delivery, &fence)?;
+        let prepared =
+            self.native
+                .prepare(self.owner, &held, &delivery, &WelcomeFence::Fixture(&fence))?;
         fence.wall()?;
         self.owner.cursor.unchanged()?;
         let started = self.owner.checkpoint.start_installed_join(
@@ -199,8 +201,22 @@ impl<'turn, 'lease> PendingTurn<'turn, 'lease> {
         )?;
         let clock = Wall::System;
         let fence = TurnFence::new(&clock, stop, None, wall, current.held_deadline())?;
-        self.native
-            .join(self.owner, port, &fence, armed, &current, &delivery)
+        let result = self.native.join(
+            self.owner,
+            port,
+            &WelcomeFence::Fixture(&fence),
+            armed,
+            &current,
+            &delivery,
+        )?;
+        let (result, metrics) = result.test_parts();
+        let result = result.map_err(Into::into);
+        let result = if result.is_ok() && LOSE_JOIN_RESULT.replace(false) {
+            Err(Error::Checkpoint(consent_checkpoint::Error::Source))
+        } else {
+            result
+        };
+        Ok((result, metrics))
     }
 
     pub(in crate::peer_invitation) fn qualify(
@@ -222,9 +238,12 @@ impl<'turn, 'lease> PendingTurn<'turn, 'lease> {
             .unwrap_or_else(|| held.held_deadline());
         let clock = Wall::System;
         let fence = TurnFence::new(&clock, stop, None, wall, deadline)?;
-        let joined = self
-            .native
-            .read_joined(self.owner, &held, &delivery, &fence)?;
+        let joined = self.native.read_joined(
+            self.owner,
+            &held,
+            &delivery,
+            &WelcomeFence::Fixture(&fence),
+        )?;
         fence.wall()?;
         self.owner.cursor.unchanged()?;
         self.owner.checkpoint.commit_installed_pending(
@@ -407,19 +426,20 @@ impl<'lease> NativePending<'lease> {
         owner: &mut RecoveredOwner<'_>,
         held: &HeldEvidence,
         delivery: &Delivery,
-        fence: &TurnFence<'_>,
+        fence: &WelcomeFence<'_>,
     ) -> Result<PreparedWelcome<'lease>> {
         self.check(owner, held, delivery)?;
         if held.state() != CustodyState::Held {
             return Err(Error::Binding);
         }
         let enrollment = Enrollment::from_delivery(held, delivery)?;
-        fence.require_deadline(enrollment.deadline)?;
+        require_deadline(fence, enrollment.deadline)?;
         let (binding, witness) = enrollment.stage;
         let welcome = JoinWitness::new(delivery, &self.origin, enrollment.package_digest)?;
         let key = SqlCipherKey::raw(*owner.paths.provisional_key(binding));
         let operation = self.operation(owner, binding, &key, &welcome, fence);
-        let files = CleanFiles::begin(owner, self.quota, self.lease, binding, fence)?;
+        let files =
+            CleanFiles::begin(owner, self.quota, self.lease, binding, storage_fence(fence))?;
         let original = owner.paths.reopen_provisional(binding, witness)?;
         let ((), image) = inspect_copy(owner, &files, &original, fence, true, |permit| {
             Ok(files
@@ -438,11 +458,11 @@ impl<'lease> NativePending<'lease> {
         &self,
         owner: &mut RecoveredOwner<'_>,
         port: &mut PeerRecipientPort,
-        fence: &TurnFence<'_>,
+        fence: &WelcomeFence<'_>,
         armed: ArmedWelcome<'_>,
         held: &HeldEvidence,
         delivery: &Delivery,
-    ) -> Result<(Result<()>, JoinMetrics)> {
+    ) -> Result<ClosedJoin> {
         let ArmedWelcome { prepared, started } = armed;
         self.check(owner, held, delivery)?;
         if !started.matches_installed_turn(held)
@@ -451,14 +471,15 @@ impl<'lease> NativePending<'lease> {
         {
             return Err(Error::Binding);
         }
-        fence.require_deadline(prepared.enrollment.deadline)?;
+        require_deadline(fence, prepared.enrollment.deadline)?;
         let (binding, witness) = prepared.enrollment.stage;
         let welcome = JoinWitness::new(delivery, &self.origin, prepared.enrollment.package_digest)?;
         let key = SqlCipherKey::raw(*owner.paths.provisional_key(binding));
         let operation = self.operation(owner, binding, &key, &welcome, fence);
-        let files = CleanFiles::begin(owner, self.quota, self.lease, binding, fence)?;
+        let files =
+            CleanFiles::begin(owner, self.quota, self.lease, binding, storage_fence(fence))?;
         let original = owner.paths.reopen_provisional(binding, witness)?;
-        let permit = files.original_permit(owner, fence)?;
+        let permit = files.original_permit(owner, storage_fence(fence))?;
         if original.digest()? != prepared.image {
             return Err(Error::StageIdentityMismatch);
         }
@@ -472,11 +493,10 @@ impl<'lease> NativePending<'lease> {
             files
                 .files()
                 .join_original(permit, operation)
-                .map(|closed| closed.test_parts())
                 .map_err(|_| Error::Path)
         })?;
-        files.finish(owner, fence, false)?;
-        let (result, metrics) = attempt?;
+        files.finish(owner, storage_fence(fence), false)?;
+        let closed = attempt?;
         port.use_current_recipient(|account, origin, wall| {
             if account != self.signer.public_key()
                 || origin != self.origin
@@ -486,13 +506,7 @@ impl<'lease> NativePending<'lease> {
             }
             Ok(())
         })??;
-        let result = result.map_err(Into::into);
-        let result = if result.is_ok() && LOSE_JOIN_RESULT.replace(false) {
-            Err(Error::Checkpoint(consent_checkpoint::Error::Source))
-        } else {
-            result
-        };
-        Ok((result, metrics))
+        Ok(closed)
     }
 
     fn read_joined(
@@ -500,7 +514,7 @@ impl<'lease> NativePending<'lease> {
         owner: &mut RecoveredOwner<'_>,
         held: &HeldEvidence,
         delivery: &Delivery,
-        fence: &TurnFence<'_>,
+        fence: &WelcomeFence<'_>,
     ) -> Result<InstalledJoinedReadback<'lease>> {
         self.check(owner, held, delivery)?;
         let enrollment = Enrollment::from_delivery(held, delivery)?;
@@ -509,20 +523,28 @@ impl<'lease> NativePending<'lease> {
             CustodyState::Pending => held.pending_deadline().ok_or(Error::Binding)?,
             _ => return Err(Error::Binding),
         };
-        fence.require_deadline(deadline)?;
+        require_deadline(fence, deadline)?;
         let (binding, witness) = enrollment.stage;
         if held.state() == CustodyState::JoinStarted
             && matches!(
-                owner.recover(fence.wall()?)?.classes[1],
+                owner.recover(fence.sample()?)?.classes[1],
                 Class::JournalCandidate { binding: recovered, .. } if recovered == binding
             )
         {
-            owner.rollback_journal(self.lease, self.quota, binding, &fence.into(), false)?;
+            owner.rollback_journal(
+                self.lease,
+                self.quota,
+                binding,
+                &storage_fence(fence),
+                #[cfg(test)]
+                false,
+            )?;
         }
         let welcome = JoinWitness::new(delivery, &self.origin, enrollment.package_digest)?;
         let key = SqlCipherKey::raw(*owner.paths.provisional_key(binding));
         let operation = self.operation(owner, binding, &key, &welcome, fence);
-        let files = CleanFiles::begin(owner, self.quota, self.lease, binding, fence)?;
+        let files =
+            CleanFiles::begin(owner, self.quota, self.lease, binding, storage_fence(fence))?;
         let original = owner.paths.reopen_provisional(binding, witness)?;
         let (authority, _) = inspect_copy(owner, &files, &original, fence, false, |permit| {
             Ok(files
@@ -546,7 +568,7 @@ impl<'lease> NativePending<'lease> {
         binding: Binding,
         key: &'a SqlCipherKey,
         join: &'a JoinWitness<'a>,
-        fence: &'a TurnFence<'a>,
+        fence: &'a WelcomeFence<'a>,
     ) -> JoinTurn<'a> {
         JoinTurn {
             key,
@@ -554,7 +576,7 @@ impl<'lease> NativePending<'lease> {
             origin: &self.origin,
             label: owner.paths.provisional_label(binding),
             join,
-            fence: WelcomeFence::Fixture(fence),
+            fence: *fence,
         }
     }
 }
@@ -563,7 +585,7 @@ fn inspect_copy<T>(
     owner: &mut RecoveredOwner<'_>,
     files: &CleanFiles<'_>,
     original: &paths::ProvisionalFile,
-    fence: &TurnFence<'_>,
+    fence: &WelcomeFence<'_>,
     original_replica_required: bool,
     inspect: impl FnOnce(CleanPermit<'_>) -> Result<T>,
 ) -> Result<(T, [u8; 32])> {
@@ -571,7 +593,7 @@ fn inspect_copy<T>(
     let reader = original.read_file()?;
     let length = reader.metadata().map_err(|_| Error::Path)?.len();
     let path = files.snapshot_path(length)?;
-    fence.wall()?;
+    fence.sample()?;
     let mut copy = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -586,17 +608,33 @@ fn inspect_copy<T>(
         return Err(Error::StageIdentityMismatch);
     }
 
-    let result = inspect(files.snapshot_permit(owner, identity, fence)?);
-    files.snapshot_closed(owner, identity, fence)?;
+    let result = inspect(files.snapshot_permit(owner, identity, storage_fence(fence))?);
+    files.snapshot_closed(owner, identity, storage_fence(fence))?;
     let (digest, after) = read_image(path)?;
     if after != identity || original.digest()? != image {
         return Err(Error::StageIdentityMismatch);
     }
     fs::remove_file(path).map_err(|_| Error::Path)?;
     snapshot_sidecars(path)?;
-    files.finish(owner, fence, true)?;
+    files.finish(owner, storage_fence(fence), true)?;
     if original_replica_required && result.is_ok() && digest != image {
         return Err(Error::StageIdentityMismatch);
     }
     Ok((result?, image))
+}
+
+fn storage_fence<'a>(fence: &'a WelcomeFence<'a>) -> NativeFence<'a> {
+    match fence {
+        #[cfg(test)]
+        WelcomeFence::Fixture(fence) => NativeFence::Fixture(fence),
+        WelcomeFence::Candidate(window) => NativeFence::Candidate(window),
+    }
+}
+
+fn require_deadline(fence: &WelcomeFence<'_>, deadline: u64) -> Result<()> {
+    match fence {
+        #[cfg(test)]
+        WelcomeFence::Fixture(fence) => fence.require_deadline(deadline),
+        WelcomeFence::Candidate(window) => window.require_offer_limit(deadline),
+    }
 }

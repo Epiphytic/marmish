@@ -8,7 +8,14 @@
 ))]
 #[path = "peer_stage_files.rs"]
 mod provisional;
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        marmish_peer_receiver_candidate
+    )
+))]
 pub(super) use provisional::MAX_STAGE_LEN;
 #[cfg(test)]
 pub(super) use provisional::ProvisionalFile;
