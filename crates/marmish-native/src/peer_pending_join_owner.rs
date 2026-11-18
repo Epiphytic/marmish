@@ -137,6 +137,66 @@ impl PreparedConsentOwner<'_> {
             .await
     }
 
+    pub(in crate::peer_invitation) fn read_pending_proof(
+        &mut self,
+        selector: Selector,
+        generation: u64,
+    ) -> Result<Option<(HeldEvidence, JoinedReadback)>> {
+        let Some((evidence, delivery)) = self.current_custody(selector, generation)? else {
+            return Ok(None);
+        };
+        if !matches!(
+            evidence.state(),
+            CustodyState::Pending | CustodyState::Activating
+        ) {
+            return Err(Error::Binding);
+        }
+        let joined = self.inspect_joined(evidence.stage(), &delivery, evidence.package_digest())?;
+        if !evidence.matches_pending_readback(&joined) {
+            return Err(Error::StageIdentityMismatch);
+        }
+        // Snapshot verification can take time. A read-only retry cannot report
+        // an expired row just because the snapshot was opened before expiry.
+        self.require_pending_live(&evidence)?;
+        Ok(Some((evidence, joined)))
+    }
+
+    fn require_pending_live(&mut self, evidence: &HeldEvidence) -> Result<u64> {
+        let wall = self.available_sample()?.as_secs();
+        let deadline = evidence.pending_deadline().ok_or(Error::Binding)?;
+        if wall >= deadline {
+            return Err(consent_checkpoint::Error::Expired.into());
+        }
+        Ok(wall)
+    }
+
+    pub(in crate::peer_invitation) fn commit_pending_decision(
+        &mut self,
+        pending: &HeldEvidence,
+        joined: &JoinedReadback,
+        check_current: impl FnOnce(&Checkpoint) -> Result<CustodyDecision>,
+    ) -> Result<u64> {
+        if pending.state() != CustodyState::Pending {
+            return Err(Error::Binding);
+        }
+        let wall = self.require_pending_live(pending)?;
+        // The paired exchange or private auto cause is checked on the owner
+        // thread after readback and directly before the synchronous CAS.
+        let cause = check_current(&self.state.checkpoint)?;
+        let approval = match &cause {
+            CustodyDecision::Manual(local) => Approval::Manual(local),
+            CustodyDecision::Automatic => Approval::Automatic,
+        };
+        self.state.checkpoint.commit_custody_activating(
+            &self.state.source,
+            pending,
+            joined,
+            approval,
+            wall,
+        )?;
+        Ok(wall)
+    }
+
     pub(in crate::peer_invitation) fn activate_custody(
         &mut self,
         selector: Selector,
@@ -147,27 +207,16 @@ impl PreparedConsentOwner<'_> {
         let local = connection
             .map(|connection| verified_local(&self.state.checkpoint, connection))
             .transpose()?;
-        let Some((pending, delivery)) = self.current_custody(selector, generation)? else {
-            return Ok(CustodyProgress::Missing);
+        let (pending, joined) = match self.read_pending_proof(selector, generation) {
+            Ok(Some(proof)) => proof,
+            Ok(None) => return Ok(CustodyProgress::Missing),
+            Err(error @ (Error::Native(_) | Error::Path | Error::StageIdentityMismatch)) => {
+                return Ok(CustodyProgress::Unavailable(error));
+            }
+            Err(error) => return Err(error),
         };
-        if pending.state() != CustodyState::Pending {
-            return Err(Error::Binding);
-        }
-        let joined = match self.inspect_joined(pending.stage(), &delivery, pending.package_digest())
-        {
-            Ok(joined) if pending.matches_pending_readback(&joined) => joined,
-            Ok(_) => return Ok(CustodyProgress::Unavailable(Error::StageIdentityMismatch)),
-            Err(error) => return Ok(CustodyProgress::Unavailable(error)),
-        };
-        let wall = self.available_sample()?.as_secs();
-        let approval = local.as_ref().map_or(Approval::Automatic, Approval::Manual);
-        self.state.checkpoint.commit_custody_activating(
-            &self.state.source,
-            &pending,
-            &joined,
-            approval,
-            wall,
-        )?;
+        let cause = local.map_or(CustodyDecision::Automatic, CustodyDecision::Manual);
+        self.commit_pending_decision(&pending, &joined, |_| Ok(cause))?;
         cut(JoinCut::ActivatingCommitted)?;
         Ok(CustodyProgress::Activating)
     }

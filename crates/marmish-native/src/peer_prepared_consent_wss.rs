@@ -55,7 +55,7 @@ impl PreparedConsentOwner<'_> {
         Ok(())
     }
 
-    fn available_sample(&mut self) -> Result<Duration> {
+    pub(in crate::peer_invitation) fn available_sample(&mut self) -> Result<Duration> {
         let sample = self.sample()?;
         self.state
             .checkpoint
@@ -125,13 +125,22 @@ impl PreparedConsentOwner<'_> {
         socket: &mut Owner,
         deadline: Instant,
     ) -> Result<History> {
+        self.scan_wss(socket, ScanStart::Recovery, deadline).await
+    }
+
+    pub(in crate::peer_invitation) async fn scan_wss(
+        &mut self,
+        socket: &mut Owner,
+        start: ScanStart,
+        deadline: Instant,
+    ) -> Result<History> {
         self.require_socket(socket)?;
         let wall = self.available_sample()?.as_secs();
-        let Some(cursor) =
-            self.state
-                .checkpoint
-                .cursor
-                .scan(self.state.origin, ScanStart::Recovery, wall)?
+        let Some(cursor) = self
+            .state
+            .checkpoint
+            .cursor
+            .scan(self.state.origin, start, wall)?
         else {
             return Ok(History::NoWork);
         };

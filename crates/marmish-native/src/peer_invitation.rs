@@ -1,6 +1,9 @@
 //! Client receipt and publication on a qualified private Peer origin.
 
 #[cfg(test)]
+#[path = "peer_daemon_worker.rs"]
+pub(crate) mod daemon_peer;
+#[cfg(test)]
 #[path = "peer_daemon_wss_tests.rs"]
 mod daemon_wss_tests;
 #[path = "peer_invitation_paths.rs"]
@@ -87,6 +90,12 @@ impl From<StageError> for Error {
 }
 
 type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+enum CustodyDecision {
+    Manual(Local),
+    Automatic,
+}
 
 struct QualifiedOrigin {
     connector: RelayConnector,

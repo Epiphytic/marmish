@@ -151,11 +151,11 @@ fn pending_custody_only_upgrades_prepared_and_rejects_older_owners() {
     assert_eq!(retiring.inventory(), retirement);
 }
 
-fn exact_offer(cp: &mut Checkpoint, source: &Source, client: &Keys) -> Selector {
+fn exact_offer(cp: &mut Checkpoint, source: &Source, client: &Keys, server: &Keys) -> Selector {
     let frame = wire::Codec::new(wire::MAX_OUTER_BYTES)
         .unwrap()
         .prepare_offer(
-            &Keys::generate(),
+            server,
             client.public_key(),
             [0x51; 16],
             &NostrRoutingV1::new([0xc4; 32], vec![URL.to_owned()]).unwrap(),
@@ -180,7 +180,12 @@ fn exact_offer(cp: &mut Checkpoint, source: &Source, client: &Keys) -> Selector 
 
 // This prepares a storage row graph without a live native or signed Delivery
 // fixture. The integrated test separately uses the real attestation API.
-fn seed_exact_outbox(cp: &mut Checkpoint, source: &Source, selector: Selector) -> Reservation {
+fn seed_exact_outbox(
+    cp: &mut Checkpoint,
+    source: &Source,
+    selector: Selector,
+    settle: bool,
+) -> Reservation {
     let reservation = cp.reserve_provisioning(source, selector, WALL).unwrap();
     let stage = cp.bind_stage(source, &reservation, WALL).unwrap();
     let witness = FileWitness {
@@ -228,25 +233,27 @@ fn seed_exact_outbox(cp: &mut Checkpoint, source: &Source, selector: Selector) -
         b"prepared Consent row for schema only",
     );
     out.insert(&tx, &prepared).unwrap();
-    outbox::advance(
-        &tx,
-        &prepared,
-        &out,
-        outbox::Advance::Reserve {
-            attempt: 1,
-            retry_at: WALL + 60,
-        },
-    )
-    .unwrap();
-    out.attempt = 1;
-    out.retry_at = Some(WALL + 60);
-    outbox::advance(
-        &tx,
-        &prepared,
-        &out,
-        outbox::Advance::Acknowledge { wall: WALL },
-    )
-    .unwrap();
+    if settle {
+        outbox::advance(
+            &tx,
+            &prepared,
+            &out,
+            outbox::Advance::Reserve {
+                attempt: 1,
+                retry_at: WALL + 60,
+            },
+        )
+        .unwrap();
+        out.attempt = 1;
+        out.retry_at = Some(WALL + 60);
+        outbox::advance(
+            &tx,
+            &prepared,
+            &out,
+            outbox::Advance::Acknowledge { wall: WALL },
+        )
+        .unwrap();
+    }
     tx.commit().unwrap();
     reservation
 }
@@ -318,8 +325,8 @@ fn pending_custody_exact_graph_and_legacy_sweep_preserve_each_state() {
     f.provisional();
     let mut cp = f.prepared().unwrap();
     let source = cp.bind_source(URL).unwrap();
-    let selector = exact_offer(&mut cp, &source, &f.client);
-    let reservation = seed_exact_outbox(&mut cp, &source, selector);
+    let selector = exact_offer(&mut cp, &source, &f.client, &Keys::generate());
+    let reservation = seed_exact_outbox(&mut cp, &source, selector, true);
     drop(cp);
     let mut cp = f.custody().unwrap();
     let source = cp.bind_source(URL).unwrap();
@@ -357,6 +364,7 @@ fn pending_custody_exact_graph_and_legacy_sweep_preserve_each_state() {
         .unwrap()
         .unwrap();
     assert_eq!(evidence.state(), CustodyState::Held);
+    assert!(cp.daemon_inventory(&source, WALL).unwrap().is_empty());
     assert_eq!(evidence.package_bounds(), (WALL - 600, WALL + 172_800));
     assert!(
         cp.read_custody(&source, selector, 2, WALL)
@@ -371,6 +379,7 @@ fn pending_custody_exact_graph_and_legacy_sweep_preserve_each_state() {
     ));
     let first = cp.start_custody_join(&source, &evidence, WALL + 1).unwrap();
     assert!(first.matches(&evidence));
+    assert!(cp.daemon_inventory(&source, WALL + 1).unwrap().is_empty());
     assert!(matches!(
         cp.start_custody_join(&source, &evidence, WALL + 1),
         Err(Error::Cursor(CursorError::Stale))
@@ -413,6 +422,14 @@ fn pending_custody_exact_graph_and_legacy_sweep_preserve_each_state() {
         .unwrap();
     assert_eq!(pending.state(), CustodyState::Pending);
     assert_eq!(pending.pending_deadline(), Some(WALL + 3300));
+    let inventory = cp.daemon_inventory(&source, WALL + 2).unwrap();
+    assert_eq!(inventory.len(), 1);
+    assert_eq!(inventory[0].key, selector);
+    assert_eq!(inventory[0].generation, 1);
+    assert_eq!(inventory[0].state, CustodyState::Pending);
+    assert_eq!(inventory[0].qualified_at, WALL + 2);
+    assert_eq!(inventory[0].expires_at, WALL + 3300);
+    assert_eq!(inventory[0].activating_at, None);
     let tx = cp.cursor.with_wall(source.origin, WALL + 3).unwrap();
     writer.guard(&tx, false).unwrap();
     assert!(
@@ -487,6 +504,12 @@ fn pending_custody_exact_graph_and_legacy_sweep_preserve_each_state() {
         Replay::Invalid(_)
     ));
     let after = WALL + 1_000_000;
+    let inventory = cp.daemon_inventory(&source, after).unwrap();
+    assert_eq!(inventory.len(), 1);
+    assert_eq!(inventory[0].state, CustodyState::Activating);
+    assert_eq!(inventory[0].activating_at, Some(WALL + 3));
+    assert_eq!(inventory[0].held_at, WALL);
+    assert_eq!(inventory[0].expires_at, WALL + 3300);
     let tx = cp.cursor.with_wall(source.origin, after).unwrap();
     rows::sweep(&tx, after).unwrap();
     tx.commit().unwrap();
@@ -526,4 +549,52 @@ fn pending_custody_exact_graph_and_legacy_sweep_preserve_each_state() {
     }
     tx.commit().unwrap();
     assert_eq!(f.custody().err(), Some(Error::Cursor(CursorError::Binding)));
+}
+
+#[test]
+fn daemon_due_skips_ineligible_classes_and_advances_past_a_stuck_reservation() {
+    use super::daemon::{Due, Rotation};
+
+    let f = Fixture::new();
+    f.provisional();
+    drop(f.prepared().unwrap());
+    let mut cp = f.custody().unwrap();
+    let source = cp.bind_source(URL).unwrap();
+    let old = exact_offer(&mut cp, &source, &f.client, &Keys::generate());
+    let extra = exact_offer(&mut cp, &source, &f.client, &Keys::generate());
+    let mut rotation = Rotation::default();
+    let due = |cp: &mut Checkpoint, rotation: &mut Rotation, online, server| {
+        cp.daemon_due(&source, WALL, rotation, online, server)
+            .unwrap()
+    };
+    assert_eq!(
+        due(&mut cp, &mut rotation, true, old.server),
+        Some(Due::Provision(old))
+    );
+    cp.reserve_provisioning(&source, old, WALL).unwrap();
+    assert_eq!(
+        due(&mut cp, &mut rotation, true, old.server),
+        Some(Due::Resume(old))
+    );
+    // A fresh general Offer cannot take the occupied slot. A different
+    // eligible class can advance and publish while that reservation stays.
+    assert_eq!(due(&mut cp, &mut rotation, true, extra.server), None);
+    let reserved = Keys::generate();
+    cp.policy.reserved.insert(reserved.public_key());
+    let fresh = exact_offer(&mut cp, &source, &f.client, &reserved);
+    assert_eq!(
+        due(&mut cp, &mut rotation, true, fresh.server),
+        Some(Due::Provision(fresh))
+    );
+    seed_exact_outbox(&mut cp, &source, fresh, false);
+    assert_eq!(due(&mut cp, &mut rotation, false, fresh.server), None);
+    assert_eq!(
+        due(&mut cp, &mut rotation, true, fresh.server),
+        Some(Due::Publish(fresh))
+    );
+    assert_eq!(
+        due(&mut cp, &mut rotation, true, old.server),
+        Some(Due::Resume(old))
+    );
+    assert!(cp.daemon_inventory(&source, WALL).unwrap().is_empty());
 }
