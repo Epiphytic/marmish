@@ -32,6 +32,10 @@ mod stream_service;
 pub mod terminal_backend;
 #[cfg(test)]
 mod terminal_bootstrap;
+#[cfg(test)]
+mod terminal_fence;
+#[cfg(test)]
+mod terminal_ipc_wire;
 pub mod transport;
 pub use error::{Error, Result};
 pub(crate) use mdk_adapter::command_local;

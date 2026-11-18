@@ -1173,9 +1173,15 @@ fn core_tests_terminal_backend_failed_exec_and_inherited_descriptor() {
     let daemon = Path::new(env!("CARGO_BIN_EXE_marmishd"))
         .canonicalize()
         .unwrap();
+    // Cargo may place binaries under a writable ancestor such as /tmp.
+    // The mock tmux is subject to the same ancestor checks as a real tmux.
+    let home = PathBuf::from(std::env::var_os("HOME").expect("terminal test needs HOME"))
+        .canonicalize()
+        .unwrap();
     let work = tempfile::Builder::new()
+        .prefix(".marmish-terminal-exec-test-")
         .permissions(fs::Permissions::from_mode(0o700))
-        .tempdir_in(daemon.parent().unwrap())
+        .tempdir_in(home)
         .unwrap();
     let sock_dir = tempfile::Builder::new()
         .permissions(fs::Permissions::from_mode(0o700))

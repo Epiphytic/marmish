@@ -23,7 +23,9 @@ restart recovery in Linux tmux fixtures. The [foreground frontend](validation/te
 verifies filtered display, local input, signal cleanup and restoration
 against real Linux PTYs and tmux. The [room enrollment fixture](validation/terminal-enrollment.md)
 uses a separate native room, a pinned direct WSS origin, exact 4 KiB frame
-checks and an ordinary Command after room teardown. Remote Terminal admission, reattach,
+checks and an ordinary Command after room teardown. The [local stream records and
+authority fence](validation/terminal-ipc-fence.md) qualify fixed-storage framing,
+role checks and revocation ordering in test builds. Remote Terminal admission, reattach,
 inbound Peer invitations and network heartbeat remain in development.
 The [Peer aggregate ingress proof](validation/peer-aggregate-ingress-proof.md)
 qualifies one shared canonical origin in a native loopback fixture. A copy
