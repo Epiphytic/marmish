@@ -159,3 +159,7 @@ impl Fixture<'_> {
         Ok((statuses, next))
     }
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "peer_installed_pending_wss_tests.rs"]
+mod pending_bridge;

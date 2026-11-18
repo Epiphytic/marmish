@@ -64,6 +64,22 @@ impl<'lease> PendingReceiver<'lease> {
         })
     }
 
+    pub(in crate::peer_invitation) fn custody_state(
+        &mut self,
+        port: &mut PeerRecipientPort,
+        selector: Selector,
+        generation: u64,
+    ) -> Result<(CustodyState, [u8; 32])> {
+        self.owner.cursor.unchanged()?;
+        let (held, _, _) = self.owner.checkpoint.read_installed_join_custody(
+            &self.owner.source,
+            port,
+            selector,
+            generation,
+        )?;
+        Ok((held.state(), held.delivery_carrier()))
+    }
+
     pub(in crate::peer_invitation) fn arm(
         &mut self,
         port: &mut PeerRecipientPort,
