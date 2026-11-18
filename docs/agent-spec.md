@@ -1562,6 +1562,12 @@ layout. The successor is available to library tests and stops before native
 Welcome ingestion. Installed custody, activation and status still need their
 own measured integration.
 
+The [capped Welcome fixture](validation/peer-capped-welcome.md) uses the
+real native ingest and a metered cold readback on Linux AMD64. It
+exercises exact snapshot admission, cancellation and a refused rollback
+journal write. This proof uses isolated v1 enrollment and disables all
+relay I/O. The installed v2 capped Pending turn is still separate.
+
 The [terminal custody fixture](validation/peer-terminal-custody.md) makes
 Declined and Expired durable for an exact joined Pending invitation.
 The local fence excludes the same generation from approval and ordinary

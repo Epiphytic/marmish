@@ -28,3 +28,14 @@ package binding, and a stop between native open and ingest. The proof here
 uses a valid v1 transcript, tests cancellation after durable JoinStarted and
 before native open, and observes the specific journal refusal through VFS
 counters. The design and authorization evidence is recorded separately.
+
+Claude Code Sonnet 5.5 Auto independently approved the patch-identical
+integration `02e34c8` over `9df12c8` in session
+`90a3f063-52e4-4704-8999-71464bf84967`. The review confirmed the
+source at `75821cb` matches the Opus-approved `3b2a00f` patch. It
+checked the charged exclusive copy, consumed native join authority,
+deadline and cancellation behavior, preserved Leave and PostJoin
+fixtures, and test-only mount. It was static and found no blocking
+defects. The successful native join and joined readback use the
+isolated v1 harness. The actual v2 owner and platform validation
+remain separate.
