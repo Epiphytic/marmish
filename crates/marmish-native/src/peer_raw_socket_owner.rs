@@ -570,6 +570,35 @@ impl Socket {
         refresh_route(&mut self.physical, deadline)
     }
 
+    fn revoked(physical: &Option<LivePhysicalRoute>) -> impl Future<Output = ()> + use<> {
+        let cancel = physical.as_ref().map(LivePhysicalRoute::cancellation);
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        let fatal = physical.as_ref().and_then(LivePhysicalRoute::fatal);
+        async move {
+            let Some(cancel) = cancel else {
+                return std::future::pending().await;
+            };
+            #[cfg(all(
+                any(test, marmish_peer_receiver_candidate),
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            if let Some(fatal) = fatal {
+                tokio::select! {
+                    biased;
+                    _ = fatal.tripped() => cancel.cancel(),
+                    _ = cancel.cancelled() => (),
+                }
+                return;
+            }
+            cancel.cancelled().await;
+        }
+    }
+
     async fn fenced_write(
         &mut self,
         text: String,
@@ -583,7 +612,7 @@ impl Socket {
             return Err(Failure::Size);
         }
         let Self { sink, physical, .. } = self;
-        let cancel = physical.as_ref().ok_or(Failure::Binding)?.cancellation();
+        let revoked = Self::revoked(physical);
         let write = fenced_sink(
             sink,
             Message::Text(text),
@@ -603,7 +632,7 @@ impl Socket {
         );
         tokio::select! {
             biased;
-            _ = cancel.cancelled() => Err(Failure::Retired),
+            _ = revoked => Err(Failure::Retired),
             outcome = write => outcome,
         }
     }
@@ -612,15 +641,10 @@ impl Socket {
         loop {
             self.refresh(&mut deadline)?;
             let incoming = timeout_at(deadline, self.stream.next());
-            let arrival = if let Some(physical) = &self.physical {
-                let cancel = physical.cancellation();
-                tokio::select! {
-                    biased;
-                    _ = cancel.cancelled() => return Err(Failure::Retired),
-                    incoming = incoming => incoming,
-                }
-            } else {
-                incoming.await
+            let arrival = tokio::select! {
+                biased;
+                _ = Self::revoked(&self.physical) => return Err(Failure::Retired),
+                incoming = incoming => incoming,
             };
             let arrival = match arrival {
                 Ok(arrival) => arrival,
@@ -653,12 +677,17 @@ impl Socket {
             Message::Text(text) => Ok(Some(text)),
             Message::Ping(payload) if payload.len() <= 125 => {
                 let Self { sink, physical, .. } = self;
-                fenced_poll(
+                let revoked = Self::revoked(physical);
+                let flush = fenced_poll(
                     deadline,
                     |end| refresh_route(physical, end).map(drop),
                     |cx| Pin::new(&mut *sink).poll_flush(cx),
-                )
-                .await?;
+                );
+                tokio::select! {
+                    biased;
+                    _ = revoked => Err(Failure::Retired),
+                    outcome = flush => outcome,
+                }?;
                 Ok(None)
             }
             Message::Pong(payload) if payload.len() <= 125 => Ok(None),

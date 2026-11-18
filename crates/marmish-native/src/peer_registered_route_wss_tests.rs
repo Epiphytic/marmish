@@ -1,6 +1,7 @@
 use super::{Keys, PeerRecipientPort, ReceiverRouteAdmission, time_limit};
 use crate::{
     command_config::CommandConfig,
+    dispatcher_fatal::Trip,
     identity::ProfileLease,
     peer_relay_trust::{
         candidate_registration::{ReceiverPreflight, RegistrationFailure},
@@ -18,6 +19,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "peer_registered_raw_fatal_wss_tests.rs"]
+mod raw_fatal;
+
 const CASE_ENV: &str = "MARMISH_TEST_REGISTERED_ROUTE_CASE";
 const DIR_ENV: &str = "MARMISH_TEST_REGISTERED_ROUTE_ROOT";
 const CHILD: &str = concat!(module_path!(), "::registered_route_subprocess");
@@ -25,16 +29,20 @@ const CHILD: &str = concat!(module_path!(), "::registered_route_subprocess");
 #[test]
 #[ignore = "uses fresh subprocesses, private WSS relays and real SQLCipher"]
 fn peer_registered_route_private_wss_handoff() {
-    let parent = tempfile::tempdir().unwrap();
-    let (_, child_test) = CHILD.split_once("::").unwrap();
-    for case in [
+    run_cases(&[
         "success",
         "foreign_lease",
         "wrong_root",
         "unused_admission",
         "global_displacement",
         "dropped_registration",
-    ] {
+    ]);
+}
+
+fn run_cases(cases: &[&str]) {
+    let parent = tempfile::tempdir().unwrap();
+    let (_, child_test) = CHILD.split_once("::").unwrap();
+    for &case in cases {
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args(["--ignored", "--exact", child_test, "--nocapture"])
             .env_clear()
@@ -71,10 +79,10 @@ async fn registered_route_subprocess() {
     };
     let parent = Path::new(&parent);
     let case = std::env::var(CASE_ENV).unwrap();
-    let founder = Keys::generate().public_key();
+    let founder = Keys::generate();
     let third = Keys::generate().public_key();
     let (mut relay, _temp, lease, material) =
-        qualified_manual_recipient_fixture(founder, third, parent).await;
+        qualified_manual_recipient_fixture(founder.public_key(), third, parent).await;
     assert_eq!(relay.qualification_connections(), 4);
     let account = material.public_key();
     let config = CommandConfig::load(lease.root()).unwrap();
@@ -85,13 +93,31 @@ async fn registered_route_subprocess() {
         .unwrap();
     let forwarding = registered.forwarding_verifier();
     let mut attached = registered.attach(&lease, &material).unwrap();
+    let (trip, fatal) = Trip::new();
+    if let Some(case) = case.strip_prefix("fatal_") {
+        let token = attached.take_route(&lease, &material).unwrap();
+        let (admission, drain) = ReceiverRouteAdmission::registered(token, fatal).unwrap();
+        raw_fatal::run(
+            case,
+            &relay,
+            &lease,
+            &material,
+            &founder,
+            trip,
+            (admission, drain),
+        )
+        .await;
+        forwarding.recheck_default().unwrap();
+        relay.stop().await;
+        return;
+    }
 
     match case.as_str() {
         "success" | "dropped_registration" => {
             let (quota, mut control) = attached.actor_parts();
             quota.receiver_files(&lease).unwrap();
             let route = control.take_route(&lease, &material).unwrap();
-            let admission = ReceiverRouteAdmission::registered(route).unwrap();
+            let (admission, _drain) = ReceiverRouteAdmission::registered(route, fatal).unwrap();
             let mut port = PeerRecipientPort::open(admission, time_limit())
                 .await
                 .unwrap();
@@ -159,7 +185,8 @@ async fn registered_route_subprocess() {
         }
         "unused_admission" => {
             let route = attached.take_route(&lease, &material).unwrap();
-            drop(ReceiverRouteAdmission::registered(route).unwrap());
+            let (admission, _drain) = ReceiverRouteAdmission::registered(route, fatal).unwrap();
+            drop(admission);
             assert_eq!(
                 attached.recheck(&lease, &material),
                 Err(RegistrationFailure::LocalUnavailable)

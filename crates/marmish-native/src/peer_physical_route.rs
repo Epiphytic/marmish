@@ -9,6 +9,15 @@ use crate::{
     identity::{IdentityMaterial, ProfileLease},
     transport::{ArtiDirs, PeerRelayConnector, RelayPolicy, RouteMode, TransportLimits},
 };
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+use crate::{
+    dispatcher_fatal::Fatal,
+    transport::{PeerSocketDrain, PeerSocketStart},
+};
 use nostr::{
     key::{Keys, PublicKey},
     types::Url,
@@ -147,6 +156,15 @@ impl CheckedPeerRoute {
 pub(crate) struct ReceiverRouteAdmission {
     route: CheckedPeerRoute,
     signer: Arc<Keys>,
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    start: Option<PeerSocketStart>,
+    #[cfg(all(
+        not(test),
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    start: PeerSocketStart,
 }
 
 #[allow(
@@ -161,12 +179,23 @@ impl ReceiverRouteAdmission {
     ))]
     pub(crate) fn registered(
         token: super::candidate_registration::RegisteredRoute,
-    ) -> Result<Self> {
+        fatal: Fatal,
+    ) -> Result<(Self, PeerSocketDrain)> {
         let (route, signer) = token.into_parts();
         if signer.public_key() != route.account {
             return Err(Error::Invalid("peer_identity_binding"));
         }
-        Ok(Self { route, signer })
+        let (start, drain) = PeerSocketStart::pair(route.profile.cancel.clone(), fatal)?;
+        #[cfg(test)]
+        let start = Some(start);
+        Ok((
+            Self {
+                route,
+                signer,
+                start,
+            },
+            drain,
+        ))
     }
 
     #[cfg(test)]
@@ -174,6 +203,8 @@ impl ReceiverRouteAdmission {
         Ok(Self {
             route: CheckedPeerRoute::bind(lease, material)?,
             signer: material.signer(),
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            start: None,
         })
     }
 
@@ -182,6 +213,27 @@ impl ReceiverRouteAdmission {
         max_frame_bytes: usize,
         deadline: tokio::time::Instant,
     ) -> Result<(LivePhysicalRoute, Arc<Keys>, WebSocketSink, WebSocketStream)> {
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        let start = self.start.take();
+        #[cfg(all(
+            not(test),
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        let start = Some(self.start);
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        let fatal = start.as_ref().map(|start| start.fatal().clone());
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        check_fatal(fatal.as_ref(), &self.route.profile.cancel)?;
         if self.signer.public_key() != self.route.account {
             return Err(Error::Invalid("peer_identity_binding"));
         }
@@ -220,6 +272,12 @@ impl ReceiverRouteAdmission {
             dirs,
             attempt,
             cancel: profile.cancel.clone(),
+            #[cfg(all(
+                any(test, marmish_peer_receiver_candidate),
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            start,
         };
         let deadline = deadline.min(
             self.route
@@ -232,6 +290,12 @@ impl ReceiverRouteAdmission {
             endpoint,
             window,
             ceiling: None,
+            #[cfg(all(
+                any(test, marmish_peer_receiver_candidate),
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            fatal,
         };
         live.recheck()?;
         Ok((live, self.signer, sink, stream))
@@ -244,9 +308,25 @@ pub(crate) struct PeerLiveDial {
     dirs: ArtiDirs,
     attempt: PeerTlsAttempt,
     cancel: CancellationToken,
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    start: Option<PeerSocketStart>,
 }
 
 impl PeerLiveDial {
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn take_start(mut self) -> (Self, Option<PeerSocketStart>) {
+        let start = self.start.take();
+        (self, start)
+    }
+
     pub(crate) fn take(
         self,
     ) -> (
@@ -271,9 +351,37 @@ pub(crate) struct LivePhysicalRoute {
     endpoint: Url,
     window: PeerTlsWindow,
     ceiling: Option<tokio::time::Instant>,
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    fatal: Option<Fatal>,
+}
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+fn check_fatal(fatal: Option<&Fatal>, cancel: &CancellationToken) -> Result<()> {
+    if fatal.is_some_and(Fatal::is_tripped) {
+        cancel.cancel();
+        return Err(Error::Transport("dispatcher_fatal"));
+    }
+    Ok(())
 }
 
 impl LivePhysicalRoute {
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn fatal(&self) -> Option<Fatal> {
+        self.fatal.clone()
+    }
+
     pub(crate) fn endpoint(&self) -> &Url {
         &self.endpoint
     }
@@ -319,6 +427,12 @@ impl LivePhysicalRoute {
     }
 
     pub(crate) fn recheck(&mut self) -> Result<()> {
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        check_fatal(self.fatal.as_ref(), &self.route.profile.cancel)?;
         self.route.recheck()?;
         if let Err(error) = self
             .window

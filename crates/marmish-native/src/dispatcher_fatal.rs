@@ -3,8 +3,10 @@
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::sync::OwnedSemaphorePermit;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
 #[derive(Clone)]
@@ -16,6 +18,7 @@ pub(crate) struct Trip(CancellationToken);
 
 #[cfg_attr(not(test), allow(dead_code))]
 impl Trip {
+    #[cfg(test)]
     pub(crate) fn new() -> (Self, Fatal) {
         let signal = CancellationToken::new();
         (Self(signal.clone()), Fatal(signal))
@@ -40,6 +43,8 @@ impl Fatal {
 /// by reads inside the WebSocket or TLS implementation as well as the sink.
 pub(crate) struct FencedStream<S> {
     io: S,
+    // Field order keeps the actual route slot held until I/O destruction.
+    _registered_slot: Option<Arc<OwnedSemaphorePermit>>,
     fatal: Fatal,
     read: Pin<Box<WaitForCancellationFutureOwned>>,
     write: Pin<Box<WaitForCancellationFutureOwned>>,
@@ -49,9 +54,17 @@ impl<S> FencedStream<S> {
     pub(crate) fn new(io: S, fatal: &Fatal) -> Self {
         Self {
             io,
+            _registered_slot: None,
             fatal: fatal.clone(),
             read: Box::pin(fatal.0.clone().cancelled_owned()),
             write: Box::pin(fatal.0.clone().cancelled_owned()),
+        }
+    }
+
+    pub(crate) fn with_slot(io: S, fatal: &Fatal, slot: &Arc<OwnedSemaphorePermit>) -> Self {
+        Self {
+            _registered_slot: Some(slot.clone()),
+            ..Self::new(io, fatal)
         }
     }
 }
@@ -125,6 +138,36 @@ mod tests {
     use std::future::poll_fn;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn registered_slot_outlives_raw_io_destructor() {
+        struct ObserveDrop {
+            slot: Arc<tokio::sync::Semaphore>,
+            observed: Arc<std::sync::atomic::AtomicBool>,
+        }
+
+        impl Drop for ObserveDrop {
+            fn drop(&mut self) {
+                assert_eq!(self.slot.available_permits(), 0);
+                self.observed
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+
+        let (_, fatal) = Trip::new();
+        let slot = Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = Arc::new(slot.clone().try_acquire_owned().unwrap());
+        let observed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let io = ObserveDrop {
+            slot: slot.clone(),
+            observed: observed.clone(),
+        };
+        let stream = FencedStream::with_slot(io, &fatal, &permit);
+        drop(permit);
+        drop(stream);
+        assert!(observed.load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(slot.available_permits(), 1);
+    }
 
     #[tokio::test]
     async fn blocked_duplex_polls_wake_without_forwarding_after_fatal() {
