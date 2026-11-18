@@ -98,6 +98,11 @@ fn durable_attempts_are_bounded_and_active_reservation_is_atomic_and_replayable(
     let reserved = cp
         .reserve_postjoin_coordinates(&source, &evidence, &scope, &operation, pin(2), wall)
         .unwrap();
+    assert_eq!(
+        cp.reserve_postjoin_coordinates(&source, &evidence, &scope, &operation, pin(2), wall)
+            .err(),
+        Some(stale)
+    );
     assert_eq!(reserved.step(), Step::Reserved);
     assert_eq!(reserved.generation(), 1);
     assert_eq!(reserved.founder(), selector.server);

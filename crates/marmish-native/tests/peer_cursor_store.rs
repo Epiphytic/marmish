@@ -72,6 +72,49 @@ mod peer_invitation {
         }
     }
 
+    pub(crate) mod accept_receipt_verify {
+        use cgka_traits::app_components::NostrRoutingV1;
+        use cgka_traits::{GroupId, MessageId};
+
+        use super::accept_receipt_wire::Receipt;
+
+        pub(crate) enum VerifiedReceiptSource {}
+
+        impl VerifiedReceiptSource {
+            pub(crate) fn receipt(&self) -> &Receipt {
+                match *self {}
+            }
+
+            pub(crate) fn group(&self) -> &GroupId {
+                match *self {}
+            }
+
+            pub(crate) fn route(&self) -> &NostrRoutingV1 {
+                match *self {}
+            }
+
+            pub(crate) fn native_id(&self) -> &MessageId {
+                match *self {}
+            }
+
+            pub(crate) fn app_id(&self) -> [u8; 32] {
+                match *self {}
+            }
+
+            pub(crate) fn leaf(&self) -> u32 {
+                match *self {}
+            }
+
+            pub(crate) fn created_at(&self) -> u64 {
+                match *self {}
+            }
+
+            pub(crate) fn deadline(&self) -> u64 {
+                match *self {}
+            }
+        }
+    }
+
     pub(crate) mod prepared_consent {
         use crate::peer_cursor_store::consent_checkpoint::{
             Result,

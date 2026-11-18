@@ -42,6 +42,9 @@ CREATE TABLE peer_activation_publication (
     PRIMARY KEY(carrier,kind)
 ) STRICT;
 
+CREATE UNIQUE INDEX peer_activation_single_postjoin
+ON peer_activation_publication(kind) WHERE kind=0;
+
 CREATE TABLE peer_activation_active (
     carrier BLOB PRIMARY KEY REFERENCES peer_pending_custody(delivery_carrier)
         ON UPDATE RESTRICT ON DELETE RESTRICT CHECK(length(carrier)=32),
@@ -162,6 +165,14 @@ pub(super) fn active_exists(tx: &Transaction<'_>, carrier: [u8; 32]) -> Result<b
     Ok(tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM peer_activation_active WHERE carrier=?1)",
         [carrier],
+        |row| row.get(0),
+    )?)
+}
+
+pub(super) fn postjoin_exists(tx: &Transaction<'_>) -> Result<bool> {
+    Ok(tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM peer_activation_publication WHERE kind=0)",
+        [],
         |row| row.get(0),
     )?)
 }

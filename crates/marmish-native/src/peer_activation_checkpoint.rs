@@ -4,6 +4,7 @@ use cgka_traits::engine::EpochPin;
 use cgka_traits::{TransportPublishRequest, TransportPublishTarget};
 use rusqlite::Row;
 
+use crate::peer_invitation::accept_receipt_verify::VerifiedReceiptSource;
 use crate::peer_invitation::accept_receipt_wire::{self as receipt_wire, Decoded, Receipt};
 use crate::peer_invitation::postjoin_verify::{
     Baseline, Capture, ConfirmedRotation, RecoveredPostJoin,
@@ -168,6 +169,10 @@ impl Publication {
 
     pub(crate) fn deadline(&self) -> u64 {
         self.deadline
+    }
+
+    pub(crate) fn welcome_id(&self) -> [u8; 32] {
+        self.welcome_id
     }
 
     pub(crate) fn semantic_id(&self) -> &[u8] {
@@ -704,6 +709,7 @@ impl Checkpoint {
             || enrollment.scope != *scope
             || !source_pin.is_next_after(enrollment.original_pin())
             || activation_schema::active_exists(&tx, scope.carrier)?
+            || activation_schema::postjoin_exists(&tx)?
         {
             return Err(CursorError::Stale.into());
         }
@@ -994,6 +1000,31 @@ impl Checkpoint {
         }))
     }
 
+    pub(crate) fn accept_verified_receipt(
+        &mut self,
+        source: &Source,
+        verified: &VerifiedReceiptSource,
+        wall: u64,
+    ) -> Result<FounderAcceptance> {
+        let cx = self.publication_context(source, verified.receipt().recipient)?;
+        if verified.route().relays != cx.route.urls {
+            return Err(CursorError::Binding.into());
+        }
+        let exact = ReceiptSourceCoordinates {
+            decoded: Decoded {
+                receipt: *verified.receipt(),
+                event_id: verified.app_id(),
+                created_at: verified.created_at(),
+            },
+            group: verified.group().as_slice().to_vec(),
+            route: verified.route().nostr_group_id,
+            sender_leaf: verified.leaf(),
+            native_id: verified.native_id().as_slice().to_vec(),
+            deadline: verified.deadline(),
+        };
+        self.accept_receipt_coordinates(source, &exact, wall)
+    }
+
     fn accept_receipt_coordinates(
         &mut self,
         source: &Source,
@@ -1036,7 +1067,7 @@ impl Publication {
             || !matches_baseline(
                 &self.scope,
                 self.recipient(),
-                self.welcome_id,
+                self.welcome_id(),
                 self.origin(),
                 self.deadline(),
                 baseline,
@@ -1087,7 +1118,7 @@ fn insert_acceptance(
 }
 
 fn load_acceptance(tx: &Transaction<'_>, origin: Origin) -> Result<Option<FounderAcceptance>> {
-    Ok(tx.query_row(
+    let saved = tx.query_row(
         "SELECT founder,recipient,room_id,offer_id,offer_revision,welcome_id,epoch,identity,group_id,
                 route,sender_leaf,native_id,event_id,authored_at,deadline,accepted_at
          FROM peer_founder_acceptance WHERE singleton=1 AND origin=?1",
@@ -1118,7 +1149,16 @@ fn load_acceptance(tx: &Transaction<'_>, origin: Origin) -> Result<Option<Founde
                 accepted_at: read_seconds(row, 15)?,
             })
         },
-    ).optional()?)
+    ).optional()?;
+    if let Some(saved) = &saved {
+        let decoded = &saved.source.decoded;
+        let prepared = receipt_wire::prepare(&decoded.receipt, decoded.created_at)
+            .map_err(|_| CursorError::Binding)?;
+        if prepared.event_id() != decoded.event_id {
+            return Err(CursorError::Binding.into());
+        }
+    }
+    Ok(saved)
 }
 
 #[path = "peer_activation_checkpoint_tests.rs"]
