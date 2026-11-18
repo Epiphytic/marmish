@@ -1,11 +1,15 @@
 //! Exact fixture epoch and transactional writer apertures.
 
-use rusqlite::{Connection, TransactionBehavior};
+use rusqlite::Connection;
+#[cfg(test)]
+use rusqlite::TransactionBehavior;
+#[cfg(test)]
 use std::sync::OnceLock;
 
-use super::super::super::super::{
-    HardenedPeerConnection, MAX_ORIGINS, check_hardening, stored_origins,
-};
+use super::super::super::super::stored_origins;
+#[cfg(test)]
+use super::super::super::super::{HardenedPeerConnection, MAX_ORIGINS, check_hardening};
+#[cfg(test)]
 use super::super::retirement::schema::{Entry, expected as prior_inventory, inventory};
 use super::super::stage_schema::STAGE_CLAIM_TRIGGER;
 use super::*;
@@ -126,6 +130,7 @@ pub(super) fn install(conn: &Connection) -> std::result::Result<(), CursorError>
     Ok(())
 }
 
+#[cfg(test)]
 fn expected() -> std::result::Result<&'static [Entry], CursorError> {
     static EXPORT: OnceLock<Vec<Entry>> = OnceLock::new();
     if let Some(entries) = EXPORT.get() {
@@ -161,6 +166,7 @@ pub(super) fn cursor_error(error: Error) -> CursorError {
     }
 }
 
+#[cfg(test)]
 pub(super) fn verify(
     conn: &rusqlite::Transaction<'_>,
     account: [u8; 32],
@@ -172,6 +178,7 @@ pub(super) fn verify(
     verify_rows(conn, account, origins)
 }
 
+#[cfg(test)]
 pub(super) fn verify_for_epoch(
     conn: &rusqlite::Transaction<'_>,
     account: [u8; 32],
@@ -249,6 +256,7 @@ fn verify_owner(
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn open(
     HardenedPeerConnection(mut conn): HardenedPeerConnection,
     account: [u8; 32],

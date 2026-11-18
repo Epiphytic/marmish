@@ -16,7 +16,14 @@ pub(in super::super) fn under_cooldown(
     )?)
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 pub(super) fn install(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE peer_retirement_cooldown (
@@ -27,13 +34,27 @@ pub(super) fn install(conn: &Connection) -> Result<()> {
     Writers::Cooldown.guard(conn, true)
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 #[derive(Clone, Copy)]
 enum Writers {
     Cooldown,
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 impl Writers {
     fn guard(self, conn: &Connection, install: bool) -> Result<()> {
         let table = match self {
@@ -57,7 +78,14 @@ impl Writers {
 
 #[cfg(test)]
 pub(super) const DAY: u64 = 86_400;
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 pub(super) const HISTORY_LIMIT: i64 = 512;
 
 #[cfg(test)]

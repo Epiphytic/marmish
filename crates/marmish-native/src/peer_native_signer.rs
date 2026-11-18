@@ -1,9 +1,23 @@
 //! Sign an isolated stage's KeyPackage without granting MDK any transport access.
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        marmish_peer_receiver_candidate
+    )
+))]
 #[path = "peer_stage_native.rs"]
 mod provisional;
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        marmish_peer_receiver_candidate
+    )
+))]
 pub(crate) use provisional::ProvisionalPackage;
 #[cfg(test)]
 #[path = "peer_stage_joined.rs"]
@@ -140,6 +154,7 @@ impl OpenStage {
         sample: Duration,
         publisher: WithheldPublisher,
     ) -> StageResult<()> {
+        publisher.check_window()?;
         let role = SessionConfig::with_storage(
             self.storage.clone(),
             Duration::ZERO,
@@ -149,6 +164,15 @@ impl OpenStage {
         .account_identity_proof_signer(Arc::new(ProofSigner(self.signer.clone())))
         .supported_app_components(components());
         let endpoints = vec![self.endpoint.clone()];
+        publisher.check_window()?;
+        #[cfg(all(
+            target_os = "linux",
+            target_arch = "x86_64",
+            any(test, marmish_peer_receiver_candidate)
+        ))]
+        let window = publisher.window.clone();
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        let point = std::time::Instant::now();
         let mut runtime = AccountDeviceRuntime::open(role, || {
             Ok::<_, marmot_session::SessionError>((
                 NoIo,
@@ -162,7 +186,21 @@ impl OpenStage {
             Arc::new(SystemMonotonicClock::default()),
             Arc::new(OsMaintenanceRandom),
         );
-        runtime
+        #[cfg(all(
+            target_os = "linux",
+            target_arch = "x86_64",
+            any(test, marmish_peer_receiver_candidate)
+        ))]
+        if let Some(window) = &window {
+            #[cfg(test)]
+            window.timing("native_runtime", point);
+            window.check()?;
+            #[cfg(test)]
+            window.before_generation_fixture();
+        }
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        let point = std::time::Instant::now();
+        let result = runtime
             .prepare_fresh_key_package(endpoints)
             .await
             .map_err(|err| match err {
@@ -170,7 +208,12 @@ impl OpenStage {
                     StageError::Unavailable
                 }
                 _ => StageError::Invalid,
-            })?;
+            });
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        if let Some(window) = &window {
+            window.timing("native_prepare", point);
+        }
+        result?;
         Ok(())
     }
 
@@ -182,6 +225,12 @@ impl OpenStage {
             },
             #[cfg(test)]
             withhold_signing: false,
+            #[cfg(all(
+                target_os = "linux",
+                target_arch = "x86_64",
+                any(test, marmish_peer_receiver_candidate)
+            ))]
+            window: None,
         }
     }
 
@@ -290,6 +339,26 @@ struct WithheldPublisher {
     publisher: Publisher,
     #[cfg(test)]
     withhold_signing: bool,
+    #[cfg(all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(test, marmish_peer_receiver_candidate)
+    ))]
+    window: Option<crate::peer_invitation::NativeWindow>,
+}
+
+impl WithheldPublisher {
+    fn check_window(&self) -> StageResult<()> {
+        #[cfg(all(
+            target_os = "linux",
+            target_arch = "x86_64",
+            any(test, marmish_peer_receiver_candidate)
+        ))]
+        if let Some(window) = &self.window {
+            window.check()?;
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -304,11 +373,21 @@ impl KeyPackagePublisher for WithheldPublisher {
                 "peer_fixture_unsigned_cut",
             ));
         }
+        let check_window = || {
+            self.check_window()
+                .map_err(|_| KeyPackagePublishError::unexposed("peer_package_window_closed"))
+        };
+        check_window()?;
         let mut artifact = self.publisher.prepare_key_package(publication).await?;
         let event: Event = serde_json::from_slice(&artifact.bytes)
             .map_err(|_| KeyPackagePublishError::unexposed("peer_package_decode"))?;
         artifact.bytes = serde_json::to_vec(&event)
             .map_err(|_| KeyPackagePublishError::unexposed("peer_package_encode"))?;
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        if let Some(window) = &self.window {
+            window.signed_fixture();
+        }
+        check_window()?;
         Ok(artifact)
     }
 

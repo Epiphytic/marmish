@@ -9,11 +9,25 @@ use super::{
     Checkpoint, CursorError, Error, Invitation, Local, Origin, Result, Selector, Source, rows,
 };
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 #[path = "peer_stage_journal_schema.rs"]
 mod stage_schema;
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 #[path = "peer_stage_journal.rs"]
 pub(crate) mod stage_journal;
 
@@ -24,9 +38,27 @@ pub(super) mod cooldown;
 #[path = "peer_stage_retirement_journal.rs"]
 pub(crate) mod retirement;
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 #[path = "peer_prepared_consent.rs"]
 pub(crate) mod prepared_consent;
+
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
+#[path = "peer_stage_layout_inventory.rs"]
+mod layout_inventory;
 
 const START_INTERVAL: u64 = 600;
 
@@ -135,7 +167,11 @@ pub(crate) struct Binding {
     pub(super) generation: Generation,
 }
 
-#[cfg(test)]
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
 impl Binding {
     pub(crate) fn coordinates(self) -> (bool, u64, Origin, Selector) {
         (
@@ -328,9 +364,23 @@ impl Checkpoint {
         wall: u64,
     ) -> Result<(Transaction<'_>, Origin, u64)> {
         let origin = self.origin(source)?;
-        #[cfg(test)]
+        #[cfg(any(
+            test,
+            all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            )
+        ))]
         self.custody_mode(key.server)?;
-        #[cfg(not(test))]
+        #[cfg(not(any(
+            test,
+            all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            )
+        )))]
         if !self.policy.permits(key.server) {
             return Err(Error::Policy);
         }
@@ -339,7 +389,14 @@ impl Checkpoint {
             .iter()
             .find(|route| route.id == origin)
             .ok_or(Error::Source)?;
-        #[cfg(test)]
+        #[cfg(any(
+            test,
+            all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            )
+        ))]
         let custody = match self.export_epoch {
             Some(prepared_consent::Epoch::Custody(epoch)) => {
                 Some((epoch, self.cursor.origins.clone()))
@@ -349,14 +406,28 @@ impl Checkpoint {
         let cooldown_attached = self.cooldown_attached();
         let tx = self.cursor.with_wall(origin, wall)?;
         rows::check_wall(&tx, wall)?;
-        #[cfg(test)]
+        #[cfg(any(
+            test,
+            all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            )
+        ))]
         if let Some((epoch, origins)) = &custody {
             epoch.verify(&tx, self.signer.public_key().to_bytes(), origins)?;
         }
         if cooldown_attached && cooldown::under_cooldown(&tx, key.server.to_bytes(), wall)? {
             return Err(Error::Cooldown);
         }
-        #[cfg(test)]
+        #[cfg(any(
+            test,
+            all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            )
+        ))]
         if custody.is_some() && prepared_consent::custody::owns(&tx, key, origin)? {
             return Err(Error::Custodied);
         }

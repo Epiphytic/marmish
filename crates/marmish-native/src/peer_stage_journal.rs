@@ -2,10 +2,15 @@
 
 use std::sync::Arc;
 
-use super::super::super::{CursorStore, read_seconds, seconds};
-use super::super::{Policy, package_digest};
+#[cfg(test)]
+use super::super::super::CursorStore;
+use super::super::super::{read_seconds, seconds};
+#[cfg(test)]
+use super::super::Policy;
+use super::super::package_digest;
 use super::{Binding, Checkpoint, CursorError, Error, Reservation, Result, Source};
 use super::{generation, has_outbox, rows};
+#[cfg(test)]
 use nostr::key::Keys;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
@@ -76,6 +81,10 @@ pub(crate) struct NativeStart {
 
 impl NativeStart {
     pub(crate) fn matches(self, stage: &BoundStage, witness: FileWitness) -> bool {
+        self.same_stage(stage, witness)
+    }
+
+    pub(crate) fn same_stage(&self, stage: &BoundStage, witness: FileWitness) -> bool {
         Arc::ptr_eq(&self.owner, &stage.owner)
             && self.binding == stage.binding
             && self.witness == witness
@@ -122,6 +131,7 @@ pub(super) fn load(conn: &Connection, binding: Binding) -> Result<Option<State>>
 }
 
 impl Checkpoint {
+    #[cfg(test)]
     pub(crate) fn attach_for_provisional_proof(
         cursor: CursorStore,
         signer: Keys,
@@ -141,6 +151,7 @@ impl Checkpoint {
         Ok(checkpoint)
     }
 
+    #[cfg(test)]
     pub(crate) fn has_stage(
         &mut self,
         source: &Source,
@@ -264,6 +275,7 @@ impl Checkpoint {
         if !self.provisional_schema || binding.origin != self.origin(source)? {
             return Err(Error::Source);
         }
+        #[cfg(test)]
         if self.retirement_epoch {
             super::retirement::verify_epoch(&self.cursor.conn)?;
             if super::retirement::retiring(&self.cursor.conn, binding)? {
