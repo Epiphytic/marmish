@@ -143,7 +143,7 @@ fn peer_installed_custody_offer_outer_self_and_wrong_recipient_fail_at_port_inde
     let self_carrier = EventBuilder::new(event.kind, event.content)
         .tags(event.tags)
         .custom_created_at(event.created_at)
-        .sign_with_keys(&recipient)
+        .finalize(&recipient)
         .unwrap();
     let body = serde_json::value::to_raw_value(&self_carrier).unwrap();
     assert!(matches!(
