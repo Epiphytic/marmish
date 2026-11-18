@@ -55,3 +55,7 @@ jobs:
         run: cargo test --locked -p marmish-native --lib core_tests_terminal_supervisor
       - name: Check foreground Terminal byte policies
         run: cargo test --locked -p marmish-native --test terminal_local_tmux core_tests_terminal_frontend
+      - name: Check Terminal enrollment bounds and records
+        run: |
+          cargo test --locked -p marmish-native --lib terminal_bootstrap::enrollment::core_tests
+          cargo test --locked -p marmish-native --lib terminal_enrollment::core_tests

@@ -14,6 +14,9 @@ use std::time::Duration;
 #[path = "terminal_bootstrap_wss_tests.rs"]
 mod terminal_bootstrap_wss_tests;
 
+#[path = "terminal_enrollment_wss_tests.rs"]
+mod terminal_enrollment_wss_tests;
+
 struct CommandPeer {
     material: IdentityMaterial,
     lease: ProfileLease,

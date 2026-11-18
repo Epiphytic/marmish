@@ -532,6 +532,16 @@ impl Relay {
             })
     }
 
+    pub(super) fn has_live_subscription(&self, account: PublicKey, id: &str) -> bool {
+        self.state
+            .lock()
+            .unwrap()
+            .connections
+            .values()
+            .filter(|connection| connection.account == Some(account))
+            .any(|connection| connection.subscriptions.iter().any(|sub| sub.id == id))
+    }
+
     pub(super) fn assert_healthy(&self) {
         assert!(
             !self.task.is_finished(),

@@ -31,12 +31,21 @@ pub(crate) struct Exchange {
     last_probe: Option<Instant>,
 }
 
+pub(crate) struct ConfirmedTerminal {
+    pub(crate) local: Keys,
+    pub(crate) client: PublicKey,
+    pub(crate) server: PublicKey,
+    pub(crate) ready: RumorId,
+    pub(crate) confirmed_at: Instant,
+}
+
 struct Live {
     began: Instant,
     last: Body,
     ids: [Option<RumorId>; 4],
     sent: [Option<Prepared>; 4],
     local_terminal: Option<Keys>,
+    confirmed_at: Option<Instant>,
 }
 
 impl Live {
@@ -47,6 +56,7 @@ impl Live {
             ids: [Some(id), None, None, None],
             sent: [const { None }; 4],
             local_terminal: None,
+            confirmed_at: None,
         }
     }
 
@@ -213,6 +223,7 @@ impl Exchange {
                 },
             ) if pair == expected && own == client_key && codec.fresh_terminal_key(server_key) => {
                 live.advance(verified.id, verified.body);
+                live.confirmed_at = Some(now.monotonic);
                 return Ok(Advance::Confirmed);
             }
             _ => return Err(ORDER),
@@ -223,6 +234,9 @@ impl Exchange {
         let prepared = codec.wrap(signer, response, now.unix)?;
         live.advance(verified.id, verified.body);
         live.remember(prepared, response);
+        if response.step() == Step::Ready {
+            live.confirmed_at = Some(now.monotonic);
+        }
         live.local_terminal = Some(local_terminal);
         Ok(Advance::Send(response.step()))
     }
@@ -257,6 +271,34 @@ impl Exchange {
         let key = live.local_terminal.as_ref().ok_or(ORDER)?;
         let id = live.ids[Step::Ready as usize].ok_or(ORDER)?;
         Ok((key, remote, id))
+    }
+
+    pub(crate) fn take_terminal(
+        &mut self,
+        now: Time,
+        authority: bool,
+    ) -> Result<ConfirmedTerminal> {
+        let (_, _, ready) = self.confirmed(now, authority)?;
+        let live = self.live.as_mut().ok_or(ORDER)?;
+        let Body::Ready {
+            client_key,
+            server_key,
+            ..
+        } = live.last
+        else {
+            return Err(ORDER);
+        };
+        Ok(ConfirmedTerminal {
+            local: live.local_terminal.take().ok_or(ORDER)?,
+            client: client_key,
+            server: server_key,
+            ready,
+            confirmed_at: live.confirmed_at.ok_or(ORDER)?,
+        })
+    }
+
+    pub(crate) fn enrollment_codec(&self) -> Result<&Codec> {
+        self.codec.as_ref().ok_or(AUTHORITY)
     }
 }
 

@@ -13,6 +13,8 @@ use zeroize::Zeroizing;
 
 #[path = "terminal_bootstrap_core_tests.rs"]
 mod core_tests;
+#[path = "terminal_enrollment_codec.rs"]
+pub(crate) mod enrollment;
 #[path = "terminal_bootstrap_state.rs"]
 pub(crate) mod state;
 
@@ -26,6 +28,21 @@ const OUTER_CONTENT_CAP: usize = 31 * 1024;
 const SEAL_CONTENT_CAP: usize = 8 * 1024;
 const RUMOR_CONTENT_CAP: usize = 2 * 1024;
 const LIFETIME: u64 = 30;
+const BOOTSTRAP_GIFT: GiftLimits = GiftLimits {
+    outer: OUTER_CAP,
+    outer_content: OUTER_CONTENT_CAP,
+    seal: OUTER_CONTENT_CAP,
+    seal_content: SEAL_CONTENT_CAP,
+    rumor: SEAL_CONTENT_CAP,
+};
+
+struct GiftLimits {
+    outer: usize,
+    outer_content: usize,
+    seal: usize,
+    seal_content: usize,
+    rumor: usize,
+}
 
 const BINDING: Error = Error::Invalid("terminal_bootstrap_binding");
 const ALIAS: Error = Error::Invalid("terminal_bootstrap_alias");
@@ -36,7 +53,7 @@ const RECORD: Error = Error::Invalid("terminal_bootstrap_record");
 const CLOCK: Error = Error::Invalid("terminal_bootstrap_clock");
 
 type Challenge = [u8; 16];
-type RumorId = [u8; 32];
+pub(crate) type RumorId = [u8; 32];
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -172,24 +189,33 @@ impl Codec {
             [Tag::public_key(self.outbound)],
             content,
         );
+        self.wrap_gift(signer, rumor, &BOOTSTRAP_GIFT)
+    }
+
+    fn wrap_gift(
+        &self,
+        signer: &Keys,
+        rumor: UnsignedEvent,
+        limits: &GiftLimits,
+    ) -> Result<Prepared> {
         let id = rumor.compute_id().to_bytes();
         let event = GiftWrapBuilder::new(self.outbound, rumor)
             .finalize(signer)
             .map_err(|_| WRAP)?;
         let frame = serde_json::to_vec(&event).map_err(|_| WRAP)?;
-        if frame.len() > OUTER_CAP || event.content.len() > OUTER_CONTENT_CAP {
+        if frame.len() > limits.outer || event.content.len() > limits.outer_content {
             return Err(WRAP);
         }
         Ok(Prepared { id, frame })
     }
 
-    fn open(&self, frame: &[u8], now: u64) -> Result<Verified> {
-        if frame.len() > OUTER_CAP {
+    fn open_gift(&self, frame: &[u8], limits: &GiftLimits) -> Result<UnsignedEvent> {
+        if frame.len() > limits.outer {
             return Err(WRAP);
         }
         let outer: Event = serde_json::from_slice(frame).map_err(|_| WRAP)?;
         if outer.kind != Kind::GiftWrap
-            || outer.content.len() > OUTER_CONTENT_CAP
+            || outer.content.len() > limits.outer_content
             || !only_recipient(&outer.tags, self.inbound.public)
             || outer.verify().is_err()
         {
@@ -199,11 +225,14 @@ impl Codec {
             nip44::decrypt_to_bytes(&self.inbound.secret, &outer.pubkey, &outer.content)
                 .map_err(|_| SEAL)?,
         );
+        if seal_bytes.len() > limits.seal {
+            return Err(SEAL);
+        }
         let seal: Event = serde_json::from_slice(&seal_bytes).map_err(|_| SEAL)?;
         let (_, remote) = self.binding.accounts();
         if seal.kind != Kind::Seal
             || seal.pubkey != remote
-            || seal.content.len() > SEAL_CONTENT_CAP
+            || seal.content.len() > limits.seal_content
             || !seal.tags.is_empty()
             || seal.verify().is_err()
         {
@@ -213,10 +242,20 @@ impl Codec {
             nip44::decrypt_to_bytes(&self.inbound.secret, &seal.pubkey, &seal.content)
                 .map_err(|_| RUMOR)?,
         );
-        let mut rumor: UnsignedEvent = serde_json::from_slice(&rumor_bytes).map_err(|_| RUMOR)?;
+        if rumor_bytes.len() > limits.rumor {
+            return Err(RUMOR);
+        }
+        let rumor: UnsignedEvent = serde_json::from_slice(&rumor_bytes).map_err(|_| RUMOR)?;
+        if rumor.pubkey != seal.pubkey {
+            return Err(RUMOR);
+        }
+        Ok(rumor)
+    }
+
+    fn open(&self, frame: &[u8], now: u64) -> Result<Verified> {
+        let mut rumor = self.open_gift(frame, &BOOTSTRAP_GIFT)?;
         let content = Zeroizing::new(std::mem::take(&mut rumor.content));
         if rumor.kind != KIND
-            || rumor.pubkey != seal.pubkey
             || content.len() > RUMOR_CONTENT_CAP
             || !only_recipient(&rumor.tags, self.inbound.public)
         {
@@ -279,7 +318,7 @@ fn only_recipient(tags: &nostr::event::Tags, recipient: PublicKey) -> bool {
 }
 
 pub(crate) struct Prepared {
-    id: RumorId,
+    pub(crate) id: RumorId,
     pub(crate) frame: Vec<u8>,
 }
 

@@ -21,7 +21,9 @@ and durable Command profile exclusion. The [local supervisor](validation/termina
 qualifies persistent encrypted slot state, writer and observer attachment, and
 restart recovery in Linux tmux fixtures. The [foreground frontend](validation/terminal-frontend-tty.md)
 verifies filtered display, local input, signal cleanup and restoration
-against real Linux PTYs and tmux. Remote Terminal admission, reattach,
+against real Linux PTYs and tmux. The [room enrollment fixture](validation/terminal-enrollment.md)
+uses a separate native room, a pinned direct WSS origin, exact 4 KiB frame
+checks and an ordinary Command after room teardown. Remote Terminal admission, reattach,
 inbound Peer invitations and network heartbeat remain in development.
 The [Peer aggregate ingress proof](validation/peer-aggregate-ingress-proof.md)
 qualifies one shared canonical origin in a native loopback fixture. A copy

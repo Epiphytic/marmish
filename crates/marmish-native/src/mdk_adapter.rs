@@ -2915,6 +2915,18 @@ pub(crate) mod trust_tests;
 mod terminal_memory_proof_tests;
 
 #[cfg(test)]
+#[path = "terminal_enrollment.rs"]
+mod terminal_enrollment;
+
+#[cfg(test)]
+#[path = "terminal_enrollment_room.rs"]
+mod terminal_enrollment_room;
+
+#[cfg(test)]
+#[path = "terminal_enrollment_transport.rs"]
+mod terminal_enrollment_transport;
+
+#[cfg(test)]
 #[path = "terminal_room_fixture.rs"]
 mod terminal_room_fixture;
 
