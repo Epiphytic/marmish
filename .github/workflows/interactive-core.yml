@@ -90,3 +90,7 @@ jobs:
         run: cargo test --locked -p marmish-native --lib terminal_selection
       - name: Check durable Peer heartbeat reservations
         run: cargo test --locked -p marmish-native --test peer_heartbeat_send_fences peer_heartbeat_send_fences::core_tests::core_
+      - name: Check local Pending Peer decline and expiry
+        run: |
+          cargo test --locked -p marmish-native --lib pending_terminal_expiry_boundary_and_absorbing_block_preserve_slot
+          cargo test --locked -p marmish-native --lib joined_retirement_
