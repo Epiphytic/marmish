@@ -133,7 +133,7 @@ impl Round {
         drop(setup);
         ordinary.ordinary(signer);
         ordinary.ordinary(command.public());
-        let relay = Relay::start_peer([signer, founder.public_key()]).await;
+        let mut relay = Relay::start_peer([signer, founder.public_key()]).await;
         assert!(ordinary.peer_mode().is_none());
         assert!(
             QualifiedOrigin::for_daemon_peer_fixture(
@@ -144,6 +144,17 @@ impl Round {
             )
             .is_err()
         );
+        let bound = std::mem::replace(&mut relay.url, ordinary.url.clone());
+        assert!(
+            QualifiedOrigin::for_daemon_peer_fixture(
+                relay.peer_mode().unwrap(),
+                founder_root.path(),
+                signer,
+                founder.public_key(),
+            )
+            .is_err()
+        );
+        relay.url = bound;
         let wall = Arc::new(AtomicU64::new(Wall::System.sample().unwrap().as_secs()));
         Self {
             ordinary,
@@ -402,15 +413,14 @@ async fn entry(socket: &Path, selector: Selector, target: peer::State) -> peer::
         loop {
             if let Ok(peer::Reply::List { entries }) =
                 peer::client_request(socket, peer::Request::List {}).await
-            {
-                if let Some(entry) = entries.into_iter().find(|entry| {
+                && let Some(entry) = entries.into_iter().find(|entry| {
                     entry.selection.server == selector.server
                         && entry.selection.offer_id == selector.id
                         && entry.selection.revision == selector.revision
                         && entry.state == target
-                }) {
-                    break entry;
-                }
+                })
+            {
+                break entry;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
@@ -439,7 +449,7 @@ async fn manual() {
     let began = Instant::now();
     let (selector, delivery) = round.send_delivery().await;
     let pending = entry(&socket, selector, peer::State::Pending).await;
-    let join = began.elapsed();
+    let offer_to_pending = began.elapsed();
     show(&socket, pending.selection, peer::State::Pending).await;
     assert_no_command(&socket).await;
     let stop = daemon.stop().await;
@@ -453,6 +463,8 @@ async fn manual() {
 
     let daemon = round.start(Admission::Automatic, true).await;
     show(&socket, pending.selection, peer::State::Pending).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    show(&socket, pending.selection, peer::State::Pending).await;
     let began = Instant::now();
     let request = || peer::Request::Approve {
         selection: pending.selection,
@@ -462,7 +474,8 @@ async fn manual() {
         Err(peer::Failure::Uncertain)
     ));
     let decision = began.elapsed();
-    show(&socket, pending.selection, peer::State::Activating).await;
+    let committed = show(&socket, pending.selection, peer::State::Activating).await;
+    assert!(committed.activating_at.is_some());
     assert_no_command(&socket).await;
     daemon.stop().await;
     assert!(!socket.exists());
@@ -477,6 +490,7 @@ async fn manual() {
     );
 
     let daemon = round.start(Admission::Automatic, false).await;
+    round.wall.fetch_add(1, Ordering::Relaxed);
     let began = Instant::now();
     let peer::Reply::Approve { entry } = peer::client_request(&socket, request()).await.unwrap()
     else {
@@ -484,6 +498,7 @@ async fn manual() {
     };
     assert_eq!(entry.selection, pending.selection);
     assert_eq!(entry.state, peer::State::Activating);
+    assert_eq!(entry.activating_at, committed.activating_at);
     let retry = began.elapsed();
     round.wall.store(pending.expires_at, Ordering::Relaxed);
     assert_eq!(
@@ -502,12 +517,13 @@ async fn manual() {
     );
     daemon.stop().await;
     assert!(!socket.exists());
+    assert!(ProfileLease::acquire(round.root.path(), PROFILE).is_ok());
     assert!(round.relay.peer_only_publications());
     assert_eq!(round.relay.peer_transcript().len(), 3);
     assert_eq!(round.ordinary.publication_attempts(7435), 0);
     eprintln!(
-        "peer_daemon_wss manual join_ms={} decision_ms={} retry_ms={} first_stop_ms={}",
-        join.as_millis(),
+        "peer_daemon_wss manual offer_to_pending_ms={} decision_ms={} retry_ms={} first_stop_ms={}",
+        offer_to_pending.as_millis(),
         decision.as_millis(),
         retry.as_millis(),
         stop.as_millis()
@@ -521,7 +537,7 @@ async fn automatic() {
     let began = Instant::now();
     let (selector, delivery) = round.send_delivery().await;
     let admitted = entry(&socket, selector, peer::State::Activating).await;
-    let join_and_decision = began.elapsed();
+    let offer_to_activating = began.elapsed();
     show(&socket, admitted.selection, peer::State::Activating).await;
     assert_no_command(&socket).await;
     let stop = daemon.stop().await;
@@ -535,8 +551,8 @@ async fn automatic() {
     assert!(round.relay.peer_only_publications());
     assert_eq!(round.relay.peer_transcript().len(), 3);
     eprintln!(
-        "peer_daemon_wss automatic join_and_decision_ms={} stop_ms={}",
-        join_and_decision.as_millis(),
+        "peer_daemon_wss automatic offer_to_activating_ms={} stop_ms={}",
+        offer_to_activating.as_millis(),
         stop.as_millis()
     );
 }
@@ -802,6 +818,7 @@ async fn outage() {
     round.command.stop_fixture_server(server).await;
     let stop = daemon.stop().await;
     assert!(!socket.exists());
+    assert!(ProfileLease::acquire(round.root.path(), PROFILE).is_ok());
     eprintln!(
         "peer_daemon_wss outage decision_ms={} command_ms={} stop_ms={}",
         decision.as_millis(),
