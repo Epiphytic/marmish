@@ -283,6 +283,21 @@ impl ReceiverRouteControl<'_, '_> {
             .ok_or(RegistrationFailure::LocalUnavailable)
     }
 
+    pub(crate) fn prepare_cursor(
+        &mut self,
+        lease: &Arc<ProfileLease>,
+        material: &IdentityMaterial,
+        quota: &ReceiverQuota<'_>,
+    ) -> std::result::Result<File, RegistrationFailure> {
+        self.recheck(lease, material)?;
+        if !std::ptr::eq(self.quota, quota) || self.route_scope.route.is_none() {
+            return Err(RegistrationFailure::LocalUnavailable);
+        }
+        let prepared = prepare_cursor_file(&self.route_scope.scope.directories.member);
+        self.recheck(lease, material)?;
+        prepared.map_err(|_| RegistrationFailure::LocalUnavailable)
+    }
+
     fn check_local(
         &mut self,
         lease: &Arc<ProfileLease>,
@@ -416,6 +431,80 @@ fn open_member(root: &File) -> io::Result<File> {
     }
     // SAFETY: successful openat returns a new owned descriptor.
     Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+fn prepare_cursor_file(dir: &File) -> io::Result<File> {
+    use super::open_regular;
+    use std::os::unix::fs::MetadataExt;
+
+    let read = || open_regular(dir, c"cursor.db", libc::O_RDONLY);
+    let file = match read() {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            for name in [c"cursor.db-journal", c"cursor.db-wal", c"cursor.db-shm"] {
+                let mut entry = std::mem::MaybeUninit::<libc::stat>::uninit();
+                // SAFETY: the retained directory is live, the name is static and
+                // fstatat writes to the supplied storage only on success.
+                let status = unsafe {
+                    libc::fstatat(
+                        dir.as_raw_fd(),
+                        name.as_ptr(),
+                        entry.as_mut_ptr(),
+                        libc::AT_SYMLINK_NOFOLLOW,
+                    )
+                };
+                if status == 0 {
+                    return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+                }
+                let error = io::Error::last_os_error();
+                if error.kind() != io::ErrorKind::NotFound {
+                    return Err(error);
+                }
+            }
+            match create_cursor_file(dir) {
+                Ok(file) => file,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => read()?,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(error) => return Err(error),
+    };
+    if file.metadata()?.dev() != dir.metadata()?.dev() {
+        return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+    }
+    Ok(file)
+}
+
+fn create_cursor_file(dir: &File) -> io::Result<File> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    // SAFETY: the held directory is live and the fixed basename is NUL-terminated.
+    let fd = unsafe {
+        libc::openat(
+            dir.as_raw_fd(),
+            c"cursor.db".as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600 as libc::c_uint,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: successful openat returns a new owned descriptor.
+    let file = unsafe { File::from_raw_fd(fd) };
+    let meta = file.metadata()?;
+    // SAFETY: reads the current process's effective UID.
+    let uid = unsafe { libc::geteuid() };
+    if !meta.is_file() || meta.nlink() != 1 || meta.uid() != uid || meta.len() != 0 {
+        return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+    }
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    if !private_mode(&file.metadata()?, 0o600) {
+        return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+    }
+    file.sync_all()?;
+    dir.sync_all()?;
+    Ok(file)
 }
 
 #[cfg(test)]
