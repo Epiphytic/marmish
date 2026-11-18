@@ -8,6 +8,7 @@ use crate::{
         peer_origin, peer_trust,
     },
 };
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -24,6 +25,8 @@ use std::{
 
 const RECORD: &CStr = c"peer-relay-qualification.json";
 const STAGING: &CStr = c"peer-relay-qualification.new";
+const MANAGED_ATTESTATION: &CStr = c"peer-relay-attestation.json";
+const ATTESTATION_STAGING: &CStr = c"peer-relay-attestation.new";
 const RECORD_LIMIT: usize = 8192;
 const MAX_TIMESTAMP: u64 = 253_402_300_799;
 const MAX_VALIDITY: u64 = 30 * 24 * 60 * 60;
@@ -50,6 +53,10 @@ struct Record {
     qualified_at: u64,
     last_observed_at: u64,
     expires_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    build_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    issuer_tag: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -73,7 +80,7 @@ enum LocalStatus {
     ClockUntrusted,
     // Locally consistent metadata awaiting independent issuer evidence.
     CurrentMetadata,
-    Qualified,
+    RequalifyRequired,
 }
 
 #[derive(Serialize)]
@@ -103,7 +110,7 @@ pub(super) fn wall() -> Option<u64> {
 }
 
 pub(super) fn show(profile: &ProfileFiles, relay: &Relay) -> Report {
-    let record = read_record(profile).filter(|record| record.schema == 2);
+    let record = read_record(profile).filter(|record| record.schema != 1);
     let status = record.as_ref().map_or(LocalStatus::Unqualified, |record| {
         record.readback(
             Scope {
@@ -114,26 +121,26 @@ pub(super) fn show(profile: &ProfileFiles, relay: &Relay) -> Report {
             wall(),
         )
     });
-    let (qualified_at, expires_at) = record
-        .filter(|_| matches!(status, LocalStatus::Qualified | LocalStatus::Expired))
-        .map_or((None, None), |record| {
-            (Some(record.qualified_at), Some(record.expires_at))
-        });
-    let status = match status {
-        LocalStatus::Unqualified | LocalStatus::CurrentMetadata => "unqualified",
-        LocalStatus::Stale => "stale",
-        LocalStatus::Expired => "expired",
-        LocalStatus::ClockUntrusted => "clock_untrusted",
-        LocalStatus::Qualified => "qualified",
+    let (record, label) = match status {
+        LocalStatus::Unqualified => (None, "unqualified"),
+        LocalStatus::Stale => (None, "stale"),
+        LocalStatus::Expired => (record.as_ref(), "expired"),
+        LocalStatus::ClockUntrusted => (None, "clock_untrusted"),
+        LocalStatus::CurrentMetadata => (record.as_ref(), "current_metadata"),
+        LocalStatus::RequalifyRequired => (record.as_ref(), "requalify_required"),
     };
+    report(relay, record, label)
+}
+
+fn report(relay: &Relay, record: Option<&Record>, status: &'static str) -> Report {
     let full_trust = trust_expression(&relay.trust);
     let trust = full_trust[..full_trust.len() - 52].to_owned();
     Report {
         origin: relay.origin.to_string(),
         trust,
         status,
-        qualified_at,
-        expires_at,
+        qualified_at: record.map(|record| record.qualified_at),
+        expires_at: record.map(|record| record.expires_at),
     }
 }
 
@@ -187,6 +194,10 @@ impl CheckedAttestation {
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
             .open(path)
             .map_err(|_| ATTESTATION_REFUSED)?;
+        Self::read_file(file, relay, now, false)
+    }
+
+    fn read_file(file: File, relay: &Relay, now: u64, managed: bool) -> Result<Self> {
         let meta = file.metadata().map_err(|_| ATTESTATION_REFUSED)?;
         if !meta.is_file() || meta.nlink() != 1 || !private_mode(&meta, 0o600) {
             return Err(ATTESTATION_REFUSED);
@@ -227,6 +238,9 @@ impl CheckedAttestation {
             return Err(ATTESTATION_REFUSED);
         }
         let canonical = serde_json::to_vec(&data).map_err(|_| ATTESTATION_REFUSED)?;
+        if managed && bytes != canonical {
+            return Err(ATTESTATION_REFUSED);
+        }
         Ok(Self {
             data,
             file: inode(&meta),
@@ -248,9 +262,17 @@ impl CheckedAttestation {
             self.data.enforcement_source, self.data.valid_from, self.data.valid_until
         )
     }
+
+    fn read_managed(profile: &ProfileFiles, relay: &Relay, now: u64) -> Result<Self> {
+        let file = profile
+            .required(MANAGED_ATTESTATION)
+            .map_err(|_| ATTESTATION_REFUSED)?;
+        Self::read_file(file, relay, now, true)
+    }
 }
 
 pub(super) fn check_build_scope() -> Result<()> {
+    check_build_commit(env!("MARMISH_BUILD_COMMIT"))?;
     if !crate::foundation::valid_hex(env!("MARMISH_MDK_REVISION"), 40)
         || !valid_label(env!("MARMISH_BUILD_TARGET"), 128)
     {
@@ -259,10 +281,19 @@ pub(super) fn check_build_scope() -> Result<()> {
     Ok(())
 }
 
+fn check_build_commit(commit: &str) -> Result<()> {
+    if !crate::foundation::valid_hex(commit, 40) || commit.bytes().all(|byte| byte == b'0') {
+        return Err(Error::Invalid("peer_qualification_build"));
+    }
+    Ok(())
+}
+
 pub(super) fn issue(
     authority: &ProbeAuthority<'_>,
     completed: super::probe::Completed,
+    issuer_key: &[u8; 32],
 ) -> Result<Report> {
+    check_build_scope()?;
     let ProbeAuthority {
         profile,
         relay,
@@ -277,8 +308,8 @@ pub(super) fn issue(
     if finished < started || now >= expires_at {
         return Err(WRITE_REFUSED);
     }
-    let record = Record {
-        schema: 2,
+    let mut record = Record {
+        schema: 3,
         profile_id: profile.lease.profile_id().to_owned(),
         origin: relay.origin.to_string(),
         trust: trust_expression(&relay.trust),
@@ -292,7 +323,10 @@ pub(super) fn issue(
         qualified_at: started,
         last_observed_at: finished,
         expires_at,
+        build_commit: Some(env!("MARMISH_BUILD_COMMIT").to_owned()),
+        issuer_tag: None,
     };
+    record.issuer_tag = Some(hex::encode(record.mac(issuer_key)?.finalize().into_bytes()));
     let staged_check = || {
         let wall = authority.check().map_err(io::Error::other)?;
         if wall >= expires_at || !completed.valid_clock(wall) {
@@ -300,23 +334,25 @@ pub(super) fn issue(
         }
         Ok(())
     };
-    replace_using(
+    let exact = replace_pair(
         profile,
         relay,
-        VERSIONS,
         &record,
+        attestation,
         staged_check,
         File::sync_all,
     )?;
-    let exact = read_record(profile).ok_or(WRITE_UNCERTAIN)?;
-    if exact != record {
+    let readback = read_issued(
+        profile,
+        relay,
+        issuer_key,
+        authority.check().map_err(|_| WRITE_UNCERTAIN)?,
+    )
+    .map_err(|_| WRITE_UNCERTAIN)?;
+    if readback.files != exact || readback.record != record || staged_check().is_err() {
         return Err(WRITE_UNCERTAIN);
     }
-    let report = show(profile, relay);
-    if report.status != "qualified" {
-        return Err(WRITE_UNCERTAIN);
-    }
-    Ok(report)
+    Ok(report(relay, Some(&readback.record), "qualified"))
 }
 
 impl Record {
@@ -328,12 +364,24 @@ impl Record {
             return None;
         }
         let record: Self = serde_json::from_slice(bytes).ok()?;
-        record.is_canonical().then_some(record)
+        (record.is_canonical()
+            && (record.schema != 3 || serde_json::to_vec(&record).ok()?.as_slice() == bytes))
+            .then_some(record)
     }
 
     fn is_canonical(&self) -> bool {
         let hex = crate::foundation::valid_hex;
-        matches!(self.schema, 1 | 2)
+        let schema = match self.schema {
+            1 | 2 => self.build_commit.is_none() && self.issuer_tag.is_none(),
+            3 => {
+                self.build_commit
+                    .as_deref()
+                    .is_some_and(|build| check_build_commit(build).is_ok())
+                    && self.issuer_tag.as_deref().is_some_and(|tag| hex(tag, 64))
+            }
+            _ => false,
+        };
+        schema
             && hex(&self.profile_id, 32)
             && peer_origin(self.origin.clone()).is_ok_and(|url| url.as_str() == self.origin)
             && peer_trust(&self.trust).is_ok()
@@ -371,6 +419,8 @@ impl Record {
             || self.relay_contract != scope.versions.contract
             || self.mdk_revision != revision
             || self.target != env!("MARMISH_BUILD_TARGET")
+            || (self.schema == 3
+                && self.build_commit.as_deref() != Some(env!("MARMISH_BUILD_COMMIT")))
         {
             return LocalStatus::Stale;
         }
@@ -381,14 +431,26 @@ impl Record {
             Some(now) if (self.last_observed_at..=MAX_TIMESTAMP).contains(&now) => {
                 if now >= self.expires_at {
                     LocalStatus::Expired
-                } else if self.schema == 1 {
-                    LocalStatus::CurrentMetadata
                 } else {
-                    LocalStatus::Qualified
+                    match self.schema {
+                        2 => LocalStatus::RequalifyRequired,
+                        3 => LocalStatus::CurrentMetadata,
+                        _ => LocalStatus::Unqualified,
+                    }
                 }
             }
             _ => LocalStatus::ClockUntrusted,
         }
+    }
+
+    fn mac(&self, key: &[u8; 32]) -> Result<Hmac<Sha256>> {
+        let mut unsigned = self.clone();
+        unsigned.issuer_tag = None;
+        let bytes = serde_json::to_vec(&unsigned).map_err(|_| WRITE_REFUSED)?;
+        let mut mac = Hmac::<Sha256>::new_from_slice(key).map_err(|_| WRITE_REFUSED)?;
+        mac.update(b"marmish/peer/qualification/record/v3\0");
+        mac.update(&bytes);
+        Ok(mac)
     }
 }
 
@@ -415,6 +477,88 @@ fn read_record(profile: &ProfileFiles) -> Option<Record> {
     read_checked().ok().flatten()
 }
 
+const EVIDENCE_REFUSED: Error = Error::Invalid("peer_qualification_evidence");
+
+/// Authenticated local evidence only. It grants no network or custody authority.
+pub(super) struct IssuedQualification {
+    record: Record,
+    files: EvidenceFiles,
+}
+
+#[derive(PartialEq, Eq)]
+struct EvidenceFiles {
+    record: (u64, u64),
+    attestation: (u64, u64),
+}
+
+pub(super) fn read_issued(
+    profile: &ProfileFiles,
+    relay: &Relay,
+    key: &[u8; 32],
+    now: u64,
+) -> Result<IssuedQualification> {
+    check_build_scope()?;
+    let (config, snapshot) = profile.command_snapshot()?;
+    if config.bound_peer_relay(&config)? != relay {
+        return Err(EVIDENCE_REFUSED);
+    }
+    let ca = profile.ca_snapshot(&relay.trust, now)?;
+    let file = profile.required(RECORD).map_err(|_| EVIDENCE_REFUSED)?;
+    let id = inode(&file.metadata().map_err(|_| EVIDENCE_REFUSED)?);
+    let bytes = read_bounded(file, RECORD_LIMIT).map_err(|_| EVIDENCE_REFUSED)?;
+    let record = Record::decode(&bytes).ok_or(EVIDENCE_REFUSED)?;
+    let scope = Scope {
+        profile_id: profile.lease.profile_id(),
+        relay,
+        versions: VERSIONS,
+    };
+    if record.readback(scope, Some(now)) != LocalStatus::CurrentMetadata {
+        return Err(EVIDENCE_REFUSED);
+    }
+    let tag = record
+        .issuer_tag
+        .as_deref()
+        .and_then(|tag| hex::decode(tag).ok())
+        .ok_or(EVIDENCE_REFUSED)?;
+    record
+        .mac(key)?
+        .verify_slice(&tag)
+        .map_err(|_| EVIDENCE_REFUSED)?;
+    let attestation = CheckedAttestation::read_managed(profile, relay, now)?;
+    if record.operator_evidence != hex::encode(attestation.digest)
+        || attestation.data.valid_from > record.qualified_at
+        || record.expires_at
+            != record
+                .qualified_at
+                .saturating_add(MAX_VALIDITY)
+                .min(attestation.data.valid_until)
+    {
+        return Err(EVIDENCE_REFUSED);
+    }
+    profile.check_command_snapshot(snapshot)?;
+    if profile.ca_snapshot(&relay.trust, now)? != ca {
+        return Err(EVIDENCE_REFUSED);
+    }
+    let live = profile.required(RECORD).map_err(|_| EVIDENCE_REFUSED)?;
+    let current = profile
+        .required(MANAGED_ATTESTATION)
+        .map_err(|_| EVIDENCE_REFUSED)?;
+    if file_id(Some(&live))? != Some(id)
+        || read_bounded(live, RECORD_LIMIT).map_err(|_| EVIDENCE_REFUSED)? != bytes
+        || file_id(Some(&current))? != Some(attestation.file)
+        || CheckedAttestation::read_file(current, relay, now, true)?.digest != attestation.digest
+    {
+        return Err(EVIDENCE_REFUSED);
+    }
+    Ok(IssuedQualification {
+        record,
+        files: EvidenceFiles {
+            record: id,
+            attestation: attestation.file,
+        },
+    })
+}
+
 #[cfg(test)]
 fn read(
     profile: &ProfileFiles,
@@ -437,7 +581,125 @@ fn read(
 const WRITE_REFUSED: Error = Error::Storage("peer_qualification_write");
 const WRITE_UNCERTAIN: Error = Error::Storage("peer_qualification_write_uncertain");
 
-// The issuer calls this only after both independent evidence checks.
+#[derive(Clone, Copy)]
+struct Slot {
+    name: &'static CStr,
+    stage: &'static CStr,
+}
+
+const RECORD_SLOT: Slot = Slot {
+    name: RECORD,
+    stage: STAGING,
+};
+const ATTESTATION_SLOT: Slot = Slot {
+    name: MANAGED_ATTESTATION,
+    stage: ATTESTATION_STAGING,
+};
+
+#[derive(PartialEq, Eq)]
+struct Snapshot {
+    id: (u64, u64),
+    bytes: Vec<u8>,
+}
+
+impl Snapshot {
+    fn read(profile: &ProfileFiles, name: &CStr) -> Result<Option<Self>> {
+        checked_optional(&profile.dir, name)?
+            .map(|file| {
+                let id = inode(&file.metadata().map_err(|_| WRITE_REFUSED)?);
+                let bytes = read_bounded(file, RECORD_LIMIT).map_err(|_| WRITE_REFUSED)?;
+                Ok(Self { id, bytes })
+            })
+            .transpose()
+    }
+}
+
+fn prepare_record(
+    profile: &ProfileFiles,
+    relay: &Relay,
+    versions: Versions,
+    record: &Record,
+) -> Result<(Vec<u8>, Option<Snapshot>)> {
+    let bytes = serde_json::to_vec(record).map_err(|_| WRITE_REFUSED)?;
+    let scope = Scope {
+        profile_id: profile.lease.profile_id(),
+        relay,
+        versions,
+    };
+    if Record::decode(&bytes).is_none()
+        || matches!(
+            record.readback(scope, Some(record.last_observed_at)),
+            LocalStatus::Stale | LocalStatus::ClockUntrusted
+        )
+    {
+        return Err(WRITE_REFUSED);
+    }
+    profile.recheck()?;
+    let old = Snapshot::read(profile, RECORD)?;
+    if let Some(old) = &old {
+        let old_record = Record::decode(&old.bytes).ok_or(WRITE_REFUSED)?;
+        if !permits_replacement(&old_record, record) {
+            return Err(WRITE_REFUSED);
+        }
+    }
+    Ok((bytes, old))
+}
+
+fn replace_pair(
+    profile: &ProfileFiles,
+    relay: &Relay,
+    record: &Record,
+    attestation: &CheckedAttestation,
+    staged_check: impl Fn() -> io::Result<()>,
+    sync_parent: impl Fn(&File) -> io::Result<()>,
+) -> Result<EvidenceFiles> {
+    let _turn = profile.record_writer.lock().map_err(|_| WRITE_REFUSED)?;
+    let (record_bytes, previous_record) = prepare_record(profile, relay, VERSIONS, record)?;
+    let attestation_bytes = serde_json::to_vec(&attestation.data).map_err(|_| WRITE_REFUSED)?;
+    let previous_attestation = Snapshot::read(profile, MANAGED_ATTESTATION)?;
+    checked_optional(&profile.dir, STAGING)?;
+    let attestation_id = if let Some(existing) = previous_attestation
+        .as_ref()
+        .filter(|existing| existing.id == attestation.file)
+    {
+        if existing.bytes != attestation_bytes {
+            return Err(WRITE_REFUSED);
+        }
+        existing.id
+    } else {
+        replace_file(
+            profile,
+            ATTESTATION_SLOT,
+            &attestation_bytes,
+            previous_attestation.as_ref(),
+            &staged_check,
+            &sync_parent,
+        )?
+    };
+    let check_pair = || {
+        staged_check()?;
+        let live = Snapshot::read(profile, MANAGED_ATTESTATION).map_err(io::Error::other)?;
+        if !live.is_some_and(|live| live.id == attestation_id && live.bytes == attestation_bytes) {
+            return Err(io::Error::from(io::ErrorKind::InvalidData));
+        }
+        Ok(())
+    };
+    let record_id = replace_file(
+        profile,
+        RECORD_SLOT,
+        &record_bytes,
+        previous_record.as_ref(),
+        check_pair,
+        sync_parent,
+    )
+    .map_err(|_| WRITE_UNCERTAIN)?;
+    Ok(EvidenceFiles {
+        record: record_id,
+        attestation: attestation_id,
+    })
+}
+
+// Isolated existing record-replacement regressions use pre-v3 metadata.
 #[cfg(test)]
 fn replace(
     profile: &ProfileFiles,
@@ -448,6 +710,7 @@ fn replace(
     replace_using(profile, relay, versions, record, || Ok(()), File::sync_all)
 }
 
+#[cfg(test)]
 fn replace_using(
     profile: &ProfileFiles,
     relay: &Relay,
@@ -457,47 +720,45 @@ fn replace_using(
     sync_parent: impl FnOnce(&File) -> io::Result<()>,
 ) -> Result<()> {
     let _turn = profile.record_writer.lock().map_err(|_| WRITE_REFUSED)?;
-    let bytes = serde_json::to_vec(record).map_err(|_| WRITE_REFUSED)?;
-    let scope = Scope {
-        profile_id: profile.lease.profile_id(),
-        relay,
-        versions,
-    };
-    if Record::decode(&bytes).is_none()
-        || !matches!(
-            record.readback(scope, Some(record.last_observed_at)),
-            LocalStatus::CurrentMetadata | LocalStatus::Qualified | LocalStatus::Expired
-        )
-    {
-        return Err(WRITE_REFUSED);
-    }
-    profile.recheck()?;
-    let old = checked_optional(&profile.dir, RECORD)?;
-    if let Some(old) = &old {
-        let old_bytes = read_bounded(old.try_clone()?, RECORD_LIMIT).map_err(|_| WRITE_REFUSED)?;
-        let old_record = Record::decode(&old_bytes).ok_or(WRITE_REFUSED)?;
-        if !permits_replacement(&old_record, record) {
-            return Err(WRITE_REFUSED);
-        }
-    }
-    if let Some(stale_stage) = checked_optional(&profile.dir, STAGING)? {
-        unlink_owned_stage(profile, &stale_stage)?;
+    let (bytes, old) = prepare_record(profile, relay, versions, record)?;
+    replace_file(
+        profile,
+        RECORD_SLOT,
+        &bytes,
+        old.as_ref(),
+        staged_check,
+        sync_parent,
+    )
+    .map(|_| ())
+}
+
+fn replace_file(
+    profile: &ProfileFiles,
+    slot: Slot,
+    bytes: &[u8],
+    old: Option<&Snapshot>,
+    staged_check: impl FnOnce() -> io::Result<()>,
+    sync_parent: impl FnOnce(&File) -> io::Result<()>,
+) -> Result<(u64, u64)> {
+    if let Some(stale_stage) = checked_optional(&profile.dir, slot.stage)? {
+        unlink_owned_stage(profile, slot.stage, &stale_stage)?;
     }
     let staged = open_regular(
         &profile.dir,
-        STAGING,
+        slot.stage,
         libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
     )
     .map_err(|_| WRITE_REFUSED)?;
-    let stage_and_rename = || -> Result<()> {
-        (&staged).write_all(&bytes).map_err(|_| WRITE_REFUSED)?;
+    let stage_and_rename = || -> Result<(u64, u64)> {
+        (&staged).write_all(bytes).map_err(|_| WRITE_REFUSED)?;
         staged.sync_all().map_err(|_| WRITE_REFUSED)?;
         staged_check().map_err(|_| WRITE_REFUSED)?;
         profile.recheck()?;
-        let latest = checked_optional(&profile.dir, RECORD)?;
-        let latest = file_id(latest.as_ref())?;
-        if latest != file_id(old.as_ref())?
-            || file_id(Some(&staged))? != file_id(Some(&profile.required(STAGING)?))?
+        let latest = Snapshot::read(profile, slot.name)?;
+        let id = inode(&staged.metadata().map_err(|_| WRITE_REFUSED)?);
+        if old != latest.as_ref()
+            || !Snapshot::read(profile, slot.stage)?
+                .is_some_and(|live| live.id == id && live.bytes == bytes)
         {
             return Err(WRITE_REFUSED);
         }
@@ -506,29 +767,30 @@ fn replace_using(
         let status = unsafe {
             libc::renameat(
                 profile.dir.as_raw_fd(),
-                STAGING.as_ptr(),
+                slot.stage.as_ptr(),
                 profile.dir.as_raw_fd(),
-                RECORD.as_ptr(),
+                slot.name.as_ptr(),
             )
         };
         if status != 0 {
             return Err(WRITE_REFUSED);
         }
-        Ok(())
+        Ok(id)
     };
-    if let Err(error) = stage_and_rename() {
-        unlink_owned_stage(profile, &staged)?;
-        return Err(error);
-    }
+    let id = match stage_and_rename() {
+        Ok(id) => id,
+        Err(error) => {
+            unlink_owned_stage(profile, slot.stage, &staged)?;
+            return Err(error);
+        }
+    };
     sync_parent(&profile.dir).map_err(|_| WRITE_UNCERTAIN)?;
     profile.recheck().map_err(|_| WRITE_UNCERTAIN)?;
-    let live = profile.required(RECORD).map_err(|_| WRITE_UNCERTAIN)?;
-    if file_id(Some(&staged)).map_err(|_| WRITE_UNCERTAIN)?
-        != file_id(Some(&live)).map_err(|_| WRITE_UNCERTAIN)?
-    {
+    let live = Snapshot::read(profile, slot.name).map_err(|_| WRITE_UNCERTAIN)?;
+    if !live.is_some_and(|live| live.id == id && live.bytes == bytes) {
         return Err(WRITE_UNCERTAIN);
     }
-    Ok(())
+    Ok(id)
 }
 
 fn permits_replacement(old: &Record, new: &Record) -> bool {
@@ -558,14 +820,14 @@ fn file_id(file: Option<&File>) -> Result<Option<(u64, u64)>> {
     .transpose()
 }
 
-fn unlink_owned_stage(profile: &ProfileFiles, file: &File) -> Result<()> {
+fn unlink_owned_stage(profile: &ProfileFiles, name: &CStr, file: &File) -> Result<()> {
     profile.recheck()?;
-    let stage = profile.required(STAGING).map_err(|_| WRITE_REFUSED)?;
+    let stage = profile.required(name).map_err(|_| WRITE_REFUSED)?;
     if file_id(Some(&stage))? != file_id(Some(file))? {
         return Err(WRITE_REFUSED);
     }
     // SAFETY: static filename and held directory descriptor remain live.
-    let status = unsafe { libc::unlinkat(profile.dir.as_raw_fd(), STAGING.as_ptr(), 0) };
+    let status = unsafe { libc::unlinkat(profile.dir.as_raw_fd(), name.as_ptr(), 0) };
     if status != 0 {
         return Err(WRITE_REFUSED);
     }
@@ -575,7 +837,7 @@ fn unlink_owned_stage(profile: &ProfileFiles, file: &File) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::peer_relay_trust::tests::{private_write, test_lease};
+    use crate::peer_relay_trust::tests::{config_fixture, private_write, test_lease};
     use std::{
         fs,
         os::unix::fs::{PermissionsExt, symlink},
@@ -610,6 +872,8 @@ mod tests {
             qualified_at: 100,
             last_observed_at: 104,
             expires_at: 120,
+            build_commit: None,
+            issuer_tag: None,
         }
     }
 
@@ -655,7 +919,7 @@ mod tests {
         }
         assert_eq!(
             baseline.readback(scope(), Some(104)),
-            LocalStatus::CurrentMetadata
+            LocalStatus::Unqualified
         );
         assert_eq!(baseline.readback(scope(), Some(120)), LocalStatus::Expired);
         let mut terminal = baseline.clone();
@@ -679,6 +943,127 @@ mod tests {
     }
 
     #[test]
+    fn peer_qualification_pair_commit_cut_and_managed_reuse() {
+        let (temp, lease) = test_lease();
+        let profile = ProfileFiles::open(lease.clone()).unwrap();
+        let relay = relay();
+        config_fixture(
+            &lease,
+            relay.origin.as_str(),
+            &trust_expression(&relay.trust),
+            "auto",
+        );
+        let open = |source: &Path| CheckedAttestation::read(source, &relay, 100).unwrap();
+        let attestation_path = temp.path().join("operator.json");
+        let mut data = Attestation {
+            schema: 1,
+            origin: relay.origin.to_string(),
+            trust: trust_expression(&relay.trust),
+            enforcement_source: "fixture before cut".into(),
+            valid_from: 90,
+            valid_until: 120,
+            control_limits: ControlLimits {
+                event_bytes: 65536,
+                stored_per_recipient: 256,
+                per_timestamp_second: 3,
+                accepted_per_600s: 32,
+                stored_per_writer_recipient: 32,
+                retention_max_seconds: 324000,
+            },
+            enforcement: Enforcement {
+                control_registered_writer: true,
+                control_exact_recipient_auth: true,
+                control_expiration_no_early_eviction: true,
+                group_exact_route_acl: true,
+                group_authenticated_members: true,
+                group_reconnect_history: true,
+            },
+        };
+        private_write(&attestation_path, &serde_json::to_vec(&data).unwrap());
+        let first = open(&attestation_path);
+        let key = [31; 32];
+        let sign = |candidate: &mut Record| {
+            candidate.issuer_tag = Some(hex::encode(
+                candidate.mac(&key).unwrap().finalize().into_bytes(),
+            ));
+        };
+        let mut baseline = record(lease.profile_id(), &relay);
+        baseline.schema = 3;
+        baseline.probe_suite = super::VERSIONS.suite.into();
+        baseline.bounds_version = super::VERSIONS.bounds.into();
+        baseline.relay_contract = super::VERSIONS.contract.into();
+        baseline.build_commit = Some(env!("MARMISH_BUILD_COMMIT").into());
+        baseline.operator_evidence = hex::encode(first.digest);
+        sign(&mut baseline);
+
+        let managed = lease.root().join("peer-relay-attestation.json");
+        let fixed = lease.root().join("peer-relay-qualification.json");
+        let files = replace_pair(
+            &profile,
+            &relay,
+            &baseline,
+            &first,
+            || Ok(()),
+            File::sync_all,
+        )
+        .ok()
+        .unwrap();
+        assert!(read_issued(&profile, &relay, &key, 104).is_ok());
+        let before = fs::read(&fixed).unwrap();
+        data.enforcement_source = "fixture after cut".into();
+        fs::write(&attestation_path, serde_json::to_vec(&data).unwrap()).unwrap();
+        let second = open(&attestation_path);
+
+        let mut next = baseline.clone();
+        next.qualified_at = 105;
+        next.last_observed_at = 108;
+        next.probe_evidence = "c3".repeat(32);
+        next.operator_evidence = hex::encode(second.digest);
+        sign(&mut next);
+        let staged = lease.root().join("peer-relay-qualification.new");
+        symlink(&fixed, &staged).unwrap();
+        assert!(matches!(
+            replace_pair(&profile, &relay, &next, &second, || Ok(()), File::sync_all),
+            Err(Error::Storage("peer_qualification_write"))
+        ));
+        assert_eq!(open(&managed).file, files.attestation);
+        assert_eq!(fs::read(&fixed).unwrap(), before);
+        fs::remove_file(staged).unwrap();
+
+        assert!(matches!(
+            replace_pair(
+                &profile,
+                &relay,
+                &next,
+                &second,
+                || Ok(()),
+                |_| { Err(io::Error::from(io::ErrorKind::Interrupted)) }
+            ),
+            Err(Error::Storage("peer_qualification_write_uncertain"))
+        ));
+        assert_eq!(fs::read(&fixed).unwrap(), before);
+        let retained = open(&managed);
+        assert_eq!(retained.digest, second.digest);
+        assert_ne!(retained.file, files.attestation);
+        assert!(read_issued(&profile, &relay, &key, 108).is_err());
+
+        let recovered = replace_pair(
+            &profile,
+            &relay,
+            &next,
+            &retained,
+            || Ok(()),
+            File::sync_all,
+        )
+        .ok()
+        .unwrap();
+        assert_eq!(recovered.attestation, retained.file);
+        assert_eq!(open(&managed).file, retained.file);
+        assert!(read_issued(&profile, &relay, &key, 108).is_ok());
+        assert!(check_build_commit(&"0".repeat(40)).is_err());
+    }
+
+    #[test]
     fn peer_qualification_atomic_replacement_and_crash_floor() {
         let (_temp, lease) = test_lease();
         let profile = ProfileFiles::open(lease.clone()).unwrap();
@@ -695,7 +1080,7 @@ mod tests {
         assert!(!staging.exists());
         assert_eq!(
             read(&profile, &relay, VERSIONS, Some(104)),
-            LocalStatus::CurrentMetadata
+            LocalStatus::Unqualified
         );
 
         let mut advanced = baseline.clone();
@@ -707,7 +1092,7 @@ mod tests {
         ));
         assert_eq!(
             read(&profile, &relay, VERSIONS, Some(104)),
-            LocalStatus::CurrentMetadata
+            LocalStatus::Unqualified
         );
         assert!(staging.is_symlink());
         fs::remove_file(&staging).unwrap();

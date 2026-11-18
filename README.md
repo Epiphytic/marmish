@@ -389,14 +389,18 @@ matching private CA in the profile's `peer-relay-ca.der`, or
 The [qualification contract](docs/phases/peer-installed-heartbeat-first.md#as-first-patch-relay-cli-and-production-transport-boundary)
 defines the owner-only attestation file and the required relay behavior.
 
-`show` reads local status without opening a connection. For `qualify`, register
-the two disposable test identities and grant them access to the test route
-printed by the command. Leave the third identity unregistered. Enter the exact
-confirmation at the foreground terminal once the scope is ready. The probe
-checks authenticated access, reconnect history, and the exact bytes
-returned by the relay. A qualification record reports the outcome of this
-probe and the operator's attestation. Peer enrollment and heartbeats require
-separate runtime authorization. Ordinary Command relay selection is unchanged.
+`show` reads local metadata without opening a connection or accessing the
+profile credential. An older schema 2 record shows `requalify_required`.
+For `qualify`, the profile's selected credential provider must be available.
+Register the two disposable test identities and grant their access to the test
+route printed by the command. Leave the third identity unregistered. Enter the
+exact confirmation at the foreground terminal once the scope is ready. The
+probe checks authenticated access, reconnect history, and exact event bytes.
+On success, the command verifies its own saved schema 3 record and the managed
+attestation. Subsequent `show` calls display `current_metadata` when that
+record's local metadata is current. Credential-backed readback authenticates
+the saved pair. Runtime authorization for Peer enrollment and heartbeats
+remains separate. Ordinary Command relay selection is unchanged.
 
 
 Replace `CLIENT_NPUB` and `SERVER_NPUB` with complete `npub1…` values and

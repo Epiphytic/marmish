@@ -37,6 +37,11 @@ id_ed25519
 # Native v0.2 profile metadata, provider files and Tor state
 profile.json
 owner.lock
+peer-relay-attestation.json
+peer-relay-attestation.new
+peer-relay-ca.der
+peer-relay-qualification.json
+peer-relay-qualification.new
 arti-state/
 arti-cache/
 **/keys/

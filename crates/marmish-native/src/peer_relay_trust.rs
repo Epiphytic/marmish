@@ -27,6 +27,7 @@ use std::{
     },
     path::{Path, PathBuf},
     sync::{Arc, Mutex, Weak},
+    time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
 use x509_parser::{certificate::X509Certificate, parse_x509_certificate, public_key::PublicKey};
@@ -61,6 +62,7 @@ pub(crate) async fn qualify(
     state: &Path,
     identity: &str,
     attestation: PathBuf,
+    helper: &Path,
 ) -> Result<QualificationReport> {
     qualification::check_build_scope()?;
     let lease = Arc::new(ProfileLease::acquire_ready(state, identity)?);
@@ -68,15 +70,28 @@ pub(crate) async fn qualify(
     let (config, snapshot) = profile.command_snapshot()?;
     let relay = config.bound_peer_relay(&config)?;
     let clock = || qualification::wall().ok_or(Error::Invalid("peer_qualification_clock"));
+    let ca = profile.ca_snapshot(&relay.trust, clock()?)?;
     let checked = qualification::CheckedAttestation::read(&attestation, relay, clock()?)?;
     let owner = PeerRelayOwner::bind_with_limits(
-        lease,
+        lease.clone(),
         &config,
         TransportLimits {
             max_frame_bytes: 128 * 1024,
             ..TransportLimits::default()
         },
     )?;
+    let helper = helper.to_owned();
+    let credential_deadline = Instant::now() + Duration::from_secs(10);
+    let issuer_key = tokio::task::spawn_blocking(move || {
+        lease.peer_qualification_key(&helper, credential_deadline)
+    })
+    .await
+    .map_err(|_| Error::Identity("peer_qualification_worker"))??;
+    owner.profile.check_command_snapshot(snapshot)?;
+    if owner.profile.ca_snapshot(&relay.trust, clock()?)? != ca {
+        return Err(CA_ERROR);
+    }
+    checked.recheck(&attestation, relay, clock()?)?;
     let plan = probe::Plan::new()?;
     let affirmative = format!("qualify {}", relay.origin);
     let prompt = format!(
@@ -97,12 +112,13 @@ pub(crate) async fn qualify(
         profile: &owner.profile,
         relay,
         snapshot,
+        ca,
         attestation: &checked,
         attestation_path: &attestation,
     };
     let started = authority.check()?;
     let completed = plan.execute(&owner.connector, &authority, started).await?;
-    qualification::issue(&authority, completed)
+    qualification::issue(&authority, completed, &issuer_key)
 }
 
 /// Created only by the selected profile's confirmed operator turn. A raw URL
@@ -111,6 +127,7 @@ pub(crate) struct ProbeAuthority<'a> {
     profile: &'a ProfileFiles,
     relay: &'a Relay,
     snapshot: ConfigWitness,
+    ca: Option<ConfigWitness>,
     attestation: &'a qualification::CheckedAttestation,
     attestation_path: &'a Path,
 }
@@ -132,6 +149,9 @@ impl ProbeAuthority<'_> {
         self.attestation
             .recheck(self.attestation_path, self.relay, now)?;
         self.profile.check_command_snapshot(self.snapshot)?;
+        if self.profile.ca_snapshot(&self.relay.trust, now)? != self.ca {
+            return Err(CA_ERROR);
+        }
         Ok(now)
     }
 }
@@ -235,18 +255,11 @@ impl BoundPeerTls {
                 Ok((crate::transport::bundled_tls_roots(), None))
             }
             Trust::CaSha256(pin) => {
-                let file = profile.required(CA_FILE).map_err(|_| CA_ERROR)?;
-                let bytes = read_bounded(file, CERT_LIMIT).map_err(|_| CA_ERROR)?;
-                if Sha256::digest(&bytes)[..] != pin {
-                    return Err(CA_ERROR);
-                }
-                let window = ca_window(&bytes)
-                    .filter(|window| wall_in(window, UnixTime::now().as_secs()))
-                    .ok_or(CA_ERROR)?;
+                let ca = profile.read_ca(&pin, UnixTime::now().as_secs())?;
                 let mut root = RootCertStore::empty();
-                root.add(CertificateDer::from(bytes))
+                root.add(CertificateDer::from(ca.bytes))
                     .map_err(|_| CA_ERROR)?;
-                Ok((root, Some(window)))
+                Ok((root, Some(ca.window)))
             }
         }
     }
@@ -374,6 +387,7 @@ fn matching_ec_parameters(cert: &X509Certificate<'_>, curve: &str) -> bool {
 struct ProfileFiles {
     lease: Arc<ProfileLease>,
     dir: File,
+    manifest_file: (u64, u64),
     cancel: CancellationToken,
     record_writer: Mutex<()>,
 }
@@ -381,20 +395,17 @@ struct ProfileFiles {
 impl ProfileFiles {
     fn open(lease: Arc<ProfileLease>) -> Result<Self> {
         let dir = open_profile_directory(&lease)?;
+        let manifest =
+            open_regular(&dir, c"profile.json", libc::O_RDONLY).map_err(|_| PROFILE_CHANGED)?;
+        let manifest_file = inode(&manifest.metadata().map_err(|_| PROFILE_CHANGED)?);
         let owned = Self {
             lease,
             dir,
+            manifest_file,
             cancel: CancellationToken::new(),
             record_writer: Mutex::new(()),
         };
         owned.recheck()?;
-        let manifest = owned
-            .required(c"profile.json")
-            .map_err(|_| PROFILE_CHANGED)?;
-        owned
-            .lease
-            .match_peer_manifest(manifest)
-            .map_err(|_| PROFILE_CHANGED)?;
         Ok(owned)
     }
 
@@ -411,6 +422,15 @@ impl ProfileFiles {
         let lock = self.required(c"owner.lock").map_err(|_| PROFILE_CHANGED)?;
         self.lease
             .match_peer_lock(&lock)
+            .map_err(|_| PROFILE_CHANGED)?;
+        let manifest = self
+            .required(c"profile.json")
+            .map_err(|_| PROFILE_CHANGED)?;
+        if inode(&manifest.metadata().map_err(|_| PROFILE_CHANGED)?) != self.manifest_file {
+            return Err(PROFILE_CHANGED);
+        }
+        self.lease
+            .match_peer_manifest(manifest)
             .map_err(|_| PROFILE_CHANGED)
     }
 
@@ -449,6 +469,38 @@ impl ProfileFiles {
         }
         Ok(())
     }
+
+    fn read_ca(&self, pin: &[u8; 32], now: u64) -> Result<CheckedCa> {
+        let file = self.required(CA_FILE).map_err(|_| CA_ERROR)?;
+        let file_id = inode(&file.metadata().map_err(|_| CA_ERROR)?);
+        let bytes = read_bounded(file, CERT_LIMIT).map_err(|_| CA_ERROR)?;
+        let digest = Sha256::digest(&bytes).into();
+        let live = self.required(CA_FILE).map_err(|_| CA_ERROR)?;
+        if digest != *pin || inode(&live.metadata().map_err(|_| CA_ERROR)?) != file_id {
+            return Err(CA_ERROR);
+        }
+        let window = ca_window(&bytes)
+            .filter(|window| wall_in(window, now))
+            .ok_or(CA_ERROR)?;
+        Ok(CheckedCa {
+            witness: ConfigWitness { file_id, digest },
+            bytes,
+            window,
+        })
+    }
+
+    fn ca_snapshot(&self, trust: &Trust, now: u64) -> Result<Option<ConfigWitness>> {
+        match trust {
+            Trust::CaSha256(pin) => self.read_ca(pin, now).map(|ca| Some(ca.witness)),
+            Trust::SpkiSha256(_) => Ok(None),
+        }
+    }
+}
+
+struct CheckedCa {
+    witness: ConfigWitness,
+    bytes: Vec<u8>,
+    window: std::ops::RangeInclusive<i64>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

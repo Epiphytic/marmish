@@ -49,7 +49,12 @@ pub(super) fn test_lease() -> (tempfile::TempDir, Arc<ProfileLease>) {
     (temp, Arc::new(ready))
 }
 
-fn config_fixture(lease: &ProfileLease, origin: &str, trust: &str, mode: &str) -> CommandConfig {
+pub(super) fn config_fixture(
+    lease: &ProfileLease,
+    origin: &str,
+    trust: &str,
+    mode: &str,
+) -> CommandConfig {
     let bytes = serde_json::to_vec(&json!({
         "version": 1, "role":"both", "relays":["wss://ordinary.invalid/"],
         "tor":mode,"trusted_remotes":[],"execution_clients":[],"command_policy":{"version":1},
@@ -438,6 +443,18 @@ fn peer_tls_caps_chain_and_requires_private_ca_descriptor() {
 
 use crate::mdk_adapter::terminal_relay_fixture::{GroupFault, QualificationFault, Relay};
 
+fn write_issuer_root(lease: &ProfileLease) {
+    // Exercise the ordinary read-only file provider without a profile signer.
+    let keys = lease.root().join("keys");
+    fs::create_dir(&keys).unwrap();
+    use std::os::unix::fs::PermissionsExt as _;
+    fs::set_permissions(&keys, fs::Permissions::from_mode(0o700)).unwrap();
+    private_write(
+        &keys.join(format!("sqlcipher-{}", "32".repeat(32))),
+        &[42; 32],
+    );
+}
+
 struct QualificationFixture {
     temp: tempfile::TempDir,
     owner: PeerRelayOwner,
@@ -449,6 +466,7 @@ struct QualificationFixture {
 impl QualificationFixture {
     fn new(transport: &Relay) -> Self {
         let (temp, lease) = test_lease();
+        write_issuer_root(&lease);
         let trust = format!(
             "ca-sha256:{}",
             hex::encode(Sha256::digest(transport.qualification_ca()))
@@ -500,6 +518,11 @@ impl QualificationFixture {
             profile: &self.owner.profile,
             relay: self.relay(),
             snapshot: self.owner.profile.command_snapshot().unwrap().1,
+            ca: self
+                .owner
+                .profile
+                .ca_snapshot(&self.relay().trust, qualification::wall().unwrap())
+                .unwrap(),
             attestation: checked,
             attestation_path: &self.attestation_path,
         }
@@ -507,6 +530,17 @@ impl QualificationFixture {
 
     fn relay(&self) -> &crate::command_config::peer_intent::Relay {
         self.config.bound_peer_relay(&self.config).unwrap()
+    }
+
+    fn issuer_key(&self) -> zeroize::Zeroizing<[u8; 32]> {
+        self.owner
+            .profile
+            .lease
+            .peer_qualification_key(
+                Path::new("/unused"),
+                std::time::Instant::now() + TEST_TIMEOUT,
+            )
+            .unwrap()
     }
 
     fn record(&self) -> std::path::PathBuf {
@@ -573,24 +607,88 @@ async fn peer_qualification_loopback_requires_all_evidence_and_rechecks_profile(
     assert_eq!(transport.group_writes().len(), 1);
     assert!(transport.authenticated(accounts[0]) && transport.authenticated(accounts[1]));
     assert!(!record.exists());
-    let issued = qualification::issue(&authority, completed).unwrap();
+    let issued = qualification::issue(&authority, completed, &fixture.issuer_key()).unwrap();
     assert_eq!(report(issued)["status"], "qualified");
     let bytes = fs::read(&record).unwrap();
     let mut issued: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(issued["schema"], 2);
+    assert_eq!(issued["schema"], 3);
     assert!(
-        !String::from_utf8(bytes)
+        !std::str::from_utf8(&bytes)
             .unwrap()
             .contains("fixture contract")
     );
     let qualified = report(qualification::show(&owner.profile, relay));
-    assert_eq!(qualified["status"], "qualified");
+    assert_eq!(qualified["status"], "current_metadata");
     assert_eq!(qualified["origin"], transport.url.as_str());
     assert!(
         qualified["trust"].as_str().unwrap().len() < attestation["trust"].as_str().unwrap().len()
     );
 
-    issued["schema"] = json!(1);
+    let key = fixture.issuer_key();
+    let current = qualification::wall().unwrap();
+    let readback = |key, wall| qualification::read_issued(&owner.profile, relay, key, wall);
+    assert!(readback(&key, current).is_ok());
+    let (_other_temp, other) = test_lease();
+    write_issuer_root(&other);
+    let other_key = other
+        .peer_qualification_key(
+            Path::new("/unused"),
+            std::time::Instant::now() + TEST_TIMEOUT,
+        )
+        .unwrap();
+    assert!(readback(&other_key, current).is_err());
+    assert!(readback(&key, issued["last_observed_at"].as_u64().unwrap() - 1).is_err());
+    assert!(readback(&key, issued["expires_at"].as_u64().unwrap()).is_err());
+
+    for field in [
+        "issuer_tag",
+        "probe_evidence",
+        "operator_evidence",
+        "build_commit",
+    ] {
+        let original = issued[field].as_str().unwrap();
+        let alternative = if original.starts_with('a') { 'b' } else { 'a' };
+        let forged = format!("{alternative}{}", &original[1..]);
+        let forged_bytes = std::str::from_utf8(&bytes)
+            .unwrap()
+            .replace(original, &forged);
+        fs::write(&record, forged_bytes).unwrap();
+        assert!(readback(&key, current).is_err());
+        if field != "build_commit" {
+            assert_eq!(
+                report(qualification::show(&owner.profile, relay))["status"],
+                "current_metadata"
+            );
+        }
+    }
+    fs::write(&record, &bytes).unwrap();
+    let managed = owner
+        .profile
+        .lease
+        .root()
+        .join("peer-relay-attestation.json");
+    let managed_bytes = fs::read(&managed).unwrap();
+    assert_eq!(fs::metadata(&managed).unwrap().mode() & 0o777, 0o600);
+    let changed_attestation = std::str::from_utf8(&managed_bytes)
+        .unwrap()
+        .replace("fixture contract", "different contract");
+    fs::write(&managed, changed_attestation).unwrap();
+    assert!(readback(&key, current).is_err());
+    fs::write(&managed, managed_bytes).unwrap();
+    assert!(readback(&key, current).is_ok());
+
+    issued.as_object_mut().unwrap().remove("build_commit");
+    issued.as_object_mut().unwrap().remove("issuer_tag");
+    for (schema, status) in [(2, "requalify_required"), (1, "unqualified")] {
+        issued["schema"] = json!(schema);
+        fs::write(&record, issued.to_string()).unwrap();
+        assert_eq!(
+            report(qualification::show(&owner.profile, relay))["status"],
+            status
+        );
+        assert!(readback(&key, current).is_err());
+    }
+    issued["last_observed_at"] = issued["expires_at"].clone();
     fs::write(&record, issued.to_string()).unwrap();
     assert_eq!(
         report(qualification::show(&owner.profile, relay))["status"],
@@ -749,7 +847,7 @@ async fn peer_qualification_accepts_correlated_empty_wide_history() {
             .await
             .unwrap();
         assert!(relay.qualification_fault_fired());
-        qualification::issue(&authority, completed).unwrap();
+        qualification::issue(&authority, completed, &fixture.issuer_key()).unwrap();
         assert!(fixture.record().is_file());
         relay.stop().await;
     }
@@ -778,17 +876,108 @@ async fn peer_qualification_rejects_config_and_ca_drift_before_network() {
     fs::write(&config_path, config).unwrap();
 
     let ca_path = fixture.owner.profile.lease.root().join("peer-relay-ca.der");
-    fs::write(ca_path, Authority::new().der.as_ref()).unwrap();
-    let result = plan
-        .execute(
-            &fixture.owner.connector,
-            &authority,
-            authority.check().unwrap(),
-        )
-        .await;
-    assert!(matches!(result, Err(Error::Transport("peer_tls_ca"))));
+    let ca_bytes = fs::read(&ca_path).unwrap();
+    fs::write(&ca_path, Authority::new().der.as_ref()).unwrap();
+    assert!(matches!(
+        authority.check(),
+        Err(Error::Transport("peer_tls_ca"))
+    ));
+    fs::write(&ca_path, &ca_bytes).unwrap();
+
+    let manifest = fixture.owner.profile.lease.root().join("profile.json");
+    let manifest_bytes = fs::read(&manifest).unwrap();
+    let mut changed: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
+    changed["device_slot"] = json!("54".repeat(16));
+    fs::write(&manifest, changed.to_string()).unwrap();
+    assert!(matches!(
+        authority.check(),
+        Err(Error::Identity("peer_profile_changed"))
+    ));
+    fs::write(&manifest, &manifest_bytes).unwrap();
+    assert!(authority.check().is_ok());
+
+    let new_ca = fixture.temp.path().join("same-ca");
+    private_write(&new_ca, &ca_bytes);
+    fs::rename(new_ca, &ca_path).unwrap();
+    assert!(matches!(
+        authority.check(),
+        Err(Error::Transport("peer_tls_ca"))
+    ));
+
+    let new_manifest = fixture.temp.path().join("same-manifest");
+    private_write(&new_manifest, &manifest_bytes);
+    fs::rename(new_manifest, manifest).unwrap();
+    assert!(matches!(
+        authority.check(),
+        Err(Error::Identity("peer_profile_changed"))
+    ));
     assert!(!transport.authenticated(accounts[0]));
     assert!(!fixture.record().exists());
+    transport.stop().await;
+}
+
+#[tokio::test]
+async fn peer_qualification_credential_failure_precedes_tty_and_preserves_files() {
+    use std::os::unix::fs::PermissionsExt;
+    let plan = probe::Plan::new().unwrap();
+    let (accounts, route) = plan.relay_registration();
+    let mut transport = Relay::start_peer_qualification(accounts, route).await;
+    let fixture = QualificationFixture::new(&transport);
+    let root = fixture.owner.profile.lease.root().to_owned();
+    let record = fixture.record();
+    let managed = root.join("peer-relay-attestation.json");
+    private_write(&record, b"prior local record");
+    private_write(&managed, b"prior managed attestation");
+    let QualificationFixture {
+        temp,
+        owner,
+        attestation_path,
+        ..
+    } = fixture;
+    drop(owner);
+    let manifest_path = root.join("profile.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["backend"] = json!("keychain");
+    let manifest = serde_json::to_vec(&manifest).unwrap();
+    fs::write(&manifest_path, &manifest).unwrap();
+    let helper = temp.path().join("provider-fixture");
+    let trace_path = temp.path().join("provider-trace");
+    let read_and_trace = format!(
+        "IFS= read -r request\nprintf '%s' \"$request\" > '{}'",
+        trace_path.display()
+    );
+    private_write(&helper, b"#!/bin/sh\n");
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
+    for (reply, timed_out) in [
+        (
+            r#"printf '%s' '{"version":1,"ok":false,"error":"locked_or_denied"}'"#,
+            false,
+        ),
+        ("exec /bin/sleep 30", true),
+    ] {
+        fs::write(&helper, format!("#!/bin/sh\n{read_and_trace}\n{reply}\n")).unwrap();
+        let result = timeout(
+            Duration::from_secs(14),
+            qualify(temp.path(), "test", attestation_path.clone(), &helper),
+        )
+        .await
+        .unwrap();
+        if timed_out {
+            assert!(matches!(result, Err(Error::Timeout)));
+        } else {
+            assert!(matches!(result, Err(Error::Identity("locked_or_denied"))));
+        }
+        let trace: serde_json::Value =
+            serde_json::from_slice(&fs::read(&trace_path).unwrap()).unwrap();
+        fs::remove_file(&trace_path).unwrap();
+        assert_eq!(trace["action"], "load");
+        assert_eq!(trace["reference"]["purpose"], "sqlcipher");
+        assert_eq!(fs::read(&record).unwrap(), b"prior local record");
+        assert_eq!(fs::read(&managed).unwrap(), b"prior managed attestation");
+        assert_eq!(fs::read(&manifest_path).unwrap(), manifest);
+        assert_eq!(transport.qualification_connections(), 0);
+    }
     transport.stop().await;
 }
 
@@ -939,8 +1128,22 @@ async fn peer_qualification_native_cli_requires_exact_controlling_tty_confirmati
                 "qualified"
             );
             assert_eq!(transport.qualification_connections(), 4);
-            assert_eq!(show().await["status"], "qualified");
+            assert_eq!(show().await["status"], "current_metadata");
             assert!(record.exists());
+            let lease = Arc::new(ProfileLease::acquire_ready(temp.path(), "test").unwrap());
+            let key = lease
+                .peer_qualification_key(
+                    Path::new("/unused"),
+                    std::time::Instant::now() + TEST_TIMEOUT,
+                )
+                .unwrap();
+            let profile = ProfileFiles::open(lease).unwrap();
+            let config = profile.command_snapshot().unwrap().0;
+            let relay = config.bound_peer_relay(&config).unwrap();
+            assert!(
+                qualification::read_issued(&profile, relay, &key, qualification::wall().unwrap())
+                    .is_ok()
+            );
         } else {
             assert!(output.stdout.is_empty());
             assert!(

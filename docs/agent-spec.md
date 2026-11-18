@@ -669,15 +669,23 @@ set, not a hostname-based authorization rule.
 
 The development branch exposes local `peer relay show` and
 `peer relay qualify --attestation <file>` for a ready, stopped profile with an
-explicit private Peer relay and typed trust policy. `show` uses only current
-local record metadata. `qualify` uses a foreground controlling terminal,
-operator attestation, and disposable identities on one pinned private WSS
-origin. It issues a schema 2 record only after the bounded positive and negative
-probe. Schema 2 provides status metadata. Live Peer requires the owner's
-independently verified current attestation, probe evidence and native scope.
-A matching relay deployment still needs independent qualification for the
-[installed Peer phase](phases/peer-installed-heartbeat-first.md#as-first-patch-relay-cli-and-production-transport-boundary).
-Ordinary Command defaults and routing are unaffected.
+explicit private Peer relay and typed trust policy. `show` reads metadata
+without credentials or a connection. Valid schema 2 metadata displays
+`requalify_required`, and current schema 3 metadata displays `current_metadata`.
+`qualify` reads only the profile's existing SQLCipher root through its selected
+provider, derives a purpose-specific issuer key, and zeroizes the root. It
+authenticates a record covering the exact build, profile, trust, current
+window, probe evidence and attestation digest. After the private WSS probe and
+operator confirmation, it syncs the managed owner-only attestation before the
+record and verifies the exact pair on disk. If replacement stops after the
+attestation is committed, authenticated readback refuses the mismatched pair
+until a later successful qualification repairs it. The issuer check assumes
+custody of the profile's existing credential
+and an otherwise valid previously issued pair has no independent cross-restart
+rollback counter. The root and derived key buffers are wiped, while the current
+cryptographic primitives make no guarantee about wiping their internal state.
+The [production route design](phases/peer-production-route.md) keeps live admission dependent on the independently checked evidence and
+native scope. Ordinary Command defaults and routing are unaffected.
 
 
 Commands require the separator before argv, for example:

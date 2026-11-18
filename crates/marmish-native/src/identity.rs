@@ -42,7 +42,7 @@ enum Phase {
     Initializing,
     Ready,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Manifest {
     format: u8,
@@ -249,13 +249,7 @@ impl ProfileLease {
     pub(crate) fn match_peer_manifest(&self, file: File) -> Result<()> {
         let manifest = parse_manifest(file)?;
         validate_manifest(&manifest, &self.name)?;
-        if !self
-            .manifest
-            .as_ref()
-            .is_some_and(|manifest| manifest.phase == Phase::Ready)
-            || manifest.phase != Phase::Ready
-            || manifest.profile_id != self.profile_id
-        {
+        if manifest.phase != Phase::Ready || self.manifest.as_ref() != Some(&manifest) {
             return Err(Error::Identity("peer_profile_changed"));
         }
         Ok(())
@@ -306,6 +300,45 @@ impl ProfileLease {
         deadline: Instant,
     ) -> Result<IdentityMaterial> {
         self.prepare_with(choice, &mut NativeProvider { helper, deadline })
+    }
+
+    /// Read only the Ready profile's SQLCipher root from its selected provider.
+    /// The caller runs this on a blocking worker and retains the lease until it exits.
+    pub(crate) fn peer_qualification_key(
+        &self,
+        helper: &Path,
+        deadline: Instant,
+    ) -> Result<Zeroizing<[u8; 32]>> {
+        let manifest = self
+            .manifest
+            .as_ref()
+            .filter(|manifest| manifest.phase == Phase::Ready)
+            .ok_or(Error::Identity("missing_manifest"))?;
+        let root = match manifest.backend {
+            Backend::Files => {
+                let root = self.root.join("keys");
+                check_dir(&root)?;
+                FileProvider { root }.load("sqlcipher", &manifest.sqlcipher_ref)?
+            }
+            Backend::Keychain => {
+                NativeProvider { helper, deadline }.load("sqlcipher", &manifest.sqlcipher_ref)?
+            }
+        };
+        let account = self
+            .public_key()
+            .ok_or(Error::Identity("identity_mismatch"))?;
+        let mut key = Zeroizing::new([0; 32]);
+        hkdf::Hkdf::<sha2::Sha256>::new(Some(b"marmish/peer/qualification/issuer/v1"), &root[..])
+            .expand_multi_info(
+                &[
+                    self.profile_id.as_bytes(),
+                    account.as_bytes(),
+                    manifest.device_slot.as_bytes(),
+                ],
+                &mut *key,
+            )
+            .map_err(|_| Error::Identity("peer_qualification_key"))?;
+        Ok(key)
     }
     fn prepare_with(
         &mut self,
@@ -1662,6 +1695,95 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         path
     }
+    #[test]
+    fn qualification_reads_only_sqlcipher_from_selected_keychain() {
+        let f = Fixture::new();
+        let mut lease = f.lease("alice");
+        lease
+            .prepare_with(BackendChoice::Keychain, &mut Fake::default())
+            .unwrap();
+        lease.manifest.as_mut().unwrap().phase = Phase::Ready;
+        let manifest_path = lease.root.join("profile.json");
+        atomic_json(&manifest_path, lease.manifest.as_ref().unwrap()).unwrap();
+        let before = fs::read(&manifest_path).unwrap();
+        let reference = lease.manifest.as_ref().unwrap().sqlcipher_ref.clone();
+        let scripts = Fixture::new();
+        let trace = scripts.base.path().join("trace");
+        let answer = serde_json::json!({
+            "version": 1, "ok": true, "result": {"secret": STANDARD.encode([42; 32])}
+        });
+        let helper = helper_fixture(
+            scripts.base.path(),
+            &format!(
+                r#"IFS= read -r request
+printf '%s\n%s\n' "$1" "$request" >> '{}'
+printf '%s' '{}'"#,
+                trace.display(),
+                answer
+            ),
+        );
+        let deadline = || Instant::now() + Duration::from_secs(3);
+        let key = lease.peer_qualification_key(&helper, deadline()).unwrap();
+        assert_ne!(&*key, &[42; 32]);
+        let trace_text = fs::read_to_string(&trace).unwrap();
+        let lines = trace_text.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], HelperKind::Ordinary.argument());
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(lines[1]).unwrap(),
+            serde_json::json!({
+                "action":"load", "version":1, "namespace":"marmish-v2",
+                "reference":{"version":2,"purpose":"sqlcipher","id":reference}
+            })
+        );
+
+        let original_profile = lease.profile_id.clone();
+        lease.profile_id = "19".repeat(16);
+        assert_ne!(
+            &*lease.peer_qualification_key(&helper, deadline()).unwrap(),
+            &*key
+        );
+        lease.profile_id = original_profile;
+        let original_account = lease
+            .manifest
+            .as_mut()
+            .unwrap()
+            .public_key
+            .replace(Keys::generate().public_key().to_hex());
+        assert_ne!(
+            &*lease.peer_qualification_key(&helper, deadline()).unwrap(),
+            &*key
+        );
+        let manifest = lease.manifest.as_mut().unwrap();
+        manifest.public_key = original_account;
+        let original_device = std::mem::replace(&mut manifest.device_slot, "28".repeat(16));
+        assert_ne!(
+            &*lease.peer_qualification_key(&helper, deadline()).unwrap(),
+            &*key
+        );
+        lease.manifest.as_mut().unwrap().device_slot = original_device;
+        assert_eq!(
+            &*lease.peer_qualification_key(&helper, deadline()).unwrap(),
+            &*key
+        );
+
+        helper_fixture(
+            scripts.base.path(),
+            r#"printf '%s' '{"version":1,"ok":false,"error":"locked_or_denied"}'"#,
+        );
+        assert!(matches!(
+            lease.peer_qualification_key(&helper, deadline()),
+            Err(Error::Identity("locked_or_denied"))
+        ));
+        helper_fixture(scripts.base.path(), "exec /bin/sleep 10");
+        assert!(matches!(
+            lease.peer_qualification_key(&helper, Instant::now() + Duration::from_millis(100)),
+            Err(Error::Timeout)
+        ));
+        assert!(!lease.root.join("keys").exists());
+        assert_eq!(fs::read(&manifest_path).unwrap(), before);
+    }
+
     #[test]
     fn authorization_fresh_process_sequence_uses_identical_frozen_refs_and_stops_on_failure() {
         let mut f = Fixture::new();

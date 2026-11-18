@@ -587,7 +587,13 @@ async fn run(
                 crate::peer_relay_trust::qualification_status(&state, &args.identity)?
             }
             Some(FrontendCommand::PeerRelayQualify { attestation }) => {
-                crate::peer_relay_trust::qualify(&state, &args.identity, attestation).await?
+                crate::peer_relay_trust::qualify(
+                    &state,
+                    &args.identity,
+                    attestation,
+                    &layout.helper,
+                )
+                .await?
             }
             _ => unreachable!("matched Peer relay action"),
         };
