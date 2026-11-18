@@ -89,13 +89,18 @@ mod fixture {
                         &mut slave,
                         std::ptr::null_mut(),
                         std::ptr::null(),
-                        &size,
+                        std::ptr::null_mut(),
                     )
                 },
                 0
             );
             let master = unsafe { File::from_raw_fd(master) };
             let slave = unsafe { File::from_raw_fd(slave) };
+            // Set size separately because openpty's final pointer differs by platform.
+            assert_eq!(
+                unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSWINSZ, &size) },
+                0
+            );
             for file in [&master, &slave] {
                 assert_eq!(
                     unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) },
