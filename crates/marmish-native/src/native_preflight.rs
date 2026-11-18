@@ -8,9 +8,9 @@ use std::fs;
 use std::path::Path;
 use zeroize::Zeroizing;
 
-// Last account migration in MDK 0ad3c61088e1acac58e0fcf1a9f1142bae5d997a.
+// Last account migration in MDK 122ad45ece73c1d6f687a4e92a541b9b2febde34.
 // Upstream exposes no read-only registry API. Review this bound when updating Cargo.lock.
-const MDK_MAX_MIGRATION: i64 = 212;
+const MDK_MAX_MIGRATION: i64 = 213;
 fn db(_: rusqlite::Error) -> Error {
     Error::Storage("state_preflight")
 }
@@ -245,6 +245,22 @@ impl WalSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn open_writable_fixture(path: &Path, key: &[u8; 32]) -> Connection {
+        marmish_engine::initialize_storage().unwrap();
+        let conn = Connection::open(path).unwrap();
+        let raw = Zeroizing::new(format!("x'{}'", hex::encode(key)));
+        assert_eq!(
+            unsafe {
+                rusqlite::ffi::sqlite3_key(conn.handle(), raw.as_ptr().cast(), raw.len() as i32)
+            },
+            rusqlite::ffi::SQLITE_OK
+        );
+        conn.execute_batch("PRAGMA cipher_compatibility=4;")
+            .unwrap();
+        conn
+    }
+
     /// Real owner creation enables SQLCipher WAL in both upstream MDK and the
     /// native journal. Check the databases independently after every owner has
     /// closed; the older future-format fixture deliberately uses rollback mode.
@@ -433,6 +449,26 @@ mod tests {
             assert_eq!(inventory(&path), before, "preexisting WAL reader inventory");
             conn.execute_batch("ROLLBACK").unwrap();
         }
+
+        // Seed one future migration into the now-closed native account. The
+        // preflight must reject it while preserving all existing state bytes.
+        let mut key = Zeroizing::new([0; 32]);
+        hk.expand(b"mdk", key.as_mut()).unwrap();
+        let conn = open_writable_fixture(profile.mdk_database(), &key);
+        conn.execute(
+            "INSERT INTO cgka_schema_migrations (version, name, applied_at_unix_seconds)
+             SELECT max(version) + 1, 'future_migration_fixture', 0
+             FROM cgka_schema_migrations",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let snapshot = WalSnapshot::capture(profile.mdk_database()).unwrap();
+        assert!(matches!(
+            check(&profile, &material),
+            Err(Error::Storage("incompatible_state"))
+        ));
+        WalSnapshot::verify_all(&[snapshot]).unwrap();
     }
     #[test]
     fn wal_inventory_allows_only_new_private_empty_auxiliaries() {
@@ -518,16 +554,9 @@ mod tests {
             .unwrap();
         let path = root.path().join("state.sqlite3");
         let key = [37u8; 32];
-        marmish_engine::initialize_storage().unwrap();
-        let conn = Connection::open(&path).unwrap();
-        let raw = format!("x'{}'", hex::encode(key));
-        assert_eq!(
-            unsafe {
-                rusqlite::ffi::sqlite3_key(conn.handle(), raw.as_ptr().cast(), raw.len() as i32)
-            },
-            rusqlite::ffi::SQLITE_OK
-        );
-        conn.execute_batch("PRAGMA cipher_compatibility=4; PRAGMA user_version=99; CREATE TABLE proof(value INTEGER);").unwrap();
+        let conn = open_writable_fixture(&path, &key);
+        conn.execute_batch("PRAGMA user_version=99; CREATE TABLE proof(value INTEGER);")
+            .unwrap();
         drop(conn);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         let before = fs::read(&path).unwrap();
