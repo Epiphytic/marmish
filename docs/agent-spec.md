@@ -1469,3 +1469,11 @@ that exact relay event and reaches the recipient's staged epoch and
 authenticator before the recipient records confirmation. A duplicate leaves
 the founder at the same pin. This fixture uses an in-process delivery sink.
 Private WSS activation and installed Peer authorization remain later phases.
+
+The [terminal custody fixture](validation/peer-terminal-custody.md) makes
+Declined and Expired durable for an exact joined Pending invitation.
+The local fence excludes the same generation from approval and ordinary
+Peer work. Checked filesystem retirement releases the reservation only
+after exact file absence while retaining the terminal reason and replay
+fence. Decline also applies a cooldown to subsequent offers and
+provisioning. This increment records native membership as Unconfirmed.
