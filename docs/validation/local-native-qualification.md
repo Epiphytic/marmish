@@ -64,3 +64,16 @@ provenance, the tampered payload was refused, repeat setup retained the same
 identity, and the closed relay startup failure left no private runtime or
 test state. This run left the positive live relay and both Terminal fixture
 modes unexercised.
+
+A full `wss` run on the same source and package passed in 418.233 seconds
+using a dedicated Cargo target directory. The installer and closed-relay
+checks passed, then both controlling PTY fixtures and all three private
+WSS fixtures ran exactly once. They cover native writer, read-only observer
+and named takeover. The native WSS test binaries came from that Cargo
+checkout. The installed binary smoke and WSS fixtures are separate checks.
+The optional positive installed relay mode remained unexercised in this run.
+
+An earlier run using a shared Cargo target directory completed the installer
+and local PTY checks but stopped at the writer selector with
+`operation_failed`. The writer passed alone in 70.10 seconds before the
+full retry. The first harness report could not identify the cause.

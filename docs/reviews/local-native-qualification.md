@@ -1,6 +1,6 @@
 # Local native qualification review
 
-Claude Code in Auto mode approved the final narrow design in session
+Claude Code Sonnet 5.5 in Auto mode approved the final narrow design in session
 `fd4451d2-f5a2-4414-b392-147aeb3a371d`. It covers an opt-in same-commit
 package harness and keeps production behavior and runner scheduling outside
 the increment.
@@ -10,7 +10,7 @@ different exception classes, which could hide the precise refusal
 category. The implementation now uses one supervisor and has regression
 tests for the refusal report and empty Cargo selectors.
 
-Claude Code in Auto mode approved the final integrated patch in session
+Claude Code Sonnet 5.5 in Auto mode approved the final integrated patch in session
 `ff1d44e2-d901-43c7-adad-4dec1efebf8b`. The reviewer independently ran
 both regression tests and inspected refusal categories, selector matching,
 tmux and relay preflight, cleanup and the prior Linux artifact report.
@@ -27,3 +27,9 @@ summary produces a fixed advisory category, the child exit code is bounded,
 and the report excludes raw child output. All four local qualification unit
 tests and `git diff --check` passed. This review used no Cargo builds or live
 relay fixtures.
+
+Claude Code Sonnet 5.5 Auto session `91c5bed8-3379-4747-b36e-065e5ea15507`
+approved the WSS rerun supplement after comparing both harness reports
+and the standalone writer test result. It verified the five distinct case
+results, timings, installed versus fixture coverage and unresolved cause
+of the first writer failure.
