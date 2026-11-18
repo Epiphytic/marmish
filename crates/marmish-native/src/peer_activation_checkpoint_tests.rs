@@ -163,8 +163,13 @@ fn durable_attempts_are_bounded_and_active_reservation_is_atomic_and_replayable(
         uncertain.publication().step(),
         Step::Uncertain { number: 1 }
     );
+    assert_eq!(
+        cp.arm_publication(&source, uncertain.publication(), wall + 3)
+            .err(),
+        Some(stale)
+    );
     let second = cp
-        .arm_publication(&source, uncertain.publication(), wall + 3)
+        .arm_exact(&source, uncertain.publication(), wall + 3)
         .unwrap();
     assert_eq!(second.publication().step(), Step::Armed { number: 2 });
     assert_eq!(second.publication().attempt_wall(), Some(wall + 3));
@@ -173,9 +178,13 @@ fn durable_attempts_are_bounded_and_active_reservation_is_atomic_and_replayable(
         .record_publication_uncertain(&source, second.publication(), wall + 4)
         .unwrap();
     assert_eq!(
-        cp.arm_publication(&source, &twice_uncertain, wall + 4)
-            .err(),
+        cp.arm_exact(&source, &twice_uncertain, wall + 4).err(),
         Some(stale)
+    );
+    assert!(
+        cp.read_uncertain_postjoin(&source, &evidence, wall + 4)
+            .unwrap()
+            .is_none()
     );
     let mut wrong = candidate;
     wrong.signed_digest = [0x09; 32];

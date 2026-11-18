@@ -14,6 +14,64 @@ mod peer_invitation {
     pub(crate) use crate::peer_cursor_store::consent_checkpoint::provisioning::
         prepared_consent::custody::HeldEvidence;
 
+    // Standalone storage tests cannot mint native proofs. These uninhabited
+    // stand-ins permit checking the same storage source without linking MDK.
+    pub(crate) mod postjoin_verify {
+        use cgka_traits::engine::EpochPin;
+        use cgka_traits::{GroupId, MemberId, MessageId, TransportPublishRequest};
+
+        macro_rules! uninhabited {
+            ($name:ident { $($method:ident -> $return:ty),+ $(,)? }) => {
+                pub(crate) enum $name {}
+
+                impl $name {
+                    $(pub(crate) fn $method(&self) -> $return { match *self {} })+
+                }
+            };
+        }
+
+        uninhabited!(Baseline {
+            obligation_id -> &MessageId,
+            group -> &GroupId,
+            recipient -> &MemberId,
+            founder -> &MemberId,
+            route -> [u8; 32],
+            origin -> &str,
+            inode -> (u64, u64),
+            generation -> u64,
+            deadline -> u64,
+            welcome -> &MessageId,
+            source -> &EpochPin,
+            recipient_leaf -> u32,
+        });
+
+        uninhabited!(Capture {
+            request -> &TransportPublishRequest,
+            obligation_id -> &MessageId,
+            event_id -> [u8; 32],
+            signed_digest -> [u8; 32],
+            target -> &EpochPin,
+            generation -> u64,
+            deadline -> u64,
+        });
+
+        uninhabited!(RecoveredPostJoin { capture -> &Capture });
+
+        enum Never {}
+
+        pub(crate) struct ConfirmedRotation<'a>(Never, std::marker::PhantomData<&'a ()>);
+
+        impl<'a> ConfirmedRotation<'a> {
+            pub(crate) fn baseline(&self) -> &'a Baseline {
+                match self.0 {}
+            }
+
+            pub(crate) fn capture(&self) -> &'a Capture {
+                match self.0 {}
+            }
+        }
+    }
+
     pub(crate) mod prepared_consent {
         use crate::peer_cursor_store::consent_checkpoint::{
             Result,

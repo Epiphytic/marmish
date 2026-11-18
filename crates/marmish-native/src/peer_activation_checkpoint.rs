@@ -1,8 +1,13 @@
 //! Exact checkpoint turns for the isolated Peer publication fixture.
 
+use cgka_traits::engine::EpochPin;
+use cgka_traits::{TransportPublishRequest, TransportPublishTarget};
 use rusqlite::Row;
 
 use crate::peer_invitation::accept_receipt_wire::{self as receipt_wire, Decoded, Receipt};
+use crate::peer_invitation::postjoin_verify::{
+    Baseline, Capture, ConfirmedRotation, RecoveredPostJoin,
+};
 use nostr::key::PublicKey;
 
 use super::activation_schema::{self, Table};
@@ -29,6 +34,14 @@ pub(crate) struct Pin {
 }
 
 impl Pin {
+    fn from_native(pin: &EpochPin, leaf: u32) -> Self {
+        Self {
+            ordinal: pin.epoch.0,
+            authenticator: pin.identity,
+            recipient_leaf: leaf,
+        }
+    }
+
     fn read(row: &Row<'_>, column: usize) -> rusqlite::Result<Self> {
         Ok(Self {
             ordinal: u64::from_be_bytes(row.get(column)?),
@@ -112,6 +125,7 @@ pub(crate) struct Publication {
     recipient: PublicKey,
     origin: String,
     deadline: u64,
+    welcome_id: [u8; 32],
     saved: SavedPublication,
 }
 
@@ -186,6 +200,13 @@ impl Publication {
             && self.scope == other.scope
             && self.saved == other.saved
     }
+
+    fn matches_rotation(&self, rotation: &RotationCoordinates) -> bool {
+        self.kind == Kind::PostJoin
+            && self.scope == rotation.scope
+            && self.semantic_id() == rotation.obligation
+            && self.source_pin() == rotation.source
+    }
 }
 
 /// Minted only by a fresh durable arm. A cold reader never creates this turn.
@@ -212,6 +233,44 @@ struct Enrollment {
     deadline: u64,
     activating_at: u64,
     original_leaf: u32,
+}
+
+fn matches_baseline(
+    scope: &Scope,
+    recipient: PublicKey,
+    welcome: [u8; 32],
+    origin: &str,
+    deadline: u64,
+    baseline: &Baseline,
+) -> bool {
+    let (_, file) = scope.stage;
+    let (device, inode) = baseline.inode();
+    file.device == device.to_be_bytes()
+        && file.inode == inode.to_be_bytes()
+        && scope.generation() == baseline.generation()
+        && scope.group == baseline.group().as_slice()
+        && scope.route == baseline.route()
+        && scope.stage.0.key.server.to_bytes().as_slice() == baseline.founder().as_slice()
+        && recipient.to_bytes().as_slice() == baseline.recipient().as_slice()
+        && welcome.as_slice() == baseline.welcome().as_slice()
+        && origin == baseline.origin()
+        && deadline == baseline.deadline()
+}
+
+fn matches_request(baseline: &Baseline, request: &TransportPublishRequest) -> bool {
+    let TransportPublishTarget::Group {
+        group_id,
+        transport_group_id,
+        endpoints,
+    } = &request.target
+    else {
+        return false;
+    };
+    matches!(endpoints.as_slice(), [endpoint] if endpoint.0 == baseline.origin())
+        && request.account_id == *baseline.recipient()
+        && group_id == baseline.group()
+        && transport_group_id.as_slice() == baseline.route()
+        && request.required_acks == 1
 }
 
 impl Enrollment {
@@ -248,6 +307,14 @@ impl Enrollment {
             epoch: pin.ordinal,
             epoch_identity: pin.authenticator,
             ..self.receipt
+        }
+    }
+
+    fn original_pin(&self) -> Pin {
+        Pin {
+            ordinal: self.receipt.epoch,
+            authenticator: self.receipt.epoch_identity,
+            recipient_leaf: self.original_leaf,
         }
     }
 
@@ -342,6 +409,9 @@ impl Context {
         {
             return Err(CursorError::Binding.into());
         }
+        if kind == Kind::PostJoin && !saved.source_pin.is_next_after(enrollment.original_pin()) {
+            return Err(CursorError::Binding.into());
+        }
         if kind == Kind::AcceptReceipt {
             let expected =
                 receipt_wire::prepare(&enrollment.at_pin(saved.source_pin), saved.created_at)
@@ -357,6 +427,7 @@ impl Context {
             recipient: enrollment.receipt.recipient,
             origin: self.route.urls[0].clone(),
             deadline: enrollment.deadline,
+            welcome_id: enrollment.receipt.welcome_id,
             saved,
         }))
     }
@@ -569,6 +640,18 @@ impl Checkpoint {
         prior: &Publication,
         wall: u64,
     ) -> Result<EgressAttempt> {
+        if prior.step() != Step::Captured {
+            return Err(CursorError::Stale.into());
+        }
+        self.arm_exact(source, prior, wall)
+    }
+
+    fn arm_exact(
+        &mut self,
+        source: &Source,
+        prior: &Publication,
+        wall: u64,
+    ) -> Result<EgressAttempt> {
         self.update_publication(source, prior, Change::Arm, wall)
             .map(EgressAttempt)
     }
@@ -619,9 +702,7 @@ impl Checkpoint {
         enrollment.verify_live(wall)?;
         if !current.same_turn(prior)
             || enrollment.scope != *scope
-            || enrollment.receipt.epoch.checked_add(1) != Some(source_pin.ordinal)
-            || enrollment.receipt.epoch_identity == source_pin.authenticator
-            || enrollment.original_leaf != source_pin.recipient_leaf
+            || !source_pin.is_next_after(enrollment.original_pin())
             || activation_schema::active_exists(&tx, scope.carrier)?
         {
             return Err(CursorError::Stale.into());
@@ -645,12 +726,40 @@ impl UncertainPostJoin {
     }
 }
 
-pub(crate) struct RotationCoordinates {
-    pub(crate) scope: Scope,
-    pub(crate) obligation: Vec<u8>,
-    pub(crate) candidate: CandidateBinding,
-    pub(crate) source: Pin,
-    pub(crate) confirmed: Pin,
+struct RotationCoordinates {
+    scope: Scope,
+    obligation: Vec<u8>,
+    candidate: CandidateBinding,
+    source: Pin,
+    confirmed: Pin,
+}
+
+impl RotationCoordinates {
+    fn from_capture(scope: &Scope, baseline: &Baseline, capture: &Capture) -> Result<Self> {
+        if capture.generation() != baseline.generation()
+            || capture.deadline() != baseline.deadline()
+            || capture.obligation_id() != baseline.obligation_id()
+            || !matches_request(baseline, capture.request())
+        {
+            return Err(CursorError::Binding.into());
+        }
+        let leaf = baseline.recipient_leaf();
+        let source = Pin::from_native(baseline.source(), leaf);
+        let confirmed = Pin::from_native(capture.target(), leaf);
+        if !confirmed.is_next_after(source) {
+            return Err(CursorError::Binding.into());
+        }
+        Ok(Self {
+            scope: scope.clone(),
+            obligation: baseline.obligation_id().as_slice().to_vec(),
+            candidate: CandidateBinding {
+                event_id: capture.event_id(),
+                signed_digest: capture.signed_digest(),
+            },
+            source,
+            confirmed,
+        })
+    }
 }
 
 #[derive(Eq, PartialEq)]
@@ -679,6 +788,80 @@ impl FounderAcceptance {
 }
 
 impl Checkpoint {
+    pub(crate) fn reserve_postjoin(
+        &mut self,
+        source: &Source,
+        prior: &HeldEvidence,
+        baseline: &Baseline,
+        wall: u64,
+    ) -> Result<Publication> {
+        let enrollment = Enrollment::from_evidence(prior, self.signer.public_key())?;
+        let cx = self.publication_context(source, prior.stage.0.key.server)?;
+        if !matches_baseline(
+            &enrollment.scope,
+            enrollment.receipt.recipient,
+            enrollment.receipt.welcome_id,
+            &cx.route.urls[0],
+            enrollment.deadline,
+            baseline,
+        ) {
+            return Err(CursorError::Binding.into());
+        }
+        self.reserve_postjoin_coordinates(
+            source,
+            prior,
+            &enrollment.scope,
+            baseline.obligation_id().as_slice(),
+            Pin::from_native(baseline.source(), baseline.recipient_leaf()),
+            wall,
+        )
+    }
+
+    pub(crate) fn capture_postjoin(
+        &mut self,
+        source: &Source,
+        prior: &Publication,
+        baseline: &Baseline,
+        capture: &Capture,
+        wall: u64,
+    ) -> Result<Publication> {
+        let coordinates = prior.rotation(baseline, capture)?;
+        self.update_publication(
+            source,
+            prior,
+            Change::Capture(coordinates.candidate, Some(coordinates.confirmed)),
+            wall,
+        )
+    }
+
+    pub(crate) fn confirm_postjoin(
+        &mut self,
+        source: &Source,
+        prior: &Publication,
+        confirmed: &ConfirmedRotation<'_>,
+        wall: u64,
+    ) -> Result<Publication> {
+        let coordinates = prior.rotation(confirmed.baseline(), confirmed.capture())?;
+        if prior.target_pin() != Some(coordinates.confirmed) {
+            return Err(CursorError::Binding.into());
+        }
+        self.update_publication(source, prior, Change::Confirm(coordinates.candidate), wall)
+    }
+
+    pub(crate) fn activate_and_reserve_receipt(
+        &mut self,
+        source: &Source,
+        prior: &HeldEvidence,
+        confirmed: &ConfirmedRotation<'_>,
+        wall: u64,
+    ) -> Result<ReceiptReservation> {
+        let postjoin = self
+            .publication(source, prior, Kind::PostJoin, wall)?
+            .ok_or(CursorError::Stale)?;
+        let coordinates = postjoin.rotation(confirmed.baseline(), confirmed.capture())?;
+        self.activate_and_reserve_coordinates(source, prior, &coordinates, wall, |_| Ok(()))
+    }
+
     pub(crate) fn read_uncertain_postjoin(
         &mut self,
         source: &Source,
@@ -688,9 +871,28 @@ impl Checkpoint {
         Ok(self
             .publication(source, prior, Kind::PostJoin, wall)?
             .filter(|saved| {
-                saved.deadline() > wall && matches!(saved.step(), Step::Uncertain { .. })
+                saved.deadline() > wall && saved.step() == (Step::Uncertain { number: 1 })
             })
             .map(UncertainPostJoin))
+    }
+
+    pub(crate) fn arm_recovered_postjoin(
+        &mut self,
+        source: &Source,
+        prior: &UncertainPostJoin,
+        baseline: &Baseline,
+        recovered: &RecoveredPostJoin,
+        wall: u64,
+    ) -> Result<EgressAttempt> {
+        let prior = prior.publication();
+        let coordinates = prior.rotation(baseline, recovered.capture())?;
+        if prior.step() != (Step::Uncertain { number: 1 })
+            || prior.target_pin() != Some(coordinates.confirmed)
+            || prior.candidate() != Some(coordinates.candidate)
+        {
+            return Err(CursorError::Binding.into());
+        }
+        self.arm_exact(source, prior, wall)
     }
 
     fn activate_and_reserve_coordinates(
@@ -824,6 +1026,25 @@ impl Checkpoint {
         rows::advance_wall(&tx, wall)?;
         tx.commit()?;
         Ok(saved)
+    }
+}
+
+impl Publication {
+    fn rotation(&self, baseline: &Baseline, capture: &Capture) -> Result<RotationCoordinates> {
+        let coordinates = RotationCoordinates::from_capture(&self.scope, baseline, capture)?;
+        if !self.matches_rotation(&coordinates)
+            || !matches_baseline(
+                &self.scope,
+                self.recipient(),
+                self.welcome_id,
+                self.origin(),
+                self.deadline(),
+                baseline,
+            )
+        {
+            return Err(CursorError::Binding.into());
+        }
+        Ok(coordinates)
     }
 }
 
