@@ -20,6 +20,7 @@ pub(in crate::peer_invitation) enum Failure {
     Binding,
     Size,
     Grammar,
+    ConflictingHistory,
     Capacity,
     Deadline,
     Transport,

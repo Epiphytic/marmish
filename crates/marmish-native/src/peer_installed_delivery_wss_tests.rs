@@ -20,11 +20,12 @@ use crate::{
 
 use super::super::tests::{time_limit, wall};
 use super::*;
+use consent_checkpoint::provisioning::prepared_consent::custody::delivery_ingress::Observation;
 use consent_checkpoint::{
     Status,
     wire::{Codec, MAX_OUTER_BYTES},
 };
-use service::{ConnectionAction, Refusal, Service, Work};
+use service::{ConnectionAction, Refusal, Retirement, Service, Work};
 use socket::owner::recipient::PublicationOutcome;
 use store::TrustedOutcome;
 
@@ -180,7 +181,7 @@ async fn run() {
         Err(Failure::Retired)
     ));
     let received = sender.wait_live(time_limit()).await.unwrap().unwrap();
-    let consent = codec
+    let mut consent = codec
         .open_consent(
             &founder,
             received.arrival().body.get().as_bytes(),
@@ -258,12 +259,59 @@ async fn run() {
         .scan_delivery(&mut recipient, ScanStart::Recovery)
         .unwrap()
         .unwrap();
+    let delivery_event = delivery.flight.flight().carrier_id;
+    let delivery_id = delivery_event.to_bytes();
+    let before = delivery_state(&fixture);
+    for (fault, failure, retirement, cooldown) in [
+        (
+            RecipientFault::OversizedHistory,
+            Failure::Size,
+            Retirement::Size,
+            4,
+        ),
+        (
+            RecipientFault::ConflictingHistory(delivery_event),
+            Failure::ConflictingHistory,
+            Retirement::PageContract,
+            8,
+        ),
+    ] {
+        relay.recipient_fault(fault);
+        let outer: nostr::Event = serde_json::from_slice(delivery.frame()).unwrap();
+        let event_stamp = outer.created_at.as_secs();
+        let rejected = recipient
+            .page([event_stamp, event_stamp], time_limit())
+            .await;
+        assert_eq!(rejected.err(), Some(failure));
+        assert!(matches!(
+            recipient.wait_live(time_limit()).await,
+            Err(Failure::Retired)
+        ));
+        assert_eq!(delivery_state(&fixture), before);
+        let reason = Refusal::from(Error::Socket(failure));
+        assert_eq!(reason, Refusal::RetireRelay(retirement));
+        let now = std::time::Instant::now();
+        service.refuse(now, reason);
+        let eligible = now + Duration::from_secs(cooldown);
+        assert_eq!(
+            service.poll_connect(now),
+            ConnectionAction::WaitUntil(eligible)
+        );
+        tokio::time::sleep_until(eligible.into()).await;
+        assert_eq!(
+            service.poll_connect(std::time::Instant::now()),
+            ConnectionAction::Connect
+        );
+        recipient = PeerRecipientPort::open(admission(), time_limit())
+            .await
+            .unwrap();
+        assert!(service.authenticated(std::time::Instant::now()));
+    }
     let page = recipient
         .page([cursor.lower, cursor.until], time_limit())
         .await
         .unwrap();
     assert_eq!(page.records().len(), 4);
-    let delivery_id = delivery.flight.flight().carrier_id.to_bytes();
     let observed_delivery = page
         .records()
         .iter()
@@ -273,6 +321,46 @@ async fn run() {
         .get()
         .as_bytes()
         .to_vec();
+
+    let delivery_index = page
+        .records()
+        .iter()
+        .position(|record| record.id == delivery_id)
+        .unwrap();
+    let before = delivery_state(&fixture);
+    let inspected = observe_delivery(&mut fixture, &mut recipient, &page, delivery_index);
+    let (stage, checked_wall) = inspected.native_coordinates();
+    let native = fixture.attest(stage, checked_wall).unwrap();
+    recipient.stop(time_limit()).await.unwrap();
+    service.disconnected(std::time::Instant::now());
+    assert_eq!(
+        service.poll_connect(std::time::Instant::now()),
+        ConnectionAction::Connect
+    );
+    let mut recipient = PeerRecipientPort::open(admission(), time_limit())
+        .await
+        .unwrap();
+    assert!(service.authenticated(std::time::Instant::now()));
+    let page = recipient
+        .page([cursor.lower, cursor.until], time_limit())
+        .await
+        .unwrap();
+    let after_reconnect = page
+        .records()
+        .iter()
+        .position(|record| record.id == delivery_id)
+        .unwrap();
+    let state = &mut fixture.owner.state;
+    let refused = recipient.use_page_carrier(&page, after_reconnect, |carrier| {
+        state
+            .checkpoint
+            .finish_installed_delivery(&state.source, carrier, *inspected, &native)
+    });
+    assert!(matches!(
+        refused,
+        Ok(Err(consent_checkpoint::Error::Source))
+    ));
+    assert_eq!(delivery_state(&fixture), before);
 
     let started = std::time::Instant::now();
     let (statuses, next) = {
@@ -311,6 +399,34 @@ async fn run() {
             .is_none()
     );
 
+    relay.recipient_fault(RecipientFault::ReformattedHistory(delivery_event));
+    let reformatted = recipient
+        .page([cursor.lower, cursor.until], time_limit())
+        .await
+        .unwrap();
+    let reformatted_index = reformatted
+        .records()
+        .iter()
+        .position(|record| record.id == delivery_id)
+        .unwrap();
+    assert!(
+        reformatted.records()[reformatted_index]
+            .body
+            .get()
+            .as_bytes()
+            != observed_delivery
+    );
+    let before = delivery_state(&fixture);
+    let result = fixture.delivery_input(
+        &mut recipient,
+        Input::History(&reformatted, reformatted_index),
+    );
+    assert_eq!(
+        result.err().map(Refusal::from),
+        Some(Refusal::RetireRelay(Retirement::LexicalConflict))
+    );
+    assert_eq!(delivery_state(&fixture), before);
+
     // A second carrier can match the same signed Consent and package. It
     // cannot replace the exact Delivery that already owns the retry slot.
     let competing = codec
@@ -344,6 +460,40 @@ async fn run() {
             .status,
         Status::Invalid
     );
+
+    consent.fixture_flip_package_reference();
+    let wrong_package = codec
+        .prepare_delivery(
+            &founder,
+            &consent,
+            &welcome,
+            wall(),
+            consent.flight().expires_at - 1,
+        )
+        .unwrap();
+    consent.fixture_flip_package_reference();
+    let wrong_id = wrong_package.flight.flight().carrier_id.to_bytes();
+    assert!(
+        sender
+            .publish(&wrong_package, wrong_package.flight.flight(), time_limit())
+            .await
+            .unwrap()
+    );
+    let deadline = time_limit();
+    let wrong_live = loop {
+        let record = recipient.wait_live(deadline).await.unwrap().unwrap();
+        if record.arrival().id == wrong_id {
+            break record;
+        }
+    };
+    let before = delivery_state(&fixture);
+    let reads = fixture.package_reads.get();
+    let result = fixture.delivery_input(&mut recipient, Input::Live(&wrong_live));
+    assert_eq!(result.unwrap().status, Status::Invalid);
+    assert_eq!(fixture.package_reads.get(), reads + 1);
+    let after = delivery_state(&fixture);
+    assert_eq!(before[..2], after[..2]);
+    assert_eq!(before[4..], after[4..]);
 
     // The first retry is due one second after deferral. Confirm the
     // stored work is actually eligible before asserting no native read.
@@ -389,6 +539,16 @@ async fn run() {
     while wall() < retry_at {
         tokio::time::sleep(Duration::from_millis(125)).await;
     }
+    let stamp = competing_live.arrival().stamp;
+    let page = recipient.page([stamp, stamp], time_limit()).await.unwrap();
+    let index = page
+        .records()
+        .iter()
+        .position(|record| record.id == competing_id)
+        .unwrap();
+    let competing_inspection = observe_delivery(&mut fixture, &mut recipient, &page, index);
+    let (stage, sample) = competing_inspection.native_coordinates();
+    let package = fixture.attest(stage, sample).unwrap();
     assert_eq!(
         recipient
             .publish_prepared_consent(&mut fixture, selector, time_limit())
@@ -396,6 +556,23 @@ async fn run() {
         PublicationOutcome::Settled
     );
     assert!(fixture.wake_failure.is_none());
+    let before = delivery_state(&fixture);
+    let state = &mut fixture.owner.state;
+    let competes = recipient
+        .use_page_carrier(&page, index, |carrier| {
+            state.checkpoint.finish_installed_delivery(
+                &state.source,
+                carrier,
+                *competing_inspection,
+                &package,
+            )
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(competes.status, Status::Invalid);
+    let after = delivery_state(&fixture);
+    assert_eq!(before[..2], after[..2]);
+    assert_eq!(before[4..], after[4..]);
     let started = std::time::Instant::now();
     assert_eq!(
         fixture.retry_delivery(&mut recipient).unwrap(),
@@ -454,4 +631,33 @@ async fn run() {
         "installed_delivery mixed_ms={page_millis} retry_cold_ms={retry_cold_ms} ack_to_held_ms={held_ms} held_cold_ms={held_cold_ms} delivery_bytes={}",
         observed_delivery.len()
     );
+}
+
+fn delivery_state(fixture: &Fixture<'_>) -> [i64; 6] {
+    let state = &fixture.owner.state;
+    state
+        .checkpoint
+        .fixture_delivery_state(&state.source)
+        .unwrap()
+}
+
+fn observe_delivery(
+    fixture: &mut Fixture<'_>,
+    recipient: &mut PeerRecipientPort,
+    page: &Page,
+    index: usize,
+) -> Box<consent_checkpoint::provisioning::prepared_consent::custody::delivery_ingress::Prepared> {
+    let state = &mut fixture.owner.state;
+    let observed = recipient
+        .use_page_carrier(page, index, |carrier| {
+            state
+                .checkpoint
+                .observe_installed_delivery(&state.source, carrier)
+        })
+        .unwrap()
+        .unwrap();
+    let Observation::Inspect(inspected) = observed else {
+        panic!("Delivery should still require inspected KeyPackage evidence");
+    };
+    inspected
 }

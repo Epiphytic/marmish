@@ -99,6 +99,8 @@ pub(crate) enum Approval<'a> {
 
 enum HeldInput<'a> {
     Observed(RawRecord<'a>),
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    InstalledObserved(RawRecord<'a>),
     Saved(&'a super::super::super::super::retry::Snapshot),
 }
 
@@ -106,6 +108,8 @@ impl<'a> HeldInput<'a> {
     fn record(&self) -> RawRecord<'a> {
         match *self {
             Self::Observed(raw) => raw,
+            #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+            Self::InstalledObserved(raw) => raw,
             Self::Saved(snapshot) => snapshot.record(),
         }
     }
@@ -417,6 +421,30 @@ impl Context {
         let prepared = Candidate::read(tx, binding, self.account, offer)?;
         let row = outbox::load(tx, &prepared)?.ok_or(CursorError::Binding)?;
         Ok(Some(Queued { prepared, row }))
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    fn require_no_delivery_competitor(
+        &self,
+        tx: &Transaction<'_>,
+        raw: RawRecord<'_>,
+        prerequisite: [u8; 32],
+    ) -> std::result::Result<(), CursorError> {
+        let competitor: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM peer_cursor_deferred
+                WHERE origin=?1 AND auth=?2 AND prerequisite=?3 AND id!=?4)",
+            params![
+                self.origin,
+                super::super::super::super::Auth::FlightVerified as i64,
+                prerequisite,
+                raw.id
+            ],
+            |row| row.get(0),
+        )?;
+        if competitor {
+            return Err(CursorError::Classification);
+        }
+        Ok(())
     }
 
     fn read_evidence(&self, tx: &Transaction<'_>, queued: Queued) -> Result<Option<HeldEvidence>> {
@@ -803,12 +831,23 @@ impl Checkpoint {
                     {
                         return Err(CursorError::Stale.into());
                     }
-                    if let HeldInput::Saved(snapshot) = input {
-                        snapshot.require_current_flight(
-                            tx,
-                            cx.origin,
-                            current.row.transcript.carrier,
-                        )?;
+                    match input {
+                        HeldInput::Observed(_) => {}
+                        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+                        HeldInput::InstalledObserved(_) => {
+                            cx.require_no_delivery_competitor(
+                                tx,
+                                raw,
+                                current.row.transcript.carrier,
+                            )?;
+                        }
+                        HeldInput::Saved(snapshot) => {
+                            snapshot.require_current_flight(
+                                tx,
+                                cx.origin,
+                                current.row.transcript.carrier,
+                            )?;
+                        }
                     }
                     HeldWrite {
                         raw,

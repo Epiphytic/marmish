@@ -287,9 +287,15 @@ impl Owner {
                 Packet::Event(id, body) if id == request => {
                     reserve.charge(body.get().len())?;
                     let item = Arrival::parse(body, &self.scope.recipient)?;
+                    if let Some(earlier) = records.iter().find(|earlier| earlier.id == item.id) {
+                        return Err(if earlier.body.get() == item.body.get() {
+                            Failure::Grammar
+                        } else {
+                            Failure::ConflictingHistory
+                        });
+                    }
                     if !(lower..=upper).contains(&item.stamp)
                         || records.last().is_some_and(|last| last.stamp < item.stamp)
-                        || records.iter().any(|earlier| earlier.id == item.id)
                     {
                         return Err(Failure::Grammar);
                     }

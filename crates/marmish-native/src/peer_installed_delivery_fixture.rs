@@ -134,7 +134,7 @@ impl Fixture<'_> {
                     earlier.id == entry.id
                         && (earlier.stamp != entry.stamp || earlier.body.get() != entry.body.get())
                 }) {
-                    return Err(consent_checkpoint::Error::Index);
+                    return Err(consent_checkpoint::Error::ObservedPageConflict);
                 }
             }
             Ok(checked.records.len())

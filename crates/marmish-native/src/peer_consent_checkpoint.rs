@@ -36,6 +36,10 @@ pub(crate) enum Error {
     Source,
     LocalOwner,
     Index,
+    #[cfg(test)]
+    ObservedLexicalConflict,
+    #[cfg(test)]
+    ObservedPageConflict,
     Policy,
     Missing,
     Expired,

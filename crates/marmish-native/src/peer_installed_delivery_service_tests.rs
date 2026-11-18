@@ -165,8 +165,12 @@ fn installed_delivery_refuses_local_and_indeterminate_failures_without_backoff()
         (Error::Socket(Failure::Grammar), Retirement::Grammar),
         (Error::Socket(Failure::Size), Retirement::Size),
         (
-            Error::Checkpoint(consent_checkpoint::Error::Index),
+            Error::Checkpoint(consent_checkpoint::Error::ObservedLexicalConflict),
             Retirement::LexicalConflict,
+        ),
+        (
+            Error::Checkpoint(consent_checkpoint::Error::ObservedPageConflict),
+            Retirement::PageContract,
         ),
     ] {
         assert_eq!(Refusal::from(error), Refusal::RetireRelay(reason));
@@ -179,6 +183,7 @@ fn installed_delivery_refuses_local_and_indeterminate_failures_without_backoff()
         Error::Socket(Failure::Retired),
         Error::Socket(Failure::Capacity),
         Error::Checkpoint(consent_checkpoint::Error::Source),
+        Error::Checkpoint(consent_checkpoint::Error::Index),
         Error::Checkpoint(consent_checkpoint::Error::Cursor(CursorError::Backlog)),
         Error::Cursor(CursorError::ClockRegressed),
         Error::Cursor(CursorError::RelayContract),

@@ -145,6 +145,11 @@ impl Consent {
     pub(crate) fn package_bytes(&self) -> &[u8] {
         &self.package
     }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn fixture_flip_package_reference(&mut self) {
+        self.native.binding.reference[0] ^= 1;
+    }
 }
 
 pub(crate) struct Delivery {

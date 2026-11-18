@@ -63,6 +63,9 @@ pub(crate) enum RecipientFault {
     NegativeAuthAck,
     WrongAuthAck,
     WrongLiveEose,
+    OversizedHistory,
+    ConflictingHistory(EventId),
+    ReformattedHistory(EventId),
 }
 
 #[derive(Clone, Debug)]
@@ -598,6 +601,42 @@ fn handle_message(
                 .into_iter()
                 .map(|event| json!(["EVENT", subscription_id, event]))
                 .collect();
+            if fields[2].get("until").is_some() {
+                match state.recipient_fault {
+                    Some(RecipientFault::OversizedHistory) => {
+                        state.recipient_fault.take();
+                        return vec![json!([
+                            "EVENT",
+                            subscription_id,
+                            "x".repeat(FRAME_LIMIT + 1)
+                        ])];
+                    }
+                    Some(
+                        RecipientFault::ConflictingHistory(target)
+                        | RecipientFault::ReformattedHistory(target),
+                    ) => {
+                        let target = target.to_hex();
+                        if let Some(index) = responses
+                            .iter()
+                            .position(|frame| frame[2]["id"].as_str() == Some(&target))
+                        {
+                            let reserialized = Value::String(
+                                serde_json::to_string_pretty(&responses[index]).unwrap(),
+                            );
+                            if matches!(
+                                state.recipient_fault,
+                                Some(RecipientFault::ConflictingHistory(_))
+                            ) {
+                                responses.insert(index + 1, reserialized);
+                            } else {
+                                responses[index] = reserialized;
+                            }
+                            state.recipient_fault.take();
+                        }
+                    }
+                    _ => {}
+                }
+            }
             if subscription_id == "control" && !responses.is_empty() {
                 if state.inject_qualification(QualificationFault::AlterControlHistory) {
                     responses[0][2]["content"] = json!("altered");
@@ -733,8 +772,12 @@ async fn serve_connection(
             }
             let mut connected = true;
             for reply in replies {
+                let text = match reply {
+                    Value::String(raw) => raw,
+                    parsed => parsed.to_string(),
+                };
                 if !matches!(
-                    timeout(STEP, socket.send(Message::Text(reply.to_string().into()))).await,
+                    timeout(STEP, socket.send(Message::Text(text.into()))).await,
                     Ok(Ok(()))
                 ) {
                     connected = false;

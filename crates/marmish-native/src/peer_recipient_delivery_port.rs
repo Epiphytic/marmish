@@ -4,16 +4,16 @@
 use super::*;
 use crate::peer_invitation::store::consent_checkpoint::provisioning::prepared_consent::custody::delivery_ingress::retry::SavedDelivery;
 
-pub(in crate::peer_invitation) struct CheckedSavedDelivery<'a> {
-    scope: &'a Arc<Scope>,
-    saved: &'a SavedDelivery,
+pub(in crate::peer_invitation) struct CheckedSavedDelivery<'port, 'saved> {
+    scope: &'port Arc<Scope>,
+    saved: &'saved SavedDelivery,
     wall: u64,
 }
 
 pub(in crate::peer_invitation) struct SavedPortWitness(Arc<Scope>);
 
-impl<'a> CheckedSavedDelivery<'a> {
-    pub(in crate::peer_invitation) fn observation(&self) -> (&'a SavedDelivery, u64) {
+impl<'saved> CheckedSavedDelivery<'_, 'saved> {
+    pub(in crate::peer_invitation) fn observation(&self) -> (&'saved SavedDelivery, u64) {
         (self.saved, self.wall)
     }
 
@@ -27,10 +27,10 @@ impl<'a> CheckedSavedDelivery<'a> {
 }
 
 impl PeerRecipientPort {
-    pub(in crate::peer_invitation) fn use_saved_delivery<T>(
+    pub(in crate::peer_invitation) fn use_saved_delivery<'saved, T>(
         &mut self,
-        saved: &SavedDelivery,
-        use_checked: impl FnOnce(CheckedSavedDelivery<'_>) -> T,
+        saved: &'saved SavedDelivery,
+        use_checked: impl FnOnce(CheckedSavedDelivery<'_, 'saved>) -> T,
     ) -> Result<T> {
         let (account, wall) = self.check_observation()?;
         if !saved.matches_route(account, &self.0.scope.origin) {

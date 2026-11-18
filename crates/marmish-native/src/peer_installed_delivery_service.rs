@@ -29,11 +29,16 @@ impl From<Error> for Refusal {
         match error {
             Error::Socket(Failure::Grammar) => Self::RetireRelay(Retirement::Grammar),
             Error::Socket(Failure::Size) => Self::RetireRelay(Retirement::Size),
-            Error::Checkpoint(consent_checkpoint::Error::Index) => {
+            Error::Socket(Failure::ConflictingHistory) => {
+                Self::RetireRelay(Retirement::PageContract)
+            }
+            Error::Checkpoint(consent_checkpoint::Error::ObservedLexicalConflict) => {
                 Self::RetireRelay(Retirement::LexicalConflict)
             }
-            // Cursor page and contract errors also carry local refusals. A caller
-            // must explicitly identify a proved page contract violation.
+            Error::Checkpoint(consent_checkpoint::Error::ObservedPageConflict) => {
+                Self::RetireRelay(Retirement::PageContract)
+            }
+            // Generic cursor and checkpoint errors can originate locally.
             _ => Self::Stop,
         }
     }
