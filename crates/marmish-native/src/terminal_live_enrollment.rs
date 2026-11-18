@@ -110,6 +110,20 @@ impl Drop for RoomPermit {
     }
 }
 
+pub(super) fn finish_failed_enrollment(
+    original: Error,
+    close: Result<()>,
+    permit: Option<RoomPermit>,
+    stage: &'static str,
+) -> Error {
+    if close.is_err() {
+        crate::diagnostics::event(stage, "cleanup_failed");
+    } else if let Some(permit) = permit {
+        permit.release_after_reap();
+    }
+    original
+}
+
 struct ReservedRoom {
     owner: Option<(Owner, RoomPermit)>,
 }
@@ -597,14 +611,22 @@ impl Carrier {
         let keys = Arc::new(codec.inbound_alias());
         let mut lane = Lane::open_verified(connector, endpoint, keys, authority, 64 * 1024).await?;
         if let Err(error) = lane.activate_inbox().await {
-            let _ = lane.close().await;
-            return Err(error);
+            return Err(finish_failed_enrollment(
+                error,
+                lane.close().await,
+                None,
+                "terminal_inbox_close",
+            ));
         }
         if self.context.direction() == CommandDirection::Server
             && let Err(error) = lane.adapter.authority.begin_listener(deadline)
         {
-            lane.close().await?;
-            return Err(error);
+            return Err(finish_failed_enrollment(
+                error,
+                lane.close().await,
+                None,
+                "terminal_listener_close",
+            ));
         }
         Ok(Bootstrap {
             carrier: self,
@@ -710,13 +732,12 @@ impl Bootstrap {
         let mut permit = None;
         match self.serve_inner(state, rooms, &grant, &mut permit).await {
             Ok(()) => Ok((self, permit.ok_or(ORDER)?)),
-            Err(error) => {
-                self.close().await?;
-                if let Some(permit) = permit {
-                    permit.release_after_reap();
-                }
-                Err(error)
-            }
+            Err(error) => Err(finish_failed_enrollment(
+                error,
+                self.close().await,
+                permit,
+                "terminal_inbound_close",
+            )),
         }
     }
 
@@ -856,9 +877,12 @@ impl Bootstrap {
             self.lane.adapter.authority.wait_live().await
         };
         if let Err(error) = checked.await {
-            self.close().await?;
-            permit.release_after_reap();
-            return Err(error);
+            return Err(finish_failed_enrollment(
+                error,
+                self.close().await,
+                Some(permit),
+                "terminal_enroll_close",
+            ));
         }
         let opened = Owner::open_bound(
             self.exchange,
@@ -899,4 +923,41 @@ fn room_capacity_returns_only_after_a_confirmed_reap() {
     assert_eq!(rooms.available_permits(), 1);
     drop(RoomPermit::new(rooms.clone().try_acquire_owned().unwrap()));
     assert_eq!(rooms.available_permits(), 0);
+}
+
+#[test]
+fn terminal_failed_enrollment_retains_unsafe_room_capacity() {
+    let rooms = Arc::new(Semaphore::new(1));
+    let permit = RoomPermit::new(rooms.clone().try_acquire_owned().unwrap());
+    assert!(matches!(
+        finish_failed_enrollment(Error::Timeout, Ok(()), Some(permit), "fixture_close"),
+        Error::Timeout
+    ));
+    assert_eq!(rooms.available_permits(), 1);
+
+    let permit = RoomPermit::new(rooms.clone().try_acquire_owned().unwrap());
+    assert!(matches!(
+        finish_failed_enrollment(
+            ROUTE,
+            Err(Error::Invalid("fixture_close")),
+            Some(permit),
+            "fixture_close",
+        ),
+        Error::Transport("terminal_transport_unavailable")
+    ));
+    assert_eq!(rooms.available_permits(), 0);
+}
+
+#[test]
+fn terminal_runtime_core_cleanup_failure_keeps_client_refusal() {
+    let error = finish_failed_enrollment(
+        Error::Invalid("terminal_enrollment_grant"),
+        Err(Error::Transport("fixture_close")),
+        None,
+        "fixture_close",
+    );
+    assert_eq!(
+        crate::terminal_owner::category(&error),
+        "terminal_grant_denied"
+    );
 }

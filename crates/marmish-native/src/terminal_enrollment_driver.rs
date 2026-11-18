@@ -4,7 +4,9 @@ use crate::terminal_bootstrap::BoundSigning;
 use crate::terminal_fence::FenceState;
 use crate::transport::{ArtiDirs, RelayConnector, RelayPolicy};
 use crate::{Error, Result};
-use enrollment::{EnrollmentCeiling, InboundState, ReadyEnrollment, Reapers, RoomPermit};
+use enrollment::{
+    EnrollmentCeiling, InboundState, ReadyEnrollment, Reapers, RoomPermit, finish_failed_enrollment,
+};
 use nostr::key::Keys;
 use std::sync::{Arc, atomic::AtomicBool};
 use std::time::Duration;
@@ -176,10 +178,12 @@ impl Route {
         }
         .await;
         if let Err(error) = flight {
-            if bootstrap.close().await.is_err() {
-                crate::diagnostics::event("terminal_outbound_close", "bootstrap_cleanup_failed");
-            }
-            return Err(error);
+            return Err(finish_failed_enrollment(
+                error,
+                bootstrap.close().await,
+                None,
+                "terminal_outbound_close",
+            ));
         }
         let room = trace(
             "terminal_outbound_enroll",
@@ -251,8 +255,12 @@ async fn complete(
     }
     .await;
     if let Err(error) = established {
-        room.close().await?;
-        return Err(error);
+        return Err(finish_failed_enrollment(
+            error,
+            room.close().await,
+            None,
+            "terminal_established_close",
+        ));
     }
     room.ready(&|| grant() && binding.fence.state() == FenceState::Live)
         .await

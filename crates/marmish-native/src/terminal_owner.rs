@@ -606,7 +606,7 @@ fn decode<const N: usize>(value: &str) -> Result<[u8; N]> {
     Ok(bytes)
 }
 
-fn category(error: &Error) -> &'static str {
+pub(crate) fn category(error: &Error) -> &'static str {
     match error {
         Error::Invalid("terminal_capacity") => "terminal_capacity",
         Error::Invalid("terminal_mode_unavailable") => "terminal_mode_unavailable",
