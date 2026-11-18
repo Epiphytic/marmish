@@ -1455,5 +1455,10 @@ After restart it inspects independently reopened encrypted copies. A verified
 room reaches `Pending`, then `Activating` via a same-UID manual decision or
 the original and current automatic policy. An uncertain closed image retains
 its stage reservation. Exact replay remains a cursor operation throughout.
-The installed daemon, invitation CLI, room activation, telemetry and platform
+The [daemon custody fixture](validation/peer-daemon-pending-owner.md) uses
+actual daemon ownership and the same-UID Unix listener. It tests Manual and
+Automatic admission through durable `Activating`, uncertain local approval
+recovery, expiration and ordinary commands during a separate Peer relay
+outage. Peer IPC and its bootstrap are available only inside tests. The
+installed invitation CLI, room activation, telemetry and platform
 qualification have separate acceptance criteria.

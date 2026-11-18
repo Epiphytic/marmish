@@ -304,3 +304,13 @@ checks, and track deployment cap and leave cleanup independently.
    production relay, live storage cap, joined leave and Active semantics need
    independent qualification. Obtain actual Claude Code Auto integrated code
    review before publication.
+
+## Qualification result
+
+The final fixture qualifies one exact pinned founder per daemon instance. The
+checkpoint filters that founder before reading due work and the lookup selects
+at most one eligible class for the founder. This refines the original
+inter-class rotation design for the implemented single-founder scope. Each
+pass retains distinct local, IPC and relay opportunities. Inventory omits
+expired rows. See [validation](../validation/peer-daemon-pending-owner.md)
+and the [independent code review](../reviews/peer-daemon-pending-owner-code.md).
