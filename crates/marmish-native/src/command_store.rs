@@ -4281,6 +4281,7 @@ pub(in crate::journal) mod tests {
     }
     fn evidence(epoch: u64) -> PublishedEvidence {
         PublishedEvidence::from_native(&marmot_session::PublishedApplicationMessage {
+            publication_observation: None,
             group_id: cgka_traits::GroupId::new(vec![1]),
             app_event_id: "a".repeat(64),
             message_id: cgka_traits::MessageId::new(vec![1]),

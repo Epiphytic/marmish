@@ -1783,6 +1783,7 @@ fn command_published_effect(
     native: &[u8],
 ) -> marmot_session::PublishedApplicationMessage {
     marmot_session::PublishedApplicationMessage {
+        publication_observation: None,
         group_id: GroupId::new(publication.key.group.clone()),
         app_event_id: publication.key.app_event_id.clone(),
         message_id: MessageId::new(native.to_vec()),
@@ -1816,6 +1817,8 @@ async fn unmatched_command_queue_refusal_does_not_fail_the_owner() {
         intent_id: MessageId::new(b"unrecorded-intent".to_vec()),
         intent_kind: "app_message".into(),
         reason: "not_group_member".into(),
+        artifact: None,
+        size_class: None,
     });
     effects.published_app_messages.push(published.clone());
     let bob = &mut fixture.owners[1];

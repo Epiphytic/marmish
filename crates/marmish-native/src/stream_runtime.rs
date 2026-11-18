@@ -1742,6 +1742,7 @@ impl MdkOwner {
             && let Some(app) = fanout.application_message()
         {
             let published = marmot_session::PublishedApplicationMessage {
+                publication_observation: None,
                 group_id: app.group_id.clone(),
                 app_event_id: app.app_event_id.clone(),
                 message_id: fanout

@@ -582,6 +582,8 @@ impl TransportAdapter for PublicationGate {
                     reason: "recovery_paused".into(),
                     kind: TransportEndpointFailureKind::RetryableUnavailable,
                     rejection_category: None,
+                    size_class: None,
+                    pre_send: true,
                 })
                 .collect();
             return Err(TransportAdapterError::PublishEndpoints(
@@ -2439,6 +2441,7 @@ impl MdkOwner {
                     "mdk_ingest",
                     match &effects.outcome {
                         IngestOutcome::Processed => "processed",
+                        IngestOutcome::GroupRecovery { .. } => "group_recovery",
                         IngestOutcome::Buffered { .. } => "buffered",
                         IngestOutcome::Ignored { .. } => "ignored",
                         IngestOutcome::LocalState { .. } => "local_state",

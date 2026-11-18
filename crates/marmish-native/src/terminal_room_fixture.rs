@@ -613,7 +613,10 @@ pub(super) async fn prove(founder_index: usize, relay: &str) -> CapturedRoom {
     let (peeled, provenance) = peeler.peel_welcome_with_provenance(&welcome).await.unwrap();
     assert_eq!(peeled.sender.as_ref(), Some(&founder.account));
     assert_eq!(
-        provenance.key_package_event_id.as_slice(),
+        provenance
+            .expect("current Welcome provenance")
+            .key_package_event_id
+            .as_slice(),
         artifact.id.as_slice()
     );
     let joined = joiner

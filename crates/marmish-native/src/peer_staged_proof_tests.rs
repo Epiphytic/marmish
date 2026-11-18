@@ -377,6 +377,7 @@ async fn verify_hints(
         .peel_welcome_with_provenance(message)
         .await
         .map_err(|_| "native_peel")?;
+    let proof = proof.ok_or("provenance")?;
     // Native peeler first on the same bytes enforces the pinned tag/URL bounds.
     // The SDK extraction only recovers fields the public peeler omits.
     let signed = Event::from_json(&message.payload).map_err(|_| "wrapper")?;

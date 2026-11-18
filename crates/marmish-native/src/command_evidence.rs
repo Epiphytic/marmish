@@ -49,6 +49,7 @@ impl PublishedEvidence {
         native_id: &[u8],
     ) -> PublishedApplicationMessage {
         PublishedApplicationMessage {
+            publication_observation: None,
             group_id: GroupId::new(key.group.clone()),
             app_event_id: key.app_event_id.clone(),
             message_id: MessageId::new(native_id.to_vec()),
@@ -92,6 +93,7 @@ mod tests {
     use super::*;
     fn publication() -> PublishedApplicationMessage {
         PublishedApplicationMessage {
+            publication_observation: None,
             group_id: GroupId::new(vec![1; 32]),
             app_event_id: "a".repeat(64),
             message_id: MessageId::new(vec![2; 32]),

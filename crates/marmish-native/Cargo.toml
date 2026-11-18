@@ -69,17 +69,17 @@ hyper-util = { version = "=0.1.20", default-features = false, features = ["tokio
 http-body-util = { version = "=0.1.5", default-features = false }
 sha3 = "0.10"
 data-encoding = "2"
-nostr = { git = "https://github.com/erskingardner/rust-nostr", rev = "48801bf6f2f1cd55bb1729e94159946c8832a786", default-features = false, features = ["std", "rand", "os-rng", "nip04", "nip49", "nip59"] }
-nostr-sdk = { git = "https://github.com/erskingardner/rust-nostr", rev = "48801bf6f2f1cd55bb1729e94159946c8832a786", default-features = false }
-cgka-traits = { git = "https://github.com/marmot-protocol/mdk", rev = "8abc51befbf71a1ae3bdbb25eb0860c731e75db2" }
-cgka-engine = { git = "https://github.com/marmot-protocol/mdk", rev = "8abc51befbf71a1ae3bdbb25eb0860c731e75db2" }
-marmot-session = { git = "https://github.com/marmot-protocol/mdk", rev = "8abc51befbf71a1ae3bdbb25eb0860c731e75db2" }
-storage-sqlite = { git = "https://github.com/marmot-protocol/mdk", rev = "8abc51befbf71a1ae3bdbb25eb0860c731e75db2" }
-transport-nostr-adapter = { git = "https://github.com/marmot-protocol/mdk", rev = "8abc51befbf71a1ae3bdbb25eb0860c731e75db2", features = ["sdk"] }
-transport-nostr-peeler = { git = "https://github.com/marmot-protocol/mdk", rev = "8abc51befbf71a1ae3bdbb25eb0860c731e75db2" }
+nostr = { git = "https://github.com/erskingardner/rust-nostr", rev = "e93cc06b5624f06c21ecd8111a124176eb0c7589", default-features = false, features = ["std", "rand", "os-rng", "nip04", "nip49", "nip59"] }
+nostr-sdk = { git = "https://github.com/erskingardner/rust-nostr", rev = "e93cc06b5624f06c21ecd8111a124176eb0c7589", default-features = false }
+cgka-traits = { git = "https://github.com/marmot-protocol/mdk", branch = "master" }
+cgka-engine = { git = "https://github.com/marmot-protocol/mdk", branch = "master" }
+marmot-session = { git = "https://github.com/marmot-protocol/mdk", branch = "master" }
+storage-sqlite = { git = "https://github.com/marmot-protocol/mdk", branch = "master" }
+transport-nostr-adapter = { git = "https://github.com/marmot-protocol/mdk", branch = "master", features = ["sdk"] }
+transport-nostr-peeler = { git = "https://github.com/marmot-protocol/mdk", branch = "master" }
 
 [dev-dependencies]
-marmot-session = { git = "https://github.com/marmot-protocol/mdk", rev = "8abc51befbf71a1ae3bdbb25eb0860c731e75db2", features = ["test-support"] }
+marmot-session = { git = "https://github.com/marmot-protocol/mdk", branch = "master", features = ["test-support"] }
 rcgen = { version = "=0.14.8", default-features = false, features = ["ring"] }
 tempfile.workspace = true
 tokio = { version = "1", features = ["test-util"] }

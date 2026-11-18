@@ -1104,6 +1104,7 @@ impl Candidate<'_> {
             .await
             .ok()?
             .ok()?;
+        let provenance = provenance?;
         if peeled.sender.as_ref().map(MemberId::as_slice) != Some(self.founder.as_bytes())
             || provenance.key_package_event_id.as_slice() != self.held_package.as_slice()
         {
@@ -1215,6 +1216,7 @@ async fn ordinary_held_source(
         .await
         .ok()?
         .ok()?;
+    let provenance = provenance?;
     storage
         .key_package_lifecycle()
         .unwrap()?

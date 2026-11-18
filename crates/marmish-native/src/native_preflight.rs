@@ -8,9 +8,9 @@ use std::fs;
 use std::path::Path;
 use zeroize::Zeroizing;
 
-// Exact account migration registry in pinned MDK8abc51befbf71a1ae3bdbb25eb0860c731e75db2.
-// Upstream exposes no read-only registry API. Updating the pin requires reviewing this bound.
-const MDK_MAX_MIGRATION: i64 = 166;
+// Last account migration in MDK 0ad3c61088e1acac58e0fcf1a9f1142bae5d997a.
+// Upstream exposes no read-only registry API. Review this bound when updating Cargo.lock.
+const MDK_MAX_MIGRATION: i64 = 212;
 fn db(_: rusqlite::Error) -> Error {
     Error::Storage("state_preflight")
 }

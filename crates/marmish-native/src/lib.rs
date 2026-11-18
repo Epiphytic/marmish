@@ -1,4 +1,7 @@
 //! Native v0.2 Marmish. Legacy Python tooling is a separate test fixture.
+// MDK and the test fixtures compose deeply nested concrete futures.
+#![recursion_limit = "256"]
+
 pub mod cli;
 mod client_inventory;
 #[cfg(test)]

@@ -354,7 +354,9 @@ impl Room {
                     .await
                     .map_err(|_| STATE)?;
                 if peeled.sender.as_ref() != Some(&self.server)
-                    || provenance.key_package_event_id.as_slice() != package.event
+                    || provenance
+                        .as_ref()
+                        .is_none_or(|proof| proof.key_package_event_id.as_slice() != package.event)
                 {
                     return Err(STATE);
                 }
