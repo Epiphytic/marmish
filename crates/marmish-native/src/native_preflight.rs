@@ -8,9 +8,9 @@ use std::fs;
 use std::path::Path;
 use zeroize::Zeroizing;
 
-// Last account migration in MDK 122ad45ece73c1d6f687a4e92a541b9b2febde34.
+// Last account migration in MDK b3cd2cb1c3a585372c5061b8f35d31a93ce9cdc1.
 // Upstream exposes no read-only registry API. Review this bound when updating Cargo.lock.
-const MDK_MAX_MIGRATION: i64 = 213;
+const MDK_MAX_MIGRATION: i64 = 214;
 fn db(_: rusqlite::Error) -> Error {
     Error::Storage("state_preflight")
 }
@@ -455,13 +455,24 @@ mod tests {
         let mut key = Zeroizing::new([0; 32]);
         hk.expand(b"mdk", key.as_mut()).unwrap();
         let conn = open_writable_fixture(profile.mdk_database(), &key);
-        conn.execute(
-            "INSERT INTO cgka_schema_migrations (version, name, applied_at_unix_seconds)
-             SELECT max(version) + 1, 'future_migration_fixture', 0
-             FROM cgka_schema_migrations",
-            [],
-        )
-        .unwrap();
+        let native_migration: i64 = conn
+            .query_row(
+                "SELECT max(version) FROM cgka_schema_migrations",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(native_migration, MDK_MAX_MIGRATION);
+        let future_migration = MDK_MAX_MIGRATION + 1;
+        let inserted: i64 = conn
+            .query_row(
+                "INSERT INTO cgka_schema_migrations (version, name, applied_at_unix_seconds)
+                 VALUES (?1, 'future_migration_fixture', 0) RETURNING version",
+                [future_migration],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(inserted, future_migration);
         drop(conn);
         let snapshot = WalSnapshot::capture(profile.mdk_database()).unwrap();
         assert!(matches!(
