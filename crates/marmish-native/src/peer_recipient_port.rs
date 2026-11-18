@@ -306,6 +306,24 @@ impl PeerRecipientPort {
         Ok(use_checked(account, &self.0.scope.origin, wall))
     }
 
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    #[allow(dead_code, reason = "consumed by the separately mounted Manual actor")]
+    pub(in crate::peer_invitation) fn use_current_native<T>(
+        &mut self,
+        use_checked: impl FnOnce(crate::peer_relay_trust::NativeRouteWindow<'_>) -> T,
+    ) -> Result<T> {
+        let result = self.0.socket().and_then(|socket| {
+            let physical = socket.physical.as_mut().ok_or(Failure::Binding)?;
+            let scope = physical.native_window().map_err(|_| Failure::Retired)?;
+            Ok(use_checked(scope))
+        });
+        result.or_else(|err| self.0.fail(err))
+    }
+
     pub(in crate::peer_invitation) fn use_accepted<T>(
         &mut self,
         ack: &Acknowledgement,

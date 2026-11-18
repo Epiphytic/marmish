@@ -372,6 +372,90 @@ pub(crate) struct LivePhysicalRoute {
     target_os = "linux",
     target_arch = "x86_64"
 ))]
+#[allow(dead_code, reason = "consumed by the separately mounted Manual actor")]
+pub(crate) struct NativeRouteWindow<'a> {
+    route: &'a LivePhysicalRoute,
+    fence: NativeRouteFence,
+}
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[derive(Clone)]
+pub(crate) struct NativeRouteFence {
+    cancel: CancellationToken,
+    fatal: Fatal,
+    wall: Duration,
+    wall_end: u64,
+    horizon: tokio::time::Instant,
+}
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+impl NativeRouteFence {
+    pub(crate) fn wall(&self) -> Duration {
+        self.wall
+    }
+
+    pub(crate) fn wall_end(&self) -> u64 {
+        self.wall_end
+    }
+
+    pub(crate) fn is_current(&self) -> bool {
+        !self.cancel.is_cancelled()
+            && !self.fatal.is_tripped()
+            && tokio::time::Instant::now() < self.horizon
+    }
+}
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[allow(dead_code, reason = "consumed by the separately mounted Manual actor")]
+impl NativeRouteWindow<'_> {
+    pub(crate) fn account(&self) -> PublicKey {
+        self.route.account()
+    }
+
+    pub(crate) fn origin(&self) -> &str {
+        self.route.endpoint().as_str()
+    }
+
+    pub(crate) fn wall(&self) -> Duration {
+        self.fence.wall()
+    }
+
+    pub(crate) fn horizon(&self) -> tokio::time::Instant {
+        self.fence.horizon
+    }
+
+    pub(crate) fn window(
+        &self,
+        readiness: crate::peer_candidate_startup::Readiness,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        signed_end_exclusive: u64,
+    ) -> crate::peer_invitation::Result<crate::peer_invitation::NativeWindow> {
+        crate::peer_invitation::NativeWindow::start_checked(
+            readiness,
+            stop,
+            signed_end_exclusive,
+            self.fence.clone(),
+        )
+    }
+}
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
 fn check_fatal(fatal: Option<&Fatal>, cancel: &CancellationToken) -> Result<()> {
     if fatal.is_some_and(Fatal::is_tripped) {
         cancel.cancel();
@@ -410,11 +494,7 @@ impl LivePhysicalRoute {
 
     pub(crate) fn observe(&mut self) -> Result<u64> {
         self.recheck()?;
-        let end = self
-            .route
-            .qualification
-            .end_exclusive()?
-            .min(self.window.end_exclusive()?);
+        let end = self.wall_end()?;
         let projected = self.route.clock.projected_end(end)?;
         let ceiling = self.ceiling.map_or(projected, |prior| prior.min(projected));
         self.ceiling = Some(ceiling);
@@ -423,6 +503,34 @@ impl LivePhysicalRoute {
             return Err(CLOCK_ERROR);
         }
         Ok(self.route.clock.effective_wall().as_secs())
+    }
+
+    fn wall_end(&self) -> Result<u64> {
+        Ok(self
+            .route
+            .qualification
+            .end_exclusive()?
+            .min(self.window.end_exclusive()?))
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    #[allow(dead_code, reason = "consumed by the separately mounted Manual actor")]
+    pub(crate) fn native_window(&mut self) -> Result<NativeRouteWindow<'_>> {
+        self.observe()?;
+        Ok(NativeRouteWindow {
+            route: self,
+            fence: NativeRouteFence {
+                wall: self.route.clock.effective_wall(),
+                cancel: self.cancellation(),
+                fatal: self.fatal.as_ref().ok_or(CLOCK_ERROR)?.clone(),
+                wall_end: self.wall_end()?,
+                horizon: self.ceiling.ok_or(CLOCK_ERROR)?,
+            },
+        })
     }
 
     pub(crate) fn clamp_wall(
@@ -558,3 +666,50 @@ pub(crate) use tests::qualified_recipient_fixture;
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) use tests::{qualified_founder_fixture, qualified_manual_recipient_fixture};
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[tokio::test(start_paused = true)]
+async fn native_window_honors_absolute_route_horizon_and_fatal_cut() {
+    use crate::{
+        dispatcher_fatal::Trip,
+        peer_candidate_startup,
+        peer_invitation::{NativeFence, NativeWindow},
+    };
+    use std::sync::atomic::AtomicBool;
+
+    let (startup, listener, worker) = peer_candidate_startup::pair();
+    startup.ordinary_ready();
+    listener.registered();
+    let ready = worker.ready().await.unwrap();
+    let wall = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+    let (trip, fatal) = Trip::new();
+    let cancel = CancellationToken::new();
+    let route = NativeRouteFence {
+        cancel: cancel.clone(),
+        fatal,
+        wall,
+        wall_end: wall.as_secs() + 60,
+        horizon: tokio::time::Instant::now() + Duration::from_secs(1),
+    };
+    let start = |route| {
+        NativeWindow::start_checked(
+            ready.readiness(),
+            Arc::new(AtomicBool::new(false)),
+            wall.as_secs() + 30,
+            route,
+        )
+        .unwrap()
+    };
+
+    let before_fatal = start(route.clone());
+    assert!(NativeFence::Candidate(&before_fatal).check().is_ok());
+    trip.mark_cut();
+    assert!(!cancel.is_cancelled());
+    assert!(NativeFence::Candidate(&before_fatal).check().is_err());
+
+    let (_live, fatal) = Trip::new();
+    let before_horizon = start(NativeRouteFence { fatal, ..route });
+    assert!(NativeFence::Candidate(&before_horizon).check().is_ok());
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert!(NativeFence::Candidate(&before_horizon).check().is_err());
+}

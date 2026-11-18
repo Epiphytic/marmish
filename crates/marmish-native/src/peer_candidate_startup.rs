@@ -114,6 +114,11 @@ pub(crate) struct Ready {
 }
 
 impl Ready {
+    #[allow(dead_code, reason = "consumed by the separately mounted Manual actor")]
+    pub(crate) fn readiness(&self) -> Readiness {
+        self.readiness.clone()
+    }
+
     pub(crate) fn is_current(&self) -> bool {
         self.readiness.is_current()
     }
@@ -195,8 +200,12 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
+            let native_readiness = ready.readiness();
             assert!(ready.is_current());
+            assert!(native_readiness.is_current());
             assert!(intake.is_current());
+            startup.stop();
+            assert!(!native_readiness.is_current());
         }
     }
 

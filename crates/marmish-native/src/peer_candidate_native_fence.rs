@@ -8,8 +8,13 @@ use std::sync::{
 #[cfg(test)]
 use std::sync::atomic::AtomicUsize;
 
-use crate::{command_limits::continuous_time, peer_candidate_startup::Readiness};
+#[cfg(test)]
 use tokio_util::sync::CancellationToken;
+
+use crate::{
+    command_limits::continuous_time, peer_candidate_startup::Readiness,
+    peer_relay_trust::NativeRouteFence,
+};
 
 use super::*;
 
@@ -19,9 +24,8 @@ pub(crate) struct NativeWindow(Arc<Window>);
 struct Window {
     readiness: Readiness,
     stop: Arc<AtomicBool>,
-    route_cancel: CancellationToken,
     anchor: Sample,
-    wall_end: Duration,
+    ceiling: Ceiling,
     tick_end: Duration,
     floor: Mutex<Option<Sample>>,
     #[cfg(test)]
@@ -36,6 +40,29 @@ struct Window {
     crash_generation: AtomicBool,
     #[cfg(test)]
     expire_schema: AtomicBool,
+}
+
+#[derive(Clone)]
+struct Ceiling {
+    wall: Duration,
+    route: RouteFence,
+}
+
+#[derive(Clone)]
+enum RouteFence {
+    Checked(NativeRouteFence),
+    #[cfg(test)]
+    Fixture(CancellationToken),
+}
+
+impl RouteFence {
+    fn is_current(&self) -> bool {
+        match self {
+            Self::Checked(route) => route.is_current(),
+            #[cfg(test)]
+            Self::Fixture(cancel) => !cancel.is_cancelled(),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -54,12 +81,48 @@ impl Sample {
 }
 
 impl NativeWindow {
+    #[cfg(test)]
     pub(super) fn start(
         readiness: Readiness,
         stop: Arc<AtomicBool>,
         route_cancel: CancellationToken,
         anchored_wall: Duration,
         end_exclusive: u64,
+    ) -> Result<Self> {
+        Self::start_with(
+            readiness,
+            stop,
+            anchored_wall,
+            Ceiling {
+                wall: Duration::from_secs(end_exclusive),
+                route: RouteFence::Fixture(route_cancel),
+            },
+        )
+    }
+
+    #[allow(dead_code, reason = "consumed by the separately mounted Manual actor")]
+    pub(crate) fn start_checked(
+        readiness: Readiness,
+        stop: Arc<AtomicBool>,
+        end_exclusive: u64,
+        route: NativeRouteFence,
+    ) -> Result<Self> {
+        Self::start_with(
+            readiness,
+            stop,
+            route.wall(),
+            Ceiling {
+                wall: Duration::from_secs(end_exclusive.min(route.wall_end())),
+                route: RouteFence::Checked(route),
+            },
+        )
+    }
+
+    fn start_with(
+        readiness: Readiness,
+        stop: Arc<AtomicBool>,
+        anchored_wall: Duration,
+        ceiling: Ceiling,
     ) -> Result<Self> {
         let now = Sample::now()?;
         if now.wall.abs_diff(anchored_wall) > Duration::from_secs(2) {
@@ -68,12 +131,11 @@ impl NativeWindow {
         Self::new(
             readiness,
             stop,
-            route_cancel,
             Sample {
                 wall: anchored_wall.max(now.wall),
                 tick: now.tick,
             },
-            Duration::from_secs(end_exclusive),
+            ceiling,
             now,
             Duration::from_secs(5),
         )
@@ -82,9 +144,8 @@ impl NativeWindow {
     fn new(
         readiness: Readiness,
         stop: Arc<AtomicBool>,
-        route_cancel: CancellationToken,
         anchor: Sample,
-        wall_end: Duration,
+        ceiling: Ceiling,
         floor: Sample,
         limit: Duration,
     ) -> Result<Self> {
@@ -93,20 +154,18 @@ impl NativeWindow {
             .wall
             .checked_add(now.tick.checked_sub(anchor.tick).ok_or(Error::Clock)?)
             .ok_or(Error::Clock)?;
+        let remaining = ceiling
+            .wall
+            .checked_sub(now.wall.max(projected))
+            .ok_or(Error::Clock)?;
         let window = Self(Arc::new(Window {
             readiness,
             stop,
-            route_cancel,
             anchor,
-            wall_end,
+            ceiling,
             tick_end: now
                 .tick
-                .checked_add(
-                    wall_end
-                        .checked_sub(now.wall.max(projected))
-                        .ok_or(Error::Clock)?
-                        .min(limit),
-                )
+                .checked_add(remaining.min(limit))
                 .ok_or(Error::Clock)?,
             floor: Mutex::new(Some(floor)),
             #[cfg(test)]
@@ -134,9 +193,8 @@ impl NativeWindow {
         Self::new(
             self.0.readiness.clone(),
             self.0.stop.clone(),
-            self.0.route_cancel.clone(),
             self.0.anchor,
-            self.0.wall_end,
+            self.0.ceiling.clone(),
             now,
             limit,
         )
@@ -156,7 +214,7 @@ impl NativeWindow {
         let window = &self.0;
         if !window.readiness.is_current()
             || window.stop.load(Ordering::Acquire)
-            || window.route_cancel.is_cancelled()
+            || !window.ceiling.route.is_current()
             || now.wall < floor.wall
             || now.tick < floor.tick
             || now.tick >= window.tick_end
@@ -173,7 +231,7 @@ impl NativeWindow {
             .checked_add(elapsed)
             .ok_or(Error::Clock)?;
         let wall = now.wall.max(projected);
-        if wall >= window.wall_end || now.wall.abs_diff(projected) > Duration::from_secs(2) {
+        if wall >= window.ceiling.wall || now.wall.abs_diff(projected) > Duration::from_secs(2) {
             return Err(Error::Clock);
         }
         Ok(wall)
@@ -189,7 +247,7 @@ impl NativeWindow {
     }
 
     pub(super) fn require_offer_limit(&self, offer_expires: u64) -> Result<()> {
-        if self.0.wall_end > Duration::from_secs(offer_expires) {
+        if self.0.ceiling.wall > Duration::from_secs(offer_expires) {
             return Err(Error::Clock);
         }
         self.sample()?;
@@ -225,7 +283,10 @@ impl NativeWindow {
     pub(super) fn copy_cut(&self) {
         match self.0.copy_cut.swap(0, Ordering::AcqRel) {
             0 => {}
-            1 => self.0.route_cancel.cancel(),
+            1 => match &self.0.ceiling.route {
+                RouteFence::Fixture(cancel) => cancel.cancel(),
+                RouteFence::Checked(_) => self.0.stop.store(true, Ordering::Release),
+            },
             2 => std::process::exit(78),
             _ => unreachable!("closed fixture cut enum"),
         }
