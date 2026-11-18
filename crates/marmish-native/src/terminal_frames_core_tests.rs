@@ -792,3 +792,40 @@ fn codec_and_admission_benchmark() {
         );
     }
 }
+
+#[test]
+fn core_tests_terminal_frames_timed_sink_preserves_the_earlier_boundary() {
+    let mut lost_head = Attachment::new(WRITER, TO, secs(0)).unwrap();
+    assert_eq!(
+        deliver(&mut lost_head, input(2, b"second"), 1),
+        Ok(Receipt::Ordered)
+    );
+    assert_eq!(
+        deliver(&mut lost_head, input(1, b"first"), 6),
+        Ok(Receipt::Ordered)
+    );
+    let Some((Offer::Bytes(1, b"first"), expires)) = lost_head.begin_timed_sink(secs(7)).unwrap()
+    else {
+        panic!("expected first byte offer")
+    };
+    assert_eq!(expires, secs(11));
+    assert!(matches!(
+        lost_head.begin_timed_sink(expires),
+        Err(Fault::Expired)
+    ));
+
+    let mut signed_age = Attachment::new(WRITER, TO, secs(0)).unwrap();
+    assert_eq!(
+        deliver(&mut signed_age, input(1, b"first"), 1),
+        Ok(Receipt::Ordered)
+    );
+    let Some((Offer::Bytes(1, b"first"), expires)) = signed_age.begin_timed_sink(secs(12)).unwrap()
+    else {
+        panic!("expected first byte offer")
+    };
+    assert_eq!(expires, secs(16));
+    assert!(matches!(
+        signed_age.begin_timed_sink(expires),
+        Err(Fault::Expired)
+    ));
+}

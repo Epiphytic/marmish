@@ -379,6 +379,14 @@ impl Attachment {
 
     /// Call after rechecking generation, grant and lease in the same owner turn.
     pub(super) fn begin_sink(&mut self, now: Duration) -> Result<Option<Offer<'_>>, Fault> {
+        Ok(self.begin_timed_sink(now)?.map(|(offer, _)| offer))
+    }
+
+    /// Preserve the same signed-age and ordered head deadlines for a deferred native sink.
+    pub(super) fn begin_timed_sink(
+        &mut self,
+        now: Duration,
+    ) -> Result<Option<(Offer<'_>, Duration)>, Fault> {
         self.poll(now)?;
         let Some(sequence) = self.rx.expected() else {
             return self.fence_on_fault(Err(Fault::Counter));
@@ -386,14 +394,16 @@ impl Attachment {
         let Some(item) = self.rx.pending.get(&sequence) else {
             return Ok(None);
         };
-        self.rx.unresolved_since.get_or_insert(now);
+        let started = *self.rx.unresolved_since.get_or_insert(now);
+        let until = item.deadline.min(deadline(started, DELIVERY_WAIT)?);
         self.rx.offered = Some(sequence);
-        Ok(Some(match &item.data {
+        let offer = match &item.data {
             Data::Input(bytes) | Data::Output(bytes) => {
                 Offer::Bytes(sequence, &bytes[self.rx.offset..])
             }
             Data::Resize(size) => Offer::Resize(sequence, *size),
-        }))
+        };
+        Ok(Some((offer, until)))
     }
 
     pub(super) fn sink_progress(

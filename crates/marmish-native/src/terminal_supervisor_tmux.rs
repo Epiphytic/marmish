@@ -22,17 +22,20 @@ pub(super) const SESSION: &str = "shell";
 
 pub(super) struct Manager {
     pub tmux: PathBuf,
-    root: PathBuf,
-    uid: libc::uid_t,
+    pub(super) root: PathBuf,
+    pub(super) uid: libc::uid_t,
     user: backend::paths::User,
     pending: Option<Child>,
     reaper: std::sync::mpsc::SyncSender<backend::ChildState>,
+    pub(super) profile: Option<std::sync::Arc<crate::identity::ProfileLease>>,
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct Inventory {
     pub session: u32,
-    socket: (u64, u64),
+    pub pid: i32,
+    pub directory: (u64, u64),
+    pub socket: (u64, u64),
 }
 
 #[derive(Clone, Copy)]
@@ -68,6 +71,7 @@ impl Manager {
             user,
             pending: None,
             reaper: backend::reserve_reaper()?,
+            profile: None,
         };
         let mut command = manager.command()?;
         command.arg("-V");
@@ -80,6 +84,20 @@ impl Manager {
     }
 
     pub fn create(&mut self, slot: Slot, rows: u16, cols: u16) -> Result<Inventory> {
+        self.create_until(slot, rows, cols, Instant::now() + TIMEOUT * 2, || Ok(()))
+    }
+
+    pub fn create_until(
+        &mut self,
+        slot: Slot,
+        rows: u16,
+        cols: u16,
+        deadline: Instant,
+        admit: impl FnOnce() -> Result<()>,
+    ) -> Result<Inventory> {
+        if Instant::now() >= deadline {
+            return Err(CLEANUP);
+        }
         let socket = self.socket(slot.id);
         let directory = socket.parent().ok_or(SOCKET)?;
         check_directory(&self.root)?;
@@ -142,28 +160,56 @@ impl Manager {
                 "@marmish-proof",
                 &hex::encode(slot.marker),
             ]);
-        self.run(command)?;
-        self.inventory(slot, None)
+        if let Err(error) = admit() {
+            // Only this owner created the private directory, and no native
+            // process was started. A removal failure leaves it quarantined.
+            if fs::remove_dir(directory).is_ok() {
+                File::open(&self.root)?.sync_all()?;
+            }
+            return Err(error);
+        }
+        self.run_until(command, deadline.min(Instant::now() + TIMEOUT))?;
+        self.inventory_until(slot, None, deadline)
     }
 
     pub fn inventory(&mut self, slot: Slot, native_id: Option<u32>) -> Result<Inventory> {
+        self.inventory_until(slot, native_id, Instant::now() + TIMEOUT)
+    }
+
+    pub fn inventory_until(
+        &mut self,
+        slot: Slot,
+        native_id: Option<u32>,
+        deadline: Instant,
+    ) -> Result<Inventory> {
         let socket = self.socket(slot.id);
+        let parent = socket.parent().ok_or(SOCKET)?;
+        let directory = directory_identity(parent)?;
         let before = socket_identity(&socket, self.uid)?;
+        if let Some(proof) = slot.proof
+            && (proof.directory != directory || proof.socket != before)
+        {
+            return Err(UNAVAILABLE);
+        }
         let mut command = self.control(slot.id)?;
         command.args([
             "list-sessions",
             "-F",
-            "#{session_name}|#{session_id}|#{@marmish-proof}",
+            "#{session_name}|#{session_id}|#{@marmish-proof}|#{pid}",
         ]);
-        let raw = self.run(command)?;
-        let session = parse_inventory(&raw, slot.marker).ok_or(UNAVAILABLE)?;
+        let raw = self.run_until(command, deadline.min(Instant::now() + TIMEOUT))?;
+        let (session, pid) = parse_inventory(&raw, slot.marker).ok_or(UNAVAILABLE)?;
         if native_id.is_some_and(|expected| expected != session)
+            || slot.proof.is_some_and(|proof| proof.pid != pid)
             || socket_identity(&socket, self.uid)? != before
+            || directory_identity(parent)? != directory
         {
             return Err(UNAVAILABLE);
         }
         Ok(Inventory {
             session,
+            pid,
+            directory,
             socket: before,
         })
     }
@@ -190,7 +236,24 @@ impl Manager {
         expected: usize,
         change: ClientChange,
     ) -> Result<()> {
-        let deadline = Instant::now() + CLIENT_TIMEOUT;
+        self.wait_clients_until(
+            slot,
+            inventory,
+            expected,
+            change,
+            Instant::now() + CLIENT_TIMEOUT,
+        )
+    }
+
+    pub fn wait_clients_until(
+        &mut self,
+        slot: SlotId,
+        inventory: Inventory,
+        expected: usize,
+        change: ClientChange,
+        deadline: Instant,
+    ) -> Result<()> {
+        let deadline = deadline.min(Instant::now() + CLIENT_TIMEOUT);
         loop {
             if Instant::now() >= deadline {
                 return Err(CLEANUP);
@@ -213,11 +276,8 @@ impl Manager {
 
     pub fn terminate(&mut self, slot: SlotId, inventory: Inventory) -> Result<()> {
         let socket = self.socket(slot);
-        let target = format!("${}", inventory.session);
-        let mut command = self.verified_control(slot, inventory)?;
-        command.args(["kill-session", "-t", &target]);
-        self.run(command)?;
         let until = Instant::now() + TIMEOUT;
+        self.kill_session(slot, inventory, until)?;
         loop {
             match fs::symlink_metadata(&socket) {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => break,
@@ -241,6 +301,19 @@ impl Manager {
         Ok(())
     }
 
+    pub fn kill_session(
+        &mut self,
+        slot: SlotId,
+        inventory: Inventory,
+        until: Instant,
+    ) -> Result<()> {
+        let target = format!("${}", inventory.session);
+        let mut command = self.verified_control(slot, inventory)?;
+        command.args(["kill-session", "-t", &target]);
+        self.run_until(command, until.min(Instant::now() + TIMEOUT))?;
+        Ok(())
+    }
+
     pub(super) fn control(&self, slot: SlotId) -> Result<Command> {
         let path = self.socket(slot);
         backend::paths::socket(&path, self.uid)?;
@@ -253,7 +326,10 @@ impl Manager {
     }
 
     fn verified_control(&self, slot: SlotId, inventory: Inventory) -> Result<Command> {
-        if socket_identity(&self.socket(slot), self.uid)? != inventory.socket {
+        let socket = self.socket(slot);
+        if socket_identity(&socket, self.uid)? != inventory.socket
+            || directory_identity(socket.parent().ok_or(SOCKET)?)? != inventory.directory
+        {
             return Err(UNAVAILABLE);
         }
         self.control(slot)
@@ -299,15 +375,28 @@ impl Manager {
         if Instant::now() >= deadline {
             return Err(CLEANUP);
         }
-        let mut child = command.spawn().map_err(|_| TMUX)?;
-        let result = collect(&mut child, deadline);
+        self.pending = Some(command.spawn().map_err(|_| TMUX)?);
+        let child = self.pending.as_mut().ok_or(TMUX)?;
+        let result = collect(child, deadline);
         if result.is_err() && !matches!(child.try_wait(), Ok(Some(_))) {
             let _ = child.kill();
-            if !matches!(child.try_wait(), Ok(Some(_))) {
-                self.pending = Some(child);
-            }
+        }
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            self.pending = None;
         }
         result
+    }
+
+    pub(super) fn drain_pending(&mut self) -> bool {
+        let Some(child) = &mut self.pending else {
+            return true;
+        };
+        let _ = child.kill();
+        if !matches!(child.try_wait(), Ok(Some(_))) {
+            return false;
+        }
+        self.pending = None;
+        true
     }
 }
 
@@ -318,11 +407,9 @@ impl Drop for Manager {
             if !matches!(child.try_wait(), Ok(Some(_))) {
                 // Retain the exact child while it is being reaped. The owner
                 // can shut down even if the kernel delays its waitable state.
-                if self
-                    .reaper
-                    .try_send(backend::ChildState::new(child))
-                    .is_err()
-                {
+                let mut child = backend::ChildState::new(child);
+                child._profile = self.profile.take();
+                if self.reaper.try_send(child).is_err() {
                     std::process::abort();
                 }
             }
@@ -362,7 +449,7 @@ fn collect(child: &mut Child, until: Instant) -> Result<Vec<u8>> {
     Err(UNAVAILABLE)
 }
 
-fn check_directory(path: &Path) -> Result<()> {
+pub(super) fn check_directory(path: &Path) -> Result<()> {
     identity::check_dir(path)?;
     if path.canonicalize()? != path {
         return Err(SOCKET);
@@ -371,6 +458,12 @@ fn check_directory(path: &Path) -> Result<()> {
         marmish_engine::validate_executable_ancestor(ancestor).map_err(|_| SOCKET)?;
     }
     Ok(())
+}
+
+fn directory_identity(path: &Path) -> Result<(u64, u64)> {
+    check_directory(path)?;
+    let metadata = fs::symlink_metadata(path)?;
+    Ok((metadata.dev(), metadata.ino()))
 }
 
 pub(super) fn connection_refused(path: &Path) -> Result<bool> {
@@ -463,14 +556,16 @@ fn number<T: std::str::FromStr>(digits: &str) -> Option<T> {
     digits.parse().ok()
 }
 
-pub(super) fn parse_inventory(raw: &[u8], marker: [u8; 16]) -> Option<u32> {
+pub(super) fn parse_inventory(raw: &[u8], marker: [u8; 16]) -> Option<(u32, i32)> {
     let raw = std::str::from_utf8(raw)
         .ok()?
         .strip_prefix("shell|$")?
         .strip_suffix('\n')?;
-    let (id, proof) = raw.split_once('|')?;
+    let (id, rest) = raw.split_once('|')?;
+    let (proof, pid) = rest.split_once('|')?;
     if proof != hex::encode(marker) {
         return None;
     }
-    number(id)
+    let pid: i32 = number(pid)?;
+    (pid > 0).then_some((number(id)?, pid))
 }

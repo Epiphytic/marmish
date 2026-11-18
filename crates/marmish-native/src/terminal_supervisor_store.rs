@@ -10,7 +10,7 @@ use std::path::Path;
 use std::time::Duration;
 use zeroize::Zeroizing;
 
-const SCHEMA: i64 = 1;
+const SCHEMA: i64 = 2;
 const STORE: Error = Error::Storage("terminal_registry");
 const FORMAT: Error = Error::Storage("terminal_registry_format");
 const BINDING: Error = Error::Storage("terminal_registry_binding");
@@ -23,6 +23,64 @@ pub(super) enum State {
     Retiring(Option<u32>),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct Host {
+    pub boot: [u8; 16],
+    pub namespace: (u64, u64),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct Proof {
+    pub host: Host,
+    pub pid: i32,
+    pub directory: (u64, u64),
+    pub socket: (u64, u64),
+}
+
+impl Proof {
+    const BYTES: usize = 68;
+
+    fn encode(self) -> Result<[u8; Self::BYTES]> {
+        if self.pid <= 0 || self.directory.1 == 0 || self.socket.1 == 0 {
+            return Err(FORMAT);
+        }
+        let mut value = [0; Self::BYTES];
+        value[..4].copy_from_slice(&self.pid.to_be_bytes());
+        value[4..20].copy_from_slice(&self.host.boot);
+        for (bytes, field) in value[20..].chunks_exact_mut(8).zip([
+            self.host.namespace.0,
+            self.host.namespace.1,
+            self.directory.0,
+            self.directory.1,
+            self.socket.0,
+            self.socket.1,
+        ]) {
+            bytes.copy_from_slice(&field.to_be_bytes());
+        }
+        Ok(value)
+    }
+
+    fn decode(value: [u8; Self::BYTES]) -> Result<Self> {
+        let pid = i32::from_be_bytes(value[..4].try_into().map_err(|_| FORMAT)?);
+        let boot = value[4..20].try_into().map_err(|_| FORMAT)?;
+        let (fields, _) = value[20..].as_chunks::<8>();
+        let [ns_dev, ns_ino, dir_dev, dir_ino, sock_dev, sock_ino] = fields else {
+            return Err(FORMAT);
+        };
+        let proof = Self {
+            host: Host {
+                boot,
+                namespace: (u64::from_be_bytes(*ns_dev), u64::from_be_bytes(*ns_ino)),
+            },
+            pid,
+            directory: (u64::from_be_bytes(*dir_dev), u64::from_be_bytes(*dir_ino)),
+            socket: (u64::from_be_bytes(*sock_dev), u64::from_be_bytes(*sock_ino)),
+        };
+        proof.encode()?;
+        Ok(proof)
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct Slot {
     pub id: SlotId,
@@ -30,6 +88,7 @@ pub(super) struct Slot {
     pub default: bool,
     pub marker: [u8; 16],
     pub state: State,
+    pub proof: Option<Proof>,
 }
 
 pub(super) struct Registry {
@@ -86,7 +145,7 @@ impl Registry {
         let schema: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(db)?;
-        if !matches!((schema, table_count), (0, 0) | (SCHEMA, _)) {
+        if !matches!((schema, table_count), (0, 0) | (1 | SCHEMA, _)) {
             return Err(FORMAT);
         }
         connection
@@ -113,13 +172,16 @@ impl Registry {
         if binding.0 != profile_id || binding.1 != account {
             return Err(BINDING);
         }
+        if schema == 1 {
+            migrate_v1(&mut connection)?;
+        }
         Ok(Self { connection })
     }
 
     pub fn slots(&self) -> Result<Vec<Slot>> {
         let mut statement = self
             .connection
-            .prepare("SELECT slot, account, is_default, marker, state, native_id FROM slot ORDER BY slot LIMIT ?1")
+            .prepare("SELECT slot, account, is_default, marker, state, native_id, native_proof FROM slot ORDER BY slot LIMIT ?1")
             .map_err(db)?;
         let mut rows = statement.query([(MAX_SLOTS + 1) as i64]).map_err(db)?;
         let mut slots = Vec::new();
@@ -137,6 +199,11 @@ impl Registry {
                 default: row.get(2).map_err(db)?,
                 marker: row.get(3).map_err(db)?,
                 state,
+                proof: row
+                    .get::<_, Option<[u8; Proof::BYTES]>>(6)
+                    .map_err(db)?
+                    .map(Proof::decode)
+                    .transpose()?,
             });
         }
         if slots.len() > MAX_SLOTS {
@@ -161,24 +228,48 @@ impl Registry {
         tx.commit().map_err(db)
     }
 
-    pub fn ready(&mut self, slot: Slot, native_id: u32) -> Result<()> {
+    pub fn ready(&mut self, slot: Slot, native_id: u32, proof: Option<Proof>) -> Result<()> {
+        let proof = proof.map(Proof::encode).transpose()?;
         changed(self.connection.execute(
-            "UPDATE slot SET state=1,native_id=?2 WHERE slot=?1 AND state=0",
-            params![slot.id.0, native_id],
+            "UPDATE slot SET state=1,native_id=?2,native_proof=?3 WHERE slot=?1 AND state=0 AND account=?4 AND marker=?5",
+            params![slot.id.0, native_id, proof.as_ref().map(|value| value.as_slice()), slot.account, slot.marker],
+        ))
+    }
+
+    pub fn pin(&mut self, slot: Slot, proof: Proof, native_id: u32) -> Result<()> {
+        let proof = proof.encode()?;
+        changed(self.connection.execute(
+            "UPDATE slot SET native_proof=?2 WHERE slot=?1 AND native_id=?3 AND native_proof IS NULL AND account=?4 AND marker=?5 AND state IN (1,2)",
+            params![slot.id.0, proof.as_slice(), native_id, slot.account, slot.marker],
         ))
     }
 
     pub fn retiring(&mut self, slot: Slot) -> Result<()> {
-        changed(
-            self.connection
-                .execute("UPDATE slot SET state=2 WHERE slot=?1", params![slot.id.0]),
-        )
+        changed(self.connection.execute(
+            "UPDATE slot SET state=2 WHERE slot=?1 AND account=?2 AND marker=?3",
+            params![slot.id.0, slot.account, slot.marker],
+        ))
     }
 
     pub fn retired(&mut self, slot: Slot) -> Result<()> {
         changed(self.connection.execute(
-            "DELETE FROM slot WHERE slot=?1 AND state=2",
-            params![slot.id.0],
+            "DELETE FROM slot WHERE slot=?1 AND state=2 AND account=?2 AND marker=?3",
+            params![slot.id.0, slot.account, slot.marker],
+        ))
+    }
+
+    pub fn retire_old_boot(&mut self, slot: Slot, proof: Proof) -> Result<()> {
+        let proof = proof.encode()?;
+        changed(self.connection.execute(
+            "DELETE FROM slot WHERE slot=?1 AND account=?2 AND marker=?3 AND native_proof=?4 AND state IN (1,2)",
+            params![slot.id.0, slot.account, slot.marker, proof.as_slice()],
+        ))
+    }
+
+    pub fn retire_unstarted(&mut self, slot: Slot) -> Result<()> {
+        changed(self.connection.execute(
+            "DELETE FROM slot WHERE slot=?1 AND account=?2 AND marker=?3 AND state IN (0,2) AND native_id IS NULL AND native_proof IS NULL",
+            params![slot.id.0, slot.account, slot.marker],
         ))
     }
 
@@ -215,19 +306,10 @@ fn migrate(connection: &mut Connection, profile_id: &str, account: Account) -> R
             id INTEGER PRIMARY KEY CHECK(id=1), profile TEXT NOT NULL CHECK(length(profile)=32),
             account BLOB NOT NULL CHECK(length(account)=32),
             generation BLOB NOT NULL CHECK(length(generation)=8)
-        ) STRICT;
-        CREATE TABLE slot (
-            slot BLOB PRIMARY KEY NOT NULL CHECK(length(slot)=16),
-            account BLOB NOT NULL CHECK(length(account)=32),
-            is_default INTEGER NOT NULL CHECK(is_default IN (0,1)),
-            marker BLOB NOT NULL CHECK(length(marker)=16),
-            state INTEGER NOT NULL CHECK(state IN (0,1,2)),
-            native_id INTEGER CHECK(native_id BETWEEN 0 AND 4294967295),
-            CHECK((state=0 AND native_id IS NULL) OR (state=1 AND native_id IS NOT NULL) OR state=2)
-        ) STRICT;
-        CREATE UNIQUE INDEX default_by_account ON slot(account) WHERE is_default=1;",
+        ) STRICT;",
     )
     .map_err(db)?;
+    tx.execute_batch(SLOT_SCHEMA).map_err(db)?;
     tx.execute(
         "INSERT INTO binding VALUES (1,?1,?2,?3)",
         params![profile_id, account, [0_u8; 8]],
@@ -236,6 +318,35 @@ fn migrate(connection: &mut Connection, profile_id: &str, account: Account) -> R
     tx.pragma_update(None, "user_version", SCHEMA).map_err(db)?;
     tx.commit().map_err(db)
 }
+
+fn migrate_v1(connection: &mut Connection) -> Result<()> {
+    let tx = connection.transaction().map_err(db)?;
+    tx.execute_batch("DROP INDEX default_by_account; ALTER TABLE slot RENAME TO slot_v1;")
+        .map_err(db)?;
+    tx.execute_batch(SLOT_SCHEMA).map_err(db)?;
+    tx.execute_batch(
+        "INSERT INTO slot (slot, account, is_default, marker, state, native_id)
+            SELECT slot, account, is_default, marker, state, native_id FROM slot_v1;
+        DROP TABLE slot_v1;",
+    )
+    .map_err(db)?;
+    tx.pragma_update(None, "user_version", SCHEMA).map_err(db)?;
+    tx.commit().map_err(db)
+}
+
+const SLOT_SCHEMA: &str = "CREATE TABLE slot (
+            slot BLOB PRIMARY KEY NOT NULL CHECK(length(slot)=16),
+            account BLOB NOT NULL CHECK(length(account)=32),
+            is_default INTEGER NOT NULL CHECK(is_default IN (0,1)),
+            marker BLOB NOT NULL CHECK(length(marker)=16),
+            state INTEGER NOT NULL CHECK(state IN (0,1,2)),
+            native_id INTEGER CHECK(native_id BETWEEN 0 AND 4294967295),
+            native_proof BLOB CHECK(length(native_proof)=68),
+            CHECK((state=0 AND native_id IS NULL AND native_proof IS NULL)
+                OR (state=1 AND native_id IS NOT NULL)
+                OR (state=2 AND (native_proof IS NULL OR native_id IS NOT NULL)))
+        ) STRICT;
+        CREATE UNIQUE INDEX default_by_account ON slot(account) WHERE is_default=1;";
 
 pub(super) fn derive_key(profile_id: &str, root: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>> {
     if !crate::foundation::valid_hex(profile_id, 32) {

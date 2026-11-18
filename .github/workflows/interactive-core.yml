@@ -52,7 +52,9 @@ jobs:
       - name: Check private Peer heartbeat and policy records
         run: cargo test --locked -p marmish-native --test peer_status_wire peer_heartbeat_core
       - name: Check local Terminal supervisor registry
-        run: cargo test --locked -p marmish-native --lib core_tests_terminal_supervisor
+        run: |
+          cargo test --locked -p marmish-native --lib core_tests_terminal_supervisor
+          cargo test --locked -p marmish-native --lib core_tests_terminal_live_supervisor_bounded_independent_queue_and_cancel
       - name: Check foreground Terminal byte policies
         run: cargo test --locked -p marmish-native --test terminal_local_tmux core_tests_terminal_frontend
       - name: Check Terminal enrollment bounds and records

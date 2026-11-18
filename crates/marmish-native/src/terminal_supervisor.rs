@@ -1,4 +1,8 @@
 //! Test-gated local terminal registry and sole owner of PTY effects.
+#[path = "terminal_live_supervisor.rs"]
+mod live;
+#[path = "terminal_live_supervisor_recovery.rs"]
+mod recovery;
 #[path = "terminal_supervisor_store.rs"]
 mod store;
 #[path = "terminal_supervisor_tests.rs"]
@@ -122,7 +126,7 @@ impl<'a> Supervisor<'a> {
             } else if slot.state == State::Prepared
                 && let Ok(inventory) = self.tmux.inventory(slot, None)
             {
-                self.registry.ready(slot, inventory.session)?;
+                self.registry.ready(slot, inventory.session, None)?;
             }
         }
         Ok(())
@@ -236,10 +240,11 @@ impl<'a> Supervisor<'a> {
             default: matches!(selection, Selection::Default),
             marker: random()?,
             state: State::Prepared,
+            proof: None,
         };
         self.registry.prepare(slot)?;
         let inventory = self.tmux.create(slot, rows, cols)?;
-        self.registry.ready(slot, inventory.session)?;
+        self.registry.ready(slot, inventory.session, None)?;
         Ok((slot.id, inventory))
     }
 

@@ -22,13 +22,13 @@ pub use cleanup::CleanupGuard;
 pub use copy_launch::RegisteredCopyHelper;
 use launcher::{FrontendGuard, LaunchSpec, StateRoot, WorkerPresence};
 pub use live::{
-    probe_recorded_process, LiveChild, LiveCleanupProgress, LivePipes, LiveProcessRecord,
-    LiveSpawnError, PreparedLiveExec, RecordedProcessDisposition,
+    LiveChild, LiveCleanupProgress, LivePipes, LiveProcessRecord, LiveSpawnError, PreparedLiveExec,
+    RecordedProcessDisposition, probe_recorded_process,
 };
 pub use model::*;
 pub use policy::{
-    inspect_canonical_exec, CanonicalExecOutcome, CommandPolicy, CommandPolicyDescriptionV1,
-    KeyRestrictions, Restrictions,
+    CanonicalExecOutcome, CommandPolicy, CommandPolicyDescriptionV1, KeyRestrictions, Restrictions,
+    inspect_canonical_exec,
 };
 use std::collections::HashMap;
 use std::time::Duration;
@@ -45,6 +45,11 @@ pub const ENGINE_FORMAT: i64 = store::ENGINE_FORMAT;
 /// separate actual-descriptor checks. Linux is a no-op.
 pub fn initialize_process_limits() -> Result<()> {
     platform::initialize_process_limits()
+}
+
+/// Return the current host boot UUID for conservative local recovery proofs.
+pub fn system_boot_id() -> Result<[u8; 16]> {
+    platform::boot_time().map(|snapshot| snapshot.boot_id)
 }
 
 #[cfg(test)]

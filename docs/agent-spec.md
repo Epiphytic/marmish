@@ -19,7 +19,9 @@ and [ordered Terminal records](validation/terminal-frames.md) have native
 test-only WSS evidence, including exact 4 KiB records in both directions
 and durable Command profile exclusion. The [local supervisor](validation/terminal-supervisor.md)
 qualifies persistent encrypted slot state, writer and observer attachment, and
-restart recovery in Linux tmux fixtures. The [foreground frontend](validation/terminal-frontend-tty.md)
+restart recovery in Linux tmux fixtures. The [writer supervisor](validation/terminal-live-supervisor.md)
+qualifies background PTY ownership, held-lock recovery and output receipts
+with local timing and 20 repeated native runs. The [foreground frontend](validation/terminal-frontend-tty.md)
 verifies filtered display, local input, signal cleanup and restoration
 against real Linux PTYs and tmux. The [room enrollment fixture](validation/terminal-enrollment.md)
 uses a separate native room, a pinned direct WSS origin, exact 4 KiB frame

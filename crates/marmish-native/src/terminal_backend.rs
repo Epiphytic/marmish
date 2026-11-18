@@ -119,6 +119,25 @@ impl CheckedLaunch {
         rows: u16,
         cols: u16,
     ) -> std::result::Result<Attachment, LaunchFailure> {
+        self.launch_until(
+            generation,
+            rows,
+            cols,
+            Instant::now() + STATUS_DEADLINE + EXEC_GRACE,
+            None,
+            || Ok(()),
+        )
+    }
+
+    fn launch_until(
+        &self,
+        generation: u64,
+        rows: u16,
+        cols: u16,
+        deadline: Instant,
+        profile: Option<std::sync::Arc<crate::identity::ProfileLease>>,
+        admit: impl FnOnce() -> Result<()>,
+    ) -> std::result::Result<Attachment, LaunchFailure> {
         if generation == 0 {
             return Err(STALE.into());
         }
@@ -136,6 +155,10 @@ impl CheckedLaunch {
             .open("/dev/null")
             .map_err(|_| LAUNCH)?;
         let reaper = reserve_reaper()?;
+        admit()?;
+        if Instant::now() >= deadline {
+            return Err(LAUNCH.into());
+        }
         let child = Command::new(&self.daemon)
             .env_clear()
             .arg(WORKER_ENTRYPOINT)
@@ -148,17 +171,25 @@ impl CheckedLaunch {
             .stderr(null)
             .spawn()
             .map_err(|_| LAUNCH)?;
+        let mut child = ChildState::new(child);
+        child._profile = profile;
         let mut attachment = Attachment {
             master: Some(master),
             generation,
             role: self.role,
-            child: Some(ChildState::new(child)),
+            child: Some(child),
             reaper,
         };
         let child = attachment.child.as_mut().ok_or(LAUNCH)?;
-        if let Err(error) = await_status(reader, child, Instant::now() + STATUS_DEADLINE)
-            .and_then(|()| exec_grace(child, Instant::now() + EXEC_GRACE))
-        {
+        let status = deadline.min(Instant::now() + STATUS_DEADLINE);
+        if let Err(error) = await_status(reader, child, status).and_then(|()| {
+            let grace = Instant::now() + EXEC_GRACE;
+            if grace > deadline {
+                Err(LAUNCH)
+            } else {
+                exec_grace(child, grace)
+            }
+        }) {
             return Err(LaunchFailure {
                 error,
                 pending: Some(attachment),
@@ -377,6 +408,25 @@ pub struct Attachment {
 }
 
 impl Attachment {
+    #[cfg(test)]
+    fn with_test_master(
+        master: File,
+        generation: u64,
+        mut command: Command,
+        profile: Option<std::sync::Arc<crate::identity::ProfileLease>>,
+    ) -> Result<Self> {
+        let reaper = reserve_reaper()?;
+        let mut child = ChildState::new(command.spawn()?);
+        child._profile = profile;
+        Ok(Self {
+            master: Some(master),
+            generation,
+            role: Role::Writer,
+            child: Some(child),
+            reaper,
+        })
+    }
+
     pub fn supersede(&mut self, next: u64) -> Result<()> {
         if next <= self.generation || self.master.is_none() {
             return Err(STALE);
@@ -509,6 +559,7 @@ struct ChildState {
     group: bool,
     termination: Option<Instant>,
     killed: bool,
+    _profile: Option<std::sync::Arc<crate::identity::ProfileLease>>,
 }
 
 impl ChildState {
@@ -519,6 +570,7 @@ impl ChildState {
             group: false,
             termination: None,
             killed: false,
+            _profile: None,
         }
     }
 

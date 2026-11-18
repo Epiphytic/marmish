@@ -43,14 +43,19 @@ fn core_tests_terminal_supervisor_management_grammar() {
         Err(Error::Invalid("terminal_socket_path_length"))
     ));
     let marker = [1; 16];
-    let raw = format!("shell|$4294967295|{}\n", hex::encode(marker));
+    let raw = format!("shell|$4294967295|{}|2147483647\n", hex::encode(marker));
     assert_eq!(
         tmux::parse_inventory(raw.as_bytes(), marker),
-        Some(u32::MAX)
+        Some((u32::MAX, i32::MAX))
     );
     assert!(tmux::parse_inventory(raw.as_bytes(), [2; 16]).is_none());
     assert!(tmux::parse_inventory(raw.repeat(2).as_bytes(), marker).is_none());
     assert!(tmux::parse_inventory(raw.replace("shell", "shell2").as_bytes(), marker).is_none());
+    for invalid in ["0", "-1", "2147483648"] {
+        assert!(
+            tmux::parse_inventory(raw.replace("2147483647", invalid).as_bytes(), marker).is_none()
+        );
+    }
 }
 
 #[test]
@@ -104,7 +109,7 @@ fn core_tests_terminal_supervisor_encrypted_registry() {
         Err(Error::Storage("terminal_registry_generation"))
     ));
     db.connection
-        .pragma_update(None, "user_version", 2)
+        .pragma_update(None, "user_version", 3)
         .unwrap();
     drop(db);
     assert!(matches!(
@@ -126,6 +131,7 @@ fn prepared(index: u8, account: Account, default: bool) -> Slot {
         default,
         marker: [index + 1; 16],
         state: State::Prepared,
+        proof: None,
     }
 }
 
@@ -202,15 +208,15 @@ fn terminal_supervisor_registry_interrupted_final_commit() {
     assert!(!journal.exists());
 }
 
-struct Fixture {
-    base: tempfile::TempDir,
-    daemon: PathBuf,
-    tmux: PathBuf,
-    accounts: [Account; 2],
+pub(super) struct Fixture {
+    pub(super) base: tempfile::TempDir,
+    pub(super) daemon: PathBuf,
+    pub(super) tmux: PathBuf,
+    pub(super) accounts: [Account; 2],
 }
 
 impl Fixture {
-    async fn new() -> Self {
+    pub(super) async fn new() -> Self {
         let daemon = Path::new(
             &std::env::var_os("MARMISH_TEST_DAEMON")
                 .expect("set MARMISH_TEST_DAEMON to the built marmishd"),
@@ -259,7 +265,7 @@ impl Fixture {
         result
     }
 
-    fn set_terminal_config(&self, accounts: &[Account]) {
+    pub(super) fn set_terminal_config(&self, accounts: &[Account]) {
         let root = self.base.path().join("t");
         let path = root.join("config.json");
         let mut config: serde_json::Value =
@@ -279,7 +285,7 @@ impl Fixture {
         drop(lease);
     }
 
-    fn identity(&self) -> (ProfileLease, IdentityMaterial) {
+    pub(super) fn identity(&self) -> (ProfileLease, IdentityMaterial) {
         let mut profile = ProfileLease::acquire_ready(self.base.path(), "t").unwrap();
         let material = profile
             .prepare(BackendChoice::File, Path::new(""), Instant::now() + WAIT)

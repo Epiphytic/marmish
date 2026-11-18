@@ -99,7 +99,7 @@ impl ServiceLifetime {
     }
 }
 #[cfg(target_os = "linux")]
-fn continuous_time() -> Result<Duration> {
+pub(crate) fn continuous_time() -> Result<Duration> {
     let mut time = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,
@@ -114,7 +114,7 @@ fn continuous_time() -> Result<Duration> {
     Ok(Duration::new(time.tv_sec as u64, time.tv_nsec as u32))
 }
 #[cfg(target_os = "macos")]
-fn continuous_time() -> Result<Duration> {
+pub(crate) fn continuous_time() -> Result<Duration> {
     #[repr(C)]
     struct TimebaseInfo {
         numer: u32,
