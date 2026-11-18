@@ -747,6 +747,21 @@ pub(crate) fn run(o: InstallOptions) -> Result<InstallReport> {
     if receipt.bin_dir != o.bin_dir {
         return Err(invalid("install_bin_binding"));
     }
+    // The two artifact classes have the same version ID. Refuse a checked
+    // opposite-class receipt before recovery, staging or launcher changes.
+    let incoming_id = incoming.as_ref().map(Manifest::id);
+    for id in receipt.active.iter().chain(
+        incoming_id
+            .iter()
+            .filter(|id| Some(*id) != receipt.active.as_ref()),
+    ) {
+        if matches!(
+            read_version(&receipt.prefix, id, &receipt.install_id),
+            Err(Error::Invalid("install_manifest_class"))
+        ) {
+            return Err(invalid("install_manifest_class"));
+        }
+    }
     if o.debug {
         eprintln!("marmish installer debug: stage=recovery");
     }
@@ -1006,6 +1021,57 @@ mod tests {
         for name in ["prefix", "bin", "state"] {
             assert!(!fixture.root.path().join(name).exists(), "{name}");
         }
+    }
+
+    #[test]
+    fn opposite_installed_class_refuses_before_journal_or_launcher_changes() {
+        let fixture = Fixture::new();
+        fixture.install().unwrap();
+        let prefix = fixture.prefix();
+        let receipt = read_receipt(&prefix).unwrap();
+        let version = prefix
+            .join("versions")
+            .join(receipt.active.as_ref().unwrap());
+        let manifest_path = version.join("manifest");
+        let version_receipt_path = version.join(VERSION_RECEIPT);
+        let mut version_receipt: VersionReceipt = json(&version_receipt_path, 0o444, 4096).unwrap();
+        let opposite = if manifest::PEER_CANDIDATE {
+            manifest::STOCK_HEADER
+        } else {
+            manifest::PEER_CANDIDATE_HEADER
+        };
+        let manifest_text = fs::read_to_string(&manifest_path).unwrap().replacen(
+            manifest::manifest_header(),
+            opposite,
+            1,
+        );
+        version_receipt.manifest_sha256 = hex::encode(Sha256::digest(manifest_text.as_bytes()));
+        for (path, bytes) in [
+            (manifest_path, manifest_text.into_bytes()),
+            (
+                version_receipt_path,
+                serde_json::to_vec(&version_receipt).unwrap(),
+            ),
+        ] {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            fs::write(&path, bytes).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+        }
+        let before = fs::read(prefix.join(RECEIPT)).unwrap();
+        for result in [
+            fixture.install(),
+            run(fixture.options(InstallAction::Uninstall)),
+            run(fixture.options(InstallAction::Status)),
+        ] {
+            assert!(matches!(
+                result,
+                Err(Error::Invalid("install_manifest_class"))
+            ));
+        }
+        assert!(!prefix.join(TRANSACTION).exists());
+        assert_eq!(fs::read(prefix.join(RECEIPT)).unwrap(), before);
+        assert!(fixture.root.path().join("bin/marmish").is_symlink());
+        assert!(fixture.root.path().join("bin/marmishd").is_symlink());
     }
 
     #[test]

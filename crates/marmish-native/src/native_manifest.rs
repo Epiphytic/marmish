@@ -135,6 +135,14 @@ impl Manifest {
             .ok_or_else(bad)?
             .split('\n')
             .collect();
+        let opposite = if PEER_CANDIDATE {
+            STOCK_HEADER
+        } else {
+            PEER_CANDIDATE_HEADER
+        };
+        if lines.first() == Some(&opposite) {
+            return Err(Error::Invalid("install_manifest_class"));
+        }
         if lines.len() != 12
             || lines
                 .iter()
