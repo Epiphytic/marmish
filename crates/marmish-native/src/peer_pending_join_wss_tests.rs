@@ -247,7 +247,7 @@ impl Round<'_> {
                 local
                     .publish_consent_wss(client, self.selector, deadline(), || unreachable!())
                     .await,
-                Err(Error::Checkpoint(consent_checkpoint::Error::Custodied))
+                Ok(false)
             );
             assert!(matches!(
                 local
