@@ -43,3 +43,16 @@ and was stopped once the review required a new source revision. The WSS
 durations are harness runtimes under local load. This phase provides
 no latency or throughput measurement for a supported relay, production
 qualification result, release-platform evidence, or installed Peer traffic.
+
+## Integration with the current MDK lock
+
+Composed source `bd199d1c6f47df9ef9fbc4698ef9a6754e94a29b` uses upstream
+MDK `122ad45ece73c1d6f687a4e92a541b9b2febde34`. Linux AMD64 passed
+all eight focused cases, all six deterministic raw socket cases and
+all nine opt-in raw WSS cases. Strict all-target Clippy with
+`installed-checks` passed. The same-build native daemon repeated durable
+PostJoin recovery over private loopback WSS in 51.63 seconds. Its reopened
+recipient state took 260 ms, deliberate acknowledgement loss took 5.080
+seconds, and retry took 2.210 seconds. The relay recorded exactly three
+physical group writes. The figures above for source `359d9d8` remain
+the original validation on the earlier MDK lock.

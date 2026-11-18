@@ -59,7 +59,11 @@ another relay in the SDK's account-wide seen-ID tracker. Production Peer
 activation is specified in the reviewed [Peer live routing and recovery
 plan](phases/peer-live.md). The [raw Peer WSS proof](validation/peer-raw-socket.md)
 qualifies readiness, one bounded history page, and exact publication using a
-private loopback relay. The [offline invitation codec](validation/peer-control-codec.md)
+private loopback relay. The [private TLS and qualification substrate](validation/peer-installed-relay-trust.md)
+checks exact-origin trust, certificate rotation and local evidence
+replacement. A matching qualification record describes local evidence.
+Installed Peer activation still requires a reviewed owner and relay scope.
+The [offline invitation codec](validation/peer-control-codec.md)
 verifies the three signed Offer, Consent and Delivery flights, with sizes and
 local timing for each. The [offline Peer cursor store](validation/peer-cursor-store.md)
 verifies encrypted page and retry persistence, bounded replay, and transaction
