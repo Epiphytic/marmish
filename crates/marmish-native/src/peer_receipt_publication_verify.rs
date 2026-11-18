@@ -240,7 +240,9 @@ pub(crate) fn acknowledge_published(
         return Ok(());
     };
     let application = accepted_application(&evidence, &fanout, number)?;
-    recipient.acknowledge_published_app_messages(&[application])?;
+    recipient
+        .acknowledge_published_app_messages(&[application])
+        .map_err(|_| Refusal::Storage)?;
     Ok(())
 }
 
@@ -373,11 +375,12 @@ fn read_optional<'a>(
                 Ok(fanouts.pop())
             },
         )?;
-    check_image(image, inode).map_err(|_| Refusal::Binding)?;
     let Some(fanout) = fanout else {
+        check_image(image, inode).map_err(|_| Refusal::Binding)?;
         return Ok(None);
     };
     let (request, binding) = read_request(publication, &group, &fanout)?;
+    check_image(image, inode).map_err(|_| Refusal::Binding)?;
     Ok(Some((
         Evidence {
             publication,
