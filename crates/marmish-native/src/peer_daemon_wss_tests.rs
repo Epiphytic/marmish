@@ -207,8 +207,8 @@ impl Round {
             .unwrap();
     }
 
-    fn assert_stopped(&self) {
-        assert!(!self.socket().exists());
+    fn assert_stopped(&self, socket: &Path) {
+        assert!(!socket.exists());
         assert!(ProfileLease::acquire(self.root.path(), PROFILE).is_ok());
     }
 
@@ -551,7 +551,7 @@ async fn manual() {
     expect_decision_refusal(&socket, pending.selection, peer::Failure::Expired).await;
     assert_expired_hidden(&socket).await;
     daemon.stop().await;
-    round.assert_stopped();
+    round.assert_stopped(&socket);
     assert!(round.relay.peer_only_publications());
     assert_eq!(round.relay.peer_transcript().len(), 3);
     assert_eq!(round.ordinary.publication_attempts(7435), 0);
@@ -641,7 +641,7 @@ async fn refusal() {
         assert!(!peer_path.exists());
         assert!(!round.relay.authenticated(round.signer));
         daemon.stop().await;
-        round.assert_stopped();
+        round.assert_stopped(&socket);
     }
 
     round.configure(Some("client"));
@@ -650,7 +650,7 @@ async fn refusal() {
     let pending = entry(&socket, selector, peer::State::Pending).await;
     show(&socket, pending.selection, peer::State::Pending).await;
     daemon.stop().await;
-    round.assert_stopped();
+    round.assert_stopped(&socket);
     let (stage, _) = round.closed_stage(
         &pending.selection,
         &delivery,
@@ -669,7 +669,7 @@ async fn refusal() {
     );
     expect_decision_refusal(&socket, pending.selection, peer::Failure::Unavailable).await;
     daemon.stop().await;
-    round.assert_stopped();
+    round.assert_stopped(&socket);
     std::fs::rename(saved, stage).unwrap();
 
     let daemon = round.start(Admission::Manual, false).await;
@@ -679,7 +679,7 @@ async fn refusal() {
     assert_expired_hidden(&socket).await;
     assert_no_command(&socket).await;
     daemon.stop().await;
-    round.assert_stopped();
+    round.assert_stopped(&socket);
     assert_eq!(round.relay.peer_transcript().len(), 3);
     assert!(round.relay.peer_only_publications());
     assert_eq!(round.ordinary.publication_attempts(7435), 0);
