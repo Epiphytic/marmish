@@ -112,3 +112,24 @@ application bytes (largest 451) and 14,988 signed wire bytes.
 | Reservation to callback p50 / p95 | Callback lookup p50 / p95 | Reservation to ACK p50 / p95 | Reservation to projection p50 / p95 |
 | --- | --- | --- | --- |
 | 254 / 798 ms | 0 / 1 ms | 29,846 / 29,916 ms | 29,946 / 30,027 ms |
+
+## Regression at the candidate physical route head
+
+Linux AMD64 source `9344290` resolved MDK master to `bdf9833e`.
+Three private WSS cases passed in a 403.36 s harness run with two
+test threads. The two-record proof covered provenance before publish
+and the separate negative checked relay refusal for unregistered and
+out-of-scope messages. The 12-record benchmark performed 12 writes and
+12 projections, carrying 5,403 application bytes (largest 451) and
+14,988 signed wire bytes.
+
+| Records | Time in heartbeat operations | Reservation to callback p50 / p95 | Callback lookup p50 / p95 | Reservation to ACK p50 / p95 | Reservation to projection p50 / p95 |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 2 | 59.869 s | 133 / 179 ms | 0 / 1 ms | 29,790 / 29,935 ms | 29,840 / 29,985 ms |
+| 12 | 359.817 s | 97 / 156 ms | 0 / 0 ms | 29,941 / 29,949 ms | 29,977 / 30,000 ms |
+
+The closed-publisher retry remains the dominant delay in this
+test-only path. The exact candidate libtest used stock native helpers
+built from the same source and lock, in Cargo's executable layout.
+Forty additional checks passed for heartbeat sender fences, status
+wire encoding, native setup, and signed-profile publication.
