@@ -28,6 +28,9 @@ mod private_wss_tests;
 #[path = "peer_stage_binding.rs"]
 mod provisional;
 #[cfg(test)]
+#[path = "peer_private_activation_publication.rs"]
+mod publication_socket;
+#[cfg(test)]
 #[path = "peer_stage_retirement.rs"]
 mod retirement;
 #[cfg(test)]

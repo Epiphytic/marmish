@@ -25,7 +25,7 @@ use marmot_session::{
 use nostr::event::Event;
 use transport_nostr_peeler::NostrTransportEvent;
 
-use super::postjoin_verify::Capture;
+use super::postjoin_verify::{Capture, RecoveredPostJoin};
 
 const MAX_CANDIDATE_BYTES: usize = 64 * 1024;
 const MAX_ENDPOINT_BYTES: usize = 2048;
@@ -157,12 +157,24 @@ impl Permit {
         candidate: &Candidate,
         capture: &Capture,
     ) -> Result<Self, GateError> {
+        if scope != &candidate.scope || &candidate.request != capture.request() {
+            return Err(GateError);
+        }
+        Self::from_capture(scope, capture)
+    }
+
+    pub(super) fn verify_recovery(
+        scope: &Scope,
+        recovered: &RecoveredPostJoin,
+    ) -> Result<Self, GateError> {
+        Self::from_capture(scope, recovered.capture())
+    }
+
+    fn from_capture(scope: &Scope, capture: &Capture) -> Result<Self, GateError> {
         let operation = Operation::from_capture(capture);
         let request = capture.request();
-        if scope != &candidate.scope
-            || capture.generation() != scope.generation
+        if capture.generation() != scope.generation
             || capture.deadline() != scope.deadline
-            || &candidate.request != request
             || operation.obligation != scope.obligation
             || !Candidate::valid(scope, request)
         {
