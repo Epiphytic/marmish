@@ -713,10 +713,40 @@ mod tests {
     use super::*;
 
     #[cfg(not(marmish_peer_receiver_candidate))]
-    #[test]
-    fn stock_rejects_candidate_peer_read() {
-        let read = r#"{"operation":"peer_read","request":{"kind":"list"}}"#;
-        assert!(serde_json::from_str::<Request>(read).is_err());
+    #[tokio::test]
+    async fn stock_socket_rejects_candidate_peer_read() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = directory.path().join("s");
+        let listener = bind(&path).unwrap();
+        let (queue, mut incoming) = mpsc::channel(1);
+        let (_status, status) =
+            watch::channel(Response::success(serde_json::json!({"state":"active"})));
+        let task = tokio::spawn(serve(listener, queue, status));
+        let mut stream = UnixStream::connect(&path).await.unwrap();
+        write_frame(
+            &mut stream,
+            &serde_json::json!({"operation":"peer_read","request":{"kind":"list"}}),
+        )
+        .await
+        .unwrap();
+        let response: Response = tokio::time::timeout(IO_TIMEOUT, read_frame(&mut stream))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.error.as_deref(), Some("invalid_request"));
+        assert!(matches!(
+            incoming.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(
+            exchange(&path, &Request::Status {}, IO_TIMEOUT)
+                .await
+                .unwrap()
+                .ok
+        );
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
     }
 
     #[test]

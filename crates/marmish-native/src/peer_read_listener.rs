@@ -97,6 +97,10 @@ impl Intake {
         if admitted.is_some()
             && let Some(pause) = &self.pause
         {
+            let _drop_probe = TestTaskDrop {
+                intake: self,
+                pause,
+            };
             pause.arrived.send(()).unwrap();
             let _ = timeout_at(exchange_deadline, pause.resume.acquire()).await;
         }
@@ -122,6 +126,22 @@ impl Intake {
 struct TestPause {
     arrived: tokio::sync::mpsc::UnboundedSender<()>,
     resume: std::sync::Arc<tokio::sync::Semaphore>,
+    dropped: tokio::sync::mpsc::UnboundedSender<(bool, bool)>,
+}
+
+#[cfg(test)]
+struct TestTaskDrop<'a> {
+    intake: &'a Intake,
+    pause: &'a TestPause,
+}
+
+#[cfg(test)]
+impl Drop for TestTaskDrop<'_> {
+    fn drop(&mut self) {
+        let ready = self.intake.readiness.is_current();
+        let can_admit = self.intake.reader.admit(self.intake.generation).is_some();
+        let _ = self.pause.dropped.send((ready, can_admit));
+    }
 }
 
 #[cfg(test)]

@@ -102,14 +102,21 @@ impl Fixture {
     }
 }
 
-fn pause() -> (TestPause, mpsc::UnboundedReceiver<()>) {
-    let (arrived, receiver) = mpsc::unbounded_channel();
+fn pause() -> (
+    TestPause,
+    mpsc::UnboundedReceiver<()>,
+    mpsc::UnboundedReceiver<(bool, bool)>,
+) {
+    let (arrived, arrivals) = mpsc::unbounded_channel();
+    let (dropped, drops) = mpsc::unbounded_channel();
     (
         TestPause {
             arrived,
             resume: Arc::new(Semaphore::new(0)),
+            dropped,
         },
-        receiver,
+        arrivals,
+        drops,
     )
 }
 
@@ -164,6 +171,7 @@ async fn mismatched_listener_drops_projection_with_ordinary_service_intact() {
     let mut fixture = Fixture::start(true, None);
     fixture.startup.ordinary_ready();
     assert_eq!(fixture.request(LIST).await, Err(Failure::Unavailable));
+    assert!(!fixture.intake.readiness.is_current());
     assert!(fixture.intake.reader.admit(NonZeroU64::MIN).is_none());
     fixture.assert_owner_untouched().await;
     fixture.drain().await;
@@ -171,7 +179,7 @@ async fn mismatched_listener_drops_projection_with_ordinary_service_intact() {
 
 #[tokio::test]
 async fn fifth_read_is_unavailable_and_fatal_refuses_four_admitted_replies() {
-    let (pause, mut arrived) = pause();
+    let (pause, mut arrived, _) = pause();
     let mut fixture = Fixture::start(false, Some(pause.clone()));
     fixture.startup.ordinary_ready();
     let _row = pending_view::publish_live_fixture(&fixture.producer);
@@ -206,7 +214,7 @@ async fn fifth_read_is_unavailable_and_fatal_refuses_four_admitted_replies() {
 
 #[tokio::test]
 async fn draining_reaps_admitted_exchange_and_revokes_projection() {
-    let (pause, mut arrived) = pause();
+    let (pause, mut arrived, mut dropped) = pause();
     let fixture = Fixture::start(false, Some(pause));
     fixture.startup.ordinary_ready();
     let _row = pending_view::publish_live_fixture(&fixture.producer);
@@ -217,8 +225,96 @@ async fn draining_reaps_admitted_exchange_and_revokes_projection() {
         Some(())
     );
     fixture.drain().await;
+    assert_eq!(dropped.try_recv().unwrap(), (false, false));
     assert_eq!(
         timeout(TEST_BUDGET, client).await.unwrap().unwrap(),
         Err(Failure::Unavailable)
     );
+}
+
+#[tokio::test]
+async fn stopped_handshake_cannot_be_restored_by_listener_registration() {
+    let mut fixture = Fixture::start(false, None);
+    fixture.startup.stop();
+    fixture.startup.ordinary_ready();
+    let _row = pending_view::publish_live_fixture(&fixture.producer);
+    assert_eq!(fixture.request(LIST).await, Err(Failure::Unavailable));
+    assert!(!fixture.intake.readiness.is_current());
+    fixture.assert_owner_untouched().await;
+    fixture.drain().await;
+}
+
+#[test]
+fn dropping_unregistered_offer_stops_its_read_view_and_handshake() {
+    let (startup, registration, _worker) = peer_candidate_startup::pair();
+    let (_trip, fatal) = Trip::new();
+    let (offer, producer) = Offer::new(
+        PathBuf::from("unused"),
+        registration,
+        NonZeroU64::MIN,
+        fatal,
+    )
+    .unwrap();
+    let intake = offer.intake();
+    let _row = pending_view::publish_live_fixture(&producer);
+    assert!(intake.reader.admit(NonZeroU64::MIN).is_some());
+    drop(offer);
+    startup.ordinary_ready();
+    assert!(intake.reader.admit(NonZeroU64::MIN).is_none());
+    assert!(!intake.readiness.is_current());
+}
+
+#[tokio::test]
+async fn aborting_service_stops_projection_and_registers_permanent_stop() {
+    let mut fixture = Fixture::start(false, None);
+    fixture.startup.ordinary_ready();
+    let row = pending_view::publish_live_fixture(&fixture.producer);
+    assert_eq!(
+        fixture.request(LIST).await,
+        Ok(Reply::List { entries: vec![row] })
+    );
+    fixture.assert_owner_untouched().await;
+    fixture.task.abort();
+    assert!(
+        timeout(TEST_BUDGET, fixture.task)
+            .await
+            .unwrap()
+            .unwrap_err()
+            .is_cancelled()
+    );
+    fixture.startup.ordinary_ready();
+    assert!(!fixture.intake.readiness.is_current());
+    assert!(fixture.intake.reader.admit(NonZeroU64::MIN).is_none());
+}
+
+#[tokio::test]
+async fn readiness_and_view_stops_refuse_a_read_admitted_on_a_live_listener() {
+    enum Cut {
+        Readiness,
+        View,
+    }
+    for cut in [Cut::Readiness, Cut::View] {
+        let (pause, mut arrived, _) = pause();
+        let mut fixture = Fixture::start(false, Some(pause.clone()));
+        fixture.startup.ordinary_ready();
+        let _row = pending_view::publish_live_fixture(&fixture.producer);
+        let path = fixture.path.clone();
+        let client = tokio::spawn(async move { client_request(&path, LIST).await });
+        assert_eq!(
+            timeout(TEST_BUDGET, arrived.recv()).await.unwrap(),
+            Some(())
+        );
+        match cut {
+            Cut::Readiness => fixture.startup.stop(),
+            Cut::View => fixture.intake.reader.stop(),
+        }
+        pause.resume.add_permits(1);
+        assert_eq!(
+            timeout(TEST_BUDGET, client).await.unwrap().unwrap(),
+            Err(Failure::Unavailable)
+        );
+        assert_eq!(fixture.request(LIST).await, Err(Failure::Unavailable));
+        fixture.assert_owner_untouched().await;
+        fixture.drain().await;
+    }
 }
