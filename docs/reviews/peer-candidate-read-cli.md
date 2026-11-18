@@ -19,3 +19,13 @@ delta from `08ca5d7`.
   The existing keychain argument check is irrelevant to these commands.
 
 The reviews did not run Cargo while shared test targets were in coordinated use.
+
+## Composed review
+
+Independent Claude Code Auto (Sonnet 5.5, session
+`dddded29-16b4-4660-900d-58130119f343`) approved exact composed
+`cfd68df` against `08ca5d7`. It confirmed that the crate diff against
+author source `f9c6f57` is empty and traced candidate registration,
+explicit remote parsing, typed selector and local credential-checked
+dispatch. This review was static. The author ran the separate stock
+64-test regression on the exact composed checkout.
