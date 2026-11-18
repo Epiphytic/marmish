@@ -1,5 +1,6 @@
 //! Bounded encrypted prefixes. Caller holds the I/O guard through metadata commit.
 use crate::cipher::{self, Context, Journal, StorageKeys};
+use crate::cipher_fence::ConnectionFence;
 use crate::fault::{fault_point, FaultPoint};
 use crate::launcher::{IoGuard, StateRoot};
 use crate::model::*;
@@ -358,6 +359,7 @@ impl Spool {
         Ok(self.commit.clone())
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub fn read(
         root: &StateRoot,
@@ -368,6 +370,21 @@ impl Spool {
         cursor: u64,
         limit: usize,
         guard: &IoGuard,
+    ) -> Result<OutputChunk> {
+        Self::read_with_fence(root, keys, job, stream, status, cursor, limit, guard, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn read_with_fence(
+        root: &StateRoot,
+        keys: &StorageKeys,
+        job: JobId,
+        stream: Stream,
+        status: &OutputStatus,
+        cursor: u64,
+        limit: usize,
+        guard: &IoGuard,
+        fence: Option<&ConnectionFence>,
     ) -> Result<OutputChunk> {
         root.check_io(job, guard)?;
         if limit == 0
@@ -389,14 +406,19 @@ impl Spool {
                 cursor,
                 limit,
                 guard,
+                fence,
             );
+            ConnectionFence::check(fence)?;
             let actual = match loaded {
                 Ok((actual, output)) => {
                     bytes = output;
                     actual
                 }
-                Err(EngineError::Busy) => return Err(EngineError::Busy),
-                Err(EngineError::UnsafePath) => return Err(EngineError::UnsafePath),
+                Err(
+                    error @ (EngineError::Busy
+                    | EngineError::UnsafePath
+                    | EngineError::StorageAdmissionRefused),
+                ) => return Err(error),
                 Err(_) => 0,
             };
             if actual < status.retained {
@@ -435,12 +457,21 @@ fn load_prefix(
     cursor: u64,
     limit: usize,
     guard: &IoGuard,
+    fence: Option<&ConnectionFence>,
 ) -> Result<(u64, Vec<u8>)> {
+    ConnectionFence::check(fence)?;
     let path = root.prepare_spool_db(job, stream, false, guard)?;
     // Bound even recovery work before SQLite can inspect a hot journal.
     bounds(&path, MAX_CAP)?;
-    let db = cipher::open(&path, keys, Context::Spool(job, stream), Journal::Delete)?;
+    let db = cipher::open_owned(
+        &path,
+        keys,
+        Context::Spool(job, stream),
+        Journal::Delete,
+        fence,
+    )?;
     root.verify_spool_files(job, stream, guard)?;
+    ConnectionFence::check(fence)?;
     let cap = metadata(&db, job, stream)?;
     bounds(&path, cap)?;
     configure_bound(&db, cap)?;
@@ -462,6 +493,9 @@ fn load_prefix(
     }
     root.verify_spool_files(job, stream, guard)?;
     bounds(&path, cap)?;
+    #[cfg(test)]
+    crate::cipher_fence::tests::mark(crate::cipher_fence::tests::Boundary::PrefixRead);
+    db.close()?;
     Ok((actual, output))
 }
 

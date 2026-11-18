@@ -7,6 +7,10 @@ impl Mode {
         false
     }
 
+    pub(super) fn connection_fence(&self) -> Option<marmish_engine::ConnectionFence> {
+        None
+    }
+
     pub(super) fn tripped(&self) -> bool {
         false
     }

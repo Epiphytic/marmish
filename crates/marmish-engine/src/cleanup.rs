@@ -64,6 +64,7 @@ fn terminal(store: &mut Store, jobs: &[JobId]) -> Result<()> {
 pub(crate) fn acquire(root: &StateRoot, store: &mut Store) -> Result<Vec<(JobGuard, IoGuard)>> {
     let deadline = platform::Deadline::after_millis(5_000)?;
     loop {
+        store.check_admission()?;
         let attempt = (|| {
             if deadline.expired()? {
                 return Err(EngineError::Busy);

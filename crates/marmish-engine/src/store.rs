@@ -1,11 +1,12 @@
 use crate::cipher::db_error;
+use crate::cipher_fence::{ConnectionFence, Owned};
 use crate::{
     admission::{sha256, validate_request},
     fault::{fault_point, FaultPoint},
     launcher::{self, StateRoot},
     model::*,
 };
-use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 #[cfg(test)]
 use std::time::Duration;
@@ -292,7 +293,7 @@ impl Job {
 }
 
 pub(crate) struct Store {
-    conn: Connection,
+    conn: Owned,
     root: StateRoot,
     config: Config,
 }
@@ -490,23 +491,37 @@ impl Store {
         root: &StateRoot,
         keys: &crate::cipher::StorageKeys,
         create: bool,
-    ) -> Result<Connection> {
+        fence: Option<&ConnectionFence>,
+    ) -> Result<Owned> {
+        ConnectionFence::check(fence)?;
         let database_path = root.prepare_db(create)?;
-        let conn = crate::cipher::open(
+        let conn = crate::cipher::open_owned(
             &database_path,
             keys,
             crate::cipher::Context::State,
             crate::cipher::Journal::Wal,
+            fence,
         )?;
         root.verify_db_files()?;
         Ok(conn)
     }
+    #[cfg(test)]
     pub fn create_frontend(
         root: &StateRoot,
         keys: &crate::cipher::StorageKeys,
         policy: &EnginePolicy,
         account: &AccountSpec,
         epoch: [u8; 16],
+    ) -> Result<Self> {
+        Self::create_frontend_with_fence(root, keys, policy, account, epoch, None)
+    }
+    pub fn create_frontend_with_fence(
+        root: &StateRoot,
+        keys: &crate::cipher::StorageKeys,
+        policy: &EnginePolicy,
+        account: &AccountSpec,
+        epoch: [u8; 16],
+        fence: Option<&ConnectionFence>,
     ) -> Result<Self> {
         if account.uid == 0 {
             return Err(EngineError::RootForbidden);
@@ -515,12 +530,12 @@ impl Store {
         if real.uid != account.uid {
             return Err(EngineError::Unauthorized);
         }
-        let mut conn = Self::connection(root, keys, true)?;
+        let mut conn = Self::connection(root, keys, true, fence)?;
+        ConnectionFence::check(fence)?;
         validate_frontend_schema(&conn, root)?;
         fault_point(root, JobId([0; 16]), FaultPoint::BeforeSchemaCreate);
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(db_error)?;
+        ConnectionFence::check(fence)?;
+        let tx = conn.transaction().map_err(db_error)?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS meta(name TEXT PRIMARY KEY,data BLOB NOT NULL);
             CREATE TABLE IF NOT EXISTS jobs(job BLOB PRIMARY KEY,principal BLOB NOT NULL,server BLOB NOT NULL,target INTEGER NOT NULL,invocation BLOB NOT NULL,state INTEGER NOT NULL,data BLOB NOT NULL,reserved_boot BLOB,reserved_ms INTEGER,spool_used INTEGER NOT NULL DEFAULT 0,retained INTEGER NOT NULL DEFAULT 0,completed INTEGER,ttl INTEGER,tombstone INTEGER NOT NULL DEFAULT 172800,UNIQUE(principal,server,target,invocation));
             CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state,job);
@@ -605,7 +620,7 @@ impl Store {
     }
     pub fn open_worker(root: &StateRoot, keys: &crate::cipher::StorageKeys) -> Result<Self> {
         let account = launcher::local_account(None)?;
-        let conn = Self::connection(root, keys, false)?;
+        let conn = Self::connection(root, keys, false, None)?;
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(db_error)?;
@@ -629,11 +644,17 @@ impl Store {
             config,
         })
     }
+    pub(crate) fn close(self) -> Result<()> {
+        self.conn.close()
+    }
+    pub(crate) fn fence(&self) -> Option<&ConnectionFence> {
+        self.conn.fence()
+    }
+    pub(crate) fn check_admission(&self) -> Result<()> {
+        ConnectionFence::check(self.fence())
+    }
     fn transaction<T>(&mut self, f: impl FnOnce(&Transaction<'_>) -> Result<T>) -> Result<T> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(db_error)?;
+        let tx = self.conn.transaction().map_err(db_error)?;
         let result = f(&tx)?;
         tx.commit().map_err(db_error)?;
         Ok(result)

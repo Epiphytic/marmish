@@ -2176,3 +2176,54 @@ fn launch_failure_is_persisted_only_from_launching() {
         ExitOutcome::NotStarted
     );
 }
+
+#[test]
+fn guarded_startup_cuts_before_disk_raw_open_schema_and_reconciliation() {
+    use crate::cipher_fence::tests::{child, counts, cut_at, Boundary};
+    if child("store::tests::guarded_startup_cuts_before_disk_raw_open_schema_and_reconciliation")
+        .is_none()
+    {
+        return;
+    }
+    let mut fixture = Fixture::new();
+    let job = fixture.admit(123);
+    fixture
+        .root
+        .prepare_job(job, &WorkerCredential([4; 32]))
+        .unwrap();
+    let policy = fixture.store.config.policy.clone();
+    let db_path = fixture.root.prepare_db(false).unwrap();
+    drop(fixture.guard.take());
+    // Keep the stock connection only for the verification of durable state.
+    let mut unused = policy.clone();
+    unused.state_root = policy.state_root.join("not-created");
+    let refused = ConnectionFence::new(|| false, || panic!("unexpected close"));
+    assert!(matches!(
+        crate::Engine::open_storage(unused.clone(), None, Some(&refused)),
+        Err(EngineError::StorageAdmissionRefused)
+    ));
+    assert!(!unused.state_root.exists());
+    assert_eq!(counts(), (0, 0));
+
+    let bytes = std::fs::read(&db_path).unwrap();
+    for (boundary, expected_opens) in [
+        (Boundary::BeforeOpen, 0),
+        (Boundary::Opened, 1),
+        (Boundary::Hardened, 2),
+        (Boundary::Reconcile, 3),
+    ] {
+        let (fence, _) = cut_at(boundary, 0);
+        assert!(matches!(
+            crate::Engine::open_storage(policy.clone(), None, Some(&fence)),
+            Err(EngineError::StorageAdmissionRefused)
+        ));
+        assert_eq!(counts(), (expected_opens, 0));
+        let record = load(&fixture.store.conn, job).unwrap();
+        assert_eq!(record.state, InvocationState::Accepted);
+        assert_eq!(record.attempts, 0);
+        assert!(fixture.store.worker_identity(job).unwrap().is_none());
+        if boundary == Boundary::BeforeOpen {
+            assert_eq!(std::fs::read(&db_path).unwrap(), bytes);
+        }
+    }
+}

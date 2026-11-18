@@ -636,7 +636,7 @@ fn error_code(error: EngineError) -> &'static str {
         EngineError::InputGap => "input_gap",
         EngineError::WorkerUnavailable => "worker_unavailable",
         EngineError::RecoveryUncertain => "recovery_uncertain",
-        EngineError::StorageFailure => "storage_failure",
+        EngineError::StorageFailure | EngineError::StorageAdmissionRefused => "storage_failure",
         EngineError::UnsupportedStorage => "unsupported_storage",
         EngineError::Busy => "busy",
         EngineError::InputBackpressure { .. } => "input_backpressure",

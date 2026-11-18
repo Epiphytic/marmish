@@ -1,15 +1,15 @@
 use super::*;
 use crate::command_lifecycle::keep_fatal_engine;
-use crate::dispatcher_fatal::{Fatal, Trip};
+use crate::dispatcher_fatal::Trip;
 use crate::identity::ProfileLease;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
 
-fn checked(fatal: Fatal) -> Mode {
+fn checked(trip: &Arc<Trip>) -> Mode {
     Mode {
-        checked: Some(Admission::new(fatal, || true)),
+        checked: Some(Admission::new(trip, || true)),
     }
 }
 
@@ -34,10 +34,10 @@ fn early_fatal_creates_no_engine_directory_or_bootstrap_event() {
     let root = tempfile::tempdir().unwrap();
     let settings = engine_settings(&root);
     let storage = settings.policy.state_root.clone();
-    let (trip, fatal) = Trip::new();
+    let trip = Arc::new(Trip::new().0);
     trip.trip();
     let mut handle =
-        CommandEngine::start_candidate(settings, vec![], Admission::new(fatal, || panic!()))
+        CommandEngine::start_candidate(settings, vec![], Admission::new(&trip, || panic!()))
             .unwrap();
     let stop = deadline();
     while handle
@@ -61,7 +61,7 @@ fn early_fatal_creates_no_engine_directory_or_bootstrap_event() {
 }
 
 #[test]
-fn candidate_cleanup_fails_before_moving_live_engine() {
+fn healthy_candidate_cleanup_closes_real_engine_and_retains_guard() {
     let root = tempfile::tempdir().unwrap();
     let settings = engine_settings(&root);
     let reopen_settings = EngineSettings {
@@ -70,13 +70,13 @@ fn candidate_cleanup_fails_before_moving_live_engine() {
         master: settings.master.clone(),
         canonical_native_image: None,
     };
-    let (_trip, fatal) = Trip::new();
+    let trip = Arc::new(Trip::new().0);
     let checks = Arc::new(AtomicUsize::new(0));
     let admitted = checks.clone();
     let mut handle = CommandEngine::start_candidate(
         settings,
         vec![],
-        Admission::new(fatal, move || {
+        Admission::new(&trip, move || {
             admitted.fetch_add(1, Ordering::Relaxed);
             true
         }),
@@ -90,10 +90,9 @@ fn candidate_cleanup_fails_before_moving_live_engine() {
     handle.try_prepare_cleanup().unwrap();
     assert!(matches!(
         handle.events.recv_timeout(Duration::from_secs(2)),
-        Ok(Event::Cleanup(CleanupState::Failed))
+        Ok(Event::Cleanup(CleanupState::Quiesced))
     ));
-    // Ready, registration, cleanup admission and failure publication have run;
-    // healthy ordinary stop then checks both Stop and the final engine close.
+    // Cleanup closes the database and retains the exact frontend lock until stop.
     let checked_before_stop = checks.load(Ordering::Relaxed);
     assert!(checked_before_stop >= 5);
     assert!(matches!(
@@ -101,7 +100,7 @@ fn candidate_cleanup_fails_before_moving_live_engine() {
         Err(engine::EngineError::AlreadyOpen)
     ));
     assert!(handle.shutdown(deadline()).unwrap().complete);
-    assert!(checks.load(Ordering::Relaxed) >= checked_before_stop + 2);
+    assert!(checks.load(Ordering::Relaxed) > checked_before_stop);
     assert!(reopen(&reopen_settings).is_ok());
 }
 
@@ -109,14 +108,14 @@ fn candidate_cleanup_fails_before_moving_live_engine() {
 async fn full_queues_disconnect_before_join_and_keeper_retains_lease() {
     let (mut handle, operations, controls, events) = handle();
     let (_live_in, live) = mpsc::sync_channel(CAPACITY);
-    let (trip, fatal) = Trip::new();
+    let trip = Arc::new(Trip::new().0);
     let checks = Arc::new(AtomicUsize::new(0));
     let admitted = checks.clone();
     let (sending, wait_send) = mpsc::sync_channel(1);
     let (exited, wait_exit) = mpsc::sync_channel(1);
     let (release_join, join_gate) = mpsc::sync_channel(1);
     handle.mode = Mode {
-        checked: Some(Admission::new(fatal, move || {
+        checked: Some(Admission::new(&trip, move || {
             if admitted.fetch_add(1, Ordering::Relaxed) == 1 {
                 sending.send(()).unwrap();
             }
@@ -170,8 +169,8 @@ async fn full_queues_disconnect_before_join_and_keeper_retains_lease() {
 #[test]
 fn completed_panicked_thread_stays_failed_after_fatal_handoff() {
     let (mut handle, _operations, _controls, _events) = handle();
-    let (trip, fatal) = Trip::new();
-    handle.mode = checked(fatal);
+    let trip = Arc::new(Trip::new().0);
+    handle.mode = checked(&trip);
     handle.thread = Some(thread::spawn(|| panic!("fixture worker panic")));
     assert!(matches!(
         handle.stop_outcome(deadline()),
@@ -196,8 +195,8 @@ fn completed_panicked_thread_stays_failed_after_fatal_handoff() {
 #[test]
 fn stale_cached_observations_and_queue_admissions_are_hidden() {
     let (mut handle, _operations, controls, events) = handle();
-    let (trip, fatal) = Trip::new();
-    handle.mode = checked(fatal);
+    let trip = Arc::new(Trip::new().0);
+    handle.mode = checked(&trip);
     events
         .send(Event::CopyGc(Box::new(CopyGcCompletion {
             key: "fixture".into(),
@@ -250,14 +249,15 @@ fn stale_cached_observations_and_queue_admissions_are_hidden() {
 fn late_finite_failure_never_updates_bookkeeping_or_emits() {
     let (handle, operations, controls, events) = handle();
     let (_live_in, live) = mpsc::sync_channel(CAPACITY);
-    let (trip, fatal) = Trip::new();
+    let trip = Arc::new(Trip::new().0);
     let checks = Arc::new(AtomicUsize::new(0));
     let admitted = checks.clone();
+    let trigger = trip.clone();
     let mut worker = scheduler();
     worker.mode = Mode {
-        checked: Some(Admission::new(fatal, move || {
+        checked: Some(Admission::new(&trip, move || {
             if admitted.fetch_add(1, Ordering::Relaxed) == 1 {
-                trip.trip();
+                trigger.trip();
             }
             true
         })),
@@ -290,8 +290,8 @@ fn owner_retirement_drops_healthy_slots_and_parks_fatal_slots() {
         }
     }
 
-    let (trip, fatal) = Trip::new();
-    let mode = checked(fatal);
+    let trip = Arc::new(Trip::new().0);
+    let mode = checked(&trip);
     let drops = AtomicUsize::new(0);
     mode.retire_storage((Sentinel(&drops), Sentinel(&drops)));
     assert_eq!(drops.load(Ordering::Relaxed), 2);
@@ -303,8 +303,8 @@ fn owner_retirement_drops_healthy_slots_and_parks_fatal_slots() {
 #[test]
 fn handle_finished_before_report_still_selects_fatal() {
     let (mut handle, _operations, _controls, _events) = handle();
-    let (trip, fatal) = Trip::new();
-    handle.mode = checked(fatal);
+    let trip = Arc::new(Trip::new().0);
+    handle.mode = checked(&trip);
     assert!(matches!(
         handle.stop_outcome(deadline()),
         Ok(StopOutcome::Ordinary(StopReport { complete: true, .. }))
@@ -348,8 +348,8 @@ fn cut_after_admitted_stop_parks_real_engine_until_process_exit() {
     let worker_engine = reopen(&settings).unwrap();
     let (mut handle, operations, controls, events) = handle();
     let (_live_in, live) = mpsc::sync_channel(CAPACITY);
-    let (trip, fatal) = Trip::new();
-    handle.mode = checked(fatal);
+    let trip = Arc::new(Trip::new().0);
+    handle.mode = checked(&trip);
     let (stopping, wait_stopping) = mpsc::sync_channel(1);
     let (release, wait_release) = mpsc::sync_channel(1);
     let mode = handle.mode.clone();
@@ -376,4 +376,113 @@ fn cut_after_admitted_stop_parks_real_engine_until_process_exit() {
         reopen(&settings),
         Err(engine::EngineError::AlreadyOpen)
     ));
+}
+
+#[test]
+fn first_stream_admission_refusal_never_polls_second_stream() {
+    let output = input_status(0, 0, engine::InputHealth::Open).stdout;
+    let mut streams = vec![];
+    let result = poll_outputs(0, 0, 32, output.clone(), output, |stream, _, _| {
+        streams.push(stream);
+        Err(engine::EngineError::StorageAdmissionRefused)
+    });
+    assert!(matches!(
+        result,
+        Err(engine::EngineError::StorageAdmissionRefused)
+    ));
+    assert_eq!(streams, [engine::Stream::Stdout]);
+}
+
+#[test]
+fn real_worker_suppresses_consuming_close_and_dispatch_refusals() {
+    const DIRECTORY: &str = "MARMISH_TEST_ENGINE_REFUSAL_DIRECTORY";
+    if std::env::var_os(DIRECTORY).is_none() {
+        let root = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "command_engine::tests::fatal::real_worker_suppresses_consuming_close_and_dispatch_refusals"])
+            .env(DIRECTORY, root.path())
+            .env("TMPDIR", root.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    for cleanup in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        let settings = engine_settings(&root);
+        let (trip, fatal) = Trip::new();
+        let trip = Arc::new(trip);
+        let trigger = trip.clone();
+        let permitted = Arc::new(AtomicUsize::new(usize::MAX));
+        let budget = permitted.clone();
+        let mode = Mode {
+            checked: Some(Admission::new(&trip, move || {
+                if budget.fetch_sub(1, Ordering::Relaxed) == 0 {
+                    trigger.trip();
+                    return false;
+                }
+                true
+            })),
+        };
+        let e = engine::Engine::open_with_master_fenced(
+            settings.policy.clone(),
+            settings.binding.clone(),
+            engine::ProvidedMaster::new(*settings.master),
+            mode.connection_fence().unwrap(),
+        )
+        .unwrap();
+        let (handle, operations, controls, events) = handle();
+        let (_live_in, live) = mpsc::sync_channel(CAPACITY);
+        let mut worker = Worker::with_mode(e, vec![], mode);
+        if cleanup {
+            // Admit control, consuming entry and lock acquisition. The next
+            // check is the checked SQLCipher close.
+            permitted.store(3, Ordering::Relaxed);
+            handle.controls.try_send(Control::Cleanup).unwrap();
+        } else {
+            // The first check admits the worker turn. The next is the first
+            // independent submission turn, before reaping or preparing a job.
+            permitted.store(1, Ordering::Relaxed);
+            handle
+                .operations
+                .try_send(operation(
+                    1,
+                    EngineOperation::Dispatch {
+                        submit: wire::Submit {
+                            invocation: [1; 16],
+                            argv: vec![
+                                settings
+                                    .policy
+                                    .worker_executable
+                                    .as_os_str()
+                                    .as_encoded_bytes()
+                                    .to_vec(),
+                            ],
+                            stdin: vec![],
+                        },
+                    },
+                ))
+                .unwrap();
+        }
+        worker.run(operations, live, controls, events);
+        assert!(fatal.is_tripped());
+        assert_eq!(permitted.load(Ordering::Relaxed), usize::MAX);
+        assert!(worker.guard.is_none());
+        assert!(worker.unresolved.is_empty());
+        assert!(worker.awaiting.is_empty());
+        assert!(matches!(
+            handle.events.try_recv(),
+            Err(TryRecvError::Disconnected)
+        ));
+        drop(worker);
+        assert!(matches!(
+            reopen(&settings),
+            Err(engine::EngineError::AlreadyOpen)
+        ));
+    }
 }

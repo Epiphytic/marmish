@@ -444,3 +444,110 @@ fn closed_missing_stream_is_not_created() {
         .prepare_spool_db(job, Stream::Stdout, false, &guard)
         .is_err());
 }
+
+#[test]
+fn guarded_prefix_keeps_bytes_and_refuses_independent_open_and_close() {
+    use crate::cipher_fence::tests::{child, counts, cut_at, Boundary};
+    if child("spool::tests::guarded_prefix_keeps_bytes_and_refuses_independent_open_and_close")
+        .is_none()
+    {
+        return;
+    }
+    let (_temp, root, keys, job) = setup();
+    let guard = root.lock_io(job).unwrap();
+    let mut spool = Spool::open(&root, &keys, job, Stream::Stdout, &empty(), 24, &guard).unwrap();
+    let payload = b"a\0\xff\nexact";
+    let saved = status(&spool.append(payload, &guard).unwrap());
+    drop(spool);
+    let read = |saved: &OutputStatus, fence: &ConnectionFence| {
+        Spool::read_with_fence(
+            &root,
+            &keys,
+            job,
+            Stream::Stdout,
+            saved,
+            0,
+            24,
+            &guard,
+            Some(fence),
+        )
+    };
+    let (healthy, _) = cut_at(Boundary::Opened, usize::MAX);
+    assert!(read(&empty(), &healthy).unwrap().bytes.is_empty());
+    assert_eq!(counts(), (0, 0));
+    assert_eq!(read(&saved, &healthy).unwrap().bytes, payload);
+    assert_eq!(counts(), (1, 1));
+    for (cut, expected_opens) in [(Boundary::BeforeOpen, 1), (Boundary::PrefixRead, 2)] {
+        let (fence, _) = cut_at(cut, 0);
+        assert!(matches!(
+            read(&saved, &fence),
+            Err(EngineError::StorageAdmissionRefused)
+        ));
+        assert_eq!(counts(), (expected_opens, 1));
+    }
+}
+
+#[test]
+fn guarded_destructor_refusal_precedes_ordinary_spool_corruption_and_busy() {
+    use crate::cipher_fence::tests::{child, counts, cut_at, Boundary};
+    if child("spool::tests::guarded_destructor_refusal_precedes_ordinary_spool_corruption_and_busy")
+        .is_none()
+    {
+        return;
+    }
+    for busy in [false, true] {
+        let (_temp, root, keys, job) = setup();
+        let guard = root.lock_io(job).unwrap();
+        let mut spool =
+            Spool::open(&root, &keys, job, Stream::Stdout, &empty(), 24, &guard).unwrap();
+        let saved = status(&spool.append(b"held", &guard).unwrap());
+        let db = spool.db.as_ref().unwrap();
+        if busy {
+            db.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        } else {
+            db.execute_batch("DROP TABLE spool_meta").unwrap();
+        }
+        let read = |fence| {
+            Spool::read_with_fence(
+                &root,
+                &keys,
+                job,
+                Stream::Stdout,
+                &saved,
+                0,
+                24,
+                &guard,
+                Some(fence),
+            )
+        };
+        let before = counts();
+        let (healthy, _) = cut_at(Boundary::Opened, usize::MAX);
+        let plain = read(&healthy);
+        if busy {
+            assert!(matches!(plain, Err(EngineError::Busy)));
+        } else {
+            let chunk = plain.unwrap();
+            assert!(chunk.bytes.is_empty());
+            assert_eq!(chunk.status.gaps[0].reason, MissingReason::StorageFailure);
+        }
+        assert_eq!(counts(), (before.0 + 1, before.1 + 1));
+        // The first check admits real hardening or metadata SQL. With failure
+        // pending the next matching check is the converted-owner destructor.
+        let (fence, _) = cut_at(
+            if busy {
+                Boundary::Opened
+            } else {
+                Boundary::Hardened
+            },
+            1,
+        );
+        assert!(matches!(
+            read(&fence),
+            Err(EngineError::StorageAdmissionRefused)
+        ));
+        assert_eq!(counts(), (before.0 + 2, before.1 + 1));
+        if busy {
+            db.execute_batch("ROLLBACK").unwrap();
+        }
+    }
+}

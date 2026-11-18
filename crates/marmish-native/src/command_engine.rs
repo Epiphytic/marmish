@@ -258,11 +258,13 @@ impl CommandEngine {
                     master,
                     canonical_native_image,
                 } = settings;
-                let opened = engine::Engine::open_with_master(
-                    policy,
-                    binding,
-                    engine::ProvidedMaster::new(*master),
-                );
+                let provided = engine::ProvidedMaster::new(*master);
+                let opened = match worker_mode.connection_fence() {
+                    Some(fence) => {
+                        engine::Engine::open_with_master_fenced(policy, binding, provided, fence)
+                    }
+                    None => engine::Engine::open_with_master(policy, binding, provided),
+                };
                 drop(master);
                 match opened {
                     Ok(engine) => {
@@ -789,8 +791,7 @@ impl Worker {
                     }
                     Control::Cleanup => {
                         self.closed = true;
-                        let state = if !self.mode.candidate()
-                            && self.pending.is_empty()
+                        let state = if self.pending.is_empty()
                             && self.awaiting.is_empty()
                             && self.unresolved.is_empty()
                         {
@@ -946,7 +947,9 @@ fn failed(error: engine::EngineError) -> EngineObservation {
     use engine::EngineError as E;
     EngineObservation::Failed(match error {
         E::StorageFailure | E::UnsupportedStorage | E::UnsafePath => OperationalFailure::Storage,
-        E::RecoveryUncertain | E::WorkerUnavailable => OperationalFailure::Uncertain,
+        E::RecoveryUncertain | E::WorkerUnavailable | E::StorageAdmissionRefused => {
+            OperationalFailure::Uncertain
+        }
         _ => OperationalFailure::Unavailable,
     })
 }
@@ -1055,6 +1058,9 @@ fn execute_operation(
                 Ok(token) => e.submit(ctx, &token, id, &request),
                 Err(err) => Err(err),
             };
+            if let Err(engine::EngineError::StorageAdmissionRefused) = submitted {
+                return failed(engine::EngineError::StorageAdmissionRefused);
+            }
             match e.status(ctx, id) {
                 Ok(s) => {
                     let w = worker(e, ctx, id, s.state);
@@ -1115,6 +1121,7 @@ fn execute_operation(
             }
             status = match e.status(ctx, id) {
                 Ok(s) => s,
+                Err(err @ engine::EngineError::StorageAdmissionRefused) => return failed(err),
                 Err(_) => {
                     return observed(fallback, op, WorkerState::Unknown, ObservationKind::Found);
                 }
@@ -1139,6 +1146,7 @@ fn execute_operation(
         EngineOperation::Cancel => {
             status = match e.cancel(ctx, id) {
                 Ok(s) => s,
+                Err(err @ engine::EngineError::StorageAdmissionRefused) => return failed(err),
                 Err(_) => {
                     return observed(fallback, op, WorkerState::Unknown, ObservationKind::Found);
                 }
@@ -1162,6 +1170,7 @@ fn execute_operation(
                 |stream, cursor, limit| e.read_output(ctx, id, stream, cursor, limit),
             ) {
                 Ok(chunks) => chunks,
+                Err(err @ engine::EngineError::StorageAdmissionRefused) => return failed(err),
                 Err(engine::EngineError::Busy) => {
                     return observed(
                         fallback,
@@ -1259,8 +1268,11 @@ fn input_failure(
     id: engine::InvocationId,
     op: &OperationRecord,
     fallback: &engine::InvocationStatus,
-    _error: engine::EngineError,
+    error: engine::EngineError,
 ) -> EngineObservation {
+    if error == engine::EngineError::StorageAdmissionRefused {
+        return failed(error);
+    }
     // Never infer absence or retry bytes from an input error. The next committed
     // status supplies accepted/delivered/health/generation and preserves ambiguity.
     match e.status(ctx, id) {
@@ -1268,6 +1280,7 @@ fn input_failure(
             let w = worker(e, ctx, id, s.state);
             observed(s, op, w, ObservationKind::Input)
         }
+        Err(err @ engine::EngineError::StorageAdmissionRefused) => failed(err),
         Err(_) => observed(
             fallback.clone(),
             op,

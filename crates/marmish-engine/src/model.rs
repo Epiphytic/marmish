@@ -277,6 +277,8 @@ pub enum EngineError {
     RecoveryUncertain,
     #[error("storage failure")]
     StorageFailure,
+    #[error("storage admission refused")]
+    StorageAdmissionRefused,
     #[error("unsupported storage filesystem or durability primitive")]
     UnsupportedStorage,
     #[error("engine busy")]

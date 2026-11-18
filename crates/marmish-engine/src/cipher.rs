@@ -1,4 +1,5 @@
 //! Versioned local storage keys and one fail-closed SQLCipher open boundary.
+use crate::cipher_fence::{ConnectionFence, Owned};
 use crate::model::*;
 use hkdf::Hkdf;
 use rusqlite::{Connection, OpenFlags};
@@ -71,6 +72,32 @@ pub(crate) fn open(
         | OpenFlags::SQLITE_OPEN_NO_MUTEX
         | OpenFlags::SQLITE_OPEN_NOFOLLOW;
     let conn = Connection::open_with_flags(path, flags).map_err(db_error)?;
+    harden(&conn, keys, context, journal)?;
+    Ok(conn)
+}
+
+pub(crate) fn open_owned(
+    path: &Path,
+    keys: &StorageKeys,
+    context: Context,
+    journal: Journal,
+    fence: Option<&ConnectionFence>,
+) -> Result<Owned> {
+    let Some(fence) = fence else {
+        return open(path, keys, context, journal).map(Owned::stock);
+    };
+    if !path.is_absolute() {
+        return Err(EngineError::UnsafePath);
+    }
+    let conn = Owned::guarded(path, fence)?;
+    ConnectionFence::check(Some(fence))?;
+    harden(&conn, keys, context, journal)?;
+    #[cfg(test)]
+    crate::cipher_fence::tests::mark(crate::cipher_fence::tests::Boundary::Hardened);
+    Ok(conn)
+}
+
+fn harden(conn: &Connection, keys: &StorageKeys, context: Context, journal: Journal) -> Result<()> {
     conn.busy_timeout(Duration::from_secs(2))
         .map_err(db_error)?;
     let version: String = conn
@@ -114,7 +141,7 @@ pub(crate) fn open(
     if !actual.eq_ignore_ascii_case(desired) {
         return Err(EngineError::StorageFailure);
     }
-    Ok(conn)
+    Ok(())
 }
 
 #[cfg(test)]

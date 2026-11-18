@@ -1,4 +1,4 @@
-use crate::dispatcher_fatal::Fatal;
+use crate::dispatcher_fatal::{Fatal, Trip};
 use crate::{Error, Result};
 use std::{sync::Arc, thread::JoinHandle};
 
@@ -10,14 +10,17 @@ use std::{sync::Arc, thread::JoinHandle};
 pub(crate) struct Admission {
     fatal: Fatal,
     verify: Arc<dyn Fn() -> bool + Send + Sync>,
+    owner_failed: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl Admission {
     #[allow(dead_code, reason = "candidate engine remains unmounted")]
-    pub(crate) fn new(fatal: Fatal, verify: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+    pub(crate) fn new(trip: &Arc<Trip>, verify: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        let (fatal, owner_failed) = trip.custody_observation();
         Self {
             fatal,
             verify: Arc::new(verify),
+            owner_failed: Arc::new(owner_failed),
         }
     }
 
@@ -62,11 +65,37 @@ impl Mode {
         self.checked.is_some()
     }
 
+    pub(super) fn connection_fence(&self) -> Option<marmish_engine::ConnectionFence> {
+        self.checked.as_ref().map(|checked| {
+            let verify = checked.clone();
+            let owner_failed = checked.owner_failed.clone();
+            marmish_engine::ConnectionFence::new(move || verify.admit(), move || owner_failed())
+        })
+    }
+
     pub(super) fn tripped(&self) -> bool {
         self.checked.as_ref().is_some_and(Admission::tripped)
     }
 
     pub(super) fn admit(&self) -> bool {
         self.checked.as_ref().is_none_or(Admission::admit)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn close_poison_notifies_only_the_original_admission_and_fatal() {
+        let (trip, fatal) = Trip::new();
+        let trip = Arc::new(trip);
+        let (_, unrelated) = Trip::new();
+        let admission = Admission::new(&trip, || true);
+        assert!(admission.admit());
+        (admission.owner_failed)();
+        assert!(!admission.admit());
+        assert!(fatal.is_tripped());
+        assert!(!unrelated.is_tripped());
     }
 }

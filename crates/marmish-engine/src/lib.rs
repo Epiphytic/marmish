@@ -3,6 +3,7 @@
 compile_error!("marmish-engine supports Linux and macOS only");
 mod admission;
 mod cipher;
+mod cipher_fence;
 mod cleanup;
 mod copy_launch;
 mod fault;
@@ -18,6 +19,7 @@ mod storage;
 mod store;
 mod worker;
 use admission::{context_owner, random_bytes, sha256};
+pub use cipher_fence::ConnectionFence;
 pub use cleanup::CleanupGuard;
 pub use copy_launch::RegisteredCopyHelper;
 use launcher::{FrontendGuard, LaunchSpec, StateRoot, WorkerPresence};
@@ -141,8 +143,17 @@ impl Engine {
     /// Consume a stopped frontend and prove that its private state can be removed.
     /// Keep the returned guard alive until removal finishes. Failure leaves state intact.
     pub fn into_cleanup(mut self) -> Result<CleanupGuard> {
-        self.check_uid()?;
-        let locks = cleanup::acquire(&self.root, &mut self.store)?;
+        let locks = self
+            .store
+            .check_admission()
+            .and_then(|()| self.check_uid())
+            .and_then(|()| cleanup::acquire(&self.root, &mut self.store));
+        if matches!(locks, Err(EngineError::StorageAdmissionRefused)) {
+            // The profile owner keeps its lease. Preserve the frontend lock
+            // and exact state owner through the candidate process exit.
+            std::mem::forget(self);
+            return Err(EngineError::StorageAdmissionRefused);
+        }
         let Self {
             store,
             keys,
@@ -150,13 +161,18 @@ impl Engine {
             _guard,
             ..
         } = self;
-        drop(store);
+        if let Err(error) = store.close() {
+            // A refused or failed close parked the handle. Retain the local
+            // guards that would otherwise enable reopening or cleanup.
+            std::mem::forget((_guard, locks));
+            return Err(error);
+        }
         drop(keys);
-        Ok(CleanupGuard::new(root, _guard, locks))
+        Ok(CleanupGuard::new(root, _guard, locks?))
     }
 
     pub fn open(policy: EnginePolicy) -> Result<Self> {
-        Self::open_storage(policy, None)
+        Self::open_storage(policy, None, None)
     }
 
     pub fn open_with_master(
@@ -164,7 +180,17 @@ impl Engine {
         binding: NativeBinding,
         master: ProvidedMaster,
     ) -> Result<Self> {
-        Self::open_storage(policy, Some((binding, master)))
+        Self::open_storage(policy, Some((binding, master)), None)
+    }
+
+    /// Open the native frontend under the exact candidate connection fence.
+    pub fn open_with_master_fenced(
+        policy: EnginePolicy,
+        binding: NativeBinding,
+        master: ProvidedMaster,
+        fence: ConnectionFence,
+    ) -> Result<Self> {
+        Self::open_storage(policy, Some((binding, master)), Some(&fence))
     }
 
     pub fn prepare_native_migration(
@@ -194,9 +220,11 @@ impl Engine {
     fn open_storage(
         mut policy: EnginePolicy,
         provided: Option<(NativeBinding, ProvidedMaster)>,
+        fence: Option<&ConnectionFence>,
     ) -> Result<Self> {
         let account = admission::validate_policy(&policy)?;
         policy.worker_executable = launcher::worker_preconditions(&policy.worker_executable)?;
+        ConnectionFence::check(fence)?;
         let root = StateRoot::open(&policy.state_root)?;
         let guard = root.lock_frontend()?;
         let (keys, storage) = match provided {
@@ -213,7 +241,10 @@ impl Engine {
             }
         };
         let epoch = random_bytes()?;
-        let store = Store::create_frontend(&root, &keys, &policy, &account, epoch)?;
+        let created =
+            Store::create_frontend_with_fence(&root, &keys, &policy, &account, epoch, fence);
+        ConnectionFence::check(fence)?;
+        let store = created?;
         let mut engine = Self {
             store,
             keys,
@@ -226,6 +257,7 @@ impl Engine {
             deadlines: HashMap::new(),
             orphan_cursor: None,
         };
+        engine.store.check_admission()?;
         for pending in engine.store.pending_jobs(128)? {
             if matches!(
                 pending.state,
@@ -234,6 +266,7 @@ impl Engine {
                 engine.reconcile_background(pending.job)?;
             }
         }
+        engine.store.check_admission()?;
         Ok(engine)
     }
 
@@ -279,6 +312,7 @@ impl Engine {
         {
             Err(EngineError::QuotaExceeded) => {
                 self.maintain(128)?;
+                self.store.check_admission()?;
                 self.store
                     .issue_token(&owner, self.epoch, hash, now, expires)?;
             }
@@ -331,6 +365,7 @@ impl Engine {
         }
         self.check_execute_request(ctx, request)?;
         launcher::worker_preconditions(&self.policy.worker_executable)?;
+        self.store.check_admission()?;
         let now = launcher::boot_time()?;
         let expires = self.deadlines.get(&hash).ok_or(EngineError::InvalidToken)?;
         if expires.boot_id != now.boot_id || expires.millis <= now.millis {
@@ -339,6 +374,7 @@ impl Engine {
         match self.store.preflight_admit(&owner, self.epoch, hash, now) {
             Err(EngineError::QuotaExceeded) => {
                 self.maintain(128)?;
+                self.store.check_admission()?;
                 self.store
                     .preflight_admit(&owner, self.epoch, hash, launcher::boot_time()?)?;
             }
@@ -346,6 +382,7 @@ impl Engine {
         }
         // Bounded orphan inspection prevents accumulating directories after crashes.
         self.reap_orphans(128)?;
+        self.store.check_admission()?;
         let job = JobId(random_bytes()?);
         let credential = WorkerCredential(random_bytes()?);
         if let Err(error) = self.root.prepare_job(job, &credential) {
@@ -367,9 +404,11 @@ impl Engine {
             )
         })();
         match admission {
+            Err(EngineError::StorageAdmissionRefused) => Err(EngineError::StorageAdmissionRefused),
             Ok(submission) if submission.disposition == SubmitDisposition::Accepted => {
                 self.deadlines.remove(&hash);
                 self.await_worker(job)?;
+                self.store.check_admission()?;
                 Ok(Submission {
                     status: self.store.status(&owner.owner, job)?,
                     ..submission
@@ -446,6 +485,7 @@ impl Engine {
         id: InvocationId,
     ) -> Result<InputStatus> {
         let (owner, job) = self.authorized_job(ctx, id)?;
+        self.store.check_admission()?;
         self.store
             .begin_input(job, &owner, InputGeneration(random_bytes()?))
     }
@@ -464,6 +504,7 @@ impl Engine {
         if fresh_for < Duration::from_millis(1) || fresh_for > Duration::from_secs(60) {
             return Err(EngineError::InvalidRequest);
         }
+        self.store.check_admission()?;
         let now = launcher::boot_time()?;
         self.store.queue_input(
             job,
@@ -484,6 +525,7 @@ impl Engine {
         final_offset: u64,
     ) -> Result<InputStatus> {
         let (owner, job) = self.authorized_job(ctx, id)?;
+        self.store.check_admission()?;
         self.store.queue_eof(job, &owner, generation, final_offset)
     }
 
@@ -499,6 +541,7 @@ impl Engine {
         if limit == 0 || limit > 16 * 1024 {
             return Err(EngineError::InvalidRequest);
         }
+        self.store.check_admission()?;
         if !self.root.job_directory_exists(job)? {
             let status = self.store.output_status(&owner.owner, job, stream)?;
             if !status.closed || status.retained != 0 {
@@ -513,9 +556,19 @@ impl Engine {
         }
         let guard = self.root.lock_io(job)?;
         let status = self.store.output_status(&owner.owner, job, stream)?;
-        spool::Spool::read(
-            &self.root, &self.keys, job, stream, &status, cursor, limit, &guard,
-        )
+        let chunk = spool::Spool::read_with_fence(
+            &self.root,
+            &self.keys,
+            job,
+            stream,
+            &status,
+            cursor,
+            limit,
+            &guard,
+            self.store.fence(),
+        );
+        self.store.check_admission()?;
+        chunk
     }
 
     pub fn cancel(
@@ -564,6 +617,9 @@ impl Engine {
 
     /// One job-local observation/start/CAS, with no readiness sleeps.
     fn reconcile_step(&mut self, job: JobId) -> std::result::Result<Readiness, ReconcileFailure> {
+        #[cfg(test)]
+        cipher_fence::tests::mark(cipher_fence::tests::Boundary::Reconcile);
+        self.store.check_admission()?;
         let state = self.store.job_state(job)?;
         if matches!(
             state,
@@ -629,6 +685,7 @@ impl Engine {
         };
         let prepared = launcher::prepare_worker(&self.policy.worker_executable, &spec)?;
         prepared.verify_root(&self.root)?;
+        self.store.check_admission()?;
         let decision = match self.store.reserve_worker_start(job, launcher::boot_time()?) {
             Err(EngineError::Busy) => return Ok(false),
             other => other?,
@@ -655,6 +712,7 @@ impl Engine {
             return Err(EngineError::InvalidRequest);
         }
         launcher::worker_preconditions(&self.policy.worker_executable)?;
+        self.store.check_admission()?;
         let now = launcher::boot_time()?;
         self.store.reap_tokens(now, max_jobs)?;
         // The page cursor is committed before processing. A late global error
@@ -667,6 +725,7 @@ impl Engine {
                 self.reconcile_background(pending.job)?;
             }
         }
+        self.store.check_admission()?;
         // Sample the clock after taking the transaction: reconciliation or a
         // concurrent worker may have advanced the durable anchor meanwhile.
         let logical = self.store.retention_now_current()?;
@@ -675,6 +734,7 @@ impl Engine {
             spool_bytes_removed: 0,
         };
         for candidate in self.store.cleanup_candidates(logical, max_jobs)? {
+            self.store.check_admission()?;
             // A crash may have removed the expired directory before deleting its
             // durable tombstone. Never recreate that directory during recovery.
             if candidate.delete_record && !self.root.job_directory_exists(candidate.job)? {
@@ -703,6 +763,7 @@ impl Engine {
     }
 
     fn remove_orphan(&mut self, job: JobId) -> Result<()> {
+        self.store.check_admission()?;
         // Admission can be ambiguous after a storage error. Never repair locks
         // or remove a directory once its durable job record exists.
         if self.store.job_exists(job)? {
@@ -713,10 +774,12 @@ impl Engine {
     }
 
     fn reap_orphans(&mut self, limit: u32) -> Result<()> {
+        self.store.check_admission()?;
         let page = self.root.list_job_dirs(limit, self.orphan_cursor)?;
         self.orphan_cursor = page.next;
         let mut orphans = 0;
         for job in page.jobs {
+            self.store.check_admission()?;
             if !self.store.job_exists(job)? {
                 orphans += 1;
                 match self.remove_orphan(job) {
