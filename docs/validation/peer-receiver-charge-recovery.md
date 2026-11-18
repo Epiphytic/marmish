@@ -64,3 +64,36 @@ of the journal. An exact post-recovery charge assertion remains open.
 The wrong-key case checks a conservative minimum main charge.
 The interruption uses process exit 80 while the system page cache
 survives. Power-loss ordering and torn writes require separate tests.
+
+## Measured guard matrix
+
+Exact matrix source `990c8ca03b3cf2f6c7ba6c966ea2bded506bb565` passed
+the expanded bundled SQLCipher test in 2.50 seconds. A separate
+measured inventory regression passed in 0.23 seconds. Across the four
+ordinary inventory regressions, all four passed in 0.50 seconds.
+The fixed journal format and two adjacent dispatcher tests passed
+along with the raw quota rollback regression. Strict installed-checks
+all-target Clippy passed in 40.72 seconds. Scoped Rust formatting and
+Git diff checks passed.
+
+- Durable inventory rejects a replaced inode, main or journal length
+  changed after measurement, and physical WAL and SHM siblings.
+- Seven fresh subprocesses exercise stale generation, foreign
+  `xAccess`, growth through journal write and truncate, separate
+  main and aggregate caps, and a read-only main request through
+  the registered dispatcher. Both measured files remain byte exact.
+- A real interrupted journal with a super-journal marker and a
+  separately oversized sparse journal both retain the files and
+  main bytes when the owner refuses them ahead of playback.
+- No genuine stock read-only fallback, cross-platform behavior or
+  power-loss durability is claimed. The previous wrong-key limit
+  remains. [Independent review](../reviews/peer-receiver-charge-recovery.md)
+
+The integrated source `515557a61235f81debdb3deb6d52bdb60a6cafee`
+passed the expanded bundled SQLCipher test in 2.66 seconds and all four
+inventory tests in 0.43 seconds. Receiver registration passed in 0.12 seconds,
+the abrupt Founder native-write test in 8.99 seconds, and ordinary dispatcher
+routing in 8.89 seconds. These are separate Linux AMD64 results from the
+isolated matrix author run above.
+Strict installed-checks all-target Clippy passed in 43.59 seconds, and
+the full workspace formatting check passed.

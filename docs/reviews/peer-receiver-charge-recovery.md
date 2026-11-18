@@ -44,3 +44,36 @@ carried forward the thread-local teardown guard in `xAccess`, additional
 physical charge assertions, and broader refusal checks for the next
 increment. The review covers Linux AMD64 library tests. macOS and a
 shipped recipient path still require qualification.
+
+## Measured guard matrix
+
+Claude Code Sonnet 5.5 in Auto permission mode approved exact source
+`990c8ca03b3cf2f6c7ba6c966ea2bded506bb565`, session
+`18ad854c-35a5-40b1-a910-bdaf83aad396`, with no blocking findings.
+The reviewer ran the preserved Linux AMD64 executable using the
+author's build provenance and ran the expanded SQLCipher test in
+3.22 seconds, the four ordinary inventory cases, and two ordinary
+quota cases. The reviewer inspected, without cross-compiling, that
+other targets retain the stock access callback.
+
+The matrix fixes the earlier thread-local teardown concern in
+`xAccess` and demonstrates separate 16 MiB main and combined logical
+limits. The main and journal image bytes remain unchanged across the
+seven guard subprocesses. The oversized and super-journal markers
+are refused before playback. The earlier wrong-key result still
+demonstrates refusal and retained main charge. The pager can write
+before that refusal.
+
+A genuine stock filesystem fallback from requested read-write to
+read-only, the allowed absent WAL existence probe, and the other
+managed open flags were reviewed by inspection only. The tests do
+exercise an explicit read-only main request, a foreign access name,
+and physical WAL/SHM fencing. Mutation tests, power-loss ordering,
+macOS and installed owner validation remain outside this result.
+
+Claude Code Sonnet in Auto permission mode also approved the integrated
+source `515557a61235f81debdb3deb6d52bdb60a6cafee`, session
+`986e2654-06c3-448f-ad13-ac94afe0384b`. It verified the same source change
+over `f5d99ff` with both adjacent Founder and receiver test module
+registrations retained. The review inspected callback scope and ordinary
+SQLite delegation. The composed tests ran separately.

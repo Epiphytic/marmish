@@ -1581,8 +1581,10 @@ The [managed rollback proof](validation/peer-receiver-charge-recovery.md)
 restored a real SQLCipher stage after a process exit under that exact lease
 while ordinary SQLite used WAL on another thread. This was a Linux AMD64
 library test. Ambiguous or failed recovery remained charged. The shipped
-recipient does not yet use this recovery path. Remaining recovery guards
-and metered native receiver opens still need qualification.
+recipient does not yet use this recovery path. The guard matrix also
+exercised stale generation, changed inode or extents, file and aggregate
+limits, sidecars and malformed journals. Metered native receiver opens
+and stock read-only fallback still need qualification.
 
 The [founder qualification](validation/peer-installed-founder-turn.md)
 exercises the real signed v2 Offer, Consent and Delivery over private WSS on
