@@ -17,6 +17,7 @@ mod peer_invitation {
     // Standalone storage tests cannot mint native proofs. These uninhabited
     // stand-ins permit checking the same storage source without linking MDK.
     pub(crate) mod postjoin_verify {
+        use crate::peer_cursor_store::consent_checkpoint::provisioning::prepared_consent::custody::publication::Publication;
         use cgka_traits::engine::EpochPin;
         use cgka_traits::{GroupId, MemberId, MessageId, TransportPublishRequest};
 
@@ -70,6 +71,18 @@ mod peer_invitation {
             }
 
             pub(crate) fn capture(&self) -> &'a Capture {
+                match self.0 {}
+            }
+        }
+
+        pub(crate) struct ColdConfirmedRotation<'a>(Never, std::marker::PhantomData<&'a ()>);
+
+        impl<'a> ColdConfirmedRotation<'a> {
+            pub(crate) fn publication(&self) -> &'a Publication {
+                match self.0 {}
+            }
+
+            pub(crate) fn observed_at(&self) -> u64 {
                 match self.0 {}
             }
         }
