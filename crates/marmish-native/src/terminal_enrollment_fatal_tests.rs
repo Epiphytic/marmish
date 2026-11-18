@@ -71,7 +71,8 @@ async fn terminal_fatal_closes_both_live_sdk_lanes_without_protocol_close() {
         let mut alias = open_lane(&route, &relay, &route.client_reapers, alias_keys.clone()).await;
         let mut room = open_lane(&route, &relay, &route.client_reapers, room_keys.clone()).await;
         alias.activate_inbox().await.unwrap();
-        room.activate_inbox().await.unwrap();
+        room.begin_active_enrollment();
+        room.activate_room_fixture().await.unwrap();
         assert_eq!(route.client_reapers.custody(), (2, 0, false));
 
         let accounts = [alias_keys.public_key(), room_keys.public_key()];
@@ -85,12 +86,14 @@ async fn terminal_fatal_closes_both_live_sdk_lanes_without_protocol_close() {
         });
 
         trip.trip();
-        for lane in [&mut alias, &mut room] {
-            assert!(matches!(
-                lane.activate_inbox().await,
-                Err(Error::Transport("dispatcher_fatal"))
-            ));
-        }
+        assert!(matches!(
+            alias.activate_inbox().await,
+            Err(Error::Transport("dispatcher_fatal"))
+        ));
+        assert!(matches!(
+            room.activate_room_fixture().await,
+            Err(Error::Transport("dispatcher_fatal"))
+        ));
         let (alias_result, room_result) = tokio::join!(alias.close(), room.close());
         alias_result.unwrap();
         room_result.unwrap();

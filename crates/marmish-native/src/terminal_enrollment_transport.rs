@@ -1118,6 +1118,15 @@ impl Lane {
     }
 
     pub(super) async fn activate_inbox(&mut self) -> Result<()> {
+        self.activate_scoped_inbox(InboxScope::Bootstrap).await
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(super) async fn activate_room_fixture(&mut self) -> Result<()> {
+        self.activate_scoped_inbox(InboxScope::Room).await
+    }
+
+    async fn activate_scoped_inbox(&mut self, scope: InboxScope) -> Result<()> {
         let adapter = &self.adapter;
         adapter
             .authority
@@ -1133,7 +1142,7 @@ impl Lane {
                     .map_err(|_| ROUTE)
             })
             .await?;
-        self.pin_inbox_inner(InboxScope::Bootstrap).await
+        self.pin_inbox_inner(scope).await
     }
 
     pub(super) async fn pin_inbox(&mut self) -> Result<()> {
