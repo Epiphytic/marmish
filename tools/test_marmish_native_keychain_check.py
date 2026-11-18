@@ -1028,7 +1028,7 @@ class IdentityDiagnosticVocabulary(unittest.TestCase):
         mapped = set(re.findall(r'=>\s*"(keychain_(?:authorize|verify)_[a-z_]+)"', identity))
         self.assertEqual(len(mapped), 18)
         labels.update(mapped)
-        self.assertEqual(len(labels), 65)
+        self.assertEqual(len(labels), 67)
         self.assertEqual(check._fixture.INTERACTIVE_IDENTITY, labels | {'corrupt'})
         self.assertNotIn('must_not_send_twice', labels)
         self.assertNotIn('private marker', labels)
