@@ -638,6 +638,103 @@ async fn peer_installed_custody_reopens_signed_prepared_consent_and_held_deliver
     ));
     assert_eq!(counts(&cp), (1, 1, 0, 0));
     assert_eq!(approval_time(&cp, key), None);
+    native_pending_store_checks!({
+        // These are checked local transitions, measured without introducing a
+        // fixture socket or mock native join.
+        use crate::{
+            peer_invitation::receiver_inventory::v2_pending::committed_custody_changes,
+            peer_quota_vfs::dispatch::welcome_counts,
+        };
+        let installed_pending_effects = || (welcome_counts(), committed_custody_changes());
+        let effects = installed_pending_effects();
+        assert_eq!(
+            cp.start_custody_join(&source, &held, wall).err(),
+            Some(Error::Layout)
+        );
+        let after = cp
+            .read_custody(&source, key, generation, wall)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (after.state(), after.stage()),
+            (CustodyState::Held, held.stage())
+        );
+        assert_eq!(after.signed_delivery(), held.signed_delivery());
+        assert_eq!(installed_pending_effects(), effects);
+
+        let exact = cp.current_installed_delivery(&held, wall).unwrap();
+        let competing = codec
+            .prepare_delivery(
+                &f.server,
+                &consent,
+                &serde_json::to_vec(&welcome).unwrap(),
+                wall,
+                wall + 599,
+            )
+            .unwrap();
+        let competing = codec
+            .open_delivery(&f.client, competing.frame(), &signed.flight, wall)
+            .unwrap();
+        assert_ne!(
+            competing.status_negotiation().unwrap().delivery_revision(),
+            exact.status_negotiation().unwrap().delivery_revision()
+        );
+        use crate::peer_invitation::{
+            Error as PeerError, receiver_inventory::v2_pending::fixture_check_enrollment,
+        };
+        fixture_check_enrollment(&held, &exact).unwrap();
+        assert_eq!(
+            fixture_check_enrollment(&held, &competing),
+            Err(PeerError::Binding)
+        );
+        assert_eq!(installed_pending_effects(), effects);
+
+        let before = cursor_progress(&cp, &source);
+        let deadline = held.held_deadline();
+        assert_eq!(
+            cp.current_installed_delivery(&held, deadline - 1)
+                .unwrap()
+                .welcome_id(),
+            welcome.id
+        );
+        assert_eq!(
+            cp.current_installed_delivery(&held, deadline).err(),
+            Some(Error::Expired)
+        );
+        assert_eq!(cursor_progress(&cp, &source), before);
+        assert_eq!(installed_pending_effects(), effects);
+
+        for policy in [ReceivePolicy::AutoAny, ReceivePolicy::Off] {
+            let off = matches!(policy, ReceivePolicy::Off);
+            let mut other = open_custody(&f, &f.client, A, Policy::default(), policy).unwrap();
+            let other_source = other.bind_source(A).unwrap();
+            let held = other.read_custody(&other_source, key, generation, wall);
+            if off {
+                assert_eq!(held.err(), Some(Error::Policy));
+            } else {
+                let held = held.unwrap().unwrap();
+                assert_eq!(
+                    other.current_installed_delivery(&held, wall).err(),
+                    Some(Error::Policy)
+                );
+            }
+            assert_eq!(installed_pending_effects(), effects);
+        }
+
+        cp.fixture_change_custody_frame(held.delivery_carrier())
+            .unwrap();
+        let changed = cp
+            .read_custody(&source, key, generation, wall)
+            .unwrap()
+            .unwrap();
+        assert_ne!(changed.signed_delivery(), held.signed_delivery());
+        assert_eq!(
+            cp.current_installed_delivery(&changed, wall).err(),
+            Some(Error::Package)
+        );
+        assert_eq!(changed.state(), CustodyState::Held);
+        assert_eq!(installed_pending_effects(), effects);
+    });
     assert!(open(&f, &f.client, A, Policy::default()).is_err());
 }
 

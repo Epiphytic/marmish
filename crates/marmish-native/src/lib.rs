@@ -138,6 +138,13 @@ macro_rules! native_installed_pending_fixture {
         use crate::peer_invitation::receiver_inventory::v2_pending::InstalledJoinedReadback;
     };
 }
+#[cfg(test)]
+macro_rules! native_pending_store_checks {
+    ($body:block) => {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        $body
+    };
+}
 #[allow(dead_code)] // Deployment qualification must precede daemon activation.
 mod peer_invitation;
 

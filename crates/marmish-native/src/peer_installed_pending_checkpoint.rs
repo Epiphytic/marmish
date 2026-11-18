@@ -130,7 +130,11 @@ impl Checkpoint {
         .map_err(|_| Error::Source)?
     }
 
-    fn current_installed_delivery(&self, held: &HeldEvidence, wall: u64) -> Result<Delivery> {
+    pub(in crate::peer_invitation) fn current_installed_delivery(
+        &self,
+        held: &HeldEvidence,
+        wall: u64,
+    ) -> Result<Delivery> {
         self.check_local_owner(&held.owner)?;
         if held.is_active()
             || held.saved.automatic
@@ -157,5 +161,65 @@ impl Checkpoint {
         self.codec
             .reopen_custodied_delivery(&self.signer, held, wall)
             .map_err(|_| Error::Package)
+    }
+}
+
+// This module is mounted only in the Linux AMD64 native test target. Change
+// one field in its disposable profile while preserving the exact schema.
+impl Checkpoint {
+    pub(in crate::peer_invitation) fn fixture_change_custody_frame(
+        &mut self,
+        carrier: [u8; 32],
+    ) -> Result<()> {
+        self.fixture_change_custody(
+            carrier,
+            "UPDATE peer_pending_custody SET frame=zeroblob(length(frame))
+             WHERE delivery_carrier=?1 AND state=0",
+        )
+    }
+
+    pub(in crate::peer_invitation) fn fixture_change_pending_epoch(
+        &mut self,
+        carrier: [u8; 32],
+    ) -> Result<()> {
+        self.fixture_change_custody(
+            carrier,
+            "UPDATE peer_pending_custody SET epoch_identity=zeroblob(32)
+             WHERE delivery_carrier=?1 AND state=2 AND epoch_identity!=zeroblob(32)",
+        )
+    }
+
+    fn fixture_change_custody(&mut self, carrier: [u8; 32], statement: &str) -> Result<()> {
+        use super::super::super::retirement::schema::inventory;
+        use rusqlite::TransactionBehavior;
+
+        if !self.is_installed_custody() {
+            return Err(Error::Layout);
+        }
+        let tx = self
+            .cursor
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let before = inventory(&tx).map_err(super::schema::cursor_error)?;
+        let trigger_sql = |name| -> rusqlite::Result<String> {
+            tx.query_row(
+                "SELECT sql FROM main.sqlite_schema WHERE type='trigger' AND name=?1",
+                [name],
+                |row| row.get(0),
+            )
+        };
+        let next = trigger_sql("peer_custody_next")?;
+        let deny = trigger_sql("peer_custody_deny_UPDATE")?;
+        tx.execute_batch("DROP TRIGGER peer_custody_next; DROP TRIGGER peer_custody_deny_UPDATE;")?;
+        if tx.execute(statement, [carrier])? != 1 {
+            return Err(Error::Missing);
+        }
+        tx.execute_batch(&next)?;
+        tx.execute_batch(&deny)?;
+        if inventory(&tx).map_err(super::schema::cursor_error)? != before {
+            return Err(CursorError::Binding.into());
+        }
+        tx.commit()?;
+        Ok(())
     }
 }
