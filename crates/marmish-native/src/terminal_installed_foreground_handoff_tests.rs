@@ -172,10 +172,9 @@ impl Participant {
     async fn wait_raw(&mut self, deadline: Instant, stage: &'static str) -> Instant {
         timeout_at(deadline, async {
             loop {
-                assert!(
-                    self.child.try_wait().unwrap().is_none(),
-                    "{stage} exited before raw Ready"
-                );
+                if let Some(status) = self.child.try_wait().unwrap() {
+                    panic!("{stage} exited before raw Ready ({status})");
+                }
                 if raw(&self.slave) {
                     return Instant::now();
                 }
@@ -265,11 +264,12 @@ pub(in super::super) async fn prove_handoff(
     relay: &Relay,
     cleanup: &OwnedTmux,
     turns: &mpsc::Sender<CommandTurn>,
+    bindings: &mut watch::Receiver<u64>,
 ) -> HandoffSample {
     write_cli_config(state, remote, relay);
     let mut children = [None, None, None];
     let launch = |mode| Participant::launch(state, daemon, remote, mode);
-    let checks = AssertUnwindSafe(handoff(&mut children, launch, cleanup, turns))
+    let checks = AssertUnwindSafe(handoff(&mut children, launch, cleanup, turns, bindings))
         .catch_unwind()
         .await;
     if checks.is_err() {
@@ -283,7 +283,25 @@ pub(in super::super) async fn prove_handoff(
     if exits.is_err() {
         kill_all(&mut children);
     }
-    let sample = checks.unwrap_or_else(|panic| resume_unwind(panic));
+    let sample = checks.unwrap_or_else(|panic| {
+        if let Ok(exits) = &exits {
+            for (who, exit) in ["writer", "observer", "successor"].into_iter().zip(exits) {
+                if let Ok(exit) = exit {
+                    let category = match exit.stderr.as_slice() {
+                        b"" => "empty",
+                        b"marmish: invalid input: terminal_takeover_uncertain\n" => {
+                            "takeover_uncertain"
+                        }
+                        b"marmish: invalid input: terminal_display_restore\n" => "display_restore",
+                        b"marmish: invalid input: terminal_offer_stale\n" => "offer_stale",
+                        _ => "unclassified",
+                    };
+                    eprintln!("foreground {who} {} stderr={category}", exit.status);
+                }
+            }
+        }
+        resume_unwind(panic)
+    });
     let exits = exits.expect("shared foreground cleanup deadline");
     for ((participant, exit), who) in
         children
@@ -294,6 +312,7 @@ pub(in super::super) async fn prove_handoff(
     {
         exit.expect("foreground reap and stderr drain")
             .check(who, who != "successor");
+        participant.capture.inspect(0, assert_no_candidate);
         assert_restored(
             &participant.slave,
             &participant.saved,
@@ -308,6 +327,7 @@ async fn handoff(
     launch: impl Fn(CliMode) -> Participant,
     cleanup: &OwnedTmux,
     turns: &mpsc::Sender<CommandTurn>,
+    bindings: &mut watch::Receiver<u64>,
 ) -> HandoffSample {
     let [writer, observer, successor] = children;
     let writer = writer.insert(launch(CliMode::Default));
@@ -339,6 +359,7 @@ async fn handoff(
         cooked & (libc::ICANON | libc::ISIG),
         libc::ICANON | libc::ISIG
     );
+    let previous_binding = *bindings.borrow_and_update();
     assert_eq!(
         timeout(IO, write_master(&successor.pty, b"t\r"))
             .await
@@ -352,7 +373,17 @@ async fn handoff(
             (choice + Duration::from_secs(60)).min(successor.began + 2 * ATTACH),
             "successor"
         ),
-        command_timing(turns),
+        async {
+            // The fixture drives both Command owners serially. Let the
+            // successor finish its binding lookup before occupying that actor.
+            let completed = timeout(IO, bindings.wait_for(|count| *count > previous_binding))
+                .await
+                .expect("successor binding lookup deadline")
+                .unwrap();
+            assert_eq!(*completed, previous_binding + 1);
+            drop(completed);
+            command_timing(turns).await
+        },
     );
     assert!(
         during.began >= choice && during.began <= ready,
@@ -363,6 +394,11 @@ async fn handoff(
         socket,
         "same tmux socket through takeover"
     );
+    timeout(IO, async {
+        tokio::try_join!(writer.child.wait(), observer.child.wait()).unwrap();
+    })
+    .await
+    .expect("superseded clients did not exit after takeover");
     let marker_sent = Instant::now();
     input(
         &successor.pty,
@@ -375,6 +411,10 @@ async fn handoff(
     let marker = marker_sent.elapsed();
     successor.capture.inspect(0, assert_no_candidate);
     input(&successor.pty, b"exit 0\r").await;
+    timeout(IO, successor.child.wait())
+        .await
+        .expect("successor shell exit deadline")
+        .unwrap();
     HandoffSample {
         observed,
         choice,
@@ -433,8 +473,8 @@ async fn both_find(sides: [&Participant; 2], from: [usize; 2], marker: &[u8], st
 }
 
 fn assert_no_candidate(bytes: &[u8]) {
-    assert!(!has(bytes, CANDIDATE_TOKEN), "observer input was echoed");
     assert!(!has(bytes, CANDIDATE_OUTPUT), "observer candidate ran");
+    assert!(!has(bytes, CANDIDATE_TOKEN), "observer input was echoed");
 }
 
 async fn wait_input_consumed(slave: &File) {

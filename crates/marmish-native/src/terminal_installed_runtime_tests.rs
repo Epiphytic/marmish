@@ -296,6 +296,7 @@ struct CommandOwners {
     command: CommandRoom,
     cat: PathBuf,
     relays: Vec<String>,
+    bindings: watch::Sender<u64>,
 }
 
 impl CommandOwners {
@@ -308,7 +309,10 @@ impl CommandOwners {
         loop {
             self.server_control.refresh(&mut self.server);
             tokio::select! {
-                Some(request) = self.client_control.requests.recv() => request.complete(&mut self.client),
+                Some(request) = self.client_control.requests.recv() => {
+                    request.complete(&mut self.client);
+                    self.bindings.send_modify(|count| *count += 1);
+                },
                 Some(request) = self.server_control.requests.recv() => request.complete(&mut self.server),
                 Some(pending) = ordinary.recv() => {
                     let response = match pending.request {
@@ -1060,6 +1064,7 @@ async fn prove_writer(workload: Workload) -> Measurements {
     let mut server_runtime = Some(server_runtime);
     let (ipc, ordinary) = serve_ipc(listener, client_control.intake.clone());
     let (turns, receive) = mpsc::channel(1);
+    let (bindings, mut binding_turns) = watch::channel(0);
     let actor = tokio::task::spawn_local(
         CommandOwners {
             client: client_owner,
@@ -1069,6 +1074,7 @@ async fn prove_writer(workload: Workload) -> Measurements {
             command: command_room,
             cat,
             relays: relays.clone(),
+            bindings,
         }
         .run(receive, ordinary),
     );
@@ -1113,7 +1119,7 @@ async fn prove_writer(workload: Workload) -> Measurements {
             return sample;
         }
         if matches!(workload, Workload::ForegroundHandoff) {
-            let sample = foreground::prove_handoff(temp.path(), &daemon, remote, &relay, &cleanup, &turns).await;
+            let sample = foreground::prove_handoff(temp.path(), &daemon, remote, &relay, &cleanup, &turns, &mut binding_turns).await;
             let after = command(&turns).await;
             sample.report(before, after, relay.all_publication_attempts());
             return Measurements::default();

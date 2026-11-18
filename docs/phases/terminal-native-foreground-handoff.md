@@ -57,11 +57,14 @@ use disposable credentials, and leave production code and core CI alone.
    empty stderr, and assert its exact original termios and window size.
 
 Run the existing independent ordinary Command turn before, during and
-after handoff. The test starts the during turn after the successor's choice
-and interleaves it in wall time with Ready and old-link drains. Record
-its start and end offsets from the choice and the Ready observation. The fixture uses the
-existing bounded multi-room relay limit of 256 events and reports the
-number of observed publication attempts. This workload uses the Command
+after handoff. The fixture handles both Command owners on one task. Start the during
+turn after the successor's choice and the exact subsequent binding lookup,
+so the synthetic full Command round trip cannot starve that lookup's one-second
+deadline. Require the Command turn to start before raw Ready while all three
+PTY readers continue draining. Record its start and end offsets from the
+choice and the Ready observation. The fixture uses the existing bounded
+multi-room relay limit of 256 events and reports the number of observed
+publication attempts. This workload uses the Command
 room, writer, observer and two successor admission legs. Keep the
 benchmark's higher cap scoped to its existing workloads. Exceeding the
 existing cap fails this proof and calls for revising the fixture workload.

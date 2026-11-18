@@ -1007,22 +1007,22 @@ impl Relay {
     }
 
     pub(crate) fn publication_attempts(&self, kind: u16) -> usize {
-        self.state
-            .lock()
-            .unwrap()
-            .observations
-            .iter()
-            .filter(|observation| matches!(observation, Observation::Write(_, found, _) if *found == kind))
-            .count()
+        self.count_publication_attempts(Some(kind))
     }
 
     pub(crate) fn all_publication_attempts(&self) -> usize {
+        self.count_publication_attempts(None)
+    }
+
+    fn count_publication_attempts(&self, kind: Option<u16>) -> usize {
         self.state
             .lock()
             .unwrap()
             .observations
             .iter()
-            .filter(|observation| matches!(observation, Observation::Write(..)))
+            .filter(|observation| {
+                matches!(observation, Observation::Write(_, found, _) if kind.is_none_or(|kind| *found == kind))
+            })
             .count()
     }
 
