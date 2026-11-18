@@ -52,7 +52,7 @@ pub(in crate::peer_invitation) struct PendingReceiver<'lease> {
     lease: &'lease ProfileLease,
 }
 
-pub(super) struct PendingTurn<'turn, 'lease> {
+pub(in crate::peer_invitation) struct PendingTurn<'turn, 'lease> {
     owner: &'turn mut RecoveredOwner<'lease>,
     native: NativePending<'lease>,
 }
@@ -154,7 +154,7 @@ impl<'lease> PendingReceiver<'lease> {
     }
 }
 
-pub(super) enum PendingClock<'a> {
+pub(in crate::peer_invitation) enum PendingClock<'a> {
     Candidate {
         readiness: &'a Readiness,
         stop: &'a Arc<AtomicBool>,
@@ -198,7 +198,7 @@ impl PendingClock<'_> {
 }
 
 impl<'turn, 'lease> PendingTurn<'turn, 'lease> {
-    pub(super) fn borrow(
+    pub(in crate::peer_invitation) fn borrow(
         owner: &'turn mut RecoveredOwner<'lease>,
         lease: &'lease ProfileLease,
     ) -> Result<Self> {

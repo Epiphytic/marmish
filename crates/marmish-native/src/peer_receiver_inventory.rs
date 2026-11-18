@@ -23,7 +23,7 @@ use super::store::{
 };
 use super::*;
 
-struct RecoveredOwner<'lease> {
+pub(super) struct RecoveredOwner<'lease> {
     paths: Paths<'lease>,
     cursor: CheckedFile,
     checkpoint: Checkpoint,
@@ -75,7 +75,7 @@ pub(super) mod package;
 pub(super) mod v2_pending;
 
 impl<'lease> RecoveredOwner<'lease> {
-    fn open_registered<'profile: 'lease>(
+    pub(super) fn open_registered<'profile: 'lease>(
         lease: &'lease Arc<ProfileLease>,
         material: &IdentityMaterial,
         quota: &'lease ReceiverQuota<'profile>,
