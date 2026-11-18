@@ -4,7 +4,8 @@ use super::*;
 use crate::{
     mdk_adapter::{
         peer_staged_proof_tests::{
-            PeerFounderRuntime, peer_enrollment_founder_with_group, postjoin_session_config,
+            PeerFounderReopen, PeerFounderRuntime, peer_enrollment_founder_with_group,
+            postjoin_session_config,
         },
         terminal_relay_fixture::{GroupFault, GroupHistoryCut, GroupWrite},
     },
@@ -184,6 +185,9 @@ struct HistorySetup {
     generation: u64,
     routing: NostrRoutingV1,
     founder: PeerFounderRuntime<FounderTransport>,
+    founder_reopen: PeerFounderReopen,
+    founder_offer: consent_checkpoint::wire::Offer,
+    ordinary_server: Option<crate::mdk_adapter::MdkOwner>,
     group: GroupId,
     welcome: MessageId,
     delivery: Delivery,
@@ -195,20 +199,26 @@ struct HistorySetup {
     update_ms: u128,
 }
 
-async fn prepare_history(round: &Round, group_route: [u8; 32], delivery_ttl: u64) -> HistorySetup {
+async fn prepare_history(
+    round: &Round,
+    group_route: [u8; 32],
+    delivery_ttl: u64,
+    check_command: bool,
+) -> HistorySetup {
     let socket = round.socket();
     let daemon = round
         .start(Admission::Automatic, super::LostReply::None)
         .await;
     let started = Instant::now();
     let mut enrollment = round.send_offer(group_route).await;
-    let selector = Selector::from(enrollment.consent.offer());
-    let routing = enrollment.consent.offer().routing().clone();
+    let founder_offer = enrollment.consent.offer().clone();
+    let selector = Selector::from(&founder_offer);
+    let routing = founder_offer.routing().clone();
     let adapter = FounderTransport {
         turn: Arc::new(Mutex::new(None)),
         sent: Arc::new(Mutex::new(None)),
     };
-    let (mut founder, group, welcome) = peer_enrollment_founder_with_group(
+    let (mut founder, group, welcome, founder_reopen) = peer_enrollment_founder_with_group(
         round.founder_root.path(),
         round.founder.clone(),
         round.signer,
@@ -229,6 +239,18 @@ async fn prepare_history(round: &Round, group_route: [u8; 32], delivery_ttl: u64
         .await;
     let selected = entry(&socket, selector, peer::State::Activating).await;
     assert_no_command(&socket).await;
+    let ordinary_server = if check_command {
+        let started = Instant::now();
+        let server = verify_ordinary_command(round, &socket).await;
+        assert!(round.ordinary.publication_attempts(445) > 0);
+        eprintln!(
+            "peer_activation_ordinary_command_ms={}",
+            started.elapsed().as_millis()
+        );
+        Some(server)
+    } else {
+        None
+    };
     daemon.stop().await;
     round.assert_stopped(&socket);
     let activation_ms = started.elapsed().as_millis();
@@ -288,6 +310,9 @@ async fn prepare_history(round: &Round, group_route: [u8; 32], delivery_ttl: u64
         generation: selected.selection.generation,
         routing,
         founder,
+        founder_reopen,
+        founder_offer,
+        ordinary_server,
         group,
         welcome: welcome.id,
         delivery,
@@ -303,7 +328,7 @@ async fn prepare_history(round: &Round, group_route: [u8; 32], delivery_ttl: u64
 async fn history(case: History) {
     let group_route = random();
     let mut round = Round::initialize_with_group(Some(group_route)).await;
-    let setup = prepare_history(&round, group_route, 360).await;
+    let setup = prepare_history(&round, group_route, 360, false).await;
     let HistorySetup {
         selector,
         generation,
@@ -318,6 +343,7 @@ async fn history(case: History) {
         writes,
         activation_ms,
         update_ms,
+        ..
     } = setup;
     let [write] = writes.as_slice() else {
         panic!("founder history is established by one Group publication")
@@ -532,6 +558,18 @@ fn open_recipient<A: TransportAdapter + KeyPackagePublisher + Clone>(
     routing: &NostrRoutingV1,
     gate: A,
 ) -> AccountDeviceRuntime<A, StaticTransportRouting, A> {
+    open_recipient_with_package_gate(owner, row, wall, group, routing, gate.clone(), gate)
+}
+
+fn open_recipient_with_package_gate<A: TransportAdapter, K: KeyPackagePublisher>(
+    owner: &PreparedConsentOwner<'_>,
+    row: &crate::peer_invitation::HeldEvidence,
+    wall: &Arc<AtomicU64>,
+    group: &GroupId,
+    routing: &NostrRoutingV1,
+    adapter: A,
+    packages: K,
+) -> AccountDeviceRuntime<A, StaticTransportRouting, K> {
     let (binding, file) = row.stage();
     let original = owner.state.paths.reopen_provisional(binding, file).unwrap();
     let key = owner.state.paths.provisional_key(binding);
@@ -558,7 +596,7 @@ fn open_recipient<A: TransportAdapter + KeyPackagePublisher + Clone>(
         endpoints,
     );
     AccountDeviceRuntime::open(config, || {
-        Ok::<_, marmot_session::SessionError>((gate.clone(), router, gate))
+        Ok::<_, marmot_session::SessionError>((adapter, router, packages))
     })
     .unwrap()
     .with_maintenance_sources(

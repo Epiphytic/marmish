@@ -11,18 +11,21 @@ use crate::peer_invitation::{
 };
 use std::path::PathBuf;
 
+#[path = "peer_accept_receipt_wss_tests.rs"]
+mod receipt;
+
 const DURABLE_DEADLINE: Duration = Duration::from_secs(135);
 
 #[test]
 #[ignore = "requires native staged SQLCipher and two independent private WSS accounts"]
 fn private_wss_recovers_lost_postjoin_ack_without_another_native_send() {
-    run_native(DURABLE_DEADLINE, prove_lost_ack);
+    run_native(DURABLE_DEADLINE, || prove_lost_ack(false));
 }
 
-async fn prove_lost_ack() {
+async fn prove_lost_ack(with_receipt: bool) {
     let group_route = random();
     let mut round = Round::initialize_with_group(Some(group_route)).await;
-    let setup = prepare_history(&round, group_route, 600).await;
+    let setup = prepare_history(&round, group_route, 600, with_receipt).await;
     let mut founder = setup.founder;
     let stage = Stage {
         selector: setup.selector,
@@ -469,6 +472,38 @@ async fn prove_lost_ack() {
     recipient.resume_outbound_fanouts().await.unwrap();
     assert_eq!(gate.observe().unwrap().commit_calls, 0);
     assert_eq!(round.relay.group_writes(), writes);
+    if with_receipt {
+        let rotation = verify::confirm_rotation_cold(
+            &recipient,
+            founder.runtime(),
+            &image,
+            &confirmed,
+            wall(),
+        )
+        .unwrap();
+        let reserved = owner
+            .state
+            .checkpoint
+            .activate_and_reserve_recovered_receipt(&owner.state.source, &held, &rotation, wall())
+            .unwrap();
+        let inner = receipt::start(&mut owner, &stage, &round, reserved).await;
+        drop(rotation);
+        drop((recipient, owner, held, confirmed, armed));
+        receipt::finish(receipt::ReceiptRun {
+            stage: &stage,
+            round: &round,
+            image: &image,
+            reopen: &open_owner,
+            founder: setup.founder_reopen,
+            founder_offer: setup.founder_offer,
+            founder_runtime: Some(founder),
+            founder_socket: &mut founder_socket,
+            sender_socket: retry_socket.clone(),
+            recipient_signer: recipient_signer.clone(),
+            inner,
+        })
+        .await;
+    }
     founder_socket.stop(Instant::now() + STEP).await.unwrap();
     retry_socket
         .lock()
@@ -478,8 +513,13 @@ async fn prove_lost_ack() {
         .unwrap();
     assert_eq!(round.relay.peer_transcript().len(), 3);
     assert_eq!(round.ordinary.publication_attempts(7435), 0);
-    assert_eq!(round.ordinary.publication_attempts(445), 0);
+    if !with_receipt {
+        assert_eq!(round.ordinary.publication_attempts(445), 0);
+    }
     round.relay.stop().await;
+    if let Some(server) = setup.ordinary_server {
+        round.command.stop_fixture_server(server).await;
+    }
     round.ordinary.stop().await;
     eprintln!(
         "peer_postjoin_durable stage_ms={} history_ms={history_ms} reopen_ms={reopen_ms} ack_loss_ms={lost_ms} retry_ms={recover_ms} group_writes=3",
@@ -559,7 +599,16 @@ fn read_publication(
     row
 }
 
-fn advance_retry(recipient: &Recipient, group: &GroupId, wall: &AtomicU64, deadline: u64) {
+fn advance_retry(
+    recipient: &AccountDeviceRuntime<
+        impl TransportAdapter,
+        impl TransportRoutingPolicy,
+        impl KeyPackagePublisher,
+    >,
+    group: &GroupId,
+    wall: &AtomicU64,
+    deadline: u64,
+) {
     let delay = recipient
         .outbound_fanout_retry_delay_ms(group)
         .unwrap()

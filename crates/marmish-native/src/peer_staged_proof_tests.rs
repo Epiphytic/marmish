@@ -30,6 +30,7 @@ use nostr::types::Timestamp as NostrTimestamp;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -482,26 +483,67 @@ pub(crate) async fn peer_enrollment_founder_with_group<A: TransportAdapter>(
     room_id: [u8; 16],
     package: KeyPackage,
     adapter: A,
-) -> (PeerFounderRuntime<A>, GroupId, TransportMessage) {
+) -> (
+    PeerFounderRuntime<A>,
+    GroupId,
+    TransportMessage,
+    PeerFounderReopen,
+) {
     let founder = Store::new(dir, "peer-founder.db", signer);
     let (runtime, group, welcome) =
         prepare_peer_founder(&founder, recipient, routing, room_id, package).await;
     drop(runtime);
-    // The group ID is assigned during native founding. Reopen the same
-    // encrypted image with an exact route and keep KeyPackage I/O closed.
-    let endpoints: Vec<_> = routing
-        .relays
-        .iter()
-        .cloned()
-        .map(TransportEndpoint)
-        .collect();
-    let router = StaticTransportRouting::new(endpoints.clone()).with_group_route(
-        group.clone(),
-        routing.nostr_group_id.to_vec(),
-        endpoints,
-    );
-    let (_, runtime) = founder.open_with_routing(router, adapter, Arc::new(NoIo));
-    (PeerFounderRuntime(runtime), group, welcome)
+    // The group ID is assigned during native founding, before the scoped
+    // route is installed. Keep the storage authority independent of the socket.
+    let info = std::fs::symlink_metadata(&founder.path).unwrap();
+    assert!(info.is_file() && info.nlink() == 1);
+    let reopen = PeerFounderReopen {
+        founder,
+        group: group.clone(),
+        route: routing.clone(),
+        inode: (info.dev(), info.ino()),
+    };
+    (reopen.open(adapter), group, welcome, reopen)
+}
+
+pub(crate) struct PeerFounderReopen {
+    founder: Store,
+    group: GroupId,
+    route: NostrRoutingV1,
+    inode: (u64, u64),
+}
+
+impl PeerFounderReopen {
+    pub(crate) fn closed(&self) -> PeerFounderRuntime {
+        self.open(NoIo)
+    }
+
+    fn open<A: TransportAdapter>(&self, adapter: A) -> PeerFounderRuntime<A> {
+        let check = || {
+            let info = std::fs::symlink_metadata(&self.founder.path).unwrap();
+            assert!(info.is_file() && info.nlink() == 1);
+            assert_eq!((info.dev(), info.ino()), self.inode);
+        };
+        check();
+        let endpoints: Vec<_> = self
+            .route
+            .relays
+            .iter()
+            .cloned()
+            .map(TransportEndpoint)
+            .collect();
+        let router = StaticTransportRouting::new(endpoints.clone()).with_group_route(
+            self.group.clone(),
+            self.route.nostr_group_id.to_vec(),
+            endpoints,
+        );
+        let (storage, runtime) = self
+            .founder
+            .open_with_routing(router, adapter, Arc::new(NoIo));
+        assert_eq!(storage.migration_summary().0, 0);
+        check();
+        PeerFounderRuntime(runtime)
+    }
 }
 
 async fn prepare_peer_founder(
