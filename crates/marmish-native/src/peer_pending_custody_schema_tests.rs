@@ -123,11 +123,23 @@ fn pending_custody_only_upgrades_prepared_and_rejects_older_owners() {
     assert_eq!(f.inventory(), epoch1);
 
     let checkpoint = f.custody().unwrap();
-    let epoch2 = f.inventory();
-    assert_ne!(epoch2, epoch1);
+    let epoch3 = f.inventory();
+    assert_ne!(epoch3, epoch1);
     assert_eq!(f.prepared().err(), Some(binding));
     assert_eq!(f.retirement().err(), Some(binding));
-    assert_eq!(f.inventory(), epoch2);
+    assert_eq!(f.inventory(), epoch3);
+    assert_eq!(
+        Checkpoint::attach_pending_custody_fixture(
+            f.open(),
+            Keys::generate(),
+            UID,
+            &[URL],
+            Policy::default(),
+        )
+        .err(),
+        Some(binding)
+    );
+    assert_eq!(f.inventory(), epoch3);
     let HardenedPeerConnection(external) = f.open();
     assert!(
         external
@@ -141,7 +153,17 @@ fn pending_custody_only_upgrades_prepared_and_rejects_older_owners() {
     );
     drop(checkpoint);
     drop(f.custody().unwrap());
-    assert_eq!(f.inventory(), epoch2);
+    assert_eq!(f.inventory(), epoch3);
+
+    let legacy = Fixture::new();
+    legacy.provisional();
+    drop(legacy.prepared().unwrap());
+    let HardenedPeerConnection(conn) = legacy.open();
+    custody_schema::install_epoch_two_for_test(&conn).unwrap();
+    drop(conn);
+    let epoch2 = legacy.inventory();
+    assert_eq!(legacy.custody().err(), Some(binding));
+    assert_eq!(legacy.inventory(), epoch2);
 
     let retiring = Fixture::new();
     retiring.provisional();
@@ -492,6 +514,15 @@ fn pending_custody_exact_graph_and_legacy_sweep_preserve_each_state() {
         bytes: b"schema fixture bytes",
     };
     let expired = WALL + 3600;
+    assert!(
+        cp.terminal_due(&source, selector.server, expired)
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        cp.expire_pending(&source, selector, 1, expired),
+        Err(Error::Cursor(CursorError::Stale))
+    ));
     cp.cursor
         .defer(
             source.origin,
@@ -830,6 +861,86 @@ fn pending_terminal_exact_decline_and_release_preserves_fences_and_cooldown() {
         )
         .unwrap();
     assert_eq!(replay_fence, 1);
+
+    let retain_until: u64 = cp
+        .cursor
+        .conn
+        .query_row("SELECT retain_until FROM peer_pending_terminal", [], |r| {
+            read_seconds(r, 0)
+        })
+        .unwrap();
+    // Populate storage-only terminal history from the actual Released row.
+    // Keep the same checked schema and a cleared slot at the final generation.
+    let history_limit = super::super::super::cooldown::HISTORY_LIMIT;
+    let tx = cp.cursor.begin(source.origin).unwrap();
+    let insert_sql: String = tx
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE name='peer_terminal_insert'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    tx.execute_batch("DROP TRIGGER peer_terminal_insert")
+        .unwrap();
+    let guard = terminal_schema::Writer::Insert;
+    guard.guard(&tx, false).unwrap();
+    assert_eq!(
+        tx.execute(
+            "INSERT INTO peer_pending_terminal
+             WITH RECURSIVE generations(n) AS
+                (SELECT 2 UNION ALL SELECT n+1 FROM generations WHERE n<?1)
+             SELECT class,n,account,server,origin,CAST(printf('%016d',n) AS BLOB),
+                CAST(printf('%032d',n) AS BLOB),consent_carrier,CAST(printf('%032d',n) AS BLOB),
+                delivery_digest,outer_stamp,welcome_digest,device,inode,group_id,epoch_number,
+                epoch_identity,own_leaf,qualified_at,pending_deadline,replay_until,
+                offer_replay_until,reason,decided_at,step,outcome,witness,retain_until
+             FROM peer_pending_terminal, generations WHERE generation=1",
+            [history_limit],
+        )
+        .unwrap() as i64,
+        history_limit - 1
+    );
+    guard.guard(&tx, true).unwrap();
+    tx.execute_batch(&insert_sql).unwrap();
+    tx.execute(
+        "UPDATE peer_provisioning_slot SET generation=?1 WHERE generation=1",
+        [history_limit],
+    )
+    .unwrap();
+    tx.commit().unwrap();
+
+    let tx = cp
+        .cursor
+        .with_wall(source.origin, retain_until - 1)
+        .unwrap();
+    assert_eq!(
+        terminal::prune_terminal_history(&tx, source.origin, retain_until - 1),
+        Err(Error::Cursor(CursorError::Backlog))
+    );
+    drop(tx);
+    let count_history = |cp: &Checkpoint| -> i64 {
+        cp.cursor
+            .conn
+            .query_row("SELECT count(*) FROM peer_pending_terminal", [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+    };
+    assert_eq!(count_history(&cp), history_limit);
+    assert!(
+        cp.terminal_lookup(&source, selector, 1, retain_until - 1)
+            .unwrap()
+            .is_some()
+    );
+    let tx = cp.cursor.with_wall(source.origin, retain_until).unwrap();
+    terminal::prune_terminal_history(&tx, source.origin, retain_until).unwrap();
+    tx.commit().unwrap();
+    assert_eq!(count_history(&cp), 0);
+    assert!(
+        cp.terminal_lookup(&source, selector, 1, retain_until)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -888,4 +999,43 @@ fn pending_terminal_expiry_boundary_and_absorbing_block_preserve_slot() {
     assert_eq!(counts(&cp.cursor.conn), (1, 1, 1, 1, 1));
     drop(cp);
     assert_eq!(counts(&f.custody().unwrap().cursor.conn), (1, 1, 1, 1, 1));
+}
+
+#[test]
+fn pending_terminal_full_cooldown_refuses_decline_but_not_expiry() {
+    use super::super::super::cooldown;
+
+    let f = Fixture::new();
+    let founder = Keys::generate();
+    let (mut cp, source, selector) = joined_pending(&f, &founder);
+    let now = WALL + 3;
+    let tx = cp.cursor.begin(source.origin).unwrap();
+    for n in 0..cooldown::HISTORY_LIMIT {
+        let mut server = [0xa3; 32];
+        server[..8].copy_from_slice(&n.to_be_bytes());
+        cooldown::decline(&tx, server, now).unwrap();
+    }
+    tx.commit().unwrap();
+
+    let local = cp.authorize_local(UID).unwrap();
+    assert!(matches!(
+        cp.decline_pending_checked(&source, selector, 1, now, &local, || Ok(())),
+        Err(Error::Cursor(CursorError::Backlog))
+    ));
+    assert!(
+        cp.terminal_lookup(&source, selector, 1, now)
+            .unwrap()
+            .is_none()
+    );
+    let deadline = WALL + 3_300;
+    let expired = cp.expire_pending(&source, selector, 1, deadline).unwrap();
+    assert_eq!(expired.reason(), terminal::TerminalReason::Expired);
+    let cooldown_rows: i64 = cp
+        .cursor
+        .conn
+        .query_row("SELECT count(*) FROM peer_retirement_cooldown", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(cooldown_rows, cooldown::HISTORY_LIMIT);
 }

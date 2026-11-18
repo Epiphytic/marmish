@@ -429,7 +429,11 @@ fn selection(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Selector, u64)> {
     ))
 }
 
-fn prune_terminal_history(tx: &Transaction<'_>, origin: Origin, wall: u64) -> Result<()> {
+pub(super) fn prune_terminal_history(
+    tx: &Transaction<'_>,
+    origin: Origin,
+    wall: u64,
+) -> Result<()> {
     Writer::Prune.guard(tx, false)?;
     tx.execute(
         "DELETE FROM peer_pending_terminal WHERE origin=?1 AND step=3 AND retain_until<=?2",

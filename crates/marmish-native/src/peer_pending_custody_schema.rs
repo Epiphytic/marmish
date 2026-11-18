@@ -149,8 +149,8 @@ fn install_guard(conn: &Connection, verb: &str) -> rusqlite::Result<()> {
     ))
 }
 
-fn install(conn: &Connection) -> std::result::Result<(), CursorError> {
-    conn.execute_batch(DDL)?;
+fn install_common(conn: &Connection, ddl: &str) -> std::result::Result<(), CursorError> {
+    conn.execute_batch(ddl)?;
     let predicate = EXACT_OUTBOX.replace("c.", "NEW.");
     for writer in [Writer::Insert, Writer::Update] {
         let verb = writer.verb();
@@ -162,6 +162,22 @@ fn install(conn: &Connection) -> std::result::Result<(), CursorError> {
         install_guard(conn, verb)?;
     }
     install_guard(conn, "DELETE")?;
+    Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn install_epoch_two_for_test(
+    conn: &Connection,
+) -> std::result::Result<(), CursorError> {
+    let ddl = DDL.replace("epoch=3", "epoch=2").replace("VALUES (3);", "VALUES (2);").replace(
+        "\n    OR EXISTS (SELECT 1 FROM peer_pending_terminal t WHERE t.class=OLD.class AND t.generation=OLD.generation)",
+        "",
+    );
+    install_common(conn, &ddl)
+}
+
+fn install(conn: &Connection) -> std::result::Result<(), CursorError> {
+    install_common(conn, DDL)?;
     super::super::super::cooldown::install(conn).map_err(super::schema::cursor_error)?;
     super::terminal_schema::install(conn).map_err(super::schema::cursor_error)?;
     Ok(())
