@@ -11,7 +11,7 @@ use storage_sqlite::{SqlCipherHardening, SqlCipherKey, open_hardened_sqlcipher};
 
 #[cfg(test)]
 #[path = "peer_installed_cursor.rs"]
-mod installed;
+pub(crate) mod installed;
 
 #[path = "peer_cursor_pages.rs"]
 mod pages;

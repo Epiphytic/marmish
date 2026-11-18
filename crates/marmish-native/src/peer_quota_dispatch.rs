@@ -8,10 +8,10 @@ use std::{
 };
 
 const RAW_AUTOPROXY: c_int = 0x20;
-pub(super) const CLOSED_STAGE_LIMIT: u64 = 16 * 1024 * 1024;
+pub(crate) const CLOSED_STAGE_LIMIT: u64 = 16 * 1024 * 1024;
 // The 128 MiB admission in the pending activation design. No production quota
 // owner exists at this revision; the proof fixture supplies the other charges.
-const TOTAL_ADMISSION: u64 = 128 * 1024 * 1024;
+pub(crate) const TOTAL_ADMISSION: u64 = 128 * 1024 * 1024;
 const NAMES: [&str; 2] = ["provisional-known.db", "provisional-unknown.db"];
 #[cfg(test)]
 const SNAPSHOT: usize = NAMES.len();
@@ -865,7 +865,7 @@ fn witness(meta: &fs::Metadata) -> (u64, u64) {
 }
 
 #[cfg(test)]
-fn local_volume(path: &Path) -> Result<bool> {
+pub(crate) fn local_volume(path: &Path) -> Result<bool> {
     let name = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| "stage_parent")?;
     let mut status = std::mem::MaybeUninit::<libc::statfs>::uninit();
     if unsafe { libc::statfs(name.as_ptr(), status.as_mut_ptr()) } != 0 {

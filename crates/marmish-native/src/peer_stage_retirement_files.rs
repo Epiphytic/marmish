@@ -102,24 +102,28 @@ fn open_dirs(paths: &Paths<'_>) -> Result<(File, Identity, Identity)> {
     Ok((peer, profile, identity))
 }
 
+fn stage_names(known: bool) -> [&'static CStr; 4] {
+    if known {
+        [
+            c"provisional-known.db",
+            c"provisional-known.db-journal",
+            c"provisional-known.db-wal",
+            c"provisional-known.db-shm",
+        ]
+    } else {
+        [
+            c"provisional-unknown.db",
+            c"provisional-unknown.db-journal",
+            c"provisional-unknown.db-wal",
+            c"provisional-unknown.db-shm",
+        ]
+    }
+}
+
 impl<'p, 'a> RetirementDir<'p, 'a> {
     pub(in super::super) fn open(paths: &'p Paths<'a>, known: bool) -> Result<Self> {
         let (descriptor, profile, peer) = open_dirs(paths)?;
-        let names = if known {
-            [
-                c"provisional-known.db",
-                c"provisional-known.db-journal",
-                c"provisional-known.db-wal",
-                c"provisional-known.db-shm",
-            ]
-        } else {
-            [
-                c"provisional-unknown.db",
-                c"provisional-unknown.db-journal",
-                c"provisional-unknown.db-wal",
-                c"provisional-unknown.db-shm",
-            ]
-        };
+        let names = stage_names(known);
         Ok(Self {
             paths,
             descriptor,
@@ -202,24 +206,119 @@ impl<'p, 'a> RetirementDir<'p, 'a> {
     }
 
     fn leaf(&self) -> Result<Option<(Identity, libc::off_t)>> {
-        let Some(entry) = stat(&self.descriptor, self.names[0])? else {
-            return Ok(None);
+        Ok(private_stat(&self.descriptor, self.peer, self.names[0])?
+            .map(|(identity, entry)| (identity, entry.st_size)))
+    }
+}
+
+fn private_stat(
+    descriptor: &File,
+    peer: Identity,
+    name: &CStr,
+) -> Result<Option<(Identity, libc::stat)>> {
+    let Some(entry) = stat(descriptor, name)? else {
+        return Ok(None);
+    };
+    #[cfg(target_os = "linux")]
+    let device = entry.st_dev;
+    #[cfg(target_os = "macos")]
+    let device = entry.st_dev as u64;
+    // SAFETY: reads this Unix process's effective UID.
+    let uid = unsafe { libc::geteuid() };
+    if entry.st_mode & libc::S_IFMT != libc::S_IFREG
+        || entry.st_mode & 0o7777 != 0o600
+        || entry.st_uid != uid
+        || entry.st_nlink != 1
+        || device != peer.0
+    {
+        return Err(Error::StageIdentityMismatch);
+    }
+    Ok(Some(((device, entry.st_ino), entry)))
+}
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+pub(in super::super) mod recovery {
+    use super::*;
+    use std::collections::BTreeSet;
+    use std::os::unix::ffi::OsStrExt;
+
+    const CURSOR: [&CStr; 4] = [
+        c"cursor.db",
+        c"cursor.db-journal",
+        c"cursor.db-wal",
+        c"cursor.db-shm",
+    ];
+
+    const SNAPSHOT: [&CStr; 4] = [
+        c"receiver-join-snapshot.db",
+        c"receiver-join-snapshot.db-journal",
+        c"receiver-join-snapshot.db-wal",
+        c"receiver-join-snapshot.db-shm",
+    ];
+
+    #[derive(Clone, Copy)]
+    pub(in super::super::super) struct FileExtent {
+        pub(in super::super::super) identity: Identity,
+        pub(in super::super::super) logical: u64,
+        pub(in super::super::super) charged: u64,
+    }
+
+    pub(in super::super::super) fn inspect(
+        paths: &Paths<'_>,
+        cursor: &CheckedFile,
+    ) -> Result<[[Option<FileExtent>; 4]; 3]> {
+        cursor.unchanged()?;
+        let (descriptor, profile, peer) = open_dirs(paths)?;
+        let families = [stage_names(true), stage_names(false), SNAPSHOT];
+        for entry in fs::read_dir(paths.directory()).map_err(|_| Error::Path)? {
+            let name = entry.map_err(|_| Error::Path)?.file_name();
+            if !CURSOR
+                .iter()
+                .chain(families.iter().flatten())
+                .any(|expected| expected.to_bytes() == name.as_bytes())
+            {
+                return Err(Error::StageIdentityMismatch);
+            }
+        }
+        let Some((id, _)) = private_stat(&descriptor, peer, CURSOR[0])? else {
+            return Err(Error::StageIdentityMismatch);
         };
-        #[cfg(target_os = "linux")]
-        let device = entry.st_dev;
-        #[cfg(target_os = "macos")]
-        let device = entry.st_dev as u64;
-        // SAFETY: reads this Unix process's effective UID.
-        let uid = unsafe { libc::geteuid() };
-        if entry.st_mode & libc::S_IFMT != libc::S_IFREG
-            || entry.st_mode & 0o7777 != 0o600
-            || entry.st_uid != uid
-            || entry.st_nlink != 1
-            || device != self.peer.0
-        {
+        for sidecar in &CURSOR[1..] {
+            if stat(&descriptor, sidecar)?.is_some() {
+                return Err(Error::StageIdentityMismatch);
+            }
+        }
+        if id != cursor.before {
             return Err(Error::StageIdentityMismatch);
         }
-        Ok(Some(((device, entry.st_ino), entry.st_size)))
+
+        let mut identities = BTreeSet::from([id]);
+        let mut extents = [[None; 4]; 3];
+        for (family, extents) in families.into_iter().zip(&mut extents) {
+            for (name, extent) in family.into_iter().zip(extents) {
+                if let Some((identity, entry)) = private_stat(&descriptor, peer, name)? {
+                    let logical = u64::try_from(entry.st_size).map_err(|_| Error::Path)?;
+                    let allocated = u64::try_from(entry.st_blocks)
+                        .ok()
+                        .and_then(|blocks| blocks.checked_mul(512))
+                        .ok_or(Error::Path)?;
+                    if !identities.insert(identity) {
+                        return Err(Error::StageIdentityMismatch);
+                    }
+                    *extent = Some(FileExtent {
+                        identity,
+                        logical,
+                        charged: logical.max(allocated),
+                    });
+                }
+            }
+        }
+        let (_, current_profile, current_peer) = open_dirs(paths)?;
+        cursor.unchanged()?;
+        if (profile, peer) != (current_profile, current_peer) {
+            return Err(Error::StageIdentityMismatch);
+        }
+        Ok(extents)
     }
 }
 

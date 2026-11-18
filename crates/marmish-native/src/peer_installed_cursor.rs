@@ -7,14 +7,14 @@ const PAGE_SIZE: u64 = 4_096;
 const MAX_PAGES: u64 = 6_144;
 const MAX_MAIN_BYTES: u64 = MAX_PAGES * PAGE_SIZE;
 const MAX_JOURNAL_BYTES: u64 = MAX_PAGES * (PAGE_SIZE + 8) + 2 * 65_536;
-const RESERVED_BYTES: u64 = 49 * 1_048_576;
+pub(crate) const RESERVED_BYTES: u64 = 49 * 1_048_576;
 
 const _: () = assert!(MAX_MAIN_BYTES + MAX_JOURNAL_BYTES <= RESERVED_BYTES);
 
 impl HardenedPeerConnection {
     /// The owner must hold the sole profile lease and recheck its checked cursor
     /// inode and scope around this open. This proof has no daemon caller yet.
-    fn open_installed(path: &Path, key: [u8; 32]) -> Result<Self> {
+    pub(crate) fn open_installed(path: &Path, key: [u8; 32]) -> Result<Self> {
         check_closed_image(path)?;
         let conn = open_keyed(path, key)?;
         // Verify DELETE mode rather than attempting to transition a foreign image.
