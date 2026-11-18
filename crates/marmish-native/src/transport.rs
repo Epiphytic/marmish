@@ -5,7 +5,7 @@
 
 use crate::{
     Error, Result,
-    peer_relay_trust::{BoundPeerTls, PeerTlsAttempt},
+    peer_relay_trust::{BoundPeerTls, PeerTlsAttempt, ProbeAuthority},
 };
 use arti_client::{BootstrapBehavior, TorClient, config::TorClientConfigBuilder};
 use async_wsocket::Message;
@@ -303,6 +303,21 @@ impl PeerRelayConnector {
         state.peer_tls = Some(tls);
         state.cancelled = cancel;
         Ok(Self(connector))
+    }
+
+    pub(crate) async fn open_probe(
+        &self,
+        authority: &ProbeAuthority<'_>,
+        deadline: Instant,
+    ) -> Result<(WebSocketSink, WebSocketStream)> {
+        let url = authority.endpoint()?;
+        if self.0.0.policy.urls.first() != Some(url) {
+            return Err(Error::Transport("relay_not_configured"));
+        }
+        self.0.bootstrap(deadline).await?;
+        timeout_at(deadline, self.0.open_socket(url, None))
+            .await
+            .map_err(|_| Error::Transport("peer_qualification_deadline"))?
     }
 
     #[cfg(test)]

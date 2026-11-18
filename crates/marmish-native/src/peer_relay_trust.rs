@@ -2,7 +2,10 @@
 
 use crate::{
     Error, Result,
-    command_config::{CommandConfig, peer_intent::Trust},
+    command_config::{
+        CommandConfig,
+        peer_intent::{Relay, Trust},
+    },
     identity::ProfileLease,
     transport::{
         ArtiDirs, NetworkStream, PeerRelayConnector, RelayPolicy, RouteMode, TransportLimits,
@@ -22,13 +25,19 @@ use std::{
         fd::{AsRawFd, FromRawFd},
         unix::fs::{MetadataExt, OpenOptionsExt},
     },
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, Weak},
 };
 use tokio_util::sync::CancellationToken;
 use x509_parser::{certificate::X509Certificate, parse_x509_certificate, public_key::PublicKey};
 
+#[path = "peer_relay_probe.rs"]
+mod probe;
+
 #[path = "peer_relay_qualification.rs"]
 mod qualification;
+
+pub(crate) use qualification::Report as QualificationReport;
 
 #[cfg(test)]
 #[path = "peer_relay_trust_tests.rs"]
@@ -40,6 +49,86 @@ const PROFILE_CHANGED: Error = Error::Identity("peer_profile_changed");
 const CA_ERROR: Error = Error::Transport("peer_tls_ca");
 const CERT_ERROR: Error = Error::Transport("peer_tls_certificate");
 const PIN_ERROR: Error = Error::Transport("peer_tls_pin");
+
+pub(crate) fn qualification_status(state: &Path, identity: &str) -> Result<QualificationReport> {
+    let profile = ProfileFiles::open(Arc::new(ProfileLease::acquire_ready(state, identity)?))?;
+    let config = profile.command_config()?;
+    let relay = config.bound_peer_relay(&config)?;
+    Ok(qualification::show(&profile, relay))
+}
+
+pub(crate) async fn qualify(
+    state: &Path,
+    identity: &str,
+    attestation: PathBuf,
+) -> Result<QualificationReport> {
+    let lease = Arc::new(ProfileLease::acquire_ready(state, identity)?);
+    let profile = ProfileFiles::open(lease.clone())?;
+    let (config, snapshot) = profile.command_snapshot()?;
+    let relay = config.bound_peer_relay(&config)?;
+    let clock = || qualification::wall().ok_or(Error::Invalid("peer_qualification_clock"));
+    let checked = qualification::CheckedAttestation::read(&attestation, relay, clock()?)?;
+    let owner = PeerRelayOwner::bind_with_limits(
+        lease,
+        &config,
+        TransportLimits {
+            max_frame_bytes: 128 * 1024,
+            ..TransportLimits::default()
+        },
+    )?;
+    let plan = probe::Plan::new()?;
+    let affirmative = format!("qualify {}", relay.origin);
+    let prompt = format!(
+        "Private relay qualification for {}\nTLS trust: {}\n{}\n{}Type {affirmative} to authorize the bounded relay probe: ",
+        relay.origin,
+        qualification::trust_expression(&relay.trust),
+        checked.operator_view(),
+        plan.operator_view(),
+    );
+    let answer =
+        tokio::task::spawn_blocking(move || crate::native_setup::Tty::open()?.line_exact(&prompt))
+            .await
+            .map_err(|_| Error::Invalid("peer_qualification_confirmation"))??;
+    if answer != affirmative {
+        return Err(Error::Invalid("peer_qualification_confirmation"));
+    }
+    let authority = ProbeAuthority {
+        profile: &owner.profile,
+        relay,
+        snapshot,
+        attestation: &checked,
+        attestation_path: &attestation,
+    };
+    let started = authority.check()?;
+    let completed = plan.execute(&owner.connector, &authority, started).await?;
+    authority.check()?;
+    qualification::issue(&owner.profile, relay, &checked, completed)
+}
+
+/// Created only by the selected profile's confirmed operator turn. A raw URL
+/// cannot obtain a probe connection and this permission cannot open live Peer.
+pub(crate) struct ProbeAuthority<'a> {
+    profile: &'a ProfileFiles,
+    relay: &'a Relay,
+    snapshot: ConfigWitness,
+    attestation: &'a qualification::CheckedAttestation,
+    attestation_path: &'a Path,
+}
+
+impl ProbeAuthority<'_> {
+    pub(crate) fn endpoint(&self) -> Result<&Url> {
+        self.check()?;
+        Ok(&self.relay.origin)
+    }
+
+    fn check(&self) -> Result<u64> {
+        let now = qualification::wall().ok_or(Error::Invalid("peer_qualification_clock"))?;
+        self.attestation
+            .recheck(self.attestation_path, self.relay, now)?;
+        self.profile.check_command_snapshot(self.snapshot)?;
+        Ok(now)
+    }
+}
 
 pub(crate) struct PeerRelayOwner {
     profile: Arc<ProfileFiles>,
@@ -57,12 +146,7 @@ impl PeerRelayOwner {
         mut limits: TransportLimits,
     ) -> Result<Self> {
         let profile = Arc::new(ProfileFiles::open(lease)?);
-        let loaded = CommandConfig::from_file(
-            profile
-                .required(c"config.json")
-                .map_err(|_| PROFILE_CHANGED)?,
-        )
-        .map_err(|_| PROFILE_CHANGED)?;
+        let loaded = profile.command_config()?;
         let relay = config.bound_peer_relay(&loaded)?;
         limits.max_relays = 1;
         let policy = RelayPolicy::parse(&[relay.origin.to_string()], RouteMode::Off, limits)?;
@@ -327,6 +411,44 @@ impl ProfileFiles {
     fn required(&self, name: &CStr) -> io::Result<File> {
         open_regular(&self.dir, name, libc::O_RDONLY)
     }
+
+    fn command_config(&self) -> Result<CommandConfig> {
+        self.command_snapshot().map(|(config, _)| config)
+    }
+
+    fn command_snapshot(&self) -> Result<(CommandConfig, ConfigWitness)> {
+        self.recheck()?;
+        let file = self.required(c"config.json").map_err(|_| PROFILE_CHANGED)?;
+        let file_id = inode(&file.metadata().map_err(|_| PROFILE_CHANGED)?);
+        let bytes = read_bounded(file, crate::command_config::MAX_CONFIG as usize)
+            .map_err(|_| PROFILE_CHANGED)?;
+        self.recheck()?;
+        let live = self.required(c"config.json").map_err(|_| PROFILE_CHANGED)?;
+        if inode(&live.metadata().map_err(|_| PROFILE_CHANGED)?) != file_id {
+            return Err(PROFILE_CHANGED);
+        }
+        let config = CommandConfig::from_bytes(&bytes).map_err(|_| PROFILE_CHANGED)?;
+        Ok((
+            config,
+            ConfigWitness {
+                file_id,
+                digest: Sha256::digest(bytes).into(),
+            },
+        ))
+    }
+
+    fn check_command_snapshot(&self, expected: ConfigWitness) -> Result<()> {
+        if self.command_snapshot()?.1 != expected {
+            return Err(PROFILE_CHANGED);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ConfigWitness {
+    file_id: (u64, u64),
+    digest: [u8; 32],
 }
 
 fn open_profile_directory(lease: &ProfileLease) -> Result<File> {

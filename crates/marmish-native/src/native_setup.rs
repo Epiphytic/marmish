@@ -195,6 +195,10 @@ impl Tty {
         Ok(Self { file: f })
     }
     pub(crate) fn line(&mut self, prompt: &str) -> Result<String> {
+        self.line_exact(prompt).map(|line| line.trim().to_owned())
+    }
+
+    pub(crate) fn line_exact(&mut self, prompt: &str) -> Result<String> {
         self.file.write_all(prompt.as_bytes())?;
         self.file.flush()?;
         let mut v = Vec::new();
@@ -211,9 +215,7 @@ impl Tty {
             }
             v.push(byte[0]);
         }
-        String::from_utf8(v)
-            .map(|s| s.trim().to_owned())
-            .map_err(|_| Error::Invalid("setup_input"))
+        String::from_utf8(v).map_err(|_| Error::Invalid("setup_input"))
     }
 }
 fn choices(o: &mut SetupOptions) -> Result<()> {

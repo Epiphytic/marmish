@@ -1,16 +1,25 @@
 //! Bounded local record storage. A matching record never grants egress.
 
-use super::{ProfileFiles, inode, open_regular, read_bounded};
+use super::{ProfileFiles, inode, open_regular, private_mode, read_bounded};
 use crate::{
     Error, Result,
-    command_config::{peer_intent::Relay, peer_origin, peer_trust},
+    command_config::{
+        peer_intent::{Relay, Trust},
+        peer_origin, peer_trust,
+    },
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     ffi::CStr,
-    fs::File,
+    fs::{File, OpenOptions},
     io::{self, Write},
-    os::fd::AsRawFd,
+    os::{
+        fd::AsRawFd,
+        unix::fs::{MetadataExt, OpenOptionsExt},
+    },
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 const RECORD: &CStr = c"peer-relay-qualification.json";
@@ -18,6 +27,11 @@ const STAGING: &CStr = c"peer-relay-qualification.new";
 const RECORD_LIMIT: usize = 8192;
 const MAX_TIMESTAMP: u64 = 253_402_300_799;
 const MAX_VALIDITY: u64 = 30 * 24 * 60 * 60;
+const VERSIONS: Versions = Versions {
+    suite: "private-wss-probe-v1",
+    bounds: "private-wss-bounds-v1",
+    contract: "private-wss-contract-v1",
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -59,6 +73,222 @@ enum LocalStatus {
     ClockUntrusted,
     // Locally consistent metadata awaiting independent issuer evidence.
     CurrentMetadata,
+    Qualified,
+}
+
+#[derive(Serialize)]
+pub(crate) struct Report {
+    origin: String,
+    trust: String,
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    qualified_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_at: Option<u64>,
+}
+
+pub(super) fn trust_expression(trust: &Trust) -> String {
+    let (prefix, pin) = match trust {
+        Trust::SpkiSha256(pin) => ("spki-sha256", pin),
+        Trust::CaSha256(pin) => ("ca-sha256", pin),
+    };
+    format!("{prefix}:{}", hex::encode(pin))
+}
+
+pub(super) fn wall() -> Option<u64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|now| now.as_secs())
+}
+
+pub(super) fn show(profile: &ProfileFiles, relay: &Relay) -> Report {
+    let record = read_record(profile).filter(|record| record.schema == 2);
+    let status = record.as_ref().map_or(LocalStatus::Unqualified, |record| {
+        record.readback(
+            Scope {
+                profile_id: profile.lease.profile_id(),
+                relay,
+                versions: VERSIONS,
+            },
+            wall(),
+        )
+    });
+    let (qualified_at, expires_at) = record
+        .filter(|_| matches!(status, LocalStatus::Qualified | LocalStatus::Expired))
+        .map_or((None, None), |record| {
+            (Some(record.qualified_at), Some(record.expires_at))
+        });
+    let status = match status {
+        LocalStatus::Unqualified | LocalStatus::CurrentMetadata => "unqualified",
+        LocalStatus::Stale => "stale",
+        LocalStatus::Expired => "expired",
+        LocalStatus::ClockUntrusted => "clock_untrusted",
+        LocalStatus::Qualified => "qualified",
+    };
+    let full_trust = trust_expression(&relay.trust);
+    let trust = full_trust[..full_trust.len() - 52].to_owned();
+    Report {
+        origin: relay.origin.to_string(),
+        trust,
+        status,
+        qualified_at,
+        expires_at,
+    }
+}
+
+const ATTESTATION_REFUSED: Error = Error::Invalid("peer_qualification_attestation");
+
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct Attestation {
+    schema: u8,
+    origin: String,
+    trust: String,
+    enforcement_source: String,
+    valid_from: u64,
+    valid_until: u64,
+    control_limits: ControlLimits,
+    enforcement: Enforcement,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ControlLimits {
+    event_bytes: u32,
+    stored_per_recipient: u32,
+    per_timestamp_second: u32,
+    accepted_per_600s: u32,
+    stored_per_writer_recipient: u32,
+    retention_max_seconds: u32,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct Enforcement {
+    control_registered_writer: bool,
+    control_exact_recipient_auth: bool,
+    control_expiration_no_early_eviction: bool,
+    group_exact_route_acl: bool,
+    group_authenticated_members: bool,
+    group_reconnect_history: bool,
+}
+
+pub(super) struct CheckedAttestation {
+    data: Attestation,
+    file: (u64, u64),
+    digest: [u8; 32],
+}
+
+impl CheckedAttestation {
+    pub(super) fn read(path: &Path, relay: &Relay, now: u64) -> Result<Self> {
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+            .open(path)
+            .map_err(|_| ATTESTATION_REFUSED)?;
+        let meta = file.metadata().map_err(|_| ATTESTATION_REFUSED)?;
+        if !meta.is_file() || meta.nlink() != 1 || !private_mode(&meta, 0o600) {
+            return Err(ATTESTATION_REFUSED);
+        }
+        let bytes = read_bounded(file, RECORD_LIMIT).map_err(|_| ATTESTATION_REFUSED)?;
+        if bytes.iter().find(|byte| !byte.is_ascii_whitespace()) != Some(&b'{') {
+            return Err(ATTESTATION_REFUSED);
+        }
+        let data: Attestation = serde_json::from_slice(&bytes).map_err(|_| ATTESTATION_REFUSED)?;
+        if data.schema != 1
+            || data.origin != relay.origin.as_str()
+            || data.trust != trust_expression(&relay.trust)
+            || !(1..=512).contains(&data.enforcement_source.len())
+            || data.enforcement_source.trim() != data.enforcement_source
+            || data.enforcement_source.chars().any(char::is_control)
+            || data.valid_from == 0
+            || !(data.valid_from..data.valid_until).contains(&now)
+            || data.valid_until > MAX_TIMESTAMP
+            || data.control_limits
+                != (ControlLimits {
+                    event_bytes: 65536,
+                    stored_per_recipient: 256,
+                    per_timestamp_second: 3,
+                    accepted_per_600s: 32,
+                    stored_per_writer_recipient: 32,
+                    retention_max_seconds: 324000,
+                })
+            || data.enforcement
+                != (Enforcement {
+                    control_registered_writer: true,
+                    control_exact_recipient_auth: true,
+                    control_expiration_no_early_eviction: true,
+                    group_exact_route_acl: true,
+                    group_authenticated_members: true,
+                    group_reconnect_history: true,
+                })
+        {
+            return Err(ATTESTATION_REFUSED);
+        }
+        let canonical = serde_json::to_vec(&data).map_err(|_| ATTESTATION_REFUSED)?;
+        Ok(Self {
+            data,
+            file: inode(&meta),
+            digest: Sha256::digest(canonical).into(),
+        })
+    }
+
+    pub(super) fn recheck(&self, path: &Path, relay: &Relay, now: u64) -> Result<()> {
+        let current = Self::read(path, relay, now)?;
+        if self.file != current.file || self.digest != current.digest {
+            return Err(ATTESTATION_REFUSED);
+        }
+        Ok(())
+    }
+
+    pub(super) fn operator_view(&self) -> String {
+        format!(
+            "Enforcement source: {:?}\nAttestation validity: {} to {} (Unix seconds)\nConfirm the v1 Control retention, limits and access rules, and Group access and reconnect history.",
+            self.data.enforcement_source, self.data.valid_from, self.data.valid_until
+        )
+    }
+}
+
+pub(super) fn issue(
+    profile: &ProfileFiles,
+    relay: &Relay,
+    attestation: &CheckedAttestation,
+    completed: super::probe::Completed,
+) -> Result<Report> {
+    let (started, finished, evidence) = completed.evidence(relay)?;
+    let expires_at = started
+        .saturating_add(MAX_VALIDITY)
+        .min(attestation.data.valid_until);
+    if finished < started || finished >= expires_at {
+        return Err(WRITE_REFUSED);
+    }
+    let record = Record {
+        schema: 2,
+        profile_id: profile.lease.profile_id().to_owned(),
+        origin: relay.origin.to_string(),
+        trust: trust_expression(&relay.trust),
+        probe_suite: VERSIONS.suite.to_owned(),
+        bounds_version: VERSIONS.bounds.to_owned(),
+        relay_contract: VERSIONS.contract.to_owned(),
+        mdk_revision: env!("MARMISH_MDK_REVISION").to_owned(),
+        target: env!("MARMISH_BUILD_TARGET").to_owned(),
+        probe_evidence: hex::encode(evidence),
+        operator_evidence: hex::encode(attestation.digest),
+        qualified_at: started,
+        last_observed_at: finished,
+        expires_at,
+    };
+    replace(profile, relay, VERSIONS, &record)?;
+    let exact = read_record(profile).ok_or(WRITE_UNCERTAIN)?;
+    if exact != record {
+        return Err(WRITE_UNCERTAIN);
+    }
+    let report = show(profile, relay);
+    if report.status != "qualified" {
+        return Err(WRITE_UNCERTAIN);
+    }
+    Ok(report)
 }
 
 impl Record {
@@ -75,7 +305,7 @@ impl Record {
 
     fn is_canonical(&self) -> bool {
         let hex = crate::foundation::valid_hex;
-        self.schema == 1
+        matches!(self.schema, 1 | 2)
             && hex(&self.profile_id, 32)
             && peer_origin(self.origin.clone()).is_ok_and(|url| url.as_str() == self.origin)
             && peer_trust(&self.trust).is_ok()
@@ -123,8 +353,10 @@ impl Record {
             Some(now) if (self.last_observed_at..=MAX_TIMESTAMP).contains(&now) => {
                 if now >= self.expires_at {
                     LocalStatus::Expired
-                } else {
+                } else if self.schema == 1 {
                     LocalStatus::CurrentMetadata
+                } else {
+                    LocalStatus::Qualified
                 }
             }
             _ => LocalStatus::ClockUntrusted,
@@ -144,12 +376,7 @@ fn valid_evidence(digest: &str) -> bool {
     crate::foundation::valid_hex(digest, 64) && digest.bytes().any(|b| b != b'0')
 }
 
-fn read(
-    profile: &ProfileFiles,
-    relay: &Relay,
-    versions: Versions,
-    wall: Option<u64>,
-) -> LocalStatus {
+fn read_record(profile: &ProfileFiles) -> Option<Record> {
     let read_checked = || -> Result<Option<Record>> {
         profile.recheck()?;
         let file = profile.required(RECORD)?;
@@ -157,26 +384,32 @@ fn read(
         profile.recheck()?;
         Ok(Record::decode(&bytes))
     };
-    read_checked()
-        .ok()
-        .flatten()
-        .map_or(LocalStatus::Unqualified, |record| {
-            record.readback(
-                Scope {
-                    profile_id: profile.lease.profile_id(),
-                    relay,
-                    versions,
-                },
-                wall,
-            )
-        })
+    read_checked().ok().flatten()
+}
+
+#[cfg(test)]
+fn read(
+    profile: &ProfileFiles,
+    relay: &Relay,
+    versions: Versions,
+    wall: Option<u64>,
+) -> LocalStatus {
+    read_record(profile).map_or(LocalStatus::Unqualified, |record| {
+        record.readback(
+            Scope {
+                profile_id: profile.lease.profile_id(),
+                relay,
+                versions,
+            },
+            wall,
+        )
+    })
 }
 
 const WRITE_REFUSED: Error = Error::Storage("peer_qualification_write");
 const WRITE_UNCERTAIN: Error = Error::Storage("peer_qualification_write_uncertain");
 
-// A future typed issuer must supply the completed evidence before it can
-// call this private primitive under the owner lease.
+// The issuer calls this only after both independent evidence checks.
 fn replace(
     profile: &ProfileFiles,
     relay: &Relay,
@@ -204,7 +437,7 @@ fn replace_using(
     if Record::decode(&bytes).is_none()
         || !matches!(
             record.readback(scope, Some(record.last_observed_at)),
-            LocalStatus::CurrentMetadata | LocalStatus::Expired
+            LocalStatus::CurrentMetadata | LocalStatus::Qualified | LocalStatus::Expired
         )
     {
         return Err(WRITE_REFUSED);
@@ -370,7 +603,7 @@ mod tests {
         let cases = [
             text.replace(r#""schema":1"#, r#""schema":1,"schema":1"#),
             text.replace(r#""schema":1"#, r#""schema":1,"extra":1"#),
-            text.replace(r#""schema":1"#, r#""schema":2"#),
+            text.replace(r#""schema":1"#, r#""schema":3"#),
             text.replace(r#""schema":1"#, r#""schema":null"#),
             text.replace(r#""schema":1,"#, ""),
             text.replace("wss://", "WSS://"),

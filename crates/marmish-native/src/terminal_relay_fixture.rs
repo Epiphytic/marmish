@@ -515,15 +515,18 @@ async fn serve_connection(
     state: Arc<Mutex<State>>,
     relay: Url,
     id: usize,
+    probe_limit: Option<usize>,
 ) {
     let Ok(Ok(tls)) = timeout(STEP, acceptor.accept(raw)).await else {
         return;
     };
-    let frame_limit = if state.lock().unwrap().peer.is_some() {
-        peer::MESSAGE_LIMIT
-    } else {
-        FRAME_LIMIT
-    };
+    let frame_limit = probe_limit.unwrap_or_else(|| {
+        if state.lock().unwrap().peer.is_some() {
+            peer::MESSAGE_LIMIT
+        } else {
+            FRAME_LIMIT
+        }
+    });
     let options = WebSocketConfig::default()
         .max_message_size(Some(frame_limit))
         .max_frame_size(Some(frame_limit));
@@ -605,7 +608,7 @@ async fn serve_connection(
     state.lock().unwrap().connections.remove(&id);
 }
 
-fn tls() -> (TlsAcceptor, rustls::RootCertStore) {
+fn tls() -> (TlsAcceptor, rustls::RootCertStore, Vec<u8>) {
     let mut ca = CertificateParams::default();
     ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     ca.key_usages.push(KeyUsagePurpose::KeyCertSign);
@@ -630,12 +633,17 @@ fn tls() -> (TlsAcceptor, rustls::RootCertStore) {
     .unwrap();
     let mut roots = rustls::RootCertStore::empty();
     roots.add(ca_cert.der().clone()).unwrap();
-    (TlsAcceptor::from(Arc::new(config)), roots)
+    (
+        TlsAcceptor::from(Arc::new(config)),
+        roots,
+        ca_cert.der().to_vec(),
+    )
 }
 
 pub(crate) struct Relay {
     pub(crate) url: Url,
     roots: rustls::RootCertStore,
+    qualification_ca: Vec<u8>,
     peer: Option<PeerIdentity>,
     state: Arc<Mutex<State>>,
     task: JoinHandle<()>,
@@ -675,15 +683,28 @@ impl<'a> PeerMode<'a> {
 
 impl Relay {
     pub(crate) async fn start() -> Self {
-        Self::start_with(None, None).await
+        Self::start_with(None, None, None).await
     }
 
     pub(crate) async fn start_peer(accounts: [PublicKey; 2]) -> Self {
-        Self::start_with(Some(accounts), None).await
+        Self::start_with(Some(accounts), None, None).await
     }
 
     pub(crate) async fn start_peer_group(accounts: [PublicKey; 2], route: [u8; 32]) -> Self {
-        Self::start_with(Some(accounts), Some(route)).await
+        Self::start_with(Some(accounts), Some(route), None).await
+    }
+
+    pub(crate) async fn start_peer_qualification(
+        accounts: [PublicKey; 2],
+        route: [u8; 32],
+    ) -> Self {
+        // Receive an over-cap event so the scoped policy can explicitly refuse
+        // it. Existing fixture modes retain their original websocket bound.
+        Self::start_with(Some(accounts), Some(route), Some(128 * 1024)).await
+    }
+
+    pub(crate) fn qualification_ca(&self) -> &[u8] {
+        &self.qualification_ca
     }
 
     pub(crate) fn group_history_cut(
@@ -802,10 +823,14 @@ impl Relay {
         assert!(error.is_cancelled(), "fixture stopped without panic");
     }
 
-    async fn start_with(accounts: Option<[PublicKey; 2]>, group: Option<[u8; 32]>) -> Self {
+    async fn start_with(
+        accounts: Option<[PublicKey; 2]>,
+        group: Option<[u8; 32]>,
+        probe_limit: Option<usize>,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = Url::parse(&format!("wss://{}/", listener.local_addr().unwrap())).unwrap();
-        let (acceptor, roots) = tls();
+        let (acceptor, roots, qualification_ca) = tls();
         let peer = accounts.map(|accounts| PeerIdentity {
             origin: url.clone(),
             accounts,
@@ -825,7 +850,7 @@ impl Relay {
                         let (raw, _) = accepted.unwrap();
                         assert!(peers.len() < MAX_CONNECTIONS, "fixture socket bound");
                         next += 1;
-                        peers.spawn(serve_connection(raw, acceptor.clone(), worker_state.clone(), worker_url.clone(), next));
+                        peers.spawn(serve_connection(raw, acceptor.clone(), worker_state.clone(), worker_url.clone(), next, probe_limit));
                     }
                     result = peers.join_next(), if !peers.is_empty() => {
                         result.unwrap().unwrap();
@@ -836,6 +861,7 @@ impl Relay {
         Self {
             url,
             roots,
+            qualification_ca,
             peer,
             state,
             task,

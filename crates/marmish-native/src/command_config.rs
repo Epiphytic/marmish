@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub(crate) const CONFIG_FORMAT: u32 = 1;
-const MAX_CONFIG: u64 = 1024 * 1024;
+pub(crate) const MAX_CONFIG: u64 = 1024 * 1024;
 const DAY: u64 = 86400;
 const MAX_TERMINAL_CLIENTS: usize = 256;
 const MAX_PEER_FOUNDERS: usize = 256;

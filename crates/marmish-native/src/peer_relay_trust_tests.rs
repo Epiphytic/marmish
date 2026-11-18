@@ -435,3 +435,123 @@ fn peer_tls_caps_chain_and_requires_private_ca_descriptor() {
         Err(Error::Transport("peer_tls_ca"))
     ));
 }
+
+#[tokio::test]
+async fn peer_qualification_loopback_requires_all_evidence_and_rechecks_profile() {
+    use crate::mdk_adapter::terminal_relay_fixture::Relay;
+    let plan = probe::Plan::new().unwrap();
+    let (accounts, route) = plan.relay_registration();
+    let mut transport = Relay::start_peer_qualification(accounts, route).await;
+    let (temp, lease) = test_lease();
+    let trust = format!(
+        "ca-sha256:{}",
+        hex::encode(Sha256::digest(transport.qualification_ca()))
+    );
+    let config = config_fixture(&lease, transport.url.as_str(), &trust, "off");
+    private_write(
+        &lease.root().join("peer-relay-ca.der"),
+        transport.qualification_ca(),
+    );
+    let relay = config.bound_peer_relay(&config).unwrap();
+    let attestation_path = temp.path().join("attestation.json");
+    let now = qualification::wall().unwrap();
+    let mut attestation = json!({
+        "schema":1, "origin": relay.origin, "trust": trust, "enforcement_source":"fixture contract",
+        "valid_from":now-1, "valid_until":now+60,
+        "control_limits":{
+            "event_bytes":65536, "stored_per_recipient":256, "per_timestamp_second":3,
+            "accepted_per_600s":32, "stored_per_writer_recipient":32, "retention_max_seconds":324000
+        },
+        "enforcement":{
+            "control_registered_writer":true, "control_exact_recipient_auth":true,
+            "control_expiration_no_early_eviction":true, "group_exact_route_acl":true,
+            "group_authenticated_members":true, "group_reconnect_history":true
+        }
+    });
+    let save = |value: &serde_json::Value| fs::write(&attestation_path, value.to_string()).unwrap();
+    private_write(&attestation_path, attestation.to_string().as_bytes());
+    attestation["enforcement"]["group_reconnect_history"] = json!(false);
+    save(&attestation);
+    assert!(qualification::CheckedAttestation::read(&attestation_path, relay, now).is_err());
+    attestation["enforcement"]["group_reconnect_history"] = json!(true);
+    save(&attestation);
+    let checked = qualification::CheckedAttestation::read(&attestation_path, relay, now).unwrap();
+    assert!(qualification::CheckedAttestation::read(&attestation_path, relay, now + 60).is_err());
+    let alias = temp.path().join("attestation-link.json");
+    std::os::unix::fs::symlink(&attestation_path, &alias).unwrap();
+    assert!(qualification::CheckedAttestation::read(&alias, relay, now).is_err());
+
+    let owner = PeerRelayOwner::bind_with_limits(
+        lease.clone(),
+        &config,
+        TransportLimits {
+            max_frame_bytes: 128 * 1024,
+            ..TransportLimits::default()
+        },
+    )
+    .unwrap();
+    let snapshot = owner.profile.command_snapshot().unwrap().1;
+    let authority = ProbeAuthority {
+        profile: &owner.profile,
+        relay,
+        snapshot,
+        attestation: &checked,
+        attestation_path: &attestation_path,
+    };
+    let record = lease.root().join("peer-relay-qualification.json");
+    assert!(!record.exists());
+    let report = |value| serde_json::to_value(value).unwrap();
+    assert_eq!(
+        report(qualification::show(&owner.profile, relay))["status"],
+        "unqualified"
+    );
+
+    attestation["enforcement_source"] = json!("changed after confirmation");
+    save(&attestation);
+    assert!(authority.check().is_err());
+    assert!(!transport.authenticated(accounts[0]));
+    assert!(!record.exists());
+    attestation["enforcement_source"] = json!("fixture contract");
+    save(&attestation);
+    assert!(matches!(
+        qualification_status(temp.path(), "test"),
+        Err(Error::Identity("profile_in_use"))
+    ));
+
+    let completed = plan
+        .execute(&owner.connector, &authority, authority.check().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(transport.peer_transcript().len(), 1);
+    assert_eq!(transport.group_writes().len(), 1);
+    assert!(transport.authenticated(accounts[0]) && transport.authenticated(accounts[1]));
+    assert!(!record.exists());
+    let issued = qualification::issue(&owner.profile, relay, &checked, completed).unwrap();
+    assert_eq!(report(issued)["status"], "qualified");
+    let bytes = fs::read(&record).unwrap();
+    let mut issued: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(issued["schema"], 2);
+    assert!(
+        !String::from_utf8(bytes)
+            .unwrap()
+            .contains("fixture contract")
+    );
+    let qualified = report(qualification::show(&owner.profile, relay));
+    assert_eq!(qualified["status"], "qualified");
+    assert_eq!(qualified["origin"], transport.url.as_str());
+    assert!(qualified["trust"].as_str().unwrap().len() < trust.len());
+
+    issued["schema"] = json!(1);
+    fs::write(&record, issued.to_string()).unwrap();
+    assert_eq!(
+        report(qualification::show(&owner.profile, relay))["status"],
+        "unqualified"
+    );
+    drop(owner);
+    drop(lease);
+    assert_eq!(
+        report(qualification_status(temp.path(), "test").unwrap())["status"],
+        "unqualified"
+    );
+    transport.stop().await;
+}

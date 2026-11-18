@@ -182,6 +182,12 @@ enum ClientInventoryCommand {
 #[derive(Subcommand)]
 enum FrontendCommand {
     #[command(skip)]
+    PeerRelayShow,
+    #[command(skip)]
+    PeerRelayQualify {
+        attestation: PathBuf,
+    },
+    #[command(skip)]
     Clients {
         #[command(subcommand)]
         action: ClientInventoryCommand,
@@ -567,6 +573,25 @@ async fn run(
         };
         let reply = ipc::client_inventory_request(&socket, request).await?;
         let json = serde_json::to_string(&reply).map_err(|_| Error::Invalid("report_encoding"))?;
+        use std::io::Write as _;
+        writeln!(std::io::stdout().lock(), "{json}")?;
+        return Ok(0);
+    }
+    if matches!(
+        args.command,
+        Some(FrontendCommand::PeerRelayShow | FrontendCommand::PeerRelayQualify { .. })
+    ) {
+        let state = state_dir(args.state_dir)?;
+        let report = match args.command {
+            Some(FrontendCommand::PeerRelayShow) => {
+                crate::peer_relay_trust::qualification_status(&state, &args.identity)?
+            }
+            Some(FrontendCommand::PeerRelayQualify { attestation }) => {
+                crate::peer_relay_trust::qualify(&state, &args.identity, attestation).await?
+            }
+            _ => unreachable!("matched Peer relay action"),
+        };
+        let json = serde_json::to_string(&report).map_err(|_| Error::Invalid("report_encoding"))?;
         use std::io::Write as _;
         writeln!(std::io::stdout().lock(), "{json}")?;
         return Ok(0);
@@ -1405,6 +1430,13 @@ fn parse_frontend(raw: &[OsString], daemon_binary: bool) -> std::result::Result<
     if let Some(action) = inventory {
         args.command = Some(FrontendCommand::Clients { action });
     }
+    if !daemon_binary
+        && !authorization_disallowed(&matches)
+        && let Some(FrontendCommand::Remote(parts)) = &args.command
+        && let Some(command) = exact_peer_relay_command(parts, raw)
+    {
+        args.command = Some(command);
+    }
     if rsh.is_some() && !matches!(args.command, Some(FrontendCommand::Rsh)) {
         return Err(clap::Error::raw(
             clap::error::ErrorKind::InvalidValue,
@@ -1421,6 +1453,30 @@ fn parse_frontend(raw: &[OsString], daemon_binary: bool) -> std::result::Result<
     };
     args.rsh = rsh;
     Ok(args)
+}
+
+fn exact_peer_relay_command(parts: &[OsString], raw: &[OsString]) -> Option<FrontendCommand> {
+    // An explicit remote shell separator may be outside the collected
+    // external subcommand. Consult the original argv before routing locally.
+    if !raw.ends_with(parts) || raw.iter().any(|arg| arg == "--") {
+        return None;
+    }
+    match parts {
+        [peer, relay, action] if peer == "peer" && relay == "relay" && action == "show" => {
+            Some(FrontendCommand::PeerRelayShow)
+        }
+        [peer, relay, action, flag, path]
+            if peer == "peer"
+                && relay == "relay"
+                && action == "qualify"
+                && flag == "--attestation" =>
+        {
+            Some(FrontendCommand::PeerRelayQualify {
+                attestation: PathBuf::from(path),
+            })
+        }
+        _ => None,
+    }
 }
 
 pub fn main(daemon_binary: bool) -> ExitCode {
@@ -1959,6 +2015,46 @@ mod tests {
                 .command,
             Some(FrontendCommand::Remote(_))
         ));
+    }
+
+    #[test]
+    fn peer_relay_commands_are_local_only_in_the_exact_form() {
+        assert!(matches!(
+            public(&[
+                "marmish",
+                "--state-dir",
+                "/tmp/state",
+                "-i",
+                "other",
+                "peer",
+                "relay",
+                "show"
+            ])
+            .unwrap()
+            .command,
+            Some(FrontendCommand::PeerRelayShow)
+        ));
+        assert!(matches!(
+            public(&["marmish", "peer", "relay", "qualify", "--attestation", "policy.json"])
+                .unwrap().command,
+            Some(FrontendCommand::PeerRelayQualify { attestation }) if attestation == std::path::Path::new("policy.json")
+        ));
+        for input in [
+            &["peer", "echo", "rsh"][..],
+            &["peer", "--", "relay", "show"],
+            &["peer", "relay", "show", "again"],
+            &["peer", "relay", "qualify", "--attestation=policy.json"],
+            &["peer", "rsync", "--server", "-s"],
+            &["-u", "elsewhere", "peer", "relay", "show"],
+        ] {
+            let raw = std::iter::once(OsString::from("marmish"))
+                .chain(input.iter().map(OsString::from))
+                .collect::<Vec<_>>();
+            assert!(matches!(
+                parse_public(&raw).unwrap().command,
+                Some(FrontendCommand::Remote(_))
+            ));
+        }
     }
 
     #[test]
