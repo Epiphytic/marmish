@@ -89,9 +89,7 @@ impl<'lease> RecoveredOwner<'lease> {
             .package_origin(lease, material, quota)
             .map_err(|_| Error::Binding)?;
         let _files = quota.receiver_files(lease).map_err(|_| Error::Path)?;
-        let paths = Paths::new(lease, material)?;
-        let cursor = paths.cursor()?;
-        Self::open_core(paths, cursor, material, &relay, Some(quota))
+        Self::open_core(lease, material, &relay, Some(quota))
     }
 
     #[cfg(all(
@@ -122,19 +120,28 @@ impl<'lease> RecoveredOwner<'lease> {
         let paths = Paths::new(lease, material)?;
         let cursor = paths.cursor()?;
         cursor.matches_file(&prepared)?;
-        let owner = Self::open_core(paths, cursor, material, &relay, Some(quota))?;
+        let owner = Self::open_pinned(paths, cursor, material, &relay, Some(quota))?;
         owner.cursor.matches_file(&prepared)?;
         Ok(owner)
     }
 
     #[cfg(test)]
     fn open(lease: &'lease ProfileLease, material: &IdentityMaterial, relay: &str) -> Result<Self> {
-        let paths = Paths::new(lease, material)?;
-        let cursor = paths.cursor()?;
-        Self::open_core(paths, cursor, material, relay, None)
+        Self::open_core(lease, material, relay, None)
     }
 
     fn open_core(
+        lease: &'lease ProfileLease,
+        material: &IdentityMaterial,
+        relay: &str,
+        package_quota: Option<&'lease ReceiverQuota<'lease>>,
+    ) -> Result<Self> {
+        let paths = Paths::new(lease, material)?;
+        let cursor = paths.cursor()?;
+        Self::open_pinned(paths, cursor, material, relay, package_quota)
+    }
+
+    fn open_pinned(
         paths: Paths<'lease>,
         cursor: CheckedFile,
         material: &IdentityMaterial,
