@@ -314,7 +314,8 @@ async fn terminal_copies_never_ingest_in_durable_command_profiles() {
         .await
         .unwrap();
     run_command(&mut client, &mut server, &room, &cat).await;
-    let events = prove(0, relay.url.as_str()).await;
+    let mut events = prove(0, relay.url.as_str()).await;
+    let terminal_frame = events.prepare_maximum_frame(0).await;
     relay.mode(Mode::KnownAccountsOnly);
     let unknown = Lane::open(&relay, temp.path(), events.founder.clone()).await;
     unknown.activate(None).await;
@@ -359,7 +360,11 @@ async fn terminal_copies_never_ingest_in_durable_command_profiles() {
             .subscription(account, 445, "#h", json!(hex::encode(&room.transport)))
             .await;
         let previously = owner.relay_proof_ingress.as_ref().unwrap().len();
-        for (id, event) in [(&inbox_id, &events.welcome), (&room_id, &events.frame)] {
+        for (id, event) in [
+            (&inbox_id, &events.welcome),
+            (&room_id, &events.frame),
+            (&room_id, &terminal_frame.event),
+        ] {
             relay.inject(account, id, event);
             let copy = NostrRelayEvent {
                 endpoint: TransportEndpoint(relay.url.to_string()),
@@ -374,7 +379,7 @@ async fn terminal_copies_never_ingest_in_durable_command_profiles() {
                     .unwrap(),
                 0
             );
-            if event.id == events.frame.id {
+            if id == &room_id {
                 assert_eq!(
                     owner
                         .adapter
@@ -394,6 +399,19 @@ async fn terminal_copies_never_ingest_in_durable_command_profiles() {
             previously
         );
         assert_excluded(&owner.storage, &events);
+        let terminal_id = MessageId::new(terminal_frame.event.id.to_bytes().to_vec());
+        assert!(
+            !owner
+                .storage
+                .has_ingress_dedup_marker(&terminal_id)
+                .unwrap()
+        );
+        assert!(
+            !owner
+                .storage
+                .has_processed_transport_id(&terminal_id)
+                .unwrap()
+        );
     }
     assert_eq!(snapshot(&inspect), baseline);
     events.assert_no_package_publication();
@@ -416,6 +434,9 @@ async fn terminal_copies_never_ingest_in_durable_command_profiles() {
         )
         .unwrap();
         assert_excluded(&reopened, &events);
+        let terminal_id = MessageId::new(terminal_frame.event.id.to_bytes().to_vec());
+        assert!(!reopened.has_ingress_dedup_marker(&terminal_id).unwrap());
+        assert!(!reopened.has_processed_transport_id(&terminal_id).unwrap());
     }
     relay.assert_healthy();
 }

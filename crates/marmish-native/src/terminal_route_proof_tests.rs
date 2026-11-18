@@ -86,17 +86,31 @@ impl Lane {
         .is_ok_and(|outcome| outcome.accepted.len() == 1)
     }
 
-    async fn receive_match(&self, event: &Event) {
-        let received = timeout(STEP, self.adapter.receive())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        assert_eq!(received.account_id, self.account);
-        assert_eq!(received.message.id.as_slice(), event.id.to_bytes());
-        self.adapter
-            .ack_replay_delivery(&self.account, &received.message.id)
-            .await;
+    async fn receive_match(&self, event: &Event) -> TransportDelivery {
+        self.receive_match_after(event, None).await
+    }
+
+    async fn receive_match_after(
+        &self,
+        event: &Event,
+        mut prior: Option<&Event>,
+    ) -> TransportDelivery {
+        timeout(STEP, async {
+            loop {
+                let received = self.adapter.receive().await.unwrap().unwrap();
+                assert_eq!(received.account_id, self.account);
+                self.adapter
+                    .ack_replay_delivery(&self.account, &received.message.id)
+                    .await;
+                if received.message.id.as_slice() == event.id.to_bytes() {
+                    return received;
+                }
+                let replay = prior.take().expect("only one previous test publication");
+                assert_eq!(received.message.id.as_slice(), replay.id.to_bytes());
+            }
+        })
+        .await
+        .unwrap()
     }
 
     fn relay_event(&self, id: String, event: &Event) -> NostrRelayEvent {
@@ -240,4 +254,57 @@ async fn sdk_fixture_tls_trust_is_private_and_exact() {
         .await
         .unwrap();
     timeout(STEP, sdk.shutdown()).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "opt-in private WSS and native MDK acceptance for maximum Terminal v1 records"]
+async fn maximum_terminal_records_round_trip_through_private_wss() {
+    timeout(Duration::from_secs(30), async {
+        let temp = tempfile::tempdir().unwrap();
+        let relay = Relay::start().await;
+        let mut room = prove(0, relay.url.as_str()).await;
+        let other = prove(1, relay.url.as_str()).await;
+        let keys = [room.founder.clone(), room.joiner.clone()];
+        let unrelated = Lane::open(&relay, temp.path(), other.joiner.clone()).await;
+        unrelated.activate(Some(&other)).await;
+        let (_, unrelated_group) = subscriptions(&relay, &unrelated, &other.route).await;
+
+        let mut prior = None;
+        for (sender, name) in [(0, "output"), (1, "input")] {
+            let publisher = Lane::open(&relay, temp.path(), keys[sender].clone()).await;
+            publisher.activate(None).await;
+            let subscriber = Lane::open(&relay, temp.path(), keys[1 - sender].clone()).await;
+            subscriber.activate(Some(&room)).await;
+            subscriptions(&relay, &subscriber, &room.route).await;
+            let frame = room.prepare_maximum_frame(sender).await;
+            assert_eq!(
+                unrelated.adapter.handle_relay_event(
+                    unrelated.relay_event(unrelated_group.clone(), &frame.event)
+                ).await.unwrap(),
+                0
+            );
+            relay.inject(unrelated.public, &unrelated_group, &frame.event);
+            let started = Instant::now();
+            assert!(publisher.publish(&frame.event).await);
+            let accepted = subscriber.receive_match_after(&frame.event, prior.as_ref()).await;
+            room.accept_maximum_frame(&frame, Some(accepted)).await;
+            let wss_bytes = relay.accepted_event_bytes(frame.event.id).await;
+            assert!(wss_bytes <= 32 * 1024);
+            println!(
+                "terminal_frame_wss direction={name} payload_bytes=4096 app_bytes={} protected_content_bytes={} outer_bytes={} wss_request_bytes={wss_bytes} publish_receive_open_us={}",
+                frame.app_bytes,
+                frame.protected_bytes,
+                frame.outer_bytes,
+                started.elapsed().as_micros()
+            );
+            prior = Some(frame.event);
+            subscriber.close().await;
+            publisher.close().await;
+        }
+        assert!(timeout(Duration::from_millis(100), unrelated.adapter.receive()).await.is_err());
+        unrelated.close().await;
+        room.assert_no_package_publication();
+        relay.assert_zero_package_writes();
+        relay.assert_healthy();
+    }).await.expect("bounded loopback qualification");
 }

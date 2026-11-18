@@ -37,6 +37,7 @@ pub(super) enum Observation {
     Authentication(PublicKey, bool),
     Read(bool, Option<PublicKey>),
     Write(EventId, u16, bool),
+    WriteBytes(EventId, usize),
 }
 
 #[derive(Clone)]
@@ -66,7 +67,7 @@ impl State {
         self.observations.push(observation);
     }
 
-    fn publish(&mut self, connection: usize, event: Event) -> Value {
+    fn publish(&mut self, connection: usize, event: Event, text_bytes: usize) -> Value {
         let account = self.connections[&connection].account;
         let kind = u16::from(event.kind);
         let authenticated = account.is_some();
@@ -78,6 +79,9 @@ impl State {
         let accepted = authenticated && authorized_author && event.verify().is_ok();
         self.observe(Observation::Write(event.id, kind, accepted));
         if accepted {
+            if kind == 445 {
+                self.observe(Observation::WriteBytes(event.id, text_bytes));
+            }
             assert!(
                 self.publications.len() < MAX_PUBLICATIONS,
                 "relay event bound"
@@ -195,6 +199,7 @@ fn handle_message(
     challenge: &str,
     challenge_started: Instant,
     fields: &[Value],
+    text_bytes: usize,
 ) -> Vec<Value> {
     let mut state = state.lock().unwrap();
     match fields.first().and_then(Value::as_str) {
@@ -278,7 +283,7 @@ fn handle_message(
         Some("EVENT") => serde_json::from_value(fields[1].clone())
             .ok()
             .into_iter()
-            .map(|event| state.publish(id, event))
+            .map(|event| state.publish(id, event, text_bytes))
             .collect(),
         Some("NEG-OPEN") => vec![json!([
             "NEG-ERR",
@@ -332,7 +337,7 @@ async fn serve_connection(
                     Some(Ok(Message::Text(raw))) => {
                         let Ok(fields) = serde_json::from_str::<Vec<Value>>(&raw) else { break };
                         if fields.len() < 2 || fields.len() > 18 { break; }
-                        handle_message(&state, id, &relay, &challenge, started, &fields)
+                        handle_message(&state, id, &relay, &challenge, started, &fields, raw.len())
                     }
                     Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {
                         if socket.flush().await.is_err() { break; }
@@ -489,6 +494,21 @@ impl Relay {
         })
         .await
         .expect("relay observation");
+    }
+
+    pub(super) async fn accepted_event_bytes(&self, id: EventId) -> usize {
+        self.observed(|entry| matches!(entry, Observation::WriteBytes(event, _) if *event == id))
+            .await;
+        self.state
+            .lock()
+            .unwrap()
+            .observations
+            .iter()
+            .find_map(|entry| match entry {
+                Observation::WriteBytes(event, bytes) if *event == id => Some(*bytes),
+                _ => None,
+            })
+            .expect("observed accepted WSS event length")
     }
 
     pub(super) fn assert_zero_package_writes(&self) {

@@ -99,3 +99,6 @@ mod copy_commit_hook;
 
 #[cfg(test)]
 mod peer_host_sampling_proof_tests;
+
+#[cfg(test)]
+mod terminal_frames;

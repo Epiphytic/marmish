@@ -14,7 +14,10 @@ history from the local daemon socket. [Explicit Terminal shell grants](phases/te
 are default-off and separate from executable policy. Inventory shows the
 configured grant and setup revocation removes it. The
 [native tmux attachment worker](validation/terminal-native-backend.md)
-has local Linux x86-64 verification. Remote Terminal admission, reattach,
+has local Linux x86-64 verification. The [authenticated bootstrap](validation/terminal-bootstrap.md)
+and [ordered Terminal records](validation/terminal-frames.md) have native
+test-only WSS evidence, including exact 4 KiB records in both directions
+and durable Command profile exclusion. Remote Terminal admission, reattach,
 inbound Peer invitations and network heartbeat remain in development.
 
 **CI execution direction (2026-11-13):** prefer Epiphytic self-hosted runners;

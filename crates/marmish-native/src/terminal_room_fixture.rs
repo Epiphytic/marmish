@@ -1,5 +1,6 @@
 //! Test-only native terminal room setup and signed event capture.
 use super::{ProofSigner, Publisher};
+use crate::terminal_frames as frames;
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use cgka_traits::app_components::{
@@ -259,37 +260,26 @@ fn verify_event(message: &TransportMessage, kind: u16) -> Event {
     signed
 }
 
-async fn round_trip(
+async fn send_app(
     sender: &mut Endpoint,
-    receiver: &mut Endpoint,
     group: &GroupId,
     route: &[u8; 32],
-    sample: &[u8],
-) -> (Duration, Event) {
-    let started = Instant::now();
-    let created_at = now();
-    let expected_sender = &sender.account;
-    let payload = MarmotAppEvent::new(
-        hex::encode(sender.account.as_slice()),
-        created_at,
-        MARMOT_APP_EVENT_KIND_CHAT,
-        vec![],
-        STANDARD.encode(sample),
-    )
-    .encode()
-    .unwrap();
+    created: u64,
+    payload: Vec<u8>,
+) -> (TransportMessage, Event) {
+    let epoch = sender.runtime.epoch_pin(group).unwrap();
     sender
         .runtime
         .send(SendIntent::AppMessage {
             group_id: group.clone(),
-            payload: payload.clone(),
-            expected_epoch: None,
+            payload,
+            expected_epoch: Some(epoch),
         })
         .await
         .unwrap();
     let message = sender.adapter.take();
     let event = verify_event(&message, 445);
-    let expected_expiration = (created_at + RETENTION_SECS).to_string();
+    let expected_expiration = (created + RETENTION_SECS).to_string();
     assert!(
         event
             .tags
@@ -302,46 +292,112 @@ async fn round_trip(
             transport_group_id: route.to_vec()
         }
     );
-    let incoming = receiver
-        .runtime
-        .ingest_delivery(&receiver.delivery(message, TransportDeliveryPlane::Group))
-        .await
-        .unwrap();
-    let received = incoming
+    (message, event)
+}
+
+async fn receive_app(
+    receiver: &mut Endpoint,
+    delivery: TransportDelivery,
+    group: &GroupId,
+    expected_sender: &MemberId,
+    created: u64,
+    expected_payload: &[u8],
+) -> (Vec<u8>, AppMessageRetentionDecision) {
+    let current = receiver.runtime.group_record(group).unwrap().epoch;
+    let membership = receiver.runtime.canonical_group_membership(group).unwrap();
+    let mut leaves = membership
+        .member_leaves
+        .iter()
+        .filter(|leaf| &leaf.member == expected_sender);
+    let leaf = leaves.next().expect("active peer leaf").leaf_index;
+    assert!(leaves.next().is_none(), "one active leaf for peer");
+    let incoming = receiver.runtime.ingest_delivery(&delivery).await.unwrap();
+    let (received, retention) = incoming
         .effects
         .events
-        .iter()
+        .into_iter()
         .find_map(|event| match event {
             GroupEvent::MessageReceived {
                 group_id,
                 sender,
                 sender_leaf_index,
+                epoch,
                 payload,
                 retention,
                 ..
             } => {
-                assert!(sender_leaf_index.is_some());
-                assert!(group_id == group && sender == expected_sender);
+                assert_eq!(sender_leaf_index, Some(leaf));
+                assert_eq!(epoch, current);
+                assert!(group_id == *group && sender == *expected_sender);
+                let retention = retention.expect("authenticated source retention");
                 assert_eq!(
-                    *retention,
-                    Some(AppMessageRetentionDecision::new(created_at, RETENTION_SECS))
+                    retention,
+                    AppMessageRetentionDecision::new(created, RETENTION_SECS)
                 );
-                Some(payload)
+                Some((payload, retention))
             }
             _ => None,
         })
         .expect("authenticated MLS application delivery");
     assert!(
-        received == &payload,
+        received == expected_payload,
         "account and room authenticated the exact app event"
     );
-    let app = MarmotAppEvent::decode(received).unwrap();
-    assert!(
-        STANDARD.decode(app.content).unwrap() == sample,
-        "frame bytes match"
-    );
+    (received, retention)
+}
+
+async fn round_trip(
+    sender: &mut Endpoint,
+    receiver: &mut Endpoint,
+    group: &GroupId,
+    route: &[u8; 32],
+    sample: &[u8],
+) -> (Duration, Event) {
+    let started = Instant::now();
+    let created = now();
+    let payload = MarmotAppEvent::new(
+        hex::encode(sender.account.as_slice()),
+        created,
+        MARMOT_APP_EVENT_KIND_CHAT,
+        vec![],
+        STANDARD.encode(sample),
+    )
+    .encode()
+    .unwrap();
+    let (message, event) = send_app(sender, group, route, created, payload.clone()).await;
+    let delivery = receiver.delivery(message, TransportDeliveryPlane::Group);
+    let (received, _) = receive_app(
+        receiver,
+        delivery,
+        group,
+        &sender.account,
+        created,
+        &payload,
+    )
+    .await;
+    let app = MarmotAppEvent::decode(&received).unwrap();
+    assert!(STANDARD.decode(app.content).unwrap() == sample);
     (started.elapsed(), event)
 }
+
+pub(super) struct MaximumFrame {
+    pub(super) event: Event,
+    pub(super) app_bytes: usize,
+    pub(super) outer_bytes: usize,
+    pub(super) protected_bytes: usize,
+    payload: Vec<u8>,
+    created: u64,
+    retained_offline: TransportMessage,
+    direction: frames::Direction,
+    sender: usize,
+}
+
+const MAXIMUM_BINDING: frames::Binding = frames::Binding {
+    transcript: [0x11; 32],
+    attachment: [0x22; 16],
+    generation: u64::MAX,
+    role: frames::Role::Writer,
+};
 
 pub(super) struct CapturedRoom {
     pub(super) founder: Arc<Keys>,
@@ -354,6 +410,84 @@ pub(super) struct CapturedRoom {
 }
 
 impl CapturedRoom {
+    pub(super) async fn prepare_maximum_frame(&mut self, sender: usize) -> MaximumFrame {
+        let party = &mut self.endpoints[sender];
+        let created = now();
+        let author = party.keys.public_key().to_bytes();
+        let bytes: Vec<_> = (0..=u8::MAX).cycle().take(frames::MAX_DATA).collect();
+        let (direction, data) = if sender == 0 {
+            (frames::Direction::FromServer, frames::Data::Output(bytes))
+        } else {
+            (frames::Direction::ToServer, frames::Data::Input(bytes))
+        };
+        let payload = frames::encode_app(
+            &author,
+            created,
+            MAXIMUM_BINDING,
+            direction,
+            &frames::Record::Ordered(u64::MAX, data),
+        )
+        .unwrap();
+        let (retained_offline, event) =
+            send_app(party, &self.group, &self.route, created, payload.clone()).await;
+        let app_bytes = payload.len();
+        let outer_bytes = retained_offline.payload.len();
+        let protected_bytes = event.content.len();
+        assert!(app_bytes <= frames::MAX_APP);
+        assert!(outer_bytes <= 32 * 1024);
+        assert!(protected_bytes <= 16 * 1024);
+        MaximumFrame {
+            event,
+            payload,
+            app_bytes,
+            outer_bytes,
+            protected_bytes,
+            created,
+            retained_offline,
+            direction,
+            sender,
+        }
+    }
+
+    pub(super) async fn accept_maximum_frame(
+        &mut self,
+        frame: &MaximumFrame,
+        from_relay: Option<TransportDelivery>,
+    ) {
+        let author = self.endpoints[frame.sender].account.clone();
+        let receiver = &mut self.endpoints[1 - frame.sender];
+        let delivery = from_relay.unwrap_or_else(|| {
+            receiver.delivery(
+                frame.retained_offline.clone(),
+                TransportDeliveryPlane::Group,
+            )
+        });
+        assert!(delivery.message.id == frame.retained_offline.id);
+        let (bytes, retention) = receive_app(
+            receiver,
+            delivery,
+            &self.group,
+            &author,
+            frame.created,
+            &frame.payload,
+        )
+        .await;
+        assert!(
+            frames::decode_app(
+                &bytes,
+                author.as_slice().try_into().unwrap(),
+                MAXIMUM_BINDING,
+                frame.direction,
+                frames::Arrival {
+                    retention: Some(retention),
+                    wall: Some(now()),
+                    monotonic: Some(Duration::ZERO),
+                },
+            )
+            .is_some()
+        );
+    }
+
     pub(super) fn assert_no_package_publication(&self) {
         for endpoint in &self.endpoints {
             assert_eq!(endpoint.publish_attempts.load(Ordering::Relaxed), 0);
