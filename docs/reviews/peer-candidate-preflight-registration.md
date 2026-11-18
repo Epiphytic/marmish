@@ -35,3 +35,27 @@ design reviewer.
 
 The local design phase opens no Peer store or socket. The later daemon
 composition owns listener, actor and end-to-end qualification.
+
+## Code review
+
+Claude Code CLI in Auto mode approved exact code
+`14df37d8fc7c570a9d09f0572b2e6b1324475d67` in session
+`b45ac9cf-da87-42ff-a4d1-af42dc785d20` using Claude Sonnet 5.5. The
+reviewer ran the archived, matching test executable and the registration
+harness passed in 29.56 seconds. The author also ran the remaining
+[local checks](../validation/peer-candidate-preflight-registration.md).
+
+The first code review at `5e3d071` requested changes in session
+`077da851-53d5-4dd8-ac53-ec0295c6e643`. The initial expired-lease test
+asserted a re-registration refusal and could pass without exercising the
+lease check. The corrected test releases the original lease and requests a
+direct dispatcher recheck using the replacement lease. It separately checks
+that forwarding survives and a second registration remains forbidden. The
+revision also adds config-byte drift coverage and makes the isolated child
+return before registration when no fixture environment is present.
+
+The final reviewer found no blockers. The optional suggestion to inspect
+the retired weak reference's strong count was left out. The test releases
+each holder it acquired and asserts the dispatcher’s exact lease-conflict
+result. The registered forwarding descriptor remains valid through that
+refusal.
