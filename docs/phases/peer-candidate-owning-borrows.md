@@ -10,14 +10,15 @@ Fix the borrow boundary before actor mounting.
 
 ## Ownership
 
-Hold two fields in `LocalReceiverRegistration<'lease>`. Keep the
-original `ReceiverQuota<'lease>` in one field. Move the existing
-`RegisteredScope`, optional original `CheckedPeerRoute` and original
-`&'lease IdentityMaterial` into a private `AttachedRouteScope<'lease>`
-in the other field. The actual registration still owns both, borrows
+Declare `quota: ReceiverQuota<'lease>` first in
+`LocalReceiverRegistration<'lease>`, then
+`route_scope: AttachedRouteScope<'lease>`. Inside the private route
+scope retain the existing declaration order `scope: RegisteredScope`,
+`route: Option<CheckedPeerRoute>`, `material: &'lease IdentityMaterial`.
+The actual registration still owns both fields, borrows
 the original lease and material, and cancels the shared profile token in
-its destructor. It is impossible to move either field out of an
-attached registration.
+its destructor before those fields drop. It is impossible to move
+either field out of an attached registration.
 
 Provide the owner a private candidate-only borrow split through
 `LocalReceiverRegistration::actor_parts(&mut self)`. It returns an
@@ -27,13 +28,14 @@ exclusive borrow of the route scope and an immutable borrow of that
 same quota. The controller has no constructor outside the owning
 module, no independent lifetime, and no API for replacing route,
 quota, identity or forwarding witness. It exposes only the registered
-local recheck and one-use route take. Preserve an origin accessor if
-added by the metered cursor increment. That accessor checks the exact
-local/global scope with the original route still present, and returns
-only an owned origin from that route.
+local recheck and one-use route take. Any checked origin accessor
+introduced by the separate metered cursor increment requires its own
+composition review and exact test.
 
 Move the existing local/global brackets into the controller and
-delegate the narrow pre-mount wrappers through the same split. Keep
+move `take_route_checked` along with its `#[cfg(test)] after_take` hook
+between the original move and the final global verifier. Delegate the
+narrow pre-mount wrappers through the same `actor_parts` split. Keep
 both identity pointer and lease identity checks. A cursor owner borrows
 the immutable quota in parallel, so its read or synchronous native
 turn can finish before the next controller call without reopening,
@@ -43,9 +45,10 @@ remain in the actor thread. Neither may be handed to the IPC listener.
 Preserve the existing ordering for both global forwarding rechecks,
 the one-use route and its drop semantics. A controller drop releases
 the borrow only. Dropping the registration after all attached borrows
-end still invalidates a live route. It is legal for the owner to stop
-and drop the port before returning its cursor and controller borrows.
-On fatal loss the same process-wide physical shutdown rules apply.
+end still invalidates a live route. The owner may stop and drop the
+port while the cursor and controller borrows are live. The registration
+can drop only after those borrows have ended. On fatal loss the same
+process-wide physical shutdown rules apply.
 This phase adds no retry, native side effect, process setter, or daemon
 startup exception.
 
@@ -60,16 +63,21 @@ startup exception.
   across the transfer.
 - Exercise both real VFS displacement cuts against the same controller
   used by production callers. Preserve the first cut's uncancelled
-  observation and the second cut's retired moved route. Rerun the
-  WSS wrong-scope, repeated-take, and owner-drop cases. For the owner
-  drop case, finish the borrowed controller and retained quota use
-  before dropping the registration while the port stays live.
-- The candidate compiles the controller while stock builds omit it.
-  An isolated negative compile probe outside the module attempts to
-  construct it. Another attempts to release the registration and use
-  its borrowed controller afterward. Expect private-field and
-  borrow-checker errors respectively. The probes do not enter the
-  repository.
+  observation and the second cut's retired moved route. Point the
+  existing assertions into `route_scope` and use the controller's
+  callback without dropping any assertion. Rerun the WSS wrong-scope,
+  repeated-take, and owner-drop cases. The success case uses the
+  controller after the first take to make a repeated request, then
+  verifies the authenticated port is still usable. End every borrow
+  from `actor_parts` before the owner-drop case drops the registration
+  with its port still live.
+- The controller compiles in stock tests and explicit candidate
+  builds for Linux AMD64. It is absent from stock production. In a
+  scratch worktree, add a temporary sibling probe module inside the
+  crate outside candidate registration. Require only `E0451` when
+  attempting private field construction and only `E0505` when
+  attempting to drop the registration and then use its borrowed
+  controller. The probes do not enter the repository.
 - Run strict stock and candidate all-target Clippy and focused physical
   and candidate-registered regressions. This changes only the
   ownership interface. Positive live observation, database transition
