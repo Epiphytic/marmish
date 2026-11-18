@@ -1567,6 +1567,12 @@ layout. The successor is available to library tests and stops before native
 Welcome ingestion. Installed custody, activation and status still need their
 own measured integration.
 
+The [installed Offer admission proof](validation/peer-installed-offer-ingress.md)
+accepts an authenticated WSS Offer into that successor as unreserved Unknown.
+On Linux AMD64 it preserved the exact received bytes over a cold SQLCipher
+reopen. A combined recipient owner must still handle Delivery and exact
+mixed-page cursor progress before this path can be mounted in the daemon.
+
 The [capped Welcome fixture](validation/peer-capped-welcome.md) uses the
 real native ingest and a metered cold readback on Linux AMD64. It
 exercises exact snapshot admission, cancellation and a refused rollback

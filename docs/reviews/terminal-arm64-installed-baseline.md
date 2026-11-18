@@ -43,3 +43,12 @@ this test-only correction, checked BSD socket lengths and cleanup ownership,
 and reported 23 passing Python tests. The author then passed the actual
 warmed-debug package, installer and installed controls sequence on R3.
 [AMD64 validation](../validation/local-native-qualification.md).
+
+Claude Code Auto approved exact composed source `49a740f` on the reviewed
+Offer base in session `58a1083b-1ef6-473b-a346-a24873792267`. The review
+checked that the integrated test harness retained the existing CLI mode,
+Observe and ForegroundHandoff behavior and gave the controller and children
+the same private IPC root. The Terminal patch's added and removed lines
+matched the approved author source. The reviewer ran the baseline and
+qualifier Python tests. The installed AMD64 result remains from the author
+source documented above.
