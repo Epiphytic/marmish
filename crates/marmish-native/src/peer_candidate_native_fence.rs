@@ -34,6 +34,8 @@ struct Window {
     trace_timing: AtomicBool,
     #[cfg(test)]
     crash_generation: AtomicBool,
+    #[cfg(test)]
+    expire_schema: AtomicBool,
 }
 
 #[derive(Clone, Copy)]
@@ -117,6 +119,8 @@ impl NativeWindow {
             trace_timing: AtomicBool::new(false),
             #[cfg(test)]
             crash_generation: AtomicBool::new(false),
+            #[cfg(test)]
+            expire_schema: AtomicBool::new(false),
         }));
         window.sample()?;
         Ok(window)
@@ -139,7 +143,13 @@ impl NativeWindow {
     }
 
     pub(super) fn schema_turn(&self) -> Result<SchemaWindow> {
-        self.next(Duration::from_secs(15)).map(SchemaWindow)
+        let window = self.next(Duration::from_secs(15))?;
+        #[cfg(test)]
+        window.0.expire_schema.store(
+            self.0.expire_schema.load(Ordering::Acquire),
+            Ordering::Release,
+        );
+        Ok(SchemaWindow(window))
     }
 
     fn observe(&self, now: Sample, floor: Sample) -> Result<Duration> {
@@ -242,6 +252,11 @@ impl NativeWindow {
     }
 
     #[cfg(test)]
+    pub(super) fn expire_schema_after_open(&self) {
+        self.0.expire_schema.store(true, Ordering::Release);
+    }
+
+    #[cfg(test)]
     pub(crate) fn before_generation_fixture(&self) {
         if self.0.crash_generation.load(Ordering::Acquire) {
             crate::peer_quota_vfs::dispatch::arm_package_generation_crash();
@@ -263,6 +278,21 @@ impl NativeWindow {
 pub(crate) struct SchemaWindow(NativeWindow);
 
 impl SchemaWindow {
+    #[cfg(test)]
+    pub(super) fn wait_for_fixture_expiry(&self) -> Result<()> {
+        let window = &self.0.0;
+        if window.expire_schema.load(Ordering::Acquire) {
+            loop {
+                let now = continuous_time().map_err(|_| Error::Clock)?;
+                if now >= window.tick_end {
+                    break;
+                }
+                std::thread::sleep(window.tick_end - now);
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn sample(&self) -> Result<Duration> {
         self.0.sample()
     }

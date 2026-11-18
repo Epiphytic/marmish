@@ -187,6 +187,8 @@ impl RecoveredOwner<'_> {
             .files()
             .prestage_package(permit, operation, started.file)
             .map_err(|_| Error::Path)?;
+        #[cfg(test)]
+        schema.wait_for_fixture_expiry()?;
         let extent = files.finish(self, fence(), false)?;
         result?;
         let digest = PackageDirectory::open(&self.paths, files.files())?

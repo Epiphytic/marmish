@@ -1,6 +1,6 @@
 use std::{
     fs::{self, OpenOptions},
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::Path,
     process::{Command, Stdio},
     sync::atomic::{AtomicBool, Ordering},
@@ -19,7 +19,10 @@ use crate::{
     },
 };
 
-use super::super::super::store::{TrustedOutcome, consent_checkpoint::wire};
+use super::super::super::store::{
+    TrustedOutcome,
+    consent_checkpoint::{Error as CheckpointError, wire},
+};
 use super::*;
 
 const RELAY: &str = "wss://private.example/";
@@ -316,21 +319,24 @@ fn package_child() {
                 .unwrap();
             assert!(fs::metadata(&stage).unwrap().len() > 0);
             if mode == "prestage-lost" {
-                return;
-            }
-            if mode == "issue-stop" {
-                startup.stop();
+                drop(staged);
             } else {
-                let image = fs::OpenOptions::new().append(true).open(&stage).unwrap();
-                image.set_len(staged.extent.logical + 1).unwrap();
-            }
-            let observed = staged.window.clone();
-            assert!(owner.issue_package(quota, &reservation, staged).is_err());
-            assert_eq!(observed.signs(), 0);
-            if mode == "prestage-extent" {
-                // Restore the exact image for the following unsigned-prestage restart check.
-                let image = fs::OpenOptions::new().write(true).open(&stage).unwrap();
-                image.set_len(image.metadata().unwrap().len() - 1).unwrap();
+                let changed = if mode == "issue-stop" {
+                    startup.stop();
+                    None
+                } else {
+                    let image = OpenOptions::new().append(true).open(&stage).unwrap();
+                    let length = staged.extent.logical;
+                    image.set_len(length + 1).unwrap();
+                    Some((image, length))
+                };
+                let observed = staged.window.clone();
+                assert!(owner.issue_package(quota, &reservation, staged).is_err());
+                assert_eq!(observed.signs(), 0);
+                if let Some((image, length)) = changed {
+                    // Restore the exact image for the following cold unsigned check.
+                    image.set_len(length).unwrap();
+                }
             }
         }
         "foreign-package-owner" => {
@@ -342,12 +348,16 @@ fn package_child() {
                 .prestage_package(quota, &reservation, started)
                 .unwrap();
             let mut foreign = RecoveredOwner::open(&lease, &identity, RELAY).unwrap();
+            let current_wall = Wall::System.sample().unwrap().as_secs();
             let unrelated = foreign
                 .checkpoint
-                .reserve_provisioning(&foreign.source, selector, now)
+                .reserve_provisioning(&foreign.source, selector, current_wall)
                 .unwrap();
             let turn = staged.window.clone();
-            assert!(owner.issue_package(quota, &unrelated, staged).is_err());
+            assert!(matches!(
+                owner.issue_package(quota, &unrelated, staged),
+                Err(Error::Checkpoint(CheckpointError::LocalOwner))
+            ));
             assert_eq!(turn.signs(), 0);
         }
         "prestage-expired" => {
@@ -357,18 +367,18 @@ fn package_child() {
                 Arc::new(AtomicBool::new(false)),
                 CancellationToken::new(),
                 anchor,
-                expires.min(anchor.as_secs() + 2),
+                expires.min(anchor.as_secs() + 8),
             )
             .unwrap();
             let started = owner
                 .start_package(quota, &reservation, &turn)
                 .unwrap()
                 .unwrap();
-            assert!(
-                owner
-                    .prestage_package(quota, &reservation, started)
-                    .is_err()
-            );
+            turn.expire_schema_after_open();
+            assert!(matches!(
+                owner.prestage_package(quota, &reservation, started),
+                Err(Error::Clock)
+            ));
             assert_eq!(turn.signs(), 0);
             assert!(fs::metadata(&stage).unwrap().len() > 0);
         }
@@ -424,10 +434,18 @@ fn package_child() {
             assert!(turn.sample().is_err());
         }
         "issue" => {
-            let started = owner
-                .start_package(quota, &reservation, &window())
-                .unwrap()
-                .unwrap();
+            let turn = window();
+            // SAFETY: the isolated child runs one fixture and restores its process umask
+            // immediately after checking exclusive original allocation.
+            let previous_umask = unsafe { libc::umask(0o200) };
+            let started = owner.start_package(quota, &reservation, &turn);
+            // SAFETY: this restores the exact prior mask in the same isolated child.
+            unsafe { libc::umask(previous_umask) };
+            let started = started.unwrap().unwrap();
+            assert_eq!(
+                fs::metadata(&stage).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
             let staged = owner
                 .prestage_package(quota, &reservation, started)
                 .unwrap();
