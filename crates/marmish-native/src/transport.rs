@@ -260,7 +260,7 @@ struct ConnectorState {
     #[cfg(test)]
     direct_attempts: std::sync::atomic::AtomicUsize,
     #[cfg(test)]
-    fixture_roots: Option<(Url, rustls::RootCertStore)>,
+    fixture_roots: Option<Vec<(Url, rustls::RootCertStore)>>,
 }
 
 #[derive(Clone)]
@@ -308,19 +308,33 @@ impl RelayConnector {
         url: Url,
         roots: rustls::RootCertStore,
     ) -> Result<Self> {
-        let parsed = url::Url::parse(url.as_str()).map_err(|_| Error::Invalid("relay_url"))?;
-        let (_, route) = policy.destination(&url)?;
-        if parsed.scheme() != "wss"
-            || parsed.host_str() != Some("127.0.0.1")
-            || parsed.path() != "/"
-            || parsed.query().is_some()
-            || route != Route::Direct
-            || roots.is_empty()
-        {
+        Self::for_loopback_fixtures(policy, dirs, vec![(url, roots)])
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_loopback_fixtures(
+        policy: RelayPolicy,
+        dirs: ArtiDirs,
+        roots: Vec<(Url, rustls::RootCertStore)>,
+    ) -> Result<Self> {
+        if !(1..=2).contains(&roots.len()) || roots.len() == 2 && roots[0].0 == roots[1].0 {
             return Err(Error::Invalid("fixture_relay_trust"));
         }
+        for (url, roots) in &roots {
+            let parsed = url::Url::parse(url.as_str()).map_err(|_| Error::Invalid("relay_url"))?;
+            let (_, route) = policy.destination(url)?;
+            if parsed.scheme() != "wss"
+                || parsed.host_str() != Some("127.0.0.1")
+                || parsed.path() != "/"
+                || parsed.query().is_some()
+                || route != Route::Direct
+                || roots.is_empty()
+            {
+                return Err(Error::Invalid("fixture_relay_trust"));
+            }
+        }
         let mut connector = Self::new(policy, dirs)?;
-        Arc::get_mut(&mut connector.0).unwrap().fixture_roots = Some((url, roots));
+        Arc::get_mut(&mut connector.0).unwrap().fixture_roots = Some(roots);
         Ok(connector)
     }
 
@@ -482,8 +496,8 @@ impl RelayConnector {
         }
         let (index, route) = self.policy().destination(url)?;
         #[cfg(test)]
-        if let Some((fixture_url, _)) = &self.0.fixture_roots
-            && fixture_url != url
+        if let Some(roots) = &self.0.fixture_roots
+            && !roots.iter().any(|(fixture_url, _)| fixture_url == url)
         {
             return Err(Error::Transport("fixture_relay_destination"));
         }
@@ -611,7 +625,11 @@ impl RelayConnector {
             .trim_start_matches('[')
             .trim_end_matches(']');
         #[cfg(test)]
-        if let Some((_, roots)) = &self.0.fixture_roots {
+        if let Some(roots) = &self.0.fixture_roots {
+            let (_, roots) = roots
+                .iter()
+                .find(|(fixture, _)| fixture == url)
+                .ok_or(Error::Transport("fixture_relay_destination"))?;
             let stream = tls_stream_with_roots(stream, host, roots.clone()).await?;
             return self.websocket(url, stream, permit).await;
         }

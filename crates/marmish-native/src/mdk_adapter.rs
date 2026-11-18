@@ -2931,6 +2931,10 @@ mod terminal_route_proof_tests;
 mod peer_staged_proof_tests;
 
 #[cfg(test)]
+#[path = "peer_aggregate_ingress_proof_tests.rs"]
+mod peer_aggregate_ingress_proof_tests;
+
+#[cfg(test)]
 mod scheduler_tests {
     use super::*;
     #[test]

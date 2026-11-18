@@ -19,6 +19,11 @@ and [ordered Terminal records](validation/terminal-frames.md) have native
 test-only WSS evidence, including exact 4 KiB records in both directions
 and durable Command profile exclusion. Remote Terminal admission, reattach,
 inbound Peer invitations and network heartbeat remain in development.
+The [Peer aggregate ingress proof](validation/peer-aggregate-ingress-proof.md)
+qualifies one shared canonical origin in a native loopback fixture. A copy
+arriving first on an ineligible relay can suppress the eligible copy from
+another relay in the SDK's account-wide seen-ID tracker. Production Peer
+activation requires a separate routing and recovery solution.
 
 **CI execution direction (2026-11-13):** prefer Epiphytic self-hosted runners;
 do not launch GitHub-hosted qualification as an implicit fallback. The

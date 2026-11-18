@@ -38,10 +38,12 @@ pub(super) enum Observation {
     Read(bool, Option<PublicKey>),
     Write(EventId, u16, bool),
     WriteBytes(EventId, usize),
+    Request(PublicKey, Subscription),
+    Close(PublicKey, Subscription),
 }
 
-#[derive(Clone)]
-struct Subscription {
+#[derive(Clone, Debug)]
+pub(super) struct Subscription {
     id: String,
     filters: Vec<Value>,
 }
@@ -109,6 +111,19 @@ impl State {
 }
 
 impl Subscription {
+    fn serves(&self, kind: u16, tag: &str, value: &Value) -> bool {
+        self.filters.iter().any(|filter| {
+            filter
+                .get("kinds")
+                .and_then(Value::as_array)
+                .is_some_and(|kinds| kinds.contains(&json!(kind)))
+                && filter
+                    .get(tag)
+                    .and_then(Value::as_array)
+                    .is_some_and(|values| values.contains(value))
+        })
+    }
+
     fn matches(&self, event: &Event) -> bool {
         let tag_matches = |filter: &Value, name: &str| {
             let Some(values) = filter.get(format!("#{name}")).and_then(Value::as_array) else {
@@ -262,6 +277,7 @@ fn handle_message(
                 "fixture subscription bound"
             );
             subscriptions.push(subscription.clone());
+            state.observe(Observation::Request(account.unwrap(), subscription.clone()));
             let mut responses: Vec<_> = state
                 .publications
                 .iter()
@@ -272,12 +288,16 @@ fn handle_message(
             responses
         }
         Some("CLOSE") => {
-            state
-                .connections
-                .get_mut(&id)
-                .unwrap()
+            let connection = state.connections.get_mut(&id).unwrap();
+            if let Some(index) = connection
                 .subscriptions
-                .retain(|entry| Some(entry.id.as_str()) != fields[1].as_str());
+                .iter()
+                .position(|entry| Some(entry.id.as_str()) == fields[1].as_str())
+            {
+                let removed = connection.subscriptions.remove(index);
+                let account = connection.account.unwrap();
+                state.observe(Observation::Close(account, removed));
+            }
             vec![]
         }
         Some("EVENT") => serde_json::from_value(fields[1].clone())
@@ -461,6 +481,57 @@ impl Relay {
         }
     }
 
+    pub(super) fn paired_connector(&self, other: &Self, path: &Path) -> RelayConnector {
+        let limits = TransportLimits {
+            handshake_timeout: STEP,
+            ..TransportLimits::default()
+        };
+        let policy = RelayPolicy::parse(
+            &[self.url.to_string(), other.url.to_string()],
+            RouteMode::Off,
+            limits,
+        )
+        .unwrap();
+        let dirs = ArtiDirs {
+            state: path.join("arti_state"),
+            cache: path.join("arti_cache"),
+        };
+        RelayConnector::for_loopback_fixtures(
+            policy,
+            dirs,
+            vec![
+                (self.url.clone(), self.roots.clone()),
+                (other.url.clone(), other.roots.clone()),
+            ],
+        )
+        .unwrap()
+    }
+
+    pub(super) fn subscription_counts(
+        &self,
+        account: PublicKey,
+        kind: u16,
+        tag: &str,
+        value: &Value,
+    ) -> (usize, usize) {
+        self.state
+            .lock()
+            .unwrap()
+            .observations
+            .iter()
+            .fold((0, 0), |(req, close), entry| match entry {
+                Observation::Request(who, sub)
+                    if *who == account && sub.serves(kind, tag, value) =>
+                {
+                    (req + 1, close)
+                }
+                Observation::Close(who, sub) if *who == account && sub.serves(kind, tag, value) => {
+                    (req, close + 1)
+                }
+                _ => (req, close),
+            })
+    }
+
     pub(super) fn assert_healthy(&self) {
         assert!(
             !self.task.is_finished(),
@@ -541,13 +612,7 @@ impl Relay {
                             continue;
                         }
                         for subscription in &connection.subscriptions {
-                            if subscription.filters.iter().any(|filter| {
-                                includes(filter, "kinds", &json!(kind))
-                                    && filter
-                                        .get(tag)
-                                        .and_then(Value::as_array)
-                                        .is_some_and(|values| values.contains(&value))
-                            }) {
+                            if subscription.serves(kind, tag, &value) {
                                 return subscription.id.clone();
                             }
                         }
@@ -558,6 +623,22 @@ impl Relay {
         })
         .await
         .expect("active relay subscription")
+    }
+
+    pub(super) fn retain_for_replay(&self, event: Event) {
+        event.verify().unwrap();
+        let mut state = self.state.lock().unwrap();
+        assert!(
+            state.publications.len() < MAX_PUBLICATIONS,
+            "relay event bound"
+        );
+        assert!(state.connections.values().all(|connection| {
+            connection
+                .subscriptions
+                .iter()
+                .all(|subscription| !subscription.matches(&event))
+        }));
+        state.publications.push(event);
     }
 
     pub(super) fn inject(&self, account: PublicKey, id: &str, event: &Event) {
