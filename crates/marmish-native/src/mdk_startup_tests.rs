@@ -57,6 +57,7 @@ pub(crate) fn qualify(
     if case == "panic_forget" {
         seed_revoked(lease, material, admission);
     }
+    let lease_baseline = Arc::strong_count(lease);
     let sockets = socket_count();
     let threads = fs::read_dir("/proc/self/task").unwrap().count();
     let account_path = lease.mdk_database();
@@ -168,20 +169,20 @@ pub(crate) fn qualify(
         assert!(fatal.is_tripped());
         assert_eq!(descriptors(account_path), 0);
         assert_eq!(descriptors(journal_path), 0);
-        assert_eq!(Arc::strong_count(lease), 1);
+        assert_eq!(Arc::strong_count(lease), lease_baseline);
     } else if case.starts_with("cut_")
         || case.starts_with("panic_")
         || matches!(case, "drop" | "close_cut" | "close_failure")
     {
         assert!(fatal.is_tripped());
-        assert_eq!(Arc::strong_count(lease), 2);
+        assert_eq!(Arc::strong_count(lease), lease_baseline + 1);
         assert!(descriptors(account_path) > 0);
         if !matches!(case, "cut_smoke_close" | "cut_journal" | "close_failure") {
             assert!(descriptors(journal_path) > 0);
         }
     } else {
         assert!(!fatal.is_tripped());
-        assert_eq!(Arc::strong_count(lease), 1);
+        assert_eq!(Arc::strong_count(lease), lease_baseline);
     }
     match case {
         "wrong_key" | "cut_initialize" | "cut_smoke" | "cut_smoke_close" | "cut_account"
