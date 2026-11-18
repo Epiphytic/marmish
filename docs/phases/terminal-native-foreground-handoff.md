@@ -19,8 +19,9 @@ use disposable credentials, and leave production code and core CI alone.
    writer output. Submit a uniquely identifiable harmless shell command
    to the observer PTY. Its typed candidate and evaluated marker must
    differ and neither can occur in the shell's existing state. Wait under
-   the I/O deadline for zero pending input via `FIONREAD` on the raw
-   observer slave after the test successfully wrote the candidate.
+   the I/O deadline for two zero pending-input readings via `FIONREAD` on
+   the raw observer slave, at least 25 ms apart after the test wrote the
+   candidate. This lets the line discipline receive the submitted bytes.
    Drive the writer to a subsequent unique split delimiter under the same
    bounded observation, framing the delimiter command so an intact echo
    marks its own line. Require the echo and delimiter in each PTY, and
@@ -56,18 +57,22 @@ use disposable credentials, and leave production code and core CI alone.
    empty stderr, and assert its exact original termios and window size.
 
 Run the existing independent ordinary Command turn before, during and
-after handoff. The during turn starts with the successor's choice and
-runs concurrently with Ready and old-link drains. The fixture uses the
+after handoff. The test starts the during turn after the successor's choice
+and interleaves it in wall time with Ready and old-link drains. Record
+its start and end offsets from the choice and the Ready observation. The fixture uses the
 existing bounded multi-room relay limit of 256 events and reports the
 number of observed publication attempts. This workload uses the Command
 room, writer, observer and two successor admission legs. Keep the
-benchmark's higher cap scoped to its existing workloads.
+benchmark's higher cap scoped to its existing workloads. Exceeding the
+existing cap fails this proof and calls for revising the fixture workload.
 
 ## Lifetime and evidence
 
 Extend existing test-only helpers where their behavior can be preserved.
-Give each child one bounded pending admission and independent PTY output
-capped by the existing scan limit. Give each stderr drain a 4 KiB capture
+Give each child one bounded pending admission and one reader task per PTY, with a
+capture capped by the existing scan limit. Use offsets in that capture
+for independent observation windows. Raw mode signals attachment after
+the initial writer, while exact tmux socket identity checks continuity. Give each stderr drain a 4 KiB capture
 cap and consume further bytes only to avoid backpressure, with overflow a
 test failure. Keep draining the old clients while the successor waits, in
 addition to the earlier explicit capture windows. If the workload panics
@@ -76,9 +81,10 @@ reap, drain and join stderr tasks under one overall 15 s cleanup deadline.
 Kill-on-drop remains a fallback. Preserve the original panic and leave
 owned tmux cleanup to the fixture's existing drop owner.
 
-Report separate single-run wall durations for observer launch to observed
-raw Ready, successful cooked-choice write to observed raw Ready, and
-successor state-command write to observed output. The Ready observations
+Report separate single-run wall durations as `observe_raw_us` for
+observer launch to observed raw Ready, `choice_to_raw_us` for cooked-choice
+write to observed raw Ready, and `successor_marker_us` for successor
+state-command write to observed output. The Ready observations
 include local polling and the sample does not measure physical rendering.
 Report the independent Command turn durations. Use the existing
 multi-trial backend benchmark for percentile measurements.
