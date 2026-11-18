@@ -23,6 +23,53 @@ const CAPACITY: usize = 64;
 const OPEN_OBSERVER: Duration = Duration::from_secs(30);
 #[cfg(test)]
 const OP_OBSERVER: Duration = Duration::from_secs(15);
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "command_engine_admission.rs"]
+mod admission;
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+use admission::Mode;
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub(crate) use admission::{Admission, FatalEngineJoin};
+
+#[cfg(not(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+)))]
+#[path = "command_engine_unfenced.rs"]
+mod unfenced;
+#[cfg(not(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+)))]
+use unfenced::Mode;
+
+impl Mode {
+    fn emit(&self, tx: &SyncSender<Event>, event: Event) -> bool {
+        self.admit() && tx.send(event).is_ok()
+    }
+
+    fn retire_storage<T>(&self, storage: T) {
+        let storage = std::mem::ManuallyDrop::new(storage);
+        if self.admit() {
+            drop(std::mem::ManuallyDrop::into_inner(storage));
+        }
+    }
+}
+
 type Key = ([u8; 32], [u8; 32], [u8; 16]);
 fn key(k: &InvocationKey) -> Key {
     (k.server, k.principal, k.invocation)
@@ -53,6 +100,12 @@ pub(crate) struct StopReport {
     pub complete: bool,
     pub quiesced: bool,
 }
+
+pub(crate) enum StopOutcome {
+    Ordinary(StopReport),
+    Fatal,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum QueueBusy {
     Full,
@@ -132,6 +185,8 @@ pub(crate) struct CommandEngine {
     completions: VecDeque<EngineCompletion>,
     registered: BTreeMap<Key, Registration>,
     thread: Option<JoinHandle<()>>,
+    thread_failed: bool,
+    mode: Mode,
     readiness: Readiness,
     cleanup: CleanupState,
     #[cfg(test)]
@@ -145,13 +200,37 @@ impl CommandEngine {
         Self::start_internal(
             settings,
             recovery,
+            Mode::default(),
             #[cfg(test)]
             None,
         )
     }
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    #[allow(dead_code, reason = "candidate engine remains unmounted")]
+    pub(crate) fn start_candidate(
+        settings: EngineSettings,
+        recovery: Vec<RecoveryRecord>,
+        checked: Admission,
+    ) -> Result<Self> {
+        Self::start_internal(
+            settings,
+            recovery,
+            Mode {
+                checked: Some(checked),
+            },
+            #[cfg(test)]
+            None,
+        )
+    }
+
     fn start_internal(
         settings: EngineSettings,
         recovery: Vec<RecoveryRecord>,
+        mode: Mode,
         #[cfg(test)] before_open: Option<Receiver<()>>,
     ) -> Result<Self> {
         let live_capacity = (settings.policy.limits.starting_workers as usize).min(LIVE_CAPACITY);
@@ -162,12 +241,16 @@ impl CommandEngine {
         let (live_preparations, live_rx) = mpsc::sync_channel(LIVE_CAPACITY);
         let (controls, control_rx) = mpsc::sync_channel(CAPACITY);
         let (tx, events) = mpsc::sync_channel(CAPACITY);
+        let worker_mode = mode.clone();
         let thread = thread::Builder::new()
             .name("marmish-engine".into())
             .spawn(move || {
                 #[cfg(test)]
                 if let Some(gate) = before_open {
                     let _ = gate.recv();
+                }
+                if !worker_mode.admit() {
+                    return;
                 }
                 let EngineSettings {
                     policy,
@@ -183,14 +266,14 @@ impl CommandEngine {
                 drop(master);
                 match opened {
                     Ok(engine) => {
-                        if tx.send(Event::Ready).is_ok() {
-                            let mut worker = Worker::new(engine, recovery);
+                        let mut worker = Worker::with_mode(engine, recovery, worker_mode);
+                        if worker.mode.emit(&tx, Event::Ready) && worker.mode.admit() {
                             worker.register_copy_helper(canonical_native_image.as_deref());
                             worker.run(rx, live_rx, control_rx, tx);
                         }
                     }
                     Err(_) => {
-                        let _ = tx.send(Event::OpenFailed);
+                        worker_mode.emit(&tx, Event::OpenFailed);
                     }
                 }
             })?;
@@ -207,6 +290,8 @@ impl CommandEngine {
             completions: VecDeque::new(),
             registered: BTreeMap::new(),
             thread: Some(thread),
+            thread_failed: false,
+            mode,
             readiness: Readiness::Opening,
             cleanup: CleanupState::Open,
             #[cfg(test)]
@@ -219,7 +304,7 @@ impl CommandEngine {
         request: CopyGcRequest,
     ) -> std::result::Result<(), QueueBusy> {
         self.collect();
-        if self.stopping || self.readiness != Readiness::Ready {
+        if self.mode.tripped() || self.stopping || self.readiness != Readiness::Ready {
             return Err(QueueBusy::Unavailable);
         }
         if self.copy_gc_pending {
@@ -236,6 +321,9 @@ impl CommandEngine {
     }
     pub(crate) fn take_copy_gc(&mut self) -> Option<CopyGcCompletion> {
         self.collect();
+        if self.mode.tripped() {
+            return None;
+        }
         let result = self.copy_gc_completed.take();
         if result.is_some() {
             self.copy_gc_pending = false;
@@ -243,7 +331,13 @@ impl CommandEngine {
         result
     }
     fn collect(&mut self) {
-        while let Ok(event) = self.events.try_recv() {
+        while !self.mode.tripped() {
+            let Ok(event) = self.events.try_recv() else {
+                break;
+            };
+            if self.mode.tripped() {
+                break;
+            }
             match event {
                 Event::CopyGc(completed) => {
                     self.copy_gc_completed = Some(*completed);
@@ -266,7 +360,11 @@ impl CommandEngine {
     }
     pub fn readiness(&mut self) -> Readiness {
         self.collect();
-        self.readiness
+        if self.mode.tripped() {
+            Readiness::Opening
+        } else {
+            self.readiness
+        }
     }
     #[cfg(test)]
     pub fn open_observer_expired(&self) -> bool {
@@ -283,11 +381,16 @@ impl CommandEngine {
     }
     pub fn cleanup_state(&mut self) -> CleanupState {
         self.collect();
-        self.cleanup
+        if self.mode.tripped() {
+            CleanupState::Failed
+        } else {
+            self.cleanup
+        }
     }
     pub fn try_enqueue(&mut self, op: OperationRecord) -> std::result::Result<(), QueueBusy> {
         self.collect();
-        if self.stopping
+        if self.mode.tripped()
+            || self.stopping
             || self.cleanup != CleanupState::Open
             || self.readiness == Readiness::Failed
         {
@@ -319,7 +422,8 @@ impl CommandEngine {
         request: LivePrepareRequest,
     ) -> std::result::Result<(), QueueBusy> {
         self.collect();
-        if self.stopping
+        if self.mode.tripped()
+            || self.stopping
             || self.cleanup != CleanupState::Open
             || self.readiness == Readiness::Failed
         {
@@ -346,7 +450,7 @@ impl CommandEngine {
     /// OpenFailed is emitted before Worker exists or can consume live requests.
     /// Generic disconnection, stopping and Opening do not establish this proof.
     pub(crate) fn retire_failed_bootstrap_live(&mut self, stream: [u8; 16]) -> bool {
-        if self.readiness() != Readiness::Failed {
+        if self.readiness() != Readiness::Failed || self.mode.tripped() {
             return false;
         }
         self.live_pending.remove(&stream);
@@ -354,15 +458,24 @@ impl CommandEngine {
     }
     pub(crate) fn take_live_prepared(&mut self) -> Option<LivePrepared> {
         self.collect();
+        if self.mode.tripped() {
+            return None;
+        }
         let result = self.live_prepared.pop_front()?;
         self.live_pending.remove(&result.stream_id);
         Some(result)
     }
     pub fn try_completion(&mut self) -> Option<EngineCompletion> {
         self.collect();
+        if self.mode.tripped() {
+            return None;
+        }
         self.completions.pop_front()
     }
     pub fn ack_committed(&mut self, ack: CommitAck) -> Result<()> {
+        if self.mode.tripped() {
+            return Err(Error::Storage("candidate_dispatcher_lost"));
+        }
         let k = key(&ack.key);
         if !self
             .registered
@@ -381,7 +494,8 @@ impl CommandEngine {
     /// Any failure is terminal for this instance; no implicit reopen is possible.
     pub fn try_prepare_cleanup(&mut self) -> Result<()> {
         self.collect();
-        if self.cleanup != CleanupState::Open
+        if self.mode.tripped()
+            || self.cleanup != CleanupState::Open
             || !self.registered.is_empty()
             || !self.live_pending.is_empty()
             || self.readiness != Readiness::Ready
@@ -395,6 +509,9 @@ impl CommandEngine {
         Ok(())
     }
     pub fn fail_cleanup(&mut self) -> Result<()> {
+        if self.mode.tripped() {
+            return Err(Error::Storage("candidate_dispatcher_lost"));
+        }
         self.controls
             .try_send(Control::FailCleanup)
             .map_err(|_| Error::Storage("engine_control_busy"))?;
@@ -402,44 +519,80 @@ impl CommandEngine {
         Ok(())
     }
     pub fn shutdown(&mut self, deadline: Instant) -> Result<StopReport> {
+        match self.stop_outcome(deadline)? {
+            StopOutcome::Ordinary(report) => Ok(report),
+            StopOutcome::Fatal => Err(Error::Storage("candidate_dispatcher_lost")),
+        }
+    }
+
+    pub(crate) fn stop_outcome(&mut self, deadline: Instant) -> Result<StopOutcome> {
         self.stopping = true;
         // A full control queue is retried on the same owner, never detached.
         loop {
+            if self.mode.tripped() {
+                return Ok(StopOutcome::Fatal);
+            }
             match self.controls.try_send(Control::Stop) {
                 Ok(()) | Err(TrySendError::Disconnected(_)) => break,
                 Err(TrySendError::Full(_)) if Instant::now() < deadline => {
                     self.collect();
-                    thread::sleep(Duration::from_millis(1))
+                    thread::sleep(Duration::from_millis(1));
                 }
-                Err(_) => {
-                    return Ok(StopReport {
-                        complete: false,
-                        quiesced: self.cleanup == CleanupState::Quiesced,
-                    });
-                }
+                Err(_) => return self.stop_report(false),
             }
         }
         while self.thread.as_ref().is_some_and(|t| !t.is_finished()) && Instant::now() < deadline {
+            if self.mode.tripped() {
+                return Ok(StopOutcome::Fatal);
+            }
             self.collect();
             thread::sleep(Duration::from_millis(1));
         }
         self.collect();
         let complete = self.thread.as_ref().is_none_or(|t| t.is_finished());
         if complete && let Some(t) = self.thread.take() {
-            t.join()
-                .map_err(|_| Error::Storage("engine_thread_failed"))?;
+            self.thread_failed = t.join().is_err();
+            if self.thread_failed && !self.mode.tripped() {
+                return Err(Error::Storage("engine_thread_failed"));
+            }
         }
-        Ok(StopReport {
+        self.stop_report(complete)
+    }
+
+    fn stop_report(&self, complete: bool) -> Result<StopOutcome> {
+        if self.mode.tripped() {
+            return Ok(StopOutcome::Fatal);
+        }
+        if self.mode.candidate() && self.thread_failed {
+            return Err(Error::Storage("engine_thread_failed"));
+        }
+        Ok(StopOutcome::Ordinary(StopReport {
             complete,
             quiesced: self.cleanup == CleanupState::Quiesced,
-        })
+        }))
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    #[allow(dead_code, reason = "candidate engine remains unmounted")]
+    pub(crate) fn into_fatal_join(mut self) -> std::result::Result<FatalEngineJoin, Box<Self>> {
+        if !self.mode.tripped() {
+            return Err(Box::new(self));
+        }
+        let join = FatalEngineJoin::new(self.thread.take(), self.thread_failed);
+        // Includes every request/control sender and the event receiver.
+        drop(self);
+        Ok(join)
     }
 }
 
 #[cfg(test)]
 impl CommandEngine {
     pub(crate) fn gated_open_for_test(settings: EngineSettings, gate: Receiver<()>) -> Self {
-        Self::start_internal(settings, vec![], Some(gate)).unwrap()
+        Self::start_internal(settings, vec![], Mode::default(), Some(gate)).unwrap()
     }
     pub(crate) fn live_pending_for_test(&self, stream: [u8; 16]) -> bool {
         self.live_pending.contains(&stream)
@@ -466,6 +619,8 @@ impl CommandEngine {
             completions: VecDeque::new(),
             registered: BTreeMap::new(),
             thread: Some(worker),
+            thread_failed: false,
+            mode: Mode::default(),
             readiness: Readiness::Ready,
             cleanup: CleanupState::Open,
             #[cfg(test)]
@@ -497,9 +652,23 @@ struct Worker {
     closed: bool,
     search_path: Option<OsString>,
     copy_helper: Option<engine::RegisteredCopyHelper>,
+    mode: Mode,
+}
+impl Drop for Worker {
+    fn drop(&mut self) {
+        if self.engine.is_some() || self.guard.is_some() {
+            self.mode
+                .retire_storage((self.engine.take(), self.guard.take()));
+        }
+    }
 }
 impl Worker {
+    #[cfg(test)]
     fn new(engine: engine::Engine, recovery: Vec<RecoveryRecord>) -> Self {
+        Self::with_mode(engine, recovery, Mode::default())
+    }
+
+    fn with_mode(engine: engine::Engine, recovery: Vec<RecoveryRecord>, mode: Mode) -> Self {
         let mut unresolved = BTreeSet::new();
         let mut known = BTreeSet::new();
         for r in recovery {
@@ -518,6 +687,7 @@ impl Worker {
             closed: false,
             search_path: std::env::var_os("PATH"),
             copy_helper: None,
+            mode,
         }
     }
     fn register_copy_helper(&mut self, path: Option<&std::path::Path>) {
@@ -562,24 +732,32 @@ impl Worker {
         self.awaiting.remove(&k);
     }
     fn run(
-        mut self,
+        &mut self,
         rx: Receiver<OperationRecord>,
         live_rx: Receiver<LivePrepareRequest>,
         controls: Receiver<Control>,
         tx: SyncSender<Event>,
     ) {
-        loop {
+        while !self.mode.tripped() {
             loop {
-                match controls.try_recv() {
-                    Ok(Control::Stop) => return,
-                    Ok(Control::Ack(ack)) => self.ack(ack),
-                    Ok(Control::FailCleanup) => {
+                let control = match controls.try_recv() {
+                    Ok(control) => control,
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => return,
+                };
+                if !self.mode.admit() {
+                    return;
+                }
+                match control {
+                    Control::Stop => return,
+                    Control::Ack(ack) => self.ack(ack),
+                    Control::FailCleanup => {
                         self.closed = true;
-                        if tx.send(Event::Cleanup(CleanupState::Failed)).is_err() {
+                        if !self.mode.emit(&tx, Event::Cleanup(CleanupState::Failed)) {
                             return;
                         }
                     }
-                    Ok(Control::CopyGc(request)) => {
+                    Control::CopyGc(request) => {
                         let cleaned = if self.closed {
                             false
                         } else if request.launch.direction
@@ -598,20 +776,21 @@ impl Worker {
                                 })
                                 .unwrap_or(false)
                         };
-                        if tx
-                            .send(Event::CopyGc(Box::new(CopyGcCompletion {
+                        if !self.mode.emit(
+                            &tx,
+                            Event::CopyGc(Box::new(CopyGcCompletion {
                                 key: request.key,
                                 revision: request.revision,
                                 cleaned,
-                            })))
-                            .is_err()
-                        {
+                            })),
+                        ) {
                             return;
                         }
                     }
-                    Ok(Control::Cleanup) => {
+                    Control::Cleanup => {
                         self.closed = true;
-                        let state = if self.pending.is_empty()
+                        let state = if !self.mode.candidate()
+                            && self.pending.is_empty()
                             && self.awaiting.is_empty()
                             && self.unresolved.is_empty()
                         {
@@ -625,31 +804,32 @@ impl Worker {
                         } else {
                             CleanupState::Failed
                         };
-                        if tx.send(Event::Cleanup(state)).is_err() {
+                        if !self.mode.emit(&tx, Event::Cleanup(state)) {
                             return;
                         }
                     }
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => return,
                 }
             }
             // One preparation per round keeps finite operations and controls fair.
             if let Ok(request) = live_rx.try_recv() {
+                if !self.mode.admit() {
+                    return;
+                }
                 let result = self.prepare_live(&request);
-                if tx
-                    .send(Event::LivePrepared(Box::new(LivePrepared {
+                if !self.mode.emit(
+                    &tx,
+                    Event::LivePrepared(Box::new(LivePrepared {
                         operation_id: request.operation_id,
                         stream_id: request.stream_id,
                         revision: request.revision,
                         result,
-                    })))
-                    .is_err()
-                {
+                    })),
+                ) {
                     return;
                 }
             }
             // A single bounded queue remains observable while dispatch is fenced.
-            while self.pending.len() < CAPACITY {
+            while !self.mode.tripped() && self.pending.len() < CAPACITY {
                 match rx.try_recv() {
                     Ok(op) => self.pending.push_back(op),
                     Err(_) => break,
@@ -660,6 +840,9 @@ impl Worker {
                     || self.can_dispatch(&key(&op.key))
             });
             if let Some(index) = selected {
+                if !self.mode.admit() {
+                    return;
+                }
                 let op = self.pending.remove(index).unwrap();
                 let k = key(&op.key);
                 let result = if self.closed {
@@ -667,13 +850,16 @@ impl Worker {
                 } else {
                     self.execute(&op)
                 };
+                if !self.mode.admit() {
+                    return;
+                }
                 let fact = match &result {
                     EngineObservation::Missing => Fact::Missing,
                     EngineObservation::Refused(_) => Fact::Refused,
                     EngineObservation::Failed(_) => Fact::Uncertain,
                     _ => Fact::Found,
                 };
-                if fact == Fact::Found {
+                if fact == Fact::Found || (!self.closed && op.engine_known) {
                     self.known.insert(k);
                 }
                 // No maintenance until this exact result is durably committed.
@@ -686,18 +872,18 @@ impl Worker {
                         fact,
                     },
                 );
-                if tx
-                    .send(Event::Completion(Box::new(EngineCompletion {
+                if !self.mode.emit(
+                    &tx,
+                    Event::Completion(Box::new(EngineCompletion {
                         operation: op.id,
                         key: op.key,
                         revision: op.revision,
                         result,
-                    })))
-                    .is_err()
-                {
+                    })),
+                ) {
                     return;
                 }
-            } else {
+            } else if !self.mode.tripped() {
                 thread::sleep(Duration::from_millis(2));
             }
         }
@@ -734,10 +920,7 @@ impl Worker {
         }
     }
     fn execute(&mut self, op: &OperationRecord) -> EngineObservation {
-        if op.engine_known {
-            self.known.insert(key(&op.key));
-        }
-        let known = self.known.contains(&key(&op.key));
+        let known = op.engine_known || self.known.contains(&key(&op.key));
         let Some(e) = self.engine.as_mut() else {
             return EngineObservation::Failed(OperationalFailure::Unavailable);
         };
@@ -1309,6 +1492,10 @@ mod tests {
     use crate::mdk_adapter::{AuthenticatedCommandContext, CommandDirection};
     use std::os::unix::fs::{PermissionsExt, symlink};
 
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[path = "command_engine_fatal_tests.rs"]
+    mod fatal;
+
     fn operation(n: u8, operation: EngineOperation) -> OperationRecord {
         let context = AuthenticatedCommandContext::test_fixture(
             [1; 32],
@@ -1348,6 +1535,7 @@ mod tests {
             closed: false,
             search_path: None,
             copy_helper: None,
+            mode: Mode::default(),
         }
     }
     fn handle() -> (
@@ -1374,6 +1562,8 @@ mod tests {
                 completions: VecDeque::new(),
                 registered: BTreeMap::new(),
                 thread: None,
+                thread_failed: false,
+                mode: Mode::default(),
                 readiness: Readiness::Ready,
                 cleanup: CleanupState::Open,
                 #[cfg(test)]

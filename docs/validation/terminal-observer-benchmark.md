@@ -40,6 +40,25 @@ or 4,786 B/s, for the same 20,480-byte request workload. This includes
 records and the observer acknowledged 44. This is a single run on a
 shared host, so it does not quantify the effect of compiler optimization.
 
+## Regression at the candidate physical route head
+
+The Linux AMD64 fixture passed again on source `9344290`. Foreground attached
+in 6.451 s and echoed one byte in 128.907 ms. Ordinary Command before
+and after took 1.923 s and 1.658 s. The separate named resume and
+takeover test passed in 73.04 s.
+
+The observer benchmark completed in 38.78 s with 323 accepted relay
+publications. First named observer Ready took 7.305 s.
+
+| Local reader | Timed sends | p50 | p95 | Display bytes | Display rate | Output acknowledgements |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Writer | 20 | 146.534 ms | 173.875 ms | 24,347 | 4,511 B/s | 48 |
+| Observer | 20 | 119.508 ms | 139.768 ms | 24,347 | 4,511 B/s | 44 |
+
+The same 20,480-byte serial shell workload completed in 5.397 s,
+including 2.024 s of intentional pre-turn drains. The fixture measured
+local receipt and acknowledgement over private loopback TLS.
+
 ## Reproduce
 
 On a supported nonroot host, build the native binaries and run the ignored report-only test in the same Cargo target:
