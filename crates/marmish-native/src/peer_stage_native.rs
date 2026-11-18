@@ -242,6 +242,12 @@ impl OpenStage {
         Ok(())
     }
 
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn fixture_require_empty_package(&self) -> StageResult<()> {
+        self.require_unjoined_provisional()?;
+        Self::require_empty_package_storage(&self.storage)
+    }
+
     #[cfg(test)]
     pub(crate) fn fixture_replace_with_slot_only(&self) -> StageResult<()> {
         self.save(&KeyPackageLifecycleState::slot_only(self.slot.clone()))

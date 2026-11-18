@@ -111,9 +111,11 @@ fn candidate_package_cold_attestation_under_registered_quota() {
         &["started-empty", "empty"],
         &["early-stop", "bound"],
         &["schema-stop", "empty"],
-        &["issue-stop", "unsigned"],
-        &["prestage-lost", "unsigned"],
-        &["prestage-extent", "unsigned"],
+        &["issue-stop", "schema-only"],
+        &["prestage-lost", "schema-only"],
+        &["prestage-extent", "schema-only"],
+        &["foreign-package-owner", "schema-only"],
+        &["prestage-expired", "schema-only"],
         &["signing-loss", "unsigned"],
         &["generation-crash", "recover-unsigned"],
         &["issue", "copy-crash", "fenced"],
@@ -331,6 +333,45 @@ fn package_child() {
                 image.set_len(image.metadata().unwrap().len() - 1).unwrap();
             }
         }
+        "foreign-package-owner" => {
+            let started = owner
+                .start_package(quota, &reservation, &window())
+                .unwrap()
+                .unwrap();
+            let staged = owner
+                .prestage_package(quota, &reservation, started)
+                .unwrap();
+            let mut foreign = RecoveredOwner::open(&lease, &identity, RELAY).unwrap();
+            let unrelated = foreign
+                .checkpoint
+                .reserve_provisioning(&foreign.source, selector, now)
+                .unwrap();
+            let turn = staged.window.clone();
+            assert!(owner.issue_package(quota, &unrelated, staged).is_err());
+            assert_eq!(turn.signs(), 0);
+        }
+        "prestage-expired" => {
+            let anchor = Wall::System.sample().unwrap();
+            let turn = NativeWindow::start(
+                listener.readiness(),
+                Arc::new(AtomicBool::new(false)),
+                CancellationToken::new(),
+                anchor,
+                expires.min(anchor.as_secs() + 2),
+            )
+            .unwrap();
+            let started = owner
+                .start_package(quota, &reservation, &turn)
+                .unwrap()
+                .unwrap();
+            assert!(
+                owner
+                    .prestage_package(quota, &reservation, started)
+                    .is_err()
+            );
+            assert_eq!(turn.signs(), 0);
+            assert!(fs::metadata(&stage).unwrap().len() > 0);
+        }
         "generation-crash" => {
             let started = owner
                 .start_package(quota, &reservation, &window())
@@ -505,7 +546,7 @@ fn package_child() {
             assert!(!snapshot.exists());
             assert_eq!(fs::metadata(&stage).unwrap().len(), before);
         }
-        "fenced" | "empty" | "unsigned" => {
+        "fenced" | "empty" | "unsigned" | "schema-only" => {
             let before = fs::read(&stage).unwrap();
             if mode == "fenced" && !snapshot.exists() {
                 assert!(owner.start_package(quota, &reservation, &window()).is_err());
@@ -523,7 +564,7 @@ fn package_child() {
                     .is_err()
             );
             assert_eq!(fs::read(&stage).unwrap(), before);
-            if mode == "unsigned" {
+            if matches!(mode.as_str(), "unsigned" | "schema-only") {
                 let binding = reservation.stage_binding();
                 let inspect = root.join("fixture-unsigned-copy.db");
                 fs::copy(&stage, &inspect).unwrap();
@@ -536,11 +577,15 @@ fn package_child() {
                     false,
                 )
                 .unwrap();
-                assert!(
-                    !inspection
-                        .provisional_is_signed(Wall::System.sample().unwrap())
-                        .unwrap()
-                );
+                if mode == "schema-only" {
+                    inspection.fixture_require_empty_package().unwrap();
+                } else {
+                    assert!(
+                        !inspection
+                            .provisional_is_signed(Wall::System.sample().unwrap())
+                            .unwrap()
+                    );
+                }
             }
             if snapshot.exists() {
                 assert!(fs::metadata(&snapshot).unwrap().len() > 0);
