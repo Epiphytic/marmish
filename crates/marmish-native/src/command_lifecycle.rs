@@ -216,6 +216,24 @@ fn start_keeper(
     PendingStop { task, progress }
 }
 
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[must_use = "Retain and finish this worker join before shutting down the candidate"]
+#[allow(dead_code, reason = "candidate engine remains unmounted")]
+pub(crate) fn keep_fatal_engine(
+    join: crate::command_engine::FatalEngineJoin,
+    lease: Arc<ProfileLease>,
+) -> JoinHandle<crate::Result<()>> {
+    tokio::task::spawn_blocking(move || {
+        let result = join.wait();
+        drop(lease);
+        result
+    })
+}
+
 /// Consumes the existing identity. Observer expiry returns the same keeper;
 /// callers must retain it and the runtime until actual engine join completes.
 pub(crate) async fn stop_owned(identity: OwnedIdentity, deadline: Instant) -> StopObservation {
