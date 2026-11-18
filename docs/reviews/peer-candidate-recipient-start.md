@@ -36,3 +36,9 @@ cannot complete ahead of local revocation, and the returned joined
 status represents a real thread join. The reviewer inspected exact
 source without running network or Cargo. The author completed the
 [candidate link, strict lint, and real WSS checks](../validation/peer-candidate-recipient-start.md).
+
+Claude Code Auto `9255f36a-d5d9-4fd7-9e7b-e543c7cc286c` approved the exact
+composition `f65d4e3` with the reviewed Terminal and storage branch. The five
+recipient code files match `79c9d18` byte for byte. Registration and readiness
+contracts stayed shared and unchanged by the composition. The reviewer relied
+on the source-matched eight-case live validation for runtime behavior.
