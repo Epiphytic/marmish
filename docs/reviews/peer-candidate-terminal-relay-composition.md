@@ -91,3 +91,17 @@ set a performance threshold for a network or an optimized build.
 [Physical cut design](../phases/peer-candidate-terminal-fatal-stop.md)
 · [Original code review](peer-candidate-terminal-relay-code.md)
 · [Author validation](../validation/peer-candidate-terminal-relay-fatal.md)
+
+## Integration with the reviewed candidate storage and listener changes
+
+Claude Code Auto session `11808f2a-0ba1-4f77-be2a-8e6fe25bf846` approved
+`65fcfae09cabc639714c05e29c8dc555786e9ef9`. The two branches changed disjoint
+files. All 13 files from the Terminal branch match their reviewed versions
+byte for byte. The reviewer checked the shared transport callers and passed
+independent stock and candidate all-target Cargo checks. The combined
+candidate also passed strict Clippy in 40.53 s. The reviewer's separate
+runtime build exhausted disk space. The source-matched live Terminal results
+above and the candidate storage and listener results below are from their
+respective reviewed source cuts.
+
+[Candidate storage and listener validation](../validation/peer-candidate-owner-leaves-composition.md)
