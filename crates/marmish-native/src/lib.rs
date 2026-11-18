@@ -110,6 +110,9 @@ mod peer_invitation;
 #[cfg(test)]
 mod peer_host_sampling_proof_tests;
 
+#[cfg(test)]
+mod peer_quota_vfs;
+
 mod terminal_frames;
 
 mod terminal_selection_wire_v2;

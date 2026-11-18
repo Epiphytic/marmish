@@ -1430,3 +1430,13 @@ in tests. The daemon has no production retirement route.
 The release path and its bounded local benchmark are recorded in the
 [fixture validation](validation/peer-native-stage-retirement.md) and
 [review](reviews/peer-native-stage-retirement.md).
+
+### Provisional Peer storage quota fixture
+
+The [quota fixture](phases/peer-provisional-quota-vfs.md) installs its VFS in
+an isolated test process before the actual MDK SQLCipher open and migration.
+It caps the combined logical length of the main database and DELETE journal.
+Linux AMD64 passed the [native and rollback tests](validation/peer-provisional-quota-vfs.md).
+The abrupt-exit test uses a keyed SQLite fixture on the same bundled library.
+macOS qualification and production integration are pending. The quota does
+not bound physical filesystem allocation.
