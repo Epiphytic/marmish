@@ -1573,6 +1573,12 @@ On Linux AMD64 it preserved the exact received bytes over a cold SQLCipher
 reopen. A combined recipient owner must still handle Delivery and exact
 mixed-page cursor progress before this path can be mounted in the daemon.
 
+The [recipient quota registration proof](validation/peer-receiver-charge-scope.md)
+binds the exact registered file family and measured clean allowance to one
+profile lease. Linux AMD64 fixtures covered both registration orders,
+descriptor-relative inventory, retirement, and ordinary stock routing.
+Managed recovery and native receiver opens with that allowance are pending.
+
 The [capped Welcome fixture](validation/peer-capped-welcome.md) uses the
 real native ingest and a metered cold readback on Linux AMD64. It
 exercises exact snapshot admission, cancellation and a refused rollback

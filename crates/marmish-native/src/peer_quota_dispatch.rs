@@ -17,6 +17,8 @@ const NAMES: [&str; 2] = ["provisional-known.db", "provisional-unknown.db"];
 const SNAPSHOT: usize = NAMES.len();
 #[cfg(test)]
 const SNAPSHOT_NAME: &str = "terminal-leave-snapshot.db";
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+const RECEIVER_SNAPSHOT_NAME: &str = "receiver-join-snapshot.db";
 const SLOT_COUNT: usize = NAMES.len() + cfg!(test) as usize;
 const SIDECARS: [&str; 3] = ["-journal", "-wal", "-shm"];
 
@@ -49,8 +51,80 @@ struct Slot {
 
 struct ReservedPaths {
     profile_id: String,
+    root: PathBuf,
+    directories: [(u64, u64); 2],
     mains: [PathBuf; SLOT_COUNT],
     all: [PathBuf; SLOT_COUNT * 4],
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    receiver: Option<std::sync::Weak<ProfileLease>>,
+}
+
+impl ReservedPaths {
+    fn directory_identities(root: &Path) -> Result<[(u64, u64); 2]> {
+        let directories = [root.to_path_buf(), root.join("peer")];
+        let mut identities = [(0, 0); 2];
+        for (identity, path) in identities.iter_mut().zip(&directories) {
+            let meta = path.symlink_metadata().map_err(|_| "stage_directory")?;
+            // SAFETY: reads this process's effective UID.
+            if !meta.is_dir()
+                || meta.uid() != unsafe { libc::geteuid() }
+                || meta.mode() & 0o7777 != 0o700
+                || path.canonicalize().as_ref().ok() != Some(path)
+            {
+                return Err("dispatch_profile");
+            }
+            *identity = witness(&meta);
+        }
+        if identities[0].0 != identities[1].0 {
+            return Err("dispatch_profile");
+        }
+        Ok(identities)
+    }
+
+    #[cfg(test)]
+    fn new(lease: &ProfileLease, snapshot: &str) -> Result<Self> {
+        let root = lease.root().to_path_buf();
+        let directory = root.join("peer");
+        let directories = Self::directory_identities(&root)?;
+        if !local_volume(&directory)? {
+            return Err("dispatch_profile");
+        }
+        let mains = [NAMES[0], NAMES[1], snapshot].map(|name| directory.join(name));
+        let all = std::array::from_fn(|index| {
+            let main = &mains[index / 4];
+            match index % 4 {
+                0 => main.clone(),
+                offset => sidecar(main, SIDECARS[offset - 1]),
+            }
+        });
+        Ok(Self {
+            profile_id: lease.profile_id().to_owned(),
+            root,
+            directories,
+            mains,
+            all,
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            receiver: None,
+        })
+    }
+
+    fn check(&self, lease: &ProfileLease) -> Result<()> {
+        if self.root != lease.root()
+            || self.profile_id != lease.profile_id()
+            || Self::directory_identities(lease.root())? != self.directories
+        {
+            return Err("dispatch_profile_conflict");
+        }
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        if let Some(owner) = &self.receiver
+            && owner
+                .upgrade()
+                .is_none_or(|owner| !ptr::eq(owner.as_ref(), lease))
+        {
+            return Err("dispatch_lease_conflict");
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -135,6 +209,14 @@ pub(crate) struct Reservation<'a> {
 }
 
 impl ReceiverQuota<'_> {
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn bind_receiver(lease: &Arc<ProfileLease>) -> Result<ReceiverQuota<'_>> {
+        let mut paths = ReservedPaths::new(lease, RECEIVER_SNAPSHOT_NAME)?;
+        paths.receiver = Some(Arc::downgrade(lease));
+        let dispatch = Dispatch::bind(lease, paths)?;
+        Ok(ReceiverQuota { dispatch, lease })
+    }
+
     pub(crate) fn admit(&self, reservation: Reservation<'_>) -> Result<QuotaTurn<'_>> {
         if !ptr::eq(self, reservation.owner) {
             return Err("dispatch_reservation_owner");
@@ -153,13 +235,8 @@ impl ReceiverQuota<'_> {
         if ACTIVE.with(|active| active.borrow().is_some()) {
             return Err("dispatch_recursive_turn");
         }
-        let paths = self.dispatch.paths.get().ok_or("dispatch_unreserved")?;
+        let paths = self.dispatch.checked_paths(self.lease)?;
         let main = paths.mains.get(index).ok_or("dispatch_stage_path")?;
-        if paths.profile_id != self.lease.profile_id()
-            || main.parent().and_then(Path::parent) != Some(self.lease.root())
-        {
-            return Err("dispatch_stage_path");
-        }
         let mut slots = self
             .dispatch
             .slots
@@ -224,6 +301,7 @@ impl ReceiverQuota<'_> {
         slot.active = Some(quota.clone());
         Ok(QuotaTurn {
             dispatch: self.dispatch,
+            lease: self.lease,
             slot: index,
             quota,
             entered: false,
@@ -238,6 +316,7 @@ thread_local! {
 
 pub(crate) struct QuotaTurn<'a> {
     dispatch: &'a Dispatch,
+    lease: &'a ProfileLease,
     slot: usize,
     quota: Arc<Quota>,
     entered: bool,
@@ -248,7 +327,7 @@ impl QuotaTurn<'_> {
     // Private to the checked dispatcher. Merely holding the permission does
     // not put arbitrary work on this thread inside the quota scope.
     fn enter(&mut self) -> Result<()> {
-        self.dispatch.assert_default()?;
+        self.dispatch.checked_paths(self.lease)?;
         ACTIVE.with(|active| {
             let mut active = active.borrow_mut();
             if self.entered || active.is_some() {
@@ -261,7 +340,7 @@ impl QuotaTurn<'_> {
     }
 
     fn finish(&self) -> Result<()> {
-        self.dispatch.assert_default()?;
+        self.dispatch.checked_paths(self.lease)?;
         if Arc::strong_count(&self.quota) != 3 {
             return Err("dispatch_live_handles");
         }
@@ -292,7 +371,9 @@ impl Drop for QuotaTurn<'_> {
             // guard only to quarantine and clear this exact ownership claim.
             if poisoned
                 || Arc::strong_count(&self.quota) != 2
-                || (self.entered && self.quota.verify_dispatch().is_err())
+                || (self.entered
+                    && (self.dispatch.checked_paths(self.lease).is_err()
+                        || self.quota.verify_dispatch().is_err()))
             {
                 slot.quarantined = true;
             }
@@ -353,7 +434,37 @@ impl Dispatch {
         if unsafe { sql::sqlite3_vfs_find(ptr::null()) } != self.wrapper {
             return Err("dispatch_displaced");
         }
+        #[cfg(target_os = "linux")]
+        let managed_name = c"unix";
+        #[cfg(target_os = "macos")]
+        let managed_name = c"unix-posix";
+        if unsafe { sql::sqlite3_vfs_find(c"unix".as_ptr()) } != self.stock
+            || unsafe { sql::sqlite3_vfs_find(managed_name.as_ptr()) } != self.managed
+        {
+            return Err("dispatch_stock_displaced");
+        }
         Ok(())
+    }
+
+    fn checked_paths(&self, lease: &ProfileLease) -> Result<&ReservedPaths> {
+        self.assert_default()?;
+        let paths = self.paths.get().ok_or("dispatch_unreserved")?;
+        paths.check(lease)?;
+        Ok(paths)
+    }
+
+    #[cfg(test)]
+    fn bind(lease: &ProfileLease, expected: ReservedPaths) -> Result<&'static Self> {
+        let dispatch = Self::mount()?;
+        expected.check(lease)?;
+        let competing = dispatch.paths.set(expected).err();
+        let actual = dispatch.checked_paths(lease)?;
+        if let Some(expected) = competing
+            && (actual.mains != expected.mains || actual.all != expected.all)
+        {
+            return Err("dispatch_profile_conflict");
+        }
+        Ok(dispatch)
     }
 
     fn protected(&self, name: *const c_char) -> bool {
@@ -396,47 +507,10 @@ impl Dispatch {
 #[cfg(test)]
 impl<'a> ProfileSlots<'a> {
     pub(crate) fn reserve(lease: &'a ProfileLease, charged_other: u64) -> Result<Self> {
-        let dispatch = Dispatch::mount()?;
-        dispatch.assert_default()?;
-        let directory = lease.root().join("peer");
-        let parent = directory
-            .symlink_metadata()
-            .map_err(|_| "stage_directory")?;
-        if !parent.is_dir()
-            || parent.uid() != unsafe { libc::geteuid() }
-            || parent.mode() & 0o777 != 0o700
-            || directory.canonicalize().as_ref().ok() != Some(&directory)
-            || lease
-                .root()
-                .symlink_metadata()
-                .map_err(|_| "profile_root")?
-                .dev()
-                != parent.dev()
-            || !local_volume(&directory)?
-        {
-            return Err("dispatch_profile");
-        }
-        let paths = dispatch.paths.get_or_init(|| {
-            let mains = [NAMES[0], NAMES[1], SNAPSHOT_NAME].map(|name| directory.join(name));
-            let all = std::array::from_fn(|index| {
-                let main = &mains[index / 4];
-                match index % 4 {
-                    0 => main.clone(),
-                    offset => sidecar(main, SIDECARS[offset - 1]),
-                }
-            });
-            ReservedPaths {
-                profile_id: lease.profile_id().to_owned(),
-                mains,
-                all,
-            }
-        });
-        if paths.mains[0].parent() != Some(&directory) || paths.profile_id != lease.profile_id() {
-            return Err("dispatch_profile_conflict");
-        }
         if charged_other > TOTAL_ADMISSION {
             return Err("dispatch_admission");
         }
+        let dispatch = Dispatch::bind(lease, ReservedPaths::new(lease, SNAPSHOT_NAME)?)?;
         Ok(Self {
             dispatch,
             charged_other,
@@ -496,7 +570,7 @@ impl<'a> ProfileSlots<'a> {
     }
 
     pub(crate) fn file_turn(&self) -> Result<FixtureFileTurn<'_>> {
-        self.dispatch.assert_default()?;
+        self.dispatch.checked_paths(self.owner.lease)?;
         let exclusive = self
             .dispatch
             .file_turn

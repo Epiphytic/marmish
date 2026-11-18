@@ -28,7 +28,10 @@ struct RecoveredOwner<'lease> {
 enum Class {
     Vacant,
     Create(Binding),
-    Identified(Binding),
+    Identified {
+        binding: Binding,
+        main: FileExtent,
+    },
     JournalCandidate {
         binding: Binding,
         journal: FileExtent,
@@ -43,6 +46,14 @@ struct Inventory {
     classes: [Class; 2],
     extents: [u64; 3],
     charged: u64,
+}
+
+// Measured only from the selected durable Unknown row plus its exact clean
+// main inode. Quota admission must still recheck this value at the native turn.
+#[derive(Debug, Eq, PartialEq)]
+struct CleanExtent {
+    main: FileExtent,
+    charged_other: u64,
 }
 
 impl<'lease> RecoveredOwner<'lease> {
@@ -104,6 +115,27 @@ impl<'lease> RecoveredOwner<'lease> {
 }
 
 impl Inventory {
+    fn clean_extent(&self, exact: Binding) -> Result<CleanExtent> {
+        let Class::Identified { binding, main } = self.classes[1] else {
+            return Err(Error::StageIdentityMismatch);
+        };
+        if binding != exact {
+            return Err(Error::StageIdentityMismatch);
+        }
+        // Keep other families, the fixed cursor reservation, and physically
+        // allocated excess for this active main. The VFS counts its logical
+        // bytes itself. Reserve one byte to preserve the strict aggregate cap.
+        let charged_other = self
+            .charged
+            .checked_sub(main.logical)
+            .and_then(|value| value.checked_add(1))
+            .ok_or(Error::Path)?;
+        Ok(CleanExtent {
+            main,
+            charged_other,
+        })
+    }
+
     fn calculate(
         charges: [Option<Charge>; 2],
         files: [[Option<FileExtent>; 4]; 3],
@@ -163,7 +195,7 @@ fn classify_unknown(charge: Option<Charge>, family: [Option<FileExtent>; 4]) -> 
             // still needs a scoped pager check before native access.
             match journal {
                 Some(journal) => Class::JournalCandidate { binding, journal },
-                None => Class::Identified(binding),
+                None => Class::Identified { binding, main },
             }
         }
         _ => Class::Fenced,
