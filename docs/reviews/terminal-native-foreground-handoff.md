@@ -44,3 +44,12 @@ version shares the exact predicate after selecting a kind or total.
 Remaining flags include the ignored test entry point, separate bounded
 stderr and PTY drains, and churn in the test harness. The product source
 and regular CI selection are unchanged.
+
+Claude Code Auto session `7c57964b-a67e-49da-b50c-c086038fe00a` approved the
+integrated source `a9e581b` on the newer branch and ran strict all-target
+native Clippy with `installed-checks`. The review identified timing-sensitive
+fixture assertions around watch notifications, raw Ready, and tmux echo.
+The narrow proof uses one successor, fixed PTY geometry, continuous drains,
+and a checked admission interval. The [integrated rerun](../validation/terminal-native-foreground-handoff.md)
+passed. These samples check functionality and do not establish transport
+latency bounds.

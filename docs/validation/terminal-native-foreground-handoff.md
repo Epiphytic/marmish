@@ -64,3 +64,12 @@ To rerun with matching already built native binaries, use
 cargo test --offline --locked -p marmish-native --lib \
   terminal_installed_runtime_native_foreground_handoff -- --ignored --nocapture
 ```
+
+The integrated source `a9e581b` passed with freshly rebuilt normal binaries
+on Linux AMD64 in 54.45 s. Observe reached raw mode in 6.954 s. Cooked choice
+to successor raw took 8.949 s, preserved state took 182.064 ms, and the relay
+counted 121 publication attempts. The during Command took 3.540 s and started
+8.089 ms after the choice. All three exits were clean. The app test files
+match the author candidate byte for byte. The shared relay file carries the
+identical counter patch on top of the newer authenticated route fixture.
+[Composed review](../reviews/terminal-native-foreground-handoff.md)
