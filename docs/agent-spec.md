@@ -94,7 +94,10 @@ do not launch GitHub-hosted qualification as an implicit fallback. The
 hosted measurements as historical evidence. Its first increment is a manual,
 trusted-master native prerequisite inventory, not a migrated candidate or
 release qualification. Native builds must retain the Linux glibc2.39 baseline,
-macOS keychain isolation and all acceptance checks. Full nine-pair live transfer
+macOS keychain isolation and all acceptance checks. The Node coordinator
+and native interactive core use trusted self-hosted master pushes. The
+historical v0.1 installer validation is manual. [Workflow validation](validation/interactive-ci-triggers.md)
+records the static and local checks. Full nine-pair live transfer
 qualification currently needs capacity beyond the shared laptop ARM64 slot.
 
 **[v0.3.0 is published](https://github.com/Epiphytic/marmish/releases/tag/v0.3.0).**
