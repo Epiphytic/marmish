@@ -43,12 +43,18 @@ pub(super) enum Mode {
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub(crate) enum QualificationFault {
+    WrongAuthAck(usize),
     AcceptUnregisteredAuth,
+    WrongWriteAck(u16),
     AcceptOversize,
+    WrongSizeRefusal,
     AcceptWrongGroupWrite,
+    AcceptUnauthenticatedControlWrite,
     AlterControlHistory,
     ExtraControlHistory,
-    LeakWideControl,
+    LeakHistory(&'static str, u16),
+    EmptyHistory(&'static str),
+    WrongReadRefusal(&'static str),
 }
 
 #[derive(Clone, Debug)]
@@ -97,6 +103,7 @@ struct State {
     qualification: bool,
     qualification_connections: usize,
     qualification_fault: Option<QualificationFault>,
+    qualification_fault_fired: bool,
     acknowledge_duplicates: bool,
     duplicate_acks: usize,
     ordinary: BTreeSet<PublicKey>,
@@ -119,23 +126,40 @@ impl State {
         self.observations.push(observation);
     }
 
+    fn inject_qualification(&mut self, fault: QualificationFault) -> bool {
+        if self.qualification_fault != Some(fault) || self.qualification_fault_fired {
+            return false;
+        }
+        self.qualification_fault_fired = true;
+        true
+    }
+
     fn publish(&mut self, connection: usize, event: Event, raw: &str) -> Option<Value> {
         let account = self.connections[&connection].account;
         let kind = u16::from(event.kind);
         let authenticated = account.is_some();
+        if authenticated && self.inject_qualification(QualificationFault::WrongWriteAck(kind)) {
+            return Some(json!(["OK", EventId::from_byte_array([1; 32]), true, ""]));
+        }
+        if !authenticated
+            && kind == 7435
+            && self.inject_qualification(QualificationFault::AcceptUnauthenticatedControlWrite)
+        {
+            return Some(json!(["OK", event.id, true, ""]));
+        }
         if self.qualification && kind == 7435 {
             let raw_event = serde_json::from_str::<(&str, &serde_json::value::RawValue)>(raw)
                 .expect("qualified fixture event framing")
                 .1;
             if raw_event.get().len() > 65_536 {
-                let accepted = self.qualification_fault == Some(QualificationFault::AcceptOversize);
-                self.observe(Observation::Write(event.id, kind, accepted));
-                return Some(json!([
-                    "OK",
-                    event.id,
-                    accepted,
+                let accepted = self.inject_qualification(QualificationFault::AcceptOversize);
+                let reason = if self.inject_qualification(QualificationFault::WrongSizeRefusal) {
+                    "invalid: unsupported event format"
+                } else {
                     "invalid: event size exceeds 65536 bytes"
-                ]));
+                };
+                self.observe(Observation::Write(event.id, kind, accepted));
+                return Some(json!(["OK", event.id, accepted, reason]));
             }
         }
         let authorized_author = account.is_some_and(|account| {
@@ -148,7 +172,7 @@ impl State {
             let result = account.and_then(|sender| group.accept(sender, &event, raw));
             self.observe(Observation::Write(event.id, kind, result.is_some()));
             let Some((duplicate, acknowledged)) = result else {
-                if self.qualification_fault == Some(QualificationFault::AcceptWrongGroupWrite) {
+                if self.inject_qualification(QualificationFault::AcceptWrongGroupWrite) {
                     return Some(json!(["OK", event.id, true, ""]));
                 }
                 return Some(json!([
@@ -401,7 +425,7 @@ fn handle_message(
                 <= 30
                 && challenge_started.elapsed() <= Duration::from_secs(30);
             let accept_unregistered =
-                state.qualification_fault == Some(QualificationFault::AcceptUnregisteredAuth);
+                !eligible && state.inject_qualification(QualificationFault::AcceptUnregisteredAuth);
             let accepted = (eligible || accept_unregistered)
                 && fresh
                 && u16::from(event.kind) == 22242
@@ -420,7 +444,9 @@ fn handle_message(
             } else {
                 "restricted: fixture AUTH refused"
             };
-            let acknowledged = if state.mode == Mode::WrongAuthAcknowledgement {
+            let acknowledged = if state.mode == Mode::WrongAuthAcknowledgement
+                || state.inject_qualification(QualificationFault::WrongAuthAck(id))
+            {
                 EventId::from_byte_array([1; 32])
             } else {
                 event.id
@@ -438,19 +464,38 @@ fn handle_message(
                 |peer| peer.read_allowed(account, filters),
             );
             state.observe(Observation::Read(permitted, account));
+            if let Some(QualificationFault::LeakHistory(expected, kind)) = state.qualification_fault
+                && !permitted
+                && expected == subscription_id
+                && let Some(event) = state
+                    .publications
+                    .iter()
+                    .find(|event| u16::from(event.kind) == kind)
+                    .cloned()
+                && state.inject_qualification(QualificationFault::LeakHistory(expected, kind))
+            {
+                return vec![
+                    json!(["EVENT", subscription_id, event]),
+                    json!(["EOSE", subscription_id]),
+                ];
+            }
+            if let Some(QualificationFault::EmptyHistory(expected)) = state.qualification_fault
+                && expected == subscription_id
+                && state.inject_qualification(QualificationFault::EmptyHistory(expected))
+            {
+                return vec![json!(["EOSE", subscription_id])];
+            }
             if !permitted {
-                if state.qualification_fault == Some(QualificationFault::LeakWideControl)
-                    && account.is_some()
-                    && subscription_id == "control-wide"
-                    && let Some(event) = state
-                        .publications
-                        .iter()
-                        .find(|event| u16::from(event.kind) == 7435)
+                if let Some(QualificationFault::WrongReadRefusal(expected)) =
+                    state.qualification_fault
+                    && expected == subscription_id
+                    && state.inject_qualification(QualificationFault::WrongReadRefusal(expected))
                 {
-                    return vec![
-                        json!(["EVENT", subscription_id, event]),
-                        json!(["EOSE", subscription_id]),
-                    ];
+                    return vec![json!([
+                        "CLOSED",
+                        subscription_id,
+                        "auth-required: deliberately wrong scoped refusal"
+                    ])];
                 }
                 let reason = if account.is_none() {
                     "auth-required: fixture authentication required"
@@ -510,15 +555,11 @@ fn handle_message(
                 .into_iter()
                 .map(|event| json!(["EVENT", subscription_id, event]))
                 .collect();
-            if state.qualification && subscription_id == "control" && !responses.is_empty() {
-                match state.qualification_fault {
-                    Some(QualificationFault::AlterControlHistory) => {
-                        responses[0][2]["content"] = json!("altered")
-                    }
-                    Some(QualificationFault::ExtraControlHistory) => {
-                        responses.push(responses[0].clone())
-                    }
-                    _ => {}
+            if subscription_id == "control" && !responses.is_empty() {
+                if state.inject_qualification(QualificationFault::AlterControlHistory) {
+                    responses[0][2]["content"] = json!("altered");
+                } else if state.inject_qualification(QualificationFault::ExtraControlHistory) {
+                    responses.push(responses[0].clone());
                 }
             }
             if state.hold_eose_for.is_some_and(|alias| {
@@ -763,6 +804,10 @@ impl Relay {
     pub(crate) fn qualification_fault(&self, fault: QualificationFault) {
         let mut state = self.state.lock().unwrap();
         assert!(state.qualification && state.qualification_fault.replace(fault).is_none());
+    }
+
+    pub(crate) fn qualification_fault_fired(&self) -> bool {
+        self.state.lock().unwrap().qualification_fault_fired
     }
 
     pub(crate) fn qualification_register(&self, accounts: [PublicKey; 2], route: [u8; 32]) {

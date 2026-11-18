@@ -14,7 +14,10 @@ use nostr_sdk::transport::websocket::{WebSocketSink, WebSocketStream};
 use serde::Serialize;
 use serde_json::{Value, json, value::RawValue};
 use sha2::{Digest, Sha256};
-use std::time::Duration;
+use std::{
+    sync::{Arc, Weak},
+    time::Duration,
+};
 use tokio::time::{Instant, timeout_at};
 
 const CONTROL: u16 = 7435;
@@ -23,6 +26,8 @@ const FRAME_BUDGET: usize = 64;
 const BYTE_BUDGET: usize = 2 * 1024 * 1024;
 const CONTROL_CAP: usize = 65_536;
 const REFUSED: Error = Error::Transport("peer_qualification_probe");
+const TRAFFIC_BUDGET: Error = Error::Transport("peer_qualification_traffic_budget");
+const SOCKET_BUDGET: Error = Error::Transport("peer_qualification_socket_budget");
 const TIMEOUT: Error = Error::Transport("peer_qualification_deadline");
 
 pub(super) struct Plan {
@@ -85,15 +90,26 @@ impl Plan {
         }
         let group = self.group(&route, started)?;
         let wrong_group = self.group(&wrong, started)?;
-        let mut writer = io.connect(connector, &self.writer, true).await?;
-        writer.publish(&mut io, &control, None).await?;
+        let mut writer = io
+            .connect(connector, &self, Turn::Writer)
+            .await
+            .map_err(at("peer_qualification_writer_auth"))?;
+        writer
+            .publish(&mut io, &control, None)
+            .await
+            .map_err(at("peer_qualification_control_write"))?;
         writer
             .publish(&mut io, &oversize, Some(Refusal::Size))
-            .await?;
-        writer.publish(&mut io, &group, None).await?;
+            .await
+            .map_err(at("peer_qualification_control_size"))?;
+        writer
+            .publish(&mut io, &group, None)
+            .await
+            .map_err(at("peer_qualification_group_write"))?;
         writer
             .publish(&mut io, &wrong_group, Some(Refusal::Scope))
-            .await?;
+            .await
+            .map_err(at("peer_qualification_group_foreign_write"))?;
         // The writer cannot read the recipient's exact protected scope.
         let control_filter = json!({
             "kinds":[CONTROL], "#p":[recipient], "since":started, "until":started, "limit":4,
@@ -106,15 +122,20 @@ impl Plan {
                 Refusal::Scope,
                 false,
             )
-            .await?;
+            .await
+            .map_err(at("peer_qualification_control_foreign_read"))?;
         drop(writer);
 
         let group_filter = json!({"kinds":[GROUP], "#h":[route]});
-        let mut outsider = io.connect(connector, &self.outsider, false).await?;
+        let mut outsider = io
+            .connect(connector, &self, Turn::Outsider)
+            .await
+            .map_err(at("peer_qualification_outsider_auth"))?;
         let outsider_control = self.control(recipient, started, " outsider")?;
         outsider
             .publish(&mut io, &outsider_control, Some(Refusal::Unauthenticated))
-            .await?;
+            .await
+            .map_err(at("peer_qualification_control_unauthenticated_write"))?;
         outsider
             .refuse_history(
                 &mut io,
@@ -123,7 +144,8 @@ impl Plan {
                 Refusal::Unauthenticated,
                 false,
             )
-            .await?;
+            .await
+            .map_err(at("peer_qualification_control_unauthenticated_read"))?;
         outsider
             .refuse_history(
                 &mut io,
@@ -132,17 +154,37 @@ impl Plan {
                 Refusal::Unauthenticated,
                 false,
             )
-            .await?;
+            .await
+            .map_err(at("peer_qualification_group_unauthenticated_read"))?;
         drop(outsider);
-        for (control_req, group_req) in [("control", "group"), ("control-reopen", "group-reopen")] {
-            let mut reader = io.connect(connector, &self.recipient, true).await?;
+        for (turn, auth, control_req, control_check, group_req, group_check) in [
+            (
+                Turn::Recipient,
+                "peer_qualification_recipient_auth",
+                "control",
+                "peer_qualification_control_history",
+                "group",
+                "peer_qualification_group_history",
+            ),
+            (
+                Turn::Reconnect,
+                "peer_qualification_reconnect_auth",
+                "control-reopen",
+                "peer_qualification_control_reconnect",
+                "group-reopen",
+                "peer_qualification_group_reconnect",
+            ),
+        ] {
+            let mut reader = io.connect(connector, &self, turn).await.map_err(at(auth))?;
             reader
                 .history(&mut io, control_req, control_filter.clone(), &control)
-                .await?;
+                .await
+                .map_err(at(control_check))?;
             reader
                 .history(&mut io, group_req, group_filter.clone(), &group)
-                .await?;
-            if control_req == "control" {
+                .await
+                .map_err(at(group_check))?;
+            if turn == Turn::Recipient {
                 reader
                     .refuse_history(
                         &mut io,
@@ -151,7 +193,8 @@ impl Plan {
                         Refusal::Scope,
                         true,
                     )
-                    .await?;
+                    .await
+                    .map_err(at("peer_qualification_control_wide_read"))?;
                 reader
                     .refuse_history(
                         &mut io,
@@ -160,7 +203,8 @@ impl Plan {
                         Refusal::Scope,
                         true,
                     )
-                    .await?;
+                    .await
+                    .map_err(at("peer_qualification_group_wide_read"))?;
                 reader
                     .refuse_history(
                         &mut io,
@@ -169,9 +213,11 @@ impl Plan {
                         Refusal::Scope,
                         false,
                     )
-                    .await?;
+                    .await
+                    .map_err(at("peer_qualification_group_foreign_read"))?;
             }
         }
+        io.sockets.complete()?;
         io.recheck()?;
         let finished = io.last_wall;
         if Instant::now() >= io.deadline {
@@ -292,6 +338,48 @@ impl Signed {
     }
 }
 
+// Admission serializes physical socket ownership. The only repeated
+// principal is the final turn, which always receives a fresh NIP-42 challenge.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Turn {
+    Writer,
+    Outsider,
+    Recipient,
+    Reconnect,
+}
+
+#[derive(Default)]
+struct SocketBudget {
+    opened: usize,
+    active: Weak<()>,
+}
+
+impl SocketBudget {
+    const ORDER: [Turn; 4] = [
+        Turn::Writer,
+        Turn::Outsider,
+        Turn::Recipient,
+        Turn::Reconnect,
+    ];
+
+    fn admit(&mut self, turn: Turn) -> Result<Arc<()>> {
+        if self.active.upgrade().is_some() || Self::ORDER.get(self.opened) != Some(&turn) {
+            return Err(SOCKET_BUDGET);
+        }
+        let permit = Arc::new(());
+        self.active = Arc::downgrade(&permit);
+        self.opened += 1;
+        Ok(permit)
+    }
+
+    fn complete(&self) -> Result<()> {
+        if self.opened != Self::ORDER.len() || self.active.upgrade().is_some() {
+            return Err(SOCKET_BUDGET);
+        }
+        Ok(())
+    }
+}
+
 struct Budget<'a> {
     authority: &'a ProbeAuthority<'a>,
     last_wall: u64,
@@ -300,6 +388,7 @@ struct Budget<'a> {
     deadline: Instant,
     frames: usize,
     bytes: usize,
+    sockets: SocketBudget,
 }
 
 impl<'a> Budget<'a> {
@@ -313,12 +402,13 @@ impl<'a> Budget<'a> {
             deadline: begun + Duration::from_secs(30),
             frames: FRAME_BUDGET,
             bytes: BYTE_BUDGET,
+            sockets: SocketBudget::default(),
         }
     }
 
     fn admit(&mut self, bytes: usize) -> Result<()> {
-        self.frames = self.frames.checked_sub(1).ok_or(REFUSED)?;
-        self.bytes = self.bytes.checked_sub(bytes).ok_or(REFUSED)?;
+        self.frames = self.frames.checked_sub(1).ok_or(TRAFFIC_BUDGET)?;
+        self.bytes = self.bytes.checked_sub(bytes).ok_or(TRAFFIC_BUDGET)?;
         if Instant::now() >= self.deadline {
             return Err(TIMEOUT);
         }
@@ -337,12 +427,22 @@ impl<'a> Budget<'a> {
     async fn connect(
         &mut self,
         connector: &PeerRelayConnector,
-        signer: &Keys,
-        registered: bool,
+        plan: &Plan,
+        turn: Turn,
     ) -> Result<Socket> {
         self.recheck()?;
+        let permit = self.sockets.admit(turn)?;
+        let signer = match turn {
+            Turn::Writer => &plan.writer,
+            Turn::Outsider => &plan.outsider,
+            Turn::Recipient | Turn::Reconnect => &plan.recipient,
+        };
         let (sink, stream) = connector.open_probe(self.authority, self.deadline).await?;
-        let mut socket = Socket { sink, stream };
+        let mut socket = Socket {
+            sink,
+            stream,
+            _permit: permit,
+        };
         let message = socket.text(self).await?;
         let fields: Vec<&RawValue> = serde_json::from_str(&message).map_err(|_| REFUSED)?;
         let [verb, challenge] = fields.as_slice() else {
@@ -369,7 +469,7 @@ impl<'a> Budget<'a> {
             .ack(
                 self,
                 &auth.id,
-                (!registered).then_some(Refusal::Unregistered),
+                (turn == Turn::Outsider).then_some(Refusal::Unregistered),
             )
             .await?;
         Ok(socket)
@@ -379,6 +479,7 @@ impl<'a> Budget<'a> {
 struct Socket {
     sink: WebSocketSink,
     stream: WebSocketStream,
+    _permit: Arc<()>,
 }
 
 impl Socket {
@@ -514,6 +615,13 @@ impl Socket {
     }
 }
 
+fn at(check: &'static str) -> impl FnOnce(Error) -> Error {
+    move |error| match error {
+        Error::Transport("peer_qualification_probe") => Error::Transport(check),
+        other => other,
+    }
+}
+
 fn string(value: &RawValue) -> Option<String> {
     serde_json::from_str(value.get()).ok()
 }
@@ -558,7 +666,7 @@ pub(super) fn check_test_budget(authority: &ProbeAuthority<'_>) {
     }
     assert!(matches!(
         count.admit(1),
-        Err(Error::Transport("peer_qualification_probe"))
+        Err(Error::Transport("peer_qualification_traffic_budget"))
     ));
 
     let mut size = Budget::new(authority, wall);
@@ -566,7 +674,7 @@ pub(super) fn check_test_budget(authority: &ProbeAuthority<'_>) {
     size.admit(1).unwrap();
     assert!(matches!(
         size.admit(1),
-        Err(Error::Transport("peer_qualification_probe"))
+        Err(Error::Transport("peer_qualification_traffic_budget"))
     ));
 
     let mut time = Budget::new(authority, wall);
@@ -579,4 +687,35 @@ pub(super) fn check_test_budget(authority: &ProbeAuthority<'_>) {
     assert!(!reasonable_clock(100, 101, 100, Duration::ZERO));
     assert!(!reasonable_clock(100, 101, 103, Duration::ZERO));
     assert!(reasonable_clock(100, 103, 131, Duration::from_secs(30)));
+}
+
+#[cfg(test)]
+#[test]
+fn peer_qualification_socket_budget_rejects_overlap_reorder_and_second_reconnect() {
+    let mut budget = SocketBudget::default();
+    assert!(matches!(
+        budget.admit(Turn::Reconnect),
+        Err(Error::Transport("peer_qualification_socket_budget"))
+    ));
+    assert!(budget.complete().is_err());
+    let writer = budget.admit(Turn::Writer).unwrap();
+    assert!(matches!(
+        budget.admit(Turn::Outsider),
+        Err(Error::Transport("peer_qualification_socket_budget"))
+    ));
+    drop(writer);
+    drop(budget.admit(Turn::Outsider).unwrap());
+    drop(budget.admit(Turn::Recipient).unwrap());
+    let reopened = budget.admit(Turn::Reconnect).unwrap();
+    assert!(budget.complete().is_err());
+    drop(reopened);
+    assert!(budget.complete().is_ok());
+    assert!(matches!(
+        budget.admit(Turn::Reconnect),
+        Err(Error::Transport("peer_qualification_socket_budget"))
+    ));
+    assert!(matches!(
+        budget.admit(Turn::Writer),
+        Err(Error::Transport("peer_qualification_socket_budget"))
+    ));
 }

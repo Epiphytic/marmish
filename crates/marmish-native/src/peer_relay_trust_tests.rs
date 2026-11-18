@@ -607,14 +607,83 @@ async fn peer_qualification_loopback_requires_all_evidence_and_rechecks_profile(
 
 #[tokio::test]
 async fn peer_qualification_rejects_faulty_private_wss_and_never_writes() {
-    for fault in [
-        Some(QualificationFault::AcceptUnregisteredAuth),
-        Some(QualificationFault::AcceptOversize),
-        Some(QualificationFault::AcceptWrongGroupWrite),
-        Some(QualificationFault::AlterControlHistory),
-        Some(QualificationFault::ExtraControlHistory),
-        Some(QualificationFault::LeakWideControl),
-        None,
+    use QualificationFault::*;
+    for (fault, expected) in [
+        (Some(WrongAuthAck(1)), "peer_qualification_writer_auth"),
+        (
+            Some(WrongWriteAck(7435)),
+            "peer_qualification_control_write",
+        ),
+        (Some(AcceptOversize), "peer_qualification_control_size"),
+        (Some(WrongSizeRefusal), "peer_qualification_control_size"),
+        (Some(WrongWriteAck(445)), "peer_qualification_group_write"),
+        (
+            Some(AcceptWrongGroupWrite),
+            "peer_qualification_group_foreign_write",
+        ),
+        (
+            Some(LeakHistory("foreign-recipient", 7435)),
+            "peer_qualification_control_foreign_read",
+        ),
+        (
+            Some(WrongReadRefusal("foreign-recipient")),
+            "peer_qualification_control_foreign_read",
+        ),
+        (
+            Some(AcceptUnregisteredAuth),
+            "peer_qualification_outsider_auth",
+        ),
+        (
+            Some(AcceptUnauthenticatedControlWrite),
+            "peer_qualification_control_unauthenticated_write",
+        ),
+        (
+            Some(LeakHistory("unauth-control", 7435)),
+            "peer_qualification_control_unauthenticated_read",
+        ),
+        (
+            Some(EmptyHistory("unauth-control")),
+            "peer_qualification_control_unauthenticated_read",
+        ),
+        (
+            Some(LeakHistory("unauth-group", 445)),
+            "peer_qualification_group_unauthenticated_read",
+        ),
+        (Some(WrongAuthAck(3)), "peer_qualification_recipient_auth"),
+        (
+            Some(AlterControlHistory),
+            "peer_qualification_control_history",
+        ),
+        (
+            Some(ExtraControlHistory),
+            "peer_qualification_control_history",
+        ),
+        (
+            Some(EmptyHistory("group")),
+            "peer_qualification_group_history",
+        ),
+        (None, "peer_qualification_group_history"),
+        (
+            Some(LeakHistory("control-wide", 7435)),
+            "peer_qualification_control_wide_read",
+        ),
+        (
+            Some(LeakHistory("group-wide", 445)),
+            "peer_qualification_group_wide_read",
+        ),
+        (
+            Some(LeakHistory("group-wrong", 445)),
+            "peer_qualification_group_foreign_read",
+        ),
+        (Some(WrongAuthAck(4)), "peer_qualification_reconnect_auth"),
+        (
+            Some(EmptyHistory("control-reopen")),
+            "peer_qualification_control_reconnect",
+        ),
+        (
+            Some(EmptyHistory("group-reopen")),
+            "peer_qualification_group_reconnect",
+        ),
     ] {
         let plan = probe::Plan::new().unwrap();
         let (accounts, route) = plan.relay_registration();
@@ -640,10 +709,49 @@ async fn peer_qualification_rejects_faulty_private_wss_and_never_writes() {
                 authority.check().unwrap(),
             )
             .await;
-        assert!(result.is_err(), "accepted relay fault {fault:?}");
-        assert!(transport.authenticated(accounts[0]));
+        assert!(
+            matches!(result, Err(Error::Transport(category)) if category == expected),
+            "fault {fault:?} at {expected} returned {:?}",
+            result.err()
+        );
+        if let Some(fault) = fault {
+            assert!(
+                transport.qualification_fault_fired(),
+                "fixture fault not triggered {fault:?}"
+            );
+        }
         assert!(!fixture.record().exists());
         transport.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn peer_qualification_accepts_correlated_empty_wide_history() {
+    for subscription in ["control-wide", "group-wide"] {
+        let plan = probe::Plan::new().unwrap();
+        let (accounts, route) = plan.relay_registration();
+        let mut relay = Relay::start_peer_qualification(accounts, route).await;
+        relay.qualification_fault(QualificationFault::EmptyHistory(subscription));
+        let fixture = QualificationFixture::new(&relay);
+        let checked = qualification::CheckedAttestation::read(
+            &fixture.attestation_path,
+            fixture.relay(),
+            qualification::wall().unwrap(),
+        )
+        .unwrap();
+        let authority = fixture.authority(&checked);
+        let completed = plan
+            .execute(
+                &fixture.owner.connector,
+                &authority,
+                authority.check().unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(relay.qualification_fault_fired());
+        qualification::issue(&authority, completed).unwrap();
+        assert!(fixture.record().is_file());
+        relay.stop().await;
     }
 }
 
