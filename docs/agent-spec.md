@@ -1541,8 +1541,12 @@ revalidated native Terminal and ordinary Command in a private WSS fixture.
 The [installed Peer design](phases/peer-installed.md) records the current
 join-before-decision behavior, operator interface and separate platform and
 relay gates. A join can expose Pending only after exact native custody.
-The planned installed owner, private relay qualification and status
-transmission remain gated on separate validation. The [configuration parser
+The installed [relay qualification issuer](validation/peer-qualification-issuer.md)
+records authenticated local evidence for an explicit WSS origin. The
+[physical route binding](validation/peer-physical-route-binding.md) checks
+that evidence and holds the exact profile files and TLS trust under one
+lease. It has no live Peer connector. The installed enrollment owner and
+status transmission still require separate validation. The [configuration parser
 increment](reviews/peer-installed-config.md) validates optional Peer intent and
 preserves it through ordinary setup. The parsed fields currently have no
 runtime consumer, so this increment does not open Peer relay connections.

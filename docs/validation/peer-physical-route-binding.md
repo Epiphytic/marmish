@@ -60,3 +60,19 @@ and deployments were outside this run. Independent files are observed
 in sequence. The check can only reject drift it observes, and the
 [design](../phases/peer-physical-route-binding.md) retains the same-UID and
 cross-restart rollback limits.
+
+## Integration with receiver quota sources
+
+Claude Code Sonnet 5.5 Auto approved integrated source
+`31116d0b0cb5bc88f97415bb205297b84255ff8f` in session
+`75cca77d-3bfd-4b6a-9a84-6b7bc70ddafc`. Its six Rust files match the
+previously reviewed source. The integrated review was static and
+confirmed that the quota dispatcher, daemon, transport and configuration
+source were unchanged by the route patch.
+
+The integration author ran strict installed-checks all-target Clippy
+successfully in 34.78 s. Both physical route tests passed in 7.65 s
+on Linux AMD64, including the cold SQLCipher binding and the private
+WSS traffic counters. An initial filter matched zero tests. The rerun
+used the function-name prefix from the test binary and confirmed two
+executions.
