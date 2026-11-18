@@ -27,6 +27,7 @@ use super::*;
 use crate::peer_invitation::{
     founder_ledger::{Ledger, Outbound, ledger_binding},
     receiver_inventory::v2_pending::PendingReceiver,
+    socket::owner::recipient::PublicationOutcome,
     store::consent_checkpoint::{
         Status,
         provisioning::prepared_consent::custody::CustodyState,
@@ -80,14 +81,14 @@ struct NativeCoordinates {
 
 impl NativeCoordinates {
     fn check(&self, joined: (&[u8], u64, [u8; 32], u32)) {
-        assert_eq!(
-            joined,
-            (
-                self.group.as_slice(),
-                self.epoch,
-                self.identity,
-                self.own_leaf
-            ),
+        assert!(
+            joined
+                == (
+                    self.group.as_slice(),
+                    self.epoch,
+                    self.identity,
+                    self.own_leaf
+                ),
             "cold readback differs from the independent founder"
         );
     }
