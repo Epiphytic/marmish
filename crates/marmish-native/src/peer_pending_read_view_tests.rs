@@ -130,10 +130,59 @@ fn admission_rechecks_declared_generation_age_and_wall_floor() {
     let origin = read.select(LIST, sample(time, FLOOR)).unwrap();
     assert!(read.reply(origin, sample(time, FLOOR - 1)).is_none());
     assert!(read.select(LIST, sample(time, FLOOR)).is_none());
+}
 
-    let origin = Instant::now();
-    let now = Sample::now().unwrap();
-    assert!(now.monotonic.checked_duration_since(origin).is_some());
+#[test]
+fn both_clock_samples_apply_at_their_exact_admission_boundaries() {
+    let before = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let sampled = Sample::now().unwrap();
+    let after = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    assert!((before..=after).contains(&sampled.wall));
+
+    let time = Instant::now();
+    let (producer, reader) = pair(generation()).unwrap();
+    let row = entry();
+    let ticket = producer.begin(false, || time).unwrap();
+    assert!(!producer.publish(ticket, observation(Some(row)), || None));
+    publish(&producer, time, Some(row));
+    let read = reader.admit(generation()).unwrap();
+    assert!(read.select(LIST, || None).is_none());
+    let selected = read.select(LIST, sample(time, FLOOR)).unwrap();
+    assert!(read.reply(selected, || None).is_none());
+
+    let selected = read.select(LIST, sample(time, FLOOR)).unwrap();
+    let almost_expired = time + LIFETIME - Duration::from_nanos(1);
+    assert!(
+        read.reply(selected, sample(almost_expired, FLOOR))
+            .is_some()
+    );
+    assert!(
+        read.select(LIST, sample(time - Duration::from_nanos(1), FLOOR))
+            .is_none()
+    );
+}
+
+#[test]
+fn only_the_current_producer_can_latch_an_expired_record() {
+    let time = Instant::now();
+    let (producer, reader) = pair(generation()).unwrap();
+    let (other, _) = pair(generation()).unwrap();
+    let row = entry();
+    let foreign = other.begin(false, || time).unwrap();
+    assert!(!producer.publish(foreign, observation(Some(row)), sample(time, EXPIRES)));
+    publish(&producer, time, Some(row));
+
+    let fresh = producer.begin(false, || time).unwrap();
+    assert!(!producer.publish(fresh, observation(Some(row)), sample(time, EXPIRES)));
+    let again = producer.begin(true, || time).unwrap();
+    assert!(!producer.publish(again, observation(Some(row)), sample(time, EXPIRES - 1)));
+    assert!(query(&reader, LIST, sample(time, EXPIRES - 1)).is_none());
 }
 
 #[test]
@@ -183,20 +232,23 @@ fn a_second_invalidation_or_changed_owner_rejects_old_tickets_and_replies() {
     let first = producer.begin(true, || time).unwrap();
     assert!(producer.publish(first, observation(Some(entry())), current));
 
+    let other_turn = other.begin(true, || time).unwrap();
+    assert!(other.publish(other_turn, observation(Some(entry())), current));
     let read = reader.admit(generation()).unwrap();
     let old_reply = read.select(LIST, current).unwrap();
-    assert!(
-        other_reader
-            .admit(generation())
-            .unwrap()
-            .reply(old_reply, current)
-            .is_none()
-    );
+    let alternate = other_reader.admit(generation()).unwrap();
+    let alternate_reply = alternate.select(LIST, current).unwrap();
+    assert_eq!(old_reply.stamp.sequence, alternate_reply.stamp.sequence);
+    assert!(alternate.reply(old_reply, current).is_none());
+    let foreign = producer.begin(false, || time).unwrap();
+    assert_eq!(foreign.stamp.sequence, alternate_reply.stamp.sequence);
+    assert!(!other.publish(foreign, observation(Some(entry())), current));
+
     let old_reply = read.select(LIST, current).unwrap();
     let first = producer.begin(true, || time).unwrap();
     let second = producer.begin(true, || time).unwrap();
     assert!(!producer.publish(first, observation(Some(entry())), current));
-    assert!(!other.publish(second, observation(Some(entry())), current));
+    assert!(producer.publish(second, observation(Some(entry())), current));
     assert!(read.reply(old_reply, current).is_none());
 
     let ticket = producer.begin(false, || time).unwrap();

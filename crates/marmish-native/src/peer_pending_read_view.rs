@@ -152,16 +152,28 @@ impl Producer {
         };
         let Some(sample) = sample() else { return false };
         if ticket.stamp != self.0.stamp(&inner)
-            || !sample.fresh(ticket.origin)
+            || matches!(inner.state, State::Stopped)
             || observation.verified_wall < observation.wall_floor
+        {
+            return false;
+        }
+        if let Some(entry) = observation.entry {
+            if entry.selection.generation == 0
+                || entry.held_at >= entry.expires_at
+                || entry.held_at > observation.verified_wall
+            {
+                return false;
+            }
+            if observation.verified_wall >= entry.expires_at || sample.wall >= entry.expires_at {
+                inner.expired = Some(entry.selection);
+                return false;
+            }
+            if inner.expired == Some(entry.selection) {
+                return false;
+            }
+        }
+        if !sample.fresh(ticket.origin)
             || sample.wall < observation.verified_wall
-            || observation.entry.is_some_and(|entry| {
-                entry.selection.generation == 0
-                    || entry.held_at > observation.verified_wall
-                    || observation.verified_wall >= entry.expires_at
-                    || sample.wall >= entry.expires_at
-                    || inner.expired == Some(entry.selection)
-            })
             || !inner.advance()
         {
             return false;
