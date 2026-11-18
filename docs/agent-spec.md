@@ -1468,7 +1468,13 @@ recovers the same signed commit after SQLCipher reopen. The founder processes
 that exact relay event and reaches the recipient's staged epoch and
 authenticator before the recipient records confirmation. A duplicate leaves
 the founder at the same pin. This fixture uses an in-process delivery sink.
-Private WSS activation and installed Peer authorization remain later phases.
+The [private WSS history proof](validation/peer-private-wss-activation-history.md)
+then exercises a founder SelfUpdate after the real Welcome. The saved signed
+event reaches the recipient through a bounded authenticated history cut. Both
+copies reach the same native epoch and active roster. The recipient stays at
+its original pin when the relay omits the update or its end-of-history
+marker. The fixture stops at Activating. Durable WSS PostJoin egress,
+acceptance receipts, and installed Peer authorization have separate gates.
 
 The [terminal custody fixture](validation/peer-terminal-custody.md) makes
 Declined and Expired durable for an exact joined Pending invitation.
