@@ -44,3 +44,10 @@ Claude Code Sonnet in Auto mode approved exact source `2629cc1718862812d3154e988
 Strict Clippy exposed a standalone test target with an unused re-export. Claude approved exact corrected source `9adbe329e2e4ebbbaff0303eb60993ee15622f0f` in Auto session `9774898e-a6fb-413a-8d5c-c6bee91ee19f`. The correction keeps the same test-only Linux AMD64 boundaries and refers directly to the original charge type. Both reviews were static. The author ran the checks in [validation](../validation/peer-installed-recipient-daemon.md).
 
 The composed review requested that a possible rollback journal have its own state. Claude approved exact follow-up source `834eb3ee8c33dee9855c81a3ada0450057e31ff4` in Auto session `942a0d52-9154-46c3-bd4c-8c30d633df7a` and reran the three focused Linux tests. The candidate carries exact inode and logical and charged bytes, and both observed extents must fit the remaining allowance after all other charges. Known keeps its charge and is always fenced. The state grants no managed recovery. [Validation](../validation/peer-installed-recipient-daemon.md)
+
+Claude Code in Auto mode approved the integrated inventory at `9a95ba7`
+in session `4cec5d98-8ff2-473b-a297-9066a270b73b` and reran the three
+focused tests. The changed Rust files match the author-reviewed source
+byte for byte. The current allowance covers observed extents. A future
+pager and dispatcher will still have to bound file growth before taking
+native authority.
