@@ -31,5 +31,25 @@ In the final author checkout, `git diff --check` and
 `cargo clippy --offline --locked -j2 -p marmish-native --all-targets -- -D warnings`
 passed. The batch and parser regressions and repeated opt-in oracle
 results are recorded in the validation note.
+
+## Integrated review
+
+Claude Code `claude-sonnet-5-5`, Auto mode, approved integrated commit
+`a06410f8fd7ad22580ecaa0ce5ca7c26dce5d01f` in session
+`322cdc45-d686-4c88-8d63-752bfbe7e63d`. The reviewer verified identical
+test blobs, the test-only mount, exact timing and fallback boundaries,
+private process cleanup, workload totals and the scope of the four adjacent
+native restart and cancellation reports. Formatting and diff checks passed
+in the review. The integration author ran the integrated tests while the
+reviewer inspected the patch. The report now labels those responsibilities
+and identifies the measurements as offline in the agent specification.
+
+The change audit confirmed that existing runtime code only gained a
+`#[cfg(test)]` module mount. Ripwire flagged normalized similarities in
+fixture-only process cleanup, tmux command construction and simple data
+copies. The separate oracle retains its own lifecycle and bounded control
+calls. The validation note records the test selections that exercise the
+flagged types.
+
 [Approved design](../phases/terminal-redraw-evaluation.md)
 [Validation](../validation/terminal-redraw-evaluation.md)

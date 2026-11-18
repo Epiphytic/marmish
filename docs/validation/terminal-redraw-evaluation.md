@@ -77,6 +77,12 @@ traffic counts in 2.23 s and 2.22 s respectively, including fixture
 startup and cleanup. These are test runtimes with Rust 1.97.1 and
 tmux 3.4 on Linux AMD64.
 
+The composed commit `a06410f` passed four batch/redraw tests, four parser
+tests and the opt-in tmux oracle in 2.20 s. The oracle reproduced every
+reported traffic count. Strict Clippy with `--features installed-checks
+--all-targets` passed on Linux AMD64 in 47.20 s. The existing GitHub test selection stays
+unchanged.
+
 ## Reproduce
 
 Run the deterministic selection and then explicitly select a native tmux

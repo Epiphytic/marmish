@@ -97,7 +97,9 @@ tests each ran one exact selector. These results cover built native
 entry points with fixture TLS trust. Packaged Terminal over an external
 qualified relay still requires a separate run.
 
-On the same platform, `terminal_installed_runtime_restart` passed in 51.66 s
+The following four tests were run by the integration author. The independent
+redraw reviewer checked their scope and report. On the same platform,
+`terminal_installed_runtime_restart` passed in 51.66 s
 at integrated commit `97a1cad` with the same MDK revision. The private WSS
 fixture kept bootstrap events from the first attachment and restarted the
 server owner. The stored events drew no unsolicited reply and created no tmux
