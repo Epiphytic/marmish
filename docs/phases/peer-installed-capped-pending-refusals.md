@@ -3,7 +3,8 @@
 This addendum to [the capped Pending bridge design](peer-installed-capped-pending-bridge.md)
 addresses independent review `e3c8b15e` using accounting source `7d725d0`.
 It remains opt-in Linux AMD64. Reuse the three existing private NIP-42
-WSS scenarios and the independently signed fixture used by
+WSS scenarios, one opt-in uncertain variant of the same topology, and
+the independently signed fixture used by
 `peer_installed_custody_reopens_signed_prepared_consent_and_held_delivery`.
 No installed runtime mount, permission, or wire change.
 
@@ -16,10 +17,34 @@ For legacy entry points also compare durable rows because no installed
 CAS counter observes those entry points. Preserve the existing relay
 publication-attempt delta across the same WSS windows.
 
+In this plan `CheckpointError` denotes `consent_checkpoint::Error`,
+`CursorError` denotes `store::Error`, and unqualified `Error` denotes
+`peer_invitation::Error`.
+
+The refusal author owns local fixture access. Expose only the private
+read-only `current_installed_delivery` call under the existing
+Linux AMD64 test configuration. A narrow test adapter within
+`v2_pending` checks `Enrollment::from_delivery` with the signed pair
+constructed by the existing store test. Use focused test methods on
+`PendingReceiver` for the legacy Start check, exact saved epoch edit, and
+the one-shot loss. Do not expose its checkpoint or owner to the WSS test.
+
+Both persisted field edits run only on fixtures. In one immediate
+transaction read the original SQL for `peer_custody_next` and
+`peer_custody_deny_UPDATE` from `sqlite_schema`, drop those exact
+triggers, update the named field for one exact Delivery carrier, restore
+both SQL definitions, and commit only if exactly one row changed.
+`Epoch::verify` rechecks the exact inventory on every custody read, so
+restoring both triggers before the normal guard is essential. The
+operation must leave schema inventory unchanged and fail atomically.
+The independently signed store test uses the invalid stored frame for
+its last refusal. The native WSS child uses the changed epoch for its
+last check on that disposable profile.
+
 ## Local guards
 
 - **Legacy or uncapped authority.** Call `start_custody_join` on the same
-  real installed Held and require `Error::Layout`, zero polls, and exact
+  real installed Held and require `CheckpointError::Layout`, zero polls, and exact
   retained custody. The first checks in `commit_custody_pending` and
   `commit_custody_activating` also refuse installed layout before using a
   legacy `JoinedReadback`. Cover their refusal dynamically only if the
@@ -41,24 +66,25 @@ publication-attempt delta across the same WSS windows.
   `Error::Binding` and zero effects. This covers the mismatched signed pair;
   the exact guard may fail earlier on the distinct signed carrier. The
   same store fixture can change the retained signed frame with
-  `fixture_statement` in a disposable cursor; the checked reopen must
+  the exact fixture edit above; the checked reopen must
   refuse lexical/signature drift before any native work. Existing exact
   Offer ancestry/drift tests and WSS competing-carrier and signed swapped
   KeyPackage reference tests cover independently verified inbound ancestry.
   A changed selector is only row selection evidence (`Error::Missing`).
 - **Policy and deadline.** Reopen the same signed Held cursor as
   `ReceivePolicy::AutoAny`, using the existing `open_custody` fixture.
-  Call `current_installed_delivery` and require `Error::Policy`. Open
-  as `Off` and require `Error::Policy` at `read_custody` if reachable.
+  Call `current_installed_delivery` and require `CheckpointError::Policy`. Open
+  as `Off` and require `CheckpointError::Policy` at `read_custody` if reachable.
   This tests Manual policy; physical role eligibility is independently
   covered by `receiver_eligibility_reads_only_its_lease_config`, which
-  refuses server-only and changed lease/config. Use a local test child of
-  `peer_installed_pending_checkpoint.rs` for private access to
-  `current_installed_delivery`: `deadline - 1` accepts with the known
-  signed validity, exact deadline returns `Error::Expired`, both measured
+  refuses server-only and changed lease/config. Read one genuine owner-local Held at its real wall before testing the
+  read-only `current_installed_delivery` call: `deadline - 1` accepts with the known
+  signed validity, exact deadline returns `CheckpointError::Expired`, both measured
   separately if wall and signed bounds permit. The continuous fence uses
   `TurnFence::new` with its existing fixture wall/ticks. Never pass a
-  synthetic future wall to a cursor writer or advance its durable floor.
+  synthetic future wall to `read_custody`, `read_installed_join_custody`,
+  `start_installed_join`, `commit_installed_pending` or any cursor writer.
+  Even `read_custody` advances the persisted wall floor.
 
 ## Real Held/Joined guards and cut
 
@@ -66,8 +92,11 @@ publication-attempt delta across the same WSS windows.
   `PendingReceiver::open` with another same-UID lease and the original
   quota and require `Error::Path`, without registering another quota.
   Rename the original stage file aside, put a distinct inode at its path,
-  run regular `arm` and require `Error::StageIdentityMismatch` at the
-  checked family/extent boundary. Restore the original by rename. For old
+  run regular `arm` and require a typed pre-effect refusal at the checked family/extent boundary.
+  Determine whether the unclassifiable family is refused as `Error::Path`
+  during inspection or `Error::StageIdentityMismatch` at the exact inode
+  lookup from the observed guard. A wrong variant is not evidence that the
+  desired guard ran. Restore the original by rename. For old
   checkpoint authority, use the pre-effect scenario where one exact
   `ArmedWelcome` already exists. Drop receiver #1, reopen receiver #2 on
   the same profile and call normal `ingest` with the stale token. Require
@@ -77,16 +106,17 @@ publication-attempt delta across the same WSS windows.
 - **Physical retirement.** At the end of an existing child after the other
   cases, retire its actual physical port via `stop` or change a held scope
   file and trigger ordinary recheck. Invoke the normal bridge read/arm
-  on the now-retired port and require `Error::Source` with zero effects.
+  on the now-retired port and require `Error::Checkpoint(CheckpointError::Source)` with zero effects.
   The pure Manual policy refusal above separately covers the admission
   predicate. The unmounted proof does not promise lifecycle role-loss
   detection by a future daemon.
 - **Native roster, epoch and package.** On final cold Pending replay
   first observe exact positive readback. With the disposable profile
-  about to be discarded, use `fixture_statement` to change only
+  about to be discarded, use the exact fixture edit above to change only
   `peer_pending_custody.epoch_identity` for the exact carrier. Run the
   ordinary checked Pending readback and require
-  `Error::Cursor(CursorError::Stale)` at the retained-vs-native
+  `Error::Checkpoint(CheckpointError::Cursor(CursorError::Stale))` at the
+  retained-vs-native
   coordinates compare with zero effects. Verify it did not rewrite the
   changed expectation. If storage validation blocks before that compare,
   it is a different test and must be reported as such. The first
@@ -103,11 +133,15 @@ publication-attempt delta across the same WSS windows.
   check must return `StageError::Invalid`, not `Unavailable`.
 - **Uncertain after actual Start and one actual Welcome poll.** Add one
   one-shot thread-local fixture flag in `peer_receiver_v2_pending.rs`.
-  Consume it after `files.finish` and unpacking the exact successful
-  native result, before returning confirmation of that result to custody.
-  Its sole transition is success to `Err(Error::Source)`. The private
-  test child is the only setter (narrow visibility if cross-module) and
-  cannot turn failure into success. Reuse the existing joined scenario.
+  Consume it after `files.finish`, unpacking the exact successful
+  native result and rechecking the physical port, before returning that
+  result. Its only change is inside `Ok((result, metrics))`. Replace
+  inner `Ok(())` with `Err(Error::Checkpoint(CheckpointError::Source))`
+  and keep the real native metrics. Permit only the new WSS scenario to
+  arm that fixture flag and confirm it is consumed. Keep the existing
+  `joined` success-return scenario untouched. Add one separate ignored
+  `uncertain` variant of the same WSS topology, sharing the same
+  `qualify` and `replay` branches as `joined`.
   Assert `(1, 1, 0)` for actual polls, closed successes and custody CAS in
   the injected loss window, the exact `JoinStarted` row and rearm refusal
   (`Error::Binding`, zero new effects). Subsequent processes see no old
