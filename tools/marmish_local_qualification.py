@@ -16,7 +16,7 @@ import time
 
 from marmish_native_https_check import (
     bounded_read, check_manifest, decode, release_contract, require, safe_version,
-    setup_contract, sha, status_contract, supervisor, target_host,
+    setup_contract, sha, status_contract, supervisor, target_host, terminal,
 )
 from marmish_native_quickstart_check import DIALOG, UTILITIES, interactive, parse_release_version, reports
 from mdk_smoke import SmokeError, public_key, relay_url
@@ -81,7 +81,7 @@ def install_arguments(assets, prefix, bins, state):
             '--state-dir', str(state)]
 
 
-def reject_tampered_asset(bootstrap, assets, manifest, environment, root):
+def reject_tampered_asset(bootstrap, assets, manifest, environment, root, *, existing=None, timeout=60):
     changed = root / 'tamper'
     changed.mkdir(mode=0o700)
     shutil.copyfile(assets / manifest, changed / manifest)
@@ -95,10 +95,12 @@ def reject_tampered_asset(bootstrap, assets, manifest, environment, root):
         byte = output.read(1)
         output.seek(0)
         output.write(bytes([byte[0] ^ 1]))
-    prefix, bins, state = (changed / name for name in ('prefix', 'bin', 'state'))
+    locations = existing or tuple(changed / name for name in ('prefix', 'bin', 'state'))
+    prefix, bins, state = locations
     expect_failure(['/bin/sh', bootstrap, *install_arguments(changed, prefix, bins, state)],
-                   environment, 60, 'asset_digest', b'marmish installer: asset_digest (stage=asset_verify)')
-    require(not any(os.path.lexists(path) for path in (prefix, bins, state)), 'tamper_mutated_install')
+                   environment, timeout, 'asset_digest', b'marmish installer: asset_digest (stage=asset_verify)')
+    if existing is None:
+        require(not any(os.path.lexists(path) for path in locations), 'tamper_mutated_install')
     shutil.rmtree(changed)
 
 
@@ -136,18 +138,45 @@ def run_live_foreground(daemon, status, environment, expected):
         stop(child)
 
 
-def verify_installation(root, raw, context, target, environment):
+def verify_installation(root, raw, context, target, environment, remaining):
     prefix, bins = root / 'prefix', root / 'bin'
-    _, output = execute([bins / 'marmish', 'install-status', '--prefix', prefix, '--bin-dir', bins], environment)
+    _, output = execute([bins / 'marmish', 'install-status', '--prefix', prefix, '--bin-dir', bins], environment,
+                        timeout=remaining(15))
     status_contract(decode(output), context, target, prefix, bins)
     directory = safe_version(prefix, bins)
     formats = check_manifest(raw, context, target, directory)
     for binary in (bins / 'marmish', bins / 'marmishd', directory / 'marmish-worker'):
-        _, output = execute([binary, 'release-info'], environment)
+        _, output = execute([binary, 'release-info'], environment, timeout=remaining(15))
         release_contract(decode(output), context, target, formats)
+    return directory
 
 
-def installed_case(options, root, account, relay, report):
+def installed_snapshot(locations):
+    from marmish_installed_terminal_baseline import digest
+    entries = {}
+    for location in locations:
+        info = location.lstat()
+        require(stat.S_ISDIR(info.st_mode), 'install_snapshot_type')
+        entries[location] = (stat.S_IMODE(info.st_mode), None)
+        for directory, subdirs, files in os.walk(location, followlinks=False):
+            for name in (*subdirs, *files):
+                path = Path(directory) / name
+                info = path.lstat()
+                require(len(entries) < 256, 'install_snapshot_count')
+                mode = stat.S_IMODE(info.st_mode)
+                if stat.S_ISLNK(info.st_mode):
+                    value = os.readlink(path)
+                elif stat.S_ISREG(info.st_mode):
+                    value = digest(path)
+                else:
+                    require(stat.S_ISDIR(info.st_mode), 'install_snapshot_type')
+                    value = None
+                entries[path] = (mode, value)
+    return entries
+
+
+def installed_case(options, root, account, relay, report, budget=None):
+    remaining = budget.remaining if budget is not None else lambda limit: limit
     target = report['target']
     report['stage'] = 'native_assets'
     manifest = f'marmish-{options.version}-{target}.manifest'
@@ -171,15 +200,19 @@ def installed_case(options, root, account, relay, report):
     bootstrap.write_text(render_bootstrap(template, context, target), encoding='ascii')
     bootstrap.chmod(0o500)
     report['stage'] = 'tampered_payload'
-    reject_tampered_asset(bootstrap, options.assets, manifest, environment, root)
+    reject_tampered_asset(bootstrap, options.assets, manifest, environment, root, timeout=remaining(60))
     report['tampered_payload_refused'] = True
 
     report['stage'] = 'quickstart'
     prefix, bins, state = (root / name for name in ('prefix', 'bin', 'state'))
     dialog = (*DIALOG[:1], (DIALOG[1][0], relay.encode('ascii') + b'\n'), *DIALOG[2:])
     args = install_arguments(options.assets, prefix, bins, state)
-    output = interactive([str(bootstrap), *args, '--quickstart', '--key-storage', 'file'],
-                         environment, dialog=dialog, failure_diagnostics=report['quickstart_diagnostics'])
+    quickstart = [str(bootstrap), *args, '--quickstart', '--key-storage', 'file']
+    if budget is None:
+        output = interactive(quickstart, environment, dialog=dialog,
+                             failure_diagnostics=report['quickstart_diagnostics'])
+    else:
+        output = terminal(quickstart, environment, remaining(240), dialog)
     setups = [value for value in reports(output) if 'identity_created' in value]
     require(len(setups) == 1, 'quickstart_setup_report')
     initial = setups[0]
@@ -189,12 +222,20 @@ def installed_case(options, root, account, relay, report):
     report['installed_quickstart'] = True
 
     report['stage'] = 'installed_provenance'
-    verify_installation(root, raw, context, target, environment)
+    directory = verify_installation(root, raw, context, target, environment, remaining)
     report['installed_provenance'] = True
+    if budget is not None:
+        report['stage'] = 'tampered_replacement'
+        locations = (prefix, bins, state)
+        before = installed_snapshot(locations)
+        reject_tampered_asset(bootstrap, options.assets, manifest, environment, root,
+                              existing=locations, timeout=remaining(60))
+        require(installed_snapshot(locations) == before, 'tamper_mutated_install')
+        report['tampered_replacement_refused'] = True
 
     report['stage'] = 'repeat_setup'
     profile = ['--state-dir', state, '--key-storage', 'file']
-    _, output = execute([bins / 'marmish', *profile, 'setup', '--no-grants'], environment, timeout=45)
+    _, output = execute([bins / 'marmish', *profile, 'setup', '--no-grants'], environment, timeout=remaining(45))
     setup_contract(decode(output), repeated=True, original=initial)
     report['repeat_setup'] = True
 
@@ -205,10 +246,11 @@ def installed_case(options, root, account, relay, report):
                             public_key(initial['npub']))
         report['live_relay'] = 'verified_active_and_stopped'
     else:
-        expect_failure(daemon, environment, 180, 'relay_connect', b'marmish: transport: relay_connect')
+        expect_failure(daemon, environment, remaining(180), 'relay_connect', b'marmish: transport: relay_connect')
         report['closed_relay_refusal'] = True
     require(not any(root.glob('mr2-*')), 'daemon_runtime_leftover')
     report['daemon_runtime_removed'] = True
+    return directory
 
 
 def fixture_tmux(tmux, mode):
@@ -241,31 +283,42 @@ def terminal_cases(options, tmux, report):
         exit_code, output = execute([*cargo, 'test', *common, *scope, name, '--', '--ignored',
                                      '--exact', '--test-threads=1'], environment, timeout=1200,
                                     success=False)
-        lines = output.rstrip(b'\r\n').splitlines()
-        if exit_code:
-            selected_test_failed = (lines.count(b'running 1 test') == 1 and
-                                    LIBTEST_SINGLE_FAILURE.fullmatch(lines[-1]))
-            report['fixture_failure_kind'] = (
-                'selected_test_failed' if selected_test_failed else 'no_recognized_failure_summary'
-            )
-            if type(exit_code) is int and -128 <= exit_code <= 255:
-                report['fixture_exit_code'] = exit_code
-            raise Refused('operation_failed', exit_code=exit_code)
-        require(lines.count(b'running 1 test') == 1 and any(line.startswith(b'test result: ok. 1 passed;')
-                for line in lines), 'fixture_test_count')
+        check_fixture_result(exit_code, output, report)
         report['fixture_passes'].append(name)
     del report['fixture_case']
+
+
+def check_fixture_result(exit_code, output, report):
+    lines = output.rstrip(b'\r\n').splitlines()
+    if exit_code:
+        selected_test_failed = (lines.count(b'running 1 test') == 1 and
+                                LIBTEST_SINGLE_FAILURE.fullmatch(lines[-1]))
+        report['fixture_failure_kind'] = (
+            'selected_test_failed' if selected_test_failed else 'no_recognized_failure_summary'
+        )
+        if type(exit_code) is int and -128 <= exit_code <= 255:
+            report['fixture_exit_code'] = exit_code
+        raise Refused('operation_failed', exit_code=exit_code)
+    require(lines.count(b'running 1 test') == 1 and any(line.startswith(b'test result: ok. 1 passed;')
+            for line in lines), 'fixture_test_count')
 
 
 def qualify(options, report):
     require(os.geteuid() != 0, 'nonroot_required')
     require(re.fullmatch('[0-9a-f]{40}', options.commit) is not None, 'source_commit')
-    parse_release_version(options.version)
+    if options.build_installed_terminal:
+        require(options.version is None and options.assets is None and options.live_relay is None
+                and options.terminal == 'skip' and options.licenses is not None, 'build_mode_arguments')
+    else:
+        require(options.version is not None and options.assets is not None and options.licenses is None,
+                'provided_asset_arguments')
+        parse_release_version(options.version)
     try:
         live_relay = relay_url(options.live_relay) if options.live_relay else None
     except SmokeError as error:
         raise Refused('live_relay_invalid') from error
-    tmux = fixture_tmux(options.tmux, options.terminal) if options.terminal != 'skip' else None
+    mode = 'wss' if options.build_installed_terminal else options.terminal
+    tmux = fixture_tmux(options.tmux, mode) if mode != 'skip' else None
     verify_checkout(options.source, options.commit)
     target = target_host()
     report.update(target=target, source_commit=options.commit, version=options.version)
@@ -273,9 +326,14 @@ def qualify(options, report):
     with tempfile.TemporaryDirectory(prefix='.mq-', dir=account.pw_dir) as path, socket.socket() as guard:
         guard.bind(('127.0.0.1', 0))
         relay = live_relay or f'wss://127.0.0.1:{guard.getsockname()[1]}/'
-        installed_case(options, Path(path).resolve(), account, relay, report)
+        root = Path(path).resolve()
+        if options.build_installed_terminal:
+            from marmish_installed_terminal_baseline import run
+            run(options, root, account, relay, tmux, report, installed_case, check_fixture_result)
+        else:
+            installed_case(options, root, account, relay, report)
     report['owned_state_removed'] = True
-    if tmux is not None:
+    if tmux is not None and not options.build_installed_terminal:
         terminal_cases(options, tmux, report)
     report['stage'] = 'source_recheck'
     verify_checkout(options.source, options.commit)
@@ -290,8 +348,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', required=True, type=lambda path: Path(path).resolve())
     parser.add_argument('--commit', required=True, help='full SHA shared by checkout and staged binaries')
-    parser.add_argument('--version', required=True)
-    parser.add_argument('--assets', required=True, type=lambda path: Path(path).resolve())
+    parser.add_argument('--version')
+    parser.add_argument('--assets', type=lambda path: Path(path).resolve())
+    parser.add_argument('--build-installed-terminal', action='store_true',
+                        help='build and install the exact native source for a private Terminal controls fixture')
+    parser.add_argument('--licenses', type=lambda path: Path(path).absolute(),
+                        help='trusted license inventory collected from the exact locked candidate')
     parser.add_argument('--terminal', choices=('skip', 'local', 'wss'), default='skip')
     parser.add_argument('--tmux', type=Path, help='absolute native tmux executable for fixture modes')
     parser.add_argument('--live-relay', help='optional explicitly authorized, production-trusted WSS relay')
@@ -300,7 +362,14 @@ def main():
               'terminal_scope': options.terminal, 'fixture_passes': [], 'quickstart_diagnostics': {},
               'live_relay': 'requested' if options.live_relay else 'not_exercised',
               'owned_state_removed': False}
+    if options.build_installed_terminal:
+        report.update(terminal_scope='installed_controls_subset', fixture_count=0,
+                      broader_terminal_qualification='unrun', observe='unrun', takeover='unrun',
+                      stock_private_wss='unrun', cross_host='unrun', peer='unrun',
+                      fixture_root_removed=False, fixture_tmux_cleanup='unverified',
+                      owned_fixture_join='unverified')
     began = time.monotonic()
+    signal.signal(signal.SIGINT, interrupt)
     signal.signal(signal.SIGTERM, interrupt)
     try:
         qualify(options, report)

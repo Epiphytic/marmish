@@ -12,7 +12,7 @@ use nostr::nips::nip19::ToBech32;
 use std::future::Future;
 use std::io::Write as _;
 use std::os::fd::{AsRawFd, FromRawFd};
-use std::os::unix::fs::{FileTypeExt, OpenOptionsExt as _};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt as _};
 use std::panic::{AssertUnwindSafe, resume_unwind};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -951,10 +951,33 @@ async fn run_quiet_cli(state: &Path, daemon: &Path, remote: PublicKey, relay: &R
 
 async fn prove_writer(workload: Workload) -> Measurements {
     crate::terminal_backend::paths::checked_uid().expect("nonroot terminal fixture");
+    let root = match std::env::var_os("MARMISH_TEST_INSTALLED_RUNTIME_ROOT") {
+        None => PathBuf::from("/tmp"),
+        Some(path) => {
+            let path = PathBuf::from(path);
+            let metadata = std::fs::symlink_metadata(&path).expect("private fixture root");
+            assert!(
+                path.is_absolute()
+                    && path.canonicalize().ok().as_deref() == Some(path.as_path())
+                    && metadata.is_dir()
+                    && metadata.mode() & 0o7777 == 0o700
+                    && metadata.uid() == crate::terminal_backend::paths::checked_uid().unwrap()
+                    && path
+                        .join("ir-123456/s/t/")
+                        .join("0".repeat(32))
+                        .join("s")
+                        .as_os_str()
+                        .len()
+                        <= 103,
+                "private fixture root contract"
+            );
+            path
+        }
+    };
     let temp = tempfile::Builder::new()
         .prefix("ir-")
         .permissions(std::fs::Permissions::from_mode(0o700))
-        .tempdir_in("/tmp")
+        .tempdir_in(root)
         .unwrap();
     let relay = Relay::start().await;
     if matches!(

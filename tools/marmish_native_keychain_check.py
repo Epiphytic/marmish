@@ -192,11 +192,12 @@ def stop(child):
     require(child.poll() is not None, 'child_cleanup_incomplete')
 
 
-def execute(argv, environment, timeout=15, data=None, success=True, error_map=None):
+def execute(argv, environment, timeout=15, data=None, success=True, error_map=None, *,
+            cwd=None, max_capture=MAX_CAPTURE):
     require(data is None or len(data) <= 4096, 'operation_input_limit')
     child = subprocess.Popen(argv, env=environment, stdin=subprocess.PIPE if data is not None
         else subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        start_new_session=True)
+        start_new_session=True, cwd=cwd)
     try:
         if data is not None:
             child.stdin.write(data)
@@ -216,7 +217,7 @@ def execute(argv, environment, timeout=15, data=None, success=True, error_map=No
                         selector.unregister(key.fileobj)
                         continue
                     total += len(raw)
-                    require(total <= MAX_CAPTURE, 'operation_output_limit')
+                    require(total <= max_capture, 'operation_output_limit')
                     if key.fileobj is child.stdout:
                         out.extend(raw)
                     elif error_map is not None:
