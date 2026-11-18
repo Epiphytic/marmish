@@ -24,6 +24,13 @@ pub(crate) mod terminal;
 mod terminal_schema;
 
 #[cfg(test)]
+#[path = "peer_activation_schema.rs"]
+mod activation_schema;
+#[cfg(test)]
+#[path = "peer_activation_checkpoint.rs"]
+pub(crate) mod publication;
+
+#[cfg(test)]
 #[path = "peer_daemon_checkpoint.rs"]
 pub(crate) mod daemon;
 
@@ -171,6 +178,8 @@ pub(crate) struct HeldEvidence {
     stage: (Binding, FileWitness),
     row: outbox::Outbox,
     saved: Saved,
+    #[cfg(test)]
+    active: bool,
 }
 
 impl HeldEvidence {
@@ -251,6 +260,11 @@ impl HeldEvidence {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn is_active(&self) -> bool {
+        self.active
+    }
+
     pub(crate) fn pending_deadline(&self) -> Option<u64> {
         match &self.saved.progress {
             Progress::Pending { joined, .. } | Progress::Activating { joined, .. } => {
@@ -261,6 +275,10 @@ impl HeldEvidence {
     }
 
     pub(crate) fn matches_pending_readback(&self, proof: &JoinedReadback) -> bool {
+        #[cfg(test)]
+        if self.active {
+            return false;
+        }
         let joined = match &self.saved.progress {
             Progress::Pending { joined, .. } | Progress::Activating { joined, .. } => joined,
             _ => return false,
@@ -269,6 +287,10 @@ impl HeldEvidence {
     }
 
     fn same_turn(&self, other: &Self) -> bool {
+        #[cfg(test)]
+        if self.active != other.active {
+            return false;
+        }
         Arc::ptr_eq(&self.owner, &other.owner)
             && self.stage == other.stage
             && self.row == other.row
@@ -352,6 +374,9 @@ impl Context {
             stage: queued.stage(),
             offer: queued.prepared.offer,
             row: queued.row,
+            #[cfg(test)]
+            active: matches!(self.epoch, Epoch::Publication)
+                && activation_schema::active_exists(tx, saved.carrier)?,
             saved,
         }))
     }

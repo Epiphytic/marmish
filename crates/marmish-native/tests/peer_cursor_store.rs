@@ -6,7 +6,11 @@ mod peer_cursor_store;
 // This storage-only target includes the cursor source directly. Native artifact
 // and local ACK authority exist in the library fixture, so there are no values
 // of either capability in this target.
+#[path = "../src/peer_accept_receipt_wire.rs"]
+pub(crate) mod receipt_wire;
+
 mod peer_invitation {
+    pub(crate) use crate::receipt_wire as accept_receipt_wire;
     pub(crate) use crate::peer_cursor_store::consent_checkpoint::provisioning::
         prepared_consent::custody::HeldEvidence;
 

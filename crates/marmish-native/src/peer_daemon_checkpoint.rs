@@ -17,6 +17,9 @@ pub(crate) struct Inventory {
 
 impl HeldEvidence {
     pub(crate) fn inventory(&self) -> Option<Inventory> {
+        if self.is_active() {
+            return None;
+        }
         let (joined, activating_at) = match &self.saved.progress {
             Progress::Pending { joined, .. } => (joined, None),
             Progress::Activating { joined, at, .. } => (joined, Some(*at)),
@@ -76,7 +79,7 @@ impl Checkpoint {
         let evidence = cx
             .read_evidence(&tx, consent)?
             .ok_or(CursorError::Binding)?;
-        Ok(vec![evidence.inventory().ok_or(CursorError::Binding)?])
+        Ok(evidence.inventory().into_iter().collect())
     }
 
     pub(crate) fn daemon_due(
