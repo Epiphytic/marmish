@@ -186,11 +186,15 @@ fn install(conn: &Connection) -> std::result::Result<(), CursorError> {
 fn expected(kind: Kind) -> std::result::Result<&'static [Entry], CursorError> {
     #[cfg(test)]
     static PUBLICATION: OnceLock<Vec<Entry>> = OnceLock::new();
+    #[cfg(test)]
+    static TERMINAL_LEAVE: OnceLock<Vec<Entry>> = OnceLock::new();
     static CUSTODY: OnceLock<Vec<Entry>> = OnceLock::new();
     let expected = match kind {
         Kind::Custody => &CUSTODY,
         #[cfg(test)]
         Kind::Publication => &PUBLICATION,
+        #[cfg(test)]
+        Kind::TerminalLeave => &TERMINAL_LEAVE,
     };
     if let Some(entries) = expected.get() {
         return Ok(entries);
@@ -198,8 +202,12 @@ fn expected(kind: Kind) -> std::result::Result<&'static [Entry], CursorError> {
     let template = super::schema::template()?;
     install(&template)?;
     #[cfg(test)]
-    if matches!(kind, Kind::Publication) {
+    if Epoch(kind).is_publication() {
         super::activation_schema::install(&template)?;
+    }
+    #[cfg(test)]
+    if Epoch(kind).is_terminal_leave() {
+        super::leave_schema::install(&template)?;
     }
     let entries = inventory(&template).map_err(super::schema::cursor_error)?;
     Ok(expected.get_or_init(|| entries))
@@ -213,12 +221,19 @@ enum Kind {
     Custody,
     #[cfg(test)]
     Publication,
+    #[cfg(test)]
+    TerminalLeave,
 }
 
 impl Epoch {
     #[cfg(test)]
     pub(super) fn is_publication(self) -> bool {
-        matches!(self.0, Kind::Publication)
+        matches!(self.0, Kind::Publication | Kind::TerminalLeave)
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_terminal_leave(self) -> bool {
+        matches!(self.0, Kind::TerminalLeave)
     }
 
     pub(crate) fn verify(
@@ -255,6 +270,10 @@ impl Epoch {
         if self.is_publication() {
             super::activation_schema::verify_rows(tx, account)
                 .map_err(super::schema::cursor_error)?;
+        }
+        #[cfg(test)]
+        if self.is_terminal_leave() {
+            super::leave_schema::verify_rows(tx, account).map_err(super::schema::cursor_error)?;
         }
         Ok(())
     }
@@ -306,6 +325,27 @@ pub(super) fn open_publication(
     if inventory(&tx).map_err(super::schema::cursor_error)? != expected(Kind::Publication)? {
         Epoch(Kind::Custody).verify(&tx, account, &origins)?;
         super::activation_schema::install(&tx)?;
+    }
+    epoch.verify(&tx, account, &origins)?;
+    tx.commit()?;
+    Ok((CursorStore { conn, origins }, epoch))
+}
+
+#[cfg(test)]
+pub(super) fn open_terminal_leave(
+    HardenedPeerConnection(mut conn): HardenedPeerConnection,
+    account: [u8; 32],
+    origin: Origin,
+) -> std::result::Result<(CursorStore, Epoch), CursorError> {
+    let origins = vec![origin];
+    verify_hardening(&conn)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let epoch = Epoch(Kind::TerminalLeave);
+    if inventory(&tx).map_err(super::schema::cursor_error)? != expected(epoch.0)? {
+        super::schema::verify(&tx, account, &origins)?;
+        install(&tx)?;
+        super::activation_schema::install(&tx)?;
+        super::leave_schema::install(&tx)?;
     }
     epoch.verify(&tx, account, &origins)?;
     tx.commit()?;

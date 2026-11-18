@@ -24,6 +24,16 @@ pub(crate) mod terminal;
 mod terminal_schema;
 
 #[cfg(test)]
+#[path = "peer_terminal_leave_schema.rs"]
+mod leave_schema;
+#[cfg(test)]
+#[path = "peer_terminal_leave_tests.rs"]
+mod leave_tests;
+#[cfg(test)]
+#[path = "peer_terminal_leave_checkpoint.rs"]
+mod terminal_leave;
+
+#[cfg(test)]
 #[path = "peer_activation_schema.rs"]
 mod activation_schema;
 #[cfg(test)]

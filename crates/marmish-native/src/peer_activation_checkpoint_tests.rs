@@ -1,4 +1,5 @@
-use super::super::tests::{Fixture, UID, URL, WALL, joined_pending};
+use super::super::leave_tests::leave_checkpoint;
+use super::super::tests::{Fixture, UID, URL, WALL, joined_pending, joined_pending_in};
 use super::*;
 
 fn publication_checkpoint(fixture: &Fixture) -> Result<Checkpoint> {
@@ -11,8 +12,13 @@ fn publication_checkpoint(fixture: &Fixture) -> Result<Checkpoint> {
     )
 }
 
-fn activating_fixture(fixture: &Fixture) -> (Checkpoint, Source, Selector) {
-    let (mut cp, source, selector) = joined_pending(fixture, &Keys::generate());
+fn activating_fixture(fixture: &Fixture, epoch_five: bool) -> (Checkpoint, Source, Selector) {
+    let founder = Keys::generate();
+    let (mut cp, source, selector) = if epoch_five {
+        joined_pending_in(fixture, &founder, leave_checkpoint)
+    } else {
+        joined_pending(fixture, &founder)
+    };
     let tx = cp.cursor.with_wall(source.origin, WALL + 3).unwrap();
     let writer = custody_schema::Writer::Update;
     writer.guard(&tx, false).unwrap();
@@ -25,7 +31,12 @@ fn activating_fixture(fixture: &Fixture) -> (Checkpoint, Source, Selector) {
     rows::advance_wall(&tx, WALL + 3).unwrap();
     tx.commit().unwrap();
     drop(cp);
-    let cp = publication_checkpoint(fixture).unwrap();
+    let cp = if epoch_five {
+        leave_checkpoint(fixture)
+    } else {
+        publication_checkpoint(fixture)
+    }
+    .unwrap();
     let source = cp.bind_source(URL).unwrap();
     (cp, source, selector)
 }
@@ -81,8 +92,22 @@ fn epoch_four_upgrades_only_exact_epoch_three_and_refuses_older_owner_reopen() {
 
 #[test]
 fn durable_attempts_are_bounded_and_active_reservation_is_atomic_and_replayable() {
+    durable_attempts(false);
+}
+
+#[test]
+fn epoch_five_preserves_exact_m5_journal_and_active_reservation() {
+    durable_attempts(true);
+}
+
+fn durable_attempts(epoch_five: bool) {
+    let reopen = if epoch_five {
+        leave_checkpoint
+    } else {
+        publication_checkpoint
+    };
     let fixture = Fixture::new();
-    let (mut cp, source, selector) = activating_fixture(&fixture);
+    let (mut cp, source, selector) = activating_fixture(&fixture, epoch_five);
     let wall = WALL + 4;
     let evidence = held(&mut cp, &source, selector, wall);
     let scope = Enrollment::from_evidence(&evidence, fixture.client.public_key())
@@ -142,7 +167,7 @@ fn durable_attempts_are_bounded_and_active_reservation_is_atomic_and_replayable(
     cp.check_armed(&source, &attempt, wall + 1).unwrap();
     drop(cp);
 
-    let mut cp = publication_checkpoint(&fixture).unwrap();
+    let mut cp = reopen(&fixture).unwrap();
     let source = cp.bind_source(URL).unwrap();
     let evidence = held(&mut cp, &source, selector, wall + 2);
     let armed = cp
@@ -259,7 +284,7 @@ fn durable_attempts_are_bounded_and_active_reservation_is_atomic_and_replayable(
     );
 
     drop(cp);
-    let mut cp = publication_checkpoint(&fixture).unwrap();
+    let mut cp = reopen(&fixture).unwrap();
     let source = cp.bind_source(URL).unwrap();
     let evidence = held(&mut cp, &source, selector, receipt_stamp + 1);
     assert!(evidence.is_active());

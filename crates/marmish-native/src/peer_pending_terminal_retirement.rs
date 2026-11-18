@@ -34,7 +34,7 @@ impl PreparedConsentOwner<'_> {
         let wall = self.sample()?.as_secs();
         self.state
             .checkpoint
-            .terminal_check(&self.state.source, &record, wall)?;
+            .terminal_retirement_check(&self.state.source, &record, wall)?;
         if matches!(
             record.step(),
             TerminalStep::Released | TerminalStep::Blocked

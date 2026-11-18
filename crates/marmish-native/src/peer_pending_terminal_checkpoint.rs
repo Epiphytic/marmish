@@ -12,6 +12,23 @@ pub(crate) enum TerminalReason {
     Expired = 1,
 }
 
+#[derive(Clone, Copy)]
+enum Decision {
+    Local(TerminalReason),
+    #[cfg(test)]
+    Held(TerminalReason),
+}
+
+impl Decision {
+    fn reason(self) -> TerminalReason {
+        match self {
+            Self::Local(reason) => reason,
+            #[cfg(test)]
+            Self::Held(reason) => reason,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum TerminalStep {
     Fenced,
@@ -58,7 +75,7 @@ impl TerminalRecord {
         self.stage.map(|stage| (self.binding, stage))
     }
 
-    fn same_turn(&self, prior: &Self) -> bool {
+    pub(super) fn same_turn(&self, prior: &Self) -> bool {
         Arc::ptr_eq(&self.owner, &prior.owner)
             && self.binding == prior.binding
             && self.reason == prior.reason
@@ -72,13 +89,13 @@ impl TerminalRecord {
 }
 
 impl Context {
-    fn verify_local_terminal(&self, tx: &Transaction<'_>, wall: u64) -> Result<()> {
+    pub(super) fn verify_local_terminal(&self, tx: &Transaction<'_>, wall: u64) -> Result<()> {
         self.epoch.verify(tx, self.account, &self.origins)?;
         rows::check_wall(tx, wall)?;
         check_origin_wall(tx, self.origin, wall)
     }
 
-    fn terminal_record(
+    pub(super) fn terminal_record(
         &self,
         tx: &Transaction<'_>,
         selector: Selector,
@@ -205,14 +222,21 @@ impl Checkpoint {
         let cx = self.custody_context(source)?;
         let tx = self.cursor.begin(cx.origin)?;
         cx.verify_local_terminal(&tx, wall)?;
+        let query = "SELECT server,offer_id,offer_revision,generation FROM peer_pending_terminal
+                     WHERE origin=?1 AND account=?2 AND step IN (0,1,2)
+                     ORDER BY decided_at,class LIMIT 1";
+        #[cfg(test)]
+        let query = if cx.epoch.is_terminal_leave() {
+            "SELECT t.server,t.offer_id,t.offer_revision,t.generation FROM peer_pending_terminal t
+             WHERE t.origin=?1 AND t.account=?2 AND t.step IN (0,1,2)
+               AND NOT EXISTS (SELECT 1 FROM peer_terminal_native_leave h
+                               WHERE h.class=t.class AND h.generation=t.generation)
+             ORDER BY t.decided_at,t.class LIMIT 1"
+        } else {
+            query
+        };
         let due = tx
-            .query_row(
-                "SELECT server,offer_id,offer_revision,generation FROM peer_pending_terminal
-                 WHERE origin=?1 AND account=?2 AND step IN (0,1,2)
-                 ORDER BY decided_at,class LIMIT 1",
-                params![cx.origin, cx.account],
-                selection,
-            )
+            .query_row(query, params![cx.origin, cx.account], selection)
             .optional()?;
         let Some((selector, generation)) = due else {
             return Ok(None);
@@ -237,7 +261,7 @@ impl Checkpoint {
             selector,
             generation,
             wall,
-            TerminalReason::Declined,
+            Decision::Local(TerminalReason::Declined),
             authorize,
         )
     }
@@ -254,7 +278,46 @@ impl Checkpoint {
             selector,
             generation,
             wall,
-            TerminalReason::Expired,
+            Decision::Local(TerminalReason::Expired),
+            || Ok(()),
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn hold_pending_decline(
+        &mut self,
+        source: &Source,
+        selector: Selector,
+        generation: u64,
+        wall: u64,
+        local: &Local,
+        authorize: impl FnOnce() -> Result<()>,
+    ) -> Result<TerminalRecord> {
+        self.check_local(local)?;
+        self.terminal_decision(
+            source,
+            selector,
+            generation,
+            wall,
+            Decision::Held(TerminalReason::Declined),
+            authorize,
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn hold_pending_expiry(
+        &mut self,
+        source: &Source,
+        selector: Selector,
+        generation: u64,
+        wall: u64,
+    ) -> Result<TerminalRecord> {
+        self.terminal_decision(
+            source,
+            selector,
+            generation,
+            wall,
+            Decision::Held(TerminalReason::Expired),
             || Ok(()),
         )
     }
@@ -265,13 +328,24 @@ impl Checkpoint {
         selector: Selector,
         generation: u64,
         wall: u64,
-        reason: TerminalReason,
+        decision: Decision,
         authorize: impl FnOnce() -> Result<()>,
     ) -> Result<TerminalRecord> {
         let cx = self.custody_context(source)?;
         let tx = self.cursor.begin(cx.origin)?;
         cx.verify_local_terminal(&tx, wall)?;
+        let reason = decision.reason();
+        #[cfg(test)]
+        let hold = matches!(decision, Decision::Held(_));
+        #[cfg(test)]
+        if hold && !cx.epoch.is_terminal_leave() {
+            return Err(CursorError::Binding.into());
+        }
         if let Some(existing) = cx.terminal_record(&tx, selector, generation)? {
+            #[cfg(test)]
+            if hold && cx.leave_hold(&tx, selector, generation)?.is_none() {
+                return Err(CursorError::Stale.into());
+            }
             authorize()?;
             return Ok(existing);
         }
@@ -296,37 +370,21 @@ impl Checkpoint {
         if reason == TerminalReason::Declined {
             cooldown::decline(&tx, selector.server.to_bytes(), wall)?;
         }
-        let insert = Writer::Insert;
-        insert.guard(&tx, false)?;
-        let digest = <[u8; 32]>::from(Sha256::digest(prior.signed_delivery()));
-        authorize()?;
-        rows::require_write(tx.execute(
-            "INSERT INTO peer_pending_terminal (
-                class,generation,account,server,origin,offer_id,offer_revision,
-                consent_carrier,delivery_carrier,delivery_digest,outer_stamp,welcome_digest,
-                device,inode,group_id,epoch_number,epoch_identity,own_leaf,qualified_at,
-                pending_deadline,replay_until,offer_replay_until,reason,decided_at,step
-             )
-             SELECT c.class,c.generation,c.account,c.server,c.origin,c.offer_id,c.offer_revision,
-                c.consent_carrier,c.delivery_carrier,?3,c.outer_stamp,c.welcome_digest,
-                ?4,?5,c.group_id,c.epoch_number,c.epoch_identity,c.own_leaf,c.qualified_at,
-                c.pending_deadline,c.replay_until,i.replay_until,?6,?7,0
-             FROM peer_pending_custody c JOIN peer_consent_invite i
-                ON i.server=c.server AND i.offer_id=c.offer_id
-                    AND i.revision=c.offer_revision AND i.origin=c.origin
-             WHERE c.delivery_carrier=?1 AND c.generation=?2 AND c.state=2",
-            params![
-                prior.delivery_carrier(),
-                seconds(generation)?,
-                digest,
-                prior.stage.1.device,
-                prior.stage.1.inode,
-                reason as u8,
-                seconds(wall)?
-            ],
-        )?)?;
-        insert.guard(&tx, true)?;
+        let insert_parent = || insert_terminal_parent(&tx, &prior, reason, wall, authorize);
+        #[cfg(test)]
+        if hold {
+            terminal_leave::insert_terminal_and_hold(&tx, &prior, wall, insert_parent)?;
+        } else {
+            insert_parent()?;
+        }
+        #[cfg(not(test))]
+        insert_parent()?;
         cx.verify_local_terminal(&tx, wall)?;
+        #[cfg(test)]
+        if hold {
+            cx.leave_hold(&tx, selector, generation)?
+                .ok_or(CursorError::Binding)?;
+        }
         let committed = cx
             .terminal_record(&tx, selector, generation)?
             .ok_or(CursorError::Binding)?;
@@ -344,6 +402,28 @@ impl Checkpoint {
             .terminal_lookup(source, prior.selector(), prior.generation(), wall)?
             .ok_or(CursorError::Stale)?;
         if !current.same_turn(prior) {
+            return Err(CursorError::Stale.into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn terminal_retirement_check(
+        &mut self,
+        source: &Source,
+        prior: &TerminalRecord,
+        wall: u64,
+    ) -> Result<()> {
+        let cx = self.custody_context(source)?;
+        let tx = self.cursor.begin(cx.origin)?;
+        cx.verify_local_terminal(&tx, wall)?;
+        let current = cx
+            .terminal_record(&tx, prior.selector(), prior.generation())?
+            .ok_or(CursorError::Stale)?;
+        if !current.same_turn(prior) {
+            return Err(CursorError::Stale.into());
+        }
+        #[cfg(test)]
+        if cx.epoch.is_terminal_leave() && terminal_leave::exists(&tx, current.binding)? {
             return Err(CursorError::Stale.into());
         }
         Ok(())
@@ -406,6 +486,13 @@ impl Checkpoint {
         if !current.same_turn(prior) {
             return Err(CursorError::Stale.into());
         }
+        #[cfg(test)]
+        if cx.epoch.is_terminal_leave()
+            && matches!(shift, Shift::Intent(_) | Shift::Blocked)
+            && terminal_leave::exists(&tx, current.binding)?
+        {
+            return Err(CursorError::Stale.into());
+        }
         advance_local_wall(&tx, cx.origin, wall)?;
         shift.apply(&tx, &current, wall)?;
         cx.verify_local_terminal(&tx, wall)?;
@@ -417,7 +504,7 @@ impl Checkpoint {
     }
 }
 
-fn selection(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Selector, u64)> {
+pub(super) fn selection(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Selector, u64)> {
     let key = row.get::<_, [u8; 32]>(0)?;
     Ok((
         Selector {
@@ -449,7 +536,7 @@ pub(super) fn prune_terminal_history(
     Ok(())
 }
 
-fn advance_local_wall(tx: &Transaction<'_>, origin: Origin, wall: u64) -> Result<()> {
+pub(super) fn advance_local_wall(tx: &Transaction<'_>, origin: Origin, wall: u64) -> Result<()> {
     rows::advance_wall(tx, wall)?;
     rows::require_write(tx.execute(
         "UPDATE peer_cursor_origin SET wall=?2 WHERE origin=?1 AND wall<=?2",
@@ -561,4 +648,44 @@ fn release_rows(tx: &Transaction<'_>, row: &TerminalRecord) -> Result<()> {
     tx.execute_batch(stage_schema::DELETE_STAGE)?;
     consent.guard(tx, true)?;
     custody.guard(tx, true)
+}
+
+pub(super) fn insert_terminal_parent(
+    tx: &Transaction<'_>,
+    prior: &HeldEvidence,
+    reason: TerminalReason,
+    wall: u64,
+    authorize: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let insert = Writer::Insert;
+    insert.guard(tx, false)?;
+    let digest = <[u8; 32]>::from(Sha256::digest(prior.signed_delivery()));
+    authorize()?;
+    rows::require_write(tx.execute(
+        "INSERT INTO peer_pending_terminal (
+                class,generation,account,server,origin,offer_id,offer_revision,
+                consent_carrier,delivery_carrier,delivery_digest,outer_stamp,welcome_digest,
+                device,inode,group_id,epoch_number,epoch_identity,own_leaf,qualified_at,
+                pending_deadline,replay_until,offer_replay_until,reason,decided_at,step
+             )
+             SELECT c.class,c.generation,c.account,c.server,c.origin,c.offer_id,c.offer_revision,
+                c.consent_carrier,c.delivery_carrier,?3,c.outer_stamp,c.welcome_digest,
+                ?4,?5,c.group_id,c.epoch_number,c.epoch_identity,c.own_leaf,c.qualified_at,
+                c.pending_deadline,c.replay_until,i.replay_until,?6,?7,0
+             FROM peer_pending_custody c JOIN peer_consent_invite i
+                ON i.server=c.server AND i.offer_id=c.offer_id
+                    AND i.revision=c.offer_revision AND i.origin=c.origin
+             WHERE c.delivery_carrier=?1 AND c.generation=?2 AND c.state=2",
+        params![
+            prior.delivery_carrier(),
+            seconds(prior.stage().0.generation.count)?,
+            digest,
+            prior.stage.1.device,
+            prior.stage.1.inode,
+            reason as u8,
+            seconds(wall)?
+        ],
+    )?)?;
+    insert.guard(tx, true)?;
+    Ok(())
 }

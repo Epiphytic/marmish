@@ -76,7 +76,7 @@ impl Fixture {
         )
     }
 
-    fn inventory(&self) -> Vec<super::super::super::retirement::schema::Entry> {
+    pub(super) fn inventory(&self) -> Vec<super::super::super::retirement::schema::Entry> {
         let HardenedPeerConnection(conn) = self.open();
         inventory(&conn).unwrap()
     }
@@ -208,6 +208,16 @@ fn seed_exact_outbox(
     reservation: &Reservation,
     settle: bool,
 ) {
+    seed_outbox_with_carrier(cp, source, reservation, settle, [0x83; 32]);
+}
+
+fn seed_outbox_with_carrier(
+    cp: &mut Checkpoint,
+    source: &Source,
+    reservation: &Reservation,
+    settle: bool,
+    carrier: [u8; 32],
+) {
     let selector = reservation.stage_binding().key;
     let stage = cp.bind_stage(source, reservation, WALL).unwrap();
     let witness = FileWitness {
@@ -245,7 +255,7 @@ fn seed_exact_outbox(
     let mut out = outbox::Outbox::new(
         &prepared,
         Transcript {
-            carrier: [0x83; 32],
+            carrier,
             revision: [0x64; 32],
             created_at: WALL,
             expires: WALL + 70_000,
@@ -280,6 +290,15 @@ fn seed_exact_outbox(
 }
 
 fn held_insert(tx: &Transaction<'_>, consent_revision: [u8; 32]) -> rusqlite::Result<usize> {
+    held_insert_for(tx, consent_revision, [0x83; 32], [0x56; 32])
+}
+
+fn held_insert_for(
+    tx: &Transaction<'_>,
+    consent_revision: [u8; 32],
+    carrier: [u8; 32],
+    delivery: [u8; 32],
+) -> rusqlite::Result<usize> {
     tx.execute(
         "INSERT INTO peer_pending_custody
          (class,generation,account,server,offer_id,offer_revision,origin,consent_carrier,
@@ -289,8 +308,8 @@ fn held_insert(tx: &Transaction<'_>, consent_revision: [u8; 32]) -> rusqlite::Re
          SELECT class,generation,account,server,offer_id,offer_revision,origin,carrier,
           ?1,?2,?3,?3,?3+3600,CAST('schema fixture bytes' AS BLOB),?3+7200,
           zeroblob(32),zeroblob(32),package_id,package_digest,package_ref,package_slot,
-          ?3-600,package_expires,0,?3,?3+3300,0 FROM peer_prepared_consent_outbox",
-        params![consent_revision, [0x56u8; 32], seconds(WALL).unwrap()],
+          ?3-600,package_expires,0,?3,?3+3300,0 FROM peer_prepared_consent_outbox WHERE carrier=?4",
+        params![consent_revision, delivery, seconds(WALL).unwrap(), carrier],
     )
 }
 
@@ -641,34 +660,67 @@ fn daemon_due_tracks_the_pinned_founder_and_yields_to_backoff() {
 }
 
 pub(super) fn joined_pending(f: &Fixture, founder: &Keys) -> (Checkpoint, Source, Selector) {
+    joined_pending_in(f, founder, Fixture::custody)
+}
+
+pub(super) fn joined_pending_in(
+    f: &Fixture,
+    founder: &Keys,
+    open: impl FnOnce(&Fixture) -> Result<Checkpoint>,
+) -> (Checkpoint, Source, Selector) {
     f.provisional();
     drop(f.prepared().unwrap());
-    let mut cp = f.custody().unwrap();
+    let mut cp = open(f).unwrap();
     let source = cp.bind_source(URL).unwrap();
-    let selector = exact_offer(&mut cp, &source, &f.client, founder);
-    let reservation = cp.reserve_provisioning(&source, selector, WALL).unwrap();
-    seed_exact_outbox(&mut cp, &source, &reservation, true);
+    let selector = seed_pending(&mut cp, &source, &f.client, founder, [0x83; 32]);
+    mark_pending(&mut cp, &source, [0x83; 32], [0x56; 32]);
+    (cp, source, selector)
+}
+
+pub(super) fn seed_pending(
+    cp: &mut Checkpoint,
+    source: &Source,
+    client: &Keys,
+    founder: &Keys,
+    carrier: [u8; 32],
+) -> Selector {
+    let selector = exact_offer(cp, source, client, founder);
+    let reservation = cp.reserve_provisioning(source, selector, WALL).unwrap();
+    seed_outbox_with_carrier(cp, source, &reservation, true, carrier);
+    selector
+}
+
+pub(super) fn mark_pending(
+    cp: &mut Checkpoint,
+    source: &Source,
+    carrier: [u8; 32],
+    delivery: [u8; 32],
+) {
     let tx = cp.cursor.with_wall(source.origin, WALL + 2).unwrap();
     let insert = custody_schema::Writer::Insert;
     insert.guard(&tx, false).unwrap();
-    assert_eq!(held_insert(&tx, [0x64; 32]).unwrap(), 1);
+    assert_eq!(
+        held_insert_for(&tx, [0x64; 32], carrier, delivery).unwrap(),
+        1
+    );
     insert.guard(&tx, true).unwrap();
     let update = custody_schema::Writer::Update;
     update.guard(&tx, false).unwrap();
     tx.execute(
-        "UPDATE peer_pending_custody SET state=1,started_at=held_at+1",
-        [],
+        "UPDATE peer_pending_custody SET state=1,started_at=held_at+1 WHERE consent_carrier=?1",
+        [carrier],
     )
     .unwrap();
     tx.execute(
         "UPDATE peer_pending_custody SET state=2,group_id=zeroblob(16),epoch_number=1,
-           epoch_identity=zeroblob(32),own_leaf=1,qualified_at=held_at+2,pending_deadline=held_deadline",
-        [],
-    ).unwrap();
+           epoch_identity=zeroblob(32),own_leaf=1,qualified_at=held_at+2,pending_deadline=held_deadline
+           WHERE consent_carrier=?1",
+        [carrier],
+    )
+    .unwrap();
     update.guard(&tx, true).unwrap();
     rows::advance_wall(&tx, WALL + 2).unwrap();
     tx.commit().unwrap();
-    (cp, source, selector)
 }
 
 #[test]
