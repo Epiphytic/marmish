@@ -7,6 +7,9 @@ use futures_util::{SinkExt, StreamExt};
 use nostr::event::{Event, EventId};
 use nostr::key::PublicKey;
 use nostr::types::{Timestamp, Url};
+pub(crate) use peer::{
+    GROUP_HISTORY_LIMIT, GROUP_KIND, GroupFault, GroupFingerprint, GroupHistoryCut, GroupWrite,
+};
 use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair, KeyUsagePurpose};
 use rustls::pki_types::PrivatePkcs8KeyDer;
 use serde_json::{Value, json};
@@ -55,6 +58,7 @@ pub(super) struct Subscription {
 }
 
 struct Connection {
+    retired: bool,
     account: Option<PublicKey>,
     subscriptions: Vec<Subscription>,
     outgoing: mpsc::Sender<Value>,
@@ -86,7 +90,7 @@ impl State {
         self.observations.push(observation);
     }
 
-    fn publish(&mut self, connection: usize, event: Event, raw: &str) -> Value {
+    fn publish(&mut self, connection: usize, event: Event, raw: &str) -> Option<Value> {
         let account = self.connections[&connection].account;
         let kind = u16::from(event.kind);
         let authenticated = account.is_some();
@@ -95,6 +99,24 @@ impl State {
                 || self.ordinary.contains(&account)
                 || account == event.pubkey
         });
+        if kind == GROUP_KIND && self.peer.as_ref().is_some_and(|peer| peer.group.is_some()) {
+            let group = self.peer.as_mut().unwrap().group.as_mut().unwrap();
+            let result = account.and_then(|sender| group.accept(sender, &event, raw));
+            self.observe(Observation::Write(event.id, kind, result.is_some()));
+            let Some((duplicate, acknowledged)) = result else {
+                return Some(json!([
+                    "OK",
+                    event.id,
+                    false,
+                    "restricted: fixture Group write refused"
+                ]));
+            };
+            let id = event.id;
+            if !duplicate {
+                self.dispatch_except(event, account);
+            }
+            return acknowledged.then(|| json!(["OK", id, true, ""]));
+        }
         let accepted = authenticated
             && authorized_author
             && event.verify().is_ok()
@@ -108,7 +130,12 @@ impl State {
             && self.publications.iter().any(|stored| stored.id == event.id)
         {
             self.duplicate_acks += 1;
-            return json!(["OK", event.id, true, "duplicate: fixture stored event"]);
+            return Some(json!([
+                "OK",
+                event.id,
+                true,
+                "duplicate: fixture stored event"
+            ]));
         }
         if accepted {
             if kind == 445 {
@@ -132,15 +159,22 @@ impl State {
         } else {
             ""
         };
-        json!(["OK", event.id, accepted, reason])
+        Some(json!(["OK", event.id, accepted, reason]))
     }
 
     fn dispatch(&mut self, event: Event) {
+        self.dispatch_except(event, None);
+    }
+
+    fn dispatch_except(&mut self, event: Event, author: Option<PublicKey>) {
         assert!(
             self.publications.len() < self.publication_limit.unwrap_or(MAX_PUBLICATIONS),
             "relay event bound"
         );
         for peer in self.connections.values() {
+            if author.is_some() && peer.account == author {
+                continue;
+            }
             for subscription in &peer.subscriptions {
                 if subscription.matches(&event) {
                     peer.outgoing
@@ -260,8 +294,17 @@ fn handle_message(
     raw: &str,
 ) -> Vec<Value> {
     let mut state = state.lock().unwrap();
+    if state.connections[&id].retired {
+        return vec![];
+    }
     match fields.first().and_then(Value::as_str) {
         Some("AUTH") => {
+            if state.peer.as_ref().is_some_and(|peer| peer.group.is_some())
+                && state.connections[&id].account.is_some()
+            {
+                retire_connection(&mut state, id);
+                return vec![];
+            }
             let Ok(event) = serde_json::from_value::<Event>(fields[1].clone()) else {
                 return vec![];
             };
@@ -332,7 +375,33 @@ fn handle_message(
                 "fixture subscription bound"
             );
             subscriptions.push(subscription.clone());
-            state.observe(Observation::Request(account.unwrap(), subscription.clone()));
+            let account = account.unwrap();
+            state.observe(Observation::Request(account, subscription.clone()));
+            if let Some(group) = state.peer.as_mut().and_then(|peer| peer.group.as_mut())
+                && subscription.serves(GROUP_KIND, "#h", &json!(hex::encode(group.route)))
+            {
+                return match group.history(account, subscription_id) {
+                    Some((frames, false)) => frames,
+                    Some((_, true)) => {
+                        retire_connection(&mut state, id);
+                        vec![]
+                    }
+                    None => {
+                        state
+                            .connections
+                            .get_mut(&id)
+                            .unwrap()
+                            .subscriptions
+                            .retain(|entry| entry.id != subscription_id);
+                        vec![json!([
+                            "CLOSED",
+                            subscription_id,
+                            "restricted: fixture Group history bound"
+                        ])]
+                    }
+                };
+            }
+            let account = Some(account);
             let mut matches: Vec<_> = state
                 .publications
                 .iter()
@@ -372,7 +441,7 @@ fn handle_message(
         Some("EVENT") => serde_json::from_value(fields[1].clone())
             .ok()
             .into_iter()
-            .map(|event| state.publish(id, event, raw))
+            .filter_map(|event| state.publish(id, event, raw))
             .collect(),
         Some("NEG-OPEN") => vec![json!([
             "NEG-ERR",
@@ -381,6 +450,14 @@ fn handle_message(
         ])],
         _ => vec![],
     }
+}
+
+fn retire_connection(state: &mut State, id: usize) {
+    let connection = state.connections.get_mut(&id).unwrap();
+    connection.retired = true;
+    connection.account = None;
+    connection.subscriptions.clear();
+    let _ = connection.outgoing.try_send(Value::Null);
 }
 
 async fn serve_connection(
@@ -413,6 +490,7 @@ async fn serve_connection(
     state.lock().unwrap().connections.insert(
         id,
         Connection {
+            retired: false,
             account: None,
             subscriptions: Vec::new(),
             outgoing,
@@ -536,11 +614,55 @@ impl<'a> PeerMode<'a> {
 
 impl Relay {
     pub(crate) async fn start() -> Self {
-        Self::start_with(None).await
+        Self::start_with(None, None).await
     }
 
     pub(crate) async fn start_peer(accounts: [PublicKey; 2]) -> Self {
-        Self::start_with(Some(accounts)).await
+        Self::start_with(Some(accounts), None).await
+    }
+
+    pub(crate) async fn start_peer_group(accounts: [PublicKey; 2], route: [u8; 32]) -> Self {
+        Self::start_with(Some(accounts), Some(route)).await
+    }
+
+    pub(crate) fn group_history_cut(
+        &self,
+        who: PublicKey,
+        request: &str,
+    ) -> Option<GroupHistoryCut> {
+        self.state
+            .lock()
+            .unwrap()
+            .peer
+            .as_ref()?
+            .group
+            .as_ref()?
+            .cuts
+            .get(&(who, request.into()))
+            .cloned()
+    }
+
+    pub(crate) fn group_writes(&self) -> Vec<GroupWrite> {
+        self.state
+            .lock()
+            .unwrap()
+            .peer
+            .as_ref()
+            .unwrap()
+            .group
+            .as_ref()
+            .unwrap()
+            .writes
+            .clone()
+    }
+
+    pub(crate) fn group_fault(&self, fault: GroupFault) {
+        let mut state = self.state.lock().unwrap();
+        let group = state.peer.as_mut().unwrap().group.as_mut().unwrap();
+        assert!(
+            group.fault.replace(fault).is_none(),
+            "one isolated Group fault"
+        );
     }
 
     pub(crate) fn peer_mode(&self) -> Option<PeerMode<'_>> {
@@ -595,7 +717,7 @@ impl Relay {
         assert!(error.is_cancelled(), "fixture stopped without panic");
     }
 
-    async fn start_with(accounts: Option<[PublicKey; 2]>) -> Self {
+    async fn start_with(accounts: Option<[PublicKey; 2]>, group: Option<[u8; 32]>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = Url::parse(&format!("wss://{}/", listener.local_addr().unwrap())).unwrap();
         let (acceptor, roots) = tls();
@@ -604,7 +726,7 @@ impl Relay {
             accounts,
         });
         let state = Arc::new(Mutex::new(State {
-            peer: accounts.map(peer::Scope::new),
+            peer: accounts.map(|accounts| peer::Scope::new(accounts).with_group(group)),
             ..State::default()
         }));
         let worker_state = state.clone();

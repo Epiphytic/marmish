@@ -27,6 +27,12 @@ use super::wire::{self, Arrival, Budget, CARRIER, Failure, Packet, RECORD_LIMIT,
 #[cfg(test)]
 use super::peer_control_wire::{Flight, Prepared};
 
+#[cfg(test)]
+#[path = "peer_raw_socket_group.rs"]
+mod groups;
+#[cfg(test)]
+pub(in crate::peer_invitation) use groups::{GroupPage, GroupRecord};
+
 const PREDRAIN_LIMIT: usize = 12;
 
 #[derive(Debug)]
@@ -79,6 +85,8 @@ pub(in crate::peer_invitation) struct Owner {
     next_page: u64,
     live_records: VecDeque<LiveRecord>,
     live_reserve: Reserve,
+    #[cfg(test)]
+    groups: groups::GroupLane,
 }
 
 pub(in crate::peer_invitation) struct Acknowledgement {
@@ -125,6 +133,8 @@ impl Owner {
             next_page: 0,
             live_records: VecDeque::with_capacity(RECORD_LIMIT),
             live_reserve: Reserve::default(),
+            #[cfg(test)]
+            groups: groups::GroupLane::default(),
         })
     }
 
@@ -355,6 +365,10 @@ impl Owner {
             return Err(Failure::Grammar);
         };
         if sub != self.live_id {
+            #[cfg(test)]
+            if self.groups.matches(&sub) {
+                return self.groups.push(self.scope.clone(), sub, body);
+            }
             return Err(Failure::Grammar);
         }
         self.live_reserve.charge(body.get().len())?;
@@ -410,6 +424,10 @@ impl Owner {
         self.socket.take();
         self.live_records.clear();
         self.live_reserve = Reserve::default();
+        #[cfg(test)]
+        {
+            self.groups = groups::GroupLane::default();
+        }
     }
 }
 
