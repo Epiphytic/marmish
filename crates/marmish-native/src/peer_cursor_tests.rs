@@ -568,14 +568,23 @@ fn peer_cursor_page_owner_fence_rolls_back_and_precedes_quarantine() {
         .execute_batch("DROP TRIGGER fail_fenced_page")
         .unwrap();
 
-    assert_eq!(
-        store
-            .commit_page_with_fence(&active, &request(&active, &ordinary), &[], W + 1, |_| {
-                panic!("missing receipts must refuse before the owner fence")
-            })
-            .err(),
-        Some(Error::Page)
-    );
+    let extra = store.commit_invalid(A, record(2, W), W).unwrap();
+    for receipts in [&[][..], &[receipt, extra][..]] {
+        assert_eq!(
+            store
+                .commit_page_with_fence(
+                    &active,
+                    &request(&active, &ordinary),
+                    receipts,
+                    W + 1,
+                    |_| { panic!("mismatched receipt counts must refuse before the owner fence") }
+                )
+                .err(),
+            Some(Error::Page)
+        );
+        assert_walls(&store, W);
+        assert_eq!(begin(&mut store, A, W), active);
+    }
     assert_eq!(
         store
             .commit_page_with_fence(&active, &request(&active, &bad_order), &[], W + 1, |tx| {
@@ -764,11 +773,17 @@ fn peer_cursor_saved_flight_checks_current_row_before_custody_effect() {
     let fixture = Fixture::new();
     let mut store = fixture.open();
     effect_tables(&store);
+    owner_wall_table(&store);
     let raw = record(1, W);
     let consent = id(2);
     let verified = metadata(Auth::FlightVerified, Some(consent));
     store.defer(A, raw, verified, W).unwrap();
-    let initial = store.due(A, W + 1).unwrap().unwrap();
+    store.defer(B, raw, verified, W).unwrap();
+    let foreign = store.existing(B, raw.id).unwrap().unwrap();
+    let initial = store
+        .due_with_fence(A, W + 1, |tx| advance_owner_wall(tx, W + 1))
+        .unwrap()
+        .unwrap();
 
     assert_eq!(
         store
@@ -794,11 +809,26 @@ fn peer_cursor_saved_flight_checks_current_row_before_custody_effect() {
             .err(),
         Some(Error::Stale)
     );
+    assert_eq!(
+        store
+            .commit_trusted_exact(A, raw, W + 3, |tx| {
+                advance_owner_wall(tx, W + 3)?;
+                foreign.require_current_flight(tx, A, consent)?;
+                effect(tx, A, raw.id)
+            })
+            .err(),
+        Some(Error::Binding)
+    );
     assert_eq!(effect_count(&store), 0);
+    assert_walls(&store, W + 1);
 
     // A damaged row can retain the revision. Independently check its state and bytes.
     let wall = W + 3;
-    let changed: [(&str, i64); 3] = [
+    let changed = [
+        (
+            "UPDATE peer_cursor_deferred SET stamp=?1 WHERE origin=?2 AND id=?3",
+            seconds(W - 1).unwrap(),
+        ),
         (
             "UPDATE peer_cursor_deferred SET expires=?1 WHERE origin=?2 AND id=?3",
             seconds(verified.expires + 1).unwrap(),
@@ -816,6 +846,7 @@ fn peer_cursor_saved_flight_checks_current_row_before_custody_effect() {
         assert_eq!(
             store
                 .commit_trusted_exact(A, raw, wall, |tx| {
+                    advance_owner_wall(tx, wall)?;
                     tx.execute(update, params![unexpected, A, raw.id])?;
                     current.require_current_flight(tx, A, consent)?;
                     effect(tx, A, raw.id)
@@ -837,6 +868,7 @@ fn peer_cursor_saved_flight_checks_current_row_before_custody_effect() {
         assert_eq!(
             store
                 .commit_trusted_exact(A, raw, wall, |tx| {
+                    advance_owner_wall(tx, wall)?;
                     tx.execute(update, params![unexpected, A, raw.id])?;
                     current.require_current_flight(tx, A, consent)?;
                     effect(tx, A, raw.id)
@@ -845,16 +877,33 @@ fn peer_cursor_saved_flight_checks_current_row_before_custody_effect() {
             Some(Error::Stale)
         );
     }
+    assert_eq!(
+        store
+            .commit_trusted_exact(A, raw, wall, |tx| {
+                advance_owner_wall(tx, wall)?;
+                tx.execute(
+                    "DELETE FROM peer_cursor_deferred WHERE origin=?1 AND id=?2",
+                    params![A, raw.id],
+                )?;
+                current.require_current_flight(tx, A, consent)?;
+                effect(tx, A, raw.id)
+            })
+            .err(),
+        Some(Error::Stale)
+    );
     assert_eq!(effect_count(&store), 0);
+    assert_walls(&store, W + 1);
 
     let (_, applied) = store
         .commit_trusted_exact(A, raw, wall, |tx| {
+            advance_owner_wall(tx, wall)?;
             current.require_current_flight(tx, A, consent)?;
             effect(tx, A, raw.id)
         })
         .unwrap();
     assert_eq!(applied, TrustedOutcome::Applied);
     assert_eq!(effect_count(&store), 1);
+    assert_walls(&store, wall);
     assert!(store.existing(A, raw.id).unwrap().is_none());
 }
 
@@ -971,6 +1020,195 @@ fn peer_cursor_core_backoff_wake_coalescence_and_fresh_expiry() {
         store.finish_retry(current.reverify(classify).unwrap(), known.expires),
         Err(Error::Stale)
     );
+}
+
+#[test]
+fn peer_cursor_installed_scope_cap_and_exact_expiry_preserve_sql_floors() {
+    use super::consent_checkpoint::{
+        Checkpoint, Error as CheckpointError, Policy,
+        provisioning::prepared_consent::custody::ReceivePolicy,
+    };
+    use nostr::key::Keys;
+
+    let fixture = Fixture::new();
+    let signer = Keys::generate();
+    let account = signer.public_key();
+    let route = "wss://cursor.example/";
+    Checkpoint::attach_installed_v2(
+        fixture.connection(),
+        signer.clone(),
+        123,
+        route,
+        Policy::default(),
+    )
+    .unwrap();
+    let mut checkpoint = Checkpoint::attach_installed_custody(
+        fixture.connection(),
+        signer,
+        123,
+        route,
+        Policy::default(),
+        ReceivePolicy::Manual,
+    )
+    .unwrap();
+    let source = checkpoint.bind_source(route).unwrap();
+    let origin = source.origin;
+    let state = |store: &CursorStore| {
+        store
+            .conn
+            .query_row(
+                "SELECT wall, (SELECT wall FROM peer_consent_version),
+                revision, retry_revision, (SELECT count(*) FROM peer_cursor_deferred)
+             FROM peer_cursor_origin WHERE origin=?1",
+                [origin],
+                |row| {
+                    Ok([
+                        row.get::<_, i64>(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ])
+                },
+            )
+            .unwrap()
+    };
+    let fence = |tx: &Transaction<'_>, wall| {
+        assert_eq!(
+            tx.execute(
+                "UPDATE peer_consent_version SET wall=?1 WHERE singleton=1 AND wall<=?1",
+                [seconds(wall)?],
+            )?,
+            1
+        );
+        Ok(())
+    };
+    let expires = W + 10;
+    let saved_metadata = Metadata {
+        expires,
+        ..metadata(Auth::FlightVerified, Some(id(6)))
+    };
+    for n in 0..u16::try_from(VISIBLE).unwrap() {
+        checkpoint
+            .cursor
+            .defer_with_fence(origin, record(n, W), saved_metadata, W, |tx| fence(tx, W))
+            .unwrap();
+    }
+    let baseline = state(&checkpoint.cursor);
+    let floor = seconds(W).unwrap();
+    assert_eq!(&baseline[..2], &[floor, floor]);
+    assert_eq!(baseline[4], i64::try_from(VISIBLE).unwrap());
+
+    for (other_account, other_route) in [
+        (Keys::generate().public_key(), route),
+        (account, "wss://changed.example/"),
+    ] {
+        assert_eq!(
+            checkpoint.check_installed_consent_scope(&source, other_account, other_route, W + 1),
+            Err(CheckpointError::Source)
+        );
+        assert_eq!(state(&checkpoint.cursor), baseline);
+    }
+    let advanced = seconds(W + 2).unwrap();
+    for (table, column) in [("peer_cursor_origin", 0), ("peer_consent_version", 1)] {
+        let sql = format!("UPDATE {table} SET wall=?1");
+        checkpoint.cursor.conn.execute(&sql, [advanced]).unwrap();
+        let mut changed = baseline;
+        changed[column] = advanced;
+        assert_eq!(
+            checkpoint.check_installed_consent_scope(&source, account, route, W + 1),
+            Err(CheckpointError::Cursor(Error::ClockRegressed))
+        );
+        assert_eq!(state(&checkpoint.cursor), changed);
+        checkpoint.cursor.conn.execute(&sql, [floor]).unwrap();
+    }
+    checkpoint
+        .cursor
+        .conn
+        .execute("UPDATE peer_consent_version SET account=?1", [ACCOUNT])
+        .unwrap();
+    assert!(
+        checkpoint
+            .check_installed_consent_scope(&source, account, route, W + 1)
+            .is_err()
+    );
+    assert_eq!(state(&checkpoint.cursor), baseline);
+    checkpoint
+        .cursor
+        .conn
+        .execute(
+            "UPDATE peer_consent_version SET account=?1",
+            [account.to_bytes()],
+        )
+        .unwrap();
+    assert_eq!(
+        checkpoint.check_installed_consent_scope(&source, account, route, W + 1),
+        Ok(())
+    );
+
+    let overflow = record(u16::try_from(VISIBLE).unwrap(), W);
+    assert_eq!(
+        checkpoint
+            .cursor
+            .defer_with_fence(origin, overflow, saved_metadata, W + 1, |tx| {
+                assert_eq!(
+                    tx.query_row(
+                        "SELECT wall FROM peer_cursor_origin WHERE origin=?1",
+                        [origin],
+                        |row| row.get::<_, i64>(0)
+                    )?,
+                    seconds(W + 1)?
+                );
+                fence(tx, W + 1)
+            })
+            .err(),
+        Some(Error::Backlog)
+    );
+    assert_eq!(state(&checkpoint.cursor), baseline);
+    assert!(
+        checkpoint
+            .cursor
+            .existing(origin, overflow.id)
+            .unwrap()
+            .is_none()
+    );
+
+    let saved = checkpoint.cursor.existing(origin, id(0)).unwrap().unwrap();
+    let expired = || {
+        saved
+            .reverify(|raw| {
+                assert_eq!(raw.id, id(0));
+                Some(RetryFinding::Expired {
+                    verified_expiry: expires,
+                })
+            })
+            .unwrap()
+    };
+    assert_eq!(
+        checkpoint
+            .cursor
+            .finish_retry_with_fence(expired(), expires - 1, |_| {
+                panic!("a not-yet-expired row must refuse before the owner fence")
+            }),
+        Err(Error::Classification)
+    );
+    assert_eq!(state(&checkpoint.cursor), baseline);
+    checkpoint
+        .cursor
+        .finish_retry_with_fence(expired(), expires, |tx| fence(tx, expires))
+        .unwrap();
+    let expired_wall = seconds(expires).unwrap();
+    assert_eq!(
+        state(&checkpoint.cursor),
+        [
+            expired_wall,
+            expired_wall,
+            baseline[2],
+            baseline[3],
+            baseline[4] - 1
+        ]
+    );
+    assert!(checkpoint.cursor.existing(origin, id(0)).unwrap().is_none());
 }
 
 #[test]
