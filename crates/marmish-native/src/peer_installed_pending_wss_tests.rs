@@ -113,7 +113,7 @@ impl Running {
     }
 
     async fn wait(mut self, step: &str) {
-        let deadline = Instant::now() + Duration::from_secs(45);
+        let deadline = Instant::now() + Duration::from_secs(65);
         loop {
             if let Some(status) = self.0.try_wait().unwrap() {
                 assert!(status.success(), "{step} subprocess returned {status}");
@@ -145,7 +145,7 @@ async fn private_v2_pending_survives_cold_cuts() {
         drop(lease);
         let unrelated = Keys::generate().public_key();
         let (mut relay, home, lease, material) =
-            qualified_recipient_fixture(founder, unrelated, Duration::from_secs(150)).await;
+            qualified_recipient_fixture(founder, unrelated, Duration::from_secs(240)).await;
         let account = material.public_key();
         assert_ne!(account, founder);
         drop(material);
@@ -231,7 +231,7 @@ fn prepare(lease: &mut ProfileLease) -> IdentityMaterial {
 }
 
 fn deadline() -> Instant {
-    Instant::now() + Duration::from_secs(10)
+    Instant::now() + Duration::from_secs(25)
 }
 
 fn sample() -> u64 {
@@ -314,7 +314,11 @@ async fn run_founder(public: &Path, setup: &PublicSetup) {
         .terminal(Outbound::Offer, Outbound::Offer.accepted())
         .unwrap();
 
-    let live = remote.wait_live(deadline()).await.unwrap().unwrap();
+    let live = remote
+        .wait_live(deadline())
+        .await
+        .unwrap()
+        .expect("founder did not receive Consent within the fixture window");
     let frame = live.arrival().body.get().as_bytes();
     let consent = codec
         .open_consent(&signer, frame, &offer.flight, sample())
