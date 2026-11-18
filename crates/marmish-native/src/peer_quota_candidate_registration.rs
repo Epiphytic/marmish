@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::{
+    dispatcher_fatal::{Fatal, Trip},
     identity::IdentityMaterial,
     peer_relay_trust::candidate_registration::{CheckedDirectories, ReceiverPreflight},
 };
@@ -34,24 +35,16 @@ impl Descriptor {
             delete: raw.xDelete.map(|call| call as usize),
         }
     }
-}
 
-#[derive(Clone, Copy)]
-struct Installed {
-    dispatch: &'static Dispatch,
-    descriptor: Descriptor,
-}
-
-impl Installed {
-    fn verify(self) -> Result<()> {
-        self.dispatch.assert_default()?;
+    fn verify(self, dispatch: &Dispatch) -> Result<()> {
+        dispatch.assert_default()?;
         // SAFETY: descriptors are initialized for process life, and project
         // default writers share the registration lock held by the caller.
-        let wrapper = unsafe { &*self.dispatch.wrapper };
+        let wrapper = unsafe { &*dispatch.wrapper };
         // SAFETY: NAME is a static, NUL-terminated C string.
-        if unsafe { sql::sqlite3_vfs_find(NAME.as_ptr()) } != self.dispatch.wrapper
-            || Descriptor::read(wrapper) != self.descriptor
-            || wrapper.pAppData != ptr::from_ref(self.dispatch).cast_mut().cast()
+        if unsafe { sql::sqlite3_vfs_find(NAME.as_ptr()) } != dispatch.wrapper
+            || Descriptor::read(wrapper) != self
+            || wrapper.pAppData != ptr::from_ref(dispatch).cast_mut().cast()
         {
             return Err("dispatch_descriptor");
         }
@@ -59,10 +52,30 @@ impl Installed {
     }
 }
 
+pub(crate) struct RegistryMint {
+    _private: (),
+}
+
+#[derive(Clone)]
+struct Installed {
+    dispatch: &'static Dispatch,
+    descriptor: Descriptor,
+    trip: Arc<Trip>,
+}
+
+impl Installed {
+    fn verify(&self) -> Result<()> {
+        if self.trip.observe().is_tripped() {
+            return Err("dispatch_cut");
+        }
+        self.descriptor.verify(self.dispatch)
+    }
+}
+
 enum State {
     Unregistered,
     Registered(Installed),
-    Indeterminate,
+    Indeterminate(Option<Arc<Trip>>),
 }
 
 static REGISTRY: Mutex<State> = Mutex::new(State::Unregistered);
@@ -74,10 +87,61 @@ pub(super) fn fixture_registration_guard() -> Result<impl Drop> {
     REGISTRY.lock().map_err(|_| "dispatch_registration")
 }
 
-fn registry() -> std::result::Result<MutexGuard<'static, State>, RegistrationFailure> {
-    REGISTRY
-        .lock()
-        .map_err(|_| RegistrationFailure::Indeterminate)
+struct RegistryTurn {
+    guard: Option<MutexGuard<'static, State>>,
+    notify: Option<Arc<Trip>>,
+}
+
+impl RegistryTurn {
+    fn acquire(backstop: Option<&Arc<Trip>>) -> std::result::Result<Self, RegistrationFailure> {
+        let (guard, poisoned) = match REGISTRY.lock() {
+            Ok(guard) => (guard, false),
+            Err(poisoned) => (poisoned.into_inner(), true),
+        };
+        let mut turn = Self {
+            guard: Some(guard),
+            notify: None,
+        };
+        if poisoned {
+            return Err(turn.fail(backstop));
+        }
+        Ok(turn)
+    }
+
+    fn state(&mut self) -> &mut State {
+        self.guard.as_deref_mut().expect("registry turn holds its lock")
+    }
+
+    fn fail(&mut self, backstop: Option<&Arc<Trip>>) -> RegistrationFailure {
+        let retained = match self.state() {
+            State::Unregistered => None,
+            State::Registered(installed) => Some(&installed.trip),
+            State::Indeterminate(retained) => retained.as_ref(),
+        };
+        let keeper = retained.or(backstop).cloned();
+        if let Some(keeper) = &keeper {
+            keeper.mark_cut();
+        }
+        *self.state() = State::Indeterminate(keeper.clone());
+        self.notify = keeper;
+        RegistrationFailure::Indeterminate
+    }
+
+    fn unlock(&mut self) -> Option<Arc<Trip>> {
+        drop(self.guard.take());
+        self.notify.take()
+    }
+}
+
+impl Drop for RegistryTurn {
+    fn drop(&mut self) {
+        if self.guard.is_some() && std::thread::panicking() {
+            self.fail(None);
+        }
+        if let Some(keeper) = self.unlock() {
+            keeper.notify();
+        }
+    }
 }
 
 /// Checks only the process forwarding contract and carries no receiver authority.
@@ -85,17 +149,35 @@ fn registry() -> std::result::Result<MutexGuard<'static, State>, RegistrationFai
 pub(crate) struct ForwardingVerifier(Installed);
 
 impl ForwardingVerifier {
+    pub(crate) fn fatal(&self) -> Fatal {
+        self.0.trip.observe()
+    }
+
+    pub(crate) fn custody_fault(&self) -> CustodyFault {
+        CustodyFault(Arc::clone(&self.0.trip))
+    }
+
     pub(crate) fn recheck_default(&self) -> std::result::Result<(), RegistrationFailure> {
-        let mut state = registry()?;
-        if !matches!(&*state, State::Registered(current)
+        let mut turn = RegistryTurn::acquire(Some(&self.0.trip))?;
+        if !matches!(turn.state(), State::Registered(current)
             if ptr::eq(current.dispatch, self.0.dispatch)
                 && current.descriptor == self.0.descriptor
-                && self.0.verify().is_ok())
+                && Arc::ptr_eq(&current.trip, &self.0.trip)
+                && current.verify().is_ok())
         {
-            *state = State::Indeterminate;
-            return Err(RegistrationFailure::Indeterminate);
+            return Err(turn.fail(Some(&self.0.trip)));
         }
         Ok(())
+    }
+}
+
+/// Reports unsafe custody release without performing SQLite or registry work.
+#[derive(Clone)]
+pub(crate) struct CustodyFault(Arc<Trip>);
+
+impl CustodyFault {
+    pub(crate) fn report(&self) {
+        self.0.notify();
     }
 }
 
@@ -103,7 +185,7 @@ pub(crate) struct RegisteredDispatch(Installed);
 
 impl RegisteredDispatch {
     pub(crate) fn forwarding_verifier(&self) -> ForwardingVerifier {
-        ForwardingVerifier(self.0)
+        ForwardingVerifier(self.0.clone())
     }
 
     pub(crate) fn recheck_lease(
@@ -168,21 +250,13 @@ pub(crate) fn register(
 ) -> std::result::Result<(RegisteredDispatch, CheckedDirectories), RegistrationFailure> {
     use RegistrationFailure::{Indeterminate, LocalUnavailable, Untouched};
 
-    let mut state = registry()?;
-    match *state {
-        State::Indeterminate => return Err(Indeterminate),
-        State::Registered(current) => {
-            if current.verify().is_ok() {
-                return Err(LocalUnavailable);
-            }
-            *state = State::Indeterminate;
-            return Err(Indeterminate);
-        }
+    let mut turn = RegistryTurn::acquire(None)?;
+    match turn.state() {
+        State::Registered(current) if current.verify().is_ok() => return Err(LocalUnavailable),
+        State::Indeterminate(_) | State::Registered(_) => return Err(turn.fail(None)),
         State::Unregistered => {}
     }
-    let (stock, managed, mut wrapper) = checked_stock().inspect_err(|_| {
-        *state = State::Indeterminate;
-    })?;
+    let (stock, managed, mut wrapper) = checked_stock().map_err(|_| turn.fail(None))?;
     // SAFETY: checked_stock returns the initialized process-owned descriptor.
     let stock_descriptor = Descriptor::read(unsafe { &*stock });
     let local = prepared
@@ -199,31 +273,31 @@ pub(crate) fn register(
     if !same_stock_default(stock, managed)
         || Descriptor::read(unsafe { &*stock }) != stock_descriptor
     {
-        *state = State::Indeterminate;
-        return Err(Indeterminate);
+        return Err(turn.fail(None));
     }
     let (paths, directories) = local.map_err(|_| Untouched)?;
     wrapper.zName = NAME.as_ptr();
     let descriptor = Descriptor::read(&wrapper);
     let dispatch = Dispatch::with_descriptor(stock, managed, wrapper, OnceLock::from(paths));
-    let installed = Installed {
-        dispatch,
-        descriptor,
-    };
 
     // Once this starts, even a failed C registration is an indeterminate
     // effect. Retain the descriptor and complete topology for process life.
-    *state = State::Indeterminate;
+    *turn.state() = State::Indeterminate(None);
     // SAFETY: the fully initialized, leaked wrapper remains live.
     if unsafe { sql::sqlite3_vfs_register(dispatch.wrapper, 1) } != sql::SQLITE_OK
-        || installed.verify().is_err()
+        || descriptor.verify(dispatch).is_err()
         // SQLite puts the old VFS list head immediately after the new default.
         // SAFETY: the leaked wrapper is live and this caller owns registration.
         || unsafe { (*dispatch.wrapper).pNext } != stock
     {
         return Err(Indeterminate);
     }
-    *state = State::Registered(installed);
+    let installed = Installed {
+        dispatch,
+        descriptor,
+        trip: Arc::new(Trip::registered(RegistryMint { _private: () })),
+    };
+    *turn.state() = State::Registered(installed.clone());
     Ok((RegisteredDispatch(installed), directories))
 }
 

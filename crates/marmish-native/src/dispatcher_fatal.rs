@@ -3,36 +3,72 @@
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
+struct Signal {
+    cut: AtomicBool,
+    wake: CancellationToken,
+}
+
 #[derive(Clone)]
-pub(crate) struct Fatal(CancellationToken);
+pub(crate) struct Fatal(Arc<Signal>);
 
 /// Retained by the exact registration owner. Other owners only observe.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct Trip(CancellationToken);
+pub(crate) struct Trip(Arc<Signal>);
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl Trip {
-    pub(crate) fn new() -> (Self, Fatal) {
-        let signal = CancellationToken::new();
-        (Self(signal.clone()), Fatal(signal))
+    fn fresh() -> Self {
+        Self(Arc::new(Signal {
+            cut: AtomicBool::new(false),
+            wake: CancellationToken::new(),
+        }))
     }
 
+    pub(crate) fn registered(
+        _: crate::peer_quota_vfs::dispatch::candidate_registration::RegistryMint,
+    ) -> Self {
+        Self::fresh()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new() -> (Self, Fatal) {
+        let trip = Self::fresh();
+        let fatal = trip.observe();
+        (trip, fatal)
+    }
+
+    pub(crate) fn observe(&self) -> Fatal {
+        Fatal(Arc::clone(&self.0))
+    }
+
+    pub(crate) fn mark_cut(&self) {
+        self.0.cut.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn notify(&self) {
+        self.mark_cut();
+        self.0.wake.cancel();
+    }
+
+    #[cfg(test)]
     pub(crate) fn trip(&self) {
-        self.0.cancel();
+        self.notify();
     }
 }
 
 impl Fatal {
     pub(crate) fn is_tripped(&self) -> bool {
-        self.0.is_cancelled()
+        self.0.cut.load(Ordering::Acquire)
     }
 
     pub(crate) async fn tripped(&self) {
-        self.0.cancelled().await;
+        if !self.is_tripped() {
+            self.0.wake.cancelled().await;
+            assert!(self.is_tripped(), "fatal wake requires a cut");
+        }
     }
 }
 
@@ -50,8 +86,8 @@ impl<S> FencedStream<S> {
         Self {
             io,
             fatal: fatal.clone(),
-            read: Box::pin(fatal.0.clone().cancelled_owned()),
-            write: Box::pin(fatal.0.clone().cancelled_owned()),
+            read: Box::pin(fatal.0.wake.clone().cancelled_owned()),
+            write: Box::pin(fatal.0.wake.clone().cancelled_owned()),
         }
     }
 }
