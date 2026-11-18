@@ -5,6 +5,7 @@ use crate::peer_invitation::{
     prepared_consent::JoinedReadback,
     store::consent_checkpoint::provisioning::prepared_consent::custody::{
         CustodyState, HeldEvidence,
+        terminal::{TerminalReason, TerminalRecord},
     },
 };
 
@@ -16,6 +17,7 @@ impl Service<'_> {
             Request::List {} => self.inventory(&work),
             Request::Show { selection } => self.show(&work, selection),
             Request::Approve { selection } => self.approve(worker, &mut work, lease, selection),
+            Request::Decline { selection } => self.decline(worker, &mut work, lease, selection),
         };
         work.reply(reply);
     }
@@ -61,7 +63,7 @@ impl Service<'_> {
         if found.state == CustodyState::Activating {
             // Readback answers what persisted. It does not claim the earlier
             // request performed the CAS, nor consume another write aperture.
-            manual.authorize(work, lease, selection)?;
+            manual.authorize(work, lease, Request::Approve { selection })?;
             return Ok(Reply::Approve {
                 entry: entry(found),
             });
@@ -72,7 +74,7 @@ impl Service<'_> {
         let committed = self
             .owner
             .commit_pending_decision(&row, &joined, |checkpoint| {
-                let uid = match manual.authorize(work, lease, selection) {
+                let uid = match manual.authorize(work, lease, Request::Approve { selection }) {
                     Ok(uid) => uid,
                     Err(failure) => {
                         denied = Some(failure);
@@ -93,6 +95,62 @@ impl Service<'_> {
         Ok(Reply::Approve {
             entry: entry(found),
         })
+    }
+
+    fn decline(
+        &mut self,
+        worker: &Worker,
+        work: &mut Work,
+        lease: &ProfileLease,
+        selection: Selection,
+    ) -> LocalResult<Reply> {
+        if selection.server != self.founder {
+            return Err(IpcFailure::Forbidden);
+        }
+        let manual = work.begin_manual(worker, lease)?;
+        let request = Request::Decline { selection };
+        let key = Selector {
+            server: selection.server,
+            id: selection.offer_id,
+            revision: selection.revision,
+        };
+        let wall = self.owner.sample().map_err(local_failure)?.as_secs();
+        let source = &self.owner.state.source;
+        let checkpoint = &mut self.owner.state.checkpoint;
+        let retained = checkpoint
+            .terminal_lookup(source, key, selection.generation, wall)
+            .map_err(|error| local_failure(error.into()))?;
+        let uid = manual.authorize(work, lease, request)?;
+        if let Some(record) = retained {
+            return Ok(terminal_reply(selection, &record));
+        }
+        let local = checkpoint
+            .authorize_local(uid)
+            .map_err(|error| local_failure(error.into()))?;
+        let mut denied = None;
+        let mut cas_started = false;
+        let committed = checkpoint.decline_pending_checked(
+            source,
+            key,
+            selection.generation,
+            wall,
+            &local,
+            || {
+                if let Err(failure) = work.can_reply() {
+                    denied = Some(failure);
+                    return Err(consent_checkpoint::Error::LocalOwner);
+                }
+                cas_started = true;
+                Ok(())
+            },
+        );
+        let record = committed.map_err(|error| {
+            denied.unwrap_or_else(|| decision_failure(error.into(), cas_started))
+        })?;
+        if std::mem::take(&mut self.uncertain_decline) || work.can_reply().is_err() {
+            return Err(IpcFailure::Uncertain);
+        }
+        Ok(terminal_reply(selection, &record))
     }
 
     fn proof(&mut self, selection: Selection) -> LocalResult<(HeldEvidence, JoinedReadback)> {
@@ -129,6 +187,14 @@ impl Service<'_> {
         })?;
         Ok(())
     }
+}
+
+fn terminal_reply(selection: Selection, record: &TerminalRecord) -> Reply {
+    let reason = match record.reason() {
+        TerminalReason::Declined => peer::TerminalReason::Declined,
+        TerminalReason::Expired => peer::TerminalReason::Expired,
+    };
+    Reply::Decline { selection, reason }
 }
 
 fn decision_failure(error: Error, cas_started: bool) -> IpcFailure {

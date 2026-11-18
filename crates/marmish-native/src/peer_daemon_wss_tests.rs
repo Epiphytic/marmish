@@ -120,6 +120,12 @@ impl Drop for Running {
     }
 }
 
+enum LostReply {
+    None,
+    Approve,
+    Decline,
+}
+
 struct Round {
     ordinary: Relay,
     relay: Relay,
@@ -216,7 +222,7 @@ impl Round {
         socket_path_for(self.root.path(), PROFILE).unwrap()
     }
 
-    async fn start(&self, admission: Admission, uncertain: bool) -> Running {
+    async fn start(&self, admission: Admission, lost: LostReply) -> Running {
         let profile_root = self.root.path().join(PROFILE);
         let bootstrap = Bootstrap::for_fixture(
             self.relay.peer_mode().unwrap(),
@@ -227,10 +233,10 @@ impl Round {
             Some(self.wall.clone()),
         )
         .unwrap();
-        let bootstrap = if uncertain {
-            bootstrap.with_uncertain_approval_once()
-        } else {
-            bootstrap
+        let bootstrap = match lost {
+            LostReply::None => bootstrap,
+            LostReply::Approve => bootstrap.with_uncertain_approval_once(),
+            LostReply::Decline => bootstrap.with_uncertain_decline_once(),
         };
         let (stop, stop_receiver) = oneshot::channel();
         let config = Config {
@@ -486,7 +492,7 @@ async fn show(socket: &Path, selection: peer::Selection, state: peer::State) -> 
 
 async fn manual() {
     let round = Round::initialize().await;
-    let daemon = round.start(Admission::Manual, false).await;
+    let daemon = round.start(Admission::Manual, LostReply::None).await;
     let socket = round.socket();
     let began = Instant::now();
     let (selector, delivery) = round.send_delivery().await;
@@ -503,7 +509,7 @@ async fn manual() {
         Mode::Manual,
     );
 
-    let daemon = round.start(Admission::Automatic, true).await;
+    let daemon = round.start(Admission::Automatic, LostReply::Approve).await;
     show(&socket, pending.selection, peer::State::Pending).await;
     tokio::time::sleep(Duration::from_millis(150)).await;
     show(&socket, pending.selection, peer::State::Pending).await;
@@ -536,7 +542,7 @@ async fn manual() {
         joined
     );
 
-    let daemon = round.start(Admission::Automatic, false).await;
+    let daemon = round.start(Admission::Automatic, LostReply::None).await;
     round.wall.fetch_add(1, Ordering::Relaxed);
     let began = Instant::now();
     let peer::Reply::Approve { entry } = peer::client_request(&socket, request()).await.unwrap()
@@ -566,7 +572,7 @@ async fn manual() {
 
 async fn automatic() {
     let round = Round::initialize().await;
-    let daemon = round.start(Admission::Automatic, false).await;
+    let daemon = round.start(Admission::Automatic, LostReply::None).await;
     let socket = round.socket();
     let began = Instant::now();
     let (selector, delivery) = round.send_delivery().await;
@@ -633,7 +639,7 @@ async fn refusal() {
         (None, Admission::Manual),
     ] {
         round.configure(role);
-        let daemon = round.start(admission, false).await;
+        let daemon = round.start(admission, LostReply::None).await;
         assert_eq!(
             peer::client_request(&socket, peer::Request::List {}).await,
             Err(peer::Failure::Stopped),
@@ -645,7 +651,7 @@ async fn refusal() {
     }
 
     round.configure(Some("client"));
-    let daemon = round.start(Admission::Manual, false).await;
+    let daemon = round.start(Admission::Manual, LostReply::None).await;
     let (selector, delivery) = round.send_delivery().await;
     let pending = entry(&socket, selector, peer::State::Pending).await;
     show(&socket, pending.selection, peer::State::Pending).await;
@@ -662,7 +668,7 @@ async fn refusal() {
     let saved = round.root.path().join("isolated-provisional.db");
     std::fs::rename(&stage, &saved).unwrap();
 
-    let daemon = round.start(Admission::Manual, false).await;
+    let daemon = round.start(Admission::Manual, LostReply::None).await;
     assert_eq!(
         entry(&socket, selector, peer::State::Pending).await,
         pending
@@ -672,10 +678,22 @@ async fn refusal() {
     round.assert_stopped(&socket);
     std::fs::rename(saved, stage).unwrap();
 
-    let daemon = round.start(Admission::Manual, false).await;
+    let daemon = round.start(Admission::Manual, LostReply::None).await;
     show(&socket, pending.selection, peer::State::Pending).await;
     round.wall.store(pending.expires_at, Ordering::Relaxed);
-    expect_decision_refusal(&socket, pending.selection, peer::Failure::Expired).await;
+    for request in [
+        peer::Request::Show {
+            selection: pending.selection,
+        },
+        peer::Request::Approve {
+            selection: pending.selection,
+        },
+    ] {
+        assert!(matches!(
+            peer::client_request(&socket, request).await,
+            Err(peer::Failure::Expired | peer::Failure::Stale)
+        ));
+    }
     assert_expired_hidden(&socket).await;
     assert_no_command(&socket).await;
     daemon.stop().await;
@@ -689,6 +707,86 @@ async fn refusal() {
 #[ignore = "requires same-build native bins and two independent private TLS relays"]
 fn peer_daemon_wss_ineligible_and_pending_refusals() {
     run_native(Duration::from_secs(180), refusal);
+}
+
+async fn terminal_round(reason: peer::TerminalReason) {
+    let round = Round::initialize().await;
+    let daemon = round.start(Admission::Manual, LostReply::None).await;
+    let socket = round.socket();
+    let (selector, delivery) = round.send_delivery().await;
+    let pending = entry(&socket, selector, peer::State::Pending).await;
+    daemon.stop().await;
+    let (stage, _) = round.closed_stage(
+        &pending.selection,
+        &delivery,
+        CustodyState::Pending,
+        Mode::Manual,
+    );
+
+    let request = peer::Request::Decline {
+        selection: pending.selection,
+    };
+    let daemon = match reason {
+        peer::TerminalReason::Declined => round.start(Admission::Manual, LostReply::Decline).await,
+        peer::TerminalReason::Expired => round.start(Admission::Manual, LostReply::None).await,
+    };
+    let decision = Instant::now();
+    match reason {
+        peer::TerminalReason::Declined => {
+            assert_eq!(
+                peer::client_request(&socket, request).await,
+                Err(peer::Failure::Uncertain)
+            );
+        }
+        peer::TerminalReason::Expired => {
+            round.wall.store(pending.expires_at, Ordering::Relaxed);
+        }
+    }
+    timeout(WAIT, async {
+        loop {
+            match std::fs::symlink_metadata(&stage) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                Err(error) => panic!("stage metadata failed: {:?}", error.kind()),
+                Ok(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+            }
+        }
+    })
+    .await
+    .expect("exact joined stage retired during local owner turn");
+    let retired = decision.elapsed();
+    assert_expired_hidden(&socket).await;
+    assert_no_command(&socket).await;
+    daemon.stop().await;
+    round.assert_stopped(&socket);
+
+    let daemon = round.start(Admission::Manual, LostReply::None).await;
+    assert_eq!(
+        peer::client_request(&socket, request).await,
+        Ok(peer::Reply::Decline {
+            selection: pending.selection,
+            reason,
+        })
+    );
+    assert_expired_hidden(&socket).await;
+    assert_no_command(&socket).await;
+    daemon.stop().await;
+    round.assert_stopped(&socket);
+    assert_eq!(round.relay.peer_transcript().len(), 3);
+    assert_eq!(round.relay.publication_attempts(445), 0);
+    assert_eq!(round.ordinary.publication_attempts(7435), 0);
+    eprintln!(
+        "peer_daemon_wss terminal reason={reason:?} decision_to_unlink_ms={}",
+        retired.as_millis()
+    );
+}
+
+#[test]
+#[ignore = "requires same-build native bins and independent private TLS relays"]
+fn peer_daemon_wss_decline_and_expiry_custody() {
+    run_native(Duration::from_secs(240), || async {
+        terminal_round(peer::TerminalReason::Declined).await;
+        terminal_round(peer::TerminalReason::Expired).await;
+    });
 }
 
 async fn ordinary_command(socket: &Path, remote: PublicKey, relay: &Relay, cat: &Path) {
@@ -892,7 +990,7 @@ async fn ordinary_command(socket: &Path, remote: PublicKey, relay: &Relay, cat: 
 
 async fn outage() {
     let mut round = Round::initialize().await;
-    let daemon = round.start(Admission::Manual, false).await;
+    let daemon = round.start(Admission::Manual, LostReply::None).await;
     let socket = round.socket();
     let (selector, _) = round.send_delivery().await;
     let pending = entry(&socket, selector, peer::State::Pending).await;

@@ -83,6 +83,13 @@ pub(crate) enum Request {
     List {},
     Show { selection: Selection },
     Approve { selection: Selection },
+    Decline { selection: Selection },
+}
+
+impl Request {
+    fn is_manual(self) -> bool {
+        matches!(self, Self::Approve { .. } | Self::Decline { .. })
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -113,9 +120,26 @@ pub(crate) struct Entry {
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Reply {
-    List { entries: Vec<Entry> },
-    Show { entry: Entry },
-    Approve { entry: Entry },
+    List {
+        entries: Vec<Entry>,
+    },
+    Show {
+        entry: Entry,
+    },
+    Approve {
+        entry: Entry,
+    },
+    Decline {
+        selection: Selection,
+        reason: TerminalReason,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TerminalReason {
+    Declined,
+    Expired,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -155,6 +179,12 @@ impl Reply {
             (Self::Approve { entry }, Request::Approve { selection }) => {
                 entry.selection == selection && entry.state == State::Activating
             }
+            (
+                Self::Decline { selection, .. },
+                Request::Decline {
+                    selection: requested,
+                },
+            ) => *selection == requested,
             _ => false,
         }
     }
@@ -373,7 +403,7 @@ impl Intake {
             request,
             deadline,
             respond,
-            witness: matches!(request, Request::Approve { .. }).then_some(Witness { uid }),
+            witness: request.is_manual().then_some(Witness { uid }),
             exchange: Arc::new(()),
         };
         {
@@ -449,9 +479,9 @@ impl Work {
         worker: &Worker,
         profile: &ProfileLease,
     ) -> Verdict<Manual> {
-        let Request::Approve { selection } = self.request else {
+        if !self.request.is_manual() {
             return Err(Failure::Forbidden);
-        };
+        }
         if !Arc::ptr_eq(&self.pair, &worker.pair) || !self.pair.belongs_to(profile) {
             return Err(Failure::Forbidden);
         }
@@ -459,7 +489,7 @@ impl Work {
         let witness = self.witness.take().ok_or(Failure::Forbidden)?;
         Ok(Manual {
             pair: Arc::clone(&self.pair),
-            selection,
+            request: self.request,
             exchange: Arc::clone(&self.exchange),
             witness,
         })
@@ -482,7 +512,7 @@ impl Work {
 
 pub(crate) struct Manual {
     pair: Arc<Pair>,
-    selection: Selection,
+    request: Request,
     exchange: Arc<()>,
     witness: Witness,
 }
@@ -492,12 +522,12 @@ impl Manual {
         self,
         work: &Work,
         profile: &ProfileLease,
-        selection: Selection,
+        request: Request,
     ) -> Verdict<u32> {
         if !Arc::ptr_eq(&self.pair, &work.pair)
             || !self.pair.belongs_to(profile)
-            || self.selection != selection
-            || work.request != (Request::Approve { selection })
+            || self.request != request
+            || work.request != request
             || !Arc::ptr_eq(&self.exchange, &work.exchange)
         {
             return Err(Failure::Forbidden);
@@ -610,6 +640,23 @@ mod tests {
                 selection: selected,
             })
         );
+        let decline = Request::Decline {
+            selection: selected,
+        };
+        let denied = Reply::Decline {
+            selection: selected,
+            reason: TerminalReason::Declined,
+        };
+        assert!(denied.matches(decline));
+        assert!(!denied.matches(Request::Approve {
+            selection: selected
+        }));
+        assert!(!denied.matches(Request::Decline {
+            selection: Selection {
+                generation: selected.generation + 1,
+                ..selected
+            }
+        }));
         assert!(!Reply::Show { entry }.matches(Request::Show {
             selection: Selection {
                 generation: selected.generation + 1,
@@ -667,15 +714,37 @@ mod tests {
         });
         let mut duplicate = next(&mut worker).await;
         assert!(matches!(
-            witness.authorize(&duplicate, &lease, selection),
+            witness.authorize(&duplicate, &lease, request),
             Err(Failure::Forbidden)
         ));
         let uid = duplicate
             .begin_manual(&worker, &lease)
             .unwrap()
-            .authorize(&duplicate, &lease, selection)
+            .authorize(&duplicate, &lease, request)
             .unwrap();
         assert_eq!(uid, unsafe { libc::geteuid() });
+        let decline = Request::Decline { selection };
+        let third_client = tokio::spawn({
+            let path = path.clone();
+            async move { client_request(&path, decline).await }
+        });
+        let mut declining = next(&mut worker).await;
+        let witness = declining.begin_manual(&worker, &lease).unwrap();
+        assert!(matches!(
+            witness.authorize(&declining, &lease, request),
+            Err(Failure::Forbidden)
+        ));
+        declining.reply(Ok(Reply::Decline {
+            selection,
+            reason: TerminalReason::Declined,
+        }));
+        assert_eq!(
+            third_client.await.unwrap(),
+            Ok(Reply::Decline {
+                selection,
+                reason: TerminalReason::Declined,
+            })
+        );
         duplicate.reply(Err(Failure::Stale));
         work.reply(Err(Failure::Unavailable));
         assert_eq!(client.await.unwrap(), Err(Failure::Unavailable));
@@ -726,7 +795,7 @@ mod tests {
         tokio::time::advance(super::super::IO_TIMEOUT).await;
         assert_eq!(waiting.await.unwrap(), Err(Failure::Uncertain));
         assert!(matches!(
-            witness.authorize(&active, &lease, selection),
+            witness.authorize(&active, &lease, request),
             Err(Failure::Uncertain)
         ));
         active.reply(Err(Failure::Stale));
@@ -795,7 +864,7 @@ mod tests {
         worker.stopping().await;
         assert!(worker.try_recv().is_none());
         assert!(matches!(
-            witness.authorize(&active, &lease, selection),
+            witness.authorize(&active, &lease, request),
             Err(Failure::Stopped | Failure::Uncertain)
         ));
         for client in waiting {

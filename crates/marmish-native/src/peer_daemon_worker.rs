@@ -46,6 +46,7 @@ pub(crate) struct Bootstrap {
     admission: Admission,
     wall: Wall,
     uncertain_approval: bool,
+    uncertain_decline: bool,
 }
 
 impl Bootstrap {
@@ -67,11 +68,17 @@ impl Bootstrap {
             admission,
             wall: fixture_wall.map_or(Wall::System, Wall::Fixture),
             uncertain_approval: false,
+            uncertain_decline: false,
         })
     }
 
     pub(crate) fn with_uncertain_approval_once(mut self) -> Self {
         self.uncertain_approval = true;
+        self
+    }
+
+    pub(crate) fn with_uncertain_decline_once(mut self) -> Self {
+        self.uncertain_decline = true;
         self
     }
 
@@ -140,6 +147,8 @@ impl Bootstrap {
             poll_next: false,
             retry_next: true,
             uncertain_approval: self.uncertain_approval,
+            uncertain_decline: self.uncertain_decline,
+            terminal_next: true,
         })
     }
 }
@@ -213,6 +222,8 @@ struct Service<'a> {
     poll_next: bool,
     retry_next: bool,
     uncertain_approval: bool,
+    uncertain_decline: bool,
+    terminal_next: bool,
 }
 
 impl Service<'_> {
@@ -243,6 +254,18 @@ impl Service<'_> {
     }
 
     async fn local_turn(&mut self, worker: &Worker) -> Option<Selector> {
+        let terminal = self.terminal_next;
+        self.terminal_next = !terminal;
+        if terminal && !worker.stopped() {
+            match self.terminal_turn() {
+                Ok(true) => return None,
+                Ok(false) => {}
+                Err(_) => {
+                    crate::diagnostics::event("peer_owner", "terminal_turn_unavailable");
+                    return None;
+                }
+            }
+        }
         let retry = self.retry_next;
         self.retry_next = !self.retry_next;
         if retry && self.socket.is_some() {
@@ -280,6 +303,21 @@ impl Service<'_> {
             crate::diagnostics::event("peer_owner", "custody_turn_unavailable");
         }
         None
+    }
+
+    fn terminal_turn(&mut self) -> Result<bool> {
+        let wall = self.owner.sample()?.as_secs();
+        let checkpoint = &mut self.owner.state.checkpoint;
+        let source = &self.owner.state.source;
+        if let Some(record) = checkpoint.terminal_cleanup_due(source, wall)? {
+            self.owner.retire_terminal(record)?;
+            return Ok(true);
+        }
+        if let Some((key, generation)) = checkpoint.terminal_due(source, self.founder, wall)? {
+            checkpoint.expire_pending(source, key, generation, wall)?;
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     fn next_due(&mut self) -> Result<Option<Due>> {
