@@ -41,11 +41,11 @@ mod qualification;
 #[path = "peer_physical_route.rs"]
 mod physical_route;
 
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
-pub(crate) use physical_route::qualified_founder_fixture;
 #[cfg(test)]
 pub(crate) use physical_route::qualified_recipient_fixture;
 pub(crate) use physical_route::{LivePhysicalRoute, PeerLiveDial, ReceiverRouteAdmission};
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use physical_route::{qualified_founder_fixture, qualified_manual_recipient_fixture};
 
 pub(crate) use qualification::Report as QualificationReport;
 
