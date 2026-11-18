@@ -59,11 +59,12 @@ struct Installed {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-pub(super) struct RoomWitness {
-    route: [u8; 32],
-    subscription: String,
-    local_leaf: u32,
-    epoch: EpochId,
+pub(crate) struct RoomWitness {
+    pub(crate) route: [u8; 32],
+    pub(crate) subscription: String,
+    pub(crate) local_leaf: u32,
+    pub(crate) peer_leaf: u32,
+    pub(crate) epoch: EpochId,
 }
 
 pub(super) struct HeldWelcome {
@@ -71,9 +72,10 @@ pub(super) struct HeldWelcome {
     peeled_id: MessageId,
 }
 
-pub(super) struct App {
-    pub(super) bytes: Vec<u8>,
-    pub(super) retention: AppMessageRetentionDecision,
+pub(crate) struct App {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) retention: AppMessageRetentionDecision,
+    pub(crate) sender_leaf_index: u32,
 }
 
 pub(super) struct OpenFailure {
@@ -557,18 +559,49 @@ impl Room {
             .runtime
             .canonical_group_membership(&room.group)
             .map_err(|_| STATE)?;
-        let leaf = membership
+        let local_leaf = membership
             .member_leaves
-            .into_iter()
+            .iter()
             .find(|leaf| leaf.member == self.lane.adapter.account)
-            .ok_or(STATE)?;
+            .ok_or(STATE)?
+            .leaf_index;
+        let peer_leaf = membership
+            .member_leaves
+            .iter()
+            .find(|leaf| &leaf.member == self.peer())
+            .ok_or(STATE)?
+            .leaf_index;
+        if local_leaf == peer_leaf {
+            return Err(STATE);
+        }
         let record = self.runtime.group_record(&room.group).map_err(|_| STATE)?;
         Ok(RoomWitness {
             route,
             subscription: subscription.to_owned(),
-            local_leaf: leaf.leaf_index,
+            local_leaf,
+            peer_leaf,
             epoch: record.epoch,
         })
+    }
+
+    pub(super) fn terminal_accounts(&self) -> Result<([u8; 32], [u8; 32])> {
+        let local = self
+            .lane
+            .adapter
+            .account
+            .as_slice()
+            .try_into()
+            .map_err(|_| STATE)?;
+        let peer = self.peer().as_slice().try_into().map_err(|_| STATE)?;
+        Ok((local, peer))
+    }
+
+    fn peer(&self) -> &MemberId {
+        if self.lane.adapter.account == self.server {
+            &self.client
+        } else {
+            &self.server
+        }
     }
 
     pub(super) fn checked_route(&self) -> Result<([u8; 32], &str)> {
@@ -647,17 +680,35 @@ impl Room {
     }
 
     pub(super) async fn receive_app(&mut self) -> Result<App> {
+        self.read_app(true).await?.ok_or(STATE)
+    }
+
+    pub(super) async fn receive_queued_app(&mut self) -> Result<Option<App>> {
+        self.read_app(false).await
+    }
+
+    async fn read_app(&mut self, wait: bool) -> Result<Option<App>> {
         self.check_live().await?;
         let authority = self.lane.adapter.authority.clone();
         let installed = self.room.clone().ok_or(STATE)?;
-        let delivery = self
-            .lane
-            .receive(
-                TransportDeliveryPlane::Group,
-                Some(&installed.subscription),
-                FRAME_CAP,
-            )
-            .await?;
+        let delivery = if wait {
+            self.lane
+                .receive(
+                    TransportDeliveryPlane::Group,
+                    Some(&installed.subscription),
+                    FRAME_CAP,
+                )
+                .await?
+        } else {
+            let Some(delivery) = self
+                .lane
+                .receive_queued_group(&installed.subscription, FRAME_CAP)
+                .await?
+            else {
+                return Ok(None);
+            };
+            delivery
+        };
         authority
             .run(async {
                 let event = checked_outer(&delivery, Kind::MlsGroupMessage)?;
@@ -670,11 +721,7 @@ impl Room {
                     return Err(STATE);
                 }
                 let group = &installed.group;
-                let peer = if self.lane.adapter.account == self.server {
-                    &self.client
-                } else {
-                    &self.server
-                };
+                let peer = self.peer().clone();
                 let membership = self
                     .runtime
                     .canonical_group_membership(group)
@@ -682,7 +729,7 @@ impl Room {
                 let expected_leaf = membership
                     .member_leaves
                     .iter()
-                    .find(|leaf| &leaf.member == peer)
+                    .find(|leaf| leaf.member == peer)
                     .ok_or(STATE)?
                     .leaf_index;
                 let incoming = self
@@ -710,12 +757,13 @@ impl Room {
                 else {
                     return Err(EXCHANGE);
                 };
-                if group_id != group || sender != peer || *leaf != expected_leaf {
+                if group_id != group || sender != &peer || *leaf != expected_leaf {
                     return Err(EXCHANGE);
                 }
                 let app = App {
                     bytes: payload.clone(),
                     retention: *retention,
+                    sender_leaf_index: *leaf,
                 };
                 self.storage
                     .delete_pending_application_events(std::slice::from_ref(message_id))
@@ -729,7 +777,7 @@ impl Room {
                 }
                 self.lane.acknowledge(&delivery.message.id).await;
                 self.check_live().await?;
-                Ok(app)
+                Ok(Some(app))
             })
             .await
     }

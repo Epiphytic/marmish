@@ -1,8 +1,10 @@
 //! Single direct-WSS Terminal admission on a verified Command binding.
 use super::terminal_enrollment::Owner;
-use super::terminal_enrollment_room::RoomWitness;
+use super::terminal_enrollment_room::{App, RoomWitness};
+pub(crate) use super::terminal_enrollment_transport::EnrollmentCeiling;
 use super::terminal_enrollment_transport::{Authority, Lane};
 use super::{AuthenticatedCommandContext, CommandDirection, TransportEndpoint};
+use crate::terminal_backend::supervisor::live::selection::WriterGuard;
 use crate::terminal_bootstrap::state::{Advance, Exchange, Time};
 use crate::terminal_bootstrap::{BoundSigning, Codec, Step};
 use crate::terminal_fence::{AttachmentFence, FenceState};
@@ -30,7 +32,6 @@ const ORDER: Error = Error::Invalid("terminal_enrollment_order");
 const BOOTSTRAP_OUTER: usize = 32 * 1024;
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(30);
 const CHALLENGE_TIMEOUT: Duration = Duration::from_secs(5);
-const ROOM_LIFETIME: Duration = Duration::from_secs(24 * 60 * 60);
 
 pub(super) struct Carrier {
     context: AuthenticatedCommandContext,
@@ -72,6 +73,7 @@ pub(super) struct Bootstrap {
     exchange: Exchange,
     signing: BoundSigning,
     lane: Lane,
+    client_start: Option<EnrollmentCeiling>,
 }
 
 pub(super) struct GrantedEnrollment {
@@ -123,6 +125,10 @@ impl ReservedRoom {
         self.start_reap().ok_or(ORDER)?.await.map_err(|_| ORDER)?
     }
 
+    fn owner(&self) -> &Owner {
+        &self.owner.as_ref().expect("owned native Terminal room").0
+    }
+
     fn owner_mut(&mut self) -> &mut Owner {
         &mut self.owner.as_mut().expect("owned native Terminal room").0
     }
@@ -135,34 +141,30 @@ impl Drop for ReservedRoom {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-struct SelectionBinding {
-    transcript: [u8; 32],
-    command_digest: [u8; 32],
-    generation: u64,
-    local: [u8; 32],
-    peer: [u8; 32],
-    direction: CommandDirection,
-    uid: u32,
-    native: RoomWitness,
+pub(crate) struct SelectionBinding {
+    pub(crate) transcript: [u8; 32],
+    pub(crate) command_digest: [u8; 32],
+    pub(crate) generation: u64,
+    pub(crate) local: [u8; 32],
+    pub(crate) peer: [u8; 32],
+    pub(crate) local_terminal: [u8; 32],
+    pub(crate) peer_terminal: [u8; 32],
+    pub(crate) direction: CommandDirection,
+    pub(crate) uid: u32,
+    pub(crate) native: RoomWitness,
 }
 
-pub(super) struct ReadyEnrollment {
+pub(crate) struct ReadyEnrollment {
     enrollment: GrantedEnrollment,
     binding: SelectionBinding,
+    ceiling: EnrollmentCeiling,
 }
 
-/// Private stand-in for the future verified local selection interface.
-/// This module does not accept a claim from transport or IPC.
-pub(super) struct FakeWriterClaim {
-    binding: SelectionBinding,
-    attachment: [u8; 16],
-    attachment_generation: NonZeroU64,
-    deadline: Instant,
-}
-
-pub(super) struct AttachedWriter {
+pub(crate) struct AttachedRoom {
     reserved: ReservedRoom,
-    pub(super) frames: terminal_frames::Binding,
+    binding: SelectionBinding,
+    frames: terminal_frames::Binding,
+    ceiling: EnrollmentCeiling,
 }
 
 impl GrantedEnrollment {
@@ -181,6 +183,8 @@ impl GrantedEnrollment {
         owner.alias_adapter.check().await?;
         let transcript = owner.ready().await?;
         let native = owner.room.witness()?;
+        let (local_terminal, peer_terminal) = owner.room.terminal_accounts()?;
+        permitted(granted)?;
         let context = &self.carrier.context;
         Ok(SelectionBinding {
             transcript,
@@ -188,6 +192,8 @@ impl GrantedEnrollment {
             generation: self.carrier.fence.generation().get(),
             local: context.local_account(),
             peer: context.peer_account(),
+            local_terminal,
+            peer_terminal,
             direction: context.direction(),
             uid: context.target_uid(),
             native,
@@ -195,71 +201,279 @@ impl GrantedEnrollment {
     }
 
     pub(super) async fn ready(mut self, granted: &impl Fn() -> bool) -> Result<ReadyEnrollment> {
+        let ceiling = self.reserved.owner().admission_ceiling()?;
+        ceiling.check()?;
         let binding = self.selection_binding(granted).await?;
+        ceiling.check()?;
         Ok(ReadyEnrollment {
             enrollment: self,
             binding,
+            ceiling,
         })
     }
 }
 
 impl ReadyEnrollment {
-    pub(super) fn fake_writer_claim(
-        &self,
-        attachment: [u8; 16],
-        attachment_generation: NonZeroU64,
-        deadline: Instant,
-    ) -> FakeWriterClaim {
-        FakeWriterClaim {
-            binding: self.binding.clone(),
-            attachment,
-            attachment_generation,
-            deadline,
-        }
+    pub(crate) fn binding(&self) -> &SelectionBinding {
+        &self.binding
     }
 
-    pub(super) fn validate_claim(&self, claim: &FakeWriterClaim, now: Instant) -> Result<()> {
-        if claim.binding != self.binding || claim.attachment == [0; 16] || now >= claim.deadline {
-            return Err(BINDING);
-        }
-        Ok(())
+    pub(crate) fn fence(&self) -> Arc<AttachmentFence> {
+        self.enrollment.carrier.fence.clone()
     }
 
-    pub(super) async fn select(
-        mut self,
-        claim: FakeWriterClaim,
-        granted: &impl Fn() -> bool,
-    ) -> Result<AttachedWriter> {
-        self.validate_claim(&claim, Instant::now())?;
-        if self.enrollment.selection_binding(granted).await? != self.binding {
-            return Err(BINDING);
-        }
-        permitted(granted)?;
-        let frames = terminal_frames::Binding {
-            transcript: self.binding.transcript,
-            attachment: claim.attachment,
-            generation: claim.attachment_generation.get(),
-            role: terminal_frames::Role::Writer,
-        };
+    pub(crate) fn admission_ceiling(&self) -> EnrollmentCeiling {
+        self.ceiling
+    }
+
+    pub(crate) fn authority(&self) -> Arc<Authority> {
         self.enrollment
-            .owner_mut()
+            .reserved
+            .owner()
             .alias_adapter
             .authority
-            .begin_attachment(frames, claim.deadline.min(Instant::now() + ROOM_LIFETIME))?;
+            .clone()
+    }
+
+    pub(crate) async fn recheck(&self, granted: &impl Fn() -> bool) -> Result<()> {
+        let result = self.recheck_inner(granted, true).await;
+        if result.is_err() {
+            self.authority().retire();
+        }
+        result
+    }
+
+    async fn recheck_inner(&self, granted: &impl Fn() -> bool, check_alias: bool) -> Result<()> {
+        self.ceiling.check()?;
+        permitted(granted)?;
+        let owner = self.enrollment.reserved.owner();
+        if check_alias {
+            owner.alias_adapter.check().await?;
+        }
+        if owner.ready().await? != self.binding.transcript
+            || owner.room.witness()? != self.binding.native
+            || !self.fence().matches_digest(&self.binding.command_digest)
+            || self.fence().generation().get() != self.binding.generation
+        {
+            return Err(BINDING);
+        }
+        owner.alias_adapter.authority.check()?;
+        self.ceiling.check()?;
+        permitted(granted)
+    }
+
+    pub(crate) async fn send_selection(
+        &mut self,
+        bytes: Vec<u8>,
+        granted: &impl Fn() -> bool,
+    ) -> Result<()> {
+        self.recheck(granted).await?;
+        let result = self.enrollment.owner_mut().room.send_app(bytes).await;
+        if result.is_err() {
+            self.authority().retire();
+        }
+        result?;
+        self.recheck(granted).await
+    }
+
+    pub(crate) async fn receive_selection(&mut self, granted: &impl Fn() -> bool) -> Result<App> {
+        self.read_selection(granted, true).await?.ok_or(ORDER)
+    }
+
+    pub(crate) async fn try_receive_selection(
+        &mut self,
+        granted: &impl Fn() -> bool,
+    ) -> Result<Option<App>> {
+        self.read_selection(granted, false).await
+    }
+
+    async fn read_selection(
+        &mut self,
+        granted: &impl Fn() -> bool,
+        wait: bool,
+    ) -> Result<Option<App>> {
+        self.recheck(granted).await?;
+        let room = &mut self.enrollment.owner_mut().room;
+        let result = if wait {
+            room.receive_app().await.map(Some)
+        } else {
+            room.receive_queued_app().await
+        };
+        if result.is_err() {
+            self.retire();
+        }
+        let app = result?;
+        if app
+            .as_ref()
+            .is_some_and(|app| app.sender_leaf_index != self.binding.native.peer_leaf)
+        {
+            self.retire();
+            return Err(BINDING);
+        }
+        self.recheck(granted).await?;
+        Ok(app)
+    }
+
+    pub(crate) fn retire(&self) {
+        self.authority().retire();
+    }
+
+    pub(crate) async fn close(self) -> Result<()> {
+        self.enrollment.close().await
+    }
+
+    pub(crate) async fn handoff_client(
+        self,
+        attachment: [u8; 16],
+        generation: NonZeroU64,
+        ceiling: EnrollmentCeiling,
+        granted: &impl Fn() -> bool,
+    ) -> Result<AttachedRoom> {
+        if self.binding.direction != CommandDirection::Client {
+            return Err(BINDING);
+        }
+        self.begin_attachment(attachment, generation, ceiling, granted, || true)
+            .await
+    }
+
+    pub(crate) async fn handoff_server(
+        self,
+        attachment: [u8; 16],
+        generation: NonZeroU64,
+        ceiling: EnrollmentCeiling,
+        granted: &impl Fn() -> bool,
+        guard: WriterGuard,
+    ) -> Result<(AttachedRoom, WriterGuard)> {
+        if self.binding.direction != CommandDirection::Server {
+            return Err(BINDING);
+        }
+        let room = self
+            .begin_attachment(attachment, generation, ceiling, granted, || {
+                guard.matches_binding(attachment, generation)
+            })
+            .await?;
+        Ok((room, guard))
+    }
+
+    async fn begin_attachment(
+        mut self,
+        attachment: [u8; 16],
+        generation: NonZeroU64,
+        ceiling: EnrollmentCeiling,
+        granted: &impl Fn() -> bool,
+        owns_writer: impl Fn() -> bool,
+    ) -> Result<AttachedRoom> {
+        if attachment == [0; 16] || !owns_writer() {
+            return Err(BINDING);
+        }
+        ceiling.check()?;
+        self.recheck(granted).await?;
         self.enrollment.owner_mut().detach_alias().await?;
-        Ok(AttachedWriter {
+        self.recheck_inner(granted, false).await?;
+        if !owns_writer() {
+            return Err(BINDING);
+        }
+        let frames = terminal_frames::Binding {
+            transcript: self.binding.transcript,
+            attachment,
+            generation: generation.get(),
+            role: terminal_frames::Role::Writer,
+        };
+        self.authority().begin_attachment_at(frames, ceiling)?;
+        Ok(AttachedRoom {
             reserved: self.enrollment.reserved,
+            binding: self.binding,
             frames,
+            ceiling,
         })
+    }
+
+    #[cfg(test)]
+    pub(super) async fn attach_enrollment_proof(
+        self,
+        expected: &SelectionBinding,
+        attachment: [u8; 16],
+        generation: NonZeroU64,
+        ceiling: EnrollmentCeiling,
+        granted: &impl Fn() -> bool,
+    ) -> Result<AttachedRoom> {
+        self.check_proof_binding(expected, attachment, ceiling)?;
+        self.begin_attachment(attachment, generation, ceiling, granted, || true)
+            .await
+    }
+
+    #[cfg(test)]
+    pub(super) fn check_proof_binding(
+        &self,
+        expected: &SelectionBinding,
+        attachment: [u8; 16],
+        ceiling: EnrollmentCeiling,
+    ) -> Result<()> {
+        if expected != &self.binding || attachment == [0; 16] {
+            return Err(BINDING);
+        }
+        ceiling.check()
     }
 }
 
-impl AttachedWriter {
-    pub(super) fn owner_mut(&mut self) -> &mut Owner {
-        self.reserved.owner_mut()
+impl AttachedRoom {
+    pub(crate) fn binding(&self) -> &SelectionBinding {
+        &self.binding
     }
 
-    pub(super) async fn close(self) -> Result<()> {
+    pub(crate) fn frame_binding(&self) -> terminal_frames::Binding {
+        self.frames
+    }
+
+    pub(crate) async fn check_live(&self) -> Result<()> {
+        let owner = self.reserved.owner();
+        let result = async {
+            self.ceiling.check()?;
+            owner.alias_adapter.authority.permits_frames(self.frames)?;
+            if owner.ready().await? != self.binding.transcript
+                || owner.room.witness()? != self.binding.native
+            {
+                return Err(BINDING);
+            }
+            self.ceiling.check()
+        }
+        .await;
+        if result.is_err() {
+            owner.alias_adapter.authority.retire();
+        }
+        result
+    }
+
+    pub(crate) async fn send_frame(&mut self, bytes: Vec<u8>) -> Result<()> {
+        self.check_live().await?;
+        let result = self
+            .reserved
+            .owner_mut()
+            .send_frame(self.frames, bytes)
+            .await;
+        if result.is_err() {
+            self.reserved.owner().alias_adapter.authority.retire();
+        }
+        result?;
+        self.check_live().await
+    }
+
+    pub(crate) async fn receive_frame(&mut self) -> Result<App> {
+        self.check_live().await?;
+        let result = self.reserved.owner_mut().receive_frame(self.frames).await;
+        if result.is_err() {
+            self.reserved.owner().alias_adapter.authority.retire();
+        }
+        let app = result?;
+        if app.sender_leaf_index != self.binding.native.peer_leaf {
+            self.reserved.owner().alias_adapter.authority.retire();
+            return Err(BINDING);
+        }
+        self.check_live().await?;
+        Ok(app)
+    }
+
+    pub(crate) async fn close(self) -> Result<()> {
         self.reserved.close().await
     }
 }
@@ -306,6 +520,7 @@ impl Carrier {
             exchange: Exchange::new(codec),
             signing,
             lane,
+            client_start: None,
         })
     }
 }
@@ -316,6 +531,7 @@ fn current() -> Result<(Time, Sample)> {
         Time {
             unix: sample.wall.as_secs(),
             monotonic: std::time::Instant::now(),
+            continuous: Some(sample.tick),
         },
         sample,
     ))
@@ -329,6 +545,18 @@ fn permitted(granted: &(impl Fn() -> bool + ?Sized)) -> Result<()> {
 }
 
 impl Bootstrap {
+    pub(crate) fn constrain_client_start(&mut self, ceiling: EnrollmentCeiling) -> Result<()> {
+        if self.carrier.context.direction() != CommandDirection::Client {
+            return Err(BINDING);
+        }
+        let ceiling = self
+            .client_start
+            .map_or(ceiling, |previous| previous.clamp(ceiling));
+        self.lane.adapter.authority.constrain_bootstrap(ceiling)?;
+        self.client_start = Some(ceiling);
+        Ok(())
+    }
+
     pub(super) async fn start_client(&mut self) -> Result<()> {
         if self.carrier.context.direction() != CommandDirection::Client {
             return Err(BINDING);
@@ -505,7 +733,14 @@ impl Bootstrap {
             permit.release_after_reap();
             return Err(error);
         }
-        let opened = Owner::open_bound(self.exchange, self.signing, self.lane, connector).await;
+        let opened = Owner::open_bound(
+            self.exchange,
+            self.signing,
+            self.lane,
+            connector,
+            self.client_start,
+        )
+        .await;
         let owner = match opened {
             Ok(owner) => owner,
             Err(failure) => {

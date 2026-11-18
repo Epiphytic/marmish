@@ -14,6 +14,7 @@ const ENTROPY: Error = Error::Invalid("terminal_bootstrap_entropy");
 pub(crate) struct Time {
     pub(crate) unix: u64,
     pub(crate) monotonic: Instant,
+    pub(crate) continuous: Option<Duration>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,7 +37,7 @@ pub(crate) struct ConfirmedTerminal {
     pub(crate) client: PublicKey,
     pub(crate) server: PublicKey,
     pub(crate) ready: RumorId,
-    pub(crate) confirmed_at: Instant,
+    pub(crate) confirmed_at: Time,
 }
 
 struct Live {
@@ -45,7 +46,7 @@ struct Live {
     ids: [Option<RumorId>; 4],
     sent: [Option<Prepared>; 4],
     local_terminal: Option<Keys>,
-    confirmed_at: Option<Instant>,
+    confirmed_at: Option<Time>,
 }
 
 impl Live {
@@ -264,7 +265,7 @@ impl Exchange {
                 },
             ) if pair == expected && own == client_key && codec.fresh_terminal_key(server_key) => {
                 live.advance(verified.id, verified.body);
-                live.confirmed_at = Some(now.monotonic);
+                live.confirmed_at = Some(now);
                 return Ok(Advance::Confirmed);
             }
             _ => return Err(ORDER),
@@ -276,7 +277,7 @@ impl Exchange {
         live.advance(verified.id, verified.body);
         live.remember(prepared, response);
         if response.step() == Step::Ready {
-            live.confirmed_at = Some(now.monotonic);
+            live.confirmed_at = Some(now);
         }
         live.local_terminal = Some(local_terminal);
         Ok(Advance::Send(response.step()))

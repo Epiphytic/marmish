@@ -5,7 +5,7 @@ mod os;
 mod paths;
 #[cfg(test)]
 #[path = "terminal_supervisor.rs"]
-mod supervisor;
+pub(crate) mod supervisor;
 
 use crate::{Error, Result};
 use std::ffi::OsString;

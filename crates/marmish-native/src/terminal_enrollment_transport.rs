@@ -40,7 +40,7 @@ enum AuthoritySource {
     Command(Arc<AttachmentFence>),
 }
 
-pub(super) struct Authority {
+pub(crate) struct Authority {
     generation: u64,
     source: AuthoritySource,
     retired: AtomicBool,
@@ -56,10 +56,87 @@ enum Phase {
     Attached(terminal_frames::Binding),
 }
 
+/// Absolute enrollment limits tied to the local, suspend-aware clock sample.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EnrollmentCeiling {
+    monotonic: Instant,
+    continuous: Duration,
+    observed_monotonic: Instant,
+    observed_continuous: Duration,
+}
+
+impl EnrollmentCeiling {
+    pub(crate) fn start(budget: Duration) -> Result<Self> {
+        let (monotonic, continuous) = Self::sample()?;
+        Self::captured(monotonic, continuous, budget)
+    }
+
+    pub(super) fn captured(
+        monotonic: Instant,
+        continuous: Duration,
+        budget: Duration,
+    ) -> Result<Self> {
+        Ok(Self {
+            monotonic: monotonic.checked_add(budget).ok_or(AUTHORITY)?,
+            continuous: continuous.checked_add(budget).ok_or(AUTHORITY)?,
+            observed_monotonic: monotonic,
+            observed_continuous: continuous,
+        })
+    }
+
+    pub(crate) fn clamp(self, other: Self) -> Self {
+        Self {
+            monotonic: self.monotonic.min(other.monotonic),
+            continuous: self.continuous.min(other.continuous),
+            observed_monotonic: self.observed_monotonic.max(other.observed_monotonic),
+            observed_continuous: self.observed_continuous.max(other.observed_continuous),
+        }
+    }
+
+    pub(crate) fn check(self) -> Result<()> {
+        self.deadline().map(|_| ())
+    }
+
+    pub(crate) fn deadline(self) -> Result<Instant> {
+        let (monotonic, continuous) = Self::sample()?;
+        self.deadline_at(monotonic, continuous)
+    }
+
+    pub(crate) fn continuous(self) -> Duration {
+        self.continuous
+    }
+
+    fn sample() -> Result<(Instant, Duration)> {
+        let monotonic = Instant::now();
+        let continuous = crate::command_limits::continuous_time().map_err(|_| AUTHORITY)?;
+        Ok((monotonic, continuous))
+    }
+
+    fn deadline_at(self, monotonic: Instant, continuous: Duration) -> Result<Instant> {
+        if monotonic < self.observed_monotonic || continuous < self.observed_continuous {
+            return Err(AUTHORITY);
+        }
+        let monotonic_remaining = self
+            .monotonic
+            .checked_duration_since(monotonic)
+            .ok_or(Error::Timeout)?;
+        let continuous_remaining = self
+            .continuous
+            .checked_sub(continuous)
+            .ok_or(Error::Timeout)?;
+        let remaining = monotonic_remaining.min(continuous_remaining);
+        if remaining.is_zero() {
+            return Err(Error::Timeout);
+        }
+        monotonic.checked_add(remaining).ok_or(AUTHORITY)
+    }
+}
+
 struct Deadline {
     at: Instant,
     continuous: Option<Duration>,
     phase: Phase,
+    exact: Option<EnrollmentCeiling>,
 }
 
 impl Deadline {
@@ -78,10 +155,33 @@ impl Deadline {
             at,
             continuous,
             phase,
+            exact: None,
         })
     }
 
+    fn paired(ceiling: EnrollmentCeiling, phase: Phase) -> Result<Self> {
+        Ok(Self {
+            at: ceiling.deadline()?,
+            continuous: Some(ceiling.continuous()),
+            phase,
+            exact: Some(ceiling),
+        })
+    }
+
+    fn effective(&self) -> Result<Instant> {
+        match self.exact {
+            Some(ceiling) => Ok(self.at.min(ceiling.deadline()?)),
+            None => Ok(self.at),
+        }
+    }
+
     fn expired(&self) -> Result<bool> {
+        if let Some(ceiling) = self.exact {
+            return match ceiling.check() {
+                Err(Error::Timeout) => Ok(true),
+                result => result.map(|_| false),
+            };
+        }
         if Instant::now() >= self.at {
             return Ok(true);
         }
@@ -106,6 +206,7 @@ impl Authority {
                 at: deadline,
                 continuous: None,
                 phase: Phase::Bootstrap,
+                exact: None,
             }),
             grant: OnceLock::new(),
         })
@@ -137,16 +238,23 @@ impl Authority {
         }
     }
 
-    pub(super) fn check(&self) -> Result<()> {
+    pub(crate) fn check(&self) -> Result<()> {
         if self.retired.load(Ordering::Acquire) || self.fence_state() == FenceState::Retired {
             self.retire();
             return Err(AUTHORITY);
         }
-        if self.deadline.lock().map_err(|_| AUTHORITY)?.expired()? {
-            self.retire();
-            return Err(Error::Timeout);
+        let expired = self.deadline.lock().map_err(|_| AUTHORITY)?.expired();
+        match expired {
+            Ok(false) => Ok(()),
+            Ok(true) => {
+                self.retire();
+                Err(Error::Timeout)
+            }
+            Err(error) => {
+                self.retire();
+                Err(error)
+            }
         }
-        Ok(())
     }
 
     pub(super) async fn wait_live(&self) -> Result<()> {
@@ -175,6 +283,30 @@ impl Authority {
         self.advance(Phase::Bootstrap, Phase::Enrollment, deadline)
     }
 
+    pub(super) fn constrain_bootstrap(&self, mut ceiling: EnrollmentCeiling) -> Result<()> {
+        self.check()?;
+        let mut active = self.deadline.lock().map_err(|_| AUTHORITY)?;
+        if active.phase != Phase::Bootstrap || active.expired()? {
+            return Err(AUTHORITY);
+        }
+        ceiling.monotonic = ceiling.monotonic.min(active.at);
+        if let Some(continuous) = active.continuous {
+            ceiling.continuous = ceiling.continuous.min(continuous);
+        }
+        if let Some(previous) = active.exact {
+            ceiling = ceiling.clamp(previous);
+        }
+        *active = Deadline::paired(ceiling, Phase::Bootstrap)?;
+        Ok(())
+    }
+
+    pub(super) fn begin_enrollment_at(&self, ceiling: EnrollmentCeiling) -> Result<()> {
+        self.advance_to(
+            Phase::Bootstrap,
+            Deadline::paired(ceiling, Phase::Enrollment)?,
+        )
+    }
+
     pub(super) fn begin_listener(&self, deadline: Instant) -> Result<()> {
         self.advance(Phase::Bootstrap, Phase::Listening, deadline)
     }
@@ -183,12 +315,20 @@ impl Authority {
         self.advance(Phase::Listening, Phase::Bootstrap, deadline)
     }
 
-    pub(super) fn begin_attachment(
+    #[cfg(test)]
+    fn begin_attachment(&self, binding: terminal_frames::Binding, deadline: Instant) -> Result<()> {
+        self.advance(Phase::Enrollment, Phase::Attached(binding), deadline)
+    }
+
+    pub(super) fn begin_attachment_at(
         &self,
         binding: terminal_frames::Binding,
-        deadline: Instant,
+        ceiling: EnrollmentCeiling,
     ) -> Result<()> {
-        self.advance(Phase::Enrollment, Phase::Attached(binding), deadline)
+        self.advance_to(
+            Phase::Enrollment,
+            Deadline::paired(ceiling, Phase::Attached(binding))?,
+        )
     }
 
     pub(super) fn permits_frames(&self, binding: terminal_frames::Binding) -> Result<()> {
@@ -206,21 +346,33 @@ impl Authority {
     }
 
     fn advance(&self, from: Phase, to: Phase, at: Instant) -> Result<()> {
+        let next = Deadline::new(at, to, matches!(self.source, AuthoritySource::Command(_)))?;
+        self.advance_to(from, next)
+    }
+
+    fn advance_to(&self, from: Phase, next: Deadline) -> Result<()> {
         self.check()?;
         let mut active = self.deadline.lock().map_err(|_| AUTHORITY)?;
-        if active.phase != from || Instant::now() >= at || self.fence_state() != FenceState::Live {
+        let transition = (|| {
+            if self.retired.load(Ordering::Acquire)
+                || self.fence_state() != FenceState::Live
+                || active.phase != from
+                || active.expired()?
+                || next.expired()?
+            {
+                return Err(AUTHORITY);
+            }
+            *active = next;
+            Ok(())
+        })();
+        if transition.is_err() {
             self.retire();
-            return Err(AUTHORITY);
         }
-        *active = Deadline::new(at, to, matches!(self.source, AuthoritySource::Command(_)))?;
-        Ok(())
+        transition
     }
 
     pub(super) fn deadline(&self) -> Result<Instant> {
-        self.deadline
-            .lock()
-            .map(|active| active.at)
-            .map_err(|_| AUTHORITY)
+        self.deadline.lock().map_err(|_| AUTHORITY)?.effective()
     }
 
     pub(super) fn retire(&self) {
@@ -254,12 +406,40 @@ impl Authority {
         Ok(value)
     }
 
-    async fn wait_for_retirement<T>(&self) -> Result<T> {
+    pub(crate) async fn wait_for_retirement<T>(&self) -> Result<T> {
         loop {
             self.check()?;
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
+}
+
+#[test]
+fn enrollment_ceiling_converts_the_earliest_absolute_bound() {
+    let now = Instant::now();
+    let tick = Duration::from_secs(100);
+    let secs = Duration::from_secs;
+    let confirmed = EnrollmentCeiling::captured(now, tick, secs(30)).unwrap();
+    let earlier_start =
+        EnrollmentCeiling::captured(now - secs(20), tick - secs(25), secs(45)).unwrap();
+    let clamped = confirmed.clamp(earlier_start);
+    assert_eq!(clamped.continuous(), tick + secs(20));
+    assert_eq!(
+        clamped.deadline_at(now + secs(1), tick + secs(11)).unwrap(),
+        now + secs(10)
+    );
+    assert!(matches!(
+        clamped.deadline_at(now + secs(1), tick + secs(20)),
+        Err(Error::Timeout)
+    ));
+    assert!(matches!(
+        clamped.deadline_at(now - secs(1), tick + secs(1)),
+        Err(Error::Invalid("terminal_enrollment_authority"))
+    ));
+    assert!(matches!(
+        clamped.deadline_at(now + secs(1), tick - secs(1)),
+        Err(Error::Invalid("terminal_enrollment_authority"))
+    ));
 }
 
 #[tokio::test(start_paused = true)]
@@ -799,7 +979,19 @@ impl Lane {
         };
         let authority = self.adapter.authority.clone();
         authority
-            .run(self.read_exact(plane, &expected_id, cap))
+            .run(self.read_exact(plane, &expected_id, cap, true))
+            .await?
+            .ok_or(DISCONNECTED)
+    }
+
+    pub(super) async fn receive_queued_group(
+        &mut self,
+        subscription_id: &str,
+        cap: usize,
+    ) -> Result<Option<TransportDelivery>> {
+        let authority = self.adapter.authority.clone();
+        authority
+            .run(self.read_exact(TransportDeliveryPlane::Group, subscription_id, cap, false))
             .await
     }
 
@@ -808,17 +1000,35 @@ impl Lane {
         plane: TransportDeliveryPlane,
         subscription_id: &str,
         cap: usize,
-    ) -> Result<TransportDelivery> {
+        wait: bool,
+    ) -> Result<Option<TransportDelivery>> {
+        let mut remaining = self.staged.len() + self.incoming.as_ref().ok_or(ROUTE)?.len();
         loop {
             self.adapter.check().await?;
+            if !wait {
+                let Some(next) = remaining.checked_sub(1) else {
+                    return Ok(None);
+                };
+                remaining = next;
+            }
             let incoming = match self.staged.pop_front() {
                 Some(incoming) => incoming,
                 None => {
                     let incoming = self.incoming.as_mut().ok_or(ROUTE)?;
-                    tokio::select! {
-                        biased;
-                        retired = self.adapter.authority.wait_for_retirement::<Incoming>() => retired?,
-                        value = incoming.recv() => value.ok_or(DISCONNECTED)?,
+                    if wait {
+                        tokio::select! {
+                            biased;
+                            retired = self.adapter.authority.wait_for_retirement::<Incoming>() => retired?,
+                            value = incoming.recv() => value.ok_or(DISCONNECTED)?,
+                        }
+                    } else {
+                        match incoming.try_recv() {
+                            Ok(incoming) => incoming,
+                            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => return Ok(None),
+                            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                                return Err(DISCONNECTED);
+                            }
+                        }
                     }
                 }
             };
@@ -869,7 +1079,7 @@ impl Lane {
                 self.acknowledge(&delivery.message.id).await;
                 continue;
             }
-            return Ok(delivery);
+            return Ok(Some(delivery));
         }
     }
 

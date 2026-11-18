@@ -54,7 +54,7 @@ pub(crate) struct Size {
 }
 
 impl Size {
-    fn valid(self) -> bool {
+    pub(crate) fn valid(self) -> bool {
         (2..=250).contains(&self.rows) && (2..=500).contains(&self.cols)
     }
 }
@@ -175,7 +175,7 @@ pub(crate) struct Arrival {
 pub(crate) struct Admitted {
     binding: Binding,
     direction: Direction,
-    record: Record,
+    pub(crate) record: Record,
     received: Duration,
     deadline: Duration,
 }

@@ -3,6 +3,10 @@
 mod guard;
 #[path = "terminal_live_supervisor_io.rs"]
 mod io;
+#[path = "terminal_selection.rs"]
+pub(crate) mod selection;
+#[path = "terminal_selection_wire.rs"]
+mod selection_wire;
 #[path = "terminal_live_supervisor_tests.rs"]
 mod tests;
 

@@ -1,6 +1,6 @@
 //! Test-gated local terminal registry and sole owner of PTY effects.
 #[path = "terminal_live_supervisor.rs"]
-mod live;
+pub(crate) mod live;
 #[path = "terminal_live_supervisor_recovery.rs"]
 mod recovery;
 #[path = "terminal_supervisor_store.rs"]

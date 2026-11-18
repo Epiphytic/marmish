@@ -23,6 +23,7 @@ const FRAME_LIMIT: usize = 64 * 1024;
 const MAX_CONNECTIONS: usize = 16;
 const MAX_SUBSCRIPTIONS: usize = 16;
 const MAX_PUBLICATIONS: usize = 128;
+const MAX_OBSERVATIONS: usize = 512;
 
 #[derive(Clone, Copy, Eq, PartialEq, Default)]
 pub(super) enum Mode {
@@ -63,13 +64,17 @@ struct State {
     duplicate_acks: usize,
     ordinary: BTreeSet<PublicKey>,
     connections: BTreeMap<usize, Connection>,
+    publication_limit: Option<usize>,
     publications: Vec<Event>,
     observations: Vec<Observation>,
 }
 
 impl State {
     fn observe(&mut self, observation: Observation) {
-        assert!(self.observations.len() < 512, "relay transcript bound");
+        let limit = self
+            .publication_limit
+            .map_or(MAX_OBSERVATIONS, |limit| limit * 4);
+        assert!(self.observations.len() < limit, "relay transcript bound");
         self.observations.push(observation);
     }
 
@@ -96,7 +101,7 @@ impl State {
                 self.observe(Observation::WriteBytes(event.id, text_bytes));
             }
             assert!(
-                self.publications.len() < MAX_PUBLICATIONS,
+                self.publications.len() < self.publication_limit.unwrap_or(MAX_PUBLICATIONS),
                 "relay event bound"
             );
             for peer in self.connections.values() {
@@ -476,6 +481,12 @@ impl Relay {
         }
     }
 
+    pub(super) fn allow_multi_room_workload(&self) {
+        let mut state = self.state.lock().unwrap();
+        assert!(state.publications.is_empty());
+        state.publication_limit = Some(2 * MAX_PUBLICATIONS);
+    }
+
     pub(super) fn acknowledge_duplicates(&self) {
         self.state.lock().unwrap().acknowledge_duplicates = true;
     }
@@ -575,6 +586,15 @@ impl Relay {
             !self.task.is_finished(),
             "loopback relay stopped unexpectedly"
         );
+    }
+
+    pub(super) fn assert_no_plaintext(&self, marker: &[u8]) {
+        let state = self.state.lock().unwrap();
+        assert!(!state.publications.is_empty());
+        for event in &state.publications {
+            let json = serde_json::to_vec(event).unwrap();
+            assert!(!json.windows(marker.len()).any(|window| window == marker));
+        }
     }
 
     pub(super) fn ordinary(&self, account: PublicKey) {

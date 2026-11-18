@@ -2,7 +2,9 @@
 use super::*;
 use crate::mdk_adapter::terminal_enrollment::Owner as TerminalOwner;
 use crate::mdk_adapter::terminal_enrollment_transport::{Authority, Lane as TerminalLane};
-use crate::mdk_adapter::terminal_live_enrollment::{InboundState, RoomPermit, admit};
+use crate::mdk_adapter::terminal_live_enrollment::{
+    AttachedRoom, EnrollmentCeiling, InboundState, RoomPermit, admit,
+};
 use crate::terminal_bootstrap::state::{Advance, Exchange, Time};
 use crate::terminal_bootstrap::{BoundSigning, Codec, Role, Step};
 use crate::terminal_fence::AttachmentFence;
@@ -16,6 +18,7 @@ fn clock() -> Time {
     Time {
         unix: now().unwrap(),
         monotonic: std::time::Instant::now(),
+        continuous: None,
     }
 }
 
@@ -248,6 +251,7 @@ async fn prove_enrollment(verified: bool, revoke_before_join: bool) {
     let server_grant = Arc::new(AtomicU64::new(1));
     let client_grant = Arc::new(AtomicU64::new(1));
     let start = Instant::now();
+    let client_start = EnrollmentCeiling::start(Duration::from_secs(25)).unwrap();
     let mut reserved = None;
     let mut live_fence = None;
     let mut admitted = None;
@@ -294,6 +298,9 @@ async fn prove_enrollment(verified: bool, revoke_before_join: bool) {
             .await
             .unwrap();
         relay.acknowledge_duplicates();
+        client_bootstrap
+            .constrain_client_start(client_start)
+            .unwrap();
         client_bootstrap.start_client().await.unwrap();
         client_bootstrap.retry_probe().await.unwrap();
         assert_eq!(relay.duplicate_acks(), 1);
@@ -461,7 +468,7 @@ async fn prove_enrollment(verified: bool, revoke_before_join: bool) {
     assert_eq!(tserver.ready().await.unwrap(), digest);
 
     let bytes: Vec<u8> = (0..=u8::MAX).cycle().take(frames::MAX_DATA).collect();
-    let mut attached = None;
+    let mut attached: Option<(AttachedRoom, AttachedRoom)> = None;
     let original_deadline = verified.then(|| {
         tclient
             .alias_adapter
@@ -472,34 +479,115 @@ async fn prove_enrollment(verified: bool, revoke_before_join: bool) {
     });
     let binding = if let Some((client, server)) = admitted.take() {
         let granted = || server_grant.load(Ordering::Acquire) == 1;
-        let (client, server) = tokio::try_join!(client.ready(&|| true), server.ready(&granted))
-            .expect("move-only continuations after native ClientHello");
-        let lease = Instant::now() + Duration::from_secs(90);
-        let now = Instant::now();
+        let (mut client, mut server) =
+            tokio::try_join!(client.ready(&|| true), server.ready(&granted))
+                .expect("move-only continuations after native ClientHello");
+        let lease = EnrollmentCeiling::start(Duration::from_secs(90)).unwrap();
+        let expired = EnrollmentCeiling::start(Duration::ZERO).unwrap();
+        assert_eq!(
+            client.admission_ceiling().continuous(),
+            client_start.continuous()
+        );
         let writer_generation = NonZeroU64::new(17).unwrap();
-        let client_claim = client.fake_writer_claim([3; 16], writer_generation, lease);
-        let server_claim = server.fake_writer_claim([3; 16], writer_generation, lease);
-        assert!(client.validate_claim(&server_claim, now).is_err());
-        assert!(server.validate_claim(&client_claim, now).is_err());
-        assert!(client.validate_claim(&client_claim, lease).is_err());
+        let client_binding = client.binding().clone();
+        let server_binding = server.binding().clone();
+        assert_eq!(
+            client_binding.native.local_leaf,
+            server_binding.native.peer_leaf
+        );
+        assert_eq!(
+            server_binding.native.local_leaf,
+            client_binding.native.peer_leaf
+        );
+        assert_ne!(
+            client_binding.native.local_leaf,
+            client_binding.native.peer_leaf
+        );
+        assert_eq!(client_binding.local_terminal, server_binding.peer_terminal);
+        assert_eq!(client_binding.peer_terminal, server_binding.local_terminal);
         assert!(
             client
-                .validate_claim(
-                    &client.fake_writer_claim([0; 16], writer_generation, lease),
-                    now
-                )
+                .check_proof_binding(&server_binding, [3; 16], lease)
                 .is_err()
         );
-        let (client, server) = tokio::try_join!(
-            client.select(client_claim, &|| true),
-            server.select(server_claim, &granted)
+        assert!(
+            server
+                .check_proof_binding(&client_binding, [3; 16], lease)
+                .is_err()
+        );
+        assert!(
+            client
+                .check_proof_binding(&client_binding, [3; 16], expired)
+                .is_err()
+        );
+        assert!(
+            client
+                .check_proof_binding(&client_binding, [0; 16], lease)
+                .is_err()
+        );
+        // An authenticated pending app must be visible to the selection
+        // owner at its non-waiting frontier, before frame permission exists.
+        assert!(
+            server
+                .try_receive_selection(&granted)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let pending = frames::encode_app(
+            &client_binding.local_terminal,
+            now().unwrap(),
+            frames::Binding {
+                transcript: client_binding.transcript,
+                attachment: [3; 16],
+                generation: writer_generation.get(),
+                role: frames::Role::Writer,
+            },
+            frames::Direction::ToServer,
+            &frames::Record::Ordered(1, frames::Data::Input(vec![0x8f])),
         )
-        .expect("one-shot Writer handoff");
-        let binding = client.frames;
-        assert_eq!(server.frames.transcript, binding.transcript);
-        assert_eq!(server.frames.attachment, binding.attachment);
-        assert_eq!(server.frames.generation, writer_generation.get());
-        assert_eq!(server.frames.generation, binding.generation);
+        .unwrap();
+        client
+            .send_selection(pending.clone(), &|| true)
+            .await
+            .unwrap();
+        let pending_app = timeout(STEP, async {
+            loop {
+                if let Some(app) = server.try_receive_selection(&granted).await.unwrap() {
+                    break app;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the exact queued application reaches selection");
+        assert_eq!(
+            pending_app.sender_leaf_index,
+            server_binding.native.peer_leaf
+        );
+        assert_eq!(pending_app.bytes, pending);
+        let (client, server) = tokio::try_join!(
+            client.attach_enrollment_proof(
+                &client_binding,
+                [3; 16],
+                writer_generation,
+                lease,
+                &|| true
+            ),
+            server.attach_enrollment_proof(
+                &server_binding,
+                [3; 16],
+                writer_generation,
+                lease,
+                &granted
+            )
+        )
+        .expect("isolated enrollment frame proof handoff");
+        let binding = client.frame_binding();
+        assert_eq!(server.frame_binding().transcript, binding.transcript);
+        assert_eq!(server.frame_binding().attachment, binding.attachment);
+        assert_eq!(server.frame_binding().generation, writer_generation.get());
+        assert_eq!(server.frame_binding().generation, binding.generation);
         attached = Some((client, server));
         binding
     } else {
@@ -510,11 +598,6 @@ async fn prove_enrollment(verified: bool, revoke_before_join: bool) {
             role: frames::Role::Writer,
         }
     };
-    let (tclient, tserver) = match (&mut attached, &mut legacy) {
-        (Some((client, server)), None) => (client.owner_mut(), server.owner_mut()),
-        (None, Some((client, server))) => (client, server),
-        _ => unreachable!(),
-    };
     let mut elapsed = vec![];
     for sequence in 1..=4 {
         for direction in [frames::Direction::ToServer, frames::Direction::FromServer] {
@@ -524,26 +607,24 @@ async fn prove_enrollment(verified: bool, revoke_before_join: bool) {
             {
                 tokio::time::sleep_until(deadline + Duration::from_millis(50)).await;
             }
-            let (sender, receiver, data) = match direction {
-                frames::Direction::ToServer => (
-                    &mut *tclient,
-                    &mut *tserver,
-                    frames::Data::Input(bytes.clone()),
-                ),
-                frames::Direction::FromServer => (
-                    &mut *tserver,
-                    &mut *tclient,
-                    frames::Data::Output(bytes.clone()),
-                ),
+            let to_server = direction == frames::Direction::ToServer;
+            let data = if to_server {
+                frames::Data::Input(bytes.clone())
+            } else {
+                frames::Data::Output(bytes.clone())
             };
-            let author: [u8; 32] = sender
-                .room
-                .lane
-                .adapter
-                .account
-                .as_slice()
-                .try_into()
-                .unwrap();
+            let author = match (&attached, &legacy) {
+                (Some((client, server)), None) => {
+                    if to_server { client } else { server }
+                        .binding()
+                        .local_terminal
+                }
+                (None, Some((client, server))) => {
+                    let sender = if to_server { client } else { server };
+                    sender.room.terminal_accounts().unwrap().0
+                }
+                _ => unreachable!(),
+            };
             let payload = frames::encode_app(
                 &author,
                 now().unwrap(),
@@ -553,8 +634,32 @@ async fn prove_enrollment(verified: bool, revoke_before_join: bool) {
             )
             .unwrap();
             let started = Instant::now();
-            sender.send_frame(binding, payload.clone()).await.unwrap();
-            let delivered = receiver.receive_frame(binding).await.unwrap();
+            let delivered = match (&mut attached, &mut legacy) {
+                (Some((client, server)), None) => {
+                    let (sender, receiver) = if to_server {
+                        (client, server)
+                    } else {
+                        (server, client)
+                    };
+                    sender.send_frame(payload.clone()).await.unwrap();
+                    let delivered = receiver.receive_frame().await.unwrap();
+                    assert_eq!(
+                        delivered.sender_leaf_index,
+                        receiver.binding().native.peer_leaf
+                    );
+                    delivered
+                }
+                (None, Some((client, server))) => {
+                    let (sender, receiver) = if to_server {
+                        (client, server)
+                    } else {
+                        (server, client)
+                    };
+                    sender.send_frame(binding, payload.clone()).await.unwrap();
+                    receiver.receive_frame(binding).await.unwrap()
+                }
+                _ => unreachable!(),
+            };
             elapsed.push(started.elapsed().as_micros());
             assert_eq!(delivered.bytes, payload);
             assert!(
@@ -580,15 +685,27 @@ async fn prove_enrollment(verified: bool, revoke_before_join: bool) {
         );
         run_command(&mut client, &mut server, &command, &cat).await;
         baseline = (durable_state(&client_peer), durable_state(&server_peer));
-        assert_eq!(tclient.ready().await.unwrap(), digest);
-        assert_eq!(tserver.ready().await.unwrap(), digest);
+        let (client, server) = attached.as_ref().unwrap();
+        for endpoint in [client, server] {
+            endpoint.check_live().await.unwrap();
+            assert_eq!(endpoint.binding().transcript, digest);
+        }
     }
     server_grant.store(2, Ordering::Release);
     if let Some(fence) = live_fence.as_ref() {
         revoke(fence);
     }
-    assert!(tserver.receive_frame(binding).await.is_err());
-    assert!(tserver.send_frame(binding, vec![0]).await.is_err());
+    match (&mut attached, &mut legacy) {
+        (Some((_, server)), None) => {
+            assert!(server.receive_frame().await.is_err());
+            assert!(server.send_frame(vec![0]).await.is_err());
+        }
+        (None, Some((_, server))) => {
+            assert!(server.receive_frame(binding).await.is_err());
+            assert!(server.send_frame(binding, vec![0]).await.is_err());
+        }
+        _ => unreachable!(),
+    }
     let mut exact_ids = Vec::new();
     for (account, kind, tag, value, id) in &subscriptions {
         assert_eq!(relay.subscription_counts(*account, *kind, tag, value).0, 1);
@@ -748,3 +865,6 @@ async fn refuses_incomplete_auth_and_retires_lost_exact_wss_source() {
 fn revoke(fence: &AttachmentFence) {
     fence.retire();
 }
+
+#[path = "terminal_selection_wss_tests.rs"]
+mod selection_proof;

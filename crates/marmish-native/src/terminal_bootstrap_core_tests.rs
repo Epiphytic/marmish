@@ -43,6 +43,7 @@ fn clock() -> Time {
     Time {
         unix: NOW,
         monotonic: Instant::now(),
+        continuous: None,
     }
 }
 
@@ -423,6 +424,7 @@ fn unlinked_skipped_restarted_and_revoked_exchanges_never_confirm() {
     let expired = Time {
         unix: NOW + 30,
         monotonic: time.monotonic + Duration::from_secs(30),
+        continuous: None,
     };
     assert!(
         server

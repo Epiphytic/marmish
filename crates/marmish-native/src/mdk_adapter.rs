@@ -3098,10 +3098,9 @@ pub(crate) mod trust_tests;
 #[path = "terminal_memory_proof_tests.rs"]
 mod terminal_memory_proof_tests;
 
-
 #[cfg(test)]
 #[path = "terminal_live_enrollment.rs"]
-mod terminal_live_enrollment;
+pub(crate) mod terminal_live_enrollment;
 
 #[cfg(test)]
 #[path = "terminal_enrollment.rs"]

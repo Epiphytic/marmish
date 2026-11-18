@@ -2,8 +2,9 @@
 
 This increment turns the [scoped room proof](terminal-room-enrollment.md)
 into a callable enrollment owner under the
-[interactive roadmap](interactive-peers-roadmap.md). It covers direct WSS admission to a
-fresh native room and an exclusive, verified continuation for selection.
+[interactive roadmap](interactive-peers-roadmap.md). It covers direct WSS
+admission to a fresh native room and an exclusive, verified continuation
+for selection.
 The Command actor supplies verified bindings, the local daemon supplies
 attachment selections, and the supervisor owns tmux. Those integrations
 remain separate. The first qualification uses private deterministic TLS,

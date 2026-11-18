@@ -1,6 +1,6 @@
 //! Private owner for one authenticated, non-resumable Terminal enrollment.
 use super::terminal_enrollment_room::{App, HeldWelcome, OpenFailure, Room, entropy, unix_now};
-use super::terminal_enrollment_transport::{Authority, GuardedAdapter, Lane};
+use super::terminal_enrollment_transport::{Authority, EnrollmentCeiling, GuardedAdapter, Lane};
 use super::*;
 use crate::terminal_bootstrap::enrollment::{
     Capability, ENROLLMENT_LIFETIME, OUTER_CAP, Package, Plan, RETENTION, Record, fresh,
@@ -60,9 +60,11 @@ pub(super) struct Owner {
     alias: Option<Lane>,
     pub(super) alias_adapter: GuardedAdapter,
     alias_watch: Option<AliasWatch>,
+    alias_detach: Option<tokio::task::JoinHandle<Result<()>>>,
     alias_detached: bool,
     pub(super) room: Room,
     stage: Stage,
+    ceiling: Option<EnrollmentCeiling>,
 }
 
 struct AliasWatch {
@@ -85,7 +87,7 @@ impl Owner {
         room_connector: RelayConnector,
     ) -> Result<Self> {
         let signer = BoundSigning::from_codec(exchange.enrollment_codec()?, signer)?;
-        Self::open_bound(exchange, signer, alias, room_connector)
+        Self::open_bound(exchange, signer, alias, room_connector, None)
             .await
             .map_err(|failure| failure.error)
     }
@@ -95,21 +97,32 @@ impl Owner {
         signer: BoundSigning,
         alias: Lane,
         room_connector: RelayConnector,
+        outer: Option<EnrollmentCeiling>,
     ) -> std::result::Result<Self, OpenFailure> {
         let authority = alias.adapter.authority.clone();
         let prepare = async {
             alias.adapter.check().await?;
             let confirmed = exchange.take_terminal(clock()?, authority.check().is_ok())?;
-            let deadline = confirmed.confirmed_at + Duration::from_secs(ENROLLMENT_LIFETIME);
-            authority.begin_enrollment(Instant::from_std(deadline))?;
+            let confirmed_at = Instant::from_std(confirmed.confirmed_at.monotonic);
+            let lifetime = Duration::from_secs(ENROLLMENT_LIFETIME);
+            let ceiling = if alias.is_verified() {
+                let continuous = confirmed.confirmed_at.continuous.ok_or(ORDER)?;
+                let ceiling = EnrollmentCeiling::captured(confirmed_at, continuous, lifetime)?;
+                let ceiling = outer.map_or(ceiling, |outer| ceiling.clamp(outer));
+                authority.begin_enrollment_at(ceiling)?;
+                Some(ceiling)
+            } else {
+                authority.begin_enrollment(confirmed_at.checked_add(lifetime).ok_or(ORDER)?)?;
+                None
+            };
             let codec = exchange.enrollment_codec()?;
             if alias.adapter.account.as_slice() != codec.inbound_alias().public_key().to_bytes() {
                 return Err(ORDER);
             }
-            Ok(confirmed)
+            Ok((confirmed, ceiling))
         };
-        let confirmed = match prepare.await {
-            Ok(confirmed) => confirmed,
+        let (confirmed, ceiling) = match prepare.await {
+            Ok(prepared) => prepared,
             Err(error) => {
                 authority.retire();
                 return Err(OpenFailure {
@@ -151,10 +164,16 @@ impl Owner {
             alias_adapter: alias.adapter.clone(),
             alias: Some(alias),
             alias_watch: None,
+            alias_detach: None,
             alias_detached: false,
             room,
             stage: Stage::Start,
+            ceiling,
         })
+    }
+
+    pub(super) fn admission_ceiling(&self) -> Result<EnrollmentCeiling> {
+        self.ceiling.ok_or(ORDER)
     }
 
     pub(super) async fn offer(&mut self) -> Result<usize> {
@@ -418,10 +437,11 @@ impl Owner {
     pub(super) async fn close(self) -> Result<()> {
         self.authority().retire();
         let alias = async {
-            match (self.alias, self.alias_watch) {
-                (Some(lane), None) => lane.close().await,
-                (None, Some(watch)) => watch.stop().await?.close().await,
-                (None, None) if self.alias_detached => Ok(()),
+            match (self.alias, self.alias_watch, self.alias_detach) {
+                (Some(lane), None, None) => lane.close().await,
+                (None, Some(watch), None) => watch.stop().await?.close().await,
+                (None, None, Some(detach)) => detach.await.map_err(|_| ORDER)?,
+                (None, None, None) if self.alias_detached => Ok(()),
                 _ => Err(ORDER),
             }
         };
@@ -430,8 +450,18 @@ impl Owner {
     }
 
     pub(super) async fn detach_alias(&mut self) -> Result<()> {
-        let lane = self.alias_watch.take().ok_or(ORDER)?.stop().await?;
-        lane.detach_alias().await?;
+        let Stage::Ready { .. } = &self.stage else {
+            return Err(ORDER);
+        };
+        let watcher = self.alias_watch.take().ok_or(ORDER)?;
+        // Preserve join ownership if the selecting endpoint drops its
+        // handoff future while the alias is retiring.
+        let detach = self.alias_detach.insert(tokio::spawn(async move {
+            watcher.stop().await?.detach_alias().await
+        }));
+        let result = detach.await.map_err(|_| ORDER);
+        self.alias_detach = None;
+        result??;
         self.alias_detached = true;
         self.authority().check()
     }
@@ -575,6 +605,7 @@ fn clock() -> Result<Time> {
     Ok(Time {
         unix: unix_now()?,
         monotonic: std::time::Instant::now(),
+        continuous: None,
     })
 }
 

@@ -318,7 +318,7 @@ fn attached(outcome: StartOutcome) -> AdmittedTerminal {
     }
 }
 
-async fn event(claim: &mut AdmittedTerminal) -> Event {
+pub(super) async fn event(claim: &mut AdmittedTerminal) -> Event {
     timeout(seconds(5), async {
         loop {
             if let Some(event) = claim.try_event() {
@@ -331,7 +331,7 @@ async fn event(claim: &mut AdmittedTerminal) -> Event {
     .expect("native event deadline")
 }
 
-async fn send_input(claim: &AdmittedTerminal, mut operation: Operation) {
+pub(super) async fn send_input(claim: &AdmittedTerminal, mut operation: Operation) {
     loop {
         assert!(
             native_now() < operation.deadline,

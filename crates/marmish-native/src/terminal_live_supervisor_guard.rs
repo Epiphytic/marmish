@@ -33,16 +33,12 @@ struct TimeState {
     started: Sample,
     observed: Sample,
     renewed: Duration,
+    lifetime: Duration,
 }
 
 impl TimeState {
     fn next(&self) -> Option<Duration> {
-        Some(
-            self.started
-                .continuous
-                .checked_add(LIFETIME)?
-                .min(self.renewed.checked_add(IDLE)?),
-        )
+        Some(self.lifetime.min(self.renewed.checked_add(IDLE)?))
     }
 
     fn observe(&mut self, at: Sample) -> Option<Reason> {
@@ -56,7 +52,7 @@ impl TimeState {
         }
         self.observed = at;
         if at.continuous >= self.next().unwrap_or_default() {
-            return Some(if traveled >= LIFETIME {
+            return Some(if at.continuous >= self.lifetime {
                 Reason::Budget
             } else {
                 Reason::Idle
@@ -72,16 +68,26 @@ pub(super) struct Source {
     command: Arc<AttachmentFence>,
     stopped: AtomicU8,
     local: Mutex<Option<TimeState>>,
+    ceiling: Option<Duration>,
 }
 
 impl Source {
     pub(super) fn new(id: SourceId, command: Arc<AttachmentFence>) -> Arc<Self> {
+        Self::with_ceiling(id, command, None)
+    }
+
+    pub(super) fn with_ceiling(
+        id: SourceId,
+        command: Arc<AttachmentFence>,
+        ceiling: Option<Duration>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             id,
             command_generation: command.generation(),
             command,
             stopped: AtomicU8::new(0),
             local: Mutex::new(None),
+            ceiling,
         })
     }
 
@@ -109,11 +115,21 @@ impl Source {
         }
         match self.check() {
             GuardResult::Applied(()) => {
+                let Some(lifetime) = self.ceiling.or_else(|| at.continuous.checked_add(LIFETIME))
+                else {
+                    self.stop(Reason::Clock);
+                    return GuardResult::Retired(Reason::Clock);
+                };
+                if lifetime <= at.continuous {
+                    self.stop(Reason::Budget);
+                    return GuardResult::Retired(Reason::Budget);
+                }
                 *state = Some(TimeState {
                     claim,
                     started: at,
                     observed: at,
                     renewed: at.continuous,
+                    lifetime,
                 });
                 GuardResult::Applied(())
             }

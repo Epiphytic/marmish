@@ -8,6 +8,7 @@ fn clock() -> Time {
     Time {
         unix: now().unwrap(),
         monotonic: std::time::Instant::now(),
+        continuous: None,
     }
 }
 

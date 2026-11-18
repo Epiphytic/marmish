@@ -37,7 +37,10 @@ qualifies the live ownership fence in a local WSS fixture with native membership
 and protected route changes. The [Command-backed direct WSS
 enrollment](validation/terminal-live-enrollment.md) further qualifies exact
 NIP-42 and subscription readiness, volatile room and bounded source handoff,
-and ordinary Command traffic alongside the resulting Terminal room.
+and ordinary Command traffic alongside the resulting Terminal room. The
+[writer selection proof](validation/terminal-writer-selection.md) exercises
+Default, New, Busy, reattach and revocation on Linux x86_64 with a private
+WSS relay and tmux.
 Installed Terminal admission, reattach,
 inbound Peer invitations and network heartbeat remain in development.
 The [Peer aggregate ingress proof](validation/peer-aggregate-ingress-proof.md)
