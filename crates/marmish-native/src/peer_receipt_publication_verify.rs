@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use cgka_traits::{
-    FanoutMlsState, FanoutTargetStatus, GroupId, GroupLifecycleState, MessageStorage,
-    OutboundFanout, StorageError, TransportAdapter, TransportPublishRequest,
+    FanoutMlsState, FanoutTargetStatus, GroupId, GroupLifecycleState, OutboundFanout,
+    OutboundFanoutStorage, StorageError, TransportAdapter, TransportPublishRequest,
     TransportPublishTarget,
     app_components::{NOSTR_ROUTING_COMPONENT_ID, decode_nostr_routing_v1},
 };
