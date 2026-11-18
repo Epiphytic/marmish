@@ -248,12 +248,18 @@ After displaying exact origin and pin, require the exact TTY confirmation
 affirms both authorization to run the probe and the displayed
 attestation. Its trust root is the local owner, with no unrecognized
 signer or free-form waiver.
-Start a monotonic 30-second total I/O window after confirmation, at most
-three active sockets, two reconnects, 64 protocol frames and 2 MiB of
-combined traffic. Exercise the required probe suite above; timings and
+Start a monotonic 30-second total I/O window after confirmation. Admit
+exactly four opens in order for a completed probe. The first three use
+different disposable principals (writer, unauthorized outsider, and
+recipient), followed by one fresh reconnect as the recipient. Hold
+at most one active client socket and finish or drop it before the next
+open. Enforce the total-open and reconnect budget in the probe as well
+as at most 64 protocol frames and 2 MiB of combined traffic. Exercise the required probe suite above; timings and
 budgets may be narrowed but cannot silently skip required cases. Negative
-proof requires an authenticated explicit refusal or valid EOSE with the
-exact negative scope and independently corroborated positive marker.
+proof requires the exact refusal class for that operation or, for an
+authenticated request that omits its scope tag, an empty EOSE after
+independent exact positive history on the same socket. Report fixed local
+probe-check categories without including relay response text.
 Timeout, disconnect or an untrusted response is not negative evidence.
 Recheck local file, trusted time and exact profile after the window.
 Write no qualification on refusal or partial evidence. Use a versioned
