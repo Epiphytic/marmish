@@ -70,7 +70,10 @@ impl Actor {
                 let Ok(runtime) = Builder::new_current_thread().enable_all().build() else {
                     return final_exit(&forwarding, Exit::WorkerFailed);
                 };
-                runtime.block_on(run(worker, &lease, &material, registration, &worker_stop))
+                let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    runtime.block_on(run(worker, &lease, &material, registration, &worker_stop))
+                }));
+                final_exit(&forwarding, result.unwrap_or(Exit::WorkerFailed))
             })?;
         Ok(Self {
             stop,
@@ -165,13 +168,13 @@ async fn run(
     let Some(ready) = ready else {
         return final_exit(&forwarding, Exit::Stopped);
     };
-    let mut fence = StartupFence {
+    let fence = StartupFence {
         ready,
         stop,
         forwarding: &forwarding,
         fatal: &fatal,
     };
-    let result = attach(lease, material, registration, &mut fence).await;
+    let result = attach(lease, material, registration, fence).await;
     final_exit(&forwarding, result.unwrap_or_else(|exit| exit))
 }
 
@@ -179,14 +182,14 @@ async fn attach(
     lease: &Arc<ProfileLease>,
     material: &IdentityMaterial,
     registration: RegisteredReceiver,
-    fence: &mut StartupFence<'_>,
+    mut fence: StartupFence<'_>,
 ) -> Result<Exit, Exit> {
     let mut attached = fence.step(|| registration.attach(lease, material))?;
     let (quota, mut route) = attached.actor_parts();
     let mut owner =
         fence.step(|| RecoveredOwner::open_registered(lease, material, quota, &mut route))?;
     let wall = fence.step(|| SystemTime::now().duration_since(UNIX_EPOCH))?;
-    fence.step(|| owner.reconcile_startup(wall.as_secs()))?;
+    fence.step(|| owner.reconcile_startup(lease, quota, wall.as_secs()))?;
 
     let token = match fence.step(|| route.take_route(lease, material)) {
         Ok(token) => token,
@@ -198,10 +201,10 @@ async fn attach(
     let result = match ReceiverRouteAdmission::registered(token) {
         Ok((admission, drain)) => {
             let result = futures_util::FutureExt::catch_unwind(AssertUnwindSafe(hold_port(
-                admission, &mut owner, fence,
+                admission, &mut owner, &mut fence,
             )))
             .await;
-            revoke_and_reap(&route, &drain).await;
+            revoke_and_reap(fence.ready, &route, &drain).await;
             result.unwrap_or(Exit::WorkerFailed)
         }
         Err(_) => {
@@ -253,7 +256,12 @@ async fn hold_port(
     }
 }
 
-async fn revoke_and_reap(route: &ReceiverRouteControl<'_, '_>, drain: &PeerSocketDrain) {
+async fn revoke_and_reap(
+    ready: Ready,
+    route: &ReceiverRouteControl<'_, '_>,
+    drain: &PeerSocketDrain,
+) {
+    drop(ready);
     route.revoke();
     while drain.reap(Instant::now() + DRAIN_WAIT).await.is_err() {
         // A physical reap which cannot be proved leaves this worker alive,

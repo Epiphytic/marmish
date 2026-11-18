@@ -219,8 +219,25 @@ impl<'lease> RecoveredOwner<'lease> {
         Ok(clean)
     }
 
-    #[cfg(marmish_peer_receiver_candidate)]
-    pub(super) fn reconcile_startup(&mut self, wall: u64) -> Result<()> {
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(super) fn reconcile_startup(
+        &mut self,
+        lease: &ProfileLease,
+        quota: &ReceiverQuota<'_>,
+        wall: u64,
+    ) -> Result<()> {
+        if !self.paths.owns_lease(lease)
+            || self
+                .package_quota
+                .is_none_or(|owned| !std::ptr::eq(owned, quota))
+        {
+            return Err(Error::StageIdentityMismatch);
+        }
+        let _files = quota.receiver_files(lease).map_err(|_| Error::Path)?;
         self.recover(wall).map(|_| ())
     }
 
