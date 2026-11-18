@@ -77,3 +77,19 @@ An earlier run using a shared Cargo target directory completed the installer
 and local PTY checks but stopped at the writer selector with
 `operation_failed`. The writer passed alone in 70.10 seconds before the
 full retry. The first harness report could not identify the cause.
+
+## Observed optimized Linux x86-64 result
+
+A clean checkout of `b02b1895a4374d2bc45dc781341effff0a4d8209` built the
+optimized native binaries with Rust 1.97.1. The timed build took 549.25
+seconds. All
+three executables passed native dependency inspection at glibc 2.39.
+The local release tooling packaged them for 0.3.1 with the freshly
+collected inventory from the same lockfile.
+
+The artifact-only installer check passed in 12.775 seconds. It verified
+quickstart, identity reuse, installed executable provenance, payload
+tamper refusal, typed closed-relay daemon refusal, and cleanup of daemon
+runtime and test-owned state. This run used local assets and skipped live
+activation and Terminal fixtures. The separate private WSS evidence above
+comes from the debug build and earlier source revision.
