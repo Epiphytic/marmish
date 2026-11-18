@@ -277,7 +277,7 @@ async fn run() {
         ),
     ] {
         relay.recipient_fault(fault);
-        let outer: nostr::Event = serde_json::from_slice(delivery.frame()).unwrap();
+        let outer: nostr::event::Event = serde_json::from_slice(delivery.frame()).unwrap();
         let event_stamp = outer.created_at.as_secs();
         let rejected = recipient
             .page([event_stamp, event_stamp], time_limit())
