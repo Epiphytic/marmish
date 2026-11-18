@@ -14,44 +14,51 @@ or destructor requires another admission. The test below determines
 whether the locked upstream account opener and the true last-owner drop
 are compatible with that boundary. It does not mount the daemon.
 
-Treat each `SqliteAccountStorage::open_encrypted` as one synchronous
-body. At the caller, recheck the exact registered default immediately
-before entering it. Upstream creates private files, performs one
-rusqlite open, keys it, initializes its tables and applies migrations
-inside that body. The progress observer cannot refuse any of these
-phases. A failed upstream open returns no owner and its internal cleanup
-is part of the admitted call. On success, move the storage into custody
-before the next recheck. A refusal after a success retains that complete
-root and no reopen or Journal transaction follows. If the admitted open
-can return an unowned native handle after ordinary internal failure,
-record that separately and do not claim the path qualified.
+Treat the locked `SqliteAccountStorage::open_encrypted_observed` as one
+synchronous body. Recheck the exact registered default immediately before
+entering it. The body creates private files, opens and keys the connection,
+applies migrations, then installs the notification counter, TEMP triggers
+and connection hooks before returning. The observer cannot refuse a phase.
+The first observer callback follows the file setup and the native open.
+An upstream failure's internal cleanup stays inside the admitted call.
+On successful return place the complete root in custody before the next
+recheck. If that check refuses, keep the root and skip its normal close and
+all later Journal or runtime work. Fatal does not interrupt an admitted
+synchronous open. Busy retry and migration make time-to-park unbounded.
 
-For the existing smoke open, a test guard owns one unshared account
-root. A second recheck admits its ordinary destructor. Observe
-`database_closer().is_released()` after dropping that root, then
-independently admit the cold reopen. Use no close call when the check
-refuses. The explicit upstream checked close checkpoints and on error
-drops the returned rusqlite owner, which retries the SQLite close. In
-locked rusqlite 0.40.1 the retry is `sqlite3_close`, despite the upstream
-comment referring to `sqlite3_close_v2`. The plain last-owner drop has
-one close attempt but no returned SQLite error. `is_released` proves
-only that this path finished, so use actual file-lock closure and
-cold readback as the smoke qualification. Do not treat the marker as a
-checked SQLite close or use it to dismiss a reported failure. Review
-whether the unshared proof is enough for product startup, or an upstream
-checked no-retry close/admitted connection API is necessary.
+The startup smoke fixture controls every clone. Independently admit its
+ordinary `close()` or true last-owner drop and independently admit the
+cold reopen. Collect both outcomes. The marker `closer().is_released()`
+reports completion of the upstream close path. Establish release through
+file locks and cold readback. A close error still leaves the disposition
+uncertain. The explicit close can attempt another SQLite close through
+rusqlite Drop after an error. In locked rusqlite 0.40.1 that retry is
+`sqlite3_close`. The plain last-owner drop attempts close once and discards
+its result.
 
-For the reopened root, keep one strong root from before any native
-runtime construction through all fallible initialization. No first
-owner clone may outlive it. On observation of fatal, bind the native
-API shut with its inert `DatabaseCloser::begin_close` only, retaining the
-root so its final destructor does not run. Any other clone dropped
-under the same cut must be unable to trigger last-owner SQLite close.
-The future mount must separately prove which runtime, tasks and sockets
-are reaped before parking and must retain the original lease. Late
-returned native results cannot publish availability or success. Do not
-add a new runtime, fork dependency, SQL path, SQLite registration, or
-public MDK interface in Marmish for this proof.
+The reopened root lives in custody before passing its first clone into any
+fallible runtime construction. Reaching fatal uses the inert
+`DatabaseCloser::begin_close` and leaves a strong root parked until process
+exit. That prevents an anonymous clone from becoming the final owner.
+The upstream ordinary connection lock refuses new guards after
+`begin_close`. Existing guards can finish and internal
+`try_lock_idle` deliberately ignores the closed flag. Stop task admission
+at the Marmish boundary and prove that owned tasks and physical sockets
+finish before parking. Late native results must be discarded. Independently
+admit ordinary `close()` from the custody owner, then verify a later
+anonymous clone drop has no SQLite effect. Preserve the exact original lease.
+
+The installed startup inventory starts at `MdkOwner::open`. Marmish calls
+`AccountDeviceRuntime::open` with `SessionConfig::with_storage`. Its
+`SessionStorage::Open` arm reuses the supplied account connection, including
+the engine and maintenance clone. The alternate `Path` arm opens a separate
+connection and is outside this call. Marmish constructs its key-package
+publisher, relay transport and routing directly. Neither `marmot-app` nor
+`nostr-directory` is a native workspace dependency. The production mount
+must still inventory exact dynamic SQLite roots, including any upstream
+sibling open and host Journal, Terminal, Command, and recipient stores.
+A root with an unguarded open or close cannot be included on the evidence
+of the account fixture.
 
 ## Qualification
 
@@ -63,9 +70,15 @@ its independent close, and after smoke close but before independent
 reopen. For the re-opened root, demonstrate that a real fence cut and
 `begin_close` cause a retained clone to refuse new database access,
 then park the last root without advancing its release marker. Exercise
-real displacement while an open is inside an admitted upstream progress
-callback, to prove the result is suppressed and its native owner
-retained if it returns. Capture exact close/open/source observations
+real displacement before the first progress callback by performing it in
+the dispatcher's intercepted native open, and again during the admitted
+upstream progress callback. Prove the caller suppresses the result and
+holds native custody if the upstream open returns a root. Observe VFS open,
+write, delete and sync separately, attributing any ordinary checkpoint to
+the admitted close. Cover explicit close with a surviving clone and prove
+later drop has no file effects. Identify or exercise the held-guard and
+sibling-connection limits through the inspected upstream contracts. Capture
+exact close/open/source observations
 without logging paths or secrets. Keep stock behaviour unchanged.
 Claude reviews this design and the observed limits before production
 mounting is allowed.
