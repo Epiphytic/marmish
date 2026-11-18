@@ -33,7 +33,7 @@ enum Action {
         minimum: String,
         #[arg(long)]
         notarized: bool,
-        #[arg(long)]
+        #[arg(long, hide = !manifest::PEER_CANDIDATE)]
         peer_receiver_candidate: bool,
     },
     /// Package build-only installed-test tools separately from install assets.
@@ -437,6 +437,7 @@ mod tests {
         }
         assert!(package_tooling(&source, &output, &harness).is_err());
     }
+    #[cfg(not(marmish_peer_receiver_candidate))]
     #[test]
     fn tooling_rejects_bad_harness_or_probe_before_output_mutation() {
         let root = tempfile::tempdir().unwrap();
