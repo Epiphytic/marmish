@@ -14,6 +14,10 @@ mod pages;
 #[path = "peer_cursor_retry.rs"]
 mod retry;
 
+#[cfg(test)]
+#[path = "peer_consent_checkpoint.rs"]
+mod consent_checkpoint;
+
 pub(crate) use pages::{Page, ScanStart, ServiceTurn, Turn};
 pub(crate) use retry::{Auth, Metadata, RetryFinding, TrustedOutcome};
 
