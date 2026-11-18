@@ -33,3 +33,22 @@ The reviewers inspected exact tracked Markdown and current Consent, cursor,
 port and custody source. The author verified `git diff --check` and the
 document digest. The design used read-only source inspection. No runtime
 code, build, or relay test was part of this review.
+
+## Cursor transaction increment
+
+Claude Code Auto (`claude-sonnet-5-5`, session
+`6c37a21b-a9a2-41a9-bf14-c95a620815bb`) approved exact integrated source
+`a0a68d799b7c9d3d78de4a752799c19566689d3e`. The cursor pages, retry and
+test files are byte-identical to author source `09d617ba19f30f80c6dea7d19975003bfb17cc9f`.
+The author source and its test follow-up were independently approved in Auto
+sessions `f0f50eca-15d8-4f09-b9fd-0ca938e6ab05` and
+`7b167a6b-3a5a-4620-b2ce-e854a16cb18c`.
+
+The integrated review checked callback placement, SQL rollback, quarantine
+and stale receipts, unchanged default methods, and the absence of
+new ingress or a runtime mount. The reviewer ran the archived author
+binary. The author rebuilt and reran the same suite on the integrated
+checkout, then confirmed both executables had the same digest.
+[Integrated validation](../validation/peer-installed-delivery-cursor.md)
+records the exact results. The Delivery owner callback and WSS remain
+separate.
