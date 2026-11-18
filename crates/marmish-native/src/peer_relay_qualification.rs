@@ -1040,7 +1040,7 @@ mod tests {
                 .lease
                 .root()
                 .join(MANAGED_ATTESTATION.to_str().unwrap()),
-            &bytes,
+            &serde_json::to_vec(&checked.data).unwrap(),
         );
     }
 
