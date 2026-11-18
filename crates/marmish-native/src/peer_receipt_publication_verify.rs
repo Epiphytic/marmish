@@ -213,7 +213,8 @@ pub(crate) fn confirm<'a>(
     let (Step::Armed { number } | Step::Uncertain { number }) = publication.step() else {
         return Err(Refusal::Binding);
     };
-    let (evidence, _) = accepted(recipient, image, publication, number, wall)?;
+    let (evidence, fanout) = read(recipient, image, publication, wall)?;
+    accepted_application(&evidence, &fanout, number)?;
     Ok(ConfirmedReceipt(evidence))
 }
 
@@ -230,25 +231,26 @@ pub(crate) fn acknowledge_published(
     let Step::Published { number } = publication.step() else {
         return Err(Refusal::Binding);
     };
-    let (_, application) = accepted(recipient, image, publication, number, wall)?;
-    recipient
-        .acknowledge_published_app_messages(&[application])
-        .map_err(|_| Refusal::Storage)?;
+    if publication.candidate().is_none() || publication.attempt_wall().is_none() {
+        return Err(Refusal::Binding);
+    }
+    // MDK deletes the fanout after local acknowledgement. The checked native
+    // group and durable Published row still authorize an idempotent no-op.
+    let Some((evidence, fanout)) = read_optional(recipient, image, publication, wall)? else {
+        return Ok(());
+    };
+    let application = accepted_application(&evidence, &fanout, number)?;
+    recipient.acknowledge_published_app_messages(&[application])?;
     Ok(())
 }
 
-fn accepted<'a>(
-    recipient: &AccountDeviceRuntime<
-        impl TransportAdapter,
-        impl TransportRoutingPolicy,
-        impl KeyPackagePublisher,
-    >,
-    image: &Path,
-    publication: &'a Publication,
+fn accepted_application(
+    evidence: &Evidence<'_>,
+    fanout: &OutboundFanout,
     number: u8,
-    wall: u64,
-) -> Result<(Evidence<'a>, PublishedApplicationMessage), Refusal> {
-    let (evidence, fanout) = read(recipient, image, publication, wall)?;
+) -> Result<PublishedApplicationMessage, Refusal> {
+    let publication = evidence.publication;
+    let wall = evidence.observed_at;
     let outcome = fanout.outcome();
     if publication.candidate() != Some(evidence.binding)
         || fanout.target_statuses() != [FanoutTargetStatus::Accepted]
@@ -263,7 +265,7 @@ fn accepted<'a>(
     let accepted = fanout
         .first_acceptance_observation()
         .ok_or(Refusal::Binding)?;
-    if !ordered_attempt(publication, &fanout, wall)
+    if !ordered_attempt(publication, fanout, wall)
         || fanout
             .target_last_attempt_at_ms(0)
             .is_none_or(|attempted| accepted.at_ms < attempted)
@@ -272,18 +274,15 @@ fn accepted<'a>(
         return Err(Refusal::Binding);
     }
     let application = fanout.application_message().ok_or(Refusal::Binding)?;
-    Ok((
-        evidence,
-        PublishedApplicationMessage {
-            publication_observation: Some(accepted),
-            app_event_id: application.app_event_id.clone(),
-            group_id: application.group_id.clone(),
-            message_id: outcome.message_id,
-            source_epoch: application.source_epoch,
-            retention: application.retention,
-            authority: application.authority,
-        },
-    ))
+    Ok(PublishedApplicationMessage {
+        publication_observation: Some(accepted),
+        app_event_id: application.app_event_id.clone(),
+        group_id: application.group_id.clone(),
+        message_id: outcome.message_id,
+        source_epoch: application.source_epoch,
+        retention: application.retention,
+        authority: application.authority,
+    })
 }
 
 fn read<'a>(
@@ -296,6 +295,19 @@ fn read<'a>(
     publication: &'a Publication,
     wall: u64,
 ) -> Result<(Evidence<'a>, OutboundFanout), Refusal> {
+    read_optional(recipient, image, publication, wall)?.ok_or(Refusal::Binding)
+}
+
+fn read_optional<'a>(
+    recipient: &AccountDeviceRuntime<
+        impl TransportAdapter,
+        impl TransportRoutingPolicy,
+        impl KeyPackagePublisher,
+    >,
+    image: &Path,
+    publication: &'a Publication,
+    wall: u64,
+) -> Result<Option<(Evidence<'a>, OutboundFanout)>, Refusal> {
     if wall >= publication.deadline() {
         return Err(Refusal::Expired);
     }
@@ -317,7 +329,7 @@ fn read<'a>(
         .group_authority_view()
         .with_group_authority_snapshot(
             &group,
-            |storage, snapshot| -> Result<OutboundFanout, Refusal> {
+            |storage, snapshot| -> Result<Option<OutboundFanout>, Refusal> {
                 let pin = recipient.epoch_pin(&group).map_err(|_| Refusal::Storage)?;
                 let expected = publication.source_pin();
                 if snapshot.lifecycle != GroupLifecycleState::Stable
@@ -355,14 +367,18 @@ fn read<'a>(
                 }
                 let mut fanouts = storage.list_outbound_fanouts()?;
                 fanouts.retain(|entry| entry.group_id() == Some(&group));
-                let [fanout] =
-                    <[OutboundFanout; 1]>::try_from(fanouts).map_err(|_| Refusal::Binding)?;
-                Ok(fanout)
+                if fanouts.len() > 1 {
+                    return Err(Refusal::Binding);
+                }
+                Ok(fanouts.pop())
             },
         )?;
-    let (request, binding) = read_request(publication, &group, &fanout)?;
     check_image(image, inode).map_err(|_| Refusal::Binding)?;
-    Ok((
+    let Some(fanout) = fanout else {
+        return Ok(None);
+    };
+    let (request, binding) = read_request(publication, &group, &fanout)?;
+    Ok(Some((
         Evidence {
             publication,
             request,
@@ -370,7 +386,7 @@ fn read<'a>(
             observed_at: wall,
         },
         fanout,
-    ))
+    )))
 }
 
 fn ordered_attempt(publication: &Publication, fanout: &OutboundFanout, wall: u64) -> bool {
