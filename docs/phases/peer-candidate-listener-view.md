@@ -102,9 +102,19 @@ Check that a stock build cannot use PeerRead. Add an exact synthetic test view i
 to verify the positive wire path mechanically. Qualifying the
 application's Pending and Empty proof still requires the actual actor
 and its real v2 and capped SQLCipher tests, with no installed synthetic
-constructor. Confirm candidate source and tests with
-`CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="--cfg marmish_peer_receiver_candidate"`
-and `--target x86_64-unknown-linux-gnu`. Run stock checks without the
-extra cfg, and verify the build-script refusal for a non-x86_64 Linux
-target and for macOS. Run the existing view, readiness and IPC tests. Obtain Claude Auto code review
-before publishing this slice.
+constructor. Run the candidate checks from the intended clean commit, with
+the explicit 40-character nonzero Git object ID and the ordinary feature
+set. Leave `installed-checks` disabled.
+
+```sh
+MARMISH_BUILD_COMMIT="$(git rev-parse HEAD)" \
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="--cfg marmish_peer_receiver_candidate" \
+  cargo test --locked -p marmish-native --lib --target x86_64-unknown-linux-gnu
+```
+
+Run stock checks with no candidate cfg. Run the compiled build script
+directly with `CARGO_CFG_MARMISH_PEER_RECEIVER_CANDIDATE=1`, the same
+`MARMISH_BUILD_COMMIT`, and `TARGET=aarch64-unknown-linux-gnu` and
+`TARGET=aarch64-apple-darwin` in separate invocations. Both must refuse
+before dependency compilation. Run the existing view, readiness and
+IPC tests. Obtain Claude Auto code review before publishing this slice.
