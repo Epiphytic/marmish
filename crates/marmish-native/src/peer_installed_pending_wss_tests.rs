@@ -440,8 +440,8 @@ async fn run_recipient(
             );
             let ingest = std::time::Instant::now();
             let polls = if scenario == "capacity" {
-                let original = home.join("peer/provisional-unknown.db");
-                let known = home.join("peer/provisional-known.db");
+                let original = lease.root().join("peer/provisional-unknown.db");
+                let known = lease.root().join("peer/provisional-known.db");
                 let bytes = fs::read(&original).unwrap();
                 let stage = fs::metadata(&original).unwrap();
                 let charge = stage.len().max(stage.blocks() * 512);
