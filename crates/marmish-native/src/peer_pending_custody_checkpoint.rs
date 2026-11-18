@@ -449,6 +449,7 @@ impl HeldEvidence {
         }
         #[cfg(not(test))]
         {
+            // The installed candidate schema has no Active publication inventory.
             false
         }
     }

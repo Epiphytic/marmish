@@ -1293,6 +1293,7 @@ pub(crate) struct JoinTurn<'a> {
         marmish_peer_receiver_candidate
     )
 ))]
+#[must_use = "check the native result or recover from durable JoinStarted"]
 pub(crate) struct ClosedJoin {
     pub(crate) result: std::result::Result<(), StageError>,
     #[cfg(test)]
