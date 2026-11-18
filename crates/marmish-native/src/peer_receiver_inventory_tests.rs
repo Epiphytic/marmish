@@ -295,6 +295,89 @@ fn managed_rollback_rechecks_measured_extents_inodes_and_sidecars() {
     );
 }
 
+#[test]
+#[ignore = "opt-in independent process owns the registered receiver paths"]
+fn measured_clean_turn_reserves_and_rechecks_exact_copy() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let fixture = Fixture::at(&root, None, true);
+    let (owner, _, _) = start_original(&fixture, 8192);
+    drop(owner);
+    drop(fixture);
+    run_recovery_child(&root, "clean-turn", 0);
+}
+
+fn clean_turn_child(
+    owner: &mut RecoveredOwner<'_>,
+    lease: &Arc<ProfileLease>,
+    now: u64,
+    fence: &TurnFence<'_>,
+) {
+    let quota = ReceiverQuota::bind_receiver(lease).unwrap();
+    let second = ReceiverQuota::bind_receiver(lease).unwrap();
+    let inventory = owner.recover(now).unwrap();
+    let Class::Identified { binding, main } = inventory.classes[1] else {
+        panic!("fixture clean stage missing");
+    };
+    let turn = clean::CleanFiles::begin(owner, &quota, lease, binding, fence).unwrap();
+    assert!(turn.files().matches_quota(&quota));
+    assert!(!turn.files().matches_quota(&second));
+    assert!(second.receiver_files(lease).is_err());
+    let original = turn
+        .original_permit(owner, fence)
+        .unwrap()
+        .verify(turn.files(), false)
+        .unwrap();
+    assert_eq!(original.identity, main.identity);
+    assert_eq!(original.logical, main.logical);
+    assert_eq!(original.charged, main.charged);
+    assert_eq!(original.charged_other, inventory.charged - main.logical + 1);
+    assert!(turn.snapshot_path(main.logical - 1).is_err());
+    let path = turn.snapshot_path(main.logical).unwrap();
+    let copied = write_extent(path, main.logical);
+    let copy = (
+        u64::from_be_bytes(copied.device),
+        u64::from_be_bytes(copied.inode),
+    );
+    assert!(turn.original_permit(owner, fence).is_err());
+    assert!(turn.snapshot_permit(owner, main.identity, fence).is_err());
+    let permit = turn.snapshot_permit(owner, copy, fence).unwrap();
+    assert!(permit.verify(turn.files(), false).is_none());
+    let measured = permit.verify(turn.files(), true).unwrap();
+    assert_eq!(measured.logical, main.logical);
+    assert_eq!(measured.identity, copy);
+    assert_eq!(measured.charged_other, inventory.charged + 1);
+    turn.snapshot_closed(owner, copy, fence).unwrap();
+    assert!(turn.finish(owner, fence, true).is_err());
+    let replica = OpenOptions::new().write(true).open(path).unwrap();
+    replica.set_len(main.logical + 4096).unwrap();
+    assert!(turn.snapshot_permit(owner, copy, fence).is_err());
+    turn.snapshot_closed(owner, copy, fence).unwrap();
+    replica.set_len(main.logical).unwrap();
+    drop(replica);
+
+    // Raise the other family's physical/logical charge after reserving, but
+    // before opening the copy. Its sparse logical extent needs no large write.
+    let neighbor = path.with_file_name("provisional-known.db");
+    let residual = TOTAL_ADMISSION - inventory.charged - main.logical;
+    write_extent(&neighbor, residual);
+    assert!(turn.snapshot_permit(owner, copy, fence).is_err());
+    assert!(turn.snapshot_closed(owner, copy, fence).is_err());
+    fs::remove_file(&neighbor).unwrap();
+    fs::remove_file(path).unwrap();
+    turn.finish(owner, fence, true).unwrap();
+    drop(turn);
+
+    write_extent(&neighbor, residual);
+    let near_full = clean::CleanFiles::begin(owner, &quota, lease, binding, fence).unwrap();
+    assert!(near_full.snapshot_path(main.logical).is_err());
+}
+
 const RECOVERY_CHILD: &str = "peer_invitation::receiver_inventory::tests::managed_recovery_child";
 const RECOVERY_MODE: &str = "MARMISH_TEST_MANAGED_RECOVERY";
 const RECOVERY_ROOT: &str = "MARMISH_TEST_MANAGED_RECOVERY_ROOT";
@@ -505,6 +588,14 @@ fn managed_recovery_child() {
         return;
     }
 
+    if mode == "clean-turn" {
+        let wall = Wall::Fixture(f.wall);
+        let ticks = AtomicU64::new(0);
+        let stopped = AtomicBool::new(false);
+        let fence = TurnFence::new(&wall, &stopped, Some(&ticks), f.now, f.now + 3).unwrap();
+        clean_turn_child(&mut owner, &lease, f.now, &fence);
+        return;
+    }
     if mode == "oversized-journal" {
         assert_eq!(inventory.classes[1], Class::Fenced);
         assert!(inventory.charged >= TOTAL_ADMISSION);

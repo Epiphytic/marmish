@@ -4,7 +4,8 @@ use std::{num::NonZeroU64, sync::Arc};
 use storage_sqlite::SqlCipherKey;
 
 use crate::peer_quota_vfs::dispatch::{
-    CLOSED_STAGE_LIMIT, ReceiverQuota, RecoveryRequest, TOTAL_ADMISSION, local_volume,
+    CLOSED_STAGE_LIMIT, ReceiverFiles, ReceiverQuota, RecoveryRequest, TOTAL_ADMISSION,
+    local_volume,
 };
 
 use super::paths::{
@@ -61,6 +62,10 @@ struct CleanExtent {
     main: FileExtent,
     charged_other: u64,
 }
+
+#[path = "peer_receiver_clean_charge.rs"]
+mod clean;
+pub(crate) use clean::CleanPermit;
 
 impl<'lease> RecoveredOwner<'lease> {
     fn open(lease: &'lease ProfileLease, material: &IdentityMaterial, relay: &str) -> Result<Self> {
@@ -121,6 +126,7 @@ impl<'lease> RecoveredOwner<'lease> {
             return Err(Error::StageIdentityMismatch);
         }
         let quota = ReceiverQuota::bind_receiver(lease).map_err(|_| Error::Path)?;
+        let _files = quota.receiver_files(lease).map_err(|_| Error::Path)?;
         let before = self.recover(fence.wall()?)?;
         let Class::JournalCandidate {
             binding,
@@ -138,12 +144,11 @@ impl<'lease> RecoveredOwner<'lease> {
             return Err(Error::StageIdentityMismatch);
         }
         let generation = NonZeroU64::new(generation).ok_or(Error::StageIdentityMismatch)?;
-        let charged_other = before
-            .charged
-            .checked_sub(main.logical)
-            .and_then(|n| n.checked_sub(journal.logical))
-            .and_then(|n| n.checked_add(1))
+        let active_logical = main
+            .logical
+            .checked_add(journal.logical)
             .ok_or(Error::Path)?;
+        let charged_other = clean::other_charge(before.charged, active_logical)?;
         let files = RollbackFiles::open(&self.paths, main, journal)?;
         let key = SqlCipherKey::raw(*self.paths.provisional_key(exact));
         quota
@@ -166,12 +171,17 @@ impl<'lease> RecoveredOwner<'lease> {
     }
 
     fn recover(&mut self, wall: u64) -> Result<Inventory> {
+        let (charges, files) = self.observe(wall)?;
+        Inventory::calculate(charges, files)
+    }
+
+    fn observe(&mut self, wall: u64) -> Result<([Option<Charge>; 2], clean::ObservedFiles)> {
         // SQLCipher can inspect a hot journal when it takes a new lock.
         // Refuse unexpected cursor sidecars before giving it that chance.
         inspect(&self.paths, &self.cursor)?;
         let charges = self.checkpoint.receiver_charges(&self.source, wall)?;
         let files = inspect(&self.paths, &self.cursor)?;
-        Inventory::calculate(charges, files)
+        Ok((charges, files))
     }
 }
 
@@ -186,11 +196,7 @@ impl Inventory {
         // Keep other families, the fixed cursor reservation, and physically
         // allocated excess for this active main. The VFS counts its logical
         // bytes itself. Reserve one byte to preserve the strict aggregate cap.
-        let charged_other = self
-            .charged
-            .checked_sub(main.logical)
-            .and_then(|value| value.checked_add(1))
-            .ok_or(Error::Path)?;
+        let charged_other = clean::other_charge(self.charged, main.logical)?;
         Ok(CleanExtent {
             main,
             charged_other,

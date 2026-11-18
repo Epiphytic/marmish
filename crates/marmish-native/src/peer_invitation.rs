@@ -38,6 +38,8 @@ mod receiver_inventory;
 pub(crate) use paths::retirement::recovery::RollbackFiles;
 #[cfg(test)]
 pub(crate) use prepared_consent::leave_owner::{LeaveSnapshot, TurnFence};
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use receiver_inventory::CleanPermit;
 #[cfg(test)]
 #[path = "peer_private_wss_tests.rs"]
 mod private_wss_tests;

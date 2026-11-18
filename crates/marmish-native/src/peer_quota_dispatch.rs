@@ -236,6 +236,27 @@ impl ReceiverQuota<'_> {
     }
 
     #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn receiver_files(&self, lease: &ProfileLease) -> Result<ReceiverFiles<'_>> {
+        if !ptr::eq(self.lease, lease) {
+            return Err("dispatch_reservation_owner");
+        }
+        let lock = self
+            .dispatch
+            .file_turn
+            .try_lock()
+            .map_err(|_| "dispatch_owner_busy")?;
+        let paths = self.dispatch.checked_paths(self.lease)?;
+        if paths.receiver.is_none() {
+            return Err("dispatch_receiver_owner");
+        }
+        Ok(ReceiverFiles {
+            quota: self,
+            snapshot: &paths.mains[SNAPSHOT],
+            _lock: lock,
+        })
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
     pub(crate) fn recover_unknown(
         &self,
         exact: RecoveryRequest<'_>,
@@ -770,6 +791,75 @@ impl<'a> ProfileSlots<'a> {
         let result = operation.run(binding.path);
         self.finish(&turn)?;
         Ok(result)
+    }
+}
+
+/// The existing file exclusion, restricted to the checked receiver role.
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) struct ReceiverFiles<'a> {
+    quota: &'a ReceiverQuota<'a>,
+    snapshot: &'a Path,
+    _lock: std::sync::MutexGuard<'a, ()>,
+}
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+impl ReceiverFiles<'_> {
+    pub(crate) fn snapshot(&self) -> &Path {
+        self.snapshot
+    }
+
+    pub(crate) fn matches_quota(&self, quota: &ReceiverQuota<'_>) -> bool {
+        ptr::eq(self.quota, quota)
+    }
+
+    fn snapshot_native<T>(
+        &self,
+        permit: crate::peer_invitation::CleanPermit<'_>,
+        run: impl FnOnce(&Path) -> Result<T>,
+    ) -> Result<T> {
+        let measured = permit
+            .verify(self, true)
+            .ok_or("dispatch_reservation_owner")?;
+        self.quota.dispatch.checked_paths(self.quota.lease)?;
+        let path = self.snapshot;
+        let stat = path
+            .symlink_metadata()
+            .map_err(|_| "dispatch_stage_extent")?;
+        let allocated = stat
+            .blocks()
+            .checked_mul(512)
+            .ok_or("dispatch_stage_extent")?;
+        if stat.len() != measured.logical || stat.len().max(allocated) != measured.charged {
+            return Err("dispatch_stage_extent");
+        }
+        let mut turn = self.quota.admit(Reservation {
+            owner: self.quota,
+            class: SlotClass::Snapshot,
+            generation: measured.generation,
+            witness: measured.identity,
+            charged_other: measured.charged_other,
+            crash_after_database_write: false,
+        })?;
+        turn.enter()?;
+        let result = run(path);
+        turn.finish()?;
+        result
+    }
+
+    pub(crate) fn prepare_join(
+        &self,
+        permit: crate::peer_invitation::CleanPermit<'_>,
+        operation: JoinTurn<'_>,
+    ) -> Result<std::result::Result<(), StageError>> {
+        self.snapshot_native(permit, |path| Ok(operation.prepare(path)))
+    }
+
+    pub(crate) fn read_join(
+        &self,
+        permit: crate::peer_invitation::CleanPermit<'_>,
+        operation: JoinTurn<'_>,
+    ) -> Result<std::result::Result<JoinedAuthority, StageError>> {
+        self.snapshot_native(permit, |path| Ok(operation.read(path)))
     }
 }
 
