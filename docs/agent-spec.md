@@ -1462,3 +1462,10 @@ recovery, expiration and ordinary commands during a separate Peer relay
 outage. Peer IPC and its bootstrap are available only inside tests. The
 installed invitation CLI, room activation, telemetry and platform
 qualification have separate acceptance criteria.
+
+The [isolated PostJoin proof](validation/peer-postjoin-publication-proof.md)
+recovers the same signed commit after SQLCipher reopen. The founder processes
+that exact relay event and reaches the recipient's staged epoch and
+authenticator before the recipient records confirmation. A duplicate leaves
+the founder at the same pin. This fixture uses an in-process delivery sink.
+Private WSS activation and installed Peer authorization remain later phases.
