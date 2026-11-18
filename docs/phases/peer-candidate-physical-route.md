@@ -13,7 +13,14 @@ split the attached `ReadyReceiverScope`, `CheckedDirectories`,
 `ForwardingVerifier` and `ReceiverQuota` from the checked route. The
 attached registration holds that route as `Option<CheckedPeerRoute>` and
 borrows the original `IdentityMaterial` for the same ownership interval
-as the lease. No API rebinds the route or resets its qualification clock.
+as the lease. Change `RegisteredReceiver::attach<'lease>(self,
+lease: &'lease Arc<ProfileLease>, material: &'lease IdentityMaterial)` to
+store that exact borrow as `LocalReceiverRegistration<'lease>::material:
+&'lease IdentityMaterial`. There is one lifetime, already bounded by the
+lease. Each local check requires `std::ptr::eq(self.material, material)`.
+An unused caller-supplied material cannot replace the prepared reference.
+Initial attach verifies the original issuer MAC and route account and slot.
+No API rebinds the route or resets its qualification clock.
 The retained `ForwardingVerifier::recheck_default` yields
 `RegistrationFailure::Indeterminate` on sticky registry refusal.
 `ReceiverQuota::recheck_registered_lease` checks the exact attached lease,
@@ -37,7 +44,11 @@ has this order.
 4. On local success, take the original route out of the option. Perform
    the global check even when the local result refused. Dropping a taken
    route on global refusal cancels the token. Indeterminate has priority
-   over local refusal.
+   over local refusal. Use a private test-only callback parameter on the
+   shared inner take method immediately after the result of the local check
+   and `Option::take`, before the final verification. Ordinary calls use
+   an empty callback in test builds. The parameter and call are absent
+   in non-test builds.
 5. Only after the second global check succeeds, mint the one-use token
    with the taken route and signer from the checked material.
 
@@ -52,7 +63,7 @@ the port even if retained by a mistaken caller.
 Define `RegisteredRoute` in `candidate_registration` with private fields.
 Its `into_parts` is visible only within `crate::peer_relay_trust`. The
 test and explicit Linux AMD64 candidate path consumes it through
-`ReceiverRouteAdmission::registered` inside `peer_physical_route`, which
+`pub(crate) ReceiverRouteAdmission::registered` inside `peer_physical_route`, which
 checks the signer/account binding. No fixture or caller-supplied origin,
 signer or trust chain creates this token. Compile a temporary privacy probe
 outside that module to verify the private construction and verify the
@@ -60,8 +71,8 @@ candidate excludes the test-only admission.
 
 Keep the existing typed `PeerRecipientPort::open`, using the qualified
 relay origin and TLS trust, NIP-42 exchange, and live EOSE. Share the
-existing `use_current_recipient` observation with the explicit Linux AMD64
-candidate so an actor checks live scope after returning from open. The
+existing `use_current_recipient` observation with
+`all(any(test, marmish_peer_receiver_candidate), linux, x86_64)` so an actor checks live scope after returning from open. The
 existing stock port gates stay intact. The global registry lock is never
 held across the asynchronous open. The actor owns the post-open
 local/global and live checks as well as the readiness and remaining startup
@@ -81,8 +92,10 @@ second route or evidence retirement.
 
 Use a fresh child per isolated case through the existing authenticated
 route test module under `peer_invitation`. Create the private WSS TLS
-relay and disposable identities in the child. Use a Manual variant of
-`qualified_control_fixture` with `from_ready_configured`, actual
+relay and disposable identities in the child. Define and re-export the
+test-only `pub(crate) qualified_manual_recipient_fixture` through
+`peer_physical_route` and `peer_relay_trust`. This wraps the existing
+private `qualified_control_fixture` with `from_ready_configured`, actual
 qualification with its 90-second record window, and subsequent
 `acquire_ready`. This setup issues the qualification files. The route
 comes from actual receiver preflight and registration.
@@ -104,6 +117,16 @@ comes from actual receiver preflight and registration.
 - The displacement case combines real global default replacement with
   local config drift before attempting take. Require typed Indeterminate,
   no admission, no recipient requests and no relay publish attempt.
+- In the existing isolated `candidate_registration` subprocess harness,
+  test both bracket edges with direct access to the shared cancellation
+  token. Displace the global default before take with simultaneous local
+  drift and assert typed Indeterminate while the token remains uncancelled.
+  In another fresh process, use the private test callback to displace
+  the real default exactly after a successful local check has moved the
+  route, before the second verifier. Assert typed Indeterminate, no
+  issued admission, and cancellation from dropping the taken route. The
+  bracket harness uses the existing static qualification records. The
+  separate real WSS displacement case verifies no network side effects.
 - Run default and explicit-candidate compiler/Clippy checks and the
   focused registered handoff, existing physical route and registration
   selectors. Candidate code has the sealed construction path and keeps
