@@ -18,6 +18,26 @@ Twenty serial shell turns each requested 1,024 printable ASCII bytes and a uniqu
 
 These figures describe local receipt and acknowledgment, on this single-host serial workload, with measurement pacing included in display rate. Physical display completion, internet transport, stalled observers, warm writer and takeover attachment distributions, and raw TLS wire throughput require separate measurements. The paired latency percentiles and relative role ordering describe this run.
 
+## Shell-installed Linux AMD64 package
+
+The same fixture ran in a debug test controller against the
+[checksum-verified optimized package](mdk-master-3548.md#optimized-linux-installer-and-private-terminal)
+from source `d091cc8`, installed using `scripts/install.sh`. The test
+controller used the package's build stamp and the exact controls test
+source `8fa94ff`. The run took 37.49 s and its first named observer
+attach reached Ready in 6.767 s. The relay accepted 321 publications.
+
+| Local reader | Timed sends | Minimum | p50 | p95 | Maximum |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Writer | 20 | 115.502 ms | 130.872 ms | 149.493 ms | 171.098 ms |
+| Observer | 20 | 91.797 ms | 112.657 ms | 132.350 ms | 141.086 ms |
+
+Both readers received 24,441 display bytes in a common 5.106 seconds,
+or 4,786 B/s, for the same 20,480-byte request workload. This includes
+2.027 seconds of pre-turn drains. The writer acknowledged 47 Output
+records and the observer acknowledged 44. This is a single run on a
+shared host, so it does not quantify the effect of compiler optimization.
+
 ## Reproduce
 
 On a supported nonroot host, build the native binaries and run the ignored report-only test in the same Cargo target:
