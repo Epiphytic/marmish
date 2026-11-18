@@ -1838,11 +1838,14 @@ mod auth_diagnostics_tests {
         ));
 
         challenged.store(true, Ordering::Release);
+        for state in [QuietObservation::Watching, QuietObservation::Inhibited] {
+            let observation = Mutex::new(state);
+            assert!(matches!(
+                classify_auth_timer(&authority, &observation, &challenged),
+                Err(Error::Timeout)
+            ));
+        }
         let observation = Mutex::new(QuietObservation::Inhibited);
-        assert!(matches!(
-            classify_auth_timer(&authority, &observation, &challenged),
-            Err(Error::Timeout)
-        ));
         authority.retire();
         assert!(matches!(
             classify_auth_timer(&authority, &observation, &challenged),
