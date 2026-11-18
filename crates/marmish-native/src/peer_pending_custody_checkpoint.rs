@@ -31,6 +31,9 @@ pub(crate) mod terminal;
 #[path = "peer_pending_terminal_schema.rs"]
 mod terminal_schema;
 
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+native_installed_pending_fixture!();
+
 #[cfg(test)]
 #[path = "peer_terminal_leave_effect.rs"]
 pub(crate) mod leave_effect;
@@ -953,6 +956,17 @@ impl Checkpoint {
         wall: u64,
         change: Change<'_>,
     ) -> Result<()> {
+        self.transition_custody_guarded(source, prior, wall, change, || Ok(()))
+    }
+
+    fn transition_custody_guarded(
+        &mut self,
+        source: &Source,
+        prior: &HeldEvidence,
+        wall: u64,
+        change: Change<'_>,
+        guard: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
         self.check_local_owner(&prior.owner)?;
         let cx = self.custody_context(source)?;
         let selector = prior.stage.0.key;
@@ -970,6 +984,7 @@ impl Checkpoint {
         if !current.same_turn(prior) {
             return Err(CursorError::Stale.into());
         }
+        guard()?;
         change.apply(&tx, &current, wall)?;
         cx.verify(&tx, wall)?;
         rows::advance_wall(&tx, wall)?;
@@ -981,6 +996,8 @@ impl Checkpoint {
 enum Change<'a> {
     Start,
     Qualify(&'a JoinedReadback),
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    QualifyInstalled(&'a InstalledJoinedReadback<'a>),
     Activate {
         proof: &'a JoinedReadback,
         automatic: bool,
@@ -1011,28 +1028,13 @@ impl Change<'_> {
             (Self::Qualify(proof), Progress::JoinStarted { started_at })
                 if exact_readback(prior, proof) && wall >= *started_at =>
             {
-                let deadline = prior.held_deadline().min(
-                    wall.checked_add(PENDING_WINDOW_SECONDS)
-                        .ok_or(CursorError::Range)?,
-                );
-                let (group, epoch, identity, leaf) = proof.coordinates();
-                writer.guard(tx, false)?;
-                tx.execute(
-                    "UPDATE peer_pending_custody
-                     SET state=2,group_id=?4,epoch_number=?5,epoch_identity=?6,own_leaf=?7,
-                         qualified_at=?3,pending_deadline=?8
-                     WHERE delivery_carrier=?1 AND generation=?2 AND state=1",
-                    params![
-                        id,
-                        generation,
-                        at,
-                        group,
-                        seconds(epoch)?,
-                        identity,
-                        leaf,
-                        seconds(deadline)?
-                    ],
-                )?
+                qualify_pending(tx, prior, wall, proof.coordinates())?
+            }
+            #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+            (Self::QualifyInstalled(proof), Progress::JoinStarted { started_at })
+                if wall >= *started_at =>
+            {
+                qualify_pending(tx, prior, wall, proof.coordinates())?
             }
             (Self::Activate { proof, automatic }, Progress::Pending { joined, .. }) => {
                 if !prior.matches_pending_readback(proof) || wall < joined.qualified_at {
@@ -1057,6 +1059,35 @@ impl Change<'_> {
         writer.guard(tx, true)?;
         Ok(())
     }
+}
+
+fn qualify_pending(
+    tx: &Transaction<'_>,
+    prior: &HeldEvidence,
+    wall: u64,
+    (group, epoch, identity, leaf): (&[u8], u64, [u8; 32], u32),
+) -> Result<usize> {
+    let deadline = prior.held_deadline().min(
+        wall.checked_add(PENDING_WINDOW_SECONDS)
+            .ok_or(CursorError::Range)?,
+    );
+    custody_schema::Writer::Update.guard(tx, false)?;
+    Ok(tx.execute(
+        "UPDATE peer_pending_custody
+         SET state=2,group_id=?4,epoch_number=?5,epoch_identity=?6,own_leaf=?7,
+             qualified_at=?3,pending_deadline=?8
+         WHERE delivery_carrier=?1 AND generation=?2 AND state=1",
+        params![
+            prior.delivery_carrier(),
+            seconds(prior.stage.0.generation.count)?,
+            seconds(wall)?,
+            group,
+            seconds(epoch)?,
+            identity,
+            leaf,
+            seconds(deadline)?
+        ],
+    )?)
 }
 
 fn exact_readback(prior: &HeldEvidence, proof: &JoinedReadback) -> bool {

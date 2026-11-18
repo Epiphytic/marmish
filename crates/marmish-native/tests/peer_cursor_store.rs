@@ -11,6 +11,22 @@ macro_rules! native_offer_ingress_fixture {
 macro_rules! native_consent_publication_fixture {
     () => {};
 }
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+macro_rules! native_installed_pending_fixture {
+    () => {
+        enum InstalledJoinedReadback<'a> {
+            Never(std::convert::Infallible, std::marker::PhantomData<&'a ()>),
+        }
+
+        impl InstalledJoinedReadback<'_> {
+            fn coordinates(&self) -> (&[u8], u64, [u8; 32], u32) {
+                match *self {
+                    Self::Never(impossible, _) => match impossible {},
+                }
+            }
+        }
+    };
+}
 #[allow(dead_code)] // This target also compiles the private production methods.
 #[path = "../src/peer_cursor_store.rs"]
 mod peer_cursor_store;

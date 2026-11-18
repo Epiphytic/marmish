@@ -124,10 +124,21 @@ impl<'lease> RecoveredOwner<'lease> {
         fence: &TurnFence<'_>,
         interrupt_after_write: bool,
     ) -> Result<CleanExtent> {
+        let quota = ReceiverQuota::bind_receiver(lease).map_err(|_| Error::Path)?;
+        self.rollback_journal(lease, &quota, exact, fence, interrupt_after_write)
+    }
+
+    fn rollback_journal(
+        &mut self,
+        lease: &ProfileLease,
+        quota: &ReceiverQuota<'_>,
+        exact: Binding,
+        fence: &TurnFence<'_>,
+        interrupt_after_write: bool,
+    ) -> Result<CleanExtent> {
         if !self.paths.owns_lease(lease) {
             return Err(Error::StageIdentityMismatch);
         }
-        let quota = ReceiverQuota::bind_receiver(lease).map_err(|_| Error::Path)?;
         let _files = quota.receiver_files(lease).map_err(|_| Error::Path)?;
         let before = self.recover(fence.wall()?)?;
         let Class::JournalCandidate {

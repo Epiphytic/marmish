@@ -5,6 +5,7 @@ use std::{
     io::{self, Read as _},
     os::unix::fs::OpenOptionsExt as _,
     ptr,
+    sync::atomic::AtomicBool,
 };
 
 use crate::{
@@ -22,6 +23,142 @@ use consent_checkpoint::{
     wire::{Delivery, StatusNegotiation},
 };
 use prepared_consent::{read_image, snapshot_inode, snapshot_sidecars};
+use socket::owner::recipient::PeerRecipientPort;
+
+pub(in crate::peer_invitation) struct PendingReceiver<'lease> {
+    owner: RecoveredOwner<'lease>,
+    native: NativePending<'lease>,
+}
+
+pub(in crate::peer_invitation) struct ArmedWelcome<'lease> {
+    held: HeldEvidence,
+    delivery: Delivery,
+    prepared: PreparedWelcome<'lease>,
+    started: JoinStarted,
+}
+
+impl<'lease> PendingReceiver<'lease> {
+    pub(in crate::peer_invitation) fn open(
+        lease: &'lease ProfileLease,
+        quota: &'lease ReceiverQuota<'lease>,
+        material: &IdentityMaterial,
+        origin: &'lease str,
+        port: &mut PeerRecipientPort,
+    ) -> Result<Self> {
+        // The only stock cursor opens after checking the managed quota binding.
+        quota.receiver_files(lease).map_err(|_| Error::Path)?;
+        let owner = port.use_current_recipient(|account, observed_origin, _| {
+            if account != material.public_key() || observed_origin != origin {
+                return Err(Error::Binding);
+            }
+            RecoveredOwner::open(lease, material, origin)
+        })??;
+        Ok(Self {
+            owner,
+            native: NativePending {
+                lease,
+                quota,
+                signer: material.signer(),
+                origin,
+            },
+        })
+    }
+
+    pub(in crate::peer_invitation) fn arm(
+        &mut self,
+        port: &mut PeerRecipientPort,
+        selector: Selector,
+        generation: u64,
+        stop: &AtomicBool,
+    ) -> Result<ArmedWelcome<'lease>> {
+        self.owner.cursor.unchanged()?;
+        let (held, delivery, wall) = self.owner.checkpoint.read_installed_join_custody(
+            &self.owner.source,
+            port,
+            selector,
+            generation,
+        )?;
+        let clock = Wall::System;
+        let fence = TurnFence::new(&clock, stop, None, wall, held.held_deadline())?;
+        let prepared = self
+            .native
+            .prepare(&mut self.owner, &held, &delivery, &fence)?;
+        fence.wall()?;
+        self.owner.cursor.unchanged()?;
+        let started = self.owner.checkpoint.start_installed_join(
+            &self.owner.source,
+            port,
+            &held,
+            &prepared,
+            self.native.quota,
+            &fence,
+        )?;
+        Ok(ArmedWelcome {
+            held,
+            delivery,
+            prepared,
+            started,
+        })
+    }
+
+    pub(in crate::peer_invitation) fn ingest(
+        &mut self,
+        port: &mut PeerRecipientPort,
+        armed: ArmedWelcome<'lease>,
+        stop: &AtomicBool,
+    ) -> Result<()> {
+        self.owner.cursor.unchanged()?;
+        let (current, delivery, wall) = self.owner.checkpoint.read_installed_join_custody(
+            &self.owner.source,
+            port,
+            Selector::from(armed.held.offer()),
+            armed.held.stage().0.coordinates().1,
+        )?;
+        if current.state() != CustodyState::JoinStarted
+            || !armed.prepared.matches(&current, &delivery)
+        {
+            return Err(Error::Binding);
+        }
+        let clock = Wall::System;
+        let fence = TurnFence::new(&clock, stop, None, wall, current.held_deadline())?;
+        self.native.join(&mut self.owner, port, &fence, armed)
+    }
+
+    pub(in crate::peer_invitation) fn qualify(
+        &mut self,
+        port: &mut PeerRecipientPort,
+        selector: Selector,
+        generation: u64,
+        stop: &AtomicBool,
+    ) -> Result<InstalledJoinedReadback<'lease>> {
+        self.owner.cursor.unchanged()?;
+        let (held, delivery, wall) = self.owner.checkpoint.read_installed_join_custody(
+            &self.owner.source,
+            port,
+            selector,
+            generation,
+        )?;
+        let deadline = held
+            .pending_deadline()
+            .unwrap_or_else(|| held.held_deadline());
+        let clock = Wall::System;
+        let fence = TurnFence::new(&clock, stop, None, wall, deadline)?;
+        let joined = self
+            .native
+            .read_joined(&mut self.owner, &held, &delivery, &fence)?;
+        fence.wall()?;
+        self.owner.cursor.unchanged()?;
+        self.owner.checkpoint.commit_installed_pending(
+            &self.owner.source,
+            port,
+            &held,
+            &joined,
+            self.native.quota,
+            &fence,
+        )?;
+        Ok(joined)
+    }
+}
 
 pub(in crate::peer_invitation) struct PreparedWelcome<'lease> {
     quota: &'lease ReceiverQuota<'lease>,
@@ -99,6 +236,10 @@ impl PreparedWelcome<'_> {
     ) -> bool {
         self.enrollment.matches(held, delivery)
     }
+
+    pub(in crate::peer_invitation) fn matches_quota(&self, quota: &ReceiverQuota<'_>) -> bool {
+        ptr::eq(self.quota, quota)
+    }
 }
 
 impl InstalledJoinedReadback<'_> {
@@ -119,28 +260,14 @@ impl InstalledJoinedReadback<'_> {
     }
 }
 
-pub(super) struct NativePending<'lease> {
+struct NativePending<'lease> {
     lease: &'lease ProfileLease,
     quota: &'lease ReceiverQuota<'lease>,
-    signer: &'lease Arc<Keys>,
+    signer: Arc<Keys>,
     origin: &'lease str,
 }
 
 impl<'lease> NativePending<'lease> {
-    pub(super) fn new(
-        lease: &'lease ProfileLease,
-        quota: &'lease ReceiverQuota<'lease>,
-        signer: &'lease Arc<Keys>,
-        origin: &'lease str,
-    ) -> Self {
-        Self {
-            lease,
-            quota,
-            signer,
-            origin,
-        }
-    }
-
     fn check(
         &self,
         owner: &RecoveredOwner<'_>,
@@ -158,7 +285,7 @@ impl<'lease> NativePending<'lease> {
         owner.cursor.unchanged()
     }
 
-    pub(super) fn prepare(
+    fn prepare(
         &self,
         owner: &mut RecoveredOwner<'_>,
         held: &HeldEvidence,
@@ -190,25 +317,29 @@ impl<'lease> NativePending<'lease> {
         })
     }
 
-    pub(super) fn join(
+    fn join(
         &self,
         owner: &mut RecoveredOwner<'_>,
-        held: &HeldEvidence,
-        delivery: &Delivery,
+        port: &mut PeerRecipientPort,
         fence: &TurnFence<'_>,
-        prepared: PreparedWelcome<'_>,
-        started: JoinStarted,
+        armed: ArmedWelcome<'_>,
     ) -> Result<()> {
-        self.check(owner, held, delivery)?;
-        if !started.matches(held)
-            || !ptr::eq(self.quota, prepared.quota)
-            || !prepared.matches(held, delivery)
+        let ArmedWelcome {
+            held,
+            delivery,
+            prepared,
+            started,
+        } = armed;
+        self.check(owner, &held, &delivery)?;
+        if !started.matches(&held)
+            || !prepared.matches_quota(self.quota)
+            || !prepared.matches(&held, &delivery)
         {
             return Err(Error::Binding);
         }
         fence.require_deadline(prepared.enrollment.deadline)?;
         let (binding, witness) = prepared.enrollment.stage;
-        let welcome = JoinWitness::new(delivery, self.origin, prepared.enrollment.package_digest)?;
+        let welcome = JoinWitness::new(&delivery, self.origin, prepared.enrollment.package_digest)?;
         let key = SqlCipherKey::raw(*owner.paths.provisional_key(binding));
         let operation = self.operation(owner, binding, &key, &welcome, fence);
         let files = CleanFiles::begin(owner, self.quota, self.lease, binding, fence)?;
@@ -217,12 +348,32 @@ impl<'lease> NativePending<'lease> {
         if original.digest()? != prepared.image {
             return Err(Error::StageIdentityMismatch);
         }
-        let result = files.files().join_original(permit, operation);
+        let result = port.use_current_recipient(|account, origin, wall| {
+            if account != self.signer.public_key()
+                || origin != self.origin
+                || wall >= prepared.enrollment.deadline
+            {
+                return Err(Error::Binding);
+            }
+            Ok(files
+                .files()
+                .join_original(permit, operation)
+                .map_err(|_| Error::Path)??)
+        })?;
         files.finish(owner, fence, false)?;
-        Ok(result.map_err(|_| Error::Path)??)
+        result?;
+        port.use_current_recipient(|account, origin, wall| {
+            if account != self.signer.public_key()
+                || origin != self.origin
+                || wall >= prepared.enrollment.deadline
+            {
+                return Err(Error::Binding);
+            }
+            Ok(())
+        })?
     }
 
-    pub(super) fn read_joined(
+    fn read_joined(
         &self,
         owner: &mut RecoveredOwner<'_>,
         held: &HeldEvidence,
@@ -238,6 +389,14 @@ impl<'lease> NativePending<'lease> {
         };
         fence.require_deadline(deadline)?;
         let (binding, witness) = enrollment.stage;
+        if held.state() == CustodyState::JoinStarted
+            && matches!(
+                owner.recover(fence.wall()?)?.classes[1],
+                Class::JournalCandidate { binding: recovered, .. } if recovered == binding
+            )
+        {
+            owner.rollback_journal(self.lease, self.quota, binding, fence, false)?;
+        }
         let welcome = JoinWitness::new(delivery, self.origin, enrollment.package_digest)?;
         let key = SqlCipherKey::raw(*owner.paths.provisional_key(binding));
         let operation = self.operation(owner, binding, &key, &welcome, fence);

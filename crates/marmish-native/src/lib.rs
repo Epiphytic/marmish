@@ -124,6 +124,14 @@ macro_rules! native_consent_publication_fixture {
         pub(in crate::peer_invitation) mod installed_settlement;
     };
 }
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+macro_rules! native_installed_pending_fixture {
+    () => {
+        #[path = "peer_installed_pending_checkpoint.rs"]
+        mod installed_pending;
+        use crate::peer_invitation::receiver_inventory::v2_pending::InstalledJoinedReadback;
+    };
+}
 #[allow(dead_code)] // Deployment qualification must precede daemon activation.
 mod peer_invitation;
 
