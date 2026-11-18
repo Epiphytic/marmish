@@ -19,7 +19,9 @@ and [ordered Terminal records](validation/terminal-frames.md) have native
 test-only WSS evidence, including exact 4 KiB records in both directions
 and durable Command profile exclusion. The [local supervisor](validation/terminal-supervisor.md)
 qualifies persistent encrypted slot state, writer and observer attachment, and
-restart recovery in Linux tmux fixtures. Remote Terminal admission, reattach,
+restart recovery in Linux tmux fixtures. The [foreground frontend](validation/terminal-frontend-tty.md)
+verifies filtered display, local input, signal cleanup and restoration
+against real Linux PTYs and tmux. Remote Terminal admission, reattach,
 inbound Peer invitations and network heartbeat remain in development.
 The [Peer aggregate ingress proof](validation/peer-aggregate-ingress-proof.md)
 qualifies one shared canonical origin in a native loopback fixture. A copy

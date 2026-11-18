@@ -53,3 +53,5 @@ jobs:
         run: cargo test --locked -p marmish-native --test peer_status_wire peer_heartbeat_core
       - name: Check local Terminal supervisor registry
         run: cargo test --locked -p marmish-native --lib core_tests_terminal_supervisor
+      - name: Check foreground Terminal byte policies
+        run: cargo test --locked -p marmish-native --test terminal_local_tmux core_tests_terminal_frontend

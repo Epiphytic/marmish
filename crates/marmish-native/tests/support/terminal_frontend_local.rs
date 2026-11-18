@@ -1,0 +1,727 @@
+//! Opt-in controlling terminal verification on an isolated process.
+#![cfg(any(target_os = "linux", target_os = "macos"))]
+
+use marmish_native::{Error, Result};
+use std::fs::File;
+use std::io::{self, Read, Write};
+use std::mem::MaybeUninit;
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
+
+#[path = "../../src/terminal_frontend.rs"]
+mod terminal_frontend;
+#[path = "../../src/terminal_frontend_display.rs"]
+mod terminal_frontend_display;
+#[path = "../../src/terminal_frontend_signals.rs"]
+mod terminal_frontend_signals;
+#[path = "../../src/terminal_frontend_tty.rs"]
+mod terminal_frontend_tty;
+#[path = "../../src/terminal_input.rs"]
+mod terminal_input;
+#[path = "../../src/terminal_output.rs"]
+mod terminal_output;
+use terminal_frontend_signals as signals;
+use terminal_frontend_tty as tty;
+
+const LIMIT: Duration = Duration::from_secs(5);
+const READY: &[u8] = b"<marmish-fixture-ready>";
+const RESUMED: &[u8] = b"<marmish-fixture-resumed>";
+const RESIZED: &[u8] = b"<marmish-fixture-resized>";
+const REFUSED: &[u8] = b"<marmish-fixture-refused>";
+const CHILD: &str = "frontend_local::terminal_frontend_child";
+const MODE: &str = "MARMISH_TERMINAL_TEST_MODE";
+const DETACH_MARKER: &[u8] = b"\r\n[marmish: detached]\r\n";
+const CHANNEL_FD: libc::c_int = 97;
+
+fn poll(fd: libc::c_int, events: libc::c_short, limit_ms: libc::c_int) -> bool {
+    let mut poll = libc::pollfd {
+        fd,
+        events,
+        revents: 0,
+    };
+    let result = unsafe { libc::poll(&mut poll, 1, limit_ms) };
+    result > 0 && poll.revents & events != 0
+}
+
+mod fixture {
+    use super::*;
+
+    pub(super) struct Pty {
+        pub(super) master: File,
+        pub(super) slave: File,
+        pub(super) captured: Vec<u8>,
+    }
+
+    impl Pty {
+        pub(super) fn new() -> Self {
+            let mut master = -1;
+            let mut slave = -1;
+            let size = libc::winsize {
+                ws_row: 37,
+                ws_col: 99,
+                ws_xpixel: 0,
+                ws_ypixel: 0,
+            };
+            assert_eq!(
+                unsafe {
+                    libc::openpty(
+                        &mut master,
+                        &mut slave,
+                        std::ptr::null_mut(),
+                        std::ptr::null(),
+                        &size,
+                    )
+                },
+                0
+            );
+            let master = unsafe { File::from_raw_fd(master) };
+            let slave = unsafe { File::from_raw_fd(slave) };
+            for file in [&master, &slave] {
+                assert_eq!(
+                    unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) },
+                    0
+                );
+            }
+            Self {
+                master,
+                slave,
+                captured: Vec::new(),
+            }
+        }
+
+        pub(super) fn attrs(&self) -> libc::termios {
+            let mut attrs = MaybeUninit::zeroed();
+            assert_eq!(
+                unsafe { libc::tcgetattr(self.slave.as_raw_fd(), attrs.as_mut_ptr()) },
+                0
+            );
+            unsafe { attrs.assume_init() }
+        }
+
+        pub(super) fn read_through(&mut self, marker: &[u8]) {
+            let start = Instant::now();
+            let start_offset = self.captured.len();
+            let mut chunk = [0; 512];
+            while start.elapsed() < LIMIT && self.captured.len() < 65536 {
+                if poll(self.master.as_raw_fd(), libc::POLLIN, 10) {
+                    let size = self.master.read(&mut chunk).unwrap();
+                    self.captured.extend_from_slice(&chunk[..size]);
+                    if self.captured[start_offset..]
+                        .windows(marker.len())
+                        .any(|window| window == marker)
+                    {
+                        return;
+                    }
+                }
+            }
+            panic!(
+                "frontend marker missing: {:?}",
+                String::from_utf8_lossy(&self.captured[start_offset..])
+            );
+        }
+
+        pub(super) fn drain_after_exit(&mut self) {
+            let mut chunk = [0; 512];
+            while self.captured.len() < 65536 && poll(self.master.as_raw_fd(), libc::POLLIN, 0) {
+                let size = self.master.read(&mut chunk).unwrap();
+                if size == 0 {
+                    break;
+                }
+                self.captured.extend_from_slice(&chunk[..size]);
+            }
+            assert!(self.captured.len() < 65536);
+        }
+
+        pub(super) fn resize(&self, rows: u16, cols: u16) {
+            let size = libc::winsize {
+                ws_row: rows,
+                ws_col: cols,
+                ws_xpixel: 0,
+                ws_ypixel: 0,
+            };
+            assert_eq!(
+                unsafe { libc::ioctl(self.master.as_raw_fd(), libc::TIOCSWINSZ, &size) },
+                0
+            );
+        }
+    }
+
+    pub(super) struct Held(Child);
+
+    impl Held {
+        pub(super) fn spawn(in_tty: &Pty, out_tty: &Pty, mode: &str) -> Self {
+            Self::spawn_inner(in_tty, out_tty, mode, None)
+        }
+
+        pub(super) fn spawn_inner(
+            in_tty: &Pty,
+            out_tty: &Pty,
+            mode: &str,
+            channel: Option<&UnixStream>,
+        ) -> Self {
+            let stdin = Stdio::from(in_tty.slave.try_clone().unwrap());
+            let stdout = Stdio::from(out_tty.slave.try_clone().unwrap());
+            let mut cmd = Command::new(std::env::current_exe().unwrap());
+            cmd.args(["--exact", CHILD, "--ignored", "--nocapture"])
+                .env_clear()
+                .env(MODE, mode)
+                .stdin(stdin)
+                .stdout(stdout)
+                .stderr(Stdio::inherit());
+            let inherited = channel.map(AsRawFd::as_raw_fd);
+            let take_controlling = mode != "no-control";
+            assert!(inherited != Some(CHANNEL_FD));
+            // Only async-signal-safe operations run between fork and exec.
+            unsafe {
+                cmd.pre_exec(move || {
+                    if let Some(fd) = inherited
+                        && libc::dup2(fd, CHANNEL_FD) != CHANNEL_FD
+                    {
+                        return Err(io::Error::last_os_error());
+                    }
+                    if libc::setsid() == -1
+                        || (take_controlling
+                            && libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY, 0) == -1)
+                    {
+                        return Err(io::Error::last_os_error());
+                    }
+                    let mut mask = MaybeUninit::uninit();
+                    if libc::sigemptyset(mask.as_mut_ptr()) != 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    let mut mask = mask.assume_init();
+                    for signal in signals::MANAGED {
+                        if libc::sigaddset(&mut mask, signal) != 0 {
+                            return Err(io::Error::last_os_error());
+                        }
+                    }
+                    let error = libc::pthread_sigmask(libc::SIG_BLOCK, &mask, std::ptr::null_mut());
+                    if error != 0 {
+                        return Err(io::Error::from_raw_os_error(error));
+                    }
+                    Ok(())
+                });
+            }
+            Self(cmd.spawn().unwrap())
+        }
+
+        pub(super) fn signal(&self, signal: libc::c_int) {
+            assert_eq!(
+                unsafe { libc::kill(self.0.id().try_into().unwrap(), signal) },
+                0
+            );
+        }
+
+        pub(super) fn stopped(&self) {
+            let began = Instant::now();
+            while began.elapsed() < LIMIT {
+                let mut info = MaybeUninit::<libc::siginfo_t>::zeroed();
+                let result = unsafe {
+                    libc::waitid(
+                        libc::P_PID,
+                        self.0.id(),
+                        info.as_mut_ptr(),
+                        libc::WSTOPPED | libc::WNOWAIT | libc::WNOHANG,
+                    )
+                };
+                assert_eq!(result, 0);
+                let info = unsafe { info.assume_init() };
+                if unsafe { info.si_pid() } != 0 {
+                    assert_eq!(info.si_code, libc::CLD_STOPPED);
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            panic!("frontend failed to stop");
+        }
+
+        pub(super) fn finish(&mut self, code: i32) {
+            let start = Instant::now();
+            while start.elapsed() < LIMIT {
+                if let Some(status) = self.0.try_wait().unwrap() {
+                    assert_eq!(status.code(), Some(code));
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            panic!("frontend failed to exit");
+        }
+    }
+
+    impl Drop for Held {
+        fn drop(&mut self) {
+            if self.0.try_wait().ok().flatten().is_none() {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+    }
+}
+
+fn child_write(tty: &mut tty::Tty, bytes: &[u8]) {
+    let start = Instant::now();
+    let mut rest = bytes;
+    while !rest.is_empty() && start.elapsed() < LIMIT {
+        if poll(tty.fd(), libc::POLLOUT, 10) {
+            let count = tty.write(rest).unwrap().unwrap_or(0);
+            rest = &rest[count..];
+        }
+    }
+    assert!(rest.is_empty());
+}
+
+fn run_child() -> i32 {
+    let mode = std::env::var(MODE).unwrap();
+    if mode == "signal-rollback" {
+        signals::verify_install_rollback();
+        return 0;
+    }
+    let signals = signals::Signals::install().unwrap();
+    assert!(signals::Signals::install().is_err());
+    match mode.as_str() {
+        "refuse" | "no-control" => {
+            assert!(tty::Tty::open().is_err());
+            io::stdout().write_all(REFUSED).unwrap();
+            io::stdout().flush().unwrap();
+            return 0;
+        }
+        "unwind" => {
+            let failed = std::panic::catch_unwind(|| {
+                let mut tty = tty::Tty::open().unwrap();
+                tty.raw().unwrap();
+                panic!("injected fixture unwind");
+            });
+            assert!(failed.is_err());
+            return 0;
+        }
+        "bridge" | "observer" | "suspend" | "hup" | "backpressure" | "closed" => {
+            let observer = mode == "observer";
+            let mut tty = tty::Tty::open().unwrap();
+            // Child-only descriptor duplicated by this test's pre_exec.
+            let socket = unsafe { UnixStream::from_raw_fd(CHANNEL_FD) };
+            socket.set_nonblocking(true).unwrap();
+            if mode == "backpressure" {
+                let size: libc::c_int = 4096;
+                assert_eq!(
+                    unsafe {
+                        libc::setsockopt(
+                            socket.as_raw_fd(),
+                            libc::SOL_SOCKET,
+                            libc::SO_SNDBUF,
+                            std::ptr::from_ref(&size).cast(),
+                            std::mem::size_of_val(&size) as libc::socklen_t,
+                        )
+                    },
+                    0
+                );
+            }
+            let mut bridge = Bridge { socket, observer };
+            let result = terminal_frontend::run(&mut tty, &signals, &mut bridge, observer);
+            result.restored_termios.unwrap();
+            assert!(result.restored_display);
+            use terminal_frontend::Exit;
+            let expected = match mode.as_str() {
+                "suspend" => Exit::Suspended,
+                "hup" => Exit::Interrupted(libc::SIGHUP),
+                "backpressure" => Exit::Interrupted(libc::SIGTERM),
+                "closed" => Exit::Closed,
+                _ => Exit::Detached,
+            };
+            assert_eq!(result.reason.unwrap(), expected);
+            drop(bridge);
+            if mode == "suspend" {
+                assert_eq!(unsafe { libc::raise(libc::SIGSTOP) }, 0);
+            }
+            return 0;
+        }
+        "active" => {}
+        _ => panic!("unexpected fixture mode"),
+    }
+    let mut tty = tty::Tty::open().unwrap();
+    assert_eq!(tty.geometry().unwrap(), (37, 99));
+    let before = unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_GETFL) };
+    tty.raw().unwrap();
+    assert_eq!(
+        unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_GETFL) },
+        before
+    );
+    child_write(&mut tty, READY);
+
+    let started = Instant::now();
+    let mut inbuf = [0; 32];
+    while started.elapsed() < LIMIT * 2 {
+        let mut fds = [
+            libc::pollfd {
+                fd: tty.fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: signals.fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        unsafe { libc::poll(fds.as_mut_ptr(), 2, 10) };
+        let events = signals.take();
+        if let Some(signal) = events.termination {
+            tty.restore().unwrap();
+            return 128 + signal;
+        }
+        if events.has(libc::SIGTSTP) {
+            tty.restore().unwrap();
+            assert_eq!(unsafe { libc::raise(libc::SIGSTOP) }, 0);
+            if let Some(signal) = signals.take().termination {
+                return 128 + signal;
+            }
+            tty.raw().unwrap();
+            child_write(&mut tty, RESUMED);
+        }
+        if events.has(libc::SIGWINCH) && matches!(tty.geometry(), Ok((44, 111))) {
+            child_write(&mut tty, RESIZED);
+        }
+        if fds[0].revents & libc::POLLIN != 0
+            && let Some(size) = tty.read(&mut inbuf).unwrap()
+        {
+            child_write(&mut tty, &inbuf[..size]);
+        }
+    }
+    panic!("frontend fixture deadline");
+}
+
+#[test]
+#[ignore = "re-executed with isolated terminal by the local fixture"]
+fn terminal_frontend_child() {
+    if std::env::var_os(MODE).is_some() {
+        std::process::exit(run_child());
+    }
+}
+
+fn assert_attrs(before: &libc::termios, current: &libc::termios) {
+    assert_eq!(current.c_iflag, before.c_iflag);
+    assert_eq!(current.c_oflag, before.c_oflag);
+    assert_eq!(current.c_cflag, before.c_cflag);
+    assert_eq!(current.c_lflag, before.c_lflag);
+    assert_eq!(current.c_cc, before.c_cc);
+}
+
+#[test]
+#[ignore = "isolated process-wide native signal installation"]
+fn terminal_frontend_rolls_back_each_failed_signal_installation() {
+    let terminal = fixture::Pty::new();
+    let before = terminal.attrs();
+    let mut child = fixture::Held::spawn(&terminal, &terminal, "signal-rollback");
+    child.finish(0);
+    assert_attrs(&before, &terminal.attrs());
+}
+
+#[test]
+#[ignore = "native real controlling terminal and process signals"]
+fn terminal_frontend_owns_restores_and_fences_tty() {
+    let mut terminal = fixture::Pty::new();
+    let before = terminal.attrs();
+    let mut child = fixture::Held::spawn(&terminal, &terminal, "active");
+    terminal.read_through(READY);
+    assert_eq!(terminal.attrs().c_lflag & (libc::ISIG | libc::ICANON), 0);
+    child.signal(libc::SIGCONT);
+    terminal.master.write_all(b"X\x03\x1aY").unwrap();
+    terminal.read_through(b"X\x03\x1aY");
+    terminal.resize(44, 111);
+    terminal.read_through(RESIZED);
+    child.signal(libc::SIGTSTP);
+    child.stopped();
+    assert_attrs(&before, &terminal.attrs());
+    child.signal(libc::SIGCONT);
+    terminal.read_through(RESUMED);
+    assert_eq!(terminal.attrs().c_lflag & (libc::ISIG | libc::ICANON), 0);
+    child.signal(libc::SIGHUP);
+    child.finish(128 + libc::SIGHUP);
+    assert_attrs(&before, &terminal.attrs());
+
+    let mut other = fixture::Pty::new();
+    let mut denied = fixture::Held::spawn(&terminal, &other, "refuse");
+    other.read_through(REFUSED);
+    denied.finish(0);
+
+    let mut no_control = fixture::Held::spawn(&terminal, &terminal, "no-control");
+    terminal.read_through(REFUSED);
+    no_control.finish(0);
+    assert_attrs(&before, &terminal.attrs());
+
+    let mut unwind = fixture::Held::spawn(&terminal, &terminal, "unwind");
+    unwind.finish(0);
+    assert_attrs(&before, &terminal.attrs());
+}
+
+struct Bridge {
+    socket: UnixStream,
+    observer: bool,
+}
+
+impl terminal_frontend::Channel for Bridge {
+    fn fd(&self) -> libc::c_int {
+        self.socket.as_raw_fd()
+    }
+
+    fn read_output(&mut self, bytes: &mut [u8]) -> Result<Option<usize>> {
+        bridge_io(self.socket.read(bytes))
+    }
+
+    fn write_input(&mut self, bytes: &[u8]) -> Result<Option<usize>> {
+        assert!(!self.observer);
+        bridge_io(self.socket.write(bytes))
+    }
+
+    fn resize(&mut self, rows: u16, cols: u16) -> Result<bool> {
+        assert!(!self.observer);
+        assert_eq!((rows, cols), (44, 111));
+        let Some(count) = bridge_io(self.socket.write(RESIZED))? else {
+            return Ok(false);
+        };
+        assert_eq!(count, RESIZED.len());
+        Ok(true)
+    }
+}
+
+fn bridge_io(result: io::Result<usize>) -> Result<Option<usize>> {
+    match result {
+        Ok(count) => Ok(Some(count)),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+            ) =>
+        {
+            Ok(None)
+        }
+        Err(_) => Err(Error::Invalid("terminal_fixture_channel")),
+    }
+}
+
+#[test]
+#[ignore = "native foreground PTY with local output and input bridge"]
+fn terminal_frontend_displays_sanitized_output_and_restores() {
+    for mode in ["bridge", "observer"] {
+        let mut frontend = fixture::Pty::new();
+        let before = frontend.attrs();
+        let (mut owner, child_socket) = UnixStream::pair().unwrap();
+        owner.set_read_timeout(Some(LIMIT)).unwrap();
+        let mut child = fixture::Held::spawn_inner(&frontend, &frontend, mode, Some(&child_socket));
+        drop(child_socket);
+        owner
+            .write_all(b"\x1b[?1049h\x1b]52;c;blocked\x07\x1b[32;1mrender\x1b[0m\x1b[?2004h")
+            .unwrap();
+        frontend.read_through(b"\x1b[?1049h\x1b[32;1mrender\x1b[0m\x1b[?2004h");
+        frontend
+            .master
+            .write_all(b"literal\x03\x1a\r\x1b[200~pasted\r~.inside\x1b[201~\r~.extra")
+            .unwrap();
+        frontend.read_through(DETACH_MARKER);
+        child.finish(0);
+        frontend.drain_after_exit();
+        assert_eq!(
+            frontend.captured.strip_prefix(b"\r\nrunning 1 test\r\n").unwrap(),
+            b"\x1b[?1049h\x1b[32;1mrender\x1b[0m\x1b[?2004h\x1b[?1049l\x1b[0m\x1b[0 q\x1b[?25h\x1b[r\x1b[?6l\x1b[?7h\x1b[4l\x1b(B\x1b)B\x0f\x1b[?1l\x1b>\x1b[?2004l\r\n[marmish: detached]\r\n"
+        );
+        let mut actual = Vec::new();
+        owner.read_to_end(&mut actual).unwrap();
+        assert_eq!(
+            actual,
+            if mode == "bridge" {
+                b"literal\x03\x1a\r\x1b[200~pasted\r~.inside\x1b[201~\r".as_slice()
+            } else {
+                b""
+            }
+        );
+        assert_attrs(&before, &frontend.attrs());
+    }
+}
+
+#[test]
+#[ignore = "native PTY with real frontend resize, suspend, termination and EOF"]
+fn terminal_frontend_routes_signals_and_restores_on_ipc_loss() {
+    for (mode, marker) in [
+        ("suspend", b"\r\n[marmish: suspended]\r\n".as_slice()),
+        ("hup", b"\r\n[marmish: interrupted]\r\n"),
+        ("backpressure", b"\r\n[marmish: interrupted]\r\n"),
+        ("closed", b"\r\n[marmish: terminal error]\r\n"),
+    ] {
+        let mut frontend = fixture::Pty::new();
+        let before = frontend.attrs();
+        let (mut owner, socket) = UnixStream::pair().unwrap();
+        owner.set_read_timeout(Some(LIMIT)).unwrap();
+        let mut child = fixture::Held::spawn_inner(&frontend, &frontend, mode, Some(&socket));
+        drop(socket);
+        owner.write_all(READY).unwrap();
+        frontend.read_through(READY);
+        frontend.resize(44, 111);
+        let mut resize = [0u8; RESIZED.len()];
+        owner.read_exact(&mut resize).unwrap();
+        assert_eq!(&resize, RESIZED);
+        match mode {
+            "suspend" => child.signal(libc::SIGTSTP),
+            "hup" => child.signal(libc::SIGHUP),
+            "backpressure" => {
+                let fd = frontend.master.as_raw_fd();
+                let before = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+                assert!(before >= 0);
+                assert_eq!(
+                    unsafe { libc::fcntl(fd, libc::F_SETFL, before | libc::O_NONBLOCK) },
+                    0
+                );
+                let until = Instant::now() + LIMIT;
+                let mut filled = 0;
+                while Instant::now() < until {
+                    match frontend.master.write(&[b'x'; 4096]) {
+                        Ok(count) => filled += count,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            if filled >= 40 * 1024 && !poll(fd, libc::POLLOUT, 10) {
+                                break;
+                            }
+                        }
+                        Err(error) => panic!("fixture PTY write: {error}"),
+                    }
+                }
+                assert!(filled >= 40 * 1024 && Instant::now() < until);
+                child.signal(libc::SIGTERM);
+            }
+            "closed" => drop(owner),
+            _ => unreachable!(),
+        }
+        frontend.read_through(marker);
+        if mode == "suspend" {
+            child.stopped();
+            assert_attrs(&before, &frontend.attrs());
+            child.signal(libc::SIGCONT);
+        }
+        child.finish(0);
+        assert_attrs(&before, &frontend.attrs());
+    }
+}
+
+#[test]
+#[ignore = "native foreground frontend plus the real private tmux attachment worker"]
+fn terminal_frontend_renders_native_tmux() {
+    use super::{
+        CheckedLaunch, Fixture, KEYS, Shutdown, native_key, pane_proof, trusted_tmux,
+        wait_pane_ready,
+    };
+    use marmish_native::terminal_backend::ReadStatus;
+    use std::os::fd::AsFd;
+    use std::path::Path;
+
+    let (tmux, version) = trusted_tmux();
+    let tmux_fixture = Fixture::start(&tmux);
+    tmux_fixture.start_pane();
+    let proof = wait_pane_ready(&tmux_fixture);
+    let daemon = Path::new(env!("CARGO_BIN_EXE_marmishd"))
+        .canonicalize()
+        .unwrap();
+    let socket = tmux_fixture.socket.canonicalize().unwrap();
+    let launch = CheckedLaunch::new(&daemon, &tmux, &socket, &tmux_fixture.nonce).unwrap();
+    let started = Instant::now();
+    let mut attachment = launch.launch(1, 37, 99).unwrap();
+
+    let mut frontend = fixture::Pty::new();
+    let before = frontend.attrs();
+    let (mut owner, child_socket) = UnixStream::pair().unwrap();
+    owner
+        .set_read_timeout(Some(Duration::from_millis(150)))
+        .unwrap();
+    owner
+        .set_write_timeout(Some(Duration::from_millis(150)))
+        .unwrap();
+    let mut child = fixture::Held::spawn_inner(&frontend, &frontend, "bridge", Some(&child_socket));
+    drop(child_socket);
+    let (first_render, restore, mut samples, output_writes) = std::thread::scope(|scope| {
+        let bridge = scope.spawn(move || {
+            let mut output = [0; 4096];
+            let mut keyboard = [0; 4096];
+            let until = Instant::now() + LIMIT * 2;
+            let mut writes = 0usize;
+            owner
+                .write_all(b"\x1b]52;c;not-visible\x07\x1b[?1049h\x1b[32;1mfixture-color\x1b[0m")
+                .unwrap();
+            loop {
+                assert!(Instant::now() < until, "frontend fixture bridge limit");
+                let ready = attachment.poll(false, Some(owner.as_fd()), until).unwrap();
+                if ready.wake {
+                    let count = owner.read(&mut keyboard).unwrap();
+                    if count == 0 {
+                        break;
+                    }
+                    for &key in &keyboard[..count] {
+                        native_key(&mut attachment, 1, key);
+                    }
+                }
+                if ready.readable {
+                    match attachment.read(&mut output).unwrap() {
+                        ReadStatus::Data(n) => {
+                            owner.write_all(&output[..n]).unwrap();
+                            writes += 1;
+                        }
+                        ReadStatus::WouldBlock => {}
+                        ReadStatus::Hangup => panic!("unexpected native tmux end"),
+                    }
+                }
+            }
+            assert_eq!(
+                attachment.shutdown(Instant::now() + LIMIT).unwrap(),
+                Shutdown::Reaped
+            );
+            writes
+        });
+        frontend.read_through(b"\x1b[?1049h\x1b[32;1mfixture-color\x1b[0m");
+        // Tmux may publish the initial redraw in the same read as the
+        // synthetic controls, so use a separate pane-generated response.
+        frontend.master.write_all(b"j").unwrap();
+        frontend.read_through(b"MWK_FIRST_KEY");
+        let first_render = started.elapsed();
+        frontend.master.write_all(b"v").unwrap();
+        frontend.read_through("MWK_UTF8_é_界_END".as_bytes());
+        frontend.master.write_all(b"\x03").unwrap();
+        frontend.read_through(b"MWK_SIGINT");
+        let mut samples = Vec::with_capacity(KEYS.len());
+        for key in KEYS {
+            std::thread::sleep(Duration::from_millis(5));
+            let marker = format!("MWK_ACK_{}", char::from(*key));
+            let sample = Instant::now();
+            frontend.master.write_all(&[*key]).unwrap();
+            frontend.read_through(marker.as_bytes());
+            samples.push(sample.elapsed());
+        }
+        let before_restore = Instant::now();
+        frontend.master.write_all(b"\r~.").unwrap();
+        frontend.read_through(DETACH_MARKER);
+        child.finish(0);
+        let restore = before_restore.elapsed();
+        frontend.drain_after_exit();
+        assert!(!frontend.captured.contains(&0x07));
+        assert!(!frontend.captured.windows(2).any(|bytes| bytes == b"\x1b]"));
+        assert!(
+            !frontend
+                .captured
+                .windows(11)
+                .any(|bytes| bytes == b"not-visible")
+        );
+        assert!(frontend.captured.ends_with(DETACH_MARKER));
+        assert_attrs(&before, &frontend.attrs());
+        (first_render, restore, samples, bridge.join().unwrap())
+    });
+    assert!(pane_proof(&tmux_fixture) == proof);
+    drop(tmux_fixture);
+    samples.sort_unstable();
+    println!(
+        "terminal-frontend platform={}-{} tmux={version} samples={} p50_us={} p95_us={} first_pane_response_us={} detach_and_restore_us={} bridge_output_writes={output_writes}",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        samples.len(),
+        samples[14].as_micros(),
+        samples[28].as_micros(),
+        first_render.as_micros(),
+        restore.as_micros(),
+    );
+}

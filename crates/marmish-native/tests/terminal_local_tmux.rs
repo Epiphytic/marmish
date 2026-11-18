@@ -1286,3 +1286,6 @@ fn core_tests_terminal_backend_failed_exec_and_inherited_descriptor() {
         drop(master);
     }
 }
+
+#[path = "support/terminal_frontend_local.rs"]
+mod frontend_local;
