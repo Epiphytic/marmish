@@ -710,11 +710,31 @@ async fn run(case: Case) {
         .page([cursor.lower, cursor.until], time_limit())
         .await
         .unwrap();
-    let statuses = fixture
+    fixture
         .delivery_page(&mut recipient, &cursor, &page)
-        .unwrap()
-        .0;
-    assert!(statuses.contains(&Status::Accepted(TrustedOutcome::AlreadyApplied)));
+        .unwrap();
+    // The relay sorts obfuscated outer timestamps. The first bounded
+    // recovery page need not include this exact Delivery.
+    let outer: nostr::event::Event = serde_json::from_slice(delivery.frame()).unwrap();
+    let held_stamp = outer.created_at.as_secs();
+    let page = recipient
+        .page([held_stamp, held_stamp], time_limit())
+        .await
+        .unwrap();
+    let index = page
+        .records()
+        .iter()
+        .position(|record| record.id == delivery_id)
+        .unwrap();
+    let reads = fixture.package_reads.get();
+    assert_eq!(
+        fixture
+            .delivery_input(&mut recipient, Input::History(&page, index))
+            .unwrap()
+            .status,
+        Status::Accepted(TrustedOutcome::AlreadyApplied),
+    );
+    assert_eq!(fixture.package_reads.get(), reads);
     let page = recipient.page([stamp, stamp], time_limit()).await.unwrap();
     let index = page
         .records()
