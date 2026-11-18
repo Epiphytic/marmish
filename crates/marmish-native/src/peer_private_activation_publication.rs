@@ -124,8 +124,11 @@ pub(super) struct SocketTurn {
 }
 
 impl SocketTurn {
-    pub(super) fn into_sink(self) -> DeliverySink {
-        Box::new(move |message| Box::pin(self.publish(message)))
+    pub(super) fn into_postjoin_sink(self) -> Result<DeliverySink, Refused> {
+        if self.attempt.publication().kind() != Kind::PostJoin {
+            return Err(Refused);
+        }
+        Ok(Box::new(move |message| Box::pin(self.publish(message))))
     }
 
     async fn publish(mut self, message: TransportMessage) -> DeliveryResult {
