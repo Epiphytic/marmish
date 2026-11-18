@@ -25,6 +25,171 @@ fn terminal_installed_runtime_takeover_named_resume() {
     });
 }
 
+const TRIALS: usize = 20;
+const PAYLOAD_BYTES: usize = 1024;
+const PUBLICATION_CAP: usize = 2048;
+const ATTACHED_BENCHMARK: Duration = Duration::from_secs(240);
+const QUIET: Duration = Duration::from_millis(100);
+
+#[test]
+#[ignore = "report-only workload requiring native binaries, tmux and a private loopback TLS relay"]
+fn terminal_installed_runtime_observer_benchmark() {
+    run_native(|| async {
+        prove_writer(Workload::ObserveBenchmark).await;
+    });
+}
+
+pub(super) struct Benchmark {
+    ready: Duration,
+    keys: [[Duration; 2]; TRIALS],
+    displayed: [usize; 2],
+    output_records: [usize; 2],
+    display_time: Duration,
+    drain_time: Duration,
+}
+
+impl Benchmark {
+    pub(super) fn report(&self, publications: usize) {
+        assert!(
+            (1..=PUBLICATION_CAP).contains(&publications),
+            "bounded whole-fixture relay publications: {publications}"
+        );
+        assert!(!self.display_time.is_zero());
+        eprintln!(
+            "terminal_observer_benchmark platform={}-{} transport=private_loopback_tls fixture=single_thread debug_assertions={} relay_publications={publications}",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            cfg!(debug_assertions),
+        );
+        eprintln!(
+            "terminal_observer_benchmark workload=first_named_observer_ready n=1 duration_us={}",
+            self.ready.as_micros()
+        );
+        for (reader, role) in ["writer", "observer"].into_iter().enumerate() {
+            let mut latencies = self.keys.map(|sample| sample[reader]);
+            latencies.sort_unstable();
+            let percentile = |rank: usize| latencies[(rank * TRIALS).div_ceil(100) - 1].as_micros();
+            eprintln!(
+                "terminal_observer_benchmark workload=single_byte_ipc_ack reader={role} n={TRIALS} min_us={} p50_us={} p95_us={} max_us={}",
+                latencies[0].as_micros(),
+                percentile(50),
+                percentile(95),
+                latencies[TRIALS - 1].as_micros(),
+            );
+            let bytes = self.displayed[reader];
+            eprintln!(
+                "terminal_observer_benchmark workload=serial_shell_display reader={role} turns={TRIALS} requested_bytes={} measured_display_bytes={bytes} elapsed_us={} drain_us={} display_bytes_per_second={} attachment_output_and_ack_records={}",
+                TRIALS * PAYLOAD_BYTES,
+                self.display_time.as_micros(),
+                self.drain_time.as_micros(),
+                (bytes as f64 / self.display_time.as_secs_f64()) as u64,
+                self.output_records[reader],
+            );
+        }
+    }
+}
+
+async fn drain_display(writer: &mut LocalTerminal, observer: &mut LocalTerminal) -> Duration {
+    let began = Instant::now();
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let before = (writer.output_records, observer.output_records);
+            writer
+                .while_attached(observer.while_attached(tokio::time::sleep(QUIET)))
+                .await;
+            if (writer.output_records, observer.output_records) == before {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("both local displays settle before measurement");
+    began.elapsed()
+}
+
+async fn measure_turn(
+    writer: &mut LocalTerminal,
+    observer: &mut LocalTerminal,
+    input: &[u8],
+    marker: &[u8],
+) -> [Duration; 2] {
+    writer.data.clear();
+    observer.data.clear();
+    let accepted = writer.sent.checked_add(input.len() as u64).unwrap();
+    assert!(
+        writer.credit >= accepted,
+        "measured Input must already have cumulative credit"
+    );
+    writer.sent = accepted;
+    let began = Instant::now();
+    writer.write_record(Record::Input(input)).await;
+    let (writer_time, observer_time) = tokio::join!(
+        async {
+            writer.until(marker, OUTPUT_LIMIT).await;
+            began.elapsed()
+        },
+        async {
+            observer.until(marker, OUTPUT_LIMIT).await;
+            began.elapsed()
+        },
+    );
+    [writer_time, observer_time]
+}
+
+async fn prove_benchmark(socket: &Path, request: Start, writer: &mut LocalTerminal) -> Benchmark {
+    let began = Instant::now();
+    let mut observer = observe(socket, request, writer).await;
+    let ready = began.elapsed();
+    let key_reader = concat!(
+        r#"old=$(stty -g) && stty -echo -icanon min 1 time 0 && { printf '\033[2J\033[H<key-%s>' ready; i=0; "#,
+        r#"while [ "$i" -lt "$trials" ]; do c=$(dd bs=1 count=1 2>/dev/null) || break; printf '\n<key-%02d-%s>' "$i" "$c"; i=$((i+1)); done; "#,
+        r#"stty "$old" && [ "$i" -eq "$trials" ] && printf '\n<key-%s>' restored; }"#,
+    );
+    let input = format!("trials={}; {key_reader}\r", TRIALS + 1);
+    both_receive(writer, &mut observer, input.as_bytes(), b"<key-ready>").await;
+    let mut keys = [[Duration::ZERO; 2]; TRIALS];
+    for ordinal in 0..=TRIALS {
+        drain_display(writer, &mut observer).await;
+        let key = b'a' + ordinal as u8;
+        let marker = format!("<key-{ordinal:02}-{}>", char::from(key));
+        let sample = measure_turn(writer, &mut observer, &[key], marker.as_bytes()).await;
+        if ordinal > 0 {
+            keys[ordinal - 1] = sample;
+        }
+    }
+    tokio::join!(
+        writer.until(b"<key-restored>", OUTPUT_LIMIT),
+        observer.until(b"<key-restored>", OUTPUT_LIMIT),
+    );
+
+    let mut displayed = [0; 2];
+    let mut drain_time = Duration::ZERO;
+    let began = Instant::now();
+    for turn in 0..TRIALS {
+        drain_time += drain_display(writer, &mut observer).await;
+        let end = format!("display-end-{turn:02}");
+        let input = format!(
+            "printf '\\033[2J\\033[H' && awk -v phase={turn} -v size={PAYLOAD_BYTES} 'BEGIN {{for (i=0;i<size;i++) printf \"%c\",33+(17*int(i/32)+29*(i%32)+phase)%90}}' && printf '<%s>' '{end}'\r"
+        );
+        let marker = format!("<{end}>");
+        measure_turn(writer, &mut observer, input.as_bytes(), marker.as_bytes()).await;
+        displayed[0] += writer.data.len();
+        displayed[1] += observer.data.len();
+    }
+    let display_time = began.elapsed();
+    let output_records = [writer.output_records, observer.output_records];
+    assert_eq!(output_records, [writer.output_acks, observer.output_acks]);
+    writer.while_attached(observer.close(End::Detach)).await;
+    Benchmark {
+        ready,
+        keys,
+        displayed,
+        output_records,
+        display_time,
+        drain_time,
+    }
+}
+
 fn named(mut start: Start, slot: [u8; 16]) -> Start {
     start.session_slot = Some(hex::encode(slot));
     start
@@ -344,6 +509,17 @@ pub(super) async fn prove(
     match workload {
         Workload::Observe => {
             prove_read_only(socket, &start, &mut writer, &mut sample, turns).await;
+            writer.close(End::Detach).await;
+        }
+        Workload::ObserveBenchmark => {
+            let request = named(start(Attach::Observe), writer.slot);
+            let benchmark = timeout(
+                ATTACHED_BENCHMARK,
+                prove_benchmark(socket, request, &mut writer),
+            )
+            .await
+            .expect("bounded attached observer benchmark");
+            sample.observer = Some(benchmark);
             writer.close(End::Detach).await;
         }
         Workload::Takeover => {

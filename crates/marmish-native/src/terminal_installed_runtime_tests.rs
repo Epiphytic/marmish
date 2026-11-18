@@ -118,6 +118,7 @@ enum Workload {
     Restart,
     ProbeRetry,
     Observe,
+    ObserveBenchmark,
     Takeover,
     Benchmark { throughput: bool },
 }
@@ -134,6 +135,7 @@ struct Measurements {
     output: usize,
     throughput: Duration,
     warm_busy_retries: usize,
+    observer: Option<observe::Benchmark>,
 }
 
 impl Measurements {
@@ -355,6 +357,8 @@ struct LocalTerminal {
     credit: u64,
     sent: u64,
     input_closed: bool,
+    output_records: usize,
+    output_acks: usize,
 }
 
 enum End {
@@ -386,6 +390,8 @@ impl LocalTerminal {
             credit: 0,
             sent: 0,
             input_closed: false,
+            output_records: 0,
+            output_acks: 0,
         })
     }
 
@@ -439,8 +445,10 @@ impl LocalTerminal {
             match record.unwrap() {
                 Record::Output { id, bytes } => {
                     self.data.extend_from_slice(bytes);
+                    self.output_records += 1;
                     if !self.input_closed {
                         self.write_record(Record::Ack(id)).await;
+                        self.output_acks += 1;
                     }
                     Event::Output
                 }
@@ -739,7 +747,10 @@ async fn prove_writer(workload: Workload) -> Measurements {
         .tempdir_in("/tmp")
         .unwrap();
     let relay = Relay::start().await;
-    if matches!(workload, Workload::Benchmark { throughput: true }) {
+    if matches!(
+        workload,
+        Workload::Benchmark { throughput: true } | Workload::ObserveBenchmark
+    ) {
         relay.allow_installed_benchmark();
     } else {
         relay.allow_multi_room_workload();
@@ -861,7 +872,10 @@ async fn prove_writer(workload: Workload) -> Measurements {
         relay
             .subscription(server_alias, 1059, "#p", json!(server_alias))
             .await;
-        if matches!(workload, Workload::Observe | Workload::Takeover) {
+        if matches!(
+            workload,
+            Workload::Observe | Workload::ObserveBenchmark | Workload::Takeover
+        ) {
             let mut sample = observe::prove(&socket, start, &cleanup, &turns, workload).await;
             sample.unloaded = before;
             return sample;
@@ -1033,5 +1047,8 @@ async fn prove_writer(workload: Workload) -> Measurements {
     server_cleanup.unwrap();
     relay.assert_no_plaintext(MARKER);
     assert_stores_omit_marker(&client_lease, &server_lease);
+    if let Some(benchmark) = &sample.observer {
+        benchmark.report(relay.accepted_publications());
+    }
     sample
 }

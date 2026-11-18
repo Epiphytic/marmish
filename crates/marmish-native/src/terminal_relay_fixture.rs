@@ -509,6 +509,10 @@ impl Relay {
         self.roots.clone()
     }
 
+    pub(super) fn accepted_publications(&self) -> usize {
+        self.state.lock().unwrap().publications.len()
+    }
+
     pub(super) fn allow_installed_benchmark(&self) {
         let mut state = self.state.lock().unwrap();
         assert!(state.publications.is_empty());

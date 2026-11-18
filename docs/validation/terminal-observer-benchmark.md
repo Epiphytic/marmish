@@ -1,0 +1,32 @@
+# Installed observer benchmark results
+
+One opt-in run passed on 2026-11-18 on native Linux x86-64 with tmux 3.4, Rust 1.97.1, the debug build and the fixture's single-thread Tokio host. The test ran a disposable private loopback TLS relay, real native Marmot clients and SQLCipher profiles, Unix IPC, and native tmux. The fixture completed all setup, attached workloads and teardown in 52.71 seconds. The first observer's named Connect to validated Ready was **7.230 seconds** in this one attachment.
+
+| Local reader | Timed sends | Minimum | p50 | p95 | Maximum |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Writer | 20 | 127.426 ms | 145.656 ms | 163.003 ms | 173.711 ms |
+| Observer | 20 | 109.903 ms | 123.328 ms | 137.485 ms | 156.897 ms |
+
+Each latency pair starts immediately before the credited one-byte local Input write and ends independently at the reader's complete marked Output and completed local Ack write. The shell is in byte-at-a-time, no-echo mode. It reads using `dd` and emits a marker with the byte and ordinal. The two readers are on distinct MLS attachments of the same persistent pane. Both are serviced between trials. This is a paired series within one attachment. Host scheduling, polling order and the shell contribute to the measurements.
+
+| Local reader | Requested ASCII bytes | Measured local display bytes | Display rate | Output records read and acknowledged through measurement |
+| --- | ---: | ---: | ---: | ---: |
+| Writer | 20,480 | 23,876 | 4,359 B/s | 47 |
+| Observer | 20,480 | 23,876 | 4,359 B/s | 44 |
+
+Twenty serial shell turns each requested 1,024 printable ASCII bytes and a unique end marker. Their common elapsed time was 5.476 seconds, including 2.020 seconds of pre-turn drains. The measured bytes are complete local Output payloads through each turn's end marker, including the marker record and any shell echo, ANSI and redraw accumulated in that turn. Each reader wrote one local Ack per Output through the end of the benchmark. The counts start when each socket opens, so the writer count includes its setup before the observer attached. The relay accepted 321 event publications across setup, measurements and cleanup.
+
+These figures describe local receipt and acknowledgment, on this single-host serial workload, with measurement pacing included in display rate. Physical display completion, internet transport, stalled observers, warm writer and takeover attachment distributions, and raw TLS wire throughput require separate measurements. The paired latency percentiles and relative role ordering describe this run.
+
+## Reproduce
+
+On a supported nonroot host, build the native binaries and run the ignored report-only test in the same Cargo target:
+
+```sh
+cargo build --offline --locked -p marmish-native --bins
+MARMISH_TEST_TMUX="$(command -v tmux)" cargo test --offline --locked \
+  -p marmish-native --lib terminal_installed_runtime_observer_benchmark -- \
+  --ignored --nocapture
+```
+
+[Installed observer benchmark design](../phases/terminal-observer-benchmark.md) · [Installed terminal validation](terminal-installed-runtime.md)

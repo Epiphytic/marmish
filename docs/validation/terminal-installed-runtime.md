@@ -19,6 +19,10 @@ cargo test --locked -p marmish-native --lib terminal_installed_runtime_benchmark
   -- --ignored --nocapture
 ```
 
+The separate [installed observer benchmark](terminal-observer-benchmark.md)
+measures paired local writer and observer receipts and serial shell display
+rate. Both benchmarks are covered by the exclusion above.
+
 The EOSE retry test withholds the exact authenticated server alias subscription
 completion. The relay queues the first client Probe before completion on the
 same connection, suppresses duplicate outer event IDs, and requires at least
