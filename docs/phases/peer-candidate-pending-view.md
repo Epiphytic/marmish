@@ -8,6 +8,16 @@ Scope is Linux AMD64 private qualification. The mounted actor phase must
 expose the exact test-qualified bridge in candidate compilation, with
 the existing sealed turn and without fixture authority.
 
+This phase revises the parent mount's read scheduling. Each verified
+same-UID connection uses a shared, memory-only read handle and acquires
+a nonwaiting permit from the existing four-slot local read budget.
+There is no actor-side read message or queue. Keep the existing IPC
+exchange deadline and per-connection bounds, and hold the permit through
+the reply attempt. Saturation returns Unavailable. The actor stays the
+sole producer and can be blocked on native work without delaying an
+admitted read. Candidate session framing and stock dispatch stay as
+designed in the parent mount.
+
 ## Producer and generation
 
 Use three separate identities. A non-reused actor epoch owns the view.
@@ -23,11 +33,13 @@ Before the earliest row or native evidence read for that observation, the
 producer takes the monotonic origin and an internal publication ticket.
 That ticket pins the current actor epoch and view sequence. The checked
 bridge consumes the ticket. It takes the entry coordinates, Held time,
-Pending deadline and verified wall from the exact current tuple. Use either
-the complete tuple returned by a successful CAS or a fresh exact durable
-readback with matching signed ancestry, selection, native coordinates and
-current generation. If the CAS is ambiguous or the fence is lost, publish
-nothing. Exact checked read-only recovery can later prove the row.
+Pending deadline and verified wall from the exact current tuple. Since
+`Change::apply` returns no tuple, perform one exact durable readback after
+CAS success within the same fenced turn as the native proof. Compare
+signed ancestry, selection, native coordinates, deadlines and generation.
+Use a fresh verified wall sample for the underlying CAS. A refused or
+ambiguous CAS, a mismatch or a lost fence publishes nothing. Exact checked
+read-only recovery can later prove the row.
 
 Construct the observation only inside the branch that checks both the
 application-inert durable Pending row and the sealed native witness.
@@ -45,11 +57,12 @@ state cannot create healthy-empty. Only independent maintenance can
 publish a new qualified value.
 
 Serialize the view and publication sequence in one short critical section.
-It takes no native, database, file or network locks. Any invalidation
-advances the sequence and clears the view. A publication compares the
-ticket epoch and sequence, requires the same active generation, a live
-lease and elapsed time strictly under 1 s, then consumes the ticket and
-advances the sequence. A late observation seeding an older ticket cannot
+It takes no native, database, file or network locks. Use Live, Invalid
+and terminal Stopped states. Treat a poisoned lock as permanently
+unavailable. Any invalidation advances the sequence and clears the value.
+A publication compares the ticket epoch, listener generation and sequence,
+requires an active local owner and elapsed time strictly under 1 s, then
+consumes the ticket and advances the sequence. It cannot recover Stopped. A late observation seeding an older ticket cannot
 restore visibility. The actor invalidates before transitions that could
 change a native image or durable row. The runtime and listener can
 invalidate or permanently stop on cancellation, owner loss or listener
@@ -58,8 +71,10 @@ exit without waiting for the actor to finish a native turn.
 ## Maintenance and reply
 
 Schedule maintenance independently of IPC on the single installed actor
-with a 500 ms refresh target. Recheck exact current scope and durable floor,
-exact row and no-follow original stage/image witness. Run a new capped
+with a 500 ms refresh target. Recheck exact current scope, exact row and no-follow
+original stage/image witness. The effective durable floor is the maximum
+of the authenticated applicable cursor-origin and Consent-version wall
+floors. Verify it within the same fence as the exact record. Run a new capped
 readback when the existing bridge cannot confirm the same immutable
 image. Take the monotonic origin anew before its earliest evidence read.
 A late or inconclusive turn never extends validity. The one-second proof
@@ -71,25 +86,36 @@ At reply, use only the view, listener generation and deadline, actor epoch
 and independently sampled real and monotonic clocks. Sample the real wall
 as integer seconds since the Unix epoch, rounded down by `as_secs()`,
 and reject a missing clock. Exactly 1 s after the origin the proof is
-stale. If wall is below the retained floor, permanently invalidate that
-view sequence. If the verified Pending deadline is reached, latch expiry
-for the exact row generation so a backwards wall movement cannot expose
-it again. A request observing expiry returns an empty List when the
-still-qualified view contains only that expired row, or Unavailable
-for Show. A later fresh observation must obey the existing durable floor
-and the latched exact-row deadline. For healthy state return the
-singleton List or the exactly matching Show. The listener rechecks
-generation, liveness and a corresponding in-memory observation sequence
-at the admission boundary for the final local write. It never holds the
-view lock across the write. There is no SQL, native, route, timer
-advancement or filesystem I/O in a request.
+stale. This lifetime uses Rust's monotonic `Instant`, whose suspend
+behavior is platform dependent. If wall reaches a verified Pending
+deadline, latch expiry for the exact full Selection and actor epoch.
+The candidate has one durable slot per actor, so it needs one latch.
+Invalidation clears the view and retains this latch for the actor's
+lifetime. If wall is below the retained floor, permanently invalidate
+that view sequence. A request observing expiry returns an empty List only
+when the current proof still qualifies that exact expired row. Show
+returns Unavailable. A freshly sampled older wall cannot revive the
+same expired row in this actor. After restart, the authenticated persisted
+floor still applies. If an expiry was only observed in memory and wall
+rolls backward to a time at or above the persisted floor, a new actor
+may requalify that row. Reads do not advance a durable floor.
+
+For healthy state return the singleton List or the exactly matching
+Show. Check listener generation, actor liveness, sequence and freshness
+again at the admission boundary for the final local write. The
+one-second freshness guarantee applies to write admission. Delivery to a
+slow reader is bounded by the IPC exchange deadline and can take longer.
+Release the view lock before the write. There is no SQL, native, route,
+timer advancement or filesystem I/O in a request.
 
 ## Checks
 
 Exercise Pending and qualified absence, unavailable initial and ambiguous
 states, mismatch each selector field and each generation, 1 s monotonic
 and wall-deadline boundaries, permanent rollback/expiry handling with
-subsequent clock movement, blocked attempt to publish a stale ticket,
+subsequent clock movement, the documented restart floor boundary, poison,
+four admitted requests and immediate saturation, a slow reader, blocked
+attempt to publish a stale ticket,
 invalidate before transition or stage replacement, and stop/drop racing
 a finished maintenance turn. On the installed candidate, test timeout,
 dropped reply, invalidation before the final write and zero attributed
