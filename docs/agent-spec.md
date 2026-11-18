@@ -91,6 +91,12 @@ rollback. It remains a test target pending live carrier wiring. The
 [Peer Leave journal](validation/peer-native-leave-c1.md) tests atomic
 retention holds and bounded recovery reservations in SQLCipher on Linux
 AMD64. The journal phase adds no native membership change or relay traffic.
+The [registered dispatcher cut](validation/peer-candidate-fatal-issuer.md)
+qualifies one sticky observation shared by the one-use private WSS route
+and the sealed Command fence. Linux AMD64 tests displaced the actual
+SQLite default while a private WSS request was waiting and observed
+physical disconnect without a protocol Close. The candidate actor and
+daemon physical shutdown remain unmounted at this revision.
 The [private Peer record codec](validation/peer-status-codec.md) verifies
 heartbeat fields, capability states and complete permission snapshot
 assembly in deterministic tests. The [heartbeat sampler](validation/peer-heartbeat-sampler.md)
