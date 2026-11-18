@@ -1491,10 +1491,12 @@ same signed event after a lost acknowledgement. Native Published cleanup
 requires the original stable receipt epoch and authenticator. These proof
 authorities are available only in tests. Installed Peer authorization and
 status still require their own runtime owners.
-The [current MDK master checkpoint](validation/mdk-master-schema-213.md)
+The [MDK schema 213 checkpoint](validation/mdk-master-schema-213.md)
 revalidated this history cut and ordinary Command during a Peer relay outage
-on Linux AMD64. It accepts account migration 213 through native preflight and
-refuses future versions without modifying the profile database files.
+on Linux AMD64. The [current schema 214 checkpoint](validation/mdk-master-schema-214.md)
+accepts migration 214 through native preflight and qualifies refusal of
+migration 215 without modifying the profile database files. It also
+revalidated native Terminal and ordinary Command in a private WSS fixture.
 The [installed Peer design](phases/peer-installed.md) records the current
 join-before-decision behavior, operator interface and separate platform and
 relay gates. A join can expose Pending only after exact native custody.
