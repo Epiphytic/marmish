@@ -1,5 +1,8 @@
 //! Client receipt and publication on a qualified private Peer origin.
 
+#[cfg(test)]
+#[path = "peer_daemon_wss_tests.rs"]
+mod daemon_wss_tests;
 #[path = "peer_invitation_paths.rs"]
 mod paths;
 #[cfg(test)]
@@ -96,6 +99,22 @@ impl QualifiedOrigin {
         Ok(Self {
             connector: relay.connector(private),
             route: Route::configured(relay.url.as_str())?,
+        })
+    }
+
+    #[cfg(test)]
+    fn for_daemon_peer_fixture(
+        mode: crate::mdk_adapter::terminal_relay_fixture::PeerMode<'_>,
+        private: &std::path::Path,
+        recipient: nostr::key::PublicKey,
+        founder: nostr::key::PublicKey,
+    ) -> Result<Self> {
+        let (origin, connector) = mode
+            .qualify(private, recipient, founder)
+            .ok_or(Error::Binding)?;
+        Ok(Self {
+            connector,
+            route: Route::configured(origin)?,
         })
     }
 

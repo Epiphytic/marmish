@@ -497,21 +497,58 @@ fn tls() -> (TlsAcceptor, rustls::RootCertStore) {
 pub(crate) struct Relay {
     pub(crate) url: Url,
     roots: rustls::RootCertStore,
+    peer: Option<PeerIdentity>,
     state: Arc<Mutex<State>>,
     task: JoinHandle<()>,
 }
 
+struct PeerIdentity {
+    origin: Url,
+    accounts: [PublicKey; 2],
+}
+
+/// Evidence for the exact two-account Peer relay instance and origin.
+pub(crate) struct PeerMode<'a> {
+    relay: &'a Relay,
+    identity: &'a PeerIdentity,
+}
+
+impl<'a> PeerMode<'a> {
+    pub(crate) fn qualify(
+        self,
+        path: &Path,
+        recipient: PublicKey,
+        founder: PublicKey,
+    ) -> Option<(&'a str, RelayConnector)> {
+        let identity = self.identity;
+        (recipient != founder
+            && identity.accounts.contains(&recipient)
+            && identity.accounts.contains(&founder)
+            && self.relay.url == identity.origin)
+            .then(|| {
+                (
+                    identity.origin.as_str(),
+                    self.relay.connector(path, true, None),
+                )
+            })
+    }
+}
+
 impl Relay {
-    pub(super) async fn start() -> Self {
-        Self::start_with(State::default()).await
+    pub(crate) async fn start() -> Self {
+        Self::start_with(None).await
     }
 
     pub(crate) async fn start_peer(accounts: [PublicKey; 2]) -> Self {
-        Self::start_with(State {
-            peer: Some(peer::Scope::new(accounts)),
-            ..State::default()
+        Self::start_with(Some(accounts)).await
+    }
+
+    pub(crate) fn peer_mode(&self) -> Option<PeerMode<'_>> {
+        let identity = self.peer.as_ref()?;
+        Some(PeerMode {
+            relay: self,
+            identity,
         })
-        .await
     }
 
     pub(crate) fn peer_transcript(&self) -> Vec<peer::Write> {
@@ -525,17 +562,51 @@ impl Relay {
             .clone()
     }
 
+    pub(crate) fn publication_attempts(&self, kind: u16) -> usize {
+        self.state
+            .lock()
+            .unwrap()
+            .observations
+            .iter()
+            .filter(|observation| matches!(observation, Observation::Write(_, found, _) if *found == kind))
+            .count()
+    }
+
+    pub(crate) fn peer_only_publications(&self) -> bool {
+        let state = self.state.lock().unwrap();
+        state.peer.is_some()
+            && state.observations.iter().all(
+                |observation| !matches!(observation, Observation::Write(_, kind, _) if *kind != 7435),
+            )
+    }
+
+    pub(crate) fn authenticated(&self, account: PublicKey) -> bool {
+        self.state
+            .lock()
+            .unwrap()
+            .observations
+            .iter()
+            .any(|entry| matches!(entry, Observation::Authentication(who, true) if *who == account))
+    }
+
     pub(crate) async fn stop(&mut self) {
         self.task.abort();
         let error = (&mut self.task).await.expect_err("fixture cancelled");
         assert!(error.is_cancelled(), "fixture stopped without panic");
     }
 
-    async fn start_with(initial: State) -> Self {
+    async fn start_with(accounts: Option<[PublicKey; 2]>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = Url::parse(&format!("wss://{}/", listener.local_addr().unwrap())).unwrap();
         let (acceptor, roots) = tls();
-        let state = Arc::new(Mutex::new(initial));
+        let peer = accounts.map(|accounts| PeerIdentity {
+            origin: url.clone(),
+            accounts,
+        });
+        let state = Arc::new(Mutex::new(State {
+            peer: accounts.map(peer::Scope::new),
+            ..State::default()
+        }));
         let worker_state = state.clone();
         let worker_url = url.clone();
         let task = tokio::spawn(async move {
@@ -558,6 +629,7 @@ impl Relay {
         Self {
             url,
             roots,
+            peer,
             state,
             task,
         }
@@ -762,7 +834,7 @@ impl Relay {
         }
     }
 
-    pub(super) fn ordinary(&self, account: PublicKey) {
+    pub(crate) fn ordinary(&self, account: PublicKey) {
         self.state.lock().unwrap().ordinary.insert(account);
     }
 

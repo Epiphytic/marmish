@@ -9,6 +9,7 @@ use tokio::time::timeout;
 use transport_nostr_adapter::NostrRelayEvent;
 #[path = "terminal_command_fixture.rs"]
 mod terminal_command_fixture;
+pub(crate) use terminal_command_fixture::CommandPeer;
 
 struct Lane {
     client: Client,

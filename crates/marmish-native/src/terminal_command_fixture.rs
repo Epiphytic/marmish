@@ -20,13 +20,13 @@ mod terminal_enrollment_wss_tests;
 #[path = "terminal_installed_runtime_tests.rs"]
 mod terminal_installed_runtime_tests;
 
-struct CommandPeer {
+pub(crate) struct CommandPeer {
     material: IdentityMaterial,
     lease: ProfileLease,
 }
 
 impl CommandPeer {
-    fn new(base: &Path, name: &str) -> Self {
+    pub(crate) fn new(base: &Path, name: &str) -> Self {
         let mut lease = ProfileLease::acquire(base, name).unwrap();
         let material = lease
             .prepare(
@@ -38,7 +38,7 @@ impl CommandPeer {
         Self { material, lease }
     }
 
-    fn public(&self) -> PublicKey {
+    pub(crate) fn public(&self) -> PublicKey {
         self.material.public_key()
     }
 
@@ -119,6 +119,21 @@ impl CommandPeer {
         owner.activate(Instant::now() + STEP).await.unwrap();
         owner.relay_proof_ingress = Some(Vec::new());
         owner
+    }
+
+    pub(crate) async fn open_fixture_server(
+        &self,
+        relay: &Relay,
+        remote: PublicKey,
+        cat: &Path,
+    ) -> MdkOwner {
+        let mut owner = self.open(relay, remote, true, cat).await;
+        owner.relay_proof_ingress = None;
+        owner
+    }
+
+    pub(crate) async fn stop_fixture_server(self, owner: MdkOwner) {
+        crate::daemon::stop_silent(self.lease, owner).await.unwrap();
     }
 
     fn mdk_key(&self) -> Zeroizing<[u8; 32]> {
