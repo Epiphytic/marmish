@@ -33,64 +33,64 @@ jobs:
           key: interactive-core
       - name: Check verified onboarding and private config
         run: |
-          cargo test --locked -p marmish-native --lib profile_directory::core_tests
-          cargo test --locked -p marmish-native --lib profile_metadata::core_tests
-          cargo test --locked -p marmish-native --lib identifier_proposal_cannot_grant_until_the_full_key_is_confirmed
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib profile_directory::core_tests
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib profile_metadata::core_tests
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib identifier_proposal_cannot_grant_until_the_full_key_is_confirmed
       - name: Check client policy and access inventory
         run: |
-          cargo test --locked -p marmish-engine --lib policy::inventory_core_tests
-          cargo test --locked -p marmish-native --lib client_inventory::core_tests
-          cargo test --locked -p marmish-native --lib journal::client_inventory_store::core_tests
+          sh tools/marmish_interactive_core_case.sh -p marmish-engine --lib policy::inventory_core_tests
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib client_inventory::core_tests
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib journal::client_inventory_store::core_tests
       - name: Check Terminal worker dispatch and PTY ownership
         run: |
-          cargo test --locked -p marmish-native --lib core_tests_terminal_backend
-          cargo test --locked -p marmish-native --test terminal_local_tmux core_tests_terminal_backend
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib core_tests_terminal_backend
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --test terminal_local_tmux core_tests_terminal_backend
       - name: Check authenticated Terminal bootstrap
-        run: cargo test --locked -p marmish-native --lib terminal_bootstrap::core_tests
+        run: sh tools/marmish_interactive_core_case.sh -p marmish-native --lib terminal_bootstrap::core_tests
       - name: Check Terminal record framing and delivery
-        run: cargo test --locked -p marmish-native --lib terminal_frames::core_tests
+        run: sh tools/marmish_interactive_core_case.sh -p marmish-native --lib terminal_frames::core_tests
       - name: Check private Peer heartbeat and policy records
-        run: cargo test --locked -p marmish-native --test peer_status_wire peer_heartbeat_core
+        run: sh tools/marmish_interactive_core_case.sh -p marmish-native --test peer_status_wire peer_heartbeat_core
       - name: Check local Terminal supervisor registry
         run: |
-          cargo test --locked -p marmish-native --lib core_tests_terminal_supervisor
-          cargo test --locked -p marmish-native --lib core_tests_terminal_live_supervisor_bounded_independent_queue_and_cancel
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib core_tests_terminal_supervisor
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib core_tests_terminal_live_supervisor_bounded_independent_queue_and_cancel
       - name: Check foreground Terminal byte policies
-        run: cargo test --locked -p marmish-native --test terminal_local_tmux core_tests_terminal_frontend
+        run: sh tools/marmish_interactive_core_case.sh -p marmish-native --test terminal_local_tmux core_tests_terminal_frontend
       - name: Check Terminal enrollment bounds and records
         run: |
-          cargo test --locked -p marmish-native --lib terminal_bootstrap::enrollment::core_tests
-          cargo test --locked -p marmish-native --lib terminal_enrollment::core_tests
-          cargo test --locked -p marmish-native --lib terminal_live_enrollment
-          cargo test --locked -p marmish-native --lib enrollment_listener_starts_a_full_flight_after_initial_socket_budget
-          cargo test --locked -p marmish-native --lib terminal_runtime_core_
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib terminal_bootstrap::enrollment::core_tests
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib terminal_enrollment::core_tests
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib terminal_live_enrollment
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib enrollment_listener_starts_a_full_flight_after_initial_socket_budget
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib terminal_runtime_core_
       - name: Check local Terminal records and authority fence
         run: |
-          cargo test --locked -p marmish-native --lib terminal_ipc_wire_core
-          cargo test --locked -p marmish-native --lib terminal_fence_core
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib terminal_ipc_wire_core
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib terminal_fence_core
       - name: Check Terminal Command actor retirement
-        run: cargo test --locked -p marmish-native --lib terminal_command_authority_core_actor_retires_uncertain_effects
+        run: sh tools/marmish_interactive_core_case.sh -p marmish-native --lib terminal_command_authority_core_actor_retires_uncertain_effects
       - name: Check Terminal socket byte boundaries
         run: |
-          cargo test --locked -p marmish-native --lib terminal_socket_core_ordinary_bytes_and_half_close
-          cargo test --locked -p marmish-native --lib terminal_socket_core_exact_ready_frame_and_early_binary_suffix
-          cargo test --locked -p marmish-native --test terminal_local_tmux terminal_socket_display_core
-          cargo test --locked -p marmish-native --lib terminal_socket_session_rejects_input_and_resize_after_close
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib terminal_socket_core_ordinary_bytes_and_half_close
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib terminal_socket_core_exact_ready_frame_and_early_binary_suffix
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --test terminal_local_tmux terminal_socket_display_core
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib terminal_socket_session_rejects_input_and_resize_after_close
       - name: Check private Peer invitation records
-        run: cargo test --locked -p marmish-native --test peer_control_wire peer_control_core
+        run: sh tools/marmish_interactive_core_case.sh -p marmish-native --test peer_control_wire peer_control_core
       - name: Check scoped Peer publication permits
-        run: cargo test --locked -p marmish-native --lib postjoin_gate::tests
+        run: sh tools/marmish_interactive_core_case.sh -p marmish-native --lib postjoin_gate::tests
       - name: Check Peer cursor reopening and effect rollback
         run: |
-          cargo test --locked -p marmish-native --test peer_cursor_store peer_cursor_core_ties_cutoffs_and_periodic_restart_survive_reopen
-          cargo test --locked -p marmish-native --test peer_cursor_store peer_cursor_core_effect_fence_cleanup_rolls_back_and_page_replays
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --test peer_cursor_store peer_cursor_core_ties_cutoffs_and_periodic_restart_survive_reopen
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --test peer_cursor_store peer_cursor_core_effect_fence_cleanup_rolls_back_and_page_replays
       - name: Check private Peer socket bounds
-        run: cargo test --locked -p marmish-native --lib peer_raw_socket_core_reserves_and_budgets
+        run: sh tools/marmish_interactive_core_case.sh -p marmish-native --lib peer_raw_socket_core_reserves_and_budgets
       - name: Check Terminal writer selection records
-        run: cargo test --locked -p marmish-native --lib terminal_selection
+        run: sh tools/marmish_interactive_core_case.sh -p marmish-native --lib terminal_selection
       - name: Check durable Peer heartbeat reservations
-        run: cargo test --locked -p marmish-native --test peer_heartbeat_send_fences peer_heartbeat_send_fences::core_tests::core_
+        run: sh tools/marmish_interactive_core_case.sh -p marmish-native --test peer_heartbeat_send_fences peer_heartbeat_send_fences::core_tests::core_
       - name: Check local Pending Peer decline and expiry
         run: |
-          cargo test --locked -p marmish-native --lib pending_terminal_expiry_boundary_and_absorbing_block_preserve_slot
-          cargo test --locked -p marmish-native --lib joined_retirement_
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib pending_terminal_expiry_boundary_and_absorbing_block_preserve_slot
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib joined_retirement_
