@@ -25,16 +25,18 @@ One shared core contains an `AtomicBool` and the existing
 notification. `Fatal::is_tripped` reads it with Acquire. Only `Trip`
 can cancel the token, and the wake method always performs the Release
 store first. `Fatal::tripped` returns immediately if it sees the cut
-or registers the token wait. Raw I/O keeps its check-then-poll order.
+or registers the token wait and checks the flag with Acquire again
+after waking. Raw I/O keeps its check-then-poll order.
 A cut between those checks therefore returns promptly or wakes the
 registered waiter. Cancellation means the atomic cut already happened.
 The cut flag never returns to false.
 
 Use one small owning registry guard for the production check and
 register paths. It records Indeterminate with the previous keeper
-and marks the cut while locked on all failure paths. Its destructor
-drops the underlying mutex guard, then performs idempotent token
-notification. On unwinding with the mutex held it records
+and marks the cut while locked on all failure paths. It retains
+the guard in an Option and clones the exact keeper while locked.
+Its destructor takes and drops the underlying mutex guard, then
+performs idempotent token notification. On unwinding with the mutex held it records
 Indeterminate and marks the cut before releasing the guard. Poison
 is always fatal, and recovers the held guard only to record failure
 and release it, with no database or verification work. Keep a
@@ -56,18 +58,48 @@ if physical forwarding still matches. The signal carries a
 stop condition. The typed result distinguishes dispatcher fatal
 from normal stop or local refusal.
 
-`ForwardingVerifier` exposes a checked read-only observer from the
-keeper, with its tripper private. A separate non-publicly-constructible
-custody fault handle comes from the same observer and cannot be
-created from a `Fatal`. A fresh generic private latch only has
-authority in tests. In particular, when the raw fence is composed,
-`RegisteredRoute` has a private issuer field carrying the exact
-registry observer, and its recipient admission consumes that route
-and derives the raw `Fatal` internally. No installer or route
-consumer can pass a separately created signal to that entry.
-The generic transport's internal test fixtures may still construct
-independent pairs. The future installed Command site follows the
-same sealed-pair rule.
+## Sealed construction
+
+The registry module owns `RegistryMint`, with private fields and
+a private constructor. The only production call to
+`Trip::registered(RegistryMint)` is the registrar after the physical
+post-install checks succeed. `Trip::new` for an independent pair is
+`cfg(test)`. The keeper's `Arc<Trip>` is never exported. A crate
+caller cannot build `RegistryMint` directly.
+
+`ForwardingVerifier` exposes a read-only `Fatal` for observation
+and its guarded recheck. The verifier's tripper is private. The
+actual route's single successful transfer, after the final global
+bracket, adds its read-only signal to private `RegisteredRoute`
+alongside route and signer. The reviewed raw fence's candidate
+entry takes only this sealed route. Unpacking it supplies the exact
+signal to the raw dial. The fixture-only path is compiled separately.
+
+The registered receiver also retains one private
+`RegisteredCommandFence` created at the successful registration
+handoff. It takes the verified original scope's observer and its
+narrow custody fault handle. Only the module defining
+`RegisteredReceiver` can construct it. The registrar has already
+verified original local scope before this handoff. Expose a single
+take on `RegisteredReceiver` before ordinary initialization, after
+a fresh global check. Do not require a second local lease check at
+this point. The approved startup order must keep ordinary work
+available when subsequent Peer-only checks fail, and attaching the
+actor waits for ordinary readiness. A second take is refused.
+The fence authorizes only use of the exact registered forwarding
+monitor for ordinary setup and custody, never Peer SQL or relay use.
+
+The Command composition consumes this one sealed fence in
+`Admission::from_registered`. The admission uses its exact
+`Fatal`, recheck and custody fault handle. The latter permits only
+a one-way cut, and cannot be constructed from a read-only `Fatal`.
+Independent raw `Admission::new` becomes test-only in the composed
+candidate, including when the Command leaf offers the temporary
+paired `Arc<Trip>` constructor. The underlying transport may take
+a plain latch internally, with no production constructor accepting
+a plain latch for a registered receiver. The issuer may implement
+the registered Command fence before the engine leaf merges, leaving
+consumption unmounted until the two reviewed changes compose.
 
 ## Evidence
 
@@ -91,5 +123,9 @@ through a later verified observer. Prove private WSS observes the
 actual registered cut under the composed raw fence and disconnects
 without sending a protocol Close. A scratch negative compile
 proves the route admission signature rejects a separately supplied
-latch. Run stock and candidate all-target strict Clippy. The installed
+latch. Candidate non-test probes also reject direct mint creation,
+`Trip::new` and the raw `Admission::new`. Test that an already taken
+route and a Command admission from its registered owner both observe
+the cut. Before full composition the same proof can use the sealed
+Command fence's observer directly. Run stock and candidate all-target strict Clippy. The installed
 stop path still needs its own join, lease and cross-owner proof.
