@@ -133,6 +133,35 @@ fn temp_cursor() -> (tempfile::TempDir, std::path::PathBuf) {
 }
 
 #[test]
+fn peer_installed_custody_offer_outer_self_and_wrong_recipient_fail_at_port_index() {
+    let recipient = Keys::generate();
+    let founder = Keys::generate();
+    let route = NostrRoutingV1::new([3; 32], vec![URL.to_owned()]).unwrap();
+
+    let addressed = offer(&founder, recipient.public_key(), &route, ControlVersion::V2);
+    let event: Event = serde_json::from_slice(addressed.frame()).unwrap();
+    let self_carrier = EventBuilder::new(event.kind, event.content)
+        .tags(event.tags)
+        .custom_created_at(event.created_at)
+        .sign_with_keys(&recipient)
+        .unwrap();
+    let body = serde_json::value::to_raw_value(&self_carrier).unwrap();
+    assert!(matches!(
+        Arrival::index(&body, &recipient.public_key().to_bytes()),
+        Err(Failure::Grammar)
+    ));
+
+    let another = Keys::generate().public_key();
+    let unaddressed = offer(&founder, another, &route, ControlVersion::V2);
+    let body =
+        RawValue::from_string(String::from_utf8(unaddressed.frame().to_vec()).unwrap()).unwrap();
+    assert!(matches!(
+        Arrival::index(&body, &recipient.public_key().to_bytes()),
+        Err(Failure::Grammar)
+    ));
+}
+
+#[test]
 fn peer_installed_custody_offer_refusals_leave_state_unchanged() {
     let (_temp, path) = temp_cursor();
     let recipient = Keys::generate();
@@ -390,7 +419,11 @@ async fn peer_installed_custody_offer_checked_history_live_and_cold_recovery() {
         key,
         &recipient,
         url,
-        Policy::default(),
+        Policy {
+            mode: Mode::Automatic,
+            reserved: [founder.public_key(), second.public_key()].into(),
+            blocked: Default::default(),
+        },
         ReceivePolicy::Manual,
     );
     checked.unchanged().unwrap();
