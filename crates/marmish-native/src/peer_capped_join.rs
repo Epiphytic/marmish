@@ -211,7 +211,7 @@ fn join_turn<'a>(
         origin: &state.origin_url,
         label: state.paths.provisional_label(binding),
         join: welcome,
-        fence,
+        fence: crate::mdk_adapter::peer_native_signer::WelcomeFence::Fixture(fence),
     }
 }
 

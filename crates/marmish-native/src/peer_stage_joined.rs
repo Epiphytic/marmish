@@ -1,6 +1,9 @@
-//! Native ingress and readback for the private pending Peer fixture.
+//! Closed native Welcome ingestion and exact joined-room readback.
 
 use super::*;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use crate::peer_invitation::Delivery;
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 use crate::peer_invitation::prepared_consent::Delivery;
 use cgka_traits::app_components::decode_nostr_routing_v1;
 use cgka_traits::engine::GroupEvent;
@@ -19,9 +22,29 @@ const DESCRIPTION: &str = "marmish-peer/1 peer transport";
 
 type JoinRuntime = AccountDeviceRuntime<RefusingIo, StaticTransportRouting, RefusingIo>;
 
+#[cfg(test)]
 #[path = "peer_stage_leave_proof.rs"]
 mod leave_proof;
+#[cfg(test)]
 pub(crate) use leave_proof::{CapturedLeave, LeaveInspection};
+
+pub(crate) enum WelcomeFence<'a> {
+    #[cfg(test)]
+    Fixture(&'a crate::peer_invitation::TurnFence<'a>),
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    Candidate(&'a crate::peer_invitation::NativeWindow),
+}
+
+impl WelcomeFence<'_> {
+    pub(crate) fn sample(&self) -> StageResult<u64> {
+        match self {
+            #[cfg(test)]
+            Self::Fixture(fence) => fence.sample(),
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            Self::Candidate(window) => Ok(window.stage_sample()?.as_secs()),
+        }
+    }
+}
 
 /// Borrow the signed Delivery revalidated by the custody owner and its exact
 /// package digest. The native half has no authority to advance custody.
@@ -179,6 +202,7 @@ impl OpenStage {
 
     /// Called once on the original image after the owner commits JoinStarted.
     /// A failed call conveys no authority and must never cause another ingest.
+    #[cfg(test)]
     pub(crate) async fn join_once(
         self,
         witness: &JoinWitness<'_>,
@@ -188,11 +212,10 @@ impl OpenStage {
             .await
     }
 
-    #[cfg(test)]
     pub(crate) async fn join_once_fenced(
         self,
         witness: &JoinWitness<'_>,
-        fence: &crate::peer_invitation::TurnFence<'_>,
+        fence: &WelcomeFence<'_>,
     ) -> StageResult<()> {
         self.join_with_sample(witness, || fence.sample()).await
     }

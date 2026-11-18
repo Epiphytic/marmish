@@ -1038,7 +1038,6 @@ impl ReceiverFiles<'_> {
         self.inspect_snapshot(permit, |path| Ok(operation.attest(path)))
     }
 
-    #[cfg(test)]
     pub(crate) fn prepare_join(
         &self,
         permit: crate::peer_invitation::CleanPermit<'_>,
@@ -1047,7 +1046,6 @@ impl ReceiverFiles<'_> {
         self.inspect_snapshot(permit, |path| Ok(operation.prepare(path)))
     }
 
-    #[cfg(test)]
     pub(crate) fn read_join(
         &self,
         permit: crate::peer_invitation::CleanPermit<'_>,
@@ -1056,12 +1054,11 @@ impl ReceiverFiles<'_> {
         self.inspect_snapshot(permit, |path| Ok(operation.read(path)))
     }
 
-    #[cfg(test)]
     pub(crate) fn join_original(
         &self,
         permit: crate::peer_invitation::CleanPermit<'_>,
         operation: JoinTurn<'_>,
-    ) -> Result<(std::result::Result<(), StageError>, JoinMetrics)> {
+    ) -> Result<ClosedJoin> {
         let (path, turn) = self.measured_turn(permit, SlotClass::Unknown)?;
         operation.join(path, turn)
     }
@@ -1198,7 +1195,7 @@ impl FixtureFileTurn<'_> {
         operation: JoinTurn<'_>,
     ) -> Result<(std::result::Result<(), StageError>, JoinMetrics)> {
         let turn = self.original(binding)?;
-        operation.join(binding.path, turn)
+        Ok(operation.join(binding.path, turn)?.test_parts())
     }
 }
 
@@ -1230,11 +1227,27 @@ pub(crate) struct RawBinding<'a> {
     pub(crate) witness: (u64, u64),
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        marmish_peer_receiver_candidate
+    )
+))]
 use crate::mdk_adapter::peer_native_signer::{
-    JoinWitness, JoinedAuthority, LeaveInspection, OpenStage, ProvisionalPackage, StageError,
+    JoinWitness, JoinedAuthority, OpenStage, StageError, WelcomeFence,
 };
 #[cfg(test)]
+use crate::mdk_adapter::peer_native_signer::{LeaveInspection, ProvisionalPackage};
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        marmish_peer_receiver_candidate
+    )
+))]
 use nostr::key::Keys;
 #[cfg(any(
     test,
@@ -1255,28 +1268,77 @@ use std::time::Duration;
 ))]
 use storage_sqlite::SqlCipherKey;
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        marmish_peer_receiver_candidate
+    )
+))]
 pub(crate) struct JoinTurn<'a> {
     pub(crate) key: &'a SqlCipherKey,
     pub(crate) signer: Arc<Keys>,
     pub(crate) origin: &'a str,
     pub(crate) label: String,
     pub(crate) join: &'a JoinWitness<'a>,
-    pub(crate) fence: &'a crate::peer_invitation::TurnFence<'a>,
+    pub(crate) fence: WelcomeFence<'a>,
+}
+
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        marmish_peer_receiver_candidate
+    )
+))]
+pub(crate) struct ClosedJoin {
+    pub(crate) result: std::result::Result<(), StageError>,
+    #[cfg(test)]
+    metrics: JoinMetrics,
 }
 
 #[cfg(test)]
+impl ClosedJoin {
+    pub(crate) fn test_parts(self) -> (std::result::Result<(), StageError>, JoinMetrics) {
+        (self.result, self.metrics)
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        marmish_peer_receiver_candidate
+    )
+))]
 impl JoinTurn<'_> {
     fn open(&self, path: &Path) -> std::result::Result<OpenStage, StageError> {
-        self.fence.check()?;
-        OpenStage::open_provisional(
-            path,
-            self.key,
-            self.signer.clone(),
-            self.origin,
-            self.label.clone(),
-            false,
-        )
+        match &self.fence {
+            #[cfg(test)]
+            WelcomeFence::Fixture(fence) => {
+                fence.check()?;
+                OpenStage::open_provisional(
+                    path,
+                    self.key,
+                    self.signer.clone(),
+                    self.origin,
+                    self.label.clone(),
+                    false,
+                )
+            }
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            WelcomeFence::Candidate(window) => OpenStage::open_managed_provisional(
+                path,
+                self.key,
+                self.signer.clone(),
+                self.origin,
+                self.label.clone(),
+                window,
+            ),
+        }
     }
 
     fn prepare(self, path: &Path) -> std::result::Result<(), StageError> {
@@ -1284,44 +1346,52 @@ impl JoinTurn<'_> {
         stage.require_prepared_join(self.join, Duration::from_secs(self.fence.sample()?))
     }
 
-    fn join(
-        self,
-        path: &Path,
-        turn: QuotaTurn<'_>,
-    ) -> Result<(std::result::Result<(), StageError>, JoinMetrics)> {
-        use std::future::{Future as _, poll_fn};
+    fn join(self, path: &Path, turn: QuotaTurn<'_>) -> Result<ClosedJoin> {
+        #[cfg(test)]
         let mut polls = 0;
         let result = match self.open(path) {
             Ok(stage) => {
-                let mut welcome = std::pin::pin!(stage.join_once_fenced(self.join, self.fence));
-                resolve_once(poll_fn(|cx| {
-                    polls += 1;
-                    WELCOME_POLLS.set(WELCOME_POLLS.get() + 1);
-                    welcome.as_mut().poll(cx)
-                }))
+                let welcome = stage.join_once_fenced(self.join, &self.fence);
+                #[cfg(test)]
+                {
+                    use std::future::Future as _;
+                    let mut welcome = std::pin::pin!(welcome);
+                    resolve_once(std::future::poll_fn(|cx| {
+                        polls += 1;
+                        WELCOME_POLLS.set(WELCOME_POLLS.get() + 1);
+                        welcome.as_mut().poll(cx)
+                    }))
+                }
+                #[cfg(not(test))]
+                resolve_once(welcome)
             }
             Err(error) => Ok(Err(error)),
         };
         turn.finish()?;
-        let evidence = turn.quota.evidence();
         let result = result?;
-        if result.is_ok() {
-            CLOSED_JOINS.set(CLOSED_JOINS.get() + 1);
-        }
-        Ok((
-            result,
+        #[cfg(test)]
+        let metrics = {
+            let evidence = turn.quota.evidence();
+            if result.is_ok() {
+                CLOSED_JOINS.set(CLOSED_JOINS.get() + 1);
+            }
             JoinMetrics {
                 polls,
                 peak: evidence.peak,
                 rejected: evidence.rejected,
                 main_opens: evidence.database_opens,
-            },
-        ))
+            }
+        };
+        Ok(ClosedJoin {
+            result,
+            #[cfg(test)]
+            metrics,
+        })
     }
 
     fn read(self, path: &Path) -> std::result::Result<JoinedAuthority, StageError> {
         let stage = self.open(path)?;
-        self.fence.check()?;
+        self.fence.sample()?;
         stage.read_joined(self.join)
     }
 }

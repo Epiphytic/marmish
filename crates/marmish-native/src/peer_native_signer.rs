@@ -19,13 +19,29 @@ mod provisional;
     )
 ))]
 pub(crate) use provisional::ProvisionalPackage;
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        marmish_peer_receiver_candidate
+    )
+))]
 #[path = "peer_stage_joined.rs"]
 mod joined;
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) use joined::RefusingIo;
 #[cfg(test)]
-pub(crate) use joined::{CapturedLeave, JoinWitness, JoinedAuthority, LeaveInspection};
+pub(crate) use joined::{CapturedLeave, LeaveInspection};
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        marmish_peer_receiver_candidate
+    )
+))]
+pub(crate) use joined::{JoinWitness, JoinedAuthority, WelcomeFence};
 #[cfg(test)]
 #[path = "peer_self_remove_verify.rs"]
 pub(crate) mod self_remove;

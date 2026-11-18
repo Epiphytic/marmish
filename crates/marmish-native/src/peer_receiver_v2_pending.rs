@@ -10,7 +10,7 @@ use std::{
 };
 
 use crate::{
-    mdk_adapter::peer_native_signer::{JoinWitness, JoinedAuthority},
+    mdk_adapter::peer_native_signer::{JoinWitness, JoinedAuthority, WelcomeFence},
     peer_quota_vfs::dispatch::{JoinMetrics, JoinTurn},
 };
 
@@ -472,6 +472,7 @@ impl<'lease> NativePending<'lease> {
             files
                 .files()
                 .join_original(permit, operation)
+                .map(|closed| closed.test_parts())
                 .map_err(|_| Error::Path)
         })?;
         files.finish(owner, fence, false)?;
@@ -553,7 +554,7 @@ impl<'lease> NativePending<'lease> {
             origin: &self.origin,
             label: owner.paths.provisional_label(binding),
             join,
-            fence,
+            fence: WelcomeFence::Fixture(fence),
         }
     }
 }
