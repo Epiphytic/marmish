@@ -186,8 +186,11 @@ async fn attach(
 ) -> Result<Exit, Exit> {
     let mut attached = fence.step(|| registration.attach(lease, material))?;
     let (quota, mut route) = attached.actor_parts();
-    let mut owner =
-        fence.step(|| RecoveredOwner::open_registered(lease, material, quota, &mut route))?;
+    let mut owner = fence.step(|| {
+        RecoveredOwner::open_for_actor(lease, material, quota, &mut route, || {
+            fence.deadline().is_ok()
+        })
+    })?;
     let wall = fence.step(|| SystemTime::now().duration_since(UNIX_EPOCH))?;
     fence.step(|| owner.reconcile_startup(lease, quota, wall.as_secs()))?;
 
@@ -291,15 +294,16 @@ mod tests {
     use super::*;
     use crate::{
         command_config::CommandConfig,
-        mdk_adapter::terminal_relay_fixture::RecipientFault,
+        mdk_adapter::terminal_relay_fixture::{RecipientFault, SocketEnd},
         peer_candidate_startup,
-        peer_invitation::Paths,
         peer_relay_trust::{
             candidate_registration::ReceiverPreflight, qualified_manual_recipient_fixture,
         },
     };
     use nostr::key::Keys;
     use std::{
+        fs::{self, OpenOptions},
+        os::unix::fs::{OpenOptionsExt, symlink},
         path::Path,
         process::{Command, Stdio},
     };
@@ -315,7 +319,16 @@ mod tests {
         let parent = tempfile::tempdir().unwrap();
         let child = concat!(module_path!(), "::actor_start_subprocess");
         let (_, child) = child.split_once("::").unwrap();
-        for case in ["before_ready", "stop_during_auth", "fatal_after_open"] {
+        for case in [
+            "before_ready",
+            "stop_during_auth",
+            "fatal_after_open",
+            "preexisting_empty",
+            "sidecar_only",
+            "malformed",
+            "replaced_while_preparing",
+            "drain_pending",
+        ] {
             let mut process = Command::new(std::env::current_exe().unwrap())
                 .args(["--ignored", "--exact", child, "--nocapture"])
                 .env_clear()
@@ -365,10 +378,59 @@ mod tests {
             .register(&lease, &material)
             .unwrap();
         let (_, _, custody) = registration.take_command_fence().unwrap().into_parts();
-        let directory = Paths::new(&lease, &material).unwrap();
-        let cursor = directory.cursor().unwrap().path().to_owned();
-        assert_eq!(std::fs::metadata(&cursor).unwrap().len(), 0);
+        let cursor = lease.root().join("peer/cursor.db");
+        assert!(!cursor.try_exists().unwrap());
         let (startup, listener, worker) = peer_candidate_startup::pair();
+        let readiness = listener.readiness();
+
+        if matches!(case.as_str(), "replaced_while_preparing" | "drain_pending") {
+            let mut attached = registration.attach(&lease, &material).unwrap();
+            let (quota, mut route) = attached.actor_parts();
+            startup.ordinary_ready();
+            listener.registered();
+            let ready = worker.ready().await.unwrap();
+            if case == "replaced_while_preparing" {
+                let original = lease.root().join("cursor-original-test");
+                let result =
+                    RecoveredOwner::open_for_actor(&lease, &material, quota, &mut route, || {
+                        fs::rename(&cursor, &original).unwrap();
+                        create_private(&cursor);
+                        true
+                    });
+                assert!(result.is_err());
+                assert_eq!(fs::metadata(&cursor).unwrap().len(), 0);
+                assert_eq!(fs::metadata(original).unwrap().len(), 0);
+            } else {
+                let token = route.take_route(&lease, &material).unwrap();
+                let (admission, drain) = ReceiverRouteAdmission::registered(token).unwrap();
+                assert!(readiness.is_current());
+                let mut pending = std::pin::pin!(revoke_and_reap(ready, &route, &drain));
+                assert!(
+                    timeout(Duration::from_millis(30), pending.as_mut())
+                        .await
+                        .is_err()
+                );
+                assert!(!readiness.is_current());
+                drop(admission);
+                timeout(Duration::from_secs(2), pending).await.unwrap();
+            }
+            assert!(!relay.runtime_socket_active(RUNTIME_SOCKET));
+            assert_eq!(relay.all_publication_attempts(), 0);
+            relay.stop().await;
+            return;
+        }
+
+        let sidecar = cursor.with_file_name("cursor.db-wal");
+        const MALFORMED: &[u8] = b"private malformed test cursor";
+        match case.as_str() {
+            "preexisting_empty" => create_private(&cursor),
+            "sidecar_only" => symlink("missing-target", &sidecar).unwrap(),
+            "malformed" => {
+                create_private(&cursor);
+                fs::write(&cursor, MALFORMED).unwrap();
+            }
+            _ => {}
+        }
         let mut actor = Actor::spawn(worker, lease, material, registration).unwrap();
         assert_eq!(actor.join_before(Instant::now()).await, Err(Incomplete));
 
@@ -381,7 +443,7 @@ mod tests {
                         .await,
                     Err(Incomplete)
                 );
-                assert_eq!(std::fs::metadata(cursor).unwrap().len(), 0);
+                assert!(!cursor.try_exists().unwrap());
                 assert_eq!(relay.qualification_connections(), RUNTIME_SOCKET - 1);
                 actor.stop();
                 Exit::Stopped
@@ -392,17 +454,27 @@ mod tests {
                 startup.ordinary_ready();
                 eventually(|| relay.authenticated(account)).await;
                 assert_eq!(relay.recipient_requests(account), 0);
-                startup.stop();
+                actor.stop();
                 Exit::Stopped
             }
-            "fatal_after_open" => {
+            "fatal_after_open" | "preexisting_empty" => {
                 startup.ordinary_ready();
                 listener.registered();
                 eventually(|| relay.recipient_requests(account) == 1).await;
                 assert!(relay.runtime_socket_active(RUNTIME_SOCKET));
-                assert_ne!(std::fs::metadata(cursor).unwrap().len(), 0);
-                custody.report();
-                Exit::GlobalFault
+                assert_ne!(fs::metadata(&cursor).unwrap().len(), 0);
+                if case == "fatal_after_open" {
+                    custody.report();
+                    Exit::GlobalFault
+                } else {
+                    actor.stop();
+                    Exit::Stopped
+                }
+            }
+            "sidecar_only" | "malformed" => {
+                startup.ordinary_ready();
+                listener.registered();
+                Exit::LocalUnavailable
             }
             _ => panic!("unknown actor case"),
         };
@@ -413,12 +485,32 @@ mod tests {
             Ok(expected)
         );
         assert_eq!(actor.join_before(Instant::now()).await, Ok(expected));
-        if case != "before_ready" {
-            eventually(|| relay.runtime_socket_end(RUNTIME_SOCKET).is_some()).await;
-            assert_eq!(relay.recipient_closes(account), 0);
+        assert!(!readiness.is_current());
+        match case.as_str() {
+            "fatal_after_open" | "stop_during_auth" | "preexisting_empty" => {
+                eventually(|| relay.runtime_socket_end(RUNTIME_SOCKET) == Some(SocketEnd::Raw))
+                    .await;
+                assert_eq!(relay.recipient_closes(account), 0);
+            }
+            "sidecar_only" => {
+                assert!(!cursor.try_exists().unwrap());
+                assert_eq!(fs::read_link(sidecar).unwrap(), Path::new("missing-target"));
+            }
+            "malformed" => assert_eq!(fs::read(cursor).unwrap(), MALFORMED),
+            _ => {}
         }
+        assert!(!relay.runtime_socket_active(RUNTIME_SOCKET + 1));
         assert_eq!(relay.all_publication_attempts(), 0);
         relay.stop().await;
+    }
+
+    fn create_private(path: &Path) {
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .unwrap();
     }
 
     async fn eventually(mut condition: impl FnMut() -> bool) {

@@ -75,6 +75,7 @@ pub(super) mod package;
 pub(super) mod v2_pending;
 
 impl<'lease> RecoveredOwner<'lease> {
+    #[cfg(test)]
     pub(super) fn open_registered<'profile: 'lease>(
         lease: &'lease Arc<ProfileLease>,
         material: &IdentityMaterial,
@@ -88,22 +89,58 @@ impl<'lease> RecoveredOwner<'lease> {
             .package_origin(lease, material, quota)
             .map_err(|_| Error::Binding)?;
         let _files = quota.receiver_files(lease).map_err(|_| Error::Path)?;
-        Self::open_core(lease, material, &relay, Some(quota))
+        let paths = Paths::new(lease, material)?;
+        let cursor = paths.cursor()?;
+        Self::open_core(paths, cursor, material, &relay, Some(quota))
+    }
+
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(super) fn open_for_actor<'profile: 'lease>(
+        lease: &'lease Arc<ProfileLease>,
+        material: &IdentityMaterial,
+        quota: &'lease ReceiverQuota<'profile>,
+        route: &mut crate::peer_relay_trust::candidate_registration::ReceiverRouteControl<
+            '_,
+            'profile,
+        >,
+        current: impl FnOnce() -> bool,
+    ) -> Result<Self> {
+        let relay = route
+            .package_origin(lease, material, quota)
+            .map_err(|_| Error::Binding)?;
+        let _files = quota.receiver_files(lease).map_err(|_| Error::Path)?;
+        let prepared = route
+            .prepare_cursor(lease, material, quota)
+            .map_err(|_| Error::Path)?;
+        if !current() {
+            return Err(Error::Path);
+        }
+        let paths = Paths::new(lease, material)?;
+        let cursor = paths.cursor()?;
+        cursor.matches_file(&prepared)?;
+        let owner = Self::open_core(paths, cursor, material, &relay, Some(quota))?;
+        owner.cursor.matches_file(&prepared)?;
+        Ok(owner)
     }
 
     #[cfg(test)]
     fn open(lease: &'lease ProfileLease, material: &IdentityMaterial, relay: &str) -> Result<Self> {
-        Self::open_core(lease, material, relay, None)
+        let paths = Paths::new(lease, material)?;
+        let cursor = paths.cursor()?;
+        Self::open_core(paths, cursor, material, relay, None)
     }
 
     fn open_core(
-        lease: &'lease ProfileLease,
+        paths: Paths<'lease>,
+        cursor: CheckedFile,
         material: &IdentityMaterial,
         relay: &str,
         package_quota: Option<&'lease ReceiverQuota<'lease>>,
     ) -> Result<Self> {
-        let paths = Paths::new(lease, material)?;
-        let cursor = paths.cursor()?;
         if !local_volume(cursor.path()).map_err(|_| Error::Path)? {
             return Err(Error::Path);
         }
