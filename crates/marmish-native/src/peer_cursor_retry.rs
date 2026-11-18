@@ -88,7 +88,6 @@ pub(crate) enum TrustedOutcome {
     AlreadyApplied,
     #[cfg(test)]
     Held,
-    #[cfg(test)]
     SkippedCooldown,
 }
 
