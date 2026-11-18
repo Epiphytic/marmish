@@ -55,3 +55,35 @@ MARMISH_BUILD_COMMIT="$(git rev-parse HEAD)" \
   cargo check --offline --locked -j2 -p marmish-native --all-targets \
   --target x86_64-unknown-linux-gnu
 ```
+
+## Integrated validation
+
+The exact Linux AMD64 test executable was built from source
+`1dfe9d0a3e4da5904ba6cc9cc52925dd27b65bfb`, tree
+`e13bebca98e114e2e1fe0dbc13442263c510cd1c`. Its SHA-256 was
+`62a6baeedb81437391bb6299f8eeb90b4cbecb353040334d570a3863cb445c14`.
+The integration merge `5d0f33c4488c12bda252028f4f3b071a622c7cc8`, tree
+`cbbaa55d5bd4b328a83820c335387f01ba4fbb8f`, kept the complete tested `crates/`
+tree and synchronized the previously published documentation. The nine
+registration files also match the independently reviewed author source.
+
+| Check | Result | Time |
+| --- | --- | ---: |
+| Registration subprocess harness | 1 passed, including 4 fresh fixture processes | 21.61 s |
+| Ready scope and Pending memory view | 10 passed | 23.99 s |
+| Cursor and checkpoint store suite | 76 passed, 4 opt-ins ignored | 56.30 s |
+| Private WSS Consent and Delivery, with native dispatcher proofs | 8 passed | 217.80 s |
+| Default non-test native check | Passed | 10.52 s |
+| `installed-checks` native binaries | Passed | 13.75 s |
+| Default strict native library and test Clippy | Passed | 27.95 s |
+| Candidate all-target check | Passed | 23.28 s |
+| Candidate strict all-target Clippy | Passed | 27.66 s |
+
+The combined opt-in WSS run includes both explicit child entry points, which
+return when invoked without fixture parameters. The ordinary Consent and
+Delivery wrappers launched real private-relay child processes. The existing
+native dispatch tests exercised ordinary forwarding and staged-registration
+ordering. This run establishes regression coverage for the integrated source.
+It does not mount the registered receiver in an installed daemon. Exact
+registration harness build time was 46.05 seconds. Formatting and whitespace
+checks passed. See the [integrated review](../reviews/peer-candidate-preflight-registration.md#integrated-review).

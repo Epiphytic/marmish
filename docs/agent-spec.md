@@ -105,6 +105,10 @@ The [private candidate server inventory CLI](validation/peer-candidate-read-cli.
 adds `marmish servers list` and exact `servers show` selectors for local Pending
 reads. The candidate socket returns `peer_unavailable` until the actor is mounted.
 Stock client and daemon command parsing remain unchanged.
+The [candidate VFS registration proof](validation/peer-candidate-preflight-registration.md)
+qualifies sealed receiver registration under the ordinary profile lease,
+forwards ordinary SQLite calls and fences reserved Peer database names. It
+is currently exercised in isolated test processes.
 
 **CI execution direction (2026-11-13):** prefer Epiphytic self-hosted runners;
 do not launch GitHub-hosted qualification as an implicit fallback. The

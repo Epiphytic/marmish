@@ -59,3 +59,18 @@ the retired weak reference's strong count was left out. The test releases
 each holder it acquired and asserts the dispatcher’s exact lease-conflict
 result. The registered forwarding descriptor remains valid through that
 refusal.
+
+## Integrated review
+
+Claude Code in Auto mode, Claude Sonnet 5.5, approved the integrated
+registration source in session `1c7b13dc-ce1a-4df6-bdb7-34d268055f58`.
+All nine registration files match their reviewed author versions. The reviewer
+checked the composition with Delivery, Consent and the Pending memory view
+and asked for exact-source regression runs. The author and integration runs
+are recorded in the [validation report](../validation/peer-candidate-preflight-registration.md).
+
+The design requires the future daemon to use the sealed registration entry
+point when creating `peer/`. Separate tests for root substitution, a
+different-profile lease and restrictive umask remain open. The test-only
+VFS name used while constructing the descriptor is replaced before SQLite
+registers it. Candidate archive scans must account for that source literal.
