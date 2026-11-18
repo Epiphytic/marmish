@@ -17,7 +17,9 @@ configured grant and setup revocation removes it. The
 has local Linux x86-64 verification. The [authenticated bootstrap](validation/terminal-bootstrap.md)
 and [ordered Terminal records](validation/terminal-frames.md) have native
 test-only WSS evidence, including exact 4 KiB records in both directions
-and durable Command profile exclusion. Remote Terminal admission, reattach,
+and durable Command profile exclusion. The [local supervisor](validation/terminal-supervisor.md)
+qualifies persistent encrypted slot state, writer and observer attachment, and
+restart recovery in Linux tmux fixtures. Remote Terminal admission, reattach,
 inbound Peer invitations and network heartbeat remain in development.
 The [Peer aggregate ingress proof](validation/peer-aggregate-ingress-proof.md)
 qualifies one shared canonical origin in a native loopback fixture. A copy

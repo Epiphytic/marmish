@@ -3,6 +3,9 @@
 mod os;
 #[path = "terminal_backend_paths.rs"]
 mod paths;
+#[cfg(test)]
+#[path = "terminal_supervisor.rs"]
+mod supervisor;
 
 use crate::{Error, Result};
 use std::ffi::OsString;
@@ -19,6 +22,7 @@ use std::time::{Duration, Instant};
 pub(crate) const WORKER_ENTRYPOINT: &str = "_terminal-worker";
 const LAUNCH: Error = Error::Invalid("terminal_worker_launch");
 const IO: Error = Error::Invalid("terminal_attachment_io");
+const READ_ONLY: Error = Error::Invalid("terminal_attachment_read_only");
 const STALE: Error = Error::Invalid("terminal_attachment_generation");
 const SESSION: u8 = 1;
 const READY: u8 = 2;
@@ -29,16 +33,64 @@ const EXEC_GRACE: Duration = Duration::from_millis(50);
 const CHILD_POLL: Duration = Duration::from_millis(10);
 const TERMINATE_GRACE: Duration = Duration::from_millis(50);
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Role {
+    Writer,
+    Observer,
+}
+
+impl Role {
+    fn argument(self) -> &'static str {
+        match self {
+            Self::Writer => "writer",
+            Self::Observer => "observer",
+        }
+    }
+
+    fn from_argument(arg: &std::ffi::OsStr) -> Result<Self> {
+        match arg.to_str() {
+            Some("writer") => Ok(Self::Writer),
+            Some("observer") => Ok(Self::Observer),
+            _ => Err(LAUNCH),
+        }
+    }
+}
+
 /// Verified paths and exact session name for one local attach operation.
 pub struct CheckedLaunch {
     daemon: PathBuf,
     tmux: PathBuf,
     socket: PathBuf,
     session: String,
+    role: Role,
+}
+
+struct LaunchFailure {
+    error: Error,
+    pending: Option<Attachment>,
+}
+
+impl From<Error> for LaunchFailure {
+    fn from(error: Error) -> Self {
+        Self {
+            error,
+            pending: None,
+        }
+    }
 }
 
 impl CheckedLaunch {
     pub fn new(daemon: &Path, tmux: &Path, socket: &Path, session: &str) -> Result<Self> {
+        Self::for_role(daemon, tmux, socket, session, Role::Writer)
+    }
+
+    fn for_role(
+        daemon: &Path,
+        tmux: &Path,
+        socket: &Path,
+        session: &str,
+        role: Role,
+    ) -> Result<Self> {
         let uid = paths::checked_uid()?;
         paths::daemon(daemon)?;
         let tmux = paths::tmux(tmux, uid)?;
@@ -49,17 +101,31 @@ impl CheckedLaunch {
             tmux,
             socket: socket.to_owned(),
             session: session.into(),
+            role,
         })
     }
 
     pub fn launch(&self, generation: u64, rows: u16, cols: u16) -> Result<Attachment> {
+        self.launch_owned(generation, rows, cols)
+            .map_err(|failure| {
+                drop(failure.pending);
+                failure.error
+            })
+    }
+
+    fn launch_owned(
+        &self,
+        generation: u64,
+        rows: u16,
+        cols: u16,
+    ) -> std::result::Result<Attachment, LaunchFailure> {
         if generation == 0 {
-            return Err(STALE);
+            return Err(STALE.into());
         }
         let uid = paths::checked_uid()?;
         paths::daemon(&self.daemon)?;
         if paths::tmux(&self.tmux, uid)? != self.tmux {
-            return Err(LAUNCH);
+            return Err(LAUNCH.into());
         }
         paths::socket(&self.socket, uid)?;
         let (master, slave) = os::pty(uid)?;
@@ -73,6 +139,7 @@ impl CheckedLaunch {
         let child = Command::new(&self.daemon)
             .env_clear()
             .arg(WORKER_ENTRYPOINT)
+            .arg(self.role.argument())
             .arg(&self.tmux)
             .arg(&self.socket)
             .arg(&self.session)
@@ -84,12 +151,19 @@ impl CheckedLaunch {
         let mut attachment = Attachment {
             master: Some(master),
             generation,
+            role: self.role,
             child: Some(ChildState::new(child)),
             reaper,
         };
         let child = attachment.child.as_mut().ok_or(LAUNCH)?;
-        await_status(reader, child, Instant::now() + STATUS_DEADLINE)?;
-        exec_grace(child, Instant::now() + EXEC_GRACE)?;
+        if let Err(error) = await_status(reader, child, Instant::now() + STATUS_DEADLINE)
+            .and_then(|()| exec_grace(child, Instant::now() + EXEC_GRACE))
+        {
+            return Err(LaunchFailure {
+                error,
+                pending: Some(attachment),
+            });
+        }
         Ok(attachment)
     }
 }
@@ -133,9 +207,10 @@ pub(crate) fn worker_entry(args: &[OsString]) -> ! {
 fn worker_command(args: &[OsString], uid: libc::uid_t) -> Result<Command> {
     crate::validate_executable_layout()?;
     paths::daemon(&std::env::current_exe().map_err(|_| LAUNCH)?)?;
-    let [tmux, socket, session] = args else {
+    let [role, tmux, socket, session] = args else {
         return Err(LAUNCH);
     };
+    let role = Role::from_argument(role)?;
     let tmux = Path::new(tmux);
     let socket = Path::new(socket);
     let session = session.to_str().ok_or(LAUNCH)?;
@@ -152,17 +227,14 @@ fn worker_command(args: &[OsString], uid: libc::uid_t) -> Result<Command> {
     };
     let mut command = Command::new(tmux);
     command
-        .arg("-u")
-        .arg("-S")
+        .args(["-u", "-N", "-S"])
         .arg(socket)
-        .args([
-            "-f",
-            "/dev/null",
-            "attach-session",
-            "-E",
-            "-t",
-            &format!("={session}"),
-        ])
+        .args(["-f", "/dev/null", "attach-session", "-E"]);
+    if role == Role::Observer {
+        command.args(["-f", "read-only,ignore-size"]);
+    }
+    command
+        .args(["-t", &format!("={session}")])
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .env("HOME", user.home)
@@ -299,6 +371,7 @@ pub enum Shutdown {
 pub struct Attachment {
     master: Option<File>,
     generation: u64,
+    role: Role,
     child: Option<ChildState>,
     reaper: SyncSender<ChildState>,
 }
@@ -366,9 +439,7 @@ impl Attachment {
     }
 
     pub fn write(&mut self, generation: u64, buffer: &[u8]) -> Result<WriteStatus> {
-        if self.generation != generation {
-            return Err(STALE);
-        }
+        self.check_sink(generation)?;
         let Some(master) = self.master.as_mut() else {
             return Ok(WriteStatus::Hangup);
         };
@@ -383,10 +454,18 @@ impl Attachment {
     }
 
     pub fn resize(&mut self, generation: u64, rows: u16, cols: u16) -> Result<()> {
-        if self.generation != generation {
-            return Err(STALE);
-        }
+        self.check_sink(generation)?;
         os::resize(self.master.as_ref().ok_or(IO)?.as_raw_fd(), rows, cols)
+    }
+
+    fn check_sink(&self, generation: u64) -> Result<()> {
+        if self.generation != generation {
+            Err(STALE)
+        } else if self.role == Role::Observer {
+            Err(READ_ONLY)
+        } else {
+            Ok(())
+        }
     }
 
     pub fn shutdown(&mut self, deadline: Instant) -> Result<Shutdown> {

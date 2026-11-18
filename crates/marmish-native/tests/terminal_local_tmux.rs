@@ -1184,16 +1184,34 @@ fn core_tests_terminal_backend_failed_exec_and_inherited_descriptor() {
     let socket = sock_dir.path().canonicalize().unwrap().join("sock");
     let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
     let helper = work.path().join("terminal-helper");
-    for (script, expected, exit) in [
+    for (role, script, expected, exit) in [
         (
+            "writer",
             &b"#!/no-such-marmish-interpreter\n"[..],
             &b"\x01\x02\x04"[..],
             125,
         ),
         (
+            "writer",
             &b"#!/bin/sh\n[ ! -e /dev/fd/98 ] && [ -t 0 ] && [ -t 1 ] && [ -t 2 ]\n"[..],
             &b"\x01\x02"[..],
             0,
+        ),
+        (
+            "observer",
+            &br#"#!/bin/sh
+[ "$#" = 12 ] && [ "$1 $2 $3" = "-u -N -S" ] && [ -S "$4" ] &&
+[ "$5 $6 $7 $8 $9" = "-f /dev/null attach-session -E -f" ] &&
+[ "${10} ${11} ${12}" = "read-only,ignore-size -t =unrelated" ]
+"#[..],
+            &b"\x01\x02"[..],
+            0,
+        ),
+        (
+            "invalid-role",
+            &b"#!/bin/sh\nexit 17\n"[..],
+            &b"\x03"[..],
+            125,
         ),
     ] {
         fs::write(&helper, script).unwrap();
@@ -1228,6 +1246,7 @@ fn core_tests_terminal_backend_failed_exec_and_inherited_descriptor() {
         command
             .env_clear()
             .arg("_terminal-worker")
+            .arg(role)
             .arg(&helper)
             .arg(&socket)
             .arg("unrelated")

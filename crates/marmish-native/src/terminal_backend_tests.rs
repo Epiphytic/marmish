@@ -56,6 +56,7 @@ fn guarded(child: ChildState) -> Attachment {
     Attachment {
         master: None,
         generation: 1,
+        role: Role::Writer,
         child: Some(child),
         reaper: reserve_reaper().unwrap(),
     }
@@ -154,6 +155,7 @@ fn core_tests_terminal_backend_generation_fences_partial_write() {
     let mut terminal = Attachment {
         master: Some(write),
         generation: 1,
+        role: Role::Writer,
         child: None,
         reaper: reserve_reaper().unwrap(),
     };
@@ -213,6 +215,7 @@ fn core_tests_terminal_backend_descriptor_inventory() {
     let mut guard = Attachment {
         master: None,
         generation: 1,
+        role: Role::Writer,
         child: Some(ChildState::new(child)),
         reaper,
     };

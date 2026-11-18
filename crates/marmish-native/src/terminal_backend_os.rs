@@ -132,7 +132,7 @@ pub(super) fn status_pipe() -> Result<(File, File)> {
     Ok((read, write))
 }
 
-fn nonblocking(fd: RawFd) -> Result<()> {
+pub(super) fn nonblocking(fd: RawFd) -> Result<()> {
     // SAFETY: both calls operate on the held descriptor.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } != 0 {

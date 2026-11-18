@@ -60,6 +60,8 @@ pub(super) fn checked_uid() -> Result<libc::uid_t> {
 pub(super) struct User {
     pub name: String,
     pub home: PathBuf,
+    #[cfg(test)]
+    pub shell: PathBuf,
 }
 
 fn passwd_field(buffer: &[u8], pointer: *const c_char, limit: usize) -> Option<&str> {
@@ -103,6 +105,8 @@ pub(super) fn user(uid: libc::uid_t) -> Result<User> {
         return Ok(User {
             name: name.to_owned(),
             home: home.to_owned(),
+            #[cfg(test)]
+            shell: shell.to_owned(),
         });
     }
     Err(ACCOUNT_ERROR)
