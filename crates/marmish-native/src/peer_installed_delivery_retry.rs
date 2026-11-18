@@ -156,22 +156,24 @@ impl Checkpoint {
             authority: ConsentAuthority::Fresh(queued),
         };
         let expired = wall >= prepared.expires;
-        // A deadline crossed during inspection requires another saved turn
-        // with a historical native read. Keep its current persisted revision.
-        if expired && prepared.sample >= prepared.expires {
-            return Err(Error::Expired);
-        }
         let verification_wall = if expired { prepared.sample } else { wall };
         let verified = self.verify_custody_delivery(&consent, native, prepared.incoming, verification_wall)?;
-        if !expired {
-            if let Some((delivery, package)) = verified {
+        match verified {
+            Some((delivery, package)) if !expired => {
                 let disposition = self.commit_custody_held_input(
                     source, HeldInput::Saved(&saved.snapshot), &consent, &delivery, &package, wall,
                 )?;
                 return Ok(Some(disposition.status));
             }
-        } else if verified.is_none() {
-            return Err(Error::Package);
+            Some((delivery, package)) => {
+                let replay = delivery.flight().expires_at.min(delivery.flight().replay_safe_until);
+                let verified_upper = prepared.queued.latest_delivery().min(replay).min(package.bounds().1);
+                if verified_upper.checked_sub(MARGIN) != Some(prepared.expires) {
+                    return Err(CursorError::Classification.into());
+                }
+            }
+            None if expired => return Err(Error::Package),
+            None => {}
         }
 
         let finding = if expired {

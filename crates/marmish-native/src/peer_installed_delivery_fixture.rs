@@ -14,6 +14,9 @@ use crate::peer_invitation::{
 };
 use consent_checkpoint::Disposition;
 
+#[path = "peer_installed_delivery_service.rs"]
+mod service;
+
 #[path = "peer_installed_delivery_wss_tests.rs"]
 mod tests;
 

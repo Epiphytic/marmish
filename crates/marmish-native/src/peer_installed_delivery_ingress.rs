@@ -146,7 +146,7 @@ impl Checkpoint {
         let input = (&carrier).into();
         let incoming = match self.classify_installed_carrier(source, &input)? {
             InstalledCarrier::Offer(offer) => {
-                return match self.record_installed_offer(source, input, offer)? {
+                return match self.record_installed_offer(source, input, *offer)? {
                     OfferIngress::Recorded(disposition) => Ok(Observation::Receipted(disposition)),
                     OfferIngress::Backpressure => Err(CursorError::Backlog.into()),
                     _ => Err(CursorError::Binding.into()),

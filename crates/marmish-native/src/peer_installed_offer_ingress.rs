@@ -13,7 +13,7 @@ pub(in crate::peer_invitation) enum OfferIngress {
 }
 
 pub(in crate::peer_invitation) enum InstalledCarrier {
-    Offer(wire::Offer),
+    Offer(Box<wire::Offer>),
     Delivery(Box<IncomingDelivery>),
     InvalidOffer,
     InvalidFrame,
@@ -52,7 +52,7 @@ impl Checkpoint {
         input: OfferInput<'_>,
     ) -> Result<OfferIngress> {
         match self.classify_installed_carrier(source, &input)? {
-            InstalledCarrier::Offer(offer) => self.record_installed_offer(source, input, offer),
+            InstalledCarrier::Offer(offer) => self.record_installed_offer(source, input, *offer),
             InstalledCarrier::InvalidOffer => Ok(OfferIngress::Invalid),
             InstalledCarrier::InvalidFrame | InstalledCarrier::Delivery(_) => {
                 Ok(OfferIngress::NotOffer)
@@ -99,7 +99,7 @@ impl Checkpoint {
         {
             return Ok(InstalledCarrier::InvalidOffer);
         }
-        Ok(InstalledCarrier::Offer(offer))
+        Ok(InstalledCarrier::Offer(Box::new(offer)))
     }
 
     pub(super) fn record_installed_offer(

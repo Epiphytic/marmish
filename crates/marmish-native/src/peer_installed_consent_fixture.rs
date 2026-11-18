@@ -13,6 +13,7 @@ pub(in crate::peer_invitation) struct Fixture<'a> {
     cursor: paths::CheckedFile,
     cut: Option<Cut>,
     wake_failure: Option<Error>,
+    package_reads: std::cell::Cell<usize>,
 }
 
 #[derive(PartialEq, Eq)]
@@ -83,6 +84,7 @@ impl<'a> Fixture<'a> {
             cursor,
             cut: None,
             wake_failure: None,
+            package_reads: std::cell::Cell::new(0),
         })
     }
 
@@ -91,6 +93,7 @@ impl<'a> Fixture<'a> {
         (binding, witness): (Binding, FileWitness),
         wall: u64,
     ) -> Result<NativeAttestation> {
+        self.package_reads.update(|reads| reads + 1);
         let (package, image) = self.owner.snapshot.read(
             &self.owner.state,
             binding,

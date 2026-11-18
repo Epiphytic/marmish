@@ -10,7 +10,9 @@ use nostr::event::EventId;
 use sha2::Digest;
 
 use crate::{
-    mdk_adapter::peer_staged_proof_tests::peer_enrollment_welcome,
+    mdk_adapter::{
+        peer_staged_proof_tests::peer_enrollment_welcome, terminal_relay_fixture::RecipientFault,
+    },
     peer_control_version::ControlVersion,
     peer_quota_vfs::dispatch::{ProfileSlots, mount_for_proof, resolve_once},
     peer_relay_trust::{ReceiverRouteAdmission, qualified_recipient_fixture},
@@ -22,6 +24,7 @@ use consent_checkpoint::{
     Status,
     wire::{Codec, MAX_OUTER_BYTES},
 };
+use service::{ConnectionAction, Refusal, Service, Work};
 use socket::owner::recipient::PublicationOutcome;
 use store::TrustedOutcome;
 
@@ -97,9 +100,35 @@ async fn run() {
     Paths::new(&lease, &material).unwrap().initialize().unwrap();
     let admission = || ReceiverRouteAdmission::fixture(lease.clone(), &material).unwrap();
     let mut fixture = Fixture::open(&lease, &material, &route).unwrap();
+    let mut service = Service::new(std::time::Instant::now());
+    for expected in [1, 2] {
+        assert_eq!(
+            service.poll_connect(std::time::Instant::now()),
+            ConnectionAction::Connect
+        );
+        relay.recipient_fault(RecipientFault::WrongLiveEose);
+        let failure = match PeerRecipientPort::open(admission(), time_limit()).await {
+            Ok(_) => panic!("malformed live EOSE granted a recipient port"),
+            Err(failure) => failure,
+        };
+        assert_eq!(failure, Failure::Grammar);
+        let now = std::time::Instant::now();
+        service.refuse(now, Refusal::from(Error::Socket(failure)));
+        let eligible = now + Duration::from_secs(expected);
+        assert_eq!(
+            service.poll_connect(std::time::Instant::now()),
+            ConnectionAction::WaitUntil(eligible)
+        );
+        tokio::time::sleep_until(eligible.into()).await;
+    }
+    assert_eq!(
+        service.poll_connect(std::time::Instant::now()),
+        ConnectionAction::Connect
+    );
     let mut recipient = PeerRecipientPort::open(admission(), time_limit())
         .await
         .unwrap();
+    assert!(service.authenticated(std::time::Instant::now()));
     let connector = relay.connector(lease.root(), true, None);
     let mut sender = Owner::open(
         &connector,
@@ -215,10 +244,16 @@ async fn run() {
             .unwrap()
     );
     drop(recipient);
+    service.disconnected(std::time::Instant::now());
+    assert_eq!(
+        service.poll_connect(std::time::Instant::now()),
+        ConnectionAction::Connect
+    );
 
     let mut recipient = PeerRecipientPort::open(admission(), time_limit())
         .await
         .unwrap();
+    assert!(service.authenticated(std::time::Instant::now()));
     let cursor = fixture
         .scan_delivery(&mut recipient, ScanStart::Recovery)
         .unwrap()
@@ -240,9 +275,13 @@ async fn run() {
         .to_vec();
 
     let started = std::time::Instant::now();
-    let (statuses, next) = fixture
-        .delivery_page(&mut recipient, &cursor, &page)
-        .unwrap();
+    let (statuses, next) = {
+        let mut batch = service.batch().unwrap();
+        assert_eq!(batch.choose(true, false, false), Work::History);
+        let result = fixture.delivery_page(&mut recipient, &cursor, &page);
+        batch.history_result(&cursor, &result);
+        result.unwrap()
+    };
     let page_millis = started.elapsed().as_millis();
     assert_eq!(
         statuses
@@ -271,6 +310,59 @@ async fn run() {
             .1
             .is_none()
     );
+
+    // A second carrier can match the same signed Consent and package. It
+    // cannot replace the exact Delivery that already owns the retry slot.
+    let competing = codec
+        .prepare_delivery(
+            &founder,
+            &consent,
+            &welcome,
+            wall(),
+            consent.flight().expires_at - 1,
+        )
+        .unwrap();
+    let competing_id = competing.flight.flight().carrier_id.to_bytes();
+    assert_ne!(competing_id, delivery_id);
+    assert!(
+        sender
+            .publish(&competing, competing.flight.flight(), time_limit())
+            .await
+            .unwrap()
+    );
+    let deadline = time_limit();
+    let competing_live = loop {
+        let record = recipient.wait_live(deadline).await.unwrap().unwrap();
+        if record.arrival().id == competing_id {
+            break record;
+        }
+    };
+    assert_eq!(
+        fixture
+            .delivery_input(&mut recipient, Input::Live(&competing_live))
+            .unwrap()
+            .status,
+        Status::Invalid
+    );
+
+    // The first retry is due one second after deferral. Confirm the
+    // stored work is actually eligible before asserting no native read.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let state = &mut fixture.owner.state;
+    assert!(
+        recipient
+            .use_current_recipient(|account, origin, wall| {
+                state
+                    .checkpoint
+                    .due_installed_delivery(&state.source, account, origin, wall)
+            })
+            .unwrap()
+            .unwrap()
+            .is_some()
+    );
+    let reads = fixture.package_reads.get();
+    assert_eq!(fixture.retry_delivery(&mut recipient).unwrap(), None);
+    assert_eq!(fixture.package_reads.get(), reads);
 
     let state = &mut fixture.owner.state;
     assert!(
