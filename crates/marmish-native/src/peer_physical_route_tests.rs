@@ -107,12 +107,57 @@ fn physical_route_clock_rejects_regression_drift_and_overflow() {
         initial_mono: now,
         previous_wall: Duration::ZERO,
         previous_mono: now,
+        effective_wall: Duration::ZERO,
     };
     assert!(
         clock
             .observe(sample(10, now + Duration::from_nanos(1)))
             .is_err()
     );
+}
+
+pub(crate) async fn qualified_recipient_fixture(
+    founder: PublicKey,
+    live_founder: PublicKey,
+) -> (
+    Relay,
+    tempfile::TempDir,
+    Arc<ProfileLease>,
+    IdentityMaterial,
+) {
+    let plan = probe::Plan::new().unwrap();
+    let (accounts, group) = plan.relay_registration();
+    let relay = Relay::start_peer_qualification(accounts, group).await;
+    let (temp, lease, material) = fresh_profile();
+    let fixture = QualificationFixture::from_ready(&relay, temp, lease.clone());
+    let checked = qualification::CheckedAttestation::read(
+        &fixture.attestation_path,
+        fixture.relay(),
+        qualification::wall().unwrap(),
+    )
+    .unwrap();
+    let authority = fixture.authority(&checked);
+    let completed = plan
+        .execute(
+            &fixture.owner.connector,
+            &authority,
+            authority.check().unwrap(),
+        )
+        .await
+        .unwrap();
+    qualification::issue(&authority, completed, &fixture.issuer_key()).unwrap();
+
+    let QualificationFixture { temp, owner, .. } = fixture;
+    drop(owner);
+    drop(lease);
+    drop(material);
+    let mut lease = ProfileLease::acquire_ready(temp.path(), "test").unwrap();
+    let material = prepare(&mut lease);
+    let lease = Arc::new(lease);
+    relay
+        .switch_to_recipient_runtime([material.public_key(), founder], live_founder)
+        .await;
+    (relay, temp, lease, material)
 }
 
 #[tokio::test]

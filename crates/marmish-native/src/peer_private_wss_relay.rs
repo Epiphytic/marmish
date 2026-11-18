@@ -207,6 +207,7 @@ impl GroupScope {
 
 pub(super) struct Scope {
     accounts: [PublicKey; 2],
+    extra_offer_writer: Option<PublicKey>,
     pub(super) writes: Vec<Write>,
     pub(super) group: Option<GroupScope>,
 }
@@ -216,6 +217,7 @@ impl Scope {
         assert!(accounts[0] != accounts[1], "independent Peer accounts");
         Self {
             accounts,
+            extra_offer_writer: None,
             writes: Vec::new(),
             group: None,
         }
@@ -226,16 +228,22 @@ impl Scope {
         self
     }
 
+    pub(super) fn with_extra_offer_writer(mut self, writer: PublicKey) -> Self {
+        assert!(self.group.is_none() && !self.includes(writer));
+        self.extra_offer_writer = Some(writer);
+        self
+    }
+
     pub(super) fn includes(&self, account: PublicKey) -> bool {
-        self.accounts.contains(&account)
+        self.accounts.contains(&account) || self.extra_offer_writer == Some(account)
     }
 
     pub(super) fn accept(&mut self, sender: PublicKey, event: &Event, raw: &str) -> bool {
-        let Some(recipient) = self
-            .includes(sender)
-            .then(|| self.accounts.into_iter().find(|account| *account != sender))
-            .flatten()
-        else {
+        let recipient = if sender == self.accounts[0] {
+            self.accounts[1]
+        } else if self.includes(sender) {
+            self.accounts[0]
+        } else {
             return false;
         };
         if u16::from(event.kind) != CARRIER

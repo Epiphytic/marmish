@@ -1,16 +1,18 @@
-//! One serialized, authenticated Peer relay socket for the private fixture.
+//! One serialized, authenticated Peer relay socket.
 
 use std::{
     collections::VecDeque,
-    future::Future,
+    future::{Future, poll_fn},
+    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    task::Poll,
 };
 
 use async_wsocket::Message;
-use futures_util::{FutureExt, SinkExt, StreamExt};
+use futures_util::{FutureExt, Sink, SinkExt, StreamExt};
 use nostr::{
     event::{Event, EventBuilder, FinalizeEvent, Kind, Tag},
     key::{Keys, PublicKey},
@@ -18,9 +20,12 @@ use nostr::{
 };
 use nostr_sdk::transport::websocket::{WebSocketSink, WebSocketStream, WebSocketTransport};
 use serde_json::{json, value::RawValue};
-use tokio::time::{Instant, timeout_at};
+use tokio::time::{Instant, sleep_until, timeout_at};
 
-use crate::transport::RelayConnector;
+use crate::{
+    peer_relay_trust::{LivePhysicalRoute, ReceiverRouteAdmission},
+    transport::RelayConnector,
+};
 
 use super::wire::{self, Arrival, Budget, CARRIER, Failure, Packet, RECORD_LIMIT, Reserve, Result};
 
@@ -32,6 +37,9 @@ use super::peer_control_wire::{Flight, Prepared};
 mod groups;
 #[cfg(test)]
 pub(in crate::peer_invitation) use groups::{GroupPage, GroupRecord};
+
+#[path = "peer_recipient_port.rs"]
+pub(in crate::peer_invitation) mod recipient;
 
 const PREDRAIN_LIMIT: usize = 12;
 
@@ -115,17 +123,55 @@ impl Owner {
         check_deadline(deadline)?;
         limited(deadline, connector.bootstrap(deadline)).await?;
         let (sink, stream) = limited(deadline, connector.connect(endpoint, None)).await?;
-        let mut socket = Socket { sink, stream };
+        Self::open_socket(
+            Socket {
+                sink,
+                stream,
+                physical: None,
+            },
+            endpoint,
+            signer,
+            deadline,
+        )
+        .await
+    }
 
+    async fn open_checked(admission: ReceiverRouteAdmission, deadline: Instant) -> Result<Self> {
+        let (physical, signer, sink, stream) = admission
+            .open(wire::MESSAGE_LIMIT, deadline)
+            .await
+            .map_err(|_| Failure::Retired)?;
+        let endpoint = physical.endpoint().clone();
+        Self::open_socket(
+            Socket {
+                sink,
+                stream,
+                physical: Some(physical),
+            },
+            &endpoint,
+            &signer,
+            deadline,
+        )
+        .await
+    }
+
+    async fn open_socket(
+        mut socket: Socket,
+        endpoint: &Url,
+        signer: &Keys,
+        mut deadline: Instant,
+    ) -> Result<Self> {
+        socket.refresh(&mut deadline)?;
         let mut namespace = [0; 16];
         getrandom::fill(&mut namespace).map_err(|_| Failure::Transport)?;
         let live_id = format!("mp/{}/l", hex::encode(namespace));
         socket.ready(endpoint, &live_id, signer, deadline).await?;
+        socket.refresh(&mut deadline)?;
         Ok(Self {
             socket: Some(socket),
             scope: Arc::new(Scope {
-                origin: origin.to_owned(),
-                recipient: recipient.to_bytes(),
+                origin: endpoint.as_str().to_owned(),
+                recipient: signer.public_key().to_bytes(),
                 namespace,
                 live: AtomicBool::new(true),
             }),
@@ -333,6 +379,15 @@ impl Owner {
         deadline: Instant,
     ) -> Result<bool> {
         self.socket()?.send(frame, deadline).await?;
+        self.read_ack(carrier, budget, deadline).await
+    }
+
+    async fn read_ack(
+        &mut self,
+        carrier: [u8; 32],
+        budget: &mut Budget,
+        deadline: Instant,
+    ) -> Result<bool> {
         loop {
             let text = self.socket()?.text(budget, deadline).await?;
             match wire::packet(&text)? {
@@ -345,8 +400,9 @@ impl Owner {
     }
 
     async fn predrain(&mut self, budget: &mut Budget, deadline: Instant) -> Result<()> {
+        let mut deadline = deadline;
         for index in 0..=PREDRAIN_LIMIT {
-            check_deadline(deadline)?;
+            self.socket()?.refresh(&mut deadline)?;
             let Some(message) = self.socket()?.stream.next().now_or_never() else {
                 return Ok(());
             };
@@ -388,7 +444,10 @@ impl Owner {
             .active(async |owner| {
                 let socket = owner.socket()?;
                 socket.send(message, deadline).await?;
-                limited(deadline, socket.sink.close()).await
+                if socket.physical.is_none() {
+                    limited(deadline, socket.sink.close()).await?;
+                }
+                Ok(())
             })
             .await;
         self.retire();
@@ -453,6 +512,7 @@ impl Drop for ActiveOperation<'_> {
 struct Socket {
     sink: WebSocketSink,
     stream: WebSocketStream,
+    physical: Option<LivePhysicalRoute>,
 }
 
 impl Socket {
@@ -493,16 +553,54 @@ impl Socket {
     }
 
     async fn send(&mut self, text: String, deadline: Instant) -> Result<()> {
-        limited(deadline, self.sink.send(Message::Text(text))).await
+        if self.physical.is_none() {
+            return limited(deadline, self.sink.send(Message::Text(text))).await;
+        }
+        self.fenced_write(text, deadline, None, |_| Ok(()), &mut false)
+            .await
     }
 
-    async fn text(&mut self, budget: &mut Budget, deadline: Instant) -> Result<String> {
+    fn refresh(&mut self, deadline: &mut Instant) -> Result<Option<u64>> {
+        refresh_route(&mut self.physical, deadline)
+    }
+
+    async fn fenced_write(
+        &mut self,
+        text: String,
+        deadline: Instant,
+        wall_end: Option<u64>,
+        mut authorize: impl FnMut(u64) -> Result<()>,
+        exposed: &mut bool,
+    ) -> Result<()> {
+        if text.len() > wire::MESSAGE_LIMIT {
+            return Err(Failure::Size);
+        }
+        let Self { sink, physical, .. } = self;
+        let cancel = physical.as_ref().ok_or(Failure::Binding)?.cancellation();
+        let write = fenced_sink(sink, Message::Text(text), deadline, exposed, |end| {
+            let wall = refresh_route(physical, end)?.ok_or(Failure::Binding)?;
+            if let (Some(physical), Some(wall_end)) = (physical.as_ref(), wall_end) {
+                physical
+                    .clamp_wall(end, wall_end)
+                    .map_err(|_| Failure::Retired)?;
+            }
+            authorize(wall)
+        });
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err(Failure::Retired),
+            outcome = write => outcome,
+        }
+    }
+
+    async fn text(&mut self, budget: &mut Budget, mut deadline: Instant) -> Result<String> {
         loop {
-            check_deadline(deadline)?;
+            self.refresh(&mut deadline)?;
             let arrival = timeout_at(deadline, self.stream.next())
                 .await
                 .map_err(|_| Failure::Deadline)?;
             check_received(deadline)?;
+            self.refresh(&mut deadline)?;
             if let Some(text) = self.inspect(arrival, budget, deadline).await? {
                 return Ok(text);
             }
@@ -522,9 +620,13 @@ impl Socket {
         match message {
             Message::Text(text) => Ok(Some(text)),
             Message::Ping(payload) if payload.len() <= 125 => {
-                limited(deadline, self.sink.flush())
-                    .await
-                    .map_err(|_| Failure::Transport)?;
+                let Self { sink, physical, .. } = self;
+                fenced_poll(
+                    deadline,
+                    |end| refresh_route(physical, end).map(drop),
+                    |cx| Pin::new(&mut *sink).poll_flush(cx),
+                )
+                .await?;
                 Ok(None)
             }
             Message::Pong(payload) if payload.len() <= 125 => Ok(None),
@@ -532,6 +634,71 @@ impl Socket {
             _ => Err(Failure::Grammar),
         }
     }
+}
+
+fn refresh_route(
+    physical: &mut Option<LivePhysicalRoute>,
+    deadline: &mut Instant,
+) -> Result<Option<u64>> {
+    let wall = physical
+        .as_mut()
+        .map(|route| route.check_use(deadline).map_err(|_| Failure::Retired))
+        .transpose()?;
+    check_deadline(*deadline)?;
+    Ok(wall)
+}
+
+async fn fenced_sink<S: Sink<Message> + Unpin>(
+    sink: &mut S,
+    message: Message,
+    mut end: Instant,
+    exposed: &mut bool,
+    mut fence: impl FnMut(&mut Instant) -> Result<()>,
+) -> Result<()> {
+    fenced_poll_inner(&mut end, &mut fence, |cx| {
+        Pin::new(&mut *sink).poll_ready(cx)
+    })
+    .await?;
+    fence(&mut end)?;
+    check_deadline(end)?;
+    // The installed SplitSink/With pair stages the message in start_send.
+    Pin::new(&mut *sink)
+        .start_send(message)
+        .map_err(|_| Failure::Transport)?;
+    fenced_poll_inner(&mut end, &mut fence, |cx| {
+        *exposed = true;
+        Pin::new(&mut *sink).poll_flush(cx)
+    })
+    .await
+}
+
+async fn fenced_poll<T, E>(
+    mut end: Instant,
+    mut fence: impl FnMut(&mut Instant) -> Result<()>,
+    step: impl FnMut(&mut std::task::Context<'_>) -> Poll<std::result::Result<T, E>>,
+) -> Result<T> {
+    fenced_poll_inner(&mut end, &mut fence, step).await
+}
+
+async fn fenced_poll_inner<T, E>(
+    end: &mut Instant,
+    mut fence: impl FnMut(&mut Instant) -> Result<()>,
+    mut step: impl FnMut(&mut std::task::Context<'_>) -> Poll<std::result::Result<T, E>>,
+) -> Result<T> {
+    let timer = sleep_until(*end);
+    tokio::pin!(timer);
+    poll_fn(|cx| {
+        let before = *end;
+        fence(end)?;
+        if *end < before {
+            timer.as_mut().reset(*end);
+        }
+        if timer.as_mut().poll(cx).is_ready() || Instant::now() >= *end {
+            return Poll::Ready(Err(Failure::Deadline));
+        }
+        step(cx).map(|result| result.map_err(|_| Failure::Transport))
+    })
+    .await
 }
 
 #[cfg(test)]

@@ -522,6 +522,23 @@ pub(super) struct HeldQualification {
 }
 
 impl HeldQualification {
+    pub(super) fn end_exclusive(&self) -> Result<u64> {
+        let end = self
+            .issued
+            .record
+            .expires_at
+            .min(self.attestation_window.end);
+        self.ca.as_ref().map_or(Ok(end), |ca| {
+            super::inclusive_end(&ca.window)
+                .map(|anchor_end| end.min(anchor_end))
+                .ok_or(super::CA_ERROR)
+        })
+    }
+
+    pub(super) fn live_relay(&self) -> (&Relay, Option<&CheckedCa>) {
+        (&self.relay, self.ca.as_ref())
+    }
+
     #[cfg(test)]
     pub(super) fn test_descriptor(&self, name: &str) -> &File {
         match name {

@@ -41,6 +41,10 @@ mod qualification;
 #[path = "peer_physical_route.rs"]
 mod physical_route;
 
+#[cfg(test)]
+pub(crate) use physical_route::qualified_recipient_fixture;
+pub(crate) use physical_route::{LivePhysicalRoute, PeerLiveDial, ReceiverRouteAdmission};
+
 pub(crate) use qualification::Report as QualificationReport;
 
 #[cfg(test)]
@@ -235,15 +239,7 @@ impl BoundPeerTls {
         let profile = self.profile.upgrade().ok_or(Error::Transport("shutdown"))?;
         profile.recheck()?;
         let (roots, anchor_window) = self.tls_roots(&profile)?;
-        let mut config = crate::transport::client_tls_config(roots)?;
-        config.enable_early_data = false;
-        config.resumption = rustls::client::Resumption::disabled();
-        Ok(PeerTlsAttempt {
-            profile,
-            config,
-            trust: self.trust.clone(),
-            anchor_window,
-        })
+        PeerTlsAttempt::new(profile, self.trust.clone(), roots, anchor_window)
     }
 
     fn tls_roots(
@@ -270,6 +266,23 @@ impl BoundPeerTls {
 }
 
 impl PeerTlsAttempt {
+    fn new(
+        profile: Arc<ProfileFiles>,
+        trust: Trust,
+        roots: RootCertStore,
+        anchor_window: Option<std::ops::RangeInclusive<i64>>,
+    ) -> Result<Self> {
+        let mut config = crate::transport::client_tls_config(roots)?;
+        config.enable_early_data = false;
+        config.resumption = rustls::client::Resumption::disabled();
+        Ok(Self {
+            profile,
+            config,
+            trust,
+            anchor_window,
+        })
+    }
+
     pub(crate) async fn connect(
         &self,
         stream: Box<dyn NetworkStream>,
@@ -285,6 +298,30 @@ impl PeerTlsAttempt {
         host: &str,
         wall: impl FnOnce() -> u64,
     ) -> Result<Box<dyn NetworkStream>> {
+        Ok(Box::new(self.handshake(stream, host, wall).await?))
+    }
+
+    pub(crate) async fn connect_live(
+        &self,
+        stream: Box<dyn NetworkStream>,
+        host: &str,
+    ) -> Result<(Box<dyn NetworkStream>, PeerTlsWindow)> {
+        let stream = self
+            .handshake(stream, host, || UnixTime::now().as_secs())
+            .await?;
+        let (_, session) = stream.get_ref();
+        let certificates = session.peer_certificates().ok_or(CERT_ERROR)?;
+        let window = PeerTlsWindow::verified_chain(certificates, self.anchor_window.as_ref())?;
+        window.check(UnixTime::now().as_secs())?;
+        Ok((Box::new(stream), window))
+    }
+
+    async fn handshake(
+        &self,
+        stream: Box<dyn NetworkStream>,
+        host: &str,
+        wall: impl FnOnce() -> u64,
+    ) -> Result<tokio_rustls::client::TlsStream<Box<dyn NetworkStream>>> {
         let stream = crate::transport::secure_tls_stream(stream, host, self.config.clone())
             .await
             .map_err(|_| CERT_ERROR)?;
@@ -299,8 +336,51 @@ impl PeerTlsAttempt {
             return Err(CA_ERROR);
         }
         self.profile.recheck()?;
-        Ok(Box::new(stream))
+        Ok(stream)
     }
+}
+
+pub(crate) struct PeerTlsWindow(std::ops::RangeInclusive<i64>);
+
+impl PeerTlsWindow {
+    fn verified_chain(
+        certificates: &[CertificateDer<'_>],
+        anchor: Option<&std::ops::RangeInclusive<i64>>,
+    ) -> Result<Self> {
+        // The rustls handshake has already verified trust and name. This
+        // additional window can only shorten the lifetime of that proof.
+        let mut start = anchor.map_or(i64::MIN, |window| *window.start());
+        let mut end = anchor.map_or(i64::MAX, |window| *window.end());
+        for certificate in certificates {
+            let cert = parse_der(certificate.as_ref()).ok_or(CERT_ERROR)?;
+            let validity = cert.validity();
+            start = start.max(validity.not_before.timestamp());
+            end = end.min(validity.not_after.timestamp());
+        }
+        if start > end {
+            return Err(CERT_ERROR);
+        }
+        Ok(Self(start..=end))
+    }
+
+    pub(crate) fn check(&self, wall: u64) -> Result<()> {
+        wall_in(&self.0, wall).then_some(()).ok_or(CERT_ERROR)
+    }
+
+    fn end_exclusive(&self) -> Result<u64> {
+        inclusive_end(&self.0).ok_or(CERT_ERROR)
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn peer_authenticated_route_tls_window_has_inclusive_certificate_end() {
+    let window = PeerTlsWindow(10..=20);
+    assert!(window.check(9).is_err());
+    assert!(window.check(10).is_ok());
+    assert!(window.check(20).is_ok());
+    assert!(window.check(21).is_err());
+    assert_eq!(window.end_exclusive().unwrap(), 21);
 }
 
 fn validate_live_leaf(certificates: &[CertificateDer<'_>], trust: &Trust) -> Result<()> {
@@ -344,6 +424,10 @@ fn ca_window(bytes: &[u8]) -> Option<std::ops::RangeInclusive<i64>> {
         && modern_root_signature(&certificate)
         && certificate.verify_signature(None).is_ok())
     .then_some(validity.not_before.timestamp()..=validity.not_after.timestamp())
+}
+
+fn inclusive_end(window: &std::ops::RangeInclusive<i64>) -> Option<u64> {
+    u64::try_from(*window.end()).ok()?.checked_add(1)
 }
 
 fn wall_in(window: &std::ops::RangeInclusive<i64>, wall: u64) -> bool {

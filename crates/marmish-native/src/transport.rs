@@ -5,7 +5,7 @@
 
 use crate::{
     Error, Result,
-    peer_relay_trust::{BoundPeerTls, PeerTlsAttempt, ProbeAuthority},
+    peer_relay_trust::{BoundPeerTls, PeerLiveDial, PeerTlsAttempt, PeerTlsWindow, ProbeAuthority},
 };
 use arti_client::{BootstrapBehavior, TorClient, config::TorClientConfigBuilder};
 use async_wsocket::Message;
@@ -324,6 +324,38 @@ impl PeerRelayConnector {
         timeout_at(deadline, self.0.open_socket(url, None))
             .await
             .map_err(|_| Error::Transport("peer_qualification_deadline"))?
+    }
+
+    pub(crate) async fn open_live(
+        authority: PeerLiveDial,
+        deadline: Instant,
+    ) -> Result<(WebSocketSink, WebSocketStream, PeerTlsWindow)> {
+        let (endpoint, policy, dirs, tls, cancel) = authority.take();
+        if policy.urls() != [endpoint.clone()] || policy.mode() != RouteMode::Off {
+            return Err(Error::Transport("relay_not_configured"));
+        }
+        let mut connector = RelayConnector::new(policy, dirs)?;
+        Arc::get_mut(&mut connector.0)
+            .expect("new connector is unshared")
+            .cancelled = cancel;
+        connector.bootstrap(deadline).await?;
+        let open = connector.connection_phases(
+            Route::Direct,
+            connector.connect_stream(&endpoint, 0, Route::Direct),
+            |(stream, permit)| async {
+                let host = endpoint
+                    .host_str()
+                    .ok_or(Error::Invalid("relay_host"))?
+                    .trim_start_matches('[')
+                    .trim_end_matches(']');
+                let (stream, window) = tls.connect_live(stream, host).await?;
+                let (sink, stream) = connector.websocket(&endpoint, stream, permit).await?;
+                Ok((sink, stream, window))
+            },
+        );
+        timeout_at(deadline, open)
+            .await
+            .map_err(|_| Error::Timeout)?
     }
 
     #[cfg(test)]

@@ -57,6 +57,14 @@ pub(crate) enum QualificationFault {
     WrongReadRefusal(&'static str),
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum RecipientFault {
+    MissingAuthAck,
+    NegativeAuthAck,
+    WrongAuthAck,
+    WrongLiveEose,
+}
+
 #[derive(Clone, Debug)]
 pub(super) enum Observation {
     Authentication(PublicKey, bool),
@@ -104,6 +112,9 @@ struct State {
     qualification_connections: usize,
     qualification_fault: Option<QualificationFault>,
     qualification_fault_fired: bool,
+    recipient_runtime: bool,
+    recipient_lost_ack: Option<EventId>,
+    recipient_fault: Option<RecipientFault>,
     acknowledge_duplicates: bool,
     duplicate_acks: usize,
     ordinary: BTreeSet<PublicKey>,
@@ -222,6 +233,10 @@ impl State {
             } else {
                 self.dispatch(event.clone());
             }
+        }
+        if accepted && self.recipient_lost_ack == Some(event.id) {
+            self.recipient_lost_ack = None;
+            return None;
         }
         let reason = if !authenticated {
             "auth-required: fixture authentication required"
@@ -412,7 +427,8 @@ fn handle_message(
             let Ok(event) = serde_json::from_value::<Event>(fields[1].clone()) else {
                 return vec![];
             };
-            let eligible = (state.mode != Mode::KnownAccountsOnly
+            let eligible = (state.recipient_runtime
+                || state.mode != Mode::KnownAccountsOnly
                 || state.ordinary.contains(&event.pubkey))
                 && state
                     .peer
@@ -439,6 +455,23 @@ fn handle_message(
                 state.connections.get_mut(&id).unwrap().account = Some(event.pubkey);
             }
             state.observe(Observation::Authentication(event.pubkey, accepted));
+            if accepted {
+                match state.recipient_fault {
+                    Some(RecipientFault::MissingAuthAck) => {
+                        state.recipient_fault.take();
+                        return vec![];
+                    }
+                    Some(RecipientFault::NegativeAuthAck) => {
+                        state.recipient_fault.take();
+                        return vec![json!(["OK", event.id, false, "restricted: fixture"])];
+                    }
+                    Some(RecipientFault::WrongAuthAck) => {
+                        state.recipient_fault.take();
+                        return vec![json!(["OK", EventId::from_byte_array([2; 32]), true, ""])];
+                    }
+                    _ => (),
+                }
+            }
             let reason = if accepted {
                 ""
             } else {
@@ -517,6 +550,10 @@ fn handle_message(
             subscriptions.push(subscription.clone());
             let account = account.unwrap();
             state.observe(Observation::Request(account, subscription.clone()));
+            if state.recipient_fault == Some(RecipientFault::WrongLiveEose) {
+                state.recipient_fault.take();
+                return vec![json!(["EOSE", "wrong-subscription"])];
+            }
             if let Some(group) = state.peer.as_mut().and_then(|peer| peer.group.as_mut())
                 && subscription.serves(GROUP_KIND, "#h", &json!(hex::encode(group.route)))
             {
@@ -814,6 +851,53 @@ impl Relay {
         let mut state = self.state.lock().unwrap();
         assert!(state.qualification && state.qualification_connections == 0);
         state.peer = Some(peer::Scope::new(accounts).with_group(Some(route)));
+    }
+
+    pub(crate) async fn switch_to_recipient_runtime(
+        &self,
+        accounts: [PublicKey; 2],
+        extra_offer_writer: PublicKey,
+    ) {
+        let end = Instant::now() + STEP;
+        loop {
+            {
+                let mut state = self.state.lock().unwrap();
+                assert!(state.qualification && !state.recipient_runtime);
+                assert_eq!(state.qualification_connections, 4);
+                assert_eq!(state.qualification_fault, None);
+                if state.connections.is_empty() {
+                    state.peer = Some(
+                        peer::Scope::new(accounts).with_extra_offer_writer(extra_offer_writer),
+                    );
+                    state.publications.clear();
+                    state.observations.clear();
+                    state.recipient_runtime = true;
+                    return;
+                }
+            }
+            assert!(Instant::now() < end, "qualification sockets did not close");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    pub(crate) fn recipient_lose_ack(&self, event: EventId) {
+        let mut state = self.state.lock().unwrap();
+        assert!(state.recipient_runtime && state.recipient_lost_ack.replace(event).is_none());
+    }
+
+    pub(crate) fn recipient_fault(&self, fault: RecipientFault) {
+        let mut state = self.state.lock().unwrap();
+        assert!(state.recipient_runtime && state.recipient_fault.replace(fault).is_none());
+    }
+
+    pub(crate) fn recipient_requests(&self, account: PublicKey) -> usize {
+        self.state
+            .lock()
+            .unwrap()
+            .observations
+            .iter()
+            .filter(|item| matches!(item, Observation::Request(who, _) if *who == account))
+            .count()
     }
 
     pub(crate) fn qualification_connections(&self) -> usize {
