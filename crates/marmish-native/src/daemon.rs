@@ -187,6 +187,10 @@ async fn dispatch(
     rooms: &mut crate::command_local::RoomIntents,
     request: Request,
 ) -> Result<Response> {
+    #[cfg(marmish_peer_receiver_candidate)]
+    if matches!(request, Request::PeerRead { .. }) {
+        return Err(Error::Invalid("peer_local_operation"));
+    }
     #[cfg(test)]
     if matches!(request, Request::Peer { .. }) {
         return Err(Error::Invalid("peer_local_operation"));

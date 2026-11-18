@@ -25,12 +25,24 @@ pub(crate) mod terminal_handshake;
 #[path = "peer_pending_ipc.rs"]
 pub(crate) mod peer;
 
+#[cfg(any(test, marmish_peer_receiver_candidate))]
+#[path = "peer_ipc_selection.rs"]
+mod peer_selection;
+
+#[cfg(marmish_peer_receiver_candidate)]
+#[path = "peer_read_ipc.rs"]
+pub(crate) mod peer_read;
+
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Request {
     #[cfg(test)]
     Peer {
         request: peer::WireRequest,
+    },
+    #[cfg(marmish_peer_receiver_candidate)]
+    PeerRead {
+        request: peer_read::Request,
     },
     TerminalStart {
         request: terminal_handshake::Start,
@@ -116,6 +128,10 @@ pub(crate) enum Request {
 
 impl Request {
     pub(crate) fn is_command(&self) -> bool {
+        #[cfg(marmish_peer_receiver_candidate)]
+        if matches!(self, Self::PeerRead { .. }) {
+            return false;
+        }
         #[cfg(test)]
         if matches!(self, Self::Peer { .. }) {
             return false;
@@ -133,6 +149,10 @@ impl Request {
         )
     }
     pub(crate) fn uses_short_exchange(&self) -> bool {
+        #[cfg(marmish_peer_receiver_candidate)]
+        if matches!(self, Self::PeerRead { .. }) {
+            return true;
+        }
         #[cfg(test)]
         if matches!(self, Self::Peer { .. }) {
             return true;
@@ -252,8 +272,10 @@ pub fn bind(path: &Path) -> Result<UnixListener> {
     Ok(listener)
 }
 
-fn verify_peer(stream: &UnixStream) -> Result<()> {
-    verify_peer_uid(stream.peer_cred()?.uid())
+fn verify_peer(stream: &UnixStream) -> Result<u32> {
+    let uid = stream.peer_cred()?.uid();
+    verify_peer_uid(uid)?;
+    Ok(uid)
 }
 
 fn verify_peer_uid(uid: u32) -> Result<()> {
@@ -500,16 +522,8 @@ pub(crate) async fn serve_with_peer(
                         continue;
                     }
                 };
-                #[cfg(test)]
                 let accepted_at = tokio::time::Instant::now();
-                #[cfg(test)]
-                let uid = match stream.peer_cred() {
-                    Ok(credentials) if verify_peer_uid(credentials.uid()).is_ok() =>
-                        credentials.uid(),
-                    _ => continue,
-                };
-                #[cfg(not(test))]
-                if verify_peer(&stream).is_err() { continue; }
+                let Ok(_uid) = verify_peer(&stream) else { continue };
                 let Ok(permit) = clients.clone().try_acquire_owned() else { continue };
                 let queue = queue.clone();
                 let status = status.clone();
@@ -518,8 +532,6 @@ pub(crate) async fn serve_with_peer(
                 let intake = peer.as_ref().map(|(_, intake)| intake.clone());
                 tasks.spawn(async move {
                     let _permit = permit;
-                    #[cfg(not(test))]
-                    let accepted_at = tokio::time::Instant::now();
                     let exchange_deadline = accepted_at + IO_TIMEOUT;
                     let result = tokio::time::timeout_at(exchange_deadline, read_frame::<Request>(&mut stream)).await;
                     if let Ok(Ok(Request::TerminalStart { request })) = result {
@@ -532,7 +544,7 @@ pub(crate) async fn serve_with_peer(
                         let response = peer::handle(
                             intake.as_ref(),
                             request,
-                            uid,
+                            _uid,
                             exchange_deadline - Duration::from_millis(100),
                         ).await;
                         if tokio::time::Instant::now() < exchange_deadline {
@@ -545,6 +557,8 @@ pub(crate) async fn serve_with_peer(
                     }
                     let short_exchange = matches!(&result,Ok(Ok(request)) if request.uses_short_exchange());
                     let response = match result {
+                        #[cfg(marmish_peer_receiver_candidate)]
+                        Ok(Ok(Request::PeerRead { .. })) => Response::failure(peer_read::UNAVAILABLE),
                         Ok(Ok(Request::Status {})) => status.borrow().clone(),
                         Ok(Ok(request)) => {
                             let deadline = if short_exchange {exchange_deadline - Duration::from_millis(100)} else {tokio::time::Instant::now() + Duration::from_secs(150)};
