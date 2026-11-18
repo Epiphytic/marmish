@@ -69,7 +69,10 @@ impl Checkpoint {
         if flight.carrier_id.to_bytes() != record.id {
             return Err(Error::Index);
         }
-        if flight.author == flight.recipient || self.policy.blocked.contains(&flight.author) {
+        if wall >= flight.expires_at
+            || flight.author == flight.recipient
+            || self.policy.blocked.contains(&flight.author)
+        {
             return Ok(OfferIngress::Invalid);
         }
 
@@ -103,5 +106,35 @@ impl Checkpoint {
             Err(CursorError::Backlog) => Ok(OfferIngress::Backpressure),
             Err(error) => Err(error.into()),
         }
+    }
+}
+
+pub(in crate::peer_invitation) mod fault_fixture {
+    use super::*;
+
+    pub(in crate::peer_invitation) fn limit_to_current_pages(checkpoint: &Checkpoint) {
+        let conn = &checkpoint.cursor.conn;
+        let pages: i64 = conn
+            .query_row("PRAGMA page_count", [], |row| row.get(0))
+            .unwrap();
+        let cap: i64 = conn
+            .query_row(&format!("PRAGMA max_page_count={pages}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(pages, cap);
+    }
+
+    pub(in crate::peer_invitation) fn apply_cooldown(
+        checkpoint: &mut Checkpoint,
+        founder: PublicKey,
+        wall: u64,
+    ) {
+        let [origin] = checkpoint.cursor.origins.as_slice() else {
+            panic!("exactly one installed route");
+        };
+        let tx = checkpoint.cursor.begin(*origin).unwrap();
+        super::super::super::cooldown::decline(&tx, founder.to_bytes(), wall).unwrap();
+        tx.commit().unwrap();
     }
 }

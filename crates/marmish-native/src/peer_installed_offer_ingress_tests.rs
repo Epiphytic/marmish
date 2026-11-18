@@ -2,7 +2,8 @@ use super::*;
 use crate::peer_invitation::{
     ReceivePolicy, Source,
     store::consent_checkpoint::{
-        Error, Mode, provisioning::prepared_consent::custody::offer_ingress::OfferIngress,
+        Error, Mode,
+        provisioning::prepared_consent::custody::offer_ingress::{OfferIngress, fault_fixture},
     },
 };
 use storage_sqlite::{SqlCipherHardening, SqlCipherKey, open_hardened_sqlcipher};
@@ -308,6 +309,63 @@ fn peer_installed_custody_offer_refusals_leave_state_unchanged() {
     assert_eq!(observe(&conn), after);
 }
 
+#[test]
+fn peer_installed_custody_offer_gates_cooldown_and_rolls_back_cap_refusal() {
+    let (_temp, path) = temp_cursor();
+    let recipient = Keys::generate();
+    let route = NostrRoutingV1::new([3; 32], vec![URL.to_owned()]).unwrap();
+    initialize(&path, KEY, &recipient, URL);
+    let mut checkpoint = open_custody(
+        &path,
+        KEY,
+        &recipient,
+        URL,
+        Policy::default(),
+        ReceivePolicy::Manual,
+    );
+    let source = checkpoint.bind_source(URL).unwrap();
+    let conn = sql(&path, KEY);
+    let founder = Keys::generate();
+    let cooled = offer(&founder, recipient.public_key(), &route, ControlVersion::V2);
+    let wall = cooled.flight.flight().created_at;
+    fault_fixture::apply_cooldown(&mut checkpoint, founder.public_key(), wall);
+    let outcome = checkpoint
+        .admit_installed_custody_offer(
+            &source,
+            synthetic(&cooled, recipient.public_key(), URL, wall),
+        )
+        .unwrap();
+    assert_eq!(
+        status(outcome),
+        Status::Accepted(TrustedOutcome::SkippedCooldown)
+    );
+    assert_eq!(&observe(&conn)[4..], &[0; 7]);
+
+    fault_fixture::limit_to_current_pages(&checkpoint);
+    for _ in 0..8 {
+        let founder = Keys::generate();
+        let frame = offer(&founder, recipient.public_key(), &route, ControlVersion::V2);
+        let before = observe(&conn);
+        let retained = saved(&conn);
+        let outcome = checkpoint.admit_installed_custody_offer(
+            &source,
+            synthetic(&frame, recipient.public_key(), URL, wall + 1),
+        );
+        match outcome {
+            Err(Error::Cursor(crate::peer_invitation::store::Error::Storage)) => {
+                assert_eq!(observe(&conn), before);
+                assert_eq!(saved(&conn), retained);
+                return;
+            }
+            Ok(OfferIngress::Recorded(result)) => {
+                assert_eq!(result.status, Status::Accepted(TrustedOutcome::Applied));
+            }
+            _ => panic!("expected a bounded write or rolled-back storage refusal"),
+        }
+    }
+    panic!("test cursor never attempted to grow beyond its current page count");
+}
+
 #[tokio::test]
 #[ignore = "uses a disposable private authenticated WSS relay and capped SQLCipher"]
 async fn peer_installed_custody_offer_checked_history_live_and_cold_recovery() {
@@ -376,9 +434,13 @@ async fn peer_installed_custody_offer_checked_history_live_and_cold_recovery() {
         Err(Failure::Binding)
     ));
     other.stop(time_limit()).await.unwrap();
+    let mut received = Vec::new();
     for expected in [TrustedOutcome::Applied, TrustedOutcome::AlreadyApplied] {
         let result = port
             .use_page_carrier(&page, 0, |carrier| {
+                if expected == TrustedOutcome::Applied {
+                    received.push(observed_record(&carrier, &past));
+                }
                 checkpoint.admit_installed_custody_offer(&source, carrier)
             })
             .unwrap()
@@ -386,9 +448,16 @@ async fn peer_installed_custody_offer_checked_history_live_and_cold_recovery() {
         assert_eq!(status(result), Status::Accepted(expected));
     }
 
-    let mut live_sender = Owner::open(&connector, url, second.public_key(), &second, time_limit())
-        .await
-        .unwrap();
+    let live_connector = relay.connector(lease.root(), true, None);
+    let mut live_sender = Owner::open(
+        &live_connector,
+        url,
+        second.public_key(),
+        &second,
+        time_limit(),
+    )
+    .await
+    .unwrap();
     let live = offer(&second, recipient.public_key(), &route, ControlVersion::V2);
     assert!(
         live_sender
@@ -423,18 +492,24 @@ async fn peer_installed_custody_offer_checked_history_live_and_cold_recovery() {
     );
     checked.unchanged().unwrap();
     let conn = sql(checked.path(), key);
-    let mut expected = [&past, &live]
-        .map(|frame| {
-            (
-                frame.flight.flight().carrier_id.to_bytes().to_vec(),
-                frame.frame().to_vec(),
-            )
-        })
-        .to_vec();
-    expected.sort_unstable();
-    assert_eq!(saved(&conn), expected);
+    received.sort_unstable();
+    assert!(
+        saved(&conn) == received,
+        "retained history/live bytes differ"
+    );
     let state = observe(&conn);
     assert_eq!(&state[..2], &[0, 0]);
     assert_eq!(&state[4..], &[0, 2, 2, 0, 0, 0, 0]);
     drop(reopened);
+}
+
+fn observed_record(carrier: &CheckedCarrier<'_>, expected: &Prepared<Offer>) -> (Vec<u8>, Vec<u8>) {
+    let observed = carrier.record();
+    let expected_json: serde_json::Value = serde_json::from_slice(expected.frame()).unwrap();
+    let observed_json: serde_json::Value = serde_json::from_slice(observed.bytes).unwrap();
+    // A relay can reserialize JSON. Deduplication and durable custody use the
+    // exact bytes observed by this authenticated consumer.
+    assert!(expected_json == observed_json, "signed relay event differs");
+    assert_eq!(observed.id, expected.flight.flight().carrier_id.to_bytes());
+    (observed.id.to_vec(), observed.bytes.to_vec())
 }
