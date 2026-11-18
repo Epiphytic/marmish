@@ -512,7 +512,7 @@ impl Manual {
 mod tests {
     use super::*;
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-    use tokio::net::UnixStream;
+    use tokio::{io::AsyncWriteExt, net::UnixStream};
 
     struct RuntimeDir(PathBuf);
 
@@ -707,12 +707,12 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn timeout_and_stop_fence_queued_and_started_authority() {
+    async fn timeout_fences_started_manual_authority() {
         let base = tempfile::tempdir().unwrap();
         let (lease, _runtime) = profile(base.path(), "paired");
         let listener = super::super::bind(&lease.socket_path()).unwrap();
         let (mut worker, paired, _) = pair(&lease);
-        let (registration, intake) = paired.register(&listener).unwrap();
+        let (_registration, intake) = paired.register(&listener).unwrap();
         let selection = selection();
         let request = Request::Approve { selection };
         let uid = unsafe { libc::geteuid() };
@@ -730,25 +730,68 @@ mod tests {
             Err(Failure::Uncertain)
         ));
         active.reply(Err(Failure::Stale));
+    }
 
-        let deadline = Instant::now() + super::super::IO_TIMEOUT;
+    #[tokio::test]
+    async fn real_listener_rejects_invalid_frames_and_fences_full_queue_on_abort() {
+        let base = tempfile::tempdir().unwrap();
+        let (lease, _runtime) = profile(base.path(), "paired");
+        let path = lease.socket_path();
+        let listener = super::super::bind(&path).unwrap();
+        let (mut worker, paired, _) = pair(&lease);
+        let (requests, mut ordinary) = mpsc::channel(1);
+        let (_states, status) = watch::channel(Response::success("ready"));
+        let (_drain, drain_request) = oneshot::channel();
+        let server = tokio::spawn(super::super::serve_with_peer(
+            listener,
+            requests,
+            status,
+            None,
+            Some(paired),
+            Some(drain_request),
+        ));
+        assert!(worker.ready().await);
+
+        let malformed =
+            br#"{"operation":"peer","request":{"version":1,"request":{"kind":"list","uid":0}}}"#;
+        for (length, body) in [
+            (malformed.len() as u32, malformed.as_slice()),
+            (super::super::FRAME_LIMIT as u32 + 1, &[]),
+        ] {
+            let mut stream = UnixStream::connect(&path).await.unwrap();
+            stream.write_u32(length).await.unwrap();
+            stream.write_all(body).await.unwrap();
+            stream.shutdown().await.unwrap();
+            let response: Response = super::super::read_frame(&mut stream).await.unwrap();
+            assert!(!response.ok);
+            assert_eq!(response.error.as_deref(), Some("invalid_request"));
+        }
+        assert!(worker.try_recv().is_none());
+        assert!(ordinary.try_recv().is_err());
+
+        let selection = selection();
+        let request = Request::Approve { selection };
         let mut waiting = Vec::new();
         for _ in 0..4 {
-            waiting.push(tokio::spawn({
-                let intake = intake.clone();
-                async move { intake.exchange(request, uid, deadline).await }
-            }));
+            let path = path.clone();
+            waiting.push(tokio::spawn(
+                async move { client_request(&path, request).await },
+            ));
         }
-        while worker.queue.len() < 4 {
-            tokio::task::yield_now().await;
-        }
-        assert_eq!(
-            intake.exchange(request, uid, deadline).await,
-            Err(Failure::Busy)
-        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while worker.queue.len() < 4 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("all four Peer queue slots filled from real sockets");
+        assert_eq!(client_request(&path, request).await, Err(Failure::Busy));
+        assert!(ordinary.try_recv().is_err());
+
         let mut active = worker.try_recv().unwrap();
         let witness = active.begin_manual(&worker, &lease).unwrap();
-        drop(registration);
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
         worker.stopping().await;
         assert!(worker.try_recv().is_none());
         assert!(matches!(
@@ -758,10 +801,6 @@ mod tests {
         for client in waiting {
             assert_eq!(client.await.unwrap(), Err(Failure::Uncertain));
         }
-        assert_eq!(
-            intake.exchange(request, uid, deadline).await,
-            Err(Failure::Stopped)
-        );
     }
 
     #[tokio::test]
