@@ -51,9 +51,35 @@ async fn prove_lost_ack() {
         )
         .unwrap()
     };
+    let open_custody = || {
+        PreparedConsentOwner::open_custody(
+            &lease,
+            &material,
+            crate::command_config::Role::Client,
+            Policy {
+                mode: Mode::Automatic,
+                ..Policy::default()
+            },
+            &route,
+            Wall::Fixture(round.wall.clone()),
+        )
+    };
+    let before = {
+        let mut owner = open_custody().unwrap();
+        read_joined(
+            &mut owner,
+            stage.selector,
+            stage.generation,
+            wall(),
+            &stage.delivery,
+            &stage.group,
+        )
+        .stage()
+    };
     let mut owner = open_owner();
     let held = stage.read(&mut owner, wall());
     let (binding, witness) = held.stage();
+    assert_eq!((binding, witness), before);
     let image = checked_image(&owner, &held);
     let deadline = held.pending_deadline().unwrap();
     let qualify = || {
@@ -151,13 +177,18 @@ async fn prove_lost_ack() {
         PostJoinHistoryFetchOutcome::Fetched
     );
     recipient.mark_post_join_eose(&stage.group).unwrap();
-    for _ in 0..2 {
-        recipient.run_due_maintenance().await.unwrap();
-    }
+    // The authenticated intervening founder commit restarted native quiet.
+    // One sweep reaches Jitter; the next could author the native update.
+    assert!(matches!(
+        recipient.maintenance_obligations_for_group(&stage.group).unwrap().as_slice(),
+        [obligation] if obligation.phase == cgka_traits::maintenance::MaintenancePhase::Quiet
+    ));
+    recipient.run_due_maintenance().await.unwrap();
     assert!(matches!(
         recipient.maintenance_obligations_for_group(&stage.group).unwrap().as_slice(),
         [obligation] if obligation.phase == cgka_traits::maintenance::MaintenancePhase::Jitter
     ));
+    assert_eq!(old_gate.observe().unwrap().commit_calls, 0);
     let history_ms = history_started.elapsed().as_millis();
     let baseline = verify::pre_capture(
         &recipient,
@@ -245,6 +276,8 @@ async fn prove_lost_ack() {
     let fresh = verify::reopen(&recipient, founder.runtime(), &baseline, &capture, wall()).unwrap();
 
     let event_id = fresh.event_id();
+    let signed_digest = fresh.signed_digest();
+    let target = fresh.target().clone();
     let lost_started = Instant::now();
     round.relay.group_fault(GroupFault::LoseNextAck);
     let recipient_socket = Arc::new(Mutex::new(recipient_socket));
@@ -313,6 +346,8 @@ async fn prove_lost_ack() {
     drop(recipient);
     drop(recipient_socket);
     drop(owner);
+    drop((baseline, capture, fresh, reservation));
+    assert!(open_custody().is_err());
     let recover_started = Instant::now();
     let mut owner = open_owner();
     let held = stage.read(&mut owner, wall());
@@ -325,30 +360,23 @@ async fn prove_lost_ack() {
     let gate = Gate::closed(scope.clone(), round.wall.clone());
     let mut recipient = stage.open(&owner, &held, &round.wall, gate.clone());
     let recover = |recipient: &Recipient, founder: &PeerFounderRuntime<FounderTransport>, wall| {
-        verify::recover_exposed(
-            recipient,
-            founder.runtime(),
-            &baseline,
-            &fresh,
-            &uncertain,
-            wall,
-        )
+        verify::recover_exposed(recipient, founder.runtime(), &image, &uncertain, wall)
     };
     assert!(recover(&recipient, &founder, wall()).is_err());
     let delivery = founder_record.delivery(&stage.group, wall());
     assert!(
         founder
-            .converge_exact_delivery(&stage.group, fresh.target(), &delivery)
+            .converge_exact_delivery(&stage.group, &target, &delivery)
             .await
     );
-    assert!(verify::reopen(&recipient, founder.runtime(), &baseline, &fresh, wall()).is_err());
     assert!(recover(&recipient, &founder, deadline).is_err());
     assert_eq!(gate.observe().unwrap().deliveries, 0);
     assert_eq!(round.relay.group_writes().len(), 2);
     let recovered = recover(&recipient, &founder, wall()).unwrap();
+    let baseline = recovered.baseline();
     let retry = recovered.capture();
     assert_eq!(retry.event_id(), event_id);
-    assert_eq!(retry.signed_digest(), fresh.signed_digest());
+    assert_eq!(retry.signed_digest(), signed_digest);
     let publication = read_publication(&mut owner, &held, wall(), Step::Uncertain { number: 1 });
     let retry_socket = Arc::new(Mutex::new(open_socket().await.unwrap()));
     let reserved = ReservedSocket::reserve(
@@ -362,13 +390,7 @@ async fn prove_lost_ack() {
     let attempt = owner
         .state
         .checkpoint
-        .arm_recovered_postjoin(
-            &owner.state.source,
-            &uncertain,
-            &baseline,
-            &recovered,
-            wall(),
-        )
+        .arm_recovered_postjoin(&owner.state.source, &uncertain, &recovered, wall())
         .unwrap();
     let turn = reserved
         .bind(
@@ -390,11 +412,11 @@ async fn prove_lost_ack() {
     assert!(gate.observe().unwrap().accepted);
     // One extra native sweep, where needed, completes obligation bookkeeping
     // after the PendingPublish state has reached the canonical target.
-    if verify::confirm_rotation(&recipient, founder.runtime(), &baseline, retry, wall()).is_err() {
+    if verify::confirm_rotation(&recipient, founder.runtime(), baseline, retry, wall()).is_err() {
         recipient.run_due_maintenance().await.unwrap();
     }
     let rotation =
-        verify::confirm_rotation(&recipient, founder.runtime(), &baseline, retry, wall()).unwrap();
+        verify::confirm_rotation(&recipient, founder.runtime(), baseline, retry, wall()).unwrap();
     assert_eq!(
         stable_pin(&recipient, &stage.group),
         stable_pin(founder.runtime(), &stage.group),
@@ -423,7 +445,7 @@ async fn prove_lost_ack() {
     let gate = Gate::closed(scope, round.wall.clone());
     let mut recipient = stage.open(&owner, &held, &round.wall, gate.clone());
     read_publication(&mut owner, &held, wall(), Step::Published { number: 2 });
-    verify::confirm_rotation(&recipient, founder.runtime(), &baseline, retry, wall()).unwrap();
+    verify::confirm_rotation(&recipient, founder.runtime(), baseline, retry, wall()).unwrap();
     recipient.resume_outbound_fanouts().await.unwrap();
     assert_eq!(gate.observe().unwrap().commit_calls, 0);
     assert_eq!(round.relay.group_writes(), writes);
@@ -460,14 +482,20 @@ impl Stage {
         owner: &mut PreparedConsentOwner<'_>,
         wall: u64,
     ) -> crate::peer_invitation::HeldEvidence {
-        read_joined(
-            owner,
-            self.selector,
-            self.generation,
-            wall,
-            &self.delivery,
-            &self.group,
-        )
+        let row = owner
+            .state
+            .checkpoint
+            .read_custody(&owner.state.source, self.selector, self.generation, wall)
+            .unwrap()
+            .expect("exact durable Activating custody");
+        assert_eq!(row.state(), CustodyState::Activating);
+        assert_eq!(
+            row.delivery_carrier(),
+            self.delivery.flight().carrier_id.to_bytes()
+        );
+        assert_eq!(row.welcome_id().as_slice(), self.welcome.as_slice());
+        assert_eq!(row.offer().routing(), &self.routing);
+        row
     }
 
     fn open(
