@@ -2,7 +2,7 @@
 
 use super::{Journal, ProfileLease, SqlCipherKey, SqliteAccountStorage, mdk};
 #[cfg(any(test, marmish_peer_receiver_candidate))]
-use crate::command_engine_admission::Admission;
+use crate::command_engine::Admission;
 use crate::{Error, Result};
 #[cfg(any(test, marmish_peer_receiver_candidate))]
 use std::sync::Arc;

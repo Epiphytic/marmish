@@ -13,7 +13,7 @@ pub(crate) mod installed_check;
 #[path = "mdk_startup.rs"]
 mod startup;
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
-pub(crate) use startup::tests as startup_tests;
+pub(crate) use startup::tests as candidate_startup_tests;
 use startup::{StartupMode, StartupStorage, Step};
 #[path = "stream_runtime.rs"]
 mod stream_runtime;
@@ -948,7 +948,7 @@ impl MdkOwner {
         material: &IdentityMaterial,
         connector: RelayConnector,
         allowed_peers: Vec<String>,
-        admission: crate::command_engine_admission::Admission,
+        admission: crate::command_engine::Admission,
     ) -> Result<Self> {
         Self::construct(
             profile,

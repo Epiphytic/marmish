@@ -244,7 +244,7 @@ fn registration_subprocess() {
         Err(RegistrationFailure::LocalUnavailable)
     ));
     if let Some(mode) = mode.strip_prefix("owner_startup_") {
-        crate::mdk_adapter::startup_tests::qualify(
+        crate::mdk_adapter::candidate_startup_tests::qualify(
             mode,
             &lease,
             &material,
