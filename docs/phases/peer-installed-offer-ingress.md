@@ -37,13 +37,15 @@ send, Delivery, and native Group work have separate proofs.
    existing v2 codec. Authenticate the inner flight classification before
    applying an Offer. A verified Delivery or an unsupported, malformed, or
    undecryptable carrier returns to the later combined owner as
-   `NotOffer`, with no receipt. For an Offer candidate, verify the v2
+   `NotOffer`, with no receipt. Malformed Offer bodies also return
+   `NotOffer`. Exact index mismatches return an error. For an Offer candidate, verify the v2
    signed flight and exact configured route, founder, recipient, and
    interval using the existing v2 parser. A stable Offer-policy refusal
    returns `Invalid` with no receipt. Blocked, self, wrong signed route or
    expired Offer cases are remote refusals after local scope checks.
 4. A verified current Offer uses `commit_trusted_exact` on the capped
-   stock cursor. Verify the exact installed successor before the cooldown,
+   stock cursor. Verify the exact installed successor via `Context::verify`
+   and its `Epoch::verify` before the cooldown,
    installed replay sweep, and bounded `rows::admit`. Reuse
    `installed::mark` only on Applied. Recheck the successor and exact
    retained parent before commit. This sweep preserves charged ancestry and

@@ -749,3 +749,7 @@ async fn peer_authenticated_route_expiry_prevents_first_write_poll() {
         (0, 0, 0, false)
     );
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "peer_installed_offer_ingress_tests.rs"]
+mod offer_ingress;

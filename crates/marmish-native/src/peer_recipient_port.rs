@@ -30,6 +30,33 @@ pub(in crate::peer_invitation) struct Operation {
     pub(in crate::peer_invitation) generation: u64,
 }
 
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+pub(in crate::peer_invitation) struct CheckedCarrier<'a> {
+    account: PublicKey,
+    origin: &'a str,
+    wall: u64,
+    record: crate::peer_invitation::RawRecord<'a>,
+}
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+impl<'a> CheckedCarrier<'a> {
+    pub(in crate::peer_invitation) fn account(&self) -> PublicKey {
+        self.account
+    }
+
+    pub(in crate::peer_invitation) fn origin(&self) -> &'a str {
+        self.origin
+    }
+
+    pub(in crate::peer_invitation) fn wall(&self) -> u64 {
+        self.wall
+    }
+
+    pub(in crate::peer_invitation) fn record(&self) -> crate::peer_invitation::RawRecord<'a> {
+        self.record
+    }
+}
+
 pub(in crate::peer_invitation) struct CheckedAck<'a> {
     pub(in crate::peer_invitation) account: PublicKey,
     pub(in crate::peer_invitation) origin: &'a str,
@@ -137,6 +164,44 @@ impl PeerRecipientPort {
             wall,
             record: record.arrival(),
         }))
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(in crate::peer_invitation) fn use_page_carrier<T>(
+        &mut self,
+        page: &Page,
+        index: usize,
+        use_checked: impl FnOnce(CheckedCarrier<'_>) -> T,
+    ) -> Result<T> {
+        self.use_page(page, |checked| {
+            let [lower, upper] = checked.bounds;
+            let arrival = checked.records.get(index).ok_or(Failure::Binding)?;
+            if !(lower..=upper).contains(&arrival.stamp) {
+                return Err(Failure::Binding);
+            }
+            Ok(use_checked(CheckedCarrier {
+                account: checked.account,
+                origin: checked.origin,
+                wall: checked.wall,
+                record: crate::peer_invitation::record(arrival),
+            }))
+        })?
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(in crate::peer_invitation) fn use_live_carrier<T>(
+        &mut self,
+        live: &LiveRecord,
+        use_checked: impl FnOnce(CheckedCarrier<'_>) -> T,
+    ) -> Result<T> {
+        self.use_live(live, |checked| {
+            use_checked(CheckedCarrier {
+                account: checked.account,
+                origin: checked.origin,
+                wall: checked.wall,
+                record: crate::peer_invitation::record(checked.record),
+            })
+        })
     }
 
     pub(in crate::peer_invitation) fn use_accepted<T>(

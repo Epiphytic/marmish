@@ -19,6 +19,10 @@ use super::super::super::{
 };
 use super::*;
 
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "peer_installed_offer_ingress.rs"]
+pub(in crate::peer_invitation) mod offer_ingress;
+
 #[path = "peer_pending_custody_schema.rs"]
 mod custody_schema;
 pub(crate) use custody_schema::Epoch;
@@ -358,7 +362,7 @@ struct Context {
 }
 
 impl Context {
-    fn verify(&self, tx: &Transaction<'_>, wall: u64) -> Result<()> {
+    fn verify(&self, tx: &Transaction<'_>, wall: u64) -> std::result::Result<(), CursorError> {
         self.epoch.verify(tx, self.account, &self.origins)?;
         rows::check_wall(tx, wall)?;
         let quarantined: bool = tx.query_row(
@@ -367,7 +371,7 @@ impl Context {
             |row| row.get(0),
         )?;
         if quarantined {
-            return Err(CursorError::RelayContract.into());
+            return Err(CursorError::RelayContract);
         }
         Ok(())
     }
@@ -627,7 +631,7 @@ impl Checkpoint {
         let cx = self.custody_context(source)?;
         let digest = <[u8; 32]>::from(Sha256::digest(raw.bytes));
         let lookup = |tx: &Transaction<'_>| -> std::result::Result<Option<bool>, CursorError> {
-            cx.verify(tx, wall).map_err(schema::cursor_error)?;
+            cx.verify(tx, wall)?;
             Ok(tx
                 .query_row(
                     "SELECT origin=?2 AND outer_stamp=?3 AND frame=?4 AND replay_until>?5
