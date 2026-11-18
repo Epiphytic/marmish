@@ -29,3 +29,21 @@ and the direct binder.
 
 The review covered offline wire behavior only. No installed feature,
 database migration, deployment or relay activity was part of this change.
+
+## Integrated review
+
+Claude Code Sonnet 5.5 approved composed source `b5d51c3` in Auto session
+`1dc538a3-e68e-4521-ae8b-c626baf8c91b`. It reviewed the signed version
+selection, canonical framing, receipt and room binding, and overlap with
+C2. The added and removed source lines matched the author revision. This
+was a source-only review. The integrated validation reran the test
+binaries. The owner phase must obtain `ReceiptCoordinates` from the
+verified `StatusNegotiation` and separately verify the MLS sender and
+accepted state. The classified Delivery-version fence is covered by
+cross-version refusal and the direct binder; this review identified no
+standalone test for the private fence branch.
+
+Ripwire flagged short-horizon churn in the edited framing paths. The
+review confirmed the changes are concentrated in version selection and
+binding. The default signed v1 fixture and exact offline v2 native
+Welcome tests were retained.

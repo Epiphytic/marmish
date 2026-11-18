@@ -63,3 +63,14 @@ the measured interval.
 | Delivery verify | 3.319 / 4.384 ms | 3.360 / 4.278 ms | 11,457 |
 
 The opt-in benchmark completed in 10.17 s.
+
+## Integrated Linux rerun
+
+Composed source `b5d51c3` passed all three standalone targets (4 receipt,
+11 control, 57 cursor tests, with five opt-ins skipped). The difference
+from the author run is two C2 SQL tests in the composed cursor target.
+Strict all-target Clippy passed in 31.33 s. The author benchmark above
+continues to describe the unchanged codec source.
+The native library `peer_control_` suite separately passed all 11 tests
+in 4.56 s, including the actual MDK-generated v2 Welcome and room-binder
+suite. The optional benchmark was skipped in the integrated correctness run.
