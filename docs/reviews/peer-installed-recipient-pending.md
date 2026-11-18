@@ -22,3 +22,15 @@ The reviewer confirmed that the release marker-only opener retains its previous 
 Claude Code Sonnet independently approved exact delta `7a6062cfefef1c086d9ebab477f835cc64a10c8d` over `eba46d0` in Auto mode, session `da68b52b-d37f-4072-9acf-f2a5d5d329cd`. Earlier integration review session `4f714728-cc09-4f0b-9fc2-659a719e67a6` flagged a possible conflict between the legacy row checks and Prepared Consent. The follow-up traced the two outbox tables and confirmed that the live Prepared writer uses the successor table and requires the legacy decision column to stay null. The original legacy checks remain in force.
 
 The reviewer ran all six installed custody tests on the author's exact prebuilt test binary and reported no blocking findings. Further coverage could exercise corrupt successors, advance time across restarts, and cover the Automatic path. The new regression covers Manual storage at a constant wall, with a fixture file witness and synthetic Welcome wrapper. [Validation record](../validation/peer-installed-recipient-pending.md)
+
+The integrated copy `6ca9db7` is patch-identical to `7a6062c`. Claude
+Code Sonnet 5.5 Auto approved the full integrated checkpoint from
+`31116d0` through `6ca9db7` in session
+`8e3f1e6c-2e8b-4c65-bf24-9b17a5c74810`. The reviewer traced Prepared
+and Held through the separate `peer_prepared_consent_outbox`, where
+`decision_at` remains NULL and Held requires a settled ACK. The legacy
+shape raised by the previous review correctly fails validation. The
+review was static. The integration keeps the custody successor test-only
+and requires a later per-turn checked configuration rebind before an
+installed daemon can use it. Cold readback of the captured mode, a
+conflicting Held replay and wrong-codec input remain separate tests.
