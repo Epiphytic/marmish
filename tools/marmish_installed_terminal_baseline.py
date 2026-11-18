@@ -209,17 +209,21 @@ def installed_fixture(root, installed, controller, tmux, env, budget, report, ch
     try:
         with tempfile.TemporaryDirectory(prefix='mq-', dir=Path('/tmp').resolve()) as path:
             runtime_root = Path(path)
-            run_env = dict(env, **{RUNTIME_ROOT_ENV: str(runtime_root)})
+            fixture_path, ipc_path = runtime_root / 'pty', runtime_root / 'ipc'
+            fixture_path.mkdir(mode=0o700)
+            ipc_path.mkdir(mode=0o700)
+            run_env = dict(env, TMPDIR=str(ipc_path), **{RUNTIME_ROOT_ENV: str(fixture_path)})
             try:
                 result = supervisor.execute([executable_path, CONTROLS, '--ignored', '--exact',
                                              '--test-threads=1'], run_env,
                                             timeout=budget.remaining(240), success=False)
                 check_case(*result, report)
+                require(not any(ipc_path.glob('mr2-*')), 'fixture_ipc_cleanup_incomplete')
             except supervisor.Refused as failure:
                 report['fixture_failure'] = str(failure)
                 raise
             finally:
-                cleanup_tmux(runtime_root, tmux, run_env)
+                cleanup_tmux(fixture_path, tmux, run_env)
                 report['fixture_tmux_cleanup'] = 'checked'
     finally:
         if runtime_root is not None:

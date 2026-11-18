@@ -875,6 +875,8 @@ fn spawn_cli(
     command
         .env_clear()
         .env("TERM", "dumb")
+        // IPC socket discovery must use the same private runtime base as the fixture owner.
+        .env("TMPDIR", std::env::temp_dir())
         .stdin(slave.try_clone().unwrap())
         .stdout(slave.try_clone().unwrap())
         .stderr(Stdio::piped())
