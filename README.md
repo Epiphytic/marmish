@@ -393,10 +393,10 @@ defines the owner-only attestation file and the required relay behavior.
 the two disposable test identities and grant them access to the test route
 printed by the command. Leave the third identity unregistered. Enter the exact
 confirmation at the foreground terminal once the scope is ready. The probe
-checks authenticated access, retention across a reconnect, and the exact bytes
+checks authenticated access, reconnect history, and the exact bytes
 returned by the relay. A qualification record reports the outcome of this
-probe and the operator's attestation. Peer enrollment and heartbeats remain
-disabled. Ordinary Command relay selection is unchanged.
+probe and the operator's attestation. Peer enrollment and heartbeats require
+separate runtime authorization. Ordinary Command relay selection is unchanged.
 
 
 Replace `CLIENT_NPUB` and `SERVER_NPUB` with complete `npub1…` values and

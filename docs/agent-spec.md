@@ -664,7 +664,8 @@ explicit private Peer relay and typed trust policy. `show` uses only current
 local record metadata. `qualify` uses a foreground controlling terminal,
 operator attestation, and disposable identities on one pinned private WSS
 origin. It issues a schema 2 record only after the bounded positive and negative
-probe. The record provides status metadata and grants no live Peer capability.
+probe. Schema 2 provides status metadata. Live Peer requires the owner's
+independently verified current attestation, probe evidence and native scope.
 A matching relay deployment still needs independent qualification for the
 [installed Peer phase](phases/peer-installed-heartbeat-first.md#as-first-patch-relay-cli-and-production-transport-boundary).
 Ordinary Command defaults and routing are unaffected.

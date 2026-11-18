@@ -52,3 +52,13 @@ with `cargo test --locked --offline -p marmish-native --lib <suffix> -- --ignore
 
 Strict native all-target Clippy and exact diff and formatting checks on
 the final Rust changes passed.
+
+## Integrated Linux rerun
+
+Composed source `738d1be` passed all eight focused qualification tests in
+4.07 s. The same source built the native sibling binaries in 37.19 s.
+The controlling-PTY test against that CLI passed in 0.53 s. Strict
+all-target Clippy including the `installed-checks` feature passed in
+40.92 s.
+All 35 selectors in the interactive core workflow ran locally using its
+existing wrapper. They recorded 159 passing test executions in 96.51 s.

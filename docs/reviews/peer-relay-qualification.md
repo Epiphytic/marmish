@@ -31,3 +31,21 @@ page. The current checks share the same validation functions and already
 exercise every fixed stage category. The probe conservatively counts a
 Ping and its outgoing Pong separately. The fixture's no-fault-marker
 Group test disconnects the actual socket.
+
+## Integrated review
+
+Claude Code Sonnet 5.5 approved exact composed source `738d1be` in Auto
+session `0babd060-1f8b-48d4-96ec-857333775e52`, conditional on the native
+suite and opt-in CLI test passing. It inspected all 16 changed files,
+including local grammar, confirmation before any network I/O, owner-file
+and TLS binding, traffic and socket budgets, refusal messages, atomic
+record issuance and the shared fixture's opt-in failure modes. It ran no
+extra tests. All changed Rust paths were byte-identical between the
+reviewed author and composed revisions.
+
+The documentation now describes the observed reconnect history and the
+independent authority required at runtime. Outstanding refinements include
+actual expiry mid-probe, SPKI mismatch through the CLI, and live malformed
+frame coverage. Ripwire recorded higher complexity in the test relay's
+fault branches. The review confirmed they are inert in earlier fixture
+modes. The normal Group and Terminal cases passed in the author run.
