@@ -45,6 +45,9 @@ use transport_nostr_adapter::{
 };
 use transport_nostr_peeler::{NostrMlsPeeler, NostrTransportEvent, SdkSigner, gift_wrap_rumor};
 
+#[path = "peer_public_runtime/m2_preflight.rs"]
+mod m2_preflight;
+
 const RELAY: &str = "wss://127.0.0.1:9/";
 const PURPOSE: &str = "marmish/peer/1/00112233445566778899aabbccddeeff";
 const DESCRIPTION: &str = "marmish-peer/1 peer transport";
@@ -63,6 +66,12 @@ enum BlockedIo {
     Deactivate,
     Receive,
     Publish,
+    PublishCommit,
+    ReadBack,
+    SizeCheck,
+    CommitSizeCheck,
+    LookupKeyPackageSlot,
+    PrepareKeyPackage,
     PublishKeyPackage,
     WithdrawKeyPackage,
     DeleteKeyPackage,
@@ -265,6 +274,22 @@ impl Store {
         adapter: A,
     ) -> (SqliteAccountStorage, Runtime<A>) {
         let storage = self.storage();
+        let publisher = PackageSigner {
+            keys: self.keys.clone(),
+            slot: self.slot.clone(),
+            guard: guard.clone(),
+        };
+        let runtime = self.runtime(&storage, route, adapter, publisher);
+        (storage, runtime)
+    }
+
+    fn runtime<A: TransportAdapter, P: KeyPackagePublisher>(
+        &self,
+        storage: &SqliteAccountStorage,
+        route: &StaticTransportRouting,
+        adapter: A,
+        publisher: P,
+    ) -> AccountDeviceRuntime<A, StaticTransportRouting, P> {
         let config = SessionConfig::with_storage(
             storage.clone(),
             Duration::ZERO,
@@ -277,16 +302,10 @@ impl Store {
                 .into_iter()
                 .chain([NOSTR_ROUTING_COMPONENT_ID]),
         );
-        let publisher = PackageSigner {
-            keys: self.keys.clone(),
-            slot: self.slot.clone(),
-            guard: guard.clone(),
-        };
-        let runtime = AccountDeviceRuntime::open(config, || {
+        AccountDeviceRuntime::open(config, || {
             Ok::<_, marmot_session::SessionError>((adapter, route.clone(), publisher))
         })
-        .unwrap();
-        (storage, runtime)
+        .unwrap()
     }
 
     fn delivery(
@@ -611,10 +630,10 @@ impl ExpectedJoin<'_> {
         self.verify(&storage, &runtime, guard, true)
     }
 
-    fn verify(
+    fn verify<A: TransportAdapter, P: KeyPackagePublisher>(
         &self,
         storage: &SqliteAccountStorage,
-        runtime: &Runtime,
+        runtime: &AccountDeviceRuntime<A, StaticTransportRouting, P>,
         guard: &Quarantine,
         require_receipt: bool,
     ) -> Result<Authority, &'static str> {

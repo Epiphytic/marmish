@@ -1,12 +1,17 @@
 //! An isolated test VFS for measuring and limiting provisional SQLCipher files.
 
 use std::{
+    cell::Cell,
     ffi::{CStr, c_char, c_int, c_void},
     fs,
     os::unix::{ffi::OsStrExt, fs::MetadataExt},
+    panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     ptr,
-    sync::Mutex,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use rusqlite::ffi as sql;
@@ -47,12 +52,15 @@ struct Accounted {
     evidence: Evidence,
     uncertain: bool,
     journal_synced: bool,
+    journal_witness: Option<(u64, u64)>,
 }
 
 pub(super) struct Quota {
     base: *mut sql::sqlite3_vfs,
     files: [PathBuf; 2],
     capacity: u64,
+    witness: Option<(u64, u64)>,
+    panicked: AtomicBool,
     account: Mutex<Accounted>,
     crash_after_database_write: bool,
 }
@@ -60,12 +68,13 @@ pub(super) struct Quota {
 // Safety: the captured VFS is SQLite's process-lifetime stock VFS. All
 // mutable stage state is behind the mutex and the paths are immutable.
 unsafe impl Sync for Quota {}
+unsafe impl Send for Quota {}
 
 #[repr(C)]
 struct Handle {
     outer: sql::sqlite3_file,
-    stock: *mut sql::sqlite3_file,
-    state: &'static Quota,
+    stock: Stock,
+    state: Arc<Quota>,
     index: usize,
 }
 
@@ -76,28 +85,6 @@ impl Quota {
         recover: bool,
         crash_after_database_write: bool,
     ) -> Result<&'static Self, &'static str> {
-        let parent = main.parent().ok_or("stage_parent")?;
-        let metadata = parent.symlink_metadata().map_err(|_| "stage_directory")?;
-        if !metadata.is_dir()
-            || metadata.uid() != unsafe { libc::geteuid() }
-            || metadata.mode() & 0o777 != 0o700
-            || !parent.canonicalize().is_ok_and(|path| path == parent)
-        {
-            return Err("stage_directory_identity");
-        }
-        if bytes(&sidecar(main, "-wal"))?.is_some() || bytes(&sidecar(main, "-shm"))?.is_some() {
-            return Err("stage_wal_sidecar");
-        }
-        let journal = sidecar(main, "-journal");
-        let journal_length = bytes(&journal)?;
-        if journal_length.is_some() && !recover {
-            return Err("unexpected_journal");
-        }
-        let lengths = [bytes(main)?.unwrap_or(0), journal_length.unwrap_or(0)];
-        let sum = lengths[0].checked_add(lengths[1]).ok_or("initial_size")?;
-        if sum > capacity {
-            return Err("initial_quota");
-        }
         marmish_engine::initialize_storage().map_err(|_| "sqlite_initialize")?;
         // SQLite owns the stock descriptor for the process lifetime.
         let base = unsafe { sql::sqlite3_vfs_find(ptr::null()) };
@@ -107,28 +94,20 @@ impl Quota {
         {
             return Err("stock_unix_vfs");
         }
-        let quota = Box::leak(Box::new(Self {
+        let quota = Box::leak(Box::new(Self::new(
             base,
-            files: [main.to_owned(), journal],
+            main,
             capacity,
-            account: Mutex::new(Accounted {
-                lengths,
-                evidence: Evidence {
-                    peak: sum,
-                    ..Evidence::default()
-                },
-                uncertain: false,
-                journal_synced: false,
-            }),
+            recover,
             crash_after_database_write,
-        }));
+        )?));
         let wrapper = Box::leak(Box::new(sql::sqlite3_vfs {
             iVersion: 1,
             szOsFile: size_of::<Handle>().try_into().map_err(|_| "file_header")?,
             mxPathname: unsafe { (*base).mxPathname },
             pNext: ptr::null_mut(),
             zName: c"marmish-test-provisional-quota".as_ptr(),
-            pAppData: ptr::from_ref(quota).cast_mut().cast(),
+            pAppData: ptr::from_ref::<Arc<Quota>>(quota).cast_mut().cast(),
             xOpen: Some(open),
             xDelete: Some(delete),
             xAccess: Some(access),
@@ -152,6 +131,55 @@ impl Quota {
             return Err("quota_vfs_registration");
         }
         Ok(quota)
+    }
+
+    fn new(
+        base: *mut sql::sqlite3_vfs,
+        main: &Path,
+        capacity: u64,
+        recover: bool,
+        crash_after_database_write: bool,
+    ) -> Result<Arc<Self>, &'static str> {
+        let parent = main.parent().ok_or("stage_parent")?;
+        let metadata = parent.symlink_metadata().map_err(|_| "stage_directory")?;
+        if !metadata.is_dir()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.mode() & 0o777 != 0o700
+            || !parent.canonicalize().is_ok_and(|path| path == parent)
+        {
+            return Err("stage_directory_identity");
+        }
+        if bytes(&sidecar(main, "-wal"))?.is_some() || bytes(&sidecar(main, "-shm"))?.is_some() {
+            return Err("stage_wal_sidecar");
+        }
+        let journal = sidecar(main, "-journal");
+        let journal_length = bytes(&journal)?;
+        if journal_length.is_some() && !recover {
+            return Err("unexpected_journal");
+        }
+        let lengths = [bytes(main)?.unwrap_or(0), journal_length.unwrap_or(0)];
+        let sum = lengths[0].checked_add(lengths[1]).ok_or("initial_size")?;
+        if sum > capacity {
+            return Err("initial_quota");
+        }
+        Ok(Arc::new(Self {
+            base,
+            files: [main.to_owned(), journal],
+            capacity,
+            witness: None,
+            panicked: AtomicBool::new(false),
+            account: Mutex::new(Accounted {
+                lengths,
+                evidence: Evidence {
+                    peak: sum,
+                    ..Evidence::default()
+                },
+                uncertain: false,
+                journal_synced: false,
+                journal_witness: None,
+            }),
+            crash_after_database_write,
+        }))
     }
 
     fn index(&self, name: *const c_char) -> Option<usize> {
@@ -179,6 +207,39 @@ impl Quota {
         state.lengths[0] + state.lengths[1]
     }
 
+    fn verify_dispatch(&self) -> Result<(), &'static str> {
+        let mut state = self.account.lock().map_err(|_| "dispatch_indeterminate")?;
+        if self.panicked.load(Ordering::Relaxed)
+            || state.uncertain
+            || state.evidence.database_opens == 0
+            || state.journal_witness.is_some()
+            || bytes(&self.files[1])?.is_some()
+            || bytes(&sidecar(&self.files[0], "-wal"))?.is_some()
+            || bytes(&sidecar(&self.files[0], "-shm"))?.is_some()
+            || bytes(&self.files[0])?.ok_or("dispatch_missing_main")? > dispatch::CLOSED_STAGE_LIMIT
+            || self.observe(&mut state) != sql::SQLITE_OK
+        {
+            return Err("dispatch_no_clean_receipt");
+        }
+        Ok(())
+    }
+
+    fn identities(&self, state: &Accounted) -> bool {
+        let Some(expected) = self.witness else {
+            return true;
+        };
+        let identity = |path: &Path| {
+            path.symlink_metadata()
+                .ok()
+                .map(|meta| (meta.dev(), meta.ino()))
+        };
+        identity(&self.files[0]) == Some(expected)
+            && identity(&self.files[1]) == state.journal_witness
+            && state
+                .journal_witness
+                .is_none_or(|journal| journal.0 == expected.0)
+    }
+
     fn observe(&self, state: &mut Accounted) -> c_int {
         let measured = bytes(&self.files[0]).and_then(|main| {
             let journal = bytes(&self.files[1])?;
@@ -186,6 +247,7 @@ impl Quota {
         });
         let total = state.lengths[0].checked_add(state.lengths[1]);
         if let (Ok(measured), Some(total)) = (measured, total)
+            && self.identities(state)
             && measured == state.lengths
             && total <= self.capacity
         {
@@ -208,7 +270,7 @@ fn bytes(path: &Path) -> Result<Option<u64>, &'static str> {
         Ok(meta)
             if meta.is_file()
                 && meta.uid() == unsafe { libc::geteuid() }
-                && meta.mode() & 0o077 == 0
+                && meta.mode() & 0o7777 == 0o600
                 && meta.nlink() == 1 =>
         {
             Ok(Some(meta.len()))
@@ -219,9 +281,9 @@ fn bytes(path: &Path) -> Result<Option<u64>, &'static str> {
     }
 }
 
-fn vfs_state(vfs: *mut sql::sqlite3_vfs) -> &'static Quota {
+fn vfs_state(vfs: *mut sql::sqlite3_vfs) -> &'static Arc<Quota> {
     // Called only by SQLite using the registered wrapper and its stable pAppData.
-    unsafe { &*(*vfs).pAppData.cast::<Quota>() }
+    unsafe { &*(*vfs).pAppData.cast::<Arc<Quota>>() }
 }
 
 unsafe extern "C" fn open(
@@ -231,10 +293,21 @@ unsafe extern "C" fn open(
     flags: c_int,
     out_flags: *mut c_int,
 ) -> c_int {
+    guarded(sql::SQLITE_IOERR, || unsafe {
+        open_managed(vfs_state(vfs), name, outer, flags, out_flags)
+    })
+}
+
+unsafe fn open_managed(
+    quota: &Arc<Quota>,
+    name: *const c_char,
+    outer: *mut sql::sqlite3_file,
+    flags: c_int,
+    out_flags: *mut c_int,
+) -> c_int {
     // pMethods must be NULL on failure because this function cleans up the
     // stock handle itself.
     unsafe { (*outer).pMethods = ptr::null() };
-    let quota = vfs_state(vfs);
     let mut state = quota.account.lock().unwrap();
     let kind = flags & FILE_TYPES;
     let index = match (quota.index(name), kind) {
@@ -247,7 +320,8 @@ unsafe extern "C" fn open(
             return sql::SQLITE_CANTOPEN;
         }
     };
-    if state.uncertain {
+    if quota.panicked.load(Ordering::Relaxed) || state.uncertain || !quota.identities(&state) {
+        state.uncertain = true;
         return sql::SQLITE_IOERR;
     }
     // SQLite allocates both the outer and stock file buffers with the alignment
@@ -259,21 +333,39 @@ unsafe extern "C" fn open(
             return sql::SQLITE_NOMEM;
         }
         stock.cast::<u8>().write_bytes(0, base.szOsFile as usize);
-        let rc = base.xOpen.unwrap()(quota.base, name, stock, flags, out_flags);
+        let stock = Stock(stock);
+        let rc = base.xOpen.unwrap()(quota.base, name, stock.0, flags, out_flags);
         if rc != sql::SQLITE_OK {
             state.evidence.ordinary_errors += 1;
-            close_stock(stock);
+            preserve_failure_errno(rc, || drop(stock));
             return rc;
         }
         let handle = Handle {
             outer: sql::sqlite3_file { pMethods: &METHODS },
             stock,
-            state: quota,
+            state: quota.clone(),
             index,
         };
+        if quota.witness.is_some() && index == 1 {
+            state.journal_witness = quota.files[1]
+                .symlink_metadata()
+                .ok()
+                .map(|meta| (meta.dev(), meta.ino()));
+        }
+        if quota.witness.is_some() && index == 0 {
+            let mut moved: c_int = 0;
+            let rc = handle.methods().xFileControl.unwrap()(
+                handle.stock.0,
+                sql::SQLITE_FCNTL_HAS_MOVED,
+                ptr::from_mut(&mut moved).cast(),
+            );
+            if rc != sql::SQLITE_OK || moved != 0 {
+                state.uncertain = true;
+                return sql::SQLITE_IOERR;
+            }
+        }
         let rc = handle.refresh(&mut state);
         if rc != sql::SQLITE_OK {
-            close_stock(stock);
             return rc;
         }
         if index == 0 {
@@ -282,6 +374,63 @@ unsafe extern "C" fn open(
         outer.cast::<Handle>().write(handle);
         sql::SQLITE_OK
     }
+}
+
+struct Stock(*mut sql::sqlite3_file);
+
+impl Drop for Stock {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { close_stock(self.0) };
+        }
+    }
+}
+
+thread_local! {
+    static ACTIVE_CALLBACK: Cell<bool> = const { Cell::new(false) };
+}
+
+fn guarded(failure: c_int, callback: impl FnOnce() -> c_int) -> c_int {
+    struct Exit;
+    impl Drop for Exit {
+        fn drop(&mut self) {
+            ACTIVE_CALLBACK.set(false);
+        }
+    }
+    if ACTIVE_CALLBACK.replace(true) {
+        dispatch::poison_scope();
+        return failure;
+    }
+    let _exit = Exit;
+    catch_unwind(AssertUnwindSafe(callback)).unwrap_or_else(|_| {
+        dispatch::poison_scope();
+        failure
+    })
+}
+
+fn errno_slot() -> *mut c_int {
+    // libc provides a writable errno slot for the current thread.
+    #[cfg(target_os = "linux")]
+    unsafe {
+        libc::__errno_location()
+    }
+    #[cfg(target_os = "macos")]
+    unsafe {
+        libc::__error()
+    }
+}
+
+fn preserve_failure_errno<T>(rc: c_int, reconcile: impl FnOnce() -> T) -> T {
+    if rc == sql::SQLITE_OK {
+        return reconcile();
+    }
+    // SQLite's Unix xGetLastError reads the calling thread's errno after an
+    // I/O failure. Wrapper metadata probes must not replace the stock value.
+    let slot = errno_slot();
+    let errno = unsafe { slot.read() };
+    let result = reconcile();
+    unsafe { slot.write(errno) };
+    result
 }
 
 unsafe fn close_stock(stock: *mut sql::sqlite3_file) -> c_int {
@@ -312,12 +461,12 @@ impl Handle {
 
     fn methods(&self) -> &sql::sqlite3_io_methods {
         // The stock handle remains open and owns the method pointer.
-        unsafe { &*(*self.stock).pMethods }
+        unsafe { &*(*self.stock.0).pMethods }
     }
 
     fn refresh(&self, state: &mut Accounted) -> c_int {
         let mut len = 0;
-        let rc = unsafe { self.methods().xFileSize.unwrap()(self.stock, &mut len) };
+        let rc = unsafe { self.methods().xFileSize.unwrap()(self.stock.0, &mut len) };
         if let Ok(len) = u64::try_from(len)
             && rc == sql::SQLITE_OK
         {
@@ -331,7 +480,11 @@ impl Handle {
     fn resize(&self, end: u64, kind: Resize, operation: impl FnOnce() -> c_int) -> c_int {
         let mut state = self.state.account.lock().unwrap();
         let old = state.lengths[self.index];
-        if state.uncertain && end > old {
+        if !self.state.identities(&state) {
+            state.uncertain = true;
+            return sql::SQLITE_IOERR_FSTAT;
+        }
+        if (state.uncertain || self.state.panicked.load(Ordering::Relaxed)) && end > old {
             return sql::SQLITE_IOERR_FSTAT;
         }
         if end > old
@@ -347,7 +500,7 @@ impl Handle {
             state.evidence.ordinary_errors += 1;
         }
         // Reconcile even on a partial write error before another file may grow.
-        let measured = self.refresh(&mut state);
+        let measured = preserve_failure_errno(rc, || self.refresh(&mut state));
         if rc != sql::SQLITE_OK || measured != sql::SQLITE_OK {
             return if rc != sql::SQLITE_OK { rc } else { measured };
         }
@@ -371,11 +524,12 @@ impl Handle {
 }
 
 unsafe extern "C" fn close(file: *mut sql::sqlite3_file) -> c_int {
-    let stock = unsafe { Handle::get(file) }.stock;
-    unsafe {
+    guarded(sql::SQLITE_IOERR_CLOSE, || unsafe {
+        let mut handle = file.cast::<Handle>().read();
         (*file).pMethods = ptr::null();
+        let stock = std::mem::replace(&mut handle.stock.0, ptr::null_mut());
         close_stock(stock)
-    }
+    })
 }
 
 unsafe extern "C" fn write(
@@ -384,38 +538,45 @@ unsafe extern "C" fn write(
     count: c_int,
     offset: i64,
 ) -> c_int {
-    let (Ok(offset_bound), Ok(count_bound)) = (u64::try_from(offset), u64::try_from(count)) else {
-        return sql::SQLITE_IOERR_WRITE;
-    };
-    let Some(end) = offset_bound
-        .checked_add(count_bound)
-        .filter(|n| *n <= i64::MAX as u64)
-    else {
-        return sql::SQLITE_IOERR_WRITE;
-    };
-    let handle = unsafe { Handle::get(file) };
-    handle.resize(end, Resize::Write { offset }, || unsafe {
-        handle.methods().xWrite.unwrap()(handle.stock, data, count, offset)
+    guarded(sql::SQLITE_IOERR_WRITE, || {
+        let (Ok(offset_bound), Ok(count_bound)) = (u64::try_from(offset), u64::try_from(count))
+        else {
+            return sql::SQLITE_IOERR_WRITE;
+        };
+        let Some(end) = offset_bound
+            .checked_add(count_bound)
+            .filter(|n| *n <= i64::MAX as u64)
+        else {
+            return sql::SQLITE_IOERR_WRITE;
+        };
+        let handle = unsafe { Handle::get(file) };
+        handle.resize(end, Resize::Write { offset }, || unsafe {
+            handle.methods().xWrite.unwrap()(handle.stock.0, data, count, offset)
+        })
     })
 }
 
 unsafe extern "C" fn truncate(file: *mut sql::sqlite3_file, size: i64) -> c_int {
-    let Ok(end) = u64::try_from(size) else {
-        return sql::SQLITE_IOERR_TRUNCATE;
-    };
-    let handle = unsafe { Handle::get(file) };
-    handle.resize(end, Resize::Truncate, || unsafe {
-        handle.methods().xTruncate.unwrap()(handle.stock, size)
+    guarded(sql::SQLITE_IOERR_TRUNCATE, || {
+        let Ok(end) = u64::try_from(size) else {
+            return sql::SQLITE_IOERR_TRUNCATE;
+        };
+        let handle = unsafe { Handle::get(file) };
+        handle.resize(end, Resize::Truncate, || unsafe {
+            handle.methods().xTruncate.unwrap()(handle.stock.0, size)
+        })
     })
 }
 
 unsafe extern "C" fn sync(file: *mut sql::sqlite3_file, flags: c_int) -> c_int {
-    let handle = unsafe { Handle::get(file) };
-    let rc = unsafe { handle.methods().xSync.unwrap()(handle.stock, flags) };
-    if rc == sql::SQLITE_OK && handle.index == 1 {
-        handle.state.account.lock().unwrap().journal_synced = true;
-    }
-    rc
+    guarded(sql::SQLITE_IOERR_FSYNC, || {
+        let handle = unsafe { Handle::get(file) };
+        let rc = unsafe { handle.methods().xSync.unwrap()(handle.stock.0, flags) };
+        if rc == sql::SQLITE_OK && handle.index == 1 {
+            handle.state.account.lock().unwrap().journal_synced = true;
+        }
+        rc
+    })
 }
 
 unsafe extern "C" fn file_control(
@@ -423,26 +584,30 @@ unsafe extern "C" fn file_control(
     op: c_int,
     arg: *mut c_void,
 ) -> c_int {
-    match op {
-        sql::SQLITE_FCNTL_LOCKSTATE
-        | sql::SQLITE_FCNTL_HAS_MOVED
-        | sql::SQLITE_FCNTL_VFSNAME
-        | sql::SQLITE_FCNTL_SYNC
-        | sql::SQLITE_FCNTL_COMMIT_PHASETWO
-        | sql::SQLITE_FCNTL_BUSYHANDLER => {
-            let handle = unsafe { Handle::get(file) };
-            unsafe { handle.methods().xFileControl.unwrap()(handle.stock, op, arg) }
+    guarded(sql::SQLITE_IOERR, || {
+        match op {
+            sql::SQLITE_FCNTL_LOCKSTATE
+            | sql::SQLITE_FCNTL_HAS_MOVED
+            | sql::SQLITE_FCNTL_VFSNAME
+            | sql::SQLITE_FCNTL_SYNC
+            | sql::SQLITE_FCNTL_COMMIT_PHASETWO
+            | sql::SQLITE_FCNTL_BUSYHANDLER => {
+                let handle = unsafe { Handle::get(file) };
+                unsafe { handle.methods().xFileControl.unwrap()(handle.stock.0, op, arg) }
+            }
+            // Unix SIZE_HINT can extend the file and CHUNK_SIZE can make writes
+            // and truncation allocate beyond the requested end. Both stay disabled.
+            _ => sql::SQLITE_NOTFOUND,
         }
-        // Unix SIZE_HINT can extend the file and CHUNK_SIZE can make writes
-        // and truncation allocate beyond the requested end. Both stay disabled.
-        _ => sql::SQLITE_NOTFOUND,
-    }
+    })
 }
 
 unsafe extern "C" fn capabilities(file: *mut sql::sqlite3_file) -> c_int {
-    let handle = unsafe { Handle::get(file) };
-    let bits = unsafe { handle.methods().xDeviceCharacteristics.unwrap()(handle.stock) };
-    bits & !ATOMIC_CAPABILITIES
+    guarded(0, || {
+        let handle = unsafe { Handle::get(file) };
+        let bits = unsafe { handle.methods().xDeviceCharacteristics.unwrap()(handle.stock.0) };
+        bits & !ATOMIC_CAPABILITIES
+    })
 }
 
 unsafe extern "C" fn delete(
@@ -450,23 +615,35 @@ unsafe extern "C" fn delete(
     name: *const c_char,
     sync_dir: c_int,
 ) -> c_int {
-    let quota = vfs_state(vfs);
+    guarded(sql::SQLITE_IOERR_DELETE, || {
+        delete_managed(vfs_state(vfs), name, sync_dir)
+    })
+}
+
+fn delete_managed(quota: &Quota, name: *const c_char, sync_dir: c_int) -> c_int {
     if quota.index(name) != Some(1) {
         return sql::SQLITE_IOERR_DELETE;
     }
     let mut state = quota.account.lock().unwrap();
+    if !quota.identities(&state) {
+        state.uncertain = true;
+        return sql::SQLITE_IOERR_DELETE;
+    }
     let rc = unsafe { (*quota.base).xDelete.unwrap()(quota.base, name, sync_dir) };
-    match bytes(&quota.files[1]) {
-        Ok(len) => state.lengths[1] = len.unwrap_or(0),
-        Err(_) => state.uncertain = true,
-    }
-    if state.lengths[1] == 0 {
-        state.journal_synced = false;
-    }
-    if rc != sql::SQLITE_OK && rc != sql::SQLITE_IOERR_DELETE_NOENT {
-        state.evidence.ordinary_errors += 1;
-    }
-    let measured = quota.observe(&mut state);
+    let measured = preserve_failure_errno(rc, || {
+        match bytes(&quota.files[1]) {
+            Ok(len) => state.lengths[1] = len.unwrap_or(0),
+            Err(_) => state.uncertain = true,
+        }
+        if matches!(bytes(&quota.files[1]), Ok(None)) {
+            state.journal_witness = None;
+            state.journal_synced = false;
+        }
+        if rc != sql::SQLITE_OK && rc != sql::SQLITE_IOERR_DELETE_NOENT {
+            state.evidence.ordinary_errors += 1;
+        }
+        quota.observe(&mut state)
+    });
     if rc == sql::SQLITE_OK { measured } else { rc }
 }
 
@@ -474,8 +651,10 @@ unsafe extern "C" fn delete(
 macro_rules! file_delegate {
     ($name:ident, $member:ident $(, $arg:ident : $ty:ty)*) => {
         unsafe extern "C" fn $name(file: *mut sql::sqlite3_file $(, $arg: $ty)*) -> c_int {
-            let handle = unsafe { Handle::get(file) };
-            unsafe { handle.methods().$member.unwrap()(handle.stock $(, $arg)*) }
+            guarded(sql::SQLITE_IOERR, || {
+                let handle = unsafe { Handle::get(file) };
+                unsafe { handle.methods().$member.unwrap()(handle.stock.0 $(, $arg)*) }
+            })
         }
     };
 }
@@ -544,6 +723,9 @@ static METHODS: sql::sqlite3_io_methods = sql::sqlite3_io_methods {
     xFetch: None,
     xUnfetch: None,
 };
+
+#[path = "peer_quota_dispatch.rs"]
+pub(crate) mod dispatch;
 
 #[path = "peer_quota_vfs_tests.rs"]
 mod tests;

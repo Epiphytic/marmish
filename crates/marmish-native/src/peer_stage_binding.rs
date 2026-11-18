@@ -1,6 +1,9 @@
 //! Prepared native custody without any physical publication.
 
+use std::{num::NonZeroU64, path::Path};
 use storage_sqlite::SqlCipherKey;
+
+use crate::peer_quota_vfs::dispatch::{NativeOperation, NativeTurn, ProfileSlots, RawBinding};
 
 use super::store::consent_checkpoint::provisioning::Reservation;
 use super::store::consent_checkpoint::provisioning::stage_journal::{Artifact, State};
@@ -24,7 +27,17 @@ impl InvitationState<'_> {
     pub(super) async fn prepare_provisional(
         &mut self,
         reservation: &Reservation,
+        after: impl FnMut(Cut) -> Result<()>,
+    ) -> Result<()> {
+        self.prepare_provisional_with_quota(reservation, after, None)
+            .await
+    }
+
+    pub(super) async fn prepare_provisional_with_quota(
+        &mut self,
+        reservation: &Reservation,
         mut after: impl FnMut(Cut) -> Result<()>,
+        quota: Option<&ProfileSlots<'_>>,
     ) -> Result<()> {
         let sample = self.provisional_sample()?;
         let wall = sample.as_secs();
@@ -58,41 +71,60 @@ impl InvitationState<'_> {
                 if !token.matches(&stage, file.witness()) {
                     return Err(Error::StageIdentityMismatch);
                 }
-                let native = OpenStage::open_provisional(
-                    file.path(),
-                    &key,
-                    self.signer.clone(),
-                    origin,
-                    label,
-                    true,
-                )?;
-                // Simulate losing the native signer after the atomic native pending commit.
-                let withhold_signing = after(Cut::NativeSigning).is_err();
-                let package = native
-                    .generate_provisional(sample, withhold_signing)
-                    .await?;
-                drop(native);
+                let package = if let Some(quota) = quota {
+                    let exact = scoped_binding(file.path(), binding.coordinates(), file.witness())?;
+                    let native = NativeTurn {
+                        key: &key,
+                        signer: self.signer.clone(),
+                        origin,
+                        label,
+                        sample,
+                        operation: NativeOperation::Generate {
+                            withhold_signing: after(Cut::NativeSigning).is_err(),
+                        },
+                    };
+                    quota
+                        .native_turn(exact, native)
+                        .map_err(|_| Error::Native(StageError::Storage))??
+                        .0
+                } else {
+                    let native = OpenStage::open_provisional(
+                        file.path(),
+                        &key,
+                        self.signer.clone(),
+                        origin,
+                        label,
+                        true,
+                    )?;
+                    // Simulate losing the native signer after the atomic native pending commit.
+                    let withhold_signing = after(Cut::NativeSigning).is_err();
+                    native
+                        .generate_provisional(sample, withhold_signing)
+                        .await?
+                };
                 (file, package)
             }
             State::NativeStarted(witness) | State::Prepared(witness, _) => {
                 let file = self.paths.reopen_provisional(stage.binding(), witness)?;
                 let before = file.digest()?;
-                let native = OpenStage::open_provisional(
-                    file.path(),
-                    &key,
-                    self.signer.clone(),
+                let native = NativeTurn {
+                    key: &key,
+                    signer: self.signer.clone(),
                     origin,
                     label,
-                    false,
-                )?;
-                let read_only = matches!(stage.state(), State::Prepared(..))
-                    || native.provisional_is_signed(sample)?;
-                let package = if read_only {
-                    native.read_provisional(sample)?
-                } else {
-                    native.finalize_provisional(sample).await?
+                    sample,
+                    operation: NativeOperation::Reopen {
+                        prepared: matches!(stage.state(), State::Prepared(..)),
+                    },
                 };
-                drop(native);
+                let (package, read_only) = if let Some(quota) = quota {
+                    let exact = scoped_binding(file.path(), binding.coordinates(), file.witness())?;
+                    quota
+                        .native_turn(exact, native)
+                        .map_err(|_| Error::Native(StageError::Storage))??
+                } else {
+                    native.run_unscoped(file.path()).await?
+                };
                 if read_only && before != file.digest()? {
                     return Err(Error::StageIdentityMismatch);
                 }
@@ -124,4 +156,20 @@ impl InvitationState<'_> {
         }
         Ok(checked)
     }
+}
+
+fn scoped_binding(
+    path: &Path,
+    (known, generation, _, _): (bool, u64, [u8; 32], crate::peer_invitation::Selector),
+    witness: super::store::consent_checkpoint::provisioning::stage_journal::FileWitness,
+) -> Result<RawBinding<'_>> {
+    Ok(RawBinding {
+        path,
+        generation: NonZeroU64::new(generation).ok_or(Error::StageIdentityMismatch)?,
+        known,
+        witness: (
+            u64::from_be_bytes(witness.device),
+            u64::from_be_bytes(witness.inode),
+        ),
+    })
 }

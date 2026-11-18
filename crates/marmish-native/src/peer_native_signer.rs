@@ -3,6 +3,8 @@
 #[cfg(test)]
 #[path = "peer_stage_native.rs"]
 mod provisional;
+#[cfg(test)]
+pub(crate) use provisional::ProvisionalPackage;
 
 use super::*;
 use cgka_engine::key_package::durably_owned_key_packages;

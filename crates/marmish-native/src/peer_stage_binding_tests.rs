@@ -16,7 +16,7 @@ const ORIGIN: &str = "wss://stage-fixture.example/";
 const FAULT: Error = Error::Clock;
 
 pub(in super::super) struct Fixture {
-    _private: TempDir,
+    _private: Option<TempDir>,
     pub(in super::super) lease: ProfileLease,
     pub(in super::super) identity: IdentityMaterial,
     pub(in super::super) server: Keys,
@@ -30,7 +30,12 @@ impl Fixture {
             .permissions(fs::Permissions::from_mode(0o700))
             .tempdir()
             .unwrap();
-        let mut lease = ProfileLease::acquire(private.path(), "client").unwrap();
+        let path = private.path().to_owned();
+        Self::at(&path, Some(private), true)
+    }
+
+    fn at(path: &Path, private: Option<TempDir>, initialize: bool) -> Self {
+        let mut lease = ProfileLease::acquire(path, "client").unwrap();
         let identity = lease
             .prepare(
                 BackendChoice::File,
@@ -38,7 +43,9 @@ impl Fixture {
                 std::time::Instant::now() + Duration::from_secs(5),
             )
             .unwrap();
-        InvitationLane::initialize(&lease, &identity).unwrap();
+        if initialize {
+            InvitationLane::initialize(&lease, &identity).unwrap();
+        }
         let now = Timestamp::now().as_secs();
         Self {
             _private: private,
@@ -775,4 +782,139 @@ async fn peer_stage_quarantine_stops_native_allocation() {
         checkpoint_state(&mut state, &reservation, fixture.now),
         State::Bound,
     );
+}
+
+#[test]
+#[ignore = "isolated default SQLCipher VFS subprocess"]
+fn peer_quota_dispatch_native_child() {
+    let Ok(limit) = std::env::var("MARMISH_DISPATCH_NATIVE_LIMIT") else {
+        return;
+    };
+    crate::peer_quota_vfs::dispatch::mount_for_proof().expect("dispatch_mount");
+    if matches!(limit.as_str(), "crash" | "restart") {
+        native_dispatch_restart(&limit);
+        return;
+    }
+    let limit = limit.parse::<u64>().expect("dispatch_limit");
+    let fixture = Fixture::new();
+    let quota = ProfileSlots::reserve(&fixture.lease, (128 * 1024 * 1024) - limit)
+        .expect("dispatch_reserve");
+    let mut state = fixture.start(Policy::default());
+    let (_, reservation) = fixture.reserve(&mut state);
+    let first = crate::peer_quota_vfs::dispatch::resolve_once(
+        state.prepare_provisional_with_quota(&reservation, |_| Ok(()), Some(&quota)),
+    )
+    .unwrap();
+    if limit < 64 * 1024 {
+        assert!(matches!(first, Err(Error::Native(StageError::Storage))));
+        assert!(matches!(
+            checkpoint_state(&mut state, &reservation, fixture.now),
+            State::NativeStarted(_)
+        ));
+    } else {
+        first.expect("dispatch_native_prepare");
+        let before = fs::read(fixture.stage()).expect("dispatch_read_stage");
+        crate::peer_quota_vfs::dispatch::resolve_once(state.prepare_provisional_with_quota(
+            &reservation,
+            |_| Ok(()),
+            Some(&quota),
+        ))
+        .unwrap()
+        .expect("dispatch_native_reopen");
+        assert_eq!(
+            before,
+            fs::read(fixture.stage()).expect("dispatch_read_stage")
+        );
+        assert!(before.len() as u64 <= limit);
+        assert!(!fixture.stage().with_extension("db-journal").exists());
+        let State::Prepared(witness, _) = checkpoint_state(&mut state, &reservation, fixture.now)
+        else {
+            panic!("dispatch_expected_prepared");
+        };
+        let binding = reservation.stage_binding();
+        let file = state.paths.reopen_provisional(binding, witness).unwrap();
+        let exact = scoped_binding(file.path(), binding.coordinates(), witness).unwrap();
+        let wrong = SqlCipherKey::raw([0xc9; 32]);
+        assert!(matches!(
+            quota.native_turn(
+                exact,
+                NativeTurn {
+                    key: &wrong,
+                    signer: state.signer.clone(),
+                    origin: &state.origin_url,
+                    label: state.paths.provisional_label(binding),
+                    sample: Duration::from_secs(fixture.now),
+                    operation: NativeOperation::Reopen { prepared: true },
+                }
+            ),
+            Ok(Err(StageError::Storage))
+        ));
+        assert_eq!(before, fs::read(fixture.stage()).unwrap());
+    }
+    println!("dispatch-proof native {}", u8::from(limit >= 64 * 1024));
+}
+
+fn native_dispatch_restart(mode: &str) {
+    use std::{io::Write, os::unix::fs::OpenOptionsExt};
+    let path =
+        PathBuf::from(std::env::var_os("MARMISH_DISPATCH_RESTART_ROOT").expect("dispatch_root"));
+    let crash = mode == "crash";
+    let fixture = Fixture::at(&path, None, crash);
+    let quota = ProfileSlots::reserve(&fixture.lease, 124 * 1024 * 1024).expect("dispatch_reserve");
+    let mut state = fixture.start(Policy::default());
+    let selector_file = path.join("fixture.selector");
+    if crash {
+        let quota = quota.fixture_stop_in_synced_transaction();
+        let (selector, reservation) = fixture.reserve(&mut state);
+        let mut output = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(selector_file)
+            .expect("fixture_selector");
+        output.write_all(&selector.server.to_bytes()).unwrap();
+        output.write_all(&selector.id).unwrap();
+        output.write_all(&selector.revision).unwrap();
+        output.sync_all().unwrap();
+        let _ = crate::peer_quota_vfs::dispatch::resolve_once(
+            state.prepare_provisional_with_quota(&reservation, |_| Ok(()), Some(&quota)),
+        );
+        panic!("native_crash_cut_not_reached");
+    }
+    let raw = fs::read(selector_file).expect("fixture_selector");
+    let selector = Selector {
+        server: nostr::key::PublicKey::from_slice(&raw[..32]).unwrap(),
+        id: raw[32..48].try_into().unwrap(),
+        revision: raw[48..].try_into().unwrap(),
+    };
+    let reservation = state
+        .checkpoint
+        .recover_provisioning(&state.source, selector, fixture.now)
+        .expect("dispatch_recover_reservation");
+    let durable = checkpoint_state(&mut state, &reservation, fixture.now);
+    assert!(matches!(durable, State::NativeStarted(_)));
+    let main = fixture.stage();
+    let journal = main.with_extension("db-journal");
+    let before = [fs::read(&main).unwrap(), fs::read(&journal).unwrap()];
+    assert!(before[1].len() > 512);
+    assert!(before[0].len() + before[1].len() <= 4 * 1024 * 1024);
+    assert!(rusqlite::Connection::open(&main).is_err());
+    let result = crate::peer_quota_vfs::dispatch::resolve_once(
+        state.prepare_provisional_with_quota(&reservation, |_| Ok(()), Some(&quota)),
+    )
+    .unwrap();
+    assert_eq!(result, Err(Error::StageIdentityMismatch));
+    assert_eq!(
+        checkpoint_state(&mut state, &reservation, fixture.now),
+        durable
+    );
+    assert_eq!(
+        [fs::read(&main).unwrap(), fs::read(&journal).unwrap()],
+        before
+    );
+    let other = rusqlite::Connection::open(path.join("ordinary.db")).expect("ordinary_after_crash");
+    other
+        .execute_batch("CREATE TABLE usable(value); INSERT INTO usable VALUES(1)")
+        .unwrap();
+    println!("dispatch-proof restart");
 }
