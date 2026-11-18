@@ -226,7 +226,7 @@ fn verify_cold_identity_mismatch(base: &Path, root: &Path, original: &IdentityMa
     ));
     let mut changed_root = zeroize::Zeroizing::new(*original.sqlcipher_root());
     changed_root[0] ^= 0xff;
-    fs::write(&key_path, &*changed_root).unwrap();
+    fs::write(&key_path, changed_root.as_slice()).unwrap();
     let mut lease = ProfileLease::acquire_ready(base, "test").unwrap();
     let wrong_root = prepare(&mut lease);
     assert_eq!(wrong_root.public_key(), original.public_key());
