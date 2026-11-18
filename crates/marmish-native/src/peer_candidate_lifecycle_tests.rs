@@ -217,12 +217,16 @@ async fn until(events: &mut mpsc::UnboundedReceiver<Event>, expected: Event) -> 
     .expect("expected lifecycle event")
 }
 
-async fn ordinary_round_trip(root: &Path) {
-    let socket = socket_path_for(root, PROFILE).unwrap();
-    let status = ipc::request(&socket, &ipc::Request::Status {})
+async fn active_status(socket: &Path) {
+    let status = ipc::request(socket, &ipc::Request::Status {})
         .await
         .unwrap();
     assert_eq!(status.result.unwrap()["state"], "active");
+}
+
+async fn ordinary_round_trip(root: &Path) {
+    let socket = socket_path_for(root, PROFILE).unwrap();
+    active_status(&socket).await;
     let read = ipc::request(
         &socket,
         &ipc::Request::Received {
@@ -416,7 +420,8 @@ async fn inert_daemon_reporter_wait_prevents_release_on_failure_or_stop() {
                     events.try_recv(),
                     Err(mpsc::error::TryRecvError::Empty)
                 ));
-                ordinary_round_trip(root.path()).await;
+                let socket = socket_path_for(root.path(), PROFILE).unwrap();
+                active_status(&socket).await;
                 if stop_during_ack {
                     stop.send(()).unwrap();
                     parent.write_all(b"A").await.unwrap();
