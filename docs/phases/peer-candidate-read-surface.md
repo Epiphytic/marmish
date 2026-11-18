@@ -62,12 +62,13 @@ socket framing check alone does not satisfy it.
   four-request Peer queue. Do not create a socket, a second listener or a
   generic API. Share a single credential, accepted timestamp and framing
   path on the real listener in unit tests and candidate runtime. Expose only
-  a closed read request type in the candidate `ipc::Request::Peer`, with
+  a closed read request type in the candidate `ipc::Request::PeerRead`, with
   the shared selector and bounded read queue. The separately test-only
   fixture request/reply and its `Approve`, `Decline`, `Manual` and
   `Witness` have no non-test mount and are not the candidate wire type,
-  even under candidate-cfg unit tests. A raw write variant, extra field or
-  malformed selector is rejected before peer work is queued.
+  even under candidate-cfg unit tests. The candidate wire operation is
+  `peer_read`. A raw write variant, extra field or malformed selector is
+  rejected before peer work is queued.
 - The reply exposes at most 16 current Pending entries. Fields are the four
   selector coordinates, Pending, held time and expiry. Project at the Peer
   reply boundary from current checked worker results. Show requires exact

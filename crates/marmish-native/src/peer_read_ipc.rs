@@ -244,14 +244,18 @@ mod tests {
             json!({"kind":"show","selection":invalid_hex}),
             json!({"kind":"show","selection":zero_generation}),
         ] {
-            let mut stream = UnixStream::connect(&path).await.unwrap();
-            ipc::write_frame(
-                &mut stream,
-                &json!({"operation":"peer_read","request": request}),
-            )
+            let response: Response = tokio::time::timeout(IO_TIMEOUT, async {
+                let mut stream = UnixStream::connect(&path).await?;
+                ipc::write_frame(
+                    &mut stream,
+                    &json!({"operation":"peer_read","request": request}),
+                )
+                .await?;
+                ipc::read_frame(&mut stream).await
+            })
             .await
+            .unwrap()
             .unwrap();
-            let response: Response = ipc::read_frame(&mut stream).await.unwrap();
             assert_eq!(
                 decode_reply(Request::List {}, response),
                 Err(Failure::InvalidRequest)
@@ -262,7 +266,9 @@ mod tests {
             Err(mpsc::error::TryRecvError::Empty)
         ));
 
-        let status = ipc::request(&path, &LocalRequest::Status {}).await.unwrap();
+        let status = exchange(&path, &LocalRequest::Status {}, IO_TIMEOUT)
+            .await
+            .unwrap();
         assert_eq!(status.result, Some(json!({"state":"active"})));
 
         let command = LocalRequest::CommandInvocations {
@@ -270,7 +276,10 @@ mod tests {
             limit: 1,
         };
         let (result, ()) = tokio::join!(ipc::command_request(&path, &command), async {
-            let pending = incoming.recv().await.unwrap();
+            let pending = tokio::time::timeout(IO_TIMEOUT, incoming.recv())
+                .await
+                .unwrap()
+                .unwrap();
             assert!(matches!(
                 pending.request,
                 LocalRequest::CommandInvocations { limit: 1, .. }
@@ -290,5 +299,23 @@ mod tests {
         ));
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn candidate_client_reports_timeout_at_one_exchange_deadline() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = directory.path().join("s");
+        let listener = super::super::bind(&path).unwrap();
+
+        let started = tokio::time::Instant::now();
+        assert_eq!(
+            client_request(&path, Request::List {}).await,
+            Err(Failure::Timeout)
+        );
+        assert_eq!(started.elapsed(), IO_TIMEOUT);
+        drop(listener);
     }
 }
