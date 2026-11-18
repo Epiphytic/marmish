@@ -816,7 +816,7 @@ impl ReceiverFiles<'_> {
         &self,
         permit: crate::peer_invitation::CleanPermit<'_>,
         class: SlotClass,
-        run: impl FnOnce(&Path) -> Result<T>,
+        run: impl FnOnce(&Path, &QuotaTurn<'_>) -> Result<T>,
     ) -> Result<T> {
         let measured = permit
             .verify(self, matches!(class, SlotClass::Snapshot))
@@ -842,7 +842,7 @@ impl ReceiverFiles<'_> {
             crash_after_database_write: false,
         })?;
         turn.enter()?;
-        let result = run(path);
+        let result = run(path, &turn);
         turn.finish()?;
         result
     }
@@ -852,7 +852,7 @@ impl ReceiverFiles<'_> {
         permit: crate::peer_invitation::CleanPermit<'_>,
         operation: JoinTurn<'_>,
     ) -> Result<std::result::Result<(), StageError>> {
-        self.measured_native(permit, SlotClass::Snapshot, |path| {
+        self.measured_native(permit, SlotClass::Snapshot, |path, _| {
             Ok(operation.prepare(path))
         })
     }
@@ -862,15 +862,19 @@ impl ReceiverFiles<'_> {
         permit: crate::peer_invitation::CleanPermit<'_>,
         operation: JoinTurn<'_>,
     ) -> Result<std::result::Result<JoinedAuthority, StageError>> {
-        self.measured_native(permit, SlotClass::Snapshot, |path| Ok(operation.read(path)))
+        self.measured_native(permit, SlotClass::Snapshot, |path, _| {
+            Ok(operation.read(path))
+        })
     }
 
     pub(crate) fn join_original(
         &self,
         permit: crate::peer_invitation::CleanPermit<'_>,
         operation: JoinTurn<'_>,
-    ) -> Result<std::result::Result<(), StageError>> {
-        self.measured_native(permit, SlotClass::Unknown, |path| operation.join(path))
+    ) -> Result<(std::result::Result<(), StageError>, JoinMetrics)> {
+        self.measured_native(permit, SlotClass::Unknown, |path, turn| {
+            operation.join(path, turn)
+        })
     }
 
     pub(crate) fn check_snapshot_cipher(
@@ -879,7 +883,7 @@ impl ReceiverFiles<'_> {
         key: &SqlCipherKey,
         fence: &crate::peer_invitation::TurnFence<'_>,
     ) -> Result<()> {
-        self.measured_native(permit, SlotClass::Snapshot, |path| {
+        self.measured_native(permit, SlotClass::Snapshot, |path, _| {
             recover_database(path, key, fence)
         })
     }
@@ -998,22 +1002,15 @@ impl FixtureFileTurn<'_> {
         operation: JoinTurn<'_>,
     ) -> Result<(std::result::Result<(), StageError>, JoinMetrics)> {
         let turn = self.original(binding)?;
-        let result = operation.join(binding.path);
+        let result = operation.join(binding.path, &turn);
         turn.finish()?;
-        let evidence = turn.quota.evidence();
-        Ok((
-            result?,
-            JoinMetrics {
-                peak: evidence.peak,
-                rejected: evidence.rejected,
-                main_opens: evidence.database_opens,
-            },
-        ))
+        result
     }
 }
 
 #[cfg(test)]
 pub(crate) struct JoinMetrics {
+    pub(crate) polls: u8,
     pub(crate) peak: u64,
     pub(crate) rejected: [u64; 2],
     pub(crate) main_opens: u64,
@@ -1068,11 +1065,33 @@ impl JoinTurn<'_> {
         stage.require_prepared_join(self.join, Duration::from_secs(self.fence.sample()?))
     }
 
-    fn join(self, path: &Path) -> Result<std::result::Result<(), StageError>> {
-        match self.open(path) {
-            Ok(stage) => resolve_once(stage.join_once_fenced(self.join, self.fence)),
-            Err(error) => Ok(Err(error)),
-        }
+    fn join(
+        self,
+        path: &Path,
+        turn: &QuotaTurn<'_>,
+    ) -> Result<(std::result::Result<(), StageError>, JoinMetrics)> {
+        use std::future::{Future as _, poll_fn};
+        let mut polls = 0;
+        let result = match self.open(path) {
+            Ok(stage) => {
+                let mut welcome = std::pin::pin!(stage.join_once_fenced(self.join, self.fence));
+                resolve_once(poll_fn(|cx| {
+                    polls += 1;
+                    welcome.as_mut().poll(cx)
+                }))?
+            }
+            Err(error) => Err(error),
+        };
+        let evidence = turn.quota.evidence();
+        Ok((
+            result,
+            JoinMetrics {
+                polls,
+                peak: evidence.peak,
+                rejected: evidence.rejected,
+                main_opens: evidence.database_opens,
+            },
+        ))
     }
 
     fn read(self, path: &Path) -> std::result::Result<JoinedAuthority, StageError> {

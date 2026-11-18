@@ -1,7 +1,7 @@
 use std::{
     fs,
     num::NonZeroU64,
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::atomic::AtomicBool,
@@ -15,7 +15,7 @@ use crate::{
     identity::BackendChoice,
     peer_control_version::ControlVersion,
     peer_quota_vfs::dispatch::{
-        ProfileSlots, ReceiverQuota,
+        ProfileSlots, ReceiverQuota, TOTAL_ADMISSION,
         founder::{Expected, FounderQuota},
         mount_for_proof, resolve_once,
     },
@@ -135,7 +135,7 @@ impl Drop for Running {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "private real NIP-42 WSS, native Welcome and repeated process exits"]
 async fn private_v2_pending_survives_cold_cuts() {
-    for scenario in ["joined", "before-native"] {
+    for scenario in ["joined", "before-native", "capacity"] {
         let public = tempfile::tempdir().unwrap();
         let founder_root = public.path().join("founder-profile");
         fs::create_dir(&founder_root).unwrap();
@@ -435,12 +435,54 @@ async fn run_recipient(
                     .is_err()
             );
             let ingest = std::time::Instant::now();
-            if scenario == "joined" {
-                receiver.ingest(&mut port, armed, &stop).unwrap();
+            let polls = if scenario == "capacity" {
+                let original = home.join("peer/provisional-unknown.db");
+                let known = home.join("peer/provisional-known.db");
+                let bytes = fs::read(&original).unwrap();
+                let stage = fs::metadata(&original).unwrap();
+                let charge = stage.len().max(stage.blocks() * 512);
+                // A real retained, fenced physical family contributes to the
+                // inventory charge. Leave exactly the current main length
+                // available so the first journal growth is refused in SQLite.
+                let budget = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&known)
+                    .unwrap();
+                budget
+                    .set_len(TOTAL_ADMISSION - store::installed::RESERVED_BYTES - charge - 1)
+                    .unwrap();
+                let (result, metrics) = receiver.ingest(&mut port, armed, &stop).unwrap();
+                assert!(result.is_err());
+                assert_eq!(metrics.polls, 1);
+                assert!(metrics.main_opens > 0);
+                assert!(metrics.rejected[1] > 0);
+                assert_eq!(metrics.peak, stage.len());
+                assert!(
+                    fs::read(&original).unwrap() == bytes,
+                    "refused join changed stage"
+                );
+                drop(budget);
+                fs::remove_file(known).unwrap();
+                println!(
+                    "private-v2-pending quota_peak={} journal_refused={} main_opens={}",
+                    metrics.peak, metrics.rejected[1], metrics.main_opens
+                );
+                metrics.polls
+            } else if scenario == "joined" {
+                let (result, metrics) = receiver.ingest(&mut port, armed, &stop).unwrap();
+                result.unwrap();
+                assert_eq!(metrics.polls, 1);
+                assert!(metrics.main_opens > 0);
+                assert_eq!(metrics.rejected, [0; 2]);
+                assert!(metrics.peak > 0);
+                metrics.polls
             } else {
                 assert_eq!(scenario, "before-native");
                 drop(armed);
-            }
+                0
+            };
             assert_eq!(
                 receiver
                     .custody_state(&mut port, selector, exact.generation)
@@ -448,7 +490,7 @@ async fn run_recipient(
                 (CustodyState::JoinStarted, exact.carrier)
             );
             println!(
-                "private-v2-pending prepare_ms={prepare_ms} ingest_ms={} start=1 native_commit={}",
+                "private-v2-pending prepare_ms={prepare_ms} ingest_ms={} polls={polls} start=1 native_commit={}",
                 ingest.elapsed().as_millis(),
                 scenario == "joined"
             );

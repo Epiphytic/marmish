@@ -311,6 +311,7 @@ async fn qualify(mode: &str) {
             .unwrap();
         let join_time = join_start.elapsed();
         assert!(outcome.is_err());
+        assert_eq!(metrics.polls, 1);
         assert!(metrics.main_opens > 0);
         assert!(metrics.rejected.iter().sum::<u64>() > 0);
         assert!(metrics.peak <= length);

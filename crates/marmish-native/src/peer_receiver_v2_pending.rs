@@ -10,7 +10,7 @@ use std::{
 
 use crate::{
     mdk_adapter::peer_native_signer::{JoinWitness, JoinedAuthority},
-    peer_quota_vfs::dispatch::JoinTurn,
+    peer_quota_vfs::dispatch::{JoinMetrics, JoinTurn},
 };
 
 use super::*;
@@ -122,7 +122,7 @@ impl<'lease> PendingReceiver<'lease> {
         port: &mut PeerRecipientPort,
         armed: ArmedWelcome<'lease>,
         stop: &AtomicBool,
-    ) -> Result<()> {
+    ) -> Result<(Result<()>, JoinMetrics)> {
         self.owner.cursor.unchanged()?;
         let (current, delivery, wall) = self.owner.checkpoint.read_installed_join_custody(
             &self.owner.source,
@@ -339,7 +339,7 @@ impl<'lease> NativePending<'lease> {
         port: &mut PeerRecipientPort,
         fence: &TurnFence<'_>,
         armed: ArmedWelcome<'_>,
-    ) -> Result<()> {
+    ) -> Result<(Result<()>, JoinMetrics)> {
         let ArmedWelcome {
             held,
             delivery,
@@ -364,20 +364,20 @@ impl<'lease> NativePending<'lease> {
         if original.digest()? != prepared.image {
             return Err(Error::StageIdentityMismatch);
         }
-        let result = port.use_current_recipient(|account, origin, wall| {
+        let attempt = port.use_current_recipient(|account, origin, wall| {
             if account != self.signer.public_key()
                 || origin != self.origin
                 || wall >= prepared.enrollment.deadline
             {
                 return Err(Error::Binding);
             }
-            Ok(files
+            files
                 .files()
                 .join_original(permit, operation)
-                .map_err(|_| Error::Path)??)
+                .map_err(|_| Error::Path)
         })?;
         files.finish(owner, fence, false)?;
-        result?;
+        let (result, metrics) = attempt?;
         port.use_current_recipient(|account, origin, wall| {
             if account != self.signer.public_key()
                 || origin != self.origin
@@ -386,7 +386,8 @@ impl<'lease> NativePending<'lease> {
                 return Err(Error::Binding);
             }
             Ok(())
-        })?
+        })??;
+        Ok((result.map_err(Into::into), metrics))
     }
 
     fn read_joined(
