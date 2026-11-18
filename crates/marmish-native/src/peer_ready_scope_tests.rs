@@ -23,7 +23,7 @@ impl Fixture {
         let directory = tempfile::tempdir().unwrap();
         fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let mut lease = ProfileLease::acquire(directory.path(), name).unwrap();
-        let material = lease
+        let mut material = lease
             .prepare(
                 BackendChoice::File,
                 Path::new("/unused"),
@@ -33,6 +33,17 @@ impl Fixture {
         if ready {
             let owner = open_owner(&lease, &material);
             lease.mark_ready(owner.opened_binding()).unwrap();
+            drop(owner);
+            lease.cleanup_runtime().unwrap();
+            drop(lease);
+            lease = ProfileLease::acquire_ready(directory.path(), name).unwrap();
+            material = lease
+                .prepare(
+                    BackendChoice::File,
+                    Path::new("/unused"),
+                    Instant::now() + Duration::from_secs(5),
+                )
+                .unwrap();
         }
         let fixture = Self {
             _directory: directory,
@@ -103,8 +114,16 @@ fn open_owner(lease: &ProfileLease, material: &IdentityMaterial) -> MdkOwner {
 
 #[test]
 fn peer_ready_scope_requires_manual_on_preexisting_ready_client_or_both() {
-    let initializing = Fixture::new("initializing", false);
+    let mut initializing = Fixture::new("initializing", false);
     assert!(initializing.capture().unwrap().is_none());
+    let owner = open_owner(&initializing.lease, &initializing.material);
+    Arc::get_mut(&mut initializing.lease)
+        .unwrap()
+        .mark_ready(owner.opened_binding())
+        .unwrap();
+    assert!(initializing.lease.setup_snapshot().ready);
+    assert!(initializing.capture().unwrap().is_none());
+    drop(owner);
     let ready = Fixture::new("ready", true);
     let path = ready.lease.root().join("config.json");
     for (role, tor, mode, eligible) in [

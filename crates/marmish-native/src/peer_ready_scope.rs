@@ -21,7 +21,7 @@ impl ReadyReceiverScope {
         material: &IdentityMaterial,
         daemon_config: &CommandConfig,
     ) -> Result<Option<Self>> {
-        if !lease.setup_snapshot().ready || daemon_config.peer_receive() != Some(&Receive::Manual) {
+        if !lease.was_ready_at_acquire() || daemon_config.peer_receive() != Some(&Receive::Manual) {
             return Ok(None);
         }
         lease.check_prepared_peer_identity(material)?;

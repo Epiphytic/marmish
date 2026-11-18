@@ -86,6 +86,8 @@ pub struct ProfileLease {
     _lock: File,
     root: PathBuf,
     manifest: Option<Manifest>,
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    ready_at_acquire: bool,
     profile_id: String,
     name: String,
     mdk: PathBuf,
@@ -141,6 +143,8 @@ impl ProfileLease {
             arti_state: root.join("arti-state"),
             arti_cache: root.join("arti-cache"),
             root,
+            #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+            ready_at_acquire: manifest.as_ref().is_some_and(|m| m.phase == Phase::Ready),
             manifest,
             profile_id,
             name: name.to_owned(),
@@ -220,6 +224,11 @@ impl ProfileLease {
             authorization_response(&bytes, status, kind)?;
         }
         Ok(())
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn was_ready_at_acquire(&self) -> bool {
+        self.ready_at_acquire
     }
 
     pub(crate) fn setup_snapshot(&self) -> SetupSnapshot {
