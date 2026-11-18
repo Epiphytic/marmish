@@ -10,10 +10,12 @@ the existing sealed turn and without fixture authority.
 
 This phase revises the parent mount's read scheduling. Each verified
 same-UID connection uses a shared, memory-only read handle and acquires
-a nonwaiting permit from the existing four-slot local read budget.
+a nonwaiting permit from the new view-owned four-slot local read budget.
 There is no actor-side read message or queue. Keep the existing IPC
-exchange deadline and per-connection bounds, and hold the permit through
-the reply attempt. Saturation returns Unavailable. The actor stays the
+exchange deadline and per-connection bounds. A drop guard owns a permit
+through each reply attempt. Saturation returns Unavailable. Listener
+stop cancels candidate permit-holding tasks through the listener-owned
+connection tasks, so a slow reader cannot delay teardown. The actor stays the
 sole producer and can be blocked on native work without delaying an
 admitted read. Candidate session framing and stock dispatch stay as
 designed in the parent mount.
@@ -21,7 +23,9 @@ designed in the parent mount.
 ## Producer and generation
 
 Use three separate identities. A non-reused actor epoch owns the view.
-The actual listener runtime generation gates IPC admission and reply.
+Allocate it from a checked process-wide atomic counter and refuse a new
+view on overflow. The actual listener runtime generation gates IPC
+admission and reply.
 The nonzero durable row generation is a field of the wire `Selection`
 and participates in exact Show equality. A row generation alone confers
 no actor or listener authority. Only the current actor has the non-Clone
@@ -29,11 +33,14 @@ producer. Bind it to the listener and actor at existing runtime readiness.
 
 After the bridge's successful installed Pending commit or its exact
 read-only Pending replay, return a private, non-Clone opaque observation.
-Before the earliest row or native evidence read for that observation, the
-producer takes the monotonic origin and an internal publication ticket.
-That ticket pins the current actor epoch and view sequence. The checked
-bridge consumes the ticket. It takes the entry coordinates, Held time,
-Pending deadline and verified wall from the exact current tuple. Since
+A turn that can change the durable or native image first invalidates the
+current view. Next the producer samples the monotonic origin and mints
+an internal publication ticket, before any row or native dependency read,
+including all pre-CAS proof. Read-only maintenance skips its own
+invalidation and uses the current sequence. The checked bridge consumes
+the ticket, which pins the actor epoch, listener generation and view
+sequence. It takes the entry coordinates, Held time, Pending deadline
+and verified wall from the exact current tuple. Since
 `Change::apply` returns no tuple, perform one exact durable readback after
 CAS success within the same fenced turn as the native proof. Compare
 signed ancestry, selection, native coordinates, deadlines and generation.
@@ -44,7 +51,9 @@ read-only recovery can later prove the row.
 Construct the observation only inside the branch that checks both the
 application-inert durable Pending row and the sealed native witness.
 Require `held_at <= verified_wall < pending_deadline`, a nonzero row
-generation and the current actor ticket. Keep paths, native authority, route
+generation, the current actor ticket, and `verified_wall >= effective_floor`.
+Read the authenticated effective durable floor under the same fence as
+the exact record and carry it in the observation for reply admission. Keep paths, native authority, route
 and group binding with the bridge. No positive projection can be created
 from history, a request, stage filename or config.
 
@@ -66,7 +75,8 @@ consumes the ticket and advances the sequence. It cannot recover Stopped. A late
 restore visibility. The actor invalidates before transitions that could
 change a native image or durable row. The runtime and listener can
 invalidate or permanently stop on cancellation, owner loss or listener
-exit without waiting for the actor to finish a native turn.
+exit without waiting for the actor to finish a native turn. Dropping
+the sole producer also permanently stops the view.
 
 ## Maintenance and reply
 
@@ -98,7 +108,10 @@ returns Unavailable. A freshly sampled older wall cannot revive the
 same expired row in this actor. After restart, the authenticated persisted
 floor still applies. If an expiry was only observed in memory and wall
 rolls backward to a time at or above the persisted floor, a new actor
-may requalify that row. Reads do not advance a durable floor.
+may requalify that row. Reads do not advance a durable floor. Once the
+exact expired proof ages out, return Unavailable until later independent
+maintenance or the existing custody retirement path proves healthy
+absence. Expired records will never appear as an entry once latched.
 
 For healthy state return the singleton List or the exactly matching
 Show. Check listener generation, actor liveness, sequence and freshness
@@ -114,8 +127,10 @@ Exercise Pending and qualified absence, unavailable initial and ambiguous
 states, mismatch each selector field and each generation, 1 s monotonic
 and wall-deadline boundaries, permanent rollback/expiry handling with
 subsequent clock movement, the documented restart floor boundary, poison,
-four admitted requests and immediate saturation, a slow reader, blocked
-attempt to publish a stale ticket,
+four admitted requests and immediate saturation, listener teardown with
+a slow reader, wall at and one second below the authenticated floor,
+successful publication after a turn's own initial invalidation, failed
+publication after a second invalidation,
 invalidate before transition or stage replacement, and stop/drop racing
 a finished maintenance turn. On the installed candidate, test timeout,
 dropped reply, invalidation before the final write and zero attributed
