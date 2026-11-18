@@ -1482,7 +1482,10 @@ The [installed Peer design](phases/peer-installed.md) records the current
 join-before-decision behavior, operator interface and separate platform and
 relay gates. A join can expose Pending only after exact native custody.
 The planned installed owner, private relay qualification and status
-transmission remain gated on separate validation.
+transmission remain gated on separate validation. The [configuration parser
+increment](reviews/peer-installed-config.md) validates optional Peer intent and
+preserves it through ordinary setup. The parsed fields currently have no
+runtime consumer, so this increment does not open Peer relay connections.
 
 The [terminal custody fixture](validation/peer-terminal-custody.md) makes
 Declined and Expired durable for an exact joined Pending invitation.
