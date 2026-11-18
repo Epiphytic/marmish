@@ -1477,10 +1477,17 @@ marker. The [durable WSS PostJoin proof](validation/peer-postjoin-durable-wss.md
 adds exact cold recovery at four journal cuts. The relay handled three
 Group writes, including a byte-identical retry after a withheld
 acknowledgement. Final native and journal readback recorded one rotation.
-Acceptance receipts and installed Peer authorization have separate gates.
-The [MDK master refresh](reviews/mdk-master-private-wss-refresh.md) revalidated
-this history cut and ordinary Command during a Peer relay outage on Linux
-AMD64. It includes a forward schema migration in native account databases.
+The [cold acceptance receipt proof](validation/peer-cold-acceptance-receipt.md)
+uses the same private WSS fixture. The founder commits one acceptance from an
+exact retained native source and prior enrollment. The recipient reuses the
+same signed event after a lost acknowledgement. Native Published cleanup
+requires the original stable receipt epoch and authenticator. These proof
+authorities are available only in tests. Installed Peer authorization and
+status still require their own runtime owners.
+The [current MDK master checkpoint](validation/mdk-master-schema-213.md)
+revalidated this history cut and ordinary Command during a Peer relay outage
+on Linux AMD64. It accepts account migration 213 through native preflight and
+refuses future versions without modifying the profile database files.
 The [installed Peer design](phases/peer-installed.md) records the current
 join-before-decision behavior, operator interface and separate platform and
 relay gates. A join can expose Pending only after exact native custody.
