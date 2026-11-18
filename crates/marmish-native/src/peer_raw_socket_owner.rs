@@ -601,7 +601,7 @@ impl Socket {
             if wake_unregistered {
                 cancel.cancelled().await;
             } else {
-                std::future::pending().await;
+                std::future::pending::<()>().await;
             }
         }
     }
