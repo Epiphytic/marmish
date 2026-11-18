@@ -538,3 +538,123 @@ fn epoch_five_sql_recovery_trigger_checks_each_transition_independently() {
         Recovery::Parked { at: NOW + 3 },
     );
 }
+
+fn effect_checkpoint(f: &Fixture) -> Result<Checkpoint> {
+    Checkpoint::attach_leave_effect_fixture(f.open(), f.client.clone(), UID, URL, Policy::default())
+}
+
+#[test]
+fn peer_terminal_leave_effect_epoch_requires_exact_inventory() {
+    let f = Fixture::new();
+    f.provisional();
+    assert_eq!(effect_checkpoint(&f).err(), Some(BINDING));
+    drop(f.prepared().unwrap());
+    drop(effect_checkpoint(&f).unwrap());
+    let exact = f.inventory();
+    assert_eq!(leave_checkpoint(&f).err(), Some(BINDING));
+    drop(effect_checkpoint(&f).unwrap());
+    assert_eq!(f.inventory(), exact);
+    let HardenedPeerConnection(tampered) = f.open();
+    assert!(
+        tampered
+            .execute("DELETE FROM peer_terminal_leave_effect_epoch", [])
+            .is_err()
+    );
+    tampered
+        .execute_batch("DROP TRIGGER peer_terminal_leave_effect_deny_INSERT")
+        .unwrap();
+    let partial = f.inventory();
+    assert_eq!(effect_checkpoint(&f).err(), Some(BINDING));
+    assert_eq!(f.inventory(), partial);
+
+    let older = Fixture::new();
+    older.provisional();
+    drop(older.prepared().unwrap());
+    drop(leave_checkpoint(&older).unwrap());
+    let inventory = older.inventory();
+    assert_eq!(effect_checkpoint(&older).err(), Some(BINDING));
+    assert_eq!(older.inventory(), inventory);
+}
+
+#[test]
+fn peer_terminal_leave_effect_apertures_restore_after_uncommitted_writes() {
+    use super::leave_effect::Effect;
+    use super::leave_effect_schema::set_write;
+
+    let f = Fixture::new();
+    let (mut cp, source, key) = joined_pending_in(&f, &Keys::generate(), effect_checkpoint);
+    let local = cp.authorize_local(UID).unwrap();
+    cp.hold_pending_decline(&source, key, 1, NOW, &local, || Ok(()))
+        .unwrap();
+    let hold = cp.read_leave_hold(&source, key, 1, NOW).unwrap().unwrap();
+    assert_eq!(
+        cp.native_leave_effect(&source, &hold, NOW),
+        Ok(Effect::Absent)
+    );
+    let insert = |conn: &rusqlite::Connection, wall| {
+        conn.execute(
+            "INSERT INTO peer_terminal_leave_effect (class,generation,armed_at,image_digest)
+         VALUES ((SELECT class FROM peer_terminal_native_leave),1,?1,zeroblob(32))",
+            [i64::try_from(wall).unwrap()],
+        )
+    };
+    let capture = |conn: &rusqlite::Connection, wall| {
+        conn.execute(
+            "UPDATE peer_terminal_leave_effect SET captured_at=?1, event_id=zeroblob(32),
+         event_digest=zeroblob(32), signed_event=x'45'",
+            [i64::try_from(wall).unwrap()],
+        )
+    };
+    assert!(insert(&cp.cursor.conn, NOW).is_err());
+    {
+        let tx = cp.cursor.begin(source.origin).unwrap();
+        set_write(&tx, false, true).unwrap();
+        assert!(insert(&tx, NOW + 1).is_err(), "cursor floor must match");
+        assert_eq!(insert(&tx, NOW).unwrap(), 1);
+    }
+    assert_eq!(
+        cp.native_leave_effect(&source, &hold, NOW),
+        Ok(Effect::Absent)
+    );
+    assert!(insert(&cp.cursor.conn, NOW).is_err());
+
+    {
+        let tx = cp.cursor.begin(source.origin).unwrap();
+        set_write(&tx, false, true).unwrap();
+        assert_eq!(insert(&tx, NOW).unwrap(), 1);
+        set_write(&tx, false, false).unwrap();
+        tx.commit().unwrap();
+    }
+    assert_eq!(
+        cp.native_leave_effect(&source, &hold, NOW),
+        Ok(Effect::Armed)
+    );
+    assert_eq!(
+        cp.native_leave_effect(&source, &hold, NOW - 1),
+        Err(Error::Cursor(CursorError::ClockRegressed))
+    );
+    assert!(capture(&cp.cursor.conn, NOW).is_err());
+    assert!(
+        cp.cursor
+            .conn
+            .execute("DELETE FROM peer_terminal_leave_effect", [])
+            .is_err()
+    );
+    {
+        let tx = cp.cursor.begin(source.origin).unwrap();
+        set_write(&tx, true, true).unwrap();
+        assert!(capture(&tx, hold.deadline()).is_err());
+        assert_eq!(capture(&tx, NOW).unwrap(), 1);
+    }
+    assert_eq!(
+        cp.native_leave_effect(&source, &hold, NOW),
+        Ok(Effect::Armed)
+    );
+    assert!(capture(&cp.cursor.conn, NOW).is_err());
+    assert!(
+        cp.terminal_cleanup_due(&source, hold.deadline())
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(row_counts(&cp.cursor.conn), (1, 1, 1));
+}

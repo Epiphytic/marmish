@@ -34,7 +34,7 @@ impl Fixture {
         Self::at(&path, Some(private), true)
     }
 
-    fn at(path: &Path, private: Option<TempDir>, initialize: bool) -> Self {
+    pub(in super::super) fn at(path: &Path, private: Option<TempDir>, initialize: bool) -> Self {
         let mut lease = ProfileLease::acquire(path, "client").unwrap();
         let identity = lease
             .prepare(

@@ -22,6 +22,8 @@ pub(crate) use consent_checkpoint::wire::Delivery;
 
 #[path = "peer_pending_join_native_tests.rs"]
 mod joined_tests;
+#[path = "peer_terminal_leave_owner.rs"]
+pub(crate) mod leave_owner;
 #[path = "peer_postjoin_proof_tests.rs"]
 mod postjoin_tests;
 #[path = "peer_pending_terminal_retirement.rs"]
@@ -237,6 +239,7 @@ enum Epoch {
     Prepared,
     Custody,
     Publication,
+    LeaveEffect,
 }
 
 pub(super) struct PreparedConsentOwner<'a> {
@@ -356,6 +359,9 @@ impl<'a> PreparedConsentOwner<'a> {
             }
             Epoch::Publication => {
                 Checkpoint::attach_publication_fixture(conn, keys, uid, url, policy)?
+            }
+            Epoch::LeaveEffect => {
+                Checkpoint::attach_leave_effect_fixture(conn, keys, uid, url, policy)?
             }
         };
         let source = checkpoint.bind_source(url)?;

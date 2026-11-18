@@ -284,7 +284,7 @@ impl Checkpoint {
     }
 
     #[cfg(test)]
-    pub(super) fn hold_pending_decline(
+    pub(crate) fn hold_pending_decline(
         &mut self,
         source: &Source,
         selector: Selector,

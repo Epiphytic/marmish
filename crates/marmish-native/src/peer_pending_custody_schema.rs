@@ -188,6 +188,8 @@ fn expected(kind: Kind) -> std::result::Result<&'static [Entry], CursorError> {
     static PUBLICATION: OnceLock<Vec<Entry>> = OnceLock::new();
     #[cfg(test)]
     static TERMINAL_LEAVE: OnceLock<Vec<Entry>> = OnceLock::new();
+    #[cfg(test)]
+    static LEAVE_EFFECT: OnceLock<Vec<Entry>> = OnceLock::new();
     static CUSTODY: OnceLock<Vec<Entry>> = OnceLock::new();
     let expected = match kind {
         Kind::Custody => &CUSTODY,
@@ -195,6 +197,8 @@ fn expected(kind: Kind) -> std::result::Result<&'static [Entry], CursorError> {
         Kind::Publication => &PUBLICATION,
         #[cfg(test)]
         Kind::TerminalLeave => &TERMINAL_LEAVE,
+        #[cfg(test)]
+        Kind::LeaveEffect => &LEAVE_EFFECT,
     };
     if let Some(entries) = expected.get() {
         return Ok(entries);
@@ -202,12 +206,16 @@ fn expected(kind: Kind) -> std::result::Result<&'static [Entry], CursorError> {
     let template = super::schema::template()?;
     install(&template)?;
     #[cfg(test)]
-    if Epoch(kind).is_publication() {
+    if Epoch(kind).has_publication_inventory() {
         super::activation_schema::install(&template)?;
     }
     #[cfg(test)]
     if Epoch(kind).is_terminal_leave() {
         super::leave_schema::install(&template)?;
+    }
+    #[cfg(test)]
+    if Epoch(kind).is_leave_effect() {
+        super::leave_effect_schema::install(&template)?;
     }
     let entries = inventory(&template).map_err(super::schema::cursor_error)?;
     Ok(expected.get_or_init(|| entries))
@@ -223,6 +231,8 @@ enum Kind {
     Publication,
     #[cfg(test)]
     TerminalLeave,
+    #[cfg(test)]
+    LeaveEffect,
 }
 
 impl Epoch {
@@ -232,8 +242,18 @@ impl Epoch {
     }
 
     #[cfg(test)]
+    fn has_publication_inventory(self) -> bool {
+        self.is_publication() || self.is_leave_effect()
+    }
+
+    #[cfg(test)]
     pub(super) fn is_terminal_leave(self) -> bool {
-        matches!(self.0, Kind::TerminalLeave)
+        matches!(self.0, Kind::TerminalLeave | Kind::LeaveEffect)
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_leave_effect(self) -> bool {
+        matches!(self.0, Kind::LeaveEffect)
     }
 
     pub(crate) fn verify(
@@ -267,13 +287,17 @@ impl Epoch {
         }
         super::terminal_schema::verify_rows(tx, account).map_err(super::schema::cursor_error)?;
         #[cfg(test)]
-        if self.is_publication() {
+        if self.has_publication_inventory() {
             super::activation_schema::verify_rows(tx, account)
                 .map_err(super::schema::cursor_error)?;
         }
         #[cfg(test)]
         if self.is_terminal_leave() {
             super::leave_schema::verify_rows(tx, account).map_err(super::schema::cursor_error)?;
+        }
+        #[cfg(test)]
+        if self.is_leave_effect() {
+            super::leave_effect_schema::verify_rows(tx)?;
         }
         Ok(())
     }
@@ -333,19 +357,41 @@ pub(super) fn open_publication(
 
 #[cfg(test)]
 pub(super) fn open_terminal_leave(
+    conn: HardenedPeerConnection,
+    account: [u8; 32],
+    origin: Origin,
+) -> std::result::Result<(CursorStore, Epoch), CursorError> {
+    open_leave_epoch(conn, account, origin, Kind::TerminalLeave)
+}
+
+#[cfg(test)]
+pub(super) fn open_leave_effect(
+    conn: HardenedPeerConnection,
+    account: [u8; 32],
+    origin: Origin,
+) -> std::result::Result<(CursorStore, Epoch), CursorError> {
+    open_leave_epoch(conn, account, origin, Kind::LeaveEffect)
+}
+
+#[cfg(test)]
+fn open_leave_epoch(
     HardenedPeerConnection(mut conn): HardenedPeerConnection,
     account: [u8; 32],
     origin: Origin,
+    kind: Kind,
 ) -> std::result::Result<(CursorStore, Epoch), CursorError> {
     let origins = vec![origin];
     verify_hardening(&conn)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let epoch = Epoch(Kind::TerminalLeave);
+    let epoch = Epoch(kind);
     if inventory(&tx).map_err(super::schema::cursor_error)? != expected(epoch.0)? {
         super::schema::verify(&tx, account, &origins)?;
         install(&tx)?;
         super::activation_schema::install(&tx)?;
         super::leave_schema::install(&tx)?;
+        if epoch.is_leave_effect() {
+            super::leave_effect_schema::install(&tx)?;
+        }
     }
     epoch.verify(&tx, account, &origins)?;
     tx.commit()?;

@@ -21,23 +21,37 @@ struct SavedHold {
     route: [u8; 32],
 }
 
-pub(super) struct Hold {
-    terminal: TerminalRecord,
-    custody: HeldEvidence,
+pub(crate) struct Hold {
+    pub(super) terminal: TerminalRecord,
+    pub(super) custody: HeldEvidence,
     saved: SavedHold,
 }
 
 impl Hold {
+    pub(crate) fn evidence(&self) -> &HeldEvidence {
+        &self.custody
+    }
+
+    pub(crate) fn is_idle(&self) -> bool {
+        self.saved.recovery == Recovery::Idle
+    }
+
     pub(super) fn selector(&self) -> Selector {
         self.terminal.selector()
     }
 
-    pub(super) fn deadline(&self) -> u64 {
+    pub(crate) fn deadline(&self) -> u64 {
         self.saved.deadline
     }
 
     pub(super) fn recovery(&self) -> Recovery {
         self.saved.recovery
+    }
+
+    pub(super) fn same_turn(&self, prior: &Self) -> bool {
+        self.terminal.same_turn(&prior.terminal)
+            && self.custody.same_turn(&prior.custody)
+            && self.saved == prior.saved
     }
 
     pub(super) fn not_before(&self) -> u64 {
@@ -215,7 +229,7 @@ impl Checkpoint {
         Ok(cx)
     }
 
-    pub(super) fn read_leave_hold(
+    pub(crate) fn read_leave_hold(
         &mut self,
         source: &Source,
         selector: Selector,
@@ -234,6 +248,9 @@ impl Checkpoint {
         wall: u64,
     ) -> Result<Option<Hold>> {
         let cx = self.require_leave_context(source)?;
+        if cx.epoch.is_leave_effect() {
+            return Err(CursorError::Binding.into());
+        }
         let tx = self.cursor.begin(cx.origin)?;
         cx.verify_local_terminal(&tx, wall)?;
         let selected = tx
@@ -264,6 +281,9 @@ impl Checkpoint {
     ) -> Result<Hold> {
         self.check_local_owner(&prior.custody.owner)?;
         let cx = self.require_leave_context(source)?;
+        if cx.epoch.is_leave_effect() {
+            return Err(CursorError::Binding.into());
+        }
         if cx.origin != prior.custody.stage().0.origin {
             return Err(Error::Source);
         }
@@ -272,11 +292,7 @@ impl Checkpoint {
         let current = cx
             .leave_hold(&tx, prior.selector(), prior.terminal.generation())?
             .ok_or(CursorError::Stale)?;
-        if !current.terminal.same_turn(&prior.terminal)
-            || !current.custody.same_turn(&prior.custody)
-            || current.saved != prior.saved
-            || wall < prior.not_before()
-        {
+        if !current.same_turn(prior) || wall < prior.not_before() {
             return Err(CursorError::Stale.into());
         }
         let (state, attempts, at, floor) = match current.recovery() {

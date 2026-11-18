@@ -14,6 +14,25 @@ mod peer_invitation {
     pub(crate) use crate::peer_cursor_store::consent_checkpoint::provisioning::
         prepared_consent::custody::HeldEvidence;
 
+    pub(crate) enum LeaveSnapshot {}
+
+    impl LeaveSnapshot {
+        pub(crate) fn pristine(&self, _stage: (Binding, FileWitness)) -> Option<[u8; 32]> {
+            match *self {}
+        }
+
+        pub(crate) fn captured(
+            &self,
+            _stage: (Binding, FileWitness),
+        ) -> Option<([u8; 32], [u8; 32], &[u8])> {
+            match *self {}
+        }
+    }
+
+    use crate::peer_cursor_store::consent_checkpoint::provisioning::{
+        Binding, stage_journal::FileWitness,
+    };
+
     // Standalone storage tests cannot mint native proofs. These uninhabited
     // stand-ins permit checking the same storage source without linking MDK.
     pub(crate) mod postjoin_verify {

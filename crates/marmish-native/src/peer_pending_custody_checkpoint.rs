@@ -24,6 +24,12 @@ pub(crate) mod terminal;
 mod terminal_schema;
 
 #[cfg(test)]
+#[path = "peer_terminal_leave_effect.rs"]
+pub(crate) mod leave_effect;
+#[cfg(test)]
+#[path = "peer_terminal_leave_effect_schema.rs"]
+mod leave_effect_schema;
+#[cfg(test)]
 #[path = "peer_terminal_leave_schema.rs"]
 mod leave_schema;
 #[cfg(test)]

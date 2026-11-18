@@ -20,6 +20,8 @@ pub(super) const CLOSED_STAGE_LIMIT: u64 = 16 * 1024 * 1024;
 // owner exists at this revision; the proof fixture supplies the other charges.
 const TOTAL_ADMISSION: u64 = 128 * 1024 * 1024;
 const NAMES: [&str; 2] = ["provisional-known.db", "provisional-unknown.db"];
+const SNAPSHOT: usize = NAMES.len();
+const SNAPSHOT_NAME: &str = "terminal-leave-snapshot.db";
 const SIDECARS: [&str; 3] = ["-journal", "-wal", "-shm"];
 
 type Result<T> = std::result::Result<T, &'static str>;
@@ -30,7 +32,7 @@ struct Dispatch {
     managed: *mut sql::sqlite3_vfs,
     wrapper: *mut sql::sqlite3_vfs,
     paths: OnceLock<ReservedPaths>,
-    slots: Mutex<[Slot; 2]>,
+    slots: Mutex<[Slot; 3]>,
 }
 
 // SQLite owns the captured stock descriptors for process lifetime. Our
@@ -48,8 +50,8 @@ struct Slot {
 
 struct ReservedPaths {
     profile_id: String,
-    mains: [PathBuf; 2],
-    all: [PathBuf; 8],
+    mains: [PathBuf; 3],
+    all: [PathBuf; 12],
 }
 
 pub(crate) struct ProfileSlots<'a> {
@@ -212,7 +214,7 @@ impl<'a> ProfileSlots<'a> {
             return Err("dispatch_profile");
         }
         let paths = dispatch.paths.get_or_init(|| {
-            let mains = NAMES.map(|name| directory.join(name));
+            let mains = [NAMES[0], NAMES[1], SNAPSHOT_NAME].map(|name| directory.join(name));
             let all = std::array::from_fn(|index| {
                 let main = &mains[index / 4];
                 match index % 4 {
@@ -241,13 +243,30 @@ impl<'a> ProfileSlots<'a> {
     }
 
     fn begin(&self, exact: RawBinding) -> Result<Turn<'_>> {
+        let index = usize::from(!exact.known);
+        self.begin_exact(
+            exact.path,
+            index,
+            exact.generation,
+            exact.witness,
+            self.charged_other,
+        )
+    }
+
+    fn begin_exact(
+        &self,
+        path: &Path,
+        index: usize,
+        generation: NonZeroU64,
+        file: (u64, u64),
+        charged_other: u64,
+    ) -> Result<Turn<'_>> {
         self.dispatch.assert_default()?;
         if ACTIVE.with(|active| active.borrow().is_some()) {
             return Err("dispatch_recursive_turn");
         }
-        let (index, generation) = (usize::from(!exact.known), exact.generation);
         let main = &self.dispatch.paths.get().expect("reserved_paths").mains[index];
-        if main != exact.path || main.parent().and_then(Path::parent) != Some(self.lease.root()) {
+        if main != path || main.parent().and_then(Path::parent) != Some(self.lease.root()) {
             return Err("dispatch_stage_path");
         }
         let mut slots = self
@@ -260,8 +279,9 @@ impl<'a> ProfileSlots<'a> {
         }
         let slot = &mut slots[index];
         if slot.quarantined
-            || slot.generation.is_some_and(|current| generation < current)
-            || (slot.generation == Some(generation) && slot.witness != Some(exact.witness))
+            || (index != SNAPSHOT
+                && (slot.generation.is_some_and(|current| generation < current)
+                    || (slot.generation == Some(generation) && slot.witness != Some(file))))
         {
             return Err("dispatch_stage_generation");
         }
@@ -270,7 +290,7 @@ impl<'a> ProfileSlots<'a> {
             .map_err(|_| "dispatch_stage_missing");
         let quota = (|| {
             let meta = checked?;
-            if witness(&meta) != exact.witness
+            if witness(&meta) != file
                 || main
                     .parent()
                     .expect("stage_parent")
@@ -286,24 +306,26 @@ impl<'a> ProfileSlots<'a> {
             let mut quota = Quota::new(
                 self.dispatch.managed,
                 main,
-                TOTAL_ADMISSION - self.charged_other,
+                TOTAL_ADMISSION
+                    .checked_sub(charged_other)
+                    .ok_or("dispatch_admission")?,
                 false,
-                self.crash_after_database_write,
+                index != SNAPSHOT && self.crash_after_database_write,
             )?;
-            Arc::get_mut(&mut quota).expect("new_quota").witness = Some(exact.witness);
+            Arc::get_mut(&mut quota).expect("new_quota").witness = Some(file);
             Ok(quota)
         })();
         let quota = match quota {
             Ok(quota) => quota,
             Err(error) => {
                 slot.generation = Some(generation);
-                slot.witness = Some(exact.witness);
+                slot.witness = Some(file);
                 slot.quarantined = true;
                 return Err(error);
             }
         };
         slot.generation = Some(generation);
-        slot.witness = Some(exact.witness);
+        slot.witness = Some(file);
         slot.active = Some(quota.clone());
         ACTIVE.with(|active| *active.borrow_mut() = Some(quota.clone()));
         Ok(Turn {
@@ -320,6 +342,84 @@ impl<'a> ProfileSlots<'a> {
             return Err("dispatch_live_handles");
         }
         turn.quota.verify_dispatch()
+    }
+
+    fn other_charge(&self, active: usize) -> Result<u64> {
+        let paths = self.dispatch.paths.get().expect("reserved_paths");
+        paths
+            .all
+            .iter()
+            .enumerate()
+            .try_fold(self.charged_other, |charged, (index, name)| {
+                if index / 4 == active {
+                    return Ok(charged);
+                }
+                let extent = bytes(name)?.unwrap_or(0);
+                charged
+                    .checked_add(extent)
+                    .filter(|total| *total <= TOTAL_ADMISSION)
+                    .ok_or("dispatch_admission")
+            })
+    }
+
+    pub(crate) fn leave_snapshot_path(&self, extent: u64) -> Result<&Path> {
+        self.dispatch.assert_default()?;
+        let paths = self.dispatch.paths.get().expect("reserved_paths");
+        if !(1..=CLOSED_STAGE_LIMIT).contains(&extent)
+            || paths.all[SNAPSHOT * 4..]
+                .iter()
+                .any(|name| !matches!(bytes(name), Ok(None)))
+        {
+            return Err("dispatch_snapshot_present");
+        }
+        self.other_charge(SNAPSHOT)?
+            .checked_add(extent)
+            .filter(|total| *total <= TOTAL_ADMISSION)
+            .ok_or("dispatch_admission")?;
+        Ok(&paths.mains[SNAPSHOT])
+    }
+
+    pub(crate) fn inspect_leave_snapshot(
+        &self,
+        path: &Path,
+        file: (u64, u64),
+        operation: LeaveTurn<'_>,
+        expected: Option<[u8; 32]>,
+    ) -> Result<std::result::Result<LeaveInspection, StageError>> {
+        let turn = self.begin_exact(
+            path,
+            SNAPSHOT,
+            NonZeroU64::MIN,
+            file,
+            self.other_charge(SNAPSHOT)?,
+        )?;
+        let result = operation.inspect(path, expected);
+        self.finish(&turn)?;
+        result
+    }
+
+    pub(crate) fn leave_turn(
+        &self,
+        binding: RawBinding<'_>,
+        operation: LeaveTurn<'_>,
+        expected: (&[u8], u64, [u8; 32], u32),
+    ) -> Result<std::result::Result<cgka_traits::MessageId, StageError>> {
+        if self.dispatch.paths.get().expect("reserved_paths").all[SNAPSHOT * 4..]
+            .iter()
+            .any(|name| !matches!(bytes(name), Ok(None)))
+        {
+            return Err("dispatch_snapshot_present");
+        }
+        let turn = self.begin_exact(
+            binding.path,
+            usize::from(!binding.known),
+            binding.generation,
+            binding.witness,
+            self.other_charge(usize::from(!binding.known))?,
+        )?;
+        let result = operation.run(binding.path, expected);
+        self.finish(&turn)?;
+        result
     }
 
     pub(crate) fn native_turn(
@@ -342,10 +442,67 @@ pub(crate) struct RawBinding<'a> {
     pub(crate) witness: (u64, u64),
 }
 
-use crate::mdk_adapter::peer_native_signer::{OpenStage, ProvisionalPackage, StageError};
+use crate::mdk_adapter::peer_native_signer::{
+    JoinWitness, LeaveInspection, OpenStage, ProvisionalPackage, StageError,
+};
 use nostr::key::Keys;
 use std::time::Duration;
 use storage_sqlite::SqlCipherKey;
+
+pub(crate) struct LeaveTurn<'a> {
+    pub(crate) key: &'a SqlCipherKey,
+    pub(crate) signer: Arc<Keys>,
+    pub(crate) origin: &'a str,
+    pub(crate) label: String,
+    pub(crate) join: &'a JoinWitness<'a>,
+    pub(crate) fence: &'a crate::peer_invitation::TurnFence<'a>,
+}
+
+impl LeaveTurn<'_> {
+    fn run(
+        self,
+        path: &Path,
+        expected: (&[u8], u64, [u8; 32], u32),
+    ) -> Result<std::result::Result<cgka_traits::MessageId, StageError>> {
+        if let Err(error) = self.fence.check() {
+            return Ok(Err(error));
+        }
+        let native = match OpenStage::open_provisional(
+            path,
+            self.key,
+            self.signer,
+            self.origin,
+            self.label,
+            false,
+        ) {
+            Ok(native) => native,
+            Err(error) => return Ok(Err(error)),
+        };
+        resolve_once(native.leave_for_custody(self.join, expected, self.fence))
+    }
+
+    fn inspect(
+        self,
+        path: &Path,
+        expected: Option<[u8; 32]>,
+    ) -> Result<std::result::Result<LeaveInspection, StageError>> {
+        if let Err(error) = self.fence.check() {
+            return Ok(Err(error));
+        }
+        let native = match OpenStage::open_provisional(
+            path,
+            self.key,
+            self.signer,
+            self.origin,
+            self.label,
+            false,
+        ) {
+            Ok(native) => native,
+            Err(error) => return Ok(Err(error)),
+        };
+        resolve_once(native.inspect_leave(self.join, expected))
+    }
+}
 
 pub(crate) struct NativeTurn<'a> {
     pub(crate) key: &'a SqlCipherKey,

@@ -19,6 +19,10 @@ const DESCRIPTION: &str = "marmish-peer/1 peer transport";
 
 type JoinRuntime = AccountDeviceRuntime<RefusingIo, StaticTransportRouting, RefusingIo>;
 
+#[path = "peer_stage_leave_proof.rs"]
+mod leave_proof;
+pub(crate) use leave_proof::{CapturedLeave, LeaveInspection};
+
 /// Borrow the signed Delivery revalidated by the custody owner and its exact
 /// package digest. The native half has no authority to advance custody.
 pub(crate) struct JoinWitness<'a> {
@@ -110,7 +114,7 @@ impl<'a> JoinWitness<'a> {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct JoinedAuthority {
     group: GroupId,
     epoch: EpochPin,
@@ -223,6 +227,81 @@ impl OpenStage {
         drop(runtime);
         io.require_unused()?;
         result
+    }
+
+    /// Native call only. The custody owner must first commit and consume its
+    /// unique reservation. The proof installs no group route or connector.
+    #[cfg(test)]
+    pub(crate) async fn leave_for_custody(
+        self,
+        witness: &JoinWitness<'_>,
+        expected: (&[u8], u64, [u8; 32], u32),
+        fence: &crate::peer_invitation::TurnFence<'_>,
+    ) -> StageResult<cgka_traits::MessageId> {
+        use cgka_traits::{MessageId, engine::SendIntent, storage::LeaveRequestStorage};
+        use marmot_session::AccountDeviceEffects;
+
+        self.check_join_stage(witness)?;
+        let io = RefusingIo::default();
+        let mut runtime = self.join_runtime(&io)?;
+        let authority = self.joined_authority(&runtime, witness)?;
+        let deferred = self.check_leave_environment(&runtime, &authority, witness)?;
+        let (leave, sent) = self.leave_rows(&authority)?;
+        if leave.is_some() || !sent.is_empty() || authority.coordinates() != expected {
+            return Err(StageError::Invalid);
+        }
+        fence.check()?;
+        let JoinedAuthority { group, epoch, .. } = authority;
+        let mut result = runtime
+            .send_host_change_with_audit_context(
+                SendIntent::Leave {
+                    group_id: group.clone(),
+                },
+                Default::default(),
+            )
+            .await
+            .map_err(|_| StageError::Unavailable)?;
+        if !runtime
+            .outbound_fanouts()
+            .map_err(|_| StageError::Storage)?
+            .is_empty()
+        {
+            return Err(StageError::Invalid);
+        }
+        let readback = self.joined_authority(&runtime, witness)?;
+        if readback.coordinates() != expected
+            || self.check_leave_environment(&runtime, &readback, witness)? != deferred
+        {
+            return Err(StageError::Invalid);
+        }
+        drop(runtime);
+        io.require_unused()?;
+        result.local_accept_duration = None;
+        result.publish_duration = None;
+        let [failure]: [marmot_session::PublishFailure; 1] = std::mem::take(&mut result.failures)
+            .try_into()
+            .map_err(|_| StageError::Invalid)?;
+        // The session exposes the retained, unconsumed application receipt
+        // again when it collects effects. Qualify that exact Welcome only.
+        let receipts = std::mem::take(&mut result.events);
+        if witness.group_from_receipt(&receipts)? != group {
+            return Err(StageError::Invalid);
+        }
+        let event_id: MessageId = failure.message_id;
+        if result != AccountDeviceEffects::default()
+            || self
+                .storage
+                .leave_request(&group)
+                .map_err(|_| StageError::Storage)?
+                .is_none_or(|leave| {
+                    leave.group_id != group
+                        || leave.last_proposed_epoch != Some(epoch.epoch)
+                        || leave.blocked.is_some()
+                })
+        {
+            return Err(StageError::Invalid);
+        }
+        Ok(event_id)
     }
 
     fn joined_authority(

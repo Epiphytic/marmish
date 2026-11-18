@@ -93,12 +93,22 @@ fn record(frame: &[u8]) -> RawRecord<'_> {
     }
 }
 
-async fn reach_activating(
+struct PendingStage {
+    row: HeldEvidence,
+    selector: Selector,
+    generation: u64,
+    group: GroupId,
+    routing: NostrRoutingV1,
+    welcome: TransportMessage,
+    consent: consent_checkpoint::wire::Consent,
+    delivery: Delivery,
+}
+
+async fn reach_pending(
     fixture: &Fixture,
     owner: &mut PreparedConsentOwner<'_>,
     founder_dir: &Path,
-    gate: &Gate,
-) -> (ActivatingStage, PeerFounderRuntime) {
+) -> (PendingStage, PeerFounderRuntime) {
     let recipient = fixture.identity.signer();
     let codec = Codec::new(MAX_OUTER_BYTES).unwrap();
     let routing = NostrRoutingV1::new([61; 32], vec![ORIGIN.into()]).unwrap();
@@ -205,6 +215,41 @@ async fn reach_activating(
         fixture.now,
         CustodyState::Pending,
     );
+    (
+        PendingStage {
+            row: pending,
+            selector,
+            generation,
+            group,
+            routing,
+            welcome,
+            consent,
+            delivery,
+        },
+        founder,
+    )
+}
+
+async fn reach_activating(
+    fixture: &Fixture,
+    owner: &mut PreparedConsentOwner<'_>,
+    founder_dir: &Path,
+    gate: &Gate,
+) -> (ActivatingStage, PeerFounderRuntime) {
+    let (
+        PendingStage {
+            row: pending,
+            selector,
+            generation,
+            group,
+            routing,
+            welcome,
+            consent,
+            delivery,
+        },
+        founder,
+    ) = reach_pending(fixture, owner, founder_dir).await;
+    let recipient = fixture.identity.signer();
     let account = MemberId::new(recipient.public_key().to_bytes());
     let endpoints = vec![TransportEndpoint(ORIGIN.into())];
     let refused = gate
@@ -702,3 +747,6 @@ fn founder_event(
         message,
     }
 }
+
+#[path = "peer_terminal_leave_native_tests.rs"]
+mod terminal_leave_native_tests;

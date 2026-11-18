@@ -25,6 +25,8 @@ mod postjoin_verify;
 #[path = "peer_prepared_consent_owner.rs"]
 pub(super) mod prepared_consent;
 #[cfg(test)]
+pub(crate) use prepared_consent::leave_owner::{LeaveSnapshot, TurnFence};
+#[cfg(test)]
 #[path = "peer_private_wss_tests.rs"]
 mod private_wss_tests;
 #[cfg(test)]
