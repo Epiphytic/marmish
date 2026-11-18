@@ -312,3 +312,6 @@ pub(crate) fn pair(listener: NonZeroU64) -> Option<(Producer, Reader)> {
 #[cfg(test)]
 #[path = "peer_pending_read_view_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(in crate::ipc) use tests::publish_live_fixture;

@@ -54,15 +54,7 @@ fn query(
     read.reply(selected, sample)
 }
 
-#[test]
-fn admitted_reply_uses_real_clocks_and_rechecks_listener_and_deadline() {
-    let listener = generation();
-    let foreign_listener = NonZeroU64::new(2).unwrap();
-    let (producer, reader) = pair(listener).unwrap();
-    let read = reader.admit(listener).unwrap();
-    let deadline = ExchangeInstant::now() + Duration::from_secs(5);
-    assert_eq!(read.reply_before_write(LIST, listener, deadline), None);
-
+pub(in crate::ipc) fn publish_live_fixture(producer: &Producer) -> Entry {
     let ticket = producer.begin(false, Instant::now).unwrap();
     let observed = Sample::now().unwrap();
     let row = Entry {
@@ -79,6 +71,19 @@ fn admitted_reply_uses_real_clocks_and_rechecks_listener_and_deadline() {
         },
         Sample::now,
     ));
+    row
+}
+
+#[test]
+fn admitted_reply_uses_real_clocks_and_rechecks_listener_and_deadline() {
+    let listener = generation();
+    let foreign_listener = NonZeroU64::new(2).unwrap();
+    let (producer, reader) = pair(listener).unwrap();
+    let read = reader.admit(listener).unwrap();
+    let deadline = ExchangeInstant::now() + Duration::from_secs(5);
+    assert_eq!(read.reply_before_write(LIST, listener, deadline), None);
+
+    let row = publish_live_fixture(&producer);
     assert_eq!(
         read.reply_before_write(LIST, foreign_listener, deadline),
         None

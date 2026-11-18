@@ -33,6 +33,14 @@ mod peer_selection;
 #[path = "peer_read_ipc.rs"]
 pub(crate) mod peer_read;
 
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "peer_read_listener.rs"]
+pub(crate) mod peer_read_listener;
+
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Request {
@@ -478,9 +486,22 @@ pub(crate) async fn serve_inner(
         terminal,
         #[cfg(test)]
         None,
-        #[cfg(test)]
+        #[cfg(any(
+            test,
+            all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            )
+        ))]
         None,
         #[cfg(test)]
+        None,
+        #[cfg(all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
         None,
     )
     .await
@@ -495,17 +516,58 @@ pub(crate) async fn serve_with_peer(
     peer: Option<peer::Listener>,
     drain: Option<oneshot::Receiver<()>>,
 ) -> Result<()> {
-    serve_with_listener(listener, queue, status, terminal, peer, drain, None).await
+    serve_with_listener(
+        listener,
+        queue,
+        status,
+        terminal,
+        peer,
+        drain,
+        None,
+        #[cfg(all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        None,
+    )
+    .await
 }
 
+#[cfg_attr(
+    all(
+        test,
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ),
+    allow(
+        clippy::too_many_arguments,
+        reason = "candidate reads coexist with independent test fixtures"
+    )
+)]
 pub(crate) async fn serve_with_listener(
     listener: UnixListener,
     queue: mpsc::Sender<Pending>,
     status: watch::Receiver<Response>,
     terminal: Option<terminal_handshake::Intake>,
     #[cfg(test)] peer: Option<peer::Listener>,
-    #[cfg(test)] drain: Option<oneshot::Receiver<()>>,
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
+    drain: Option<oneshot::Receiver<()>>,
     #[cfg(test)] mut candidate: Option<crate::daemon::candidate_lifecycle::Listener>,
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    read_offer: Option<peer_read_listener::Offer>,
 ) -> Result<()> {
     #[cfg(test)]
     let peer = peer.map(|peer| peer.register(&listener)).transpose()?;
@@ -517,8 +579,21 @@ pub(crate) async fn serve_with_listener(
             return Err(Error::Invalid("candidate_fixture_listener_exit"));
         }
     }
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    let read_offer = read_offer.and_then(|offer| offer.register(&listener));
     let drain = async {
-        #[cfg(test)]
+        #[cfg(any(
+            test,
+            all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            )
+        ))]
         if let Some(drain) = drain {
             let _ = drain.await;
             return;
@@ -559,6 +634,8 @@ pub(crate) async fn serve_with_listener(
                 let terminal = terminal.clone();
                 #[cfg(test)]
                 let intake = peer.as_ref().map(|(_, intake)| intake.clone());
+                #[cfg(all(marmish_peer_receiver_candidate, target_os = "linux", target_arch = "x86_64"))]
+                let read_intake = read_offer.as_ref().map(peer_read_listener::Offer::intake);
                 tasks.spawn(async move {
                     let _permit = permit;
                     let exchange_deadline = accepted_at + IO_TIMEOUT;
@@ -582,6 +659,11 @@ pub(crate) async fn serve_with_listener(
                                 write_frame(&mut stream, &response),
                             ).await;
                         }
+                        return;
+                    }
+                    #[cfg(all(marmish_peer_receiver_candidate, target_os = "linux", target_arch = "x86_64"))]
+                    if let (Some(intake), Ok(Ok(Request::PeerRead { request }))) = (&read_intake, &result) {
+                        intake.write(*request, &mut stream, exchange_deadline).await;
                         return;
                     }
                     let short_exchange = matches!(&result,Ok(Ok(request)) if request.uses_short_exchange());
@@ -615,6 +697,12 @@ pub(crate) async fn serve_with_listener(
     if let Some(candidate) = candidate {
         candidate.before_drain();
     }
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    drop(read_offer);
     drop(listener);
     tasks.shutdown().await;
     outcome
@@ -623,6 +711,43 @@ pub(crate) async fn serve_with_listener(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(marmish_peer_receiver_candidate))]
+    #[tokio::test]
+    async fn stock_socket_rejects_candidate_peer_read() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = directory.path().join("s");
+        let listener = bind(&path).unwrap();
+        let (queue, mut incoming) = mpsc::channel(1);
+        let (_status, status) =
+            watch::channel(Response::success(serde_json::json!({"state":"active"})));
+        let task = tokio::spawn(serve(listener, queue, status));
+        let mut stream = UnixStream::connect(&path).await.unwrap();
+        write_frame(
+            &mut stream,
+            &serde_json::json!({"operation":"peer_read","request":{"kind":"list"}}),
+        )
+        .await
+        .unwrap();
+        let response: Response = tokio::time::timeout(IO_TIMEOUT, read_frame(&mut stream))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.error.as_deref(), Some("invalid_request"));
+        assert!(matches!(
+            incoming.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(
+            exchange(&path, &Request::Status {}, IO_TIMEOUT)
+                .await
+                .unwrap()
+                .ok
+        );
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
 
     #[test]
     fn peer_uid_predicate_rejects_foreign_uid() {

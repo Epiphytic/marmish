@@ -566,6 +566,12 @@ async fn serve_owner(
                 peer_listener,
                 drain_request,
                 candidate_listener,
+                #[cfg(all(
+                    marmish_peer_receiver_candidate,
+                    target_os = "linux",
+                    target_arch = "x86_64"
+                ))]
+                None,
             )
             .await;
         }
