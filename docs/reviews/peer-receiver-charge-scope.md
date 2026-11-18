@@ -16,3 +16,16 @@ pinned pager header test, the independently confirmed absent WAL probe,
 and isolated opt-in subprocess tests. Record implementation evidence in a
 separate exact review. Installed operation and macOS require later native
 validation. [Approved design](../phases/peer-receiver-charge-scope.md)
+
+## Registration and inventory foundation code
+
+Claude Code Auto (Sonnet 5.5) approved exact Rust
+`d3ad63e298a950c51704fb6ac284f7aa9f789c66` in session
+`5ceb4e4f-56a7-484f-b6ac-88cdb9ff4271` without blocking findings.
+The reviewer inspected both registration orderings, same-lease ownership,
+captured stock VFS identities, the directory stream and errno handling,
+and clean allowance arithmetic. Claude independently reran the four
+inventory tests. The author subsequently confirmed completion of strict
+all-target Clippy. The review's retained follow-through is to use the
+same exact charge and lease checks in the native admission constructor.
+[Focused validation](../validation/peer-receiver-charge-scope.md)
