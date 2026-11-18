@@ -99,3 +99,27 @@ The single-sample cold and warm Ready times were 7.189 s and 8.165 s, and the
 single-key echo was 137.530 ms. The harness keeps acknowledging live output
 while trying another attachment. Cargo-layout workers must launch from the
 build directory for the binary integrity check.
+
+## Benchmark with the refreshed upstream MDK lock
+
+The ignored benchmark ran on Linux AMD64 with the normal debug binaries
+and matching harness from exact source `464300c` and MDK `bdf9833e`.
+All 20 independent loopback WSS trials passed in 696.34 s. No warm
+attach received Busy. The serial display workload acknowledged
+1,052,024 bytes in 53.084 s, or 19,818 B/s. These are local measurements
+of the native backend through its framed fixture client. The
+independent [foreground CLI sample](terminal-installed-foreground.md)
+uses the controlling terminal instead.
+
+| Workload | Samples | p50 | p95 |
+| --- | ---: | ---: | ---: |
+| Cold Ready | 20 | 6.847 s | 8.138 s |
+| Warm Ready | 20 | 7.449 s | 8.216 s |
+| Single key through native PTY | 20 | 141.7 ms | 158.8 ms |
+| Warm ordinary Command before Terminal | 20 | 1.702 s | 2.026 s |
+| Ordinary Command during Terminal output | 20 | 1.752 s | 1.994 s |
+| Ordinary Command after Terminal | 20 | 1.822 s | 2.020 s |
+| Serial command requesting 4 KiB output | 244 | 215.2 ms | 268.3 ms |
+
+The serial result includes a shell round trip and display receipts for
+each request. The benchmark completed its process and fixture teardown.

@@ -31,3 +31,15 @@ Linux and Darwin API usage by source inspection and ran no tests. The
 fixture author performed the native checks in the validation report.
 The raw-attach measurement ends at both foreground raw mode and the
 presence of one tmux socket. Shell readiness is asserted separately.
+
+Claude Code Sonnet 5.5 Auto approved integrated source `e23f82b` in
+session `4a9683a7-9f3b-4194-9193-d5b72d88ba95`. The static review
+confirmed the two Rust files matched the reviewed source and the
+package harness byte for byte. It reconciled normal, quiet and packaged
+logs against the evidence and asked for the optimized build citation
+and completion of the separately owned benchmark. The report now
+links the build record. The benchmark exited successfully after all
+20 trials, and the owned process and private fixture directories were
+gone. The raw quality scan reported test-helper overlap with a
+separate integration test and fixture churn. This integration changes
+test and evidence files only.
