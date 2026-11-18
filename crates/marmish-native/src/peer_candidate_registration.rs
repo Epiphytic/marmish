@@ -19,7 +19,7 @@ use std::{
     sync::Arc,
 };
 
-pub(crate) use quota::RegistrationFailure;
+pub(crate) use quota::{ForwardingVerifier, RegistrationFailure};
 
 pub(crate) struct ReceiverPreflight {
     scope: ReadyReceiverScope,
@@ -54,8 +54,11 @@ impl ReceiverPreflight {
     ) -> std::result::Result<RegisteredReceiver, RegistrationFailure> {
         let (dispatch, directories) = quota::register(&mut self, lease, material)?;
         Ok(RegisteredReceiver {
-            prepared: self,
-            directories,
+            scope: RegisteredScope {
+                forwarding: dispatch.forwarding_verifier(),
+                prepared: self,
+                directories,
+            },
             dispatch,
         })
     }
@@ -73,29 +76,23 @@ impl ReceiverPreflight {
 }
 
 pub(crate) struct RegisteredReceiver {
-    prepared: ReceiverPreflight,
-    directories: CheckedDirectories,
+    scope: RegisteredScope,
     dispatch: RegisteredDispatch,
 }
 
 impl RegisteredReceiver {
+    pub(crate) fn forwarding_verifier(&self) -> ForwardingVerifier {
+        self.scope.forwarding.clone()
+    }
+
     pub(crate) fn recheck(
         &mut self,
         lease: &Arc<ProfileLease>,
         material: &IdentityMaterial,
     ) -> std::result::Result<(), RegistrationFailure> {
-        self.dispatch.recheck_default()?;
-        let local = self.prepared.recheck(lease, material).is_ok()
-            && self
-                .dispatch
-                .recheck_lease(lease, &self.directories)
-                .is_ok();
-        self.dispatch.recheck_default()?;
-        if !local {
-            self.prepared.scope.profile.cancel.cancel();
-            return Err(RegistrationFailure::LocalUnavailable);
-        }
-        Ok(())
+        self.scope.recheck(lease, material, |directories| {
+            self.dispatch.recheck_lease(lease, directories)
+        })
     }
 
     pub(crate) fn attach<'lease>(
@@ -104,24 +101,57 @@ impl RegisteredReceiver {
         material: &IdentityMaterial,
     ) -> std::result::Result<LocalReceiverRegistration<'lease>, RegistrationFailure> {
         self.recheck(lease, material)?;
-        let quota = self.dispatch.attach(lease, &self.directories)?;
+        let quota = self.dispatch.attach(lease, &self.scope.directories)?;
         Ok(LocalReceiverRegistration {
             quota,
-            prepared: self.prepared,
-            directories: self.directories,
+            scope: self.scope,
         })
     }
 }
 
 pub(crate) struct LocalReceiverRegistration<'lease> {
     quota: ReceiverQuota<'lease>,
+    scope: RegisteredScope,
+}
+
+impl<'lease> LocalReceiverRegistration<'lease> {
+    pub(crate) fn recheck(
+        &mut self,
+        lease: &Arc<ProfileLease>,
+        material: &IdentityMaterial,
+    ) -> std::result::Result<(), RegistrationFailure> {
+        self.scope.recheck(lease, material, |directories| {
+            self.quota.recheck_registered_lease(lease, directories)
+        })
+    }
+
+    pub(crate) fn quota(&self) -> &ReceiverQuota<'lease> {
+        &self.quota
+    }
+}
+
+struct RegisteredScope {
+    forwarding: ForwardingVerifier,
     prepared: ReceiverPreflight,
     directories: CheckedDirectories,
 }
 
-impl<'lease> LocalReceiverRegistration<'lease> {
-    pub(crate) fn quota(&self) -> &ReceiverQuota<'lease> {
-        &self.quota
+impl RegisteredScope {
+    fn recheck(
+        &mut self,
+        lease: &Arc<ProfileLease>,
+        material: &IdentityMaterial,
+        check_topology: impl FnOnce(&CheckedDirectories) -> std::result::Result<(), &'static str>,
+    ) -> std::result::Result<(), RegistrationFailure> {
+        self.forwarding.recheck_default()?;
+        let local = self.prepared.recheck(lease, material).is_ok()
+            && check_topology(&self.directories).is_ok();
+        self.forwarding.recheck_default()?;
+        if !local {
+            self.prepared.scope.profile.cancel.cancel();
+            return Err(RegistrationFailure::LocalUnavailable);
+        }
+        Ok(())
     }
 }
 

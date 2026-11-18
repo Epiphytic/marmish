@@ -80,18 +80,30 @@ fn registry() -> std::result::Result<MutexGuard<'static, State>, RegistrationFai
         .map_err(|_| RegistrationFailure::Indeterminate)
 }
 
-pub(crate) struct RegisteredDispatch(Installed);
+/// Checks only the process forwarding contract and carries no receiver authority.
+#[derive(Clone)]
+pub(crate) struct ForwardingVerifier(Installed);
 
-impl RegisteredDispatch {
+impl ForwardingVerifier {
     pub(crate) fn recheck_default(&self) -> std::result::Result<(), RegistrationFailure> {
         let mut state = registry()?;
         if !matches!(&*state, State::Registered(current)
-            if ptr::eq(current.dispatch, self.0.dispatch) && current.verify().is_ok())
+            if ptr::eq(current.dispatch, self.0.dispatch)
+                && current.descriptor == self.0.descriptor
+                && self.0.verify().is_ok())
         {
             *state = State::Indeterminate;
             return Err(RegistrationFailure::Indeterminate);
         }
         Ok(())
+    }
+}
+
+pub(crate) struct RegisteredDispatch(Installed);
+
+impl RegisteredDispatch {
+    pub(crate) fn forwarding_verifier(&self) -> ForwardingVerifier {
+        ForwardingVerifier(self.0)
     }
 
     pub(crate) fn recheck_lease(
@@ -99,16 +111,7 @@ impl RegisteredDispatch {
         lease: &Arc<ProfileLease>,
         directories: &CheckedDirectories,
     ) -> Result<()> {
-        let paths = self.0.dispatch.paths.get().ok_or("dispatch_unreserved")?;
-        let expected = receiver_paths(lease, directories)?;
-        paths.check(lease)?;
-        if paths.directories != expected.directories
-            || paths.mains != expected.mains
-            || paths.all != expected.all
-        {
-            return Err("dispatch_profile_conflict");
-        }
-        Ok(())
+        recheck_receiver_paths(self.0.dispatch, lease, directories)
     }
 
     pub(crate) fn attach<'lease>(
@@ -116,14 +119,46 @@ impl RegisteredDispatch {
         lease: &'lease Arc<ProfileLease>,
         directories: &CheckedDirectories,
     ) -> std::result::Result<ReceiverQuota<'lease>, RegistrationFailure> {
-        self.recheck_default()?;
-        self.recheck_lease(lease, directories)
-            .map_err(|_| RegistrationFailure::LocalUnavailable)?;
+        let forwarding = self.forwarding_verifier();
+        forwarding.recheck_default()?;
+        let local = self.recheck_lease(lease, directories);
+        forwarding.recheck_default()?;
+        local.map_err(|_| RegistrationFailure::LocalUnavailable)?;
         Ok(ReceiverQuota {
             dispatch: self.0.dispatch,
             lease,
         })
     }
+}
+
+impl ReceiverQuota<'_> {
+    pub(crate) fn recheck_registered_lease(
+        &self,
+        lease: &Arc<ProfileLease>,
+        directories: &CheckedDirectories,
+    ) -> Result<()> {
+        if !ptr::eq(self.lease, Arc::as_ref(lease)) {
+            return Err("dispatch_lease_conflict");
+        }
+        recheck_receiver_paths(self.dispatch, lease, directories)
+    }
+}
+
+fn recheck_receiver_paths(
+    dispatch: &Dispatch,
+    lease: &Arc<ProfileLease>,
+    directories: &CheckedDirectories,
+) -> Result<()> {
+    let paths = dispatch.paths.get().ok_or("dispatch_unreserved")?;
+    let expected = receiver_paths(lease, directories)?;
+    paths.check(lease)?;
+    if paths.directories != expected.directories
+        || paths.mains != expected.mains
+        || paths.all != expected.all
+    {
+        return Err("dispatch_profile_conflict");
+    }
+    Ok(())
 }
 
 pub(crate) fn register(
