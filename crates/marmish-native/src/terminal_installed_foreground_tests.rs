@@ -144,7 +144,8 @@ pub(super) async fn prove(
         unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) },
         0
     );
-    let pty = AsyncFd::new(master).unwrap();
+    // File owns the same open master descriptor for the entire registration.
+    let pty = unsafe { AsyncFd::register(master) }.unwrap();
     let began = Instant::now();
     let mut child = spawn_cli(state, daemon, remote, &slave, false);
     let mut stderr = child.stderr.take().unwrap();
