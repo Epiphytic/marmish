@@ -31,7 +31,10 @@ The [Peer aggregate ingress proof](validation/peer-aggregate-ingress-proof.md)
 qualifies one shared canonical origin in a native loopback fixture. A copy
 arriving first on an ineligible relay can suppress the eligible copy from
 another relay in the SDK's account-wide seen-ID tracker. Production Peer
-activation requires a separate routing and recovery solution. The
+activation is specified in the reviewed [Peer live routing and recovery
+plan](phases/peer-live.md). The [offline invitation codec](validation/peer-control-codec.md)
+verifies the three signed Offer, Consent and Delivery flights, with sizes and
+local timing for each. The
 [private Peer record codec](validation/peer-status-codec.md) verifies
 heartbeat fields, capability states and complete permission snapshot
 assembly in deterministic tests. Status publication and reception remain

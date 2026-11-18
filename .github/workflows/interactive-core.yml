@@ -63,3 +63,5 @@ jobs:
         run: |
           cargo test --locked -p marmish-native --lib terminal_ipc_wire_core
           cargo test --locked -p marmish-native --lib terminal_fence_core
+      - name: Check private Peer invitation records
+        run: cargo test --locked -p marmish-native --test peer_control_wire peer_control_core
