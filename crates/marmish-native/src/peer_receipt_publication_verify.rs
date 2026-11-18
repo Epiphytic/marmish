@@ -98,30 +98,23 @@ impl RecoveredReceipt<'_> {
     }
 }
 
-pub(crate) struct ConfirmedReceipt<'a> {
-    evidence: Evidence<'a>,
-    application: PublishedApplicationMessage,
-}
+pub(crate) struct ConfirmedReceipt<'a>(Evidence<'a>);
 
 impl ConfirmedReceipt<'_> {
     pub(crate) fn publication(&self) -> &Publication {
-        self.evidence.publication
+        self.0.publication
     }
 
     pub(crate) fn observed_at(&self) -> u64 {
-        self.evidence.observed_at
+        self.0.observed_at
     }
 
     pub(crate) fn event_id(&self) -> [u8; 32] {
-        self.evidence.binding.event_id
+        self.0.binding.event_id
     }
 
     pub(crate) fn signed_digest(&self) -> [u8; 32] {
-        self.evidence.binding.signed_digest
-    }
-
-    pub(crate) fn application(&self) -> &PublishedApplicationMessage {
-        &self.application
+        self.0.binding.signed_digest
     }
 }
 
@@ -195,11 +188,42 @@ pub(crate) fn confirm<'a>(
     publication: &'a Publication,
     wall: u64,
 ) -> Result<ConfirmedReceipt<'a>, Refusal> {
-    let (Step::Armed { number } | Step::Uncertain { number } | Step::Published { number }) =
-        publication.step()
-    else {
+    let (Step::Armed { number } | Step::Uncertain { number }) = publication.step() else {
         return Err(Refusal::Binding);
     };
+    let (evidence, _) = accepted(recipient, image, publication, number, wall)?;
+    Ok(ConfirmedReceipt(evidence))
+}
+
+pub(crate) fn acknowledge_published(
+    recipient: &AccountDeviceRuntime<
+        impl TransportAdapter,
+        impl TransportRoutingPolicy,
+        impl KeyPackagePublisher,
+    >,
+    image: &Path,
+    publication: &Publication,
+    wall: u64,
+) -> Result<(), Refusal> {
+    let Step::Published { number } = publication.step() else {
+        return Err(Refusal::Binding);
+    };
+    let (_, application) = accepted(recipient, image, publication, number, wall)?;
+    recipient.acknowledge_published_app_messages(&[application])?;
+    Ok(())
+}
+
+fn accepted<'a>(
+    recipient: &AccountDeviceRuntime<
+        impl TransportAdapter,
+        impl TransportRoutingPolicy,
+        impl KeyPackagePublisher,
+    >,
+    image: &Path,
+    publication: &'a Publication,
+    number: u8,
+    wall: u64,
+) -> Result<(Evidence<'a>, PublishedApplicationMessage), Refusal> {
     let (evidence, fanout) = read(recipient, image, publication, wall)?;
     let outcome = fanout.outcome();
     if publication.candidate() != Some(evidence.binding)
@@ -224,18 +248,18 @@ pub(crate) fn confirm<'a>(
         return Err(Refusal::Binding);
     }
     let application = fanout.application_message().ok_or(Refusal::Binding)?;
-    Ok(ConfirmedReceipt {
-        application: PublishedApplicationMessage {
+    Ok((
+        evidence,
+        PublishedApplicationMessage {
             publication_observation: Some(accepted),
             app_event_id: application.app_event_id.clone(),
             group_id: application.group_id.clone(),
-            message_id: evidence.request.message.id.clone(),
+            message_id: outcome.message_id,
             source_epoch: application.source_epoch,
             retention: application.retention,
             authority: application.authority,
         },
-        evidence,
-    })
+    ))
 }
 
 fn read<'a>(
