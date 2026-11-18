@@ -30,7 +30,8 @@ No socket is opened, join consent is not deployed, and this proof does
 not confirm group leave at another member. If the native leave request
 and exact signed Sent row survive a crash without a native fanout, the
 design keeps the decline terminal and unconfirmed, with no replacement
-send. The test does not exercise that crash window.
+send. The [separate route rejection proof](peer-pending-unrouted-leave-proof.md)
+exercises that window with a deny-only native adapter.
 
 Run the opt-in qualification with the checked-in dependency lock.
 

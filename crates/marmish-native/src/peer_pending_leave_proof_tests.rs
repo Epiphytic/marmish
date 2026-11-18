@@ -301,3 +301,6 @@ async fn peer_pending_leave_public_runtime_redrives_exact_event() {
 
 #[path = "peer_self_remove_proof_tests.rs"]
 mod peer_self_remove_proof_tests;
+
+#[path = "peer_pending_unrouted_leave_proof_tests.rs"]
+mod peer_pending_unrouted_leave_proof_tests;

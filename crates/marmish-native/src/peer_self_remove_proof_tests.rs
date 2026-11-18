@@ -29,6 +29,8 @@ use zeroize::Zeroizing;
 
 type Runtime = AccountDeviceRuntime<DeniedTransport, StaticTransportRouting, Publisher>;
 
+pub(super) const MAX_STORED_SIGNED_WIRE_BYTES: usize = 262_144;
+
 struct Scope<'a> {
     group: &'a GroupId,
     account: &'a MemberId,
@@ -187,7 +189,7 @@ fn retained_inner(
         || &record.group_id != scope.group
         || record.epoch != pin.epoch
         || record.state != MessageState::Sent
-        || !(1..=262_144).contains(&record.payload.len())
+        || !(1..=MAX_STORED_SIGNED_WIRE_BYTES).contains(&record.payload.len())
     {
         return Err(Refusal::Invalid);
     }
