@@ -30,3 +30,9 @@ The reruns passed as recorded in the
 [validation report](../validation/peer-candidate-package.md). Native
 candidate packaging and installation use isolated paths. The release
 workflow and public bootstrap still accept only stock artifacts.
+
+Claude Code Sonnet 5.5 Auto approved the combined source at `99cec7f`
+(session `a2aa0e42-ae37-4824-9b97-6e9d6f078344`). All four packaging Rust
+files match the independently tested `b9ce82c` blobs. The composed review
+checked the build and installer boundaries and confirmed that the intervening
+cursor and charge changes do not call the changed packaging code.
