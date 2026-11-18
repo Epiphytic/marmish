@@ -75,6 +75,26 @@ samples encoded to 2,585, 5,997 and 11,457 bytes respectively in both versions.
 These are signed frame sizes for the fixed payloads, without WebSocket or
 network overhead.
 
+## Integrated source
+
+The composition at `e29270e57df1d88706849c608a7861a009f741b1` also
+passed all five opt-in Founder tests in 81.09 s and the separate receiver
+registration test in 0.12 s. The isolated children exercised receiver-first,
+fixture-first and Founder-first registration. The positive Offer-to-Consent
+sample took 4,216 ms, the native turn 7,963 ms, Delivery through ACK 44 ms,
+and a new-process native readback 61 ms. The positive run charged 4,910
+journal growth writes. The abrupt native write still left the charged
+journal and denied a fresh native open. The integrated ordinary Command
+outage regression passed in 32.76 s with freshly built normal launchers.
+Strict all-target Clippy with installed checks passed in 43.52 s.
+
+The preceding dual-published source `aca9e4ba5878eb3db6c191e9919288e69c0becc7`
+passed all 36 core CI selections on the local Linux AMD64 host, with 160
+passing case executions across those selections. The earlier full native
+library run at `42d5c0f` passed 1,316 tests and recorded 122 opt-in tests
+as ignored in 1,507.99 s. These earlier runs have different exact source
+boundaries from the integrated Founder suite.
+
 Reproduce from the source root with the two debug profiles set to `debug=0`
 and an existing private Cargo target. Build the normal launchers first so the
 ordinary daemon regression can resolve the expected binary layout.

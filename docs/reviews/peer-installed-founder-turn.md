@@ -55,3 +55,23 @@ crash boundary. No founder authority is obtained on cold entry.
 
 The R3 result text (UTF-8, including trailing newline) SHA-256 is
 `679c9a94731026b204161d072b72c49af8031ce81cfc9ede203ea379f69674d6`.
+
+## Integrated review
+
+Claude Code Sonnet independently approved composed source
+`e29270e57df1d88706849c608a7861a009f741b1` in Auto session
+`61f32fd3-190d-49ac-8a90-d4b0fd3174e3`. The integrated dispatcher puts
+the registration exclusion in the shared bind function and uses the
+same mutex as Founder registration. The reviewer checked preservation
+of the author source and receiver ownership, inspected all five
+integrated Founder results, and independently reran the receiver
+registration subprocesses. Founder, fixture and receiver rejection
+paths were exercised in both registration orders. The reviewer found
+no blocking source or test issues.
+
+The base-relative Ripwire report flagged 106 findings, including
+short-horizon churn, unrecognized test-only callers, duplicated tokens
+and longer test fixtures. The reviewer inspected the substantive native
+ledger verifier complexity and the test-only VFS extent check. The
+standalone verifier remains confined to the fixture, and the ordinary
+VFS condition evaluates equivalently. The diff passed scoped rustfmt.

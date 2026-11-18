@@ -1579,6 +1579,15 @@ profile lease. Linux AMD64 fixtures covered both registration orders,
 descriptor-relative inventory, retirement, and ordinary stock routing.
 Managed recovery and native receiver opens with that allowance are pending.
 
+The [founder qualification](validation/peer-installed-founder-turn.md)
+exercises the real signed v2 Offer, Consent and Delivery over private WSS on
+Linux AMD64. The founder creates a charged native image, withdraws the
+tracked Welcome and reads it back in a fresh process. A deliberately
+interrupted native write retained its journal and charge and refused a new
+native open. Founder, receiver and legacy fixture registrations exclude each
+other in the same process. The qualification runs in isolated tests. Installed
+founder operation, recipient activation and heartbeats remain pending.
+
 The [capped Welcome fixture](validation/peer-capped-welcome.md) uses the
 real native ingest and a metered cold readback on Linux AMD64. It
 exercises exact snapshot admission, cancellation and a refused rollback
