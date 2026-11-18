@@ -233,6 +233,12 @@ fn read_image(path: &Path) -> Result<([u8; 32], (u64, u64))> {
     Ok((digest.finalize().into(), inode))
 }
 
+enum Epoch {
+    Prepared,
+    Custody,
+    Publication,
+}
+
 pub(super) struct PreparedConsentOwner<'a> {
     pub(super) state: InvitationState<'a>,
     role: Role,
@@ -287,7 +293,7 @@ impl<'a> PreparedConsentOwner<'a> {
         route: &Route,
         wall: Wall,
     ) -> Result<Self> {
-        Self::open_with_epoch(lease, material, role, policy, route, wall, false)
+        Self::open_with_epoch(lease, material, role, policy, route, wall, Epoch::Prepared)
     }
 
     pub(super) fn open_custody(
@@ -298,7 +304,26 @@ impl<'a> PreparedConsentOwner<'a> {
         route: &Route,
         wall: Wall,
     ) -> Result<Self> {
-        Self::open_with_epoch(lease, material, role, policy, route, wall, true)
+        Self::open_with_epoch(lease, material, role, policy, route, wall, Epoch::Custody)
+    }
+
+    pub(super) fn open_publication(
+        lease: &'a ProfileLease,
+        material: &IdentityMaterial,
+        role: Role,
+        policy: Policy,
+        route: &Route,
+        wall: Wall,
+    ) -> Result<Self> {
+        Self::open_with_epoch(
+            lease,
+            material,
+            role,
+            policy,
+            route,
+            wall,
+            Epoch::Publication,
+        )
     }
 
     fn open_with_epoch(
@@ -308,7 +333,7 @@ impl<'a> PreparedConsentOwner<'a> {
         policy: Policy,
         route: &Route,
         wall: Wall,
-        custody: bool,
+        epoch: Epoch,
     ) -> Result<Self> {
         if role == Role::Server {
             return Err(Error::Binding);
@@ -321,12 +346,18 @@ impl<'a> PreparedConsentOwner<'a> {
         let url = &route.urls[0];
         // SAFETY: reads the Unix effective UID.
         let uid = unsafe { libc::geteuid() };
-        let attach = if custody {
-            Checkpoint::attach_pending_custody_fixture
-        } else {
-            Checkpoint::attach_prepared_consent_fixture
+        let keys = (*signer).clone();
+        let checkpoint = match epoch {
+            Epoch::Prepared => {
+                Checkpoint::attach_prepared_consent_fixture(conn, keys, uid, &[url], policy)?
+            }
+            Epoch::Custody => {
+                Checkpoint::attach_pending_custody_fixture(conn, keys, uid, &[url], policy)?
+            }
+            Epoch::Publication => {
+                Checkpoint::attach_publication_fixture(conn, keys, uid, url, policy)?
+            }
         };
-        let checkpoint = attach(conn, (*signer).clone(), uid, &[url], policy)?;
         let source = checkpoint.bind_source(url)?;
         checked.unchanged()?;
         Ok(Self {
@@ -340,7 +371,7 @@ impl<'a> PreparedConsentOwner<'a> {
                 origin_url: url.clone(),
             },
             role,
-            custody,
+            custody: !matches!(epoch, Epoch::Prepared),
             snapshot: SnapshotArea::new()?,
         })
     }

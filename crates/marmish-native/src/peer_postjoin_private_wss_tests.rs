@@ -3,17 +3,19 @@
 use super::*;
 use crate::{
     mdk_adapter::{
-        peer_staged_proof_tests::{peer_enrollment_founder_with_group, postjoin_session_config},
+        peer_staged_proof_tests::{
+            PeerFounderRuntime, peer_enrollment_founder_with_group, postjoin_session_config,
+        },
         terminal_relay_fixture::{GroupFault, GroupHistoryCut, GroupWrite},
     },
     peer_invitation::{postjoin_gate::Gate, socket::owner::GroupPage},
 };
 use async_trait::async_trait;
 use cgka_traits::{
-    EpochPin, EpochState, GroupId, MemberId, MessageStorage, Timestamp, TransportAccountActivation,
-    TransportAdapter, TransportAdapterError, TransportDelivery, TransportEndpoint,
-    TransportEndpointAckKind, TransportEndpointReceipt, TransportGroupSync, TransportPublishReport,
-    TransportPublishRequest, TransportPublishTarget,
+    EpochPin, EpochState, GroupId, MemberId, MessageId, MessageStorage, Timestamp,
+    TransportAccountActivation, TransportAdapter, TransportAdapterError, TransportDelivery,
+    TransportEndpoint, TransportEndpointAckKind, TransportEndpointReceipt, TransportGroupSync,
+    TransportPublishReport, TransportPublishRequest, TransportPublishTarget,
     app_components::{NOSTR_ROUTING_COMPONENT_ID, decode_nostr_routing_v1},
     ingest::IngestOutcome,
     maintenance::PostJoinHistoryFetchOutcome,
@@ -177,9 +179,23 @@ fn native_history_expires_without_eose() {
     run_native(TOTAL, || history(History::LostEose));
 }
 
-async fn history(case: History) {
-    let group_route = random();
-    let mut round = Round::initialize_with_group(Some(group_route)).await;
+struct HistorySetup {
+    selector: Selector,
+    generation: u64,
+    routing: NostrRoutingV1,
+    founder: PeerFounderRuntime<FounderTransport>,
+    group: GroupId,
+    welcome: MessageId,
+    delivery: Delivery,
+    initial_leaves: Vec<cgka_traits::engine::GroupMemberLeaf>,
+    initial: EpochPin,
+    next: EpochPin,
+    writes: Vec<GroupWrite>,
+    activation_ms: u128,
+    update_ms: u128,
+}
+
+async fn prepare_history(round: &Round, group_route: [u8; 32]) -> HistorySetup {
     let socket = round.socket();
     let daemon = round
         .start(Admission::Automatic, super::LostReply::None)
@@ -207,6 +223,7 @@ async fn history(case: History) {
         .runtime()
         .canonical_group_membership(&group)
         .unwrap();
+    assert!(initial_membership.local_leaf_active);
     let delivery = round
         .finish_delivery(&mut enrollment, &welcome.payload)
         .await;
@@ -266,6 +283,47 @@ async fn history(case: History) {
     );
     let update_ms = update_started.elapsed().as_millis();
 
+    HistorySetup {
+        selector,
+        generation: selected.selection.generation,
+        routing,
+        founder,
+        group,
+        welcome: welcome.id,
+        delivery,
+        initial_leaves: initial_membership.member_leaves,
+        initial,
+        next,
+        writes,
+        activation_ms,
+        update_ms,
+    }
+}
+
+async fn history(case: History) {
+    let group_route = random();
+    let mut round = Round::initialize_with_group(Some(group_route)).await;
+    let setup = prepare_history(&round, group_route).await;
+    let HistorySetup {
+        selector,
+        generation,
+        routing,
+        founder,
+        group,
+        welcome,
+        delivery,
+        initial_leaves,
+        initial,
+        next,
+        writes,
+        activation_ms,
+        update_ms,
+    } = setup;
+    let [write] = writes.as_slice() else {
+        panic!("founder history is established by one Group publication")
+    };
+    let record = &write.record;
+    let origin = round.relay.url.as_str();
     let mut lease = ProfileLease::acquire(round.root.path(), PROFILE).unwrap();
     let identity = material(&mut lease, &round.daemon);
     let route = Route::configured(origin).unwrap();
@@ -282,28 +340,19 @@ async fn history(case: History) {
     )
     .unwrap();
     let wall = round.wall.load(Ordering::Relaxed);
-    let row = owner
-        .state
-        .checkpoint
-        .read_custody(
-            &owner.state.source,
-            selector,
-            selected.selection.generation,
-            wall,
-        )
-        .unwrap()
-        .expect("the exact Activating row");
-    assert_eq!(row.state(), CustodyState::Activating);
-    let joined = owner
-        .inspect_joined(row.stage(), &delivery, row.package_digest())
-        .unwrap();
-    assert!(row.matches_pending_readback(&joined));
-    assert_eq!(joined.coordinates().0, group.as_slice());
-    let recipient = open_recipient(&owner, &row, &round.wall, &group, &routing);
+    let row = read_joined(&mut owner, selector, generation, wall, &delivery, &group);
+    let recipient = open_recipient(
+        &owner,
+        &row,
+        &round.wall,
+        &group,
+        &routing,
+        Gate::unscoped_closed(round.wall.clone()),
+    );
     assert_eq!(stable_pin(&recipient, &group), initial);
     let joined_membership = recipient.canonical_group_membership(&group).unwrap();
-    assert!(initial_membership.local_leaf_active && joined_membership.local_leaf_active);
-    let mut founding_leaves = initial_membership.member_leaves;
+    assert!(joined_membership.local_leaf_active);
+    let mut founding_leaves = initial_leaves;
     let mut joined_leaves = joined_membership.member_leaves;
     founding_leaves.sort_by_key(|leaf| leaf.leaf_index);
     joined_leaves.sort_by_key(|leaf| leaf.leaf_index);
@@ -439,19 +488,50 @@ async fn history(case: History) {
     assert_eq!(round.ordinary.publication_attempts(445), 0);
     round.relay.stop().await;
     round.ordinary.stop().await;
+    assert!(
+        founder
+            .runtime()
+            .tracked_outbound_welcome_ids()
+            .unwrap()
+            .contains(&welcome)
+    );
     eprintln!(
-        "peer_postjoin_history activation_ms={activation_ms} update_ms={update_ms} history_ms={} tracked_welcome_before={prior_welcome} tracked_welcome_after={tracked_after}",
+        "peer_postjoin_history activation_ms={activation_ms} update_ms={update_ms} history_ms={} tracked_welcome_before=true tracked_welcome_after=true",
         history_started.elapsed().as_millis(),
     );
 }
 
-fn open_recipient(
+fn read_joined(
+    owner: &mut PreparedConsentOwner<'_>,
+    selector: Selector,
+    generation: u64,
+    wall: u64,
+    delivery: &Delivery,
+    group: &GroupId,
+) -> crate::peer_invitation::HeldEvidence {
+    let row = owner
+        .state
+        .checkpoint
+        .read_custody(&owner.state.source, selector, generation, wall)
+        .unwrap()
+        .expect("the exact Activating row");
+    assert_eq!(row.state(), CustodyState::Activating);
+    let joined = owner
+        .inspect_joined(row.stage(), delivery, row.package_digest())
+        .unwrap();
+    assert!(row.matches_pending_readback(&joined));
+    assert_eq!(joined.coordinates().0, group.as_slice());
+    row
+}
+
+fn open_recipient<A: TransportAdapter + KeyPackagePublisher + Clone>(
     owner: &PreparedConsentOwner<'_>,
     row: &crate::peer_invitation::HeldEvidence,
     wall: &Arc<AtomicU64>,
     group: &GroupId,
     routing: &NostrRoutingV1,
-) -> Recipient {
+    gate: A,
+) -> AccountDeviceRuntime<A, StaticTransportRouting, A> {
     let (binding, file) = row.stage();
     let original = owner.state.paths.reopen_provisional(binding, file).unwrap();
     let key = owner.state.paths.provisional_key(binding);
@@ -477,7 +557,6 @@ fn open_recipient(
         routing.nostr_group_id.to_vec(),
         endpoints,
     );
-    let gate = Gate::unscoped_closed(wall.clone());
     AccountDeviceRuntime::open(config, || {
         Ok::<_, marmot_session::SessionError>((gate.clone(), router, gate))
     })
@@ -602,3 +681,6 @@ fn match_stable_roster(
     assert_eq!(decode_nostr_routing_v1(&recipient_route).unwrap(), *route);
     assert_eq!(decode_nostr_routing_v1(&founder_route).unwrap(), *route);
 }
+
+#[path = "peer_postjoin_durable_wss_tests.rs"]
+mod durable;
