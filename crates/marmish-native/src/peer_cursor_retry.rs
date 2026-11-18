@@ -53,6 +53,32 @@ impl Snapshot {
         }
     }
 
+    /// Check a deferred flight against the transaction that will apply its
+    /// effect and remove its row. The owner still verifies signed ancestry.
+    pub(crate) fn require_current_flight(
+        &self,
+        tx: &Transaction<'_>,
+        origin: Origin,
+        prerequisite: EventId,
+    ) -> Result<()> {
+        if self.origin != origin
+            || self.metadata.auth != Auth::FlightVerified
+            || self.metadata.prerequisite != Some(prerequisite)
+        {
+            return Err(Error::Binding);
+        }
+        let persisted = load(tx, origin, self.id)?.ok_or(Error::Stale)?;
+        if persisted.revision != self.revision
+            || persisted.metadata != self.metadata
+            || persisted.retry_at != self.retry_at
+            || persisted.step != self.step
+            || !same_record(persisted.record(), self.record())
+        {
+            return Err(Error::Stale);
+        }
+        Ok(())
+    }
+
     /// Supply the owner's fresh verifier. The resulting proof is valid only for this snapshot.
     pub(crate) fn reverify(
         &self,

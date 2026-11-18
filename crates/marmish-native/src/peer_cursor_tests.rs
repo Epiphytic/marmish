@@ -760,6 +760,105 @@ fn peer_cursor_retry_owner_fences_preserve_exact_rows_on_refusal() {
 }
 
 #[test]
+fn peer_cursor_saved_flight_checks_current_row_before_custody_effect() {
+    let fixture = Fixture::new();
+    let mut store = fixture.open();
+    effect_tables(&store);
+    let raw = record(1, W);
+    let consent = id(2);
+    let verified = metadata(Auth::FlightVerified, Some(consent));
+    store.defer(A, raw, verified, W).unwrap();
+    let initial = store.due(A, W + 1).unwrap().unwrap();
+
+    assert_eq!(
+        store
+            .commit_trusted_exact(A, raw, W + 1, |tx| {
+                assert_eq!(
+                    initial.require_current_flight(tx, B, consent),
+                    Err(Error::Binding)
+                );
+                initial.require_current_flight(tx, A, id(3))?;
+                unreachable!("a mismatched Consent cannot execute its effect")
+            })
+            .err(),
+        Some(Error::Binding)
+    );
+    store.retry_again(&initial, W + 1).unwrap();
+    let current = store.existing(A, raw.id).unwrap().unwrap();
+    assert_eq!(
+        store
+            .commit_trusted_exact(A, raw, W + 3, |tx| {
+                initial.require_current_flight(tx, A, consent)?;
+                effect(tx, A, raw.id)
+            })
+            .err(),
+        Some(Error::Stale)
+    );
+    assert_eq!(effect_count(&store), 0);
+
+    // A damaged row can retain the revision. Independently check its state and bytes.
+    let wall = W + 3;
+    let changed: [(&str, i64); 3] = [
+        (
+            "UPDATE peer_cursor_deferred SET expires=?1 WHERE origin=?2 AND id=?3",
+            seconds(verified.expires + 1).unwrap(),
+        ),
+        (
+            "UPDATE peer_cursor_deferred SET retry_at=?1 WHERE origin=?2 AND id=?3",
+            seconds(wall + 1).unwrap(),
+        ),
+        (
+            "UPDATE peer_cursor_deferred SET step=?1 WHERE origin=?2 AND id=?3",
+            2,
+        ),
+    ];
+    for (update, unexpected) in changed {
+        assert_eq!(
+            store
+                .commit_trusted_exact(A, raw, wall, |tx| {
+                    tx.execute(update, params![unexpected, A, raw.id])?;
+                    current.require_current_flight(tx, A, consent)?;
+                    effect(tx, A, raw.id)
+                })
+                .err(),
+            Some(Error::Stale)
+        );
+    }
+    for (update, unexpected) in [
+        (
+            "UPDATE peer_cursor_deferred SET prerequisite=?1 WHERE origin=?2 AND id=?3",
+            &[9; 32][..],
+        ),
+        (
+            "UPDATE peer_cursor_deferred SET frame=?1 WHERE origin=?2 AND id=?3",
+            b"different lexical bytes".as_slice(),
+        ),
+    ] {
+        assert_eq!(
+            store
+                .commit_trusted_exact(A, raw, wall, |tx| {
+                    tx.execute(update, params![unexpected, A, raw.id])?;
+                    current.require_current_flight(tx, A, consent)?;
+                    effect(tx, A, raw.id)
+                })
+                .err(),
+            Some(Error::Stale)
+        );
+    }
+    assert_eq!(effect_count(&store), 0);
+
+    let (_, applied) = store
+        .commit_trusted_exact(A, raw, wall, |tx| {
+            current.require_current_flight(tx, A, consent)?;
+            effect(tx, A, raw.id)
+        })
+        .unwrap();
+    assert_eq!(applied, TrustedOutcome::Applied);
+    assert_eq!(effect_count(&store), 1);
+    assert!(store.existing(A, raw.id).unwrap().is_none());
+}
+
+#[test]
 fn peer_cursor_core_clock_floor_and_rebase_preserve_retry_evidence() {
     let fixture = Fixture::new();
     let mut store = fixture.open();
