@@ -35,7 +35,7 @@ impl PreparedConsentOwner<'_> {
             Replay::Absent => {}
         }
         let incoming = match codec.classify_verified_client(&self.state.signer, outer) {
-            Ok(ClientCarrier::Offer) => {
+            Ok(ClientCarrier::Offer(_)) => {
                 return Ok(self.state.checkpoint.admit(&self.state.source, raw, wall)?);
             }
             Ok(ClientCarrier::Delivery(incoming)) => incoming,

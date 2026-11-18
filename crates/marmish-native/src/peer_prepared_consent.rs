@@ -353,5 +353,5 @@ impl Checkpoint {
 }
 
 #[path = "peer_prepared_consent_attempt.rs"]
-mod publication;
+pub(crate) mod publication;
 pub(crate) use publication::Attempt;

@@ -17,8 +17,31 @@ impl ClientOuter {
 }
 
 pub(crate) enum ClientCarrier {
-    Offer,
+    Offer(Box<AuthenticatedOffer>),
     Delivery(Box<IncomingDelivery>),
+}
+
+pub(crate) struct AuthenticatedOffer {
+    carrier: EventId,
+    recipient: PublicKey,
+    rumor: UnsignedEvent,
+}
+
+impl AuthenticatedOffer {
+    pub(crate) fn qualify(
+        self,
+        codec: &Codec,
+        configured_relays: &[String],
+        wall: u64,
+    ) -> Result<Offer> {
+        codec.qualify_offer(
+            self.carrier,
+            self.recipient,
+            &self.rumor,
+            configured_relays,
+            wall,
+        )
+    }
 }
 
 pub(crate) struct DeliveryOffer {
@@ -38,6 +61,10 @@ pub(crate) struct IncomingDelivery {
 }
 
 impl IncomingDelivery {
+    pub(crate) fn expires_at(&self) -> u64 {
+        self.wire.expires_at
+    }
+
     pub(crate) fn offer(&self) -> &DeliveryOffer {
         &self.offer
     }
@@ -75,6 +102,8 @@ impl IncomingDelivery {
 }
 
 pub(crate) struct VerifiedDeliveryPackage {
+    carrier: EventId,
+    stamp: u64,
     frame_digest: [u8; 32],
     binding: PackageBinding,
     bounds: (u64, u64),
@@ -82,6 +111,10 @@ pub(crate) struct VerifiedDeliveryPackage {
 }
 
 impl VerifiedDeliveryPackage {
+    pub(crate) fn matches_index(&self, id: [u8; 32], stamp: u64) -> bool {
+        self.carrier.to_bytes() == id && self.stamp == stamp
+    }
+
     pub(crate) fn frame_digest(&self) -> [u8; 32] {
         self.frame_digest
     }
@@ -158,7 +191,8 @@ impl Transcript {
         incoming: IncomingDelivery,
     ) -> Result<Option<(Delivery, VerifiedDeliveryPackage)>> {
         let package = self.verified_package(signer, offer, frame, exact_package, wall)?;
-        let frame_digest = incoming.frame_digest;
+        let (carrier, stamp, frame_digest) =
+            (incoming.carrier, incoming.stamp, incoming.frame_digest);
         let Ok(delivery) = incoming.verify(offer, self, package.binding, package.lifetime(), wall)
         else {
             return Ok(None);
@@ -166,6 +200,8 @@ impl Transcript {
         Ok(Some((
             delivery,
             VerifiedDeliveryPackage {
+                carrier,
+                stamp,
                 frame_digest,
                 binding: package.binding,
                 bounds: (package.not_before, package.not_after),
@@ -271,7 +307,11 @@ impl Codec {
     ) -> Result<ClientCarrier> {
         let (carrier, stamp, rumor) = Self::open_outer(signer, verified.event, None)?;
         match rumor.kind {
-            kind if kind == OFFER => Ok(ClientCarrier::Offer),
+            kind if kind == OFFER => Ok(ClientCarrier::Offer(Box::new(AuthenticatedOffer {
+                carrier,
+                recipient: signer.public_key(),
+                rumor,
+            }))),
             kind if kind == DELIVERY => {
                 let wire: DeliveryWire =
                     serde_json::from_str(&rumor.content).map_err(|_| Error::Body)?;
@@ -308,7 +348,19 @@ impl Codec {
         else {
             return Err(Error::Rumor);
         };
-        if !incoming.matches_index(evidence.delivery_carrier(), evidence.outer_stamp()) {
+        self.verify_custodied_delivery(signer, evidence, *incoming, wall)
+    }
+
+    pub(crate) fn verify_custodied_delivery(
+        &self,
+        signer: &Keys,
+        evidence: &HeldEvidence,
+        incoming: IncomingDelivery,
+        wall: u64,
+    ) -> Result<Delivery> {
+        if !incoming.matches_index(evidence.delivery_carrier(), evidence.outer_stamp())
+            || incoming.frame_digest != <[u8; 32]>::from(Sha256::digest(evidence.signed_delivery()))
+        {
             return Err(Error::Binding);
         }
         let authority = self.saved_authority(signer, evidence, wall)?;

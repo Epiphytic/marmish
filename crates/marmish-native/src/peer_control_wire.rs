@@ -346,9 +346,26 @@ impl Codec {
         now: u64,
     ) -> Result<Offer> {
         let (carrier_id, rumor) = self.open(local, frame, expected_server, OFFER)?;
+        self.qualify_offer(
+            carrier_id,
+            local.public_key(),
+            &rumor,
+            configured_relays,
+            now,
+        )
+    }
+
+    fn qualify_offer(
+        &self,
+        carrier_id: EventId,
+        recipient: PublicKey,
+        rumor: &UnsignedEvent,
+        configured_relays: &[String],
+        now: u64,
+    ) -> Result<Offer> {
         let wire: OfferWire = serde_json::from_str(&rumor.content).map_err(|_| Error::Body)?;
         check_body(self.version, wire.v, &rumor.content, &wire)?;
-        let flight = flight(carrier_id, &rumor, local.public_key(), wire.expires_at, now)?;
+        let flight = flight(carrier_id, rumor, recipient, wire.expires_at, now)?;
         if wire.expires_at != deadline(flight.created_at, FLIGHT_TTL)? {
             return Err(Error::Time);
         }

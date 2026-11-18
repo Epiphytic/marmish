@@ -95,7 +95,18 @@ impl PeerRecipientPort {
             }
             ControlOutcome::Accepted(ack) => {
                 match self.use_accepted(&ack, |view| fixture.settle(reserved, view)) {
-                    Ok(Ok(())) => PublicationOutcome::Settled,
+                    Ok(Ok(settled)) => {
+                        if let Err(error) = self
+                            .use_accepted(&ack, |view| {
+                                fixture.wake_delivery(settled, view.account, view.origin, view.wall)
+                            })
+                            .map_err(Local::from)
+                            .and_then(|result| result)
+                        {
+                            fixture.record_wake_failure(error);
+                        }
+                        PublicationOutcome::Settled
+                    }
                     Ok(Err(error)) => {
                         self.0.retire();
                         PublicationOutcome::PossiblyExposed(error)

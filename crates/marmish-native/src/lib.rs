@@ -111,6 +111,8 @@ mod peer_control_version;
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 macro_rules! native_offer_ingress_fixture {
     () => {
+        #[path = "peer_installed_delivery_ingress.rs"]
+        pub(in crate::peer_invitation) mod delivery_ingress;
         #[path = "peer_installed_offer_ingress.rs"]
         pub(in crate::peer_invitation) mod offer_ingress;
     };
@@ -119,7 +121,7 @@ macro_rules! native_offer_ingress_fixture {
 macro_rules! native_consent_publication_fixture {
     () => {
         #[path = "peer_installed_consent_settlement.rs"]
-        mod installed_settlement;
+        pub(in crate::peer_invitation) mod installed_settlement;
     };
 }
 #[allow(dead_code)] // Deployment qualification must precede daemon activation.

@@ -239,7 +239,7 @@ async fn peer_control_core_three_flights_preserve_exact_signed_bytes() {
     let authored_delivery = f.delivery(&consent, &welcome, now + 20);
     assert!(matches!(
         f.codec.classify_client(&f.client, initial.frame()).unwrap(),
-        ClientCarrier::Offer
+        ClientCarrier::Offer(_)
     ));
     let ClientCarrier::Delivery(incoming) = f
         .codec

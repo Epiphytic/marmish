@@ -182,7 +182,7 @@ impl PreparedConsentOwner<'_> {
         let wall = sample.as_secs();
         let codec = Codec::new(MAX_OUTER_BYTES).map_err(|_| Error::Binding)?;
         match codec.classify_client(&self.state.signer, arrival.body.get().as_bytes()) {
-            Ok(ClientCarrier::Offer) => Ok(Received::Admitted(self.state.checkpoint.admit(
+            Ok(ClientCarrier::Offer(_)) => Ok(Received::Admitted(self.state.checkpoint.admit(
                 &self.state.source,
                 record(arrival),
                 wall,

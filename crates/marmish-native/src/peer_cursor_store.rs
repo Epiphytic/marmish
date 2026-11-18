@@ -14,9 +14,9 @@ use storage_sqlite::{SqlCipherHardening, SqlCipherKey, open_hardened_sqlcipher};
 pub(crate) mod installed;
 
 #[path = "peer_cursor_pages.rs"]
-mod pages;
+pub(super) mod pages;
 #[path = "peer_cursor_retry.rs"]
-mod retry;
+pub(super) mod retry;
 
 #[path = "peer_consent_checkpoint.rs"]
 pub(crate) mod consent_checkpoint;

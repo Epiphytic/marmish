@@ -49,11 +49,11 @@ const CASES: [Case; 6] = [
     Case::StaleAttempt,
 ];
 
-fn time_limit() -> Instant {
+pub(super) fn time_limit() -> Instant {
     Instant::now() + Duration::from_secs(5)
 }
 
-fn wall() -> u64 {
+pub(super) fn wall() -> u64 {
     Wall::System.sample().unwrap().as_secs()
 }
 

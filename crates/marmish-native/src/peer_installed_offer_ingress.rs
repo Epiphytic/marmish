@@ -2,6 +2,7 @@
 
 use super::super::super::super::installed;
 use super::*;
+use wire::ClientCarrier;
 use crate::peer_invitation::socket::owner::recipient::CheckedCarrier;
 
 pub(in crate::peer_invitation) enum OfferIngress {
@@ -11,69 +12,108 @@ pub(in crate::peer_invitation) enum OfferIngress {
     Backpressure,
 }
 
+pub(in crate::peer_invitation) enum InstalledCarrier {
+    Offer(wire::Offer),
+    Delivery(Box<IncomingDelivery>),
+    InvalidOffer,
+    InvalidFrame,
+}
+
+pub(in crate::peer_invitation) struct OfferInput<'a> {
+    pub(in crate::peer_invitation) account: PublicKey,
+    pub(in crate::peer_invitation) origin: &'a str,
+    pub(in crate::peer_invitation) wall: u64,
+    pub(in crate::peer_invitation) record: RawRecord<'a>,
+}
+
+impl<'a> From<&CheckedCarrier<'a>> for OfferInput<'a> {
+    fn from(carrier: &CheckedCarrier<'a>) -> Self {
+        Self {
+            account: carrier.account(),
+            origin: carrier.origin(),
+            wall: carrier.wall(),
+            record: carrier.record(),
+        }
+    }
+}
+
 impl Checkpoint {
     pub(in crate::peer_invitation) fn admit_installed_custody_offer(
         &mut self,
         source: &Source,
         carrier: CheckedCarrier<'_>,
     ) -> Result<OfferIngress> {
-        if self.layout != Layout::InstalledCustodyV2 {
-            return Err(Error::Layout);
-        }
-        if !matches!(self.installed_receive, Some(ReceivePolicy::Manual)) {
-            return Err(Error::Policy);
-        }
-        let cx = self.custody_context(source)?;
-        if carrier.account().to_bytes() != cx.account || carrier.origin() != cx.route.urls[0] {
-            return Err(Error::Source);
-        }
-        let wall = carrier.wall();
-        let record = carrier.record();
-        record.check()?;
-        {
-            let tx = self.cursor.begin(cx.origin)?;
-            cx.verify(&tx, wall)?;
-            let floor = tx.query_row(
-                "SELECT wall FROM peer_cursor_origin WHERE origin=?1",
-                [cx.origin],
-                |row| read_seconds(row, 0),
-            )?;
-            if wall < floor {
-                return Err(CursorError::ClockRegressed.into());
+        self.admit_offer_fixture(source, (&carrier).into())
+    }
+
+    pub(in crate::peer_invitation) fn admit_offer_fixture(
+        &mut self,
+        source: &Source,
+        input: OfferInput<'_>,
+    ) -> Result<OfferIngress> {
+        match self.classify_installed_carrier(source, &input)? {
+            InstalledCarrier::Offer(offer) => self.record_installed_offer(source, input, offer),
+            InstalledCarrier::InvalidOffer => Ok(OfferIngress::Invalid),
+            InstalledCarrier::InvalidFrame | InstalledCarrier::Delivery(_) => {
+                Ok(OfferIngress::NotOffer)
             }
         }
+    }
 
+    pub(super) fn classify_installed_carrier(
+        &mut self,
+        source: &Source,
+        input: &OfferInput<'_>,
+    ) -> Result<InstalledCarrier> {
+        let wall = input.wall;
+        let record = input.record;
+        record.check()?;
+        self.check_installed_consent_scope(source, input.account, input.origin, wall)?;
+
+        let cx = self.custody_context(source)?;
         let Ok(outer) = cx.codec.verify_client_outer(record.bytes) else {
-            return Ok(OfferIngress::NotOffer);
+            return Ok(InstalledCarrier::InvalidFrame);
         };
         if !outer.matches_index(record.id, record.stamp) {
             return Err(Error::Index);
         }
-        if !matches!(
-            cx.codec.classify_verified_client(&cx.signer, outer),
-            Ok(ClientCarrier::Offer)
-        ) {
-            return Ok(OfferIngress::NotOffer);
-        }
-        let offer = match cx
-            .codec
-            .open_offer(&cx.signer, record.bytes, None, &cx.route.urls, wall)
-        {
-            Ok(offer) => offer,
-            Err(wire::Error::Route | wire::Error::Time | wire::Error::Binding) => {
-                return Ok(OfferIngress::Invalid);
+        let offer = match cx.codec.classify_verified_client(&cx.signer, outer) {
+            Ok(ClientCarrier::Delivery(incoming)) => {
+                return Ok(InstalledCarrier::Delivery(incoming));
             }
-            Err(_) => return Ok(OfferIngress::NotOffer),
+            Ok(ClientCarrier::Offer(opened)) => {
+                match opened.qualify(&cx.codec, &cx.route.urls, wall) {
+                    Ok(offer) => offer,
+                    Err(wire::Error::Route | wire::Error::Time | wire::Error::Binding) => {
+                        return Ok(InstalledCarrier::InvalidOffer);
+                    }
+                    Err(_) => return Ok(InstalledCarrier::InvalidFrame),
+                }
+            }
+            Err(_) => return Ok(InstalledCarrier::InvalidFrame),
         };
         let flight = offer.flight();
-        if flight.carrier_id.to_bytes() != record.id {
-            return Err(Error::Index);
-        }
         if wall >= flight.expires_at
             || flight.author == flight.recipient
             || self.policy.blocked.contains(&flight.author)
         {
-            return Ok(OfferIngress::Invalid);
+            return Ok(InstalledCarrier::InvalidOffer);
+        }
+        Ok(InstalledCarrier::Offer(offer))
+    }
+
+    pub(super) fn record_installed_offer(
+        &mut self,
+        source: &Source,
+        input: OfferInput<'_>,
+        offer: wire::Offer,
+    ) -> Result<OfferIngress> {
+        let cx = self.custody_context(source)?;
+        let wall = input.wall;
+        let record = input.record;
+        let flight = offer.flight();
+        if flight.carrier_id.to_bytes() != record.id {
+            return Err(Error::Index);
         }
 
         let committed = self

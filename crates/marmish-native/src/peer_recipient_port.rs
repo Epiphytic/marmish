@@ -31,7 +31,39 @@ pub(in crate::peer_invitation) struct Operation {
 }
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[derive(PartialEq, Eq)]
+enum CarrierLocation<'a> {
+    Live(&'a str),
+    History {
+        request: &'a str,
+        bounds: [u64; 2],
+        index: usize,
+    },
+}
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+pub(in crate::peer_invitation) struct CarrierWitness {
+    scope: Arc<Scope>,
+    location: CarrierCoordinates,
+    id: [u8; 32],
+    stamp: u64,
+    digest: [u8; 32],
+}
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+enum CarrierCoordinates {
+    Live(String),
+    History {
+        request: String,
+        bounds: [u64; 2],
+        index: usize,
+    },
+}
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 pub(in crate::peer_invitation) struct CheckedCarrier<'a> {
+    scope: &'a Arc<Scope>,
+    location: CarrierLocation<'a>,
     account: PublicKey,
     origin: &'a str,
     wall: u64,
@@ -40,6 +72,48 @@ pub(in crate::peer_invitation) struct CheckedCarrier<'a> {
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 impl<'a> CheckedCarrier<'a> {
+    pub(in crate::peer_invitation) fn witness(&self) -> CarrierWitness {
+        let location = match self.location {
+            CarrierLocation::Live(subscription) => CarrierCoordinates::Live(subscription.into()),
+            CarrierLocation::History {
+                request,
+                bounds,
+                index,
+            } => CarrierCoordinates::History {
+                request: request.into(),
+                bounds,
+                index,
+            },
+        };
+        CarrierWitness {
+            scope: Arc::clone(self.scope),
+            location,
+            id: self.record.id,
+            stamp: self.record.stamp,
+            digest: Sha256::digest(self.record.bytes).into(),
+        }
+    }
+
+    pub(in crate::peer_invitation) fn matches(&self, witness: &CarrierWitness) -> bool {
+        let location = match &witness.location {
+            CarrierCoordinates::Live(subscription) => CarrierLocation::Live(subscription),
+            CarrierCoordinates::History {
+                request,
+                bounds,
+                index,
+            } => CarrierLocation::History {
+                request,
+                bounds: *bounds,
+                index: *index,
+            },
+        };
+        Arc::ptr_eq(self.scope, &witness.scope)
+            && self.location == location
+            && self.record.id == witness.id
+            && self.record.stamp == witness.stamp
+            && <[u8; 32]>::from(Sha256::digest(self.record.bytes)) == witness.digest
+    }
+
     pub(in crate::peer_invitation) fn account(&self) -> PublicKey {
         self.account
     }
@@ -56,6 +130,12 @@ impl<'a> CheckedCarrier<'a> {
         self.record
     }
 }
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "peer_recipient_delivery_port.rs"]
+mod delivery;
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+pub(in crate::peer_invitation) use delivery::{CheckedSavedDelivery, SavedPortWitness};
 
 pub(in crate::peer_invitation) struct CheckedAck<'a> {
     account: PublicKey,
@@ -180,6 +260,12 @@ impl PeerRecipientPort {
                 return Err(Failure::Binding);
             }
             Ok(use_checked(CheckedCarrier {
+                scope: &page.scope,
+                location: CarrierLocation::History {
+                    request: checked.request,
+                    bounds: checked.bounds,
+                    index,
+                },
                 account: checked.account,
                 origin: checked.origin,
                 wall: checked.wall,
@@ -196,12 +282,23 @@ impl PeerRecipientPort {
     ) -> Result<T> {
         self.use_live(live, |checked| {
             use_checked(CheckedCarrier {
+                scope: &live.scope,
+                location: CarrierLocation::Live(&live.subscription),
                 account: checked.account,
                 origin: checked.origin,
                 wall: checked.wall,
                 record: crate::peer_invitation::record(checked.record),
             })
         })
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(in crate::peer_invitation) fn use_current_recipient<T>(
+        &mut self,
+        use_checked: impl FnOnce(PublicKey, &str, u64) -> T,
+    ) -> Result<T> {
+        let (account, wall) = self.check_observation()?;
+        Ok(use_checked(account, &self.0.scope.origin, wall))
     }
 
     pub(in crate::peer_invitation) fn use_accepted<T>(

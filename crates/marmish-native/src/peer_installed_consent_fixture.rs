@@ -4,12 +4,15 @@ use nostr::key::PublicKey;
 
 use super::*;
 use crate::peer_invitation::socket::owner::recipient::CheckedAck;
-use consent_checkpoint::provisioning::prepared_consent::{Queued, custody::ReceivePolicy};
+use consent_checkpoint::provisioning::prepared_consent::{
+    Queued, custody::ReceivePolicy, publication::installed_settlement::SettledConsent,
+};
 
 pub(in crate::peer_invitation) struct Fixture<'a> {
     owner: PreparedConsentOwner<'a>,
     cursor: paths::CheckedFile,
     cut: Option<Cut>,
+    wake_failure: Option<Error>,
 }
 
 #[derive(PartialEq, Eq)]
@@ -20,6 +23,9 @@ enum Cut {
 
 #[path = "peer_installed_consent_wss_tests.rs"]
 mod tests;
+
+#[path = "peer_installed_delivery_fixture.rs"]
+mod delivery;
 
 pub(in crate::peer_invitation) struct Reserved {
     pub(in crate::peer_invitation) attempt: Attempt,
@@ -76,6 +82,7 @@ impl<'a> Fixture<'a> {
             },
             cursor,
             cut: None,
+            wake_failure: None,
         })
     }
 
@@ -208,7 +215,7 @@ impl<'a> Fixture<'a> {
         &mut self,
         reserved: Reserved,
         ack: CheckedAck<'_>,
-    ) -> Result<()> {
+    ) -> Result<SettledConsent> {
         self.cursor.unchanged()?;
         self.owner.verify_custody(&reserved.native)?;
         let state = &mut self.owner.state;
@@ -216,9 +223,32 @@ impl<'a> Fixture<'a> {
             self.cut = None;
             state.checkpoint.fixture_statement("PRAGMA query_only=ON");
         }
-        state
-            .checkpoint
-            .settle_installed_prepared_attempt(&state.source, reserved.attempt, ack)?;
-        Ok(())
+        Ok(state.checkpoint.settle_installed_prepared_attempt(
+            &state.source,
+            reserved.attempt,
+            ack,
+        )?)
+    }
+
+    pub(in crate::peer_invitation) fn wake_delivery(
+        &mut self,
+        settled: SettledConsent,
+        account: PublicKey,
+        origin: &str,
+        wall: u64,
+    ) -> Result<usize> {
+        self.cursor.unchanged()?;
+        let state = &mut self.owner.state;
+        Ok(state.checkpoint.wake_installed_delivery(
+            &state.source,
+            settled,
+            account,
+            origin,
+            wall,
+        )?)
+    }
+
+    pub(in crate::peer_invitation) fn record_wake_failure(&mut self, error: Error) {
+        self.wake_failure = Some(error);
     }
 }

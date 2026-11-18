@@ -12,7 +12,7 @@ use crate::peer_invitation::prepared_consent::{JoinedReadback, NativeAttestation
 
 use super::super::super::super::read_seconds;
 use super::super::super::wire::{
-    ClientCarrier, Delivery, IncomingDelivery, PackageBinding, VerifiedDeliveryPackage,
+    Delivery, IncomingDelivery, PackageBinding, VerifiedDeliveryPackage,
 };
 use super::super::super::{
     Disposition, Layout, Local, Mode, Policy, RawRecord, Status, TrustedOutcome,
@@ -95,6 +95,20 @@ pub(crate) enum Replay {
 pub(crate) enum Approval<'a> {
     Manual(&'a Local),
     Automatic,
+}
+
+enum HeldInput<'a> {
+    Observed(RawRecord<'a>),
+    Saved(&'a super::super::super::super::retry::Snapshot),
+}
+
+impl<'a> HeldInput<'a> {
+    fn record(&self) -> RawRecord<'a> {
+        match *self {
+            Self::Observed(raw) => raw,
+            Self::Saved(snapshot) => snapshot.record(),
+        }
+    }
 }
 
 pub(crate) struct CustodyConsent {
@@ -740,6 +754,26 @@ impl Checkpoint {
         package: &VerifiedDeliveryPackage,
         wall: u64,
     ) -> Result<Disposition> {
+        self.commit_custody_held_input(
+            source,
+            HeldInput::Observed(raw),
+            prior,
+            delivery,
+            package,
+            wall,
+        )
+    }
+
+    fn commit_custody_held_input(
+        &mut self,
+        source: &Source,
+        input: HeldInput<'_>,
+        prior: &CustodyConsent,
+        delivery: &Delivery,
+        package: &VerifiedDeliveryPackage,
+        wall: u64,
+    ) -> Result<Disposition> {
+        let raw = input.record();
         raw.check()?;
         self.check_local_owner(&prior.owner)?;
         let cx = self.custody_context(source)?;
@@ -754,10 +788,7 @@ impl Checkpoint {
             .ok_or(Error::Expired)?;
         let mode = self.custody_mode(key.server)?;
         let frame_digest: [u8; 32] = Sha256::digest(raw.bytes).into();
-        if package.frame_digest() != frame_digest
-            || !matches!(cx.codec.classify_client(&cx.signer, raw.bytes),
-                Ok(ClientCarrier::Delivery(incoming)) if incoming.matches_index(raw.id, raw.stamp))
-        {
+        if package.frame_digest() != frame_digest || !package.matches_index(raw.id, raw.stamp) {
             return Err(Error::Index);
         }
         let (receipt, outcome) = self
@@ -771,6 +802,13 @@ impl Checkpoint {
                         || prior.row != current.row
                     {
                         return Err(CursorError::Stale.into());
+                    }
+                    if let HeldInput::Saved(snapshot) = input {
+                        snapshot.require_current_flight(
+                            tx,
+                            cx.origin,
+                            current.row.transcript.carrier,
+                        )?;
                     }
                     HeldWrite {
                         raw,

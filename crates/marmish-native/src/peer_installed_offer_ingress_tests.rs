@@ -3,7 +3,9 @@ use crate::peer_invitation::{
     ReceivePolicy, Source,
     store::consent_checkpoint::{
         Error, Mode,
-        provisioning::prepared_consent::custody::offer_ingress::{OfferIngress, fault_fixture},
+        provisioning::prepared_consent::custody::offer_ingress::{
+            OfferIngress, OfferInput, fault_fixture,
+        },
     },
 };
 use storage_sqlite::{SqlCipherHardening, SqlCipherKey, open_hardened_sqlcipher};
@@ -105,9 +107,9 @@ fn synthetic<'a>(
     account: PublicKey,
     origin: &'a str,
     wall: u64,
-) -> CheckedCarrier<'a> {
+) -> OfferInput<'a> {
     let event: Event = serde_json::from_slice(prepared.frame()).unwrap();
-    CheckedCarrier {
+    OfferInput {
         account,
         origin,
         wall,
@@ -180,7 +182,7 @@ fn peer_installed_custody_offer_refusals_leave_state_unchanged() {
     let conn = sql(&path, KEY);
     let before = observe(&conn);
     let check = |checkpoint: &mut Checkpoint, source: &Source, account, origin, now| {
-        checkpoint.admit_installed_custody_offer(source, synthetic(&frame, account, origin, now))
+        checkpoint.admit_offer_fixture(source, synthetic(&frame, account, origin, now))
     };
     let foreign = Keys::generate().public_key();
     assert!(matches!(
@@ -228,7 +230,7 @@ fn peer_installed_custody_offer_refusals_leave_state_unchanged() {
         ControlVersion::V2,
     );
     assert!(matches!(
-        checkpoint.admit_installed_custody_offer(
+        checkpoint.admit_offer_fixture(
             &source,
             synthetic(&wrong_route, recipient.public_key(), URL, wall)
         ),
@@ -246,7 +248,7 @@ fn peer_installed_custody_offer_refusals_leave_state_unchanged() {
     ));
     let legacy = offer(&founder, recipient.public_key(), &route, ControlVersion::V1);
     assert!(matches!(
-        checkpoint.admit_installed_custody_offer(
+        checkpoint.admit_offer_fixture(
             &source,
             synthetic(&legacy, recipient.public_key(), URL, wall)
         ),
@@ -255,7 +257,7 @@ fn peer_installed_custody_offer_refusals_leave_state_unchanged() {
     let mut mismatched = synthetic(&frame, recipient.public_key(), URL, wall);
     mismatched.record.id[0] ^= 1;
     assert!(matches!(
-        checkpoint.admit_installed_custody_offer(&source, mismatched),
+        checkpoint.admit_offer_fixture(&source, mismatched),
         Err(Error::Index)
     ));
     assert_eq!(observe(&conn), before);
@@ -303,7 +305,7 @@ fn peer_installed_custody_offer_refusals_leave_state_unchanged() {
     let conflict = offer(&founder, recipient.public_key(), &route, ControlVersion::V2);
     let after = observe(&conn);
     assert!(matches!(
-        checkpoint.admit_installed_custody_offer(
+        checkpoint.admit_offer_fixture(
             &source,
             synthetic(&conflict, recipient.public_key(), URL, wall + 1)
         ),
@@ -359,7 +361,7 @@ fn peer_installed_custody_offer_gates_cooldown_and_rolls_back_cap_refusal() {
     let wall = cooled.flight.flight().created_at;
     fault_fixture::apply_cooldown(&mut checkpoint, founder.public_key(), wall);
     let outcome = checkpoint
-        .admit_installed_custody_offer(
+        .admit_offer_fixture(
             &source,
             synthetic(&cooled, recipient.public_key(), URL, wall),
         )
@@ -376,7 +378,7 @@ fn peer_installed_custody_offer_gates_cooldown_and_rolls_back_cap_refusal() {
         let frame = offer(&founder, recipient.public_key(), &route, ControlVersion::V2);
         let before = observe(&conn);
         let retained = saved(&conn);
-        let outcome = checkpoint.admit_installed_custody_offer(
+        let outcome = checkpoint.admit_offer_fixture(
             &source,
             synthetic(&frame, recipient.public_key(), URL, wall + 1),
         );
