@@ -194,6 +194,18 @@ impl<'lease> LocalReceiverRegistration<'lease> {
             })
     }
 
+    pub(crate) fn package_origin(
+        &mut self,
+        lease: &Arc<ProfileLease>,
+        material: &IdentityMaterial,
+    ) -> std::result::Result<String, RegistrationFailure> {
+        self.recheck(lease, material)?;
+        self.route
+            .as_ref()
+            .map(|route| route.origin().to_owned())
+            .ok_or(RegistrationFailure::LocalUnavailable)
+    }
+
     pub(crate) fn quota(&self) -> &ReceiverQuota<'lease> {
         &self.quota
     }

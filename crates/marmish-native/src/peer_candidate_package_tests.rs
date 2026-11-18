@@ -161,8 +161,7 @@ fn package_child() {
     let root = Path::new(&root);
     let mode = std::env::var(MODE).unwrap();
     let (lease, identity, registration) = package_fixture_registration(root);
-    let registration = registration.attach(&lease, &identity).unwrap();
-    let quota = registration.quota();
+    let mut registration = registration.attach(&lease, &identity).unwrap();
     let paths = Paths::new(&lease, &identity).unwrap();
     let member = lease.root().join("peer");
     let stage = member.join("provisional-unknown.db");
@@ -234,8 +233,8 @@ fn package_child() {
         )
     };
 
-    let mut owner =
-        RecoveredOwner::open_registered(&lease, &identity, RELAY, &registration).unwrap();
+    let mut owner = RecoveredOwner::open_registered(&lease, &identity, &mut registration).unwrap();
+    let quota = owner.package_quota.unwrap();
     let reservation = owner
         .checkpoint
         .reserve_provisioning(&owner.source, selector, now)
@@ -297,7 +296,13 @@ fn package_child() {
             let turn = window();
             let artifact = owner
                 .issue_package(quota, &reservation, started, &turn)
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "package issue failed after {:.2}s with {} signs: {error:?}",
+                        point.elapsed().as_secs_f64(),
+                        turn.signs()
+                    )
+                });
             assert_eq!(turn.signs(), 1);
             println!(
                 "package_fixture_timing issue_ms={:.3}",

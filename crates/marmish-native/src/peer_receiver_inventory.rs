@@ -77,14 +77,16 @@ pub(super) mod v2_pending;
 
 impl<'lease> RecoveredOwner<'lease> {
     fn open_registered(
-        lease: &'lease ProfileLease,
+        lease: &'lease Arc<ProfileLease>,
         material: &IdentityMaterial,
-        relay: &str,
-        registration: &'lease crate::peer_relay_trust::candidate_registration::LocalReceiverRegistration<'lease>,
+        registration: &'lease mut crate::peer_relay_trust::candidate_registration::LocalReceiverRegistration<'lease>,
     ) -> Result<Self> {
+        let relay = registration
+            .package_origin(lease, material)
+            .map_err(|_| Error::Binding)?;
         let quota = registration.quota();
         let _files = quota.receiver_files(lease).map_err(|_| Error::Path)?;
-        Self::open_core(lease, material, relay, Some(quota))
+        Self::open_core(lease, material, &relay, Some(quota))
     }
 
     #[cfg(test)]
