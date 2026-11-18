@@ -2902,6 +2902,10 @@ mod tests {
 pub(crate) mod trust_tests;
 
 #[cfg(test)]
+#[path = "terminal_memory_proof_tests.rs"]
+mod terminal_memory_proof_tests;
+
+#[cfg(test)]
 mod scheduler_tests {
     use super::*;
     #[test]
