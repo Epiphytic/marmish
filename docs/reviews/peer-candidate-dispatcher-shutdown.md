@@ -39,3 +39,21 @@ Carry these review points into implementation and integrated code review:
 This is design-only evidence. The author verified the exact Git diff and
 review dispositions. Runtime implementation, tests and release
 qualification remain open.
+
+## Below-TLS transport primitive
+
+Claude Code Sonnet 5.5 Auto approved exact source
+`121dc730f437881a14847a79210bd26e11bfc8ae` in session
+`c557a516-aed0-4629-94ee-5b43c265ce32`. The reviewer inspected the
+candidate/Linux AMD64 compile gate, separate pending poll wakes, the
+direct-stream placement before TLS, biased cancellation of opening
+connections, and the exact per-route socket permit ownership and reaping.
+The reviewer allowed the increment to close after both focused tests and
+a candidate compile passed. The author completed those checks and
+recorded the [results](../validation/peer-candidate-dispatcher-shutdown.md).
+
+The reviewed code has no installed caller. Every future registered
+candidate connector must receive the same fatal observer before sharing
+or bootstrap. The raw Peer opener must transfer its socket with its
+lifetime proof. Full SDK, Lane and daemon teardown evidence belongs to
+the mounted shutdown increment.
