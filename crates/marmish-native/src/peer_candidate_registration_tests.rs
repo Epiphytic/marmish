@@ -383,16 +383,25 @@ fn verify_host_storage(
     };
     if mode.starts_with("host_preflight_") {
         let following = lease.journal_database();
-        let before = crate::native_preflight::WalSnapshot::capture(following).unwrap();
+        let journal_bytes = || {
+            ["", "-wal", "-shm"].map(|suffix| {
+                let mut path = following.as_os_str().to_os_string();
+                path.push(suffix);
+                match fs::read(path) {
+                    Ok(bytes) => Some(bytes),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(error) => panic!("reading fixture Journal files: {error}"),
+                }
+            })
+        };
+        let before = journal_bytes();
+        assert!(before[0].is_some());
         assert!(matches!(
             crate::native_preflight::check_with_fence(lease, material, Some(&fence)),
             Err(crate::Error::Storage("dispatcher_admission"))
         ));
         assert_eq!(visits.load(Ordering::Relaxed), limit.unwrap());
-        assert_eq!(
-            crate::native_preflight::WalSnapshot::verify_all(&[before]).unwrap(),
-            [[false, false]],
-        );
+        assert_eq!(journal_bytes(), before);
         return;
     }
     if !mode.starts_with("host_journal_") {
