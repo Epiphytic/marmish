@@ -44,9 +44,11 @@ WSS relay and tmux.
 The [native writer runtime](validation/terminal-installed-runtime.md)
 connects same-user IPC to an isolated volatile MDK runtime and native tmux.
 The Linux x86_64 private WSS fixture covers Default, New, Busy, warm reattach,
-byte preservation, resize and simultaneous ordinary Command. Installed
-process and cross-platform qualification, Observe, Takeover, inbound Peer
-invitations and network heartbeat remain in development.
+byte preservation, resize and simultaneous ordinary Command. The
+[Observe and Takeover design](phases/terminal-observe-takeover.md) adds typed
+writer offers, read-only observation, replacement and named reattachment.
+Installed process and cross-platform qualification, inbound Peer invitations
+and network heartbeat remain in development.
 The [Peer aggregate ingress proof](validation/peer-aggregate-ingress-proof.md)
 qualifies one shared canonical origin in a native loopback fixture. A copy
 arriving first on an ineligible relay can suppress the eligible copy from

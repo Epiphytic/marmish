@@ -1,7 +1,7 @@
 //! One attached room owns one ordered stream and one physical sink.
 use super::{
     GuardResult, Reason, guard, io,
-    selection::{ServerAttachment, WriterGuard},
+    selection::{AttachmentGuard, ServerAttachment},
 };
 use crate::ipc::terminal_handshake::{
     Attached,
@@ -196,13 +196,14 @@ pub(crate) async fn client(
     attached: Attached,
     stop: &AtomicBool,
 ) -> Result<()> {
-    let mut socket = DaemonSocket::new(attached, Role::Writer);
-    let mut lane = Attachment::new(
-        room.frame_binding(),
-        Direction::FromServer,
-        sample()?.continuous,
-    )
-    .ok_or(CHANNEL)?;
+    let binding = room.frame_binding();
+    let role = match binding.role {
+        crate::terminal_frames::Role::Writer => Role::Writer,
+        crate::terminal_frames::Role::Observer => Role::Observer,
+    };
+    let mut socket = DaemonSocket::new(attached, role);
+    let mut lane =
+        Attachment::new(binding, Direction::FromServer, sample()?.continuous).ok_or(CHANNEL)?;
     let limit = room.ceiling().deadline()?.into_std();
     let mut claims = LocalClaims::default();
     let result = async {
@@ -329,7 +330,7 @@ struct NativeSink {
 impl NativeSink {
     fn submit(
         &mut self,
-        writer: &mut WriterGuard,
+        guard: &mut AttachmentGuard,
         lane: &mut Attachment,
         now: Duration,
     ) -> Result<bool> {
@@ -358,7 +359,7 @@ impl NativeSink {
             io::Input::Resize { .. } => None,
         };
         let sequence = operation.sequence;
-        match writer.admitted().submit(operation) {
+        match guard.admitted().submit(operation) {
             Ok(()) => {
                 self.submitted = Some((sequence, bytes));
                 Ok(true)
@@ -404,14 +405,14 @@ pub(crate) async fn server(mut attached: ServerAttachment, stop: &AtomicBool) ->
             stopped(stop)?;
             let allowed = trace("terminal_server_liveness", attached.check_live().await)?;
             let shell_retired = matches!(allowed, GuardResult::Retired(Reason::ShellExit));
-            if !shell_retired && !writer_ready(allowed)? {
+            if !shell_retired && !attachment_ready(allowed)? {
                 next_turn(false).await;
                 continue;
             }
             if shell_retired {
                 renewal = None;
             } else if let Some(received) = renewal {
-                if !writer_ready(attached.writer.renew(received))? {
+                if !attachment_ready(attached.guard.renew(received))? {
                     next_turn(false).await;
                     continue;
                 }
@@ -428,9 +429,9 @@ pub(crate) async fn server(mut attached: ServerAttachment, stop: &AtomicBool) ->
                 )? {
                     Receipt::Closed => return Ok(false),
                     Receipt::Ordered | Receipt::Ack | Receipt::Pulse => {
-                        let renewed = attached.writer.renew(received);
+                        let renewed = attached.guard.renew(received);
                         if !matches!(renewed, GuardResult::Retired(Reason::ShellExit))
-                            && !writer_ready(renewed)?
+                            && !attachment_ready(renewed)?
                         {
                             renewal = Some(received);
                             next_turn(false).await;
@@ -442,8 +443,7 @@ pub(crate) async fn server(mut attached: ServerAttachment, stop: &AtomicBool) ->
                 progress = true;
             }
             stopped(stop)?;
-            if !shell_exited
-                && let Some(event) = attached.writer.admitted().port.event(!output.blocked())
+            if !shell_exited && let Some(event) = attached.guard.admitted().event(!output.blocked())
             {
                 match event {
                     io::Event::Complete(completion) => sink.complete(completion, &mut lane)?,
@@ -457,7 +457,7 @@ pub(crate) async fn server(mut attached: ServerAttachment, stop: &AtomicBool) ->
             if !shell_retired && !shell_exited {
                 progress |= trace(
                     "terminal_server_write",
-                    sink.submit(&mut attached.writer, &mut lane, now),
+                    sink.submit(&mut attached.guard, &mut lane, now),
                 )?;
             }
             progress |= trace("terminal_server_read", output.turn(&mut lane, now))?;
@@ -472,7 +472,7 @@ pub(crate) async fn server(mut attached: ServerAttachment, stop: &AtomicBool) ->
         }
     }
     .await;
-    if matches!(result, Ok(true)) {
+    if matches!(result, Ok(true)) || attached.guard.replaced() {
         lane.close();
         let _ = tokio::time::timeout(
             CLOSE_SEND_BUDGET,
@@ -484,7 +484,7 @@ pub(crate) async fn server(mut attached: ServerAttachment, stop: &AtomicBool) ->
     result.map(|_| ()).and(cleanup)
 }
 
-fn writer_ready<T>(state: GuardResult<T>) -> Result<bool> {
+fn attachment_ready<T>(state: GuardResult<T>) -> Result<bool> {
     match state {
         GuardResult::Applied(_) => Ok(true),
         GuardResult::Withheld => Ok(false),

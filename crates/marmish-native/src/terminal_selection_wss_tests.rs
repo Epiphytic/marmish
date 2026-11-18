@@ -333,6 +333,7 @@ async fn prove_selection() {
     for fault in [
         SelectionFault::Early,
         SelectionFault::WrongClaim,
+        SelectionFault::WrongRole,
         SelectionFault::Missing,
     ] {
         let (client_room, server_room, _) =

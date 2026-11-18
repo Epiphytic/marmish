@@ -2,7 +2,9 @@
 use crate::command_config::{CommandConfig, Role};
 use crate::command_wire::{Account, Id};
 use crate::identity::{IdentityMaterial, ProfileLease};
-use crate::ipc::terminal_handshake::{Attach, Intake, LocalStart, PendingStart};
+use crate::ipc::terminal_handshake::{
+    Attach, Intake, LocalStart, Offer, PendingStart, Target as LocalTarget,
+};
 use crate::mdk_adapter::{
     Binding, MdkOwner,
     terminal_enrollment_driver::Route,
@@ -10,10 +12,11 @@ use crate::mdk_adapter::{
 };
 use crate::terminal_backend::supervisor::{
     Registry,
-    live::{LiveControl, LiveSupervisor, selection, selection_wire::Choice, stream},
+    live::{LiveControl, LiveSupervisor, selection, stream},
 };
 use crate::terminal_fence::FenceState;
 use crate::terminal_frames::Size;
+use crate::terminal_selection_wire_v2::{Choice, Refusal, Request, Target, Ticket};
 use crate::transport::{ArtiDirs, RelayPolicy};
 use crate::{Error, Result};
 use std::collections::BTreeMap;
@@ -550,6 +553,7 @@ async fn client_start(
     };
     let local_closed = Arc::new(AtomicBool::new(false));
     let pending = async {
+        let request = selection_request(&start.request)?;
         let deadline = start.deadline.min(Instant::now() + Duration::from_secs(1));
         let (reply, response) = oneshot::channel();
         bindings
@@ -589,20 +593,7 @@ async fn client_start(
                 local_closed.clone(),
             )
             .await?;
-        selection::request(
-            room,
-            if start.request.attach == Attach::New {
-                Choice::New
-            } else {
-                Choice::Default
-            },
-            Size {
-                rows: start.request.rows,
-                cols: start.request.columns,
-            },
-            &|| grant(),
-        )
-        .await
+        selection::request(room, request, &|| grant()).await
     };
     let result = {
         tokio::pin!(pending);
@@ -619,8 +610,8 @@ async fn client_start(
         }
     };
     match result {
-        Ok(selection::ClientOutcome::Attached { room, .. }) => {
-            match start.admit_reserved(permit).await {
+        Ok(selection::ClientOutcome::Attached { room, role, slot }) => {
+            match start.admit_reserved(permit, role, slot).await {
                 Ok(socket) => {
                     let _ = stream::client(room, socket, &stop).await;
                 }
@@ -629,19 +620,52 @@ async fn client_start(
                 }
             }
         }
-        Ok(selection::ClientOutcome::Busy) => start.refuse("terminal_busy").await,
+        Ok(selection::ClientOutcome::Busy(ticket)) => match Offer::from_bytes(ticket.bytes()) {
+            Ok(offer) => {
+                let _ = start.busy(offer).await;
+            }
+            Err(_) => start.refuse("terminal_owner_unavailable").await,
+        },
         Ok(selection::ClientOutcome::Refused(refusal)) => {
-            use crate::terminal_backend::supervisor::live::selection_wire::Refusal;
             start
                 .refuse(match refusal {
                     Refusal::Capacity => "terminal_capacity",
                     Refusal::Permission => "terminal_grant_denied",
-                    Refusal::Unavailable => "terminal_owner_unavailable",
+                    Refusal::Unavailable => "terminal_native_unavailable",
+                    Refusal::WriterMissing => "terminal_writer_missing",
+                    Refusal::StaleOffer => "terminal_offer_stale",
+                    Refusal::SlotMissing => "terminal_slot_missing",
+                    Refusal::ReplacementPending => "terminal_replacement_pending",
                 })
                 .await;
         }
         Err(error) => start.refuse(category(&error)).await,
     }
+}
+
+fn selection_request(start: &crate::ipc::terminal_handshake::Start) -> Result<Request> {
+    let choice = match start.attach {
+        Attach::Default => Choice::Regular,
+        Attach::New => Choice::New,
+        Attach::Observe => Choice::Observe,
+        Attach::Takeover => Choice::Takeover,
+    };
+    let target = match start.target()? {
+        LocalTarget::Default => Target::Default,
+        LocalTarget::Named(slot) => Target::Named(slot),
+        LocalTarget::Offer(offer) => Target::Offer(
+            Ticket::read(&offer.bytes()).ok_or(Error::Invalid("terminal_offer_invalid"))?,
+        ),
+    };
+    let size = Size {
+        rows: start.rows,
+        cols: start.columns,
+    };
+    Ok(Request {
+        choice,
+        target,
+        size,
+    })
 }
 
 fn decode<const N: usize>(value: &str) -> Result<[u8; N]> {
@@ -653,6 +677,7 @@ fn decode<const N: usize>(value: &str) -> Result<[u8; N]> {
 pub(crate) fn category(error: &Error) -> &'static str {
     match error {
         Error::Invalid("terminal_capacity") => "terminal_capacity",
+        Error::Invalid("terminal_takeover_uncertain") => "terminal_takeover_uncertain",
         Error::Invalid("terminal_mode_unavailable") => "terminal_mode_unavailable",
         Error::Invalid("terminal_command_binding") => "terminal_command_binding",
         Error::Invalid("terminal_binding_deadline") => {

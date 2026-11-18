@@ -4,15 +4,19 @@ use super::terminal_enrollment_room::{App, RoomWitness};
 use super::terminal_enrollment_transport::{Authority, Lane, Read};
 pub(crate) use super::terminal_enrollment_transport::{EnrollmentCeiling, Reapers};
 use super::{AuthenticatedCommandContext, CommandDirection, TransportEndpoint};
-use crate::terminal_backend::supervisor::live::selection::WriterGuard;
+use crate::terminal_backend::supervisor::live::selection::AttachmentGuard;
 use crate::terminal_bootstrap::state::{Advance, Exchange, Time};
 use crate::terminal_bootstrap::{BoundSigning, Codec, Step};
 use crate::terminal_fence::{AttachmentFence, FenceState};
 use crate::terminal_frames;
 use crate::transport::{RelayConnector, RelayPolicy};
 use crate::{Error, Result};
+#[cfg(test)]
 use std::num::NonZeroU64;
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinHandle;
@@ -88,23 +92,33 @@ pub(super) struct GrantedEnrollment {
     reserved: ReservedRoom,
 }
 
-pub(super) struct RoomPermit(Option<OwnedSemaphorePermit>);
+pub(super) struct RoomPermit(Arc<RoomLease>);
+
+struct RoomLease {
+    permit: Option<OwnedSemaphorePermit>,
+    room_reaped: AtomicBool,
+}
 
 impl RoomPermit {
     pub(super) fn new(permit: OwnedSemaphorePermit) -> Self {
-        Self(Some(permit))
+        Self(Arc::new(RoomLease {
+            permit: Some(permit),
+            room_reaped: AtomicBool::new(false),
+        }))
     }
 
-    fn release_after_reap(mut self) {
-        drop(self.0.take());
+    fn release_after_reap(self) {
+        self.0.room_reaped.store(true, Ordering::Release);
     }
 }
 
-impl Drop for RoomPermit {
+impl Drop for RoomLease {
     fn drop(&mut self) {
         // An abandoned, failed or cancelled transition must not create
         // capacity while its source or room may still be running.
-        if let Some(permit) = self.0.take() {
+        if !self.room_reaped.load(Ordering::Acquire)
+            && let Some(permit) = self.permit.take()
+        {
             permit.forget();
         }
     }
@@ -345,38 +359,46 @@ impl ReadyEnrollment {
         self.authority().retire();
     }
 
+    pub(crate) fn room_hold(&self) -> Arc<dyn Send + Sync> {
+        let (_, permit) = self
+            .enrollment
+            .reserved
+            .owner
+            .as_ref()
+            .expect("owned native Terminal room");
+        permit.0.clone()
+    }
+
     pub(crate) async fn close(self) -> Result<()> {
         self.enrollment.close().await
     }
 
     pub(crate) async fn handoff_client(
         self,
-        attachment: [u8; 16],
-        generation: NonZeroU64,
+        binding: crate::terminal_selection_wire_v2::Binding,
         ceiling: EnrollmentCeiling,
         granted: &impl Fn() -> bool,
     ) -> Result<AttachedRoom> {
         if self.binding.direction != CommandDirection::Client {
             return Err(BINDING);
         }
-        self.begin_attachment(attachment, generation, ceiling, granted, || true)
+        self.begin_attachment(binding, ceiling, granted, || true)
             .await
     }
 
     pub(crate) async fn handoff_server(
         self,
-        attachment: [u8; 16],
-        generation: NonZeroU64,
+        binding: crate::terminal_selection_wire_v2::Binding,
         ceiling: EnrollmentCeiling,
         granted: &impl Fn() -> bool,
-        guard: WriterGuard,
-    ) -> Result<(AttachedRoom, WriterGuard)> {
+        guard: AttachmentGuard,
+    ) -> Result<(AttachedRoom, AttachmentGuard)> {
         if self.binding.direction != CommandDirection::Server {
             return Err(BINDING);
         }
         let room = self
-            .begin_attachment(attachment, generation, ceiling, granted, || {
-                guard.matches_binding(attachment, generation)
+            .begin_attachment(binding, ceiling, granted, || {
+                guard.matches_binding(binding.claim, binding.generation)
             })
             .await?;
         Ok((room, guard))
@@ -384,27 +406,29 @@ impl ReadyEnrollment {
 
     async fn begin_attachment(
         mut self,
-        attachment: [u8; 16],
-        generation: NonZeroU64,
+        binding: crate::terminal_selection_wire_v2::Binding,
         ceiling: EnrollmentCeiling,
         granted: &impl Fn() -> bool,
-        owns_writer: impl Fn() -> bool,
+        owns_attachment: impl Fn() -> bool,
     ) -> Result<AttachedRoom> {
-        if attachment == [0; 16] || !owns_writer() {
+        if binding.claim == [0; 16] || !owns_attachment() {
             return Err(BINDING);
         }
         ceiling.check()?;
         self.recheck(granted).await?;
         self.enrollment.owner_mut().detach_alias().await?;
         self.recheck_inner(granted, false).await?;
-        if !owns_writer() {
+        if !owns_attachment() {
             return Err(BINDING);
         }
         let frames = terminal_frames::Binding {
             transcript: self.binding.transcript,
-            attachment,
-            generation: generation.get(),
-            role: terminal_frames::Role::Writer,
+            attachment: binding.claim,
+            generation: binding.generation.get(),
+            role: match binding.role {
+                crate::terminal_ipc_wire::Role::Writer => terminal_frames::Role::Writer,
+                crate::terminal_ipc_wire::Role::Observer => terminal_frames::Role::Observer,
+            },
         };
         self.authority().begin_attachment_at(frames, ceiling)?;
         Ok(AttachedRoom(Box::new(AttachedRoomState {
@@ -425,8 +449,17 @@ impl ReadyEnrollment {
         granted: &impl Fn() -> bool,
     ) -> Result<AttachedRoom> {
         self.check_proof_binding(expected, attachment, ceiling)?;
-        self.begin_attachment(attachment, generation, ceiling, granted, || true)
-            .await
+        self.begin_attachment(
+            crate::terminal_selection_wire_v2::Binding {
+                claim: attachment,
+                generation,
+                role: crate::terminal_ipc_wire::Role::Writer,
+            },
+            ceiling,
+            granted,
+            || true,
+        )
+        .await
     }
 
     #[cfg(test)]
@@ -960,4 +993,21 @@ fn terminal_runtime_core_cleanup_failure_keeps_client_refusal() {
         crate::terminal_owner::category(&error),
         "terminal_grant_denied"
     );
+}
+
+#[test]
+fn terminal_room_capacity_waits_for_native_replacement_hold() {
+    let rooms = Arc::new(Semaphore::new(1));
+    let permit = RoomPermit::new(rooms.clone().try_acquire_owned().unwrap());
+    let hold = Arc::clone(&permit.0);
+    permit.release_after_reap();
+    assert_eq!(rooms.available_permits(), 0);
+    drop(hold);
+    assert_eq!(rooms.available_permits(), 1);
+
+    let permit = RoomPermit::new(rooms.clone().try_acquire_owned().unwrap());
+    let hold = Arc::clone(&permit.0);
+    drop(permit);
+    drop(hold);
+    assert_eq!(rooms.available_permits(), 0);
 }

@@ -356,8 +356,19 @@ fn run_child() -> i32 {
             installed_cooked_admission_resize_and_resume(fixture::Pty::inherited_job_pty());
             return 0;
         }
+        "installed-job-observer" => {
+            installed_observer_suspend(fixture::Pty::inherited_job_pty());
+            return 0;
+        }
         "installed-job-new" => {
             installed_cancels_new(fixture::Pty::inherited_job_pty());
+            return 0;
+        }
+        "installed-job-prompt" | "installed-job-offered-new" => {
+            installed_offer_suspend(
+                fixture::Pty::inherited_job_pty(),
+                mode == "installed-job-offered-new",
+            );
             return 0;
         }
         _ => {}
@@ -374,6 +385,8 @@ fn run_child() -> i32 {
         "unwind" => {
             let failed = std::panic::catch_unwind(|| {
                 let mut tty = tty::Tty::open().unwrap();
+                tty.require_cooked().unwrap();
+                tty.flush_input().unwrap();
                 tty.raw().unwrap();
                 panic!("injected fixture unwind");
             });
@@ -402,7 +415,8 @@ fn run_child() -> i32 {
                 );
             }
             let mut bridge = Bridge { socket, observer };
-            let result = terminal_frontend::run(&mut tty, &signals, &mut bridge, observer, None);
+            let result =
+                terminal_frontend::run(&mut tty, &signals, &mut bridge, observer, None, false);
             result.restored_termios.unwrap();
             assert!(result.restored_display);
             use terminal_frontend::Exit;
@@ -429,7 +443,8 @@ fn run_child() -> i32 {
                 crate::terminal_ipc_wire::Role::Writer,
             )
             .unwrap();
-            let result = terminal_frontend::run(&mut tty, &signals, &mut channel, false, None);
+            let result =
+                terminal_frontend::run(&mut tty, &signals, &mut channel, false, None, false);
             result.restored_termios.unwrap();
             assert!(result.restored_display);
             let expected = if mode == "framed-close" {
@@ -652,6 +667,8 @@ struct InstalledIpc {
 impl InstalledIpc {
     const ACCOUNT: &str = "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
     const SESSION: &str = "0123456789abcdef0123456789abcdef";
+    const SLOT: &str = "a123456789abcdef0123456789abcdef";
+    const OTHER_SLOT: &str = "b123456789abcdef0123456789abcdef";
     const RELAY: &str = "wss://relay.example/";
 
     fn new() -> Self {
@@ -688,6 +705,11 @@ impl InstalledIpc {
     }
 
     fn spawn(&self, tty: &fixture::Pty, new: bool, job_child: bool) -> fixture::Held {
+        let flags: &[&str] = if new { &["--new"] } else { &[] };
+        self.spawn_with(tty, flags, job_child)
+    }
+
+    fn spawn_with(&self, tty: &fixture::Pty, flags: &[&str], job_child: bool) -> fixture::Held {
         use nostr::nips::nip19::ToBech32 as _;
         use std::ffi::OsStr;
         let npub = nostr::key::PublicKey::from_hex(Self::ACCOUNT)
@@ -702,9 +724,7 @@ impl InstalledIpc {
             OsStr::new("terminal"),
             OsStr::new(&npub),
         ];
-        if new {
-            args.push(OsStr::new("--new"));
-        }
+        args.extend(flags.iter().map(OsStr::new));
         fixture::Held::spawn_installed(tty, &args, job_child)
     }
 
@@ -756,7 +776,17 @@ impl InstalledIpc {
         prepare
     }
 
-    fn pending(&self, attach: &str, (rows, columns): (u16, u16)) -> UnixStream {
+    fn pending(&self, attach: &str, geometry: (u16, u16)) -> UnixStream {
+        self.pending_target(attach, geometry, None, None)
+    }
+
+    fn pending_target(
+        &self,
+        attach: &str,
+        geometry: (u16, u16),
+        slot: Option<&str>,
+        offer: Option<&str>,
+    ) -> UnixStream {
         use serde_json::json;
         let mut prepare = self.preparing();
         Self::reply(
@@ -767,15 +797,37 @@ impl InstalledIpc {
             }),
         );
         drop(prepare);
+        self.next_start(attach, geometry, slot, offer)
+    }
+
+    fn next_start(
+        &self,
+        attach: &str,
+        (rows, columns): (u16, u16),
+        slot: Option<&str>,
+        offer: Option<&str>,
+    ) -> UnixStream {
+        use serde_json::json;
+        let mut expect = json!({"operation":"terminal_start","request":{
+            "remote":Self::ACCOUNT,"session":Self::SESSION,"relays":[Self::RELAY],
+            "rows":rows,"columns":columns,"attach":attach
+        }});
+        if let Some(slot) = slot {
+            expect["request"]["session_slot"] = json!(slot);
+        }
+        if let Some(offer) = offer {
+            expect["request"]["offer"] = json!(offer);
+        }
         let mut start = self.accept();
-        assert_eq!(
-            Self::read(&mut start),
-            json!({"operation":"terminal_start","request":{
-                "remote":Self::ACCOUNT,"session":Self::SESSION,"relays":[Self::RELAY],
-                "rows":rows,"columns":columns,"attach":attach
-            }})
-        );
+        assert_eq!(Self::read(&mut start), expect);
         start
+    }
+
+    fn ready(stream: &mut UnixStream, role: &str, slot: &str) {
+        Self::reply(
+            stream,
+            serde_json::json!({"ok":true,"terminal_stream":role,"slot":slot}),
+        );
     }
 }
 
@@ -788,14 +840,13 @@ fn terminal_installed_frontend_cooked_admission_resize_and_resume() {
 
 fn installed_cooked_admission_resize_and_resume(mut tty: fixture::Pty) {
     use super::terminal_ipc_wire::{Close, Direction, Record, Role, encode};
-    use serde_json::json;
     let before = tty.attrs();
     let ipc = InstalledIpc::new();
     let mut child = ipc.spawn(&tty, false, true);
     let mut first = ipc.pending("default", (37, 99));
     assert_attrs(&before, &tty.attrs());
     tty.resize(42, 102);
-    InstalledIpc::reply(&mut first, json!({"ok":true,"terminal_stream":"writer"}));
+    InstalledIpc::ready(&mut first, "writer", InstalledIpc::SLOT);
     let resize = encode(
         Direction::ToDaemon,
         Role::Writer,
@@ -819,9 +870,9 @@ fn installed_cooked_admission_resize_and_resume(mut tty: fixture::Pty) {
     assert_eq!(first.read(&mut [0]).unwrap(), 0);
 
     child.signal(libc::SIGCONT);
-    let mut resumed = ipc.pending("default", (42, 102));
+    let mut resumed = ipc.pending_target("default", (42, 102), Some(InstalledIpc::SLOT), None);
     assert_attrs(&before, &tty.attrs());
-    InstalledIpc::reply(&mut resumed, json!({"ok":true,"terminal_stream":"writer"}));
+    InstalledIpc::ready(&mut resumed, "writer", InstalledIpc::SLOT);
     let ended = encode(
         Direction::ToClient,
         Role::Writer,
@@ -842,6 +893,14 @@ fn terminal_installed_frontend_rejects_old_or_malformed_daemon_and_cancels_new()
     for (reply, category) in [
         (
             json!({"ok":false,"result":null,"error":"invalid_request"}),
+            b"terminal_daemon_upgrade_required".as_slice(),
+        ),
+        (
+            json!({"ok":true,"terminal_stream":"writer"}),
+            b"terminal_daemon_upgrade_required".as_slice(),
+        ),
+        (
+            json!({"ok":false,"error":"terminal_mode_unavailable"}),
             b"terminal_daemon_upgrade_required".as_slice(),
         ),
         (
@@ -931,13 +990,12 @@ fn terminal_installed_frontend_reports_frozen_command_binding() {
 #[ignore = "native controlling PTY and installed frontend process"]
 fn terminal_installed_frontend_reports_typed_idle_close() {
     use super::terminal_ipc_wire::{Close, Direction, Record, Role, encode};
-    use serde_json::json;
     let mut tty = fixture::Pty::new();
     let before = tty.attrs();
     let ipc = InstalledIpc::new();
     let mut child = ipc.spawn(&tty, false, false);
     let mut stream = ipc.pending("default", (37, 99));
-    InstalledIpc::reply(&mut stream, json!({"ok":true,"terminal_stream":"writer"}));
+    InstalledIpc::ready(&mut stream, "writer", InstalledIpc::SLOT);
     let idle = encode(
         Direction::ToClient,
         Role::Writer,
@@ -955,12 +1013,11 @@ fn terminal_installed_frontend_reports_typed_idle_close() {
 #[ignore = "native controlling PTY and installed frontend process"]
 fn terminal_installed_frontend_preserves_hangup_exit() {
     use super::terminal_ipc_wire::{Direction, Record, Role, encode};
-    use serde_json::json;
     let mut tty = fixture::Pty::new();
     let ipc = InstalledIpc::new();
     let mut child = ipc.spawn(&tty, false, false);
     let mut stream = ipc.pending("default", (37, 99));
-    InstalledIpc::reply(&mut stream, json!({"ok":true,"terminal_stream":"writer"}));
+    InstalledIpc::ready(&mut stream, "writer", InstalledIpc::SLOT);
     let output = encode(
         Direction::ToClient,
         Role::Writer,
@@ -1265,4 +1322,298 @@ fn terminal_socket_frontend_native_pty() {
         frontend.drain_after_exit();
         assert_attrs(&before, &frontend.attrs());
     }
+}
+
+fn installed_offer() -> String {
+    format!(
+        "{}{}{}0000000000000001",
+        "0a".repeat(16),
+        InstalledIpc::SLOT,
+        "0b".repeat(16)
+    )
+}
+
+fn local_frame(
+    role: super::terminal_ipc_wire::Role,
+    record: super::terminal_ipc_wire::Record<'_>,
+) -> Vec<u8> {
+    super::terminal_ipc_wire::encode(super::terminal_ipc_wire::Direction::ToClient, role, record)
+        .unwrap()
+}
+
+fn check_local_frame(
+    stream: &mut UnixStream,
+    role: super::terminal_ipc_wire::Role,
+    record: super::terminal_ipc_wire::Record<'_>,
+) {
+    let bytes = super::terminal_ipc_wire::encode(
+        super::terminal_ipc_wire::Direction::ToDaemon,
+        role,
+        record,
+    )
+    .unwrap();
+    let mut actual = vec![0; bytes.len()];
+    stream.read_exact(&mut actual).unwrap();
+    assert_eq!(actual, bytes);
+}
+
+#[test]
+#[ignore = "native controlling PTY and installed frontend process"]
+fn terminal_installed_foreground_offered_observer_is_read_only() {
+    use super::terminal_ipc_wire::{Record, Role};
+    use serde_json::json;
+    let mut tty = fixture::Pty::new();
+    let before = tty.attrs();
+    let ipc = InstalledIpc::new();
+    let mut child = ipc.spawn(&tty, false, false);
+    let mut first = ipc.pending("default", (37, 99));
+    let offer = installed_offer();
+    InstalledIpc::reply(
+        &mut first,
+        json!({"ok":false,"terminal_busy":{"offer":offer}}),
+    );
+    assert_eq!(first.read(&mut [0]).unwrap(), 0);
+    tty.read_through(b"[o] Observe, [t] Takeover, [n] New, [c] Cancel: ");
+    assert_attrs(&before, &tty.attrs());
+    tty.master.write_all(b"o\nno remote input\n").unwrap();
+
+    let mut observed = ipc.next_start("observe", (37, 99), None, Some(&offer));
+    InstalledIpc::ready(&mut observed, "observer", InstalledIpc::SLOT);
+    let id = 1.try_into().unwrap();
+    observed
+        .write_all(&local_frame(
+            Role::Observer,
+            Record::Output { id, bytes: READY },
+        ))
+        .unwrap();
+    tty.read_through(READY);
+    check_local_frame(&mut observed, Role::Observer, Record::Ack(id));
+    tty.resize(41, 109);
+    tty.master.write_all(b"observer bytes\r~.").unwrap();
+    check_local_frame(&mut observed, Role::Observer, Record::Detach);
+    assert_eq!(observed.read(&mut [0]).unwrap(), 0);
+    child.finish(0);
+    assert_attrs(&before, &tty.attrs());
+    assert!(!String::from_utf8_lossy(&tty.captured).contains(&offer));
+}
+
+#[test]
+#[ignore = "native controlling PTY and installed frontend process"]
+fn terminal_installed_foreground_offer_flushes_typeahead_before_writer_raw_mode() {
+    for explicit_takeover in [false, true] {
+        installed_offered_writer_flushes_typeahead(explicit_takeover);
+    }
+}
+
+fn installed_offered_writer_flushes_typeahead(explicit_takeover: bool) {
+    use super::terminal_ipc_wire::{Close, Record, Role};
+    use serde_json::json;
+    let mut tty = fixture::Pty::new();
+    let before = tty.attrs();
+    let ipc = InstalledIpc::new();
+    let (mut child, mut first) = if explicit_takeover {
+        (
+            ipc.spawn_with(&tty, &["--takeover"], false),
+            ipc.pending("takeover", (37, 99)),
+        )
+    } else {
+        (
+            ipc.spawn(&tty, false, false),
+            ipc.pending("default", (37, 99)),
+        )
+    };
+    let offer = installed_offer();
+    if !explicit_takeover {
+        // Pretyping a different choice must never authorize it.
+        tty.master.write_all(b"t\n").unwrap();
+        tty.read_through(b"t\r\n");
+    }
+    InstalledIpc::reply(
+        &mut first,
+        json!({"ok":false,"terminal_busy":{"offer":offer}}),
+    );
+    let (mode, slot) = if explicit_takeover {
+        ("takeover", InstalledIpc::SLOT)
+    } else {
+        tty.read_through(b"[n] New, [c] Cancel: ");
+        tty.master.write_all(b"n\n").unwrap();
+        ("new", InstalledIpc::OTHER_SLOT)
+    };
+    let mut writer = ipc.next_start(mode, (37, 99), None, Some(&offer));
+    assert_attrs(&before, &tty.attrs());
+    tty.master.write_all(b"discard-me\n").unwrap();
+    tty.read_through(b"discard-me\r\n");
+    InstalledIpc::ready(&mut writer, "writer", slot);
+    let id = 1.try_into().unwrap();
+    writer
+        .write_all(&local_frame(
+            Role::Writer,
+            Record::Credit(32.try_into().unwrap()),
+        ))
+        .unwrap();
+    writer
+        .write_all(&local_frame(
+            Role::Writer,
+            Record::Output { id, bytes: READY },
+        ))
+        .unwrap();
+    tty.read_through(READY);
+    let captured = String::from_utf8_lossy(&tty.captured);
+    if explicit_takeover {
+        assert!(!captured.contains("Terminal busy."));
+    } else {
+        assert!(captured.contains(InstalledIpc::OTHER_SLOT));
+    }
+    check_local_frame(&mut writer, Role::Writer, Record::Ack(id));
+    tty.master.write_all(b"fresh").unwrap();
+    check_local_frame(&mut writer, Role::Writer, Record::Input(b"fresh"));
+    writer
+        .write_all(&local_frame(Role::Writer, Record::Close(Close::Ended)))
+        .unwrap();
+    writer.shutdown(std::net::Shutdown::Write).unwrap();
+    child.finish(0);
+    assert_attrs(&before, &tty.attrs());
+}
+
+#[test]
+#[ignore = "native controlling PTY and installed frontend process"]
+fn terminal_installed_foreground_explicit_takeover_reports_loss_or_definitive_refusal() {
+    use serde_json::json;
+    for refused in [false, true] {
+        let mut tty = fixture::Pty::new();
+        let before = tty.attrs();
+        let ipc = InstalledIpc::new();
+        let mut child = ipc.spawn_with(
+            &tty,
+            &["--takeover", "--session", InstalledIpc::SLOT],
+            false,
+        );
+        let mut first = ipc.pending_target("takeover", (37, 99), Some(InstalledIpc::SLOT), None);
+        let offer = installed_offer();
+        InstalledIpc::reply(
+            &mut first,
+            json!({"ok":false,"terminal_busy":{"offer":offer}}),
+        );
+        let mut second = ipc.next_start("takeover", (37, 99), None, Some(&offer));
+        assert_attrs(&before, &tty.attrs());
+        if refused {
+            InstalledIpc::reply(
+                &mut second,
+                json!({"ok":false,"error":"terminal_offer_stale"}),
+            );
+        }
+        drop(second);
+        tty.read_through(if refused {
+            b"terminal_offer_stale".as_slice()
+        } else {
+            b"terminal_takeover_uncertain"
+        });
+        child.finish(255);
+        assert!(!String::from_utf8_lossy(&tty.captured).contains("Terminal busy."));
+        assert!(!poll(ipc.socket.as_raw_fd(), libc::POLLIN, 0));
+        assert_attrs(&before, &tty.attrs());
+    }
+}
+
+#[test]
+#[ignore = "native controlling PTY and installed frontend process"]
+fn terminal_installed_foreground_prompt_interrupt_or_eof_discards_offer() {
+    use serde_json::json;
+    for interrupt in [true, false] {
+        let mut tty = fixture::Pty::new();
+        let before = tty.attrs();
+        let ipc = InstalledIpc::new();
+        let mut child = ipc.spawn(&tty, false, false);
+        let mut first = ipc.pending("default", (37, 99));
+        InstalledIpc::reply(
+            &mut first,
+            json!({"ok":false,"terminal_busy":{"offer":installed_offer()}}),
+        );
+        tty.read_through(b"[n] New, [c] Cancel: ");
+        let code = if interrupt {
+            child.signal(libc::SIGINT);
+            128 + libc::SIGINT
+        } else {
+            tty.master.write_all(&[before.c_cc[libc::VEOF]]).unwrap();
+            0
+        };
+        child.finish(code);
+        assert!(!poll(ipc.socket.as_raw_fd(), libc::POLLIN, 0));
+        assert_attrs(&before, &tty.attrs());
+    }
+}
+
+#[test]
+#[ignore = "native job control with an installed frontend process"]
+fn terminal_installed_foreground_observer_continuation_requires_explicit_attach() {
+    let tty = fixture::Pty::new();
+    fixture::Held::spawn_job_fixture(&tty, "installed-job-observer").finish(0);
+}
+
+fn installed_observer_suspend(mut tty: fixture::Pty) {
+    use super::terminal_ipc_wire::{Record, Role};
+    let before = tty.attrs();
+    let ipc = InstalledIpc::new();
+    let mut child = ipc.spawn_with(&tty, &["--observe", "--session", InstalledIpc::SLOT], true);
+    let mut stream = ipc.pending_target("observe", (37, 99), Some(InstalledIpc::SLOT), None);
+    InstalledIpc::ready(&mut stream, "observer", InstalledIpc::SLOT);
+    let id = 1.try_into().unwrap();
+    stream
+        .write_all(&local_frame(
+            Role::Observer,
+            Record::Output { id, bytes: READY },
+        ))
+        .unwrap();
+    tty.read_through(READY);
+    check_local_frame(&mut stream, Role::Observer, Record::Ack(id));
+    child.signal(libc::SIGTSTP);
+    tty.read_through(b"\r\n[marmish: suspended]\r\n");
+    child.stopped();
+    assert_attrs(&before, &tty.attrs());
+    assert_eq!(stream.read(&mut [0]).unwrap(), 0);
+    child.signal(libc::SIGCONT);
+    child.finish(0);
+    assert!(!poll(ipc.socket.as_raw_fd(), libc::POLLIN, 0));
+}
+
+#[test]
+#[ignore = "native job control with an installed frontend process"]
+fn terminal_installed_foreground_suspend_discards_prompt_and_never_repeats_offered_new() {
+    let tty = fixture::Pty::new();
+    for mode in ["installed-job-prompt", "installed-job-offered-new"] {
+        fixture::Held::spawn_job_fixture(&tty, mode).finish(0);
+    }
+}
+
+fn installed_offer_suspend(mut tty: fixture::Pty, choose_new: bool) {
+    use serde_json::json;
+    let before = tty.attrs();
+    let ipc = InstalledIpc::new();
+    let mut child = ipc.spawn(&tty, false, true);
+    let mut first = ipc.pending("default", (37, 99));
+    let offer = installed_offer();
+    InstalledIpc::reply(
+        &mut first,
+        json!({"ok":false,"terminal_busy":{"offer":offer}}),
+    );
+    tty.read_through(b"[n] New, [c] Cancel: ");
+    let offered_leg = choose_new.then(|| {
+        tty.master.write_all(b"n\n").unwrap();
+        ipc.next_start("new", (37, 99), None, Some(&offer))
+    });
+
+    child.signal(libc::SIGTSTP);
+    child.stopped();
+    assert_attrs(&before, &tty.attrs());
+    if let Some(mut stopped) = offered_leg {
+        assert_eq!(stopped.read(&mut [0]).unwrap(), 0);
+    }
+    child.signal(libc::SIGCONT);
+    if choose_new {
+        tty.read_through(b"terminal_new_reattach_unavailable");
+        child.finish(255);
+    } else {
+        child.finish(0);
+    }
+    assert!(!poll(ipc.socket.as_raw_fd(), libc::POLLIN, 0));
 }

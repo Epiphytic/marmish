@@ -89,6 +89,31 @@ impl Ledger {
         Ok(ticket)
     }
 
+    pub(crate) fn contains(
+        &self,
+        scope: Scope,
+        writer: Writer,
+        ticket: Ticket,
+        now: Duration,
+    ) -> bool {
+        self.position(scope, writer, ticket, now).is_some()
+    }
+
+    fn position(
+        &self,
+        scope: Scope,
+        writer: Writer,
+        ticket: Ticket,
+        now: Duration,
+    ) -> Option<usize> {
+        self.0.iter().position(|entry| {
+            now < entry.expiry
+                && entry.scope == scope
+                && entry.writer == writer
+                && entry.ticket == ticket
+        })
+    }
+
     /// Effects still require the owner's authority and current writer checks in the same turn.
     pub(crate) fn consume(
         &mut self,
@@ -97,12 +122,7 @@ impl Ledger {
         ticket: Ticket,
         now: Duration,
     ) -> bool {
-        let Some(index) = self.0.iter().position(|entry| {
-            now < entry.expiry
-                && entry.scope == scope
-                && entry.writer == writer
-                && entry.ticket == ticket
-        }) else {
+        let Some(index) = self.position(scope, writer, ticket, now) else {
             return false;
         };
         self.0.swap_remove(index);
@@ -129,6 +149,19 @@ mod tests {
             claim: [10; 16],
             generation: NonZeroU64::MIN,
         }
+    }
+
+    #[test]
+    fn terminal_offers_core_validation_does_not_consume() {
+        let mut ledger = Ledger::default();
+        let (scope, writer) = (scope(2, 3), writer(4));
+        let now = Duration::from_secs(15);
+        let ticket = ledger.mint(scope, writer, [11; 16], now).unwrap();
+        assert!(ledger.contains(scope, writer, ticket, now));
+        assert!(ledger.contains(scope, writer, ticket, now));
+        assert!(!ledger.contains(scope, writer, ticket, now + LIFETIME));
+        assert!(ledger.consume(scope, writer, ticket, now));
+        assert!(!ledger.contains(scope, writer, ticket, now));
     }
 
     #[test]

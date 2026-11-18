@@ -1,8 +1,9 @@
 //! Exercise actual local tmux effects from records delivered over a private WSS relay.
+use super::super::SlotId;
 use super::*;
 use crate::identity::{IdentityMaterial, ProfileLease};
 use crate::terminal_backend::supervisor::{Manager, Registry};
-use crate::terminal_frames::{self as frames, Arrival, Data};
+use crate::terminal_frames::{self as frames, Arrival, Data, Size};
 use std::path::PathBuf;
 
 use super::super::{
@@ -43,15 +44,26 @@ impl NativeProof {
         server: ReadyEnrollment,
         new: bool,
     ) -> Result<Option<NativePair>> {
-        let choice = if new { Choice::New } else { Choice::Default };
+        let request_record = Request {
+            choice: if new { Choice::New } else { Choice::Regular },
+            target: Target::Default,
+            size: Size { rows: 24, cols: 80 },
+        };
         let start = tokio::time::Instant::now();
         let (client, server) = tokio::try_join!(
-            request(client, choice, Size { rows: 24, cols: 80 }, &|| true),
+            request(client, request_record, &|| true),
             accept(server, &self.authority.control, &mut self.tokens, &|| true),
         )?;
         match (client, server) {
-            (ClientOutcome::Attached { room: client, slot }, ServerOutcome::Attached(server)) => {
-                assert!(slot == server.writer.admitted.slot);
+            (
+                ClientOutcome::Attached {
+                    room: client,
+                    role: Role::Writer,
+                    slot,
+                },
+                ServerOutcome::Attached(server),
+            ) => {
+                assert!(SlotId(slot) == server.guard.admitted.slot);
                 assert_eq!(
                     client.frame_binding().attachment,
                     server.room.frame_binding().attachment
@@ -67,13 +79,13 @@ impl NativeProof {
                     output_sequence: 0,
                 }))
             }
-            (ClientOutcome::Busy, ServerOutcome::Busy) => Ok(None),
+            (ClientOutcome::Busy(_), ServerOutcome::Busy) => Ok(None),
             (ClientOutcome::Refused(client), ServerOutcome::Refused(server)) => {
                 assert_eq!(client, server);
                 let error = match server {
                     Refusal::Permission => "fixture_selection_permission",
                     Refusal::Capacity => "fixture_selection_capacity",
-                    Refusal::Unavailable => "fixture_selection_unavailable",
+                    _ => "fixture_selection_unavailable",
                 };
                 Err(Error::Invalid(error))
             }
@@ -101,6 +113,7 @@ impl NativeProof {
                     &mut client,
                     session,
                     Record::Confirm(Binding {
+                        role: Role::Writer,
                         claim: [1; 16],
                         generation: NonZeroU64::MIN,
                     }),
@@ -112,10 +125,11 @@ impl NativeProof {
             send(
                 &mut client,
                 session,
-                Record::Request {
+                Record::Request(Request {
                     choice: Choice::New,
+                    target: Target::Default,
                     size: Size { rows: 24, cols: 80 },
-                },
+                }),
                 admission,
                 &grant,
             )
@@ -144,6 +158,17 @@ impl NativeProof {
                     )
                     .await?;
                 }
+                SelectionFault::WrongRole => {
+                    binding.role = Role::Observer;
+                    send(
+                        &mut client,
+                        session,
+                        Record::Confirm(binding),
+                        admission,
+                        &grant,
+                    )
+                    .await?;
+                }
                 SelectionFault::Missing => (),
                 SelectionFault::Early => unreachable!(),
             }
@@ -155,7 +180,7 @@ impl NativeProof {
         );
         sent?;
         match fault {
-            SelectionFault::Early | SelectionFault::WrongClaim => {
+            SelectionFault::Early | SelectionFault::WrongClaim | SelectionFault::WrongRole => {
                 assert!(matches!(
                     result,
                     Err(Error::Invalid("terminal_selection_record"))
@@ -240,6 +265,7 @@ impl Drop for NativeProof {
 pub(crate) enum SelectionFault {
     Early,
     WrongClaim,
+    WrongRole,
     Missing,
 }
 
@@ -252,7 +278,7 @@ pub(crate) struct NativePair {
 
 impl NativePair {
     pub(crate) fn slot(&self) -> [u8; 16] {
-        self.server.writer.admitted.slot.0
+        self.server.guard.admitted.slot.0
     }
 
     pub(crate) fn binding(&self) -> ([u8; 32], [u8; 16], u64) {
@@ -283,7 +309,7 @@ impl NativePair {
         assert_eq!(bytes, input);
         let deadline = guard::sample().ok_or(SOURCE)?.continuous + Duration::from_secs(4);
         send_input(
-            self.server.writer.admitted(),
+            self.server.guard.admitted(),
             io::Operation::new(remote, deadline, io::Input::Bytes(bytes)).ok_or(INVALID)?,
         )
         .await;
@@ -291,7 +317,7 @@ impl NativePair {
         let mut output = Vec::new();
         while !committed || !output.windows(marker.len()).any(|bytes| bytes == marker) {
             assert!(output.len() <= 64 * 1024);
-            let claim = self.server.writer.admitted();
+            let claim = self.server.guard.admitted();
             let next = tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
                     if let Some(event) = claim.try_event() {
@@ -353,7 +379,7 @@ impl NativePair {
         assert!(remote_size == size);
         let deadline = guard::sample().ok_or(SOURCE)?.continuous + Duration::from_secs(4);
         send_input(
-            self.server.writer.admitted(),
+            self.server.guard.admitted(),
             io::Operation::new(
                 remote,
                 deadline,
@@ -366,7 +392,7 @@ impl NativePair {
         )
         .await;
         loop {
-            match event(self.server.writer.admitted()).await {
+            match event(self.server.guard.admitted()).await {
                 io::Event::Complete(io::Completion::Resized(id)) if id == sequence => return Ok(()),
                 io::Event::Output(_) => (),
                 _ => return Err(SOURCE),
@@ -380,7 +406,7 @@ impl NativePair {
     ) -> Result<()> {
         let marker = owned_directory.join("retired-write");
         assert!(!marker.exists());
-        let source = self.server.writer.admitted();
+        let source = self.server.guard.admitted();
         let deadline = guard::sample().ok_or(SOURCE)?.continuous + Duration::from_secs(2);
         let payload = format!("printf leaked > '{}'", marker.display());
         let input = io::Operation::new(
@@ -396,7 +422,7 @@ impl NativePair {
             Ok(()) | Err(io::PushError::Closed(Reason::Authority) | io::PushError::Contended(_))
         ));
         loop {
-            match event(self.server.writer.admitted()).await {
+            match event(self.server.guard.admitted()).await {
                 io::Event::Closed(Reason::Authority) => break,
                 io::Event::Output(_) => (),
                 _ => return Err(SOURCE),

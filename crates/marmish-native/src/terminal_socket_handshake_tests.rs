@@ -15,6 +15,8 @@ fn single_request() -> Start {
         session: "0123456789abcdef0123456789abcdef".into(),
         relays: vec!["wss://relay.example/".into()],
         attach: Attach::Default,
+        session_slot: None,
+        offer: None,
         rows: 24,
         columns: 80,
     }
@@ -99,7 +101,16 @@ async fn terminal_socket_core_request_and_reply_keep_both_directions_open() {
     let first = terminal_ipc_wire::encode(Direction::ToClient, Role::Writer, Record::ResizeApplied)
         .unwrap();
     server.write_all(&first).await.unwrap();
-    let mut client = UnixStream::from_std(client.await.unwrap().unwrap()).unwrap();
+    let StartOutcome::Ready {
+        stream,
+        role: Role::Writer,
+        slot,
+    } = client.await.unwrap().unwrap()
+    else {
+        panic!("expected writer Ready");
+    };
+    assert_eq!(slot, [1; 16]);
+    let mut client = UnixStream::from_std(stream).unwrap();
     let mut actual = [0; 4];
     client.read_exact(&mut actual).await.unwrap();
     assert_eq!(actual.as_slice(), first);
@@ -196,24 +207,28 @@ async fn terminal_socket_core_declines_unknown_fields_modes_and_expired_reply() 
     assert!(fixture.starts.try_recv().is_err());
 
     let path = fixture.path.clone();
-    let unsupported = Start {
+    let observer = Start {
         attach: Attach::Observe,
+        session_slot: Some(hex::encode([2; 16])),
         ..single_request()
     };
-    let client =
-        tokio::spawn(async move { start(&path, unsupported, Instant::now() + STEP).await });
+    let client = tokio::spawn(async move { start(&path, observer, Instant::now() + STEP).await });
     let pending = timeout_at(Instant::now() + STEP, fixture.starts.recv())
         .await
         .unwrap()
+        .unwrap()
+        .register()
+        .unwrap();
+    let permit = pending.reserve().unwrap();
+    let server = pending
+        .admit_reserved(permit, Role::Observer, [2; 16])
+        .await
         .unwrap();
     assert!(matches!(
-        pending.admit().await,
-        Err(Error::Invalid("terminal_mode_unavailable"))
-    ));
-    assert!(matches!(
         client.await.unwrap(),
-        Err(Error::Invalid("terminal_mode_unavailable"))
+        Ok(StartOutcome::Ready { role: Role::Observer, slot, .. }) if slot == [2; 16]
     ));
+    drop(server);
 
     let (mut pending, mut client) = fixture.offer().await;
     pending.deadline = Instant::now();
@@ -229,7 +244,8 @@ async fn terminal_socket_core_exact_ready_frame_and_early_binary_suffix() {
     let mut server = UnixStream::from_std(attached.stream).unwrap();
     let frame = [0, 2, 1, 8];
     server.write_all(&frame).await.unwrap();
-    let expected = br#"{"ok":true,"terminal_stream":"writer"}"#;
+    let expected =
+        br#"{"ok":true,"terminal_stream":"writer","slot":"01010101010101010101010101010101"}"#;
     assert_eq!(client.read_u32().await.unwrap(), expected.len() as u32);
     let mut actual = vec![0; expected.len() + frame.len()];
     client.read_exact(&mut actual).await.unwrap();
@@ -249,6 +265,11 @@ async fn terminal_socket_core_rejects_mixed_or_unsupported_client_replies() {
         br#"{"ok":true,"terminal_stream":"writer","command":null}"#,
         br#"{"ok":true,"terminal_stream":"writer","stream":null}"#,
         br#"{"ok":false,"terminal_stream":"writer","error":"terminal_busy"}"#,
+        br#"{"ok":true,"terminal_stream":"observer","slot":"01010101010101010101010101010101"}"#,
+        br#"{"ok":true,"terminal_stream":"writer","slot":"00000000000000000000000000000000"}"#,
+        br#"{"ok":false,"error":"terminal_busy","stream":null}"#,
+        br#"{"ok":false,"error":"terminal_busy","result":{}}"#,
+        br#"{"ok":false,"terminal_busy":{"offer":"bad"}} "#,
         br#"{"ok":true,"ok":true,"terminal_stream":"writer"}"#,
     ] {
         let (result, ()) = tokio::join!(
@@ -326,9 +347,34 @@ async fn terminal_socket_handshake_bench() {
         *sample = began.elapsed().as_nanos();
         drop((client.unwrap(), server));
     }
+    report_admission("writer Ready", samples);
+
+    let offer = Offer::from_bytes([1; 56]).unwrap();
+    for sample in &mut samples {
+        let path = fixture.path.clone();
+        let began = std::time::Instant::now();
+        let (client, ()) = tokio::join!(
+            start(&path, single_request(), Instant::now() + STEP),
+            async {
+                let pending = timeout_at(Instant::now() + STEP, fixture.starts.recv())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .register()
+                    .unwrap();
+                pending.busy(offer).await.unwrap();
+            },
+        );
+        *sample = began.elapsed().as_nanos();
+        assert!(matches!(client, Ok(StartOutcome::Busy(actual)) if actual == offer));
+    }
+    report_admission("Busy offer", samples);
+}
+
+fn report_admission(label: &str, mut samples: [u128; 100]) {
     samples.sort_unstable();
     eprintln!(
-        "100 same-UID socket admissions: p50={}ns p95={}ns",
+        "100 same-UID socket {label}: p50={}ns p95={}ns",
         samples[49], samples[94]
     );
 }
@@ -374,4 +420,107 @@ async fn terminal_socket_core_pending_owner_watches_deadline_eof_and_early_bytes
     let mut decoder = terminal_ipc_wire::Decoder::new(Direction::ToClient, Role::Writer);
     let (_, record) = decoder.push(&packet).unwrap();
     assert!(matches!(record, Some(Record::Credit(_))));
+}
+
+#[test]
+fn terminal_socket_core_start_targets_and_canonical_secrets() {
+    let slot = hex::encode([2; 16]);
+    let raw = hex::encode([3; 56]);
+    for (attach, accepts_named, accepts_offer) in [
+        (Attach::Default, true, false),
+        (Attach::New, false, true),
+        (Attach::Observe, true, true),
+        (Attach::Takeover, true, true),
+    ] {
+        let mut request = Start {
+            attach,
+            ..single_request()
+        };
+        assert_eq!(request.target().unwrap(), Target::Default);
+        request.session_slot = Some(slot.clone());
+        assert_eq!(request.target().is_ok(), accepts_named);
+        request.offer = Some(raw.clone());
+        assert!(request.target().is_err());
+        request.session_slot = None;
+        assert_eq!(request.target().is_ok(), accepts_offer);
+    }
+
+    let mut request = serde_json::to_value(single_request()).unwrap();
+    request["offer"] = serde_json::Value::Null;
+    assert!(serde_json::from_value::<Start>(request).is_err());
+
+    let mut bytes = [1; 56];
+    for range in [0..16, 16..32, 32..48, 48..56] {
+        bytes[range.clone()].fill(0);
+        assert!(Offer::from_bytes(bytes).is_err());
+        bytes[range].fill(1);
+    }
+    let offer = Offer::from_bytes(bytes).unwrap();
+    assert_eq!(format!("{offer:?}"), "Offer(..)");
+    assert_eq!(offer.bytes(), bytes);
+    assert!(Offer::parse(&"ab".repeat(56).to_uppercase()).is_err());
+}
+
+#[tokio::test]
+async fn terminal_socket_core_busy_finishes_start_without_native_permit() {
+    let mut fixture = Listener::open();
+    let offer = Offer::from_bytes([2; 56]).unwrap();
+    let request = Start {
+        session_slot: Some(hex::encode([2; 16])),
+        ..single_request()
+    };
+    let path = fixture.path.clone();
+    let (result, permits) = tokio::join!(start(&path, request, Instant::now() + STEP), async {
+        let pending = timeout_at(Instant::now() + STEP, fixture.starts.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .register()
+            .unwrap();
+        let permits: Vec<_> = (0..ATTACHED).map(|_| pending.reserve().unwrap()).collect();
+        assert!(pending.reserve().is_err());
+        pending.busy(offer).await.unwrap();
+        permits
+    },);
+    assert!(matches!(result, Ok(StartOutcome::Busy(received)) if received == offer));
+    assert_eq!(permits.len(), ATTACHED);
+}
+
+#[tokio::test]
+async fn terminal_socket_core_ready_and_busy_bind_exact_target() {
+    fn sockets() -> (UnixStream, UnixStream) {
+        UnixStream::pair().unwrap()
+    }
+    let named = [2; 16];
+    let other = [3; 16];
+    let offer = Offer::from_bytes([2; 56]).unwrap();
+    let exact = serde_json::json!({"ok":true,"terminal_stream":"writer","slot":hex::encode(named)});
+    for (attach, target, valid) in [
+        (Attach::Default, Target::Named(named), true),
+        (Attach::Default, Target::Named(other), false),
+        (Attach::New, Target::Offer(offer), false),
+        (Attach::Takeover, Target::Offer(offer), true),
+        (Attach::Takeover, Target::Named(named), false),
+        (Attach::Observe, Target::Offer(offer), false),
+    ] {
+        let (_client, stream) = sockets();
+        assert_eq!(
+            decode_reply(&exact.to_string(), attach, target, stream).is_ok(),
+            valid
+        );
+    }
+    let busy = serde_json::json!({"ok":false,"terminal_busy":{"offer":hex::encode(offer.bytes())}});
+    for (attach, target, valid) in [
+        (Attach::Default, Target::Named(named), true),
+        (Attach::Default, Target::Named(other), false),
+        (Attach::Takeover, Target::Offer(offer), false),
+        (Attach::Takeover, Target::Named(named), true),
+        (Attach::Observe, Target::Default, false),
+    ] {
+        let (_client, stream) = sockets();
+        assert_eq!(
+            decode_reply(&busy.to_string(), attach, target, stream).is_ok(),
+            valid
+        );
+    }
 }

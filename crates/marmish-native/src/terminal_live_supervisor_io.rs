@@ -321,6 +321,12 @@ impl Port {
         }
     }
 
+    pub(super) fn request_close(&self, reason: Reason) {
+        self.source.stop(reason);
+        self.wake.notify();
+        self.changed.notify_one();
+    }
+
     pub(super) fn close(&self, reason: Reason) {
         self.source.retire(reason);
         self.wake.notify();
@@ -391,6 +397,7 @@ pub(super) struct Installing {
     pub native: Native,
     pub deadline: Duration,
     pub reply: oneshot::Sender<StartOutcome>,
+    pub confirmation: Option<Arc<super::Confirmation>>,
 }
 
 struct Session {
@@ -851,6 +858,7 @@ fn install_one(
         mut native,
         deadline,
         reply,
+        confirmation,
     } = request;
     let reason = match guard::sample() {
         _ if stopping.load(Ordering::Acquire) => Some(Reason::OwnerLost),
@@ -885,6 +893,9 @@ fn install_one(
         slot: native.slot,
         claim: native.claim,
         port: Arc::clone(&native.port),
+        role: native.attachment.role,
+        confirmation,
+        confirmation_sent: false,
         #[cfg(test)]
         closed_reported: false,
     };
@@ -980,6 +991,7 @@ mod tests {
                 native,
                 deadline: guard::sample().unwrap().continuous + Duration::from_secs(3),
                 reply,
+                confirmation: None,
             },
             &AtomicBool::new(false),
         );
@@ -1388,6 +1400,7 @@ mod tests {
                     native,
                     deadline,
                     reply,
+                    confirmation: None,
                 },
                 &stopping,
             );

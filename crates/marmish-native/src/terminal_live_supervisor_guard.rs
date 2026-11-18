@@ -92,6 +92,10 @@ impl Source {
         })
     }
 
+    pub(super) fn command_generation(&self) -> NonZeroU64 {
+        self.command_generation
+    }
+
     pub(super) fn check(&self) -> GuardResult<()> {
         if let Some(reason) = self.reason() {
             return GuardResult::Retired(reason);
@@ -152,7 +156,7 @@ impl Source {
         );
     }
 
-    fn stop(&self, reason: Reason) {
+    pub(super) fn stop(&self, reason: Reason) {
         let _ = self
             .stopped
             .compare_exchange(0, reason as u8, Ordering::AcqRel, Ordering::Acquire);

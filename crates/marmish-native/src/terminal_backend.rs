@@ -66,7 +66,7 @@ pub struct CheckedLaunch {
 
 struct LaunchFailure {
     error: Error,
-    pending: Option<Attachment>,
+    pending: Option<Box<Attachment>>,
 }
 
 impl From<Error> for LaunchFailure {
@@ -191,7 +191,7 @@ impl CheckedLaunch {
         }) {
             return Err(LaunchFailure {
                 error,
-                pending: Some(attachment),
+                pending: Some(Box::new(attachment)),
             });
         }
         Ok(attachment)
@@ -407,6 +407,16 @@ pub struct Attachment {
 }
 
 impl Attachment {
+    fn hold_terminal_room(&mut self, lease: Option<std::sync::Arc<dyn Send + Sync>>) {
+        if let Some(worker) = self.child.as_mut() {
+            worker._terminal_room = lease;
+        }
+    }
+
+    fn worker_pid(&self) -> Option<libc::pid_t> {
+        self.child.as_ref().map(|worker| worker.pid)
+    }
+
     #[cfg(test)]
     fn with_test_master(
         master: File,
@@ -584,6 +594,7 @@ struct ChildState {
     termination: Option<Instant>,
     killed: bool,
     _profile: Option<std::sync::Arc<crate::identity::ProfileLease>>,
+    _terminal_room: Option<std::sync::Arc<dyn Send + Sync>>,
 }
 
 impl ChildState {
@@ -595,6 +606,7 @@ impl ChildState {
             termination: None,
             killed: false,
             _profile: None,
+            _terminal_room: None,
         }
     }
 

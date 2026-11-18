@@ -1,15 +1,17 @@
 //! Synchronous owner of the client foreground and its cancellable admission.
 
 use super::terminal_socket_session::{self, ForegroundSocket};
-use super::{Attach, Start, start};
+use super::{Attach, Offer, Start, StartOutcome, Target, exchange};
 use crate::command_limits::continuous_time;
 use crate::terminal_ipc_wire::{Close, Role};
 use crate::{Error, Result, terminal_output};
 use std::cell::Cell;
+use std::io::Write;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
+use terminal_cli_choice::Choice;
 use terminal_frontend::Exit;
 pub(crate) use terminal_frontend_signals::block_on_worker;
 use terminal_frontend_signals::{Events, Signals};
@@ -18,6 +20,8 @@ use tokio::io::Interest;
 use tokio::io::unix::AsyncFd;
 use tokio::time::{Instant, sleep};
 
+#[path = "terminal_cli_choice.rs"]
+mod terminal_cli_choice;
 #[path = "terminal_frontend.rs"]
 mod terminal_frontend;
 #[path = "terminal_frontend_display.rs"]
@@ -32,6 +36,8 @@ mod terminal_input;
 mod terminal_socket_frontend;
 
 const START_BUDGET: Duration = Duration::from_secs(60);
+const OFFER_BUDGET: Duration = Duration::from_secs(70);
+const TAKEOVER_UNCERTAIN: Error = Error::Invalid("terminal_takeover_uncertain");
 const CLOCK_TICK: Duration = Duration::from_millis(250);
 
 pub(crate) struct Prepared {
@@ -81,36 +87,78 @@ async fn read_control(signals: &Signals) -> Result<Control> {
 }
 
 type Geometry = (u16, u16);
-type Ready = (UnixStream, Geometry);
 
-enum Admission {
-    Ready(UnixStream, Geometry),
-    Control(Control),
+#[derive(Clone, Copy)]
+struct Attempt {
+    attach: Attach,
+    target: Target,
 }
 
-async fn connect(prepared: Prepared, geometry: Geometry, attach: Attach) -> Result<Ready> {
+enum Connected {
+    Ready(Attachment),
+    Busy { offer: Offer, arrived: Duration },
+}
+
+enum Controlled<T> {
+    Done(T),
+    Signal(Control),
+}
+
+async fn connect(
+    prepared: &Prepared,
+    geometry: Geometry,
+    attempt: Attempt,
+    offer_ceiling: Option<Duration>,
+    sent: &Cell<bool>,
+) -> Result<Connected> {
+    let (session_slot, offer) = match attempt.target {
+        Target::Default => (None, None),
+        Target::Named(slot) => (Some(hex::encode(slot)), None),
+        Target::Offer(offer) => (None, Some(hex::encode(offer.bytes()))),
+    };
     let request = Start {
-        remote: prepared.remote,
-        session: prepared.session,
-        relays: prepared.relays,
+        remote: prepared.remote.clone(),
+        session: prepared.session.clone(),
+        relays: prepared.relays.clone(),
         rows: geometry.0,
         columns: geometry.1,
-        attach,
+        attach: attempt.attach,
+        session_slot,
+        offer,
     };
-    wait_for_start(continuous_time, async move |active_end| {
-        start(&prepared.socket, request, active_end).await
+    let outcome = wait_for_start(continuous_time, offer_ceiling, async |active_end| {
+        exchange(&prepared.socket, request, active_end, || sent.set(true)).await
     })
-    .await
-    .map(|socket| (socket, geometry))
+    .await?;
+    Ok(match outcome {
+        StartOutcome::Ready {
+            stream: socket,
+            role,
+            slot,
+        } => Connected::Ready(Attachment {
+            socket,
+            geometry,
+            role,
+            slot,
+            attach: attempt.attach,
+            flush_input: matches!(attempt.target, Target::Offer(_)),
+        }),
+        StartOutcome::Busy(offer) => Connected::Busy {
+            offer,
+            arrived: continuous_time()?,
+        },
+    })
 }
 
 async fn wait_for_start<T>(
     continuous: impl Fn() -> Result<Duration>,
+    offer_ceiling: Option<Duration>,
     exchange: impl AsyncFnOnce(Instant) -> Result<T>,
 ) -> Result<T> {
     let continuous_end = continuous()?
         .checked_add(START_BUDGET)
-        .ok_or(Error::Timeout)?;
+        .ok_or(Error::Timeout)?
+        .min(offer_ceiling.unwrap_or(Duration::MAX));
     let active_end = Instant::now() + START_BUDGET;
     let exchange = exchange(active_end);
     tokio::pin!(exchange);
@@ -133,13 +181,10 @@ async fn wait_for_start<T>(
     }
 }
 
-fn admit(
-    tty: &Tty,
+fn with_control<T>(
     signals: &Signals,
-    attach: Attach,
-    attempted: &Cell<bool>,
-    prepare: &impl AsyncFn(libc::sigset_t) -> Result<Prepared>,
-) -> Result<Admission> {
+    task: impl Future<Output = Result<T>>,
+) -> Result<Controlled<T>> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .max_blocking_threads(2)
@@ -149,21 +194,158 @@ fn admit(
     let result = runtime.block_on(async {
         tokio::select! {
             biased;
-            signal = read_control(signals) => signal.map(Admission::Control),
-            ready = async {
-                let prepared = prepare(signals.previous_mask()).await?;
-                let geometry = tty.geometry()?;
-                attempted.set(true);
-                connect(prepared, geometry, attach).await
-            } => ready.map(|(socket, geometry)| Admission::Ready(socket, geometry)),
+            signal = read_control(signals) => signal.map(Controlled::Signal),
+            ready = task => ready.map(Controlled::Done),
         }
     });
-    // An independently launched daemon can finish startup if the foreground
-    // client canceled its wait. It has its own startup timeout and profile lease.
-    if !matches!(&result, Ok(Admission::Ready(..))) {
+    // An independently launched daemon may finish starting after local
+    // cancellation. It has its own startup timeout and profile lease.
+    if !matches!(&result, Ok(Controlled::Done(_))) {
         runtime.shutdown_background();
     }
     result
+}
+
+struct Attachment {
+    socket: UnixStream,
+    geometry: Geometry,
+    role: Role,
+    slot: [u8; 16],
+    attach: Attach,
+    flush_input: bool,
+}
+
+enum AfterSuspend {
+    Resume(Attempt),
+    NewUnconfirmed,
+    Exit,
+}
+
+impl AfterSuspend {
+    fn before_ready(attempt: Attempt, resuming: bool) -> Self {
+        match attempt.attach {
+            Attach::Default if !resuming => Self::Resume(attempt),
+            Attach::New => Self::NewUnconfirmed,
+            _ => Self::Exit,
+        }
+    }
+}
+
+enum Admission {
+    Ready(Attachment),
+    Control {
+        signal: Control,
+        after_suspend: AfterSuspend,
+    },
+    Cancel,
+}
+
+fn admit(
+    tty: &mut Tty,
+    signals: &Signals,
+    attempt: Attempt,
+    resuming: bool,
+    prepare: &impl AsyncFn(libc::sigset_t) -> Result<Prepared>,
+) -> Result<Admission> {
+    let (prepared, first) = match with_control(signals, async {
+        let prepared = prepare(signals.previous_mask()).await?;
+        let first = connect(&prepared, tty.geometry()?, attempt, None, &Cell::new(false)).await?;
+        Ok((prepared, first))
+    })? {
+        Controlled::Done(first) => first,
+        Controlled::Signal(signal) => {
+            return Ok(Admission::Control {
+                signal,
+                after_suspend: AfterSuspend::before_ready(attempt, resuming),
+            });
+        }
+    };
+    let (offer, arrived) = match first {
+        Connected::Ready(ready) => return Ok(Admission::Ready(ready)),
+        Connected::Busy { offer, arrived } => (offer, arrived),
+    };
+    if resuming {
+        return Err(Error::Invalid("terminal_busy"));
+    }
+    let attach = if attempt.attach == Attach::Takeover {
+        Attach::Takeover
+    } else {
+        match terminal_cli_choice::choose(tty, signals, arrived)? {
+            Choice::Select(attach) => attach,
+            Choice::Cancel => return Ok(Admission::Cancel),
+            Choice::Control(signal) => {
+                return Ok(Admission::Control {
+                    signal,
+                    after_suspend: AfterSuspend::Exit,
+                });
+            }
+        }
+    };
+    admit_offer(tty, signals, &prepared, offer, arrived, attach)
+}
+
+fn admit_offer(
+    tty: &Tty,
+    signals: &Signals,
+    prepared: &Prepared,
+    offer: Offer,
+    arrived: Duration,
+    attach: Attach,
+) -> Result<Admission> {
+    let sent = Cell::new(false);
+    let ceiling = arrived.checked_add(OFFER_BUDGET).ok_or(Error::Timeout)?;
+    let result = with_control(signals, async {
+        connect(
+            prepared,
+            tty.geometry()?,
+            Attempt {
+                attach,
+                target: Target::Offer(offer),
+            },
+            Some(ceiling),
+            &sent,
+        )
+        .await
+    });
+    let uncertain = attach == Attach::Takeover && sent.get();
+    match result {
+        Ok(Controlled::Done(Connected::Ready(ready))) => Ok(Admission::Ready(ready)),
+        Ok(Controlled::Done(Connected::Busy { .. })) => {
+            Err(Error::Invalid("terminal_start_response"))
+        }
+        Ok(Controlled::Signal(Control::Suspend)) if uncertain => {
+            signals.suspend()?;
+            Err(TAKEOVER_UNCERTAIN)
+        }
+        Ok(Controlled::Signal(_)) if uncertain => Err(TAKEOVER_UNCERTAIN),
+        Ok(Controlled::Signal(signal)) => Ok(Admission::Control {
+            signal,
+            after_suspend: if attach == Attach::New {
+                AfterSuspend::NewUnconfirmed
+            } else {
+                AfterSuspend::Exit
+            },
+        }),
+        Err(error) if uncertain && ambiguous(&error) => Err(TAKEOVER_UNCERTAIN),
+        Err(error) => Err(error),
+    }
+}
+
+fn ambiguous(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::Timeout
+            | Error::Io(_)
+            | Error::Invalid(
+                "terminal_start_response"
+                    | "ipc_frame_json"
+                    | "ipc_frame_size"
+                    | "terminal_attach_deadline"
+                    | "terminal_transport_unavailable"
+                    | "terminal_unavailable"
+                    | "terminal_owner_unavailable"
+            )
+    )
 }
 
 fn signal_exit(signal: libc::c_int) -> u8 {
@@ -181,50 +363,90 @@ fn close_exit(reason: Close) -> Result<u8> {
     }))
 }
 
+fn run_ready(tty: &mut Tty, signals: &Signals, ready: Attachment) -> Result<Option<u8>> {
+    let mut channel = ForegroundSocket::new(ready.socket, ready.role)?;
+    if ready.attach == Attach::New {
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "Marmish session {}",
+            hex::encode(ready.slot)
+        );
+    }
+    let ended = terminal_frontend::run(
+        tty,
+        signals,
+        &mut channel,
+        ready.role == Role::Observer,
+        Some(ready.geometry),
+        ready.flush_input,
+    );
+    drop(channel);
+    if !matches!(ended.reason, Ok(Exit::Interrupted(_))) {
+        ended.restored_termios?;
+        if !ended.restored_display {
+            eprintln!("marmish: terminal_display_restore");
+        }
+    }
+    match ended.reason? {
+        Exit::Detached => Ok(Some(0)),
+        Exit::PeerClosed(reason) => close_exit(reason).map(Some),
+        Exit::Closed => Err(Error::Invalid("terminal_tty_closed")),
+        Exit::Interrupted(signal) => Ok(Some(signal_exit(signal))),
+        Exit::Suspended => Ok(None),
+    }
+}
+
 pub(crate) fn run(
-    new: bool,
+    attach: Attach,
+    slot: Option<[u8; 16]>,
     prepare: impl AsyncFn(libc::sigset_t) -> Result<Prepared>,
 ) -> Result<u8> {
     let signals = Signals::install()?;
-    let attach = if new { Attach::New } else { Attach::Default };
+    let mut attempt = Attempt {
+        attach,
+        target: slot.map_or(Target::Default, Target::Named),
+    };
+    let mut resuming = false;
     loop {
         let mut tty = Tty::open()?;
-        let attempted = Cell::new(false);
-        let signal = match admit(&tty, &signals, attach, &attempted, &prepare)? {
-            Admission::Control(signal) => signal,
-            Admission::Ready(socket, geometry) => {
-                let mut channel = ForegroundSocket::new(socket, Role::Writer)?;
-                let ended =
-                    terminal_frontend::run(&mut tty, &signals, &mut channel, false, Some(geometry));
-                drop(channel);
-                if !matches!(ended.reason, Ok(Exit::Interrupted(_))) {
-                    ended.restored_termios?;
-                    if !ended.restored_display {
-                        eprintln!("marmish: terminal_display_restore");
-                    }
+        let after_suspend = match admit(&mut tty, &signals, attempt, resuming, &prepare)? {
+            Admission::Cancel => return Ok(0),
+            Admission::Control {
+                signal: Control::Terminate(signal),
+                ..
+            } => return Ok(signal_exit(signal)),
+            Admission::Control {
+                signal: Control::Suspend,
+                after_suspend,
+            } => after_suspend,
+            Admission::Ready(ready) => {
+                let after_suspend = if ready.role == Role::Writer {
+                    AfterSuspend::Resume(Attempt {
+                        attach: Attach::Default,
+                        target: Target::Named(ready.slot),
+                    })
+                } else {
+                    AfterSuspend::Exit
+                };
+                if let Some(code) = run_ready(&mut tty, &signals, ready)? {
+                    return Ok(code);
                 }
-                match ended.reason? {
-                    Exit::Detached => return Ok(0),
-                    Exit::PeerClosed(reason) => return close_exit(reason),
-                    Exit::Closed => return Err(Error::Invalid("terminal_tty_closed")),
-                    Exit::Interrupted(signal) => Control::Terminate(signal),
-                    Exit::Suspended => Control::Suspend,
-                }
+                after_suspend
             }
         };
-        match signal {
-            Control::Terminate(signal) => return Ok(signal_exit(signal)),
-            Control::Suspend => {
-                drop(tty);
-                signals.suspend()?;
-                if let Some(signal) = signals.termination() {
-                    return Ok(signal_exit(signal));
-                }
-                if new && attempted.get() {
-                    return Err(Error::Invalid("terminal_new_reattach_unavailable"));
-                }
-            }
+        drop(tty);
+        signals.suspend()?;
+        if let Some(signal) = signals.termination() {
+            return Ok(signal_exit(signal));
         }
+        attempt = match after_suspend {
+            AfterSuspend::Resume(next) => next,
+            AfterSuspend::NewUnconfirmed => {
+                return Err(Error::Invalid("terminal_new_reattach_unavailable"));
+            }
+            AfterSuspend::Exit => return Ok(0),
+        };
+        resuming = true;
     }
 }
 
@@ -234,6 +456,7 @@ async fn foreground_start_has_active_and_continuous_deadlines() {
     let active_start = Instant::now();
     let result = wait_for_start(
         || Ok(Duration::ZERO),
+        None,
         async |_| std::future::pending::<Result<()>>().await,
     )
     .await;
@@ -249,9 +472,26 @@ async fn foreground_start_has_active_and_continuous_deadlines() {
                 Ok(START_BUDGET)
             }
         },
+        None,
         async |_| std::future::pending::<Result<()>>().await,
     )
     .await;
     assert!(matches!(result, Err(Error::Timeout)));
     assert_eq!(active_start.elapsed(), CLOCK_TICK);
+}
+
+#[cfg(test)]
+#[tokio::test(start_paused = true)]
+async fn terminal_foreground_offer_never_extends_second_leg() {
+    let began = Instant::now();
+    let available = Duration::from_millis(725);
+    let ceiling = OFFER_BUDGET;
+    let result = wait_for_start(
+        || Ok(ceiling - available + began.elapsed()),
+        Some(ceiling),
+        async |_| std::future::pending::<Result<()>>().await,
+    )
+    .await;
+    assert!(matches!(result, Err(Error::Timeout)));
+    assert_eq!(began.elapsed(), available);
 }

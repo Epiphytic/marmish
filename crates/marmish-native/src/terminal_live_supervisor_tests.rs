@@ -264,6 +264,7 @@ fn start_request(account: Account, selection: StartChoice, source: Arc<Source>) 
         cols: 80,
         source,
         deadline: native_now() + seconds(8),
+        room_hold: None,
     }
 }
 
@@ -274,6 +275,8 @@ fn core_tests_terminal_live_supervisor_bounded_independent_queue_and_cancel() {
     let stopping = Arc::new(AtomicBool::new(false));
     let control = LiveControl {
         start: starts,
+        confirm: mpsc::sync_channel(MAX_LIVE).0,
+        start_limit: Arc::default(),
         release: releases,
         owner: thread::current(),
         stopping: Arc::clone(&stopping),
@@ -300,7 +303,7 @@ fn core_tests_terminal_live_supervisor_bounded_independent_queue_and_cancel() {
         Err(QueueError::Full)
     );
     assert!(release_requests.try_recv().is_ok());
-    let (cancelled, reply) = requests.try_recv().unwrap();
+    let (cancelled, reply, _permit) = requests.try_recv().unwrap();
     drop(replies);
     assert!(matches!(
         AdmissionBudget::open(&cancelled, &reply, &stopping),
@@ -320,7 +323,11 @@ fn core_tests_terminal_live_supervisor_stop_answers_queued_start_and_release() {
     let (source, _) = source(1);
     let (send, reply) = oneshot::channel();
     start
-        .try_send((start_request([2; 32], StartChoice::New, source), send))
+        .try_send((
+            start_request([2; 32], StartChoice::New, source),
+            send,
+            Arc::new(StartLimit::default()).try_acquire().unwrap(),
+        ))
         .ok()
         .unwrap();
     let (send, released) = oneshot::channel();
@@ -339,6 +346,112 @@ fn core_tests_terminal_live_supervisor_stop_answers_queued_start_and_release() {
         releases.try_recv(),
         Err(mpsc::TryRecvError::Empty)
     ));
+}
+
+#[test]
+fn core_tests_terminal_live_confirmation_bypasses_held_start_lock_and_is_exact() {
+    let (wake, _reader) = Wake::open().unwrap();
+    let (source, _) = source(1);
+    let port = Port::new(Arc::clone(&source), wake);
+    let (confirm, confirms) = mpsc::sync_channel(MAX_LIVE);
+    let control = LiveControl {
+        start: mpsc::sync_channel(MAX_LIVE).0,
+        confirm,
+        start_limit: Arc::default(),
+        release: mpsc::sync_channel(2).0,
+        owner: thread::current(),
+        stopping: Arc::default(),
+        submission: Arc::new(Mutex::new(())),
+    };
+    let slot = SlotId([2; 16]);
+    let confirmation = Confirmation::new(seconds(10));
+    let mut admitted = AdmittedTerminal {
+        slot,
+        claim: claim(),
+        port: Arc::clone(&port),
+        role: Role::Writer,
+        confirmation: Some(Arc::clone(&confirmation)),
+        confirmation_sent: false,
+        closed_reported: false,
+    };
+    let link = Active {
+        account: [3; 32],
+        inventory: tmux::Inventory {
+            session: 1,
+            pid: 2,
+            directory: (3, 4),
+            socket: (5, 6),
+        },
+        writer: None,
+        claim: claim(),
+        role: Role::Writer,
+        confirmation: Some(Arc::clone(&confirmation)),
+        pending_start: None,
+        port,
+        retiring: None,
+    };
+    let _held = control.submission.lock().unwrap();
+    let response = admitted.submit_confirm(&control, seconds(9)).unwrap();
+    assert!(matches!(
+        admitted.submit_confirm(&control, seconds(9)),
+        Err(QueueError::Stopped)
+    ));
+    assert!(admitted.event(true).is_none());
+    assert!(matches!(
+        admitted
+            .submit(Operation::new(1, seconds(20), Input::Resize { rows: 24, cols: 80 }).unwrap()),
+        Err(PushError::Closed(Reason::Authority))
+    ));
+    let mut request = confirms.try_recv().unwrap();
+    assert!(request.matches(&link, slot));
+    assert!(!request.matches(&link, SlotId([3; 16])));
+    request.role = Role::Observer;
+    assert!(!request.matches(&link, slot));
+    request.role = Role::Writer;
+    request.claim.generation += 1;
+    assert!(!request.matches(&link, slot));
+    request.claim = claim();
+    request.source = Source::new(source.id, AttachmentFence::new(NonZeroU64::MIN, [9; 32]));
+    assert!(!request.matches(&link, slot));
+    assert_eq!(request.refusal(&confirmation, Some(seconds(8))), None);
+    assert_eq!(
+        request.refusal(&confirmation, Some(seconds(9))),
+        Some(Reason::Deadline)
+    );
+    drop(response);
+    assert_eq!(
+        request.refusal(&confirmation, Some(seconds(8))),
+        Some(Reason::Detached)
+    );
+}
+
+#[test]
+fn core_tests_terminal_live_confirmation_full_is_an_invariant_failure() {
+    let (confirm, _confirmations) = mpsc::sync_channel(0);
+    let control = LiveControl {
+        start: mpsc::sync_channel(0).0,
+        confirm,
+        start_limit: Arc::default(),
+        release: mpsc::sync_channel(0).0,
+        owner: thread::current(),
+        stopping: Arc::default(),
+        submission: Arc::new(Mutex::new(())),
+    };
+    let (source, _) = source(1);
+    let (reply, _response) = oneshot::channel();
+    assert_eq!(
+        control.submit_confirm(confirm::Request {
+            slot: SlotId([1; 16]),
+            claim: claim(),
+            role: Role::Writer,
+            source: Arc::clone(&source),
+            until: seconds(10),
+            reply,
+        }),
+        Err(QueueError::Full)
+    );
+    assert_eq!(source.reason(), Some(Reason::OwnerLost));
+    assert!(control.stopping.load(Ordering::Acquire));
 }
 
 fn native_now() -> Duration {
@@ -461,6 +574,10 @@ async fn terminal_live_supervisor_cancel_after_prepare_is_recoverable() {
         manager: Manager::new(&fixture.tmux, profile.root()).unwrap(),
         daemon: fixture.daemon.clone(),
         active: HashMap::new(),
+        offers: Ledger::default(),
+        parked: VecDeque::new(),
+        departure: VecDeque::new(),
+        quarantine: HashSet::new(),
         wake,
         stopping: Arc::new(AtomicBool::new(false)),
         profile: Arc::new(profile),
@@ -510,7 +627,9 @@ async fn terminal_live_supervisor_cancel_after_prepare_is_recoverable() {
     let rows = owner.registry.slots().unwrap();
     assert_eq!(rows.len(), 1);
     assert!(rows[0].id == cancelled.id);
-    let (slot, _) = owner.select(&start, &budget, &rows).unwrap();
+    let (slot, _) = owner
+        .select(&budget, rows.len(), Some(cancelled), true)
+        .unwrap();
     assert!(slot != cancelled.id);
     let rows = owner.registry.slots().unwrap();
     assert_eq!(rows.len(), 1);
@@ -544,7 +663,7 @@ async fn terminal_live_supervisor_default_new_busy_restart() {
     let (second, _) = source(2);
     assert!(matches!(
         submit(&owner.control, start_request(account, StartChoice::Default, second)).await,
-        StartOutcome::Busy { slot, writer } if slot == default.slot && writer == default.claim
+        StartOutcome::Busy { slot, writer, .. } if slot == default.slot && writer == default.claim
     ));
     let mut samples = vec![];
     for sequence in 1..=100 {
@@ -910,4 +1029,199 @@ async fn terminal_live_supervisor_adopts_legacy_and_releases_at_registry_cap() {
     .await
     .unwrap();
     assert!(Arc::try_unwrap(profile).is_ok());
+}
+
+#[tokio::test]
+#[ignore = "uses real private tmux, three observers and native marmishd"]
+async fn terminal_live_supervisor_checked_observers_takeover_and_named_reattach() {
+    use crate::terminal_frames::Size;
+    use crate::terminal_selection_wire_v2::{Choice, Target};
+
+    let fixture = super::super::tests::Fixture::new().await;
+    let (profile, material) = fixture.identity();
+    let profile = Arc::new(profile);
+    let account = fixture.accounts[0];
+    let mut owner = LiveSupervisor::start(
+        Arc::clone(&profile),
+        &material,
+        &fixture.daemon,
+        &fixture.tmux,
+    )
+    .unwrap();
+    let control = &owner.control;
+    let request = |choice, target, id| {
+        let (source, _) = source(id);
+        VerifiedStart {
+            account,
+            selection: StartChoice::Checked {
+                scope: Scope {
+                    server: [1; 32],
+                    client: account,
+                    command: [9; 32],
+                    generation: 1,
+                },
+                request: Request {
+                    choice,
+                    target,
+                    size: Size { rows: 24, cols: 80 },
+                },
+            },
+            rows: 24,
+            cols: 80,
+            source,
+            deadline: native_now() + seconds(8),
+            room_hold: Some(Arc::new(())),
+        }
+    };
+    async fn confirm(control: &LiveControl, claim: &mut AdmittedTerminal) {
+        let ack = claim
+            .submit_confirm(control, native_now() + seconds(4))
+            .unwrap();
+        timeout(seconds(4), ack).await.unwrap().unwrap().unwrap();
+    }
+    let mut writer = attached(submit(control, request(Choice::Regular, Target::Default, 1)).await);
+    assert!(matches!(
+        writer.submit(
+            Operation::new(
+                1,
+                native_now() + seconds(4),
+                Input::Resize { rows: 30, cols: 90 }
+            )
+            .unwrap()
+        ),
+        Err(PushError::Closed(Reason::Authority))
+    ));
+    confirm(control, &mut writer).await;
+    exchange(
+        &mut writer,
+        1,
+        b"state=HANDOVER; printf '[%s]\\n' $state\r",
+        b"[HANDOVER]",
+    )
+    .await;
+
+    let named = Target::Named(writer.slot.0);
+    let mut observers = Vec::new();
+    for id in 2..5 {
+        let mut observer = attached(submit(control, request(Choice::Observe, named, id)).await);
+        assert!(matches!(observer.role(), Role::Observer));
+        assert_eq!(observer.slot.0, writer.slot.0);
+        assert!(
+            observer.event(true).is_none(),
+            "display left the native queue before exact confirmation"
+        );
+        confirm(control, &mut observer).await;
+        assert!(matches!(
+            observer.submit(
+                Operation::new(
+                    1,
+                    native_now() + seconds(4),
+                    Input::Resize { rows: 30, cols: 90 }
+                )
+                .unwrap()
+            ),
+            Err(PushError::Closed(Reason::Authority))
+        ));
+        observers.push(observer);
+    }
+    assert!(matches!(
+        submit(control, request(Choice::Observe, named, 5)).await,
+        StartOutcome::Refused(Error::Invalid("terminal_capacity"))
+    ));
+    let live_offer = match submit(control, request(Choice::Takeover, named, 5)).await {
+        StartOutcome::Busy {
+            offer: Some(ticket),
+            ..
+        } => ticket,
+        _ => panic!("writer did not return a live offer at observer capacity"),
+    };
+    let nonce = if live_offer.bytes()[..16] == [123; 16] {
+        [124; 16]
+    } else {
+        [123; 16]
+    };
+    let invalid_offer = Ticket::new(
+        nonce,
+        live_offer.slot,
+        live_offer.claim,
+        live_offer.generation,
+    )
+    .unwrap();
+    for (ticket, expected) in [
+        (invalid_offer, "terminal_offer_stale"),
+        (live_offer, "terminal_capacity"),
+    ] {
+        assert!(matches!(
+            submit(control, request(Choice::Observe, Target::Offer(ticket), 5)).await,
+            StartOutcome::Refused(Error::Invalid(reason)) if reason == expected
+        ));
+    }
+    exchange(
+        &mut writer,
+        2,
+        b"printf '[%s]' DISPLAYONLY\r",
+        b"[DISPLAYONLY]",
+    )
+    .await;
+    let mut display = Vec::new();
+    while !display
+        .windows(b"[DISPLAYONLY]".len())
+        .any(|part| part == b"[DISPLAYONLY]")
+    {
+        assert!(display.len() < 65536, "observer display fixture cap");
+        match event(&mut observers[0]).await {
+            Event::Output(bytes) => display.extend_from_slice(&bytes),
+            other => panic!("unexpected observer event: {other:?}"),
+        }
+    }
+    let ticket = match submit(control, request(Choice::Takeover, named, 6)).await {
+        StartOutcome::Busy {
+            offer: Some(ticket),
+            ..
+        } => ticket,
+        _ => panic!("explicit takeover did not return a live offer"),
+    };
+    let mut successor =
+        attached(submit(control, request(Choice::Takeover, Target::Offer(ticket), 7)).await);
+    assert!(successor.slot == writer.slot);
+    assert!(successor.claim != writer.claim);
+    confirm(control, &mut successor).await;
+    for link in observers.iter().chain([&writer]) {
+        assert_eq!(link.port.source.reason(), Some(Reason::Replaced));
+    }
+    assert!(matches!(
+        submit(control, request(Choice::Takeover, Target::Offer(ticket), 8)).await,
+        StartOutcome::Refused(Error::Invalid("terminal_offer_stale"))
+    ));
+    exchange(
+        &mut successor,
+        1,
+        b"printf '[%s]\\n' $state\r",
+        b"[HANDOVER]",
+    )
+    .await;
+    drop(successor);
+    let cutoff = Instant::now() + seconds(3);
+    let mut reattached = loop {
+        match submit(control, request(Choice::Regular, named, 9)).await {
+            StartOutcome::Attached(terminal) => break terminal,
+            StartOutcome::Refused(Error::Invalid("terminal_slot_unavailable"))
+                if Instant::now() < cutoff =>
+            {
+                sleep(Duration::from_millis(20)).await;
+            }
+            StartOutcome::Refused(error) => panic!("named reattach failed: {error:?}"),
+            StartOutcome::Busy { .. } => panic!("unexpected old writer"),
+        }
+    };
+    confirm(control, &mut reattached).await;
+    exchange(
+        &mut reattached,
+        1,
+        b"printf '[%s]\\n' $state\r",
+        b"[HANDOVER]",
+    )
+    .await;
+    drop(reattached);
+    let _ = stop_and_recover(&mut owner, profile).await;
 }

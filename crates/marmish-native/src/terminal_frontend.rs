@@ -74,6 +74,7 @@ pub(super) fn run(
     channel: &mut impl Channel,
     observer: bool,
     admitted_size: Option<(u16, u16)>,
+    discard_typeahead: bool,
 ) -> Finished {
     let mut display = Display::default();
     let startup = signals.take();
@@ -84,7 +85,12 @@ pub(super) fn run(
     } else if startup.has(libc::SIGTTIN) || startup.has(libc::SIGTTOU) {
         (false, Err(POLL))
     } else {
-        match tty.raw() {
+        let entered = if discard_typeahead {
+            tty.raw_flushing()
+        } else {
+            tty.raw()
+        };
+        match entered {
             Ok(()) => (
                 true,
                 drive(tty, signals, channel, observer, admitted_size, &mut display),
@@ -371,7 +377,7 @@ fn event(enabled: bool, event: libc::c_short) -> libc::c_short {
     if enabled { event } else { 0 }
 }
 
-fn poll_fd(fd: RawFd, events: libc::c_short) -> libc::pollfd {
+pub(super) fn poll_fd(fd: RawFd, events: libc::c_short) -> libc::pollfd {
     libc::pollfd {
         fd,
         events,
@@ -379,7 +385,7 @@ fn poll_fd(fd: RawFd, events: libc::c_short) -> libc::pollfd {
     }
 }
 
-fn poll(fds: &mut [libc::pollfd], millis: i32) -> Result<()> {
+pub(super) fn poll(fds: &mut [libc::pollfd], millis: i32) -> Result<()> {
     if unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, millis) } >= 0
         || std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
     {

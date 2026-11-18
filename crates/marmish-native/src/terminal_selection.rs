@@ -1,14 +1,18 @@
-//! One volatile writer selection transaction, backed by the sole native PTY owner.
-use super::selection_wire::{self as wire, Binding, Choice, Record, Refusal, Session};
+//! One volatile attachment selection transaction, backed by the sole native PTY owner.
 use super::{
-    AdmittedTerminal, CAPACITY, GuardResult, LiveControl, QueueError, Reason, SlotId, Source,
-    SourceId, StartChoice, StartOutcome, VerifiedStart, random,
+    AdmittedTerminal, CAPACITY, GuardResult, LiveControl, QueueError, Reason, Source, SourceId,
+    StartChoice, StartOutcome, VerifiedStart, random,
 };
 use crate::mdk_adapter::{
     CommandDirection,
     terminal_live_enrollment::{AttachedRoom, EnrollmentCeiling, ReadyEnrollment},
 };
-use crate::terminal_frames::{Direction, Size};
+use crate::terminal_frames::Direction;
+use crate::terminal_ipc_wire::Role;
+use crate::terminal_offers::Scope;
+use crate::terminal_selection_wire_v2::{
+    self as wire, Binding, Choice, Record, Refusal, Request, Session, Target, Ticket,
+};
 use crate::{Error, Result};
 use std::num::NonZeroU64;
 use std::sync::Arc;
@@ -40,12 +44,12 @@ impl Drop for SourceScope {
 }
 
 /// This cannot be constructed by enrollment or by the client.
-pub(crate) struct WriterGuard {
+pub(crate) struct AttachmentGuard {
     source: SourceScope,
     admitted: AdmittedTerminal,
 }
 
-impl WriterGuard {
+impl AttachmentGuard {
     pub(crate) fn matches_binding(&self, attachment: [u8; 16], generation: NonZeroU64) -> bool {
         self.admitted.claim.random == attachment
             && self.admitted.claim.generation == generation.get()
@@ -54,6 +58,10 @@ impl WriterGuard {
 
     fn binding(&self) -> Result<Binding> {
         Ok(Binding {
+            role: match self.admitted.role() {
+                crate::terminal_backend::Role::Writer => Role::Writer,
+                crate::terminal_backend::Role::Observer => Role::Observer,
+            },
             claim: self.admitted.claim.random,
             generation: NonZeroU64::new(self.admitted.claim.generation).ok_or(SOURCE)?,
         })
@@ -61,6 +69,10 @@ impl WriterGuard {
 
     pub(super) fn renew(&self, at: Duration) -> GuardResult<bool> {
         self.admitted.renew(self.source.0.id, at)
+    }
+
+    pub(super) fn replaced(&self) -> bool {
+        self.source.0.reason() == Some(Reason::Replaced)
     }
 
     pub(super) fn admitted(&mut self) -> &mut AdmittedTerminal {
@@ -75,22 +87,22 @@ pub(crate) enum ServerOutcome {
 }
 
 pub(crate) struct ServerAttachment {
-    pub(super) writer: WriterGuard,
+    pub(super) guard: AttachmentGuard,
     pub(super) room: AttachedRoom,
 }
 
 impl ServerAttachment {
     pub(super) async fn check_live(&self) -> Result<GuardResult<()>> {
         if let Err(error) = self.room.check_live().await {
-            self.writer.source.0.retire(Reason::Authority);
+            self.guard.source.0.retire(Reason::Authority);
             return Err(error);
         }
-        Ok(self.writer.source.0.check())
+        Ok(self.guard.source.0.check())
     }
 
     pub(crate) async fn close(self) -> Result<()> {
-        let Self { writer, room } = self;
-        drop(writer);
+        let Self { guard, room } = self;
+        drop(guard);
         room.close().await
     }
 }
@@ -98,13 +110,10 @@ impl ServerAttachment {
 pub(crate) enum ClientOutcome {
     Attached {
         room: AttachedRoom,
-        #[cfg_attr(
-            not(test),
-            allow(dead_code, reason = "named reattachment starts with Observe/Takeover")
-        )]
-        slot: SlotId,
+        role: Role,
+        slot: [u8; 16],
     },
-    Busy,
+    Busy(Ticket),
     Refused(Refusal),
 }
 
@@ -118,7 +127,7 @@ pub(crate) async fn accept(
         return Err(SOURCE);
     }
     let admission = room.admission_ceiling();
-    let (session, Record::Request { choice, size }) =
+    let (session, Record::Request(request)) =
         receive(&mut room, None, Direction::ToServer, admission, granted).await?
     else {
         return Err(INVALID);
@@ -135,23 +144,42 @@ pub(crate) async fn accept(
     ));
     room.recheck(granted).await?;
     admission.check()?;
+    let current = room.binding();
     let start = VerifiedStart {
-        account: room.binding().peer,
-        selection: match choice {
-            Choice::Default => StartChoice::Default,
-            Choice::New => StartChoice::New,
+        account: current.peer,
+        selection: StartChoice::Checked {
+            scope: Scope {
+                server: current.local,
+                client: current.peer,
+                command: current.command_digest,
+                generation: current.generation,
+            },
+            request,
         },
-        rows: size.rows,
-        cols: size.cols,
+        rows: request.size.rows,
+        cols: request.size.cols,
         source: Arc::clone(&source.0),
         deadline: admission.continuous(),
+        room_hold: Some(room.room_hold()),
     };
     let outcome = start_and_wait(&room, control, start, admission).await?;
-    let writer = match outcome {
-        StartOutcome::Attached(admitted) => WriterGuard { source, admitted },
-        StartOutcome::Busy { .. } => {
+    let guard = match outcome {
+        StartOutcome::Attached(admitted) => AttachmentGuard { source, admitted },
+        StartOutcome::Busy {
+            slot,
+            writer,
+            offer,
+        } => {
+            let ticket = offer
+                .filter(|ticket| {
+                    request.accepts_busy(*ticket)
+                        && ticket.slot == slot.0
+                        && ticket.claim == writer.random
+                        && ticket.generation.get() == writer.generation
+                })
+                .ok_or(INVALID)?;
             require_clear(&mut room, admission, granted).await?;
-            send(&mut room, session, Record::Busy, admission, granted).await?;
+            send(&mut room, session, Record::Busy(ticket), admission, granted).await?;
             room.close().await?;
             return Ok(ServerOutcome::Busy);
         }
@@ -175,15 +203,14 @@ pub(crate) async fn accept(
     };
 
     require_clear(&mut room, admission, granted).await?;
-    let binding = writer.binding()?;
-    if !writer.matches_binding(binding.claim, binding.generation) {
+    let binding = guard.binding()?;
+    let slot = guard.admitted.slot.0;
+    if !request.accepts(binding, slot) || !guard.matches_binding(binding.claim, binding.generation)
+    {
         return Err(SOURCE);
     }
     let confirm = EnrollmentCeiling::start(CONFIRM)?.clamp(admission);
-    let accepted = Record::Accepted {
-        binding,
-        slot: writer.admitted.slot.0,
-    };
+    let accepted = Record::Accepted { binding, slot };
     send(&mut room, session, accepted, confirm, granted).await?;
     let (_, received) = receive(
         &mut room,
@@ -196,14 +223,27 @@ pub(crate) async fn accept(
     if received != Record::Confirm(binding) {
         return Err(INVALID);
     }
-    let (room, writer) = timeout_at(
+    let (room, mut guard) = timeout_at(
         confirm.deadline()?,
-        room.handoff_server(binding.claim, binding.generation, ceiling, granted, writer),
+        room.handoff_server(binding, ceiling, granted, guard),
     )
     .await
     .map_err(|_| Error::Timeout)??;
     confirm.check()?;
-    Ok(ServerOutcome::Attached(ServerAttachment { writer, room }))
+    let reply = guard
+        .admitted
+        .submit_confirm(control, confirm.continuous())
+        .map_err(|_| SOURCE)?;
+    timeout_at(confirm.deadline()?, reply)
+        .await
+        .map_err(|_| Error::Timeout)?
+        .map_err(|_| SOURCE)??;
+    confirm.check()?;
+    room.check_live().await?;
+    if !guard.matches_binding(binding.claim, binding.generation) {
+        return Err(SOURCE);
+    }
+    Ok(ServerOutcome::Attached(ServerAttachment { guard, room }))
 }
 
 async fn start_and_wait(
@@ -232,9 +272,8 @@ async fn start_and_wait(
 }
 
 pub(crate) async fn request(
-    mut room: ReadyEnrollment,
-    choice: Choice,
-    size: Size,
+    room: ReadyEnrollment,
+    request: Request,
     granted: &impl Fn() -> bool,
 ) -> Result<ClientOutcome> {
     if room.binding().direction != CommandDirection::Client {
@@ -244,11 +283,24 @@ pub(crate) async fn request(
         transcript: room.binding().transcript,
         transaction: random()?,
     };
+    let result = exchange(room, session, request, granted).await;
+    if request.choice == Choice::Takeover && matches!(request.target, Target::Offer(_)) {
+        return result.map_err(|_| Error::Invalid("terminal_takeover_uncertain"));
+    }
+    result
+}
+
+async fn exchange(
+    mut room: ReadyEnrollment,
+    session: Session,
+    request: Request,
+    granted: &impl Fn() -> bool,
+) -> Result<ClientOutcome> {
     let admission = room.admission_ceiling();
     send(
         &mut room,
         session,
-        Record::Request { choice, size },
+        Record::Request(request),
         admission,
         granted,
     )
@@ -262,31 +314,33 @@ pub(crate) async fn request(
     )
     .await?;
     match outcome {
-        Record::Accepted { binding, slot } => {
+        Record::Accepted { binding, slot } if request.accepts(binding, slot) => {
+            let confirm = EnrollmentCeiling::start(CONFIRM)?.clamp(admission);
             send(
                 &mut room,
                 session,
                 Record::Confirm(binding),
-                admission,
+                confirm,
                 granted,
             )
             .await?;
             let ceiling = EnrollmentCeiling::start(ATTACHMENT)?;
             let room = timeout_at(
-                admission.deadline()?,
-                room.handoff_client(binding.claim, binding.generation, ceiling, granted),
+                confirm.deadline()?,
+                room.handoff_client(binding, ceiling, granted),
             )
             .await
             .map_err(|_| Error::Timeout)??;
-            admission.check()?;
+            confirm.check()?;
             Ok(ClientOutcome::Attached {
                 room,
-                slot: SlotId(slot),
+                role: binding.role,
+                slot,
             })
         }
-        Record::Busy => {
+        Record::Busy(ticket) if request.accepts_busy(ticket) => {
             room.close().await?;
-            Ok(ClientOutcome::Busy)
+            Ok(ClientOutcome::Busy(ticket))
         }
         Record::Refused(reason) => {
             room.close().await?;
@@ -312,12 +366,14 @@ async fn require_clear(
 }
 
 fn refusal(error: Error) -> Refusal {
-    if matches!(error, Error::Invalid("terminal_capacity")) {
-        Refusal::Capacity
-    } else if matches!(error, Error::Invalid("terminal_grant_denied")) {
-        Refusal::Permission
-    } else {
-        Refusal::Unavailable
+    match error {
+        Error::Invalid("terminal_capacity") => Refusal::Capacity,
+        Error::Invalid("terminal_grant_denied") => Refusal::Permission,
+        Error::Invalid("terminal_writer_missing") => Refusal::WriterMissing,
+        Error::Invalid("terminal_offer_stale") => Refusal::StaleOffer,
+        Error::Invalid("terminal_slot_missing") => Refusal::SlotMissing,
+        Error::Invalid("terminal_replacement_pending") => Refusal::ReplacementPending,
+        _ => Refusal::Unavailable,
     }
 }
 

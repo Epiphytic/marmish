@@ -36,10 +36,6 @@ impl Direction {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Role {
     Writer,
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "writer-only activation cannot admit an observer")
-    )]
     Observer,
 }
 

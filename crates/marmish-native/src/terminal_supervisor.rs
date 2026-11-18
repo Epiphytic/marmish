@@ -207,7 +207,7 @@ impl<'a> Supervisor<'a> {
             Ok(io) => io,
             Err(failure) => {
                 if let Some(pending) = failure.pending {
-                    active.retire(pending);
+                    active.retire(*pending);
                 }
                 return Err(failure.error);
             }

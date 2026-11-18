@@ -159,13 +159,18 @@ WSS relay on both ends.
 ```sh
 marmish terminal SERVER_NPUB@relay.example
 marmish terminal --new SERVER_NPUB@relay.example
+marmish terminal --observe SERVER_NPUB@relay.example
+marmish terminal --takeover SERVER_NPUB@relay.example
 ```
 
-The default command attaches to that identity's default session. A second
-writer receives Busy. Use `--new` for a separate tmux session. Enter `~.` at the
-beginning of a line to detach, then repeat the default command to return to the running shell.
-The daemon sends a keepalive every five minutes and expires an inactive
-endpoint after eleven minutes.
+The default command attaches to that identity's default session. If it
+already has a writer, the prompt offers read-only Observe, Takeover, a new
+tmux session or cancel. Observe follows the current writer's display.
+Takeover ends the previous writer and its observers, then attaches to the
+same pane. A new session prints its slot ID. Add `--session SLOT_ID` to
+attach to an existing named slot. Enter `~.` at the beginning of a line
+to detach and leave the shell running. The daemon sends a keepalive every
+five minutes and expires an inactive endpoint after eleven minutes.
 
 The command history feature upgrades the encrypted profile journal. To keep a rollback path,
 back up the entire profile directory while its daemon is stopped before

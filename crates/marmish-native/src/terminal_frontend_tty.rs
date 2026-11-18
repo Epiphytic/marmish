@@ -64,6 +64,14 @@ impl Tty {
     }
 
     pub(super) fn raw(&mut self) -> Result<()> {
+        self.enter_raw(libc::TCSANOW)
+    }
+
+    pub(super) fn raw_flushing(&mut self) -> Result<()> {
+        self.enter_raw(libc::TCSAFLUSH)
+    }
+
+    fn enter_raw(&mut self, action: libc::c_int) -> Result<()> {
         self.foreground()?;
         let mut termios = self.saved;
         unsafe { libc::cfmakeraw(&mut termios) };
@@ -71,7 +79,25 @@ impl Tty {
         termios.c_cc[libc::VMIN] = 1;
         termios.c_cc[libc::VTIME] = 0;
         self.needs_restore = true;
-        set_termios(self.fd(), &termios)
+        set_termios(self.fd(), action, &termios)
+    }
+
+    pub(super) fn require_cooked(&self) -> Result<()> {
+        self.foreground()?;
+        const COOKED: libc::tcflag_t = libc::ICANON | libc::ISIG;
+        let flags = get_termios(self.fd())?.c_lflag;
+        if flags & COOKED != COOKED {
+            return Err(Error::Invalid("terminal_prompt_not_cooked"));
+        }
+        Ok(())
+    }
+
+    pub(super) fn flush_input(&self) -> Result<()> {
+        self.foreground()?;
+        if unsafe { libc::tcflush(self.fd(), libc::TCIFLUSH) } != 0 {
+            return Err(TTY);
+        }
+        Ok(())
     }
 
     pub(super) fn restore(&mut self) -> Result<()> {
@@ -79,7 +105,7 @@ impl Tty {
             return Ok(());
         }
         self.foreground()?;
-        set_termios(self.fd(), &self.saved).map_err(|_| RESTORE)?;
+        set_termios(self.fd(), libc::TCSANOW, &self.saved).map_err(|_| RESTORE)?;
         let actual = get_termios(self.fd()).map_err(|_| RESTORE)?;
         if !termios_equal(&actual, &self.saved) {
             return Err(RESTORE);
@@ -178,8 +204,8 @@ fn get_termios(fd: RawFd) -> Result<libc::termios> {
     Ok(unsafe { termios.assume_init() })
 }
 
-fn set_termios(fd: RawFd, termios: &libc::termios) -> Result<()> {
-    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, termios) } != 0 {
+fn set_termios(fd: RawFd, action: libc::c_int, termios: &libc::termios) -> Result<()> {
+    if unsafe { libc::tcsetattr(fd, action, termios) } != 0 {
         return Err(TTY);
     }
     Ok(())

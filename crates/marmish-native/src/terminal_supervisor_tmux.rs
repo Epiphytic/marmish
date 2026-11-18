@@ -30,7 +30,7 @@ pub(super) struct Manager {
     pub(super) profile: Option<std::sync::Arc<crate::identity::ProfileLease>>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct Inventory {
     pub session: u32,
     pub pid: i32,
@@ -216,7 +216,7 @@ impl Manager {
         })
     }
 
-    fn client_count(
+    pub(super) fn client_count(
         &mut self,
         slot: SlotId,
         inventory: Inventory,
@@ -225,10 +225,35 @@ impl Manager {
         let mut command = self.verified_control(slot, inventory)?;
         command.args(["list-clients", "-F", "1"]);
         let raw = self.run_until(command, deadline)?;
+        self.verified_control(slot, inventory)?;
         if raw.chunks(2).any(|record| record != b"1\n") {
             return Err(UNAVAILABLE);
         }
         Ok(raw.len() / 2)
+    }
+
+    pub(super) fn wait_observer_until(
+        &mut self,
+        slot: SlotId,
+        inventory: Inventory,
+        worker: Option<libc::pid_t>,
+        deadline: Instant,
+    ) -> Result<()> {
+        let worker = worker.filter(|pid| *pid > 0).ok_or(UNAVAILABLE)?;
+        let deadline = deadline.min(Instant::now() + CLIENT_TIMEOUT);
+        loop {
+            let mut command = self.verified_control(slot, inventory)?;
+            command.args(["list-clients", "-F", "#{client_pid}\t#{client_flags}"]);
+            let raw = self.run_until(command, deadline)?;
+            self.verified_control(slot, inventory)?;
+            if checked_observer(&raw, worker)? {
+                return Ok(());
+            }
+            std::thread::sleep(CLIENT_POLL.min(deadline.saturating_duration_since(Instant::now())));
+            if Instant::now() >= deadline {
+                return Err(UNAVAILABLE);
+            }
+        }
     }
 
     #[cfg(test)]
@@ -530,6 +555,37 @@ pub(super) fn validate_length(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn checked_observer(raw: &[u8], expected: libc::pid_t) -> Result<bool> {
+    let records = std::str::from_utf8(raw).map_err(|_| UNAVAILABLE)?;
+    let mut count = 0;
+    let mut found = false;
+    for record in records.split_inclusive('\n') {
+        count += 1;
+        if count > 4 {
+            return Err(UNAVAILABLE);
+        }
+        let record = record.strip_suffix('\n').ok_or(UNAVAILABLE)?;
+        let (pid, flags) = record.split_once('\t').ok_or(UNAVAILABLE)?;
+        let pid = pid.parse::<libc::pid_t>().map_err(|_| UNAVAILABLE)?;
+        if pid <= 0 || flags.contains('\t') {
+            return Err(UNAVAILABLE);
+        }
+        if pid == expected {
+            if found {
+                return Err(UNAVAILABLE);
+            }
+            let mut flags = flags.split(',');
+            if !flags.clone().any(|flag| flag == "read-only")
+                || !flags.any(|flag| flag == "ignore-size")
+            {
+                return Err(UNAVAILABLE);
+            }
+            found = true;
+        }
+    }
+    Ok(found)
+}
+
 fn safe_shell_option(path: &Path) -> bool {
     path.as_os_str()
         .as_encoded_bytes()
@@ -572,4 +628,26 @@ pub(super) fn parse_inventory(raw: &[u8], marker: [u8; 16]) -> Option<(u32, i32)
     }
     let pid: i32 = number(pid)?;
     (pid > 0).then_some((number(id)?, pid))
+}
+
+#[cfg(test)]
+mod observer_tests {
+    use super::*;
+
+    #[test]
+    fn core_tests_terminal_live_tmux_requires_exact_observer_pid_and_flags() {
+        let valid = b"41\tattached,focused\n42\tattached,read-only,ignore-size\n";
+        assert!(matches!(checked_observer(valid, 42), Ok(true)));
+        assert!(matches!(checked_observer(valid, 43), Ok(false)));
+        assert!(checked_observer(valid, 41).is_err());
+        for malformed in [
+            b"42\tread-only,ignore-size".as_slice(),
+            b"42\tread-only,ignore-size-without-boundary\n",
+            b"42\tignore-size,read-onlyish\n",
+            b"42\tread-only\tignore-size\n",
+            b"42\tread-only,ignore-size\n42\tread-only,ignore-size\n",
+        ] {
+            assert!(checked_observer(malformed, 42).is_err());
+        }
+    }
 }

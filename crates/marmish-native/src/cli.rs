@@ -206,8 +206,17 @@ enum FrontendCommand {
     Terminal {
         destination: String,
         /// Start a separate tmux session.
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["observe", "takeover", "session"])]
         new: bool,
+        /// Watch the current writer without sending input or resizing.
+        #[arg(long, conflicts_with = "takeover")]
+        observe: bool,
+        /// Replace the current writer.
+        #[arg(long)]
+        takeover: bool,
+        /// Select an existing session by its 32-character slot ID.
+        #[arg(long, value_parser = ipc::terminal_handshake::parse_slot)]
+        session: Option<[u8; 16]>,
     },
     /// Execute with binary stdin/stdout streams and explicit remote cancellation.
     Stream {
@@ -1549,9 +1558,23 @@ pub fn main(daemon_binary: bool) -> ExitCode {
     if args.debug {
         crate::diagnostics::enable();
     }
-    if let Some(FrontendCommand::Terminal { destination, new }) = &args.command {
+    if let Some(FrontendCommand::Terminal {
+        destination,
+        new,
+        observe,
+        takeover,
+        session,
+    }) = &args.command
+    {
+        use ipc::terminal_handshake::Attach;
+        let attach = match (*new, *observe, *takeover) {
+            (true, _, _) => Attach::New,
+            (_, true, _) => Attach::Observe,
+            (_, _, true) => Attach::Takeover,
+            _ => Attach::Default,
+        };
         let result = validate_terminal_options(&args, daemon_binary).and_then(|()| {
-            ipc::terminal_handshake::run_foreground(*new, async |child_mask| {
+            ipc::terminal_handshake::run_foreground(attach, *session, async |child_mask| {
                 prepare_terminal(&args, destination, child_mask).await
             })
         });
@@ -1633,7 +1656,7 @@ mod tests {
         let args = parse(&["marmish", "terminal", "alias@relay.example", "--new"]).unwrap();
         assert!(matches!(
             &args.command,
-            Some(FrontendCommand::Terminal { destination, new: true })
+            Some(FrontendCommand::Terminal { destination, new: true, .. })
                 if destination == "alias@relay.example"
         ));
         assert!(validate_terminal_options(&args, false).is_ok());
@@ -1646,6 +1669,42 @@ mod tests {
         let args = parse(&["marmish", "alias", "--", "echo", "--new"]).unwrap();
         assert!(command_action(&args));
         assert_eq!(args.trailing.unwrap(), ["echo", "--new"]);
+    }
+
+    #[test]
+    fn terminal_cli_modes_and_named_slots_are_exclusive_and_canonical() {
+        let parse = |flags: &[&str]| {
+            let mut args = vec!["marmish", "terminal", "alias"];
+            args.extend_from_slice(flags);
+            parse_public(&args.into_iter().map(OsString::from).collect::<Vec<_>>())
+        };
+        let slot = "0102030405060708090a0b0c0d0e0f10";
+        assert!(matches!(
+            parse(&["--observe", "--session", slot]).unwrap().command,
+            Some(FrontendCommand::Terminal {
+                observe: true,
+                session: Some(_),
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse(&["--takeover", "--session", slot]).unwrap().command,
+            Some(FrontendCommand::Terminal {
+                takeover: true,
+                session: Some(_),
+                ..
+            })
+        ));
+        for flags in [
+            vec!["--new", "--observe"],
+            vec!["--new", "--takeover"],
+            vec!["--observe", "--takeover"],
+            vec!["--new", "--session", slot],
+            vec!["--session", "0102030405060708090A0b0c0d0e0f10"],
+            vec!["--session", "00000000000000000000000000000000"],
+        ] {
+            assert!(parse(&flags).is_err(), "{flags:?}");
+        }
     }
 
     #[test]

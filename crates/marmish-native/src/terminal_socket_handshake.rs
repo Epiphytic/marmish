@@ -34,7 +34,66 @@ pub(crate) enum Attach {
     Takeover,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) struct Offer([u8; 56]);
+
+impl Offer {
+    pub(crate) fn from_bytes(bytes: [u8; 56]) -> Result<Self> {
+        if bytes[..48].chunks_exact(16).any(|id| id == [0; 16]) || bytes[48..] == [0; 8] {
+            return Err(Error::Invalid("terminal_offer_invalid"));
+        }
+        Ok(Self(bytes))
+    }
+
+    pub(crate) fn bytes(self) -> [u8; 56] {
+        self.0
+    }
+
+    fn slot(self) -> [u8; 16] {
+        self.0[16..32].try_into().expect("fixed offer slot")
+    }
+
+    fn parse(raw: &str) -> Result<Self> {
+        let bytes = parse_hex(raw).ok_or(Error::Invalid("terminal_offer_invalid"))?;
+        Self::from_bytes(bytes)
+    }
+}
+
+impl std::fmt::Debug for Offer {
+    fn fmt(&self, format: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        format.write_str("Offer(..)")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Target {
+    Default,
+    Named([u8; 16]),
+    Offer(Offer),
+}
+
+fn canonical(value: &str, len: usize) -> bool {
+    value.len() == len
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+fn parse_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
+    let mut bytes = [0; N];
+    if !canonical(value, N * 2) || hex::decode_to_slice(value, &mut bytes).is_err() {
+        return None;
+    }
+    Some(bytes)
+}
+
+pub(crate) fn parse_slot(value: &str) -> Result<[u8; 16]> {
+    parse_hex(value)
+        .filter(|slot| *slot != [0; 16])
+        .ok_or(Error::Invalid("terminal_slot_invalid"))
+}
+
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Start {
     pub(crate) remote: String,
@@ -43,16 +102,28 @@ pub(crate) struct Start {
     pub(crate) rows: u16,
     pub(crate) columns: u16,
     pub(crate) attach: Attach,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_string"
+    )]
+    pub(crate) session_slot: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_string"
+    )]
+    pub(crate) offer: Option<String>,
+}
+
+fn present_string<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
 }
 
 impl Start {
     fn validate(&self) -> Result<()> {
-        let canonical = |value: &str, len| {
-            value.len() == len
-                && value
-                    .bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        };
         if !canonical(&self.remote, 64)
             || !canonical(&self.session, 32)
             || !(2..=250).contains(&self.rows)
@@ -66,7 +137,26 @@ impl Start {
             .map_err(|_| Error::Invalid("terminal_start_invalid"))?;
         RelayPolicy::parse(&self.relays, RouteMode::Auto, TransportLimits::default())
             .map_err(|_| Error::Invalid("terminal_start_invalid"))?;
+        self.target()?;
         Ok(())
+    }
+
+    pub(crate) fn target(&self) -> Result<Target> {
+        const INVALID: Error = Error::Invalid("terminal_start_invalid");
+        match (
+            self.attach,
+            self.session_slot.as_deref(),
+            self.offer.as_deref(),
+        ) {
+            (_, None, None) => Ok(Target::Default),
+            (Attach::Default | Attach::Observe | Attach::Takeover, Some(slot), None) => {
+                parse_slot(slot).map(Target::Named).map_err(|_| INVALID)
+            }
+            (Attach::New | Attach::Observe | Attach::Takeover, None, Some(offer)) => {
+                Offer::parse(offer).map(Target::Offer).map_err(|_| INVALID)
+            }
+            _ => Err(INVALID),
+        }
     }
 }
 
@@ -104,6 +194,46 @@ pub(crate) struct PendingStart {
 struct Ready {
     ok: bool,
     terminal_stream: Role,
+    slot: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Busy {
+    ok: bool,
+    terminal_busy: BusyOffer,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct BusyOffer {
+    offer: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyReady {
+    ok: bool,
+    #[serde(rename = "terminal_stream")]
+    _terminal_stream: Role,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Failure {
+    ok: bool,
+    error: String,
+    #[serde(rename = "result")]
+    _result: Option<()>,
+}
+
+pub(crate) enum StartOutcome {
+    Ready {
+        stream: OwnedStream,
+        role: Role,
+        slot: [u8; 16],
+    },
+    Busy(Offer),
 }
 
 pub(crate) struct Attached {
@@ -255,10 +385,26 @@ impl LocalStart {
         refuse(stream, deadline, category).await;
     }
 
+    pub(crate) async fn busy(self, offer: Offer) -> Result<()> {
+        let Self {
+            mut stream,
+            deadline,
+            pending,
+            ..
+        } = self;
+        drop(pending);
+        let response = Busy {
+            ok: false,
+            terminal_busy: BusyOffer {
+                offer: hex::encode(offer.bytes()),
+            },
+        };
+        timeout_at(deadline, write_frame_body(&mut stream, &response))
+            .await
+            .map_err(|_| Error::Timeout)?
+    }
+
     pub(crate) fn reserve(&self) -> Result<OwnedSemaphorePermit> {
-        if !matches!(self.request.attach, Attach::Default | Attach::New) {
-            return Err(Error::Invalid("terminal_mode_unavailable"));
-        }
         self.attached
             .clone()
             .try_acquire_owned()
@@ -268,7 +414,7 @@ impl LocalStart {
     #[cfg(test)]
     async fn admit(self) -> Result<Attached> {
         match self.reserve() {
-            Ok(permit) => self.admit_reserved(permit).await,
+            Ok(permit) => self.admit_reserved(permit, Role::Writer, [1; 16]).await,
             Err(error @ Error::Invalid(reason)) => {
                 self.refuse(reason).await;
                 Err(error)
@@ -277,7 +423,12 @@ impl LocalStart {
         }
     }
 
-    pub(crate) async fn admit_reserved(self, permit: OwnedSemaphorePermit) -> Result<Attached> {
+    pub(crate) async fn admit_reserved(
+        self,
+        permit: OwnedSemaphorePermit,
+        role: Role,
+        slot: [u8; 16],
+    ) -> Result<Attached> {
         let Self {
             mut stream,
             deadline,
@@ -288,9 +439,13 @@ impl LocalStart {
         if Instant::now() >= deadline {
             return Err(Error::Timeout);
         }
+        if slot == [0; 16] {
+            return Err(Error::Invalid("terminal_slot_invalid"));
+        }
         let response = Ready {
             ok: true,
-            terminal_stream: Role::Writer,
+            terminal_stream: role,
+            slot: hex::encode(slot),
         };
         timeout_at(deadline, write_frame_body(&mut stream, &response))
             .await
@@ -303,49 +458,122 @@ impl LocalStart {
     }
 }
 
-pub(crate) async fn start(path: &Path, request: Start, deadline: Instant) -> Result<OwnedStream> {
+async fn exchange(
+    path: &Path,
+    request: Start,
+    deadline: Instant,
+    before_write: impl FnOnce(),
+) -> Result<StartOutcome> {
     request.validate()?;
+    let attach = request.attach;
+    let target = request.target()?;
     if Instant::now() >= deadline {
         return Err(Error::Timeout);
     }
     timeout_at(deadline, async {
         let mut stream = UnixStream::connect(path).await?;
         verify_peer(&stream)?;
+        before_write();
         write_frame_body(&mut stream, &Request::TerminalStart { request }).await?;
         let reply: Box<serde_json::value::RawValue> = read_frame(&mut stream).await?;
-        if let Ok(Ready {
-            ok: true,
-            terminal_stream: Role::Writer,
-        }) = serde_json::from_str(reply.get())
-        {
-            return Ok(stream.into_std()?);
-        }
-        let response: Response = serde_json::from_str(reply.get())
-            .map_err(|_| Error::Invalid("terminal_start_response"))?;
-        if response.result.is_some() || response.command.is_some() || response.stream.is_some() {
-            return Err(Error::Invalid("terminal_start_response"));
-        }
-        if response.ok || response.terminal_stream.is_some() {
-            return Err(Error::Invalid("terminal_start_response"));
-        }
-        Err(Error::Invalid(match response.error.as_deref() {
-            Some("invalid_request") => "terminal_daemon_upgrade_required",
-            Some("terminal_busy") => "terminal_busy",
-            Some("terminal_bootstrap_no_challenge") => "terminal_bootstrap_no_challenge",
-            Some("terminal_attach_deadline") => "terminal_attach_deadline",
-            Some("terminal_capacity") => "terminal_capacity",
-            Some("terminal_command_binding") => "terminal_command_binding",
-            Some("terminal_grant_denied") => "terminal_grant_denied",
-            Some("terminal_mode_unavailable") => "terminal_mode_unavailable",
-            Some("terminal_owner_unavailable") => "terminal_owner_unavailable",
-            Some("terminal_start_invalid") => "terminal_start_invalid",
-            Some("terminal_transport_unavailable") => "terminal_transport_unavailable",
-            Some("terminal_unavailable") => "terminal_unavailable",
-            _ => "terminal_start_response",
-        }))
+        decode_reply(reply.get(), attach, target, stream)
     })
     .await
     .map_err(|_| Error::Timeout)?
+}
+
+#[cfg(test)]
+pub(crate) async fn start(path: &Path, request: Start, deadline: Instant) -> Result<StartOutcome> {
+    exchange(path, request, deadline, || {}).await
+}
+
+fn decode_reply(
+    body: &str,
+    attach: Attach,
+    target: Target,
+    stream: UnixStream,
+) -> Result<StartOutcome> {
+    const INVALID: Error = Error::Invalid("terminal_start_response");
+    if let Ok(Ready {
+        ok: true,
+        terminal_stream: role,
+        slot,
+    }) = serde_json::from_str(body)
+    {
+        let slot = parse_slot(&slot).map_err(|_| INVALID)?;
+        let expected = if attach == Attach::Observe {
+            Role::Observer
+        } else {
+            Role::Writer
+        };
+        let exact_slot = match target {
+            Target::Default => true,
+            Target::Named(named) => slot == named,
+            Target::Offer(offer) => (slot == offer.slot()) != (attach == Attach::New),
+        };
+        if role != expected
+            || !exact_slot
+            || (attach == Attach::Takeover && !matches!(target, Target::Offer(_)))
+        {
+            return Err(INVALID);
+        }
+        return Ok(StartOutcome::Ready {
+            stream: stream.into_std()?,
+            role,
+            slot,
+        });
+    }
+    if let Ok(Busy {
+        ok: false,
+        terminal_busy: BusyOffer { offer },
+    }) = serde_json::from_str(body)
+    {
+        if !matches!(attach, Attach::Default | Attach::Takeover)
+            || matches!(target, Target::Offer(_))
+        {
+            return Err(INVALID);
+        }
+        let offer = Offer::parse(&offer).map_err(|_| INVALID)?;
+        if let Target::Named(named) = target
+            && named != offer.slot()
+        {
+            return Err(INVALID);
+        }
+        return Ok(StartOutcome::Busy(offer));
+    }
+    if let Ok(LegacyReady {
+        ok: true,
+        _terminal_stream: Role::Writer,
+    }) = serde_json::from_str(body)
+    {
+        return Err(Error::Invalid("terminal_daemon_upgrade_required"));
+    }
+    let Failure {
+        ok: false, error, ..
+    } = serde_json::from_str(body).map_err(|_| INVALID)?
+    else {
+        return Err(INVALID);
+    };
+    Err(Error::Invalid(match error.as_str() {
+        "invalid_request" | "terminal_mode_unavailable" => "terminal_daemon_upgrade_required",
+        "terminal_attach_deadline" => "terminal_attach_deadline",
+        "terminal_bootstrap_no_challenge" => "terminal_bootstrap_no_challenge",
+        "terminal_busy" => "terminal_busy",
+        "terminal_capacity" => "terminal_capacity",
+        "terminal_command_binding" => "terminal_command_binding",
+        "terminal_grant_denied" => "terminal_grant_denied",
+        "terminal_native_unavailable" => "terminal_native_unavailable",
+        "terminal_offer_stale" => "terminal_offer_stale",
+        "terminal_owner_unavailable" => "terminal_owner_unavailable",
+        "terminal_replacement_pending" => "terminal_replacement_pending",
+        "terminal_slot_missing" => "terminal_slot_missing",
+        "terminal_start_invalid" => "terminal_start_invalid",
+        "terminal_takeover_uncertain" => "terminal_takeover_uncertain",
+        "terminal_transport_unavailable" => "terminal_transport_unavailable",
+        "terminal_unavailable" => "terminal_unavailable",
+        "terminal_writer_missing" => "terminal_writer_missing",
+        _ => return Err(INVALID),
+    }))
 }
 
 #[cfg(test)]

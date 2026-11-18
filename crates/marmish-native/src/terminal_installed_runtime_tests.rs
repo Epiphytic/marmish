@@ -18,6 +18,9 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::timeout;
 
+#[path = "terminal_installed_observe_tests.rs"]
+mod observe;
+
 const ATTACH: Duration = Duration::from_secs(35);
 const IO: Duration = Duration::from_secs(15);
 const MARKER: &[u8] = "two words; % 🐾".as_bytes();
@@ -114,6 +117,8 @@ enum Workload {
     ShellExit,
     Restart,
     ProbeRetry,
+    Observe,
+    Takeover,
     Benchmark { throughput: bool },
 }
 
@@ -315,15 +320,12 @@ async fn open_terminal_until(
     request: handshake::Start,
     deadline: Instant,
 ) -> Result<LocalTerminal> {
-    let stream = handshake::start(path, request, deadline).await?;
-    Ok(LocalTerminal {
-        stream: UnixStream::from_std(stream)?,
-        decoder: Decoder::new(Direction::ToClient, Role::Writer),
-        data: Vec::new(),
-        credit: 0,
-        sent: 0,
-        input_closed: false,
-    })
+    match handshake::start(path, request, deadline).await? {
+        handshake::StartOutcome::Ready { stream, role, slot } => {
+            LocalTerminal::from_ready(stream, role, slot)
+        }
+        handshake::StartOutcome::Busy(_) => Err(Error::Invalid("terminal_busy")),
+    }
 }
 
 async fn resume_default(
@@ -334,7 +336,9 @@ async fn resume_default(
     let mut retries = 0;
     loop {
         match open_terminal_until(path, start(handshake::Attach::Default), deadline).await {
-            Err(Error::Invalid("terminal_busy")) if retries < 2 && Instant::now() < deadline => {
+            Err(Error::Invalid("terminal_busy" | "terminal_native_unavailable"))
+                if retries < 2 && Instant::now() < deadline =>
+            {
                 retries += 1;
             }
             result => return result.map(|terminal| (terminal, retries)),
@@ -345,6 +349,8 @@ async fn resume_default(
 struct LocalTerminal {
     stream: UnixStream,
     decoder: Decoder,
+    role: Role,
+    slot: [u8; 16],
     data: Vec<u8>,
     credit: u64,
     sent: u64,
@@ -366,6 +372,23 @@ enum Event {
 }
 
 impl LocalTerminal {
+    fn from_ready(
+        stream: std::os::unix::net::UnixStream,
+        role: Role,
+        slot: [u8; 16],
+    ) -> Result<Self> {
+        Ok(Self {
+            stream: UnixStream::from_std(stream)?,
+            decoder: Decoder::new(Direction::ToClient, role),
+            role,
+            slot,
+            data: Vec::new(),
+            credit: 0,
+            sent: 0,
+            input_closed: false,
+        })
+    }
+
     async fn send(&mut self, record: Record<'_>) {
         if let Record::Input(bytes) = record {
             let accepted = self.sent.checked_add(bytes.len() as u64).unwrap();
@@ -383,7 +406,7 @@ impl LocalTerminal {
     }
 
     async fn write_record(&mut self, record: Record<'_>) {
-        let encoded = local::encode(Direction::ToDaemon, Role::Writer, record).unwrap();
+        let encoded = local::encode(Direction::ToDaemon, self.role, record).unwrap();
         timeout(IO, self.stream.write_all(&encoded))
             .await
             .unwrap()
@@ -471,10 +494,15 @@ impl LocalTerminal {
                 result = &mut task => return result,
                 result = self.stream.read(&mut first) => result.unwrap(),
             };
-            assert_eq!(count, 1, "active terminal reached EOF while another attaches");
+            assert_eq!(
+                count, 1,
+                "active terminal reached EOF while another attaches"
+            );
             match self.finish_record(first[0], Instant::now() + IO).await {
                 Event::Output | Event::Credit | Event::Resize => self.data.clear(),
-                Event::Close(reason) => panic!("active terminal closed while another attaches: {reason:?}"),
+                Event::Close(reason) => {
+                    panic!("active terminal closed while another attaches: {reason:?}")
+                }
                 Event::Eof => panic!("active terminal reached EOF while another attaches"),
             }
         }
@@ -826,11 +854,18 @@ async fn prove_writer(workload: Workload) -> Measurements {
         rows: 24,
         columns: 80,
         attach,
+        session_slot: None,
+        offer: None,
     };
     let verdict = AssertUnwindSafe(async {
         relay
             .subscription(server_alias, 1059, "#p", json!(server_alias))
             .await;
+        if matches!(workload, Workload::Observe | Workload::Takeover) {
+            let mut sample = observe::prove(&socket, start, &cleanup, &turns, workload).await;
+            sample.unloaded = before;
+            return sample;
+        }
         if matches!(workload, Workload::Cancel) {
             cancel_held_probe(
                 &relay,
