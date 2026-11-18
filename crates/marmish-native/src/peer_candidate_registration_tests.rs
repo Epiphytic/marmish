@@ -84,8 +84,12 @@ fn candidate_registration_scope_and_irreversible_dispatch() {
         "ordinary",
         "host_storage_healthy",
         "host_storage_displaced",
+        "host_preflight_open_displaced",
+        "host_preflight_key_displaced",
         "host_preflight_close_displaced",
-        "host_journal_before_key_displaced",
+        "host_preflight_next_displaced",
+        "host_journal_open_displaced",
+        "host_journal_key_displaced",
         "topology",
         "displaced",
         "dead_lease",
@@ -208,8 +212,12 @@ fn registration_subprocess() {
         }
         "host_storage_healthy"
         | "host_storage_displaced"
+        | "host_preflight_open_displaced"
+        | "host_preflight_key_displaced"
         | "host_preflight_close_displaced"
-        | "host_journal_before_key_displaced" => {
+        | "host_preflight_next_displaced"
+        | "host_journal_open_displaced"
+        | "host_journal_key_displaced" => {
             verify_host_storage(&ordinary, &lease, &material, &mode);
         }
         "topology" => {
@@ -348,9 +356,13 @@ fn verify_host_storage(
     let limit = match mode {
         // Admission at scanner entry, before file access, twice at raw open
         // and before keying; the next check is the first read-only close.
+        "host_preflight_open_displaced" => Some(4),
+        "host_preflight_key_displaced" => Some(5),
         "host_preflight_close_displaced" => Some(6),
+        "host_preflight_next_displaced" => Some(7),
         // Before file preparation, twice at raw open, then before keying.
-        "host_journal_before_key_displaced" => Some(4),
+        "host_journal_open_displaced" => Some(3),
+        "host_journal_key_displaced" => Some(4),
         _ => None,
     };
     let visits = Arc::new(AtomicUsize::new(0));
@@ -369,15 +381,21 @@ fn verify_host_storage(
     } else {
         admission.connection_fence()
     };
-    if mode == "host_preflight_close_displaced" {
+    if mode.starts_with("host_preflight_") {
+        let following = lease.journal_database();
+        let before = crate::native_preflight::WalSnapshot::capture(following).unwrap();
         assert!(matches!(
             crate::native_preflight::check_with_fence(lease, material, Some(&fence)),
             Err(crate::Error::Storage("dispatcher_admission"))
         ));
-        assert_eq!(visits.load(Ordering::Relaxed), 6);
+        assert_eq!(visits.load(Ordering::Relaxed), limit.unwrap());
+        assert_eq!(
+            crate::native_preflight::WalSnapshot::verify_all(&[before]).unwrap(),
+            [[false, false]],
+        );
         return;
     }
-    if mode != "host_journal_before_key_displaced" {
+    if !mode.starts_with("host_journal_") {
         crate::native_preflight::check_with_fence(lease, material, Some(&fence)).unwrap();
     }
     let mut key = Zeroizing::new([0; 32]);
@@ -386,14 +404,14 @@ fn verify_host_storage(
         .unwrap();
     let account = material.public_key().to_hex();
     let path = lease.journal_database();
-    if mode == "host_journal_before_key_displaced" {
-        let path = path.with_file_name("before-key.sqlite3");
+    if mode.starts_with("host_journal_") {
+        let path = path.with_file_name("refused.sqlite3");
         assert!(matches!(
             Journal::open_with_fence(&path, &key, &account, Some(&fence)),
             Err(crate::Error::Storage("dispatcher_admission"))
         ));
         assert_eq!(fs::metadata(path).unwrap().len(), 0);
-        assert_eq!(visits.load(Ordering::Relaxed), 4);
+        assert_eq!(visits.load(Ordering::Relaxed), limit.unwrap());
         return;
     }
     let journal = Journal::open_with_fence(path, &key, &account, Some(&fence)).unwrap();
