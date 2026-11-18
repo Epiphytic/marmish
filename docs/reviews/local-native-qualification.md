@@ -16,3 +16,14 @@ both regression tests and inspected refusal categories, selector matching,
 tmux and relay preflight, cleanup and the prior Linux artifact report.
 The [validation report](../validation/local-native-qualification.md)
 records the actual installed checks and remaining optional modes.
+
+## Fixture failure diagnostics
+
+Claude Code Auto with Sonnet 5.5 approved the design in session
+`38630325-75b4-4c0f-9dea-1e3c4a458892` and the final diagnostic patch against
+`c8bf3cc` in session `3c90dd64-c0cb-4bd8-9874-09974387f2b3`. The reviewer
+checked that the fixture's existing failure categories survive, the libtest
+summary produces a fixed advisory category, the child exit code is bounded,
+and the report excludes raw child output. All four local qualification unit
+tests and `git diff --check` passed. This review used no Cargo builds or live
+relay fixtures.

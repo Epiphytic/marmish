@@ -43,8 +43,14 @@ and can compile debug binaries, so prepopulate the dependency cache. The harness
 runs each selector serially and checks that it executed exactly once.
 
 The JSON report contains fixed stage results, fixture case names, source SHA,
-version, target and elapsed time. It omits child output and disposable identity
-and state details. The host-local installer and the native private WSS runtime
+version, target and elapsed time. When a fixture Cargo command exits nonzero,
+`operation_failed` includes a `fixture_exit_code` if it is in `[-128, 255]`.
+`fixture_failure_kind` is `selected_test_failed` when libtest appears to report
+one selected failure, or `no_recognized_failure_summary` otherwise. This is a
+heuristic based on the libtest summary and does not identify the underlying
+error. Timeouts and the child output limit have their own categories. The
+report omits child output, panic text and disposable identity and state details.
+The host-local installer and the native private WSS runtime
 fixture produce independent evidence. Cross-host interoperability, Keychain
 providers, the three-target release renderer and benchmarking have their own
 gates.

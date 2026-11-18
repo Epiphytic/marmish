@@ -39,6 +39,10 @@ WSS_CASES = (
     'observe::terminal_installed_runtime_observer_read_only',
     'observe::terminal_installed_runtime_takeover_named_resume',
 )
+LIBTEST_SINGLE_FAILURE = re.compile(
+    rb'test result: FAILED\. 0 passed; 1 failed; 0 ignored; 0 measured; '
+    rb'[0-9]+ filtered out; finished in [0-9]+\.[0-9]+s'
+)
 STOCK_TMUX = ('/usr/bin/tmux', '/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/opt/local/bin/tmux')
 
 
@@ -234,9 +238,19 @@ def terminal_cases(options, tmux, report):
     for scope, name in cases:
         report['stage'] = 'terminal_fixture'
         report['fixture_case'] = name
-        _, output = execute([*cargo, 'test', *common, *scope, name, '--', '--ignored', '--exact',
-                             '--test-threads=1'], environment, timeout=1200)
-        lines = output.splitlines()
+        exit_code, output = execute([*cargo, 'test', *common, *scope, name, '--', '--ignored',
+                                     '--exact', '--test-threads=1'], environment, timeout=1200,
+                                    success=False)
+        lines = output.rstrip(b'\r\n').splitlines()
+        if exit_code:
+            selected_test_failed = (lines.count(b'running 1 test') == 1 and
+                                    LIBTEST_SINGLE_FAILURE.fullmatch(lines[-1]))
+            report['fixture_failure_kind'] = (
+                'selected_test_failed' if selected_test_failed else 'no_recognized_failure_summary'
+            )
+            if type(exit_code) is int and -128 <= exit_code <= 255:
+                report['fixture_exit_code'] = exit_code
+            raise Refused('operation_failed', exit_code=exit_code)
         require(lines.count(b'running 1 test') == 1 and any(line.startswith(b'test result: ok. 1 passed;')
                 for line in lines), 'fixture_test_count')
         report['fixture_passes'].append(name)
