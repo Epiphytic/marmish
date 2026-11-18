@@ -861,6 +861,15 @@ impl ReceiverFiles<'_> {
     ) -> Result<std::result::Result<JoinedAuthority, StageError>> {
         self.snapshot_native(permit, |path| Ok(operation.read(path)))
     }
+
+    pub(crate) fn check_snapshot_cipher(
+        &self,
+        permit: crate::peer_invitation::CleanPermit<'_>,
+        key: &SqlCipherKey,
+        fence: &crate::peer_invitation::TurnFence<'_>,
+    ) -> Result<()> {
+        self.snapshot_native(permit, |path| recover_database(path, key, fence))
+    }
 }
 
 #[cfg(test)]

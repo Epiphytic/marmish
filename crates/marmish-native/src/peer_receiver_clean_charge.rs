@@ -7,6 +7,7 @@ use super::*;
 pub(super) type ObservedFiles = [[Option<FileExtent>; 4]; 3];
 
 /// Binds a single measured original or snapshot to the held file turn.
+/// Measure immediately before the native operation under the same exclusion.
 pub(crate) struct CleanPermit<'a> {
     files: &'a ReceiverFiles<'a>,
     generation: NonZeroU64,

@@ -306,7 +306,12 @@ fn measured_clean_turn_reserves_and_rechecks_exact_copy() {
         .unwrap();
     let root = directory.path().canonicalize().unwrap();
     let fixture = Fixture::at(&root, None, true);
-    let (owner, _, _) = start_original(&fixture, 8192);
+    let (owner, binding, _) = start_original(&fixture, 0);
+    let key = SqlCipherKey::raw(*owner.paths.provisional_key(binding));
+    let conn = fixture_keyed(&fixture.stage(), &key);
+    conn.execute_batch("PRAGMA journal_mode=DELETE; CREATE TABLE fixture(value INTEGER);")
+        .unwrap();
+    conn.close().unwrap();
     drop(owner);
     drop(fixture);
     run_recovery_child(&root, "clean-turn", 0);
@@ -328,41 +333,77 @@ fn clean_turn_child(
     assert!(turn.files().matches_quota(&quota));
     assert!(!turn.files().matches_quota(&second));
     assert!(second.receiver_files(lease).is_err());
+    assert!(matches!(
+        owner.recover_journal(lease, binding, fence, false),
+        Err(Error::Path)
+    ));
     let foreign = Fixture::new();
     let mut foreign_owner = open(&foreign);
     assert!(matches!(
         turn.original_permit(&mut foreign_owner, fence),
         Err(Error::StageIdentityMismatch)
     ));
-    let original = turn
-        .original_permit(owner, fence)
-        .unwrap()
-        .verify(turn.files(), false)
-        .unwrap();
+    let original_permit = turn.original_permit(owner, fence).unwrap();
+    let original = original_permit.verify(turn.files(), false).unwrap();
     assert_eq!(original.identity, main.identity);
     assert_eq!(original.logical, main.logical);
     assert_eq!(original.charged, main.charged);
     assert_eq!(original.charged_other, inventory.charged - main.logical + 1);
-    assert!(turn.snapshot_path(main.logical - 1).is_err());
+    assert!(matches!(
+        turn.snapshot_path(main.logical - 1),
+        Err(Error::StageIdentityMismatch)
+    ));
     let path = turn.snapshot_path(main.logical).unwrap();
-    let copied = write_extent(path, main.logical);
-    let copy = (
-        u64::from_be_bytes(copied.device),
-        u64::from_be_bytes(copied.inode),
+    let key = SqlCipherKey::raw(*owner.paths.provisional_key(binding));
+    let mut replica = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .unwrap();
+    let mut original = fs::File::open(path.with_file_name("provisional-unknown.db")).unwrap();
+    assert_eq!(
+        std::io::copy(&mut original, &mut replica).unwrap(),
+        main.logical
+    );
+    let copy = replica
+        .metadata()
+        .map(|stat| (stat.dev(), stat.ino()))
+        .unwrap();
+    drop(replica);
+    drop(original);
+    assert_eq!(
+        turn.files()
+            .check_snapshot_cipher(original_permit, &key, fence),
+        Err("dispatch_reservation_owner")
     );
     assert!(turn.original_permit(owner, fence).is_err());
-    assert!(turn.snapshot_permit(owner, main.identity, fence).is_err());
+    assert!(matches!(
+        turn.snapshot_permit(owner, main.identity, fence),
+        Err(Error::StageIdentityMismatch)
+    ));
     let permit = turn.snapshot_permit(owner, copy, fence).unwrap();
     assert!(permit.verify(turn.files(), false).is_none());
     let measured = permit.verify(turn.files(), true).unwrap();
     assert_eq!(measured.logical, main.logical);
     assert_eq!(measured.identity, copy);
     assert_eq!(measured.charged_other, inventory.charged + 1);
+    turn.files()
+        .check_snapshot_cipher(permit, &key, fence)
+        .unwrap();
     turn.snapshot_closed(owner, copy, fence).unwrap();
     assert!(turn.finish(owner, fence, true).is_err());
+    let stale = turn.snapshot_permit(owner, copy, fence).unwrap();
     let replica = OpenOptions::new().write(true).open(path).unwrap();
     replica.set_len(main.logical + 4096).unwrap();
-    assert!(turn.snapshot_permit(owner, copy, fence).is_err());
+    assert_eq!(
+        turn.files().check_snapshot_cipher(stale, &key, fence),
+        Err("dispatch_stage_extent")
+    );
+    assert!(matches!(
+        turn.snapshot_permit(owner, copy, fence),
+        Err(Error::StageIdentityMismatch)
+    ));
     turn.snapshot_closed(owner, copy, fence).unwrap();
     replica.set_len(main.logical).unwrap();
     drop(replica);
@@ -372,16 +413,31 @@ fn clean_turn_child(
     let neighbor = path.with_file_name("provisional-known.db");
     let residual = TOTAL_ADMISSION - inventory.charged - main.logical;
     write_extent(&neighbor, residual);
-    assert!(turn.snapshot_permit(owner, copy, fence).is_err());
-    assert!(turn.snapshot_closed(owner, copy, fence).is_err());
+    assert!(matches!(
+        turn.snapshot_permit(owner, copy, fence),
+        Err(Error::Path)
+    ));
+    assert!(matches!(
+        turn.snapshot_closed(owner, copy, fence),
+        Err(Error::Path)
+    ));
     fs::remove_file(&neighbor).unwrap();
     fs::remove_file(path).unwrap();
     turn.finish(owner, fence, true).unwrap();
     drop(turn);
 
-    write_extent(&neighbor, residual);
+    write_extent(&neighbor, residual - 1);
     let near_full = clean::CleanFiles::begin(owner, &quota, lease, binding, fence).unwrap();
-    assert!(near_full.snapshot_path(main.logical).is_err());
+    assert!(near_full.snapshot_path(main.logical).is_ok());
+    drop(near_full);
+    OpenOptions::new()
+        .write(true)
+        .open(&neighbor)
+        .unwrap()
+        .set_len(residual)
+        .unwrap();
+    let full = clean::CleanFiles::begin(owner, &quota, lease, binding, fence).unwrap();
+    assert!(matches!(full.snapshot_path(main.logical), Err(Error::Path)));
 }
 
 const RECOVERY_CHILD: &str = "peer_invitation::receiver_inventory::tests::managed_recovery_child";
