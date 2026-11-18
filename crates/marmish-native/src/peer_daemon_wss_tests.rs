@@ -1,5 +1,8 @@
 //! Opt-in custody qualification through the daemon's same-UID Unix socket.
 
+#[path = "peer_postjoin_private_wss_tests.rs"]
+mod postjoin_private_wss;
+
 use super::{
     daemon_peer::{Admission, Bootstrap},
     *,
@@ -19,7 +22,7 @@ use cgka_traits::app_components::NostrRoutingV1;
 use consent_checkpoint::{
     Mode,
     provisioning::prepared_consent::custody::CustodyState,
-    wire::{Codec, Delivery, Flight, MAX_OUTER_BYTES},
+    wire::{Codec, Consent, Delivery, Flight, MAX_OUTER_BYTES},
 };
 use nostr::key::PublicKey;
 use prepared_consent::PreparedConsentOwner;
@@ -138,8 +141,17 @@ struct Round {
     daemon: PathBuf,
 }
 
+struct FounderEnrollment {
+    socket: Owner,
+    consent: Consent,
+}
+
 impl Round {
     async fn initialize() -> Self {
+        Self::initialize_with_group(None).await
+    }
+
+    async fn initialize_with_group(group_route: Option<[u8; 32]>) -> Self {
         let daemon = layout();
         let root = private();
         let founder = Arc::new(Keys::generate());
@@ -151,7 +163,11 @@ impl Round {
         drop(setup);
         ordinary.ordinary(signer);
         ordinary.ordinary(command.public());
-        let mut relay = Relay::start_peer([signer, founder.public_key()]).await;
+        let accounts = [signer, founder.public_key()];
+        let mut relay = match group_route {
+            Some(route) => Relay::start_peer_group(accounts, route).await,
+            None => Relay::start_peer(accounts).await,
+        };
         assert!(ordinary.peer_mode().is_none());
         assert!(
             QualifiedOrigin::for_daemon_peer_fixture(
@@ -290,7 +306,7 @@ impl Round {
         running
     }
 
-    async fn send_delivery(&self) -> (Selector, Delivery) {
+    async fn send_offer(&self, group_route: [u8; 32]) -> FounderEnrollment {
         let deadline = || Instant::now() + WAIT;
         let origin = self.relay.url.to_string();
         let qualified = QualifiedOrigin::for_daemon_peer_fixture(
@@ -311,11 +327,10 @@ impl Round {
         .unwrap();
         let wall = self.wall.load(Ordering::Relaxed);
         let codec = Codec::new(MAX_OUTER_BYTES).unwrap();
-        let routing = NostrRoutingV1::new(random(), vec![origin]).unwrap();
+        let routing = NostrRoutingV1::new(group_route, vec![origin]).unwrap();
         let offer = codec
             .prepare_offer(&self.founder, self.signer, random(), &routing, wall)
             .unwrap();
-        let selector = Selector::from(&offer.flight);
         assert!(
             founder_connection
                 .publish(&offer, offer.flight.flight(), deadline())
@@ -336,6 +351,46 @@ impl Round {
             )
             .unwrap();
         assert_eq!(consent.flight().author, self.signer);
+        FounderEnrollment {
+            socket: founder_connection,
+            consent,
+        }
+    }
+
+    async fn finish_delivery(
+        &self,
+        enrollment: &mut FounderEnrollment,
+        welcome: &[u8],
+    ) -> Delivery {
+        let wall = self.wall.load(Ordering::Relaxed);
+        let codec = Codec::new(MAX_OUTER_BYTES).unwrap();
+        let delivery = codec
+            .prepare_delivery(
+                &self.founder,
+                &enrollment.consent,
+                welcome,
+                wall,
+                wall + 360,
+            )
+            .unwrap();
+        assert!(
+            enrollment
+                .socket
+                .publish(&delivery, delivery.flight.flight(), Instant::now() + WAIT)
+                .await
+                .unwrap()
+        );
+        self.assert_relays(&[
+            enrollment.consent.offer().flight(),
+            enrollment.consent.flight(),
+            delivery.flight.flight(),
+        ]);
+        delivery.flight
+    }
+
+    async fn send_delivery(&self) -> (Selector, Delivery) {
+        let mut enrollment = self.send_offer(random()).await;
+        let consent = &enrollment.consent;
         let welcome = peer_enrollment_welcome(
             self.founder_root.path(),
             self.founder.clone(),
@@ -345,22 +400,9 @@ impl Round {
             consent.key_package().clone(),
         )
         .await;
-        let delivery = codec
-            .prepare_delivery(&self.founder, &consent, &welcome, wall, wall + 360)
-            .unwrap();
-        assert!(
-            founder_connection
-                .publish(&delivery, delivery.flight.flight(), deadline())
-                .await
-                .unwrap()
-        );
-        founder_connection.stop(deadline()).await.unwrap();
-        self.assert_relays(&[
-            offer.flight.flight(),
-            consent.flight(),
-            delivery.flight.flight(),
-        ]);
-        (selector, delivery.flight)
+        let delivery = self.finish_delivery(&mut enrollment, &welcome).await;
+        enrollment.socket.stop(Instant::now() + WAIT).await.unwrap();
+        (Selector::from(enrollment.consent.offer()), delivery)
     }
 
     fn assert_relays(&self, expected: &[Flight]) {

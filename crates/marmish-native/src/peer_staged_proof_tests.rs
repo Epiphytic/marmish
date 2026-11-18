@@ -51,7 +51,7 @@ const COMMAND_SUFFIX: [u8; 16] = [0x18; 16];
 
 type StageRuntime = AccountDeviceRuntime<NoIo, StaticTransportRouting, Publisher>;
 
-struct NoIo;
+pub(crate) struct NoIo;
 
 #[async_trait]
 impl TransportAdapter for NoIo {
@@ -336,9 +336,11 @@ pub(crate) async fn peer_enrollment_welcome(
         .payload
 }
 
-pub(crate) struct PeerFounderRuntime(StageRuntime);
+pub(crate) struct PeerFounderRuntime<A: TransportAdapter = NoIo>(
+    AccountDeviceRuntime<A, StaticTransportRouting, Publisher>,
+);
 
-impl PeerFounderRuntime {
+impl<A: TransportAdapter> PeerFounderRuntime<A> {
     pub(crate) fn runtime(
         &self,
     ) -> &AccountDeviceRuntime<
@@ -354,6 +356,17 @@ impl PeerFounderRuntime {
         delivery: &TransportDelivery,
     ) -> marmot_session::AccountResult<marmot_session::AccountIngestEffects> {
         self.0.ingest_delivery(delivery).await
+    }
+
+    pub(crate) async fn self_update(
+        &mut self,
+        group: &GroupId,
+    ) -> marmot_session::AccountResult<marmot_session::AccountDeviceEffects> {
+        self.0
+            .send(SendIntent::SelfUpdate {
+                group_id: group.clone(),
+            })
+            .await
     }
 
     pub(crate) async fn converge_exact_delivery(
@@ -455,8 +468,50 @@ pub(crate) async fn peer_enrollment_founder(
     room_id: [u8; 16],
     package: KeyPackage,
 ) -> (PeerFounderRuntime, GroupId, TransportMessage) {
-    let recipient = MemberId::new(recipient.to_bytes().to_vec());
     let founder = Store::new(dir, "peer-founder.db", founder);
+    let (runtime, group, welcome) =
+        prepare_peer_founder(&founder, recipient, routing, room_id, package).await;
+    (PeerFounderRuntime(runtime), group, welcome)
+}
+
+pub(crate) async fn peer_enrollment_founder_with_group<A: TransportAdapter>(
+    dir: &Path,
+    signer: Arc<Keys>,
+    recipient: nostr::key::PublicKey,
+    routing: &NostrRoutingV1,
+    room_id: [u8; 16],
+    package: KeyPackage,
+    adapter: A,
+) -> (PeerFounderRuntime<A>, GroupId, TransportMessage) {
+    let founder = Store::new(dir, "peer-founder.db", signer);
+    let (runtime, group, welcome) =
+        prepare_peer_founder(&founder, recipient, routing, room_id, package).await;
+    drop(runtime);
+    // The group ID is assigned during native founding. Reopen the same
+    // encrypted image with an exact route and keep KeyPackage I/O closed.
+    let endpoints: Vec<_> = routing
+        .relays
+        .iter()
+        .cloned()
+        .map(TransportEndpoint)
+        .collect();
+    let router = StaticTransportRouting::new(endpoints.clone()).with_group_route(
+        group.clone(),
+        routing.nostr_group_id.to_vec(),
+        endpoints,
+    );
+    let (_, runtime) = founder.open_with_routing(router, adapter, Arc::new(NoIo));
+    (PeerFounderRuntime(runtime), group, welcome)
+}
+
+async fn prepare_peer_founder(
+    founder: &Store,
+    recipient: nostr::key::PublicKey,
+    routing: &NostrRoutingV1,
+    room_id: [u8; 16],
+    package: KeyPackage,
+) -> (StageRuntime, GroupId, TransportMessage) {
+    let recipient = MemberId::new(recipient.to_bytes().to_vec());
     let (_store, mut runtime) = founder.open_with(
         &recipient,
         routing
@@ -479,7 +534,7 @@ pub(crate) async fn peer_enrollment_founder(
     .await;
     let welcome = welcomes.pop().expect("one recipient Welcome");
     assert!(welcomes.is_empty());
-    (PeerFounderRuntime(runtime), group, welcome)
+    (runtime, group, welcome)
 }
 
 // The ordinary provider exercises actual Command wire payload authentication.
