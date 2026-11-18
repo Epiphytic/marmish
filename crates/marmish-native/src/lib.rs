@@ -113,3 +113,9 @@ mod peer_host_sampling_proof_tests;
 
 #[cfg(test)]
 mod terminal_frames;
+
+#[cfg(test)]
+mod terminal_selection_wire_v2;
+
+#[cfg(test)]
+mod terminal_offers;
