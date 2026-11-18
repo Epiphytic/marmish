@@ -34,6 +34,8 @@ pub(super) mod prepared_consent;
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 #[path = "peer_receiver_inventory.rs"]
 mod receiver_inventory;
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use paths::retirement::recovery::RollbackFiles;
 #[cfg(test)]
 pub(crate) use prepared_consent::leave_owner::{LeaveSnapshot, TurnFence};
 #[cfg(test)]

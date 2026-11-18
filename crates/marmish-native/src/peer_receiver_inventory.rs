@@ -1,10 +1,15 @@
 //! Recovered capacity for the sole Manual recipient lease.
 
-use crate::peer_quota_vfs::dispatch::{CLOSED_STAGE_LIMIT, TOTAL_ADMISSION, local_volume};
+use std::{num::NonZeroU64, sync::Arc};
+use storage_sqlite::SqlCipherKey;
+
+use crate::peer_quota_vfs::dispatch::{
+    CLOSED_STAGE_LIMIT, ReceiverQuota, RecoveryRequest, TOTAL_ADMISSION, local_volume,
+};
 
 use super::paths::{
     CheckedFile,
-    retirement::recovery::{FileExtent, inspect},
+    retirement::recovery::{FileExtent, RollbackFiles, inspect},
 };
 use super::store::{
     HardenedPeerConnection,
@@ -34,6 +39,7 @@ enum Class {
     },
     JournalCandidate {
         binding: Binding,
+        main: FileExtent,
         journal: FileExtent,
     },
     Fenced,
@@ -102,6 +108,61 @@ impl<'lease> RecoveredOwner<'lease> {
             checkpoint,
             source,
         })
+    }
+
+    fn recover_journal(
+        &mut self,
+        lease: &Arc<ProfileLease>,
+        exact: Binding,
+        fence: &TurnFence<'_>,
+        interrupt_after_write: bool,
+    ) -> Result<CleanExtent> {
+        if !self.paths.owns_lease(lease) {
+            return Err(Error::StageIdentityMismatch);
+        }
+        let quota = ReceiverQuota::bind_receiver(lease).map_err(|_| Error::Path)?;
+        let before = self.recover(fence.wall()?)?;
+        let Class::JournalCandidate {
+            binding,
+            main,
+            journal,
+        } = before.classes[1]
+        else {
+            return Err(Error::StageIdentityMismatch);
+        };
+        if binding != exact {
+            return Err(Error::StageIdentityMismatch);
+        }
+        let (known, generation, _, _) = binding.coordinates();
+        if known {
+            return Err(Error::StageIdentityMismatch);
+        }
+        let generation = NonZeroU64::new(generation).ok_or(Error::StageIdentityMismatch)?;
+        let charged_other = before
+            .charged
+            .checked_sub(main.logical)
+            .and_then(|n| n.checked_sub(journal.logical))
+            .and_then(|n| n.checked_add(1))
+            .ok_or(Error::Path)?;
+        let files = RollbackFiles::open(&self.paths, main, journal)?;
+        let key = SqlCipherKey::raw(*self.paths.provisional_key(exact));
+        quota
+            .recover_unknown(
+                RecoveryRequest {
+                    generation,
+                    files,
+                    charged_other,
+                    key: &key,
+                    interrupt_after_write,
+                },
+                fence,
+            )
+            .map_err(|_| Error::Path)?;
+        let clean = self.recover(fence.wall()?)?.clean_extent(binding)?;
+        if clean.main.identity != main.identity {
+            return Err(Error::StageIdentityMismatch);
+        }
+        Ok(clean)
     }
 
     fn recover(&mut self, wall: u64) -> Result<Inventory> {
@@ -194,7 +255,11 @@ fn classify_unknown(charge: Option<Charge>, family: [Option<FileExtent>; 4]) -> 
             // allowance left by the cursor and other families. A candidate
             // still needs a scoped pager check before native access.
             match journal {
-                Some(journal) => Class::JournalCandidate { binding, journal },
+                Some(journal) => Class::JournalCandidate {
+                    binding,
+                    main,
+                    journal,
+                },
                 None => Class::Identified { binding, main },
             }
         }

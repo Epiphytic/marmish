@@ -214,6 +214,15 @@ pub(crate) struct Reservation<'a> {
     crash_after_database_write: bool,
 }
 
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) struct RecoveryRequest<'a> {
+    pub(crate) generation: NonZeroU64,
+    pub(crate) files: crate::peer_invitation::RollbackFiles,
+    pub(crate) charged_other: u64,
+    pub(crate) key: &'a SqlCipherKey,
+    pub(crate) interrupt_after_write: bool,
+}
+
 impl ReceiverQuota<'_> {
     #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
     pub(crate) fn bind_receiver(lease: &Arc<ProfileLease>) -> Result<ReceiverQuota<'_>> {
@@ -223,7 +232,49 @@ impl ReceiverQuota<'_> {
         Ok(ReceiverQuota { dispatch, lease })
     }
 
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn recover_unknown(
+        &self,
+        exact: RecoveryRequest<'_>,
+        fence: &crate::peer_invitation::TurnFence<'_>,
+    ) -> Result<()> {
+        fence.check().map_err(|_| "recovery_fence")?;
+        let mut turn = self.admit_checked(
+            Reservation {
+                owner: self,
+                class: SlotClass::Unknown,
+                generation: exact.generation,
+                witness: exact.files.main_identity(),
+                charged_other: exact.charged_other,
+                crash_after_database_write: exact.interrupt_after_write,
+            },
+            Some(exact.files),
+        )?;
+        turn.enter()?;
+        let result = recover_database(&turn.quota.files[0], exact.key, fence)
+            .and_then(|()| turn.finish())
+            .and_then(|()| fence.check().map_err(|_| "recovery_fence"));
+        if result.is_err() {
+            turn.quota.panicked.store(true, Ordering::Relaxed);
+        }
+        result
+    }
+
     pub(crate) fn admit(&self, reservation: Reservation<'_>) -> Result<QuotaTurn<'_>> {
+        self.admit_checked(
+            reservation,
+            #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+            None,
+        )
+    }
+
+    fn admit_checked(
+        &self,
+        reservation: Reservation<'_>,
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))] recovery: Option<
+            crate::peer_invitation::RollbackFiles,
+        >,
+    ) -> Result<QuotaTurn<'_>> {
         if !ptr::eq(self, reservation.owner) {
             return Err("dispatch_reservation_owner");
         }
@@ -237,7 +288,6 @@ impl ReceiverQuota<'_> {
             ..
         } = reservation;
         let index = class.index();
-        self.dispatch.assert_default()?;
         if ACTIVE.with(|active| active.borrow().is_some()) {
             return Err("dispatch_recursive_turn");
         }
@@ -277,16 +327,50 @@ impl ReceiverQuota<'_> {
             {
                 return Err("dispatch_stage_witness");
             }
+            #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+            let recovery = recovery
+                .map(|files| {
+                    if !matches!(class, SlotClass::Unknown)
+                        || paths.receiver.is_none()
+                        || !files.belongs_to(paths.directories[1])
+                        || files.main_identity() != file
+                    {
+                        return Err("dispatch_recovery_reservation");
+                    }
+                    let (head, tail) = files
+                        .read_journal_bounds()
+                        .ok_or("dispatch_recovery_journal")?;
+                    let header = recovery_header::JournalHeader::check(
+                        files.journal_length(),
+                        files.main_length(),
+                        head,
+                        tail,
+                    )?;
+                    Ok(RecoveryImage { files, header })
+                })
+                .transpose()?;
+            let recover = false;
+            #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+            let recover = recover || recovery.is_some();
             let mut quota = Quota::new(
                 self.dispatch.managed,
                 main,
                 TOTAL_ADMISSION
                     .checked_sub(charged_other)
                     .ok_or("dispatch_admission")?,
-                false,
+                recover,
             )?;
             let state = Arc::get_mut(&mut quota).expect("new_quota");
             state.witness = Some(file);
+            #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+            if let Some(image) = recovery {
+                let recorded = state
+                    .account
+                    .get_mut()
+                    .map_err(|_| "dispatch_indeterminate")?;
+                recorded.journal_witness = Some(image.files.journal_identity());
+                state.recovery = Some(image);
+            }
             #[cfg(test)]
             {
                 state.crash_after_database_write = crash_after_database_write;
@@ -314,6 +398,44 @@ impl ReceiverQuota<'_> {
             _local: PhantomData,
         })
     }
+}
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+fn recover_database(
+    path: &Path,
+    key: &SqlCipherKey,
+    fence: &crate::peer_invitation::TurnFence<'_>,
+) -> Result<()> {
+    use rusqlite::{Connection, OpenFlags};
+    use storage_sqlite::{SqlCipherHardening, open_hardened_sqlcipher};
+
+    fence.check().map_err(|_| "recovery_fence")?;
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(|_| "recovery_open")?;
+    let query = (|| {
+        connection
+            .busy_timeout(Duration::ZERO)
+            .map_err(|_| "recovery_open")?;
+        open_hardened_sqlcipher(&connection, key, SqlCipherHardening::cipher_only())
+            .map_err(|_| "recovery_cipher")?;
+        connection
+            .execute_batch("PRAGMA temp_store=MEMORY; PRAGMA threads=0;")
+            .map_err(|_| "recovery_cipher")?;
+        fence.check().map_err(|_| "recovery_fence")?;
+        connection
+            .query_row("SELECT count(*) FROM sqlite_master", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(|_| "recovery_read")?;
+        Ok(())
+    })();
+    connection.close().map_err(|_| "recovery_close")?;
+    query
 }
 
 thread_local! {
@@ -1038,7 +1160,27 @@ macro_rules! delegate {
 }
 
 type DlSymbol = Option<unsafe extern "C" fn(*mut sql::sqlite3_vfs, *mut c_void, *const c_char)>;
-delegate!(forward_access, xAccess, c_int, name: *const c_char, flag: c_int, result: *mut c_int);
+unsafe extern "C" fn forward_access(
+    vfs: *mut sql::sqlite3_vfs,
+    name: *const c_char,
+    flag: c_int,
+    result: *mut c_int,
+) -> c_int {
+    let base = dispatcher(vfs).stock;
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    if let Some(quota) = ACTIVE.with(|scope| scope.borrow().clone())
+        && quota.recovering()
+    {
+        return guarded(sql::SQLITE_IOERR_ACCESS, || {
+            if !quota.check_recovery_access(name, flag) {
+                return sql::SQLITE_IOERR_ACCESS;
+            }
+            unsafe { (*base).xAccess.unwrap_unchecked()(base, name, flag, result) }
+        });
+    }
+    // The stock callback was present at registration.
+    unsafe { (*base).xAccess.unwrap_unchecked()(base, name, flag, result) }
+}
 delegate!(forward_path, xFullPathname, c_int, name: *const c_char, len: c_int, out: *mut c_char);
 delegate!(forward_dl_open, xDlOpen, *mut c_void, name: *const c_char);
 delegate!(forward_dl_error, xDlError, (), len: c_int, out: *mut c_char);

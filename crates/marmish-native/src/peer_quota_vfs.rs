@@ -57,6 +57,18 @@ struct Accounted {
     #[cfg(test)]
     journal_synced: bool,
     journal_witness: Option<(u64, u64)>,
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    recovered_journal: bool,
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    recovery_write: bool,
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    recovery_synced: bool,
+}
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+struct RecoveryImage {
+    files: crate::peer_invitation::RollbackFiles,
+    header: recovery_header::JournalHeader,
 }
 
 pub(super) struct Quota {
@@ -66,6 +78,8 @@ pub(super) struct Quota {
     #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
     founder_main_limit: Option<u64>,
     witness: Option<(u64, u64)>,
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    recovery: Option<RecoveryImage>,
     panicked: AtomicBool,
     account: Mutex<Accounted>,
     #[cfg(test)]
@@ -174,6 +188,8 @@ impl Quota {
             #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
             founder_main_limit: None,
             witness: None,
+            #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+            recovery: None,
             panicked: AtomicBool::new(false),
             account: Mutex::new(Accounted {
                 lengths,
@@ -187,10 +203,41 @@ impl Quota {
                 #[cfg(test)]
                 journal_synced: false,
                 journal_witness: None,
+                #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+                recovered_journal: false,
+                #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+                recovery_write: false,
+                #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+                recovery_synced: false,
             }),
             #[cfg(test)]
             crash_after_database_write: false,
         }))
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    fn recovering(&self) -> bool {
+        self.recovery.is_some()
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    fn check_recovery_access(&self, name: *const c_char, flag: c_int) -> bool {
+        if name.is_null() {
+            return false;
+        }
+        let mut state = self.account.lock().unwrap();
+        let matches_family = self.index(name).is_some();
+        let wal = sidecar(&self.files[0], "-wal");
+        let absent_wal_check = flag == sql::SQLITE_ACCESS_EXISTS
+            && unsafe { CStr::from_ptr(name) }.to_bytes() == wal.as_os_str().as_bytes();
+        if state.uncertain
+            || !(matches_family || absent_wal_check)
+            || self.observe(&mut state) != sql::SQLITE_OK
+        {
+            state.uncertain = true;
+            return false;
+        }
+        true
     }
 
     fn index(&self, name: *const c_char) -> Option<usize> {
@@ -222,6 +269,10 @@ impl Quota {
 
     fn verify_dispatch(&self) -> Result<(), &'static str> {
         let mut state = self.account.lock().map_err(|_| "dispatch_indeterminate")?;
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        if self.recovering() && !state.recovered_journal {
+            return Err("dispatch_no_clean_receipt");
+        }
         if self.panicked.load(Ordering::Relaxed)
             || state.uncertain
             || !state.opened_main
@@ -246,6 +297,14 @@ impl Quota {
                 .ok()
                 .map(|meta| (meta.dev(), meta.ino()))
         };
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        if let Some(recovery) = &self.recovery
+            && !recovery
+                .files
+                .matches(state.lengths[0], state.journal_witness.is_some())
+        {
+            return false;
+        }
         identity(&self.files[0]) == Some(expected)
             && identity(&self.files[1]) == state.journal_witness
             && state
@@ -345,6 +404,14 @@ unsafe fn open_managed(
         state.uncertain = true;
         return sql::SQLITE_IOERR;
     }
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    if quota.recovering()
+        && (flags & sql::SQLITE_OPEN_CREATE != 0
+            || (index == 0 && flags & sql::SQLITE_OPEN_READWRITE == 0))
+    {
+        state.uncertain = true;
+        return sql::SQLITE_CANTOPEN;
+    }
     // SQLite allocates both the outer and stock file buffers with the alignment
     // of its native file implementations. The stock buffer is separate.
     unsafe {
@@ -355,6 +422,14 @@ unsafe fn open_managed(
         }
         stock.cast::<u8>().write_bytes(0, base.szOsFile as usize);
         let stock = Stock(stock);
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        let mut actual = 0;
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        let out_flags = if quota.recovering() && out_flags.is_null() {
+            &mut actual
+        } else {
+            out_flags
+        };
         let rc = base.xOpen.unwrap()(quota.base, name, stock.0, flags, out_flags);
         if rc != sql::SQLITE_OK {
             #[cfg(test)]
@@ -370,7 +445,20 @@ unsafe fn open_managed(
             state: quota.clone(),
             index,
         };
-        if quota.witness.is_some() && index == 1 {
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        if let Some(recovery) = &quota.recovery
+            && (quota.observe(&mut state) != sql::SQLITE_OK
+                || (flags & sql::SQLITE_OPEN_READWRITE != 0
+                    && *out_flags & sql::SQLITE_OPEN_READWRITE == 0)
+                || (index == 1 && !handle.check_recovery_header(&recovery.header)))
+        {
+            state.uncertain = true;
+            return sql::SQLITE_IOERR;
+        }
+        let replace_journal_witness = quota.witness.is_some() && index == 1;
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        let replace_journal_witness = replace_journal_witness && !quota.recovering();
+        if replace_journal_witness {
             state.journal_witness = quota.files[1]
                 .symlink_metadata()
                 .ok()
@@ -506,6 +594,32 @@ impl Handle {
         sql::SQLITE_IOERR_FSTAT
     }
 
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    fn check_recovery_header(&self, header: &recovery_header::JournalHeader) -> bool {
+        let mut length = 0;
+        let mut head = [0_u8; 28];
+        let mut tail = [0_u8; 16];
+        let tail_offset = header.length - tail.len() as u64;
+        // Read the file SQLite already owns. Opening and closing another
+        // descriptor here could release Unix VFS process-wide locks.
+        unsafe {
+            let methods = self.methods();
+            let file = self.stock.0;
+            let read = methods.xRead.unwrap();
+            methods.xFileSize.unwrap()(file, &mut length) == sql::SQLITE_OK
+                && u64::try_from(length) == Ok(header.length)
+                && read(file, head.as_mut_ptr().cast(), head.len() as c_int, 0) == sql::SQLITE_OK
+                && read(
+                    file,
+                    tail.as_mut_ptr().cast(),
+                    tail.len() as c_int,
+                    tail_offset as i64,
+                ) == sql::SQLITE_OK
+                && head == header.head
+                && tail == header.tail
+        }
+    }
+
     fn resize(
         &self,
         end: u64,
@@ -514,6 +628,20 @@ impl Handle {
     ) -> c_int {
         let mut state = self.state.account.lock().unwrap();
         let old = state.lengths[self.index];
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        if self.state.recovering() {
+            if self.index == 1 {
+                state.uncertain = true;
+                return sql::SQLITE_READONLY;
+            }
+            if end > dispatch::CLOSED_STAGE_LIMIT {
+                state.uncertain = true;
+                return sql::SQLITE_FULL;
+            }
+            if state.uncertain || self.state.observe(&mut state) != sql::SQLITE_OK {
+                return sql::SQLITE_IOERR_FSTAT;
+            }
+        }
         if !self.state.identities(&state) {
             state.uncertain = true;
             return sql::SQLITE_IOERR_FSTAT;
@@ -547,6 +675,11 @@ impl Handle {
         let measured = preserve_failure_errno(rc, || self.refresh(&mut state));
         if rc != sql::SQLITE_OK || measured != sql::SQLITE_OK {
             return if rc != sql::SQLITE_OK { rc } else { measured };
+        }
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        if self.state.recovering() {
+            state.recovery_synced = false;
+            state.recovery_write |= matches!(kind, Resize::Write { .. });
         }
         #[cfg(test)]
         if matches!(kind, Resize::Truncate) && end > old {
@@ -629,6 +762,11 @@ unsafe extern "C" fn sync(file: *mut sql::sqlite3_file, flags: c_int) -> c_int {
         if rc == sql::SQLITE_OK && handle.index == 1 {
             handle.state.account.lock().unwrap().journal_synced = true;
         }
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        if rc == sql::SQLITE_OK && handle.index == 0 && handle.state.recovering() {
+            let mut state = handle.state.account.lock().unwrap();
+            state.recovery_synced = state.recovery_write;
+        }
         rc
     })
 }
@@ -680,6 +818,17 @@ fn delete_managed(quota: &Quota, name: *const c_char, sync_dir: c_int) -> c_int 
         return sql::SQLITE_IOERR_DELETE;
     }
     let mut state = quota.account.lock().unwrap();
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    if quota.recovering()
+        && (state.uncertain
+            || !state.journal_synced
+            || !state.recovery_synced
+            || state.journal_witness.is_none()
+            || quota.observe(&mut state) != sql::SQLITE_OK)
+    {
+        state.uncertain = true;
+        return sql::SQLITE_IOERR_DELETE;
+    }
     if !quota.identities(&state) {
         state.uncertain = true;
         return sql::SQLITE_IOERR_DELETE;
@@ -703,6 +852,14 @@ fn delete_managed(quota: &Quota, name: *const c_char, sync_dir: c_int) -> c_int 
         }
         quota.observe(&mut state)
     });
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    if quota.recovering() {
+        state.recovered_journal =
+            rc == sql::SQLITE_OK && measured == sql::SQLITE_OK && state.journal_witness.is_none();
+        if !state.recovered_journal {
+            state.uncertain = true;
+        }
+    }
     if rc == sql::SQLITE_OK { measured } else { rc }
 }
 
@@ -718,7 +875,24 @@ macro_rules! file_delegate {
     };
 }
 
-file_delegate!(read, xRead, data: *mut c_void, count: c_int, offset: i64);
+unsafe extern "C" fn read(
+    file: *mut sql::sqlite3_file,
+    data: *mut c_void,
+    count: c_int,
+    offset: i64,
+) -> c_int {
+    guarded(sql::SQLITE_IOERR, || {
+        let handle = unsafe { Handle::get(file) };
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        if handle.state.recovering() {
+            let mut state = handle.state.account.lock().unwrap();
+            if state.uncertain || handle.state.observe(&mut state) != sql::SQLITE_OK {
+                return sql::SQLITE_IOERR_FSTAT;
+            }
+        }
+        unsafe { handle.methods().xRead.unwrap()(handle.stock.0, data, count, offset) }
+    })
+}
 file_delegate!(file_size, xFileSize, length: *mut i64);
 file_delegate!(lock, xLock, level: c_int);
 file_delegate!(unlock, xUnlock, level: c_int);
@@ -794,9 +968,33 @@ static METHODS: sql::sqlite3_io_methods = sql::sqlite3_io_methods {
     xUnfetch: None,
 };
 
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "peer_quota_recovery_header.rs"]
+mod recovery_header;
+
 #[path = "peer_quota_dispatch.rs"]
 pub(crate) mod dispatch;
 
 #[cfg(test)]
 #[path = "peer_quota_vfs_tests.rs"]
 mod tests;
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn fixture_recovery_crash(path: &Path, key: &storage_sqlite::SqlCipherKey) {
+    use rusqlite::{Connection, OpenFlags};
+    use storage_sqlite::{SqlCipherHardening, open_hardened_sqlcipher};
+
+    Quota::install(path, dispatch::CLOSED_STAGE_LIMIT, false, true).unwrap();
+    let db = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .unwrap();
+    open_hardened_sqlcipher(&db, key, SqlCipherHardening::live_cache()).unwrap();
+    db.execute_batch(
+        "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;
+         BEGIN IMMEDIATE; UPDATE fixture SET value='interrupted'; COMMIT;",
+    )
+    .unwrap();
+    panic!("recovery crash cut was not reached");
+}

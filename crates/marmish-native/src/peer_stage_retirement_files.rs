@@ -240,7 +240,7 @@ fn private_stat(
 pub(in super::super) mod recovery {
     use super::*;
     use std::collections::BTreeSet;
-    use std::os::fd::IntoRawFd;
+    use std::os::{fd::IntoRawFd, unix::fs::FileExt};
 
     const CURSOR: [&CStr; 4] = [
         c"cursor.db",
@@ -261,6 +261,103 @@ pub(in super::super) mod recovery {
         pub(in super::super::super) identity: Identity,
         pub(in super::super::super) logical: u64,
         pub(in super::super::super) charged: u64,
+    }
+
+    /// The Unknown family opened relative to the existing checked profile.
+    pub(crate) struct RollbackFiles {
+        directory: File,
+        peer: Identity,
+        main: FileExtent,
+        journal: FileExtent,
+    }
+
+    impl RollbackFiles {
+        pub(in super::super::super) fn open(
+            paths: &Paths<'_>,
+            main: FileExtent,
+            journal: FileExtent,
+        ) -> Result<Self> {
+            let (directory, _, peer) = open_dirs(paths)?;
+            let files = Self {
+                directory,
+                peer,
+                main,
+                journal,
+            };
+            if !files.matches(main.logical, true) {
+                return Err(Error::StageIdentityMismatch);
+            }
+            Ok(files)
+        }
+
+        pub(crate) fn journal_identity(&self) -> Identity {
+            self.journal.identity
+        }
+
+        pub(crate) fn journal_length(&self) -> u64 {
+            self.journal.logical
+        }
+
+        pub(crate) fn main_identity(&self) -> Identity {
+            self.main.identity
+        }
+
+        pub(crate) fn main_length(&self) -> u64 {
+            self.main.logical
+        }
+
+        pub(crate) fn belongs_to(&self, peer: Identity) -> bool {
+            self.peer == peer
+        }
+
+        pub(crate) fn read_journal_bounds(&self) -> Option<([u8; 28], [u8; 16])> {
+            let flags = libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_RDONLY | libc::O_NONBLOCK;
+            let name = stage_names(false)[1];
+            // Preflight reads through a disposable descriptor before SQLite opens.
+            let fd = unsafe { libc::openat(self.directory.as_raw_fd(), name.as_ptr(), flags) };
+            if fd < 0 {
+                return None;
+            }
+            let file = unsafe { File::from_raw_fd(fd) };
+            let check = || {
+                let meta = file.metadata().ok()?;
+                if (meta.dev(), meta.ino()) != self.journal.identity
+                    || meta.len() != self.journal.logical
+                    || !meta.is_file()
+                    || meta.uid() != unsafe { libc::geteuid() }
+                    || meta.mode() & 0o7777 != 0o600
+                    || meta.nlink() != 1
+                    || !self.matches(self.main.logical, true)
+                {
+                    return None;
+                }
+                Some(())
+            };
+            check()?;
+            let mut head = [0; 28];
+            let mut tail = [0; 16];
+            let tail_offset = self.journal.logical.checked_sub(tail.len() as u64)?;
+            file.read_exact_at(&mut head, 0).ok()?;
+            file.read_exact_at(&mut tail, tail_offset).ok()?;
+            check()?;
+            Some((head, tail))
+        }
+
+        pub(crate) fn matches(&self, main_length: u64, journal_present: bool) -> bool {
+            let [main, journal, wal, shm] = stage_names(false);
+            let matches = |name, expected| {
+                private_stat(&self.directory, self.peer, name).is_ok_and(|entry| {
+                    entry.map(|(id, row)| (id, u64::try_from(row.st_size).ok())) == expected
+                })
+            };
+            matches(main, Some((self.main.identity, Some(main_length))))
+                && matches(
+                    journal,
+                    journal_present.then_some((self.journal.identity, Some(self.journal.logical))),
+                )
+                && matches(wal, None)
+                && matches(shm, None)
+        }
     }
 
     struct DirectoryEntries(*mut libc::DIR);

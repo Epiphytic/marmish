@@ -67,66 +67,7 @@ fn peer_receiver_inventory_charges_unwitnessed_and_interrupted_files_across_reop
 #[test]
 fn peer_receiver_inventory_recovers_only_exact_witness_and_retains_expired_slot() {
     let f = Fixture::new();
-    let routing = NostrRoutingV1::new([3; 32], vec![RELAY.to_owned()]).unwrap();
-    let prepared = wire::Codec::for_version(
-        wire::MAX_OUTER_BYTES,
-        crate::peer_control_version::ControlVersion::V2,
-    )
-    .unwrap()
-    .prepare_offer(&f.server, f.identity.public_key(), [1; 16], &routing, f.now)
-    .unwrap();
-    let event: Event = serde_json::from_slice(prepared.frame()).unwrap();
-    let record = RawRecord {
-        id: event.id.to_bytes(),
-        stamp: event.created_at.as_secs(),
-        bytes: prepared.frame(),
-    };
-    let key = Selector::from(&prepared.flight);
-    let paths = Paths::new(&f.lease, &f.identity).unwrap();
-    let conn =
-        HardenedPeerConnection::open_installed(paths.cursor().unwrap().path(), *paths.cursor_key())
-            .unwrap();
-    let uid = unsafe { libc::geteuid() };
-    let mut predecessor = Checkpoint::attach_installed_v2(
-        conn,
-        (*f.identity.signer()).clone(),
-        uid,
-        RELAY,
-        Policy::default(),
-    )
-    .unwrap();
-    let source = predecessor.bind_source(RELAY).unwrap();
-    assert_eq!(
-        predecessor.admit(&source, record, f.now).unwrap().status,
-        Status::Accepted(TrustedOutcome::Applied),
-    );
-    drop(predecessor);
-
-    let mut owner = open(&f);
-    let reservation = owner
-        .checkpoint
-        .reserve_provisioning(&owner.source, key, f.now)
-        .unwrap();
-    let binding = reservation.stage_binding();
-    assert_eq!(
-        owner.recover(f.now).unwrap().classes[1],
-        Class::Create(binding)
-    );
-
-    let stage = owner
-        .checkpoint
-        .bind_stage(&owner.source, &reservation, f.now)
-        .unwrap();
-    assert_eq!(
-        owner.recover(f.now).unwrap().classes[1],
-        Class::Create(binding)
-    );
-    let witness = write_extent(&f.stage(), 4096);
-    assert_eq!(owner.recover(f.now).unwrap().classes[1], Class::Fenced);
-    owner
-        .checkpoint
-        .start_stage(&owner.source, &stage, witness, f.now)
-        .unwrap();
+    let (mut owner, binding, witness) = start_original(&f, 4096);
     let journal = f.stage().with_extension("db-journal");
     let journal_file = write_extent(&journal, 8192);
     let inventory = owner.recover(f.now).unwrap();
@@ -134,6 +75,14 @@ fn peer_receiver_inventory_recovers_only_exact_witness_and_retains_expired_slot(
         inventory.classes[1],
         Class::JournalCandidate {
             binding,
+            main: FileExtent {
+                identity: (
+                    u64::from_be_bytes(witness.device),
+                    u64::from_be_bytes(witness.inode),
+                ),
+                logical: 4096,
+                charged: 4096,
+            },
             journal: FileExtent {
                 identity: (
                     u64::from_be_bytes(journal_file.device),
@@ -175,6 +124,70 @@ fn peer_receiver_inventory_recovers_only_exact_witness_and_retains_expired_slot(
     write_extent(&f.stage(), 4096);
     assert_eq!(owner.recover(f.now).unwrap().classes[1], Class::Fenced);
     drop(staged);
+}
+
+fn start_original(f: &Fixture, length: u64) -> (RecoveredOwner<'_>, Binding, FileWitness) {
+    let routing = NostrRoutingV1::new([3; 32], vec![RELAY.to_owned()]).unwrap();
+    let prepared = wire::Codec::for_version(
+        wire::MAX_OUTER_BYTES,
+        crate::peer_control_version::ControlVersion::V2,
+    )
+    .unwrap()
+    .prepare_offer(&f.server, f.identity.public_key(), [1; 16], &routing, f.now)
+    .unwrap();
+    let event: Event = serde_json::from_slice(prepared.frame()).unwrap();
+    let record = RawRecord {
+        id: event.id.to_bytes(),
+        stamp: event.created_at.as_secs(),
+        bytes: prepared.frame(),
+    };
+    let key = Selector::from(&prepared.flight);
+    let paths = Paths::new(&f.lease, &f.identity).unwrap();
+    let conn =
+        HardenedPeerConnection::open_installed(paths.cursor().unwrap().path(), *paths.cursor_key())
+            .unwrap();
+    let uid = unsafe { libc::geteuid() };
+    let mut predecessor = Checkpoint::attach_installed_v2(
+        conn,
+        (*f.identity.signer()).clone(),
+        uid,
+        RELAY,
+        Policy::default(),
+    )
+    .unwrap();
+    let source = predecessor.bind_source(RELAY).unwrap();
+    assert_eq!(
+        predecessor.admit(&source, record, f.now).unwrap().status,
+        Status::Accepted(TrustedOutcome::Applied),
+    );
+    drop(predecessor);
+
+    let mut owner = open(f);
+    let reservation = owner
+        .checkpoint
+        .reserve_provisioning(&owner.source, key, f.now)
+        .unwrap();
+    let binding = reservation.stage_binding();
+    assert_eq!(
+        owner.recover(f.now).unwrap().classes[1],
+        Class::Create(binding)
+    );
+
+    let stage = owner
+        .checkpoint
+        .bind_stage(&owner.source, &reservation, f.now)
+        .unwrap();
+    assert_eq!(
+        owner.recover(f.now).unwrap().classes[1],
+        Class::Create(binding)
+    );
+    let witness = write_extent(&f.stage(), length);
+    assert_eq!(owner.recover(f.now).unwrap().classes[1], Class::Fenced);
+    owner
+        .checkpoint
+        .start_stage(&owner.source, &stage, witness, f.now)
+        .unwrap();
+    (owner, binding, witness)
 }
 
 fn assert_clean_charge(f: &Fixture, owner: &mut RecoveredOwner<'_>, binding: Binding) {
@@ -226,4 +239,232 @@ fn peer_receiver_inventory_refuses_aliases_unknown_artifacts_and_bad_cursor() {
     drop(owner);
     assert!(RecoveredOwner::open(&f.lease, &f.identity, RELAY).is_err());
     assert!(cursor_journal.exists());
+}
+
+const RECOVERY_CHILD: &str = "peer_invitation::receiver_inventory::tests::managed_recovery_child";
+const RECOVERY_MODE: &str = "MARMISH_TEST_MANAGED_RECOVERY";
+const RECOVERY_ROOT: &str = "MARMISH_TEST_MANAGED_RECOVERY_ROOT";
+
+#[test]
+#[ignore = "opt-in subprocesses using the bundled SQLCipher rollback pager"]
+fn managed_recovery_hot_journal_and_stock_wal() {
+    use std::os::unix::fs::{FileExt, PermissionsExt};
+
+    #[derive(Clone, Copy)]
+    enum Trial {
+        Valid,
+        InvalidHeader,
+        InvalidFirstRecord,
+        WrongKey,
+    }
+
+    for case in [
+        Trial::Valid,
+        Trial::InvalidHeader,
+        Trial::InvalidFirstRecord,
+        Trial::WrongKey,
+    ] {
+        let root = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let fixture = Fixture::at(&root, None, true);
+        let (owner, binding, _) = start_original(&fixture, 0);
+        let key = if matches!(case, Trial::WrongKey) {
+            SqlCipherKey::raw([42; 32])
+        } else {
+            SqlCipherKey::raw(*owner.paths.provisional_key(binding))
+        };
+        let stage = fixture.stage();
+        let db = fixture_keyed(&stage, &key);
+        db.execute_batch(
+            "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;
+             CREATE TABLE fixture(value TEXT NOT NULL);
+             INSERT INTO fixture VALUES('committed');",
+        )
+        .unwrap();
+        db.close().unwrap();
+        drop(owner);
+        drop(fixture);
+        let baseline = fs::read(&stage).unwrap();
+        let crash = if matches!(case, Trial::WrongKey) {
+            "crash-wrong-key"
+        } else {
+            "crash"
+        };
+        run_recovery_child(&root, crash, 80);
+        let interrupted = fs::read(&stage).unwrap();
+        assert!(interrupted != baseline);
+        let journal = stage.with_extension("db-journal");
+        if matches!(case, Trial::InvalidHeader | Trial::InvalidFirstRecord) {
+            let journal = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&journal)
+                .unwrap();
+            let mut sector = [0; 4];
+            journal.read_exact_at(&mut sector, 20).unwrap();
+            let offset = if matches!(case, Trial::InvalidFirstRecord) {
+                // First record checksum follows its page number and cipher page.
+                u64::from(u32::from_be_bytes(sector)) + 4 + 4096
+            } else {
+                0
+            };
+            let mut byte = [0];
+            journal.read_exact_at(&mut byte, offset).unwrap();
+            journal.write_all_at(&[byte[0] ^ 1], offset).unwrap();
+            journal.sync_all().unwrap();
+        }
+        if matches!(case, Trial::WrongKey) {
+            run_recovery_child(&root, "wrong-key", 0);
+        } else if matches!(case, Trial::InvalidHeader | Trial::InvalidFirstRecord) {
+            run_recovery_child(&root, "fence", 0);
+            assert!(journal.is_file());
+            assert!(fs::read(&stage).unwrap() == interrupted);
+        } else {
+            let journal_before = fs::read(&journal).unwrap();
+            run_recovery_child(&root, "reinterrupt", 80);
+            assert!(fs::read(&journal).unwrap() == journal_before);
+            run_recovery_child(&root, "recover", 0);
+            assert!(!journal.exists());
+            let db = fixture_keyed(&stage, &key);
+            let value: String = db
+                .query_row("SELECT value FROM fixture", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(value, "committed");
+            db.close().unwrap();
+        }
+    }
+}
+
+fn fixture_keyed(path: &Path, key: &SqlCipherKey) -> rusqlite::Connection {
+    use rusqlite::{Connection, OpenFlags};
+    use storage_sqlite::{SqlCipherHardening, open_hardened_sqlcipher};
+    let db = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .unwrap();
+    open_hardened_sqlcipher(&db, key, SqlCipherHardening::live_cache()).unwrap();
+    db
+}
+
+fn run_recovery_child(root: &Path, mode: &str, status: i32) {
+    use std::process::{Command, Stdio};
+    use std::thread;
+    use std::time::Instant;
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args(["--ignored", "--exact", RECOVERY_CHILD])
+        .env_clear()
+        .env(RECOVERY_MODE, mode)
+        .env(RECOVERY_ROOT, root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Some(result) = child.try_wait().unwrap() {
+            assert_eq!(result.code(), Some(status), "managed recovery case {mode}");
+            break;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("managed recovery case {mode} timed out");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+#[ignore = "private child of managed recovery test"]
+fn managed_recovery_child() {
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+
+    let mode = std::env::var(RECOVERY_MODE).unwrap();
+    let root = std::env::var_os(RECOVERY_ROOT).unwrap();
+    let f = Fixture::at(Path::new(&root), None, false);
+    let stage = f.stage();
+    let lease = Arc::new(f.lease);
+    let crash = matches!(mode.as_str(), "crash" | "crash-wrong-key");
+    if !crash {
+        ReceiverQuota::bind_receiver(&lease).unwrap();
+    }
+    let mut owner = RecoveredOwner::open(&lease, &f.identity, RELAY).unwrap();
+    let inventory = owner.recover(f.now).unwrap();
+    if crash {
+        let Class::Identified { binding, .. } = inventory.classes[1] else {
+            panic!("fixture stage missing");
+        };
+        let key = if mode == "crash-wrong-key" {
+            SqlCipherKey::raw([42; 32])
+        } else {
+            SqlCipherKey::raw(*owner.paths.provisional_key(binding))
+        };
+        drop(owner);
+        crate::peer_quota_vfs::fixture_recovery_crash(&stage, &key);
+        return;
+    }
+
+    let Class::JournalCandidate { binding, .. } = inventory.classes[1] else {
+        panic!("fixture journal missing");
+    };
+    let wall = Wall::Fixture(f.wall);
+    let ticks = AtomicU64::new(0);
+    let stopped = AtomicBool::new(false);
+    let fence = TurnFence::new(&wall, &stopped, Some(&ticks), f.now, f.now + 3).unwrap();
+    if mode == "reinterrupt" {
+        owner
+            .recover_journal(&lease, binding, &fence, true)
+            .unwrap();
+        panic!("recovery failed to observe a database write");
+    }
+    if matches!(mode.as_str(), "fence" | "wrong-key") {
+        assert!(
+            owner
+                .recover_journal(&lease, binding, &fence, false)
+                .is_err()
+        );
+        let after = owner.recover(f.now).unwrap();
+        if mode == "fence" {
+            assert_eq!(after, inventory);
+        } else {
+            // The pager may have replayed bytes before the key was rejected.
+            assert!(after.charged >= RESERVED_BYTES + 4096);
+        }
+        return;
+    }
+    assert_eq!(mode, "recover");
+    let stock = tempfile::tempdir().unwrap();
+    let stock_path = stock.path().join("ordinary.db");
+    let (ready, ready_rx) = std::sync::mpsc::sync_channel(0);
+    let (complete, complete_rx) = std::sync::mpsc::sync_channel(0);
+    let stock = std::thread::spawn(move || {
+        let db = rusqlite::Connection::open(&stock_path).unwrap();
+        db.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE ordinary(value INTEGER);
+             INSERT INTO ordinary VALUES (21);",
+        )
+        .unwrap();
+        assert!(stock_path.with_extension("db-wal").is_file());
+        assert!(stock_path.with_extension("db-shm").is_file());
+        ready.send(()).unwrap();
+        complete_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        db.execute("INSERT INTO ordinary VALUES (21)", []).unwrap();
+        let value: i64 = db
+            .query_row("SELECT sum(value) FROM ordinary", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(value, 42);
+    });
+    ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let clean = owner
+        .recover_journal(&lease, binding, &fence, false)
+        .unwrap();
+    assert!(inventory.charged >= clean.charged_other);
+    complete.send(()).unwrap();
+    stock.join().unwrap();
 }
