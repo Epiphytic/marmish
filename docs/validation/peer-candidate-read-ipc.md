@@ -8,8 +8,8 @@ request still use the same socket. The Command assertion observes local
 dispatch and reply framing using an in-process queue responder.
 
 The client tests check exact Show coordinates, no more than 16 unique
-Pending entries, strictly increasing held and expiry times, and refusal
-of mixed or internal response fields. A stalled listener exercises the
+Pending entries, an expiry after each entry’s Held time, and refusal of
+mixed or internal response fields. A stalled listener exercises the
 client's single absolute timeout with a paused clock. The existing UID
 predicate test covers a foreign UID value. The socket test authenticates
 the real same-UID caller, with no privileged second UID process.
@@ -28,3 +28,4 @@ the locked dependency set.
 | `cargo test --locked --offline -p marmish-native --lib --target x86_64-unknown-linux-gnu -j 2 ipc:: -- --test-threads=1` | 62 passed, two benchmarks ignored. Build took 38.84 s and tests took 0.15 s. |
 | `cargo clippy --locked --offline -p marmish-native --lib --bins --target x86_64-unknown-linux-gnu -j 2 -- -D warnings` | Passed in 25.16 s with the non-test candidate. |
 | `cargo fmt --all -- --check` and `git diff --check` | Passed. |
+| Integrated stock build `cargo test --locked -p marmish-native --lib ipc::` | 59 passed, two benchmarks ignored. Build took 42.51 s and tests took 0.13 s. |

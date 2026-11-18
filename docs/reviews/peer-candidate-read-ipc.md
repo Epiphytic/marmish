@@ -21,3 +21,13 @@ and its typed busy response need the mounted read actor.
 
 R2 confirmed the exact final source and paused-clock client test by
 inspection. The author ran the candidate tests and non-test strict Clippy.
+
+## Integrated check
+
+Claude Code 2.1.301 (Sonnet 5.5) Auto session
+`b1e36152-9429-492c-92c4-7054628d0bb6` approved exact composed tree
+`ce98fcc` by inspection. The crate source matches `393e33f` byte for
+byte. The reviewer verified candidate isolation, bounded replies, effective
+UID checks, availability reporting and the unchanged ordinary request wire.
+The report now states the per-entry timestamp check. The integrator ran
+the stock IPC suite on the same composed tree.
