@@ -39,6 +39,12 @@ pub(crate) enum Error {
     Package,
     #[cfg(test)]
     Bound,
+    #[cfg(test)]
+    Retiring,
+    #[cfg(test)]
+    NotExpired,
+    #[cfg(test)]
+    Cooldown,
     Cursor(CursorError),
 }
 
@@ -161,6 +167,10 @@ pub(crate) struct Checkpoint {
     routes: Vec<Route>,
     #[cfg(test)]
     provisional_schema: bool,
+    #[cfg(test)]
+    retirement_epoch: bool,
+    #[cfg(test)]
+    retirement_fault: Option<provisioning::retirement::Fault>,
 }
 
 impl Checkpoint {
@@ -221,6 +231,10 @@ impl Checkpoint {
             routes,
             #[cfg(test)]
             provisional_schema: false,
+            #[cfg(test)]
+            retirement_epoch: false,
+            #[cfg(test)]
+            retirement_fault: None,
         })
     }
 
@@ -292,7 +306,19 @@ impl Checkpoint {
         let server = offer.flight().author;
         let reserved = self.policy.reserved.contains(&server);
         let decision_at = matches!(self.policy.mode, Mode::Automatic).then_some(wall);
+        #[cfg(test)]
+        let retirement_epoch = self.retirement_epoch;
+        #[cfg(test)]
+        if retirement_epoch {
+            provisioning::retirement::verify_epoch(&self.cursor.conn)?;
+        }
         let result = self.cursor.commit_trusted(origin, record, wall, |tx| {
+            #[cfg(test)]
+            if retirement_epoch
+                && provisioning::retirement::under_cooldown(tx, server.to_bytes(), wall)?
+            {
+                return Ok(TrustedOutcome::SkippedCooldown);
+            }
             rows::sweep(tx, wall)?;
             rows::admit(tx, origin, record, &offer, reserved, decision_at)
         });

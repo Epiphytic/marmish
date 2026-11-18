@@ -5,6 +5,9 @@ mod paths;
 #[cfg(test)]
 #[path = "peer_stage_binding.rs"]
 mod provisional;
+#[cfg(test)]
+#[path = "peer_stage_retirement.rs"]
+mod retirement;
 #[path = "peer_raw_socket.rs"]
 mod socket;
 #[path = "peer_cursor_store.rs"]

@@ -264,6 +264,12 @@ impl Checkpoint {
         if !self.provisional_schema || binding.origin != self.origin(source)? {
             return Err(Error::Source);
         }
+        if self.retirement_epoch {
+            super::retirement::verify_epoch(&self.cursor.conn)?;
+            if super::retirement::retiring(&self.cursor.conn, binding)? {
+                return Err(Error::Retiring);
+            }
+        }
         let (tx, origin, offer_expires) =
             self.live_provisioning_offer(source, binding.key, wall)?;
         if generation(&tx, binding.key, origin)? != Some(binding.generation)

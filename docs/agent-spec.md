@@ -1414,3 +1414,19 @@ The later exact-A candidate failed the separate macOS cleanup race described
 above. G's and R's legacy results cannot substitute for fresh native/release
 qualification of a corrected source. No native gate is waived, and no operation
 benchmark or release qualification result is claimed here.
+
+### Provisional Peer retirement fixture
+
+The [local retirement fixture](phases/peer-native-stage-retirement.md) exercises
+decline and signed expiry before a native KeyPackage has left the profile.
+It keeps the exact stage and class reserved if directory identity, the original
+stage witness or a SQLite sidecar is ambiguous. A retained hot journal requires
+a separate recovery procedure. A declined bound stage records a 24-hour
+canonical-inviter cooldown. The earlier stage-less path retains its existing
+rate charge. An expiry already committed retains its original action if a
+later decline is requested. The retirement schema and its hooks compile only
+in tests. The daemon has no production retirement route.
+
+The release path and its bounded local benchmark are recorded in the
+[fixture validation](validation/peer-native-stage-retirement.md) and
+[review](reviews/peer-native-stage-retirement.md).

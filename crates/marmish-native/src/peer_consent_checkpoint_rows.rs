@@ -9,7 +9,7 @@ type DbResult<T> = std::result::Result<T, CursorError>;
 const INVITATIONS_PER_CLASS: u16 = 8;
 const FENCES_PER_ORIGIN_CLASS: u16 = 256;
 
-const SCHEMA: &str = "
+pub(super) const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS peer_consent_version (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     version INTEGER NOT NULL CHECK (version = 2),

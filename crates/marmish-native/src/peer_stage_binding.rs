@@ -7,10 +7,10 @@ use super::store::consent_checkpoint::provisioning::stage_journal::{Artifact, St
 use super::*;
 
 #[path = "peer_stage_binding_tests.rs"]
-mod tests;
+pub(super) mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Cut {
+pub(super) enum Cut {
     PriorToBind,
     Bound,
     Allocated,
@@ -21,7 +21,7 @@ enum Cut {
 }
 
 impl InvitationState<'_> {
-    async fn prepare_provisional(
+    pub(super) async fn prepare_provisional(
         &mut self,
         reservation: &Reservation,
         mut after: impl FnMut(Cut) -> Result<()>,
@@ -116,7 +116,7 @@ impl InvitationState<'_> {
         after(Cut::Prepared)
     }
 
-    fn provisional_sample(&self) -> Result<Duration> {
+    pub(super) fn provisional_sample(&self) -> Result<Duration> {
         let checked = self.wall.sample()?;
         let system = Wall::System.sample()?;
         if checked.as_secs().abs_diff(system.as_secs()) > 120 {

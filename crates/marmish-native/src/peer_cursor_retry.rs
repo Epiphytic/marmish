@@ -86,6 +86,8 @@ pub(crate) struct RetryProof {
 pub(crate) enum TrustedOutcome {
     Applied,
     AlreadyApplied,
+    #[cfg(test)]
+    SkippedCooldown,
 }
 
 impl CursorStore {

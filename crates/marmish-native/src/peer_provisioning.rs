@@ -17,6 +17,10 @@ mod stage_schema;
 #[path = "peer_stage_journal.rs"]
 pub(crate) mod stage_journal;
 
+#[cfg(test)]
+#[path = "peer_stage_retirement_journal.rs"]
+pub(crate) mod retirement;
+
 const START_INTERVAL: u64 = 600;
 
 // Keep persisted SQL stable. A schema change needs an explicit migration.
@@ -284,7 +288,17 @@ impl Checkpoint {
         wall: u64,
         new_class: Option<bool>,
     ) -> Result<Reservation> {
+        #[cfg(test)]
+        let retirement_epoch = self.retirement_epoch;
+        #[cfg(test)]
+        if retirement_epoch {
+            retirement::verify_epoch(&self.cursor.conn)?;
+        }
         let (tx, origin, _) = self.live_provisioning_offer(source, key, wall)?;
+        #[cfg(test)]
+        if retirement_epoch && retirement::under_cooldown(&tx, key.server.to_bytes(), wall)? {
+            return Err(Error::Cooldown);
+        }
         if has_outbox(&tx, key, origin)? {
             return Err(CursorError::Conflict.into());
         }

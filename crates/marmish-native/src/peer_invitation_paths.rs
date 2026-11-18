@@ -1,6 +1,9 @@
 #[cfg(test)]
 #[path = "peer_stage_files.rs"]
 mod provisional;
+#[cfg(test)]
+#[path = "peer_stage_retirement_files.rs"]
+pub(super) mod retirement;
 
 use super::{Error, Result};
 use crate::identity::{IdentityMaterial, ProfileLease, check_dir, open_private};

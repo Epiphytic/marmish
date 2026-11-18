@@ -59,7 +59,7 @@ WHEN NEW.class IS NOT OLD.class OR NEW.generation IS NOT OLD.generation
     OR (OLD.state != 0 AND (NEW.device IS NOT OLD.device OR NEW.inode IS NOT OLD.inode))
 BEGIN SELECT RAISE(ABORT, 'stage state is monotonic'); END";
 
-const DELETE_STAGE: &str = "
+pub(super) const DELETE_STAGE: &str = "
 CREATE TRIGGER peer_stage_delete_guard BEFORE DELETE ON peer_provisional_stage_v1
 BEGIN SELECT RAISE(ABORT, 'stage is bound'); END";
 
@@ -100,7 +100,7 @@ CREATE TRIGGER peer_stage_invite_delete_guard BEFORE DELETE ON peer_consent_invi
 WHEN EXISTS (SELECT 1 FROM peer_provisional_stage_v1 s WHERE s.server=OLD.server)
 BEGIN SELECT RAISE(ABORT, 'invite is bound'); END";
 
-const SCHEMA: &[(&str, &str)] = &[
+pub(super) const SCHEMA: &[(&str, &str)] = &[
     ("peer_provisional_stage_v1", TABLE),
     ("peer_stage_insert_guard", INSERT_STAGE),
     ("peer_stage_update_guard", UPDATE_STAGE),

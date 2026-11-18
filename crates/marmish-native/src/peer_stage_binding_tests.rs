@@ -15,17 +15,17 @@ use super::*;
 const ORIGIN: &str = "wss://stage-fixture.example/";
 const FAULT: Error = Error::Clock;
 
-struct Fixture {
+pub(in super::super) struct Fixture {
     _private: TempDir,
-    lease: ProfileLease,
-    identity: IdentityMaterial,
-    server: Keys,
-    wall: Arc<AtomicU64>,
-    now: u64,
+    pub(in super::super) lease: ProfileLease,
+    pub(in super::super) identity: IdentityMaterial,
+    pub(in super::super) server: Keys,
+    pub(in super::super) wall: Arc<AtomicU64>,
+    pub(in super::super) now: u64,
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(in super::super) fn new() -> Self {
         let private = tempfile::Builder::new()
             .permissions(fs::Permissions::from_mode(0o700))
             .tempdir()
@@ -50,16 +50,16 @@ impl Fixture {
         }
     }
 
-    fn stage(&self) -> PathBuf {
+    pub(in super::super) fn stage(&self) -> PathBuf {
         self.lease.root().join("peer/provisional-unknown.db")
     }
 
-    fn start(&self, policy: Policy) -> InvitationState<'_> {
+    pub(in super::super) fn start(&self, policy: Policy) -> InvitationState<'_> {
         self.open(policy, Checkpoint::attach_for_provisional_proof)
             .unwrap()
     }
 
-    fn open(
+    pub(in super::super) fn open(
         &self,
         policy: Policy,
         checkpoint: impl FnOnce(
@@ -82,7 +82,12 @@ impl Fixture {
         Ok(state)
     }
 
-    fn admit(&self, state: &mut InvitationState<'_>, server: &Keys, created: u64) -> Selector {
+    pub(in super::super) fn admit(
+        &self,
+        state: &mut InvitationState<'_>,
+        server: &Keys,
+        created: u64,
+    ) -> Selector {
         let codec = Codec::new(MAX_OUTER_BYTES).unwrap();
         let routing = NostrRoutingV1::new([77; 32], vec![ORIGIN.to_owned()]).unwrap();
         let prepared = codec
@@ -111,7 +116,10 @@ impl Fixture {
         Selector::from(&prepared.flight)
     }
 
-    fn reserve(&self, state: &mut InvitationState<'_>) -> (Selector, Reservation) {
+    pub(in super::super) fn reserve(
+        &self,
+        state: &mut InvitationState<'_>,
+    ) -> (Selector, Reservation) {
         let selector = self.admit(state, &self.server, self.now);
         let reservation = state
             .checkpoint
