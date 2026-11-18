@@ -188,7 +188,11 @@ leave the sole Unknown slot unavailable across restarts. A hard kill
 while the copy exists can strand a valid signed original. A readiness
 or deadline loss after MDK durably stages unsigned material can also
 strand the slot, including when the signing callback refuses normally. This increment
-adds no reclamation authority. Incorporate these limits explicitly when
+adds no reclamation authority. The separate [schema prestage](peer-candidate-package-prestage.md)
+adds a schema-only strand interval of up to 15 seconds between the
+durable start and issue. A stop, crash or overrun may leave that sole
+slot unavailable without creating a signed package. Incorporate these
+limits explicitly when
 composing the approved actor plan.
 
 ## Evidence before integration
