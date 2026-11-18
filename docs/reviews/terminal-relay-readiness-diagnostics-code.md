@@ -57,3 +57,17 @@ and controlling PTY. Additional direct transport cases for an unprocessed
 replay marker, unrelated source, partial AUTH or caller EOF at the exact
 timer boundary remain outside the live WSS fixture's scope. Existing
 deterministic and control coverage is described in the validation report.
+
+## Integrated upstream MDK review
+
+Claude Code Sonnet 5.5 in Auto mode (session
+`b5bbad2e-2b2b-405b-86e3-34b2ec5639d2`) approved integrated source
+`d8c85de` using MDK `b3cd2cb1`. The reviewer inspected the code and read
+the controller's private WSS test and Clippy results, without running
+duplicate tests. The relay fixture module declaration in `mdk_adapter.rs`
+is explicitly test-only.
+
+Readiness available at the timer poll wins that decision. If readiness
+arrives after the timer has already fired and before the final provenance
+check, the expired attempt returns the existing timeout. The client
+cannot use that late readiness to reopen the expired attempt.

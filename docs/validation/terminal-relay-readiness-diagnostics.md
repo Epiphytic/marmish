@@ -79,3 +79,20 @@ reviewer type-checked the installed helper against locked libc source for
 Linux x86_64, Darwin ARM64 and Darwin x86_64. Full builds and runtime checks
 on macOS and Linux ARM64 still require those runners. See the
 [code review](../reviews/terminal-relay-readiness-diagnostics-code.md).
+
+## Integrated upstream MDK validation
+
+On Linux AMD64, integrated source `d8c85de` locked upstream MDK to
+`b3cd2cb1`. `cargo clippy --locked --offline -p marmish-native --all-targets -- -D warnings`
+passed. A local replay of the 35 CI core selectors passed all 159 test
+executions in 80.52 s. The quiet private WSS
+regression passed in 30.67 s. The installed CLI refused Terminal after
+5.035 s, and an ordinary Command completed in 4.411 s on the same fixture.
+
+The NIP-42 writer control passed in 67.73 s with real tmux, a key echoed in
+139.988 ms, and cold and warm readiness at 7.334 and 8.093 s. Ordinary
+Command passed before, during and after Terminal, in 3.943, 4.371 and
+4.109 s. These are individual loopback samples. The quiet and positive
+tests each ran one exact selector. These results cover built native
+entry points with fixture TLS trust. Packaged Terminal over an external
+qualified relay still requires a separate run.
