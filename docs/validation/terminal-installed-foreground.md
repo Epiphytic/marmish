@@ -56,8 +56,8 @@ ends when the frontend sets raw mode and the tmux socket exists. The
 shell prompt is checked after that measurement. These timings include
 setup and transport scheduling and do not measure internet latency.
 
-For the optimized check, the shell installer installed the three
-executables from the exact local package in 0.866 s. Each installed
+The shell installer installed the three executables in 0.866 s from
+the [optimized package build](mdk-master-3548.md#optimized-linux-installer-and-private-terminal). Each installed
 executable matched its package input byte for byte. The test harness
 used the same MDK lock, source `d091cc8` plus the two
 [reviewed test-only changes](../reviews/terminal-installed-foreground.md),
