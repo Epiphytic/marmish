@@ -1,6 +1,10 @@
 use cgka_traits::app_components::NostrRoutingV1;
+use nostr::event::{EventBuilder, FinalizeEvent, Kind, Tag};
 
-use super::super::provisioning::prepared_consent::custody::ReceivePolicy;
+use super::super::provisioning::{
+    prepared_consent::custody::{CustodyState, ReceivePolicy, Replay},
+    stage_journal::{Artifact, FileWitness},
+};
 use super::*;
 use wire::Transcript;
 
@@ -501,6 +505,140 @@ fn peer_installed_custody_preserves_exact_offer_ancestry_and_fences_old_writers(
         open_custody(&f, &f.client, A, Policy::default(), ReceivePolicy::Manual).unwrap();
     let source = reopened.bind_source(A).unwrap();
     assert!(reopened.recover_provisioning(&source, key, f.wall).is_ok());
+}
+
+#[tokio::test]
+async fn peer_installed_custody_reopens_signed_prepared_consent_and_held_delivery() {
+    let f = Fixture::new();
+    let (package, wall) = native_package(&f.client, A).await;
+    let offer = offer(&f, &f.server, A, wall);
+    let key = Selector::from(&offer.flight);
+    let codec = codec();
+    let signed = codec
+        .prepare_capped_fixture_consent(&f.client, &offer.flight, &package, wall + 900, wall)
+        .unwrap();
+    let consent = codec
+        .open_consent(&f.server, signed.frame(), &offer.flight, wall)
+        .unwrap();
+    let welcome = EventBuilder::new(Kind::GiftWrap, "storage fixture Welcome")
+        .tag(Tag::public_key(f.client.public_key()))
+        .finalize(&Keys::generate())
+        .unwrap();
+    let delivery = codec
+        .prepare_delivery(
+            &f.server,
+            &consent,
+            &serde_json::to_vec(&welcome).unwrap(),
+            wall,
+            wall + 600,
+        )
+        .unwrap();
+    let wire::ClientCarrier::Delivery(incoming) =
+        codec.classify_client(&f.client, delivery.frame()).unwrap()
+    else {
+        panic!("expected signed Delivery");
+    };
+    let transcript = Transcript::from_consent(&signed.flight);
+    let (verified, package_proof) = transcript
+        .verify_delivery_with_package(
+            &f.client,
+            &offer.flight,
+            signed.frame(),
+            &package,
+            wall,
+            *incoming,
+        )
+        .unwrap()
+        .unwrap();
+
+    let reopen =
+        || open_custody(&f, &f.client, A, Policy::default(), ReceivePolicy::Manual).unwrap();
+    {
+        let mut cp = open(&f, &f.client, A, Policy::default()).unwrap();
+        let source = cp.bind_source(A).unwrap();
+        assert_eq!(
+            f.submit(&mut cp, &source, &offer),
+            Status::Accepted(TrustedOutcome::Applied)
+        );
+    }
+    let generation = {
+        let mut cp = reopen();
+        let source = cp.bind_source(A).unwrap();
+        let reservation = cp.reserve_provisioning(&source, key, wall).unwrap();
+        let stage = cp.bind_stage(&source, &reservation, wall).unwrap();
+        let witness = FileWitness {
+            device: [1; 8],
+            inode: [2; 8],
+        };
+        cp.start_stage(&source, &stage, witness, wall).unwrap();
+        cp.record_prepared(
+            &source,
+            &stage,
+            witness,
+            Artifact::new(
+                package_proof.binding().event_id,
+                &package,
+                package_proof.bounds().1,
+            ),
+            wall,
+        )
+        .unwrap();
+        cp.fixture_queue_and_settle_storage(&source, &reservation, &signed, wall);
+        assert_eq!(counts(&cp), (1, 1, 0, 0));
+        assert_eq!(approval_time(&cp, key), None);
+        reservation.stage_binding().coordinates().1
+    };
+
+    let delivery_record = raw(delivery.frame());
+    {
+        let mut cp = reopen();
+        let source = cp.bind_source(A).unwrap();
+        let queued = cp
+            .recover_queued_consent(&source, key, wall)
+            .unwrap()
+            .unwrap();
+        assert_eq!(queued.frame(), signed.frame());
+        let recovered = cp.custody_consent(&source, key, wall).unwrap().unwrap();
+        assert_eq!(recovered.carrier(), transcript.carrier);
+        assert!(recovered.is_settled());
+        assert_eq!(
+            cp.commit_custody_held(
+                &source,
+                delivery_record,
+                &recovered,
+                &verified,
+                &package_proof,
+                wall
+            )
+            .unwrap()
+            .status,
+            Status::Accepted(TrustedOutcome::Held)
+        );
+    }
+
+    let mut cp = reopen();
+    let source = cp.bind_source(A).unwrap();
+    let held = cp
+        .read_custody(&source, key, generation, wall)
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.state(), CustodyState::Held);
+    assert_eq!(held.signed_consent(), signed.frame());
+    assert_eq!(held.signed_delivery(), delivery.frame());
+    assert_eq!(
+        codec
+            .reopen_custodied_delivery(&f.client, &held, wall)
+            .unwrap()
+            .welcome_id(),
+        welcome.id
+    );
+    assert!(matches!(
+        cp.custody_replay(&source, delivery_record, wall).unwrap(),
+        Replay::AlreadyApplied(_)
+    ));
+    assert_eq!(counts(&cp), (1, 1, 0, 0));
+    assert_eq!(approval_time(&cp, key), None);
+    assert!(open(&f, &f.client, A, Policy::default()).is_err());
 }
 
 #[test]

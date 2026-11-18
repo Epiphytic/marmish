@@ -205,6 +205,58 @@ fn prepared_consent_always_denies_unowned_writes_and_temp_shadow() {
 }
 
 impl Checkpoint {
+    // Stores real signed bytes through the checked writer. The stage coordinates
+    // and settlement are fixture inputs; this exercises no native join or relay.
+    pub(crate) fn fixture_queue_and_settle_storage(
+        &mut self,
+        source: &Source,
+        reservation: &Reservation,
+        consent: &wire::Prepared<wire::Consent>,
+        wall: u64,
+    ) {
+        let prepared = self
+            .inspect_prepared_consent(source, reservation, wall)
+            .unwrap();
+        let signed = Unsaved {
+            binding: prepared.binding,
+            witness: prepared.witness,
+            artifact: prepared.artifact,
+            row: outbox::Outbox::new(
+                &prepared,
+                Transcript::from_consent(&consent.flight),
+                consent.frame(),
+            ),
+        };
+        let mut queued = self
+            .queue_prepared_consent(source, reservation, signed, wall, |_| Ok(()))
+            .unwrap();
+        let tx = self
+            .cursor
+            .with_wall(prepared.binding.origin, wall)
+            .unwrap();
+        let retry_at = wall + outbox::RETRY_SECONDS;
+        outbox::advance(
+            &tx,
+            &prepared,
+            &queued.row,
+            outbox::Advance::Reserve {
+                attempt: 1,
+                retry_at,
+            },
+        )
+        .unwrap();
+        queued.row.attempt = 1;
+        queued.row.retry_at = Some(retry_at);
+        outbox::advance(
+            &tx,
+            &prepared,
+            &queued.row,
+            outbox::Advance::Acknowledge { wall },
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+
     pub(crate) fn fixture_check_outbox_guards(&mut self, second: HardenedPeerConnection) {
         use rusqlite::{ErrorCode, TransactionBehavior};
         use std::time::Duration;

@@ -136,6 +136,8 @@ pub(super) fn verify(conn: &Connection, account: PublicKey, origin: Origin) -> D
 }
 
 pub(super) fn verify_rows(conn: &Connection, account: PublicKey, origin: Origin) -> DbResult<()> {
+    // Legacy decisions and outbox are forbidden in both installed layouts.
+    // The successor verifies its separate Prepared Consent outbox and custody chain.
     let broken: bool = conn.query_row(
         "SELECT (SELECT count(*) FROM peer_consent_version WHERE version=2 AND account=?1)!=1
              OR (SELECT count(*) FROM peer_cursor_version WHERE version=1 AND account=?1)!=1
