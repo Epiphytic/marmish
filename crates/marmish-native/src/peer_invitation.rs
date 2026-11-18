@@ -34,6 +34,9 @@ mod provisional;
 #[path = "peer_private_activation_publication.rs"]
 mod publication_socket;
 #[cfg(test)]
+#[path = "peer_receipt_publication_verify.rs"]
+mod receipt_publication_verify;
+#[cfg(test)]
 #[path = "peer_stage_retirement.rs"]
 mod retirement;
 #[cfg(test)]

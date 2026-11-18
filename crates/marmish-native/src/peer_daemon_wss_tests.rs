@@ -1040,6 +1040,27 @@ async fn ordinary_command(socket: &Path, remote: PublicKey, relay: &Relay, cat: 
     assert!(entries[0].authority_valid);
 }
 
+async fn verify_ordinary_command(round: &Round, socket: &Path) -> crate::mdk_adapter::MdkOwner {
+    let cat = std::fs::canonicalize("/bin/cat").unwrap();
+    let mut server = round
+        .command
+        .open_fixture_server(&round.ordinary, round.signer, &cat)
+        .await;
+    let work = ordinary_command(socket, round.command.public(), &round.ordinary, &cat);
+    tokio::pin!(work);
+    timeout(Duration::from_secs(55), async {
+        loop {
+            tokio::select! {
+                () = &mut work => break,
+                result = server.tick(Instant::now() + STEP) => result.unwrap(),
+            }
+        }
+    })
+    .await
+    .expect("ordinary Command must finish independently of Peer WSS");
+    server
+}
+
 async fn outage() {
     let mut round = Round::initialize().await;
     let daemon = round.start(Admission::Manual, LostReply::None).await;
@@ -1063,25 +1084,8 @@ async fn outage() {
     assert_eq!(entry.state, peer::State::Activating);
     let decision = began.elapsed();
 
-    let cat = std::fs::canonicalize("/bin/cat").unwrap();
-    let mut server = round
-        .command
-        .open_fixture_server(&round.ordinary, round.signer, &cat)
-        .await;
-    let remote = round.command.public();
     let began = Instant::now();
-    let work = ordinary_command(&socket, remote, &round.ordinary, &cat);
-    tokio::pin!(work);
-    timeout(Duration::from_secs(55), async {
-        loop {
-            tokio::select! {
-                () = &mut work => break,
-                result = server.tick(Instant::now() + STEP) => result.unwrap(),
-            }
-        }
-    })
-    .await
-    .expect("ordinary Command must finish despite unavailable Peer WSS");
+    let server = verify_ordinary_command(&round, &socket).await;
     let command = began.elapsed();
     assert!(round.ordinary.publication_attempts(445) > 0);
     assert_eq!(round.ordinary.publication_attempts(7435), 0);

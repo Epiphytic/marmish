@@ -55,8 +55,23 @@ CREATE TABLE peer_activation_active (
     recipient_leaf INTEGER NOT NULL CHECK(recipient_leaf BETWEEN 0 AND 4294967295)
 ) STRICT;
 
-CREATE TABLE peer_founder_acceptance (
+CREATE TABLE peer_founder_enrollment (
     singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    origin BLOB NOT NULL REFERENCES peer_cursor_origin(origin)
+        ON UPDATE RESTRICT ON DELETE RESTRICT CHECK(length(origin)=32),
+    founder BLOB NOT NULL CHECK(length(founder)=32),
+    recipient BLOB NOT NULL CHECK(length(recipient)=32 AND recipient!=founder),
+    expected BLOB NOT NULL CHECK(length(expected) BETWEEN 1 AND 2560),
+    group_id BLOB NOT NULL CHECK(length(group_id) BETWEEN 1 AND 255),
+    route BLOB NOT NULL CHECK(length(route)=32),
+    recipient_leaf INTEGER NOT NULL CHECK(recipient_leaf BETWEEN 0 AND 4294967295),
+    valid_from INTEGER NOT NULL CHECK(valid_from>0),
+    deadline INTEGER NOT NULL CHECK(deadline>valid_from)
+) STRICT;
+
+CREATE TABLE peer_founder_acceptance (
+    singleton INTEGER PRIMARY KEY REFERENCES peer_founder_enrollment(singleton)
+        ON UPDATE RESTRICT ON DELETE RESTRICT CHECK(singleton=1),
     founder BLOB NOT NULL CHECK(length(founder)=32),
     recipient BLOB NOT NULL CHECK(length(recipient)=32 AND recipient!=founder),
     room_id BLOB NOT NULL CHECK(length(room_id)=16),
@@ -98,7 +113,7 @@ WHEN OLD.carrier IS NOT NEW.carrier OR OLD.kind IS NOT NEW.kind
 BEGIN SELECT RAISE(ABORT,'exact publication transition required'); END;
 ";
 
-const WRITES: [(Table, &str); 12] = [
+const WRITES: [(Table, &str); 15] = [
     (Table::Epoch, "INSERT"),
     (Table::Epoch, "UPDATE"),
     (Table::Epoch, "DELETE"),
@@ -108,6 +123,9 @@ const WRITES: [(Table, &str); 12] = [
     (Table::Active, "INSERT"),
     (Table::Active, "DELETE"),
     (Table::Active, "UPDATE"),
+    (Table::FounderEnrollment, "INSERT"),
+    (Table::FounderEnrollment, "UPDATE"),
+    (Table::FounderEnrollment, "DELETE"),
     (Table::Acceptance, "INSERT"),
     (Table::Acceptance, "UPDATE"),
     (Table::Acceptance, "DELETE"),
@@ -118,6 +136,7 @@ pub(super) enum Table {
     Epoch,
     Publication,
     Active,
+    FounderEnrollment,
     Acceptance,
 }
 
@@ -127,6 +146,7 @@ impl Table {
             Self::Epoch => "peer_publication_epoch",
             Self::Publication => "peer_activation_publication",
             Self::Active => "peer_activation_active",
+            Self::FounderEnrollment => "peer_founder_enrollment",
             Self::Acceptance => "peer_founder_acceptance",
         }
     }
@@ -207,7 +227,15 @@ pub(super) fn verify_rows(tx: &Transaction<'_>, account: [u8; 32]) -> Result<()>
                     WHERE p.carrier=a.carrier AND p.kind=1 AND p.created_at=a.activated_at
                         AND p.source_epoch=a.epoch AND p.source_identity=a.identity
                         AND p.source_leaf=a.recipient_leaf)
-        ) OR EXISTS (SELECT 1 FROM peer_founder_acceptance WHERE founder!=?1)",
+        ) OR EXISTS (SELECT 1 FROM peer_founder_enrollment WHERE founder!=?1)
+          OR EXISTS (
+            SELECT 1 FROM peer_founder_acceptance a
+            LEFT JOIN peer_founder_enrollment e ON e.singleton=a.singleton AND e.origin=a.origin
+            WHERE a.founder!=?1 OR e.singleton IS NULL OR a.founder!=e.founder
+                OR a.recipient!=e.recipient OR a.group_id!=e.group_id OR a.route!=e.route
+                OR a.sender_leaf!=e.recipient_leaf OR a.deadline!=e.deadline
+                OR a.authored_at<e.valid_from
+        )",
         [account],
         |row| row.get(0),
     )?;

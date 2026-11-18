@@ -9,6 +9,9 @@ use crate::peer_invitation::accept_receipt_wire::{self as receipt_wire, Decoded,
 use crate::peer_invitation::postjoin_verify::{
     Baseline, Capture, ColdConfirmedRotation, ConfirmedRotation, RecoveredPostJoin,
 };
+use crate::peer_invitation::receipt_publication_verify::{
+    CapturedReceipt, ConfirmedReceipt, RecoveredReceipt,
+};
 use nostr::key::PublicKey;
 
 use super::activation_schema::{self, Table};
@@ -639,6 +642,61 @@ impl Checkpoint {
             .map(NativeReceiptStart)
     }
 
+    pub(crate) fn capture_receipt(
+        &mut self,
+        source: &Source,
+        captured: &CapturedReceipt<'_>,
+        wall: u64,
+    ) -> Result<Publication> {
+        let prior = captured.publication();
+        if captured.observed_at() != wall || prior.kind() != Kind::AcceptReceipt {
+            return Err(CursorError::Stale.into());
+        }
+        let binding = CandidateBinding {
+            event_id: captured.event_id(),
+            signed_digest: captured.signed_digest(),
+        };
+        self.update_publication(source, prior, Change::Capture(binding, None), wall)
+    }
+
+    pub(crate) fn arm_recovered_receipt(
+        &mut self,
+        source: &Source,
+        recovered: &RecoveredReceipt<'_>,
+        wall: u64,
+    ) -> Result<EgressAttempt> {
+        let prior = recovered.publication();
+        let binding = CandidateBinding {
+            event_id: recovered.event_id(),
+            signed_digest: recovered.signed_digest(),
+        };
+        if recovered.observed_at() != wall
+            || prior.kind() != Kind::AcceptReceipt
+            || prior.step() != (Step::Uncertain { number: 1 })
+            || prior.candidate() != Some(binding)
+        {
+            return Err(CursorError::Stale.into());
+        }
+        self.arm_exact(source, prior, wall)
+    }
+
+    pub(crate) fn confirm_receipt(
+        &mut self,
+        source: &Source,
+        confirmed: &ConfirmedReceipt<'_>,
+        wall: u64,
+    ) -> Result<Publication> {
+        let prior = confirmed.publication();
+        if confirmed.observed_at() != wall || prior.kind() != Kind::AcceptReceipt {
+            return Err(CursorError::Stale.into());
+        }
+        let binding = CandidateBinding {
+            event_id: confirmed.event_id(),
+            signed_digest: confirmed.signed_digest(),
+        };
+        self.update_publication(source, prior, Change::Confirm(binding), wall)
+    }
+
     pub(crate) fn arm_publication(
         &mut self,
         source: &Source,
@@ -767,6 +825,10 @@ impl RotationCoordinates {
         })
     }
 }
+
+#[path = "peer_founder_enrollment_checkpoint.rs"]
+mod founder_enrollment;
+pub(crate) use founder_enrollment::FounderEnrollment;
 
 #[derive(Eq, PartialEq)]
 pub(crate) struct ReceiptSourceCoordinates {
@@ -1079,6 +1141,10 @@ impl Checkpoint {
         }
         let tx = self.cursor.with_wall(cx.origin, wall)?;
         cx.verify(&tx, wall)?;
+        let enrollment = founder_enrollment::load(&tx, cx.origin)?.ok_or(CursorError::Binding)?;
+        if !enrollment.matches(receipt_source) {
+            return Err(CursorError::Binding.into());
+        }
         if let Some(saved) = load_acceptance(&tx, cx.origin)? {
             return if saved.source == *receipt_source {
                 Ok(saved)
