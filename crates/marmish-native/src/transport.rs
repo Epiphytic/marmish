@@ -259,6 +259,8 @@ struct ConnectorState {
     slots: Vec<Arc<Semaphore>>,
     #[cfg(test)]
     direct_attempts: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    fixture_roots: Option<(Url, rustls::RootCertStore)>,
 }
 
 #[derive(Clone)]
@@ -294,7 +296,32 @@ impl RelayConnector {
             slots,
             #[cfg(test)]
             direct_attempts: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            fixture_roots: None,
         })))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_loopback_fixture(
+        policy: RelayPolicy,
+        dirs: ArtiDirs,
+        url: Url,
+        roots: rustls::RootCertStore,
+    ) -> Result<Self> {
+        let parsed = url::Url::parse(url.as_str()).map_err(|_| Error::Invalid("relay_url"))?;
+        let (_, route) = policy.destination(&url)?;
+        if parsed.scheme() != "wss"
+            || parsed.host_str() != Some("127.0.0.1")
+            || parsed.path() != "/"
+            || parsed.query().is_some()
+            || route != Route::Direct
+            || roots.is_empty()
+        {
+            return Err(Error::Invalid("fixture_relay_trust"));
+        }
+        let mut connector = Self::new(policy, dirs)?;
+        Arc::get_mut(&mut connector.0).unwrap().fixture_roots = Some((url, roots));
+        Ok(connector)
     }
 
     pub fn policy(&self) -> &RelayPolicy {
@@ -454,6 +481,12 @@ impl RelayConnector {
             return Err(Error::Transport("proxy_forbidden"));
         }
         let (index, route) = self.policy().destination(url)?;
+        #[cfg(test)]
+        if let Some((fixture_url, _)) = &self.0.fixture_roots
+            && fixture_url != url
+        {
+            return Err(Error::Transport("fixture_relay_destination"));
+        }
         if !self.0.ready.load(Ordering::Acquire) {
             return Err(Error::Transport("not_ready"));
         }
@@ -577,6 +610,11 @@ impl RelayConnector {
             .ok_or(Error::Invalid("relay_host"))?
             .trim_start_matches('[')
             .trim_end_matches(']');
+        #[cfg(test)]
+        if let Some((_, roots)) = &self.0.fixture_roots {
+            let stream = tls_stream_with_roots(stream, host, roots.clone()).await?;
+            return self.websocket(url, stream, permit).await;
+        }
         let stream = if parsed.scheme() == "wss" {
             crate::diagnostics::event("tls", "begin");
             tls_stream(stream, host).await?

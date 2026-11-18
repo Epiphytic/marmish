@@ -861,6 +861,8 @@ pub struct MdkOwner {
     active: bool,
     #[cfg(test)]
     command_creation_test: Option<command_runtime::CreationTest>,
+    #[cfg(test)]
+    relay_proof_ingress: Option<Vec<MessageId>>,
     retention: u64,
     welcome_retry: HashMap<Vec<u8>, (Instant, u8)>,
     reconnect_after: Instant,
@@ -1023,6 +1025,8 @@ impl MdkOwner {
             active: false,
             #[cfg(test)]
             command_creation_test: None,
+            #[cfg(test)]
+            relay_proof_ingress: None,
             retention: 86400,
             welcome_retry: HashMap::new(),
             reconnect_after: Instant::now(),
@@ -2358,6 +2362,11 @@ impl MdkOwner {
                         TransportEnvelope::GroupMessage { .. } => "group_message",
                     },
                 );
+                #[cfg(test)]
+                if let Some(observed) = &mut self.relay_proof_ingress {
+                    assert!(observed.len() < 64, "bounded relay proof observations");
+                    observed.push(delivery.message.id.clone());
+                }
                 let effects =
                     tokio::time::timeout_at(deadline, self.runtime.ingest_delivery(&delivery))
                         .await
@@ -2904,6 +2913,18 @@ pub(crate) mod trust_tests;
 #[cfg(test)]
 #[path = "terminal_memory_proof_tests.rs"]
 mod terminal_memory_proof_tests;
+
+#[cfg(test)]
+#[path = "terminal_room_fixture.rs"]
+mod terminal_room_fixture;
+
+#[cfg(test)]
+#[path = "terminal_relay_fixture.rs"]
+mod terminal_relay_fixture;
+
+#[cfg(test)]
+#[path = "terminal_route_proof_tests.rs"]
+mod terminal_route_proof_tests;
 
 #[cfg(test)]
 #[path = "peer_staged_proof_tests.rs"]
