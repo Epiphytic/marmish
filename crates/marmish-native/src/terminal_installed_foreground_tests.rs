@@ -17,26 +17,21 @@ const RAW_FLAGS: libc::tcflag_t = libc::ECHO | libc::ICANON | libc::ISIG;
 #[test]
 #[ignore = "requires nonroot, installed executables, tmux and a private loopback TLS relay"]
 fn terminal_installed_runtime_native_foreground() {
-    run_native(|| async {
-        let sample = prove_writer(Workload::Foreground).await;
-        eprintln!(
-            "terminal_installed_foreground attach_us={} echo_us={} command_before_us={} command_after_us={}",
-            sample.cold.as_micros(),
-            sample.echo.as_micros(),
-            sample.unloaded.as_micros(),
-            sample.after.as_micros(),
-        );
-    });
+    measure(Workload::Foreground, "terminal_installed_foreground");
 }
 
 #[test]
 #[ignore = "requires nonroot, installed executables, tmux and a private loopback TLS relay"]
 fn terminal_installed_runtime_native_controls() {
-    run_native(|| async {
+    measure(Workload::Controls, "terminal_installed_controls");
+}
+
+fn measure(workload: Workload, label: &'static str) {
+    run_native(move || async move {
         let started = Instant::now();
-        let sample = prove_writer(Workload::Controls).await;
+        let sample = prove_writer(workload).await;
         eprintln!(
-            "terminal_installed_controls elapsed_us={} attach_us={} echo_us={} command_before_us={} command_after_us={}",
+            "{label} elapsed_us={} attach_us={} echo_us={} command_before_us={} command_after_us={}",
             started.elapsed().as_micros(),
             sample.cold.as_micros(),
             sample.echo.as_micros(),
@@ -92,15 +87,21 @@ async fn read_master(pty: &AsyncFd<File>, buffer: &mut [u8]) -> io::Result<usize
     }
 }
 
+async fn write_master(pty: &AsyncFd<File>, bytes: &[u8]) -> io::Result<usize> {
+    loop {
+        let mut ready = pty.writable().await?;
+        if let Ok(result) = ready.try_io(|fd| fd.get_ref().write(bytes)) {
+            return result;
+        }
+    }
+}
+
 async fn input(pty: &AsyncFd<File>, mut bytes: &[u8]) {
     timeout(IO, async {
         while !bytes.is_empty() {
-            let mut ready = pty.writable().await.unwrap();
-            if let Ok(result) = ready.try_io(|fd| fd.get_ref().write(bytes)) {
-                let sent = result.unwrap();
-                assert_ne!(sent, 0, "foreground PTY write made no progress");
-                bytes = &bytes[sent..];
-            }
+            let sent = write_master(pty, bytes).await.unwrap();
+            assert_ne!(sent, 0, "foreground PTY write made no progress");
+            bytes = &bytes[sent..];
         }
     })
     .await
@@ -108,17 +109,11 @@ async fn input(pty: &AsyncFd<File>, mut bytes: &[u8]) {
 }
 
 async fn detach(pty: &AsyncFd<File>) {
-    timeout(IO, async {
-        loop {
-            let mut ready = pty.writable().await.unwrap();
-            if let Ok(result) = ready.try_io(|fd| fd.get_ref().write(b"~.")) {
-                assert_eq!(result.unwrap(), 2, "atomic tilde-dot input");
-                return;
-            }
-        }
-    })
-    .await
-    .expect("tilde-dot write deadline");
+    let sent = timeout(IO, write_master(pty, b"~."))
+        .await
+        .expect("tilde-dot write deadline")
+        .unwrap();
+    assert_eq!(sent, 2, "atomic tilde-dot input");
 }
 
 async fn output(pty: &AsyncFd<File>, expected: &[u8], stage: &'static str) -> Vec<u8> {
