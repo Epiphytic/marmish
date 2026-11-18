@@ -826,6 +826,10 @@ impl RotationCoordinates {
     }
 }
 
+#[path = "peer_founder_enrollment_checkpoint.rs"]
+mod founder_enrollment;
+pub(crate) use founder_enrollment::FounderEnrollment;
+
 #[derive(Eq, PartialEq)]
 pub(crate) struct ReceiptSourceCoordinates {
     pub(crate) decoded: Decoded,
@@ -1137,6 +1141,10 @@ impl Checkpoint {
         }
         let tx = self.cursor.with_wall(cx.origin, wall)?;
         cx.verify(&tx, wall)?;
+        let enrollment = founder_enrollment::load(&tx, cx.origin)?.ok_or(CursorError::Binding)?;
+        if !enrollment.matches(receipt_source) {
+            return Err(CursorError::Binding.into());
+        }
         if let Some(saved) = load_acceptance(&tx, cx.origin)? {
             return if saved.source == *receipt_source {
                 Ok(saved)

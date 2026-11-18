@@ -487,7 +487,7 @@ async fn prove_lost_ack(with_receipt: bool) {
             .checkpoint
             .activate_and_reserve_recovered_receipt(&owner.state.source, &held, &rotation, wall())
             .unwrap();
-        let inner = receipt::start(&mut owner, &stage, &round, reserved).await;
+        let inner = receipt::start(&mut owner, &stage, &round, &image, reserved).await;
         drop(rotation);
         drop((recipient, owner, held, confirmed, armed));
         receipt::finish(receipt::ReceiptRun {
@@ -496,7 +496,6 @@ async fn prove_lost_ack(with_receipt: bool) {
             image: &image,
             reopen: &open_owner,
             founder: setup.founder_reopen,
-            founder_offer: setup.founder_offer,
             founder_runtime: Some(founder),
             founder_socket: &mut founder_socket,
             sender_socket: retry_socket.clone(),

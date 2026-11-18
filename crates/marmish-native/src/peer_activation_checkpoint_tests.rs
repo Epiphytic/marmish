@@ -345,6 +345,24 @@ fn founder_accepts_only_one_durable_exact_source_and_refuses_late_first_receipt(
         deadline: WALL + 10,
     };
     assert_eq!(
+        cp.accept_receipt_coordinates(&source, &exact, WALL + 1)
+            .err(),
+        Some(Error::Cursor(CursorError::Binding))
+    );
+    cp.record_founder_enrollment(
+        &source,
+        &FounderEnrollment {
+            receipt,
+            group: exact.group.clone(),
+            route: exact.route,
+            leaf: exact.sender_leaf,
+            valid_from: WALL,
+            deadline: exact.deadline,
+        },
+        WALL,
+    )
+    .unwrap();
+    assert_eq!(
         cp.accept_receipt_coordinates(&source, &exact, WALL + 10)
             .err(),
         Some(Error::Expired)
@@ -359,7 +377,7 @@ fn founder_accepts_only_one_durable_exact_source_and_refuses_late_first_receipt(
     let mut cp = publication_checkpoint(&fixture).unwrap();
     let source = cp.bind_source(URL).unwrap();
     let accepted = cp
-        .accept_receipt_coordinates(&source, &exact, WALL + 10)
+        .read_founder_acceptance(&source, receipt.recipient, WALL + 10)
         .unwrap();
     assert_eq!(accepted.accepted_at(), WALL + 1);
     exact.native_id = vec![8; 32];

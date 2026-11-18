@@ -1,6 +1,12 @@
 //! Founder-side source verification for the isolated native activation proof.
 
-use crate::peer_invitation::accept_receipt_wire::{self, Receipt};
+use crate::{
+    mdk_adapter::peer_staged_proof_tests::PeerFounderRuntime,
+    peer_invitation::{
+        accept_receipt_wire::{self, Receipt},
+        store::consent_checkpoint::provisioning::prepared_consent::custody::publication::FounderAcceptance,
+    },
+};
 use cgka_traits::{
     EpochPin, GroupEvent, GroupId, GroupLifecycleState, MessageId, MessageState, MessageStorage,
     StorageError, TransportAdapter,
@@ -222,4 +228,70 @@ fn candidate(
         created_at: decoded.created_at,
         deadline: expected.deadline,
     })
+}
+
+/// Retire precisely the already committed native source. The founder owner is
+/// exclusive during readback and deletion. The original acceptance supplies
+/// the epoch and time, so later expiry cannot undo this local cleanup.
+pub(crate) fn retire(
+    founder: &mut PeerFounderRuntime,
+    accepted: &FounderAcceptance,
+    expected: &Expectation<'_>,
+    native_id: &MessageId,
+) -> Result<bool, Refusal> {
+    let source = accepted.source();
+    let runtime = founder.runtime();
+    if source.native_id != native_id.as_slice()
+        || source.decoded.receipt != *expected.receipt
+        || source.group != expected.group.as_slice()
+        || source.route != expected.route.nostr_group_id
+        || source.sender_leaf != expected.recipient_leaf
+        || source.deadline != expected.deadline
+        || runtime.self_id().as_slice() != source.decoded.receipt.founder.to_bytes()
+    {
+        return Err(Refusal::Binding);
+    }
+    let pending = runtime
+        .group_authority_view()
+        .with_group_authority_snapshot(expected.group, |storage, _| -> Result<bool, Refusal> {
+            let message = storage.get_message(native_id)?;
+            if message.id != *native_id
+                || message.group_id != *expected.group
+                || message.epoch.0 != source.decoded.receipt.epoch
+                || message.state != MessageState::Processed
+            {
+                return Err(Refusal::Binding);
+            }
+            let group = expected.group;
+            let events = storage.list_pending_application_events()?;
+            let mut found = false;
+            for event in &events {
+                match event {
+                    GroupEvent::AppMessageInvalidated {
+                        group_id,
+                        message_id,
+                        ..
+                    } if group_id == group && message_id == native_id => {
+                        return Err(Refusal::Binding);
+                    }
+                    GroupEvent::MessageReceived { message_id, .. } if message_id == native_id => {
+                        let receipt = candidate(event, expected, accepted.accepted_at())
+                            .ok_or(Refusal::Binding)?;
+                        if found
+                            || receipt.app_id() != source.decoded.event_id
+                            || receipt.created_at() != source.decoded.created_at
+                        {
+                            return Err(Refusal::Binding);
+                        }
+                        found = true;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(found)
+        })?;
+    if pending {
+        founder.acknowledge_application_source(native_id)?;
+    }
+    Ok(pending)
 }

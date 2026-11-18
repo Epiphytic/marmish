@@ -343,10 +343,12 @@ pub(crate) struct PeerFounderRuntime<A: TransportAdapter = NoIo>(
 );
 
 impl<A: TransportAdapter> PeerFounderRuntime<A> {
-    pub(crate) fn acknowledge_application_source(&self, source: &MessageId) {
+    pub(crate) fn acknowledge_application_source(
+        &self,
+        source: &MessageId,
+    ) -> Result<(), cgka_traits::StorageError> {
         self.1
             .delete_pending_application_events(std::slice::from_ref(source))
-            .unwrap();
     }
 
     pub(crate) fn runtime(

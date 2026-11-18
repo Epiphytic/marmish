@@ -6,7 +6,9 @@ use crate::peer_invitation::{
     accept_receipt_wire::{self, Receipt},
     publication_socket::ReceiptGate,
     receipt_publication_verify as outbound,
-    store::consent_checkpoint::provisioning::prepared_consent::custody::publication::ReceiptReservation,
+    store::consent_checkpoint::provisioning::prepared_consent::custody::publication::{
+        FounderEnrollment, ReceiptReservation,
+    },
 };
 use cgka_traits::{GroupEvent, OutboundFanoutStorage, engine::SendIntent};
 
@@ -20,6 +22,7 @@ pub(super) async fn start(
     owner: &mut PreparedConsentOwner<'_>,
     stage: &Stage,
     round: &Round,
+    image: &Path,
     reserved: ReceiptReservation,
 ) -> [u8; 32] {
     let wall = round.wall.load(Ordering::Acquire);
@@ -42,6 +45,7 @@ pub(super) async fn start(
         .start_native_receipt(&owner.state.source, reserved.publication(), wall)
         .unwrap();
     assert_eq!(start.publication().step(), Step::NativeStarted);
+    assert!(outbound::capture(&recipient, image, start.publication(), wall).is_err());
     let pin = stable_pin(&recipient, &stage.group);
     assert_eq!(pin.epoch.0, start.publication().source_pin().ordinal);
     assert_eq!(pin.identity, start.publication().source_pin().authenticator);
@@ -71,7 +75,6 @@ pub(super) struct ReceiptRun<'a, 'profile> {
     pub(super) image: &'a Path,
     pub(super) reopen: &'a dyn Fn() -> PreparedConsentOwner<'profile>,
     pub(super) founder: PeerFounderReopen,
-    pub(super) founder_offer: consent_checkpoint::wire::Offer,
     pub(super) founder_runtime: Option<PeerFounderRuntime<FounderTransport>>,
     pub(super) founder_socket: &'a mut Owner,
     pub(super) sender_socket: Arc<Mutex<Owner>>,
@@ -122,6 +125,15 @@ impl ReceiptRun<'_, '_> {
 }
 
 pub(super) async fn finish(mut run: ReceiptRun<'_, '_>) {
+    let projection = FounderProjection::create(&run);
+    let prior = expected_founder_enrollment(&run, run.founder_runtime.as_ref().unwrap());
+    {
+        let mut db = projection.checkpoint(&run);
+        let source = db.bind_source(run.round.relay.url.as_str()).unwrap();
+        db.record_founder_enrollment(&source, &prior, run.wall())
+            .unwrap();
+    }
+    drop(prior);
     let mut owner = (run.reopen)();
     let (row, native_started) = run.read(&mut owner, Step::NativeStarted);
     let gate = ReceiptGate::closed(run.round.wall.clone());
@@ -140,6 +152,7 @@ pub(super) async fn finish(mut run: ReceiptRun<'_, '_>) {
     drop(captured);
     drop((recipient, gate, native_started, recorded, owner));
 
+    let reopen_started = Instant::now();
     let mut owner = (run.reopen)();
     let (row, recorded) = run.read(&mut owner, Step::Captured);
     let gate = ReceiptGate::closed(run.round.wall.clone());
@@ -154,6 +167,7 @@ pub(super) async fn finish(mut run: ReceiptRun<'_, '_>) {
         .is_err()
     );
     let request = outbound::check_captured(&recipient, run.image, &recorded, run.wall()).unwrap();
+    let capture_reopen_ms = reopen_started.elapsed().as_millis();
     advance_retry(&recipient, &run.stage.group, &run.round.wall, deadline);
     let socket = ReservedSocket::reserve(
         run.sender_socket.clone(),
@@ -196,7 +210,6 @@ pub(super) async fn finish(mut run: ReceiptRun<'_, '_>) {
     assert_eq!(record.fingerprint().bytes_sha256, digest);
     let delivery = record.delivery(&run.stage.group, run.wall());
     let mut founder = run.founder_runtime.take().unwrap();
-    let (receipt, recipient_leaf) = expected_founder_receipt(&run, &founder);
     let ingress = founder.ingest_delivery(&delivery).await.unwrap();
     assert_eq!(ingress.outcome, IngestOutcome::Processed);
     assert!(!ingress.left_object_unpersisted);
@@ -221,6 +234,15 @@ pub(super) async fn finish(mut run: ReceiptRun<'_, '_>) {
         panic!("one authenticated native acceptance receipt source");
     };
     drop(founder);
+
+    // The founder can durably accept a receipt it ingested despite the
+    // publisher losing its WSS ACK. The recipient has not retried yet.
+    let mut owner = (run.reopen)();
+    run.read(&mut owner, Step::Armed { number: 1 });
+    drop(owner);
+    let first_acceptance = project_founder(&run, &projection, native_id);
+    let founder_acceptance_ms = run.started.elapsed().as_millis();
+    assert_eq!(run.round.relay.group_writes().len(), 4);
 
     let mut owner = (run.reopen)();
     let (row, first_armed) = run.read(&mut owner, Step::Armed { number: 1 });
@@ -340,26 +362,18 @@ pub(super) async fn finish(mut run: ReceiptRun<'_, '_>) {
     assert_eq!(writes[4].record, writes[3].record);
     assert!(writes[4].acknowledged && writes[4].duplicate);
 
-    let expected = founder_proof::Expectation {
-        receipt: &receipt,
-        group: &run.stage.group,
-        route: run.founder_offer.routing(),
-        recipient_leaf,
-        valid_from: run.founder_offer.flight().created_at,
-        deadline,
-    };
-    project_founder(&run, &expected, native_id, delivery).await;
+    retire_founder(&run, &projection, native_id, first_acceptance, delivery).await;
     assert_eq!(run.round.relay.group_writes(), writes);
     eprintln!(
-        "peer_receipt_durable acceptance_ms={} ack_loss_ms={ack_loss_ms} retry_ms={retry_ms} group_writes=5",
+        "peer_receipt_durable acceptance_path_ms={} founder_acceptance_ms={founder_acceptance_ms} capture_reopen_ms={capture_reopen_ms} ack_loss_ms={ack_loss_ms} retry_ms={retry_ms} group_writes=5",
         run.started.elapsed().as_millis()
     );
 }
 
-fn expected_founder_receipt(
+fn expected_founder_enrollment(
     run: &ReceiptRun<'_, '_>,
     founder: &PeerFounderRuntime<FounderTransport>,
-) -> (Receipt, u32) {
+) -> FounderEnrollment {
     let founder = founder.runtime();
     let epoch = stable_pin(founder, &run.stage.group);
     let recipient_leaf = founder
@@ -370,76 +384,164 @@ fn expected_founder_receipt(
         .find(|leaf| leaf.member.as_slice() == run.round.signer.to_bytes())
         .unwrap()
         .leaf_index;
-    let offer = &run.founder_offer;
+    let delivery = &run.stage.delivery;
+    let offer = delivery.offer();
     let flight = offer.flight();
-    (
-        Receipt {
+    assert_eq!(founder.self_id().as_slice(), flight.author.to_bytes());
+    assert_eq!(run.stage.routing, *offer.routing());
+    assert_eq!(
+        run.stage.welcome.as_slice(),
+        delivery.welcome_id().to_bytes()
+    );
+    FounderEnrollment {
+        receipt: Receipt {
             founder: flight.author,
             recipient: flight.recipient,
             room_id: offer.room_id(),
             offer_id: offer.offer_id(),
             offer_revision: flight.revision.to_bytes(),
-            welcome_id: run.stage.welcome.as_slice().try_into().unwrap(),
+            welcome_id: delivery.welcome_id().to_bytes(),
             epoch: epoch.epoch.0,
             epoch_identity: epoch.identity,
         },
-        recipient_leaf,
-    )
+        group: run.stage.group.as_slice().to_vec(),
+        route: offer.routing().nostr_group_id,
+        leaf: recipient_leaf,
+        valid_from: delivery.flight().created_at,
+        deadline: delivery.flight().expires_at,
+    }
 }
 
-async fn project_founder(
-    run: &ReceiptRun<'_, '_>,
-    expected: &founder_proof::Expectation<'_>,
-    native_id: &MessageId,
-    delivery: TransportDelivery,
-) {
-    let database = run.round.founder_root.path().join("acceptance.db");
-    let key = zeroize::Zeroizing::new(random());
-    OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(&database)
+struct DurableExpectation {
+    saved: FounderEnrollment,
+    group: GroupId,
+    route: NostrRoutingV1,
+}
+
+impl DurableExpectation {
+    fn read(
+        run: &ReceiptRun<'_, '_>,
+        db: &mut Checkpoint,
+        source: &consent_checkpoint::Source,
+    ) -> Self {
+        let saved = db
+            .read_founder_enrollment(source, run.round.signer, run.wall())
+            .unwrap();
+        let group = GroupId::new(saved.group.clone());
+        let route = NostrRoutingV1 {
+            nostr_group_id: saved.route,
+            relays: vec![run.round.relay.url.as_str().to_owned()],
+        };
+        Self {
+            saved,
+            group,
+            route,
+        }
+    }
+
+    fn expected(&self) -> founder_proof::Expectation<'_> {
+        founder_proof::Expectation {
+            receipt: &self.saved.receipt,
+            group: &self.group,
+            route: &self.route,
+            recipient_leaf: self.saved.leaf,
+            valid_from: self.saved.valid_from,
+            deadline: self.saved.deadline,
+        }
+    }
+}
+
+struct FounderProjection {
+    path: PathBuf,
+    key: zeroize::Zeroizing<[u8; 32]>,
+}
+
+impl FounderProjection {
+    fn create(run: &ReceiptRun<'_, '_>) -> Self {
+        let projection = Self {
+            path: run.round.founder_root.path().join("acceptance.db"),
+            key: zeroize::Zeroizing::new(random()),
+        };
+        OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&projection.path)
+            .unwrap();
+        let origin = run.round.relay.url.as_str();
+        let (signer, uid) = Self::account(run);
+        let origin_id = Route::configured(origin).unwrap().id;
+        let bare = CursorStore::attach(
+            projection.connect(),
+            signer.public_key().to_bytes(),
+            &[origin_id],
+        )
         .unwrap();
-    let origin = run.round.relay.url.as_str();
-    let connect = || HardenedPeerConnection::open(&database, *key).unwrap();
-    let signer = || (*run.round.founder).clone();
-    // SAFETY: reads the process's effective Unix UID without mutating state.
-    let uid = unsafe { libc::geteuid() };
-    let origin_id = Route::configured(origin).unwrap().id;
-    let bare =
-        CursorStore::attach(connect(), signer().public_key().to_bytes(), &[origin_id]).unwrap();
-    drop(
-        Checkpoint::attach_for_provisional_proof(bare, signer(), uid, &[origin], Policy::default())
+        drop(
+            Checkpoint::attach_for_provisional_proof(
+                bare,
+                signer.clone(),
+                uid,
+                &[origin],
+                Policy::default(),
+            )
             .unwrap(),
-    );
-    drop(
-        Checkpoint::attach_prepared_consent_fixture(
-            connect(),
-            signer(),
+        );
+        drop(
+            Checkpoint::attach_prepared_consent_fixture(
+                projection.connect(),
+                signer.clone(),
+                uid,
+                &[origin],
+                Policy::default(),
+            )
+            .unwrap(),
+        );
+        drop(
+            Checkpoint::attach_pending_custody_fixture(
+                projection.connect(),
+                signer,
+                uid,
+                &[origin],
+                Policy::default(),
+            )
+            .unwrap(),
+        );
+        projection
+    }
+
+    fn account(run: &ReceiptRun<'_, '_>) -> (Keys, u32) {
+        // SAFETY: reads the process's effective Unix UID without mutating state.
+        ((*run.round.founder).clone(), unsafe { libc::geteuid() })
+    }
+
+    fn connect(&self) -> HardenedPeerConnection {
+        HardenedPeerConnection::open(&self.path, *self.key).unwrap()
+    }
+
+    fn checkpoint(&self, run: &ReceiptRun<'_, '_>) -> Checkpoint {
+        let (signer, uid) = Self::account(run);
+        Checkpoint::attach_publication_fixture(
+            self.connect(),
+            signer,
             uid,
-            &[origin],
+            run.round.relay.url.as_str(),
             Policy::default(),
         )
-        .unwrap(),
-    );
-    drop(
-        Checkpoint::attach_pending_custody_fixture(
-            connect(),
-            signer(),
-            uid,
-            &[origin],
-            Policy::default(),
-        )
-        .unwrap(),
-    );
-    let checkpoint = || {
-        Checkpoint::attach_publication_fixture(connect(), signer(), uid, origin, Policy::default())
-            .unwrap()
-    };
+        .unwrap()
+    }
+}
+
+fn project_founder(
+    run: &ReceiptRun<'_, '_>,
+    projection: &FounderProjection,
+    native_id: &MessageId,
+) -> u64 {
     let founder = run.founder.closed();
-    let mut db = checkpoint();
-    let source = db.bind_source(origin).unwrap();
+    let mut db = projection.checkpoint(run);
+    let source = db.bind_source(run.round.relay.url.as_str()).unwrap();
+    let durable = DurableExpectation::read(run, &mut db, &source);
+    let expected = &durable.expected();
 
     assert!(matches!(
         founder_proof::pending(founder.runtime(), expected, expected.deadline),
@@ -461,6 +563,24 @@ async fn project_founder(
         .unwrap()
         .is_none()
     );
+    let wrong_leaf = founder_proof::Expectation {
+        recipient_leaf: expected.recipient_leaf ^ 1,
+        ..*expected
+    };
+    assert!(matches!(
+        founder_proof::pending(founder.runtime(), &wrong_leaf, run.wall()),
+        Err(founder_proof::Refusal::Binding)
+    ));
+    let mut wrong_pin = *expected.receipt;
+    wrong_pin.epoch_identity[0] ^= 1;
+    let wrong_epoch = founder_proof::Expectation {
+        receipt: &wrong_pin,
+        ..*expected
+    };
+    assert!(matches!(
+        founder_proof::pending(founder.runtime(), &wrong_epoch, run.wall()),
+        Err(founder_proof::Refusal::Binding)
+    ));
     let proof = founder_proof::pending(founder.runtime(), expected, run.wall())
         .unwrap()
         .unwrap();
@@ -471,13 +591,22 @@ async fn project_founder(
         .unwrap();
     assert_eq!(durable.accepted_at(), run.wall());
     assert_eq!(durable.source().native_id, native_id.as_slice());
-    let saved_at = durable.accepted_at();
-    drop((db, source, proof, founder, durable));
+    durable.accepted_at()
+}
 
+async fn retire_founder(
+    run: &ReceiptRun<'_, '_>,
+    projection: &FounderProjection,
+    native_id: &MessageId,
+    saved_at: u64,
+    delivery: TransportDelivery,
+) {
     run.round.wall.fetch_add(1, Ordering::AcqRel);
-    let mut founder = run.founder.closed();
-    let mut db = checkpoint();
-    let source = db.bind_source(origin).unwrap();
+    let founder = run.founder.closed();
+    let mut db = projection.checkpoint(run);
+    let source = db.bind_source(run.round.relay.url.as_str()).unwrap();
+    let durable = DurableExpectation::read(run, &mut db, &source);
+    let expected = &durable.expected();
     let proof = founder_proof::pending(founder.runtime(), expected, run.wall())
         .unwrap()
         .unwrap();
@@ -487,19 +616,42 @@ async fn project_founder(
     assert_eq!(repeated.accepted_at(), saved_at);
     assert!(repeated.accepted_at() < run.wall());
     assert_eq!(repeated.source().native_id, proof.native_id().as_slice());
-    founder.acknowledge_application_source(proof.native_id());
-    assert!(
-        founder_proof::pending(founder.runtime(), expected, run.wall())
-            .unwrap()
-            .is_none()
-    );
+    drop((proof, repeated, db, founder));
+
+    // Already-accepted rows can retire their exact native delivery after
+    // the acceptance deadline; no new acceptance becomes possible.
+    run.round.wall.store(expected.deadline, Ordering::Release);
+    let mut founder = run.founder.closed();
+    let mut db = projection.checkpoint(run);
+    let source = db.bind_source(run.round.relay.url.as_str()).unwrap();
+    let late = db
+        .read_founder_acceptance(&source, run.round.signer, run.wall())
+        .unwrap();
+    assert_eq!(late.accepted_at(), saved_at);
+    assert!(matches!(
+        founder_proof::pending(founder.runtime(), expected, run.wall()),
+        Err(founder_proof::Refusal::Expired)
+    ));
+    let mut wrong = native_id.as_slice().to_vec();
+    wrong[0] ^= 1;
+    assert!(matches!(
+        founder_proof::retire(&mut founder, &late, expected, &MessageId::new(wrong)),
+        Err(founder_proof::Refusal::Binding)
+    ));
+    assert!(founder_proof::retire(&mut founder, &late, expected, native_id).unwrap());
+    assert!(!founder_proof::retire(&mut founder, &late, expected, native_id).unwrap());
+
     let replay = founder.ingest_delivery(&delivery).await.unwrap();
     assert!(replay.effects.events.iter().all(|event| {
-        !matches!(event, GroupEvent::MessageReceived { message_id, .. } if message_id == native_id)
+        !matches!(event, GroupEvent::MessageReceived { message_id, .. } if message_id != native_id)
     }));
-    assert!(
-        founder_proof::pending(founder.runtime(), expected, run.wall())
-            .unwrap()
-            .is_none()
-    );
+    // Native can present an already observed delivery again. The application
+    // decision is the same durable row, and only that row can retire it.
+    let saved = db
+        .read_founder_acceptance(&source, run.round.signer, run.wall())
+        .unwrap();
+    assert_eq!(saved.accepted_at(), saved_at);
+    assert_eq!(saved.source().native_id, native_id.as_slice());
+    founder_proof::retire(&mut founder, &saved, expected, native_id).unwrap();
+    assert!(!founder_proof::retire(&mut founder, &saved, expected, native_id).unwrap());
 }
