@@ -84,8 +84,14 @@ impl ExistingConnection {
             .transaction_with_behavior(TransactionBehavior::Deferred)
     }
 
-    pub fn close(self) -> Result<()> {
-        self.0.close()
+    pub fn close(mut self) -> Result<()> {
+        self.close_in_place()
+    }
+
+    /// Close the held connection without moving its enclosing owner.
+    /// Consume the owner after calling this, before any further access.
+    pub fn close_in_place(&mut self) -> Result<()> {
+        self.0.close_inner()
     }
 }
 

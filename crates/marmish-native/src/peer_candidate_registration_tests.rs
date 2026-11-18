@@ -41,19 +41,7 @@ fn start_profile() -> tempfile::TempDir {
         .unwrap();
     let mut lease = ProfileLease::acquire(root.path(), "test").unwrap();
     let material = prepare(&mut lease);
-    let connector = RelayConnector::new(
-        RelayPolicy::parse(
-            &["wss://127.0.0.1:9/".into()],
-            RouteMode::Off,
-            TransportLimits::default(),
-        )
-        .unwrap(),
-        ArtiDirs {
-            state: lease.arti_state().into(),
-            cache: lease.arti_cache().into(),
-        },
-    )
-    .unwrap();
+    let connector = inert_connector(&lease);
     let owner = MdkOwner::open(&lease, &material, connector, vec![]).unwrap();
     lease.mark_ready(owner.opened_binding()).unwrap();
     drop(owner);
@@ -71,6 +59,22 @@ fn start_profile() -> tempfile::TempDir {
         &serde_json::to_vec(&config).unwrap(),
     );
     root
+}
+
+fn inert_connector(lease: &ProfileLease) -> RelayConnector {
+    RelayConnector::new(
+        RelayPolicy::parse(
+            &["wss://127.0.0.1:9/".into()],
+            RouteMode::Off,
+            TransportLimits::default(),
+        )
+        .unwrap(),
+        ArtiDirs {
+            state: lease.arti_state().into(),
+            cache: lease.arti_cache().into(),
+        },
+    )
+    .unwrap()
 }
 
 fn scope(root: &Path) -> (Arc<ProfileLease>, IdentityMaterial, CommandConfig) {
@@ -108,35 +112,70 @@ fn candidate_registration_scope_and_irreversible_dispatch() {
     ]);
 }
 
+#[test]
+#[ignore = "fresh processes with real startup account, Journal and registration"]
+fn candidate_native_owner_startup_qualification() {
+    run_registration_cases(&[
+        "owner_startup_healthy",
+        "owner_startup_drop",
+        "owner_startup_close_cut",
+        "owner_startup_close_failure",
+        "owner_startup_wrong_key",
+        "owner_startup_healthy_error",
+        "owner_startup_cut_initialize",
+        "owner_startup_cut_smoke",
+        "owner_startup_cut_smoke_close",
+        "owner_startup_cut_account",
+        "owner_startup_cut_journal",
+        "owner_startup_cut_runtime",
+        "owner_startup_cut_return",
+        "owner_startup_panic_partial",
+        "owner_startup_panic_binding",
+        "owner_startup_panic_revoked",
+        "owner_startup_panic_forget",
+        "owner_startup_panic_orphans",
+        "owner_startup_panic_maintain",
+        "owner_startup_panic_routes",
+        "owner_startup_panic_invalidations",
+    ]);
+}
+
 fn run_registration_cases(modes: &[&str]) {
     for &mode in modes {
         let root = start_profile();
-        let mut child = Command::new(std::env::current_exe().unwrap())
-            .args(["--ignored", "--exact", CHILD, "--nocapture"])
-            .env_clear()
-            .env(DIR_ENV, root.path())
-            .env(CASE_ENV, mode)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(15);
-        while child.try_wait().unwrap().is_none() {
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                panic!("registration test did not exit: {mode}");
-            }
-            std::thread::sleep(Duration::from_millis(10));
+        run_registration_case(root.path(), mode);
+        if mode == "owner_startup_healthy" {
+            run_registration_case(root.path(), "owner_startup_stock_reopen");
         }
-        let output = child.wait_with_output().unwrap();
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            output.status.success() && stdout.contains("1 passed"),
-            "{mode}: {stdout}{}",
-            String::from_utf8_lossy(&output.stderr),
-        );
     }
+}
+
+fn run_registration_case(root: &Path, mode: &str) {
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args(["--ignored", "--exact", CHILD, "--nocapture"])
+        .env_clear()
+        .env(DIR_ENV, root)
+        .env(CASE_ENV, mode)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while child.try_wait().unwrap().is_none() {
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("registration test did not exit: {mode}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "{mode}: {stdout}{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
 }
 
 #[test]
@@ -147,6 +186,14 @@ fn registration_subprocess() {
     };
     let mode = std::env::var(CASE_ENV).unwrap();
     let (lease, material, config) = scope(Path::new(&root));
+    if mode == "owner_startup_stock_reopen" {
+        let owner = MdkOwner::open(&lease, &material, inert_connector(&lease), vec![]).unwrap();
+        assert_eq!(
+            owner.status().unwrap().identity,
+            material.public_key().to_hex()
+        );
+        return;
+    }
     let profile = ProfileFiles::open(Arc::clone(&lease)).unwrap();
     let key = lease
         .peer_qualification_key_from_material(&material)
@@ -196,6 +243,18 @@ fn registration_subprocess() {
         prepare().register(&lease, &material),
         Err(RegistrationFailure::LocalUnavailable)
     ));
+    if let Some(mode) = mode.strip_prefix("owner_startup_") {
+        crate::mdk_adapter::startup_tests::qualify(
+            mode,
+            &lease,
+            &material,
+            inert_connector(&lease),
+            &ordinary,
+            &ordinary_fatal,
+            displace_default,
+        );
+        return;
+    }
     if let Some(mode) = mode.strip_prefix("mdk_") {
         mdk_owner::qualify(mode, &lease, &material, &ordinary, &ordinary_fatal);
         return;
@@ -303,7 +362,7 @@ fn registration_subprocess() {
         | "custody_under_lock" => {
             let (_, unrelated) = Trip::new();
             quota::verify_notification_case(&mode, &forwarding, || {
-                ordinary.report_test_custody_failure();
+                ordinary.report_custody_failure();
                 assert!(ordinary_fatal.is_tripped());
                 assert!(forwarding.fatal().is_tripped());
                 assert!(!ordinary.admit());
