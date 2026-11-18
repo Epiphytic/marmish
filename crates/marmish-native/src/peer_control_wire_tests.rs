@@ -200,6 +200,42 @@ async fn peer_control_core_three_flights_preserve_exact_signed_bytes() {
     // The native Welcome custody binds exact bytes, including wire whitespace.
     welcome.push(b'\n');
     let authored_delivery = f.delivery(&consent, &welcome, now + 20);
+    assert!(matches!(
+        f.codec.classify_client(&f.client, initial.frame()).unwrap(),
+        ClientCarrier::Offer
+    ));
+    let ClientCarrier::Delivery(incoming) = f
+        .codec
+        .classify_client(&f.client, authored_delivery.frame())
+        .unwrap()
+    else {
+        panic!("expected authenticated Delivery");
+    };
+    let incoming: IncomingDelivery = *incoming;
+    assert_eq!(incoming.offer().server, f.server.public_key());
+    assert_eq!(incoming.offer().id, offer.offer_id());
+    assert_eq!(
+        incoming.offer().revision,
+        offer.flight().revision.to_bytes()
+    );
+    let outer = seal::verify_signed(authored_delivery.frame(), Error::Outer).unwrap();
+    assert!(incoming.matches_index(outer.id.to_bytes(), outer.created_at.as_secs()));
+    let from_transcript = Transcript::from_consent(&authored.flight)
+        .verify_delivery(
+            &f.client,
+            &offer,
+            authored.frame(),
+            &package,
+            now + 340,
+            incoming,
+        )
+        .unwrap();
+    assert_eq!(
+        from_transcript.consent_revision(),
+        consent.flight().revision
+    );
+    assert_eq!(from_transcript.welcome_bytes(), welcome);
+
     let client_context = &authored.flight;
     let delivery = f
         .codec

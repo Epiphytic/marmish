@@ -18,7 +18,7 @@ mod prepared_consent;
 #[path = "peer_control_wire_seal.rs"]
 mod seal;
 #[cfg(test)]
-pub(crate) use prepared_consent::Transcript;
+pub(crate) use prepared_consent::{ClientCarrier, IncomingDelivery, Transcript};
 
 use self::artifact::{PackageBinding, VerifiedPackage};
 use self::seal::{BODY_CAP, OUTER_CONTENT_CAP, fixed_hex, is_exact_recipient, is_recipient_tag};
@@ -391,7 +391,13 @@ impl Codec {
             return Err(Error::Binding);
         }
         let created_at = child_time(consent.flight, now)?;
-        delivery_times(consent, created_at, expires_at, now)?;
+        delivery_times(
+            consent.flight.created_at..consent.flight.expires_at,
+            &consent.native,
+            created_at,
+            expires_at,
+            now,
+        )?;
         let client = consent.flight.author;
         let (welcome_id, welcome_digest) = artifact::verify_welcome(exact_welcome, client)?;
         let package = consent.native.binding;
@@ -436,24 +442,55 @@ impl Codec {
         }
         let (carrier_id, rumor) =
             self.open(local, frame, Some(consent.flight.recipient), DELIVERY)?;
-        let wire: DeliveryWire = serde_json::from_str(&rumor.content).map_err(|_| Error::Body)?;
+        let wire = serde_json::from_str(&rumor.content).map_err(|_| Error::Body)?;
+        Self::bind_delivery(
+            carrier_id,
+            &rumor,
+            wire,
+            DeliveryAuthority {
+                offer: &consent.offer,
+                revision: consent.flight.revision,
+                window: consent.flight.created_at..consent.flight.expires_at,
+                package: &consent.native,
+            },
+            now,
+        )
+    }
+
+    fn bind_delivery(
+        carrier_id: EventId,
+        rumor: &UnsignedEvent,
+        wire: DeliveryWire,
+        authority: DeliveryAuthority<'_>,
+        now: u64,
+    ) -> Result<Delivery> {
         if wire.v != 1 {
             return Err(Error::Body);
         }
-        match_offer(&consent.offer, &wire.offer_id, &wire.offer_revision)?;
+        match_offer(authority.offer, &wire.offer_id, &wire.offer_revision)?;
         let consent_revision = event_id(&wire.consent_revision)?;
         let package = package_binding(
             &wire.package_event_id,
             &wire.package_ref,
             &wire.package_slot,
         )?;
-        if consent_revision != consent.flight.revision || package != consent.native.binding {
+        if rumor.pubkey != authority.offer.flight.author
+            || consent_revision != authority.revision
+            || package != authority.package.binding
+        {
             return Err(Error::Binding);
         }
-        let flight = flight(carrier_id, &rumor, local.public_key(), wire.expires_at, now)?;
-        delivery_times(consent, flight.created_at, wire.expires_at, now)?;
+        let client = authority.offer.flight.recipient;
+        let flight = flight(carrier_id, rumor, client, wire.expires_at, now)?;
+        delivery_times(
+            authority.window,
+            authority.package,
+            flight.created_at,
+            flight.expires_at,
+            now,
+        )?;
         let welcome = artifact::decode(&wire.welcome, Error::Welcome)?;
-        let (welcome_id, welcome_digest) = artifact::verify_welcome(&welcome, local.public_key())?;
+        let (welcome_id, welcome_digest) = artifact::verify_welcome(&welcome, client)?;
         if welcome_id != event_id(&wire.welcome_event_id)?
             || welcome_digest != fixed_hex(&wire.welcome_sha256, Error::Body)?
         {
@@ -461,7 +498,7 @@ impl Codec {
         }
         Ok(Delivery {
             flight,
-            offer: consent.offer.clone(),
+            offer: authority.offer.clone(),
             consent_revision,
             package,
             welcome,
@@ -537,6 +574,19 @@ impl Codec {
         expected_author: Option<PublicKey>,
         expected_kind: Kind,
     ) -> Result<(EventId, UnsignedEvent)> {
+        let (carrier, _, rumor) = self.open_authenticated(local, frame, expected_author)?;
+        if rumor.kind != expected_kind {
+            return Err(Error::Rumor);
+        }
+        Ok((carrier, rumor))
+    }
+
+    fn open_authenticated(
+        &self,
+        local: &Keys,
+        frame: &[u8],
+        expected_author: Option<PublicKey>,
+    ) -> Result<(EventId, u64, UnsignedEvent)> {
         if frame.len() > self.outer_cap {
             return Err(Error::Size);
         }
@@ -557,10 +607,10 @@ impl Codec {
             return Err(Error::Outer);
         }
         let rumor = seal::open_signed_seal(&outer, local, expected_author)?;
-        if rumor.kind != expected_kind || !is_exact_recipient(&rumor.tags, recipient) {
+        if !is_exact_recipient(&rumor.tags, recipient) {
             return Err(Error::Rumor);
         }
-        Ok((outer.id, rumor))
+        Ok((outer.id, outer.created_at.as_secs(), rumor))
     }
 }
 
@@ -703,15 +753,28 @@ fn consent_times(
     package_window(package, created_at, expires_at, now)
 }
 
-fn delivery_times(consent: &Consent, created_at: u64, expires_at: u64, now: u64) -> Result<()> {
-    stage_window(consent.flight, created_at)?;
-    if expires_at <= created_at
-        || expires_at > consent.flight.expires_at
+struct DeliveryAuthority<'a> {
+    offer: &'a Offer,
+    revision: EventId,
+    window: std::ops::Range<u64>,
+    package: &'a VerifiedPackage,
+}
+
+fn delivery_times(
+    window: std::ops::Range<u64>,
+    package: &VerifiedPackage,
+    created_at: u64,
+    expires_at: u64,
+    now: u64,
+) -> Result<()> {
+    if !window.contains(&created_at)
+        || expires_at <= created_at
+        || expires_at > window.end
         || expires_at > deadline(created_at, FLIGHT_TTL)?
     {
         return Err(Error::Time);
     }
-    package_window(&consent.native, created_at, expires_at, now)
+    package_window(package, created_at, expires_at, now)
 }
 
 #[derive(Clone, Copy)]

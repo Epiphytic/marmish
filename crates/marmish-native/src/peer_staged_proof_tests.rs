@@ -314,6 +314,41 @@ async fn found_room(
     (prepared.group_id, welcomes)
 }
 
+pub(crate) async fn peer_enrollment_welcome(
+    dir: &Path,
+    founder: Arc<Keys>,
+    recipient: nostr::key::PublicKey,
+    routing: &NostrRoutingV1,
+    room_id: [u8; 16],
+    package: KeyPackage,
+) -> Vec<u8> {
+    let recipient = MemberId::new(recipient.to_bytes().to_vec());
+    let founder = Store::new(dir, "peer-founder.db", founder);
+    let (_store, mut runtime) = founder.open_with(
+        &recipient,
+        routing
+            .relays
+            .iter()
+            .cloned()
+            .map(TransportEndpoint)
+            .collect(),
+        NoIo,
+        Arc::new(NoIo),
+    );
+    let name = format!("marmish/peer/1/{}", hex::encode(room_id));
+    let (_, mut welcomes) = found_room(
+        &mut runtime,
+        vec![package],
+        routing,
+        &name,
+        vec![founder.account()],
+    )
+    .await;
+    let welcome = welcomes.pop().expect("one recipient Welcome");
+    assert!(welcomes.is_empty());
+    welcome.payload
+}
+
 // The ordinary provider exercises actual Command wire payload authentication.
 // Process admission/authorization is outside this fixture.
 async fn ordinary_command_traffic(

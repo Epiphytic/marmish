@@ -3093,7 +3093,7 @@ mod terminal_room_fixture;
 
 #[cfg(test)]
 #[path = "terminal_relay_fixture.rs"]
-mod terminal_relay_fixture;
+pub(crate) mod terminal_relay_fixture;
 
 #[cfg(test)]
 #[path = "terminal_route_proof_tests.rs"]
@@ -3101,7 +3101,7 @@ mod terminal_route_proof_tests;
 
 #[cfg(test)]
 #[path = "peer_staged_proof_tests.rs"]
-mod peer_staged_proof_tests;
+pub(crate) mod peer_staged_proof_tests;
 
 #[cfg(test)]
 #[path = "peer_aggregate_ingress_proof_tests.rs"]

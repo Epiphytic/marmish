@@ -76,6 +76,7 @@ impl SnapshotArea {
                 state.paths.provisional_label(binding),
                 false,
             )?;
+            native.require_unjoined_provisional()?;
             let package = native.read_provisional(sample)?.event;
             drop(native);
             if read_image(&path)? != (digest, inode) || original.digest()? != digest {
@@ -128,14 +129,14 @@ fn read_image(path: &Path) -> Result<([u8; 32], (u64, u64))> {
     Ok((digest.finalize().into(), inode))
 }
 
-struct PreparedConsentOwner<'a> {
-    state: InvitationState<'a>,
+pub(super) struct PreparedConsentOwner<'a> {
+    pub(super) state: InvitationState<'a>,
     role: Role,
     snapshot: SnapshotArea,
 }
 
 impl<'a> PreparedConsentOwner<'a> {
-    fn open(
+    pub(super) fn open(
         lease: &'a ProfileLease,
         material: &IdentityMaterial,
         role: Role,
@@ -210,7 +211,7 @@ impl NativeAttestation {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Cut {
+pub(super) enum Cut {
     BeforeSign,
     AfterSign,
     BeforeQueueCommit,
@@ -245,7 +246,7 @@ impl PreparedConsentOwner<'_> {
         Ok(())
     }
 
-    fn queue_prepared_consent(
+    pub(super) fn queue_prepared_consent(
         &mut self,
         reservation: &Reservation,
         mut after: impl FnMut(Cut) -> Result<()>,
@@ -396,14 +397,10 @@ impl MatchingAck {
 }
 
 impl PreparedConsentOwner<'_> {
-    fn reserve_prepared_attempt(
+    fn reserve_attempt(
         &mut self,
         selector: Selector,
-        sink: &FixtureSink,
-    ) -> Result<Option<Reserved>> {
-        if !sink.ready_for(self.state.origin) {
-            return Ok(None);
-        }
+    ) -> Result<Option<(Attempt, NativeAttestation)>> {
         let sample = self.sample()?;
         let Some(queued) = self.state.checkpoint.recover_queued_consent(
             &self.state.source,
@@ -423,11 +420,24 @@ impl PreparedConsentOwner<'_> {
             wall,
         )?;
         self.verify_custody(&native)?;
-        Ok(attempt.map(|attempt| Reserved {
-            attempt,
-            native,
-            sink: sink.owner.clone(),
-        }))
+        Ok(attempt.map(|attempt| (attempt, native)))
+    }
+
+    fn reserve_prepared_attempt(
+        &mut self,
+        selector: Selector,
+        sink: &FixtureSink,
+    ) -> Result<Option<Reserved>> {
+        if !sink.ready_for(self.state.origin) {
+            return Ok(None);
+        }
+        Ok(self
+            .reserve_attempt(selector)?
+            .map(|(attempt, native)| Reserved {
+                attempt,
+                native,
+                sink: sink.owner.clone(),
+            }))
     }
 
     fn publish_prepared_attempt(
@@ -464,3 +474,7 @@ impl PreparedConsentOwner<'_> {
         Ok(())
     }
 }
+
+#[path = "peer_prepared_consent_wss.rs"]
+mod wss;
+pub(super) use wss::{History, Received, VerifiedDelivery};

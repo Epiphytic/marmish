@@ -2,6 +2,56 @@
 
 use super::*;
 
+pub(crate) enum ClientCarrier {
+    Offer,
+    Delivery(Box<IncomingDelivery>),
+}
+
+pub(crate) struct DeliveryOffer {
+    pub(crate) server: PublicKey,
+    pub(crate) id: [u8; 16],
+    pub(crate) revision: [u8; 32],
+}
+
+pub(crate) struct IncomingDelivery {
+    carrier: EventId,
+    stamp: u64,
+    rumor: UnsignedEvent,
+    wire: DeliveryWire,
+    offer: DeliveryOffer,
+}
+
+impl IncomingDelivery {
+    pub(crate) fn offer(&self) -> &DeliveryOffer {
+        &self.offer
+    }
+
+    pub(crate) fn matches_index(&self, id: [u8; 32], stamp: u64) -> bool {
+        self.carrier.to_bytes() == id && self.stamp == stamp
+    }
+
+    fn verify(
+        self,
+        offer: &Offer,
+        transcript: Transcript,
+        package: &VerifiedPackage,
+        wall: u64,
+    ) -> Result<Delivery> {
+        Codec::bind_delivery(
+            self.carrier,
+            &self.rumor,
+            self.wire,
+            DeliveryAuthority {
+                offer,
+                revision: EventId::from_byte_array(transcript.revision),
+                window: transcript.created_at..transcript.expires,
+                package,
+            },
+            wall,
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Transcript {
     pub(crate) carrier: [u8; 32],
@@ -34,6 +84,31 @@ impl Transcript {
         exact_package: &[u8],
         now: u64,
     ) -> Result<()> {
+        self.verified_package(signer, offer, frame, exact_package, now)
+            .map(|_| ())
+    }
+
+    pub(crate) fn verify_delivery(
+        self,
+        signer: &Keys,
+        offer: &Offer,
+        frame: &[u8],
+        exact_package: &[u8],
+        wall: u64,
+        delivery: IncomingDelivery,
+    ) -> Result<Delivery> {
+        let package = self.verified_package(signer, offer, frame, exact_package, wall)?;
+        delivery.verify(offer, self, &package, wall)
+    }
+
+    fn verified_package(
+        self,
+        signer: &Keys,
+        offer: &Offer,
+        frame: &[u8],
+        exact_package: &[u8],
+        now: u64,
+    ) -> Result<VerifiedPackage> {
         if signer.public_key() != offer.flight.recipient
             || now >= self.expires
             || self.created_at > deadline(now, SKEW)?
@@ -79,11 +154,35 @@ impl Transcript {
         if rumor.id.map(EventId::to_bytes) != Some(self.revision) {
             return Err(Error::Binding);
         }
-        Ok(())
+        Ok(native)
     }
 }
 
 impl Codec {
+    pub(crate) fn classify_client(&self, signer: &Keys, frame: &[u8]) -> Result<ClientCarrier> {
+        let (carrier, stamp, rumor) = self.open_authenticated(signer, frame, None)?;
+        match rumor.kind {
+            kind if kind == OFFER => Ok(ClientCarrier::Offer),
+            kind if kind == DELIVERY => {
+                let wire: DeliveryWire =
+                    serde_json::from_str(&rumor.content).map_err(|_| Error::Body)?;
+                let offer = DeliveryOffer {
+                    server: rumor.pubkey,
+                    id: fixed_hex(&wire.offer_id, Error::Body)?,
+                    revision: event_id(&wire.offer_revision)?.to_bytes(),
+                };
+                Ok(ClientCarrier::Delivery(Box::new(IncomingDelivery {
+                    carrier,
+                    stamp,
+                    rumor,
+                    wire,
+                    offer,
+                })))
+            }
+            _ => Err(Error::Rumor),
+        }
+    }
+
     pub(crate) fn prepare_capped_fixture_consent(
         &self,
         signer: &Keys,

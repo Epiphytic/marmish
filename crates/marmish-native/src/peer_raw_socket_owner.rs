@@ -132,6 +132,17 @@ impl Owner {
         self.current(&page.scope)
     }
 
+    #[cfg(test)]
+    pub(in crate::peer_invitation) fn owns_inbox(
+        &self,
+        origin: &str,
+        recipient: PublicKey,
+    ) -> bool {
+        self.scope.origin == origin
+            && self.scope.recipient == recipient.to_bytes()
+            && self.current(&self.scope)
+    }
+
     pub(in crate::peer_invitation) fn origin(&self) -> &str {
         &self.scope.origin
     }

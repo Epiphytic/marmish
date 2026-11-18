@@ -1,4 +1,7 @@
-//! Bounded loopback NIP-42 relay used only by the native terminal proof.
+//! Bounded loopback NIP-42 relay for native transport proofs.
+
+#[path = "peer_private_wss_relay.rs"]
+mod peer;
 use crate::transport::{ArtiDirs, RelayConnector, RelayPolicy, RouteMode, TransportLimits};
 use futures_util::{SinkExt, StreamExt};
 use nostr::event::{Event, EventId};
@@ -60,6 +63,7 @@ struct Connection {
 #[derive(Default)]
 struct State {
     mode: Mode,
+    peer: Option<peer::Scope>,
     acknowledge_duplicates: bool,
     duplicate_acks: usize,
     ordinary: BTreeSet<PublicKey>,
@@ -82,7 +86,7 @@ impl State {
         self.observations.push(observation);
     }
 
-    fn publish(&mut self, connection: usize, event: Event, text_bytes: usize) -> Value {
+    fn publish(&mut self, connection: usize, event: Event, raw: &str) -> Value {
         let account = self.connections[&connection].account;
         let kind = u16::from(event.kind);
         let authenticated = account.is_some();
@@ -91,7 +95,13 @@ impl State {
                 || self.ordinary.contains(&account)
                 || account == event.pubkey
         });
-        let accepted = authenticated && authorized_author && event.verify().is_ok();
+        let accepted = authenticated
+            && authorized_author
+            && event.verify().is_ok()
+            && self
+                .peer
+                .as_mut()
+                .is_none_or(|peer| peer.accept(account.unwrap(), &event, raw));
         self.observe(Observation::Write(event.id, kind, accepted));
         if accepted
             && self.acknowledge_duplicates
@@ -102,7 +112,7 @@ impl State {
         }
         if accepted {
             if kind == 445 {
-                self.observe(Observation::WriteBytes(event.id, text_bytes));
+                self.observe(Observation::WriteBytes(event.id, raw.len()));
             }
             if kind == 1059
                 && self
@@ -247,7 +257,7 @@ fn handle_message(
     challenge: &str,
     challenge_started: Instant,
     fields: &[Value],
-    text_bytes: usize,
+    raw: &str,
 ) -> Vec<Value> {
     let mut state = state.lock().unwrap();
     match fields.first().and_then(Value::as_str) {
@@ -255,8 +265,12 @@ fn handle_message(
             let Ok(event) = serde_json::from_value::<Event>(fields[1].clone()) else {
                 return vec![];
             };
-            let eligible =
-                state.mode != Mode::KnownAccountsOnly || state.ordinary.contains(&event.pubkey);
+            let eligible = (state.mode != Mode::KnownAccountsOnly
+                || state.ordinary.contains(&event.pubkey))
+                && state
+                    .peer
+                    .as_ref()
+                    .is_none_or(|peer| peer.includes(event.pubkey));
             let fresh = event
                 .created_at
                 .as_secs()
@@ -294,7 +308,10 @@ fn handle_message(
             };
             let filters = &fields[2..];
             let account = state.connections[&id].account;
-            let permitted = read_allowed(account, filters);
+            let permitted = state.peer.as_ref().map_or_else(
+                || read_allowed(account, filters),
+                |peer| peer.read_allowed(account, filters),
+            );
             state.observe(Observation::Read(permitted, account));
             if !permitted {
                 let reason = if account.is_none() {
@@ -316,10 +333,17 @@ fn handle_message(
             );
             subscriptions.push(subscription.clone());
             state.observe(Observation::Request(account.unwrap(), subscription.clone()));
-            let mut responses: Vec<_> = state
+            let mut matches: Vec<_> = state
                 .publications
                 .iter()
                 .filter(|event| subscription.matches(event))
+                .collect();
+            if state.peer.is_some() {
+                matches.sort_by_key(|event| (std::cmp::Reverse(event.created_at), event.id));
+                matches.truncate(peer::history_limit(filters));
+            }
+            let mut responses: Vec<_> = matches
+                .into_iter()
                 .map(|event| json!(["EVENT", subscription_id, event]))
                 .collect();
             if state.hold_eose_for.is_some_and(|alias| {
@@ -348,7 +372,7 @@ fn handle_message(
         Some("EVENT") => serde_json::from_value(fields[1].clone())
             .ok()
             .into_iter()
-            .map(|event| state.publish(id, event, text_bytes))
+            .map(|event| state.publish(id, event, raw))
             .collect(),
         Some("NEG-OPEN") => vec![json!([
             "NEG-ERR",
@@ -369,9 +393,14 @@ async fn serve_connection(
     let Ok(Ok(tls)) = timeout(STEP, acceptor.accept(raw)).await else {
         return;
     };
+    let frame_limit = if state.lock().unwrap().peer.is_some() {
+        peer::MESSAGE_LIMIT
+    } else {
+        FRAME_LIMIT
+    };
     let options = WebSocketConfig::default()
-        .max_message_size(Some(FRAME_LIMIT))
-        .max_frame_size(Some(FRAME_LIMIT));
+        .max_message_size(Some(frame_limit))
+        .max_frame_size(Some(frame_limit));
     let Ok(Ok(mut socket)) = timeout(
         STEP,
         tokio_tungstenite::accept_async_with_config(tls, Some(options)),
@@ -405,7 +434,7 @@ async fn serve_connection(
                     Some(Ok(Message::Text(raw))) => {
                         let Ok(fields) = serde_json::from_str::<Vec<Value>>(&raw) else { break };
                         if fields.len() < 2 || fields.len() > 18 { break; }
-                        handle_message(&state, id, &relay, &challenge, started, &fields, raw.len())
+                        handle_message(&state, id, &relay, &challenge, started, &fields, &raw)
                     }
                     Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {
                         if socket.flush().await.is_err() { break; }
@@ -465,8 +494,8 @@ fn tls() -> (TlsAcceptor, rustls::RootCertStore) {
     (TlsAcceptor::from(Arc::new(config)), roots)
 }
 
-pub(super) struct Relay {
-    pub(super) url: Url,
+pub(crate) struct Relay {
+    pub(crate) url: Url,
     roots: rustls::RootCertStore,
     state: Arc<Mutex<State>>,
     task: JoinHandle<()>,
@@ -474,10 +503,39 @@ pub(super) struct Relay {
 
 impl Relay {
     pub(super) async fn start() -> Self {
+        Self::start_with(State::default()).await
+    }
+
+    pub(crate) async fn start_peer(accounts: [PublicKey; 2]) -> Self {
+        Self::start_with(State {
+            peer: Some(peer::Scope::new(accounts)),
+            ..State::default()
+        })
+        .await
+    }
+
+    pub(crate) fn peer_transcript(&self) -> Vec<peer::Write> {
+        self.state
+            .lock()
+            .unwrap()
+            .peer
+            .as_ref()
+            .unwrap()
+            .writes
+            .clone()
+    }
+
+    pub(crate) async fn stop(&mut self) {
+        self.task.abort();
+        let error = (&mut self.task).await.expect_err("fixture cancelled");
+        assert!(error.is_cancelled(), "fixture stopped without panic");
+    }
+
+    async fn start_with(initial: State) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = Url::parse(&format!("wss://{}/", listener.local_addr().unwrap())).unwrap();
         let (acceptor, roots) = tls();
-        let state = Arc::new(Mutex::new(State::default()));
+        let state = Arc::new(Mutex::new(initial));
         let worker_state = state.clone();
         let worker_url = url.clone();
         let task = tokio::spawn(async move {
@@ -566,7 +624,7 @@ impl Relay {
         self.state.lock().unwrap().duplicate_acks
     }
 
-    pub(super) fn connector(
+    pub(crate) fn connector(
         &self,
         path: &Path,
         trusted: bool,

@@ -107,6 +107,20 @@ impl OpenStage {
         Self::check_provisional_artifact(&pending, event, sample)
     }
 
+    pub(crate) fn require_unjoined_provisional(&self) -> StageResult<()> {
+        use cgka_traits::storage::GroupStorage;
+
+        if !self
+            .storage
+            .list_groups()
+            .map_err(|_| StageError::Storage)?
+            .is_empty()
+        {
+            return Err(StageError::Invalid);
+        }
+        Ok(())
+    }
+
     pub(crate) fn fixture_replace_with_slot_only(&self) -> StageResult<()> {
         self.save(&KeyPackageLifecycleState::slot_only(self.slot.clone()))
     }

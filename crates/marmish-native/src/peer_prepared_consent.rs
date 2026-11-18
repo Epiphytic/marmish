@@ -32,12 +32,26 @@ impl Checkpoint {
 #[path = "peer_prepared_consent_schema_tests.rs"]
 mod schema_tests;
 
-use super::super::{Offer, wire::Transcript};
+use super::super::{
+    Offer,
+    wire::{self, Transcript},
+};
 use rusqlite::Transaction;
 use stage_journal::{Artifact, FileWitness, State};
 
 #[path = "peer_prepared_consent_rows.rs"]
 mod outbox;
+
+impl super::super::Selector {
+    pub(crate) fn from_delivery(incoming: &wire::IncomingDelivery) -> Self {
+        let offer = incoming.offer();
+        Self {
+            server: offer.server,
+            id: offer.id,
+            revision: offer.revision,
+        }
+    }
+}
 
 pub(crate) struct Candidate {
     account: [u8; 32],
@@ -77,6 +91,11 @@ pub(crate) struct Queued {
 }
 
 impl Queued {
+    #[cfg(test)]
+    pub(crate) fn frame(&self) -> &[u8] {
+        self.row.frame.as_ref()
+    }
+
     pub(crate) fn stage(&self) -> (Binding, FileWitness) {
         self.prepared.stage()
     }
@@ -267,6 +286,34 @@ impl Checkpoint {
             return Err(Error::Expired);
         }
         Ok(Some(Queued { prepared, row }))
+    }
+
+    pub(crate) fn verify_queued_delivery(
+        &self,
+        recovered: &Queued,
+        package: &crate::peer_invitation::prepared_consent::NativeAttestation,
+        incoming: wire::IncomingDelivery,
+        wall: u64,
+    ) -> Result<wire::Delivery> {
+        let prepared = &recovered.prepared;
+        if super::super::Selector::from_delivery(&incoming) != prepared.binding.key
+            || recovered.row.ack_at.is_none()
+        {
+            return Err(CursorError::Binding.into());
+        }
+        let exact = package.require(prepared.stage(), prepared.artifact, wall)?;
+        recovered
+            .row
+            .transcript
+            .verify_delivery(
+                &self.signer,
+                &prepared.offer,
+                &recovered.row.frame,
+                exact,
+                wall,
+                incoming,
+            )
+            .map_err(|_| Error::Package)
     }
 
     pub(crate) fn verify_queued_consent(

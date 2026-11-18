@@ -1440,3 +1440,12 @@ Linux AMD64 passed the [native and rollback tests](validation/peer-provisional-q
 The abrupt-exit test uses a keyed SQLite fixture on the same bundled library.
 macOS qualification and production integration are pending. The quota does
 not bound physical filesystem allocation.
+
+The [private WSS enrollment fixture](phases/peer-private-wss-enrollment.md)
+exercises Offer, durable Prepared Consent with the matching relay ACK, and
+recipient verification of Delivery through the actual Peer codec and
+authenticated loopback WSS. The fixture stops before native ingest. Replaying
+Delivery leaves the cursor and provisional stage unchanged, and native custody
+checks confirm that the original KeyPackage is unconsumed. This is
+[Linux AMD64 fixture evidence](validation/peer-private-wss-enrollment-m1.md).
+Joined Pending custody and deployment qualification are separate phases.

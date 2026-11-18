@@ -19,9 +19,9 @@ use std::{
 };
 use tempfile::TempDir;
 
-type Client = (TempDir, ProfileLease, IdentityMaterial);
+pub(super) type Client = (TempDir, ProfileLease, IdentityMaterial);
 
-fn client() -> Client {
+pub(super) fn client() -> Client {
     let private = tempfile::Builder::new()
         .permissions(fs::Permissions::from_mode(0o700))
         .tempdir()

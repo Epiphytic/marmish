@@ -6,6 +6,9 @@ mod paths;
 #[path = "peer_prepared_consent_owner.rs"]
 pub(super) mod prepared_consent;
 #[cfg(test)]
+#[path = "peer_private_wss_tests.rs"]
+mod private_wss_tests;
+#[cfg(test)]
 #[path = "peer_stage_binding.rs"]
 mod provisional;
 #[cfg(test)]
@@ -90,6 +93,17 @@ impl QualifiedOrigin {
     fn for_fixture(relay: &socket::fixture::Relay, private: &std::path::Path) -> Result<Self> {
         Ok(Self {
             connector: relay.connector(private),
+            route: Route::configured(relay.url.as_str())?,
+        })
+    }
+
+    #[cfg(test)]
+    fn for_shared_peer_fixture(
+        relay: &crate::mdk_adapter::terminal_relay_fixture::Relay,
+        private: &std::path::Path,
+    ) -> Result<Self> {
+        Ok(Self {
+            connector: relay.connector(private, true, None),
             route: Route::configured(relay.url.as_str())?,
         })
     }

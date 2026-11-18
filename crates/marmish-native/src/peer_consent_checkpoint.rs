@@ -291,6 +291,22 @@ impl Checkpoint {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub(crate) fn admit_unclassified(
+        &mut self,
+        source: &Source,
+        record: RawRecord<'_>,
+        wall: u64,
+    ) -> Result<Disposition> {
+        let origin = self.origin(source)?;
+        record.check()?;
+        rows::check_wall(&self.cursor.conn, wall)?;
+        Ok(Disposition {
+            status: Status::Invalid,
+            receipt: self.cursor.commit_invalid(origin, record, wall)?,
+        })
+    }
+
     pub(crate) fn admit(
         &mut self,
         source: &Source,
