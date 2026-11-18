@@ -7,7 +7,9 @@ This increment follows the [Phase B design](peer-native-leave.md) and
 owner invoking native Leave once on a genuine joined Pending stage, and
 cold recovery of the same durable native proposal. Every C2 outcome keeps
 the stage Fenced and its reservation charged. The implementation and
-harness stay under `cfg(test)`.
+harness stay under `cfg(test)`. Recheck the exact runtime and bundled
+SQLCipher contracts on the integrated upstream master lock before code
+qualification.
 
 ## The locked native contract
 
@@ -15,14 +17,18 @@ harness stay under `cfg(test)`.
   is a commit acceptance API and its `supports_deferred_commit_publish`
   excludes Leave. Use the existing public
   `send_host_change_with_audit_context(SendIntent::Leave, ...)` with a
-  permanently closed publisher, scheduler and absent native group route.
-  The group route in the signed Offer remains independently authenticated
-  and is used only to validate the native event. An origin descriptor is
-  local data and has no connector, relay registry, tasks or sockets.
+  existing `JoinRuntime = AccountDeviceRuntime<RefusingIo,
+  StaticTransportRouting, RefusingIo>` construction in
+  `peer_stage_joined.rs`, with no group route and `require_unused()`.
+  The signed Offer's route and endpoint descriptor authenticate the
+  verifier's expected target. The runtime gets no connector, relay
+  registry, transport task or socket.
 - At the engine, `do_send_leave` calls
   `record_sent_openmls_message_with_leave_request`. The SQLite transaction
-  writes the exact signed Sent message, unblocked LeaveRequest and own-echo
-  marker, when that marker's ID differs. Runtime publication follows
+  writes the exact signed Sent message, unblocked LeaveRequest and distinct
+  own-echo marker together. Native OpenMLS preparation precedes that
+  transaction and may modify its storage. An absent committed pair cannot
+  prove that no native mutation occurred. Runtime publication follows
   after native acceptance. The [unrouted proof](../validation/peer-pending-unrouted-leave-proof.md)
   observed one missing route before any transport call and recovered the
   same retained message. A transport-shaped error or an interrupted
@@ -38,19 +44,20 @@ harness stay under `cfg(test)`.
 
 ## Durable decisions and owner boundary
 
-Extend the private epoch-5 fixture exact inventory before any native use.
-Reject the C1-only exact inventory for this new owner and reject partial
-inventory, wrong scope and modified guards before writes. C1 scratch
-profiles are disposable. Preserve the immutable historical DDL for
-epochs 3 and 4 and their existing scoped behavior. A new guarded journal
-can use the C1 hold key and an exact foreign key. Keep one journal row
-per hold and at most the existing two hold slots.
+Add a separate test owner for exact epoch 6. Install the immutable C1
+epoch-5 layers and the epoch-6 layer atomically from the already supported
+exact Prepared Consent inventory, or reopen exact epoch 6. Retain the old
+C1 exact opener and all earlier expected guard SQL and fixture checks.
+The C2 owner rejects standalone C1, partial inventory, wrong scope and
+modified guards before writes. The new `peer_terminal_leave_effect`
+table is the only C2 state. Key it by the exact C1 hold foreign key with
+one row per hold and at most the existing two hold slots.
 
 | State | Durable evidence and permitted owner action |
 | --- | --- |
 | No C2 row | C1 hold exists. The exclusive owner can attempt its reservation once. |
-| NativeArmed | Checked wall at reserve and exact C1 hold key. Only the original successful committing turn receives the non-cloneable, process-local start token. A cold owner may inspect and seal a qualifying retained proposal, or return unavailable. |
-| Captured | Original reserve wall, checked capture wall, exact native and canonical signed event ID, SHA-256 of exact signed bytes, and the single bounded signed event. A cold owner may verify an exact readback. No more sends are possible. |
+| NativeArmed | Reserve wall and SHA-256 of the exact clean original image whose guarded snapshot proved stable authority and no prior LeaveRequest or Sent rows. Bound to the exact C1 hold key. Only the original committing turn receives a non-cloneable, process-local start token. Cold inspection can seal exact retained proof or report indeterminate. |
+| Captured | The immutable reserve coordinates, capture wall, canonical signed event ID (also the exact native SignedOpenMlsWire ID), SHA-256 of exact signed bytes, and the single bounded signed event. A cold owner may verify an exact readback. |
 
 Use closed INSERT, UPDATE and DELETE guards with checked single-row
 apertures equivalent to C1. SQL fixes the scope by the C1 foreign key,
@@ -69,77 +76,149 @@ C1 recovery attempts serve only their existing filesystem accounting
 purpose. Decline/Expire replay cannot retroactively add a hold or change
 its state.
 
-The owner uses the real disposable profile lease and current exact private
-`Checkpoint` and source binding. It accepts only the selected terminal
-and known current generation. Revalidate C1 Idle, Fenced, joined Pending,
-authenticated stored Offer/Consent/Delivery and exact Welcome binding
-without treating their historic enrollment expiry as a new authorization.
-Validate account, founder, group, route, own leaf and original
-device/inode under the existing checks. Default Decline/Expire and
-unrelated admission, activation, publication and cleanup never build
-this owner. Only one stage token is alive. Its serialization covers
-checked reserve, native open/use/close, and checked capture. There is no
-await from the live native handle to any other owner turn. Sample a fresh
-qualified wall and verify the in-process stop and suspend-aware ceiling at
-reservation, immediately before native dispatch, after close and before
-capture. Use the clocks already available to the private owner where
-possible. A missed gate after dispatch retains NativeArmed. Observing or
-replaying metadata after the deadline cannot authorize a native operation.
+The local-only `LeaveOwner` in `peer_terminal_leave_owner.rs` opens
+through the existing `Paths`, hardened cursor and `ProfileLease`.
+Add a narrow epoch-6 test constructor for the existing
+`PreparedConsentOwner` and use the same `InvitationState` fields, source
+and wall gates. Keep it separate from the generic WSS opener and its
+normal recovery work. The genuine Pending stage is one of the two fixed
+`peer/provisional-{known,unknown}.db` paths, with the existing nonzero,
+monotone stage generation. Require C1 Idle, Fenced, joined Pending,
+authenticated stored Offer/Consent/Delivery and exact Welcome binding.
+Their historic enrollment expiry does not serve as new authorization.
+Default Decline/Expire, admission, activation and cleanup cannot build
+this owner. Its sole stage token serializes the full turn. Cursor
+transactions and new wall checks run outside the VFS thread-local scope.
+Only owned proof data crosses from native to checkpoint; no SQLite
+handle, runtime, pending future or caller callback escapes.
 
-Open mutable original storage only after a committed NativeArmed row or
-exact Captured readback eligibility from that same row. Start with exact clean
-one-link, mode-0600, same-device file, current path/generation and positive
-size within the closed-stage 16 MiB cap, with no journal, WAL or SHM.
-Use the existing test-only `ProfileSlots` managed dispatcher in a fresh
-subprocess. Add a concrete private Leave operation to its closed scope,
-with inert deny-only fixtures, rather than a generic scoped callback.
-Maintain the current `128 MiB - charged other extents` cap over the
-managed main and DELETE journal. Independently check the fixture's other
-files and aggregate charges once per exclusive turn. Keep SQLite opens,
-access and closure on the scoped calling thread and finish using
-`resolve_once`. Unexpected Pending drops the runtime and leaves uncertainty.
-Recheck the exact descriptor, clean sidecars and no live managed handles
-after close. A different inode, unexpected sidecar, failed cap or any
-indeterminate check prevents a seal and retains the charge. This increment
-does not open a hot original or authorize an attempt reservation and
-same-value header recovery. The existing guarded retirement stays closed
-until a separate proof qualifies that operation.
+Use `PreparedConsentOwner::available_sample` plus the C1 local and
+exact-origin wall floors. Each turn also has a process-local,
+suspend-inclusive monotonic ceiling using Linux `CLOCK_BOOTTIME` and
+macOS `mach_continuous_time` as in the native sampling proof. Clamp a
+five-second test-owner turn to the remaining wall hold. Missing,
+regressed, stopped or expired readings deny progress. Inject both clock
+readings in deterministic tests. Check the wall and ceiling before
+reserve, before native open, immediately before Leave and after the
+scope closes before capture. The within-scope check uses only in-memory
+wall/monotonic/stop reads, never opens the cursor. If wall or stop crosses
+after dispatch, keep Armed. The engine's `LeaveRequest.requested_at_ms`
+is its local convergence monotonic counter, not UNIX wall, and cannot
+prove correlation across restart. The baseline and exclusive one-call
+scope supply that correlation. Do not use
+`AccountDeviceRuntime::with_maintenance_sources` as an engine clock.
+
+### Guarded inspection and the one original dispatch
+
+Use the existing `SnapshotArea::with_snapshot` copy discipline for
+both the pre-reserve check and every post-dispatch or cold inspection.
+This includes a digest-pinned original, distinct one-link mode-0600
+copy, capped actual copy, no sidecars and recheck of both identities
+and original digest after use. MDK readback can hydrate and write even
+on an apparently clean stage. Only the one dispatch ever hands the
+original to MDK. The checked reservation binds the pre-reserve image
+digest. Recheck that digest immediately before opening the original,
+under the same exclusive lease and with no alternate original writer.
+Do not compare the post-dispatch image to the pre-reserve digest to
+infer equality of logical state. Compare exact native authority and
+expected inventories on a new guarded snapshot instead.
+
+Mount `peer_quota_dispatch::mount_for_proof` before SQLite opens in
+each C2 owner subprocess. It opens only a genuine prebuilt Pending
+profile from the local fixture setup. Use current managed `ProfileSlots`
+rules for the original and one concrete, private C2 snapshot scope.
+The snapshot gets an exact reserved fixture-only filename and its own
+file witness under the same protected profile. It cannot use either
+durable provisional slot. Count the original and all occupied extents
+outside the active scope once. Apply the same combined main + DELETE
+journal cap of `128 MiB - charged other extents` to the snapshot's
+native use and retain the 16 MiB closed main cap. Debit the bounded
+copy before creating it and give no other operation a concurrent
+allowance. Keep the copy and any sidecars charged if exact checked
+cleanup fails. The snapshot scope does not alter any durable slot
+generation or usage. No new general-purpose quota callback or path
+allowlist. A previously abandoned snapshot obstructs another turn
+until exact fixture cleanup and does not authorize touching the
+original.
+
+The runtime uses `OpenStage::open_provisional` (explicit DELETE and
+existing-only), with zero pending migrations, current profile key,
+signer, slot label, generation and file witness. Verify the stage
+mode, positive size, one link, same device and clean sidecars before
+the open. Add concrete private scope operations for Leave and
+snapshot inspection with their own bounded result types.
+`ProfileSlots::native_turn` currently accepts only Generate/Reopen and
+returns `(ProvisionalPackage, bool)`. Keep this interface unchanged.
+Use `resolve_once` with the existing scoped calling thread for the
+new operations. It must be proven under the exact lock that the native
+Leave and verifier futures complete in one poll with local signer and
+`RefusingIo`. Unexpected Pending drops future and handles in scope
+and leaves the phase indeterminate. The first implementation must
+prove that property before proceeding; if it fails, retain closed
+behavior and report the blocker. Do not switch to an unscoped executor
+or turn on network. After every managed call check the default VFS,
+no live handles, exact stage identity and sidecars. A different
+inode, unexpected sidecar, exceeded cap or uncertain close prevents
+a seal and retains charge. This increment does not reopen a hot
+original or perform the separate C1-accounted sidecar repair.
 
 ## Native qualification and restart table
 
-Use two disposable real SQLCipher accounts with genuine Peer Welcome
-enrollment and a fresh private cursor under the same owner. For the
-original runtime confirm stable current group and epoch authenticator,
+In `peer_terminal_leave_native_tests.rs` reuse the offline setup in
+`peer_postjoin_proof_tests.rs`: signed Offer and Consent with a local
+fixture ACK, founder-side `peer_enrollment_founder` using the exact
+native KeyPackage and route, genuine signed Delivery passed through
+`receive_custody_record`, and `advance_custody` to sealed Pending.
+Close enrollment before the dedicated owner subprocess. Verify held
+device, inode, group, full epoch and own leaf against that original.
+Fixtures supply no trusted fabricated custody/native evidence. On the
+pre-reserve snapshot and again on the hydrated dispatch runtime
+confirm stable current group and epoch authenticator,
 exact founder/admin and non-admin recipient roster, local signing key and
 own leaf index, exact Welcome provenance and no pending commit,
 unrecoverable/disbanded/removed state, queued intent, unexpected fanout
-or native LeaveRequest. Freeze the expected known fresh Sent inventory
-for this fixture. A genuine deferred PostJoin obligation may remain and
-must stay unexecuted. A wrong or extra group or unexplained work consumes
-the start opportunity without calling Leave.
+or native LeaveRequest. Require empty matching-or-later Sent inventory and no LeaveRequest
+before reserving, then repeat immediately before Leave. A genuine
+deferred PostJoin obligation may remain. Its exact native record must
+remain unchanged and no work from it may be executed. Refuse wrong
+or extra groups and unexplained work. A post-reserve failure leaves
+the one opportunity spent without calling Leave.
 
-Check the pre-send disposition from the unrouted runtime, the retained
-transaction's result and absence of every publisher/scheduler call,
-queued intent, success report and fanout. The published-error wording
-is corroborative evidence only. Durable evidence comes from exact native
-readback: the same authority remains current and unchanged except for
-the exact LeaveRequest and its Sent records. Require a single exact
-current-epoch 64 KiB-bounded serialized native candidate and exact
-signed event bytes of at most 64 KiB. Use the established OpenMLS
-SelfRemove verifier and authenticated outer kind-445 Nostr event,
-including exact event ID, signature, route, group, pinned recipient leaf
-and credentials. If the distinct raw marker is present, require the same
-content-derived ID and exact MLS bytes, never treat a raw marker as
-the proposal. Refuse additional, wrong epoch or malformed records.
-The proven native candidate is sealed only after all runtime handles
-close and the same stage and terminal state are revalidated. Preserve it
-in encrypted state, use redacted diagnostic outcomes, and keep all bytes,
-paths and keys out of review logs.
+Check that the unrouted result has exactly one matching local
+failure ID, without relying on the human-readable reason for authority.
+Require zero publisher/scheduler calls, queued intent, success report
+and fanout. The returned result alone cannot establish either native
+commit or relay exposure. On a guarded snapshot prove exact stable
+authority and the matching unblocked current-epoch LeaveRequest. Require
+exactly one SignedOpenMlsWire Sent and one distinct RawTransport Sent
+own-echo marker, with no other matching-or-later records. Apply all
+three size limits, 262,144 bytes for the encoded signed native record,
+65,536 bytes for the signed Nostr event and 65,536 bytes for inner MLS.
+Refuse extra data, malformed encoding, wrong epoch, IDs and routes.
+Recompute the marker ID from SHA-256 of the exact verified inner MLS
+and require the same bytes, group, epoch and Sent state. A raw marker
+cannot stand in for the proposal. After sealing, use the two expected
+native IDs for exact indexed lookups and retain full owner authority
+and bounded-work checks.
+
+Refactor the established test-only SelfRemove verifier itself to
+accept the closed runtime type and exact Offer endpoint descriptor.
+Reuse its OpenMLS query-only snapshot and exact account, local
+credential, signer, leaf, group and epoch checks, plus its signed
+outer kind-445 Nostr ID, signature and route checks. Keep assertion
+and benchmarking wrappers outside the reusable verifier. The exact
+candidate is sealed only after snapshot/runtime handles close and the
+same original image, stage and terminal state are revalidated.
+Captured means the locally retained native proposal was authenticated.
+Armed without the proven pair means possibly mutated and requires
+future disposition. Neither state evidences delivery or removal.
+Keep carrier bytes in encrypted state and exclude them, paths, keys
+and peer identities from diagnostics.
 
 | Interruption or result | Next exact owner turn |
 | --- | --- |
 | No committed reservation | Fresh C1 hold can attempt the reservation. Assert zero original native dispatch. |
-| Armed with exact clean original and no durable native pair | Keep Armed and report unavailable after comparison. No cold start token. |
+| Armed with a sidecar-free original and no durable native pair | Keep Armed and report indeterminate, including possible preparation before the record transaction. No cold start token. |
 | Native completed before local seal | Reconstruct the exact native proposal from the same original SQLCipher image, strong native facts and C1 binding. Seal once without another Leave. |
 | Armed with corrupt, partial, wrong stage or unexpected native coordinates | Refuse and keep Fenced and charged. No fall-through to ordinary storage, renewal or cleanup. |
 | Journal present, quota indeterminate or guarded close fails | Refuse without reopening the hot original, replacing or unlinking files, spending recovery attempts, or relaxing admission. Keep Fenced and charged. |
@@ -170,7 +249,7 @@ production dependency changes.
   row or second send grant. Regression-test no-hold terminal behavior.
 - In opt-in native tests drive a genuine decline or expiry and exact
   one-turn native operation. Cover stable wrong account, founder, leaf,
-  generation and route, multiple or wrong-epoch proposal candidates,
+  generation and route, missing, additional or wrong-epoch records,
   malformed bounded bytes and marker, native return with no sealed result,
   quota refusal and replacement. Assert no outbound adapter or scheduler
   calls and no native fanout, application effects or published reports.
@@ -184,8 +263,13 @@ production dependency changes.
   Leave. Inject a real or fixture-controlled journal and confirm
   byte-preserving refusal before original open. Distinguish post-commit
   child exit from a process stopped mid-transaction and from ordinary
-  in-process test faults. Cover deadline-minus-one, exact equality and
-  plus one without sleeps. Re-run existing unrouted Leave and C1
+  in-process test faults. Exercise a reserved attempt that stops at a
+  positively observed scoped journal write using the existing quota
+  fault child plumbing. If the cut is during hydration, state that
+  precisely. Separately exercise an Armed snapshot with no durable
+  pair despite potential native preparation. Do not call that state
+  pristine. Cover deadline-minus-one, exact equality and plus one
+  without sleeps. Re-run existing unrouted Leave and C1
   selectors and strict target Clippy and scoped formatting.
 - Record exact source and MDK lock, private Linux AMD64 proof and
   macOS ARM64 status. Run macOS when the reviewed native prerequisites
