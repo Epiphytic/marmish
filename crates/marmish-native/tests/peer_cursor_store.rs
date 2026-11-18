@@ -55,7 +55,10 @@ mod peer_invitation {
             deadline -> u64,
         });
 
-        uninhabited!(RecoveredPostJoin { capture -> &Capture });
+        uninhabited!(RecoveredPostJoin {
+            baseline -> &Baseline,
+            capture -> &Capture,
+        });
 
         enum Never {}
 

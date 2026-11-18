@@ -886,12 +886,11 @@ impl Checkpoint {
         &mut self,
         source: &Source,
         prior: &UncertainPostJoin,
-        baseline: &Baseline,
         recovered: &RecoveredPostJoin,
         wall: u64,
     ) -> Result<EgressAttempt> {
         let prior = prior.publication();
-        let coordinates = prior.rotation(baseline, recovered.capture())?;
+        let coordinates = prior.rotation(recovered.baseline(), recovered.capture())?;
         if prior.step() != (Step::Uncertain { number: 1 })
             || prior.target_pin() != Some(coordinates.confirmed)
             || prior.candidate() != Some(coordinates.candidate)
