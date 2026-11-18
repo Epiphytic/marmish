@@ -10,7 +10,9 @@ schema migration, relay traffic, or promotion of fixture authority.
 
 ## Wire boundary
 
-Use one closed typed `ControlVersion` for the wire modules. Its two values
+Use one closed typed `ControlVersion` in `peer_control_version.rs`. Mount it
+at the library root and in the standalone wire, receipt and checkpoint test
+crates that include these source modules by path. Its two values
 serialize to numeric 1 and 2. `Codec::new(cap)` keeps the exact existing v1
 policy. Add `Codec::for_version(cap, version)` for an owner selecting a known
 negotiation. No parser fallbacks, default upgrades or automatic selection from
@@ -32,9 +34,14 @@ its signed room ID, Offer ID and proposed native Group routing, as it does in
 v1. Do not add routing or version to the visible outer envelope.
 
 The test-mounted prepared path classifies Delivery into a `DeliveryOffer`
-that also carries the checked version. Before a classified Delivery matches a
-selected Offer or supplies admitted contents, the reconstructed bound authority
-must compare the exact Offer version. The `Transcript` reconstruction uses the
+that also carries the checked version. Require the selected version in both
+codec modes before extracting Delivery coordinates. Invalid-version carriers
+are rejected before selector lookup. Valid legacy carriers keep their current
+path and no invalid carrier gets an admitted effect. An Offer classifier is
+only a kind hint. Its selected version and canonical body are established at
+`open_offer` before it supplies any authority. Every Delivery binder checks
+the version against its bound Offer, including the static custody conflict
+path fed by previously classified Delivery. The `Transcript` reconstruction uses the
 verified Offer's version when computing the same Consent rumor ID. Therefore
 a difference in version changes the expected stored revision and fails the
 comparison before native use. Custodied Delivery calls the same binder and
@@ -47,26 +54,35 @@ and revision checks keep their existing authority limits.
 ## Receipt and shared app room
 
 Keep the existing `Receipt` coordinate shape and v1 default `prepare/decode`.
-Supply explicit versioned preparation and decoding with the closed expected
-version; v1 decoders continue to reject v2. Both receipt versions use the same
+Supply explicit `prepare_v2/decode_v2`. The v1 parser and its existing
+`Decoded` shape continue to reject v2. `decode_v2` returns an opaque
+`V2Receipt` whose private payload can only originate from the v2 parser. Both
+receipt versions use the same
 canonical JSON rules and kind, with the numeric version included in the exact
 body and app event ID. The existing MLS receipt authority must still compare
 the expected authenticated recipient, epoch, route and native leaf, exact
 same-revision receipt and locally retained publication before any accepted
 owner turn. Pure codec output carries no MLS sender proof.
 
-Expose an opaque `StatusNegotiation` derived only from a safely bound v2
-`Delivery`. It retains the founder and recipient, signed room ID and Offer
+Expose an opaque `StatusNegotiation` in `peer_control_wire.rs` derived only
+from a safely bound v2 `Delivery`. It retains the founder and recipient, signed room ID and Offer
 ID, Offer and Consent and Delivery rumor revisions, native Welcome ID and
 route, and the deterministic candidate app room. Provide accessors over
 checked values. No public raw constructor, conversion from a claimed
-receipt, or legacy fallback. Compare an explicit v2 decoded receipt to the
-expected founder, recipient, room ID, Offer ID, Offer revision and Welcome ID.
+receipt, or legacy fallback. Have `V2Receipt` compare the exact expected founder, recipient, room ID,
+Offer ID, Offer revision and Welcome ID using a shared immutable coordinate
+value in `peer_control_version.rs`. V1 receipt decoding cannot produce the
+typed input. The matching condition cannot be satisfied by rewriting the
+declared Nostr author or event ID because canonical parsing validates both.
 Receipt epoch, epoch identity, native sender, current owner generation, lease
 and authorization remain external acceptance proofs. A successful match
 alone does not yield live authority or permit a status send. V1 enrollment
 yields no candidate, including when presented with an otherwise matching
-v2 receipt.
+v2 receipt. The pure candidate is built during enrollment while the signed
+flight remains valid. For later status the future owner must persist the
+version, app room and acceptance coordinates with its proof and implement a
+separately reviewed restore path with fresh authorization and native scope.
+Expired flights never reopen enrollment to restore status.
 
 The room ID is SHA-256 over exact bytes
 `b"marmish/peer/status-room/v1\0"`, 32 founder pubkey bytes, 32 recipient
@@ -81,13 +97,19 @@ that order. The known vector of repeated 01, 02, 03 and 04 field bytes is
   control body shape with a deterministic signed rumor.
 - Run v2 prepare/open and a real offline MDK package/Welcome round trip.
   Compare the same derived room and exact negotiation on both endpoints.
+  Use real offline founder group preparation from the native engine alongside
+  the existing real recipient package fixture. No relay socket is needed.
 - Authentically sign modified bodies and reject unsupported versions, malformed
   or noncanonical v2 bodies, cross-version parents/children and changed
-  Offer or Consent revisions. Check exact DeliveryOffer version and a v2
+  Offer or Consent revisions. Resign typed body structs in declaration
+  order for valid-shape mutations and assert exact binding errors. Test
+  noncanonical whitespace, key ordering, escapes and duplicate fields as
+  a separate class. Check exact DeliveryOffer version and a v2
   Transcript round trip plus version-mismatch reconstruction failure.
 - Check new receipt serialization, exact event ID, v1/v2 decoder isolation,
   altered authenticated coordinates, noncanonical v2 body and mismatch with
-  the sealed v2 negotiation. Vary every room-hash field and pin the known
+  the sealed v2 negotiation. Reject v1 receipt bytes even with identical
+  coordinates at v2 decode. Vary every room-hash field and pin the known
   vector. Existing native substrate and fixture test qualification remain
   separate from owner activation.
 - Run final format, diff checks and locked strict all-target Clippy. Obtain
