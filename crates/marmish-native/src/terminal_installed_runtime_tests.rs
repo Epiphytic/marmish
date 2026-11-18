@@ -21,6 +21,8 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::timeout;
 
+#[path = "terminal_installed_foreground_tests.rs"]
+mod foreground;
 #[path = "terminal_installed_observe_tests.rs"]
 mod observe;
 
@@ -125,6 +127,7 @@ where
 enum Workload {
     Verify,
     QuietAuth,
+    Foreground,
     Cancel,
     ShellExit,
     Restart,
@@ -811,7 +814,7 @@ pub(crate) fn open_cli_pty() -> (std::fs::File, std::fs::File) {
     (master, slave)
 }
 
-async fn run_quiet_cli(state: &Path, daemon: &Path, remote: PublicKey, relay: &Relay) -> Duration {
+fn write_cli_config(state: &Path, remote: PublicKey, relay: &Relay) {
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -828,18 +831,27 @@ async fn run_quiet_cli(state: &Path, daemon: &Path, remote: PublicKey, relay: &R
         }),
     )
     .unwrap();
-    drop(file);
-    let (_master, slave) = open_cli_pty();
+}
+
+fn spawn_cli(
+    state: &Path,
+    daemon: &Path,
+    remote: PublicKey,
+    slave: &std::fs::File,
+    debug: bool,
+) -> tokio::process::Child {
     let mut command = tokio::process::Command::new(daemon.with_file_name("marmish"));
+    command.arg("--state-dir").arg(state).args(["-i", "c"]);
+    if debug {
+        command.arg("--debug");
+    }
     command
-        .arg("--state-dir")
-        .arg(state)
-        .args(["-i", "c", "--debug", "terminal"])
+        .arg("terminal")
         .arg(remote.to_bech32().unwrap())
         .env_clear()
         .env("TERM", "dumb")
         .stdin(slave.try_clone().unwrap())
-        .stdout(slave)
+        .stdout(slave.try_clone().unwrap())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     // The installed frontend checks foreground terminal ownership.
@@ -852,9 +864,15 @@ async fn run_quiet_cli(state: &Path, daemon: &Path, remote: PublicKey, relay: &R
             }
         })
     };
+    command.spawn().expect("launch installed marmish")
+}
+
+async fn run_quiet_cli(state: &Path, daemon: &Path, remote: PublicKey, relay: &Relay) -> Duration {
+    write_cli_config(state, remote, relay);
+    let (_master, slave) = open_cli_pty();
     let began = Instant::now();
-    let mut child = command.spawn().expect("launch installed marmish");
-    drop(command);
+    let mut child = spawn_cli(state, daemon, remote, &slave, true);
+    drop(slave);
     let mut stderr = child.stderr.take().unwrap().take(4097);
     let mut output = Vec::new();
     let child_result = timeout(ATTACH, async {
@@ -1072,6 +1090,17 @@ async fn prove_writer(workload: Workload) -> Measurements {
             let mut sample = observe::prove(&socket, start, &cleanup, &turns, workload).await;
             sample.unloaded = before;
             return sample;
+        }
+        if matches!(workload, Workload::Foreground) {
+            let (cold, echo) =
+                foreground::prove(temp.path(), &daemon, remote, &relay, &cleanup).await;
+            return Measurements {
+                cold,
+                echo,
+                unloaded: before,
+                after: command(&turns).await,
+                ..Measurements::default()
+            };
         }
         if matches!(workload, Workload::Cancel) {
             cancel_held_probe(
