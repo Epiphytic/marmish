@@ -1604,8 +1604,15 @@ sent the exact queued frame over private WSS on Linux AMD64. The library
 fixture committed acknowledgement only after the matching physical relay
 ACK and a fresh custody check. It also exercised stage replacement with
 zero relay writes, negative or lost ACK, a real same-byte retry and a
-failed settlement transaction. Installed Delivery admission and the
-production recipient daemon still require qualification.
+failed settlement transaction.
+
+The [recipient Delivery proof](validation/peer-installed-delivery-private-wss.md)
+durably advanced mixed authenticated history and live observations over
+private WSS on Linux AMD64. The library fixture preserved exact deferred
+bytes through cold restart, fenced a competing Delivery and retired an
+expired saved frame only at its authenticated deadline. The fixture stops
+at Held. Production daemon admission and application activation still
+need qualification.
 
 The [capped Welcome fixture](validation/peer-capped-welcome.md) uses the
 real native ingest and a metered cold readback on Linux AMD64. It
