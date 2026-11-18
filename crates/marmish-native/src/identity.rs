@@ -63,6 +63,15 @@ pub struct IdentityMaterial {
     slot: [u8; 16],
 }
 impl IdentityMaterial {
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn with_test_sqlcipher_root(&self, root: [u8; 32]) -> Self {
+        Self {
+            signer: Arc::clone(&self.signer),
+            root: Zeroizing::new(root),
+            slot: self.slot,
+        }
+    }
+
     pub fn signer(&self) -> Arc<Keys> {
         self.signer.clone()
     }
@@ -86,7 +95,11 @@ pub struct ProfileLease {
     _lock: File,
     root: PathBuf,
     manifest: Option<Manifest>,
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     ready_at_acquire: bool,
     profile_id: String,
     name: String,
@@ -143,7 +156,11 @@ impl ProfileLease {
             arti_state: root.join("arti-state"),
             arti_cache: root.join("arti-cache"),
             root,
-            #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+            #[cfg(all(
+                any(test, marmish_peer_receiver_candidate),
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
             ready_at_acquire: manifest.as_ref().is_some_and(|m| m.phase == Phase::Ready),
             manifest,
             profile_id,
@@ -226,7 +243,11 @@ impl ProfileLease {
         Ok(())
     }
 
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     pub(crate) fn was_ready_at_acquire(&self) -> bool {
         self.ready_at_acquire
     }
@@ -344,7 +365,11 @@ impl ProfileLease {
         self.derive_peer_qualification_key(manifest, material.sqlcipher_root())
     }
 
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     pub(crate) fn check_prepared_peer_identity(&self, material: &IdentityMaterial) -> Result<()> {
         self.prepared_peer_manifest(material).map(|_| ())
     }

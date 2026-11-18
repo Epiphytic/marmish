@@ -48,9 +48,28 @@ impl CheckedPeerRoute {
     fn bind_using(
         lease: Arc<ProfileLease>,
         material: &IdentityMaterial,
+        sample: impl FnMut() -> ClockSample,
+    ) -> Result<Self> {
+        Self::bind_profile_using(Arc::new(ProfileFiles::open(lease)?), material, sample)
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(super) fn bind_with_profile(
+        profile: Arc<ProfileFiles>,
+        material: &IdentityMaterial,
+    ) -> Result<Self> {
+        Self::bind_profile_using(profile, material, ClockSample::now)
+    }
+
+    fn bind_profile_using(
+        profile: Arc<ProfileFiles>,
+        material: &IdentityMaterial,
         mut sample: impl FnMut() -> ClockSample,
     ) -> Result<Self> {
-        let profile = Arc::new(ProfileFiles::open(lease)?);
         let clock = ScopeClock::new(sample())?;
         let qualification = {
             let key = profile
@@ -71,6 +90,33 @@ impl CheckedPeerRoute {
 
     pub(super) fn recheck(&mut self) -> Result<()> {
         self.recheck_using(ClockSample::now)
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(super) fn recheck_material(
+        &mut self,
+        config: &super::HeldFile,
+        material: &IdentityMaterial,
+    ) -> Result<()> {
+        let result = (|| {
+            if !self.qualification.matches_config(config) {
+                return Err(super::PROFILE_CHANGED);
+            }
+            let key = self
+                .profile
+                .lease
+                .peer_qualification_key_from_material(material)?;
+            self.qualification.verify_issuer(&key)?;
+            self.recheck()
+        })();
+        if result.is_err() {
+            self.profile.cancel.cancel();
+        }
+        result
     }
 
     fn recheck_using(&mut self, mut sample: impl FnMut() -> ClockSample) -> Result<()> {

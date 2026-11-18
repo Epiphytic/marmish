@@ -522,6 +522,24 @@ pub(super) struct HeldQualification {
 }
 
 impl HeldQualification {
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(super) fn matches_config(&self, config: &HeldFile) -> bool {
+        self.config.witness == config.witness
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(super) fn verify_issuer(&self, key: &[u8; 32]) -> Result<()> {
+        verify_issuer(&self.issued.record, key)
+    }
+
     pub(super) fn end_exclusive(&self) -> Result<u64> {
         let end = self
             .issued
@@ -643,6 +661,11 @@ fn authenticated_record(
     if record.readback(scope, Some(now)) != LocalStatus::CurrentMetadata {
         return Err(EVIDENCE_REFUSED);
     }
+    verify_issuer(&record, key)?;
+    Ok(record)
+}
+
+fn verify_issuer(record: &Record, key: &[u8; 32]) -> Result<()> {
     let tag = record
         .issuer_tag
         .as_deref()
@@ -651,8 +674,7 @@ fn authenticated_record(
     record
         .mac(key)?
         .verify_slice(&tag)
-        .map_err(|_| EVIDENCE_REFUSED)?;
-    Ok(record)
+        .map_err(|_| EVIDENCE_REFUSED)
 }
 
 #[cfg(test)]
@@ -930,6 +952,9 @@ fn unlink_owned_stage(profile: &ProfileFiles, name: &CStr, file: &File) -> Resul
     Ok(())
 }
 
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+pub(super) use tests::write_candidate_fixture;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -971,6 +996,55 @@ mod tests {
             build_commit: None,
             issuer_tag: None,
         }
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(in crate::peer_relay_trust) fn write_candidate_fixture(
+        scope: &ProfileFiles,
+        key: &[u8; 32],
+    ) {
+        use crate::peer_relay_trust::tests::private_write;
+        let (config, _) = scope.checked_command().unwrap();
+        let relay = config.bound_peer_relay(&config).unwrap();
+        let now = wall().unwrap();
+        let attestation = serde_json::json!({
+            "schema":1, "origin":relay.origin, "trust":trust_expression(&relay.trust),
+            "enforcement_source":"local registration test", "valid_from":now-1, "valid_until":now+90,
+            "control_limits":{
+                "event_bytes":65536, "stored_per_recipient":256, "per_timestamp_second":3,
+                "accepted_per_600s":32, "stored_per_writer_recipient":32, "retention_max_seconds":324000
+            },
+            "enforcement":{
+                "control_registered_writer":true, "control_exact_recipient_auth":true,
+                "control_expiration_no_early_eviction":true, "group_exact_route_acl":true,
+                "group_authenticated_members":true, "group_reconnect_history":true
+            }
+        });
+        let bytes = serde_json::to_vec(&attestation).unwrap();
+        let checked = CheckedAttestation::decode(&bytes, (0, 0), relay, now, false).unwrap();
+        let mut row = record(scope.lease.profile_id(), relay);
+        row.schema = 3;
+        row.trust = trust_expression(&relay.trust);
+        row.probe_suite = super::VERSIONS.suite.to_owned();
+        row.bounds_version = super::VERSIONS.bounds.to_owned();
+        row.relay_contract = super::VERSIONS.contract.to_owned();
+        row.operator_evidence = hex::encode(checked.digest);
+        row.qualified_at = now;
+        row.last_observed_at = now;
+        row.expires_at = now + 90;
+        row.build_commit = Some(env!("MARMISH_BUILD_COMMIT").to_owned());
+        row.issuer_tag = Some(hex::encode(row.mac(key).unwrap().finalize().into_bytes()));
+        private_write(
+            &scope.lease.root().join(RECORD.to_str().unwrap()),
+            &serde_json::to_vec(&row).unwrap(),
+        );
+        private_write(
+            &scope
+                .lease
+                .root()
+                .join(MANAGED_ATTESTATION.to_str().unwrap()),
+            &serde_json::to_vec(&checked.data).unwrap(),
+        );
     }
 
     #[test]
