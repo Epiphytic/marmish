@@ -27,6 +27,12 @@ pub mod identity;
 pub mod ipc;
 pub mod journal;
 pub mod mdk_adapter;
+#[cfg(any(test, marmish_peer_receiver_candidate))]
+#[allow(
+    dead_code,
+    reason = "candidate handshake remains unmounted until the charged owner is ready"
+)]
+mod peer_candidate_startup;
 mod rsync_cli;
 mod stream_cli;
 mod stream_runner;
