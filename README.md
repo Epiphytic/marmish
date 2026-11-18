@@ -650,6 +650,10 @@ same-source recovery rules.
 
 Thanks to the [Marmot Protocol and MDK contributors](https://github.com/marmot-protocol/mdk)
 for the MLS-encrypted transport and development kit that Marmish uses.
-We plan to evaluate the PTY and redraw techniques in David Beesley's
-[Claude Chill](https://github.com/davidbeesley/claude-chill) for Marmish's
-[interactive terminal mode](docs/phases/interactive-peers-roadmap.md).
+David Beesley's [Claude Chill](https://github.com/davidbeesley/claude-chill)
+informed Marmish's approach to coalescing PTY output. The
+[Terminal rendering design](docs/phases/terminal-renderer.md) explains how
+Marmish preserves ordered output across asynchronous delivery. The
+[writer and observer benchmark](docs/validation/terminal-observer-benchmark.md)
+reports latency and local display throughput over a private loopback relay
+on Linux AMD64.
