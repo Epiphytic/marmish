@@ -47,8 +47,11 @@ The Linux x86_64 private WSS fixture covers Default, New, Busy, warm reattach,
 byte preservation, resize and simultaneous ordinary Command. The
 [Observe and Takeover design](phases/terminal-observe-takeover.md) adds typed
 writer offers, read-only observation, replacement and named reattachment.
-Installed process and cross-platform qualification, inbound Peer invitations
-and network heartbeat remain in development.
+The [Linux AMD64 installer and Command report](validation/interactive-linux-amd64-installer.md)
+qualifies local-asset quickstart, repeat setup, tamper refusal and an ordinary
+command over an explicit relay. Installed interactive-process and
+cross-platform qualification, inbound Peer invitations and network heartbeat
+remain in development.
 The [Peer aggregate ingress proof](validation/peer-aggregate-ingress-proof.md)
 qualifies one shared canonical origin in a native loopback fixture. A copy
 arriving first on an ineligible relay can suppress the eligible copy from
