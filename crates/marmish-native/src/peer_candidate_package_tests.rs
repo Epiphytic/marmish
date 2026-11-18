@@ -349,9 +349,10 @@ fn package_child() {
                 .prestage_package(quota, &reservation, started)
                 .unwrap();
             let mut foreign = RecoveredOwner::open(&lease, &identity, RELAY).unwrap();
+            let current_wall = Wall::System.sample().unwrap().as_secs();
             let unrelated = foreign
                 .checkpoint
-                .reserve_provisioning(&foreign.source, selector, now)
+                .reserve_provisioning(&foreign.source, selector, current_wall)
                 .unwrap();
             let turn = staged.window.clone();
             assert!(matches!(
