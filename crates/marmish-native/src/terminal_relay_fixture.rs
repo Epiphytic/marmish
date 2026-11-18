@@ -526,6 +526,9 @@ async fn serve_connection(
                     None => break,
                 },
             };
+            if state.lock().unwrap().connections[&id].retired {
+                break;
+            }
             let mut connected = true;
             for reply in replies {
                 if !matches!(

@@ -22,6 +22,7 @@ use marmot_session::{
     AccountDeviceRuntime, KeyPackagePublisher, MaintenanceTiming, OsMaintenanceRandom,
     StaticTransportRouting, SystemMonotonicClock, TransportRoutingPolicy, WallClock,
 };
+use sha2::{Digest, Sha256};
 use storage_sqlite::{SqlCipherKey, SqliteAccountStorage, SqliteJournalMode, SqliteStorageOptions};
 use tokio::sync::Mutex;
 
@@ -30,7 +31,16 @@ const TOTAL: Duration = Duration::from_secs(100);
 type Recipient = AccountDeviceRuntime<Gate, StaticTransportRouting, Gate>;
 
 #[derive(Clone)]
-struct FounderTransport(Arc<Mutex<Option<FounderTurn>>>);
+struct FounderTransport {
+    turn: Arc<Mutex<Option<FounderTurn>>>,
+    sent: Arc<Mutex<Option<CommitDigest>>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct CommitDigest {
+    id: [u8; 32],
+    bytes_sha256: [u8; 32],
+}
 
 struct FounderTurn {
     account: MemberId,
@@ -82,7 +92,7 @@ impl TransportAdapter for FounderTransport {
         request: TransportPublishRequest,
     ) -> std::result::Result<TransportPublishReport, TransportAdapterError> {
         let closed = TransportAdapterError::Closed;
-        let Some(mut turn) = self.0.lock().await.take() else {
+        let Some(mut turn) = self.turn.lock().await.take() else {
             return Err(closed);
         };
         let expected = TransportPublishTarget::Group {
@@ -110,6 +120,10 @@ impl TransportAdapter for FounderTransport {
         if !turn.socket.accepted(&ack, id) {
             return Err(closed);
         }
+        *self.sent.lock().await = Some(CommitDigest {
+            id,
+            bytes_sha256: Sha256::digest(&request.message.payload).into(),
+        });
         turn.socket
             .stop(turn.deadline)
             .await
@@ -167,12 +181,17 @@ async fn history(case: History) {
     let group_route = random();
     let mut round = Round::initialize_with_group(Some(group_route)).await;
     let socket = round.socket();
-    let daemon = round.start(Admission::Automatic, super::LostReply::None).await;
+    let daemon = round
+        .start(Admission::Automatic, super::LostReply::None)
+        .await;
     let started = Instant::now();
     let mut enrollment = round.send_offer(group_route).await;
     let selector = Selector::from(enrollment.consent.offer());
     let routing = enrollment.consent.offer().routing().clone();
-    let adapter = FounderTransport(Arc::new(Mutex::new(None)));
+    let adapter = FounderTransport {
+        turn: Arc::new(Mutex::new(None)),
+        sent: Arc::new(Mutex::new(None)),
+    };
     let (mut founder, group, welcome) = peer_enrollment_founder_with_group(
         round.founder_root.path(),
         round.founder.clone(),
@@ -184,6 +203,10 @@ async fn history(case: History) {
     )
     .await;
     let initial = stable_pin(founder.runtime(), &group);
+    let initial_membership = founder
+        .runtime()
+        .canonical_group_membership(&group)
+        .unwrap();
     let delivery = round
         .finish_delivery(&mut enrollment, &welcome.payload)
         .await;
@@ -200,7 +223,7 @@ async fn history(case: History) {
         .contains(&welcome.id);
     let update_started = Instant::now();
     let origin = round.relay.url.as_str();
-    *adapter.0.lock().await = Some(FounderTurn {
+    *adapter.turn.lock().await = Some(FounderTurn {
         account: founder.runtime().self_id(),
         group: group.clone(),
         route: group_route,
@@ -234,6 +257,13 @@ async fn history(case: History) {
         panic!("one distinct affirmative Group relay write for founder update");
     };
     assert_eq!(*sender, round.founder.public_key());
+    assert_eq!(
+        *adapter.sent.lock().await,
+        Some(CommitDigest {
+            id: record.id,
+            bytes_sha256: record.bytes_sha256,
+        }),
+    );
     let update_ms = update_started.elapsed().as_millis();
 
     let mut lease = ProfileLease::acquire(round.root.path(), PROFILE).unwrap();
@@ -271,6 +301,13 @@ async fn history(case: History) {
     assert_eq!(joined.coordinates().0, group.as_slice());
     let recipient = open_recipient(&owner, &row, &round.wall, &group, &routing);
     assert_eq!(stable_pin(&recipient, &group), initial);
+    let joined_membership = recipient.canonical_group_membership(&group).unwrap();
+    assert!(initial_membership.local_leaf_active && joined_membership.local_leaf_active);
+    let mut founding_leaves = initial_membership.member_leaves;
+    let mut joined_leaves = joined_membership.member_leaves;
+    founding_leaves.sort_by_key(|leaf| leaf.leaf_index);
+    joined_leaves.sort_by_key(|leaf| leaf.leaf_index);
+    assert_eq!(founding_leaves, joined_leaves);
 
     let qualified = QualifiedOrigin::for_daemon_peer_fixture(
         round.relay.peer_mode().unwrap(),
@@ -497,6 +534,9 @@ async fn process_history(
         return false;
     }
     let delivery = record.delivery(group, wall);
+    let digest: [u8; 32] = Sha256::digest(&delivery.message.payload).into();
+    assert_eq!(digest, record.fingerprint().bytes_sha256);
+    assert_eq!(delivery.message.id.as_slice(), record.fingerprint().id);
     let ingested = recipient.ingest_delivery(&delivery).await.unwrap();
     let accepted = match ingested.outcome {
         IngestOutcome::Processed => true,
