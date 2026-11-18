@@ -1,20 +1,5 @@
 name: Legacy v0.1 installer and guided quickstart
 on:
-  push:
-    branches: [master]
-    paths:
-      - 'tests/fixtures/legacy/**'
-      - 'tools/**'
-      - '!tools/v02-actions/**'
-      - 'tests/fixtures/managed-runtime-assets.json'
-      - '.github/workflows/installer-validation.yml'
-  pull_request:
-    paths:
-      - 'tests/fixtures/legacy/**'
-      - 'tools/**'
-      - '!tools/v02-actions/**'
-      - 'tests/fixtures/managed-runtime-assets.json'
-      - '.github/workflows/installer-validation.yml'
   workflow_dispatch:
 permissions:
   contents: read

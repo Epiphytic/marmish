@@ -9,6 +9,7 @@ on:
       - crates/marmish-engine/**
       - crates/marmish-native/**
       - rust-toolchain.toml
+      - tools/marmish_interactive_core_case.sh
 permissions:
   contents: read
 concurrency:

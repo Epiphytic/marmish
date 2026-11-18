@@ -5,15 +5,14 @@ on:
     paths:
       - 'tools/v02-actions/**'
       - '.github/workflows/installed-coordinator.yml'
-  pull_request:
-    paths:
-      - 'tools/v02-actions/**'
-      - '.github/workflows/installed-coordinator.yml'
 permissions:
   contents: read
 jobs:
   coordinator:
-    runs-on: ubuntu-24.04
+    if: github.repository == 'Epiphytic/marmish' && github.ref == 'refs/heads/master'
+    runs-on:
+      group: epiphytic-ci
+      labels: [self-hosted, Linux, X64, bel-ci]
     timeout-minutes: 10
     defaults:
       run:
