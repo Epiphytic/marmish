@@ -7,7 +7,9 @@ use crate::{
     peer_control_version::ControlVersion,
     transport::PeerSocketDrain,
 };
+use async_wsocket::Message;
 use cgka_traits::app_components::NostrRoutingV1;
+use futures_util::{SinkExt, StreamExt};
 use std::{future::poll_fn, path::Path, time::Duration};
 use tokio::time::{Instant, sleep, timeout};
 
@@ -99,20 +101,38 @@ pub(super) async fn run(
             0
         }
         "split_sink" | "split_stream" => {
-            let (route, _, sink, stream) = admission
+            let (route, _, mut sink, mut stream) = admission
                 .open(super::super::super::wire::MESSAGE_LIMIT, time_limit())
                 .await
                 .unwrap();
-            drop(route);
+            let challenge = timeout(PROMPT, stream.next()).await.unwrap();
+            assert!(
+                matches!(challenge, Some(Ok(Message::Text(text))) if text.starts_with("[\"AUTH\","))
+            );
+            let cancellation = route.cancellation();
+            trip.trip();
+            assert!(!cancellation.is_cancelled());
             if case == "split_sink" {
                 drop(stream);
+                assert!(
+                    timeout(PROMPT, sink.send(Message::Ping(Vec::new())))
+                        .await
+                        .unwrap()
+                        .is_err()
+                );
                 assert_split_held(&drain, relay).await;
                 drop(sink);
             } else {
                 drop(sink);
+                assert!(matches!(
+                    timeout(PROMPT, stream.next()).await.unwrap(),
+                    Some(Err(_))
+                ));
                 assert_split_held(&drain, relay).await;
                 drop(stream);
             }
+            assert!(!cancellation.is_cancelled());
+            drop(route);
             0
         }
         _ => {

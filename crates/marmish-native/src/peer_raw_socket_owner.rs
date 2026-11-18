@@ -570,7 +570,10 @@ impl Socket {
         refresh_route(&mut self.physical, deadline)
     }
 
-    fn revoked(physical: &Option<LivePhysicalRoute>) -> impl Future<Output = ()> + use<> {
+    fn revoked(
+        physical: &Option<LivePhysicalRoute>,
+        wake_unregistered: bool,
+    ) -> impl Future<Output = ()> + use<> {
         let cancel = physical.as_ref().map(LivePhysicalRoute::cancellation);
         #[cfg(all(
             any(test, marmish_peer_receiver_candidate),
@@ -595,7 +598,11 @@ impl Socket {
                 }
                 return;
             }
-            cancel.cancelled().await;
+            if wake_unregistered {
+                cancel.cancelled().await;
+            } else {
+                std::future::pending().await;
+            }
         }
     }
 
@@ -612,7 +619,7 @@ impl Socket {
             return Err(Failure::Size);
         }
         let Self { sink, physical, .. } = self;
-        let revoked = Self::revoked(physical);
+        let revoked = Self::revoked(physical, true);
         let write = fenced_sink(
             sink,
             Message::Text(text),
@@ -643,7 +650,7 @@ impl Socket {
             let incoming = timeout_at(deadline, self.stream.next());
             let arrival = tokio::select! {
                 biased;
-                _ = Self::revoked(&self.physical) => return Err(Failure::Retired),
+                _ = Self::revoked(&self.physical, true) => return Err(Failure::Retired),
                 incoming = incoming => incoming,
             };
             let arrival = match arrival {
@@ -677,7 +684,7 @@ impl Socket {
             Message::Text(text) => Ok(Some(text)),
             Message::Ping(payload) if payload.len() <= 125 => {
                 let Self { sink, physical, .. } = self;
-                let revoked = Self::revoked(physical);
+                let revoked = Self::revoked(physical, false);
                 let flush = fenced_poll(
                     deadline,
                     |end| refresh_route(physical, end).map(drop),
