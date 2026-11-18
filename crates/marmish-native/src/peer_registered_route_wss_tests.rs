@@ -88,9 +88,7 @@ async fn registered_route_subprocess() {
 
     match case.as_str() {
         "success" | "dropped_registration" => {
-            let quota_identity = ptr::from_ref(attached.quota());
             let (quota, mut control) = attached.actor_parts();
-            assert_eq!(ptr::from_ref(quota), quota_identity);
             quota.receiver_files(&lease).unwrap();
             let route = control.take_route(&lease, &material).unwrap();
             let admission = ReceiverRouteAdmission::registered(route).unwrap();
@@ -125,7 +123,6 @@ async fn registered_route_subprocess() {
                 .unwrap();
                 assert_eq!(relay.recipient_requests(account), 2);
                 quota.receiver_files(&lease).unwrap();
-                assert_eq!(ptr::from_ref(quota), quota_identity);
                 control.recheck(&lease, &material).unwrap();
                 replace_config_inode(lease.root());
             }

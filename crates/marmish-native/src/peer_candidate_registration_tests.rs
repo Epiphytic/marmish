@@ -219,7 +219,8 @@ fn registration_subprocess() {
         "displaced_after_take" => {
             let mut attached = registered.attach(&lease, &material).unwrap();
             let cancel = attached.route_scope.scope.ready.profile.cancel.clone();
-            let (_, mut control) = attached.actor_parts();
+            let (quota, mut control) = attached.actor_parts();
+            assert!(std::ptr::eq(quota, control.quota));
             assert!(matches!(
                 control.take_route_checked(&lease, &material, || {
                     assert!(!cancel.is_cancelled());
