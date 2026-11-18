@@ -164,3 +164,12 @@ and the uncertainty seam. The sibling's accounting measurements stay
 unchanged. Use the existing warm exclusive target when available. Review
 the exact composed source and measured evidence independently before
 counting this proof.
+
+## Design review
+
+Claude Code Auto approved `b2d2ec9995d6b44446115dd8dcc8625f735f7f05`
+in session `e67e5b3b-e4b1-4817-ae05-dcbbf38724b1`. The final review
+checked unchanged trigger inventory, exact nested errors, real counters,
+owner access and read-only synthetic clock use. The first two reviews
+requested changes in sessions `421dadc0-0134-429d-b796-325593253f75`
+and `3205e458-4c06-4c13-a757-a21a37a81e79`.
