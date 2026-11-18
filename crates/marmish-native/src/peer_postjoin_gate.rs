@@ -216,7 +216,7 @@ pub(super) struct Observation {
     pub(super) deliveries: u8,
     pub(super) accepted: bool,
     pub(super) denied: u8,
-    pub(super) refused_group_syncs: u8,
+    pub(super) refused_key_package_publications: u8,
     pub(super) violation: bool,
 }
 
@@ -433,10 +433,7 @@ impl TransportAdapter for Gate {
         &self,
         _: TransportGroupSync,
     ) -> Result<(), TransportAdapterError> {
-        if let Ok(mut state) = self.state.lock() {
-            state.observed.refused_group_syncs =
-                state.observed.refused_group_syncs.saturating_add(1);
-        }
+        self.denied();
         Err(TransportAdapterError::Closed)
     }
 
@@ -517,7 +514,13 @@ impl KeyPackagePublisher for Gate {
         _: &KeyPackagePublication,
         _: &SignedPublicationArtifact,
     ) -> Result<KeyPackagePublishReceipt, KeyPackagePublishError> {
-        package_refused(self)
+        if let Ok(mut state) = self.state.lock() {
+            let attempts = &mut state.observed.refused_key_package_publications;
+            *attempts = attempts.saturating_add(1);
+        }
+        Err(KeyPackagePublishError::unexposed(
+            "peer_postjoin_package_refused",
+        ))
     }
 
     async fn withdraw_key_package_slot(
