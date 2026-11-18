@@ -594,7 +594,8 @@ fn peer_terminal_leave_effect_apertures_restore_after_uncommitted_writes() {
     let insert = |conn: &rusqlite::Connection, wall| {
         conn.execute(
             "INSERT INTO peer_terminal_leave_effect (class,generation,armed_at,image_digest)
-         VALUES ((SELECT class FROM peer_terminal_native_leave),1,?1,zeroblob(32))",
+         VALUES ((SELECT class FROM peer_terminal_native_leave),1,?1,zeroblob(32))
+         ON CONFLICT(class,generation) DO NOTHING",
             [i64::try_from(wall).unwrap()],
         )
     };
@@ -609,8 +610,23 @@ fn peer_terminal_leave_effect_apertures_restore_after_uncommitted_writes() {
     {
         let tx = cp.cursor.begin(source.origin).unwrap();
         set_write(&tx, false, true).unwrap();
-        assert!(insert(&tx, NOW + 1).is_err(), "cursor floor must match");
+        assert_denied(
+            insert(&tx, NOW + 1),
+            "exact leave effect reservation required",
+        );
         assert_eq!(insert(&tx, NOW).unwrap(), 1);
+        assert_eq!(insert(&tx, NOW).unwrap(), 0, "duplicate reservation");
+        tx.rollback().unwrap();
+    }
+    {
+        let tx = cp.cursor.begin(source.origin).unwrap();
+        set_write(&tx, false, true).unwrap();
+        advance_local_wall(&tx, source.origin, hold.deadline()).unwrap();
+        assert_denied(
+            insert(&tx, hold.deadline()),
+            "exact leave effect reservation required",
+        );
+        tx.rollback().unwrap();
     }
     assert_eq!(
         cp.native_leave_effect(&source, &hold, NOW),
@@ -643,8 +659,19 @@ fn peer_terminal_leave_effect_apertures_restore_after_uncommitted_writes() {
     {
         let tx = cp.cursor.begin(source.origin).unwrap();
         set_write(&tx, true, true).unwrap();
-        assert!(capture(&tx, hold.deadline()).is_err());
         assert_eq!(capture(&tx, NOW).unwrap(), 1);
+        assert_denied(capture(&tx, NOW), "exact leave effect capture required");
+        tx.rollback().unwrap();
+    }
+    {
+        let tx = cp.cursor.begin(source.origin).unwrap();
+        set_write(&tx, true, true).unwrap();
+        advance_local_wall(&tx, source.origin, hold.deadline()).unwrap();
+        assert_denied(
+            capture(&tx, hold.deadline()),
+            "exact leave effect capture required",
+        );
+        tx.rollback().unwrap();
     }
     assert_eq!(
         cp.native_leave_effect(&source, &hold, NOW),

@@ -74,6 +74,33 @@ fn peer_terminal_leave_completes_in_one_managed_poll() {
     let full = directory();
     run(full.path(), "setup", 0);
     let initial = stage_image(full.path());
+    let peer = full.path().join("client/peer");
+    let snapshot = peer.join("terminal-leave-snapshot.db");
+    fixture_write(snapshot.clone(), b"pre-existing snapshot");
+    run(full.path(), "preflight_refusal", 0);
+    assert_eq!(stage_image(full.path()), initial);
+    assert_eq!(fs::read(&snapshot).unwrap(), b"pre-existing snapshot");
+    fs::remove_file(&snapshot).unwrap();
+
+    // A sparse test file keeps the actual disk workload low. The quota
+    // deliberately charges the full logical file extent.
+    let known = peer.join("provisional-known.db");
+    let total_quota = 128 * 1024 * 1024;
+    fixture_write(known.clone(), &[]);
+    OpenOptions::new()
+        .write(true)
+        .open(&known)
+        .unwrap()
+        .set_len(total_quota)
+        .unwrap();
+    run(full.path(), "preflight_refusal", 0);
+    assert_eq!(stage_image(full.path()), initial);
+    assert_eq!(fs::metadata(&known).unwrap().len(), total_quota);
+    assert!(
+        fs::symlink_metadata(&snapshot).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+    );
+    fs::remove_file(known).unwrap();
+
     run(full.path(), "foreign_generation", 0);
     run(full.path(), "before_start", 0);
     assert_eq!(initial, stage_image(full.path()));
@@ -236,6 +263,7 @@ fn run(root: &Path, mode: &str) {
         "before_start" | "after_stop" => assert_eq!(result, Err(Error::Clock)),
         "foreign_generation" => assert_eq!(result, Err(Error::Binding)),
         "refuse" => assert_eq!(result, Err(Error::StageIdentityMismatch)),
+        "preflight_refusal" => assert_eq!(result, Err(Error::Path)),
         "recheck" => {
             let Disposition::Captured(id) = result.expect("cold capture must be recoverable")
             else {
