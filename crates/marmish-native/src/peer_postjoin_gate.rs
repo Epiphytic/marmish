@@ -216,6 +216,7 @@ pub(super) struct Observation {
     pub(super) deliveries: u8,
     pub(super) accepted: bool,
     pub(super) denied: u8,
+    pub(super) refused_group_syncs: u8,
     pub(super) violation: bool,
 }
 
@@ -432,7 +433,10 @@ impl TransportAdapter for Gate {
         &self,
         _: TransportGroupSync,
     ) -> Result<(), TransportAdapterError> {
-        self.denied();
+        if let Ok(mut state) = self.state.lock() {
+            state.observed.refused_group_syncs =
+                state.observed.refused_group_syncs.saturating_add(1);
+        }
         Err(TransportAdapterError::Closed)
     }
 

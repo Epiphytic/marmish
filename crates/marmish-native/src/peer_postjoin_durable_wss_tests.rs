@@ -188,7 +188,8 @@ async fn prove_lost_ack() {
         recipient.maintenance_obligations_for_group(&stage.group).unwrap().as_slice(),
         [obligation] if obligation.phase == cgka_traits::maintenance::MaintenancePhase::Jitter
     ));
-    assert_gate(&old_gate, 0, 0, false);
+    // History processing asks MDK to sync the group. The closed gate refuses it.
+    assert_gate(&old_gate, 0, 0, false, 1);
     let history_ms = history_started.elapsed().as_millis();
     let baseline = verify::pre_capture(
         &recipient,
@@ -228,7 +229,7 @@ async fn prove_lost_ack() {
     assert_eq!(reservation.step(), Step::Reserved);
     old_gate.begin_capture(scope.clone()).unwrap();
     recipient.run_due_maintenance().await.unwrap();
-    assert_gate(&old_gate, 1, 0, false);
+    assert_gate(&old_gate, 1, 0, false, 1);
     assert_eq!(round.relay.group_writes(), setup.writes);
     // This cut precedes application capture. Recover only native frozen rows.
     drop((
@@ -266,7 +267,7 @@ async fn prove_lost_ack() {
     let reopen_ms = reopen_started.elapsed().as_millis();
     // The second cut follows durable capture. Exact native readback and the
     // application journal must still agree before the first physical turn.
-    assert_gate(&gate, 0, 0, false);
+    assert_gate(&gate, 0, 0, false, 0);
     drop((
         gate,
         recipient,
@@ -287,7 +288,7 @@ async fn prove_lost_ack() {
     let recovered =
         verify::recover_unexposed(&recipient, founder.runtime(), &image, &publication, wall())
             .unwrap();
-    assert_gate(&gate, 0, 0, false);
+    assert_gate(&gate, 0, 0, false, 0);
     let fresh = recovered.capture();
 
     let event_id = fresh.event_id();
@@ -333,7 +334,7 @@ async fn prove_lost_ack() {
     let founder_record = founder_record.unwrap();
     assert!(founder_socket.accepts_group_record(&founder_record));
     assert_eq!(founder_record.fingerprint().id, event_id);
-    assert_gate(&gate, 1, 1, false);
+    assert_gate(&gate, 1, 1, false, 0);
     assert_eq!(round.relay.group_writes().len(), 2);
     let exposed = &round.relay.group_writes()[1];
     assert_eq!(exposed.sender, round.signer);
@@ -385,7 +386,7 @@ async fn prove_lost_ack() {
             .await
     );
     assert!(recover(&recipient, &founder, deadline).is_err());
-    assert_gate(&gate, 0, 0, false);
+    assert_gate(&gate, 0, 0, false, 0);
     assert_eq!(round.relay.group_writes().len(), 2);
     let recovered = recover(&recipient, &founder, wall()).unwrap();
     let retry = recovered.capture();
@@ -423,7 +424,7 @@ async fn prove_lost_ack() {
     .unwrap();
     advance_retry(&recipient, &stage.group, &round.wall, deadline);
     recipient.run_due_maintenance().await.unwrap();
-    assert_gate(&gate, 1, 1, true);
+    assert_gate(&gate, 1, 1, true, 0);
     // Finish native bookkeeping under the spent permit before dropping every
     // recipient handle and proving the canonical native result from disk.
     let armed = read_publication(&mut owner, &held, wall(), Step::Armed { number: 2 });
@@ -431,7 +432,7 @@ async fn prove_lost_ack() {
     {
         recipient.run_due_maintenance().await.unwrap();
     }
-    assert_gate(&gate, 1, 1, true);
+    assert_gate(&gate, 1, 1, true, 0);
     assert_eq!(
         stable_pin(&recipient, &stage.group),
         stable_pin(founder.runtime(), &stage.group),
@@ -474,7 +475,7 @@ async fn prove_lost_ack() {
     verify::confirm_rotation_cold(&recipient, founder.runtime(), &image, &confirmed, wall())
         .unwrap();
     recipient.resume_outbound_fanouts().await.unwrap();
-    assert_gate(&gate, 0, 0, false);
+    assert_gate(&gate, 0, 0, false, 0);
     assert_eq!(round.relay.group_writes(), writes);
     founder_socket.stop(Instant::now() + STEP).await.unwrap();
     retry_socket
@@ -494,7 +495,8 @@ async fn prove_lost_ack() {
     );
 }
 
-fn assert_gate(gate: &Gate, commits: u8, deliveries: u8, accepted: bool) {
+#[track_caller]
+fn assert_gate(gate: &Gate, commits: u8, deliveries: u8, accepted: bool, refused_syncs: u8) {
     let observation = gate.observe().unwrap();
     assert_eq!(
         (
@@ -502,9 +504,10 @@ fn assert_gate(gate: &Gate, commits: u8, deliveries: u8, accepted: bool) {
             observation.deliveries,
             observation.accepted,
             observation.denied,
+            observation.refused_group_syncs,
             observation.violation
         ),
-        (commits, deliveries, accepted, 0, false),
+        (commits, deliveries, accepted, 0, refused_syncs, false),
     );
 }
 
