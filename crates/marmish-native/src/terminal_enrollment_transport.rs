@@ -1598,6 +1598,13 @@ async fn terminal_fatal_deactivation_cancels_before_second_poll() {
     use std::cell::Cell;
     use std::task::Poll;
 
+    struct DropFlag<'a>(&'a Cell<bool>);
+    impl Drop for DropFlag<'_> {
+        fn drop(&mut self) {
+            self.0.set(true);
+        }
+    }
+
     let (trip, fatal) = crate::dispatcher_fatal::Trip::new();
     let authority = Authority::from_fence(
         AttachmentFence::new(std::num::NonZeroU64::MIN, [1; 32]),
@@ -1608,19 +1615,25 @@ async fn terminal_fatal_deactivation_cancels_before_second_poll() {
     .unwrap();
     assert!(authority.physical_stop.set(fatal).is_ok());
     let polls = Cell::new(0);
-    let mut deactivation =
-        std::pin::pin!(authority.deactivate_physical(std::future::poll_fn(|_| {
+    let dropped = Cell::new(false);
+    let mut deactivation = std::pin::pin!(authority.deactivate_physical(async {
+        let _drop_flag = DropFlag(&dropped);
+        std::future::poll_fn(|_| {
             polls.set(polls.get() + 1);
             Poll::Pending
-        },)));
+        })
+        .await
+    }));
     assert!(futures_util::poll!(&mut deactivation).is_pending());
     assert_eq!(polls.get(), 1);
+    assert!(!dropped.get());
     trip.mark_cut();
     assert!(matches!(
         deactivation.await,
         Err(Error::Transport("dispatcher_fatal"))
     ));
     assert_eq!(polls.get(), 1);
+    assert!(dropped.get());
 }
 
 struct GroupRoute {

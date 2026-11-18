@@ -63,6 +63,7 @@ async fn open_lane(route: &Route, relay: &Relay, reapers: &Arc<Reapers>, keys: A
 async fn terminal_fatal_closes_both_live_sdk_lanes_without_protocol_close() {
     timeout(STEP, async {
         let relay = Relay::start().await;
+        relay.record_terminal_socket_ends();
         let root = tempfile::tempdir().unwrap();
         let (trip, route) = guarded_route(&relay, root.path());
         let alias_keys = Arc::new(Keys::generate());
@@ -76,10 +77,12 @@ async fn terminal_fatal_closes_both_live_sdk_lanes_without_protocol_close() {
         let accounts = [alias_keys.public_key(), room_keys.public_key()];
         let sockets = accounts.map(|account| relay.terminal_connection_for(account));
         assert_ne!(sockets[0], sockets[1]);
-        for account in accounts {
-            assert!(relay.recipient_requests(account) > 0);
+        let requests = accounts.map(|account| {
+            let count = relay.recipient_requests(account);
+            assert!(count > 0);
             assert_eq!(relay.recipient_closes(account), 0);
-        }
+            count
+        });
 
         trip.trip();
         for lane in [&mut alias, &mut room] {
@@ -92,11 +95,12 @@ async fn terminal_fatal_closes_both_live_sdk_lanes_without_protocol_close() {
         alias_result.unwrap();
         room_result.unwrap();
         route.finish().await.unwrap();
-        for (account, socket) in accounts.into_iter().zip(sockets) {
+        for ((account, socket), requests) in accounts.into_iter().zip(sockets).zip(requests) {
             while relay.runtime_socket_active(socket) {
                 tokio::task::yield_now().await;
             }
             assert_eq!(relay.runtime_socket_end(socket), Some(SocketEnd::Raw));
+            assert_eq!(relay.recipient_requests(account), requests);
             assert_eq!(relay.recipient_closes(account), 0);
         }
         assert_eq!(route.client_reapers.custody(), (0, 0, false));
@@ -217,7 +221,11 @@ async fn terminal_fatal_cancelled_close_keeps_the_counted_pump_join() {
         }
         let finish = route.finish();
         tokio::pin!(finish);
-        assert!(futures_util::poll!(&mut finish).is_pending());
+        assert!(
+            timeout(Duration::from_millis(50), &mut finish)
+                .await
+                .is_err()
+        );
         assert_eq!(route.client_reapers.custody(), (1, 0, false));
         release.send(()).unwrap();
         finish.await.unwrap();
