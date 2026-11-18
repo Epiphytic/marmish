@@ -211,6 +211,11 @@ pub(crate) struct ReceiverRouteControl<'owner, 'lease> {
 }
 
 impl ReceiverRouteControl<'_, '_> {
+    /// Ends the exact registered route while the actor retains its quota borrow.
+    pub(crate) fn revoke(&self) {
+        self.route_scope.scope.ready.profile.cancel.cancel();
+    }
+
     pub(crate) fn recheck(
         &mut self,
         lease: &Arc<ProfileLease>,

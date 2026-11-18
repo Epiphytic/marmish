@@ -35,6 +35,8 @@ fn peer_registered_route_private_wss_handoff() {
         "unused_admission",
         "global_displacement",
         "dropped_registration",
+        "revoked_before_open",
+        "revoked_live",
     ]);
 }
 
@@ -131,6 +133,39 @@ async fn registered_route_subprocess() {
     }
 
     match case.as_str() {
+        "revoked_before_open" | "revoked_live" => {
+            let (_, mut control) = attached.actor_parts();
+            let route = control.take_route(&lease, &material).unwrap();
+            let (admission, drain) = ReceiverRouteAdmission::registered(route).unwrap();
+            if case == "revoked_before_open" {
+                control.revoke();
+                assert!(matches!(
+                    PeerRecipientPort::open(admission, time_limit()).await,
+                    Err(super::Failure::Retired)
+                ));
+                assert_eq!(drain.tcp_attempts(), 0);
+            } else {
+                let mut port = PeerRecipientPort::open(admission, time_limit())
+                    .await
+                    .unwrap();
+                assert!(relay.runtime_socket_active(5));
+                assert!(matches!(
+                    drain.reap(time_limit()).await,
+                    Err(crate::Error::Transport("peer_socket_revoke_required"))
+                ));
+                control.revoke();
+                assert!(port.use_current_recipient(|_, _, _| ()).is_err());
+                drop(port);
+            }
+            control.revoke();
+            drain.reap(time_limit()).await.unwrap();
+            assert_eq!(
+                control.recheck(&lease, &material),
+                Err(RegistrationFailure::LocalUnavailable)
+            );
+            assert!(!forwarding.fatal().is_tripped());
+            assert_eq!(relay.recipient_closes(account), 0);
+        }
         "success" | "dropped_registration" => {
             let (quota, mut control) = attached.actor_parts();
             quota.receiver_files(&lease).unwrap();
@@ -225,7 +260,10 @@ async fn registered_route_subprocess() {
         _ => panic!("unrecognized registered route test case"),
     }
 
-    if !matches!(case.as_str(), "success" | "dropped_registration") {
+    if !matches!(
+        case.as_str(),
+        "success" | "dropped_registration" | "revoked_live"
+    ) {
         assert!(!relay.authenticated(account));
         assert_eq!(relay.recipient_requests(account), 0);
     }
