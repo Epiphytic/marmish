@@ -1601,10 +1601,10 @@ async fn terminal_fatal_deactivation_cancels_before_second_poll() {
     use std::task::{Context, Poll};
 
     #[derive(Default)]
-    struct WakeCount(AtomicUsize);
-    impl ArcWake for WakeCount {
+    struct WakeFlag(AtomicBool);
+    impl ArcWake for WakeFlag {
         fn wake_by_ref(this: &Arc<Self>) {
-            this.0.fetch_add(1, Ordering::Relaxed);
+            this.0.store(true, Ordering::Relaxed);
         }
     }
 
@@ -1634,15 +1634,15 @@ async fn terminal_fatal_deactivation_cancels_before_second_poll() {
         })
         .await
     }));
-    let wakes = Arc::new(WakeCount::default());
+    let wakes = Arc::new(WakeFlag::default());
     let waker = waker(wakes.clone());
     let mut context = Context::from_waker(&waker);
     assert!(deactivation.as_mut().poll(&mut context).is_pending());
     assert_eq!(polls.get(), 1);
     assert!(!dropped.get());
-    assert_eq!(wakes.0.load(Ordering::Relaxed), 0);
+    assert!(!wakes.0.load(Ordering::Relaxed));
     trip.trip();
-    assert!(wakes.0.load(Ordering::Relaxed) > 0);
+    assert!(wakes.0.load(Ordering::Relaxed));
     assert!(matches!(
         deactivation.await,
         Err(Error::Transport("dispatcher_fatal"))
