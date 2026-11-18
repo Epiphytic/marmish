@@ -1595,6 +1595,14 @@ native open. Founder, receiver and legacy fixture registrations exclude each
 other in the same process. The qualification runs in isolated tests. Installed
 founder operation, recipient activation and heartbeats remain pending.
 
+The [recipient Consent publication proof](validation/peer-installed-consent-publication.md)
+sent the exact queued frame over private WSS on Linux AMD64. The library
+fixture committed acknowledgement only after the matching physical relay
+ACK and a fresh custody check. It also exercised stage replacement with
+zero relay writes, negative or lost ACK, a real same-byte retry and a
+failed settlement transaction. Installed Delivery admission and the
+production recipient daemon still require qualification.
+
 The [capped Welcome fixture](validation/peer-capped-welcome.md) uses the
 real native ingest and a metered cold readback on Linux AMD64. It
 exercises exact snapshot admission, cancellation and a refused rollback
