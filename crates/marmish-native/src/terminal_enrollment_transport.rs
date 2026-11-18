@@ -83,9 +83,8 @@ enum AuthoritySource {
 ))]
 async fn until_fatal<T>(
     fatal: &Fatal,
-    future: impl std::future::Future<Output = Result<T>>,
+    mut future: std::pin::Pin<&mut impl std::future::Future<Output = Result<T>>>,
 ) -> Result<T> {
-    let mut future = std::pin::pin!(future);
     tokio::select! {
         biased;
         _ = fatal.tripped() => Err(DISPATCHER_FATAL),
@@ -436,7 +435,7 @@ impl Authority {
             target_arch = "x86_64"
         ))]
         if let Some(fatal) = self.physical_stop.get() {
-            return until_fatal(fatal, future).await;
+            return until_fatal(fatal, std::pin::pin!(future)).await;
         }
         future.await
     }
