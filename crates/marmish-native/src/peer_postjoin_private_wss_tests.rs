@@ -4,7 +4,7 @@ use super::*;
 use crate::{
     mdk_adapter::{
         peer_staged_proof_tests::{peer_enrollment_founder_with_group, postjoin_session_config},
-        terminal_relay_fixture::{GroupFault, GroupFingerprint, GroupWrite},
+        terminal_relay_fixture::{GroupFault, GroupHistoryCut, GroupWrite},
     },
     peer_invitation::{postjoin_gate::Gate, socket::owner::GroupPage},
 };
@@ -165,7 +165,7 @@ fn native_history_expires_without_eose() {
 
 async fn history(case: History) {
     let group_route = random();
-    let round = Round::initialize_with_group(Some(group_route)).await;
+    let mut round = Round::initialize_with_group(Some(group_route)).await;
     let socket = round.socket();
     let daemon = round.start(Admission::Automatic, false).await;
     let started = Instant::now();
@@ -218,6 +218,7 @@ async fn history(case: History) {
         .tracked_outbound_welcome_ids()
         .unwrap()
         .contains(&welcome.id);
+    assert!(prior_welcome && tracked_after);
     assert_eq!(Some(next.epoch.0), initial.epoch.0.checked_add(1));
     assert_ne!(initial.identity, next.identity);
     let writes = round.relay.group_writes();
@@ -320,16 +321,8 @@ async fn history(case: History) {
             let page = page.expect("actual bounded history through EOSE");
             assert_eq!(page.request(), request);
             let mut recipient = recipient;
-            let observed = process_history(
-                &connection,
-                &page,
-                &mut recipient,
-                &group,
-                *record,
-                wall,
-                next,
-            )
-            .await;
+            let observed =
+                process_history(&connection, &page, &mut recipient, &group, &cut, wall, next).await;
             assert!(observed);
             match_stable_roster(&recipient, founder.runtime(), &group, &routing);
             let done = recipient
@@ -337,6 +330,14 @@ async fn history(case: History) {
                 .unwrap()
                 .unwrap();
             assert_eq!(done.outcome, PostJoinHistoryFetchOutcome::Fetched);
+            let stored = recipient.post_join_history_fetch(&group).unwrap().unwrap();
+            assert_eq!(stored.completion.as_ref(), Some(&done));
+            assert!(
+                recipient
+                    .finish_post_join_history_fetch(&group, &fetch)
+                    .unwrap()
+                    .is_none()
+            );
             recipient.mark_post_join_eose(&group).unwrap();
         }
         History::Omit => {
@@ -345,16 +346,8 @@ async fn history(case: History) {
             assert!(page.records().is_empty());
             let mut recipient = recipient;
             assert!(
-                !process_history(
-                    &connection,
-                    &page,
-                    &mut recipient,
-                    &group,
-                    *record,
-                    wall,
-                    next
-                )
-                .await
+                !process_history(&connection, &page, &mut recipient, &group, &cut, wall, next)
+                    .await
             );
             assert_eq!(stable_pin(&recipient, &group), initial);
             assert!(
@@ -376,12 +369,27 @@ async fn history(case: History) {
             );
             round
                 .wall
-                .fetch_add(EOSE_TIMEOUT.as_secs(), Ordering::Relaxed);
+                .fetch_add(EOSE_TIMEOUT.as_secs() - 1, Ordering::Relaxed);
+            assert!(
+                recipient
+                    .expire_post_join_history_fetch(&group, &fetch)
+                    .unwrap()
+                    .is_none()
+            );
+            round.wall.fetch_add(1, Ordering::Relaxed);
             let done = recipient
                 .expire_post_join_history_fetch(&group, &fetch)
                 .unwrap()
                 .unwrap();
             assert_eq!(done.outcome, PostJoinHistoryFetchOutcome::DeadlineExpired);
+            let stored = recipient.post_join_history_fetch(&group).unwrap().unwrap();
+            assert_eq!(stored.completion.as_ref(), Some(&done));
+            assert!(
+                recipient
+                    .finish_post_join_history_fetch(&group, &fetch)
+                    .unwrap()
+                    .is_none()
+            );
             assert_eq!(stable_pin(&recipient, &group), initial);
         }
     }
@@ -391,6 +399,9 @@ async fn history(case: History) {
     assert_eq!(round.relay.group_writes(), writes);
     assert_eq!(round.relay.peer_transcript().len(), 3);
     assert_eq!(round.ordinary.publication_attempts(7435), 0);
+    assert_eq!(round.ordinary.publication_attempts(445), 0);
+    round.relay.stop().await;
+    round.ordinary.stop().await;
     eprintln!(
         "peer_postjoin_history activation_ms={activation_ms} update_ms={update_ms} history_ms={} tracked_welcome_before={prior_welcome} tracked_welcome_after={tracked_after}",
         history_started.elapsed().as_millis(),
@@ -466,17 +477,23 @@ async fn process_history(
     page: &GroupPage,
     recipient: &mut Recipient,
     group: &GroupId,
-    expected: GroupFingerprint,
+    cut: &GroupHistoryCut,
     wall: u64,
     target: EpochPin,
 ) -> bool {
-    if !connection.accepts_group_page(page) {
+    if !connection.accepts_group_page(page)
+        || !page
+            .records()
+            .iter()
+            .map(|record| record.fingerprint())
+            .eq(cut.records.iter().copied())
+    {
         return false;
     }
     let [record] = page.records() else {
         return false;
     };
-    if record.fingerprint() != expected || !connection.accepts_group_record(record) {
+    if !connection.accepts_group_record(record) {
         return false;
     }
     let delivery = record.delivery(group, wall);
@@ -530,9 +547,10 @@ fn match_stable_roster(
     let recipient_id = recipient.self_id();
     let founder_id = founder.self_id();
     assert_ne!(recipient_id, founder_id);
-    assert_eq!(a.member == recipient_id, b.member == founder_id);
-    assert!(a.member == recipient_id || a.member == founder_id);
-    assert!(b.member == recipient_id || b.member == founder_id);
+    assert_eq!(a.member, founder_id);
+    assert_eq!(a.leaf_index, 0);
+    assert_eq!(b.member, recipient_id);
+    assert_eq!(b.leaf_index, 1);
     let recipient_route = recipient
         .app_component(group, NOSTR_ROUTING_COMPONENT_ID)
         .unwrap()
