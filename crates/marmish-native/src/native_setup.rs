@@ -536,9 +536,48 @@ mod tests {
         }
     }
     #[test]
+    fn ordinary_setup_preserves_peer_intent_and_rejects_direction_conflicts() {
+        let mut opt = options();
+        let (mut initial, _, _) = proposed(None, &opt).unwrap();
+        assert!(initial.get("peer").is_none());
+        let peer = json!({
+            "receive": {"mode": "manual"},
+            "originate": true,
+            "relay": "wss://peer.example/",
+            "relay_trust": format!("ca-sha256:{}", "ab".repeat(32)),
+        });
+        initial["peer"] = peer.clone();
+
+        let (noop, changed, role) = proposed(Some(initial.clone()), &opt).unwrap();
+        assert_eq!(noop, initial);
+        assert!(!changed);
+        assert_eq!(role, SetupRole::Both);
+
+        opt.update = true;
+        opt.relays = Some(vec!["wss://other.example/".into()]);
+        let (updated, changed, _) = proposed(Some(initial), &opt).unwrap();
+        assert!(changed);
+        assert_eq!(updated["relays"], json!(["wss://other.example/"]));
+        assert_eq!(updated["peer"], peer);
+
+        for role in [SetupRole::Client, SetupRole::Server] {
+            opt.role = Some(role);
+            assert!(matches!(
+                proposed(Some(updated.clone()), &opt),
+                Err(Error::Invalid("config_peer_directions"))
+            ));
+        }
+    }
+    #[test]
     fn terminal_grants_survive_setup_except_for_execution_revocation() {
-        let granted = nostr::key::Keys::generate().public_key().to_bech32().unwrap();
-        let second = nostr::key::Keys::generate().public_key().to_bech32().unwrap();
+        let granted = nostr::key::Keys::generate()
+            .public_key()
+            .to_bech32()
+            .unwrap();
+        let second = nostr::key::Keys::generate()
+            .public_key()
+            .to_bech32()
+            .unwrap();
         let mut opt = options();
         opt.no_grants = false;
         opt.grants = vec![granted.clone(), second.clone()];
