@@ -272,6 +272,7 @@ fn accepted_application(
             .target_last_attempt_at_ms(0)
             .is_none_or(|attempted| accepted.at_ms < attempted)
         || accepted.at_ms / 1_000 > wall
+        || accepted.at_ms / 1_000 >= publication.deadline()
     {
         return Err(Refusal::Binding);
     }
@@ -310,7 +311,9 @@ fn read_optional<'a>(
     publication: &'a Publication,
     wall: u64,
 ) -> Result<Option<(Evidence<'a>, OutboundFanout)>, Refusal> {
-    if wall >= publication.deadline() {
+    // A durable Published row carries no send authority. Its exact native
+    // completion may need local acknowledgement after the send window closes.
+    if wall >= publication.deadline() && !matches!(publication.step(), Step::Published { .. }) {
         return Err(Refusal::Expired);
     }
     if wall < publication.created_at()
