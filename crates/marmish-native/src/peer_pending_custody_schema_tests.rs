@@ -5,19 +5,19 @@ use super::super::super::super::super::{Auth, Metadata};
 use super::super::super::retirement::schema::inventory;
 use super::*;
 
-const URL: &str = "wss://custody-schema.example/";
+pub(super) const URL: &str = "wss://custody-schema.example/";
 const DB_KEY: [u8; 32] = [61; 32];
-const UID: u32 = 10_000;
-const WALL: u64 = 1_760_000_000;
+pub(super) const UID: u32 = 10_000;
+pub(super) const WALL: u64 = 1_760_000_000;
 
-struct Fixture {
+pub(super) struct Fixture {
     file: tempfile::NamedTempFile,
-    client: Keys,
+    pub(super) client: Keys,
     origin: Origin,
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             file: tempfile::NamedTempFile::new().unwrap(),
             client: Keys::generate(),
@@ -27,11 +27,11 @@ impl Fixture {
         }
     }
 
-    fn open(&self) -> HardenedPeerConnection {
+    pub(super) fn open(&self) -> HardenedPeerConnection {
         HardenedPeerConnection::open(self.file.path(), DB_KEY).unwrap()
     }
 
-    fn provisional(&self) {
+    pub(super) fn provisional(&self) {
         let cursor = CursorStore::attach(
             self.open(),
             self.client.public_key().to_bytes(),
@@ -48,7 +48,7 @@ impl Fixture {
         .unwrap();
     }
 
-    fn prepared(&self) -> Result<Checkpoint> {
+    pub(super) fn prepared(&self) -> Result<Checkpoint> {
         Checkpoint::attach_prepared_consent_fixture(
             self.open(),
             self.client.clone(),
@@ -58,7 +58,7 @@ impl Fixture {
         )
     }
 
-    fn custody(&self) -> Result<Checkpoint> {
+    pub(super) fn custody(&self) -> Result<Checkpoint> {
         Checkpoint::attach_pending_custody_fixture(
             self.open(),
             self.client.clone(),
@@ -640,7 +640,7 @@ fn daemon_due_tracks_the_pinned_founder_and_yields_to_backoff() {
     );
 }
 
-fn joined_pending(f: &Fixture, founder: &Keys) -> (Checkpoint, Source, Selector) {
+pub(super) fn joined_pending(f: &Fixture, founder: &Keys) -> (Checkpoint, Source, Selector) {
     f.provisional();
     drop(f.prepared().unwrap());
     let mut cp = f.custody().unwrap();

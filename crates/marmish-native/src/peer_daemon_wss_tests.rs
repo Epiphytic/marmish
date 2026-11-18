@@ -362,6 +362,16 @@ impl Round {
         enrollment: &mut FounderEnrollment,
         welcome: &[u8],
     ) -> Delivery {
+        self.finish_delivery_with_ttl(enrollment, welcome, 360)
+            .await
+    }
+
+    async fn finish_delivery_with_ttl(
+        &self,
+        enrollment: &mut FounderEnrollment,
+        welcome: &[u8],
+        ttl: u64,
+    ) -> Delivery {
         let wall = self.wall.load(Ordering::Relaxed);
         let codec = Codec::new(MAX_OUTER_BYTES).unwrap();
         let delivery = codec
@@ -370,7 +380,7 @@ impl Round {
                 &enrollment.consent,
                 welcome,
                 wall,
-                wall + 360,
+                wall + ttl,
             )
             .unwrap();
         assert!(

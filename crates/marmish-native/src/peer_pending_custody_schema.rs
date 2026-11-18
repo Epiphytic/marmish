@@ -183,21 +183,44 @@ fn install(conn: &Connection) -> std::result::Result<(), CursorError> {
     Ok(())
 }
 
-fn expected() -> std::result::Result<&'static [Entry], CursorError> {
+fn expected(kind: Kind) -> std::result::Result<&'static [Entry], CursorError> {
+    #[cfg(test)]
+    static PUBLICATION: OnceLock<Vec<Entry>> = OnceLock::new();
     static CUSTODY: OnceLock<Vec<Entry>> = OnceLock::new();
-    if let Some(entries) = CUSTODY.get() {
+    let expected = match kind {
+        Kind::Custody => &CUSTODY,
+        #[cfg(test)]
+        Kind::Publication => &PUBLICATION,
+    };
+    if let Some(entries) = expected.get() {
         return Ok(entries);
     }
     let template = super::schema::template()?;
     install(&template)?;
+    #[cfg(test)]
+    if matches!(kind, Kind::Publication) {
+        super::activation_schema::install(&template)?;
+    }
     let entries = inventory(&template).map_err(super::schema::cursor_error)?;
-    Ok(CUSTODY.get_or_init(|| entries))
+    Ok(expected.get_or_init(|| entries))
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct Epoch(());
+pub(crate) struct Epoch(Kind);
+
+#[derive(Clone, Copy)]
+enum Kind {
+    Custody,
+    #[cfg(test)]
+    Publication,
+}
 
 impl Epoch {
+    #[cfg(test)]
+    pub(super) fn is_publication(self) -> bool {
+        matches!(self.0, Kind::Publication)
+    }
+
     pub(crate) fn verify(
         self,
         tx: &Transaction<'_>,
@@ -205,7 +228,7 @@ impl Epoch {
         origins: &[Origin],
     ) -> std::result::Result<(), CursorError> {
         verify_hardening(tx)?;
-        if inventory(tx).map_err(super::schema::cursor_error)? != expected()? {
+        if inventory(tx).map_err(super::schema::cursor_error)? != expected(self.0)? {
             return Err(CursorError::Binding);
         }
         super::schema::verify_rows(tx, account, origins)?;
@@ -227,7 +250,13 @@ impl Epoch {
         if marker != 1 || broken {
             return Err(CursorError::Binding);
         }
-        super::terminal_schema::verify_rows(tx, account).map_err(super::schema::cursor_error)
+        super::terminal_schema::verify_rows(tx, account).map_err(super::schema::cursor_error)?;
+        #[cfg(test)]
+        if self.is_publication() {
+            super::activation_schema::verify_rows(tx, account)
+                .map_err(super::schema::cursor_error)?;
+        }
+        Ok(())
     }
 }
 
@@ -251,11 +280,33 @@ pub(super) fn open(
     origins.sort_unstable();
     verify_hardening(&conn)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    if inventory(&tx).map_err(super::schema::cursor_error)? != expected()? {
+    if inventory(&tx).map_err(super::schema::cursor_error)? != expected(Kind::Custody)? {
         super::schema::verify(&tx, account, &origins)?;
         install(&tx)?;
     }
-    let epoch = Epoch(());
+    let epoch = Epoch(Kind::Custody);
+    epoch.verify(&tx, account, &origins)?;
+    tx.commit()?;
+    Ok((CursorStore { conn, origins }, epoch))
+}
+
+#[cfg(test)]
+pub(super) fn open_publication(
+    HardenedPeerConnection(mut conn): HardenedPeerConnection,
+    account: [u8; 32],
+    mut origins: Vec<Origin>,
+) -> std::result::Result<(CursorStore, Epoch), CursorError> {
+    if !(1..=MAX_ORIGINS).contains(&origins.len()) {
+        return Err(CursorError::Binding);
+    }
+    origins.sort_unstable();
+    verify_hardening(&conn)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let epoch = Epoch(Kind::Publication);
+    if inventory(&tx).map_err(super::schema::cursor_error)? != expected(Kind::Publication)? {
+        Epoch(Kind::Custody).verify(&tx, account, &origins)?;
+        super::activation_schema::install(&tx)?;
+    }
     epoch.verify(&tx, account, &origins)?;
     tx.commit()?;
     Ok((CursorStore { conn, origins }, epoch))

@@ -1,6 +1,13 @@
 //! Client receipt and publication on a qualified private Peer origin.
 
 #[cfg(test)]
+#[path = "peer_accept_receipt_verify.rs"]
+mod accept_receipt_verify;
+#[cfg(test)]
+#[path = "peer_accept_receipt_wire.rs"]
+mod accept_receipt_wire;
+
+#[cfg(test)]
 #[path = "peer_daemon_worker.rs"]
 pub(crate) mod daemon_peer;
 #[cfg(test)]
@@ -23,6 +30,9 @@ mod private_wss_tests;
 #[cfg(test)]
 #[path = "peer_stage_binding.rs"]
 mod provisional;
+#[cfg(test)]
+#[path = "peer_private_activation_publication.rs"]
+mod publication_socket;
 #[cfg(test)]
 #[path = "peer_stage_retirement.rs"]
 mod retirement;
