@@ -191,6 +191,7 @@ impl RecoveredOwner<'_> {
         result?;
         let digest = PackageDirectory::open(&self.paths, files.files())?
             .original_digest(extent, &fence())?;
+        drop(files);
         schema.require_offer_limit(stage.offer_expires())?;
         let window = schema.into_issue()?;
         Ok(PrestagedPackage {
