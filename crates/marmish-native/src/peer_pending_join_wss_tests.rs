@@ -294,10 +294,10 @@ impl Round<'_> {
             ),
             Err(Error::Checkpoint(consent_checkpoint::Error::Policy))
         );
-        self.assert_state(&mut blocked, CustodyState::Pending);
         drop(blocked);
 
         let mut local = self.open_as(Mode::Automatic);
+        self.assert_state(&mut local, CustodyState::Pending);
         assert_eq!(
             local
                 .advance_custody(self.selector, self.generation, |cut| {
