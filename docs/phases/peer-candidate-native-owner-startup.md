@@ -34,22 +34,49 @@ custody-failure edge and park the root using the same rule. Its internal
 checkpoint and possible cleanup retry belong to the one admitted close
 body. Treat the release marker as observation only.
 
-Retain custody across failure and panic before the normal `MdkOwner` can
-be returned. The candidate constructor closes the smoke account
-explicitly, reopens it independently, acquires the guarded Journal,
-closes and reopens it with separate checks, then initializes the
-account-device runtime from `SessionConfig::with_storage`. The runtime
-and pre-existing MdkOwner storage field receive only clones of the
-custodied connection. Confirm the guard survives any fallible operation
-between the first account clone and the final owning value. Keep field
-ownership compatible with the later physical stop design. Binding
-checks, imported group retirement, recovery, reconciliation and native
-inventory are separate synchronous startup effects. Admit each before
-calling it and suppress a successful returned owner if the final
-admission fails. The initially constructed connector is still inert,
-and construction must not start a relay socket, producer, or child
-runner. Preserve original errors when admission remains healthy. An
-observed fatal wins over errors from a preceding admitted body.
+Keep the custody token as the last field of a candidate `MdkOwner`.
+Use a startup state that owns the account as soon as it is returned and
+owns the Journal as soon as it is returned. On panic or abandonment its
+drop path seals and parks a live account before dropping the Journal.
+On a healthy error, close any acquired Journal first and any acquired
+account second, with separate fresh admissions. Preserve the original
+error if cleanup passes. An observed fatal or failed admitted close
+takes precedence and the account is parked. An opener error before
+returning any root leaves no Marmish-owned account to park.
+
+For ordinary close consume the inactive owner. After retiring its local
+authority and checking that no runner or relay task was started, close
+its Journal first and its account second. Reuse the mutable close
+operation of the guarded connection via a narrowly scoped in-place
+Journal close. The owner is consumed so no code reads the empty
+connection slot. Clear account custody only on successful upstream
+close. On an unexpected drop, `MdkOwner::drop` seals the live token
+before normal fields drop, including the Journal. It reports custody
+failure through its original Admission and parks the upstream root and
+its exact lease. Setting the upstream inert close flag keeps surviving
+clones from taking a new ordinary storage guard. The last-field token
+is also a fallback for partial construction. Neither generic Drop path
+is a physical stop for an active owner. The unmounted constructor
+cannot start a socket, producer or command runner. Later mounting has
+to order physical abort and reap before the explicit custody decision.
+
+Admission is checked immediately before and after each independent
+synchronous effect. This includes SQLCipher initialization, account
+smoke open via `open_encrypted_observed`, explicit smoke close,
+independent account reopen, guarded Journal open/close/reopen,
+`key_package_lifecycle` read, and conditional
+`put_key_package_lifecycle` write. The upstream observed-open callback
+is a no-op in production. `AccountDeviceRuntime::open` receives
+`SessionConfig::with_storage` and clones of the custodied root. Its
+engine construction, imported legacy retirement, and hydration are
+inside that admitted call. The existing inert transport factory is the
+test seam after the session opens and before the post-call check.
+Admit the binding check, revoked Journal conversations read,
+each group retirement, orphan reconciliation, maintenance, route
+rebuild and invalidation reconciliation separately. Each admitted
+body can complete its synchronous nested effects. After a fatal
+return, suppress its result and refuse the next independent effect.
+Only transfer custody to the returned owner after the final check.
 
 The ready profile's manifest remains read-only in this slice. Normal
 setup, `daemon::open`, doctor and all unregistered storage behavior
@@ -75,8 +102,10 @@ an active MdkOwner safe to drop while physical tasks are live.
   that no caller receives a partially authorized owner. Use fresh
   subprocesses, fixed diagnostic categories and disposable identities.
 - Test early failure with a healthy default, the admitted close with an
-  anonymous clone, and registered fatal or custody failure during the
-  last release. Assert the exact original lease stays held until process
+  anonymous clone, plain abandoned owner drop, and registered fatal or custody failure
+  during the last release. Inject a close error at the disposition
+  boundary to qualify parking. This injection does not require a
+  reproducible upstream busy-close error. Assert the exact original lease stays held until process
   exit on the parked branch. No clock measurement of an already admitted
   upstream call is used as a cancellation guarantee.
 - Strict Linux AMD64 stock and candidate builds and focused tests pass.
