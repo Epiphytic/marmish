@@ -12,7 +12,11 @@ impl PreparedConsentOwner<'_> {
     ) -> Result<Disposition> {
         let sample = self.available_sample()?;
         let wall = sample.as_secs();
-        let codec = Codec::new(MAX_OUTER_BYTES).map_err(|_| Error::Binding)?;
+        // The fixture's native package attestation is not quota scoped.
+        if self.state.checkpoint.is_installed_custody() {
+            return Err(Error::Binding);
+        }
+        let codec = self.state.checkpoint.custody_codec();
         let Ok(outer) = codec.verify_client_outer(raw.bytes) else {
             return self.commit_invalid_custody(raw, wall);
         };
@@ -55,9 +59,9 @@ impl PreparedConsentOwner<'_> {
         if let Some(saved) = recovered.evidence() {
             // Both a stable mismatch and a second authentic carrier are invalid.
             // Corruption of the saved local authority stops cursor progress.
-            let _authenticated_conflict =
-                Codec::verify_custody_conflict(&self.state.signer, saved, *incoming, wall)
-                    .map_err(|_| consent_checkpoint::Error::Package)?;
+            let _authenticated_conflict = codec
+                .verify_custody_conflict(&self.state.signer, saved, *incoming, wall)
+                .map_err(|_| consent_checkpoint::Error::Package)?;
             return self.commit_invalid_custody(raw, wall);
         }
 

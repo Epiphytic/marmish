@@ -144,8 +144,7 @@ impl Checkpoint {
         let epoch = self.export_epoch.ok_or(CursorError::Binding)?;
         let account = self.signer.public_key().to_bytes();
         let signer = self.signer.clone();
-        let codec = super::super::Codec::new(super::super::MAX_OUTER_BYTES)
-            .map_err(|_| CursorError::Binding)?;
+        let codec = self.codec;
         let route = self.route(binding.origin)?;
         let signed_route = super::super::Route::configured(&route.urls[0])?;
         let origins = self.cursor.origins.clone();

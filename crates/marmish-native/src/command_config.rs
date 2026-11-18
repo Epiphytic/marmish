@@ -127,6 +127,23 @@ impl CommandConfig {
         Some(&self._peer.receive)
     }
 
+    #[cfg(test)]
+    pub(crate) fn bound_peer_receive(
+        &self,
+        loaded: &Self,
+    ) -> Result<crate::peer_invitation::ReceivePolicy> {
+        use crate::peer_invitation::ReceivePolicy;
+        use peer_intent::Receive;
+
+        self.bound_peer_relay(loaded)?;
+        Ok(match &self._peer.receive {
+            Receive::Off => ReceivePolicy::Off,
+            Receive::Manual => ReceivePolicy::Manual,
+            Receive::AutoAny => ReceivePolicy::AutoAny,
+            Receive::AutoFounders(founders) => ReceivePolicy::AutoFounders(founders.clone()),
+        })
+    }
+
     pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() as u64 > MAX_CONFIG {
             return Err(Error::Invalid("config_size"));
@@ -859,6 +876,28 @@ mod tests {
 
     fn assert_config_error(result: Result<CommandConfig>, reason: &'static str) {
         assert!(matches!(result, Err(Error::Invalid(found)) if found == reason));
+    }
+
+    #[test]
+    fn peer_installed_custody_receives_only_from_bound_configuration() {
+        use crate::peer_invitation::ReceivePolicy;
+        let founder = nostr::key::Keys::generate().public_key();
+        let mut value = document();
+        value["peer"] = peer_relay_fields();
+        value["peer"]["receive"] =
+            json!({"mode":"auto_founders","founders":[founder.to_bech32().unwrap()]});
+        let accepted = parse_document(&value).unwrap();
+        let unchanged = parse_document(&value).unwrap();
+        assert!(matches!(
+            accepted.bound_peer_receive(&unchanged).unwrap(),
+            ReceivePolicy::AutoFounders(founders) if founders == BTreeSet::from([founder])
+        ));
+        value["peer"]["receive"] = json!({"mode":"manual"});
+        let changed = parse_document(&value).unwrap();
+        assert!(matches!(
+            accepted.bound_peer_receive(&changed),
+            Err(Error::Invalid("peer_profile_changed"))
+        ));
     }
 
     #[test]

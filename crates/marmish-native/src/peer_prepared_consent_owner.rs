@@ -427,6 +427,9 @@ impl PreparedConsentOwner<'_> {
         (binding, witness): (Binding, FileWitness),
         sample: Duration,
     ) -> Result<NativeAttestation> {
+        if self.state.checkpoint.is_installed_custody() {
+            return Err(Error::Binding);
+        }
         let (package, image) = self
             .snapshot
             .read(&self.state, binding, witness, sample, |_| Ok(()))?;

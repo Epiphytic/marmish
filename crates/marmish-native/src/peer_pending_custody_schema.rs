@@ -4,8 +4,27 @@ use rusqlite::{Connection, Transaction, TransactionBehavior};
 use std::sync::OnceLock;
 
 use super::super::super::super::super::{HardenedPeerConnection, MAX_ORIGINS, check_hardening};
+use super::super::super::super::installed;
 use super::super::super::retirement::schema::{Entry, inventory};
+use super::super::super::stage_schema;
 use super::*;
+use nostr::key::{Keys, PublicKey};
+
+const INSTALLED_LAYOUT: &str = "
+CREATE TABLE peer_installed_custody_v2 (
+    version INTEGER PRIMARY KEY CHECK (version=2)
+) STRICT;
+INSERT INTO peer_installed_custody_v2 VALUES (2);
+CREATE TRIGGER peer_installed_custody_insert BEFORE INSERT ON peer_installed_custody_v2
+BEGIN SELECT RAISE(ABORT,'immutable installed custody version'); END;
+CREATE TRIGGER peer_installed_custody_update BEFORE UPDATE ON peer_installed_custody_v2
+BEGIN SELECT RAISE(ABORT,'immutable installed custody version'); END;
+CREATE TRIGGER peer_installed_custody_delete BEFORE DELETE ON peer_installed_custody_v2
+BEGIN SELECT RAISE(ABORT,'immutable installed custody version'); END;
+CREATE TRIGGER peer_installed_custody_pending_only BEFORE UPDATE ON peer_pending_custody
+WHEN NEW.state>2
+BEGIN SELECT RAISE(ABORT,'installed custody ends at Pending'); END;
+";
 
 const DDL: &str = "
 CREATE TABLE peer_pending_custody_epoch (
@@ -190,9 +209,11 @@ fn expected(kind: Kind) -> std::result::Result<&'static [Entry], CursorError> {
     static TERMINAL_LEAVE: OnceLock<Vec<Entry>> = OnceLock::new();
     #[cfg(test)]
     static LEAVE_EFFECT: OnceLock<Vec<Entry>> = OnceLock::new();
+    static INSTALLED_V2: OnceLock<Vec<Entry>> = OnceLock::new();
     static CUSTODY: OnceLock<Vec<Entry>> = OnceLock::new();
     let expected = match kind {
         Kind::Custody => &CUSTODY,
+        Kind::InstalledV2 => &INSTALLED_V2,
         #[cfg(test)]
         Kind::Publication => &PUBLICATION,
         #[cfg(test)]
@@ -205,6 +226,10 @@ fn expected(kind: Kind) -> std::result::Result<&'static [Entry], CursorError> {
     }
     let template = super::schema::template()?;
     install(&template)?;
+    if Epoch(kind).is_installed_v2() {
+        installed::install(&template)?;
+        template.execute_batch(INSTALLED_LAYOUT)?;
+    }
     #[cfg(test)]
     if Epoch(kind).has_publication_inventory() {
         super::activation_schema::install(&template)?;
@@ -227,6 +252,7 @@ pub(crate) struct Epoch(Kind);
 #[derive(Clone, Copy)]
 enum Kind {
     Custody,
+    InstalledV2,
     #[cfg(test)]
     Publication,
     #[cfg(test)]
@@ -236,6 +262,10 @@ enum Kind {
 }
 
 impl Epoch {
+    pub(crate) fn is_installed_v2(self) -> bool {
+        matches!(self.0, Kind::InstalledV2)
+    }
+
     #[cfg(test)]
     pub(super) fn is_publication(self) -> bool {
         matches!(self.0, Kind::Publication | Kind::TerminalLeave)
@@ -286,6 +316,23 @@ impl Epoch {
             return Err(CursorError::Binding);
         }
         super::terminal_schema::verify_rows(tx, account).map_err(super::schema::cursor_error)?;
+        if self.is_installed_v2() {
+            let [origin] = origins else {
+                return Err(CursorError::Binding);
+            };
+            let signer = PublicKey::from_slice(&account).map_err(|_| CursorError::Binding)?;
+            installed::verify_rows(tx, signer, *origin)?;
+            let closed: bool = tx.query_row(
+                "SELECT (SELECT count(*) FROM peer_installed_custody_v2 WHERE version=2)=1
+                    AND NOT EXISTS (SELECT 1 FROM peer_pending_custody WHERE state>2)
+                    AND NOT EXISTS (SELECT 1 FROM peer_pending_terminal)",
+                [],
+                |row| row.get(0),
+            )?;
+            if !closed {
+                return Err(CursorError::Binding);
+            }
+        }
         #[cfg(test)]
         if self.has_publication_inventory() {
             super::activation_schema::verify_rows(tx, account)
@@ -329,6 +376,41 @@ pub(super) fn open(
     }
     let epoch = Epoch(Kind::Custody);
     epoch.verify(&tx, account, &origins)?;
+    tx.commit()?;
+    Ok((CursorStore { conn, origins }, epoch))
+}
+
+pub(super) fn open_installed(
+    HardenedPeerConnection(mut conn): HardenedPeerConnection,
+    signer: &Keys,
+    route: &super::super::super::super::Route,
+    codec: &wire::Codec,
+) -> std::result::Result<(CursorStore, Epoch), CursorError> {
+    let account = signer.public_key();
+    let origins = vec![route.id];
+    verify_hardening(&conn)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let epoch = Epoch(Kind::InstalledV2);
+    if inventory(&tx).map_err(super::schema::cursor_error)? != expected(epoch.0)? {
+        installed::verify(&tx, account, route.id)?;
+        installed::verify_recovered_parents(&tx, codec, signer, route)?;
+        let used: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM peer_provisioning_slot
+                WHERE generation!=0 OR next_start_at!=0 OR server IS NOT NULL
+                   OR offer_id IS NOT NULL OR revision IS NOT NULL OR origin IS NOT NULL)",
+            [],
+            |row| row.get(0),
+        )?;
+        if used {
+            return Err(CursorError::Binding);
+        }
+        stage_schema::attach(&tx, true)?;
+        super::schema::install(&tx)?;
+        install(&tx)?;
+        tx.execute_batch(INSTALLED_LAYOUT)?;
+    }
+    epoch.verify(&tx, account.to_bytes(), &origins)?;
+    installed::verify_recovered_parents(&tx, codec, signer, route)?;
     tx.commit()?;
     Ok((CursorStore { conn, origins }, epoch))
 }

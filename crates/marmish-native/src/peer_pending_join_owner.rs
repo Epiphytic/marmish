@@ -46,8 +46,10 @@ impl PreparedConsentOwner<'_> {
         {
             return Err(consent_checkpoint::Error::Expired.into());
         }
-        let delivery = Codec::new(MAX_OUTER_BYTES)
-            .map_err(|_| Error::Binding)?
+        let delivery = self
+            .state
+            .checkpoint
+            .custody_codec()
             .reopen_custodied_delivery(&self.state.signer, &held, wall)
             .map_err(|_| consent_checkpoint::Error::Package)?;
         Ok(Some((held, delivery)))
@@ -59,6 +61,10 @@ impl PreparedConsentOwner<'_> {
         generation: u64,
         mut cut: impl FnMut(JoinCut) -> Result<()>,
     ) -> Result<CustodyProgress> {
+        // Installed v2 cannot use this fixture's uncapped native actor.
+        if self.state.checkpoint.is_installed_custody() {
+            return Err(Error::Binding);
+        }
         let Some((held, delivery)) = self.current_custody(selector, generation)? else {
             return Ok(CustodyProgress::Missing);
         };

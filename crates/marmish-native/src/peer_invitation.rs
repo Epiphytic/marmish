@@ -42,7 +42,9 @@ mod receipt_publication_verify;
 #[path = "peer_stage_retirement.rs"]
 mod retirement;
 #[cfg(test)]
-pub(crate) use store::consent_checkpoint::provisioning::prepared_consent::custody::HeldEvidence;
+pub(crate) use store::consent_checkpoint::provisioning::prepared_consent::custody::{
+    HeldEvidence, ReceivePolicy,
+};
 #[path = "peer_raw_socket.rs"]
 mod socket;
 #[path = "peer_cursor_store.rs"]

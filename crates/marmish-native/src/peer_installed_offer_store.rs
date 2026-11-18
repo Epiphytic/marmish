@@ -40,7 +40,7 @@ pub(super) fn present(conn: &Connection) -> DbResult<bool> {
     )?)
 }
 
-fn install(conn: &Connection) -> DbResult<()> {
+pub(super) fn install(conn: &Connection) -> DbResult<()> {
     for sql in [TABLE, DENY_INSERT, DENY_UPDATE, DENY_DELETE] {
         conn.execute_batch(sql)?;
     }
@@ -132,6 +132,10 @@ pub(super) fn verify(conn: &Connection, account: PublicKey, origin: Origin) -> D
     if ignore_checks || inventory(conn)? != expected(true)? {
         return Err(CursorError::Binding);
     }
+    verify_rows(conn, account, origin)
+}
+
+pub(super) fn verify_rows(conn: &Connection, account: PublicKey, origin: Origin) -> DbResult<()> {
     let broken: bool = conn.query_row(
         "SELECT (SELECT count(*) FROM peer_consent_version WHERE version=2 AND account=?1)!=1
              OR (SELECT count(*) FROM peer_cursor_version WHERE version=1 AND account=?1)!=1
@@ -202,7 +206,7 @@ pub(super) fn check_parent(
     Ok(())
 }
 
-fn verify_recovered_parents(
+pub(super) fn verify_recovered_parents(
     tx: &Transaction<'_>,
     codec: &Codec,
     signer: &Keys,

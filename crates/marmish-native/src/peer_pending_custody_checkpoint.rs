@@ -1,17 +1,22 @@
 //! Durable single-carrier ownership in the existing SQLCipher checkpoint.
 
+use nostr::key::PublicKey;
 use rusqlite::{OptionalExtension, Transaction, params};
 use sha2::{Digest as _, Sha256};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use zeroize::Zeroizing;
 
+use crate::peer_control_version::ControlVersion;
 use crate::peer_invitation::prepared_consent::{JoinedReadback, NativeAttestation};
 
 use super::super::super::super::read_seconds;
 use super::super::super::wire::{
     ClientCarrier, Delivery, IncomingDelivery, PackageBinding, VerifiedDeliveryPackage,
 };
-use super::super::super::{Disposition, Local, Mode, Policy, RawRecord, Status, TrustedOutcome};
+use super::super::super::{
+    Disposition, Layout, Local, Mode, Policy, RawRecord, Status, TrustedOutcome,
+};
 use super::*;
 
 #[path = "peer_pending_custody_schema.rs"]
@@ -53,6 +58,14 @@ pub(crate) mod daemon;
 #[cfg(test)]
 #[path = "peer_pending_custody_schema_tests.rs"]
 mod tests;
+
+// Installed policy is resolved for a single founder at the owner turn.
+pub(crate) enum ReceivePolicy {
+    Off,
+    Manual,
+    AutoAny,
+    AutoFounders(BTreeSet<PublicKey>),
+}
 
 const MARGIN: u64 = 300;
 const PENDING_WINDOW_SECONDS: u64 = 86_400;
@@ -336,6 +349,7 @@ struct Context {
     origin: Origin,
     route: super::super::super::Route,
     signer: Keys,
+    codec: wire::Codec,
     owner: Arc<()>,
 }
 
@@ -368,9 +382,8 @@ impl Context {
         // This is historical verification of the original Offer, never an
         // extension of Offer eligibility or a use of its expiry as M2's clock.
         let signed_wall = invite.expires.checked_sub(1).ok_or(CursorError::Range)?;
-        let codec = wire::Codec::new(wire::MAX_OUTER_BYTES).map_err(|_| CursorError::Binding)?;
         let offer = Checkpoint::check_signed_offer(
-            &codec,
+            &self.codec,
             &self.signer,
             &self.route,
             &invite,
@@ -432,6 +445,27 @@ fn terminalized(tx: &Transaction<'_>, selector: Selector, origin: Origin) -> Res
 }
 
 impl Checkpoint {
+    pub(crate) fn attach_installed_custody(
+        conn: HardenedPeerConnection,
+        signer: Keys,
+        uid: u32,
+        url: &str,
+        policy: Policy,
+        receive: ReceivePolicy,
+    ) -> Result<Self> {
+        let route = super::super::super::Route::configured(url)?;
+        let codec = wire::Codec::for_version(wire::MAX_OUTER_BYTES, ControlVersion::V2)
+            .map_err(|_| CursorError::Range)?;
+        let (cursor, epoch) = custody_schema::open_installed(conn, &signer, &route, &codec)?;
+        let mut checkpoint = Self::attach_with(cursor, signer, uid, &[url], policy, |_, _| Ok(()))?;
+        checkpoint.codec = codec;
+        checkpoint.layout = Layout::InstalledCustodyV2;
+        checkpoint.installed_receive = Some(receive);
+        checkpoint.provisional_schema = true;
+        checkpoint.export_epoch = Some(super::Epoch::Custody(epoch));
+        Ok(checkpoint)
+    }
+
     pub(crate) fn attach_pending_custody_fixture(
         conn: HardenedPeerConnection,
         signer: Keys,
@@ -450,6 +484,36 @@ impl Checkpoint {
         Ok(checkpoint)
     }
 
+    pub(crate) fn is_installed_custody(&self) -> bool {
+        self.layout == Layout::InstalledCustodyV2
+    }
+
+    pub(crate) fn custody_codec(&self) -> wire::Codec {
+        self.codec
+    }
+
+    pub(in super::super::super) fn custody_mode(&self, founder: PublicKey) -> Result<Mode> {
+        let Some(receive) = &self.installed_receive else {
+            return self
+                .policy
+                .permits(founder)
+                .then_some(self.policy.mode)
+                .ok_or(Error::Policy);
+        };
+        if founder == self.signer.public_key() || self.policy.blocked.contains(&founder) {
+            return Err(Error::Policy);
+        }
+        match receive {
+            ReceivePolicy::Off => Err(Error::Policy),
+            ReceivePolicy::Manual => Ok(Mode::Manual),
+            ReceivePolicy::AutoAny => Ok(Mode::Automatic),
+            ReceivePolicy::AutoFounders(founders) if founders.contains(&founder) => {
+                Ok(Mode::Automatic)
+            }
+            ReceivePolicy::AutoFounders(_) => Ok(Mode::Manual),
+        }
+    }
+
     fn custody_context(&self, source: &Source) -> Result<Context> {
         let Some(super::Epoch::Custody(epoch)) = self.export_epoch else {
             return Err(CursorError::Binding.into());
@@ -463,6 +527,7 @@ impl Checkpoint {
             origin,
             route,
             signer: self.signer.clone(),
+            codec: self.codec,
             owner: self.owner.clone(),
         })
     }
@@ -490,11 +555,9 @@ impl Checkpoint {
         wall: u64,
     ) -> Result<Option<CustodyConsent>> {
         let cx = self.custody_context(source)?;
+        self.custody_mode(selector.server)?;
         let tx = self.cursor.with_wall(cx.origin, wall)?;
         cx.verify(&tx, wall)?;
-        if !self.policy.permits(selector.server) {
-            return Err(Error::Policy);
-        }
         if terminalized(&tx, selector, cx.origin)? {
             return Err(Error::Custodied);
         }
@@ -630,14 +693,10 @@ impl Checkpoint {
             .checked_sub(MARGIN)
             .filter(|&value| value > wall)
             .ok_or(Error::Expired)?;
-        if !self.policy.permits(key.server) {
-            return Err(Error::Policy);
-        }
-        let mode = self.policy.mode;
-        let codec = wire::Codec::new(wire::MAX_OUTER_BYTES).map_err(|_| CursorError::Binding)?;
+        let mode = self.custody_mode(key.server)?;
         let frame_digest: [u8; 32] = Sha256::digest(raw.bytes).into();
         if package.frame_digest() != frame_digest
-            || !matches!(codec.classify_client(&cx.signer, raw.bytes),
+            || !matches!(cx.codec.classify_client(&cx.signer, raw.bytes),
                 Ok(ClientCarrier::Delivery(incoming)) if incoming.matches_index(raw.id, raw.stamp))
         {
             return Err(Error::Index);
@@ -684,11 +743,9 @@ impl Checkpoint {
         wall: u64,
     ) -> Result<Option<HeldEvidence>> {
         let cx = self.custody_context(source)?;
+        self.custody_mode(selector.server)?;
         let tx = self.cursor.with_wall(cx.origin, wall)?;
         cx.verify(&tx, wall)?;
-        if !self.policy.permits(selector.server) {
-            return Err(Error::Policy);
-        }
         if terminalized(&tx, selector, cx.origin)? {
             return Ok(None);
         }
@@ -707,6 +764,9 @@ impl Checkpoint {
         prior: &HeldEvidence,
         wall: u64,
     ) -> Result<JoinStarted> {
+        if self.is_installed_custody() {
+            return Err(Error::Layout);
+        }
         self.transition_custody(source, prior, wall, Change::Start)?;
         Ok(JoinStarted {
             owner: self.owner.clone(),
@@ -722,6 +782,9 @@ impl Checkpoint {
         proof: &JoinedReadback,
         wall: u64,
     ) -> Result<()> {
+        if self.is_installed_custody() {
+            return Err(Error::Layout);
+        }
         self.transition_custody(source, prior, wall, Change::Qualify(proof))
     }
 
@@ -733,6 +796,9 @@ impl Checkpoint {
         approval: Approval<'_>,
         wall: u64,
     ) -> Result<()> {
+        if self.layout == Layout::InstalledCustodyV2 {
+            return Err(Error::Layout);
+        }
         let automatic = match approval {
             Approval::Manual(local) => {
                 self.check_local(local)?;
@@ -757,9 +823,7 @@ impl Checkpoint {
         if prior.stage.0.origin != cx.origin {
             return Err(Error::Source);
         }
-        if !self.policy.permits(selector.server) {
-            return Err(Error::Policy);
-        }
+        self.custody_mode(selector.server)?;
         let tx = self.cursor.with_wall(cx.origin, wall)?;
         cx.verify(&tx, wall)?;
         if terminalized(&tx, selector, cx.origin)? {

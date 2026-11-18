@@ -328,6 +328,9 @@ impl Checkpoint {
         wall: u64,
     ) -> Result<(Transaction<'_>, Origin, u64)> {
         let origin = self.origin(source)?;
+        #[cfg(test)]
+        self.custody_mode(key.server)?;
+        #[cfg(not(test))]
         if !self.policy.permits(key.server) {
             return Err(Error::Policy);
         }
@@ -380,6 +383,10 @@ impl Checkpoint {
         local: &Local,
         key: Selector,
     ) -> Result<RetirementTarget> {
+        #[cfg(test)]
+        if self.is_installed_custody() {
+            return Err(Error::Layout);
+        }
         self.check_local(local)?;
         let origin = rows::stored_origin(&self.cursor.conn, key)?;
         let generation = generation(&self.cursor.conn, key, origin)?.ok_or(Error::Missing)?;
@@ -399,6 +406,10 @@ impl Checkpoint {
         target: RetirementTarget,
         wall: u64,
     ) -> Result<()> {
+        #[cfg(test)]
+        if self.is_installed_custody() {
+            return Err(Error::Layout);
+        }
         self.check_local(local)?;
         if !Arc::ptr_eq(&self.owner, &target.owner) {
             return Err(Error::LocalOwner);

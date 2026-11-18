@@ -311,7 +311,7 @@ impl Codec {
         if !incoming.matches_index(evidence.delivery_carrier(), evidence.outer_stamp()) {
             return Err(Error::Binding);
         }
-        let authority = Self::saved_authority(signer, evidence, wall)?;
+        let authority = self.saved_authority(signer, evidence, wall)?;
         let delivery = incoming.verify_with(authority, wall)?;
         let flight = delivery.flight();
         if wall >= evidence.held_deadline()
@@ -327,6 +327,7 @@ impl Codec {
     }
 
     pub(crate) fn verify_custody_conflict(
+        &self,
         signer: &Keys,
         evidence: &HeldEvidence,
         incoming: IncomingDelivery,
@@ -334,16 +335,20 @@ impl Codec {
     ) -> Result<bool> {
         // Expiry does not erase the original Consent's authenticated coordinates.
         // Verify the incoming carrier at the actual current wall.
-        let authority = Self::saved_authority(signer, evidence, evidence.held_at())?;
+        let authority = self.saved_authority(signer, evidence, evidence.held_at())?;
         Ok(incoming.verify_with(authority, wall).is_ok())
     }
 
     fn saved_authority<'a>(
+        &self,
         signer: &Keys,
         evidence: &'a HeldEvidence,
         wall: u64,
     ) -> Result<DeliveryAuthority<'a>> {
         let offer = evidence.offer();
+        if offer.version() != self.version {
+            return Err(Error::Binding);
+        }
         let transcript = evidence.transcript();
         transcript.check_signed_consent(signer, offer, evidence.signed_consent(), wall)?;
         let package = evidence.package();

@@ -113,7 +113,7 @@ impl Writer {
     }
 }
 
-fn install(conn: &Connection) -> std::result::Result<(), CursorError> {
+pub(super) fn install(conn: &Connection) -> std::result::Result<(), CursorError> {
     conn.execute_batch("DROP TRIGGER peer_provisioning_reject_claim")?;
     conn.execute_batch(&STAGE_CLAIM_TRIGGER.replace(
         "provisional stage v1",

@@ -1,5 +1,6 @@
 use cgka_traits::app_components::NostrRoutingV1;
 
+use super::super::provisioning::prepared_consent::custody::ReceivePolicy;
 use super::*;
 use wire::Transcript;
 
@@ -411,4 +412,221 @@ fn peer_installed_offer_signed_parent_corruption_refuses_lookup_and_replay() {
         open(&f, &f.client, A, Policy::default()).err(),
         Some(Error::Cursor(CursorError::Binding))
     );
+}
+
+fn open_custody(
+    f: &Fixture,
+    signer: &Keys,
+    url: &str,
+    policy: Policy,
+    receive: ReceivePolicy,
+) -> Result<Checkpoint> {
+    let conn = HardenedPeerConnection::open(f.file.path(), DB_KEY)?;
+    Checkpoint::attach_installed_custody(conn, signer.clone(), UID, url, policy, receive)
+}
+
+fn cursor_progress(cp: &Checkpoint, source: &Source) -> (i64, i64, i64) {
+    cp.cursor
+        .conn
+        .query_row(
+            "SELECT wall, revision, retry_revision FROM peer_cursor_origin WHERE origin=?1",
+            [source.origin],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap()
+}
+
+#[test]
+fn peer_installed_custody_preserves_exact_offer_ancestry_and_fences_old_writers() {
+    let f = Fixture::new();
+    let incoming = offer(&f, &f.server, A, f.wall);
+    let key = Selector::from(&incoming.flight);
+    let (old_source, before) = {
+        let mut cp = open(&f, &f.client, A, Policy::default()).unwrap();
+        let source = cp.bind_source(A).unwrap();
+        assert_eq!(
+            f.submit(&mut cp, &source, &incoming),
+            Status::Accepted(TrustedOutcome::Applied)
+        );
+        let before = cursor_progress(&cp, &source);
+        (source, before)
+    };
+    {
+        let mut cp =
+            open_custody(&f, &f.client, A, Policy::default(), ReceivePolicy::Manual).unwrap();
+        let source = cp.bind_source(A).unwrap();
+        let local = cp.authorize_local(UID).unwrap();
+        assert_eq!(cursor_progress(&cp, &source), before);
+        assert_eq!(counts(&cp), (1, 1, 0, 0));
+        assert_eq!(
+            cp.reserve_provisioning(&old_source, key, f.wall).err(),
+            Some(Error::Source)
+        );
+        assert_eq!(
+            cp.admit(&source, raw(incoming.frame()), f.wall).err(),
+            Some(Error::Layout)
+        );
+        assert_eq!(cp.sweep(&source, f.wall).err(), Some(Error::Layout));
+        assert_eq!(cp.approve(&local, key, f.wall).err(), Some(Error::Layout));
+        assert_eq!(cp.retirement_target(&local, key).err(), Some(Error::Layout));
+        let reservation = cp.reserve_provisioning(&source, key, f.wall).unwrap();
+        assert!(!cp.has_stage(&source, &reservation, f.wall).unwrap());
+        cp.bind_stage(&source, &reservation, f.wall).unwrap();
+        assert!(cp.has_stage(&source, &reservation, f.wall).unwrap());
+        assert!(open(&f, &f.client, A, Policy::default()).is_err());
+        let conn = HardenedPeerConnection::open(f.file.path(), DB_KEY).unwrap();
+        assert!(
+            Checkpoint::attach_pending_custody_fixture(
+                conn,
+                f.client.clone(),
+                UID,
+                &[A],
+                Policy::default()
+            )
+            .is_err()
+        );
+    }
+    assert!(open_custody(&f, &f.client, B, Policy::default(), ReceivePolicy::Manual).is_err());
+    assert!(
+        open_custody(
+            &f,
+            &Keys::generate(),
+            A,
+            Policy::default(),
+            ReceivePolicy::Manual
+        )
+        .is_err()
+    );
+    let mut reopened =
+        open_custody(&f, &f.client, A, Policy::default(), ReceivePolicy::Manual).unwrap();
+    let source = reopened.bind_source(A).unwrap();
+    assert!(reopened.recover_provisioning(&source, key, f.wall).is_ok());
+}
+
+#[test]
+fn peer_installed_custody_refuses_charged_predecessor_without_changing_it() {
+    let f = Fixture::new();
+    let incoming = offer(&f, &f.server, A, f.wall);
+    let key = Selector::from(&incoming.flight);
+    {
+        let mut cp = open(&f, &f.client, A, Policy::default()).unwrap();
+        let source = cp.bind_source(A).unwrap();
+        assert_eq!(
+            f.submit(&mut cp, &source, &incoming),
+            Status::Accepted(TrustedOutcome::Applied)
+        );
+        cp.reserve_provisioning(&source, key, f.wall).unwrap();
+    }
+    assert!(open_custody(&f, &f.client, A, Policy::default(), ReceivePolicy::Manual).is_err());
+    let mut unchanged = open(&f, &f.client, A, Policy::default()).unwrap();
+    let source = unchanged.bind_source(A).unwrap();
+    assert!(unchanged.recover_provisioning(&source, key, f.wall).is_ok());
+    assert_eq!(counts(&unchanged), (1, 1, 0, 0));
+}
+
+#[test]
+fn peer_installed_custody_resolves_receive_for_the_exact_founder() {
+    let f = Fixture::new();
+    let other = Keys::generate();
+    let blocked = Keys::generate();
+    let listed = f.server.public_key();
+    let unlisted = other.public_key();
+    let policy = || Policy {
+        blocked: BTreeSet::from([blocked.public_key()]),
+        reserved: BTreeSet::from([listed]),
+        ..Policy::default()
+    };
+    let first = offer(&f, &f.server, A, f.wall);
+    let second = offer(&f, &other, A, f.wall);
+    {
+        let mut cp = open(&f, &f.client, A, policy()).unwrap();
+        let source = cp.bind_source(A).unwrap();
+        for incoming in [&first, &second] {
+            assert_eq!(
+                f.submit(&mut cp, &source, incoming),
+                Status::Accepted(TrustedOutcome::Applied)
+            );
+        }
+    }
+    let mut cp = open_custody(
+        &f,
+        &f.client,
+        A,
+        policy(),
+        ReceivePolicy::AutoFounders(BTreeSet::from([listed])),
+    )
+    .unwrap();
+    assert!(matches!(cp.custody_mode(listed), Ok(Mode::Automatic)));
+    assert!(matches!(cp.custody_mode(unlisted), Ok(Mode::Manual)));
+    assert!(matches!(
+        cp.custody_mode(blocked.public_key()),
+        Err(Error::Policy)
+    ));
+    assert!(matches!(
+        cp.custody_mode(f.client.public_key()),
+        Err(Error::Policy)
+    ));
+    let source = cp.bind_source(A).unwrap();
+    for incoming in [&first, &second] {
+        cp.reserve_provisioning(&source, Selector::from(&incoming.flight), f.wall)
+            .unwrap();
+    }
+    for (receive, automatic) in [(ReceivePolicy::Off, false), (ReceivePolicy::AutoAny, true)] {
+        drop(cp);
+        cp = open_custody(&f, &f.client, A, policy(), receive).unwrap();
+        let source = cp.bind_source(A).unwrap();
+        let key = Selector::from(&second.flight);
+        let result = cp.recover_provisioning(&source, key, f.wall);
+        assert_eq!(result.is_ok(), automatic);
+        if !automatic {
+            assert_eq!(result.err(), Some(Error::Policy));
+        }
+    }
+}
+
+#[test]
+fn peer_installed_custody_refuses_drift_and_unverified_parents() {
+    let f = Fixture::new();
+    let incoming = offer(&f, &f.server, A, f.wall);
+    {
+        let mut cp = open(&f, &f.client, A, Policy::default()).unwrap();
+        let source = cp.bind_source(A).unwrap();
+        assert_eq!(
+            f.submit(&mut cp, &source, &incoming),
+            Status::Accepted(TrustedOutcome::Applied)
+        );
+        cp.fixture_statement("UPDATE peer_consent_invite SET frame=X'01'");
+    }
+    assert!(open_custody(&f, &f.client, A, Policy::default(), ReceivePolicy::Manual).is_err());
+    {
+        let conn = HardenedPeerConnection::open(f.file.path(), DB_KEY).unwrap();
+        let (frame, has_new_ddl): (Vec<u8>, bool) = conn
+            .0
+            .query_row(
+                "SELECT frame, EXISTS(SELECT 1 FROM sqlite_schema
+                    WHERE name IN ('peer_installed_custody_v2','peer_provisional_stage_v1'))
+                 FROM peer_consent_invite",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(frame, [1]);
+        assert!(!has_new_ddl);
+        conn.0
+            .execute(
+                "UPDATE peer_consent_invite SET frame=?1",
+                [incoming.frame()],
+            )
+            .unwrap();
+    }
+    let mut cp = open_custody(&f, &f.client, A, Policy::default(), ReceivePolicy::Manual).unwrap();
+    let source = cp.bind_source(A).unwrap();
+    let key = Selector::from(&incoming.flight);
+    cp.fixture_statement("CREATE TABLE unrelated (value BLOB) STRICT");
+    assert_eq!(
+        cp.reserve_provisioning(&source, key, f.wall).err(),
+        Some(Error::Cursor(CursorError::Binding))
+    );
+    drop(cp);
+    assert!(open_custody(&f, &f.client, A, Policy::default(), ReceivePolicy::Manual).is_err());
 }

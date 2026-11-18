@@ -59,6 +59,7 @@ pub(crate) enum Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
+#[cfg_attr(test, derive(Clone, Copy))]
 pub(crate) struct Codec {
     outer_cap: usize,
     version: ControlVersion,

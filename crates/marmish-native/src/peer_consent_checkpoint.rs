@@ -166,6 +166,8 @@ pub(crate) enum Work {
 enum Layout {
     Legacy,
     InstalledV2,
+    #[cfg(test)]
+    InstalledCustodyV2,
 }
 
 pub(crate) struct Checkpoint {
@@ -185,6 +187,8 @@ pub(crate) struct Checkpoint {
     export_epoch: Option<provisioning::prepared_consent::Epoch>,
     #[cfg(test)]
     retirement_fault: Option<provisioning::retirement::Fault>,
+    #[cfg(test)]
+    installed_receive: Option<provisioning::prepared_consent::custody::ReceivePolicy>,
 }
 
 impl Checkpoint {
@@ -252,6 +256,8 @@ impl Checkpoint {
             export_epoch: None,
             #[cfg(test)]
             retirement_fault: None,
+            #[cfg(test)]
+            installed_receive: None,
         })
     }
 
@@ -311,6 +317,9 @@ impl Checkpoint {
         record: RawRecord<'_>,
         wall: u64,
     ) -> Result<Disposition> {
+        if self.layout == Layout::InstalledCustodyV2 {
+            return Err(Error::Layout);
+        }
         let origin = self.origin(source)?;
         record.check()?;
         rows::check_wall(&self.cursor.conn, wall)?;
@@ -348,6 +357,10 @@ impl Checkpoint {
         record: RawRecord<'_>,
         wall: u64,
     ) -> Result<Disposition> {
+        #[cfg(test)]
+        if self.layout == Layout::InstalledCustodyV2 {
+            return Err(Error::Layout);
+        }
         let origin = self.origin(source)?;
         record.check()?;
         rows::check_wall(&self.cursor.conn, wall)?;
@@ -364,6 +377,8 @@ impl Checkpoint {
         match self.layout {
             Layout::Legacy => self.admit_legacy(origin, record, wall, offer),
             Layout::InstalledV2 => self.admit_installed(origin, record, wall, offer),
+            #[cfg(test)]
+            Layout::InstalledCustodyV2 => Err(Error::Layout),
         }
     }
 
@@ -521,6 +536,10 @@ impl Checkpoint {
     }
 
     pub(crate) fn sweep(&mut self, source: &Source, wall: u64) -> Result<()> {
+        #[cfg(test)]
+        if self.layout == Layout::InstalledCustodyV2 {
+            return Err(Error::Layout);
+        }
         let origin = self.origin(source)?;
         let tx = self.cursor.with_wall(origin, wall)?;
         if self.layout == Layout::InstalledV2 {
