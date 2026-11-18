@@ -48,7 +48,8 @@ has this order.
    shared inner take method immediately after the result of the local check
    and `Option::take`, before the final verification. Ordinary calls use
    an empty callback in test builds. The parameter and call are absent
-   in non-test builds.
+   in non-test builds. The outer `take_route` signature is identical
+   in both builds.
 5. Only after the second global check succeeds, mint the one-use token
    with the taken route and signer from the checked material.
 
@@ -57,8 +58,12 @@ the retained authority. After a take, the local recheck covers exact
 lease, original material, Ready scope, directories and quota topology.
 The live port owns the route, qualification clock and TLS window. A
 caller of the attached local check alone cannot infer the route is current.
-Dropping the attached registration cancels its shared token, invalidating
-the port even if retained by a mistaken caller.
+Implement `Drop for LocalReceiverRegistration<'_>` to call
+`self.scope.ready.profile.cancel.cancel()` even after its route option
+has been taken. This invalidates a port still held by a caller. Keep
+`ReadyReceiverScope` in `RegisteredScope::ready` and keep the
+registration's fields private, so that matching them out cannot skip
+that destructor.
 
 Define `RegisteredRoute` in `candidate_registration` with private fields.
 Its `into_parts` is visible only within `crate::peer_relay_trust`. The
@@ -117,9 +122,14 @@ comes from actual receiver preflight and registration.
 - The displacement case combines real global default replacement with
   local config drift before attempting take. Require typed Indeterminate,
   no admission, no recipient requests and no relay publish attempt.
+- In a separate real WSS child, attach and open the registered port, then
+  drop the registration and keep the port. Require live port observation
+  to fail after registration drop and the global verifier to stay current.
 - In the existing isolated `candidate_registration` subprocess harness,
-  test both bracket edges with direct access to the shared cancellation
-  token. Displace the global default before take with simultaneous local
+  add two named modes to the parent child-spawn list and the existing
+  `registration_subprocess` entry point. Run each mode in a separate
+  process and inspect both bracket edges with direct access to the shared
+  cancellation token. Displace the global default before take with simultaneous local
   drift and assert typed Indeterminate while the token remains uncancelled.
   In another fresh process, use the private test callback to displace
   the real default exactly after a successful local check has moved the
