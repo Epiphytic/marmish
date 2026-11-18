@@ -2,6 +2,11 @@
 
 #[path = "../src/peer_control_version.rs"]
 mod peer_control_version;
+// The standalone cursor tests have no authenticated socket or carrier type.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+macro_rules! native_offer_ingress_fixture {
+    () => {};
+}
 #[allow(dead_code)] // This target also compiles the private production methods.
 #[path = "../src/peer_cursor_store.rs"]
 mod peer_cursor_store;

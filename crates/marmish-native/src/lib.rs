@@ -108,6 +108,13 @@ mod copy_io_abort_tests;
 mod copy_commit_hook;
 
 mod peer_control_version;
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+macro_rules! native_offer_ingress_fixture {
+    () => {
+        #[path = "peer_installed_offer_ingress.rs"]
+        pub(in crate::peer_invitation) mod offer_ingress;
+    };
+}
 #[allow(dead_code)] // Deployment qualification must precede daemon activation.
 mod peer_invitation;
 

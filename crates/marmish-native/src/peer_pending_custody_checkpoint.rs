@@ -20,8 +20,7 @@ use super::super::super::{
 use super::*;
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
-#[path = "peer_installed_offer_ingress.rs"]
-pub(in crate::peer_invitation) mod offer_ingress;
+native_offer_ingress_fixture!();
 
 #[path = "peer_pending_custody_schema.rs"]
 mod custody_schema;
