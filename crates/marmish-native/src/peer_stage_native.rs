@@ -163,6 +163,8 @@ impl OpenStage {
         &self,
         window: &crate::peer_invitation::NativeWindow,
     ) -> StageResult<ProvisionalPackage> {
+        #[cfg(test)]
+        let point = std::time::Instant::now();
         self.require_unjoined_provisional()?;
         if self.load()?.is_some()
             || !durably_owned_key_packages(&self.storage, ProtocolProfile::Current)
@@ -173,6 +175,8 @@ impl OpenStage {
         }
         window.check()?;
         self.save(&KeyPackageLifecycleState::slot_only(self.slot.clone()))?;
+        #[cfg(test)]
+        window.timing("native_bootstrap", point);
         let mut publisher = self.publisher();
         publisher.window = Some(window.clone());
         let sample = window.stage_sample()?;

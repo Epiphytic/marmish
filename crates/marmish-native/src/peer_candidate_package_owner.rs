@@ -25,7 +25,12 @@ pub(crate) struct PackageOperation<'a> {
 
 impl PackageOperation<'_> {
     pub(crate) async fn issue(self, path: &std::path::Path) -> NativeResult<ProvisionalPackage> {
-        let stage = self.open(path, true)?;
+        #[cfg(test)]
+        let point = std::time::Instant::now();
+        let opened = self.open(path, true);
+        #[cfg(test)]
+        self.window.timing("native_open", point);
+        let stage = opened?;
         stage.issue_managed_provisional(self.window).await
     }
 

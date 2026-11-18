@@ -171,6 +171,8 @@ impl OpenStage {
             any(test, marmish_peer_receiver_candidate)
         ))]
         let window = publisher.window.clone();
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        let point = std::time::Instant::now();
         let mut runtime = AccountDeviceRuntime::open(role, || {
             Ok::<_, marmot_session::SessionError>((
                 NoIo,
@@ -190,9 +192,13 @@ impl OpenStage {
             any(test, marmish_peer_receiver_candidate)
         ))]
         if let Some(window) = &window {
+            #[cfg(test)]
+            window.timing("native_runtime", point);
             window.check()?;
         }
-        runtime
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        let point = std::time::Instant::now();
+        let result = runtime
             .prepare_fresh_key_package(endpoints)
             .await
             .map_err(|err| match err {
@@ -200,7 +206,12 @@ impl OpenStage {
                     StageError::Unavailable
                 }
                 _ => StageError::Invalid,
-            })?;
+            });
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        if let Some(window) = &window {
+            window.timing("native_prepare", point);
+        }
+        result?;
         Ok(())
     }
 

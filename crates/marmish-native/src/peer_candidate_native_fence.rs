@@ -30,6 +30,8 @@ struct Window {
     signs: AtomicUsize,
     #[cfg(test)]
     copy_cut: AtomicUsize,
+    #[cfg(test)]
+    trace_timing: AtomicBool,
 }
 
 #[derive(Clone, Copy)]
@@ -83,6 +85,8 @@ impl NativeWindow {
             signs: AtomicUsize::new(0),
             #[cfg(test)]
             copy_cut: AtomicUsize::new(0),
+            #[cfg(test)]
+            trace_timing: AtomicBool::new(false),
         }));
         if now.wall.abs_diff(anchored_wall) > Duration::from_secs(2) {
             return Err(Error::Clock);
@@ -167,6 +171,21 @@ impl NativeWindow {
             1 => self.0.route_cancel.cancel(),
             2 => std::process::exit(78),
             _ => unreachable!("closed fixture cut enum"),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn trace_timing(&self) {
+        self.0.trace_timing.store(true, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn timing(&self, stage: &'static str, started: std::time::Instant) {
+        if self.0.trace_timing.load(Ordering::Acquire) {
+            println!(
+                "package_fixture_timing {stage}_ms={:.3}",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
         }
     }
 

@@ -297,6 +297,7 @@ fn package_child() {
                 .unwrap();
             let point = Instant::now();
             let turn = window();
+            turn.trace_timing();
             let artifact = owner
                 .issue_package(quota, &reservation, started, &turn)
                 .unwrap_or_else(|error| {
