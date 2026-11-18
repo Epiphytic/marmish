@@ -20,6 +20,12 @@ mod command_wire;
 pub mod daemon;
 mod daemon_launch;
 pub mod diagnostics;
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+mod dispatcher_fatal;
 pub mod error;
 pub mod foundation;
 pub mod foundation_check;
