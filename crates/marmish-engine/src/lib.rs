@@ -19,7 +19,7 @@ mod storage;
 mod store;
 mod worker;
 use admission::{context_owner, random_bytes, sha256};
-pub use cipher_fence::ConnectionFence;
+pub use cipher_fence::{ConnectionFence, ExistingAccess, ExistingConnection};
 pub use cleanup::CleanupGuard;
 pub use copy_launch::RegisteredCopyHelper;
 use launcher::{FrontendGuard, LaunchSpec, StateRoot, WorkerPresence};

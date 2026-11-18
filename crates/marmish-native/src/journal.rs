@@ -21,6 +21,7 @@ pub(crate) use client_inventory_store::ClientInventoryAccess;
 pub(crate) use command_preparation::*;
 pub(crate) use command_rooms::*;
 pub(crate) use command_store::*;
+use marmish_engine::{ConnectionFence, EngineError, ExistingAccess, ExistingConnection};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -63,7 +64,7 @@ pub(crate) struct Prepared {
     pub encoded: Vec<u8>,
 }
 pub(crate) struct Journal {
-    conn: Connection,
+    conn: ExistingConnection,
 }
 fn sql_u64(row: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<u64> {
     let value: i64 = row.get(column)?;
@@ -81,8 +82,34 @@ fn db(_: rusqlite::Error) -> Error {
     Error::Storage("journal")
 }
 
+pub(crate) fn host_storage_error(error: EngineError, fallback: &'static str) -> Error {
+    match error {
+        EngineError::StorageAdmissionRefused => Error::Storage("dispatcher_admission"),
+        _ => Error::Storage(fallback),
+    }
+}
+
+pub(crate) fn admit_host_storage(fence: Option<&ConnectionFence>) -> Result<()> {
+    if let Some(fence) = fence {
+        fence
+            .admit()
+            .map_err(|error| host_storage_error(error, "sqlcipher_init"))?;
+    }
+    Ok(())
+}
+
 impl Journal {
     pub(crate) fn open(path: &Path, key: &[u8; 32], account: &str) -> Result<Self> {
+        Self::open_with_fence(path, key, account, None)
+    }
+
+    pub(crate) fn open_with_fence(
+        path: &Path,
+        key: &[u8; 32],
+        account: &str,
+        fence: Option<&ConnectionFence>,
+    ) -> Result<Self> {
+        admit_host_storage(fence)?;
         let parent = fs::symlink_metadata(path.parent().ok_or(Error::Storage("journal_path"))?)?;
         // The profile lease validates ancestors; additionally refuse a replaced
         // immediate parent and links/foreign-writable database files here.
@@ -112,14 +139,40 @@ impl Journal {
             }
             Err(e) => return Err(e.into()),
         }
-        marmish_engine::initialize_storage().map_err(|_| Error::Storage("sqlcipher_init"))?;
-        let conn = Connection::open_with_flags(
-            path,
-            OpenFlags::SQLITE_OPEN_READ_WRITE
-                | OpenFlags::SQLITE_OPEN_NO_MUTEX
-                | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-        )
-        .map_err(db)?;
+        let conn = match fence {
+            Some(fence) => ExistingConnection::open(path, fence, ExistingAccess::ReadWrite)
+                .map_err(|error| host_storage_error(error, "journal"))?,
+            None => {
+                marmish_engine::initialize_storage()
+                    .map_err(|_| Error::Storage("sqlcipher_init"))?;
+                ExistingConnection::stock(
+                    Connection::open_with_flags(
+                        path,
+                        OpenFlags::SQLITE_OPEN_READ_WRITE
+                            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+                            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+                    )
+                    .map_err(db)?,
+                )
+            }
+        };
+        let mut journal = Self { conn };
+        let initialized = admit_host_storage(fence).and_then(|()| journal.initialize(key, account));
+        if let Err(error) = admit_host_storage(fence).and(initialized) {
+            journal.close()?;
+            return Err(error);
+        }
+        Ok(journal)
+    }
+
+    pub(crate) fn close(self) -> Result<()> {
+        self.conn
+            .close()
+            .map_err(|error| host_storage_error(error, "journal"))
+    }
+
+    fn initialize(&mut self, key: &[u8; 32], account: &str) -> Result<()> {
+        let conn = &self.conn;
         conn.busy_timeout(Duration::from_secs(2)).map_err(db)?;
         let version: String = conn
             .query_row("PRAGMA cipher_version", [], |r| r.get(0))
@@ -182,13 +235,12 @@ impl Journal {
             }
             _ => {}
         }
-        let mut journal = Self { conn };
-        journal.command_init()?;
-        journal.stream_schema_init()?;
-        journal.copy_local_init()?;
-        journal.command_rooms_init()?;
-        journal.command_preparations_init()?;
-        let tx = journal.conn.transaction().map_err(db)?;
+        self.command_init()?;
+        self.stream_schema_init()?;
+        self.copy_local_init()?;
+        self.command_rooms_init()?;
+        self.command_preparations_init()?;
+        let tx = self.conn.transaction().map_err(db)?;
         Self::copy_init_in(&tx, schema)?;
         client_inventory_store::inventory_init_in(&tx, schema)?;
         if schema != JOURNAL_FORMAT {
@@ -196,8 +248,7 @@ impl Journal {
                 .map_err(db)?;
         }
         tx.commit().map_err(db)?;
-        journal.stream_init()?;
-        Ok(journal)
+        self.stream_init()
     }
     pub(crate) fn publication_owned(&self, group: &[u8], event: &str) -> Result<bool> {
         self.conn
@@ -1685,6 +1736,60 @@ mod tests {
             assert_eq!(count(&j, table), 0);
         }
     }
+    #[test]
+    fn guarded_journal_preserves_deferred_transactions_and_encrypted_data() {
+        let (temp, stock) = setup();
+        stock.close().unwrap();
+        let path = temp.path().join("journal.db");
+        let account = "ab".repeat(32);
+        let fence = ConnectionFence::new(|| true, || panic!("unexpected custody fault"));
+        let open = || Journal::open_with_fence(&path, &[7; 32], &account, Some(&fence)).unwrap();
+        let mut writer = open();
+        let mut reader = open();
+        writer
+            .conn
+            .execute_batch("CREATE TABLE guarded_proof(value TEXT)")
+            .unwrap();
+        let committed = writer.conn.transaction().unwrap();
+        committed
+            .execute(
+                "INSERT INTO guarded_proof VALUES (?)",
+                ["committed fixture"],
+            )
+            .unwrap();
+        // A second begin succeeds while the first transaction owns the write lock.
+        reader.conn.transaction().unwrap().rollback().unwrap();
+        committed.commit().unwrap();
+        let discarded = writer.conn.transaction().unwrap();
+        discarded
+            .execute(
+                "INSERT INTO guarded_proof VALUES (?)",
+                ["rolled back fixture"],
+            )
+            .unwrap();
+        discarded.rollback().unwrap();
+        reader.close().unwrap();
+        writer.close().unwrap();
+
+        let cold = open();
+        let values: Vec<String> = cold
+            .conn
+            .prepare("SELECT value FROM guarded_proof")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(values, ["committed fixture"]);
+        cold.close().unwrap();
+        assert!(
+            !fs::read(path)
+                .unwrap()
+                .windows(b"committed fixture".len())
+                .any(|bytes| bytes == b"committed fixture")
+        );
+    }
+
     #[test]
     fn old_schema_is_rejected_without_migration() {
         let (temp, j) = setup();

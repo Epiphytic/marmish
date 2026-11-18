@@ -1,20 +1,26 @@
 //! Read-only compatibility checks before any upstream migration or engine recovery.
 use crate::identity::{IdentityMaterial, ProfileLease};
+use crate::journal::{admit_host_storage, host_storage_error};
 use crate::{Error, Result};
 use hkdf::Hkdf;
+use marmish_engine::{ConnectionFence, ExistingAccess, ExistingConnection};
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use sha2::Sha256;
 use std::fs;
 use std::path::Path;
 use zeroize::Zeroizing;
 
-// Last account migration in MDK b3cd2cb1c3a585372c5061b8f35d31a93ce9cdc1.
+// Last account migration in MDK bdf9833e340909f29c628f4fc2f9a3d6873f1cf5.
 // Upstream exposes no read-only registry API. Review this bound when updating Cargo.lock.
 const MDK_MAX_MIGRATION: i64 = 214;
 fn db(_: rusqlite::Error) -> Error {
     Error::Storage("state_preflight")
 }
-fn open(path: &Path, key: &[u8; 32]) -> Result<Option<Connection>> {
+fn open_readonly(
+    path: &Path,
+    fence: Option<&ConnectionFence>,
+) -> Result<Option<ExistingConnection>> {
+    admit_host_storage(fence)?;
     match fs::symlink_metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.into()),
@@ -24,14 +30,43 @@ fn open(path: &Path, key: &[u8; 32]) -> Result<Option<Connection>> {
     if file.metadata()?.len() == 0 {
         return Ok(None);
     }
-    marmish_engine::initialize_storage().map_err(|_| Error::Storage("sqlcipher_init"))?;
-    let conn = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY
-            | OpenFlags::SQLITE_OPEN_NO_MUTEX
-            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-    )
-    .map_err(db)?;
+    let conn = match fence {
+        Some(fence) => ExistingConnection::open(path, fence, ExistingAccess::ReadOnly)
+            .map_err(|error| host_storage_error(error, "state_preflight"))?,
+        None => {
+            marmish_engine::initialize_storage().map_err(|_| Error::Storage("sqlcipher_init"))?;
+            ExistingConnection::stock(
+                Connection::open_with_flags(
+                    path,
+                    OpenFlags::SQLITE_OPEN_READ_ONLY
+                        | OpenFlags::SQLITE_OPEN_NO_MUTEX
+                        | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+                )
+                .map_err(db)?,
+            )
+        }
+    };
+    Ok(Some(conn))
+}
+
+fn inspect<T>(
+    path: &Path,
+    key: &[u8; 32],
+    fence: Option<&ConnectionFence>,
+    check: impl FnOnce(&Connection) -> Result<T>,
+) -> Result<Option<T>> {
+    let Some(conn) = open_readonly(path, fence)? else {
+        return Ok(None);
+    };
+    let inspected = admit_host_storage(fence)
+        .and_then(|()| configure(&conn, key))
+        .and_then(|()| check(&conn));
+    conn.close()
+        .map_err(|error| host_storage_error(error, "state_preflight"))?;
+    inspected.map(Some)
+}
+
+fn configure(conn: &Connection, key: &[u8; 32]) -> Result<()> {
     let mut raw = Zeroizing::new(Vec::with_capacity(67));
     raw.extend_from_slice(b"x'");
     let mut hexkey = Zeroizing::new([0u8; 64]);
@@ -48,7 +83,7 @@ fn open(path: &Path, key: &[u8; 32]) -> Result<Option<Connection>> {
         r.get::<_, i64>(0)
     })
     .map_err(db)?;
-    Ok(Some(conn))
+    Ok(())
 }
 fn user_version(conn: &Connection, supported: &[i64]) -> Result<()> {
     let n: i64 = conn
@@ -60,6 +95,15 @@ fn user_version(conn: &Connection, supported: &[i64]) -> Result<()> {
     Ok(())
 }
 pub(crate) fn check(profile: &ProfileLease, material: &IdentityMaterial) -> Result<()> {
+    check_with_fence(profile, material, None)
+}
+
+pub(crate) fn check_with_fence(
+    profile: &ProfileLease,
+    material: &IdentityMaterial,
+    fence: Option<&ConnectionFence>,
+) -> Result<()> {
+    admit_host_storage(fence)?;
     let hk = Hkdf::<Sha256>::new(Some(b"marmish/v2/storage"), material.sqlcipher_root());
     let mut mdk = Zeroizing::new([0; 32]);
     let mut journal = Zeroizing::new([0; 32]);
@@ -67,7 +111,7 @@ pub(crate) fn check(profile: &ProfileLease, material: &IdentityMaterial) -> Resu
         .map_err(|_| Error::Storage("state_preflight"))?;
     hk.expand(b"journal", journal.as_mut())
         .map_err(|_| Error::Storage("state_preflight"))?;
-    if let Some(conn) = open(profile.mdk_database(), &mdk)? {
+    inspect(profile.mdk_database(), &mdk, fence, |conn| {
         let table: Option<i64> = conn
             .query_row(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cgka_schema_migrations'",
@@ -94,11 +138,12 @@ pub(crate) fn check(profile: &ProfileLease, material: &IdentityMaterial) -> Resu
                 return Err(Error::Storage("state_preflight"));
             }
         }
-    }
+        Ok(())
+    })?;
     // Command ledger shares the journal schema/migration boundary; there is no separate database.
-    if let Some(conn) = open(profile.journal_database(), &journal)? {
-        user_version(&conn, crate::journal::JOURNAL_SUPPORTED_FORMATS)?;
-    }
+    inspect(profile.journal_database(), &journal, fence, |conn| {
+        user_version(conn, crate::journal::JOURNAL_SUPPORTED_FORMATS)
+    })?;
     let engine = crate::command_identity::derive(
         profile.profile_id(),
         material.public_key().to_bytes(),
@@ -114,9 +159,9 @@ pub(crate) fn check(profile: &ProfileLease, material: &IdentityMaterial) -> Resu
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e.into()),
     }
-    if let Some(conn) = open(&engine_dir.join("engine.sqlite3"), &state)? {
-        user_version(&conn, &[0, marmish_engine::ENGINE_FORMAT])?;
-    }
+    inspect(&engine_dir.join("engine.sqlite3"), &state, fence, |conn| {
+        user_version(conn, &[0, marmish_engine::ENGINE_FORMAT])
+    })?;
     let config = profile.root().join("config.json");
     match fs::symlink_metadata(config) {
         Ok(_) => match crate::command_config::CommandConfig::load(profile.root()) {
@@ -245,6 +290,14 @@ impl WalSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn open(path: &Path, key: &[u8; 32]) -> Result<Option<ExistingConnection>> {
+        let conn = open_readonly(path, None)?;
+        if let Some(conn) = conn.as_ref() {
+            configure(conn, key)?;
+        }
+        Ok(conn)
+    }
 
     fn open_writable_fixture(path: &Path, key: &[u8; 32]) -> Connection {
         marmish_engine::initialize_storage().unwrap();

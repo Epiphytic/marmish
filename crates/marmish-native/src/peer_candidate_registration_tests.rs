@@ -82,6 +82,14 @@ fn candidate_registration_scope_and_irreversible_dispatch() {
     for mode in [
         "local",
         "ordinary",
+        "host_storage_healthy",
+        "host_storage_displaced",
+        "host_preflight_open_displaced",
+        "host_preflight_key_displaced",
+        "host_preflight_close_displaced",
+        "host_preflight_next_displaced",
+        "host_journal_open_displaced",
+        "host_journal_key_displaced",
         "topology",
         "displaced",
         "dead_lease",
@@ -202,6 +210,16 @@ fn registration_subprocess() {
             assert!(ordinary.admit());
             verify_forwarded_ordinary_and_fenced_names(lease.root());
         }
+        "host_storage_healthy"
+        | "host_storage_displaced"
+        | "host_preflight_open_displaced"
+        | "host_preflight_key_displaced"
+        | "host_preflight_close_displaced"
+        | "host_preflight_next_displaced"
+        | "host_journal_open_displaced"
+        | "host_journal_key_displaced" => {
+            verify_host_storage(&ordinary, &lease, &material, &mode);
+        }
         "topology" => {
             let mut attached = registered.attach(&lease, &material).unwrap();
             let moved = lease.root().join("moved");
@@ -315,11 +333,122 @@ fn registration_subprocess() {
     if ordinary_fatal.is_tripped() {
         assert!(!ordinary.admit());
     }
-    if mode.starts_with("displaced") {
+    if mode.starts_with("displaced") || mode.ends_with("_displaced") {
         assert!(ordinary_fatal.is_tripped());
         assert!(forwarding.fatal().is_tripped());
     }
     lease.cleanup_runtime().unwrap();
+}
+
+fn verify_host_storage(
+    admission: &Admission,
+    lease: &ProfileLease,
+    material: &IdentityMaterial,
+    mode: &str,
+) {
+    use crate::journal::Journal;
+    use hkdf::Hkdf;
+    use sha2::Sha256;
+    use zeroize::Zeroizing;
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let limit = match mode {
+        // Admission at scanner entry, before file access, twice at raw open
+        // and before keying; the next check is the first read-only close.
+        "host_preflight_open_displaced" => Some(4),
+        "host_preflight_key_displaced" => Some(5),
+        "host_preflight_close_displaced" => Some(6),
+        "host_preflight_next_displaced" => Some(7),
+        // Before file preparation, twice at raw open, then before keying.
+        "host_journal_open_displaced" => Some(3),
+        "host_journal_key_displaced" => Some(4),
+        _ => None,
+    };
+    let visits = Arc::new(AtomicUsize::new(0));
+    let fence = if let Some(limit) = limit {
+        let visits = visits.clone();
+        let admission = admission.clone();
+        marmish_engine::ConnectionFence::new(
+            move || {
+                if visits.fetch_add(1, Ordering::Relaxed) + 1 == limit {
+                    displace_default();
+                }
+                admission.admit()
+            },
+            || panic!("unexpected SQLite close failure"),
+        )
+    } else {
+        admission.connection_fence()
+    };
+    if mode.starts_with("host_preflight_") {
+        let following = lease.journal_database();
+        let journal_bytes = || {
+            ["", "-wal", "-shm"].map(|suffix| {
+                let mut path = following.as_os_str().to_os_string();
+                path.push(suffix);
+                match fs::read(path) {
+                    Ok(bytes) => Some(bytes),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(error) => panic!("reading fixture Journal files: {error}"),
+                }
+            })
+        };
+        let before = journal_bytes();
+        assert!(before[0].is_some());
+        assert!(matches!(
+            crate::native_preflight::check_with_fence(lease, material, Some(&fence)),
+            Err(crate::Error::Storage("dispatcher_admission"))
+        ));
+        assert_eq!(visits.load(Ordering::Relaxed), limit.unwrap());
+        assert_eq!(journal_bytes(), before);
+        return;
+    }
+    if !mode.starts_with("host_journal_") {
+        crate::native_preflight::check_with_fence(lease, material, Some(&fence)).unwrap();
+    }
+    let mut key = Zeroizing::new([0; 32]);
+    Hkdf::<Sha256>::new(Some(b"marmish/v2/storage"), material.sqlcipher_root())
+        .expand(b"journal", key.as_mut())
+        .unwrap();
+    let account = material.public_key().to_hex();
+    let path = lease.journal_database();
+    if mode.starts_with("host_journal_") {
+        let path = path.with_file_name("refused.sqlite3");
+        assert!(matches!(
+            Journal::open_with_fence(&path, &key, &account, Some(&fence)),
+            Err(crate::Error::Storage("dispatcher_admission"))
+        ));
+        assert_eq!(fs::metadata(path).unwrap().len(), 0);
+        assert_eq!(visits.load(Ordering::Relaxed), limit.unwrap());
+        return;
+    }
+    let journal = Journal::open_with_fence(path, &key, &account, Some(&fence)).unwrap();
+    if mode == "host_storage_displaced" {
+        let unopened = path.with_file_name("refused.sqlite3");
+        displace_default();
+        assert!(matches!(
+            journal.close(),
+            Err(crate::Error::Storage("dispatcher_admission"))
+        ));
+        assert!(!admission.admit());
+        assert!(matches!(
+            Journal::open_with_fence(&unopened, &key, &account, Some(&fence)),
+            Err(crate::Error::Storage("dispatcher_admission"))
+        ));
+        assert!(!unopened.exists());
+        assert!(matches!(
+            crate::native_preflight::check_with_fence(lease, material, Some(&fence)),
+            Err(crate::Error::Storage("dispatcher_admission"))
+        ));
+    } else {
+        journal.close().unwrap();
+        Journal::open_with_fence(path, &key, &account, Some(&fence))
+            .unwrap()
+            .close()
+            .unwrap();
+        assert!(admission.admit());
+    }
 }
 
 fn displace_default() {

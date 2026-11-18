@@ -47,6 +47,12 @@ impl Admission {
         self.fatal.is_tripped()
     }
 
+    pub(crate) fn connection_fence(&self) -> marmish_engine::ConnectionFence {
+        let verify = self.clone();
+        let owner_failed = self.owner_failed.clone();
+        marmish_engine::ConnectionFence::new(move || verify.admit(), move || owner_failed())
+    }
+
     pub(crate) fn admit(&self) -> bool {
         !self.tripped() && (self.verify)() && !self.tripped()
     }
@@ -85,11 +91,7 @@ impl Mode {
     }
 
     pub(super) fn connection_fence(&self) -> Option<marmish_engine::ConnectionFence> {
-        self.checked.as_ref().map(|checked| {
-            let verify = checked.clone();
-            let owner_failed = checked.owner_failed.clone();
-            marmish_engine::ConnectionFence::new(move || verify.admit(), move || owner_failed())
-        })
+        self.checked.as_ref().map(Admission::connection_fence)
     }
 
     pub(super) fn tripped(&self) -> bool {

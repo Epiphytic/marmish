@@ -38,6 +38,10 @@ impl ConnectionFence {
         }))
     }
 
+    pub fn admit(&self) -> Result<()> {
+        Self::check(Some(self))
+    }
+
     pub(crate) fn check(fence: Option<&Self>) -> Result<()> {
         let Some(fence) = fence else {
             return Ok(());
@@ -57,6 +61,42 @@ impl ConnectionFence {
     }
 }
 
+/// Access to an already existing database. Neither variant creates a file.
+pub enum ExistingAccess {
+    ReadOnly,
+    ReadWrite,
+}
+
+/// Keeps custody of an existing SQLite connection through checked close.
+pub struct ExistingConnection(Owned);
+
+impl ExistingConnection {
+    pub fn open(path: &Path, fence: &ConnectionFence, access: ExistingAccess) -> Result<Self> {
+        Owned::open_existing(path, fence, access).map(Self)
+    }
+
+    pub fn stock(connection: Connection) -> Self {
+        Self(Owned::stock(connection))
+    }
+
+    pub fn transaction(&mut self) -> rusqlite::Result<Transaction<'_>> {
+        self.0
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+    }
+
+    pub fn close(self) -> Result<()> {
+        self.0.close()
+    }
+}
+
+impl Deref for ExistingConnection {
+    type Target = Connection;
+
+    fn deref(&self) -> &Connection {
+        &self.0
+    }
+}
+
 pub(crate) struct Owned {
     connection: Option<Connection>,
     fence: Option<ConnectionFence>,
@@ -71,6 +111,10 @@ impl Owned {
     }
 
     pub(crate) fn guarded(path: &Path, fence: &ConnectionFence) -> Result<Self> {
+        Self::open_existing(path, fence, ExistingAccess::ReadWrite)
+    }
+
+    fn open_existing(path: &Path, fence: &ConnectionFence, access: ExistingAccess) -> Result<Self> {
         let mut raw = Raw {
             handle: ptr::null_mut(),
             fence,
@@ -80,7 +124,11 @@ impl Owned {
         ConnectionFence::check(Some(fence))?;
         crate::initialize_storage()?;
         check_threading()?;
-        let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
+        let access = match access {
+            ExistingAccess::ReadOnly => OpenFlags::SQLITE_OPEN_READ_ONLY,
+            ExistingAccess::ReadWrite => OpenFlags::SQLITE_OPEN_READ_WRITE,
+        };
+        let flags = access
             | OpenFlags::SQLITE_OPEN_FULL_MUTEX
             | OpenFlags::SQLITE_OPEN_NOFOLLOW
             | OpenFlags::SQLITE_OPEN_EXRESCODE;
@@ -129,10 +177,17 @@ impl Owned {
     }
 
     pub(crate) fn transaction(&mut self) -> rusqlite::Result<Transaction<'_>> {
+        self.transaction_with_behavior(TransactionBehavior::Immediate)
+    }
+
+    fn transaction_with_behavior(
+        &mut self,
+        behavior: TransactionBehavior,
+    ) -> rusqlite::Result<Transaction<'_>> {
         self.connection
             .as_mut()
             .expect("held SQLite connection")
-            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .transaction_with_behavior(behavior)
     }
 
     pub(crate) fn close(mut self) -> Result<()> {
