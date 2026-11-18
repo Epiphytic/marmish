@@ -145,6 +145,19 @@ fn proposed(mut old: Option<Value>, o: &SetupOptions) -> Result<(Value, bool, Se
         value["tor"] = json!(t);
     }
     update_set(&mut value, "execution_clients", &o.grants, &o.revoke)?;
+    if !o.revoke.is_empty()
+        && let Some(clients) = value
+            .get_mut("terminal")
+            .and_then(|terminal| terminal.get_mut("clients").and_then(Value::as_array_mut))
+    {
+        let revoked = list(&o.revoke)?;
+        clients.retain(|client| {
+            !client
+                .as_str()
+                .and_then(|key| crate::command_config::account(key).ok())
+                .is_some_and(|key| revoked.contains(&hex::encode(key)))
+        });
+    }
     update_set(&mut value, "trusted_remotes", &o.trust, &o.untrust)?;
     if o.no_grants
         && !value["execution_clients"]
@@ -521,6 +534,53 @@ mod tests {
             no_grants: true,
             debug: false,
         }
+    }
+    #[test]
+    fn terminal_grants_survive_setup_except_for_execution_revocation() {
+        let granted = nostr::key::Keys::generate().public_key().to_bech32().unwrap();
+        let second = nostr::key::Keys::generate().public_key().to_bech32().unwrap();
+        let mut opt = options();
+        opt.no_grants = false;
+        opt.grants = vec![granted.clone(), second.clone()];
+        let (mut initial, _, _) = proposed(None, &opt).unwrap();
+        assert!(initial.get("terminal").is_none());
+        let section = json!({"clients":[granted]});
+        initial["terminal"] = section.clone();
+
+        opt.update = true;
+        opt.grants.clear();
+        opt.trust = vec![second.clone()];
+        let (updated, _, _) = proposed(Some(initial), &opt).unwrap();
+        assert_eq!(updated["terminal"], section);
+        assert!(!updated["trusted_remotes"].as_array().unwrap().is_empty());
+        opt.trust.clear();
+        opt.untrust = vec![second.clone()];
+        let (updated, _, _) = proposed(Some(updated), &opt).unwrap();
+        assert_eq!(updated["terminal"], section);
+        assert!(updated["trusted_remotes"].as_array().unwrap().is_empty());
+        opt.untrust.clear();
+
+        opt.role = Some(SetupRole::Client);
+        assert!(matches!(
+            proposed(Some(updated.clone()), &opt),
+            Err(Error::Invalid("config_terminal_clients"))
+        ));
+        opt.role = Some(SetupRole::Server);
+        opt.no_grants = true;
+        assert!(matches!(
+            proposed(Some(updated.clone()), &opt),
+            Err(Error::Invalid("explicit_revoke_required"))
+        ));
+        opt.revoke = vec![granted.clone(), second];
+        let (revoked, _, _) = proposed(Some(updated), &opt).unwrap();
+        assert_eq!(revoked["execution_clients"], json!([]));
+        assert_eq!(revoked["terminal"]["clients"], json!([]));
+        opt.no_grants = false;
+        opt.revoke.clear();
+        opt.grants = vec![granted];
+        let (regranted, _, _) = proposed(Some(revoked), &opt).unwrap();
+        assert_eq!(regranted["execution_clients"].as_array().unwrap().len(), 1);
+        assert_eq!(regranted["terminal"]["clients"], json!([]));
     }
     #[test]
     fn identifier_proposal_cannot_grant_until_the_full_key_is_confirmed() {

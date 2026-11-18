@@ -268,6 +268,7 @@ async fn oversized_inventory_reply_is_a_typed_socket_error() {
     let clients = (0..1024)
         .map(|_| ClientInventoryEntry {
             npub: row.npub.clone(),
+            terminal_shell_granted: row.terminal_shell_granted,
             access: row.access.clone(),
         })
         .collect();

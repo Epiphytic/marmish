@@ -133,7 +133,25 @@ launch or exit with an error. Activity before this feature is unavailable.
 Use `--policy-page` and `--policy-generation` with the returned values to
 continue. The queries use the same-user daemon socket and work while the relay
 is disconnected.
-This feature upgrades the encrypted profile journal. To keep a rollback path,
+
+The interactive Terminal work in this branch adds a separate, default-off
+shell grant to the server's private `config.json`. Omit the section or leave
+`clients` empty to grant nobody. Each listed npub must also be an execution
+client. An interactive shell will have the daemon user's OS permissions and
+will be able to run executables outside the ordinary command allowlist.
+
+```json
+{"terminal": {"clients": ["CLIENT_NPUB"]}}
+```
+
+Merge this entry into the existing config. `setup --update --revoke CLIENT_NPUB`
+also removes its shell grant. The inventory's `terminal_shell_granted` reports
+the configured grant. `interactive_shell_enabled` continues to report false
+while the local worker awaits remote integration. Use matching binaries for
+inventory queries and remove the `terminal` object before rolling back to a
+binary that predates it.
+
+The command history feature upgrades the encrypted profile journal. To keep a rollback path,
 back up the entire profile directory while its daemon is stopped before
 starting the new binary. An older binary requires the pre-upgrade backup.
 

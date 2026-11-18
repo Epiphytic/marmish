@@ -52,6 +52,8 @@ pub(crate) enum InventoryResult {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ClientInventoryEntry {
     pub(crate) npub: String,
+    #[serde(default)]
+    pub(crate) terminal_shell_granted: bool,
     pub(crate) access: ClientInventoryAccess,
 }
 
@@ -163,7 +165,7 @@ pub(crate) fn query(
             let clients = remaining
                 .by_ref()
                 .take(limit)
-                .map(|key| entry(journal, key))
+                .map(|key| entry(journal, config, key))
                 .collect::<Result<Vec<_>>>()?;
             let next = remaining
                 .next()
@@ -182,7 +184,7 @@ pub(crate) fn query(
             let policy = policy.ok_or(InventoryError::PolicyUnavailable)?;
             let policy = describe(policy, key, policy_page, policy_generation.as_deref())?;
             InventoryResult::Show {
-                client: entry(journal, &key)?,
+                client: entry(journal, config, &key)?,
                 policy: Box::new(policy),
             }
         }
@@ -211,12 +213,13 @@ fn canonical_account(value: &str) -> Result<Account> {
     Ok(key)
 }
 
-fn entry(journal: &Journal, key: &Account) -> Result<ClientInventoryEntry> {
+fn entry(journal: &Journal, config: &CommandConfig, key: &Account) -> Result<ClientInventoryEntry> {
     let access = journal
         .client_inventory_access(key)
         .map_err(|_| InventoryError::Storage)?;
     Ok(ClientInventoryEntry {
         npub: npub(key)?,
+        terminal_shell_granted: config.terminal_allowed(key),
         access,
     })
 }
@@ -355,8 +358,15 @@ mod core_tests {
     use serde_json::json;
 
     fn config(role: &str, keys: &[Account]) -> CommandConfig {
-        CommandConfig::from_bytes(
-            &serde_json::to_vec(&json!({
+        config_with_terminal(role, keys, None)
+    }
+
+    fn config_with_terminal(
+        role: &str,
+        keys: &[Account],
+        terminal: Option<Account>,
+    ) -> CommandConfig {
+        let mut value = json!({
                 "version": 1,
                 "role": role,
                 "relays": ["wss://127.0.0.1:9/"],
@@ -367,10 +377,11 @@ mod core_tests {
                 "cwd": "/",
                 "limits": {},
                 "aliases": {}
-            }))
-            .unwrap(),
-        )
-        .unwrap()
+        });
+        if let Some(key) = terminal {
+            value["terminal"] = json!({"clients":[npub(&key).unwrap()]});
+        }
+        CommandConfig::from_bytes(&serde_json::to_vec(&value).unwrap()).unwrap()
     }
 
     fn journal(config: &CommandConfig) -> (tempfile::TempDir, Journal) {
@@ -392,6 +403,85 @@ mod core_tests {
             npub: value,
             policy_page: 0,
             policy_generation: None,
+        }
+    }
+
+    #[test]
+    fn terminal_grants_in_list_and_show_are_canonical_and_decode_legacy_replies() {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct LegacyEntry {
+            npub: String,
+            access: ClientInventoryAccess,
+        }
+
+        let granted = [2; 32];
+        let denied = [3; 32];
+        let config = config_with_terminal("both", &[granted, denied], Some(granted));
+        let (directory, journal) = journal(&config);
+        let list = query(
+            &journal,
+            &config,
+            None,
+            InventoryRequest::List {
+                after: None,
+                limit: 2,
+            },
+        )
+        .unwrap();
+        let mut wire = serde_json::to_value(&list).unwrap();
+        assert_eq!(wire["version"], INVENTORY_VERSION);
+        assert_eq!(
+            wire["result"]["clients"][0]["npub"],
+            npub(&granted).unwrap()
+        );
+        assert_eq!(wire["result"]["clients"][0]["terminal_shell_granted"], true);
+        assert_eq!(wire["result"]["clients"][1]["npub"], npub(&denied).unwrap());
+        assert_eq!(
+            wire["result"]["clients"][1]["terminal_shell_granted"],
+            false
+        );
+        let first = &mut wire["result"]["clients"][0];
+        assert!(serde_json::from_value::<LegacyEntry>(first.clone()).is_err());
+        first
+            .as_object_mut()
+            .unwrap()
+            .remove("terminal_shell_granted");
+        let legacy: LegacyEntry = serde_json::from_value(first.clone()).unwrap();
+        assert_eq!(legacy.npub, npub(&granted).unwrap());
+        assert_eq!(legacy.access.last_authenticated_submit_at, None);
+        let decoded: ClientInventoryReply = serde_json::from_value(wire).unwrap();
+        assert!(matches!(
+            decoded.result,
+            InventoryResult::List { clients, .. } if !clients[0].terminal_shell_granted
+        ));
+
+        let policy = config
+            .engine_policy(
+                directory.path().join("engine"),
+                "/bin/true".into(),
+                [1; 32],
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+        for (key, granted) in [(granted, true), (denied, false)] {
+            let response = query(
+                &journal,
+                &config,
+                policy.command_policy.as_ref(),
+                show(npub(&key).unwrap()),
+            )
+            .unwrap();
+            let decoded: ClientInventoryReply =
+                serde_json::from_slice(&serde_json::to_vec(&response).unwrap()).unwrap();
+            assert!(matches!(
+                decoded.result,
+                InventoryResult::Show { client, policy }
+                    if client.npub == npub(&key).unwrap()
+                        && client.terminal_shell_granted == granted
+                        && !policy.semantics.interactive_shell_enabled
+            ));
         }
     }
 

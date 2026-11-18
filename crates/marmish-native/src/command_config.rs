@@ -18,6 +18,7 @@ use std::time::Duration;
 pub(crate) const CONFIG_FORMAT: u32 = 1;
 const MAX_CONFIG: u64 = 1024 * 1024;
 const DAY: u64 = 86400;
+const MAX_TERMINAL_CLIENTS: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -63,6 +64,7 @@ pub(crate) struct CommandConfig {
     relay_policy: RelayPolicy,
     trusted_remotes: BTreeSet<Account>,
     execution_clients: BTreeSet<Account>,
+    terminal_clients: BTreeSet<Account>,
     aliases: BTreeMap<String, AliasTarget>,
     cwd: PathBuf,
     limits: CommandLimits,
@@ -100,6 +102,15 @@ impl CommandConfig {
         let relay_policy = RelayPolicy::parse(&raw.relays, mode, TransportLimits::default())?;
         let trusted_remotes = accounts(raw.trusted_remotes)?;
         let execution_clients = accounts(raw.execution_clients)?;
+        if raw.terminal.clients.len() > MAX_TERMINAL_CLIENTS {
+            return Err(Error::Invalid("config_terminal_clients"));
+        }
+        let terminal_clients = accounts(raw.terminal.clients)?;
+        if (!terminal_clients.is_empty() && raw.role == Role::Client)
+            || !terminal_clients.is_subset(&execution_clients)
+        {
+            return Err(Error::Invalid("config_terminal_clients"));
+        }
         raw.command_policy.validate_bounds()?;
         let cwd = match raw.cwd {
             Some(value) => PathBuf::from(value),
@@ -134,6 +145,7 @@ impl CommandConfig {
             relay_policy,
             trusted_remotes,
             execution_clients,
+            terminal_clients,
             aliases,
             cwd,
             limits: raw.limits.normalize()?,
@@ -273,6 +285,11 @@ impl CommandConfig {
     pub(crate) fn execution_clients(&self) -> &BTreeSet<Account> {
         &self.execution_clients
     }
+    pub(crate) fn terminal_allowed(&self, key: &Account) -> bool {
+        matches!(self.role, Role::Server | Role::Both)
+            && self.execution_clients.contains(key)
+            && self.terminal_clients.contains(key)
+    }
     pub(crate) fn aliases(&self) -> &BTreeMap<String, AliasTarget> {
         &self.aliases
     }
@@ -313,11 +330,19 @@ struct RawConfig {
     tor: String,
     trusted_remotes: Vec<String>,
     execution_clients: Vec<String>,
+    #[serde(default)]
+    terminal: RawTerminal,
     command_policy: RawPolicy,
     #[serde(deserialize_with = "required_cwd")]
     cwd: Option<String>,
     limits: RawLimits,
     aliases: RawAliases,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTerminal {
+    clients: Vec<String>,
 }
 // deserialize_with keeps this nullable field required in the containing object.
 fn required_cwd<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<String>, D::Error> {
@@ -613,6 +638,75 @@ mod tests {
             self.write(&serde_json::to_vec(value).unwrap());
             CommandConfig::load(self.0.path())
         }
+    }
+    #[test]
+    fn terminal_grants_have_a_closed_shape_and_explicit_role_and_account_scope() {
+        let client = nostr::key::Keys::generate().public_key();
+        let other = nostr::key::Keys::generate().public_key();
+        let key = client.to_bytes();
+        let key_hex = hex::encode(key);
+        let key_npub = client.to_bech32().unwrap();
+        let parse = |value: &Value| CommandConfig::from_bytes(&serde_json::to_vec(value).unwrap());
+        let mut value = document();
+        value["execution_clients"] = json!([key_hex]);
+        assert!(!parse(&value).unwrap().terminal_allowed(&key));
+        value["terminal"] = json!({"clients":[]});
+        assert!(!parse(&value).unwrap().terminal_allowed(&key));
+        for role in ["server", "both"] {
+            value["role"] = json!(role);
+            value["terminal"] = json!({"clients":[key_npub]});
+            let config = parse(&value).unwrap();
+            assert!(config.terminal_allowed(&key));
+            assert!(!config.terminal_allowed(&other.to_bytes()));
+        }
+        value["role"] = json!("client");
+        assert!(parse(&value).is_err());
+        value["terminal"] = json!({"clients":[]});
+        assert!(!parse(&value).unwrap().terminal_allowed(&key));
+        value["role"] = json!("both");
+        for invalid in [
+            json!(null),
+            json!({}),
+            json!({"clients":[],"default":true}),
+            json!({"clients":null}),
+            json!({"clients":["not-a-key"]}),
+            json!({"clients":[other.to_bech32().unwrap()]}),
+            json!({"clients":[key_hex, key_npub]}),
+        ] {
+            value["terminal"] = invalid;
+            assert!(parse(&value).is_err());
+        }
+        value["terminal"] = json!({"clients":[]});
+        let bytes = serde_json::to_string(&value).unwrap();
+        for invalid in [
+            bytes.replace(
+                r#""terminal":{"clients":[]}"#,
+                r#""terminal":{"clients":[],"clients":[]}"#,
+            ),
+            bytes.replace(
+                r#""terminal":{"clients":[]}"#,
+                r#""terminal":{"clients":[]},"terminal":{"clients":[]}"#,
+            ),
+        ] {
+            assert_ne!(invalid, bytes);
+            assert!(CommandConfig::from_bytes(invalid.as_bytes()).is_err());
+        }
+    }
+
+    #[test]
+    fn terminal_grants_enforce_the_raw_list_cap() {
+        let keys: Vec<_> = (0..=MAX_TERMINAL_CLIENTS)
+            .map(|_| hex::encode(nostr::key::Keys::generate().public_key().to_bytes()))
+            .collect();
+        let mut value = document();
+        value["execution_clients"] = json!(keys);
+        value["terminal"] = json!({"clients": &keys[..MAX_TERMINAL_CLIENTS]});
+        assert!(CommandConfig::from_bytes(&serde_json::to_vec(&value).unwrap()).is_ok());
+        value["terminal"] = json!({"clients":keys});
+        assert!(matches!(
+            CommandConfig::from_bytes(&serde_json::to_vec(&value).unwrap()),
+            Err(Error::Invalid("config_terminal_clients"))
+        ));
     }
     #[test]
     fn launch_overrides_merge_before_effective_limit_validation() {

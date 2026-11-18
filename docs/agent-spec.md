@@ -10,8 +10,12 @@ public profile publication and `setup --grant-identifier` with full npub
 confirmation. Daemon admission continues to use pinned configuration. The
 [local client inventory](phases/local-client-inventory.md) exposes configured
 inbound grants, per-key normalized executable policy, and qualified access
-history from the local daemon socket. Inbound network invitations, remote
-heartbeat and interactive terminals are future phases.
+history from the local daemon socket. [Explicit Terminal shell grants](phases/terminal-grants.md)
+are default-off and separate from executable policy. Inventory shows the
+configured grant and setup revocation removes it. The
+[native tmux attachment worker](validation/terminal-native-backend.md)
+has local Linux x86-64 verification. Remote Terminal admission, reattach,
+inbound Peer invitations and network heartbeat remain in development.
 
 **CI execution direction (2026-11-13):** prefer Epiphytic self-hosted runners;
 do not launch GitHub-hosted qualification as an implicit fallback. The
