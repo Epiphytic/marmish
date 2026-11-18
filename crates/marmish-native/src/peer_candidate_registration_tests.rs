@@ -77,7 +77,7 @@ fn scope(root: &Path) -> (Arc<ProfileLease>, IdentityMaterial, CommandConfig) {
 
 #[test]
 fn candidate_registration_scope_and_irreversible_dispatch() {
-    for mode in ["local", "ordinary", "displaced", "dead_lease"] {
+    for mode in ["local", "ordinary", "topology", "displaced", "dead_lease"] {
         let root = start_profile();
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args(["--ignored", "--exact", CHILD, "--nocapture"])
@@ -148,6 +148,7 @@ fn registration_subprocess() {
     }
 
     let mut registered = prepared.register(&lease, &material).unwrap();
+    let forwarding = registered.forwarding_verifier();
     registered.recheck(&lease, &material).unwrap();
     assert_eq!(fs::read_dir(&peer).unwrap().count(), 0);
     assert!(matches!(
@@ -156,21 +157,37 @@ fn registration_subprocess() {
     ));
     match mode.as_str() {
         "ordinary" => {
-            verify_forwarded_ordinary_and_fenced_names(lease.root());
-            let attached = registered.attach(&lease, &material).unwrap();
+            let independent = forwarding.clone();
+            let mut attached = registered.attach(&lease, &material).unwrap();
             let _quota = attached.quota();
+            attached.recheck(&lease, &material).unwrap();
+
+            let config = lease.root().join("config.json");
+            let mut changed = fs::read(&config).unwrap();
+            changed.push(b'\n');
+            fs::write(config, changed).unwrap();
+            assert_eq!(
+                attached.recheck(&lease, &material),
+                Err(RegistrationFailure::LocalUnavailable)
+            );
+            drop(attached);
+            independent.recheck_default().unwrap();
+            verify_forwarded_ordinary_and_fenced_names(lease.root());
+        }
+        "topology" => {
+            let mut attached = registered.attach(&lease, &material).unwrap();
+            let moved = lease.root().join("moved");
+            fs::rename(&peer, &moved).unwrap();
+            fs::create_dir(&peer).unwrap();
+            fs::set_permissions(&peer, fs::Permissions::from_mode(0o700)).unwrap();
+            assert_eq!(
+                attached.recheck(&lease, &material),
+                Err(RegistrationFailure::LocalUnavailable)
+            );
+            forwarding.recheck_default().unwrap();
         }
         "displaced" => {
-            // SAFETY: this is the single test-only mutation in an isolated
-            // subprocess; the bundled unix descriptor is process owned.
-            unsafe {
-                let stock = sql::sqlite3_vfs_find(c"unix".as_ptr());
-                assert_eq!(sql::sqlite3_vfs_register(stock, 1), sql::SQLITE_OK);
-            }
-            assert_eq!(
-                registered.recheck(&lease, &material),
-                Err(RegistrationFailure::Indeterminate)
-            );
+            verify_sticky_displacement(registered, &lease, &material, &forwarding);
             assert!(matches!(
                 prepare().register(&lease, &material),
                 Err(RegistrationFailure::Indeterminate)
@@ -178,13 +195,11 @@ fn registration_subprocess() {
         }
         "dead_lease" => {
             let RegisteredReceiver {
-                prepared,
-                directories,
+                scope: old_scope,
                 dispatch,
             } = registered;
             lease.cleanup_runtime().unwrap();
-            drop(prepared);
-            drop(directories);
+            drop(old_scope);
             drop(lease);
             let (new, material, config) = scope(Path::new(&root));
             let mut prepared = ReceiverPreflight::prepare(&new, &material, &config)
@@ -195,7 +210,7 @@ fn registration_subprocess() {
                 dispatch.recheck_lease(&new, &directories),
                 Err("dispatch_lease_conflict")
             );
-            assert!(dispatch.recheck_default().is_ok());
+            forwarding.recheck_default().unwrap();
             // With the old lease gone, the process still cannot register again.
             assert!(matches!(
                 prepared.register(&new, &material),
@@ -207,6 +222,43 @@ fn registration_subprocess() {
         _ => panic!("unrecognized registration test case"),
     }
     lease.cleanup_runtime().unwrap();
+}
+
+fn verify_sticky_displacement(
+    registered: RegisteredReceiver,
+    lease: &Arc<ProfileLease>,
+    material: &IdentityMaterial,
+    forwarding: &ForwardingVerifier,
+) {
+    let independent = forwarding.clone();
+    let mut attached = registered.attach(lease, material).unwrap();
+    // SAFETY: the isolated test owns these default mutations and the
+    // stock and registered descriptors live for this process.
+    let wrapper = unsafe {
+        let wrapper = sql::sqlite3_vfs_find(ptr::null());
+        let stock = sql::sqlite3_vfs_find(c"unix".as_ptr());
+        assert_ne!(wrapper, stock);
+        assert_eq!(sql::sqlite3_vfs_register(stock, 1), sql::SQLITE_OK);
+        wrapper
+    };
+    assert_eq!(
+        attached.recheck(lease, material),
+        Err(RegistrationFailure::Indeterminate)
+    );
+    assert_eq!(
+        forwarding.recheck_default(),
+        Err(RegistrationFailure::Indeterminate)
+    );
+    // SAFETY: the wrapper was retained for process life by registration.
+    unsafe {
+        assert_eq!(sql::sqlite3_vfs_register(wrapper, 1), sql::SQLITE_OK);
+        assert_eq!(sql::sqlite3_vfs_find(ptr::null()), wrapper);
+    }
+    drop(attached);
+    assert_eq!(
+        independent.recheck_default(),
+        Err(RegistrationFailure::Indeterminate)
+    );
 }
 
 fn local_refusals(
