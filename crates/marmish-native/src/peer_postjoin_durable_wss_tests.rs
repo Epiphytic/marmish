@@ -479,22 +479,29 @@ async fn prove_lost_ack(with_receipt: bool) {
         .await
         .unwrap();
     if with_receipt {
-        let rotation = verify::confirm_rotation_cold(
-            &recipient,
-            founder.runtime(),
-            &image,
-            &confirmed,
-            wall(),
-        )
-        .unwrap();
-        let started = Instant::now();
-        let reserved = owner
-            .state
-            .checkpoint
-            .activate_and_reserve_recovered_receipt(&owner.state.source, &held, &rotation, wall())
+        let (started, reserved) = {
+            let rotation = verify::confirm_rotation_cold(
+                &recipient,
+                founder.runtime(),
+                &image,
+                &confirmed,
+                wall(),
+            )
             .unwrap();
+            let started = Instant::now();
+            let reserved = owner
+                .state
+                .checkpoint
+                .activate_and_reserve_recovered_receipt(
+                    &owner.state.source,
+                    &held,
+                    &rotation,
+                    wall(),
+                )
+                .unwrap();
+            (started, reserved)
+        };
         let inner = receipt::start(&mut owner, &stage, &round, &image, reserved).await;
-        drop(rotation);
         drop((recipient, owner, held, confirmed, armed));
         receipt::finish(receipt::ReceiptRun {
             stage: &stage,
