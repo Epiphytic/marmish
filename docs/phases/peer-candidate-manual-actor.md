@@ -85,15 +85,15 @@ local admission and WSS authentication together. Use monotonic remaining
 time clamped by qualification and retained TLS validity where applicable.
 Sample the second edge on completion in the shared handshake so actor
 scheduling delay cannot reset that budget. A late synchronous open
-cannot authorize a later step. Startup uses one WSS attempt. After qualification, take finite turns on
-one authenticated physical port, at most one complete checked carrier or one
+cannot authorize a later step. Startup uses one WSS attempt. After
+qualification, take finite turns on one authenticated physical port, at most one complete checked carrier or one
 bounded exact page application at a time. Park idle on readiness, deadlines
-or the next maintenance time. Clamp the idle `wait_live` deadline to the next maintenance wake.
+or the next maintenance time. Clamp the idle `wait_live` deadline
+to the next maintenance wake.
 A complete page or physical publish uses the existing checked transport
 deadline and yields at the end of that operation. Never cancel a partial
 exchange and reuse its socket as clean. A stale view during a bounded
-exchange is allowed to expire. Use one serviced
-native turn at a time, at most five seconds including its preflight,
+exchange is allowed to expire. Use one serviced native turn at a time, at most five seconds including its preflight,
 checkpoint and postcondition, further bounded by signed deadlines and live
 qualification. Check stop/readiness and time before each turn, immediately
 before native or durable effects and before releasing any proof. Pass the
@@ -101,8 +101,7 @@ existing concrete fence into the one-polled native operation. In candidate
 turns its synchronous `wall` check observes both the shared stop cell
 and the live `Ready::is_current()` watch state, including inside native
 callbacks. Do not rely on the actor polling a stop future while blocked.
-This bounds
-admission and acceptance, since synchronous SQLite/OS calls can return
+This bounds admission and acceptance, since synchronous SQLite/OS calls can return
 late. Keep the lease and actual join alive while such a call finishes and
 report incomplete shutdown while it is outstanding. Disconnect or lost
 exact physical scope invalidates the view and closes the actor for this
@@ -267,7 +266,7 @@ coverage from the same shared checked functions.
 | `peer_candidate_registration`, `peer_quota_candidate_registration`, `peer_ready_scope` | Already shared on selected Linux AMD64 | Keep existing mount, add read-only global verifier and same material/route admission. |
 | `peer_physical_route::ReceiverRouteAdmission`, `peer_relay_trust` exports | Fixture recipient/founder issuers test-only | Keep fixture exports test-only and add a sealed candidate issuer. |
 | `peer_recipient_port` carrier witnesses and use methods, `peer_installed_offer_*`, `peer_installed_consent_port`, `peer_installed_delivery_*` | Raw port shared, installed controller leaves under tests | Mount exact checked carrier/settlement and implemented receiver owners under shared Linux gate; isolate test harness, phase cuts, fixture policy and fixture issuer. |
-| `peer_installed_recipient_store`, `peer_receiver_inventory`, `peer_receiver_clean_charge`, `peer_quota_dispatch` receiver turns | Installed test owner and measured leaves test-only; registrar shared | Mount the exact checked schema/inventory leaves under shared Linux gate. Promote same-quota checked original/copy apertures; keep second-bind fixture helpers and scalar charge absent. |
+| `peer_installed_offer_store::attach_installed_v2`, `peer_receiver_inventory`, `peer_receiver_clean_charge`, `peer_quota_dispatch` receiver turns | Installed test owner and measured leaves test-only; registrar shared | Mount the exact checked schema/inventory leaves under shared Linux gate. Promote same-quota checked original/copy apertures; keep second-bind fixture helpers and scalar charge absent. |
 | `peer_receiver_v2_pending`, `peer_installed_pending_checkpoint`, `peer_pending_custody_checkpoint`, `peer_stage_binding`, `peer_stage_native` and `peer_stage_joined` | Test bridge and installed-only custody writers behind Linux test gate or inherited fixture parents | Widen shared Linux gate for only the durable v2/capped leaves and concrete package/native operations. Split fixture owner and legacy state transitions at inherited mounts when necessary. |
 | `peer_pending_read_view` under `peer_read_ipc`; new `peer_installed_recipient` | View is test-only, actor absent | View shared only with its candidate mount and tests, actor candidate-only. Keep read request/response contract. |
 
@@ -298,7 +297,8 @@ audit alone is insufficient for inlined or eliminated items.
    v2 exchange through durable Pending, cold new-process same-profile
    readback and exact List/Show. Exercise healthy-empty versus unavailable,
    an expired, stale and wrong selection, a parked actor, saturated
-   IPC, and disconnect with exact Unavailable and no reconnect, and ordinary Command while Peer is available and unavailable.
+   IPC, and disconnect with exact Unavailable and no reconnect. Exercise
+   ordinary Command while Peer is available and unavailable.
    Confirm the candidate has no write or active Peer surface and the stock
    package has no candidate surface. Report startup and actor turn timing,
    view refresh age, availability and local IPC latency without treating
