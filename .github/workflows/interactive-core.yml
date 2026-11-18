@@ -78,6 +78,8 @@ jobs:
           cargo test --locked -p marmish-native --lib terminal_socket_session_rejects_input_and_resize_after_close
       - name: Check private Peer invitation records
         run: cargo test --locked -p marmish-native --test peer_control_wire peer_control_core
+      - name: Check scoped Peer publication permits
+        run: cargo test --locked -p marmish-native --lib postjoin_gate::tests
       - name: Check Peer cursor reopening and effect rollback
         run: |
           cargo test --locked -p marmish-native --test peer_cursor_store peer_cursor_core_ties_cutoffs_and_periodic_restart_survive_reopen

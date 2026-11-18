@@ -21,7 +21,8 @@ use cgka_traits::{
 use futures_util::{SinkExt as _, StreamExt as _};
 use hkdf::Hkdf;
 use marmot_session::{
-    AccountDeviceRuntime, PublishWork, SessionConfig, StaticTransportRouting, key_package_metadata,
+    AccountDeviceRuntime, PublishWork, SessionConfig, StaticTransportRouting,
+    TransportRoutingPolicy, key_package_metadata,
 };
 use nostr::event::{Event, Kind, Tag, UnsignedEvent};
 use nostr::key::Keys;
@@ -179,18 +180,7 @@ impl Store {
                 )))
                 .unwrap();
         }
-        let config = SessionConfig::with_storage(
-            storage.clone(),
-            Duration::ZERO,
-            self.account().as_slice().to_vec(),
-            Box::new(NostrMlsPeeler::new().with_welcome_signer_arc(self.signer.clone())),
-        )
-        .account_identity_proof_signer(Arc::new(ProofSigner(self.signer.clone())))
-        .supported_app_components(
-            default_group_components()
-                .into_iter()
-                .chain([NOSTR_ROUTING_COMPONENT_ID]),
-        );
+        let config = postjoin_session_config(storage.clone(), self.signer.clone());
         let runtime = AccountDeviceRuntime::open(config, || {
             Ok::<_, marmot_session::SessionError>((
                 adapter,
@@ -231,6 +221,24 @@ fn now() -> u64 {
 
 fn endpoints() -> Vec<TransportEndpoint> {
     vec![TransportEndpoint(RELAY.into())]
+}
+
+pub(crate) fn postjoin_session_config(
+    storage: SqliteAccountStorage,
+    signer: Arc<Keys>,
+) -> SessionConfig {
+    SessionConfig::with_storage(
+        storage,
+        Duration::ZERO,
+        signer.public_key().to_bytes().to_vec(),
+        Box::new(NostrMlsPeeler::new().with_welcome_signer_arc(signer.clone())),
+    )
+    .account_identity_proof_signer(Arc::new(ProofSigner(signer)))
+    .supported_app_components(
+        default_group_components()
+            .into_iter()
+            .chain([NOSTR_ROUTING_COMPONENT_ID]),
+    )
 }
 
 async fn prepare_private_package(
@@ -322,6 +330,41 @@ pub(crate) async fn peer_enrollment_welcome(
     room_id: [u8; 16],
     package: KeyPackage,
 ) -> Vec<u8> {
+    peer_enrollment_founder(dir, founder, recipient, routing, room_id, package)
+        .await
+        .2
+        .payload
+}
+
+pub(crate) struct PeerFounderRuntime(StageRuntime);
+
+impl PeerFounderRuntime {
+    pub(crate) fn runtime(
+        &self,
+    ) -> &AccountDeviceRuntime<
+        impl TransportAdapter,
+        impl TransportRoutingPolicy,
+        impl super::KeyPackagePublisher,
+    > {
+        &self.0
+    }
+
+    pub(crate) async fn ingest_delivery(
+        &mut self,
+        delivery: &TransportDelivery,
+    ) -> marmot_session::AccountResult<marmot_session::AccountIngestEffects> {
+        self.0.ingest_delivery(delivery).await
+    }
+}
+
+pub(crate) async fn peer_enrollment_founder(
+    dir: &Path,
+    founder: Arc<Keys>,
+    recipient: nostr::key::PublicKey,
+    routing: &NostrRoutingV1,
+    room_id: [u8; 16],
+    package: KeyPackage,
+) -> (PeerFounderRuntime, GroupId, TransportMessage) {
     let recipient = MemberId::new(recipient.to_bytes().to_vec());
     let founder = Store::new(dir, "peer-founder.db", founder);
     let (_store, mut runtime) = founder.open_with(
@@ -336,7 +379,7 @@ pub(crate) async fn peer_enrollment_welcome(
         Arc::new(NoIo),
     );
     let name = format!("marmish/peer/1/{}", hex::encode(room_id));
-    let (_, mut welcomes) = found_room(
+    let (group, mut welcomes) = found_room(
         &mut runtime,
         vec![package],
         routing,
@@ -346,7 +389,7 @@ pub(crate) async fn peer_enrollment_welcome(
     .await;
     let welcome = welcomes.pop().expect("one recipient Welcome");
     assert!(welcomes.is_empty());
-    welcome.payload
+    (PeerFounderRuntime(runtime), group, welcome)
 }
 
 // The ordinary provider exercises actual Command wire payload authentication.

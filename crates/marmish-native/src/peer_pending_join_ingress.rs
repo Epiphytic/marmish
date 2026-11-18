@@ -6,7 +6,10 @@ use crate::peer_invitation::store::{
 };
 
 impl PreparedConsentOwner<'_> {
-    pub(super) fn receive_custody_record(&mut self, raw: RawRecord<'_>) -> Result<Disposition> {
+    pub(in crate::peer_invitation::prepared_consent) fn receive_custody_record(
+        &mut self,
+        raw: RawRecord<'_>,
+    ) -> Result<Disposition> {
         let sample = self.available_sample()?;
         let wall = sample.as_secs();
         let codec = Codec::new(MAX_OUTER_BYTES).map_err(|_| Error::Binding)?;

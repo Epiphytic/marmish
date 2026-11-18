@@ -22,6 +22,8 @@ pub(crate) use consent_checkpoint::wire::Delivery;
 
 #[path = "peer_pending_join_native_tests.rs"]
 mod joined_tests;
+#[path = "peer_postjoin_proof_tests.rs"]
+mod postjoin_tests;
 #[path = "peer_prepared_consent_owner_tests.rs"]
 mod tests;
 
