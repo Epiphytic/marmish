@@ -431,6 +431,33 @@ async fn wait_startup_turn(
     }
     Ok(false)
 }
+pub(crate) async fn connect_configured_relay(
+    connector: &RelayConnector,
+    client: &Client,
+    endpoint: &nostr::types::Url,
+    deadline: Instant,
+) -> Result<()> {
+    let connection_timeout = connector.connection_timeout(endpoint)?;
+    tokio::time::timeout_at(
+        deadline,
+        client
+            .add_relay(endpoint.as_str())
+            .connect_timeout(connection_timeout)
+            .limits(connector.relay_limits())
+            .reconnect(false)
+            .notification_channel_size(64),
+    )
+    .await
+    .map_err(|_| Error::Timeout)?
+    .map_err(|_| Error::Transport("add_relay"))?;
+    let relay = client
+        .relay(endpoint.as_str())
+        .await
+        .map_err(|_| Error::Transport("relay_connect"))?
+        .ok_or(Error::Transport("relay_connect"))?;
+    connect_startup_relay(&mut SdkStartupRelay(relay), deadline, connection_timeout).await
+}
+
 async fn connect_startup_relay(
     relay: &mut impl StartupRelay,
     deadline: Instant,
@@ -1394,27 +1421,7 @@ impl MdkOwner {
         }
         self.ensure_ingress()?;
         for endpoint in self.connector.policy().urls() {
-            let connection_timeout = self.connector.connection_timeout(endpoint)?;
-            tokio::time::timeout_at(
-                deadline,
-                self.client
-                    .add_relay(endpoint.as_str())
-                    .connect_timeout(connection_timeout)
-                    .limits(self.connector.relay_limits())
-                    .reconnect(false)
-                    .notification_channel_size(64),
-            )
-            .await
-            .map_err(|_| Error::Timeout)?
-            .map_err(|_| Error::Transport("add_relay"))?;
-            let relay = self
-                .client
-                .relay(endpoint.as_str())
-                .await
-                .map_err(|_| Error::Transport("relay_connect"))?
-                .ok_or(Error::Transport("relay_connect"))?;
-            connect_startup_relay(&mut SdkStartupRelay(relay), deadline, connection_timeout)
-                .await?;
+            connect_configured_relay(&self.connector, &self.client, endpoint, deadline).await?;
         }
         // Ordinary drain does not drive KeyPackage maintenance. Readiness
         // requires an actual acknowledged publication of this device's stable

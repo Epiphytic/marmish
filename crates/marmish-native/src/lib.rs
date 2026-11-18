@@ -33,6 +33,9 @@ mod native_install;
 mod native_manifest;
 mod native_preflight;
 mod native_setup;
+mod profile_directory;
+mod profile_metadata;
+mod profile_onboarding;
 
 mod command_srv;
 mod native_layout;

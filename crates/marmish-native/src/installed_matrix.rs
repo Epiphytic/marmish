@@ -1417,6 +1417,7 @@ exit {code}
                 relays: Some(ctx.relays.clone()),
                 tor: Some("off".into()),
                 grants: vec![],
+                identifier: None,
                 revoke: vec![],
                 trust: vec![],
                 untrust: vec![],

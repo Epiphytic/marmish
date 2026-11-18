@@ -301,6 +301,30 @@ impl RelayConnector {
         &self.0.policy
     }
 
+    /// Directory HTTPS uses a separate Tor isolation token and no relay slot.
+    /// The caller owns the total HTTPS deadline.
+    pub(crate) async fn directory_tor_stream(&self, host: &str) -> Result<Box<dyn NetworkStream>> {
+        if self.policy().mode() != RouteMode::Always {
+            return Err(Error::Transport("directory_tor_policy"));
+        }
+        let client = self
+            .0
+            .tor
+            .lock()
+            .await
+            .as_ref()
+            .ok_or(Error::Transport("directory_tor_not_ready"))?
+            .isolated_client();
+        tokio::select! {
+            biased;
+            _ = self.0.cancelled.cancelled() => Err(Error::Transport("shutdown")),
+            result = client.connect((host, 443)) => {
+                let stream = result.map_err(|_| Error::Transport("directory_tor_connect"))?;
+                Ok(Box::new(stream))
+            }
+        }
+    }
+
     /// The complete attempt budget for an explicitly configured endpoint.
     pub fn connection_timeout(&self, url: &Url) -> Result<Duration> {
         let (_, route) = self.policy().destination(url)?;
@@ -612,11 +636,31 @@ impl RelayConnector {
     }
 }
 
-trait NetworkStream: AsyncRead + AsyncWrite + Unpin + Send {}
+pub(crate) trait NetworkStream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> NetworkStream for T {}
 
-async fn tls_stream(stream: Box<dyn NetworkStream>, host: &str) -> Result<Box<dyn NetworkStream>> {
+pub(crate) async fn tls_stream(
+    stream: Box<dyn NetworkStream>,
+    host: &str,
+) -> Result<Box<dyn NetworkStream>> {
     let roots = rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    tls_stream_using_roots(stream, host, roots).await
+}
+
+#[cfg(test)]
+pub(crate) async fn tls_stream_with_roots(
+    stream: Box<dyn NetworkStream>,
+    host: &str,
+    roots: rustls::RootCertStore,
+) -> Result<Box<dyn NetworkStream>> {
+    tls_stream_using_roots(stream, host, roots).await
+}
+
+async fn tls_stream_using_roots(
+    stream: Box<dyn NetworkStream>,
+    host: &str,
+    roots: rustls::RootCertStore,
+) -> Result<Box<dyn NetworkStream>> {
     // Explicit provider avoids ambient process-wide provider selection.
     let config = rustls::ClientConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),

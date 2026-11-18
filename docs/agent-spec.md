@@ -1,11 +1,14 @@
 # Marmish native v0.3 agent specification
 
-**Interactive terminal and peer operations are planned.** The
+**Interactive terminals and peer operations are under development.** The
 [native roadmap](phases/interactive-peers-roadmap.md) covers PTY/tmux,
 display update reduction, pinned-key onboarding, inbound server invitations
 and encrypted per-peer status. The proposed shell grant is separate from
 command policy. Discovery suggests keys for confirmation and never modifies
-existing grants on its own. The roadmap describes future behavior.
+existing grants on its own. The [NIP-05 onboarding increment](phases/nip05-onboarding.md) adds explicit
+public profile publication and `setup --grant-identifier` with full npub
+confirmation. Daemon admission continues to use pinned configuration. The
+other roadmap phases describe intended behavior.
 
 **CI execution direction (2026-11-13):** prefer Epiphytic self-hosted runners;
 do not launch GitHub-hosted qualification as an implicit fallback. The

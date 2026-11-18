@@ -3,6 +3,8 @@ use crate::command_config::CommandConfig;
 use crate::command_lifecycle::{OwnedIdentity, stop_owned};
 use crate::identity::{BackendChoice, ProfileLease};
 use crate::mdk_adapter::MdkOwner;
+use crate::profile_directory::DirectoryId;
+use crate::profile_onboarding;
 use crate::transport::{ArtiDirs, RelayConnector, default_relays};
 use crate::{Error, Result};
 use nostr::nips::nip19::ToBech32;
@@ -44,6 +46,7 @@ pub(crate) struct SetupOptions {
     pub relays: Option<Vec<String>>,
     pub tor: Option<String>,
     pub grants: Vec<String>,
+    pub identifier: Option<IdentifierGrant>,
     pub revoke: Vec<String>,
     pub trust: Vec<String>,
     pub untrust: Vec<String>,
@@ -51,6 +54,11 @@ pub(crate) struct SetupOptions {
     pub no_grants: bool,
     pub debug: bool,
 }
+pub(crate) struct IdentifierGrant {
+    pub(crate) id: DirectoryId,
+    pub(crate) expected: Option<String>,
+}
+
 #[derive(Serialize)]
 pub(crate) struct SetupReport {
     pub schema: u8,
@@ -118,15 +126,11 @@ fn proposed(mut old: Option<Value>, o: &SetupOptions) -> Result<(Value, bool, Se
             Some("server") => SetupRole::Server,
             _ => SetupRole::Both,
         });
-    if role == SetupRole::Client && !o.grants.is_empty() || o.no_grants && !o.grants.is_empty() {
+    let adding_grants = !o.grants.is_empty() || o.identifier.is_some();
+    if adding_grants && (role == SetupRole::Client || o.no_grants) {
         return Err(Error::Invalid("invalid_grant"));
     }
-    if !existing
-        && !o.interactive
-        && role != SetupRole::Client
-        && o.grants.is_empty()
-        && !o.no_grants
-    {
+    if !existing && !o.interactive && role != SetupRole::Client && !adding_grants && !o.no_grants {
         return Err(Error::Invalid("grant_choice_required"));
     }
     let before = old.clone();
@@ -153,16 +157,16 @@ fn proposed(mut old: Option<Value>, o: &SetupOptions) -> Result<(Value, bool, Se
         &serde_json::to_vec(&value).map_err(|_| Error::Invalid("config_invalid"))?,
     )?;
     let changed = before.as_ref() != Some(&value);
-    if existing && changed && !o.update {
+    if existing && (changed || o.identifier.is_some()) && !o.update {
         return Err(Error::Invalid("config_exists"));
     }
     Ok((value, changed, role))
 }
-struct Tty {
+pub(crate) struct Tty {
     file: File,
 }
 impl Tty {
-    fn open() -> Result<Self> {
+    pub(crate) fn open() -> Result<Self> {
         let f = OpenOptions::new()
             .read(true)
             .write(true)
@@ -177,7 +181,7 @@ impl Tty {
         }
         Ok(Self { file: f })
     }
-    fn line(&mut self, prompt: &str) -> Result<String> {
+    pub(crate) fn line(&mut self, prompt: &str) -> Result<String> {
         self.file.write_all(prompt.as_bytes())?;
         self.file.flush()?;
         let mut v = Vec::new();
@@ -237,7 +241,11 @@ fn choices(o: &mut SetupOptions) -> Result<()> {
             .into(),
         );
     }
-    if o.role != Some(SetupRole::Client) && o.grants.is_empty() && !o.no_grants {
+    if o.role != Some(SetupRole::Client)
+        && o.grants.is_empty()
+        && o.identifier.is_none()
+        && !o.no_grants
+    {
         let text = tty.line("Npub(s) allowed to execute here (empty disables inbound): ")?;
         o.grants = text.split_whitespace().map(str::to_owned).collect();
     }
@@ -296,6 +304,64 @@ fn commit(root: &Path, value: &Value) -> Result<()> {
     }
     result
 }
+fn confirmed_grant(candidate: &str, expected: &str) -> Result<String> {
+    if candidate != expected {
+        return Err(Error::Invalid("profile_key_unconfirmed"));
+    }
+    Ok(candidate.to_owned())
+}
+
+#[cfg(test)]
+thread_local! {
+    static LOOKUP_FIXTURE: std::cell::RefCell<Option<(DirectoryId, profile_onboarding::Candidate)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+async fn lookup_candidate(
+    profile: &ProfileLease,
+    config: &CommandConfig,
+    id: &DirectoryId,
+) -> Result<profile_onboarding::Candidate> {
+    #[cfg(test)]
+    if let Some((requested, candidate)) = LOOKUP_FIXTURE.with(|fixture| fixture.borrow_mut().take())
+    {
+        assert_eq!(&requested, id);
+        return Ok(candidate);
+    }
+    profile_onboarding::lookup(profile, config.relay_policy(), id).await
+}
+
+async fn resolve_grant(
+    request: &IdentifierGrant,
+    profile: &ProfileLease,
+    config: &Value,
+) -> Result<String> {
+    let mut tty = if let Some(expected) = &request.expected {
+        list(std::slice::from_ref(expected))?;
+        None
+    } else {
+        Some(Tty::open()?)
+    };
+    let normalized = CommandConfig::from_bytes(
+        &serde_json::to_vec(config).map_err(|_| Error::Invalid("config_invalid"))?,
+    )?;
+    let candidate = lookup_candidate(profile, &normalized, &request.id).await?;
+    let preview = format!(
+        "{} resolved by NIP-05 and signed Nostr metadata ({}/{} relays complete).\n{}\n",
+        request.id, candidate.relays_complete, candidate.relays_queried, candidate.npub
+    );
+    let expected = match &mut tty {
+        Some(tty) => tty.line(&format!(
+            "{preview}Compare the complete npub with the intended user independently, then type it to grant access: "
+        ))?,
+        None => {
+            eprint!("{preview}");
+            request.expected.clone().ok_or(Error::Invalid("profile_key_unconfirmed"))?
+        }
+    };
+    confirmed_grant(&candidate.npub, &expected)
+}
+
 pub(crate) async fn run(mut o: SetupOptions) -> Result<SetupReport> {
     if o.debug {
         eprintln!("marmish setup debug: stage=choices");
@@ -313,14 +379,24 @@ pub(crate) async fn run(mut o: SetupOptions) -> Result<SetupReport> {
     })
     .await
     .map_err(|_| Error::Identity("initialization_worker"))??;
-    let (config, changed, role) = proposed(config_read(&profile)?, &o).inspect_err(|error| {
-        if matches!(error, Error::Invalid("config_exists")) {
-            eprintln!(
-                "marmish setup: existing configuration at {:?} differs from the requested options; rerun setup with --update to apply them (existing identity and data are kept).",
-                profile.root().join("config.json")
-            );
-        }
-    })?;
+    let old = config_read(&profile)?;
+    let validate = |current: Option<Value>, options: &SetupOptions| {
+        proposed(current, options).inspect_err(|error| {
+            if matches!(error, Error::Invalid("config_exists")) {
+                eprintln!(
+                    "marmish setup: existing configuration at {:?} differs from the requested options; rerun setup with --update to apply them (existing identity and data are kept).",
+                    profile.root().join("config.json")
+                );
+            }
+        })
+    };
+    if let Some(request) = &o.identifier {
+        let (preview, _, _) = validate(old.clone(), &o)?;
+        let key = resolve_grant(request, &profile, &preview).await?;
+        o.identifier = None;
+        o.grants.push(key);
+    }
+    let (config, changed, role) = validate(old, &o)?;
     let normalized = CommandConfig::from_bytes(
         &serde_json::to_vec(&config).map_err(|_| Error::Invalid("config_invalid"))?,
     )?;
@@ -437,6 +513,7 @@ mod tests {
             relays: Some(vec!["wss://relay.example/".into()]),
             tor: Some("off".into()),
             grants: vec![],
+            identifier: None,
             revoke: vec![],
             trust: vec![],
             untrust: vec![],
@@ -445,6 +522,42 @@ mod tests {
             debug: false,
         }
     }
+    #[test]
+    fn identifier_proposal_cannot_grant_until_the_full_key_is_confirmed() {
+        use nostr::key::Keys;
+        let mut options = options();
+        options.no_grants = false;
+        let key = Keys::generate().public_key().to_bech32().unwrap();
+        let other = Keys::generate().public_key().to_bech32().unwrap();
+        options.identifier = Some(IdentifierGrant {
+            id: "client@example.org".parse().unwrap(),
+            expected: Some(key.clone()),
+        });
+        let (preview, _, _) = proposed(None, &options).unwrap();
+        assert!(preview["execution_clients"].as_array().unwrap().is_empty());
+        assert!(matches!(
+            proposed(Some(preview), &options),
+            Err(Error::Invalid("config_exists"))
+        ));
+        assert!(confirmed_grant(&key, &other).is_err());
+        assert!(confirmed_grant(&key, &key[..12]).is_err());
+
+        options.role = Some(SetupRole::Client);
+        assert!(matches!(
+            proposed(None, &options),
+            Err(Error::Invalid("invalid_grant"))
+        ));
+        options.role = Some(SetupRole::Server);
+        options.identifier.take();
+        options.grants.push(confirmed_grant(&key, &key).unwrap());
+        let (approved, _, _) = proposed(None, &options).unwrap();
+        assert_eq!(
+            approved["execution_clients"],
+            json!([hex::encode(crate::command_config::account(&key).unwrap())])
+        );
+        assert!(!approved.to_string().contains("client@example.org"));
+    }
+
     #[test]
     fn both_without_grants_is_disabled_and_new_profiles_default_to_white_noise() {
         let o = options();
@@ -511,6 +624,84 @@ mod tests {
             .permissions(fs::Permissions::from_mode(0o700))
             .tempdir_in(std::env::var_os("HOME").unwrap())
             .unwrap()
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn identifier_grant_commits_only_the_verified_key() {
+        let root = private_state();
+        let state = root.path().join("state");
+        let mut initial = options();
+        initial.state_dir = state.clone();
+        assert!(!run(initial).await.unwrap().inbound_enabled);
+
+        let identity = "default";
+        let profile = ProfileLease::acquire_ready(&state, identity).unwrap();
+        let path = profile.root().join("config.json");
+        let original = fs::read(&path).unwrap();
+        drop(profile);
+
+        let account = nostr::key::Keys::generate().public_key();
+        let approved = account.to_bech32().unwrap();
+        let replacement = nostr::key::Keys::generate()
+            .public_key()
+            .to_bech32()
+            .unwrap();
+        let identifier: DirectoryId = "client@example.org".parse().unwrap();
+        let grant = |candidate: &str| {
+            LOOKUP_FIXTURE.with(|fixture| {
+                assert!(
+                    fixture
+                        .borrow_mut()
+                        .replace((
+                            identifier.clone(),
+                            profile_onboarding::Candidate {
+                                npub: candidate.to_owned(),
+                                relays_queried: 1,
+                                relays_complete: 1,
+                            },
+                        ))
+                        .is_none()
+                );
+            });
+            let mut o = options();
+            o.state_dir = state.clone();
+            o.update = true;
+            o.no_grants = false;
+            o.identifier = Some(IdentifierGrant {
+                id: identifier.clone(),
+                expected: Some(approved.clone()),
+            });
+            o
+        };
+
+        assert!(matches!(
+            run(grant(&replacement)).await,
+            Err(Error::Invalid("profile_key_unconfirmed"))
+        ));
+        assert_eq!(fs::read(&path).unwrap(), original);
+
+        let report = run(grant(&approved)).await.unwrap();
+        assert!(report.config_changed && report.inbound_enabled);
+        let committed = fs::read(&path).unwrap();
+        assert_ne!(committed, original);
+        let profile = ProfileLease::acquire_ready(&state, identity).unwrap();
+        assert_eq!(
+            config_read(&profile).unwrap().unwrap()["execution_clients"],
+            json!([account.to_hex()]),
+        );
+        assert!(!String::from_utf8_lossy(&committed).contains(&identifier.to_string()));
+        drop(profile);
+
+        assert!(matches!(
+            run(grant(&replacement)).await,
+            Err(Error::Invalid("profile_key_unconfirmed"))
+        ));
+        assert_eq!(fs::read(&path).unwrap(), committed);
+        let profile = ProfileLease::acquire_ready(&state, identity).unwrap();
+        let config = CommandConfig::load(profile.root()).unwrap();
+        assert_eq!(
+            config.execution_clients(),
+            &BTreeSet::from([crate::command_config::account(&approved).unwrap(),])
+        );
     }
     #[tokio::test(flavor = "current_thread")]
     async fn actual_file_setup_is_local_repeatable_and_releases_lease() {

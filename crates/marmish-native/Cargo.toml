@@ -40,7 +40,7 @@ hkdf.workspace = true
 libc.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 sha2.workspace = true
 thiserror.workspace = true
 url.workspace = true
@@ -64,6 +64,9 @@ tokio-tungstenite = { version = "0.28", default-features = false, features = ["h
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1"
+hyper = { version = "=1.11.1", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "=0.1.20", default-features = false, features = ["tokio"] }
+http-body-util = { version = "=0.1.5", default-features = false }
 sha3 = "0.10"
 data-encoding = "2"
 nostr = { git = "https://github.com/erskingardner/rust-nostr", rev = "48801bf6f2f1cd55bb1729e94159946c8832a786", default-features = false, features = ["std", "rand", "os-rng", "nip04", "nip49", "nip59"] }
@@ -77,5 +80,6 @@ transport-nostr-peeler = { git = "https://github.com/marmot-protocol/mdk", rev =
 
 [dev-dependencies]
 marmot-session = { git = "https://github.com/marmot-protocol/mdk", rev = "8abc51befbf71a1ae3bdbb25eb0860c731e75db2", features = ["test-support"] }
+rcgen = { version = "=0.14.8", default-features = false, features = ["ring"] }
 tempfile.workspace = true
 tokio = { version = "1", features = ["test-util"] }

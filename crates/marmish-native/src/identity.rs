@@ -149,6 +149,15 @@ impl ProfileLease {
     }
     /// Open only an existing ready Keychain profile, without creating state.
     pub(crate) fn acquire_existing(base: &Path, name: &str) -> Result<Self> {
+        let profile = Self::acquire_ready(base, name)?;
+        if profile.setup_snapshot().backend != Some(BackendChoice::Keychain) {
+            return Err(Error::Identity("keychain_profile_required"));
+        }
+        Ok(profile)
+    }
+
+    /// Acquire a ready profile of either backend without creating state.
+    pub(crate) fn acquire_ready(base: &Path, name: &str) -> Result<Self> {
         validate_name(name)?;
         check_dir(base)?;
         let root = base.canonicalize()?.join(name);
@@ -161,9 +170,6 @@ impl ProfileLease {
         validate_manifest(&manifest, name)?;
         if manifest.phase != Phase::Ready {
             return Err(Error::Identity("profile_not_ready"));
-        }
-        if manifest.backend != Backend::Keychain {
-            return Err(Error::Identity("keychain_profile_required"));
         }
         Self::from_locked(root, name, lock, Some(manifest))
     }

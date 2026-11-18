@@ -145,6 +145,21 @@ struct CopyArgs {
 }
 
 #[derive(Subcommand)]
+enum ProfileCommand {
+    /// Update public signed metadata on the configured relays.
+    Publish {
+        #[arg(long)]
+        nip05: String,
+        /// Public contact address. Anyone who reads this metadata can copy it.
+        #[arg(long)]
+        email: Option<String>,
+        /// Consent to public distribution when running without a terminal.
+        #[arg(long)]
+        confirm_public: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum FrontendCommand {
     /// Inspect retained local download receipts or acknowledge an uncertain record.
     CopyReceipts {
@@ -215,7 +230,7 @@ enum FrontendCommand {
         #[arg(long)]
         bin_dir: PathBuf,
     },
-    /// Create or update this named identity and its offline command configuration.
+    /// Resolve a verified client identifier or update this identity's configuration.
     Setup {
         #[arg(long)]
         interactive: bool,
@@ -223,6 +238,12 @@ enum FrontendCommand {
         role: Option<String>,
         #[arg(long)]
         grant: Vec<String>,
+        /// Resolve one NIP-05 identifier and pin its independently verified npub.
+        #[arg(long, conflicts_with = "no_grants")]
+        grant_identifier: Option<String>,
+        /// Independently verified full npub expected for --grant-identifier.
+        #[arg(long, requires = "grant_identifier")]
+        confirm_npub: Option<String>,
         #[arg(long)]
         revoke: Vec<String>,
         #[arg(long)]
@@ -233,6 +254,11 @@ enum FrontendCommand {
         update: bool,
         #[arg(long)]
         no_grants: bool,
+    },
+    /// Manage this identity's signed public Nostr profile.
+    Profile {
+        #[command(subcommand)]
+        action: ProfileCommand,
     },
     /// Initialize encrypted native storage without connecting to relays.
     Init,
@@ -446,10 +472,47 @@ async fn run(
         });
     }
     let state = state_dir(args.state_dir.clone())?;
+    if let Some(FrontendCommand::Profile {
+        action:
+            ProfileCommand::Publish {
+                nip05,
+                email,
+                confirm_public,
+            },
+    }) = &args.command
+    {
+        if daemon_binary || !args.srv.is_empty() {
+            return Err(Error::Invalid("profile_operation"));
+        }
+        let report =
+            crate::profile_onboarding::publish(crate::profile_onboarding::PublishOptions {
+                state_dir: state,
+                identity: args.identity,
+                backend: args.key_storage.into(),
+                helper: layout.helper.clone(),
+                relays: args.relay,
+                tor: args.tor,
+                nip05: nip05.parse()?,
+                email: email.clone(),
+                confirm_public: *confirm_public,
+            })
+            .await?;
+        println!(
+            "{}",
+            serde_json::to_string(&report).map_err(|_| Error::Invalid("report_encoding"))?
+        );
+        return Ok(if report.acknowledged == report.queried {
+            0
+        } else {
+            1
+        });
+    }
     if let Some(FrontendCommand::Setup {
         interactive,
         role,
         grant,
+        grant_identifier,
+        confirm_npub,
         revoke,
         trust,
         untrust,
@@ -457,7 +520,19 @@ async fn run(
         no_grants,
     }) = &args.command
     {
-        use crate::native_setup::{SetupOptions, SetupRole};
+        use crate::native_setup::{IdentifierGrant, SetupOptions, SetupRole};
+        if grant_identifier.is_some() && (daemon_binary || !args.srv.is_empty()) {
+            return Err(Error::Invalid("profile_operation"));
+        }
+        let identifier = grant_identifier
+            .as_deref()
+            .map(|id| {
+                Ok::<_, Error>(IdentifierGrant {
+                    id: id.parse()?,
+                    expected: confirm_npub.clone(),
+                })
+            })
+            .transpose()?;
         let role = match role.as_deref() {
             Some("client" | "c") => Some(SetupRole::Client),
             Some("server" | "s") => Some(SetupRole::Server),
@@ -475,6 +550,7 @@ async fn run(
             relays: (!args.relay.is_empty()).then_some(args.relay),
             tor: args.tor,
             grants: grant.clone(),
+            identifier,
             revoke: revoke.clone(),
             trust: trust.clone(),
             untrust: untrust.clone(),
@@ -1856,6 +1932,43 @@ mod tests {
     fn parser_contract_is_consistent() {
         Args::command().debug_assert();
     }
+    #[test]
+    fn profile_onboarding_cli_requires_explicit_confirmation_arguments() {
+        assert!(Args::try_parse_from(["marmish", "setup", "--confirm-npub", "unused"]).is_err());
+        assert!(
+            Args::try_parse_from([
+                "marmish",
+                "setup",
+                "--grant-identifier",
+                "client@example.org",
+                "--no-grants"
+            ])
+            .is_err()
+        );
+        assert!(
+            Args::try_parse_from(["marmish", "profile", "publish", "--confirm-public"]).is_err()
+        );
+        let args = Args::try_parse_from([
+            "marmish",
+            "setup",
+            "--grant-identifier",
+            "client@example.org",
+            "--confirm-npub",
+            "candidate",
+            "--update",
+        ])
+        .unwrap();
+        assert!(matches!(
+            args.command,
+            Some(FrontendCommand::Setup {
+                grant_identifier: Some(identifier),
+                confirm_npub: Some(expected),
+                update: true,
+                ..
+            }) if identifier == "client@example.org" && expected == "candidate"
+        ));
+    }
+
     #[test]
     fn stream_cli_preserves_literal_argv_and_cancel_selection() {
         let args = Args::try_parse_from([

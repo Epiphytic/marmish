@@ -1,0 +1,37 @@
+name: Native interactive and peer core
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/interactive-core.yml
+      - Cargo.lock
+      - crates/marmish-native/**
+      - rust-toolchain.toml
+permissions:
+  contents: read
+concurrency:
+  group: marmish-interactive-core
+  cancel-in-progress: true
+jobs:
+  core:
+    if: github.repository == 'Epiphytic/marmish' && github.ref == 'refs/heads/master'
+    runs-on:
+      group: epiphytic-ci
+      labels: [self-hosted, Linux, X64, bel-ci]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920
+        with:
+          toolchain: 1.97.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          key: interactive-core
+      - name: Check verified onboarding and private config
+        run: |
+          cargo test --locked -p marmish-native --lib profile_directory::core_tests
+          cargo test --locked -p marmish-native --lib profile_metadata::core_tests
+          cargo test --locked -p marmish-native --lib identifier_proposal_cannot_grant_until_the_full_key_is_confirmed

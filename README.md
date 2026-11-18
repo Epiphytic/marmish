@@ -123,6 +123,36 @@ client dies before acknowledging readiness, the new unacknowledged daemon shuts
 down; an acknowledged daemon survives the caller. This does not install a login
 or boot service.
 
+## Onboard a client with NIP-05
+
+A client with a domain-backed [NIP-05](https://github.com/nostr-protocol/nips/blob/master/05.md)
+identifier can publish it after local identity setup. The domain's HTTPS
+mapping must already contain the client's public key in lowercase hex. Stop the
+local daemon for that identity before publishing.
+
+```sh
+marmish profile publish --nip05 alice@example.org
+```
+
+The prompt previews the public fields. Add `--email address@example.org` only
+if you want that contact address copied to public relay metadata.
+In a headless environment, use `--confirm-public` to opt in. If you have a
+controlling terminal, type `publish` at the preview prompt. Publication requires
+complete metadata lookup across the configured relays.
+
+On the server, resolve the identifier during setup and compare the complete
+displayed npub with the client through an independent channel before entering it.
+
+```sh
+marmish setup --update --grant-identifier alice@example.org
+```
+
+In a headless environment, add `--confirm-npub "$CLIENT_NPUB"` with the full npub
+you already verified. Use `--role server` when preparing a new server-only
+profile. Setup stores the approved key. Restart the daemon to load the updated
+configuration. A changed directory mapping requires fresh approval, so direct
+`--grant` and `--revoke` remain available for controlling existing access.
+
 ## Rsync over Marmish (v0.3)
 
 Install rsync 3.x on both machines and use secluded arguments (`-s`):
