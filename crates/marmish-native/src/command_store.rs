@@ -233,6 +233,10 @@ pub(crate) enum EngineObservation {
         status: Status,
         worker: WorkerState,
     },
+    PollBusy {
+        status: Status,
+        worker: WorkerState,
+    },
     Dispatched {
         status: Status,
         worker: WorkerState,
@@ -3799,6 +3803,7 @@ pub(crate) fn project_completion(
             CommittedDecision::StillUncertain
         }
         EngineObservation::Found { status, worker }
+        | EngineObservation::PollBusy { status, worker }
         | EngineObservation::Dispatched { status, worker }
         | EngineObservation::Input { status, worker, .. }
         | EngineObservation::Polled { status, worker, .. } => {
@@ -3920,6 +3925,12 @@ fn response_value(
         .clone()
         .unwrap_or_else(|| accepted_status(record));
     let value = match (&request.op, observation) {
+        (RequestOp::Poll { .. }, EngineObservation::PollBusy { .. }) => {
+            return Ok(Some(Err(WireError {
+                code: ErrorCode::Busy,
+                detail: None,
+            })));
+        }
         (
             RequestOp::Status { .. },
             EngineObservation::Found { .. }
@@ -4526,6 +4537,90 @@ pub(in crate::journal) mod tests {
         assert_eq!(totals(&j), before);
         assert_eq!(j.command_admission_budget().unwrap().finished, 0);
     }
+    #[test]
+    fn client_poll_busy_receipt_leaves_durable_cursors_unchanged() {
+        let (tmp, mut j, owner) = client_setup();
+        let submit = submit(1);
+        client_exchange(&mut j, &owner, &submit, &response(&submit));
+        let (_, digest) = j
+            .command_client_response(&owner, submit.id)
+            .unwrap()
+            .unwrap();
+        j.command_consume_response(&owner, submit.id, digest, None)
+            .unwrap();
+
+        let poll = Request {
+            binding: owner.binding.clone(),
+            id: id(300),
+            op: RequestOp::Poll {
+                invocation: id(1),
+                stdout_cursor: 0,
+                stderr_cursor: 0,
+                max_bytes: 8,
+            },
+        };
+        let mut busy = response(&poll);
+        busy.result = Err(WireError {
+            code: ErrorCode::Busy,
+            detail: None,
+        });
+        let (source, outgoing) = client_exchange(&mut j, &owner, &poll, &busy);
+        let (_, digest) = j.command_client_response(&owner, poll.id).unwrap().unwrap();
+        let start = ClientDelivery::default();
+        assert!(
+            j.command_consume_response(&owner, poll.id, digest, Some(start))
+                .unwrap()
+                == start
+        );
+        assert!(
+            j.command_client_response(&owner, poll.id)
+                .unwrap()
+                .is_none()
+        );
+        client_settle(&mut j, &source, &outgoing);
+        j.command_maintain(NOW, &CommandProtection::default())
+            .unwrap();
+
+        drop(j);
+        let mut j = Journal::open(
+            &tmp.path().join("journal.db"),
+            &[7; 32],
+            &hex::encode([1; 32]),
+        )
+        .unwrap();
+        assert!(j.command_client_cursors(&owner, id(1)).unwrap() == start);
+        let retry = Request {
+            id: id(301),
+            ..poll
+        };
+        let mut answer = response(&retry);
+        let mut status = exited_status(&retry);
+        status.stdout.produced = 3;
+        status.stdout.retained = 3;
+        status.stderr.produced = 2;
+        status.stderr.retained = 2;
+        answer.result = Ok(ResponseResult::Poll {
+            status,
+            stdout: Chunk {
+                bytes: b"out".to_vec(),
+                next_cursor: 3,
+            },
+            stderr: Chunk {
+                bytes: b"er".to_vec(),
+                next_cursor: 2,
+            },
+        });
+        client_exchange(&mut j, &owner, &retry, &answer);
+        let (_, digest) = j
+            .command_client_response(&owner, retry.id)
+            .unwrap()
+            .unwrap();
+        let delivered = j
+            .command_consume_response(&owner, retry.id, digest, Some(start))
+            .unwrap();
+        assert_eq!((delivered.stdout, delivered.stderr), (3, 2));
+    }
+
     #[test]
     fn client_final_poll_consumption_and_finish_are_one_commit() {
         let (tmp, mut j, owner) = client_setup();
@@ -5536,6 +5631,198 @@ pub(in crate::journal) mod tests {
         ));
         assert!(!j.command_get(&key).unwrap().unwrap().engine_known);
     }
+    #[test]
+    fn poll_busy_preserves_failure_budget_and_replays_exact_response() {
+        let (tmp, mut j) = setup();
+        let (_, key) = admitted(&mut j, 1);
+        let status = fact(&mut j, &key, State::Exited);
+        let request = pending_read(
+            &mut j,
+            &key,
+            2,
+            RequestOp::Poll {
+                invocation: key.invocation,
+                stdout_cursor: 3,
+                stderr_cursor: 4,
+                max_bytes: 8,
+            },
+        );
+        for attempt in 1..=2 {
+            let ack = finish(
+                &mut j,
+                &key,
+                &request,
+                EngineObservation::Failed(OperationalFailure::Storage),
+            );
+            assert!(ack.answered.is_empty());
+            let pending = j.command_find_request(&owner(), &request).unwrap().unwrap();
+            assert_eq!(pending.failed_attempts, attempt);
+        }
+        let ack = finish(
+            &mut j,
+            &key,
+            &request,
+            EngineObservation::PollBusy {
+                status,
+                worker: WorkerState::Unknown,
+            },
+        );
+        assert_eq!(ack.answered, vec![request.id]);
+        let row = j.command_get(&key).unwrap().unwrap();
+        assert!(row.engine_known && !row.uncertain);
+        assert!(row.worker == WorkerState::Unknown);
+        let before = j.command_find_request(&owner(), &request).unwrap().unwrap();
+        assert_eq!(before.failed_attempts, 2);
+        let response = load_publication(&j.conn, &before.response.unwrap())
+            .unwrap()
+            .unwrap();
+        let decoded = wire::decode_response(&response.encoded_wire).unwrap();
+        assert_eq!(decoded.id, request.id);
+        assert_eq!(
+            decoded.request_sha256,
+            wire::request_digest(&wire::encode_request(&request).unwrap())
+        );
+        assert!(matches!(
+            decoded.result,
+            Err(WireError {
+                code: ErrorCode::Busy,
+                detail: None
+            })
+        ));
+
+        drop(j);
+        let mut j = Journal::open(
+            &tmp.path().join("journal.db"),
+            &[7; 32],
+            &hex::encode([2; 32]),
+        )
+        .unwrap();
+        let mut duplicate = projection(request.clone());
+        duplicate.decision = AdmissionDecision::Existing;
+        duplicate.response = None;
+        assert!(j.command_project_request(&duplicate, NOW).unwrap().existing);
+        let replay = j.command_find_request(&owner(), &request).unwrap().unwrap();
+        assert_eq!(replay.failed_attempts, 2);
+        let replay = load_publication(&j.conn, &replay.response.unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(replay.encoded_wire, response.encoded_wire);
+    }
+
+    #[test]
+    fn non_busy_poll_found_still_exhausts_after_three_attempts() {
+        let (_tmp, mut j) = setup();
+        let (_, key) = admitted(&mut j, 1);
+        let status = fact(&mut j, &key, State::Exited);
+        let request = pending_read(
+            &mut j,
+            &key,
+            2,
+            RequestOp::Poll {
+                invocation: key.invocation,
+                stdout_cursor: 3,
+                stderr_cursor: 4,
+                max_bytes: 8,
+            },
+        );
+        for attempt in 1..=3 {
+            let ack = finish(
+                &mut j,
+                &key,
+                &request,
+                EngineObservation::Found {
+                    status: status.clone(),
+                    worker: WorkerState::Unknown,
+                },
+            );
+            assert_eq!(ack.answered.len(), usize::from(attempt == 3));
+            let pending = j.command_find_request(&owner(), &request).unwrap().unwrap();
+            assert_eq!(pending.failed_attempts, attempt);
+            assert_eq!(pending.response.is_some(), attempt == 3);
+        }
+        let exhausted = j.command_find_request(&owner(), &request).unwrap().unwrap();
+        let publication = load_publication(&j.conn, &exhausted.response.unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            wire::decode_response(&publication.encoded_wire)
+                .unwrap()
+                .result,
+            Err(WireError {
+                code: ErrorCode::RecoveryUncertain,
+                detail: None,
+            })
+        ));
+    }
+
+    #[test]
+    fn stale_and_revoked_poll_busy_use_existing_completion_gates() {
+        let (_tmp, mut j) = setup();
+        let (_, key) = admitted(&mut j, 1);
+        let status = fact(&mut j, &key, State::Exited);
+        let request = pending_read(
+            &mut j,
+            &key,
+            2,
+            RequestOp::Poll {
+                invocation: key.invocation,
+                stdout_cursor: 3,
+                stderr_cursor: 4,
+                max_bytes: 8,
+            },
+        );
+        let mut record = j.command_get(&key).unwrap().unwrap();
+        let operation = j
+            .command_begin_request_operation(
+                &key,
+                record.revision,
+                request.id,
+                EngineOperation::Poll {
+                    stdout_cursor: 3,
+                    stderr_cursor: 4,
+                    max_bytes: 8,
+                },
+            )
+            .unwrap();
+        let mut pending = j.command_operation_request(operation.id).unwrap().unwrap();
+        let completion = EngineCompletion {
+            operation: operation.id,
+            key,
+            revision: operation.revision,
+            result: EngineObservation::PollBusy {
+                status,
+                worker: WorkerState::Unknown,
+            },
+        };
+        record.revision += 1;
+        let stale = project_completion(&record, &operation, &completion, Some(&pending)).unwrap();
+        assert!(stale.response.is_none() && !stale.suppressed);
+        assert_eq!(stale.failed_attempts, 1);
+        pending.failed_attempts = 2;
+        let exhausted =
+            project_completion(&record, &operation, &completion, Some(&pending)).unwrap();
+        assert_eq!(exhausted.failed_attempts, 3);
+        assert!(matches!(
+            exhausted.response.unwrap().result,
+            Err(WireError {
+                code: ErrorCode::RecoveryUncertain,
+                detail: None
+            })
+        ));
+
+        j.command_revoke_group(owner().group()).unwrap();
+        let ack = j.command_commit_completion(&completion, &[]).unwrap();
+        assert_eq!(ack.suppressed, vec![request.id]);
+        assert!(ack.answered.is_empty());
+        assert!(
+            j.command_find_request(&owner(), &request)
+                .unwrap()
+                .unwrap()
+                .response
+                .is_none()
+        );
+    }
+
     #[test]
     fn unknown_read_refusal_owns_slot_without_allocating_invocation() {
         let (_tmp, mut j) = setup();

@@ -2171,6 +2171,108 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn poll_busy_is_consumed_then_retried_with_a_fresh_id_at_the_same_cursors() {
+        let (_dir, context, listener) = socket_context();
+        let handle = handle();
+        let found = handle.clone();
+        let server = tokio::spawn(async move {
+            let mut previous_id = None;
+            for busy in [true, false] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                assert!(matches!(
+                    read_request(&mut stream).await,
+                    Request::CommandUnconsumed { .. }
+                ));
+                reply(&mut stream, LocalResult::Entries { entries: vec![] }).await;
+                let (mut stream, _) = listener.accept().await.unwrap();
+                assert!(matches!(
+                    read_request(&mut stream).await,
+                    Request::CommandCursors { .. }
+                ));
+                reply(
+                    &mut stream,
+                    LocalResult::Cursors {
+                        stdout: 3,
+                        stderr: 2,
+                    },
+                )
+                .await;
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let Request::CommandPoll {
+                    request_id,
+                    stdout_cursor: 3,
+                    stderr_cursor: 2,
+                    ..
+                } = read_request(&mut stream).await
+                else {
+                    panic!("Poll must use the original cursors");
+                };
+                let request_id = id(&request_id).unwrap();
+                assert_ne!(Some(request_id), previous_id);
+                previous_id = Some(request_id);
+                let result = if busy {
+                    Err(wire::WireError {
+                        code: wire::ErrorCode::Busy,
+                        detail: None,
+                    })
+                } else {
+                    Ok(ResponseResult::Poll {
+                        status: status(found.invocation()),
+                        stdout: wire::Chunk {
+                            bytes: vec![],
+                            next_cursor: 3,
+                        },
+                        stderr: wire::Chunk {
+                            bytes: vec![],
+                            next_cursor: 2,
+                        },
+                    })
+                };
+                let answer = response_result(&found, request_id, Op::Poll, result);
+                let LocalResult::Answer {
+                    response_sha256, ..
+                } = &answer
+                else {
+                    unreachable!()
+                };
+                let digest = response_sha256.clone();
+                reply(&mut stream, answer).await;
+                let (mut stream, _) = listener.accept().await.unwrap();
+                assert!(matches!(read_request(&mut stream).await,
+                    Request::CommandConsume {
+                        request_id: consumed,
+                        response_sha256,
+                        expected_cursors: Some(Cursors { stdout: 3, stderr: 2 }),
+                        ..
+                    } if consumed == hex::encode(request_id) && response_sha256 == digest));
+                reply(
+                    &mut stream,
+                    LocalResult::Consumed {
+                        stdout: 3,
+                        stderr: 2,
+                        finish_request_id: None,
+                        finish_confirmed: !busy,
+                    },
+                )
+                .await;
+            }
+        });
+        assert_eq!(
+            context
+                .wait_inner(
+                    &handle,
+                    Instant::now() + Duration::from_secs(5),
+                    false,
+                    false
+                )
+                .await
+                .unwrap(),
+            7
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn poll_not_found_before_authenticated_acceptance_is_retryable() {
         for authenticated in [false, true] {
             let (_dir, context, listener) = socket_context();

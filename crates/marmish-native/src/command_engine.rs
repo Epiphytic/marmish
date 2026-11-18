@@ -979,6 +979,14 @@ fn execute_operation(
                 |stream, cursor, limit| e.read_output(ctx, id, stream, cursor, limit),
             ) {
                 Ok(chunks) => chunks,
+                Err(engine::EngineError::Busy) => {
+                    return observed(
+                        fallback,
+                        op,
+                        WorkerState::Unknown,
+                        ObservationKind::PollBusy,
+                    );
+                }
                 Err(_) => {
                     return observed(fallback, op, WorkerState::Unknown, ObservationKind::Found);
                 }
@@ -1087,6 +1095,7 @@ fn input_failure(
 }
 enum ObservationKind {
     Found,
+    PollBusy,
     Dispatched,
     Input,
     EofConfirmed,
@@ -1140,6 +1149,7 @@ fn observed(
     }
     match kind {
         ObservationKind::Found => EngineObservation::Found { status, worker },
+        ObservationKind::PollBusy => EngineObservation::PollBusy { status, worker },
         ObservationKind::Dispatched => EngineObservation::Dispatched { status, worker },
         ObservationKind::Input | ObservationKind::EofConfirmed => EngineObservation::Input {
             status,
@@ -1907,6 +1917,140 @@ mod tests {
             ));
             assert!(e.status(&ctx, id).unwrap().invocation == id);
         }
+    }
+    #[test]
+    #[ignore = "build marmish-native --bins first to exercise the real Command worker"]
+    fn poll_busy_from_contended_worker_output_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut settings = engine_settings(&dir);
+        settings.policy.worker_executable = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("marmish-worker");
+        assert!(settings.policy.worker_executable.is_file());
+        let state = settings.policy.state_root.clone();
+        let mut engine = engine::Engine::open_with_master(
+            settings.policy,
+            settings.binding,
+            engine::ProvidedMaster::new(*settings.master),
+        )
+        .unwrap();
+        let ctx = engine
+            .authorize(
+                engine::PrincipalId([2; 32]),
+                engine::EndpointId(Sha256::digest([3; 32]).into()),
+                engine::ServerId([1; 32]),
+                unsafe { libc::geteuid() },
+            )
+            .unwrap();
+        let id = engine::InvocationId([1; 16]);
+        let dispatch = operation(
+            1,
+            EngineOperation::Dispatch {
+                submit: wire::Submit {
+                    invocation: id.0,
+                    argv: vec![
+                        b"/bin/sh".to_vec(),
+                        b"-c".to_vec(),
+                        b"printf 'out\\000\\377'; printf 'err\\001\\376' >&2; exit 7".to_vec(),
+                    ],
+                    stdin: vec![],
+                },
+            },
+        );
+        assert!(matches!(
+            execute_operation(&mut engine, &ctx, id, &dispatch, false, None),
+            EngineObservation::Dispatched { .. }
+        ));
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            let status = engine.status(&ctx, id).unwrap();
+            if status.state == engine::InvocationState::Exited
+                && status.stdout.closed
+                && status.stderr.closed
+            {
+                assert_eq!(status.stdout.retained, 5);
+                assert_eq!(status.stderr.retained, 5);
+                break;
+            }
+            assert!(Instant::now() < deadline, "real worker did not finish");
+            thread::sleep(Duration::from_millis(5));
+        }
+        let mut jobs = std::fs::read_dir(state.join("jobs")).unwrap();
+        let lock_path = jobs.next().unwrap().unwrap().path().join("io.lock");
+        assert!(jobs.next().is_none());
+        let lock = hold_output_lock(&lock_path);
+        let poll = operation(
+            1,
+            EngineOperation::Poll {
+                stdout_cursor: 1,
+                stderr_cursor: 2,
+                max_bytes: 16,
+            },
+        );
+        assert!(matches!(
+            execute_operation(&mut engine, &ctx, id, &poll, true, None),
+            EngineObservation::PollBusy { status, worker: WorkerState::Unknown }
+                if status.state == wire::State::Exited
+                    && status.stdout.produced == 5 && status.stderr.produced == 5
+        ));
+        drop(lock);
+        let EngineObservation::Polled {
+            status,
+            stdout,
+            stderr,
+            ..
+        } = execute_operation(&mut engine, &ctx, id, &poll, true, None)
+        else {
+            panic!("expected output after releasing the job lock");
+        };
+        assert_eq!(stdout.bytes, b"ut\0\xff");
+        assert_eq!(stderr.bytes, b"r\x01\xfe");
+        assert_eq!((stdout.next_cursor, stderr.next_cursor), (5, 5));
+        let outcome = status.outcome.unwrap();
+        assert!(outcome.kind == wire::OutcomeKind::Code);
+        assert_eq!(outcome.value, Some(7));
+
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(matches!(
+            engine.read_output(&ctx, id, engine::Stream::Stdout, 1, 8),
+            Err(engine::EngineError::UnsafePath)
+        ));
+        assert!(matches!(
+            execute_operation(&mut engine, &ctx, id, &poll, true, None),
+            EngineObservation::Found {
+                worker: WorkerState::Unknown,
+                ..
+            }
+        ));
+    }
+
+    fn hold_output_lock(path: &std::path::Path) -> std::fs::File {
+        use std::os::fd::AsRawFd as _;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        #[cfg(target_os = "linux")]
+        let result = unsafe {
+            let lock = libc::flock {
+                l_type: libc::F_WRLCK as i16,
+                l_whence: libc::SEEK_SET as i16,
+                l_start: 0,
+                l_len: 0,
+                l_pid: 0,
+            };
+            libc::fcntl(file.as_raw_fd(), libc::F_OFD_SETLK, &lock)
+        };
+        #[cfg(target_os = "macos")]
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        assert_eq!(result, 0, "{}", std::io::Error::last_os_error());
+        file
     }
     fn input_status(
         length: u64,
