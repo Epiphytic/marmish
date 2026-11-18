@@ -102,7 +102,11 @@ qualifies original native generation and independent cold attestation from
 the exact registered quota and checked route. Fresh SQLCipher setup is
 metered separately from signing. Linux AMD64 process tests include source
 and charge mismatches, recovery and signed-only replay. Candidate daemon
-invitation intake remains a separate integration.
+invitation intake remains a separate integration. The
+[storage and listener composition](validation/peer-candidate-owner-leaves-composition.md)
+qualifies the managed queued-package reader, borrowed Pending over private
+WSS, account custody across dispatcher cuts, and the same-user read
+listener on Linux AMD64. These components have no mounted daemon actor.
 The [private Peer record codec](validation/peer-status-codec.md) verifies
 heartbeat fields, capability states and complete permission snapshot
 assembly in deterministic tests. The [heartbeat sampler](validation/peer-heartbeat-sampler.md)
