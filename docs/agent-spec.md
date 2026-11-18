@@ -101,6 +101,10 @@ projection in a stand-alone test target. The [private WSS heartbeat proof](valid
 checks SQLCipher publication state before the first publisher callback
 returns, then observes exact native retry and replay-safe client projection.
 Status publication and reception remain inactive in the installed daemon.
+The [private candidate server inventory CLI](validation/peer-candidate-read-cli.md)
+adds `marmish servers list` and exact `servers show` selectors for local Pending
+reads. The candidate socket returns `peer_unavailable` until the actor is mounted.
+Stock client and daemon command parsing remain unchanged.
 
 **CI execution direction (2026-11-13):** prefer Epiphytic self-hosted runners;
 do not launch GitHub-hosted qualification as an implicit fallback. The
