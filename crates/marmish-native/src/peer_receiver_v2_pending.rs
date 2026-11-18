@@ -177,7 +177,7 @@ impl PendingClock<'_> {
                 let window = port.use_current_native(|scope| {
                     if scope.account() != native.signer.public_key()
                         || scope.origin() != native.origin
-                        || scope.wall() < observed_wall
+                        || scope.wall().as_secs() < observed_wall
                     {
                         return Err(Error::Binding);
                     }

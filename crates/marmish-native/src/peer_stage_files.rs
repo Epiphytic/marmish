@@ -1,10 +1,24 @@
 //! Two fixed, generation-keyed paths in the held profile.
 
 use std::io;
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 use std::io::Read;
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 use sha2::Digest as _;
 
 use super::super::store::consent_checkpoint::provisioning::Binding;
@@ -134,7 +148,14 @@ impl ProvisionalFile {
         self.read_file().map(|_| ())
     }
 
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     pub(in super::super) fn digest(&self) -> Result<[u8; 32]> {
         let mut file = self.read_file()?.take(MAX_STAGE_LEN + 1);
         let mut digest = Sha256::new();

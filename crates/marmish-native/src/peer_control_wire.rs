@@ -13,7 +13,14 @@ use zeroize::Zeroizing;
 
 #[path = "peer_control_wire_artifact.rs"]
 mod artifact;
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 #[path = "peer_prepared_consent_wire.rs"]
 mod prepared_consent;
 #[path = "peer_control_wire_seal.rs"]

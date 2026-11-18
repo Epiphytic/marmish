@@ -4,7 +4,14 @@ use super::super::super::super::HardenedPeerConnection;
 use super::super::super::{Layout, Mode, Policy, wire};
 use nostr::key::Keys;
 use nostr::key::PublicKey;
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
 use rusqlite::params;
@@ -12,7 +19,14 @@ use rusqlite::params;
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeSet;
 use std::sync::Arc;
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 use zeroize::Zeroizing;
 
 use crate::peer_control_version::ControlVersion;
@@ -20,10 +34,17 @@ use crate::peer_control_version::ControlVersion;
 use crate::peer_invitation::prepared_consent::{JoinedReadback, NativeAttestation};
 
 use super::super::super::super::read_seconds;
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
+use super::super::super::wire::{Delivery, PackageBinding};
 #[cfg(test)]
-use super::super::super::wire::{
-    Delivery, IncomingDelivery, PackageBinding, VerifiedDeliveryPackage,
-};
+use super::super::super::wire::{IncomingDelivery, VerifiedDeliveryPackage};
 #[cfg(test)]
 use super::super::super::{Disposition, Local, RawRecord, Status, TrustedOutcome};
 use super::*;
@@ -43,6 +64,22 @@ mod terminal_schema;
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 native_installed_pending_fixture!();
+
+#[cfg(all(
+    not(test),
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "peer_installed_pending_checkpoint.rs"]
+mod installed_pending;
+#[cfg(all(
+    not(test),
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+use crate::peer_invitation::receiver_inventory::v2_pending::InstalledJoinedReadback;
 
 #[cfg(test)]
 #[path = "peer_terminal_leave_effect.rs"]
@@ -93,12 +130,26 @@ pub(crate) enum ReceivePolicy {
 
 #[cfg(test)]
 const MARGIN: u64 = 300;
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 const PENDING_WINDOW_SECONDS: u64 = 86_400;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 pub(crate) enum CustodyState {
     Held,
     JoinStarted,
@@ -188,7 +239,14 @@ impl CustodyConsent {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 struct JoinedCoordinates {
     group: Vec<u8>,
     epoch: u64,
@@ -210,7 +268,14 @@ impl JoinedCoordinates {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 enum Progress {
     Held,
     JoinStarted {
@@ -229,7 +294,14 @@ enum Progress {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 struct Qualified {
     native: JoinedCoordinates,
     qualified_at: u64,
@@ -237,7 +309,14 @@ struct Qualified {
 }
 
 #[derive(Eq, PartialEq)]
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 struct Saved {
     carrier: [u8; 32],
     outer_stamp: u64,
@@ -259,7 +338,14 @@ struct Saved {
 
 /// A saved authority witness, constructed only by the exact durable owner
 /// reader. It carries no live socket, receipt or prepared-package capability.
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 pub(crate) struct HeldEvidence {
     owner: Arc<()>,
     offer: Offer,
@@ -270,13 +356,20 @@ pub(crate) struct HeldEvidence {
     active: bool,
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 impl HeldEvidence {
     pub(crate) fn offer(&self) -> &Offer {
         &self.offer
     }
 
-    pub(crate) fn transcript(&self) -> Transcript {
+    pub(crate) fn transcript(&self) -> wire::Transcript {
         self.row.transcript
     }
 
@@ -349,9 +442,15 @@ impl HeldEvidence {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn is_active(&self) -> bool {
-        self.active
+        #[cfg(test)]
+        {
+            self.active
+        }
+        #[cfg(not(test))]
+        {
+            false
+        }
     }
 
     pub(crate) fn pending_deadline(&self) -> Option<u64> {
@@ -363,8 +462,8 @@ impl HeldEvidence {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn matches_pending_readback(&self, proof: &JoinedReadback) -> bool {
-        #[cfg(test)]
         if self.active {
             return false;
         }
@@ -387,7 +486,14 @@ impl HeldEvidence {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 pub(crate) struct JoinStarted {
     owner: Arc<()>,
     stage: (Binding, FileWitness),
@@ -516,13 +622,19 @@ impl Context {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     fn read_evidence(&self, tx: &Transaction<'_>, queued: Queued) -> Result<Option<HeldEvidence>> {
         let Some(saved) = load(tx, &queued)? else {
             return Ok(None);
         };
         Ok(Some(HeldEvidence {
-            #[cfg(test)]
             owner: self.owner.clone(),
             stage: queued.stage(),
             offer: queued.prepared.offer,
@@ -553,7 +665,14 @@ pub(in super::super) fn owns(
     )?)
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 fn terminalized(tx: &Transaction<'_>, selector: Selector, origin: Origin) -> Result<bool> {
     Ok(tx.query_row(
         "SELECT EXISTS (SELECT 1 FROM peer_pending_terminal t JOIN peer_pending_custody c
@@ -778,7 +897,14 @@ impl Checkpoint {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     pub(crate) fn check_installed_consent_scope(
         &mut self,
         source: &Source,
@@ -1201,7 +1327,14 @@ impl Checkpoint {
             .map(|_| ())
     }
 
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     fn transition_custody_guarded(
         &mut self,
         source: &Source,
@@ -1237,19 +1370,35 @@ impl Checkpoint {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 enum Change<'a> {
     Start,
+    #[cfg(test)]
     Qualify(&'a JoinedReadback),
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     QualifyInstalled(&'a InstalledJoinedReadback<'a>),
+    #[cfg(test)]
     Activate {
         proof: &'a JoinedReadback,
         automatic: bool,
     },
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 impl Change<'_> {
     fn apply(self, tx: &Transaction<'_>, prior: &HeldEvidence, wall: u64) -> Result<usize> {
         if wall < prior.held_at() {
@@ -1271,17 +1420,19 @@ impl Change<'_> {
                     params![id, generation, at],
                 )?
             }
+            #[cfg(test)]
             (Self::Qualify(proof), Progress::JoinStarted { started_at })
                 if exact_readback(prior, proof) && wall >= *started_at =>
             {
                 qualify_pending(tx, prior, wall, proof.coordinates())?
             }
-            #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
             (Self::QualifyInstalled(proof), Progress::JoinStarted { started_at })
                 if wall >= *started_at =>
             {
                 qualify_pending(tx, prior, wall, proof.coordinates())?
             }
+            #[cfg(test)]
             (Self::Activate { proof, automatic }, Progress::Pending { joined, .. }) => {
                 if !prior.matches_pending_readback(proof) || wall < joined.qualified_at {
                     return Err(CursorError::Stale.into());
@@ -1307,7 +1458,14 @@ impl Change<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 fn qualify_pending(
     tx: &Transaction<'_>,
     prior: &HeldEvidence,
@@ -1416,7 +1574,14 @@ impl HeldWrite<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 fn load(tx: &Transaction<'_>, queued: &Queued) -> Result<Option<Saved>> {
     let binding = queued.prepared.binding;
     let transcript = queued.row.transcript;

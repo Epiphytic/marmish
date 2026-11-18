@@ -107,10 +107,17 @@ mod receipt_publication_verify;
 #[cfg(test)]
 #[path = "peer_stage_retirement.rs"]
 mod retirement;
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
+pub(crate) use store::consent_checkpoint::provisioning::prepared_consent::custody::HeldEvidence;
 #[cfg(test)]
-pub(crate) use store::consent_checkpoint::provisioning::prepared_consent::custody::{
-    HeldEvidence, ReceivePolicy,
-};
+pub(crate) use store::consent_checkpoint::provisioning::prepared_consent::custody::ReceivePolicy;
 #[path = "peer_raw_socket.rs"]
 mod socket;
 #[path = "peer_cursor_store.rs"]

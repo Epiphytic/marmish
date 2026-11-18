@@ -71,7 +71,6 @@ mod clean;
 pub(crate) use clean::CleanPermit;
 #[path = "peer_candidate_package_owner.rs"]
 pub(super) mod package;
-#[cfg(test)]
 #[path = "peer_receiver_v2_pending.rs"]
 pub(super) mod v2_pending;
 

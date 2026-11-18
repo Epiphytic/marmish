@@ -16,9 +16,7 @@ mod provisional;
         marmish_peer_receiver_candidate
     )
 ))]
-pub(super) use provisional::MAX_STAGE_LEN;
-#[cfg(test)]
-pub(super) use provisional::ProvisionalFile;
+pub(super) use provisional::{MAX_STAGE_LEN, ProvisionalFile};
 #[cfg(any(
     test,
     all(

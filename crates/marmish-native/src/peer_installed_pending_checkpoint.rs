@@ -47,9 +47,8 @@ impl Checkpoint {
         generation: u64,
     ) -> Result<(HeldEvidence, Delivery, u64)> {
         port.use_current_recipient(|account, origin, wall| {
-            self.check_installed_consent_scope(source, account, origin, wall)?;
             let held = self
-                .read_custody(source, selector, generation, wall)?
+                .read_installed_custody(source, account, origin, wall, selector, generation)?
                 .ok_or(Error::Missing)?;
             let delivery = self.current_installed_delivery(&held, wall)?;
             Ok((held, delivery, wall))
@@ -107,7 +106,14 @@ impl Checkpoint {
             if let Progress::Pending { joined: saved, .. } = &prior.saved.progress {
                 let selector = Selector::from(prior.offer());
                 let current = self
-                    .read_custody(source, selector, prior.stage().0.coordinates().1, wall)?
+                    .read_installed_custody(
+                        source,
+                        account,
+                        origin,
+                        wall,
+                        selector,
+                        prior.stage().0.coordinates().1,
+                    )?
                     .ok_or(Error::Missing)?;
                 if !current.same_turn(prior)
                     || (
@@ -134,6 +140,32 @@ impl Checkpoint {
             Ok(())
         })
         .map_err(|_| Error::Source)?
+    }
+
+    fn read_installed_custody(
+        &mut self,
+        source: &Source,
+        account: PublicKey,
+        origin: &str,
+        wall: u64,
+        selector: Selector,
+        generation: u64,
+    ) -> Result<Option<HeldEvidence>> {
+        if !matches!(self.custody_mode(selector.server)?, Mode::Manual) {
+            return Err(Error::Policy);
+        }
+        self.read_installed_consent(source, account, origin, wall, |tx, cx| {
+            if terminalized(tx, selector, cx.origin)? {
+                return Ok(None);
+            }
+            let Some(queued) = cx.exact_consent(tx, selector)? else {
+                return Ok(None);
+            };
+            if queued.prepared.binding.generation.count != generation {
+                return Ok(None);
+            }
+            cx.read_evidence(tx, queued)
+        })
     }
 
     pub(in crate::peer_invitation) fn current_installed_delivery(
