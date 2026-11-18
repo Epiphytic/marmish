@@ -1,6 +1,28 @@
 use std::{fs, process::Command};
 fn main() {
+    const CANDIDATE_CFG: &str = "CARGO_CFG_MARMISH_PEER_RECEIVER_CANDIDATE";
+    println!("cargo:rustc-check-cfg=cfg(marmish_peer_receiver_candidate)");
     println!("cargo:rerun-if-env-changed=MARMISH_BUILD_COMMIT");
+    println!("cargo:rerun-if-env-changed={CANDIDATE_CFG}");
+    let candidate = std::env::var_os(CANDIDATE_CFG).is_some();
+    let target = std::env::var("TARGET").expect("Cargo target");
+    let explicit_commit = std::env::var("MARMISH_BUILD_COMMIT").ok();
+    if candidate {
+        assert_eq!(
+            target, "x86_64-unknown-linux-gnu",
+            "unsupported Peer candidate target"
+        );
+        assert!(
+            std::env::var_os("CARGO_FEATURE_INSTALLED_CHECKS").is_none(),
+            "Peer candidate cannot include installed-checks"
+        );
+        assert!(
+            explicit_commit
+                .as_ref()
+                .is_some_and(|commit| commit.bytes().any(|byte| byte != b'0')),
+            "Peer candidate requires an explicit nonzero build commit"
+        );
+    }
     // Track the actual worktree HEAD and symbolic ref, including linked worktrees.
     let mut refs = vec!["HEAD".to_owned()];
     if let Ok(output) = Command::new("git")
@@ -21,19 +43,16 @@ fn main() {
             println!("cargo:rerun-if-changed={}", path.trim());
         }
     }
-    let target = std::env::var("TARGET").expect("Cargo target");
-    let commit = std::env::var("MARMISH_BUILD_COMMIT")
-        .ok()
-        .unwrap_or_else(|| {
-            Command::new("git")
-                .args(["rev-parse", "HEAD"])
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .and_then(|o| String::from_utf8(o.stdout).ok())
-                .map(|s| s.trim().to_owned())
-                .unwrap_or_else(|| "0".repeat(40))
-        });
+    let commit = explicit_commit.unwrap_or_else(|| {
+        Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_owned())
+            .unwrap_or_else(|| "0".repeat(40))
+    });
     assert!(
         commit.len() == 40
             && commit
@@ -43,6 +62,10 @@ fn main() {
     );
     println!("cargo:rustc-env=MARMISH_BUILD_TARGET={target}");
     println!("cargo:rustc-env=MARMISH_BUILD_COMMIT={commit}");
+    println!(
+        "cargo:rustc-env=MARMISH_BUILD_PEER_CANDIDATE={}",
+        u8::from(candidate)
+    );
     const LOCK: &str = "../../Cargo.lock";
     println!("cargo:rerun-if-changed={LOCK}");
     let lock = fs::read_to_string(LOCK).ok();

@@ -18,6 +18,21 @@ pub(crate) const TARGETS: [&str; 3] = [
     "aarch64-unknown-linux-gnu",
     "aarch64-apple-darwin",
 ];
+pub(crate) const STOCK_HEADER: &str = "marmish-manifest 1";
+pub(crate) const PEER_CANDIDATE_HEADER: &str = "marmish-peer-receiver-candidate 1";
+pub(crate) const PEER_CANDIDATE: bool = cfg!(marmish_peer_receiver_candidate);
+const _: () = assert!(
+    PEER_CANDIDATE == (env!("MARMISH_BUILD_PEER_CANDIDATE").as_bytes()[0] == b'1'),
+    "Peer candidate cfg must be applied through Cargo"
+);
+
+pub(crate) fn manifest_header() -> &'static str {
+    if PEER_CANDIDATE {
+        PEER_CANDIDATE_HEADER
+    } else {
+        STOCK_HEADER
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Asset {
     pub name: &'static str,
@@ -48,6 +63,8 @@ pub(crate) struct ReleaseMetadata {
     pub target: &'static str,
     pub commit: &'static str,
     pub formats: [u32; 5],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate: Option<&'static str>,
 }
 pub(crate) fn compiled_release_metadata() -> ReleaseMetadata {
     ReleaseMetadata {
@@ -62,6 +79,7 @@ pub(crate) fn compiled_release_metadata() -> ReleaseMetadata {
             crate::command_config::CONFIG_FORMAT,
             crate::command_wire::COMMAND_FORMAT,
         ],
+        candidate: PEER_CANDIDATE.then_some("peer-receiver"),
     }
 }
 pub(crate) fn version(value: &str) -> bool {
@@ -121,7 +139,7 @@ impl Manifest {
             || lines
                 .iter()
                 .any(|l| l.is_empty() || l.starts_with(' ') || l.ends_with(' ') || l.contains("  "))
-            || lines[0] != "marmish-manifest 1"
+            || lines[0] != manifest_header()
             || lines[11] != "end"
         {
             return Err(bad());
@@ -132,7 +150,7 @@ impl Manifest {
             return Err(bad());
         }
         let target = take(2, "target ")?;
-        if !TARGETS.contains(&target) {
+        if !TARGETS.contains(&target) || (PEER_CANDIDATE && target != TARGETS[0]) {
             return Err(bad());
         }
         let commit = take(3, "commit ")?;
@@ -325,7 +343,8 @@ mod tests {
     use super::*;
     fn sample() -> String {
         format!(
-            "marmish-manifest 1\nversion 0.2.0\ntarget {}\ncommit {}\nsigning none notarized=no\nminimum glibc=2.39\nstate profile=2 journal=5 engine=1 config=1 commands=1\nfile {} 1 0555 marmish\nfile {} 1 0555 marmishd\nfile {} 1 0555 marmish-worker\nfile {} 1 0444 THIRD-PARTY-LICENSES\nend\n",
+            "{}\nversion 0.2.0\ntarget {}\ncommit {}\nsigning none notarized=no\nminimum glibc=2.39\nstate profile=2 journal=5 engine=1 config=1 commands=1\nfile {} 1 0555 marmish\nfile {} 1 0555 marmishd\nfile {} 1 0555 marmish-worker\nfile {} 1 0444 THIRD-PARTY-LICENSES\nend\n",
+            manifest_header(),
             TARGETS[0],
             "a".repeat(40),
             "b".repeat(64),
@@ -334,6 +353,37 @@ mod tests {
             "b".repeat(64)
         )
     }
+    #[test]
+    fn manifest_and_release_info_require_the_compiled_class() {
+        let opposite = if PEER_CANDIDATE {
+            STOCK_HEADER
+        } else {
+            PEER_CANDIDATE_HEADER
+        };
+        assert!(
+            Manifest::parse(sample().replacen(manifest_header(), opposite, 1).as_bytes()).is_err()
+        );
+
+        let metadata = compiled_release_metadata();
+        let stock = format!(
+            "{{\"schema\":{},\"version\":\"{}\",\"target\":\"{}\",\"commit\":\"{}\",\"formats\":{}}}",
+            metadata.schema,
+            metadata.version,
+            metadata.target,
+            metadata.commit,
+            serde_json::to_string(&metadata.formats).unwrap()
+        );
+        let expected = if PEER_CANDIDATE {
+            format!(
+                "{},\"candidate\":\"peer-receiver\"}}",
+                stock.trim_end_matches('}')
+            )
+        } else {
+            stock
+        };
+        assert_eq!(serde_json::to_string(&metadata).unwrap(), expected);
+    }
+
     #[test]
     fn strict_vectors() {
         let s = sample();

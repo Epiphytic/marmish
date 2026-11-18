@@ -33,6 +33,8 @@ enum Action {
         minimum: String,
         #[arg(long)]
         notarized: bool,
+        #[arg(long)]
+        peer_receiver_candidate: bool,
     },
     /// Package build-only installed-test tools separately from install assets.
     PackageTooling {
@@ -171,6 +173,9 @@ fn copy_asset(source: &Path, path: &Path, a: &manifest::Asset) -> Result<()> {
 }
 const TOOL_NAMES: [&str; 2] = ["marmish-installed-check", "marmish-installed-fixture"];
 fn package_tooling(input: &Path, output: &Path, harness: &str) -> Result<()> {
+    if manifest::PEER_CANDIDATE {
+        return Err(bad());
+    }
     let m = metadata()?;
     if harness.len() != 64
         || !harness
@@ -222,10 +227,15 @@ fn package(
     signing: &str,
     minimum: &str,
     notarized: bool,
+    peer_receiver_candidate: bool,
 ) -> Result<()> {
+    if peer_receiver_candidate != manifest::PEER_CANDIDATE {
+        return Err(bad());
+    }
     let m = metadata()?;
     let mut text = format!(
-        "marmish-manifest 1\nversion {}\ntarget {}\ncommit {}\nsigning {signing} notarized={}\nminimum {minimum}\nstate profile={} journal={} engine={} config={} commands={}\n",
+        "{}\nversion {}\ntarget {}\ncommit {}\nsigning {signing} notarized={}\nminimum {minimum}\nstate profile={} journal={} engine={} config={} commands={}\n",
+        manifest::manifest_header(),
         m.version,
         m.target,
         m.commit,
@@ -280,6 +290,9 @@ fn package(
     Ok(())
 }
 fn render(assets: &Path, output: &Path) -> Result<()> {
+    if manifest::PEER_CANDIDATE {
+        return Err(bad());
+    }
     let m = metadata()?;
     let mut script =
         include_str!("../../../scripts/install-native.sh").replace("@MARMISH_VERSION@", m.version);
@@ -318,6 +331,7 @@ pub fn entry() -> u8 {
             signing,
             minimum,
             notarized,
+            peer_receiver_candidate,
         } => package(
             &input_dir,
             &output_dir,
@@ -325,6 +339,7 @@ pub fn entry() -> u8 {
             &signing,
             &minimum,
             notarized,
+            peer_receiver_candidate,
         ),
         Action::Render { assets_dir, output } => render(&assets_dir, &output),
         Action::PackageTooling {
@@ -350,11 +365,14 @@ mod tests {
         fs::create_dir(&directory).unwrap();
         let metadata = serde_json::to_string(&metadata().unwrap()).unwrap();
         for name in names {
-            create(&directory.join(name), format!(
-                "#!/bin/sh\n[ \"$#\" = 1 ] && [ \"$1\" = {argument} ] || exit 9\nprintf '%s\\n' '{metadata}'\n"
-            ).as_bytes(), 0o555).unwrap();
+            write_probe(&directory.join(name), argument, &metadata);
         }
         directory
+    }
+    fn write_probe(path: &Path, argument: &str, metadata: &str) {
+        create(path, format!(
+                "#!/bin/sh\n[ \"$#\" = 1 ] && [ \"$1\" = {argument} ] || exit 9\nprintf '%s\\n' '{metadata}'\n"
+        ).as_bytes(), 0o555).unwrap();
     }
     fn platform() -> (&'static str, &'static str) {
         if cfg!(target_os = "macos") {
@@ -363,6 +381,7 @@ mod tests {
             ("none", "glibc=2.39")
         }
     }
+    #[cfg(not(marmish_peer_receiver_candidate))]
     #[test]
     fn tooling_record_binds_only_two_probed_files_and_exact_source() {
         let root = tempfile::tempdir().unwrap();
@@ -442,8 +461,19 @@ mod tests {
         create(&licenses, b"Original dependency notices\n", 0o444).unwrap();
         let output = root.path().join("assets");
         let (signing, minimum) = platform();
-        package(&source, &output, &licenses, signing, minimum, false).unwrap();
-        assert!(package(&source, &output, &licenses, signing, minimum, false).is_err());
+        let run = || {
+            package(
+                &source,
+                &output,
+                &licenses,
+                signing,
+                minimum,
+                false,
+                manifest::PEER_CANDIDATE,
+            )
+        };
+        run().unwrap();
+        assert!(run().is_err());
         let m = metadata().unwrap();
         let manifest_path = output.join(format!("marmish-{}-{}.manifest", m.version, m.target));
         let bytes = fs::read(&manifest_path).unwrap();
@@ -462,6 +492,48 @@ mod tests {
         );
     }
     #[test]
+    fn package_checks_class_of_packager_and_every_input_before_writing() {
+        let root = tempfile::tempdir().unwrap();
+        let source = input(root.path(), &NAMES[..3], "release-info");
+        let licenses = root.path().join("licenses");
+        create(&licenses, b"Notices\n", 0o444).unwrap();
+        let output = root.path().join("assets");
+        let (signing, minimum) = platform();
+        let run = |candidate| {
+            package(
+                &source, &output, &licenses, signing, minimum, false, candidate,
+            )
+        };
+        assert!(run(!manifest::PEER_CANDIDATE).is_err());
+        assert!(!output.exists());
+
+        let mut opposite = metadata().unwrap();
+        let expected = serde_json::to_string(&opposite).unwrap();
+        opposite.candidate = (!manifest::PEER_CANDIDATE).then_some("peer-receiver");
+        let opposite = serde_json::to_string(&opposite).unwrap();
+        for name in &NAMES[..3] {
+            let path = source.join(name);
+            fs::remove_file(&path).unwrap();
+            write_probe(&path, "release-info", &opposite);
+            assert!(run(manifest::PEER_CANDIDATE).is_err(), "{name}");
+            assert!(!output.exists());
+            fs::remove_file(&path).unwrap();
+            write_probe(&path, "release-info", &expected);
+        }
+    }
+
+    #[cfg(marmish_peer_receiver_candidate)]
+    #[test]
+    fn candidate_packager_cannot_render_or_package_public_tooling() {
+        let root = tempfile::tempdir().unwrap();
+        let output = root.path().join("absent");
+        assert!(render(root.path(), &output).is_err());
+        let source = input(root.path(), &TOOL_NAMES, "--release-info");
+        assert!(package_tooling(&source, &output, &"a".repeat(64)).is_err());
+        assert!(!output.exists());
+    }
+
+    #[test]
     fn malformed_release_probe_is_finite_and_never_creates_output() {
         let root = tempfile::tempdir().unwrap();
         let source = input(root.path(), &NAMES[..3], "release-info");
@@ -473,9 +545,21 @@ mod tests {
         create(&licenses, b"Notices\n", 0o444).unwrap();
         let output = root.path().join("assets");
         let (signing, minimum) = platform();
-        assert!(package(&source, &output, &licenses, signing, minimum, false).is_err());
+        assert!(
+            package(
+                &source,
+                &output,
+                &licenses,
+                signing,
+                minimum,
+                false,
+                manifest::PEER_CANDIDATE
+            )
+            .is_err()
+        );
         assert!(!output.exists());
     }
+    #[cfg(not(marmish_peer_receiver_candidate))]
     #[test]
     fn rendering_requires_complete_matching_target_provenance() {
         let root = tempfile::tempdir().unwrap();

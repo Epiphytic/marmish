@@ -920,7 +920,8 @@ mod tests {
             fs::create_dir(&source).unwrap();
             let meta = manifest::compiled_release_metadata();
             let mut text = format!(
-                "marmish-manifest 1\nversion {}\ntarget {}\ncommit {}\nsigning {} notarized=no\nminimum {}\nstate profile={} journal={} engine={} config={} commands={}\n",
+                "{}\nversion {}\ntarget {}\ncommit {}\nsigning {} notarized=no\nminimum {}\nstate profile={} journal={} engine={} config={} commands={}\n",
+                manifest::manifest_header(),
                 meta.version,
                 meta.target,
                 meta.commit,
@@ -986,6 +987,27 @@ mod tests {
             self.root.path().join("prefix")
         }
     }
+    #[test]
+    fn verified_digest_does_not_authorize_the_other_manifest_class() {
+        let mut fixture = Fixture::new();
+        let opposite = if manifest::PEER_CANDIDATE {
+            manifest::STOCK_HEADER
+        } else {
+            manifest::PEER_CANDIDATE_HEADER
+        };
+        let text = fs::read_to_string(&fixture.manifest).unwrap().replacen(
+            manifest::manifest_header(),
+            opposite,
+            1,
+        );
+        fs::write(&fixture.manifest, &text).unwrap();
+        fixture.hash = Sha256::digest(text.as_bytes()).into();
+        assert!(fixture.install().is_err());
+        for name in ["prefix", "bin", "state"] {
+            assert!(!fixture.root.path().join(name).exists(), "{name}");
+        }
+    }
+
     #[test]
     fn transaction_unlocks_even_while_an_inherited_description_remains_open() {
         let directory = tempfile::tempdir().unwrap();
@@ -1342,13 +1364,13 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 output.status.success(),
-                expected,
+                expected && !manifest::PEER_CANDIDATE,
                 "shell vector {index}: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
             assert_eq!(
                 marker.exists(),
-                expected,
+                expected && !manifest::PEER_CANDIDATE,
                 "install invoked for vector {index}"
             );
         }
