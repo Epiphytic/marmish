@@ -9,7 +9,7 @@ public `MdkOwner::open` entry point and stock behavior. This slice supplies
 an internal production constructor and tests its composed startup and
 early error paths with real profile contents. The daemon starts using it
 with the reviewed physical stop integration. A single private constructor
-uses a mode carrying either stock behavior or the exact registered lease
+uses `StartupMode` carrying either stock behavior or the exact registered lease
 and Admission. The existing public `open` and the new internal constructor
 are wrappers. Share validation, derivation, the owner literal, connector
 construction and reconciliations. Stock mode preserves existing connection
@@ -47,16 +47,18 @@ owner literal together before the first post-construction reconciliation.
 Run subsequent fallible calls in a closure. A healthy `Err` consumes the
 local owner through explicit cleanup. A panic follows `MdkOwner::drop`,
 which seals before any fields drop. A final admission check gates the
-result. Release of both slots records an ordinary disposition. There
-is no fallible action between moving the storage slots into the literal
-and having the owner that holds them.
+result. Use an optional token in the owner and the partial-startup state.
+Each transfer takes its slot. The token is cleared only after the
+account closes successfully.
 
 On an ordinary finish or a healthy startup error, retire terminal
 authority, cancel the inert connector and verify that no forwarder,
 runner or active owner was started. Admit cleanup of an acquired
 Journal first and account second. Preserve the original error if
 cleanup succeeds. A dispatcher admission refusal or failed admitted
-close takes precedence. An opener error before a root is returned
+close takes precedence. If Journal close refuses or fails, seal the
+account without attempting its close and return the Journal error.
+An opener error before a root is returned
 leaves no Marmish-owned root to park.
 
 Add `ExistingConnection::close_in_place(&mut self)` and
@@ -71,8 +73,9 @@ taken and discarded the connection. The failure still trips and holds
 the original lease.
 
 Drop sealing in the partial startup state, owner, and fallback token
-uses only `begin_close`, the lock-free custody-failure notification
-(`CustodyFault::report`, via Admission), and forgetting the root and
+takes its token and uses only the precomputed closer's `begin_close`, the lock-free custody-failure notification
+(`CustodyFault::report`, via the new `Admission::report_custody_failure`
+method that invokes only its stored callback), and forgetting the root and
 lease. It performs no new admission, verification or close itself.
 The fatal edge fires before the guarded Journal's existing Drop checks
 admission. The guard then parks its connection. Sealing must not panic.
@@ -97,7 +100,7 @@ each group retirement, orphan reconciliation, maintenance, route
 rebuild and invalidation reconciliation separately. Each admitted
 body can complete its synchronous nested effects. After a fatal
 return, suppress its result and refuse the next independent effect.
-Only transfer custody to the returned owner after the final check.
+Return the local owner to its caller only after the final check.
 
 The ready profile's manifest remains read-only in this slice. Normal
 setup, `daemon::open`, doctor and all unregistered storage behavior
@@ -123,8 +126,8 @@ an active MdkOwner safe to drop while physical tasks are live.
   that no caller receives a partially authorized owner. Use fresh
   subprocesses, fixed diagnostic categories and disposable identities.
 - Test early failure with a healthy default, the admitted close with an
-  anonymous clone, plain abandoned owner drop, and registered fatal or custody failure
-  during the last release. Inject panic at the pre-literal ownership
+  anonymous clone, plain abandoned owner drop, and registered fatal or
+  custody failure during the last release. Inject panic at the pre-literal ownership
   transitions and each post-literal reconciliation. Assert that a plain
   abandoned owner retains both main-file descriptors. Check that the
   suppressed runtime can drop, that the inert runtime construction
@@ -132,8 +135,8 @@ an active MdkOwner safe to drop while physical tasks are live.
   owner after successful or fence-refused Journal close tolerates its
   empty connection slot. Inject a close error at the disposition
   boundary to qualify parking. This injection does not require a
-  reproducible upstream busy-close error. Assert the exact original lease stays held until process
-  exit on the parked branch. No clock measurement of an already admitted
+  reproducible upstream busy-close error. Assert that the exact original
+  lease stays held until process exit on the parked branch. No clock measurement of an already admitted
   upstream call is used as a cancellation guarantee.
 - Strict Linux AMD64 stock and candidate builds and focused tests pass.
   Confirm default and package checks still select stock behavior. Leave
