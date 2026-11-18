@@ -1,52 +1,94 @@
 # Native foreground observation and takeover qualification
 
 Extend the approved [Observe and Takeover validation](terminal-observe-takeover.md)
-with one ignored test on Linux AMD64. Use native `marmish terminal` processes,
-the existing checked private loopback WSS and foreground test infrastructure.
-Use the same canonical client and operator-owned fixture daemon. Provide
-independent controlling PTYs, exact binary stamps, disposable fixture
-identities and one default tmux pane. Keep the production path and core CI
-selection unchanged.
+with one ignored Linux AMD64 test. Use the actual `marmish terminal` binary
+in three independent controlling PTYs, the existing Terminal and Command
+owners, and tmux against the checked private loopback WSS fixture. The
+clients share the same canonical identity. Stamp-check the executables,
+use disposable credentials, and leave production code and core CI alone.
 
-1. Connect the writer using the ordinary CLI. Require raw mode, record the
-   tmux socket path, device and inode, enter the test shell, and assign a
-   variable. A split output marker proves that the command executed.
-2. Start an explicit `--observe` CLI with a different PTY size. Confirm its
-   raw mode, write a harmless uniquely identifiable candidate command to
-   its local PTY, and use local echo flags and a bounded marker witness to
-   check that the command did not execute. Have the writer emit a subsequent
-   split positive delimiter and read it from both PTYs. Check the writer's
-   native geometry using the same bounded split-output probe as the control
-   test. The observer's original geometry must differ from that output.
-3. Start a third ordinary CLI and require the cooked Busy prompt before
-   choosing takeover. At the prompt require ICANON and ISIG, send one
-   choice through the PTY and require raw mode on the successor. Reap the
-   old writer and observer and assert their exact local termios restoration.
-   Waiting for disappearance is bounded and never uses the successor's
-   input as a readiness probe. Check preservation of the tmux path,
-   device and inode. From the successor, synthesize a fresh marker from
-   the original shell variable, prove it reaches the successor PTY, then
-   exit the shell and verify successor restoration. Use an observer input
-   sentinel distinct from all display probes.
-4. Reuse the current Command checks before and after. Capture optional
-   single-run wall times for observe Ready, cooked choice to successor
-   Ready and first successor marker. Do not identify these samples as
-   physical display or p95 measurements. Refer to the existing multi-trial
-   backend benchmark for broader measurements.
+## One pane through three foreground clients
 
-Give each child one bounded pending admission and own its exact reaping,
-stderr drain, PTY and result assertions. Reuse the test-only supervision
-helpers where this preserves the existing writer and control behavior.
-Concurrent reads may use a bounded accumulator per PTY; carry no output
-between independent invocations. On any failure reap all spawned children
-and clean up only the known fixture tmux server. Verify the normal native
-binary plus independently shell-installed, checksum-verified Linux AMD64
-payload with matching stamp. Run the existing writer, controls and quiet
-AUTH regressions and strict all-target installed-checks Clippy. Obtain
-Claude Code Auto design and code approval and publish sanitized evidence.
+1. Start the ordinary writer in a 24×80 PTY and record its original
+   termios and window size before launching it. At raw Ready, record the
+   sole owned tmux socket's path, device and inode. Reuse the predictable
+   shell, set a variable and wait for output of a split marker command.
+2. Start explicit Observe by appending `--observe` to the test launcher
+   arguments after the destination. Give the observer a 40×120 PTY and
+   record its own termios and size. Wait for raw Ready while draining
+   writer output. Submit a uniquely identifiable harmless shell command
+   to the observer PTY. Its typed candidate and evaluated marker must
+   differ and neither can occur in the shell's existing state. Wait under
+   the I/O deadline for zero pending input via `FIONREAD` on the raw
+   observer slave after the test successfully wrote the candidate.
+   Drive the writer to a subsequent unique split delimiter under the same
+   bounded observation, framing the delimiter command so an intact echo
+   marks its own line. Require the echo and delimiter in each PTY, and
+   absence from both capture windows of the candidate text and evaluated
+   marker. Also require those two values absent from the successor redraw
+   window. This checks local input consumption and read-only behavior at
+   the explicit CLI entry point. The separate backend
+   `reject_observer_effect` test covers native observer rejection directly.
+   From the writer, use another split probe to prove the remote geometry
+   stays `24:80` on both PTYs, with no `40:120` output.
+3. Start the successor as an ordinary invocation. For the expected Busy
+   branch, drain the old clients continuously and recognize the full
+   cooked prompt within the initial 35 s attach budget. Require ICANON
+   and ISIG and immediately submit `t\r` in one write. Prompt input is
+   flushed before the question is printed and the CLI allows 25 s to
+   choose. Send nothing else before raw Ready. Use a separate successor
+   raw deadline of at most 60 s after the choice and 70 s after launch.
+   Continue draining both old PTYs during that interval and use a bounded
+   reap to verify both exits. For both old clients require code 0 with
+   empty stderr, or code 255 with exactly the single stderr line
+   `marmish: invalid input: terminal_replaced` or
+   `marmish: invalid input: terminal_transport_closed`, with its final
+   newline. These are the ordinary close outcomes covered by the
+   existing native backend proof. Reject all other errors and any
+   `terminal_display_restore` report. Verify their exact termios and
+   original window sizes after exit.
+4. Require raw Ready and the same tmux socket path, device and inode.
+   Check the successor's bounded initial redraw through the distinct
+   state marker it produces from the original writer's variable. Every
+   positive marker uses split print arguments and a distinct label absent
+   from earlier screen content so an old redraw or an echo cannot satisfy
+   a later stage. Issue `exit 0` from the successor, require code 0 with
+   empty stderr, and assert its exact original termios and window size.
 
-The NIP-42 relay and account are confined to the prepared test fixture.
-This covers the explicit Observer and the cooked selection route to
-Takeover. It leaves externally qualified WSS, macOS and Linux ARM64,
-distinct-device identities, and induced parked-takeover failure to their
-separate validation.
+Run the existing independent ordinary Command turn before, during and
+after handoff. The during turn starts with the successor's choice and
+runs concurrently with Ready and old-link drains. The fixture uses the
+existing bounded multi-room relay limit of 256 events and reports the
+number of observed publication attempts. This workload uses the Command
+room, writer, observer and two successor admission legs. Keep the
+benchmark's higher cap scoped to its existing workloads.
+
+## Lifetime and evidence
+
+Extend existing test-only helpers where their behavior can be preserved.
+Give each child one bounded pending admission and independent PTY output
+capped by the existing scan limit. Give each stderr drain a 4 KiB capture
+cap and consume further bytes only to avoid backpressure, with overflow a
+test failure. Keep draining the old clients while the successor waits, in
+addition to the earlier explicit capture windows. If the workload panics
+or misses a deadline, signal all live children first, then concurrently
+reap, drain and join stderr tasks under one overall 15 s cleanup deadline.
+Kill-on-drop remains a fallback. Preserve the original panic and leave
+owned tmux cleanup to the fixture's existing drop owner.
+
+Report separate single-run wall durations for observer launch to observed
+raw Ready, successful cooked-choice write to observed raw Ready, and
+successor state-command write to observed output. The Ready observations
+include local polling and the sample does not measure physical rendering.
+Report the independent Command turn durations. Use the existing
+multi-trial backend benchmark for percentile measurements.
+
+Run with matching normal native executables and independently with the
+checksum-verified Linux AMD64 package installed by shell. Run the
+existing foreground writer, controls and quiet AUTH selectors with
+matching executables, plus strict all-target `installed-checks` Clippy.
+Obtain Claude Code Auto review on both design and integrated source.
+Record sanitized results and scope. The clients and NIP-42 relay run
+locally, and the daemon and worker are the existing prepared fixture.
+External relay trust, other platforms, distinct-device identities and
+induced parked-takeover failure stay in their separate validation scopes.
