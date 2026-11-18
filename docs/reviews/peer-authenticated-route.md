@@ -26,6 +26,13 @@ AUTH acknowledgement and live EOSE. Separate private WSS tests cover
 buffered data after CA replacement and idle retirement at actual leaf
 expiry.
 
+Claude Code Opus 5.5 in Auto mode approved the exact composed source
+`6829448` against `0f80c27` in session
+`c2e6d16d-4cd5-45a4-a860-99aeda1bc281`. The reviewer traced the transport
+and storage boundaries on the composed tree and read its test logs.
+The real fixture covers private CA mode. SPKI live open and misaddressed
+arrivals from a relay that permits them remain independent test cases.
+
 The reviewer confirmed the final fence order, only-tightening route
 ceiling, inclusive certificate end, disabled early data and session
 resumption, signed carrier checks, and the four-test focused suite.

@@ -1550,8 +1550,11 @@ The installed [relay qualification issuer](validation/peer-qualification-issuer.
 records authenticated local evidence for an explicit WSS origin. The
 [physical route binding](validation/peer-physical-route-binding.md) checks
 that evidence and holds the exact profile files and TLS trust under one
-lease. It has no live Peer connector. The installed enrollment owner and
-status transmission still require separate validation. The [configuration parser
+lease. The [authenticated recipient port](validation/peer-authenticated-route.md)
+builds on that binding. It passed checked NIP-42 WSS, v2 history and live
+Offer intake, guarded publication, and SQLCipher cold readback on Linux AMD64.
+The daemon still needs paired recipient admission and durable operation
+wiring before it can start the port. The [configuration parser
 increment](reviews/peer-installed-config.md) validates optional Peer intent and
 preserves it through ordinary setup. The parsed fields currently have no
 runtime consumer, so this increment does not open Peer relay connections.

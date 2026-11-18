@@ -77,6 +77,18 @@ unmounted types. The relay's added fault choices are scoped to the
 opt-in recipient fixture and the native socket regression selectors
 exercise its established modes.
 
+## Integrated branch check
+
+Exact integrated source `6829448` passed the three deterministic route
+tests and the real private-WSS case in 20.07 s. Qualification took 4,403 ms.
+Checked AUTH and EOSE took 100 ms. Intake through SQLCipher cold readback
+took 216 ms. The send and fault batch took 15,348 ms, including the
+certificate expiry. The 17 ordinary transport tests, two physical-route
+tests, nine real raw-socket WSS tests, and six installed Offer tests also
+passed. Strict all-target Clippy with `installed-checks` took 39.03 s.
+The optimized check of all three binaries with the same feature took
+16.43 s.
+
 See the [phase design](../phases/peer-authenticated-route.md) and
 [review evidence](../reviews/peer-authenticated-route.md). The installed
 worker still needs paired durable recipient admission and a sealed v2
