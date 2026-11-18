@@ -435,4 +435,4 @@ mod tests;
 pub(crate) use tests::qualified_recipient_fixture;
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
-pub(crate) use tests::qualified_founder_fixture;
+pub(crate) use tests::{qualified_founder_fixture, qualified_manual_recipient_fixture};
