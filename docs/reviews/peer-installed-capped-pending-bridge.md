@@ -80,4 +80,13 @@ results and the separate rollback evidence appear in
 
 The scoped follow-up result text SHA-256 with one trailing newline is
 `99648a9c0259efbc11d05e47b52e8073cba90c6191ef5921f8f4ed3c579dad19`.
-The separate refusal matrix remains outside this accounting follow-up.
+
+Claude Code Sonnet 5.5 Auto session
+`da0ceefe-8e2a-432b-be2a-4cb0b21c09f5` approved both corrections on
+evidence commit `90cbe16a8d55208567e51c0ac179f855df1235db`, with source
+unchanged. It verified the completed WSS log and earlier independent keyed
+rollback run. The ordinary and candidate build timings, Clippy timing
+and author rollback timing come from the author's execution output.
+The R2 result text SHA-256 with one trailing newline is
+`465ea51e1e893610655cb00c16df7aad34c77680975f8e12517f1524e213a647`.
+The separate refusal matrix and overall phase review remain open.
