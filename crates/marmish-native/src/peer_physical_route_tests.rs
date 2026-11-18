@@ -5,7 +5,11 @@ use super::{
     },
     *,
 };
-use crate::{identity::BackendChoice, mdk_adapter::terminal_relay_fixture::Relay};
+use crate::{
+    identity::BackendChoice,
+    mdk_adapter::{MdkOwner, terminal_relay_fixture::Relay},
+    transport::{ArtiDirs, RelayConnector, RelayPolicy, RouteMode, TransportLimits},
+};
 use std::{
     fs,
     os::unix::fs::{PermissionsExt, symlink},
@@ -34,6 +38,24 @@ fn fresh_profile() -> (tempfile::TempDir, Arc<ProfileLease>, IdentityMaterial) {
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let mut lease = ProfileLease::acquire(temp.path(), "test").unwrap();
     let material = prepare(&mut lease);
+    let policy = RelayPolicy::parse(
+        &["wss://127.0.0.1:9/".into()],
+        RouteMode::Off,
+        TransportLimits::default(),
+    )
+    .unwrap();
+    let connector = RelayConnector::new(
+        policy,
+        ArtiDirs {
+            state: lease.arti_state().into(),
+            cache: lease.arti_cache().into(),
+        },
+    )
+    .unwrap();
+    let owner = MdkOwner::open(&lease, &material, connector, vec![]).unwrap();
+    lease.mark_ready(owner.opened_binding()).unwrap();
+    drop(owner);
+    lease.cleanup_runtime().unwrap();
     (temp, Arc::new(lease), material)
 }
 
@@ -141,6 +163,7 @@ async fn physical_route_cold_real_wss_binding_and_faults() {
     fs::rename(&moved_keys, &keys).unwrap();
     assert_eq!(route.account, material.public_key());
     assert_eq!(route.device_slot, *material.device_slot());
+    fs::write(root.join(RECORD), &before[0]).unwrap();
     route.recheck().unwrap();
     assert_eq!(before, files.map(|name| fs::read(root.join(name)).unwrap()));
     let drop_witness = route.profile.cancel.clone();
@@ -175,6 +198,7 @@ async fn physical_route_cold_real_wss_binding_and_faults() {
     assert_eq!(relay.peer_transcript().len(), 1);
     assert_eq!(relay.group_writes().len(), 1);
     relay.stop().await;
+    lease.cleanup_runtime().unwrap();
 }
 
 fn verify_cold_identity_mismatch(base: &Path, root: &Path, original: &IdentityMaterial) {
@@ -217,11 +241,13 @@ fn verify_first_bind_faults(lease: &Arc<ProfileLease>, material: &IdentityMateri
         CheckedPeerRoute::bind(lease.clone(), &other),
         Err(Error::Identity("identity_mismatch")),
     ));
-    let ca = lease.root().join(CA);
-    let moved = ca.with_extension("moved");
-    fs::rename(&ca, &moved).unwrap();
-    assert!(CheckedPeerRoute::bind(lease.clone(), material).is_err());
-    fs::rename(&moved, &ca).unwrap();
+    for missing in [RECORD, ATTESTATION, CA] {
+        let path = lease.root().join(missing);
+        let moved = path.with_extension("moved");
+        fs::rename(&path, &moved).unwrap();
+        assert!(CheckedPeerRoute::bind(lease.clone(), material).is_err());
+        fs::rename(&moved, &path).unwrap();
+    }
 
     let path = lease.root().join(RECORD);
     let original = fs::read(&path).unwrap();
