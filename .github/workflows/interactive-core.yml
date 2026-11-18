@@ -49,3 +49,5 @@ jobs:
         run: cargo test --locked -p marmish-native --lib terminal_bootstrap::core_tests
       - name: Check Terminal record framing and delivery
         run: cargo test --locked -p marmish-native --lib terminal_frames::core_tests
+      - name: Check private Peer heartbeat and policy records
+        run: cargo test --locked -p marmish-native --test peer_status_wire peer_heartbeat_core

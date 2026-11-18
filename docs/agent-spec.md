@@ -23,7 +23,11 @@ The [Peer aggregate ingress proof](validation/peer-aggregate-ingress-proof.md)
 qualifies one shared canonical origin in a native loopback fixture. A copy
 arriving first on an ineligible relay can suppress the eligible copy from
 another relay in the SDK's account-wide seen-ID tracker. Production Peer
-activation requires a separate routing and recovery solution.
+activation requires a separate routing and recovery solution. The
+[private Peer record codec](validation/peer-status-codec.md) verifies
+heartbeat fields, capability states and complete permission snapshot
+assembly in deterministic tests. Status publication and reception remain
+inactive in the daemon.
 
 **CI execution direction (2026-11-13):** prefer Epiphytic self-hosted runners;
 do not launch GitHub-hosted qualification as an implicit fallback. The
