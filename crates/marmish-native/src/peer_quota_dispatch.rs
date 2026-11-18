@@ -5,6 +5,9 @@ use super::*;
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 #[path = "peer_founder_quota.rs"]
 pub(crate) mod founder;
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "peer_quota_recovery_guard_tests.rs"]
+pub(crate) mod recovery_guard_tests;
 
 use crate::{command_config::CommandConfig, identity::ProfileLease};
 use std::{
@@ -239,7 +242,21 @@ impl ReceiverQuota<'_> {
         fence: &crate::peer_invitation::TurnFence<'_>,
     ) -> Result<()> {
         fence.check().map_err(|_| "recovery_fence")?;
-        let mut turn = self.admit_checked(
+        let key = exact.key;
+        let mut turn = self.admit_recovery(exact)?;
+        turn.enter()?;
+        let result = recover_database(&turn.quota.files[0], key, fence)
+            .and_then(|()| turn.finish())
+            .and_then(|()| fence.check().map_err(|_| "recovery_fence"));
+        if result.is_err() {
+            turn.quota.panicked.store(true, Ordering::Relaxed);
+        }
+        result
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    fn admit_recovery(&self, exact: RecoveryRequest<'_>) -> Result<QuotaTurn<'_>> {
+        self.admit_checked(
             Reservation {
                 owner: self,
                 class: SlotClass::Unknown,
@@ -249,15 +266,7 @@ impl ReceiverQuota<'_> {
                 crash_after_database_write: exact.interrupt_after_write,
             },
             Some(exact.files),
-        )?;
-        turn.enter()?;
-        let result = recover_database(&turn.quota.files[0], exact.key, fence)
-            .and_then(|()| turn.finish())
-            .and_then(|()| fence.check().map_err(|_| "recovery_fence"));
-        if result.is_err() {
-            turn.quota.panicked.store(true, Ordering::Relaxed);
-        }
-        result
+        )
     }
 
     pub(crate) fn admit(&self, reservation: Reservation<'_>) -> Result<QuotaTurn<'_>> {
@@ -1167,19 +1176,22 @@ unsafe extern "C" fn forward_access(
     result: *mut c_int,
 ) -> c_int {
     let base = dispatcher(vfs).stock;
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
-    if let Some(quota) = ACTIVE.with(|scope| scope.borrow().clone())
-        && quota.recovering()
-    {
-        return guarded(sql::SQLITE_IOERR_ACCESS, || {
-            if !quota.check_recovery_access(name, flag) {
-                return sql::SQLITE_IOERR_ACCESS;
-            }
-            unsafe { (*base).xAccess.unwrap_unchecked()(base, name, flag, result) }
-        });
-    }
     // The stock callback was present at registration.
-    unsafe { (*base).xAccess.unwrap_unchecked()(base, name, flag, result) }
+    let stock_access = || unsafe { (*base).xAccess.unwrap_unchecked()(base, name, flag, result) };
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    return guarded(sql::SQLITE_IOERR_ACCESS, || {
+        let quota = ACTIVE
+            .try_with(|scope| scope.borrow().clone())
+            .ok()
+            .flatten();
+        if quota.is_some_and(|quota| quota.recovering() && !quota.check_recovery_access(name, flag))
+        {
+            return sql::SQLITE_IOERR_ACCESS;
+        }
+        stock_access()
+    });
+    #[cfg(not(all(test, target_os = "linux", target_arch = "x86_64")))]
+    stock_access()
 }
 delegate!(forward_path, xFullPathname, c_int, name: *const c_char, len: c_int, out: *mut c_char);
 delegate!(forward_dl_open, xDlOpen, *mut c_void, name: *const c_char);

@@ -241,9 +241,72 @@ fn peer_receiver_inventory_refuses_aliases_unknown_artifacts_and_bad_cursor() {
     assert!(cursor_journal.exists());
 }
 
+#[test]
+fn managed_rollback_rechecks_measured_extents_inodes_and_sidecars() {
+    let fixture = Fixture::new();
+    let (mut owner, binding, _) = start_original(&fixture, 4096);
+    let path = fixture.stage();
+    let journal_path = path.with_extension("db-journal");
+    write_extent(&journal_path, 8192);
+    let original = owner.recover(fixture.now).unwrap();
+    let Class::JournalCandidate { main, journal, .. } = original.classes[1] else {
+        panic!("fixture journal missing");
+    };
+    let evidence = RollbackFiles::open(&owner.paths, main, journal).unwrap();
+    assert!(evidence.read_journal_bounds().is_some());
+
+    for extent in [&path, &journal_path] {
+        let file = OpenOptions::new().write(true).open(extent).unwrap();
+        let previous = file.metadata().unwrap().len();
+        file.set_len(previous + 1).unwrap();
+        assert!(evidence.read_journal_bounds().is_none());
+        assert!(RollbackFiles::open(&owner.paths, main, journal).is_err());
+        file.set_len(previous).unwrap();
+    }
+    for extension in ["db-wal", "db-shm"] {
+        let sidecar = path.with_extension(extension);
+        write_extent(&sidecar, 0);
+        assert!(evidence.read_journal_bounds().is_none());
+        assert_eq!(
+            owner.recover(fixture.now).unwrap().classes[1],
+            Class::Fenced
+        );
+        fs::remove_file(sidecar).unwrap();
+    }
+
+    let retired = OpenOptions::new().read(true).open(&path).unwrap();
+    fs::remove_file(&path).unwrap();
+    let replaced = write_extent(&path, main.logical);
+    assert_ne!(
+        replaced.inode,
+        retired.metadata().unwrap().ino().to_be_bytes()
+    );
+    assert!(evidence.read_journal_bounds().is_none());
+    assert_eq!(
+        owner.recover(fixture.now).unwrap().classes[1],
+        Class::Fenced
+    );
+    assert!(
+        owner
+            .recover(fixture.now)
+            .unwrap()
+            .clean_extent(binding)
+            .is_err()
+    );
+}
+
 const RECOVERY_CHILD: &str = "peer_invitation::receiver_inventory::tests::managed_recovery_child";
 const RECOVERY_MODE: &str = "MARMISH_TEST_MANAGED_RECOVERY";
 const RECOVERY_ROOT: &str = "MARMISH_TEST_MANAGED_RECOVERY_ROOT";
+const RECOVERY_GUARDS: [&str; 7] = [
+    "stale-generation",
+    "wrong-access",
+    "journal-write",
+    "journal-truncate",
+    "main-cap",
+    "combined-cap",
+    "main-readonly",
+];
 
 #[test]
 #[ignore = "opt-in subprocesses using the bundled SQLCipher rollback pager"]
@@ -255,6 +318,8 @@ fn managed_recovery_hot_journal_and_stock_wal() {
         Valid,
         InvalidHeader,
         InvalidFirstRecord,
+        SuperJournal,
+        OversizedJournal,
         WrongKey,
     }
 
@@ -262,6 +327,8 @@ fn managed_recovery_hot_journal_and_stock_wal() {
         Trial::Valid,
         Trial::InvalidHeader,
         Trial::InvalidFirstRecord,
+        Trial::SuperJournal,
+        Trial::OversizedJournal,
         Trial::WrongKey,
     ] {
         let root = tempfile::Builder::new()
@@ -297,6 +364,19 @@ fn managed_recovery_hot_journal_and_stock_wal() {
         let interrupted = fs::read(&stage).unwrap();
         assert!(interrupted != baseline);
         let journal = stage.with_extension("db-journal");
+        if matches!(case, Trial::SuperJournal | Trial::OversizedJournal) {
+            let file = OpenOptions::new().write(true).open(&journal).unwrap();
+            if matches!(case, Trial::SuperJournal) {
+                let mut tail = [0; 16];
+                tail[..4].copy_from_slice(&4_u32.to_be_bytes());
+                tail[8..].copy_from_slice(&[0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]);
+                file.write_all_at(&tail, file.metadata().unwrap().len() - 16)
+                    .unwrap();
+            } else {
+                file.set_len(TOTAL_ADMISSION - RESERVED_BYTES).unwrap();
+            }
+            file.sync_all().unwrap();
+        }
         if matches!(case, Trial::InvalidHeader | Trial::InvalidFirstRecord) {
             let journal = OpenOptions::new()
                 .read(true)
@@ -318,12 +398,28 @@ fn managed_recovery_hot_journal_and_stock_wal() {
         }
         if matches!(case, Trial::WrongKey) {
             run_recovery_child(&root, "wrong-key", 0);
-        } else if matches!(case, Trial::InvalidHeader | Trial::InvalidFirstRecord) {
-            run_recovery_child(&root, "fence", 0);
+        } else if matches!(
+            case,
+            Trial::InvalidHeader
+                | Trial::InvalidFirstRecord
+                | Trial::SuperJournal
+                | Trial::OversizedJournal
+        ) {
+            let mode = if matches!(case, Trial::OversizedJournal) {
+                "oversized-journal"
+            } else {
+                "fence"
+            };
+            run_recovery_child(&root, mode, 0);
             assert!(journal.is_file());
             assert!(fs::read(&stage).unwrap() == interrupted);
         } else {
             let journal_before = fs::read(&journal).unwrap();
+            for mode in RECOVERY_GUARDS {
+                run_recovery_child(&root, mode, 0);
+            }
+            assert!(fs::read(&stage).unwrap() == interrupted);
+            assert!(fs::read(&journal).unwrap() == journal_before);
             run_recovery_child(&root, "reinterrupt", 80);
             assert!(fs::read(&journal).unwrap() == journal_before);
             run_recovery_child(&root, "recover", 0);
@@ -409,9 +505,48 @@ fn managed_recovery_child() {
         return;
     }
 
-    let Class::JournalCandidate { binding, .. } = inventory.classes[1] else {
+    if mode == "oversized-journal" {
+        assert_eq!(inventory.classes[1], Class::Fenced);
+        assert!(inventory.charged >= TOTAL_ADMISSION);
+        return;
+    }
+    let Class::JournalCandidate {
+        binding,
+        main,
+        journal,
+    } = inventory.classes[1]
+    else {
         panic!("fixture journal missing");
     };
+    if RECOVERY_GUARDS.contains(&mode.as_str()) {
+        use crate::peer_quota_vfs::dispatch::{RecoveryRequest, recovery_guard_tests};
+
+        let quota = ReceiverQuota::bind_receiver(&lease).unwrap();
+        let generation = NonZeroU64::new(binding.coordinates().1).unwrap();
+        // Hold the current family fixed at its measured combined limit to
+        // exercise a rejected single-byte growth at aggregate capacity.
+        let charged = if mode == "combined-cap" {
+            TOTAL_ADMISSION
+        } else {
+            inventory.charged
+        };
+        let charged_other = charged - main.logical - journal.logical;
+        let key = SqlCipherKey::raw(*owner.paths.provisional_key(binding));
+        let files = || RollbackFiles::open(&owner.paths, main, journal).unwrap();
+        recovery_guard_tests::probe(
+            &quota,
+            &mode,
+            RecoveryRequest {
+                generation,
+                files: files(),
+                charged_other,
+                key: &key,
+                interrupt_after_write: false,
+            },
+            files,
+        );
+        return;
+    }
     let wall = Wall::Fixture(f.wall);
     let ticks = AtomicU64::new(0);
     let stopped = AtomicBool::new(false);
