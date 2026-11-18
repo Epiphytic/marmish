@@ -74,3 +74,16 @@ point when creating `peer/`. Separate tests for root substitution, a
 different-profile lease and restrictive umask remain open. The test-only
 VFS name used while constructing the descriptor is replaced before SQLite
 registers it. Candidate archive scans must account for that source literal.
+
+## Retained verifier review
+
+Claude Code Auto, Claude Sonnet 5.5, approved exact source
+`e8bf71f3ccbd8c23facbb8865d1585b17339c42b` in session
+`e1aabf4a-54e2-4973-8004-4a90bac6c8b0`. The reviewer checked the
+process-lifetime witness, exact descriptor and default comparisons under
+the registry lock, sticky displacement, and the lease and directory
+checks that still run after attach. The review independently reran the
+five-mode SQLite subprocess harness from the exact source executable.
+The successor changes only the registration validation and review
+documentation. Foreign profile and port-cancellation evidence belongs to
+the later route handoff, which still needs its own source validation.

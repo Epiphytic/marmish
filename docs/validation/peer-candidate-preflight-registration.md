@@ -87,3 +87,32 @@ ordering. This run establishes regression coverage for the integrated source.
 It does not mount the registered receiver in an installed daemon. Exact
 registration harness build time was 46.05 seconds. Formatting and whitespace
 checks passed. See the [integrated review](../reviews/peer-candidate-preflight-registration.md#integrated-review).
+
+## Forwarding verifier after attachment
+
+Exact source `e8bf71f3ccbd8c23facbb8865d1585b17339c42b` extends the
+registration with a read-only global witness. The witness can check the
+same registry entry, SQLite defaults, and stored forwarding descriptor
+after the registered authorization is consumed by attach. Attached checks
+bracket the original profile, material and reserved topology with the
+independent global verification. Local drift cancels only Peer scope.
+Displacement permanently latches the global failure, including when the
+default pointer is restored.
+
+| Exact Linux AMD64 check | Result | Wall time |
+| --- | --- | ---: |
+| Bundled SQLCipher registration libtest build | Passed | 39.45 s |
+| Isolated registration harness | Passed in all five cases | 17.77 s |
+| Default strict native lib and tests Clippy | Passed | 27.60 s |
+| Default binary check | Passed | 8.87 s |
+| Explicit candidate strict all-target Clippy | Passed | 27.93 s |
+
+The five cases cover preflight refusal, attached config drift, attached
+directory replacement, sticky displacement after attach, and forwarding
+after lease drop. The local-refusal cases use real SQL forwarding after
+Peer refuses. Claude independently reran the focused harness with the
+same libtest executable, SHA-256
+`64e6396e0edab01cee37e0d8c057fe5aa94ebb49601c043124a842a76027e2b0`.
+The verifier is available to later candidate composition. This increment
+keeps it outside the active daemon run path.
+[Code review](../reviews/peer-candidate-preflight-registration.md#retained-verifier-review)

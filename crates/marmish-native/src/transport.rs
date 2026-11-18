@@ -3,6 +3,12 @@
 //! Construction is configuration-only. The owner must open encrypted state
 //! before calling `bootstrap`; no SDK default connector or proxy is used.
 
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+use crate::dispatcher_fatal::{Fatal, FencedStream};
 use crate::{
     Error, Result,
     peer_relay_trust::{BoundPeerTls, PeerLiveDial, PeerTlsAttempt, PeerTlsWindow, ProbeAuthority},
@@ -274,6 +280,12 @@ struct ConnectorState {
     ready: AtomicBool,
     cancelled: CancellationToken,
     slots: Vec<Arc<Semaphore>>,
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    fatal: Option<Fatal>,
     #[cfg(test)]
     direct_attempts: std::sync::atomic::AtomicUsize,
     #[cfg(test)]
@@ -403,6 +415,12 @@ impl RelayConnector {
             ready: AtomicBool::new(false),
             cancelled: CancellationToken::new(),
             slots,
+            #[cfg(all(
+                any(test, marmish_peer_receiver_candidate),
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            fatal: None,
             #[cfg(test)]
             direct_attempts: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
@@ -450,6 +468,48 @@ impl RelayConnector {
         let mut connector = Self::new(policy, dirs)?;
         Arc::get_mut(&mut connector.0).unwrap().fixture_roots = Some(roots);
         Ok(connector)
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn with_fatal(mut self, fatal: Fatal) -> Result<Self> {
+        if self.policy().needs_tor() {
+            return Err(Error::Transport("dispatcher_fatal_direct_only"));
+        }
+        let state = Arc::get_mut(&mut self.0).ok_or(Error::Transport("connector_shared"))?;
+        if state.fatal.is_some() || state.ready.load(Ordering::Acquire) {
+            return Err(Error::Transport("connector_initialized"));
+        }
+        state.fatal = Some(fatal);
+        Ok(self)
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) async fn reap_fatal_sockets(&self, deadline: Instant) -> Result<()> {
+        if !self.0.fatal.as_ref().is_some_and(Fatal::is_tripped) {
+            return Err(Error::Transport("dispatcher_fatal_required"));
+        }
+        self.0.cancelled.cancel();
+        let mut reaped = Vec::with_capacity(self.0.slots.len());
+        for slot in &self.0.slots {
+            reaped.push(
+                timeout_at(deadline, slot.acquire())
+                    .await
+                    .map_err(|_| Error::Timeout)?
+                    .map_err(|_| Error::Transport("dispatcher_fatal_reap"))?,
+            );
+        }
+        self.cancel();
+        Ok(())
     }
 
     pub(crate) async fn reap_terminal_socket(&self, deadline: Instant) -> Result<()> {
@@ -703,6 +763,22 @@ impl RelayConnector {
                 }
             }
         };
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        let attempt = async {
+            if let Some(fatal) = &self.0.fatal {
+                tokio::select! {
+                    biased;
+                    _ = fatal.tripped() => Err(Error::Transport("dispatcher_fatal")),
+                    result = attempt => result,
+                }
+            } else {
+                attempt.await
+            }
+        };
         tokio::select! {
             biased;
             _ = self.0.cancelled.cancelled() => Err(Error::Transport("shutdown")),
@@ -764,6 +840,15 @@ impl RelayConnector {
                         .map_err(|_| Error::Transport("direct_connect"))?,
                 )
             }
+        };
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        let stream: Box<dyn NetworkStream> = match &self.0.fatal {
+            Some(fatal) => Box::new(FencedStream::new(stream, fatal)),
+            None => stream,
         };
         crate::diagnostics::event("relay_stream", "connected");
         Ok((stream, permit))
@@ -1021,6 +1106,75 @@ impl WebSocketTransport for RelayConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[tokio::test]
+    async fn fatal_drains_each_exact_route_slot_and_blocks_new_connects() {
+        use crate::dispatcher_fatal::Trip;
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+
+        let first = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let second = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoints =
+            [&first, &second].map(|listener| format!("wss://{}/", listener.local_addr().unwrap()));
+        let policy =
+            RelayPolicy::parse(&endpoints, RouteMode::Off, TransportLimits::default()).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let dirs = ArtiDirs {
+            state: root.path().join("state"),
+            cache: root.path().join("cache"),
+        };
+        let (trip, fatal) = Trip::new();
+        let connector = RelayConnector::new(policy, dirs)
+            .unwrap()
+            .with_fatal(fatal)
+            .unwrap();
+        let until = || Instant::now() + Duration::from_secs(1);
+        connector.bootstrap(until()).await.unwrap();
+        assert!(matches!(
+            connector.reap_fatal_sockets(until()).await,
+            Err(Error::Transport("dispatcher_fatal_required"))
+        ));
+
+        let mut sockets = Vec::new();
+        for (index, endpoint) in connector.policy().urls().iter().enumerate() {
+            sockets.push(
+                connector
+                    .connect_stream(endpoint, index, Route::Direct)
+                    .await
+                    .unwrap(),
+            );
+        }
+        let (mut first_half, first_slot) = sockets.pop().unwrap();
+        let (second_half, second_slot) = sockets.pop().unwrap();
+        trip.trip();
+        assert_eq!(
+            first_half
+                .write_all(b"after fatal")
+                .await
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::ConnectionAborted
+        );
+        assert!(matches!(
+            connector
+                .open_socket(&connector.policy().urls()[0], None)
+                .await,
+            Err(Error::Transport("dispatcher_fatal"))
+        ));
+
+        drop((first_half, first_slot));
+        let retained_second_half = second_slot.clone();
+        drop((second_half, second_slot));
+        assert!(matches!(
+            connector.reap_fatal_sockets(Instant::now()).await,
+            Err(Error::Timeout)
+        ));
+        drop(retained_second_half);
+        connector.reap_fatal_sockets(until()).await.unwrap();
+        assert!(connector.0.slots.iter().all(|slot| slot.is_closed()));
+    }
 
     #[test]
     fn white_noise_defaults_are_canonical_and_follow_route_policy() {
