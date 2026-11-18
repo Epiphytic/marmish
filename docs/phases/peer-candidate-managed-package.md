@@ -118,11 +118,12 @@ increment. No new schema, native protocol, relay behavior or role.
    Release file exclusion before `start_stage` writes the exact inode.
    Do not authorize allocation through the fixture's permissive
    `resume_allocation`.
-2. Reacquire measured clean file exclusion. Require `NativeStarted`,
-   the exact bound empty inode, the one-use token and no sidecars. With
-   the active Unknown quota admitted, open as keyed SQLite DELETE only
-   then call the closed, non-withholding form of
-   `OpenStage::generate_provisional` once. Require no native groups,
+2. Apply the [separate metered schema prestage](peer-candidate-package-prestage.md)
+   to the exact bound empty inode and one-use token. Reacquire measured
+   clean file exclusion in the five-second issue window. Require the same
+   current `NativeStarted`, prestaged closed inode and digest, no
+   sidecars and zero migrations during the keyed DELETE reopen. Call
+   `OpenStage::issue_managed_provisional` once. Require no native groups,
    clean closure, same inode and all caps. Reuse
    `AccountDeviceRuntime::prepare_fresh_key_package` through the existing
    `NoIo` adapter and local publisher, never the native publish method.
