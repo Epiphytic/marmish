@@ -1,10 +1,13 @@
 use super::*;
 use nostr::key::Keys;
-use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair, KeyUsagePurpose};
+use rcgen::{
+    BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair, KeyUsagePurpose, PublicKeyData,
+    SignatureAlgorithm, date_time_ymd,
+};
 use serde_json::json;
 use std::{fs, net::SocketAddr, path::Path, time::Duration};
 use tokio::{
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     task::JoinHandle,
     time::{Instant, timeout},
 };
@@ -65,10 +68,18 @@ struct Authority {
 
 impl Authority {
     fn new() -> Self {
+        Self::configured(&rcgen::PKCS_ECDSA_P256_SHA256, |_| {})
+    }
+
+    fn configured(
+        algorithm: &'static SignatureAlgorithm,
+        configure: impl FnOnce(&mut CertificateParams),
+    ) -> Self {
         let mut ca = CertificateParams::default();
         ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         ca.key_usages.push(KeyUsagePurpose::KeyCertSign);
-        let key = KeyPair::generate().unwrap();
+        configure(&mut ca);
+        let key = KeyPair::generate_for(algorithm).unwrap();
         let der = ca.self_signed(&key).unwrap().der().clone();
         Self {
             der,
@@ -77,11 +88,21 @@ impl Authority {
     }
 
     fn server(&self, san: &str, key: &KeyPair, serial: u64) -> (TlsAcceptor, String) {
+        self.server_with(san, key, serial, |_| {})
+    }
+
+    fn server_with(
+        &self,
+        san: &str,
+        key: &KeyPair,
+        serial: u64,
+        configure: impl FnOnce(&mut CertificateParams),
+    ) -> (TlsAcceptor, String) {
         let mut params = CertificateParams::new(vec![san.into()]).unwrap();
         params.serial_number = Some(serial.into());
+        configure(&mut params);
         let cert = params.signed_by(key, &self.issuer).unwrap();
-        let parsed = parse_der(cert.der().as_ref()).unwrap();
-        let hash = hex::encode(Sha256::digest(parsed.public_key().raw));
+        let hash = hex::encode(Sha256::digest(key.subject_public_key_info()));
         let config = rustls::ServerConfig::builder_with_provider(Arc::new(
             rustls::crypto::ring::default_provider(),
         ))
@@ -275,5 +296,142 @@ fn peer_tls_anchor_and_strict_profile_checks() {
     assert!(matches!(
         PeerRelayOwner::bind(lease.clone(), &config),
         Err(Error::Identity("peer_profile_changed"))
+    ));
+}
+
+#[tokio::test]
+async fn peer_tls_refuses_expired_leaf_and_anchor_before_upgrade() {
+    let ca = Authority::new();
+    let key = KeyPair::generate().unwrap();
+    let (expired_leaf, _) = ca.server_with("127.0.0.1", &key, 1, |params| {
+        params.not_after = date_time_ymd(2001, 1, 1);
+    });
+    let (live_leaf, _) = ca.server("127.0.0.1", &key, 2);
+    let (origin, server) = serve_fixture(vec![expired_leaf, live_leaf]).await;
+    let (_temp, lease) = test_lease();
+    let ca_pin: [u8; 32] = Sha256::digest(&ca.der).into();
+    private_write(&lease.root().join("peer-relay-ca.der"), ca.der.as_ref());
+    let config = config_fixture(
+        &lease,
+        origin.as_str(),
+        &format!("ca-sha256:{}", hex::encode(ca_pin)),
+        "off",
+    );
+    let owner = PeerRelayOwner::bind(lease, &config).unwrap();
+    let connector = owner.connector.test_transport();
+    connector
+        .bootstrap(Instant::now() + TEST_TIMEOUT)
+        .await
+        .unwrap();
+    assert!(matches!(
+        connector.peer_test_open(&origin, None).await,
+        Err(Error::Transport("peer_tls_certificate"))
+    ));
+
+    // Reuse the exact TLS stream verifier with a simulated wall step after
+    // the handshake. This makes the anchor expire without a real-time race.
+    let tls = BoundPeerTls {
+        origin: origin.clone(),
+        trust: Trust::CaSha256(ca_pin),
+        profile: Arc::downgrade(&owner.profile),
+        spki_roots: None,
+    };
+    let attempt = tls.attempt(&origin).unwrap();
+    let expires = u64::try_from(*attempt.anchor_window.as_ref().unwrap().end()).unwrap();
+    let stream = TcpStream::connect(("127.0.0.1", origin.port().unwrap()))
+        .await
+        .unwrap();
+    assert!(matches!(
+        attempt
+            .connect_using(Box::new(stream), "127.0.0.1", || expires + 1)
+            .await,
+        Err(Error::Transport("peer_tls_ca"))
+    ));
+    assert_eq!(
+        server.await.unwrap(),
+        [Outcome::TlsRefused, Outcome::NoUpgrade]
+    );
+
+    for configure in [
+        |params: &mut CertificateParams| params.not_after = date_time_ymd(2001, 1, 1),
+        |params: &mut CertificateParams| params.not_before = date_time_ymd(2099, 1, 1),
+    ] {
+        let invalid = Authority::configured(&rcgen::PKCS_ECDSA_P256_SHA256, configure);
+        let ca_file = owner.profile.lease.root().join("peer-relay-ca.der");
+        fs::remove_file(&ca_file).unwrap();
+        private_write(&ca_file, invalid.der.as_ref());
+        let invalid = BoundPeerTls {
+            trust: Trust::CaSha256(Sha256::digest(&invalid.der).into()),
+            origin: origin.clone(),
+            profile: tls.profile.clone(),
+            spki_roots: None,
+        };
+        assert!(matches!(
+            invalid.attempt(&origin),
+            Err(Error::Transport("peer_tls_ca"))
+        ));
+    }
+}
+
+#[test]
+fn peer_tls_caps_chain_and_requires_private_ca_descriptor() {
+    let ca = Authority::new();
+    let trust = Trust::CaSha256(Sha256::digest(&ca.der).into());
+    for chain in [
+        Vec::new(),
+        vec![ca.der.clone(); 9],
+        vec![
+            ca.der.clone(),
+            CertificateDer::from(vec![0; CERT_LIMIT * 8]),
+        ],
+        vec![CertificateDer::from(vec![0; CERT_LIMIT + 1])],
+    ] {
+        assert!(matches!(
+            validate_live_leaf(&chain, &trust),
+            Err(Error::Transport("peer_tls_certificate"))
+        ));
+    }
+    for algorithm in [&rcgen::PKCS_ECDSA_P384_SHA384, &rcgen::PKCS_ED25519] {
+        let ca = Authority::configured(algorithm, |_| {});
+        assert!(ca_window(ca.der.as_ref()).is_some());
+    }
+    let no_sign = Authority::configured(&rcgen::PKCS_ECDSA_P256_SHA256, |params| {
+        params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+    });
+    assert!(ca_window(no_sign.der.as_ref()).is_none());
+
+    let (_temp, lease) = test_lease();
+    let ca_file = lease.root().join("peer-relay-ca.der");
+    let alias = lease.root().join("alias.der");
+    let config = config_fixture(
+        &lease,
+        "wss://127.0.0.1:9999/",
+        &format!("ca-sha256:{}", hex::encode(Sha256::digest(&ca.der))),
+        "off",
+    );
+    private_write(&alias, ca.der.as_ref());
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    symlink(&alias, &ca_file).unwrap();
+    assert!(matches!(
+        PeerRelayOwner::bind(lease.clone(), &config),
+        Err(Error::Transport("peer_tls_ca"))
+    ));
+    fs::remove_file(&ca_file).unwrap();
+    fs::hard_link(&alias, &ca_file).unwrap();
+    assert!(matches!(
+        PeerRelayOwner::bind(lease.clone(), &config),
+        Err(Error::Transport("peer_tls_ca"))
+    ));
+    fs::remove_file(&alias).unwrap();
+    fs::set_permissions(&ca_file, fs::Permissions::from_mode(0o640)).unwrap();
+    assert!(matches!(
+        PeerRelayOwner::bind(lease.clone(), &config),
+        Err(Error::Transport("peer_tls_ca"))
+    ));
+    fs::remove_file(&ca_file).unwrap();
+    private_write(&ca_file, &vec![0; CERT_LIMIT + 1]);
+    assert!(matches!(
+        PeerRelayOwner::bind(lease, &config),
+        Err(Error::Transport("peer_tls_ca"))
     ));
 }

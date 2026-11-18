@@ -183,7 +183,7 @@ fn replace(
     versions: Versions,
     record: &Record,
 ) -> Result<()> {
-    replace_using(profile, relay, versions, record, File::sync_all)
+    replace_using(profile, relay, versions, record, || Ok(()), File::sync_all)
 }
 
 fn replace_using(
@@ -191,6 +191,7 @@ fn replace_using(
     relay: &Relay,
     versions: Versions,
     record: &Record,
+    staged_check: impl FnOnce() -> io::Result<()>,
     sync_parent: impl FnOnce(&File) -> io::Result<()>,
 ) -> Result<()> {
     let _turn = profile.record_writer.lock().map_err(|_| WRITE_REFUSED)?;
@@ -229,6 +230,7 @@ fn replace_using(
     let stage_and_rename = || -> Result<()> {
         (&staged).write_all(&bytes).map_err(|_| WRITE_REFUSED)?;
         staged.sync_all().map_err(|_| WRITE_REFUSED)?;
+        staged_check().map_err(|_| WRITE_REFUSED)?;
         profile.recheck()?;
         let latest = checked_optional(&profile.dir, RECORD)?;
         let latest = file_id(latest.as_ref())?;
@@ -361,6 +363,9 @@ mod tests {
         let baseline = record(&profile_id, &relay);
         let bytes = serde_json::to_vec(&baseline).unwrap();
         assert_eq!(Record::decode(&bytes), Some(baseline.clone()));
+        let mut exact_limit = bytes.clone();
+        exact_limit.resize(RECORD_LIMIT, b' ');
+        assert_eq!(Record::decode(&exact_limit), Some(baseline.clone()));
         let text = std::str::from_utf8(&bytes).unwrap();
         let cases = [
             text.replace(r#""schema":1"#, r#""schema":1,"schema":1"#),
@@ -445,9 +450,14 @@ mod tests {
         assert!(staging.is_symlink());
         fs::remove_file(&staging).unwrap();
         assert!(matches!(
-            replace_using(&profile, &relay, VERSIONS, &advanced, |_| Err(
-                io::Error::from(io::ErrorKind::Interrupted)
-            )),
+            replace_using(
+                &profile,
+                &relay,
+                VERSIONS,
+                &advanced,
+                || Ok(()),
+                |_| Err(io::Error::from(io::ErrorKind::Interrupted))
+            ),
             Err(Error::Storage("peer_qualification_write_uncertain"))
         ));
         // Rename took place, but caller never receives success after failed
@@ -493,5 +503,57 @@ mod tests {
             read(&profile, &relay, VERSIONS, Some(120)),
             LocalStatus::Unqualified
         );
+    }
+    #[test]
+    fn peer_qualification_failed_staging_preserves_prior_and_foreign_inodes() {
+        let (_temp, lease) = test_lease();
+        let profile = ProfileFiles::open(lease.clone()).unwrap();
+        let relay = relay();
+        let baseline = record(lease.profile_id(), &relay);
+        let fixed = lease.root().join("peer-relay-qualification.json");
+        let staging = lease.root().join("peer-relay-qualification.new");
+        let moved = lease.root().join("moved");
+        replace(&profile, &relay, VERSIONS, &baseline).unwrap();
+
+        let mut advanced = baseline.clone();
+        advanced.last_observed_at += 1;
+        assert!(matches!(
+            replace_using(
+                &profile,
+                &relay,
+                VERSIONS,
+                &advanced,
+                || {
+                    assert!(staging.is_file());
+                    Err(io::Error::from(io::ErrorKind::Interrupted))
+                },
+                |_| panic!("parent synced before rename")
+            ),
+            Err(Error::Storage("peer_qualification_write"))
+        ));
+        assert!(!staging.exists());
+        assert_eq!(
+            Record::decode(&fs::read(&fixed).unwrap()),
+            Some(baseline.clone())
+        );
+
+        assert!(matches!(
+            replace_using(
+                &profile,
+                &relay,
+                VERSIONS,
+                &advanced,
+                || {
+                    fs::rename(&staging, &moved)?;
+                    private_write(&staging, b"external replacement");
+                    Ok(())
+                },
+                |_| panic!("parent synced a foreign stage")
+            ),
+            Err(Error::Storage("peer_qualification_write"))
+        ));
+        assert_eq!(fs::read(&staging).unwrap(), b"external replacement");
+        assert_eq!(Record::decode(&fs::read(&moved).unwrap()), Some(advanced));
+        assert_eq!(Record::decode(&fs::read(&fixed).unwrap()), Some(baseline));
     }
 }

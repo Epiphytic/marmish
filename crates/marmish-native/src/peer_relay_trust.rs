@@ -168,6 +168,16 @@ impl PeerTlsAttempt {
         stream: Box<dyn NetworkStream>,
         host: &str,
     ) -> Result<Box<dyn NetworkStream>> {
+        self.connect_using(stream, host, || UnixTime::now().as_secs())
+            .await
+    }
+
+    async fn connect_using(
+        &self,
+        stream: Box<dyn NetworkStream>,
+        host: &str,
+        wall: impl FnOnce() -> u64,
+    ) -> Result<Box<dyn NetworkStream>> {
         let stream = crate::transport::secure_tls_stream(stream, host, self.config.clone())
             .await
             .map_err(|_| CERT_ERROR)?;
@@ -177,7 +187,7 @@ impl PeerTlsAttempt {
         if self
             .anchor_window
             .as_ref()
-            .is_some_and(|window| !wall_in(window, UnixTime::now().as_secs()))
+            .is_some_and(|window| !wall_in(window, wall()))
         {
             return Err(CA_ERROR);
         }
