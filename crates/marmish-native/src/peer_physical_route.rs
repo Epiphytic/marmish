@@ -441,7 +441,7 @@ impl NativeRouteWindow<'_> {
         readiness: crate::peer_candidate_startup::Readiness,
         stop: Arc<std::sync::atomic::AtomicBool>,
         signed_end_exclusive: u64,
-    ) -> crate::peer_invitation::Result<crate::peer_invitation::NativeWindow> {
+    ) -> Result<crate::peer_invitation::NativeWindow> {
         crate::peer_invitation::NativeWindow::start_checked(
             readiness,
             stop,

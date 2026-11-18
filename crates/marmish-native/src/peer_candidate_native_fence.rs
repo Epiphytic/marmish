@@ -106,7 +106,7 @@ impl NativeWindow {
         stop: Arc<AtomicBool>,
         end_exclusive: u64,
         route: NativeRouteFence,
-    ) -> Result<Self> {
+    ) -> crate::Result<Self> {
         Self::start_with(
             readiness,
             stop,
@@ -116,6 +116,7 @@ impl NativeWindow {
                 route: RouteFence::Checked(route),
             },
         )
+        .map_err(|_| crate::Error::Invalid("peer_native_clock"))
     }
 
     fn start_with(
