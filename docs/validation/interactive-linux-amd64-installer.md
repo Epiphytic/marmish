@@ -45,6 +45,21 @@ An earlier invocation was rejected with `invalid input: command_separator`
 before command execution. The successful invocation used the explicit
 `-u` form.
 
+A second independent run used the documented `marmish SERVER_NPUB -- …`
+form. The client used its configured White Noise US relay without a host
+suffix. The same literal was returned byte-for-byte with empty stderr and
+exit 0 in 9.581 s. The client and server reported active in 903 and 916 ms,
+respectively. Both daemons exited 0 on shutdown. These two ordinary-command
+timings are individual samples.
+
+## Copy and streaming regressions
+
+On the same Linux AMD64 source revision, the local `rsync_cli` selector
+passed both command parser and bootstrap tests. `copy_integration_tests`
+passed 14 tests with two opt-in cases skipped. `stream_cli` passed all 12
+cases. The rsync selector checks command handling. It does not launch an
+end-to-end rsync transfer through the installed client and server.
+
 ## Core workflow replay
 
 All 32 Cargo selectors from `.github/workflows/interactive-core.yml` ran
