@@ -7,7 +7,7 @@ use rusqlite::Row;
 use crate::peer_invitation::accept_receipt_verify::VerifiedReceiptSource;
 use crate::peer_invitation::accept_receipt_wire::{self as receipt_wire, Decoded, Receipt};
 use crate::peer_invitation::postjoin_verify::{
-    Baseline, Capture, ConfirmedRotation, RecoveredPostJoin,
+    Baseline, Capture, ColdConfirmedRotation, ConfirmedRotation, RecoveredPostJoin,
 };
 use nostr::key::PublicKey;
 
@@ -854,6 +854,22 @@ impl Checkpoint {
         self.update_publication(source, prior, Change::Confirm(coordinates.candidate), wall)
     }
 
+    pub(crate) fn confirm_recovered_postjoin(
+        &mut self,
+        source: &Source,
+        confirmed: &ColdConfirmedRotation<'_>,
+        wall: u64,
+    ) -> Result<Publication> {
+        let prior = confirmed.publication();
+        if confirmed.observed_at() != wall
+            || !matches!(prior.step(), Step::Armed { .. } | Step::Uncertain { .. })
+        {
+            return Err(CursorError::Stale.into());
+        }
+        let candidate = prior.candidate().ok_or(CursorError::Binding)?;
+        self.update_publication(source, prior, Change::Confirm(candidate), wall)
+    }
+
     pub(crate) fn activate_and_reserve_receipt(
         &mut self,
         source: &Source,
@@ -866,6 +882,32 @@ impl Checkpoint {
             .ok_or(CursorError::Stale)?;
         let coordinates = postjoin.rotation(confirmed.baseline(), confirmed.capture())?;
         self.activate_and_reserve_coordinates(source, prior, &coordinates, wall, |_| Ok(()))
+    }
+
+    pub(crate) fn activate_and_reserve_recovered_receipt(
+        &mut self,
+        source: &Source,
+        prior: &HeldEvidence,
+        confirmed: &ColdConfirmedRotation<'_>,
+        wall: u64,
+    ) -> Result<ReceiptReservation> {
+        let postjoin = self
+            .publication(source, prior, Kind::PostJoin, wall)?
+            .ok_or(CursorError::Stale)?;
+        if confirmed.observed_at() != wall
+            || !matches!(postjoin.step(), Step::Published { .. })
+            || !postjoin.same_turn(confirmed.publication())
+        {
+            return Err(CursorError::Stale.into());
+        }
+        let rotation = RotationCoordinates {
+            scope: postjoin.scope.clone(),
+            obligation: postjoin.semantic_id().to_vec(),
+            candidate: postjoin.candidate().ok_or(CursorError::Binding)?,
+            source: postjoin.source_pin(),
+            confirmed: postjoin.target_pin().ok_or(CursorError::Binding)?,
+        };
+        self.activate_and_reserve_coordinates(source, prior, &rotation, wall, |_| Ok(()))
     }
 
     pub(crate) fn read_uncertain_postjoin(

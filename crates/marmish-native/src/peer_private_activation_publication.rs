@@ -161,15 +161,16 @@ impl SocketTurn {
 
 /// The generic publish method can egress only a previously verified receipt.
 /// Commit publication has a separate adapter and cannot take this turn.
+#[derive(Clone)]
 pub(super) struct ReceiptGate {
-    turn: Slot<Option<SocketTurn>>,
+    turn: Arc<Slot<Option<SocketTurn>>>,
     wall: Arc<AtomicU64>,
 }
 
 impl ReceiptGate {
     pub(super) fn closed(wall: Arc<AtomicU64>) -> Self {
         Self {
-            turn: Slot::new(None),
+            turn: Arc::new(Slot::new(None)),
             wall,
         }
     }
