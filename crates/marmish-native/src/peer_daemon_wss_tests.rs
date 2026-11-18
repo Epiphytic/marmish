@@ -939,7 +939,8 @@ async fn outage() {
     assert_eq!(round.relay.peer_transcript().len(), 3);
     round.command.stop_fixture_server(server).await;
     let stop = daemon.stop().await;
-    round.assert_stopped();
+    assert!(!socket.exists());
+    assert!(ProfileLease::acquire(round.root.path(), PROFILE).is_ok());
     eprintln!(
         "peer_daemon_wss outage decision_ms={} command_ms={} stop_ms={}",
         decision.as_millis(),
