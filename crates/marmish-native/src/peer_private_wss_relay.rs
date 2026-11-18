@@ -17,6 +17,7 @@ pub(crate) struct Write {
     pub(crate) recipient: PublicKey,
     pub(crate) event: EventId,
     pub(crate) bytes_sha256: [u8; 32],
+    pub(crate) bytes_len: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -272,6 +273,7 @@ impl Scope {
             recipient,
             event: event.id,
             bytes_sha256: Sha256::digest(body.get()).into(),
+            bytes_len: body.get().len(),
         });
         true
     }

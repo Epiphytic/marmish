@@ -349,7 +349,7 @@ impl JoinStarted {
     }
 }
 
-struct Context {
+pub(super) struct Context {
     account: [u8; 32],
     epoch: Epoch,
     origins: Vec<Origin>,
@@ -375,7 +375,11 @@ impl Context {
         Ok(())
     }
 
-    fn exact_consent(&self, tx: &Transaction<'_>, selector: Selector) -> Result<Option<Queued>> {
+    pub(super) fn exact_consent(
+        &self,
+        tx: &Transaction<'_>,
+        selector: Selector,
+    ) -> Result<Option<Queued>> {
         if !outbox::exists(tx, selector, self.origin)? {
             return Ok(None);
         }
@@ -493,6 +497,54 @@ impl Checkpoint {
 
     pub(crate) fn is_installed_custody(&self) -> bool {
         self.layout == Layout::InstalledCustodyV2
+    }
+
+    pub(crate) fn installed_receive_policy(&self) -> Option<&ReceivePolicy> {
+        self.installed_receive.as_ref()
+    }
+
+    pub(super) fn read_installed_consent<T>(
+        &mut self,
+        source: &Source,
+        account: PublicKey,
+        url: &str,
+        wall: u64,
+        read: impl FnOnce(&Transaction<'_>, &Context) -> Result<T>,
+    ) -> Result<T> {
+        if !self.is_installed_custody() {
+            return Err(Error::Layout);
+        }
+        if !matches!(self.installed_receive_policy(), Some(ReceivePolicy::Manual)) {
+            return Err(Error::Policy);
+        }
+        let cx = self.custody_context(source)?;
+        if account.to_bytes() != cx.account
+            || cx.route.urls.as_slice() != [url]
+            || cx.origins.as_slice() != [cx.route.id]
+        {
+            return Err(Error::Source);
+        }
+        let tx = self.cursor.conn.transaction()?;
+        cx.verify(&tx, wall)?;
+        let floor = tx.query_row(
+            "SELECT wall FROM peer_cursor_origin WHERE origin=?1",
+            [cx.origin],
+            |row| read_seconds(row, 0),
+        )?;
+        if wall < floor {
+            return Err(CursorError::ClockRegressed.into());
+        }
+        read(&tx, &cx)
+    }
+
+    pub(crate) fn check_installed_consent_scope(
+        &mut self,
+        source: &Source,
+        account: PublicKey,
+        url: &str,
+        wall: u64,
+    ) -> Result<()> {
+        self.read_installed_consent(source, account, url, wall, |_, _| Ok(()))
     }
 
     pub(crate) fn custody_codec(&self) -> wire::Codec {

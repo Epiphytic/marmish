@@ -556,7 +556,7 @@ impl Socket {
         if self.physical.is_none() {
             return limited(deadline, self.sink.send(Message::Text(text))).await;
         }
-        self.fenced_write(text, deadline, None, |_| Ok(()), &mut false)
+        self.fenced_write(text, deadline, None, |_| Ok(()), |_| Ok(()), &mut false)
             .await
     }
 
@@ -570,6 +570,7 @@ impl Socket {
         deadline: Instant,
         wall_end: Option<u64>,
         mut authorize: impl FnMut(u64) -> Result<()>,
+        before_flush: impl FnOnce(u64) -> Result<()>,
         exposed: &mut bool,
     ) -> Result<()> {
         if text.len() > wire::MESSAGE_LIMIT {
@@ -577,15 +578,23 @@ impl Socket {
         }
         let Self { sink, physical, .. } = self;
         let cancel = physical.as_ref().ok_or(Failure::Binding)?.cancellation();
-        let write = fenced_sink(sink, Message::Text(text), deadline, exposed, |end| {
-            let wall = refresh_route(physical, end)?.ok_or(Failure::Binding)?;
-            if let (Some(physical), Some(wall_end)) = (physical.as_ref(), wall_end) {
-                physical
-                    .clamp_wall(end, wall_end)
-                    .map_err(|_| Failure::Retired)?;
-            }
-            authorize(wall)
-        });
+        let write = fenced_sink(
+            sink,
+            Message::Text(text),
+            deadline,
+            exposed,
+            |end| {
+                let wall = refresh_route(physical, end)?.ok_or(Failure::Binding)?;
+                if let (Some(physical), Some(wall_end)) = (physical.as_ref(), wall_end) {
+                    physical
+                        .clamp_wall(end, wall_end)
+                        .map_err(|_| Failure::Retired)?;
+                }
+                authorize(wall)?;
+                Ok(wall)
+            },
+            before_flush,
+        );
         tokio::select! {
             biased;
             _ = cancel.cancelled() => Err(Failure::Retired),
@@ -670,22 +679,29 @@ async fn fenced_sink<S: Sink<Message> + Unpin>(
     message: Message,
     mut end: Instant,
     exposed: &mut bool,
-    mut fence: impl FnMut(&mut Instant) -> Result<()>,
+    mut fence: impl FnMut(&mut Instant) -> Result<u64>,
+    before_flush: impl FnOnce(u64) -> Result<()>,
 ) -> Result<()> {
-    fenced_poll_inner(&mut end, &mut fence, |cx| {
+    let mut poll_fence = |end: &mut Instant| fence(end).map(drop);
+    fenced_poll_inner(&mut end, &mut poll_fence, |cx| {
         Pin::new(&mut *sink).poll_ready(cx)
     })
     .await?;
-    fence(&mut end)?;
+    let wall = fence(&mut end)?;
     check_deadline(end)?;
     // The installed SplitSink/With pair stages the message in start_send.
     Pin::new(&mut *sink)
         .start_send(message)
         .map_err(|_| Failure::Transport)?;
-    fenced_poll_inner(&mut end, &mut fence, |cx| {
-        *exposed = true;
-        Pin::new(&mut *sink).poll_flush(cx)
-    })
+    before_flush(wall)?;
+    fenced_poll_inner(
+        &mut end,
+        |end| fence(end).map(drop),
+        |cx| {
+            *exposed = true;
+            Pin::new(&mut *sink).poll_flush(cx)
+        },
+    )
     .await
 }
 

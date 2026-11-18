@@ -114,6 +114,7 @@ struct State {
     qualification_fault_fired: bool,
     recipient_runtime: bool,
     recipient_lost_ack: Option<EventId>,
+    recipient_rejected_ack: Option<EventId>,
     recipient_fault: Option<RecipientFault>,
     acknowledge_duplicates: bool,
     duplicate_acks: usize,
@@ -206,6 +207,11 @@ impl State {
                 .peer
                 .as_mut()
                 .is_none_or(|peer| peer.accept(account.unwrap(), &event, raw));
+        let reject = accepted && self.recipient_rejected_ack == Some(event.id);
+        if reject {
+            self.recipient_rejected_ack = None;
+        }
+        let accepted = accepted && !reject;
         self.observe(Observation::Write(event.id, kind, accepted));
         if accepted
             && self.acknowledge_duplicates
@@ -898,6 +904,11 @@ impl Relay {
     pub(crate) fn recipient_lose_ack(&self, event: EventId) {
         let mut state = self.state.lock().unwrap();
         assert!(state.recipient_runtime && state.recipient_lost_ack.replace(event).is_none());
+    }
+
+    pub(crate) fn recipient_reject_ack(&self, event: EventId) {
+        let mut state = self.state.lock().unwrap();
+        assert!(state.recipient_runtime && state.recipient_rejected_ack.replace(event).is_none());
     }
 
     pub(crate) fn recipient_fault(&self, fault: RecipientFault) {

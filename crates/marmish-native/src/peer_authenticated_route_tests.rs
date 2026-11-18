@@ -716,9 +716,10 @@ async fn peer_authenticated_route_send_fence_pending_boundaries() {
                 if checks == cut_on_check {
                     Err(Failure::Retired)
                 } else {
-                    Ok(())
+                    Ok(0)
                 }
             },
+            |_| Ok(()),
         )
         .await;
         assert_eq!(result, Err(Failure::Retired));
@@ -727,6 +728,37 @@ async fn peer_authenticated_route_send_fence_pending_boundaries() {
             expected
         );
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn peer_authenticated_route_once_only_preflush_refusal() {
+    let mut sink = CountingSink::default();
+    let mut exposed = false;
+    let mut hooks = 0;
+    let result = fenced_sink(
+        &mut sink,
+        Message::Text("fixture".into()),
+        time_limit(),
+        &mut exposed,
+        |_| Ok(72),
+        |wall| {
+            hooks += 1;
+            assert_eq!(wall, 72);
+            Err(Failure::Binding)
+        },
+    )
+    .await;
+    assert_eq!(result, Err(Failure::Binding));
+    assert_eq!(
+        (
+            sink.ready_polls,
+            sink.starts,
+            sink.flush_polls,
+            hooks,
+            exposed
+        ),
+        (1, 1, 0, 1, false)
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -739,6 +771,7 @@ async fn peer_authenticated_route_expiry_prevents_first_write_poll() {
             Message::Text("fixture".into()),
             Instant::now(),
             &mut exposed,
+            |_| Ok(0),
             |_| Ok(()),
         )
         .await,

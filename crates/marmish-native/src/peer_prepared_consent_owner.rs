@@ -22,6 +22,9 @@ pub(crate) use consent_checkpoint::wire::Delivery;
 
 #[path = "peer_capped_join.rs"]
 pub(in crate::peer_invitation) mod capped_join;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "peer_installed_consent_fixture.rs"]
+pub(in crate::peer_invitation) mod installed_consent;
 #[path = "peer_pending_join_native_tests.rs"]
 mod joined_tests;
 #[path = "peer_terminal_leave_owner.rs"]

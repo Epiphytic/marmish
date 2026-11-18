@@ -7,6 +7,10 @@ mod peer_control_version;
 macro_rules! native_offer_ingress_fixture {
     () => {};
 }
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+macro_rules! native_consent_publication_fixture {
+    () => {};
+}
 #[allow(dead_code)] // This target also compiles the private production methods.
 #[path = "../src/peer_cursor_store.rs"]
 mod peer_cursor_store;

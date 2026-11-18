@@ -58,11 +58,11 @@ impl<'a> CheckedCarrier<'a> {
 }
 
 pub(in crate::peer_invitation) struct CheckedAck<'a> {
-    pub(in crate::peer_invitation) account: PublicKey,
-    pub(in crate::peer_invitation) origin: &'a str,
-    pub(in crate::peer_invitation) wall: u64,
-    pub(in crate::peer_invitation) carrier: [u8; 32],
-    pub(in crate::peer_invitation) operation: Operation,
+    account: PublicKey,
+    origin: &'a str,
+    wall: u64,
+    carrier: [u8; 32],
+    operation: Operation,
 }
 
 pub(in crate::peer_invitation) struct Acknowledgement {
@@ -241,8 +241,18 @@ impl PeerRecipientPort {
 
     pub(in crate::peer_invitation) async fn publish_control(
         &mut self,
+        permit: ControlSendPermit<'_>,
+        deadline: Instant,
+    ) -> ControlOutcome {
+        self.publish_control_with(permit, deadline, |_| Ok(()))
+            .await
+    }
+
+    async fn publish_control_with(
+        &mut self,
         mut permit: ControlSendPermit<'_>,
         deadline: Instant,
+        before_flush: impl FnOnce(u64) -> Result<()>,
     ) -> ControlOutcome {
         if !self.0.current(&permit.scope) {
             return ControlOutcome::NotSent(Failure::Binding);
@@ -271,6 +281,7 @@ impl PeerRecipientPort {
                         end,
                         Some(permit.deadline),
                         |wall| permit.check(wall),
+                        before_flush,
                         &mut exposed,
                     )
                     .await?;
@@ -318,3 +329,9 @@ mod tests;
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 #[path = "peer_founder_port.rs"]
 pub(in crate::peer_invitation) mod founder;
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "peer_installed_consent_port.rs"]
+mod installed_consent;
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+pub(in crate::peer_invitation) use installed_consent::PublicationOutcome;

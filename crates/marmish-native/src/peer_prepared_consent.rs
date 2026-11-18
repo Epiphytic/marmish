@@ -105,6 +105,11 @@ impl Queued {
         self.row.frame.as_ref()
     }
 
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn publication_state(&self) -> (u64, Option<u64>, Option<u64>) {
+        (self.row.attempt, self.row.retry_at, self.row.ack_at)
+    }
+
     pub(crate) fn stage(&self) -> (Binding, FileWitness) {
         self.prepared.stage()
     }
