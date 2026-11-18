@@ -1,5 +1,12 @@
 //! Client receipt and publication on a qualified private Peer origin.
 
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "peer_founder_ledger.rs"]
+pub(crate) mod founder_ledger;
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "peer_founder_turn_tests.rs"]
+mod founder_turn_tests;
+
 #[cfg(test)]
 #[path = "peer_accept_receipt_verify.rs"]
 mod accept_receipt_verify;

@@ -433,16 +433,28 @@ enum Blocked {
 }
 
 #[derive(Clone, Default)]
-struct RefusingIo(Arc<Mutex<Vec<Blocked>>>);
+pub(crate) struct RefusingIo {
+    attempts: Arc<Mutex<Vec<Blocked>>>,
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    absent_size_reports: bool,
+}
 
 impl RefusingIo {
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn no_size_report() -> Self {
+        Self {
+            absent_size_reports: true,
+            ..Self::default()
+        }
+    }
+
     fn deny<T>(&self, operation: Blocked, refusal: T) -> T {
-        self.0.lock().unwrap().push(operation);
+        self.attempts.lock().unwrap().push(operation);
         refusal
     }
 
-    fn require_unused(&self) -> StageResult<()> {
-        if self.0.lock().unwrap().is_empty() {
+    pub(crate) fn require_unused(&self) -> StageResult<()> {
+        if self.attempts.lock().unwrap().is_empty() {
             Ok(())
         } else {
             Err(StageError::Unavailable)
@@ -498,6 +510,10 @@ impl TransportAdapter for RefusingIo {
         _: &TransportMessage,
         _: &TransportPublishTarget,
     ) -> Option<EventSizeClass> {
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        if self.absent_size_reports {
+            return None;
+        }
         self.deny(Blocked::SizeCheck, None)
     }
     async fn commit_size_refusals(
@@ -505,6 +521,10 @@ impl TransportAdapter for RefusingIo {
         _: &TransportMessage,
         _: &TransportPublishTarget,
     ) -> Vec<TransportEndpointFailure> {
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        if self.absent_size_reports {
+            return Vec::new();
+        }
         self.deny(Blocked::CommitSizeCheck, Vec::new())
     }
 }

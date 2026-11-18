@@ -314,3 +314,7 @@ fn sealed_digest(frame: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 #[path = "peer_authenticated_route_tests.rs"]
 mod tests;
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "peer_founder_port.rs"]
+pub(in crate::peer_invitation) mod founder;

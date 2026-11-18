@@ -475,11 +475,22 @@ impl QualificationFixture {
         temp: tempfile::TempDir,
         lease: Arc<ProfileLease>,
     ) -> Self {
+        Self::from_ready_configured(transport, temp, lease, |lease, origin, trust| {
+            config_fixture(lease, origin, trust, "off")
+        })
+    }
+
+    pub(super) fn from_ready_configured(
+        transport: &Relay,
+        temp: tempfile::TempDir,
+        lease: Arc<ProfileLease>,
+        configure: impl FnOnce(&ProfileLease, &str, &str) -> CommandConfig,
+    ) -> Self {
         let trust = format!(
             "ca-sha256:{}",
             hex::encode(Sha256::digest(transport.qualification_ca()))
         );
-        let config = config_fixture(&lease, transport.url.as_str(), &trust, "off");
+        let config = configure(&lease, transport.url.as_str(), &trust);
         private_write(
             &lease.root().join("peer-relay-ca.der"),
             transport.qualification_ca(),

@@ -2,6 +2,10 @@
 
 use super::*;
 
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "peer_founder_quota.rs"]
+pub(crate) mod founder;
+
 use crate::{command_config::CommandConfig, identity::ProfileLease};
 use std::{
     cell::RefCell, ffi::OsStr, marker::PhantomData, num::NonZeroU64, rc::Rc, sync::OnceLock,
@@ -34,6 +38,8 @@ struct Dispatch {
     slots: Mutex<[Slot; SLOT_COUNT]>,
     #[cfg(test)]
     file_turn: Mutex<()>,
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    founder_paths: OnceLock<founder::FounderPaths>,
 }
 
 // SQLite owns the captured stock descriptors for process lifetime. Our
@@ -419,6 +425,8 @@ impl Dispatch {
             paths: OnceLock::new(),
             slots: Mutex::default(),
             file_turn: Mutex::default(),
+            #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+            founder_paths: OnceLock::new(),
         }));
         unsafe {
             (*dispatch.wrapper).pAppData = ptr::from_ref(dispatch).cast_mut().cast();
@@ -456,6 +464,15 @@ impl Dispatch {
     #[cfg(test)]
     fn bind(lease: &ProfileLease, expected: ReservedPaths) -> Result<&'static Self> {
         let dispatch = Self::mount()?;
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        let _lock = dispatch
+            .file_turn
+            .try_lock()
+            .map_err(|_| "dispatch_owner_busy")?;
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        if dispatch.founder_paths.get().is_some() {
+            return Err("dispatch_founder_owner");
+        }
         expected.check(lease)?;
         let competing = dispatch.paths.set(expected).err();
         let actual = dispatch.checked_paths(lease)?;
@@ -468,9 +485,6 @@ impl Dispatch {
     }
 
     fn protected(&self, name: *const c_char) -> bool {
-        let Some(paths) = self.paths.get() else {
-            return false;
-        };
         if name.is_null() {
             return false;
         }
@@ -479,6 +493,17 @@ impl Dispatch {
         let path = Path::new(OsStr::from_bytes(
             unsafe { CStr::from_ptr(name) }.to_bytes(),
         ));
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        if self
+            .founder_paths
+            .get()
+            .is_some_and(|scope| scope.protects(path))
+        {
+            return true;
+        }
+        let Some(paths) = self.paths.get() else {
+            return false;
+        };
         if paths.all.iter().any(|reserved| reserved == path) {
             return true;
         }

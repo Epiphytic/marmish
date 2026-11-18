@@ -98,6 +98,55 @@ impl Paths<'_> {
         self.key(b"marmish/peer/native-stage/1", &[slot.0])
     }
 
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(super) fn initialize_founder_directory(&self) -> Result<()> {
+        let dir = self.directory();
+        match DirBuilder::new().mode(0o700).create(&dir) {
+            Ok(()) => File::open(self.lease.root())
+                .and_then(|parent| parent.sync_all())
+                .map_err(|_| Error::Path)?,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(_) => return Err(Error::Path),
+        }
+        directory(&dir)
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(super) fn founder_ledger_key(&self) -> Zeroizing<[u8; 32]> {
+        self.key(b"marmish/peer/founder-ledger/1", &[])
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(super) fn founder_image_key(
+        &self,
+        generation: std::num::NonZeroU64,
+    ) -> Zeroizing<[u8; 32]> {
+        self.key(
+            b"marmish/peer/founder-native/1",
+            &generation.get().to_be_bytes(),
+        )
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(super) fn check_founder_ledger(path: &Path) -> Result<CheckedFile> {
+        directory(path.parent().ok_or(Error::Path)?)?;
+        if path.file_name().and_then(|name| name.to_str()) != Some("founder-ledger.db") {
+            return Err(Error::Path);
+        }
+        CheckedFile::read(path.to_owned(), &["-journal", "-wal", "-shm"])
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(super) fn create_founder_file(&self, path: &Path) -> Result<(u64, u64)> {
+        let dir = self.directory();
+        if path.parent() != Some(dir.as_path()) {
+            return Err(Error::Path);
+        }
+        directory(&dir)?;
+        create_file(path)?;
+        inode(path)
+    }
+
     fn key(&self, domain: &[u8], slot: &[u8]) -> Zeroizing<[u8; 32]> {
         expand_peer_key(&self.keys, domain, self.lease.profile_id().as_bytes(), slot)
     }

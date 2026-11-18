@@ -61,6 +61,11 @@ impl From<rusqlite::Error> for Error {
 pub(crate) struct HardenedPeerConnection(Connection);
 
 impl HardenedPeerConnection {
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(super) fn into_founder_ledger(self) -> Connection {
+        self.0
+    }
+
     pub(crate) fn open(path: &Path, key: [u8; 32]) -> Result<Self> {
         let conn = open_keyed(path, key)?;
         let mode: String = conn.query_row("PRAGMA journal_mode=DELETE", [], |row| row.get(0))?;

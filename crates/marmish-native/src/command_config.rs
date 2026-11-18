@@ -116,6 +116,18 @@ impl CommandConfig {
             .ok_or(Error::Invalid("peer_relay_missing"))
     }
 
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn founder_origin(&self, recipient: &Account) -> Option<&nostr::types::Url> {
+        if !matches!(self.role, Role::Server | Role::Both)
+            || self.relay_policy.mode() == RouteMode::Always
+            || !self._peer.originate
+            || !self.execution_clients.contains(recipient)
+        {
+            return None;
+        }
+        self._peer.relay.as_ref().map(|relay| &relay.origin)
+    }
+
     pub(crate) fn peer_receive(&self) -> Option<&peer_intent::Receive> {
         if !self.role.can_receive_peers()
             || self.relay_policy.mode() == RouteMode::Always

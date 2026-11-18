@@ -34,7 +34,17 @@ fn prepare(lease: &mut ProfileLease) -> IdentityMaterial {
 }
 
 fn fresh_profile() -> (tempfile::TempDir, Arc<ProfileLease>, IdentityMaterial) {
-    let temp = tempfile::tempdir().unwrap();
+    fresh_profile_in(None)
+}
+
+fn fresh_profile_in(
+    parent: Option<&Path>,
+) -> (tempfile::TempDir, Arc<ProfileLease>, IdentityMaterial) {
+    let temp = match parent {
+        Some(parent) => tempfile::tempdir_in(parent),
+        None => tempfile::tempdir(),
+    }
+    .unwrap();
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let mut lease = ProfileLease::acquire(temp.path(), "test").unwrap();
     let material = prepare(&mut lease);
@@ -126,11 +136,76 @@ pub(crate) async fn qualified_recipient_fixture(
     Arc<ProfileLease>,
     IdentityMaterial,
 ) {
+    qualified_control_fixture(
+        founder,
+        live_founder,
+        leaf_lifetime,
+        None,
+        QualificationFixture::from_ready,
+    )
+    .await
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) async fn qualified_founder_fixture(
+    recipient: PublicKey,
+    third: PublicKey,
+    leaf_lifetime: Duration,
+    parent: Option<&Path>,
+    server_only: bool,
+) -> (
+    Relay,
+    tempfile::TempDir,
+    Arc<ProfileLease>,
+    IdentityMaterial,
+) {
+    qualified_control_fixture(
+        recipient,
+        third,
+        leaf_lifetime,
+        parent,
+        |relay, temp, lease| {
+            QualificationFixture::from_ready_configured(
+                relay,
+                temp,
+                lease,
+                |lease, origin, trust| {
+                    use nostr::nips::nip19::ToBech32;
+                    let config = serde_json::json!({
+                        "version":1,
+                        "role":if server_only { "server" } else { "both" },
+                        "relays":[origin], "tor":"off",
+                        "trusted_remotes":[], "execution_clients":[recipient.to_bech32().unwrap()],
+                        "command_policy":{"version":1}, "cwd":null, "limits":{}, "aliases":{},
+                        "peer":{"relay":origin, "relay_trust":trust, "originate":true}
+                    });
+                    let bytes = serde_json::to_vec(&config).unwrap();
+                    private_write(&lease.root().join("config.json"), &bytes);
+                    crate::command_config::CommandConfig::from_bytes(&bytes).unwrap()
+                },
+            )
+        },
+    )
+    .await
+}
+
+async fn qualified_control_fixture(
+    remote: PublicKey,
+    third: PublicKey,
+    leaf_lifetime: Duration,
+    parent: Option<&Path>,
+    config: impl FnOnce(&Relay, tempfile::TempDir, Arc<ProfileLease>) -> QualificationFixture,
+) -> (
+    Relay,
+    tempfile::TempDir,
+    Arc<ProfileLease>,
+    IdentityMaterial,
+) {
     let plan = probe::Plan::new().unwrap();
     let (accounts, group) = plan.relay_registration();
     let relay = Relay::start_recipient_qualification(accounts, group, leaf_lifetime).await;
-    let (temp, lease, material) = fresh_profile();
-    let fixture = QualificationFixture::from_ready(&relay, temp, lease.clone());
+    let (temp, lease, material) = fresh_profile_in(parent);
+    let fixture = config(&relay, temp, lease.clone());
     let checked = qualification::CheckedAttestation::read(
         &fixture.attestation_path,
         fixture.relay(),
@@ -156,7 +231,7 @@ pub(crate) async fn qualified_recipient_fixture(
     let material = prepare(&mut lease);
     let lease = Arc::new(lease);
     relay
-        .switch_to_recipient_runtime([material.public_key(), founder], live_founder)
+        .switch_to_recipient_runtime([material.public_key(), remote], third)
         .await;
     (relay, temp, lease, material)
 }

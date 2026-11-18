@@ -63,6 +63,8 @@ pub(super) struct Quota {
     base: *mut sql::sqlite3_vfs,
     files: [PathBuf; 2],
     capacity: u64,
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    founder_main_limit: Option<u64>,
     witness: Option<(u64, u64)>,
     panicked: AtomicBool,
     account: Mutex<Accounted>,
@@ -169,6 +171,8 @@ impl Quota {
             base,
             files: [main.to_owned(), journal],
             capacity,
+            #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+            founder_main_limit: None,
             witness: None,
             panicked: AtomicBool::new(false),
             account: Mutex::new(Accounted {
@@ -517,11 +521,17 @@ impl Handle {
         if (state.uncertain || self.state.panicked.load(Ordering::Relaxed)) && end > old {
             return sql::SQLITE_IOERR_FSTAT;
         }
-        if end > old
-            && end
-                .checked_add(state.lengths[1 - self.index])
-                .is_none_or(|sum| sum > self.state.capacity)
-        {
+        let exceeds_total = end
+            .checked_add(state.lengths[1 - self.index])
+            .is_none_or(|sum| sum > self.state.capacity);
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        let exceeds_total = exceeds_total
+            || (self.index == 0
+                && self
+                    .state
+                    .founder_main_limit
+                    .is_some_and(|limit| end > limit));
+        if end > old && exceeds_total {
             #[cfg(test)]
             {
                 state.evidence.rejected[self.index] += 1;
