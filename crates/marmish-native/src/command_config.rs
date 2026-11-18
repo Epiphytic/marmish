@@ -513,6 +513,7 @@ fn peer_origin(input: String) -> Result<nostr::types::Url> {
     {
         return Err(invalid());
     }
+    // The transport parser also rejects controls, whitespace, backslashes and invalid ports.
     RelayPolicy::parse(&[input], RouteMode::Off, TransportLimits::default())
         .map_err(|_| invalid())?
         .urls()
@@ -1026,6 +1027,7 @@ mod tests {
             "wss://private.example/#",
             "wss://private.example\\x",
             "wss://private.example\t",
+            "wss://private.ex\nample/",
             "wss://private.example\u{007f}",
             "wss://private.example:0",
             "wss://private.example:",
