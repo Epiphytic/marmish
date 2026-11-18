@@ -76,10 +76,10 @@ pub(super) mod package;
 pub(super) mod v2_pending;
 
 impl<'lease> RecoveredOwner<'lease> {
-    fn open_registered(
+    fn open_registered<'profile: 'lease>(
         lease: &'lease Arc<ProfileLease>,
         material: &IdentityMaterial,
-        registration: &'lease mut crate::peer_relay_trust::candidate_registration::LocalReceiverRegistration<'lease>,
+        registration: &'lease mut crate::peer_relay_trust::candidate_registration::LocalReceiverRegistration<'profile>,
     ) -> Result<Self> {
         let relay = registration
             .package_origin(lease, material)
