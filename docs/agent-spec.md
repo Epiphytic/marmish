@@ -68,7 +68,10 @@ verifies the three signed Offer, Consent and Delivery flights, with sizes and
 local timing for each. The [offline Peer cursor store](validation/peer-cursor-store.md)
 verifies encrypted page and retry persistence, bounded replay, and transaction
 rollback. It remains a test target pending live carrier wiring. The
-[private Peer record codec](validation/peer-status-codec.md) verifies
+[Peer Leave journal](validation/peer-native-leave-c1.md) tests atomic
+retention holds and bounded recovery reservations in SQLCipher on Linux
+AMD64. The journal phase adds no native membership change or relay traffic.
+The [private Peer record codec](validation/peer-status-codec.md) verifies
 heartbeat fields, capability states and complete permission snapshot
 assembly in deterministic tests. The [heartbeat sampler](validation/peer-heartbeat-sampler.md)
 qualifies bounded host metrics and opt-in address collection on Linux x86_64.
