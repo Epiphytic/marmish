@@ -88,6 +88,40 @@ mod peer_invitation {
         }
     }
 
+    pub(crate) mod receipt_publication_verify {
+        use crate::peer_cursor_store::consent_checkpoint::provisioning::prepared_consent::custody::publication::Publication;
+
+        enum Never {}
+
+        macro_rules! uninhabited_receipt_proof {
+            ($name:ident) => {
+                pub(crate) struct $name<'a>(Never, std::marker::PhantomData<&'a Publication>);
+
+                impl $name<'_> {
+                    pub(crate) fn publication(&self) -> &Publication {
+                        match self.0 {}
+                    }
+
+                    pub(crate) fn observed_at(&self) -> u64 {
+                        match self.0 {}
+                    }
+
+                    pub(crate) fn event_id(&self) -> [u8; 32] {
+                        match self.0 {}
+                    }
+
+                    pub(crate) fn signed_digest(&self) -> [u8; 32] {
+                        match self.0 {}
+                    }
+                }
+            };
+        }
+
+        uninhabited_receipt_proof!(CapturedReceipt);
+        uninhabited_receipt_proof!(RecoveredReceipt);
+        uninhabited_receipt_proof!(ConfirmedReceipt);
+    }
+
     pub(crate) mod accept_receipt_verify {
         use cgka_traits::app_components::NostrRoutingV1;
         use cgka_traits::{GroupId, MessageId};
