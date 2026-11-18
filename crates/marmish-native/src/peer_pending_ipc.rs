@@ -511,10 +511,26 @@ impl Manual {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     use tokio::net::UnixStream;
 
-    fn profile(base: &Path, name: &str) -> ProfileLease {
-        ProfileLease::acquire(base, name).unwrap()
+    struct RuntimeDir(PathBuf);
+
+    impl Drop for RuntimeDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn profile(base: &Path, name: &str) -> (ProfileLease, RuntimeDir) {
+        std::fs::set_permissions(base, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let lease = ProfileLease::acquire(base, name).unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(lease.runtime_dir())
+            .unwrap();
+        let runtime = RuntimeDir(lease.runtime_dir().to_owned());
+        (lease, runtime)
     }
 
     fn selection() -> Selection {
@@ -605,8 +621,8 @@ mod tests {
     #[tokio::test]
     async fn real_listener_binds_one_use_uid_to_exact_exchange() {
         let base = tempfile::tempdir().unwrap();
-        let lease = profile(base.path(), "paired");
-        let wrong_lease = profile(base.path(), "wrong");
+        let (lease, _runtime) = profile(base.path(), "paired");
+        let (wrong_lease, _wrong_runtime) = profile(base.path(), "wrong");
         let path = lease.socket_path();
         let listener = super::super::bind(&path).unwrap();
         let (mut worker, paired, control) = pair(&lease);
@@ -693,7 +709,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn timeout_and_stop_fence_queued_and_started_authority() {
         let base = tempfile::tempdir().unwrap();
-        let lease = profile(base.path(), "paired");
+        let (lease, _runtime) = profile(base.path(), "paired");
         let listener = super::super::bind(&lease.socket_path()).unwrap();
         let (mut worker, paired, _) = pair(&lease);
         let (registration, intake) = paired.register(&listener).unwrap();
@@ -751,8 +767,8 @@ mod tests {
     #[tokio::test]
     async fn wrong_or_never_polled_listener_retires_pair() {
         let base = tempfile::tempdir().unwrap();
-        let lease = profile(base.path(), "paired");
-        let wrong = profile(base.path(), "wrong");
+        let (lease, _runtime) = profile(base.path(), "paired");
+        let (wrong, _wrong_runtime) = profile(base.path(), "wrong");
         let listener = super::super::bind(&wrong.socket_path()).unwrap();
         let (worker, paired, _) = pair(&lease);
         assert!(paired.register(&listener).is_err());
