@@ -2,6 +2,7 @@
 #[path = "terminal_live_enrollment_readiness.rs"]
 mod readiness;
 
+use super::terminal_live_enrollment::RELAY_AUTH_CHALLENGE_TIMEOUT;
 use super::*;
 use crate::terminal_fence::{AttachmentFence, FenceState};
 use crate::terminal_frames;
@@ -744,6 +745,29 @@ impl GuardedAdapter {
         }
         self.authority.check()
     }
+
+    async fn wait_for_bootstrap_auth(
+        &self,
+        mut ready: tokio::sync::oneshot::Receiver<ReadinessBuffer>,
+        quiet: &Mutex<QuietObservation>,
+        challenged: &AtomicBool,
+    ) -> Result<ReadinessBuffer> {
+        let buffered = self.authority.run(wait_for_auth(&mut ready)).await?;
+        if let AuthWait::Ready(buffered) = buffered {
+            return Ok(buffered);
+        }
+
+        let disposition = self.authority.run(self.check()).await;
+        let result = disposition.and_then(|()| match ready.try_recv() {
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => Err(AUTH),
+            Ok(_) => Err(Error::Timeout),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                classify_auth_timer(&self.authority, quiet, challenged)
+            }
+        });
+        self.authority.retire();
+        result
+    }
 }
 
 #[async_trait]
@@ -952,10 +976,14 @@ impl Lane {
                     .map_err(|_| ROUTE)
             })
             .await?;
-        self.pin_inbox().await
+        self.pin_inbox_inner(InboxScope::Bootstrap).await
     }
 
     pub(super) async fn pin_inbox(&mut self) -> Result<()> {
+        self.pin_inbox_inner(InboxScope::Room).await
+    }
+
+    async fn pin_inbox_inner(&mut self, scope: InboxScope) -> Result<()> {
         let adapter = &self.adapter;
         let (connection, attempt) = adapter
             .authority
@@ -1004,10 +1032,11 @@ impl Lane {
         let notifications = self.connect_notifications.take().ok_or(ROUTE)?;
         let (verified, ready) = tokio::sync::oneshot::channel();
         let challenged = Arc::new(AtomicBool::new(false));
-        let verification = self
-            .signed_auth
-            .take()
-            .map(|signed| PendingReadiness::new(signed, verified, challenged.clone()));
+        let quiet = (matches!(scope, InboxScope::Bootstrap) && self.signed_auth.is_some())
+            .then(|| Arc::new(Mutex::new(QuietObservation::Unproven)));
+        let verification = self.signed_auth.take().map(|signed| {
+            PendingReadiness::new(signed, verified, challenged.clone(), quiet.clone())
+        });
         let auth_required = verification.is_some();
         self.pump = Some(tokio::spawn(ingress.read(
             notifications,
@@ -1017,20 +1046,26 @@ impl Lane {
         self.inbox = Some(inbox);
         self.incoming = Some(receive);
         if auth_required {
-            let buffered = adapter
-                .authority
-                .run(async {
-                    tokio::time::timeout(AUTH_TIMEOUT, ready)
-                        .await
-                        .map_err(|_| Error::Timeout)?
-                        .map_err(|_| AUTH)
-                })
-                .await;
-            let (staged, dropped) = match buffered {
-                Err(Error::Timeout) if !challenged.load(Ordering::Acquire) => {
-                    return Err(UNAVAILABLE);
+            let (staged, dropped) = if let Some(quiet) = quiet {
+                adapter
+                    .wait_for_bootstrap_auth(ready, &quiet, &challenged)
+                    .await?
+            } else {
+                let buffered = adapter
+                    .authority
+                    .run(async {
+                        tokio::time::timeout(AUTH_TIMEOUT, ready)
+                            .await
+                            .map_err(|_| Error::Timeout)?
+                            .map_err(|_| AUTH)
+                    })
+                    .await;
+                match buffered {
+                    Err(Error::Timeout) if !challenged.load(Ordering::Acquire) => {
+                        return Err(UNAVAILABLE);
+                    }
+                    result => result?,
                 }
-                result => result?,
             };
             self.staged = staged;
             self.staged_losses = dropped;
@@ -1396,11 +1431,62 @@ struct Incoming {
     relay: NostrRelayEvent,
 }
 
+enum InboxScope {
+    Bootstrap,
+    Room,
+}
+
+type ReadinessBuffer = (VecDeque<Incoming>, usize);
+
+enum AuthWait {
+    Ready(ReadinessBuffer),
+    Elapsed,
+}
+
+async fn wait_for_auth(
+    ready: &mut tokio::sync::oneshot::Receiver<ReadinessBuffer>,
+) -> Result<AuthWait> {
+    tokio::select! {
+        biased;
+        result = ready => result.map(AuthWait::Ready).map_err(|_| AUTH),
+        () = tokio::time::sleep(AUTH_TIMEOUT) => Ok(AuthWait::Elapsed),
+    }
+}
+
+#[derive(PartialEq, Eq)]
+enum QuietObservation {
+    Unproven,
+    Watching,
+    Inhibited,
+    Elapsed,
+}
+
+fn classify_auth_timer(
+    authority: &Authority,
+    quiet: &Mutex<QuietObservation>,
+    challenged: &AtomicBool,
+) -> Result<ReadinessBuffer> {
+    let mut quiet = quiet.lock().map_err(|_| UNAVAILABLE)?;
+    authority.check()?;
+    if authority.fence_state() != FenceState::Live {
+        return Err(UNAVAILABLE);
+    }
+    if *quiet == QuietObservation::Watching {
+        *quiet = QuietObservation::Elapsed;
+        return Err(Error::Transport(RELAY_AUTH_CHALLENGE_TIMEOUT));
+    }
+    if challenged.load(Ordering::Acquire) {
+        return Err(Error::Timeout);
+    }
+    Err(UNAVAILABLE)
+}
+
 struct PendingReadiness {
     signed: Arc<SignedAuth>,
     state: Readiness,
     challenged: Arc<AtomicBool>,
-    ready: Option<tokio::sync::oneshot::Sender<(VecDeque<Incoming>, usize)>>,
+    ready: Option<tokio::sync::oneshot::Sender<ReadinessBuffer>>,
+    quiet: Option<Arc<Mutex<QuietObservation>>>,
     pending: VecDeque<Incoming>,
     pending_bytes: usize,
     stored_losses: usize,
@@ -1410,18 +1496,38 @@ struct PendingReadiness {
 impl PendingReadiness {
     fn new(
         signed: Arc<SignedAuth>,
-        ready: tokio::sync::oneshot::Sender<(VecDeque<Incoming>, usize)>,
+        ready: tokio::sync::oneshot::Sender<ReadinessBuffer>,
         challenged: Arc<AtomicBool>,
+        quiet: Option<Arc<Mutex<QuietObservation>>>,
     ) -> Self {
         Self {
             signed,
             state: Readiness::default(),
             challenged,
             ready: Some(ready),
+            quiet,
             pending: VecDeque::new(),
             pending_bytes: 0,
             stored_losses: 0,
             idle_losses: VecDeque::with_capacity(MAX_IDLE_LOSSES),
+        }
+    }
+
+    fn watch_quiet(&self) {
+        if let Some(observation) = &self.quiet
+            && let Ok(mut observation) = observation.lock()
+            && *observation == QuietObservation::Unproven
+        {
+            *observation = QuietObservation::Watching;
+        }
+    }
+
+    fn inhibit_quiet(&self) {
+        if let Some(observation) = &self.quiet
+            && let Ok(mut observation) = observation.lock()
+            && *observation != QuietObservation::Elapsed
+        {
+            *observation = QuietObservation::Inhibited;
         }
     }
 
@@ -1449,6 +1555,16 @@ impl PendingReadiness {
     }
 }
 
+fn inhibits_quiet(message: &RelayMessage<'_>, inbox: &str) -> bool {
+    match message {
+        RelayMessage::Auth { .. } | RelayMessage::Notice { .. } => true,
+        RelayMessage::Closed {
+            subscription_id, ..
+        } => subscription_id.as_str() == inbox,
+        _ => false,
+    }
+}
+
 struct Ingress {
     adapter: GuardedAdapter,
     recipient: String,
@@ -1460,6 +1576,41 @@ struct Ingress {
 }
 
 impl Ingress {
+    // Use the ordered raw stream. The SDK also publishes derived Events,
+    // which have no independent authority to establish readiness.
+    fn observes_source(
+        &self,
+        notification: &NostrSdkNotification,
+        replay_epoch: Option<[u64; 2]>,
+        verification: Option<&PendingReadiness>,
+    ) -> bool {
+        let mut inhibitor = false;
+        let current = match notification {
+            NostrSdkNotification::Replay {
+                endpoint, epoch, ..
+            } => {
+                endpoint == &self.adapter.endpoint
+                    && replay_epoch.is_none_or(|pinned| pinned == *epoch)
+            }
+            NostrSdkNotification::Disconnected { .. } | NostrSdkNotification::Shutdown => false,
+            NostrSdkNotification::Payload {
+                notification: ClientNotification::Message { relay_url, message },
+                epoch,
+                ..
+            } => {
+                inhibitor = inhibits_quiet(message, &self.inbox);
+                replay_epoch == Some(*epoch) && relay_url.as_str() == self.adapter.endpoint.0
+            }
+            _ => true,
+        };
+        if let Some(auth) = verification
+            && (!current || inhibitor)
+        {
+            auth.inhibit_quiet();
+        }
+        current
+    }
+
     async fn read(
         self,
         mut notifications: Notifications,
@@ -1469,29 +1620,23 @@ impl Ingress {
         let mut replay_epoch = None;
         while let Some(NotificationUpdate::Notification(notification)) = notifications.next().await
         {
+            if !self.observes_source(&notification, replay_epoch, verification.as_ref()) {
+                break;
+            }
             if self.adapter.check().await.is_err() {
                 break;
             }
             match &notification {
-                NostrSdkNotification::Replay {
-                    endpoint, epoch, ..
-                } if endpoint == &self.adapter.endpoint
-                    && replay_epoch.is_none_or(|pinned| pinned == *epoch) =>
-                {
+                NostrSdkNotification::Replay { epoch, .. } => {
                     replay_epoch = Some(*epoch);
+                    if let Some(auth) = verification.as_ref() {
+                        auth.watch_quiet();
+                    }
                 }
-                NostrSdkNotification::Replay { .. }
-                | NostrSdkNotification::Disconnected { .. }
-                | NostrSdkNotification::Shutdown => break,
                 NostrSdkNotification::Payload {
                     notification: ClientNotification::Message { relay_url, message },
-                    epoch,
                     ..
                 } => {
-                    if replay_epoch != Some(*epoch) || relay_url.as_str() != self.adapter.endpoint.0
-                    {
-                        break;
-                    }
                     if let Some(auth) = verification.as_mut() {
                         if auth
                             .state
@@ -1550,6 +1695,9 @@ impl Ingress {
             )
             .await;
         }
+        if let Some(auth) = verification.as_ref() {
+            auth.inhibit_quiet();
+        }
         self.adapter.authority.retire();
     }
 
@@ -1606,4 +1754,137 @@ pub(super) fn exact_selector(event: &Event, name: &str, expected: &str) -> bool 
         .next()
         .is_some_and(|tag| tag.as_slice() == [name, expected])
         && matching.next().is_none()
+}
+
+#[cfg(test)]
+mod auth_diagnostics_tests {
+    use super::*;
+    use nostr::message::SubscriptionId;
+    use std::borrow::Cow;
+
+    fn fenced(until: Instant) -> (Arc<AttachmentFence>, Arc<Authority>) {
+        let fence = AttachmentFence::new(std::num::NonZeroU64::new(1).unwrap(), [1; 32]);
+        let authority = Authority::from_fence(fence.clone(), until, None, None).unwrap();
+        (fence, authority)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn terminal_runtime_core_readiness_timer_uses_inner_provenance() {
+        for allowance in [
+            AUTH_TIMEOUT - Duration::from_secs(1),
+            AUTH_TIMEOUT,
+            AUTH_TIMEOUT + Duration::from_secs(1),
+        ] {
+            let (_, authority) = fenced(Instant::now() + allowance);
+            let (_hold, mut ready) = tokio::sync::oneshot::channel();
+            let result = authority.run(wait_for_auth(&mut ready)).await;
+            if allowance <= AUTH_TIMEOUT {
+                assert!(matches!(result, Err(Error::Timeout)));
+            } else {
+                assert!(matches!(result, Ok(AuthWait::Elapsed)));
+            }
+        }
+
+        for ready_at_cutoff in [false, true] {
+            let deadline = Instant::now() + AUTH_TIMEOUT;
+            let (send, mut receive) = tokio::sync::oneshot::channel();
+            let wait = wait_for_auth(&mut receive);
+            tokio::pin!(wait);
+            assert!(futures_util::poll!(&mut wait).is_pending());
+            tokio::time::advance(deadline - Instant::now()).await;
+            if ready_at_cutoff {
+                assert!(send.send((VecDeque::new(), 0)).is_ok());
+                assert!(matches!(wait.await, Ok(AuthWait::Ready((_, 0)))));
+            } else {
+                drop(send);
+                assert!(matches!(
+                    wait.await,
+                    Err(Error::Transport("terminal_enrollment_auth"))
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_runtime_core_quiet_disposition_needs_current_exact_scope() {
+        let (fence, authority) = fenced(Instant::now() + AUTH_TIMEOUT);
+        let challenged = AtomicBool::new(false);
+        for state in [QuietObservation::Unproven, QuietObservation::Inhibited] {
+            let observation = Mutex::new(state);
+            let result = classify_auth_timer(&authority, &observation, &challenged);
+            assert!(matches!(
+                result,
+                Err(Error::Transport("terminal_transport_unavailable"))
+            ));
+        }
+
+        let observation = Mutex::new(QuietObservation::Watching);
+        let updating = fence.begin_update().unwrap();
+        let result = classify_auth_timer(&authority, &observation, &challenged);
+        assert!(matches!(
+            result,
+            Err(Error::Transport("terminal_transport_unavailable"))
+        ));
+        assert_eq!(updating.resolve(Some([1; 32])), FenceState::Live);
+        let result = classify_auth_timer(&authority, &observation, &challenged);
+        assert!(matches!(
+            result,
+            Err(Error::Transport(RELAY_AUTH_CHALLENGE_TIMEOUT))
+        ));
+        let repeated = classify_auth_timer(&authority, &observation, &challenged);
+        assert!(matches!(
+            repeated,
+            Err(Error::Transport("terminal_transport_unavailable"))
+        ));
+
+        challenged.store(true, Ordering::Release);
+        let observation = Mutex::new(QuietObservation::Inhibited);
+        assert!(matches!(
+            classify_auth_timer(&authority, &observation, &challenged),
+            Err(Error::Timeout)
+        ));
+        authority.retire();
+        assert!(matches!(
+            classify_auth_timer(&authority, &observation, &challenged),
+            Err(Error::Invalid("terminal_enrollment_authority"))
+        ));
+    }
+
+    #[test]
+    fn terminal_runtime_core_quiet_wait_counts_exact_auth_and_refusal_before_validation() {
+        let exact = SubscriptionId::new("exact");
+        let foreign = SubscriptionId::new("different");
+        let (send, _receive) = tokio::sync::oneshot::channel();
+        let observation = Arc::new(Mutex::new(QuietObservation::Unproven));
+        let pending = PendingReadiness::new(
+            Arc::default(),
+            send,
+            Arc::default(),
+            Some(observation.clone()),
+        );
+        pending.watch_quiet();
+        let closed = |subscription_id| RelayMessage::Closed {
+            subscription_id: Cow::Borrowed(subscription_id),
+            message: Cow::Borrowed("auth-required: fixture"),
+        };
+        assert!(!inhibits_quiet(
+            &RelayMessage::EndOfStoredEvents(Cow::Borrowed(&exact)),
+            "exact"
+        ));
+        assert!(!inhibits_quiet(
+            &RelayMessage::EndOfStoredEvents(Cow::Borrowed(&foreign)),
+            "exact"
+        ));
+        assert!(!inhibits_quiet(&closed(&foreign), "exact"));
+        assert!(inhibits_quiet(&closed(&exact), "exact"));
+        assert!(inhibits_quiet(
+            &RelayMessage::Auth {
+                challenge: Cow::Borrowed("")
+            },
+            "exact"
+        ));
+        pending.inhibit_quiet();
+        pending.watch_quiet();
+        assert!(*observation.lock().unwrap() == QuietObservation::Inhibited);
+    }
 }

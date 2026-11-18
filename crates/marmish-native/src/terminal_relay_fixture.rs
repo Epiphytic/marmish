@@ -57,7 +57,22 @@ pub(super) struct Subscription {
     filters: Vec<Value>,
 }
 
+#[derive(Default)]
+enum QuietConnection {
+    #[default]
+    Standard,
+    AwaitingRequest,
+    Subscribed(String),
+}
+
+struct QuietAliases {
+    accounts: [PublicKey; 2],
+    seen: [usize; 2],
+    unexpected: usize,
+}
+
 struct Connection {
+    quiet: QuietConnection,
     retired: bool,
     account: Option<PublicKey>,
     subscriptions: Vec<Subscription>,
@@ -67,6 +82,7 @@ struct Connection {
 #[derive(Default)]
 struct State {
     mode: Mode,
+    quiet: Option<QuietAliases>,
     peer: Option<peer::Scope>,
     acknowledge_duplicates: bool,
     duplicate_acks: usize,
@@ -284,6 +300,36 @@ fn auth_tag(event: &Event, name: &str, value: &str) -> bool {
         .eq([&[name, value][..]])
 }
 
+fn quiet_message(state: &mut State, id: usize, fields: &[Value]) -> Vec<Value> {
+    let quiet = state.quiet.as_mut().unwrap();
+    let connection = state.connections.get_mut(&id).unwrap();
+    match (&connection.quiet, fields) {
+        (QuietConnection::AwaitingRequest, [verb, subscription, filter]) if verb == "REQ" => {
+            if let Some((id, alias)) = subscription.as_str().zip(
+                quiet
+                    .accounts
+                    .iter()
+                    .position(|account| *filter == json!({"kinds": [1059], "#p": [account]})),
+            ) && !id.is_empty()
+                && id.len() <= 64
+            {
+                quiet.seen[alias] += 1;
+                connection.quiet = QuietConnection::Subscribed(id.to_owned());
+                return vec![json!(["EOSE", id])];
+            }
+        }
+        (QuietConnection::Subscribed(id), [verb, subscription])
+            if verb == "CLOSE" && subscription.as_str() == Some(id.as_str()) =>
+        {
+            return vec![];
+        }
+        _ => (),
+    }
+    quiet.unexpected += 1;
+    retire_connection(state, id);
+    vec![]
+}
+
 fn handle_message(
     state: &Mutex<State>,
     id: usize,
@@ -296,6 +342,9 @@ fn handle_message(
     let mut state = state.lock().unwrap();
     if state.connections[&id].retired {
         return vec![];
+    }
+    if !matches!(state.connections[&id].quiet, QuietConnection::Standard) {
+        return quiet_message(&mut state, id, fields);
     }
     match fields.first().and_then(Value::as_str) {
         Some("AUTH") => {
@@ -487,19 +536,28 @@ async fn serve_connection(
         return;
     };
     let (outgoing, mut queued) = mpsc::channel(32);
-    state.lock().unwrap().connections.insert(
-        id,
-        Connection {
-            retired: false,
-            account: None,
-            subscriptions: Vec::new(),
-            outgoing,
-        },
-    );
+    let omit_challenge = {
+        let mut state = state.lock().unwrap();
+        let quiet = state.quiet.is_some();
+        state.connections.insert(
+            id,
+            Connection {
+                quiet: if quiet {
+                    QuietConnection::AwaitingRequest
+                } else {
+                    QuietConnection::Standard
+                },
+                retired: false,
+                account: None,
+                subscriptions: Vec::new(),
+                outgoing,
+            },
+        );
+        quiet || state.mode == Mode::NoChallenge
+    };
     let challenge = hex::encode(super::random::<32>().unwrap());
     let started = Instant::now();
     let challenge_message = Message::Text(json!(["AUTH", challenge]).to_string().into());
-    let omit_challenge = state.lock().unwrap().mode == Mode::NoChallenge;
     if omit_challenge
         || matches!(
             timeout(STEP, socket.send(challenge_message)).await,
@@ -685,6 +743,30 @@ impl Relay {
             .unwrap()
             .writes
             .clone()
+    }
+
+    pub(super) fn arm_quiet_aliases(&self, accounts: [PublicKey; 2]) {
+        let mut state = self.state.lock().unwrap();
+        assert!(state.peer.is_none() && state.mode == Mode::Qualifying);
+        assert!(
+            accounts[0] != accounts[1] && accounts.iter().all(|key| !state.ordinary.contains(key))
+        );
+        assert!(
+            state
+                .quiet
+                .replace(QuietAliases {
+                    accounts,
+                    seen: [0; 2],
+                    unexpected: 0,
+                })
+                .is_none()
+        );
+    }
+
+    pub(super) fn quiet_alias_observations(&self) -> ([usize; 2], usize) {
+        let state = self.state.lock().unwrap();
+        let quiet = state.quiet.as_ref().unwrap();
+        (quiet.seen, quiet.unexpected)
     }
 
     pub(crate) fn publication_attempts(&self, kind: u16) -> usize {

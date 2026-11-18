@@ -8,7 +8,7 @@ use crate::ipc::terminal_handshake::{
 use crate::mdk_adapter::{
     Binding, MdkOwner,
     terminal_enrollment_driver::Route,
-    terminal_live_enrollment::{AdmissionLedger, InboundState},
+    terminal_live_enrollment::{AdmissionLedger, InboundState, RELAY_AUTH_CHALLENGE_TIMEOUT},
 };
 use crate::terminal_backend::supervisor::{
     Registry,
@@ -102,6 +102,11 @@ impl Prepared {
         }
         prepared.route.set_fixture_roots(roots)?;
         Ok(prepared)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn watch_fixture_quiet_open(&mut self, quiet: Arc<AtomicBool>) {
+        self.route.watch_fixture_quiet_open(quiet);
     }
 
     pub(crate) fn open(
@@ -689,6 +694,7 @@ pub(crate) fn category(error: &Error) -> &'static str {
         }
         Error::Timeout => "terminal_attach_deadline",
         Error::Transport("terminal_bootstrap_no_challenge") => "terminal_bootstrap_no_challenge",
+        Error::Transport(RELAY_AUTH_CHALLENGE_TIMEOUT) => RELAY_AUTH_CHALLENGE_TIMEOUT,
         Error::Transport(_) => "terminal_transport_unavailable",
         _ => "terminal_owner_unavailable",
     }

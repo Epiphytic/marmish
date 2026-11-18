@@ -177,6 +177,16 @@ Writer keystrokes are batched for up to 8 ms by default. Use
 a value up to 50 ms. A full input record sends sooner. The CLI rejects
 `--input-batch-ms` together with `--observe`.
 
+If Terminal reports `terminal_relay_auth_challenge_timeout`, its local
+five-second inbox wait ended without observing a NIP-42 AUTH challenge and
+the exact relay subscription was still current. Ordinary Command can work
+on the same relay, and an end-of-stored-events response can arrive before AUTH.
+`terminal_bootstrap_no_challenge` means a later encrypted Terminal exchange
+did not receive its peer's response after relay authentication.
+`terminal_transport_unavailable` is the generic failure when the relay inbox
+cannot be qualified. After the CLI issues a takeover, an ambiguous response
+reports `terminal_takeover_uncertain`. The CLI does not retry that takeover.
+
 The command history feature upgrades the encrypted profile journal. To keep a rollback path,
 back up the entire profile directory while its daemon is stopped before
 starting the new binary. An older binary requires the pre-upgrade backup.

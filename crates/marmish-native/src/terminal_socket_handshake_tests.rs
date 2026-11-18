@@ -524,3 +524,56 @@ async fn terminal_socket_core_ready_and_busy_bind_exact_target() {
         );
     }
 }
+
+#[tokio::test]
+async fn terminal_socket_core_relay_auth_failure_is_closed_over_same_uid() {
+    let mut fixture = Listener::open();
+    for (error, extra_field, expected) in [
+        (
+            RELAY_AUTH_CHALLENGE_TIMEOUT,
+            false,
+            RELAY_AUTH_CHALLENGE_TIMEOUT,
+        ),
+        (
+            "terminal_transport_unavailable",
+            false,
+            "terminal_transport_unavailable",
+        ),
+        (
+            "relay-specific dynamic message",
+            false,
+            "terminal_start_response",
+        ),
+        (
+            RELAY_AUTH_CHALLENGE_TIMEOUT,
+            true,
+            "terminal_start_response",
+        ),
+    ] {
+        let (received, ()) = tokio::join!(
+            start(&fixture.path, single_request(), Instant::now() + STEP),
+            async {
+                let mut local = timeout_at(Instant::now() + STEP, fixture.starts.recv())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .register()
+                    .unwrap();
+                if extra_field {
+                    write_frame_body(
+                        &mut local.stream,
+                        &serde_json::json!({
+                            "ok": false, "error": error, "result": null, "extra": "ignored?"
+                        }),
+                    )
+                    .await
+                    .unwrap();
+                } else {
+                    local.refuse(error).await;
+                }
+            },
+        );
+        assert!(matches!(received, Err(Error::Invalid(actual)) if actual == expected));
+    }
+    assert!(fixture.ordinary.try_recv().is_err());
+}

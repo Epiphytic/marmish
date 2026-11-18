@@ -37,6 +37,8 @@ pub(crate) struct Route {
     server_reapers: Arc<Reapers>,
     #[cfg(test)]
     fixture_roots: Option<rustls::RootCertStore>,
+    #[cfg(test)]
+    fixture_quiet_open: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Route {
@@ -49,6 +51,8 @@ impl Route {
             server_reapers: Arc::default(),
             #[cfg(test)]
             fixture_roots: None,
+            #[cfg(test)]
+            fixture_quiet_open: None,
         }
     }
 
@@ -65,6 +69,12 @@ impl Route {
         )?;
         self.fixture_roots = Some(roots);
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn watch_fixture_quiet_open(&mut self, quiet: Arc<AtomicBool>) {
+        assert!(self.fixture_roots.is_some());
+        self.fixture_quiet_open = Some(quiet);
     }
 
     pub(crate) async fn finish(&self) -> Result<()> {
@@ -108,7 +118,7 @@ impl Route {
             endpoint,
         )?;
         let (signing, codec) = BoundSigning::bind(&binding.context, self.signer.clone())?;
-        carrier
+        let result = carrier
             .open_inner(
                 signing,
                 codec,
@@ -120,7 +130,17 @@ impl Route {
                     local_closed,
                 }),
             )
-            .await
+            .await;
+        #[cfg(test)]
+        if let Some(quiet) = &self.fixture_quiet_open
+            && matches!(
+                result,
+                Err(Error::Transport(enrollment::RELAY_AUTH_CHALLENGE_TIMEOUT))
+            )
+        {
+            quiet.store(true, std::sync::atomic::Ordering::Release);
+        }
+        result
     }
 
     fn connector(&self, endpoint: &str) -> Result<RelayConnector> {

@@ -1,7 +1,7 @@
 //! Synchronous owner of the client foreground and its cancellable admission.
 
 use super::terminal_socket_session::{self, ForegroundSocket};
-use super::{Attach, Offer, Start, StartOutcome, Target, exchange};
+use super::{Attach, Offer, RELAY_AUTH_CHALLENGE_TIMEOUT, Start, StartOutcome, Target, exchange};
 use crate::command_limits::continuous_time;
 use crate::terminal_ipc_wire::{Close, Role};
 use crate::{Error, Result, terminal_output};
@@ -342,6 +342,7 @@ fn ambiguous(error: &Error) -> bool {
                     | "ipc_frame_size"
                     | "terminal_attach_deadline"
                     | "terminal_transport_unavailable"
+                    | RELAY_AUTH_CHALLENGE_TIMEOUT
                     | "terminal_unavailable"
                     | "terminal_owner_unavailable"
             )
@@ -501,4 +502,54 @@ async fn terminal_foreground_offer_never_extends_second_leg() {
     .await;
     assert!(matches!(result, Err(Error::Timeout)));
     assert_eq!(began.elapsed(), available);
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn terminal_socket_core_relay_auth_failure_is_ambiguous_after_offer_write() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let directory = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
+    let socket = directory.path().join("m");
+    let attempt = Attempt {
+        attach: Attach::Takeover,
+        target: Target::Offer(Offer::from_bytes([2; 56]).unwrap()),
+    };
+    let prepared = Prepared {
+        socket,
+        remote: "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798".into(),
+        session: hex::encode([3; 16]),
+        relays: vec!["wss://relay.example/".into()],
+    };
+    let sent = Cell::new(false);
+    let before_listener = connect(&prepared, (24, 80), attempt, None, &sent).await;
+    assert!(matches!(before_listener, Err(Error::Io(_))));
+    assert!(!sent.get());
+
+    let listener = crate::ipc::bind(&prepared.socket).unwrap();
+    for category in [RELAY_AUTH_CHALLENGE_TIMEOUT, "unknown_diagnostic"] {
+        sent.set(false);
+        let (result, ()) = tokio::join!(
+            connect(&prepared, (24, 80), attempt, None, &sent),
+            async {
+                let (mut local, _) = listener.accept().await.unwrap();
+                let request: crate::ipc::Request =
+                    crate::ipc::read_frame(&mut local).await.unwrap();
+                assert!(
+                    matches!(request, crate::ipc::Request::TerminalStart { request }
+                    if request.attach == Attach::Takeover && request.target().unwrap() == attempt.target)
+                );
+                crate::ipc::write_frame_body(&mut local, &crate::ipc::Response::failure(category))
+                    .await
+                    .unwrap();
+            },
+        );
+        assert!(sent.get());
+        let Err(error) = result else {
+            panic!("Takeover offer must not be Ready or Busy");
+        };
+        assert!(ambiguous(&error));
+    }
 }

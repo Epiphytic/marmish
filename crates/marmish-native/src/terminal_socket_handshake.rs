@@ -1,6 +1,7 @@
 //! Same-UID ownership transfer for the local Terminal stream fixture.
 
 use super::{Request, Response, read_frame, verify_peer, write_frame, write_frame_body};
+use crate::mdk_adapter::terminal_live_enrollment::RELAY_AUTH_CHALLENGE_TIMEOUT;
 use crate::terminal_ipc_wire::Role;
 use crate::transport::{RelayPolicy, RouteMode, TransportLimits};
 use crate::{Error, Result};
@@ -569,6 +570,7 @@ fn decode_reply(
         "terminal_slot_missing" => "terminal_slot_missing",
         "terminal_start_invalid" => "terminal_start_invalid",
         "terminal_takeover_uncertain" => "terminal_takeover_uncertain",
+        RELAY_AUTH_CHALLENGE_TIMEOUT => RELAY_AUTH_CHALLENGE_TIMEOUT,
         "terminal_transport_unavailable" => "terminal_transport_unavailable",
         "terminal_unavailable" => "terminal_unavailable",
         "terminal_writer_missing" => "terminal_writer_missing",

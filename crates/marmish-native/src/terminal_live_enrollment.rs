@@ -42,6 +42,7 @@ const PROBE_RETRIES: [Duration; 4] = [
     Duration::from_secs(18),
 ];
 const NO_CHALLENGE: Error = Error::Transport("terminal_bootstrap_no_challenge");
+pub(crate) const RELAY_AUTH_CHALLENGE_TIMEOUT: &str = "terminal_relay_auth_challenge_timeout";
 
 pub(super) struct CarrierScope {
     pub(super) reapers: Arc<Reapers>,

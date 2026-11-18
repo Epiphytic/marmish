@@ -8,11 +8,14 @@ use crate::ipc::{self, Response, terminal_handshake as handshake};
 use crate::terminal_ipc_wire::{self as local, Decoder, Direction, Record, Role};
 use crate::terminal_owner::{Control, Prepared, Runtime};
 use futures_util::FutureExt;
+use nostr::nips::nip19::ToBech32;
 use std::future::Future;
 use std::io::Write as _;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{FileTypeExt, OpenOptionsExt as _};
 use std::panic::{AssertUnwindSafe, resume_unwind};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -30,6 +33,14 @@ const MARKER: &[u8] = "two words; % 🐾".as_bytes();
 fn terminal_installed_runtime_native_writer() {
     run_native(|| async {
         Measurements::report(&[prove_writer(Workload::Verify).await]);
+    });
+}
+
+#[test]
+#[ignore = "requires installed binaries, a local PTY and a private loopback TLS relay"]
+fn terminal_installed_runtime_relay_auth_challenge_timeout() {
+    run_native(|| async {
+        prove_writer(Workload::QuietAuth).await;
     });
 }
 
@@ -113,6 +124,7 @@ where
 #[derive(Clone, Copy)]
 enum Workload {
     Verify,
+    QuietAuth,
     Cancel,
     ShellExit,
     Restart,
@@ -273,16 +285,36 @@ struct CommandOwners {
     server_control: Control,
     command: CommandRoom,
     cat: PathBuf,
+    relays: Vec<String>,
 }
 
 impl CommandOwners {
-    async fn run(mut self, mut turns: mpsc::Receiver<CommandTurn>) {
+    async fn run(
+        mut self,
+        mut turns: mpsc::Receiver<CommandTurn>,
+        mut ordinary: mpsc::Receiver<ipc::Pending>,
+    ) {
         let mut interval = tokio::time::interval(Duration::from_millis(100));
         loop {
             self.server_control.refresh(&mut self.server);
             tokio::select! {
                 Some(request) = self.client_control.requests.recv() => request.complete(&mut self.client),
                 Some(request) = self.server_control.requests.recv() => request.complete(&mut self.server),
+                Some(pending) = ordinary.recv() => {
+                    let response = match pending.request {
+                        ref request @ ipc::Request::CommandPrepare {
+                            ref remote, ref relays, fresh: None
+                        } if remote == &hex::encode(self.command.peer) && relays == &self.relays => {
+                            let result = self.client.command_local("c", request)
+                                .expect("mature Command preparation");
+                            assert!(matches!(&result, crate::command_local::LocalResult::Ready { session, .. }
+                                if session == &hex::encode(self.command.session)));
+                            Response::command(result)
+                        }
+                        _ => Response::failure("fixture_unexpected_ordinary"),
+                    };
+                    let _ = pending.respond.send(response);
+                }
                 turn = turns.recv() => match turn {
                     Some(CommandTurn::Run(reply)) => {
                         let began = Instant::now();
@@ -733,10 +765,140 @@ fn assert_stores_omit_marker(client: &ProfileLease, server: &ProfileLease) {
 fn serve_ipc(
     listener: UnixListener,
     intake: handshake::Intake,
-) -> tokio::task::JoinHandle<Result<()>> {
-    let (queue, _ordinary) = mpsc::channel(1);
-    let (_status, snapshots) = watch::channel(Response::success("active"));
-    tokio::spawn(ipc::serve_inner(listener, queue, snapshots, Some(intake)))
+) -> (
+    tokio::task::JoinHandle<Result<()>>,
+    mpsc::Receiver<ipc::Pending>,
+) {
+    let (queue, ordinary) = mpsc::channel(1);
+    let (_status, snapshots) = watch::channel(Response::success(json!({"state": "active"})));
+    let listener = tokio::spawn(ipc::serve_inner(listener, queue, snapshots, Some(intake)));
+    (listener, ordinary)
+}
+
+fn open_cli_pty() -> (std::fs::File, std::fs::File) {
+    let (mut master, mut slave) = (-1, -1);
+    let size = libc::winsize {
+        ws_row: 24,
+        ws_col: 80,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    assert_eq!(
+        unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &size,
+            )
+        },
+        0
+    );
+    let master = unsafe { std::fs::File::from_raw_fd(master) };
+    let slave = unsafe { std::fs::File::from_raw_fd(slave) };
+    for fd in [master.as_raw_fd(), slave.as_raw_fd()] {
+        assert_eq!(
+            unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
+            0
+        );
+    }
+    (master, slave)
+}
+
+async fn run_quiet_cli(state: &Path, daemon: &Path, remote: PublicKey, relay: &Relay) -> Duration {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(state.join("c/config.json"))
+        .unwrap();
+    serde_json::to_writer(
+        &mut file,
+        &json!({
+            "version": 1, "role": "client", "tor": "off",
+            "relays": [relay.url.as_str()], "trusted_remotes": [remote.to_hex()],
+        "execution_clients": [], "command_policy": {"version": 1},
+        "cwd": "/", "limits": {}, "aliases": {},
+        }),
+    )
+    .unwrap();
+    drop(file);
+    let (_master, slave) = open_cli_pty();
+    let mut command = tokio::process::Command::new(daemon.with_file_name("marmish"));
+    command
+        .arg("--state-dir")
+        .arg(state)
+        .args(["-i", "c", "--debug", "terminal"])
+        .arg(remote.to_bech32().unwrap())
+        .env_clear()
+        .env("TERM", "dumb")
+        .stdin(slave.try_clone().unwrap())
+        .stdout(slave)
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    // The installed frontend checks foreground terminal ownership.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 || libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY, 0) == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        })
+    };
+    let began = Instant::now();
+    let mut child = command.spawn().expect("launch installed marmish");
+    drop(command);
+    let mut stderr = child.stderr.take().unwrap().take(4097);
+    let mut output = Vec::new();
+    let child_result = timeout(ATTACH, async {
+        tokio::try_join!(child.wait(), stderr.read_to_end(&mut output))
+    })
+    .await;
+    let Ok(result) = child_result else {
+        child.kill().await.unwrap();
+        panic!("installed marmish did not exit after quiet relay");
+    };
+    let (status, bytes) = result.unwrap();
+    assert_eq!(status.code(), Some(255), "quiet CLI refusal exit status");
+    assert!(bytes < 4097);
+    let error = std::str::from_utf8(&output).unwrap();
+    let mut refusal = 0;
+    let remote_npub = remote.to_bech32().unwrap();
+    for line in error.lines() {
+        if line == "marmish: invalid input: terminal_relay_auth_challenge_timeout" {
+            refusal += 1;
+        } else {
+            let unexpected = [
+                "config_schema",
+                "invalid_remote_identity",
+                "terminal_transport_unavailable",
+                "terminal_owner_unavailable",
+                "terminal_enrollment_auth",
+                "terminal_timeout",
+                "terminal_start_closed",
+                "terminal_start_response",
+                "command_preparation_binding",
+            ]
+            .into_iter()
+            .find(|category| line.ends_with(category));
+            let event: serde_json::Value = serde_json::from_str(line)
+                .unwrap_or_else(|_| panic!("unexpected CLI diagnostic category: {unexpected:?}"));
+            let keys = event.as_object().expect("diagnostic object");
+            assert!(keys.keys().all(|key| matches!(
+                key.as_str(),
+                "architecture" | "event" | "platform" | "schema" | "version" | "stage" | "category"
+            )));
+            assert!(
+                !line.contains(remote.to_hex().as_str())
+                    && !line.contains(remote_npub.as_str())
+                    && !line.contains(relay.url.as_str())
+            );
+        }
+    }
+    assert_eq!(refusal, 1, "installed CLI reports one exact category");
+    began.elapsed()
 }
 
 async fn prove_writer(workload: Workload) -> Measurements {
@@ -823,8 +985,15 @@ async fn prove_writer(workload: Workload) -> Measurements {
         )
         .unwrap()
     };
-    let client_prepared = prepare(&client.lease, &client.material, None);
-    let server_prepared = prepare(&server.lease, &server.material, Some(config.clone()));
+    let mut client_prepared = prepare(&client.lease, &client.material, None);
+    let mut server_prepared = prepare(&server.lease, &server.material, Some(config.clone()));
+    let quiet_client = Arc::new(AtomicBool::new(false));
+    let quiet_server = Arc::new(AtomicBool::new(false));
+    if matches!(workload, Workload::QuietAuth) {
+        relay.arm_quiet_aliases([server_alias, client_alias]);
+        client_prepared.watch_fixture_quiet_open(quiet_client.clone());
+        server_prepared.watch_fixture_quiet_open(quiet_server.clone());
+    }
     let cleanup = OwnedTmux {
         directory: server.lease.root().join("t"),
         executable: crate::terminal_owner::tmux_path().expect("checked fixture tmux"),
@@ -845,7 +1014,7 @@ async fn prove_writer(workload: Workload) -> Measurements {
             }
         };
     let mut server_runtime = Some(server_runtime);
-    let ipc = serve_ipc(listener, client_control.intake.clone());
+    let (ipc, ordinary) = serve_ipc(listener, client_control.intake.clone());
     let (turns, receive) = mpsc::channel(1);
     let actor = tokio::task::spawn_local(
         CommandOwners {
@@ -855,8 +1024,9 @@ async fn prove_writer(workload: Workload) -> Measurements {
             server_control,
             command: command_room,
             cat,
+            relays: relays.clone(),
         }
-        .run(receive),
+        .run(receive, ordinary),
     );
     let start = |attach| handshake::Start {
         remote: remote.to_hex(),
@@ -869,6 +1039,24 @@ async fn prove_writer(workload: Workload) -> Measurements {
         offer: None,
     };
     let verdict = AssertUnwindSafe(async {
+        if matches!(workload, Workload::QuietAuth) {
+            let baseline = [relay.publication_attempts(1059), relay.publication_attempts(445)];
+            let elapsed = run_quiet_cli(temp.path(), &daemon, remote, &relay).await;
+            timeout(IO, async {
+                while !quiet_server.load(Ordering::Acquire) {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            }).await.expect("typed inbound quiet-auth timeout");
+            assert!(quiet_client.load(Ordering::Acquire), "typed outbound quiet-auth timeout");
+            let (alias_requests, unexpected) = relay.quiet_alias_observations();
+            assert!(alias_requests.into_iter().all(|attempts| attempts > 0));
+            assert_eq!(unexpected, 0, "only exact alias REQ and cleanup CLOSE");
+            assert_eq!(baseline, [relay.publication_attempts(1059), relay.publication_attempts(445)]);
+            assert_eq!(cleanup.sockets().count(), 0, "quiet AUTH allocated no tmux socket");
+            eprintln!("terminal_relay_quiet_cli_ms={:.1} ordinary_command_ms={:.1}",
+                elapsed.as_secs_f64() * 1000.0, before.as_secs_f64() * 1000.0);
+            return Measurements { unloaded: before, ..Measurements::default() };
+        }
         relay
             .subscription(server_alias, 1059, "#p", json!(server_alias))
             .await;

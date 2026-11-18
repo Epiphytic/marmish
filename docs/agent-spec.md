@@ -41,6 +41,12 @@ and ordinary Command traffic alongside the resulting Terminal room. The
 [writer selection proof](validation/terminal-writer-selection.md) exercises
 Default, New, Busy, reattach and revocation on Linux x86_64 with a private
 WSS relay and tmux.
+The [Terminal relay readiness diagnostic](phases/terminal-relay-readiness-diagnostics.md)
+distinguishes a full five-second wait with no observed NIP-42 AUTH challenge
+on a still-current verified bootstrap inbox. The daemon forwards that fixed
+local category through same-user IPC. The encrypted peer challenge timeout
+and generic transport failures have separate outcomes. An issued takeover
+with an ambiguous response remains uncertain.
 The [native writer runtime](validation/terminal-installed-runtime.md)
 connects same-user IPC to an isolated volatile MDK runtime and native tmux.
 The Linux x86_64 private WSS fixture covers Default, New, Busy, warm reattach,
