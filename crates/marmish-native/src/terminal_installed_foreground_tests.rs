@@ -1,6 +1,7 @@
 use super::*;
 use std::fs::File;
 use std::io::{self, Read};
+use std::os::unix::fs::MetadataExt;
 use tokio::io::unix::AsyncFd;
 use tokio::process::Child;
 
@@ -10,6 +11,8 @@ const PROMPT: &[u8] = b"MARMISH> ";
 const SCRIPT: &str = "\x15printf '[%s]\\n' 'two words; % 🐾'\r";
 const EXPECTED: &str = "[two words; % 🐾]";
 const MAX_SCAN: usize = 32 * 1024;
+const COOKED_BUSY: &[u8] = b"Terminal busy. [o] Observe";
+const RAW_FLAGS: libc::tcflag_t = libc::ECHO | libc::ICANON | libc::ISIG;
 
 #[test]
 #[ignore = "requires nonroot, installed executables, tmux and a private loopback TLS relay"]
@@ -18,6 +21,23 @@ fn terminal_installed_runtime_native_foreground() {
         let sample = prove_writer(Workload::Foreground).await;
         eprintln!(
             "terminal_installed_foreground attach_us={} echo_us={} command_before_us={} command_after_us={}",
+            sample.cold.as_micros(),
+            sample.echo.as_micros(),
+            sample.unloaded.as_micros(),
+            sample.after.as_micros(),
+        );
+    });
+}
+
+#[test]
+#[ignore = "requires nonroot, installed executables, tmux and a private loopback TLS relay"]
+fn terminal_installed_runtime_native_controls() {
+    run_native(|| async {
+        let started = Instant::now();
+        let sample = prove_writer(Workload::Controls).await;
+        eprintln!(
+            "terminal_installed_controls elapsed_us={} attach_us={} echo_us={} command_before_us={} command_after_us={}",
+            started.elapsed().as_micros(),
             sample.cold.as_micros(),
             sample.echo.as_micros(),
             sample.unloaded.as_micros(),
@@ -87,7 +107,21 @@ async fn input(pty: &AsyncFd<File>, mut bytes: &[u8]) {
     .expect("foreground PTY write deadline");
 }
 
-async fn output(pty: &AsyncFd<File>, expected: &[u8], stage: &'static str) {
+async fn detach(pty: &AsyncFd<File>) {
+    timeout(IO, async {
+        loop {
+            let mut ready = pty.writable().await.unwrap();
+            if let Ok(result) = ready.try_io(|fd| fd.get_ref().write(b"~.")) {
+                assert_eq!(result.unwrap(), 2, "atomic tilde-dot input");
+                return;
+            }
+        }
+    })
+    .await
+    .expect("tilde-dot write deadline");
+}
+
+async fn output(pty: &AsyncFd<File>, expected: &[u8], stage: &'static str) -> Vec<u8> {
     timeout(IO, async {
         let mut seen = Vec::new();
         let mut chunk = [0; 1024];
@@ -99,13 +133,13 @@ async fn output(pty: &AsyncFd<File>, expected: &[u8], stage: &'static str) {
             assert_ne!(read, 0, "foreground PTY {stage} closed");
             seen.extend_from_slice(&chunk[..read]);
             if seen.windows(expected.len()).any(|bytes| bytes == expected) {
-                return;
+                return seen;
             }
         }
         panic!("foreground PTY {stage} exceeded scan limit");
     })
     .await
-    .unwrap_or_else(|_| panic!("foreground PTY {stage} output deadline"));
+    .unwrap_or_else(|_| panic!("foreground PTY {stage} output deadline"))
 }
 
 async fn drain_master(pty: &AsyncFd<File>) {
@@ -127,14 +161,189 @@ async fn reap(
     }
 }
 
+fn raw(slave: &File) -> bool {
+    attributes(slave).c_lflag & RAW_FLAGS == 0
+}
+
+fn owned_socket(tmux: &OwnedTmux) -> (PathBuf, u64, u64) {
+    let mut sockets = tmux.sockets();
+    let socket = sockets.next().expect("one live tmux socket");
+    assert!(
+        sockets.next().is_none(),
+        "only the Default socket may exist"
+    );
+    let metadata = std::fs::symlink_metadata(&socket).unwrap();
+    (socket, metadata.dev(), metadata.ino())
+}
+
+async fn wait_raw(
+    pty: &AsyncFd<File>,
+    slave: &File,
+    child: &mut Child,
+    tmux: &OwnedTmux,
+    resume: bool,
+) {
+    timeout(ATTACH, async {
+        let mut early = Vec::new();
+        let mut chunk = [0; 1024];
+        while !raw(slave) || tmux.sockets().count() != 1 {
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "foreground exited before attach"
+            );
+            let tick = tokio::time::sleep(Duration::from_millis(25));
+            if resume {
+                tokio::select! {
+                    read = read_master(pty, &mut chunk) => {
+                        let read = read.expect("read resume admission");
+                        assert_ne!(read, 0, "resume admission closed");
+                        early.extend_from_slice(&chunk[..read]);
+                        assert!(early.len() <= MAX_SCAN, "resume admission scan limit");
+                        assert!(
+                            !early.windows(COOKED_BUSY.len()).any(|bytes| bytes == COOKED_BUSY)
+                                || attributes(slave).c_lflag & libc::ICANON == 0,
+                            "resume_busy"
+                        );
+                    }
+                    () = tick => {}
+                }
+            } else {
+                tick.await;
+            }
+        }
+    })
+    .await
+    .expect("foreground raw PTY and tmux attach deadline");
+}
+
+async fn confirm_resize(pty: &AsyncFd<File>, slave: &File) -> [u16; 4] {
+    let [_, _, x, y] = size(slave);
+    let geometry = libc::winsize {
+        ws_row: 31,
+        ws_col: 91,
+        ws_xpixel: x,
+        ws_ypixel: y,
+    };
+    // The ioctl updates the owned controlling PTY and sends SIGWINCH.
+    assert_eq!(
+        unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSWINSZ, &geometry) },
+        0
+    );
+    timeout(IO, async {
+        for trial in 0..3 {
+            let request = format!("stty size | tr ' ' :; printf '<%s>' geometry-{trial}\r");
+            let marker = format!("<geometry-{trial}>");
+            input(pty, request.as_bytes()).await;
+            let bytes = output(pty, marker.as_bytes(), "resize probe").await;
+            if bytes.windows(5).any(|bytes| bytes == b"31:91") {
+                return;
+            }
+        }
+        panic!("remote resize did not reach the requested geometry");
+    })
+    .await
+    .expect("resize confirmation deadline");
+    [31, 91, x, y]
+}
+
+async fn confirm_interrupt(pty: &AsyncFd<File>, slave: &File) {
+    input(
+        pty,
+        concat!(
+            "/bin/sh -c 'trap \"printf \\\"<%s>\\\" interrupted; exit 130\" INT; ",
+            "printf \"<%s>\" interrupt-ready; /bin/sleep 60'\r"
+        )
+        .as_bytes(),
+    )
+    .await;
+    output(pty, b"<interrupt-ready>", "interrupt readiness").await;
+    input(pty, b"\x03").await;
+    timeout(IO, async {
+        output(pty, b"<interrupted>", "remote SIGINT").await;
+        input(pty, b"printf '<%s>' after-interrupt\r").await;
+        output(pty, b"<after-interrupt>", "shell after interrupt").await;
+    })
+    .await
+    .expect("interrupt confirmation deadline");
+    assert!(raw(slave), "foreground CLI remains raw after remote Ctrl-C");
+}
+
 pub(super) async fn prove(
     state: &Path,
     daemon: &Path,
     remote: PublicKey,
     relay: &Relay,
     cleanup: &OwnedTmux,
+    controls: bool,
 ) -> (Duration, Duration) {
     write_cli_config(state, remote, relay);
+    let mut socket = None;
+    let sample = run_cli(
+        state,
+        daemon,
+        remote,
+        cleanup,
+        false,
+        async |pty, slave, original_size| {
+            let mut restored_size = original_size;
+            input(pty, SHELL).await;
+            output(pty, PROMPT, "shell prompt").await;
+
+            let key_sent = Instant::now();
+            input(pty, b"x").await;
+            output(pty, b"x", "single-key echo").await;
+            let echo = key_sent.elapsed();
+
+            assert!(!SCRIPT.contains(EXPECTED));
+            input(pty, SCRIPT.as_bytes()).await;
+            output(pty, EXPECTED.as_bytes(), "quoted UTF-8").await;
+            if controls {
+                restored_size = confirm_resize(pty, slave).await;
+                confirm_interrupt(pty, slave).await;
+                socket = Some(owned_socket(cleanup));
+                input(pty, b"MARMISH_CLI_KEEP=STORED; printf '<%s>' saved\r").await;
+                output(pty, b"<saved>", "save state before detach").await;
+                detach(pty).await;
+            } else {
+                input(pty, b"exit 0\r").await;
+            }
+            (echo, restored_size)
+        },
+    )
+    .await;
+    if let Some(socket) = socket {
+        assert_eq!(owned_socket(cleanup), socket);
+        let (resumed, _) = run_cli(
+            state,
+            daemon,
+            remote,
+            cleanup,
+            true,
+            async |pty, _slave, original_size| {
+                assert_eq!(owned_socket(cleanup), socket);
+                input(pty, b"printf '<fresh-%s>' \"$MARMISH_CLI_KEEP\"\r").await;
+                output(pty, b"<fresh-STORED>", "resumed shell state").await;
+                input(pty, b"exit 0\r").await;
+                (Duration::ZERO, original_size)
+            },
+        )
+        .await;
+        eprintln!(
+            "terminal_installed_controls resume_attach_us={}",
+            resumed.as_micros()
+        );
+    }
+    sample
+}
+
+async fn run_cli(
+    state: &Path,
+    daemon: &Path,
+    remote: PublicKey,
+    cleanup: &OwnedTmux,
+    resume: bool,
+    workload: impl AsyncFnOnce(&AsyncFd<File>, &File, [u16; 4]) -> (Duration, [u16; 4]),
+) -> (Duration, Duration) {
     let (master, slave) = open_cli_pty();
     let original = attributes(&slave);
     let original_size = size(&slave);
@@ -161,33 +370,10 @@ pub(super) async fn prove(
         }
     });
     let checks = AssertUnwindSafe(async {
-        timeout(ATTACH, async {
-            while attributes(&slave).c_lflag & (libc::ECHO | libc::ICANON) != 0
-                || cleanup.sockets().count() != 1
-            {
-                assert!(
-                    child.try_wait().unwrap().is_none(),
-                    "foreground exited before attach"
-                );
-                tokio::time::sleep(Duration::from_millis(25)).await;
-            }
-        })
-        .await
-        .expect("foreground raw PTY and tmux attach deadline");
+        wait_raw(&pty, &slave, &mut child, cleanup, resume).await;
         let cold = began.elapsed();
-        input(&pty, SHELL).await;
-        output(&pty, PROMPT, "shell prompt").await;
-
-        let key_sent = Instant::now();
-        input(&pty, b"x").await;
-        output(&pty, b"x", "single-key echo").await;
-        let echo = key_sent.elapsed();
-
-        assert!(!SCRIPT.contains(EXPECTED));
-        input(&pty, SCRIPT.as_bytes()).await;
-        output(&pty, EXPECTED.as_bytes(), "quoted UTF-8").await;
-        input(&pty, b"exit 0\r").await;
-        (cold, echo)
+        let (echo, restored_size) = workload(&pty, &slave, original_size).await;
+        (cold, echo, restored_size)
     })
     .catch_unwind()
     .await;
@@ -200,7 +386,7 @@ pub(super) async fn prove(
         stderr_drain.abort();
         let _ = stderr_drain.await;
     }
-    let sample = checks.unwrap_or_else(|panic| resume_unwind(panic));
+    let (cold, echo, restored_size) = checks.unwrap_or_else(|panic| resume_unwind(panic));
     assert_eq!(
         exit.expect("foreground reap deadline").unwrap().code(),
         Some(0)
@@ -212,6 +398,6 @@ pub(super) async fn prove(
             .unwrap(),
         0
     );
-    assert_restored(&slave, &original, original_size);
-    sample
+    assert_restored(&slave, &original, restored_size);
+    (cold, echo)
 }

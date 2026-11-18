@@ -128,6 +128,7 @@ enum Workload {
     Verify,
     QuietAuth,
     Foreground,
+    Controls,
     Cancel,
     ShellExit,
     Restart,
@@ -1091,9 +1092,12 @@ async fn prove_writer(workload: Workload) -> Measurements {
             sample.unloaded = before;
             return sample;
         }
-        if matches!(workload, Workload::Foreground) {
-            let (cold, echo) =
-                foreground::prove(temp.path(), &daemon, remote, &relay, &cleanup).await;
+        if matches!(workload, Workload::Foreground | Workload::Controls) {
+            let (cold, echo) = foreground::prove(
+                temp.path(), &daemon, remote, &relay, &cleanup,
+                matches!(workload, Workload::Controls),
+            )
+            .await;
             return Measurements {
                 cold,
                 echo,
