@@ -43,6 +43,19 @@ fn peer_installed_delivery_recovers_when_wake_cannot_write() {
     run_child("wake-refuses");
 }
 
+#[test]
+#[ignore = "private TLS with a real deferred Delivery and historical native KeyPackage evidence"]
+fn peer_installed_delivery_retires_saved_at_expiry() {
+    run_child("saved-expires");
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Case {
+    Normal,
+    WakeRefuses,
+    SavedExpires,
+}
+
 fn run_child(case: &str) {
     let name = concat!(
         "peer_invitation::prepared_consent::installed_consent::delivery::tests::",
@@ -72,9 +85,10 @@ fn run_child(case: &str) {
 #[test]
 #[ignore = "child of the installed Delivery WSS proof"]
 fn peer_installed_delivery_child() {
-    let wake_refuses = match std::env::var(CHILD_FLAG).as_deref() {
-        Ok("normal") => false,
-        Ok("wake-refuses") => true,
+    let case = match std::env::var(CHILD_FLAG).as_deref() {
+        Ok("normal") => Case::Normal,
+        Ok("wake-refuses") => Case::WakeRefuses,
+        Ok("saved-expires") => Case::SavedExpires,
         _ => return,
     };
     mount_for_proof().unwrap();
@@ -86,14 +100,14 @@ fn peer_installed_delivery_child() {
                 .enable_all()
                 .build()
                 .unwrap();
-            runtime.block_on(Box::pin(run(wake_refuses)));
+            runtime.block_on(Box::pin(run(case)));
         })
         .unwrap()
         .join()
         .unwrap();
 }
 
-async fn run(wake_refuses: bool) {
+async fn run(case: Case) {
     let founder = Arc::new(Keys::generate());
     let second = Keys::generate();
     let (relay, _test_home, lease, material) = qualified_recipient_fixture(
@@ -211,14 +225,13 @@ async fn run(wake_refuses: bool) {
         consent.key_package().clone(),
     )
     .await;
+    let expires = if case == Case::SavedExpires {
+        wall() + 7 + 300
+    } else {
+        consent.flight().expires_at - 1
+    };
     let delivery = codec
-        .prepare_delivery(
-            &founder,
-            &consent,
-            &welcome,
-            wall(),
-            consent.flight().expires_at - 1,
-        )
+        .prepare_delivery(&founder, &consent, &welcome, wall(), expires)
         .unwrap();
     assert!(
         sender
@@ -226,6 +239,27 @@ async fn run(wake_refuses: bool) {
             .await
             .unwrap()
     );
+    if case == Case::SavedExpires {
+        let mut new_port = PeerRecipientPort::open(admission(), time_limit())
+            .await
+            .unwrap();
+        let outer: nostr::event::Event = serde_json::from_slice(delivery.frame()).unwrap();
+        let stamp = outer.created_at.as_secs();
+        let page = new_port.page([stamp, stamp], time_limit()).await.unwrap();
+        let id = delivery.flight.flight().carrier_id.to_bytes();
+        let index = page
+            .records()
+            .iter()
+            .position(|record| record.id == id)
+            .unwrap();
+        let disposition = fixture
+            .delivery_input(&mut new_port, Input::History(&page, index))
+            .unwrap();
+        assert_eq!(disposition.status, Status::Deferred);
+        assert_saved_expiry(&mut fixture, &mut new_port, expires - 300).await;
+        return;
+    }
+    let wake_refuses = case == Case::WakeRefuses;
     let other_connector = relay.connector(lease.root(), true, None);
     let mut other = Owner::open(
         &other_connector,
@@ -765,4 +799,65 @@ async fn assert_observed_expiry(
     let after = delivery_state(fixture);
     assert_eq!(before[..2], after[..2]);
     assert_eq!(before[4..], after[4..]);
+}
+
+async fn assert_saved_expiry(
+    fixture: &mut Fixture<'_>,
+    recipient: &mut PeerRecipientPort,
+    expires: u64,
+) {
+    while wall() < expires {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    // No negative fault touches the signed carrier, revision, or Consent.
+    let replace_expiry = |fixture: &Fixture<'_>, value| {
+        fixture
+            .owner
+            .state
+            .checkpoint
+            .fixture_statement(&format!("UPDATE peer_cursor_deferred SET expires={value}"));
+    };
+    let reads = fixture.package_reads.get();
+    let before = delivery_state(fixture);
+    assert_eq!(before[4..], [1, 0]);
+
+    replace_expiry(fixture, expires + 1);
+    assert_eq!(
+        fixture.retry_delivery(recipient).err(),
+        Some(Error::Checkpoint(consent_checkpoint::Error::Cursor(
+            store::Error::Classification
+        ))),
+    );
+    assert_eq!(fixture.package_reads.get(), reads);
+    let after = delivery_state(fixture);
+    assert_eq!(before[..2], after[..2]);
+    assert_eq!(before[4..], after[4..]);
+    assert_eq!(after[2], after[3]);
+
+    replace_expiry(fixture, expires - 1);
+    assert_eq!(
+        fixture.retry_delivery(recipient).err(),
+        Some(Error::Checkpoint(consent_checkpoint::Error::Cursor(
+            store::Error::Classification
+        ))),
+    );
+    assert_eq!(fixture.package_reads.get(), reads + 1);
+    let after = delivery_state(fixture);
+    assert_eq!(before[..2], after[..2]);
+    assert_eq!(before[4..], after[4..]);
+    assert_eq!(after[2], after[3]);
+
+    replace_expiry(fixture, expires);
+    let started = std::time::Instant::now();
+    assert_eq!(fixture.retry_delivery(recipient).unwrap(), None);
+    assert_eq!(fixture.package_reads.get(), reads + 2);
+    let after = delivery_state(fixture);
+    assert_eq!(before[..2], after[..2]);
+    assert_eq!(after[4..], [0, 0]);
+    assert_eq!(after[2], after[3]);
+    assert!(after[2] >= i64::try_from(expires).unwrap());
+    eprintln!(
+        "installed_delivery saved_expiry_retirement_ms={}",
+        started.elapsed().as_millis()
+    );
 }
