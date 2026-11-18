@@ -85,6 +85,11 @@ impl<'p, 'l> PackageDirectory<'p, 'l> {
         }
         // SAFETY: successful openat transferred ownership of a new descriptor.
         let file = unsafe { File::from_raw_fd(fd) };
+        // SAFETY: this live descriptor names only the newly created private file.
+        // Ensure the owner can reopen it even when the process umask masks owner bits.
+        if unsafe { libc::fchmod(file.as_raw_fd(), 0o600) } != 0 {
+            return Err(Error::Path);
+        }
         let identity = identity(&file)?;
         self.exact(family, identity, Some(0))?;
         Ok((file, identity))
