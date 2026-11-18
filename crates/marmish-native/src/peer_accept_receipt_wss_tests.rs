@@ -13,10 +13,13 @@ use crate::peer_invitation::{
 };
 use cgka_traits::{GroupEvent, OutboundFanoutStorage, engine::SendIntent};
 
+#[path = "peer_heartbeat_private_wss_tests.rs"]
+pub(super) mod heartbeat;
+
 #[test]
 #[ignore = "requires native staged SQLCipher and two independent private WSS accounts"]
 fn private_wss_cold_acceptance_receipt_projects_exactly_once() {
-    run_native(Duration::from_secs(180), || prove_lost_ack(true));
+    run_native(Duration::from_secs(180), || prove_lost_ack(true, None));
 }
 
 pub(super) async fn start(
@@ -145,7 +148,7 @@ impl ReceiptRun<'_, '_> {
     }
 }
 
-pub(super) async fn finish(mut run: ReceiptRun<'_, '_>) {
+pub(super) async fn finish(mut run: ReceiptRun<'_, '_>, heartbeat: Option<heartbeat::Run>) {
     let projection = FounderProjection::create(&run);
     let prior = expected_founder_enrollment(&run, run.founder_runtime.as_ref().unwrap());
     {
@@ -344,6 +347,11 @@ pub(super) async fn finish(mut run: ReceiptRun<'_, '_>) {
         .unwrap();
     assert_eq!(published.step(), Step::Published { number: 2 });
     drop((recipient, owner, accepted, published));
+
+    if let Some(mode) = heartbeat {
+        heartbeat::prove(&run, &projection, first_acceptance, mode).await;
+        return;
+    }
 
     // Reopen after the recipient SQL commit and acknowledge exactly the
     // MessageId/app-id selected by the retained native publication evidence.

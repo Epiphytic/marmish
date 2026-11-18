@@ -121,3 +121,11 @@ mod terminal_frames;
 mod terminal_selection_wire_v2;
 
 mod terminal_offers;
+
+#[cfg(test)]
+#[allow(dead_code)] // Also exercised by the standalone Peer status proofs.
+mod peer_status_wire;
+
+#[cfg(test)]
+#[allow(dead_code)] // Also exercised by the standalone sender-fence proof.
+mod peer_heartbeat_send_fences;

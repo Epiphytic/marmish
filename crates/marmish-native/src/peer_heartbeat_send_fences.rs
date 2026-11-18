@@ -951,4 +951,4 @@ fn write_fence(tx: &Transaction<'_>, scope: &SendScope, row: &Fence) -> Result<(
 
 #[cfg(test)]
 #[path = "peer_heartbeat_send_fences_tests.rs"]
-mod core_tests;
+pub(crate) mod core_tests;

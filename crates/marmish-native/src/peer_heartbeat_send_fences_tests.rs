@@ -99,7 +99,10 @@ impl Fixture {
     }
 }
 
-fn encrypted_connection(path: &Path, key: [u8; 32]) -> std::result::Result<Connection, String> {
+pub(crate) fn encrypted_connection(
+    path: &Path,
+    key: [u8; 32],
+) -> std::result::Result<Connection, String> {
     marmish_engine::initialize_storage().map_err(|error| error.to_string())?;
     let connection = Connection::open_with_flags(
         path,
@@ -117,11 +120,16 @@ fn encrypted_connection(path: &Path, key: [u8; 32]) -> std::result::Result<Conne
     Ok(connection)
 }
 
-fn install_fixture(connection: &Connection) {
+pub(crate) fn install_fixture(connection: &Connection) {
     connection.execute(AUTHORITY_SCHEMA, []).unwrap();
 }
 
-fn authorize(connection: &Connection, scope: &SendScope, revision: NonZeroU64, state: State) {
+pub(crate) fn authorize(
+    connection: &Connection,
+    scope: &SendScope,
+    revision: NonZeroU64,
+    state: State,
+) {
     connection
         .execute(
             "DELETE FROM main.peer_heartbeat_test_authority WHERE generation=?1",

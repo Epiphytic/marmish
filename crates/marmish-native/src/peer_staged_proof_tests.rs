@@ -171,6 +171,18 @@ impl Store {
         SqliteAccountStorage,
         AccountDeviceRuntime<A, StaticTransportRouting, Publisher>,
     ) {
+        self.open_with_builder(routing, |_| adapter, relay)
+    }
+
+    fn open_with_builder<A: TransportAdapter>(
+        &self,
+        routing: StaticTransportRouting,
+        build: impl FnOnce(SqliteAccountStorage) -> A,
+        relay: Arc<dyn NostrRelayClient>,
+    ) -> (
+        SqliteAccountStorage,
+        AccountDeviceRuntime<A, StaticTransportRouting, Publisher>,
+    ) {
         marmish_engine::initialize_storage().unwrap();
         let storage =
             SqliteAccountStorage::open_encrypted(&self.path, &SqlCipherKey::raw(self.key)).unwrap();
@@ -182,6 +194,7 @@ impl Store {
                 .unwrap();
         }
         let config = postjoin_session_config(storage.clone(), self.signer.clone());
+        let adapter = build(storage.clone());
         let runtime = AccountDeviceRuntime::open(config, || {
             Ok::<_, marmot_session::SessionError>((
                 adapter,
@@ -368,6 +381,34 @@ impl<A: TransportAdapter> PeerFounderRuntime<A> {
         self.0.ingest_delivery(delivery).await
     }
 
+    pub(crate) async fn send_fixture_app(
+        &mut self,
+        group_id: GroupId,
+        payload: Vec<u8>,
+        pin: cgka_traits::EpochPin,
+    ) -> marmot_session::AccountResult<marmot_session::AccountDeviceEffects> {
+        self.0
+            .send(SendIntent::AppMessage {
+                group_id,
+                payload,
+                expected_epoch: Some(pin),
+            })
+            .await
+    }
+
+    pub(crate) async fn resume_fixture_app(
+        &mut self,
+    ) -> marmot_session::AccountResult<marmot_session::AccountDeviceEffects> {
+        self.0.resume_outbound_fanouts().await
+    }
+
+    pub(crate) fn acknowledge_fixture_app(
+        &self,
+        published: &[marmot_session::PublishedApplicationMessage],
+    ) -> marmot_session::AccountResult<()> {
+        self.0.acknowledge_published_app_messages(published)
+    }
+
     pub(crate) async fn self_update(
         &mut self,
         group: &GroupId,
@@ -528,6 +569,13 @@ impl PeerFounderReopen {
     }
 
     fn open<A: TransportAdapter>(&self, adapter: A) -> PeerFounderRuntime<A> {
+        self.open_with_adapter(|_| adapter)
+    }
+
+    pub(crate) fn open_with_adapter<A: TransportAdapter>(
+        &self,
+        build: impl FnOnce(SqliteAccountStorage) -> A,
+    ) -> PeerFounderRuntime<A> {
         let check = || {
             let info = std::fs::symlink_metadata(&self.founder.path).unwrap();
             assert!(info.is_file() && info.nlink() == 1);
@@ -548,7 +596,7 @@ impl PeerFounderReopen {
         );
         let (storage, runtime) = self
             .founder
-            .open_with_routing(router, adapter, Arc::new(NoIo));
+            .open_with_builder(router, build, Arc::new(NoIo));
         assert_eq!(storage.migration_summary().0, 0);
         check();
         PeerFounderRuntime(runtime, storage)

@@ -19,10 +19,10 @@ const DURABLE_DEADLINE: Duration = Duration::from_secs(135);
 #[test]
 #[ignore = "requires native staged SQLCipher and two independent private WSS accounts"]
 fn private_wss_recovers_lost_postjoin_ack_without_another_native_send() {
-    run_native(DURABLE_DEADLINE, || prove_lost_ack(false));
+    run_native(DURABLE_DEADLINE, || prove_lost_ack(false, None));
 }
 
-async fn prove_lost_ack(with_receipt: bool) {
+async fn prove_lost_ack(with_receipt: bool, heartbeat: Option<receipt::heartbeat::Run>) {
     let group_route = random();
     let mut round = Round::initialize_with_group(Some(group_route)).await;
     let setup = prepare_history(&round, group_route, 600, with_receipt).await;
@@ -516,18 +516,21 @@ async fn prove_lost_ack(with_receipt: bool) {
         };
         let inner = receipt::start(&mut owner, &stage, &round, &image, reserved).await;
         drop((recipient, owner, held, confirmed, armed));
-        receipt::finish(receipt::ReceiptRun {
-            stage: &stage,
-            round: &round,
-            image: &image,
-            reopen: &open_owner,
-            founder: setup.founder_reopen,
-            founder_runtime: Some(founder),
-            founder_socket: &mut founder_socket,
-            recipient_signer: recipient_signer.clone(),
-            inner,
-            started,
-        })
+        receipt::finish(
+            receipt::ReceiptRun {
+                stage: &stage,
+                round: &round,
+                image: &image,
+                reopen: &open_owner,
+                founder: setup.founder_reopen,
+                founder_runtime: Some(founder),
+                founder_socket: &mut founder_socket,
+                recipient_signer: recipient_signer.clone(),
+                inner,
+                started,
+            },
+            heartbeat,
+        )
         .await;
     }
     founder_socket.stop(Instant::now() + STEP).await.unwrap();

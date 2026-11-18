@@ -250,6 +250,58 @@ impl Owner {
         }
     }
 
+    #[cfg(test)]
+    async fn prove_group_filter_refusals(&mut self, route: [u8; 32], deadline: Instant) {
+        let exact = json!({"kinds": [GROUP_KIND], "#h": [hex::encode(route)]});
+        for (index, filters) in [
+            vec![exact.clone(), exact.clone()],
+            vec![json!({"kinds": [GROUP_KIND, 30104], "#h": [hex::encode(route)]})],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = format!("mp-fixture-rejected-{index}");
+            let mut frame = vec![json!("REQ"), json!(id)];
+            frame.extend(filters);
+            let socket = self.socket().unwrap();
+            socket
+                .send(json!(frame).to_string(), deadline)
+                .await
+                .unwrap();
+            let response = socket.text(&mut Budget::default(), deadline).await.unwrap();
+            let (verb, actual, _): (String, String, String) =
+                serde_json::from_str(&response).unwrap();
+            assert!(
+                verb == "CLOSED" && actual == id,
+                "unexpected private relay filter response"
+            );
+        }
+    }
+
+    #[cfg(test)]
+    async fn prove_group_write_refusals(&mut self, route: [u8; 32], deadline: Instant) {
+        let mut foreign = route;
+        foreign[0] ^= 1;
+        for (kind, tag) in [(GROUP_KIND, foreign), (30104, route)] {
+            let event = EventBuilder::new(Kind::Custom(kind), "fixture-scope-probe")
+                .tags([Tag::parse(["h", &hex::encode(tag)]).unwrap()])
+                .finalize(&Keys::generate())
+                .unwrap();
+            assert!(
+                !self
+                    .publish_flight(
+                        json!(["EVENT", event]).to_string(),
+                        event.id.to_bytes(),
+                        &mut Budget::default(),
+                        deadline,
+                    )
+                    .await
+                    .unwrap(),
+                "private relay accepted out-of-scope event"
+            );
+        }
+    }
+
     pub(in crate::peer_invitation) async fn push_group_exact(
         &mut self,
         route: [u8; 32],
@@ -353,6 +405,44 @@ mod tests {
             group_publication(route, &[b'x'; RECORD_LIMIT_BYTES + 1], id),
             Err(Failure::Size)
         ));
+    }
+
+    #[tokio::test]
+    #[ignore = "opt-in private authenticated WSS heartbeat relay scope"]
+    async fn private_wss_heartbeat_relay_refuses_unregistered_and_out_of_scope_messages() {
+        let route = [5; 32];
+        let founder = Keys::generate();
+        let recipient = Keys::generate();
+        let outsider = Keys::generate();
+        let mut relay =
+            Relay::start_peer_group([founder.public_key(), recipient.public_key()], route).await;
+        let private = tempfile::tempdir().unwrap();
+        let connector = relay.connector(private.path(), true, None);
+        assert!(matches!(
+            Owner::open(
+                &connector,
+                relay.url.as_str(),
+                outsider.public_key(),
+                &outsider,
+                deadline(),
+            )
+            .await,
+            Err(Failure::Grammar)
+        ));
+        assert!(!relay.authenticated(outsider.public_key()));
+        let mut registered = connect(&relay, &founder, private.path()).await;
+        registered
+            .prove_group_filter_refusals(route, deadline())
+            .await;
+        registered
+            .prove_group_write_refusals(route, deadline())
+            .await;
+        assert!(relay.group_writes().is_empty());
+        assert!(relay.peer_transcript().is_empty());
+        assert_eq!(relay.publication_attempts(GROUP_KIND), 1);
+        assert_eq!(relay.publication_attempts(30104), 1);
+        registered.stop(deadline()).await.unwrap();
+        relay.stop().await;
     }
 
     #[tokio::test]

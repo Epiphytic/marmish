@@ -64,10 +64,15 @@ Group socket and authenticate the live target. It records one physical
 status write and a matching relay ACK. For each send record exactly one
 initial `send` call, one matching native target attempt after the closed
 callback, and the same signed event ID and digest in the resumed request.
-No fresh message is generated from the same reservation. Close before the first write under changed revision,
+No fresh message is generated from the same reservation. Close before the
+first write under changed revision,
 lost grant, changed pin/roster, deadline, wrong Group endpoint or mismatched
-native/app event, and require the relay count to stay unchanged. An
-unexpected maintainer callback cannot publish under this proof.
+native/app event, and require the relay count to stay unchanged. Run these
+negative turns through the same armed adapter with the saved native
+request. MDK spends a native attempt before entering its callback, so use
+its real resume only for the positive send. A negative adapter turn must
+leave the saved native attempt count unchanged. An unexpected maintainer
+callback cannot publish under this proof.
 
 ## Receiver and timing
 
@@ -84,9 +89,9 @@ projection. Do not emit metrics content or peer IDs.
 
 Exercise stable accepted-state negatives before release, including status
 before acceptance, current grant loss and revision changes. Each checks
-zero WSS writes. Test that an unregistered or foreign writer, wrong
-transport group tag, extra filters and other kinds are refused by the
-private relay. Use a fresh disposable third signer for the relay negative.
+zero WSS writes. A separate bounded private WSS test proves refusal of an unregistered
+account, wrong transport group tag, extra filters and other kinds. Use a
+fresh disposable third signer for the refused account.
 Reject wrong author, epoch, leaf, application room, kind and marker,
 nonempty tags, noncanonical bytes and expired or future creation time in
 the receiver. Confirm receipt and heartbeat kinds cannot cross lanes.
@@ -108,13 +113,24 @@ deadline. Use one in-flight application event, a one-second send floor
 and at most two positive records and sixteen negative cases in this
 test. Keep the opt-in whole fixture out of ordinary CI.
 
-After a passing proof, add a separate benchmark with fifty fresh
-heartbeat reservations over one accepted native group, a one-second
-send floor, one in-flight operation and a ten-minute total deadline.
-Record monotonic p50/p95 reservation-to-callback, reservation-to-ACK
-and reservation-to-projection. Wall time only supplies created_at and
-freshness checks. Report elapsed timings, sample count, encoded bytes
-and physical writes without reporting host or identity contents.
+Run the benchmark in a separate owned process with twelve fresh heartbeat
+reservations over one new accepted native group. Use the normal MDK retry,
+a one-second send floor and one in-flight operation. Give each full sample
+50 seconds and the process ten minutes, including prior enrollment. MDK
+122ad45's `FROZEN_FANOUT_AMBIGUOUS_RETRY_BASE_MS` in
+`crates/marmot-session/src/runtime.rs` is 30 seconds for the initial closed
+publish in this path. Fifty reservations would need over 1,500 seconds for
+retry alone. The unchanged native delay dominates reservation-to-ACK and
+reservation-to-projection timings. Those timings bound the closed-capture
+path. Reservation-to-callback includes native setup and submit work. Report
+in-callback lookup and validation time separately.
+
+Report elapsed timings, writes, projections, total encoded and signed wire
+bytes, and largest application size without reporting host or identity
+contents. Use nearest-rank monotonic p50/p95 for each stage. With twelve
+samples p95 is the maximum. Wall time only supplies created_at and freshness
+checks. The already measured 200-sample [local planner and codec path](../validation/peer-heartbeat-planner.md) has separate results and exercises
+none of the native retry or WSS path.
 
 All new authority and transport proof code is under `#[cfg(test)]`. A
 non-test compiler probe confirms that fixture constructors and adapters
