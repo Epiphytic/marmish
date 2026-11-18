@@ -410,7 +410,7 @@ impl MdkOwner {
         }
         Ok(None)
     }
-    fn command_ready_session(
+    pub(super) fn command_ready_session(
         &mut self,
         remote: Account,
         relays: &[String],

@@ -112,9 +112,9 @@ impl MdkOwner {
 
     pub(super) fn command_forget_and_confirm(&mut self, group: &GroupId) -> Result<()> {
         if self.journal.command_room(group.as_slice())?.is_some() {
-            self.journal.command_revoke_room(group.as_slice())?;
+            self.revoke_owned_command_room(group)?;
         }
-        self.routing.remove(group);
+        self.remove_owned_route(group);
         mdk(self.runtime.forget_group_local(group))?;
         let pending = self
             .storage
@@ -152,7 +152,7 @@ impl MdkOwner {
             Ok(value) => value,
             Err(Error::Mdk(_) | Error::Invalid(_)) => {
                 if self.journal.command_room(group_id.as_slice())?.is_some() {
-                    self.journal.command_revoke_room(group_id.as_slice())?;
+                    self.revoke_owned_command_room(&group_id)?;
                 }
                 return self.command_forget_and_confirm(&group_id);
             }
@@ -323,10 +323,14 @@ impl MdkOwner {
                 {
                     return Err(Error::Mdk("command_authority_changed"));
                 }
-                Ok(())
+                #[cfg(test)]
+                let verified = route.relays;
+                #[cfg(not(test))]
+                let verified = ();
+                Ok(verified)
             });
         match verified {
-            Ok(()) => Ok(AuthenticatedCommandContext {
+            Ok(_relay_endpoints) => Ok(AuthenticatedCommandContext {
                 local_account: fixed_hex::<32>(&self.identity)?,
                 peer_account: room.peer,
                 mls_group: room.group,
@@ -335,10 +339,12 @@ impl MdkOwner {
                 direction: room.direction,
                 target_uid: unsafe { libc::geteuid() },
                 authority_digest: room.authority,
+                #[cfg(test)]
+                relay_endpoints: _relay_endpoints,
             }),
             Err(Error::Mdk(_) | Error::Invalid(_)) => {
-                self.journal.command_revoke_room(group.as_slice())?;
-                self.routing.remove(group);
+                self.revoke_owned_command_room(group)?;
+                self.remove_owned_route(group);
                 Err(Error::Mdk("command_room_revoked"))
             }
             Err(error) => Err(error),

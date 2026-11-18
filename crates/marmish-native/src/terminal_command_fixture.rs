@@ -40,6 +40,18 @@ impl CommandPeer {
     }
 
     async fn open(&self, relay: &Relay, remote: PublicKey, server: bool, cat: &Path) -> MdkOwner {
+        self.open_with_terminal(relay, remote, server, cat, false)
+            .await
+    }
+
+    async fn open_with_terminal(
+        &self,
+        relay: &Relay,
+        remote: PublicKey,
+        server: bool,
+        cat: &Path,
+        terminal: bool,
+    ) -> MdkOwner {
         let mut owner = MdkOwner::open(
             &self.lease,
             &self.material,
@@ -55,6 +67,7 @@ impl CommandPeer {
                 "limits": {}, "aliases": {},
                 "trusted_remotes": if server { vec![] } else { vec![remote.to_hex()] },
                 "execution_clients": if server { vec![remote.to_hex()] } else { vec![] },
+                "terminal": {"clients":if terminal && server { vec![remote.to_hex()] } else { vec![] }},
                 "command_policy": {"version":1, "defaults":{"allow_exec":[cat]}},
             }))
             .unwrap(),
@@ -254,7 +267,12 @@ async fn run_command(client: &mut MdkOwner, server: &mut MdkOwner, room: &Comman
             .outcome
             .filter(|_| status.stdout.closed && status.stderr.closed)
         {
-            assert!(outcome.kind == wire::OutcomeKind::Code);
+            assert!(
+                outcome.kind == wire::OutcomeKind::Code,
+                "Command fixture outcome {} ({:?})",
+                serde_json::to_string(&outcome.kind).unwrap(),
+                outcome.value,
+            );
             assert_eq!(outcome.value, Some(0));
             assert_eq!(result, bytes);
             break;
@@ -442,4 +460,185 @@ async fn terminal_copies_never_ingest_in_durable_command_profiles() {
         assert!(!reopened.has_processed_transport_id(&terminal_id).unwrap());
     }
     relay.assert_healthy();
+}
+
+#[test]
+#[ignore = "real loopback WSS with native Command workers"]
+fn terminal_command_authority_native_wss() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    prove_terminal_command_authority(false).await;
+                    prove_terminal_command_authority(true).await;
+                });
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+async fn prove_terminal_command_authority(granted: bool) {
+    use crate::terminal_fence::FenceState;
+
+    let temp = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
+    let relay = Relay::start().await;
+    let client_peer = CommandPeer::new(temp.path(), "authority-client");
+    let server_peer = CommandPeer::new(temp.path(), "authority-server");
+    let cat = [Path::new("/usr/bin/cat"), Path::new("/bin/cat")]
+        .into_iter()
+        .find_map(|path| std::fs::canonicalize(path).ok())
+        .unwrap();
+    for account in [client_peer.public(), server_peer.public()] {
+        relay.ordinary(account);
+    }
+    let mut client = client_peer
+        .open(&relay, server_peer.public(), false, &cat)
+        .await;
+    let mut server = server_peer
+        .open_with_terminal(&relay, client_peer.public(), true, &cat, granted)
+        .await;
+    let remote = server_peer.public().to_bytes();
+    let relays = [relay.url.to_string()];
+    let room = client
+        .open_command_room(remote, false, Instant::now() + STEP)
+        .await
+        .unwrap();
+    run_command(&mut client, &mut server, &room, &cat).await;
+    let before = Instant::now();
+    client.tick(before + STEP).await.unwrap();
+    let empty_turn = before.elapsed();
+    let binding = client
+        .terminal_client_binding(remote, &relays, room.session)
+        .unwrap()
+        .expect("exact ready Command room");
+    assert_eq!(binding.context.relay_endpoints(), relays);
+    assert!(
+        client
+            .terminal_client_binding(remote, &["wss://other.example/".into()], room.session)
+            .is_err()
+    );
+    assert_eq!(binding.fence.state(), FenceState::Live);
+    let server_bindings = server.terminal_server_bindings().unwrap();
+    if granted {
+        let [server_binding] = server_bindings.as_slice() else {
+            panic!("exact granted server binding");
+        };
+        assert_eq!(server_binding.context.relay_endpoints(), relays);
+        assert_eq!(
+            server_binding.context.transport_group(),
+            binding.context.transport_group()
+        );
+        assert_eq!(
+            server_binding.context.authority_digest(),
+            binding.context.authority_digest()
+        );
+        run_command(&mut client, &mut server, &room, &cat).await;
+        assert_eq!(server_binding.fence.state(), FenceState::Live);
+        client.terminal_authority.measure_pauses();
+        server.terminal_authority.measure_pauses();
+        let mut turns = Vec::new();
+        for _ in 0..10 {
+            let before = Instant::now();
+            client.tick(before + STEP).await.unwrap();
+            server.tick(Instant::now() + STEP).await.unwrap();
+            turns.push(before.elapsed().as_micros());
+            assert_eq!(binding.fence.state(), FenceState::Live);
+            assert_eq!(server_binding.fence.state(), FenceState::Live);
+        }
+        turns.sort_unstable();
+        let mut pauses = client.terminal_authority.measured_pauses();
+        pauses.extend(server.terminal_authority.measured_pauses());
+        pauses.sort_unstable();
+        assert!(pauses.len() >= 20, "one measured drain per owner and turn");
+        let p95 = pauses[(pauses.len() * 95).div_ceil(100) - 1];
+        eprintln!(
+            "loopback idle empty client tick={}us, fenced client/server pair p50={}us p95={}us",
+            empty_turn.as_micros(),
+            turns[4],
+            turns[9],
+        );
+        eprintln!(
+            "loopback fenced pause samples={} p50={}us p95={}us max={}us",
+            pauses.len(),
+            pauses[(pauses.len() - 1) / 2].as_micros(),
+            p95.as_micros(),
+            pauses.last().unwrap().as_micros(),
+        );
+        assert!(p95 < Duration::from_millis(50), "healthy pause budget");
+        let group = GroupId::new(room.group);
+        let deadline = Instant::now() + STEP;
+        let updates = client.terminal_authority.stage(Some(&group));
+        assert_eq!(binding.fence.state(), FenceState::Suspect);
+        let effects = client
+            .runtime
+            .send(SendIntent::RemoveMembers {
+                group_id: group.clone(),
+                members: vec![MemberId::new(remote.to_vec())],
+            })
+            .await
+            .unwrap();
+        client.apply_effects(effects, deadline).await.unwrap();
+        client.terminal_finish(updates);
+        assert_eq!(binding.fence.state(), FenceState::Retired);
+        assert_eq!(server_binding.fence.state(), FenceState::Live);
+        // Deliberately exercise the receiver itself without rebuild_routes or
+        // the tick's grant pruning being able to retire it earlier.
+        while server_binding.fence.state() != FenceState::Retired {
+            assert!(
+                Instant::now() < deadline,
+                "native membership retires receiver"
+            );
+            server.receive_one(deadline).await.unwrap();
+        }
+
+        let next = client
+            .open_command_room(remote, true, Instant::now() + STEP)
+            .await
+            .unwrap();
+        run_command(&mut client, &mut server, &next, &cat).await;
+        let next_binding = client
+            .terminal_client_binding(remote, &relays, next.session)
+            .unwrap()
+            .unwrap();
+        let next_servers = server.terminal_server_bindings().unwrap();
+        let [next_server] = next_servers.as_slice() else {
+            panic!("single unaffected room after the membership change");
+        };
+        let group = GroupId::new(next.group);
+        let deadline = Instant::now() + STEP;
+        let updates = client.terminal_authority.stage(Some(&group));
+        let effects = client
+            .runtime
+            .send(SendIntent::UpdateGroupData {
+                group_id: group,
+                name: None,
+                description: Some("Marmish fixture changed description".into()),
+            })
+            .await
+            .unwrap();
+        client.apply_effects(effects, deadline).await.unwrap();
+        client.terminal_finish(updates);
+        assert_eq!(next_binding.fence.state(), FenceState::Retired);
+        assert_eq!(next_server.fence.state(), FenceState::Live);
+        while next_server.fence.state() != FenceState::Retired {
+            assert!(
+                Instant::now() < deadline,
+                "native metadata retires receiver"
+            );
+            server.receive_one(deadline).await.unwrap();
+        }
+    } else {
+        assert!(server_bindings.is_empty());
+    }
+    client.shutdown(Instant::now() + STEP).await.unwrap();
+    assert_eq!(binding.fence.state(), FenceState::Retired);
+    server.shutdown(Instant::now() + STEP).await.unwrap();
 }

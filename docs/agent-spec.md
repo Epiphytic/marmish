@@ -30,7 +30,9 @@ authority fence](validation/terminal-ipc-fence.md) qualify fixed-storage framing
 role checks and revocation ordering in test builds. The [local socket and
 display commit](validation/terminal-socket-handshake.md) qualify same-user
 handshake, independent socket limits, and acknowledgment after display
-writes in test builds. Remote Terminal admission, reattach,
+writes in test builds. The [Command owner authority handoff](validation/terminal-command-authority.md)
+qualifies the live ownership fence in a local WSS fixture with native membership
+and protected route changes. Remote Terminal admission, reattach,
 inbound Peer invitations and network heartbeat remain in development.
 The [Peer aggregate ingress proof](validation/peer-aggregate-ingress-proof.md)
 qualifies one shared canonical origin in a native loopback fixture. A copy

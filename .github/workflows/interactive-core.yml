@@ -65,6 +65,8 @@ jobs:
         run: |
           cargo test --locked -p marmish-native --lib terminal_ipc_wire_core
           cargo test --locked -p marmish-native --lib terminal_fence_core
+      - name: Check Terminal Command actor retirement
+        run: cargo test --locked -p marmish-native --lib terminal_command_authority_core_actor_retires_uncertain_effects
       - name: Check Terminal socket byte boundaries
         run: |
           cargo test --locked -p marmish-native --lib terminal_socket_core_ordinary_bytes_and_half_close

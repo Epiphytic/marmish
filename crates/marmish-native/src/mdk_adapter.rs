@@ -12,6 +12,9 @@ mod command_runtime;
 pub(crate) mod installed_check;
 #[path = "stream_runtime.rs"]
 mod stream_runtime;
+#[cfg(test)]
+#[path = "terminal_command_authority.rs"]
+mod terminal_command_authority;
 use crate::foundation::{self, Body, Envelope};
 use crate::identity::{IdentityMaterial, ProfileLease};
 pub use crate::journal::{Conversation, ReceivedMessage, SendStatus};
@@ -101,6 +104,8 @@ pub(crate) struct AuthenticatedCommandContext {
     direction: CommandDirection,
     target_uid: u32,
     authority_digest: crate::command_wire::Digest,
+    #[cfg(test)]
+    relay_endpoints: Vec<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -136,6 +141,11 @@ impl AuthenticatedCommandContext {
     }
 
     #[cfg(test)]
+    pub(crate) fn relay_endpoints(&self) -> &[String] {
+        &self.relay_endpoints
+    }
+
+    #[cfg(test)]
     pub(crate) fn test_fixture(
         local_account: crate::command_wire::Account,
         peer_account: crate::command_wire::Account,
@@ -152,6 +162,7 @@ impl AuthenticatedCommandContext {
             direction,
             target_uid: unsafe { libc::geteuid() },
             authority_digest: [7; 32],
+            relay_endpoints: Vec::new(),
         }
     }
 }
@@ -863,6 +874,8 @@ pub struct MdkOwner {
     command_creation_test: Option<command_runtime::CreationTest>,
     #[cfg(test)]
     relay_proof_ingress: Option<Vec<MessageId>>,
+    #[cfg(test)]
+    terminal_authority: terminal_command_authority::Authority,
     retention: u64,
     welcome_retry: HashMap<Vec<u8>, (Instant, u8)>,
     reconnect_after: Instant,
@@ -1027,6 +1040,8 @@ impl MdkOwner {
             command_creation_test: None,
             #[cfg(test)]
             relay_proof_ingress: None,
+            #[cfg(test)]
+            terminal_authority: terminal_command_authority::Authority::default(),
             retention: 86400,
             welcome_retry: HashMap::new(),
             reconnect_after: Instant::now(),
@@ -1118,7 +1133,7 @@ impl MdkOwner {
                 Err(Error::Transport("group_state_unavailable")) => {}
                 Err(e) => return Err(e),
             }
-            self.routing.remove(&group);
+            self.remove_owned_route(&group);
             self.forget_and_confirm(&group)?;
         }
         for group in self.journal.pending_group_cleanup()? {
@@ -1252,6 +1267,8 @@ impl MdkOwner {
 }
 impl Drop for MdkOwner {
     fn drop(&mut self) {
+        #[cfg(test)]
+        self.terminal_authority.retire_all();
         self.connector.cancel();
         if let Some(forwarder) = self.forwarder.take() {
             forwarder.abort();
@@ -1260,6 +1277,18 @@ impl Drop for MdkOwner {
 }
 
 impl MdkOwner {
+    fn remove_owned_route(&mut self, group: &GroupId) {
+        #[cfg(test)]
+        self.terminal_authority.retire(group.as_slice());
+        self.routing.remove(group);
+    }
+
+    fn revoke_owned_command_room(&mut self, group: &GroupId) -> Result<()> {
+        #[cfg(test)]
+        self.terminal_authority.retire(group.as_slice());
+        self.journal.command_revoke_room(group.as_slice())
+    }
+
     fn check_group(
         &self,
         g: &GroupId,
@@ -1381,7 +1410,7 @@ impl MdkOwner {
                 hex::decode(&conversation.group_id).map_err(|_| Error::Storage("group_id"))?,
             );
             if conversation.revoked {
-                self.routing.remove(&g);
+                self.remove_owned_route(&g);
                 continue;
             }
             match self.ensure_trusted(&g) {
@@ -1444,10 +1473,14 @@ impl MdkOwner {
         // Drain may publish. All transport admission and Arti bootstrap above
         // must therefore finish first. Reconcile retained pending work before
         // accepting a fresh command from IPC.
+        #[cfg(test)]
+        let updates = self.terminal_authority.stage(None);
         let effects = tokio::time::timeout_at(deadline, self.runtime.drain())
             .await
             .map_err(|_| Error::Timeout)?;
         self.apply_effects(mdk(effects)?, deadline).await?;
+        #[cfg(test)]
+        self.terminal_finish(updates);
         self.replay_pending(deadline).await?;
         self.submit_unsubmitted(deadline).await?;
         self.ensure_ingress()?;
@@ -1639,6 +1672,8 @@ impl MdkOwner {
             }],
             initial_admins: vec![],
         };
+        #[cfg(test)]
+        let updates = self.terminal_authority.stage(None);
         let (group, effects) =
             tokio::time::timeout_at(deadline, self.runtime.create_group(request))
                 .await
@@ -1653,6 +1688,8 @@ impl MdkOwner {
         self.journal.bind_authority(group.as_slice(), &digest)?;
         self.routing.group(group, route)?;
         self.apply_effects(effects, deadline).await?;
+        #[cfg(test)]
+        self.terminal_finish(updates);
         mdk(self.runtime.sync_transport_groups(None).await)?;
         self.journal
             .conversation(&session)?
@@ -1721,6 +1758,8 @@ impl MdkOwner {
             now()?,
         )?;
         self.journal.mark(group.as_slice(), &event.id, "prepared")?;
+        #[cfg(test)]
+        let updates = self.terminal_authority.stage(Some(&group));
         let effects = tokio::time::timeout_at(
             deadline,
             self.runtime.send(SendIntent::AppMessage {
@@ -1733,7 +1772,12 @@ impl MdkOwner {
         .map_err(|_| Error::Timeout)?;
         let effects = mdk(effects)?;
         self.bind_queued(&effects, &event.id)?;
-        self.apply_effects(effects, deadline).await
+        let result = self.apply_effects(effects, deadline).await;
+        #[cfg(test)]
+        if result.is_ok() {
+            self.terminal_finish(updates);
+        }
+        result
     }
     fn bind_queued(&self, effects: &AccountDeviceEffects, event: &str) -> Result<()> {
         if let [queued] = effects.queued.as_slice() {
@@ -1769,7 +1813,7 @@ impl MdkOwner {
                     Some(foundation::id_timestamp(&c.session)?),
                     now()?,
                 )?;
-                self.routing.remove(g);
+                self.remove_owned_route(g);
                 self.forget_and_confirm(g)?;
                 Err(Error::Mdk("conversation_revoked"))
             }
@@ -1931,6 +1975,8 @@ impl MdkOwner {
         Ok(())
     }
     fn forget_and_confirm(&mut self, group: &GroupId) -> Result<()> {
+        #[cfg(test)]
+        self.terminal_authority.retire(group.as_slice());
         mdk(self.runtime.forget_group_local(group))?;
         let pending = mdk(self.storage.list_pending_application_events())?;
         let remains = pending.iter().any(|e| match e {
@@ -1971,7 +2017,7 @@ impl MdkOwner {
                         now()?,
                     )?;
                 }
-                self.routing.remove(&group_id);
+                self.remove_owned_route(&group_id);
                 self.forget_and_confirm(&group_id)?;
                 return Ok(());
             }
@@ -2017,7 +2063,7 @@ impl MdkOwner {
                 // A valid peer may still propose an already-bound session ID.
                 // This new group never acquired authority: refuse it without
                 // consuming rejection metadata or poisoning other sessions.
-                self.routing.remove(&group_id);
+                self.remove_owned_route(&group_id);
                 self.forget_and_confirm(&group_id)?;
                 return Ok(());
             }
@@ -2186,6 +2232,8 @@ impl MdkOwner {
             // Commit the ambiguity boundary BEFORE crossing into MDK. A crash
             // after this point must never regenerate ciphertext without proof.
             self.journal.mark(&p.group, &p.event_id, "prepared")?;
+            #[cfg(test)]
+            let updates = self.terminal_authority.stage(Some(&group));
             let effects = tokio::time::timeout_at(
                 deadline,
                 self.runtime.send(SendIntent::AppMessage {
@@ -2199,6 +2247,8 @@ impl MdkOwner {
             let effects = mdk(effects)?;
             self.bind_queued(&effects, &p.event_id)?;
             self.apply_effects(effects, deadline).await?;
+            #[cfg(test)]
+            self.terminal_finish(updates);
         }
         Ok(())
     }
@@ -2234,7 +2284,7 @@ impl MdkOwner {
                     // A cross-store crash can retain a native Welcome without
                     // an application acceptance. Never publish that orphan.
                     self.reconcile_orphans()?;
-                    self.routing.remove(&group);
+                    self.remove_owned_route(&group);
                     if self.journal.command_room(group.as_slice())?.is_some() {
                         self.command_forget_and_confirm(&group)?;
                     } else {
@@ -2261,12 +2311,16 @@ impl MdkOwner {
                     (attempt + 1) % 3,
                 ),
             );
+            #[cfg(test)]
+            let updates = self.terminal_authority.stage(Some(&group));
             let effects =
                 tokio::time::timeout_at(deadline, self.runtime.redeliver_welcome(&message.id))
                     .await
                     .map_err(|_| Error::Timeout)?
                     .map_err(|_| Error::Transport("welcome_retry"))?;
             self.apply_effects(effects, deadline).await?;
+            #[cfg(test)]
+            self.terminal_finish(updates);
         }
         for c in self
             .journal
@@ -2303,6 +2357,8 @@ impl MdkOwner {
             .is_none_or(|task| task.is_finished());
         let connected = self.network_connected().await;
         if !self.recovery && (stopped || loss != self.loss_baseline || !connected) {
+            #[cfg(test)]
+            self.terminal_authority.retire_all();
             self.recovery = true;
             self.publication.pause();
             self.recovery_subscribed = false;
@@ -2367,6 +2423,13 @@ impl MdkOwner {
                     assert!(observed.len() < 64, "bounded relay proof observations");
                     observed.push(delivery.message.id.clone());
                 }
+                #[cfg(test)]
+                let updates = {
+                    let group = self
+                        .terminal_authority
+                        .delivery_group(&delivery.message.envelope);
+                    self.terminal_authority.stage(group.as_ref())
+                };
                 let effects =
                     tokio::time::timeout_at(deadline, self.runtime.ingest_delivery(&delivery))
                         .await
@@ -2389,7 +2452,11 @@ impl MdkOwner {
                 if effects.effects.events.is_empty() {
                     crate::diagnostics::event("mdk_delivery", "no_application_events");
                 }
-                self.apply_effects(effects.effects, deadline).await?;
+                let projected = self.apply_effects(effects.effects, deadline).await;
+                #[cfg(test)]
+                self.terminal_after_ingest(updates, &effects.outcome, durable, projected)?;
+                #[cfg(not(test))]
+                projected?;
                 if durable {
                     self.adapter
                         .ack_replay_delivery(&self.account, &delivery.message.id)
@@ -2399,8 +2466,15 @@ impl MdkOwner {
                 }
                 mdk(self.runtime.sync_transport_groups(None).await)?;
             }
-            Ok(Ok(None)) => return Err(Error::Transport("delivery_closed")),
-            Ok(Err(_)) => return Err(Error::Transport("delivery")),
+            Ok(failure @ (Ok(None) | Err(_))) => {
+                #[cfg(test)]
+                self.terminal_authority.retire_all();
+                return Err(Error::Transport(if failure.is_ok() {
+                    "delivery_closed"
+                } else {
+                    "delivery"
+                }));
+            }
             Err(_) => {}
         }
         Ok(())
@@ -2432,6 +2506,8 @@ impl MdkOwner {
         if !self.active {
             return Err(Error::Mdk("inactive"));
         }
+        #[cfg(test)]
+        self.terminal_prune_grants();
         self.progress_commands()?;
         self.progress_streams()?;
         self.reconcile_command_sources()?;
@@ -2461,10 +2537,14 @@ impl MdkOwner {
             .await
             .map_err(|_| Error::Timeout)?
             .map_err(|_| Error::Transport("subscription_sync"))?;
+        #[cfg(test)]
+        let updates = self.terminal_authority.stage(None);
         let effects = tokio::time::timeout_at(deadline, self.runtime.drain())
             .await
             .map_err(|_| Error::Timeout)?;
         self.apply_effects(mdk(effects)?, deadline).await?;
+        #[cfg(test)]
+        self.terminal_finish(updates);
         self.receive_one(deadline).await?;
         self.drive_retained(deadline).await?;
         self.submit_unsubmitted(deadline).await?;
@@ -2476,6 +2556,8 @@ impl MdkOwner {
         Ok(())
     }
     pub async fn shutdown(&mut self, deadline: Instant) -> Result<()> {
+        #[cfg(test)]
+        self.terminal_authority.retire_all();
         let mut result =
             match tokio::time::timeout_at(deadline, self.adapter.deactivate_account(&self.account))
                 .await
@@ -2542,6 +2624,108 @@ mod tests {
         )
         .unwrap()
     }
+    #[tokio::test]
+    async fn terminal_command_authority_core_actor_retires_uncertain_effects() {
+        use crate::terminal_fence::{Effect, FenceState};
+        use cgka_traits::ingest::{DeferralLineage, InboundResourceLimit, LocalIngestState};
+        use cgka_traits::types::EpochId;
+
+        let temp = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let mut profile = ProfileLease::acquire(temp.path(), "authority-actor").unwrap();
+        let material = profile
+            .prepare(
+                BackendChoice::File,
+                &std::env::current_exe().unwrap(),
+                std::time::Instant::now() + Duration::from_secs(5),
+            )
+            .unwrap();
+        let mut owner = MdkOwner::open(&profile, &material, connector(&profile), vec![]).unwrap();
+        let group = GroupId::new(vec![3; 32]);
+        let context = AuthenticatedCommandContext::test_fixture(
+            [1; 32],
+            [2; 32],
+            group.as_slice().to_vec(),
+            [4; 16],
+            CommandDirection::Client,
+        );
+
+        let cases = [
+            (
+                IngestOutcome::Buffered {
+                    group_id: group.clone(),
+                    epoch: EpochId(1),
+                },
+                true,
+                Ok(()),
+            ),
+            (
+                IngestOutcome::LocalState {
+                    state: LocalIngestState::Quarantined,
+                },
+                true,
+                Ok(()),
+            ),
+            (
+                IngestOutcome::TransportDeferred {
+                    group_id: group.clone(),
+                    lineage: DeferralLineage::Uncontested,
+                },
+                true,
+                Ok(()),
+            ),
+            (
+                IngestOutcome::ResourceRefused {
+                    group_id: group.clone(),
+                    resource: InboundResourceLimit::TransportDeferredCapacity,
+                },
+                true,
+                Ok(()),
+            ),
+            (IngestOutcome::Processed, false, Ok(())),
+            (
+                IngestOutcome::Processed,
+                true,
+                Err(Error::Storage("fixture_projection_failure")),
+            ),
+        ];
+        for (outcome, durable, projected) in cases {
+            let binding = owner.terminal_authority.register(context.clone()).unwrap();
+            let updates = owner.terminal_authority.stage(Some(&group));
+            assert_eq!(binding.fence.with_effect(|| ()), Effect::Suspect);
+            let failed = projected.is_err();
+            assert_eq!(
+                owner
+                    .terminal_after_ingest(updates, &outcome, durable, projected)
+                    .is_err(),
+                failed
+            );
+            assert_eq!(binding.fence.state(), FenceState::Retired);
+        }
+
+        let binding = owner.terminal_authority.register(context.clone()).unwrap();
+        owner.terminal_prune_grants();
+        assert_eq!(binding.fence.state(), FenceState::Retired);
+
+        let binding = owner.terminal_authority.register(context.clone()).unwrap();
+        owner.remove_owned_route(&group);
+        assert_eq!(binding.fence.state(), FenceState::Retired);
+
+        let binding = owner.terminal_authority.register(context.clone()).unwrap();
+        let _ = owner.revoke_owned_command_room(&group);
+        assert_eq!(binding.fence.state(), FenceState::Retired);
+
+        let binding = owner.terminal_authority.register(context.clone()).unwrap();
+        assert!(owner.recover_transport(Instant::now()).await.is_err());
+        assert_eq!(binding.fence.state(), FenceState::Retired);
+
+        let binding = owner.terminal_authority.register(context).unwrap();
+        drop(owner);
+        assert_eq!(binding.fence.state(), FenceState::Retired);
+    }
+
     #[tokio::test]
     async fn encrypted_production_open_and_signed_keypackage_survive_restart_without_network() {
         let temp = tempfile::tempdir().unwrap();
@@ -2913,6 +3097,7 @@ pub(crate) mod trust_tests;
 #[cfg(test)]
 #[path = "terminal_memory_proof_tests.rs"]
 mod terminal_memory_proof_tests;
+
 
 #[cfg(test)]
 #[path = "terminal_enrollment.rs"]

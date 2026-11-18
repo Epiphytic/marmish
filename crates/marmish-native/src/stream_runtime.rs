@@ -1530,10 +1530,14 @@ impl MdkOwner {
     pub(crate) async fn stream_stop_progress(&mut self, deadline: Instant) -> Result<()> {
         self.progress_streams()?;
         if self.active && Instant::now() < deadline {
+            #[cfg(test)]
+            let updates = self.terminal_authority.stage(None);
             let effects = tokio::time::timeout_at(deadline, self.runtime.drain())
                 .await
                 .map_err(|_| Error::Timeout)?;
             self.apply_effects(mdk(effects)?, deadline).await?;
+            #[cfg(test)]
+            self.terminal_finish(updates);
             self.receive_one(deadline).await?;
         }
         self.progress_streams()?;
@@ -1666,6 +1670,8 @@ impl MdkOwner {
             }
             self.journal
                 .stream_publication_state(&p.group, &p.event_id, "prepared")?;
+            #[cfg(test)]
+            let updates = self.terminal_authority.stage(Some(&group));
             let effects = match tokio::time::timeout_at(
                 deadline,
                 self.runtime.send(SendIntent::AppMessage {
@@ -1695,6 +1701,8 @@ impl MdkOwner {
                 )?;
             }
             self.apply_effects(effects, deadline).await?;
+            #[cfg(test)]
+            self.terminal_finish(updates);
         }
         Ok(())
     }

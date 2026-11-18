@@ -37,6 +37,8 @@ impl MdkOwner {
             .cancel_fixture_invocations(&mut self.journal, invocations)
     }
     pub(crate) fn command_begin_cleanup(&mut self) -> Result<u64> {
+        #[cfg(test)]
+        self.terminal_authority.retire_all();
         self.commands
             .as_mut()
             .ok_or(Error::Invalid("commands_disabled"))?
@@ -53,6 +55,8 @@ impl MdkOwner {
         Ok(service.cleanup_snapshot())
     }
     pub(crate) fn take_engine_for_stop(&mut self) -> Option<CommandEngine> {
+        #[cfg(test)]
+        self.terminal_authority.retire_all();
         self.commands
             .as_mut()
             .and_then(CommandService::take_engine_for_stop)
@@ -342,6 +346,8 @@ impl MdkOwner {
             }
             request
         };
+        #[cfg(test)]
+        let updates = self.terminal_authority.stage(None);
         let (group, effects) =
             tokio::time::timeout_at(deadline, self.runtime.create_group(request))
                 .await
@@ -368,6 +374,8 @@ impl MdkOwner {
             return Ok(room);
         }
         self.apply_effects(effects, deadline).await?;
+        #[cfg(test)]
+        self.terminal_finish(updates);
         mdk(self.runtime.sync_transport_groups(None).await)?;
         Ok(room)
     }
@@ -438,6 +446,8 @@ impl MdkOwner {
             else {
                 continue;
             };
+            #[cfg(test)]
+            let authority_updates = self.terminal_authority.stage(Some(&group));
             let effects = tokio::time::timeout_at(
                 deadline,
                 self.runtime.send(SendIntent::AppMessage {
@@ -464,6 +474,8 @@ impl MdkOwner {
                 .collect::<Result<Vec<_>>>()?;
             self.journal.command_apply_native(&updates)?;
             self.apply_effects(effects, deadline).await?;
+            #[cfg(test)]
+            self.terminal_finish(authority_updates);
         }
         let native_fanouts = mdk(self.storage.list_outbound_fanouts())?;
         for publication in self
@@ -833,12 +845,16 @@ impl MdkOwner {
             || mdk(self.runtime.has_queued_outbound_intents(group))?
         {
             self.ensure_application_group(group)?;
+            #[cfg(test)]
+            let updates = self.terminal_authority.stage(Some(group));
             let effects =
                 tokio::time::timeout_at(deadline, self.runtime.advance_convergence(group))
                     .await
                     .map_err(|_| Error::Timeout)?
                     .map_err(|_| Error::Transport("convergence"))?;
             self.apply_effects(effects, deadline).await?;
+            #[cfg(test)]
+            self.terminal_finish(updates);
         }
         Ok(())
     }
