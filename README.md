@@ -697,4 +697,6 @@ informed Marmish's approach to coalescing PTY output. The
 Marmish preserves ordered output across asynchronous delivery. The
 [writer and observer benchmark](docs/validation/terminal-observer-benchmark.md)
 reports latency and local display throughput over a private loopback relay
-on Linux AMD64.
+on Linux AMD64. The [offline redraw evaluation](docs/validation/terminal-redraw-evaluation.md)
+compares serialized application bytes and checks screen and cursor fidelity
+in private tmux panes. The installed renderer uses ordered PTY batches.

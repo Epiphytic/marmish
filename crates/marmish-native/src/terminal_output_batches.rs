@@ -147,3 +147,7 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "terminal_redraw_evaluation_tests.rs"]
+mod terminal_redraw_evaluation_tests;

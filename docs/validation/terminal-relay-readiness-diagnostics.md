@@ -96,3 +96,28 @@ Command passed before, during and after Terminal, in 3.943, 4.371 and
 tests each ran one exact selector. These results cover built native
 entry points with fixture TLS trust. Packaged Terminal over an external
 qualified relay still requires a separate run.
+
+On the same platform, `terminal_installed_runtime_restart` passed in 51.66 s
+at integrated commit `97a1cad` with the same MDK revision. The private WSS
+fixture kept bootstrap events from the first attachment and restarted the
+server owner. The stored events drew no unsolicited reply and created no tmux
+socket in the two-second observation window. A new client attach reused the
+existing socket and preserved a shell variable set before restart. Ordinary
+Command also completed before, during and after the Terminal workload.
+Terminal rooms used volatile storage for this run.
+
+The exact `terminal_installed_runtime_probe_retry` test passed in 48.64 s
+on the same build. The relay held the authenticated inbox EOSE through the
+first Probe and suppressed duplicate event IDs. After EOSE, a distinct Probe
+preceded the first Challenge and the attachment became ready in 8.983 s
+(9.039 s from opening). These are individual fixture measurements.
+
+The exact `terminal_installed_runtime_shell_exit` test passed in 48.54 s.
+The client received the shell's final output before the typed `Ended`
+response, and an ordinary Command still completed afterward.
+
+The exact `terminal_installed_runtime_pending_eof` test passed in 81.08 s.
+The test closed the local socket while the relay held the Probe. After releasing
+the Probe, the client got an EOF with zero response bytes and the server opened
+a fresh alias subscription without allocating tmux for the abandoned request.
+The next attachment allocated exactly one tmux socket.

@@ -53,6 +53,11 @@ The Linux x86_64 private WSS fixture covers Default, New, Busy, warm reattach,
 byte preservation, resize and simultaneous ordinary Command. The
 [Observe and Takeover design](phases/terminal-observe-takeover.md) adds typed
 writer offers, read-only observation, replacement and named reattachment.
+The [offline redraw evaluation](validation/terminal-redraw-evaluation.md)
+measured a 17.3% reduction in serialized application bytes in a fixed replay
+using typed ASCII redraw fixtures and the existing batch deadline. The test
+oracle checks screen and cursor fidelity in private tmux panes on Linux AMD64.
+The installed renderer uses ordered PTY batches.
 The [Linux AMD64 installer and Command report](validation/interactive-linux-amd64-installer.md)
 qualifies local-asset quickstart, repeat setup, tamper refusal and an ordinary
 command over an explicit relay. Installed interactive-process and
