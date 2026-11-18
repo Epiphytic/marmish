@@ -151,8 +151,19 @@ impl CursorStore {
         record: RawRecord<'_>,
         wall: u64,
     ) -> Result<Receipt> {
+        self.commit_invalid_with_fence(origin, record, wall, |_| Ok(()))
+    }
+
+    pub(crate) fn commit_invalid_with_fence(
+        &mut self,
+        origin: Origin,
+        record: RawRecord<'_>,
+        wall: u64,
+        fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
+    ) -> Result<Receipt> {
         record.check()?;
         let tx = self.with_wall(origin, wall)?;
+        fence(&tx)?;
         clear_exact(&tx, origin, record)?;
         tx.commit()?;
         Ok(Receipt::new(origin, record, ReceiptKind::Invalid))
@@ -165,9 +176,21 @@ impl CursorStore {
         metadata: Metadata,
         wall: u64,
     ) -> Result<Receipt> {
+        self.defer_with_fence(origin, record, metadata, wall, |_| Ok(()))
+    }
+
+    pub(crate) fn defer_with_fence(
+        &mut self,
+        origin: Origin,
+        record: RawRecord<'_>,
+        metadata: Metadata,
+        wall: u64,
+        fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
+    ) -> Result<Receipt> {
         record.check()?;
         let tx = self.with_wall(origin, wall)?;
         metadata.check(wall)?;
+        fence(&tx)?;
         if let Some(saved) = load(&tx, origin, record.id)? {
             if !same_record(saved.record(), record) {
                 return Err(Error::Conflict);
@@ -254,6 +277,15 @@ impl CursorStore {
     }
 
     pub(crate) fn due(&mut self, origin: Origin, wall: u64) -> Result<Option<Snapshot>> {
+        self.due_with_fence(origin, wall, |_| Ok(()))
+    }
+
+    pub(crate) fn due_with_fence(
+        &mut self,
+        origin: Origin,
+        wall: u64,
+        fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
+    ) -> Result<Option<Snapshot>> {
         let tx = self.with_wall(origin, wall)?;
         let snapshot = tx.query_row(
             "SELECT id, stamp, frame, auth, expires, prerequisite, retry_at, step, revision
@@ -261,15 +293,27 @@ impl CursorStore {
             params![origin, seconds(wall)?],
             |row| read_snapshot(origin, row),
         ).optional()?;
+        // Even an empty acquisition persists the cursor wall on success.
+        fence(&tx)?;
         tx.commit()?;
         Ok(snapshot)
     }
 
     pub(crate) fn retry_again(&mut self, snapshot: &Snapshot, wall: u64) -> Result<()> {
+        self.retry_again_with_fence(snapshot, wall, |_| Ok(()))
+    }
+
+    pub(crate) fn retry_again_with_fence(
+        &mut self,
+        snapshot: &Snapshot,
+        wall: u64,
+        fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
+    ) -> Result<()> {
         let tx = self.with_wall(snapshot.origin, wall)?;
         if snapshot.retry_at > wall || !record_matches(&tx, snapshot)? {
             return Err(Error::Stale);
         }
+        fence(&tx)?;
         let step = (snapshot.step + 1).min(BACKOFF.len() - 1);
         tx.execute(
             "UPDATE peer_cursor_deferred SET retry_at=?3, step=?4, revision=?5 WHERE origin=?1 AND id=?2",
@@ -285,7 +329,18 @@ impl CursorStore {
         prerequisite: [u8; 32],
         wall: u64,
     ) -> Result<usize> {
+        self.wake_with_fence(origin, prerequisite, wall, |_| Ok(()))
+    }
+
+    pub(crate) fn wake_with_fence(
+        &mut self,
+        origin: Origin,
+        prerequisite: [u8; 32],
+        wall: u64,
+        fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
+    ) -> Result<usize> {
         let tx = self.with_wall(origin, wall)?;
+        fence(&tx)?;
         let updated = tx.execute(
             "UPDATE peer_cursor_deferred SET retry_at=?3,revision=?4
                 WHERE origin=?1 AND auth=2 AND prerequisite=?2 AND retry_at>?3",
@@ -301,6 +356,15 @@ impl CursorStore {
     }
 
     pub(crate) fn finish_retry(&mut self, proof: RetryProof, wall: u64) -> Result<()> {
+        self.finish_retry_with_fence(proof, wall, |_| Ok(()))
+    }
+
+    pub(crate) fn finish_retry_with_fence(
+        &mut self,
+        proof: RetryProof,
+        wall: u64,
+        fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
+    ) -> Result<()> {
         let tx = self.with_wall(proof.origin, wall)?;
         let snapshot = load(&tx, proof.origin, proof.id)?.ok_or(Error::Stale)?;
         if snapshot.revision != proof.revision || snapshot.record().digest() != proof.digest {
@@ -310,6 +374,7 @@ impl CursorStore {
         {
             return Err(Error::Classification);
         }
+        fence(&tx)?;
         tx.execute(
             "DELETE FROM peer_cursor_deferred WHERE origin=?1 AND id=?2",
             params![proof.origin, proof.id],

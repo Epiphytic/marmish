@@ -141,6 +141,17 @@ impl CursorStore {
         receipts: &[Receipt],
         wall: u64,
     ) -> Result<Option<Cursor>> {
+        self.commit_page_with_fence(cursor, page, receipts, wall, |_| Ok(()))
+    }
+
+    pub(crate) fn commit_page_with_fence(
+        &mut self,
+        cursor: &Cursor,
+        page: &Page<'_>,
+        receipts: &[Receipt],
+        wall: u64,
+        fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
+    ) -> Result<Option<Cursor>> {
         if page.origin != cursor.origin || page.since != cursor.lower || page.until != cursor.until
         {
             return Err(Error::Page);
@@ -155,6 +166,8 @@ impl CursorStore {
             return Err(Error::Stale);
         }
         let Ok(visible) = count_page(cursor, page.records) else {
+            // The owner must check the prior state before quarantine is written.
+            fence(&tx)?;
             tx.execute(
                 "UPDATE peer_cursor_origin SET quarantine_until=?2 WHERE origin=?1",
                 params![origin, after(wall, QUARANTINE)?],
@@ -163,6 +176,7 @@ impl CursorStore {
             return Err(Error::RelayContract);
         };
         check_receipts(&tx, origin, page.records, receipts)?;
+        fence(&tx)?;
         let remaining = if page.records.len() == PAGE_SIZE {
             advance(&tx, cursor, page.records, visible)?;
             load(&tx, origin)?.active

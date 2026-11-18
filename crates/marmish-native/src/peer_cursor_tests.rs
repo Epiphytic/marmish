@@ -478,6 +478,287 @@ fn peer_cursor_core_failed_writes_and_missing_deferrals_leave_cursor_unmoved() {
     assert_eq!(begin(&mut fixture.open(), A, W), active);
 }
 
+fn owner_wall_table(store: &CursorStore) {
+    store
+        .conn
+        .execute_batch("CREATE TABLE fixture_owner_wall (wall INTEGER NOT NULL);")
+        .unwrap();
+    store
+        .conn
+        .execute(
+            "INSERT INTO fixture_owner_wall VALUES (?1)",
+            [seconds(W).unwrap()],
+        )
+        .unwrap();
+}
+
+fn advance_owner_wall(tx: &Transaction<'_>, wall: u64) -> Result<()> {
+    tx.execute("UPDATE fixture_owner_wall SET wall=?1", [seconds(wall)?])?;
+    Ok(())
+}
+
+fn assert_walls(store: &CursorStore, wall: u64) {
+    let persisted: (i64, i64) = store
+        .conn
+        .query_row(
+            "SELECT wall, (SELECT wall FROM fixture_owner_wall)
+             FROM peer_cursor_origin WHERE origin=?1",
+            [A],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let expected = seconds(wall).unwrap();
+    assert_eq!(persisted, (expected, expected));
+}
+
+#[test]
+fn peer_cursor_page_owner_fence_rolls_back_and_precedes_quarantine() {
+    let fixture = Fixture::new();
+    let mut store = fixture.open();
+    let active = begin(&mut store, A, W);
+    owner_wall_table(&store);
+    let raw = record(1, W);
+    let bad_order = [raw, raw];
+    let ordinary = [raw];
+    let receipt = store.commit_invalid(A, raw, W).unwrap();
+
+    for (records, receipts) in [
+        (ordinary.as_slice(), std::slice::from_ref(&receipt)),
+        (bad_order.as_slice(), &[]),
+    ] {
+        assert_eq!(
+            store
+                .commit_page_with_fence(
+                    &active,
+                    &request(&active, records),
+                    receipts,
+                    W + 1,
+                    |tx| {
+                        advance_owner_wall(tx, W + 1)?;
+                        Err(Error::Binding)
+                    },
+                )
+                .err(),
+            Some(Error::Binding)
+        );
+        assert_walls(&store, W);
+        assert_eq!(begin(&mut store, A, W), active);
+    }
+
+    store.conn.execute_batch(
+        "CREATE TEMP TRIGGER fail_fenced_page BEFORE UPDATE OF completed_anchor ON peer_cursor_origin
+         BEGIN SELECT RAISE(ABORT,'fixture page write failure'); END;",
+    ).unwrap();
+    assert_eq!(
+        store
+            .commit_page_with_fence(
+                &active,
+                &request(&active, &ordinary),
+                std::slice::from_ref(&receipt),
+                W + 1,
+                |tx| advance_owner_wall(tx, W + 1),
+            )
+            .err(),
+        Some(Error::Storage)
+    );
+    assert_walls(&store, W);
+    assert_eq!(begin(&mut store, A, W), active);
+    store
+        .conn
+        .execute_batch("DROP TRIGGER fail_fenced_page")
+        .unwrap();
+
+    assert_eq!(
+        store
+            .commit_page_with_fence(&active, &request(&active, &ordinary), &[], W + 1, |_| {
+                panic!("missing receipts must refuse before the owner fence")
+            })
+            .err(),
+        Some(Error::Page)
+    );
+    assert_eq!(
+        store
+            .commit_page_with_fence(&active, &request(&active, &bad_order), &[], W + 1, |tx| {
+                let already_quarantined: bool = tx.query_row(
+                    "SELECT quarantine_until IS NOT NULL FROM peer_cursor_origin WHERE origin=?1",
+                    [A],
+                    |row| row.get(0),
+                )?;
+                assert!(!already_quarantined);
+                advance_owner_wall(tx, W + 1)
+            },)
+            .err(),
+        Some(Error::RelayContract)
+    );
+    drop(store);
+
+    let mut store = fixture.open();
+    assert_walls(&store, W + 1);
+    assert_eq!(
+        store
+            .commit_page_with_fence(&active, &request(&active, &[]), &[], W + 2, |_| {
+                panic!("active quarantine must refuse before a new fence write")
+            })
+            .err(),
+        Some(Error::RelayContract)
+    );
+    assert_walls(&store, W + 1);
+    store.requalify(A, W + 61).unwrap();
+    let current = begin(&mut store, A, W + 61);
+    assert_eq!(
+        store
+            .commit_page_with_fence(&active, &request(&active, &[]), &[], W + 61, |_| {
+                panic!("stale page must refuse before the owner fence")
+            })
+            .err(),
+        Some(Error::Stale)
+    );
+    assert!(
+        store
+            .commit_page_with_fence(&current, &request(&current, &[]), &[], W + 62, |tx| {
+                advance_owner_wall(tx, W + 62)
+            },)
+            .unwrap()
+            .is_none()
+    );
+    assert_walls(&store, W + 62);
+}
+
+#[test]
+fn peer_cursor_retry_owner_fences_preserve_exact_rows_on_refusal() {
+    let fixture = Fixture::new();
+    let mut store = fixture.open();
+    begin(&mut store, A, W);
+    owner_wall_table(&store);
+    let raw = record(1, W);
+    let binding = id(2);
+    let verified = metadata(Auth::FlightVerified, Some(binding));
+    store
+        .defer_with_fence(A, raw, verified, W + 1, |tx| advance_owner_wall(tx, W + 1))
+        .unwrap();
+    assert_walls(&store, W + 1);
+    let due = store.existing(A, raw.id).unwrap().unwrap();
+    let wall = W + 2;
+    let refuse = |tx: &Transaction<'_>| {
+        advance_owner_wall(tx, wall)?;
+        Err(Error::Binding)
+    };
+
+    assert_eq!(
+        store.due_with_fence(A, wall, refuse).err(),
+        Some(Error::Binding)
+    );
+    assert_eq!(
+        store.commit_invalid_with_fence(A, raw, wall, refuse).err(),
+        Some(Error::Binding)
+    );
+    assert_eq!(
+        store.wake_with_fence(A, binding, wall, refuse),
+        Err(Error::Binding)
+    );
+    assert_eq!(
+        store.retry_again_with_fence(&due, wall, refuse),
+        Err(Error::Binding)
+    );
+    let invalid = due.reverify(|_| Some(RetryFinding::Invalid)).unwrap();
+    assert_eq!(
+        store.finish_retry_with_fence(invalid, wall, refuse),
+        Err(Error::Binding)
+    );
+    assert_walls(&store, W + 1);
+    assert_eq!(store.existing(A, raw.id).unwrap().unwrap().retry_at, wall);
+
+    let competing = RawRecord {
+        bytes: b"alternate lexical rendering",
+        ..raw
+    };
+    assert_eq!(
+        store
+            .defer_with_fence(A, competing, verified, wall, |tx| advance_owner_wall(
+                tx, wall
+            ))
+            .err(),
+        Some(Error::Conflict)
+    );
+    assert_walls(&store, W + 1);
+
+    let due = store
+        .due_with_fence(A, wall, |tx| advance_owner_wall(tx, wall))
+        .unwrap()
+        .unwrap();
+    assert_eq!(due.record().bytes, raw.bytes);
+    assert_walls(&store, wall);
+    store
+        .retry_again_with_fence(&due, wall, |tx| advance_owner_wall(tx, wall))
+        .unwrap();
+    assert_eq!(
+        store.existing(A, raw.id).unwrap().unwrap().retry_at,
+        wall + 2
+    );
+    assert_eq!(
+        store.wake_with_fence(A, binding, wall + 1, |tx| advance_owner_wall(tx, wall + 1)),
+        Ok(1)
+    );
+    assert_eq!(
+        store.retry_again_with_fence(&due, wall + 2, |_| {
+            panic!("stale retry must refuse before the owner fence")
+        }),
+        Err(Error::Stale)
+    );
+    let old = due.reverify(|_| Some(RetryFinding::Invalid)).unwrap();
+    assert_eq!(
+        store.finish_retry_with_fence(old, wall + 2, |_| {
+            panic!("stale retry must refuse before the owner fence")
+        }),
+        Err(Error::Stale)
+    );
+    assert_walls(&store, wall + 1);
+    let current = store.existing(A, raw.id).unwrap().unwrap();
+    let premature = current
+        .reverify(|_| {
+            Some(RetryFinding::Expired {
+                verified_expiry: verified.expires,
+            })
+        })
+        .unwrap();
+    assert_eq!(
+        store.finish_retry_with_fence(premature, wall + 2, |_| {
+            panic!("unexpired retry must refuse before the owner fence")
+        }),
+        Err(Error::Classification)
+    );
+    assert_walls(&store, wall + 1);
+    let proof = current.reverify(|_| Some(RetryFinding::Invalid)).unwrap();
+    store
+        .finish_retry_with_fence(proof, wall + 2, |tx| advance_owner_wall(tx, wall + 2))
+        .unwrap();
+    assert!(store.existing(A, raw.id).unwrap().is_none());
+
+    store.defer(A, raw, verified, wall + 2).unwrap();
+    store
+        .commit_invalid_with_fence(A, raw, wall + 3, |tx| advance_owner_wall(tx, wall + 3))
+        .unwrap();
+    assert!(store.existing(A, raw.id).unwrap().is_none());
+    assert_walls(&store, wall + 3);
+    assert_eq!(
+        store
+            .due_with_fence(A, wall + 4, |tx| {
+                advance_owner_wall(tx, wall + 4)?;
+                Err(Error::Binding)
+            })
+            .err(),
+        Some(Error::Binding)
+    );
+    assert_walls(&store, wall + 3);
+    assert!(
+        store
+            .due_with_fence(A, wall + 4, |tx| advance_owner_wall(tx, wall + 4))
+            .unwrap()
+            .is_none()
+    );
+    assert_walls(&store, wall + 4);
+}
+
 #[test]
 fn peer_cursor_core_clock_floor_and_rebase_preserve_retry_evidence() {
     let fixture = Fixture::new();
@@ -605,10 +886,16 @@ fn peer_cursor_core_conflict_resolution_and_saturation_keep_original_obligations
     }
     assert!(!store.capacity(A).unwrap());
     let overflow = record(256, W - 40);
+    owner_wall_table(&store);
     assert_eq!(
-        store.defer(A, overflow, unverified, W).err(),
+        store
+            .defer_with_fence(A, overflow, unverified, W + 1, |tx| {
+                advance_owner_wall(tx, W + 1)
+            })
+            .err(),
         Some(Error::Backlog)
     );
+    assert_walls(&store, W);
     assert_eq!(
         store
             .commit_page(&cursor, &request(&cursor, &[overflow]), &[], W)
