@@ -2,11 +2,15 @@
 use super::*;
 use crate::mdk_adapter::terminal_enrollment::Owner as TerminalOwner;
 use crate::mdk_adapter::terminal_enrollment_transport::{Authority, Lane as TerminalLane};
+use crate::mdk_adapter::terminal_live_enrollment::{InboundState, RoomPermit, admit};
 use crate::terminal_bootstrap::state::{Advance, Exchange, Time};
-use crate::terminal_bootstrap::{Codec, Role, Step};
+use crate::terminal_bootstrap::{BoundSigning, Codec, Role, Step};
+use crate::terminal_fence::AttachmentFence;
 use crate::terminal_frames as frames;
 use cgka_traits::TransportDeliveryPlane;
+use std::num::NonZeroU64;
 use std::sync::atomic::AtomicU64;
+use tokio::sync::Semaphore;
 
 fn clock() -> Time {
     Time {
@@ -28,15 +32,11 @@ async fn open_alias(
         Arc::new(move |generation| active.load(Ordering::Acquire) == generation),
         Instant::now() + Duration::from_secs(30),
     );
-    let mut lane = TerminalLane::open(
-        relay.connector(path, true, None),
-        TransportEndpoint(relay.url.to_string()),
-        keys,
-        authority,
-        64 * 1024,
-    )
-    .await
-    .unwrap();
+    let endpoint = TransportEndpoint(relay.url.to_string());
+    let connector = relay.connector(path, true, None);
+    let mut lane = TerminalLane::open(connector, endpoint, keys, authority, 64 * 1024)
+        .await
+        .unwrap();
     lane.activate_inbox().await.unwrap();
     let actual_inbox = relay.subscription(public, 1059, "#p", json!(public)).await;
     assert_eq!(lane.inbox_id().unwrap(), actual_inbox);
@@ -165,14 +165,48 @@ fn enrollment_routes_only_authenticated_terminal_frames() {
                 .enable_all()
                 .build()
                 .unwrap()
-                .block_on(prove_enrollment());
+                .block_on(prove_enrollment(false, false));
         })
         .unwrap()
         .join()
         .unwrap();
 }
 
-async fn prove_enrollment() {
+#[test]
+#[ignore = "opt-in real loopback WSS NIP-42 readiness qualification"]
+fn signed_auth_precedes_terminal_alias_admission() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(prove_enrollment(true, false));
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+#[ignore = "opt-in real loopback WSS terminal grant retirement before native join"]
+fn signed_auth_then_grant_revocation_stops_native_join() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(prove_enrollment(true, true));
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+async fn prove_enrollment(verified: bool, revoke_before_join: bool) {
     let temp = tempfile::tempdir().unwrap();
     let relay = Relay::start().await;
     let commands = tempfile::Builder::new()
@@ -192,7 +226,7 @@ async fn prove_enrollment() {
         .open(&relay, server_peer.public(), false, &cat)
         .await;
     let mut server = server_peer
-        .open(&relay, client_peer.public(), true, &cat)
+        .open_with_terminal(&relay, client_peer.public(), true, &cat, verified)
         .await;
     let command = client
         .open_command_room(
@@ -206,45 +240,149 @@ async fn prove_enrollment() {
     let command_group = GroupId::new(command.group.clone());
     let client_context = client.command_context(&command_group).unwrap();
     let server_context = server.command_context(&command_group).unwrap();
-    let baseline = (durable_state(&client_peer), durable_state(&server_peer));
+    let mut baseline = (durable_state(&client_peer), durable_state(&server_peer));
     let package_writes = relay.package_writes();
     let client_signer = client_peer.material.signer();
     let server_signer = server_peer.material.signer();
     let command_route = client_context.transport_group();
-    let client_codec = Codec::new(&client_context, &client_signer, &[]).unwrap();
-    let server_codec = Codec::new(&server_context, &server_signer, &[]).unwrap();
-    let client_grant = Arc::new(AtomicU64::new(1));
     let server_grant = Arc::new(AtomicU64::new(1));
-    let mut client_alias = open_alias(&relay, temp.path(), &client_codec, client_grant).await;
-    let mut server_alias =
-        open_alias(&relay, temp.path(), &server_codec, server_grant.clone()).await;
-
-    let (client_exchange, server_exchange) = confirm(
-        &mut client_alias,
-        &mut server_alias,
-        client_codec,
-        server_codec,
-        &client_signer,
-        &server_signer,
-    )
-    .await;
+    let client_grant = Arc::new(AtomicU64::new(1));
     let start = Instant::now();
-    let (mut tclient, mut tserver) = tokio::try_join!(
-        TerminalOwner::open(
-            client_exchange,
-            client_signer,
-            client_alias,
-            relay.connector(temp.path(), true, None)
-        ),
-        TerminalOwner::open(
-            server_exchange,
-            server_signer,
-            server_alias,
-            relay.connector(temp.path(), true, None)
-        ),
-    )
-    .unwrap();
+    let mut reserved = None;
+    let mut live_fence = None;
+    let mut admitted = None;
+    let mut legacy = None;
+    if verified {
+        let relays = [relay.url.to_string()];
+        let client_binding = client
+            .terminal_client_binding(server_peer.public().to_bytes(), &relays, command.session)
+            .unwrap()
+            .unwrap();
+        let mut server_bindings = server.terminal_server_bindings().unwrap();
+        assert_eq!(server_bindings.len(), 1);
+        let server_binding = server_bindings.pop().unwrap();
+        let (client_signing, client_codec) =
+            BoundSigning::bind(&client_binding.context, client_signer).unwrap();
+        let (server_signing, server_codec) =
+            BoundSigning::bind(&server_binding.context, server_signer).unwrap();
+        assert!(
+            client_signing
+                .check_context(&server_binding.context, &client_codec)
+                .is_err()
+        );
+        let endpoint = &relays[0];
+        let client_connector = relay.connector(temp.path(), true, None);
+        let server_connector = relay.connector(temp.path(), true, None);
+        let client_carrier = admit(
+            client_binding.context,
+            client_binding.fence,
+            client_connector.policy(),
+            endpoint,
+        )
+        .unwrap();
+        let server_carrier = admit(
+            server_binding.context,
+            server_binding.fence.clone(),
+            server_connector.policy(),
+            endpoint,
+        )
+        .unwrap();
+        let server_alias = server_codec.inbound_alias().public_key();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut client_bootstrap = client_carrier
+            .open(client_signing, client_codec, client_connector, deadline)
+            .await
+            .unwrap();
+        relay.acknowledge_duplicates();
+        client_bootstrap.start_client().await.unwrap();
+        client_bootstrap.retry_probe().await.unwrap();
+        assert_eq!(relay.duplicate_acks(), 1);
+        assert_eq!(
+            relay.subscription_counts(server_alias, 1059, "#p", &json!(server_alias)),
+            (0, 0)
+        );
+        let server_bootstrap = server_carrier
+            .open(server_signing, server_codec, server_connector, deadline)
+            .await
+            .unwrap();
+        let client_rooms = Arc::new(Semaphore::new(1));
+        let server_rooms = Arc::new(Semaphore::new(1));
+        let mut inbound = InboundState::default();
+        let granted = {
+            let grant = server_grant.clone();
+            Arc::new(move || grant.load(Ordering::Acquire) == 1)
+        };
+        let (_, (server_bootstrap, server_permit)) = tokio::try_join!(
+            client_bootstrap.finish_client(),
+            server_bootstrap.serve(&mut inbound, &server_rooms, granted),
+        )
+        .unwrap();
+        assert_eq!(server_rooms.available_permits(), 0);
+        let (client_admitted, server_admitted) = tokio::try_join!(
+            client_bootstrap.enroll(
+                relay.connector(temp.path(), true, None),
+                RoomPermit::new(client_rooms.clone().try_acquire_owned().unwrap()),
+                Some({
+                    let grant = client_grant.clone();
+                    Arc::new(move || grant.load(Ordering::Acquire) == 1)
+                }),
+            ),
+            server_bootstrap.enroll(
+                relay.connector(temp.path(), true, None),
+                server_permit,
+                None
+            ),
+        )
+        .unwrap();
+        reserved = Some((client_rooms, server_rooms));
+        live_fence = Some(server_binding.fence);
+        admitted = Some((client_admitted, server_admitted));
+    } else {
+        let client_codec = Codec::new(&client_context, &client_signer, &[]).unwrap();
+        let server_codec = Codec::new(&server_context, &server_signer, &[]).unwrap();
+        let client_grant = Arc::new(AtomicU64::new(1));
+        let mut client_alias = open_alias(&relay, temp.path(), &client_codec, client_grant).await;
+        let mut server_alias =
+            open_alias(&relay, temp.path(), &server_codec, server_grant.clone()).await;
+        let (client_exchange, server_exchange) = confirm(
+            &mut client_alias,
+            &mut server_alias,
+            client_codec,
+            server_codec,
+            &client_signer,
+            &server_signer,
+        )
+        .await;
+        legacy = Some(
+            tokio::try_join!(
+                TerminalOwner::open(
+                    client_exchange,
+                    client_signer,
+                    client_alias,
+                    relay.connector(temp.path(), true, None)
+                ),
+                TerminalOwner::open(
+                    server_exchange,
+                    server_signer,
+                    server_alias,
+                    relay.connector(temp.path(), true, None)
+                ),
+            )
+            .unwrap(),
+        );
+    }
+    let (tclient, tserver) = match (&mut admitted, &mut legacy) {
+        (Some((client, server)), None) => (client.owner_mut(), server.owner_mut()),
+        (None, Some((client, server))) => (client, server),
+        _ => unreachable!(),
+    };
     let installation = start.elapsed();
+    if verified {
+        for owner in [&*tclient, &*tserver] {
+            let alias = PublicKey::from_slice(owner.alias_adapter.account.as_slice()).unwrap();
+            assert_eq!(relay.replay_alias_inbox(alias), 2);
+        }
+    }
     let group_conflicts = |id: &[u8; 32], route: &[u8; 32]| {
         [command.group.as_slice(), command_route]
             .iter()
@@ -260,16 +398,37 @@ async fn prove_enrollment() {
         .expect("found and publish native Welcome");
     assert!(tclient.ready().await.is_err());
     assert!(tserver.ready().await.is_err());
-    tclient
-        .hold_welcome()
-        .await
-        .expect("early authenticated native Welcome");
+    if revoke_before_join {
+        client_grant.store(2, Ordering::Release);
+        assert!(matches!(
+            tclient.join(group_conflicts).await,
+            Err(Error::Invalid("terminal_enrollment_authority"))
+        ));
+        assert!(tclient.room.checked_route().is_err());
+        let (client_admitted, server_admitted) = admitted.take().unwrap();
+        tokio::try_join!(client_admitted.close(), server_admitted.close()).unwrap();
+        let (client_rooms, server_rooms) = reserved.unwrap();
+        assert_eq!(client_rooms.available_permits(), 1);
+        assert_eq!(server_rooms.available_permits(), 1);
+        assert!((durable_state(&client_peer), durable_state(&server_peer)) == baseline);
+        assert_eq!(relay.package_writes(), package_writes);
+        client.shutdown(Instant::now() + STEP).await.unwrap();
+        server.shutdown(Instant::now() + STEP).await.unwrap();
+        relay.assert_healthy();
+        return;
+    }
+    if !verified {
+        tclient
+            .hold_welcome()
+            .await
+            .expect("early authenticated native Welcome");
+    }
     tclient
         .join(group_conflicts)
         .await
         .expect("Plan validation and native join");
     let mut subscriptions = vec![];
-    for owner in [&tclient, &tserver] {
+    for owner in [&*tclient, &*tserver] {
         owner.room.verify_mismatches().unwrap();
         let room_account =
             PublicKey::from_slice(owner.room.lane.adapter.account.as_slice()).unwrap();
@@ -291,7 +450,8 @@ async fn prove_enrollment() {
                 relay.subscription_counts(account, kind, tag, &value),
                 (1, 0)
             );
-            subscriptions.push((account, kind, tag, value));
+            let exact = relay.subscription(account, kind, tag, value.clone()).await;
+            subscriptions.push((account, kind, tag, value, exact));
         }
     }
     tokio::try_join!(tclient.client_receipts(), tserver.server_receipts())
@@ -301,24 +461,78 @@ async fn prove_enrollment() {
     assert_eq!(tserver.ready().await.unwrap(), digest);
 
     let bytes: Vec<u8> = (0..=u8::MAX).cycle().take(frames::MAX_DATA).collect();
-    let binding = frames::Binding {
-        transcript: digest,
-        attachment: [3; 16],
-        generation: 1,
-        role: frames::Role::Writer,
+    let mut attached = None;
+    let original_deadline = verified.then(|| {
+        tclient
+            .alias_adapter
+            .authority
+            .deadline()
+            .unwrap()
+            .max(tserver.alias_adapter.authority.deadline().unwrap())
+    });
+    let binding = if let Some((client, server)) = admitted.take() {
+        let granted = || server_grant.load(Ordering::Acquire) == 1;
+        let (client, server) = tokio::try_join!(client.ready(&|| true), server.ready(&granted))
+            .expect("move-only continuations after native ClientHello");
+        let lease = Instant::now() + Duration::from_secs(90);
+        let now = Instant::now();
+        let writer_generation = NonZeroU64::new(17).unwrap();
+        let client_claim = client.fake_writer_claim([3; 16], writer_generation, lease);
+        let server_claim = server.fake_writer_claim([3; 16], writer_generation, lease);
+        assert!(client.validate_claim(&server_claim, now).is_err());
+        assert!(server.validate_claim(&client_claim, now).is_err());
+        assert!(client.validate_claim(&client_claim, lease).is_err());
+        assert!(
+            client
+                .validate_claim(
+                    &client.fake_writer_claim([0; 16], writer_generation, lease),
+                    now
+                )
+                .is_err()
+        );
+        let (client, server) = tokio::try_join!(
+            client.select(client_claim, &|| true),
+            server.select(server_claim, &granted)
+        )
+        .expect("one-shot Writer handoff");
+        let binding = client.frames;
+        assert_eq!(server.frames.transcript, binding.transcript);
+        assert_eq!(server.frames.attachment, binding.attachment);
+        assert_eq!(server.frames.generation, writer_generation.get());
+        assert_eq!(server.frames.generation, binding.generation);
+        attached = Some((client, server));
+        binding
+    } else {
+        frames::Binding {
+            transcript: digest,
+            attachment: [3; 16],
+            generation: 1,
+            role: frames::Role::Writer,
+        }
+    };
+    let (tclient, tserver) = match (&mut attached, &mut legacy) {
+        (Some((client, server)), None) => (client.owner_mut(), server.owner_mut()),
+        (None, Some((client, server))) => (client, server),
+        _ => unreachable!(),
     };
     let mut elapsed = vec![];
     for sequence in 1..=4 {
         for direction in [frames::Direction::ToServer, frames::Direction::FromServer] {
+            if sequence == 4
+                && direction == frames::Direction::FromServer
+                && let Some(deadline) = original_deadline
+            {
+                tokio::time::sleep_until(deadline + Duration::from_millis(50)).await;
+            }
             let (sender, receiver, data) = match direction {
                 frames::Direction::ToServer => (
-                    &mut tclient,
-                    &mut tserver,
+                    &mut *tclient,
+                    &mut *tserver,
                     frames::Data::Input(bytes.clone()),
                 ),
                 frames::Direction::FromServer => (
-                    &mut tserver,
-                    &mut tclient,
+                    &mut *tserver,
+                    &mut *tclient,
                     frames::Data::Output(bytes.clone()),
                 ),
             };
@@ -359,20 +573,32 @@ async fn prove_enrollment() {
             );
         }
     }
+    if verified {
+        assert!(
+            (durable_state(&client_peer), durable_state(&server_peer)) == baseline,
+            "active Terminal traffic modified the durable Command or MDK state"
+        );
+        run_command(&mut client, &mut server, &command, &cat).await;
+        baseline = (durable_state(&client_peer), durable_state(&server_peer));
+        assert_eq!(tclient.ready().await.unwrap(), digest);
+        assert_eq!(tserver.ready().await.unwrap(), digest);
+    }
     server_grant.store(2, Ordering::Release);
+    if let Some(fence) = live_fence.as_ref() {
+        revoke(fence);
+    }
     assert!(tserver.receive_frame(binding).await.is_err());
     assert!(tserver.send_frame(binding, vec![0]).await.is_err());
     let mut exact_ids = Vec::new();
-    for (account, kind, tag, value) in &subscriptions {
+    for (account, kind, tag, value, id) in &subscriptions {
         assert_eq!(relay.subscription_counts(*account, *kind, tag, value).0, 1);
-        exact_ids.push((
-            *account,
-            relay
-                .subscription(*account, *kind, tag, value.clone())
-                .await,
-        ));
+        exact_ids.push((*account, id.clone()));
     }
-    tokio::try_join!(tclient.close(), tserver.close()).unwrap();
+    match (attached, legacy) {
+        (Some((client, server)), None) => tokio::try_join!(client.close(), server.close()).unwrap(),
+        (None, Some((client, server))) => tokio::try_join!(client.close(), server.close()).unwrap(),
+        _ => unreachable!(),
+    };
     timeout(STEP, async {
         loop {
             if exact_ids
@@ -386,6 +612,10 @@ async fn prove_enrollment() {
     })
     .await
     .expect("all exact Terminal subscriptions closed at relay");
+    if let Some((client_rooms, server_rooms)) = reserved {
+        assert_eq!(client_rooms.available_permits(), 1);
+        assert_eq!(server_rooms.available_permits(), 1);
+    }
     assert!(
         (durable_state(&client_peer), durable_state(&server_peer)) == baseline,
         "Terminal enrollment modified the durable Command or MDK state"
@@ -405,4 +635,116 @@ async fn prove_enrollment() {
         elapsed.len(),
         package_size,
     );
+}
+
+#[tokio::test]
+#[ignore = "opt-in real loopback WSS terminal AUTH refusal and source retirement"]
+async fn refuses_incomplete_auth_and_retires_lost_exact_wss_source() {
+    for (mode, category) in [
+        (Mode::NoChallenge, "terminal_transport_unavailable"),
+        (Mode::KnownAccountsOnly, "terminal_enrollment_auth"),
+        (Mode::WrongAuthAcknowledgement, "timeout"),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let relay = Relay::start().await;
+        relay.mode(mode);
+        let keys = Arc::new(Keys::generate());
+        let generation = NonZeroU64::new(1).unwrap();
+        let fence = AttachmentFence::new(generation, [1; 32]);
+        let authority =
+            Authority::from_fence(fence, Instant::now() + Duration::from_secs(8)).unwrap();
+        let endpoint = TransportEndpoint(relay.url.to_string());
+        let mut lane = TerminalLane::open_verified(
+            relay.connector(temp.path(), true, None),
+            endpoint,
+            keys,
+            authority,
+            64 * 1024,
+        )
+        .await
+        .unwrap();
+        let error = lane.activate_inbox().await.unwrap_err();
+        assert!(matches!(
+            (category, error),
+            (
+                "terminal_transport_unavailable",
+                Error::Transport("terminal_transport_unavailable")
+            ) | (
+                "terminal_enrollment_auth",
+                Error::Transport("terminal_enrollment_auth")
+            ) | ("timeout", Error::Timeout)
+        ));
+        lane.close().await.unwrap();
+        relay.assert_healthy();
+    }
+    for disconnect in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let relay = Relay::start().await;
+        let keys = Arc::new(Keys::generate());
+        let public = keys.public_key();
+        let publisher = Keys::generate();
+        relay.seed_stored_events((0..41).map(|sequence| {
+            let size = if sequence == 0 { 40 } else { 30 };
+            nostr::event::EventBuilder::new(
+                Kind::GiftWrap,
+                format!("{}-{sequence}", "x".repeat(size * 1024)),
+            )
+            .tag(nostr::event::Tag::public_key(public))
+            .finalize(&publisher)
+            .unwrap()
+        }));
+        let generation = NonZeroU64::new(1).unwrap();
+        let fence = AttachmentFence::new(generation, [1; 32]);
+        let authority =
+            Authority::from_fence(fence, Instant::now() + Duration::from_secs(8)).unwrap();
+        let endpoint = TransportEndpoint(relay.url.to_string());
+        let mut lane = TerminalLane::open_verified(
+            relay.connector(temp.path(), true, None),
+            endpoint,
+            keys,
+            authority,
+            64 * 1024,
+        )
+        .await
+        .unwrap();
+        lane.activate_inbox().await.unwrap();
+        let (stored, dropped) = lane.stored_backlog();
+        assert!(stored > 0 && dropped > 0);
+        assert_eq!(stored + dropped, 40, "40 KiB alias copy is inert");
+        eprintln!("terminal_auth_backlog stored={stored} dropped={dropped}");
+        let inbox = lane.inbox_id().unwrap().to_owned();
+        if disconnect {
+            relay.disconnect(public);
+        } else {
+            relay.refuse_exact_subscription(public, &inbox);
+        }
+        timeout(STEP, async {
+            while lane.adapter.authority.check().is_ok() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("socket retirement observed");
+        timeout(
+            STEP,
+            lane.receive(TransportDeliveryPlane::AccountInbox, None, 32 * 1024),
+        )
+        .await
+        .unwrap()
+        .expect_err("the verified source cannot deliver after loss");
+        assert!(lane.publish_alias(b"inactive").await.is_err());
+        lane.close().await.unwrap();
+        timeout(STEP, async {
+            while relay.has_live_subscription(public, &inbox) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("relay released retired source");
+        relay.assert_healthy();
+    }
+}
+
+fn revoke(fence: &AttachmentFence) {
+    fence.retire();
 }

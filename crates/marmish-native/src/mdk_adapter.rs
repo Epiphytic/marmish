@@ -3100,6 +3100,10 @@ mod terminal_memory_proof_tests;
 
 
 #[cfg(test)]
+#[path = "terminal_live_enrollment.rs"]
+mod terminal_live_enrollment;
+
+#[cfg(test)]
 #[path = "terminal_enrollment.rs"]
 mod terminal_enrollment;
 

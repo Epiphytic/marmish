@@ -1,4 +1,4 @@
-use super::{Body, Challenge, Codec, Pair, Prepared, Role, RumorId, Step, Verified};
+use super::{Body, BoundSigning, Challenge, Codec, Pair, Prepared, Role, RumorId, Step, Verified};
 use crate::{Error, Result};
 use nostr::key::{Keys, PublicKey};
 use std::time::{Duration, Instant};
@@ -132,12 +132,41 @@ impl Exchange {
         Ok(())
     }
 
+    pub(crate) fn start_bound(&mut self, signer: &BoundSigning, now: Time) -> Result<()> {
+        let keys = signer.for_codec(self.codec.as_ref().ok_or(AUTHORITY)?)?;
+        self.start(keys, now, true)
+    }
+
+    pub(crate) fn receive_bound(
+        &mut self,
+        signer: &BoundSigning,
+        frame: &[u8],
+        now: Time,
+        admit: impl FnOnce(Step, RumorId) -> Result<bool>,
+    ) -> Result<Advance> {
+        let keys = signer.for_codec(self.codec.as_ref().ok_or(AUTHORITY)?)?;
+        self.receive_checked(keys, frame, now, true, admit)
+    }
+
     pub(crate) fn receive(
         &mut self,
         signer: &Keys,
         frame: &[u8],
         now: Time,
         authority: bool,
+    ) -> Result<Advance> {
+        self.receive_checked(signer, frame, now, authority, |_, _| Ok(true))
+    }
+
+    /// Invoke admission gates only for a fresh authenticated Probe or the
+    /// exact expected Confirm, before a response or terminal key is made.
+    pub(crate) fn receive_checked(
+        &mut self,
+        signer: &Keys,
+        frame: &[u8],
+        now: Time,
+        authority: bool,
+        admit: impl FnOnce(Step, RumorId) -> Result<bool>,
     ) -> Result<Advance> {
         self.refresh(now, authority)?;
         let verified = self
@@ -153,6 +182,9 @@ impl Exchange {
             return Ok(Advance::Duplicate);
         }
         if let Body::Probe { client } = verified.body {
+            if !admit(Step::Probe, verified.id)? {
+                return Ok(Advance::Duplicate);
+            }
             self.admit_probe(now)?;
             let response = Body::Challenge {
                 pair: Pair {
@@ -171,10 +203,16 @@ impl Exchange {
             self.live = Some(live);
             return Ok(Advance::Send(Step::Challenge));
         }
-        self.advance(signer, verified, now)
+        self.advance(signer, verified, now, admit)
     }
 
-    fn advance(&mut self, signer: &Keys, verified: Verified, now: Time) -> Result<Advance> {
+    fn advance(
+        &mut self,
+        signer: &Keys,
+        verified: Verified,
+        now: Time,
+        admit: impl FnOnce(Step, RumorId) -> Result<bool>,
+    ) -> Result<Advance> {
         let codec = self.codec.as_ref().ok_or(AUTHORITY)?;
         let live = self.live.as_mut().ok_or(ORDER)?;
         if verified.body.previous() != live.ids[live.last.step() as usize] {
@@ -196,6 +234,9 @@ impl Exchange {
                     pair, client_key, ..
                 },
             ) if expected == pair && codec.fresh_terminal_key(client_key) => {
+                if !admit(Step::Confirm, verified.id)? {
+                    return Ok(Advance::Duplicate);
+                }
                 let keys = Keys::generate();
                 let server_key = keys.public_key();
                 if server_key == client_key {

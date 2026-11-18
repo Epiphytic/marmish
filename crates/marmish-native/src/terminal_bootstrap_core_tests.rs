@@ -260,9 +260,11 @@ fn signed_outer_seal_and_rumor_keep_recipient_and_sender_distinct() {
         .finalize(&fixture.client)
         .unwrap()
         .sig;
-    assert!(server
-        .open(&manual_outer(receiver, &forged_seal), NOW)
-        .is_err());
+    assert!(
+        server
+            .open(&manual_outer(receiver, &forged_seal), NOW)
+            .is_err()
+    );
 
     let mut forged_id = normal();
     forged_id.id = Some(EventId::from_byte_array([0; 32]));
@@ -330,9 +332,11 @@ fn strict_record_shape_and_clock_bounds_are_authenticated() {
     for rejected in [NOW - 6, NOW + 36] {
         assert!(server.open(frame, rejected).is_err());
     }
-    assert!(client
-        .wrap(&fixture.client, created_body(), u64::MAX)
-        .is_err());
+    assert!(
+        client
+            .wrap(&fixture.client, created_body(), u64::MAX)
+            .is_err()
+    );
 }
 
 #[test]
@@ -379,18 +383,22 @@ fn unlinked_skipped_restarted_and_revoked_exchanges_never_confirm() {
         })
     };
     let authentic = confirm(pair, challenge.id, public);
-    assert!(restarted
-        .receive(&fixture.server, &authentic.frame, time, true)
-        .is_err());
+    assert!(
+        restarted
+            .receive(&fixture.server, &authentic.frame, time, true)
+            .is_err()
+    );
     assert_eq!(
         restarted
             .receive(&fixture.server, &probe.frame, time, true)
             .unwrap(),
         Advance::Send(Step::Challenge)
     );
-    assert!(restarted
-        .receive(&fixture.server, &authentic.frame, time, true)
-        .is_err());
+    assert!(
+        restarted
+            .receive(&fixture.server, &authentic.frame, time, true)
+            .is_err()
+    );
     assert!(restarted.confirmed(time, true).is_err());
 
     for invalid in [
@@ -405,18 +413,22 @@ fn unlinked_skipped_restarted_and_revoked_exchanges_never_confirm() {
         ),
         confirm(pair, challenge.id, fixture.client.public_key()),
     ] {
-        assert!(server
-            .receive(&fixture.server, &invalid.frame, time, true)
-            .is_err());
+        assert!(
+            server
+                .receive(&fixture.server, &invalid.frame, time, true)
+                .is_err()
+        );
         assert!(server.confirmed(time, true).is_err());
     }
     let expired = Time {
         unix: NOW + 30,
         monotonic: time.monotonic + Duration::from_secs(30),
     };
-    assert!(server
-        .receive(&fixture.server, &authentic.frame, expired, true)
-        .is_err());
+    assert!(
+        server
+            .receive(&fixture.server, &authentic.frame, expired, true)
+            .is_err()
+    );
     assert!(server.confirmed(expired, true).is_err());
     assert!(matches!(
         server.receive(&fixture.server, &probe.frame, expired, true),
@@ -432,9 +444,11 @@ fn unlinked_skipped_restarted_and_revoked_exchanges_never_confirm() {
         restarted.receive(&fixture.server, &probe.frame, time, true),
         Err(Error::Invalid("terminal_bootstrap_authority"))
     ));
-    assert!(restarted
-        .receive(&fixture.server, &authentic.frame, time, false)
-        .is_err());
+    assert!(
+        restarted
+            .receive(&fixture.server, &authentic.frame, time, false)
+            .is_err()
+    );
     assert!(restarted.confirmed(time, true).is_err());
 
     // Revocation is checked even when a valid Confirm would otherwise
@@ -510,9 +524,11 @@ fn ready_requires_both_challenges_and_the_exact_confirmed_client_key() {
                 NOW,
             )
             .unwrap();
-        assert!(client
-            .receive(&fixture.client, &forged.frame, time, true)
-            .is_err());
+        assert!(
+            client
+                .receive(&fixture.client, &forged.frame, time, true)
+                .is_err()
+        );
         assert!(client.confirmed(time, true).is_err());
     }
 
@@ -528,6 +544,62 @@ fn ready_requires_both_challenges_and_the_exact_confirmed_client_key() {
         client.receive(&fixture.client, ready, time, true).unwrap(),
         Advance::Confirmed
     );
+}
+
+#[test]
+fn duplicate_refused_confirm_never_prepares_ready() {
+    let fixture = Fixture::new();
+    let group = [13; 32];
+    for (grant, capacity) in [(false, true), (true, false)] {
+        let (client, server) = fixture.codecs(&group);
+        let mut client = Exchange::new(client);
+        let mut server = Exchange::new(server);
+        let server_signing = BoundSigning::bind(
+            &fixture.context(Role::Server, &group),
+            Arc::new(fixture.server.clone()),
+        )
+        .unwrap()
+        .0;
+        let time = clock();
+        client.start(&fixture.client, time, true).unwrap();
+        let probe = &client.retry(Step::Probe, time, true).unwrap().frame;
+        assert_eq!(
+            server.receive(&fixture.server, probe, time, true).unwrap(),
+            Advance::Send(Step::Challenge)
+        );
+        let challenge = &server.retry(Step::Challenge, time, true).unwrap().frame;
+        assert_eq!(
+            client
+                .receive(&fixture.client, challenge, time, true)
+                .unwrap(),
+            Advance::Send(Step::Confirm)
+        );
+        let confirm = &client.retry(Step::Confirm, time, true).unwrap().frame;
+        let mut gates = 0;
+        let gate = |step, _| {
+            assert_eq!(step, Step::Confirm);
+            gates += 1;
+            Ok(grant && capacity)
+        };
+        assert_eq!(
+            server
+                .receive_bound(&server_signing, confirm, time, gate)
+                .unwrap(),
+            Advance::Duplicate,
+        );
+        assert!(server.retry(Step::Ready, time, true).is_err());
+        // The live owner retires the source on either admission error before
+        // another delivery can reach the bootstrap state machine.
+        assert!(
+            server
+                .receive_checked(&fixture.server, confirm, time, false, |_, _| {
+                    panic!("retired authority ran the admission gate")
+                })
+                .is_err()
+        );
+        assert!(server.retry(Step::Ready, time, false).is_err());
+        assert_eq!(gates, 1, "a denied Confirm stays terminal");
+    }
 }
 
 #[test]

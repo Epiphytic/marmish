@@ -61,6 +61,8 @@ jobs:
         run: |
           cargo test --locked -p marmish-native --lib terminal_bootstrap::enrollment::core_tests
           cargo test --locked -p marmish-native --lib terminal_enrollment::core_tests
+          cargo test --locked -p marmish-native --lib terminal_live_enrollment
+          cargo test --locked -p marmish-native --lib enrollment_listener_starts_a_full_flight_after_initial_socket_budget
       - name: Check local Terminal records and authority fence
         run: |
           cargo test --locked -p marmish-native --lib terminal_ipc_wire_core

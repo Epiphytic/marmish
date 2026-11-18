@@ -32,7 +32,11 @@ display commit](validation/terminal-socket-handshake.md) qualify same-user
 handshake, independent socket limits, and acknowledgment after display
 writes in test builds. The [Command owner authority handoff](validation/terminal-command-authority.md)
 qualifies the live ownership fence in a local WSS fixture with native membership
-and protected route changes. Remote Terminal admission, reattach,
+and protected route changes. The [Command-backed direct WSS
+enrollment](validation/terminal-live-enrollment.md) further qualifies exact
+NIP-42 and subscription readiness, volatile room and bounded source handoff,
+and ordinary Command traffic alongside the resulting Terminal room.
+Installed Terminal admission, reattach,
 inbound Peer invitations and network heartbeat remain in development.
 The [Peer aggregate ingress proof](validation/peer-aggregate-ingress-proof.md)
 qualifies one shared canonical origin in a native loopback fixture. A copy

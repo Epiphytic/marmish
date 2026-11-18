@@ -48,6 +48,10 @@ impl AttachmentFence {
         self.generation
     }
 
+    pub(crate) fn matches_digest(&self, expected: &[u8; 32]) -> bool {
+        &self.digest == expected
+    }
+
     pub(crate) fn state(&self) -> FenceState {
         match self.stopped.load(Ordering::Acquire) {
             RETIRE => FenceState::Retired,

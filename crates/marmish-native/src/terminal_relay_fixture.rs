@@ -30,6 +30,8 @@ pub(super) enum Mode {
     Qualifying,
     KnownAccountsOnly,
     AuthorsMustAuthenticate,
+    NoChallenge,
+    WrongAuthAcknowledgement,
 }
 
 #[derive(Clone, Debug)]
@@ -57,6 +59,8 @@ struct Connection {
 #[derive(Default)]
 struct State {
     mode: Mode,
+    acknowledge_duplicates: bool,
+    duplicate_acks: usize,
     ordinary: BTreeSet<PublicKey>,
     connections: BTreeMap<usize, Connection>,
     publications: Vec<Event>,
@@ -80,6 +84,13 @@ impl State {
         });
         let accepted = authenticated && authorized_author && event.verify().is_ok();
         self.observe(Observation::Write(event.id, kind, accepted));
+        if accepted
+            && self.acknowledge_duplicates
+            && self.publications.iter().any(|stored| stored.id == event.id)
+        {
+            self.duplicate_acks += 1;
+            return json!(["OK", event.id, true, "duplicate: fixture stored event"]);
+        }
         if accepted {
             if kind == 445 {
                 self.observe(Observation::WriteBytes(event.id, text_bytes));
@@ -248,7 +259,12 @@ fn handle_message(
             } else {
                 "restricted: fixture AUTH refused"
             };
-            vec![json!(["OK", event.id, accepted, reason])]
+            let acknowledged = if state.mode == Mode::WrongAuthAcknowledgement {
+                EventId::from_byte_array([1; 32])
+            } else {
+                event.id
+            };
+            vec![json!(["OK", acknowledged, accepted, reason])]
         }
         Some("REQ") => {
             let Some(subscription_id) = fields[1].as_str() else {
@@ -347,10 +363,13 @@ async fn serve_connection(
     let challenge = hex::encode(super::random::<32>().unwrap());
     let started = Instant::now();
     let challenge_message = Message::Text(json!(["AUTH", challenge]).to_string().into());
-    if matches!(
-        timeout(STEP, socket.send(challenge_message)).await,
-        Ok(Ok(()))
-    ) {
+    let omit_challenge = state.lock().unwrap().mode == Mode::NoChallenge;
+    if omit_challenge
+        || matches!(
+            timeout(STEP, socket.send(challenge_message)).await,
+            Ok(Ok(()))
+        )
+    {
         loop {
             let replies = tokio::select! {
                 incoming = socket.next() => match incoming {
@@ -366,7 +385,8 @@ async fn serve_connection(
                     _ => break,
                 },
                 outgoing = queued.recv() => match outgoing {
-                    Some(event) => vec![event],
+                    Some(event) if !event.is_null() => vec![event],
+                    Some(_) => break,
                     None => break,
                 },
             };
@@ -454,6 +474,14 @@ impl Relay {
             state,
             task,
         }
+    }
+
+    pub(super) fn acknowledge_duplicates(&self) {
+        self.state.lock().unwrap().acknowledge_duplicates = true;
+    }
+
+    pub(super) fn duplicate_acks(&self) -> usize {
+        self.state.lock().unwrap().duplicate_acks
     }
 
     pub(super) fn connector(
@@ -555,6 +583,62 @@ impl Relay {
 
     pub(super) fn mode(&self, mode: Mode) {
         self.state.lock().unwrap().mode = mode;
+    }
+
+    pub(super) fn seed_stored_events(&self, events: impl IntoIterator<Item = Event>) {
+        let mut state = self.state.lock().unwrap();
+        assert!(state.connections.is_empty());
+        state.publications.extend(events);
+        assert!(state.publications.len() <= MAX_PUBLICATIONS);
+    }
+
+    pub(super) fn replay_alias_inbox(&self, account: PublicKey) -> usize {
+        let state = self.state.lock().unwrap();
+        let mut replayed = 0;
+        for connection in state
+            .connections
+            .values()
+            .filter(|source| source.account == Some(account))
+        {
+            for subscription in &connection.subscriptions {
+                for event in state
+                    .publications
+                    .iter()
+                    .filter(|event| subscription.matches(event))
+                {
+                    connection
+                        .outgoing
+                        .try_send(json!(["EVENT", subscription.id, event]))
+                        .unwrap();
+                    replayed += 1;
+                }
+            }
+        }
+        replayed
+    }
+
+    pub(super) fn refuse_exact_subscription(&self, account: PublicKey, id: &str) {
+        let state = self.state.lock().unwrap();
+        let source = state.connections.values().find(|source| {
+            source.account == Some(account) && source.subscriptions.iter().any(|sub| sub.id == id)
+        });
+        source
+            .expect("verified fixture subscription")
+            .outgoing
+            .try_send(json!(["CLOSED", id, "restricted: fixture read revoked"]))
+            .unwrap();
+    }
+
+    pub(super) fn disconnect(&self, account: PublicKey) {
+        let state = self.state.lock().unwrap();
+        state
+            .connections
+            .values()
+            .find(|source| source.account == Some(account))
+            .expect("verified fixture source")
+            .outgoing
+            .try_send(Value::Null)
+            .unwrap();
     }
 
     pub(super) async fn observed(&self, predicate: impl Fn(&Observation) -> bool) {

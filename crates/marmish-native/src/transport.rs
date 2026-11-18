@@ -159,6 +159,20 @@ impl RelayPolicy {
     pub fn limits(&self) -> TransportLimits {
         self.limits
     }
+    #[cfg(test)]
+    pub(crate) fn direct_wss_scope(&self, endpoint: &str) -> Option<Self> {
+        let index = self.urls.iter().position(|url| url.as_str() == endpoint)?;
+        if self.routes[index] != Route::Direct || !endpoint.starts_with("wss://") {
+            return None;
+        }
+        Some(Self {
+            urls: vec![self.urls[index].clone()],
+            routes: vec![Route::Direct],
+            mode: self.mode,
+            limits: self.limits,
+        })
+    }
+
     pub fn needs_tor(&self) -> bool {
         self.routes.contains(&Route::Tor)
     }
@@ -338,6 +352,22 @@ impl RelayConnector {
         Ok(connector)
     }
 
+    #[cfg(test)]
+    pub(crate) async fn reap_terminal_socket(&self, deadline: Instant) -> Result<()> {
+        let [slot] = self.0.slots.as_slice() else {
+            return Err(Error::Transport("terminal_enrollment_reap"));
+        };
+        // Cancel before waiting, so no reconnect can take the single-route
+        // slot. Its permit lives in both halves of the actual SDK socket.
+        self.0.cancelled.cancel();
+        let reaped = timeout_at(deadline, slot.acquire())
+            .await
+            .map_err(|_| Error::Timeout)
+            .and_then(|result| result.map_err(|_| Error::Transport("terminal_enrollment_reap")));
+        self.cancel();
+        reaped.map(drop)
+    }
+
     pub fn policy(&self) -> &RelayPolicy {
         &self.0.policy
     }
@@ -399,13 +429,20 @@ impl RelayConnector {
     }
 
     pub fn sdk_client(&self, signer: Arc<nostr::key::Keys>) -> Result<nostr_sdk::client::Client> {
+        self.sdk_client_with_authenticator(SignerAuthenticator::new(signer.as_ref().clone()))
+    }
+
+    pub(crate) fn sdk_client_with_authenticator(
+        &self,
+        authenticator: impl nostr_sdk::authenticator::Authenticator,
+    ) -> Result<nostr_sdk::client::Client> {
         if self.0.cancelled.is_cancelled() {
             return Err(Error::Transport("shutdown"));
         }
         let limits = self.policy().limits;
         Ok(nostr_sdk::client::Client::builder()
             .websocket_transport(self.clone())
-            .authenticator(SignerAuthenticator::new(signer.as_ref().clone()))
+            .authenticator(authenticator)
             .max_relays(NonZeroUsize::new(limits.max_relays))
             .notification_channel_size(NonZeroUsize::new(limits.queue_capacity).expect("validated"))
             .connect_timeout(self.maximum_connection_timeout()?)
@@ -668,17 +705,25 @@ impl RelayConnector {
         let sink =
             sink.sink_map_err(|_| sdk_error("websocket_write"))
                 .with(move |message: Message| {
-                    let _permit = sink_permit.clone();
+                    let permit = sink_permit.clone();
                     let cancelled = cancelled.clone();
-                    async move {
+                    let mut message = Some(message);
+                    // `With` may poll a failed conversion again on close.
+                    std::future::poll_fn(move |_| {
+                        let _permit = &permit;
                         if cancelled.is_cancelled() {
-                            return Err(sdk_error("shutdown"));
+                            return std::task::Poll::Ready(Err(sdk_error("shutdown")));
                         }
-                        if message.len() > max {
-                            return Err(sdk_error("frame_limit"));
+                        if message.as_ref().is_some_and(|message| message.len() > max) {
+                            return std::task::Poll::Ready(Err(sdk_error("frame_limit")));
                         }
-                        Ok::<NativeMessage, nostr_sdk::error::Error>(message.into())
-                    }
+                        std::task::Poll::Ready(
+                            message
+                                .take()
+                                .map(NativeMessage::from)
+                                .ok_or_else(|| sdk_error("websocket_write")),
+                        )
+                    })
                 });
         let stream = stream
             .take_until(self.0.cancelled.clone().cancelled_owned())

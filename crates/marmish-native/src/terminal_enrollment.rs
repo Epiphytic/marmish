@@ -1,12 +1,12 @@
 //! Private owner for one authenticated, non-resumable Terminal enrollment.
-use super::terminal_enrollment_room::{App, HeldWelcome, Room, entropy, unix_now};
+use super::terminal_enrollment_room::{App, HeldWelcome, OpenFailure, Room, entropy, unix_now};
 use super::terminal_enrollment_transport::{Authority, GuardedAdapter, Lane};
 use super::*;
 use crate::terminal_bootstrap::enrollment::{
     Capability, ENROLLMENT_LIFETIME, OUTER_CAP, Package, Plan, RETENTION, Record, fresh,
 };
 use crate::terminal_bootstrap::state::{Exchange, Time};
-use crate::terminal_bootstrap::{Prepared, RumorId};
+use crate::terminal_bootstrap::{BoundSigning, Prepared, RumorId};
 use crate::terminal_frames as frames;
 use cgka_traits::TransportDeliveryPlane;
 use cgka_traits::app_event::{AppMessageRetentionDecision, MarmotAppEvent};
@@ -55,11 +55,12 @@ enum Stage {
 
 pub(super) struct Owner {
     exchange: Arc<Exchange>,
-    signer: Arc<Keys>,
+    signer: BoundSigning,
     capability: Capability,
     alias: Option<Lane>,
     pub(super) alias_adapter: GuardedAdapter,
     alias_watch: Option<AliasWatch>,
+    alias_detached: bool,
     pub(super) room: Room,
     stage: Stage,
 }
@@ -70,43 +71,79 @@ struct AliasWatch {
 }
 
 impl AliasWatch {
-    async fn close(self) -> Result<()> {
+    async fn stop(self) -> Result<Lane> {
         drop(self.stop);
-        self.task.await.map_err(|_| ORDER)?.close().await
+        self.task.await.map_err(|_| ORDER)
     }
 }
 
 impl Owner {
     pub(super) async fn open(
-        mut exchange: Exchange,
+        exchange: Exchange,
         signer: Arc<Keys>,
         alias: Lane,
         room_connector: RelayConnector,
     ) -> Result<Self> {
+        let signer = BoundSigning::from_codec(exchange.enrollment_codec()?, signer)?;
+        Self::open_bound(exchange, signer, alias, room_connector)
+            .await
+            .map_err(|failure| failure.error)
+    }
+
+    pub(super) async fn open_bound(
+        mut exchange: Exchange,
+        signer: BoundSigning,
+        alias: Lane,
+        room_connector: RelayConnector,
+    ) -> std::result::Result<Self, OpenFailure> {
         let authority = alias.adapter.authority.clone();
-        alias.adapter.check().await?;
-        let confirmed = exchange.take_terminal(clock()?, authority.check().is_ok())?;
+        let prepare = async {
+            alias.adapter.check().await?;
+            let confirmed = exchange.take_terminal(clock()?, authority.check().is_ok())?;
+            let deadline = confirmed.confirmed_at + Duration::from_secs(ENROLLMENT_LIFETIME);
+            authority.begin_enrollment(Instant::from_std(deadline))?;
+            let codec = exchange.enrollment_codec()?;
+            if alias.adapter.account.as_slice() != codec.inbound_alias().public_key().to_bytes() {
+                return Err(ORDER);
+            }
+            Ok(confirmed)
+        };
+        let confirmed = match prepare.await {
+            Ok(confirmed) => confirmed,
+            Err(error) => {
+                authority.retire();
+                return Err(OpenFailure {
+                    error,
+                    reaped: alias.close().await.is_ok(),
+                });
+            }
+        };
         let capability = Capability {
             ready: confirmed.ready,
             client: confirmed.client,
             server: confirmed.server,
         };
-        let deadline = confirmed.confirmed_at + Duration::from_secs(ENROLLMENT_LIFETIME);
-        authority.begin_enrollment(Instant::from_std(deadline))?;
-        let codec = exchange.enrollment_codec()?;
-        if alias.adapter.account.as_slice() != codec.inbound_alias().public_key().to_bytes() {
-            authority.retire();
-            return Err(ORDER);
-        }
+        alias.begin_active_enrollment();
         let room = Room::open(
             room_connector,
             alias.adapter.endpoint.clone(),
             Arc::new(confirmed.local),
             capability.client,
             capability.server,
-            authority,
+            authority.clone(),
+            alias.is_verified(),
         )
-        .await?;
+        .await;
+        let room = match room {
+            Ok(room) => room,
+            Err(failure) => {
+                authority.retire();
+                return Err(OpenFailure {
+                    error: failure.error,
+                    reaped: alias.close().await.is_ok() && failure.reaped,
+                });
+            }
+        };
         Ok(Self {
             exchange: Arc::new(exchange),
             signer,
@@ -114,6 +151,7 @@ impl Owner {
             alias_adapter: alias.adapter.clone(),
             alias: Some(alias),
             alias_watch: None,
+            alias_detached: false,
             room,
             stage: Stage::Start,
         })
@@ -193,6 +231,7 @@ impl Owner {
                     return Err(ORDER);
                 }
                 plan.digest = self.digest(&package, &plan)?;
+                self.authority().wait_live().await?;
                 let prepared = self.room.prepare_founder(&package, &plan).await?;
                 let digest = plan.digest;
                 let sealed = self.seal(&Record::Plan(plan))?;
@@ -234,6 +273,7 @@ impl Owner {
                     Some(held) => *held,
                     None => self.room.receive_welcome(&package).await?,
                 };
+                self.authority().wait_live().await?;
                 self.room.join(held, &package, &plan).await?;
                 self.stage = Stage::Joining {
                     digest: plan.digest,
@@ -279,12 +319,14 @@ impl Owner {
     }
 
     async fn send_receipt(&mut self, kind: Receipt, digest: &[u8; 32]) -> Result<()> {
+        self.authority().wait_live().await?;
         let bytes = receipt(&self.room.lane.adapter.account, unix_now()?, kind, digest)?;
         self.room.send_app(bytes).await
     }
 
     async fn receive_receipt(&mut self, kind: Receipt, digest: &[u8; 32]) -> Result<()> {
         let app = self.room.receive_app().await?;
+        self.authority().wait_live().await?;
         check_receipt(&app.bytes, unix_now()?, kind, digest)
     }
 
@@ -302,9 +344,8 @@ impl Owner {
         binding: frames::Binding,
         bytes: Vec<u8>,
     ) -> Result<()> {
-        if self.ready().await? != binding.transcript
-            || self.authority().generation() != binding.generation
-        {
+        self.authority().permits_frames(binding)?;
+        if self.ready().await? != binding.transcript {
             return Err(ORDER);
         }
         if bytes.len() > frames::MAX_APP {
@@ -344,9 +385,8 @@ impl Owner {
     }
 
     pub(super) async fn receive_frame(&mut self, binding: frames::Binding) -> Result<App> {
-        if self.ready().await? != binding.transcript
-            || self.authority().generation() != binding.generation
-        {
+        self.authority().permits_frames(binding)?;
+        if self.ready().await? != binding.transcript {
             return Err(ORDER);
         }
         let app = self.room.receive_app().await?;
@@ -380,12 +420,20 @@ impl Owner {
         let alias = async {
             match (self.alias, self.alias_watch) {
                 (Some(lane), None) => lane.close().await,
-                (None, Some(watch)) => watch.close().await,
+                (None, Some(watch)) => watch.stop().await?.close().await,
+                (None, None) if self.alias_detached => Ok(()),
                 _ => Err(ORDER),
             }
         };
         let (alias, room) = tokio::join!(alias, self.room.lane.close());
         alias.and(room)
+    }
+
+    pub(super) async fn detach_alias(&mut self) -> Result<()> {
+        let lane = self.alias_watch.take().ok_or(ORDER)?.stop().await?;
+        lane.detach_alias().await?;
+        self.alias_detached = true;
+        self.authority().check()
     }
 
     fn authority(&self) -> Arc<Authority> {
@@ -394,8 +442,8 @@ impl Owner {
 
     fn seal(&self, record: &Record) -> Result<Prepared> {
         self.authority().check()?;
-        self.exchange.enrollment_codec()?.wrap_enrollment(
-            &self.signer,
+        self.signer.wrap_enrollment(
+            self.exchange.enrollment_codec()?,
             self.capability,
             record,
             unix_now()?,
@@ -449,17 +497,24 @@ async fn next_alias(
     exchange: &Exchange,
     capability: Capability,
 ) -> Result<(RumorId, Record)> {
-    let delivery = alias
-        .receive(TransportDeliveryPlane::AccountInbox, None, OUTER_CAP)
-        .await?;
-    alias.adapter.authority.check()?;
-    let record = exchange.enrollment_codec()?.open_enrollment(
-        &delivery.message.payload,
-        capability,
-        unix_now()?,
-    );
-    alias.acknowledge(&delivery.message.id).await;
-    record
+    loop {
+        let delivery = alias
+            .receive(TransportDeliveryPlane::AccountInbox, None, OUTER_CAP)
+            .await?;
+        alias.adapter.authority.wait_live().await?;
+        // Only a sender-authenticated record for this exact Ready can
+        // advance or conflict with the room. Bootstrap copies, old Ready
+        // transcripts and invalid relay traffic are inert.
+        let record = exchange.enrollment_codec()?.open_enrollment(
+            &delivery.message.payload,
+            capability,
+            unix_now()?,
+        );
+        alias.acknowledge(&delivery.message.id).await;
+        if let Ok(record) = record {
+            return Ok(record);
+        }
+    }
 }
 
 async fn watch_alias(

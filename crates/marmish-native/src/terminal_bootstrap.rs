@@ -9,6 +9,7 @@ use nostr::nips::nip59::GiftWrapBuilder;
 use nostr::types::Timestamp;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest as _, Sha256};
+use std::sync::Arc;
 use zeroize::Zeroizing;
 
 #[path = "terminal_bootstrap_core_tests.rs"]
@@ -129,6 +130,68 @@ pub(crate) struct Codec {
     binding: Binding,
     inbound: Alias,
     outbound: PublicKey,
+}
+
+/// Binding-scoped canonical operations. The admission owner can neither
+/// export the key nor use this capability as a general event signer.
+pub(crate) struct BoundSigning {
+    signer: Arc<Keys>,
+    binding: [u8; 32],
+    role: Role,
+    context: Option<AuthenticatedCommandContext>,
+}
+
+impl BoundSigning {
+    pub(crate) fn bind(
+        context: &AuthenticatedCommandContext,
+        signer: Arc<Keys>,
+    ) -> Result<(Self, Codec)> {
+        let codec = Codec::new(context, &signer, &[])?;
+        let mut bound = Self::from_codec(&codec, signer)?;
+        bound.context = Some(context.clone());
+        Ok((bound, codec))
+    }
+
+    pub(crate) fn from_codec(codec: &Codec, signer: Arc<Keys>) -> Result<Self> {
+        if signer.public_key() != codec.binding.accounts().0 {
+            return Err(BINDING);
+        }
+        Ok(Self {
+            signer,
+            binding: codec.binding_digest(),
+            role: codec.binding.role,
+            context: None,
+        })
+    }
+
+    pub(crate) fn check_context(
+        &self,
+        context: &AuthenticatedCommandContext,
+        codec: &Codec,
+    ) -> Result<()> {
+        self.for_codec(codec)?;
+        if self.context.as_ref() != Some(context) {
+            return Err(BINDING);
+        }
+        Ok(())
+    }
+
+    fn for_codec(&self, codec: &Codec) -> Result<&Keys> {
+        if self.binding != codec.binding_digest() || self.role != codec.binding.role {
+            return Err(BINDING);
+        }
+        Ok(&self.signer)
+    }
+
+    pub(crate) fn wrap_enrollment(
+        &self,
+        codec: &Codec,
+        capability: enrollment::Capability,
+        record: &enrollment::Record,
+        now: u64,
+    ) -> Result<Prepared> {
+        codec.wrap_enrollment(self.for_codec(codec)?, capability, record, now)
+    }
 }
 
 impl Codec {

@@ -58,6 +58,14 @@ struct Installed {
     subscription: String,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct RoomWitness {
+    route: [u8; 32],
+    subscription: String,
+    local_leaf: u32,
+    epoch: EpochId,
+}
+
 pub(super) struct HeldWelcome {
     delivery: TransportDelivery,
     peeled_id: MessageId,
@@ -68,6 +76,20 @@ pub(super) struct App {
     pub(super) retention: AppMessageRetentionDecision,
 }
 
+pub(super) struct OpenFailure {
+    pub(super) error: Error,
+    pub(super) reaped: bool,
+}
+
+impl OpenFailure {
+    fn before_open(error: Error) -> Self {
+        Self {
+            error,
+            reaped: true,
+        }
+    }
+}
+
 impl Room {
     pub(super) async fn open(
         connector: RelayConnector,
@@ -76,24 +98,73 @@ impl Room {
         client: PublicKey,
         server: PublicKey,
         authority: Arc<Authority>,
-    ) -> Result<Self> {
+        verified: bool,
+    ) -> std::result::Result<Self, OpenFailure> {
         let own = keys.public_key();
         if client == server || (own != client && own != server) {
-            return Err(STATE);
+            return Err(OpenFailure::before_open(STATE));
         }
         let client = terminal_member(client);
         let server = terminal_member(server);
         let local = terminal_member(own);
         let peer = if client == local { &server } else { &client };
         let routing = SingleRoomRouting::new(endpoint.clone(), peer.clone());
-        let lane = Lane::open(
-            connector,
-            endpoint,
-            keys.clone(),
-            authority.clone(),
-            WELCOME_CAP,
-        )
-        .await?;
+        let mut lane = if verified {
+            Lane::open_verified(
+                connector,
+                endpoint,
+                keys.clone(),
+                authority.clone(),
+                WELCOME_CAP,
+            )
+            .await
+        } else {
+            Lane::open(
+                connector,
+                endpoint,
+                keys.clone(),
+                authority.clone(),
+                WELCOME_CAP,
+            )
+            .await
+        }
+        .map_err(OpenFailure::before_open)?;
+        lane.begin_active_enrollment();
+        let setup = async {
+            let (storage, runtime) = Self::prepare_runtime(&lane, keys.clone(), &local, &routing)?;
+            authority
+                .run(async { runtime.activate_transport(None).await.map_err(|_| EXCHANGE) })
+                .await?;
+            lane.pin_inbox().await?;
+            Ok((storage, runtime))
+        };
+        let (storage, runtime) = match setup.await {
+            Ok(setup) => setup,
+            Err(error) => {
+                return Err(OpenFailure {
+                    error,
+                    reaped: lane.close().await.is_ok(),
+                });
+            }
+        };
+        Ok(Self {
+            lane,
+            routing,
+            keys,
+            storage,
+            runtime,
+            client,
+            server,
+            room: None,
+        })
+    }
+
+    fn prepare_runtime(
+        lane: &Lane,
+        keys: Arc<Keys>,
+        local: &MemberId,
+        routing: &SingleRoomRouting,
+    ) -> Result<(SqliteAccountStorage, VolatileRuntime)> {
         let storage = SqliteAccountStorage::in_memory_with_options(SqliteStorageOptions {
             temp_store_memory: true,
             cipher_memory_security: true,
@@ -123,21 +194,7 @@ impl Room {
             ))
         })
         .map_err(|_| STATE)?;
-        authority
-            .run(async { runtime.activate_transport(None).await.map_err(|_| EXCHANGE) })
-            .await?;
-        let mut room = Self {
-            lane,
-            routing,
-            keys,
-            storage,
-            runtime,
-            client,
-            server,
-            room: None,
-        };
-        room.lane.pin_inbox().await?;
-        Ok(room)
+        Ok((storage, runtime))
     }
 
     pub(super) async fn prepare_package(&mut self) -> Result<Package> {
@@ -491,6 +548,27 @@ impl Room {
             .app_component(group, id)
             .map_err(|_| STATE)?
             .ok_or(STATE)
+    }
+
+    pub(super) fn witness(&self) -> Result<RoomWitness> {
+        let (route, subscription) = self.checked_route()?;
+        let room = self.room.as_ref().ok_or(STATE)?;
+        let membership = self
+            .runtime
+            .canonical_group_membership(&room.group)
+            .map_err(|_| STATE)?;
+        let leaf = membership
+            .member_leaves
+            .into_iter()
+            .find(|leaf| leaf.member == self.lane.adapter.account)
+            .ok_or(STATE)?;
+        let record = self.runtime.group_record(&room.group).map_err(|_| STATE)?;
+        Ok(RoomWitness {
+            route,
+            subscription: subscription.to_owned(),
+            local_leaf: leaf.leaf_index,
+            epoch: record.epoch,
+        })
     }
 
     pub(super) fn checked_route(&self) -> Result<([u8; 32], &str)> {
