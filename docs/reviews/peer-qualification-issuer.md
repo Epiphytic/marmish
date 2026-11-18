@@ -30,3 +30,10 @@ meaning of `show` and the repair requirement after a partial pair
 replacement. The implementation retains the conservative
 `write_uncertain` status for record-stage errors after the attestation
 has moved.
+
+Claude Code Sonnet 5.5 Auto session `df8c60cb-18a2-4358-b5f0-bac45c9020f6`
+approved the composition `4aab1f2`. This additional review was static.
+It confirmed that the Rust, dependency and ignore files match the
+approved author source byte for byte and that the earlier installed
+Offer work was intact. Rebasing the composition onto `cd90f8b` added
+only the earlier Offer review and validation documents.

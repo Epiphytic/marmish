@@ -38,3 +38,10 @@ The proof covers issue/readback on Linux x86_64. macOS, ARM64, packaged
 installers and the installed Peer daemon path were outside the run.
 The fixture Keychain executable exercises the helper contract. It
 does not establish macOS Keychain or Linux Secret Service availability.
+
+The Linux x86_64 composed source `4aab1f2` passed the normal binary
+build in 25.79 s, the 15 relay qualification tests in 10.03 s, the
+controlling-PTY private WSS issuer case in 0.54 s and the selected
+Keychain helper test in 0.18 s. Strict installed-checks Clippy across
+all targets passed in 39.61 s. The Rust, dependency and ignore files
+remained byte-identical after rebasing onto `cd90f8b`.
