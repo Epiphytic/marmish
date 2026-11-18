@@ -14,23 +14,41 @@ use crate::peer_invitation::{
 use consent_checkpoint::wire::Offer;
 use std::{path::Path, sync::atomic::Ordering};
 
-#[tokio::test]
+#[test]
 #[ignore = "explicit bounded loopback TLS and SQLCipher qualification"]
-async fn peer_private_wss_pending_join_custody_manual_and_automatic() {
-    tokio::time::timeout(Duration::from_secs(180), async {
-        enroll(Some(Mode::Manual), false).await;
-        enroll(Some(Mode::Automatic), false).await;
-    })
-    .await
-    .expect("bounded private native join and restart");
+fn peer_private_wss_pending_join_custody_manual_and_automatic() {
+    run_custody_fixture(false);
 }
 
-#[tokio::test]
+#[test]
 #[ignore = "explicit bounded loopback TLS and SQLCipher qualification"]
-async fn peer_private_wss_pending_join_custody_stopped_before_ingest() {
-    tokio::time::timeout(Duration::from_secs(120), enroll(Some(Mode::Manual), true))
-        .await
-        .expect("bounded private enrollment interrupted before native mutation");
+fn peer_private_wss_pending_join_custody_stopped_before_ingest() {
+    run_custody_fixture(true);
+}
+
+fn run_custody_fixture(stop_before_ingest: bool) {
+    // The unoptimized native MLS futures need more than libtest's stack.
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    tokio::time::timeout(Duration::from_secs(180), async {
+                        enroll(Some(Mode::Manual), stop_before_ingest).await;
+                        if !stop_before_ingest {
+                            enroll(Some(Mode::Automatic), false).await;
+                        }
+                    })
+                    .await
+                    .expect("bounded private native join and restart");
+                });
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 pub(super) struct Round<'a> {
