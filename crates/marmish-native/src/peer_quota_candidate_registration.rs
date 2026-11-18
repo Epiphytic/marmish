@@ -362,7 +362,11 @@ pub(crate) fn supported_directory_volume(directory: &File) -> Result<bool> {
 }
 
 #[cfg(test)]
-pub(crate) fn verify_notification_case(case: &str, forwarding: &ForwardingVerifier) {
+pub(crate) fn verify_notification_case(
+    case: &str,
+    forwarding: &ForwardingVerifier,
+    report_custody_fault: impl FnOnce(),
+) {
     use std::{
         future::Future,
         panic::catch_unwind,
@@ -407,16 +411,20 @@ pub(crate) fn verify_notification_case(case: &str, forwarding: &ForwardingVerifi
             assert_eq!(state.count.load(Ordering::Relaxed), 0);
             drop(turn);
         }
-        "delayed_notifier" => {
+        "delayed_notifier" | "delayed_custody_notifier" => {
             let mut turn = RegistryTurn::acquire(None).unwrap();
             turn.fail(None);
             let delayed = turn.unlock().unwrap();
             assert!(fatal.is_tripped());
             assert_eq!(state.count.load(Ordering::Relaxed), 0);
-            assert_eq!(
-                forwarding.recheck_default(),
-                Err(RegistrationFailure::Indeterminate)
-            );
+            if case == "delayed_custody_notifier" {
+                report_custody_fault();
+            } else {
+                assert_eq!(
+                    forwarding.recheck_default(),
+                    Err(RegistrationFailure::Indeterminate)
+                );
+            }
             assert!(state.count.load(Ordering::Relaxed) > 0);
             delayed.notify();
         }
@@ -445,7 +453,7 @@ pub(crate) fn verify_notification_case(case: &str, forwarding: &ForwardingVerifi
         }
         "custody_under_lock" => {
             let guard = REGISTRY.lock().unwrap();
-            CustodyFault(Arc::clone(&forwarding.0.trip)).report();
+            report_custody_fault();
             assert!(fatal.is_tripped());
             assert!(matches!(&*guard, State::Registered(_)));
             drop(guard);

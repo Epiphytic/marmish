@@ -1,6 +1,7 @@
 use super::{super::qualification, *};
 use crate::{
     command_engine::Admission,
+    dispatcher_fatal::Trip,
     identity::BackendChoice,
     mdk_adapter::MdkOwner,
     transport::{ArtiDirs, RelayConnector, RelayPolicy, RouteMode, TransportLimits},
@@ -89,6 +90,7 @@ fn candidate_registration_scope_and_irreversible_dispatch() {
         "duplicate_displacement",
         "wake_after_unlock",
         "delayed_notifier",
+        "delayed_custody_notifier",
         "guard_unwind",
         "poison_backstop",
         "custody_under_lock",
@@ -263,10 +265,21 @@ fn registration_subprocess() {
             assert!(ordinary_fatal.is_tripped());
             assert!(forwarding.fatal().is_tripped());
         }
-        "wake_after_unlock" | "delayed_notifier" | "guard_unwind" | "poison_backstop"
+        "wake_after_unlock"
+        | "delayed_notifier"
+        | "delayed_custody_notifier"
+        | "guard_unwind"
+        | "poison_backstop"
         | "custody_under_lock" => {
-            quota::verify_notification_case(&mode, &forwarding);
+            let (_, unrelated) = Trip::new();
+            quota::verify_notification_case(&mode, &forwarding, || {
+                ordinary.report_test_custody_failure();
+                assert!(ordinary_fatal.is_tripped());
+                assert!(forwarding.fatal().is_tripped());
+                assert!(!ordinary.admit());
+            });
             assert!(ordinary_fatal.is_tripped());
+            assert!(!unrelated.is_tripped());
         }
         "dead_lease" => {
             let RegisteredReceiver {

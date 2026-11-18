@@ -38,6 +38,11 @@ impl Admission {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn report_test_custody_failure(&self) {
+        (self.owner_failed)();
+    }
+
     pub(super) fn tripped(&self) -> bool {
         self.fatal.is_tripped()
     }
