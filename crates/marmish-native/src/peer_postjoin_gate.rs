@@ -202,6 +202,7 @@ pub(super) type DeliverySink = Box<
 pub(super) struct Observation {
     pub(super) commit_calls: u8,
     pub(super) deliveries: u8,
+    pub(super) accepted: bool,
     pub(super) denied: u8,
     pub(super) violation: bool,
 }
@@ -363,6 +364,7 @@ impl Gate {
     }
     fn finish_delivery(&self, accepted: bool) {
         if let Ok(mut state) = self.state.lock() {
+            state.observed.accepted = accepted;
             state.mode = if accepted {
                 Mode::Delivered
             } else {
@@ -692,5 +694,6 @@ mod tests {
         assert_eq!(failure.kind, TransportEndpointFailureKind::PossiblyExposed);
         assert!(!failure.pre_send);
         assert_eq!(gate.observe().unwrap().deliveries, 1);
+        assert!(!gate.observe().unwrap().accepted);
     }
 }

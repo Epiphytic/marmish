@@ -355,6 +355,96 @@ impl PeerFounderRuntime {
     ) -> marmot_session::AccountResult<marmot_session::AccountIngestEffects> {
         self.0.ingest_delivery(delivery).await
     }
+
+    pub(crate) async fn converge_exact_delivery(
+        &mut self,
+        group: &GroupId,
+        target: &cgka_traits::EpochPin,
+        delivery: &TransportDelivery,
+    ) -> bool {
+        use cgka_traits::ingest::IngestOutcome;
+
+        let Ok(prior) = self.0.epoch_pin(group) else {
+            return false;
+        };
+        let message_id = &delivery.message.id;
+        if prior.epoch.0.checked_add(1) != Some(target.epoch.0)
+            || delivery.group_id_hint.as_ref() != Some(group)
+            || self.processed_wrapper(group, message_id) != Some(false)
+        {
+            return false;
+        }
+        let Ok(ingested) = self.ingest_delivery(delivery).await else {
+            eprintln!("native founder commit ingress failed");
+            return false;
+        };
+        let accepted_input = match ingested.outcome {
+            IngestOutcome::Processed => true,
+            IngestOutcome::Buffered { group_id, .. } => &group_id == group,
+            IngestOutcome::Ignored { category } => {
+                eprintln!("native founder commit ignored ({category:?})");
+                false
+            }
+            IngestOutcome::Rejected { category } => {
+                eprintln!("native founder commit rejected ({category:?})");
+                false
+            }
+            IngestOutcome::GroupRecovery { .. }
+            | IngestOutcome::LocalState { .. }
+            | IngestOutcome::TransportDeferred { .. }
+            | IngestOutcome::ResourceRefused { .. }
+            | IngestOutcome::Stale { .. } => {
+                eprintln!("native founder commit did not enter convergence");
+                false
+            }
+        };
+        if !accepted_input || ingested.left_object_unpersisted {
+            eprintln!(
+                "native founder input accepted={accepted_input} unpersisted={}",
+                ingested.left_object_unpersisted
+            );
+            return false;
+        }
+
+        // Canonical storage keys the commit by peeled MLS bytes. The
+        // exact signed transport ID is tracked independently. Require its
+        // arrival and the same canonical target as the recipient staged.
+        match tokio::time::timeout(Duration::from_secs(6), async {
+            loop {
+                let pin = self.0.epoch_pin(group).ok()?;
+                let pending = self.0.has_pending_convergence_inputs(group).ok()?;
+                if &pin == target && !pending {
+                    return self.processed_wrapper(group, message_id);
+                }
+                if (pin != prior && &pin != target) || !pending {
+                    return Some(false);
+                }
+                self.0.advance_convergence(group).await.ok()?;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        {
+            Ok(Some(applied)) => applied,
+            Ok(None) => {
+                eprintln!("native founder commit convergence failed");
+                false
+            }
+            Err(_) => {
+                eprintln!("native founder commit convergence timed out");
+                false
+            }
+        }
+    }
+
+    fn processed_wrapper(&self, group: &GroupId, message: &MessageId) -> Option<bool> {
+        self.0
+            .group_authority_view()
+            .with_group_authority_snapshot(group, |storage, _| {
+                Ok::<_, marmot_session::SessionError>(storage.has_processed_transport_id(message)?)
+            })
+            .ok()
+    }
 }
 
 pub(crate) async fn peer_enrollment_founder(

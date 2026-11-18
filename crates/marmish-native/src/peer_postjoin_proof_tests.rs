@@ -19,7 +19,7 @@ use marmot_session::{
     AccountDeviceRuntime, KeyPackagePublication, KeyPackagePublisher, MaintenanceTiming,
     OsMaintenanceRandom, StaticTransportRouting, SystemMonotonicClock, WallClock,
 };
-use nostr::event::Event;
+use nostr::{event::Event, key::Keys};
 use postjoin_gate::{DeliveryResult, Gate, Permit};
 use std::{
     path::PathBuf,
@@ -436,20 +436,41 @@ async fn prove_exact_postjoin() {
         [obligation] if obligation.phase == MaintenancePhase::Jitter)
     );
     assert_eq!(gate.observe().unwrap().commit_calls, 0);
+    let verification_scope = || postjoin_verify::Scope {
+        image: &stage.image,
+        inode,
+        group: &stage.group,
+        account: fixture.identity.public_key(),
+        founder: fixture.server.public_key(),
+        route: &stage.routing,
+        generation: stage.generation,
+        deadline,
+        welcome: &stage.welcome,
+    };
+    let wrong_route = NostrRoutingV1::new(
+        stage.routing.nostr_group_id,
+        vec!["wss://other.example/".into()],
+    )
+    .unwrap();
+    for scope in [
+        postjoin_verify::Scope {
+            route: &wrong_route,
+            ..verification_scope()
+        },
+        postjoin_verify::Scope {
+            founder: Keys::generate().public_key(),
+            ..verification_scope()
+        },
+    ] {
+        assert!(matches!(
+            postjoin_verify::pre_capture(&recipient, founder.runtime(), scope, fixture.now),
+            Err(postjoin_verify::Refusal::Invalid)
+        ));
+    }
     let baseline = postjoin_verify::pre_capture(
         &recipient,
         founder.runtime(),
-        postjoin_verify::Scope {
-            image: &stage.image,
-            inode,
-            group: &stage.group,
-            account: fixture.identity.public_key(),
-            founder: fixture.server.public_key(),
-            route: &stage.routing,
-            generation: stage.generation,
-            deadline,
-            welcome: &stage.welcome,
-        },
+        verification_scope(),
         fixture.now,
     )
     .unwrap();
@@ -488,6 +509,17 @@ async fn prove_exact_postjoin() {
         fixture.now,
     )
     .unwrap();
+    assert!(matches!(
+        postjoin_verify::post_capture(
+            &recipient,
+            founder.runtime(),
+            &baseline,
+            candidate.request(),
+            2,
+            fixture.now,
+        ),
+        Err(postjoin_verify::Refusal::Invalid)
+    ));
     let capture_ms = capture_started.elapsed().as_millis();
     let reopen_started = Instant::now();
     drop(recipient);
@@ -523,7 +555,7 @@ async fn prove_exact_postjoin() {
         postjoin_verify::reopen(&recipient, founder.runtime(), &baseline, &capture, now).unwrap();
     assert_eq!(fresh.attempts(), 2);
     let founder = Arc::new(AsyncMutex::new(founder));
-    let sink = founder_delivery(&founder, &stage.group, &fixture);
+    let sink = founder_delivery(&founder, &stage.group, fresh.target(), &fixture);
     gate.arm(
         Permit::verify(&scope, &candidate, &fresh).unwrap(),
         &fresh,
@@ -534,6 +566,10 @@ async fn prove_exact_postjoin() {
     let confirm_started = Instant::now();
     recipient.run_due_maintenance().await.unwrap();
     let observed = gate.observe().unwrap();
+    assert!(
+        observed.accepted,
+        "founder did not confirm the exact delivery"
+    );
     assert_eq!(
         (
             observed.commit_calls,
@@ -542,15 +578,21 @@ async fn prove_exact_postjoin() {
         ),
         (2, 1, false)
     );
-    let founder = founder.lock().await;
-    let now = fixture.wall.load(Ordering::Relaxed);
-    let confirm = |recipient: &Runtime| {
-        postjoin_verify::post_confirm(recipient, founder.runtime(), &baseline, &fresh, now)
+    let mut founder = founder.lock().await;
+    let confirm = |recipient: &Runtime, founder: &PeerFounderRuntime| {
+        postjoin_verify::post_confirm(
+            recipient,
+            founder.runtime(),
+            &baseline,
+            &fresh,
+            fixture.wall.load(Ordering::Relaxed),
+        )
     };
-    if confirm(&recipient).is_err() {
+    let extra_sweep = confirm(&recipient, &founder).is_err();
+    if extra_sweep {
         recipient.run_due_maintenance().await.unwrap();
     }
-    confirm(&recipient).unwrap();
+    confirm(&recipient, &founder).unwrap();
     recipient.resume_outbound_fanouts().await.unwrap();
     let observed = gate.observe().unwrap();
     assert_eq!(
@@ -565,7 +607,17 @@ async fn prove_exact_postjoin() {
     let closed = Gate::closed(scope, fixture.wall.clone());
     let mut recipient = open_native(&owner, &stage, &closed, &fixture.wall).unwrap();
     recipient.resume_outbound_fanouts().await.unwrap();
-    confirm(&recipient).unwrap();
+    confirm(&recipient, &founder).unwrap();
+    assert!(matches!(
+        postjoin_verify::reopen(
+            &recipient,
+            founder.runtime(),
+            &baseline,
+            &fresh,
+            fixture.wall.load(Ordering::Relaxed),
+        ),
+        Err(postjoin_verify::Refusal::Invalid)
+    ));
     let observed = closed.observe().unwrap();
     assert_eq!(
         (
@@ -575,6 +627,21 @@ async fn prove_exact_postjoin() {
         ),
         (0, 0, false)
     );
+    let confirm_and_reopen_ms = confirm_started.elapsed().as_millis();
+    let now = fixture.wall.load(Ordering::Relaxed);
+    let founder_epoch = founder.runtime().epoch_pin(&stage.group).unwrap();
+    let duplicate = founder_event(
+        &stage.group,
+        MemberId::new(fixture.server.public_key().to_bytes().to_vec()),
+        now,
+        candidate.request().message.clone(),
+    );
+    let _ = founder.ingest_delivery(&duplicate).await;
+    assert_eq!(
+        founder.runtime().epoch_pin(&stage.group).unwrap(),
+        founder_epoch
+    );
+    confirm(&recipient, &founder).unwrap();
     let final_row = custody(
         &mut owner,
         stage.selector,
@@ -584,44 +651,54 @@ async fn prove_exact_postjoin() {
     );
     assert_eq!(final_row.stage(), stage.row.stage());
     eprintln!(
-        "peer_postjoin capture_ms={capture_ms} reopen_ms={reopen_ms} confirm_and_reopen_ms={}",
-        confirm_started.elapsed().as_millis()
+        "peer_postjoin capture_ms={capture_ms} reopen_ms={reopen_ms} confirm_and_reopen_ms={confirm_and_reopen_ms} extra_sweep={extra_sweep}",
     );
 }
 
 fn founder_delivery(
     founder: &Arc<AsyncMutex<PeerFounderRuntime>>,
     group: &GroupId,
+    target: &cgka_traits::EpochPin,
     fixture: &Fixture,
 ) -> postjoin_gate::DeliverySink {
     let founder = founder.clone();
     let group = group.clone();
+    let target = target.clone();
     let member = MemberId::new(fixture.server.public_key().to_bytes().to_vec());
     let wall = fixture.wall.clone();
     Box::new(move |message: TransportMessage| {
         Box::pin(async move {
             let mut founder = founder.lock().await;
-            let prior = founder.runtime().epoch_pin(&group).unwrap();
-            let delivery = TransportDelivery {
-                account_id: member,
-                group_id_hint: Some(group.clone()),
-                received_at: NativeTimestamp(wall.load(Ordering::Relaxed)),
-                source: TransportDeliverySource {
-                    transport: message.source.clone(),
-                    plane: TransportDeliveryPlane::Group,
-                    endpoint: Some(TransportEndpoint(ORIGIN.into())),
-                    subscription_id: Some("postjoin-exact-fixture".into()),
-                    wire: None,
-                },
-                message,
-            };
-            let applied = founder.ingest_delivery(&delivery).await.is_ok();
-            let current = founder.runtime().epoch_pin(&group).unwrap();
-            if applied && current.epoch.0 == prior.epoch.0 + 1 {
+            let delivery = founder_event(&group, member, wall.load(Ordering::Relaxed), message);
+            if founder
+                .converge_exact_delivery(&group, &target, &delivery)
+                .await
+            {
                 DeliveryResult::Accepted
             } else {
                 DeliveryResult::PossiblyExposed
             }
         })
     })
+}
+
+fn founder_event(
+    group: &GroupId,
+    account_id: MemberId,
+    wall: u64,
+    message: TransportMessage,
+) -> TransportDelivery {
+    TransportDelivery {
+        account_id,
+        group_id_hint: Some(group.clone()),
+        received_at: NativeTimestamp(wall),
+        source: TransportDeliverySource {
+            transport: message.source.clone(),
+            plane: TransportDeliveryPlane::Group,
+            endpoint: Some(TransportEndpoint(ORIGIN.into())),
+            subscription_id: Some("postjoin-exact-fixture".into()),
+            wire: None,
+        },
+        message,
+    }
 }

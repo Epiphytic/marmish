@@ -166,6 +166,10 @@ impl Capture {
         &self.pending
     }
 
+    pub(super) fn target(&self) -> &EpochPin {
+        &self.target
+    }
+
     pub(super) fn generation(&self) -> u64 {
         self.generation
     }
