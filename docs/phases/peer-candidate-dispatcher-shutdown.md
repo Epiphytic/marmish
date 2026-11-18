@@ -36,8 +36,12 @@ daemon lifetime. Retain the registration's read-only default verifier
 before attach consumes the registration witness. Its failed recheck
 (default displaced, descriptor unverifiable, or registry poisoned) latches
 the signal before returning the typed indeterminate outcome. Loss that
-provably affects only Peer stays Peer-local. The verifier does not
-register, reset or repair the process default.
+provably affects only Peer stays Peer-local. Only the exact registered observer can set this signal. It sets the latch
+under the same registry guard before exposing `State::Indeterminate`.
+The poisoned-lock path uses the guard returned in the poison error to
+latch before releasing it, without recovering the registry as usable.
+Installing or observing an already indeterminate registry cannot return
+ordinary authority. The verifier never resets or repairs the default.
 
 Provide a cheap synchronous admission check and an async wake from that
 same sticky state. The source of truth is the fatal edge, not a queue item,
@@ -47,18 +51,62 @@ effect is admitted, and terminates read authority. Candidate consumers
 receive only the checked default observer or the fatal signal as needed;
 there is no path to construct a healthy registration from a flag.
 
-The boundary is observation and admission, not atomic cancellation of
-arbitrary external SQLite or kernel instructions. Check immediately before
-each independently dispatched effect. Treat synchronous work already
-admitted as one in-flight turn, including SQLite normal close of handles
-already bound to their original VFS. Keep its ownership until it returns
-and discard any late outcome. A socket write already admitted to the
-kernel may reach the relay after the latch. Require no new write admission
-from the process, and measure against deterministic held-before-write
-cuts. Do not hold registry locks over SQL, I/O, socket writes or joins.
-No new transaction, maintenance, recovery, publication, or spawn turn may
-be started by shutdown. Do not relabel a result as durably committed or
-clean based on reverse inference from the fatal exit.
+The boundary is observation and admission. An already-admitted
+synchronous callback can finish, including its internal SQLite operations.
+The race between checked admission and its first machine instruction
+remains. Keep such ownership until the call returns and discard any late
+outcome without acknowledging or redispatching it. A write admitted to
+the kernel before the latch may arrive later. Do not hold registry locks
+over effect bodies, SQL, I/O or joins.
+
+### Check exact admission sites
+
+| Site | Admission after registration | Already admitted when fatal |
+| --- | --- | --- |
+| `daemon::open_inner` / `MdkOwner::open`, explicit MDK encrypted smoke open and reopen, native Journal open, Terminal `Registry::open_at` | Exact default recheck before each SQLite connection/opening transaction. Gate profile and Terminal initialization file creation at the owning start boundary. | Take ownership of any newly returned storage before another turn. |
+| `CommandEngine::start_internal` / Engine storage and copy helper registration; `marmish-engine::cipher` keyed open callers | Exact recheck before opening or registering. Recheck again at any independently invoked connection open inside a daemon-owned turn. | Close no newly returned store by an implicit owner drop. A separately exec'd finite worker initializes its own SQLite default and is outside this process's fence. |
+| `Worker::run`: live prepare, finite execute, CopyGc, Cleanup and queued acknowledgements | Exact default recheck at effect dispatch; memory-only queue bookkeeping checks the latch. Where an effect opens another connection independently, run the exact recheck at that opener. | A synchronous body can return; no later preparation, effect or completion admission. Finish any already admitted finite handoff before discarding. |
+| `serve_owner` / `MdkOwner`: status, idle/count exit, activation, Command dispatch, journal tick/recovery/maintenance, room intents and normal shutdown | Exact recheck on each stateful turn and its separately resumed SQL/effect steps; the latch alone is suitable for read-only in-memory bookkeeping/reply revocation. | Bound synchronous operations may return. Pending async progress is canceled; phase owners retain any acquired handle. |
+| Terminal native registry/mint or bind, enrollment/lane open or close, tmp/attachment setup and supervisor requests | Exact recheck at independent SQLite or durable-file/process creation/mutation turns, and at corresponding connection opens. Existing reply/attachment and relay fences consume the latch. | Close attachment/runners via owned control only. Do not delete a tmux session or use an MDK deactivate effect. |
+| Peer actor's cursor, stage/native, SQLCipher quota recovery and durable-file/SQL turns | Keep the reviewed exact managed rechecks; every independent new SQLite connection rechecks its default first. Apply the same latch to borrowed turns and outward wakes, without releasing quota authority as reusable. | Keep protected storage evidence and cancel or drop the raw port physically. |
+| All candidate sockets below TLS; IPC status/replies; asynchronous completions | Recheck the latch at poll/reply admission. The transport layer has no SQL or default-repair authority. | The test distinguishes an already admitted socket syscall from a canceled pending write. |
+
+This inventory covers opens, file effects, transaction/maintenance turns
+and transport with the same narrow capability. Sign off the exact open and
+close inventory in code review, including helper or error branches before
+a complete owner is assembled. A Tokio select solely around a long owner
+future does not guard separate effects during an individual poll. Reuse
+the immediate per-turn checks where they already exist. The previous
+admitted synchronous call's rollback/error return is part of that call,
+not permission for a new shutdown transaction.
+
+### SQLite and shutdown custody
+
+A connection's ordinary destructor is a separate turn. Closing can
+checkpoint WAL or delete sidecars even when no new SQL is submitted.
+Only resources with individually proven trusted close callbacks and a
+reviewed exact set of permissible close-side effects may close in Rust
+after fatal. This increment uses the smaller common rule: park retained
+SQLite-bearing roots from the daemon, engine, Terminal registry or lane,
+and Peer on fatal, regardless of reason. Ordinary executable code
+cannot recover these roots. After actual streams, tasks, pumps, socket
+halves and thread/process handles are reaped, suppress SQLite
+destructors on the parked roots. Retain the original profile lease with
+them until the candidate process exits with a failure. No startup reset,
+same-process re-init or reassignment of those resources. The process
+boundary then closes idle OS descriptors without running SQLite
+checkpoint/delete logic. Normal closure and runtime cleanup remain in
+the trusted path.
+
+Take sockets, producers and live child owners out before parking any
+opaque SQLite roots and stop their active tasks. If they cannot be
+separated using the owning boundary, report incomplete rather than
+treat a task-bearing root as quiescent. A held preparation record or
+completion may be discarded only after proving it carries no live
+`ChildOwner`; `ChildOwner::drop` can kill an unreaped child. Split
+stream cancellation from successful finite exec into its independent
+worker at the already established handoff. Do not use bare `_exit` as
+the fence: current runner children do not use `PDEATHSIG`.
 
 ## Call sites and physical order
 
@@ -69,7 +117,14 @@ clean based on reverse inference from the fatal exit.
    already constructed. For a worker that checks after thread spawn and
    before database open, a fatal signal exits without opening. Re-check
    independent of a Peer turn at ordinary startup and ordinary owner
-   admission. Never turn indeterminate into the untouched-stock path.
+   admission. Before registering, require the effective ordinary relay
+   policy to have `!RelayPolicy::needs_tor()`, including the resolved
+   config/CLI route overrides used by the actual connector. `Auto` with
+   an onion remains a stock route when the original candidate profile
+   was untouched. Do not register and then fall back. Arti owns
+   independent SQL-backed caches and has no reviewed physical fence
+   here. This does not change Tor or ordinary relay defaults in stock.
+   Never turn indeterminate into the untouched-stock path.
 
 2. **Revoke input and views.** In the existing `serve_owner` and
    `ipc::serve_with_listener` use the existing drain/join shape for the
@@ -93,7 +148,8 @@ clean based on reverse inference from the fatal exit.
    including initial storage open. The queue, pending vector, events and
    completions may be discarded on this path without acknowledgements or
    redispatch. Add a physical join on the existing engine handle that sends
-   no `Control::Stop` and does not call `collect` in shutdown. A worker
+   no `Control::Stop` and does not call `collect` in shutdown. The
+   OS join remains on the existing blocking keeper. A worker
    blocked sending an event must be released by disconnecting its receiver
    before join. Never use `Control::Cleanup` or `into_cleanup` here. If
    an already admitted finite startup completed, its separately exec'd
@@ -117,16 +173,27 @@ clean based on reverse inference from the fatal exit.
    observed join, existing SDK/connector disconnect and Terminal reaper
    barriers. In the fatal-only branch skip MDK account deactivation (also
    in Terminal `Lane::close_inner`, including the alias-detach path).
-   Abort producer pumps before awaiting drop/physical disconnect. Cover
-   both ordinary connectors and each Terminal child connector before
-   WebSocket upgrade, using the same candidate fatal signal. Enforce the
-   signal at actual underlying async write/flush/close admission for
-   registered candidates so a buffered SDK frame, AUTH, subscription
-   CLOSE, heartbeat or retry cannot add bytes. Socket ownership may be
-   reaped without sending a protocol frame. Raw Peer stop similarly
-   retires and drops its actual socket without subscription CLOSE when
-   fatal. Normal optional Peer/Tor/Terminal policy and normal shutdown
-   are unchanged. No new generic transport policy or relay configuration.
+   Abort producer pumps before awaiting physical disconnect. Candidate
+   ordinary and Terminal connectors cancel the token before awaiting
+   SDK stop, while keeping their per-route socket semaphores open.
+   Apply the existing `reap_terminal_socket` proof to every ordinary
+   route, using the existing permit carried by both socket halves, and
+   close semaphores only after acquiring all the slots. Do not use
+   ordinary `cancel()` first, which closes semaphores and prevents this
+   proof. Raw Peer retire/drop owns its actual socket and skips
+   subscription CLOSE.
+
+   At the `RelayConnector::connect_stream` direct stream handoff wrap
+   below TLS and before WebSocket upgrade. The ordinary connector,
+   Terminal child connectors, and raw Peer live connector all use that
+   handoff. Gate each `poll_write`, `poll_write_vectored`, `poll_flush`
+   and `poll_shutdown` and register the pending poll's wake on the
+   latch before forwarding. After fatal, return I/O error without
+   forwarding even if TCP never becomes writable. This covers buffered
+   SDK output, reads that flush tungstenite Pong/Close, TLS
+   close_notify, retry and `Lane::drop`'s async `stop_lane` cleanup.
+   Race the cancellable connect/open against fatal before acquiring
+   each socket. No generic transport policy is added.
 
 5. **Retain real ownership.** Initiate the cut for all owners before
    awaiting any individual join. Reuse the existing keeper/profile
@@ -140,9 +207,18 @@ clean based on reverse inference from the fatal exit.
    without stock clean report. If ordinary stop started while forwarding
    was trusted and the same candidate becomes fatal before it finishes,
    disallow subsequent journal/network progress and converge to the same
-   physical-only path. Reuse the signal before each graceful stage and
-   cancel sleeping async stages; no fatal-mode fallback to graceful
-   cleanup. Stock and a healthy candidate still use ordinary shutdown.
+   physical-only path. Stock and a healthy candidate still use ordinary
+   shutdown. Existing graceful helpers must share the fence after they
+   take ownership; the daemon cannot retrieve MDK or the engine from
+   spawned helpers once `stop_owned` transfers it.
+
+| Ordinary stage already owning resources | Fatal transition |
+| --- | --- |
+| `stop_owned` before stream checks and `stream_begin_stop` | Transfer only memory-owned barriers and owners; begin no further journal turn. |
+| `Frontend::stop` runner grace, `progress_streams`, drain/receive, stream stop publication | Wake/cancel pending work, skip all further progress or publication and run the physical frontend teardown. |
+| `MdkOwner::shutdown` including deactivate | Skip or cancel deactivate. Observe connector and actual forwarder/reaper stop and park storage roots, preserving owners still needed to join. |
+| `start_keeper` inside FIFO `CommandEngine::shutdown` or awaiting frontend completion | Drop the event receiver to release a blocked send. Switch to the out-of-band engine join, keep runner proofs, and skip `cleanup_runtime`. Prior queued Stop carries no authority to do any work. |
+| Final `stop_reporting` and caller, including clean keeper completion before final Arc destruction | Recheck fatal state before the success report or releasing the final lease. Fatal wins even if prior graceful stages happened to finish. |
 
 ## Qualification
 
@@ -151,7 +227,16 @@ registration replacement cannot leak to the test runner. Use a fixture
 VFS of known stock ancestry and return to the original profile only from
 fresh processes. Use deterministic pause points outside the admission
 checks and counters at the actual SQL/file, worker, journal and socket
-boundary as applicable, not just a mock dispatcher ack.
+boundary as applicable. Test-only SQL counters count actual `xOpen`,
+`xWrite`, `xDelete` and `xSync` at the displacing VFS and the verified
+forwarding/base callbacks; include writes attributable to connection
+close and monitor backing-file evidence. In cuts with no in-flight
+effect, all post-latch callback counts are zero. For a gated previously
+admitted effect, count its named in-flight body separately and prove no
+later callback, untrusted open, checkpoint, sync or delete from
+shutdown. Count actual execute/live prepare/CopyGc/cleanup body entry,
+process spawn, socket poll admissions and relay-received frames or bytes
+independently of the checked fence.
 
 1. Stop a real engine thread with a nonempty FIFO (CopyGc and cleanup),
    live preparation and queued finite operation at a barrier immediately
@@ -162,10 +247,14 @@ boundary as applicable, not just a mock dispatcher ack.
 2. Pause one admitted operation and a late completion. After fatal stop,
    hold that real worker and require acquisition of the same lease to fail.
    Release, prove exact joins, no completion-driven journal/relay effects,
-   no stale IPC response, and require successful new lease acquisition.
+   no stale IPC response. On the fatal process path parked storage keeps
+   that lease unavailable until process exit. Require successful lease
+   acquisition from the fresh process after exit.
    Exercise an already authenticated finite job in its separately exec'd
    worker: it completes after daemon fencing, and a fresh safe process
    recovers its exact durable exit/output without duplicate execution.
+   Fresh recovery of a fatal-interrupted live stream reports uncertainty
+   without a false clean/complete record or a replacement runner.
 3. On the existing real same-UID socket, queue Command and Terminal
    work and keep a live stream and an installed Terminal attachment.
    Use one private WSS fixture to stage an SDK write before its final
@@ -177,10 +266,15 @@ boundary as applicable, not just a mock dispatcher ack.
    deliberately gated runner or reaper. Do not claim tmux session deletion
    as attachment cleanup. Measure actual close/join outcomes; compare
    publication attempts at the transport boundary and delivered bytes
-   for frames held before the boundary.
+   for frames held before the boundary. Also block a real socket write
+   pending behind full buffers, latch, require it to wake without further
+   write admission, and observe the Terminal lane's drop/reaper path.
 4. Keep a pre-owner indeterminate refusal and a controlled Peer-local
    loss with the exact default still valid. The latter must keep real
-   ordinary Command alive. Run existing ordinary stop, finite survival
+   ordinary Command alive. Include fatal while graceful Frontend/keeper
+   already owns resources and immediately before the final report; use a
+   mixed `Auto` + onion configuration to prove ineligible-before-register
+   without opening a Tor connection. Run existing ordinary stop, finite survival
    and Terminal detach/rejoin checks in stock and healthy candidate
    configurations. Record fatal versus ordinary outcomes separately.
    Use existing fixtures and scoped tooling. Full installation/actor
