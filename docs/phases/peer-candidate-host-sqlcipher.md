@@ -9,74 +9,77 @@ or starting an actor. It enables no runtime candidate path.
 ## Shared connection ownership
 
 Reuse the Engine's checked raw and converted owner in
-`marmish-engine/src/cipher_fence.rs`. Add a narrow native-callable owned
-connection for a pre-existing local file, with only fixed read-only or
-read-write modes. Both guarded modes use FULL_MUTEX, NOFOLLOW and extended
-result codes. Keep the existing verified raw opening, effective mutex check,
-partial handle ownership and one checked close. Leave the current Engine
-opening flags and ability to map Busy unchanged. Preserve the stock
-rusqlite path and caller's file preparation. The helper does not create files,
-key, migrate, execute statements by itself or take a route argument.
+`marmish-engine/src/cipher_fence.rs`. Export a narrow non-Clone
+`ExistingConnection` owning that existing private owner, and
+`ExistingAccess::{ReadOnly, ReadWrite}`.
+`ExistingConnection::open(path, &ConnectionFence, ExistingAccess)` uses
+FULL_MUTEX, NOFOLLOW and extended result codes, with no CREATE.
+`ExistingConnection::stock(Connection)` wraps today's stock flags and
+destructor unchanged. Keep the Engine's existing guarded read-write access
+and error mapping. The host still performs file preparation and keying.
 
-Host users may borrow a shared connection for an already admitted synchronous
-body. Expose no mutable reference, unchecked ownership extraction or raw
-transfer. Provide the existing transaction mechanism for the serialized Journal,
-preserving its original deferred transaction semantics. If a transaction or
-statement has begun in one admitted body, it must complete or unwind within
-that body before returning to the async loop. No storage borrow crosses an
-await. The connection owner rechecks its fence before explicit and implicit
-close. Close refusal parks the handle. A true close failure parks the handle
-and reports terminal custody through the exact original callback at most
-once. Do not retry close through a destructor.
+`ExistingConnection` provides `Deref<Target = Connection>`,
+`transaction(&mut self)` and `close(self)`. Transactions are Deferred,
+as in today's Journal. The Engine's Immediate method stays independent.
+Expose no `DerefMut`, Clone, `into_inner` or unchecked ownership transfer.
+An unsafe rusqlite `handle()` remains available through its existing
+shared reference contract for key application. No statement or transaction
+from the synchronous Journal crosses an await. On explicit and implicit
+close, recheck the exact fence. Refusal parks the handle. Actual failure
+parks it and invokes the exact original custody callback at most once.
+Do not retry close through a destructor.
 
-`Admission::from_registered` remains the sole production source in Marmish.
-Factor the existing conversion to an Engine connection fence through that
-admission and keep the same captured fatal identity, bounded verifier and
-custody callback. Any copies delivered to the frontend, compatibility checks,
-Registry and worker originate from that registration. The registration
-verifier is not called with an owner connection or registry guard held.
-Engine and daemon checks stay independent of native body execution.
+Provide `ConnectionFence::admit(&self) -> marmish_engine::Result<()>`
+for bodies outside the wrapper, including pre-open file metadata and
+creation. `Admission::from_registered` remains the sole production
+source in Marmish. Factor the existing Engine conversion through that
+admission and keep the captured fatal identity, verifier and custody
+callback. Copies delivered to compatibility checks, Journal, Terminal
+Registry and worker originate from the same registration. Admission
+callbacks run outside registry and SQLite locks. A guard refuses with
+`Error::Storage("dispatcher_admission")`, which the candidate caller
+treats as fatal and never an ordinary retry or untouched stock outcome.
+Other existing storage errors retain their classifications.
 
 ## Ordinary compatibility and Journal integration
 
-The existing compatibility scanner does three local opens. Retain each
-file's private-path and absent/empty rules. In the guarded entry recheck before
-each of the three independent checks, including the first SQLite initialize,
-and put the returned handle in the shared owner before keying. The readonly
-connections never enter migrations. Finish their scoped SQL and explicitly
-close each checked connection before trying the next route, preserving errors
-from the compatibility validation when the dispatcher is still sound. Return a
-typed candidate storage refusal if the exact latch is cut. Preserve the stock
-legacy caller and flags.
+Keep the existing `native_preflight::check(profile, material)` and
+`Journal::open(path, key, account)` as thin wrappers using None. Each
+delegates to one shared implementation receiving
+`Option<&ConnectionFence>`, called with Some only by the guarded path.
+Leave the stock open flags and Journal transaction call sites untouched.
 
-Keep the Journal's existing private-file creation, metadata validation,
-binding, secret handling, SQLCipher PRAGMAs, schema and transaction order.
-In the guarded entry check before creating or opening its backing file.
-After checked construction and custody, its synchronous initial binding and
-migration may finish as one admitted body. Recheck before returning the
-Journal for future use. Do not allow an earlier Journal open or its successful
-return to stand for the next open. The ordinary path currently proves
-close then reopen. Give the later daemon composition a checked explicit close
-for that first instance, followed by an independent opener. All later Journal
-transaction callers retain the same behaviour under the stock wrapper.
-This slice has no live daemon call site. The composition must check after
-every async boundary before admitting another durable storage turn, and must
-not return a successful reply on a tripped fence.
+The compatibility scanner performs three independent opens. Recheck
+admission before each check and initial native open, preserving the
+private-path and absent/empty treatment. Close each read-only connection
+before opening the next. Within a guarded check, a refused or failed
+close wins over a validation error, and a validation error wins over
+successful close. Keep original stock behavior and note locked MDK
+`bdf9833` at the unchanged migration bound 214.
 
-A candidate MDK/MLS account store uses a separate upstream
-`SqliteAccountStorage` and is outside this increment. Locked upstream exposes
-close and phase observation after managed opening, and supplies neither
-an injectable pre-existing connection nor a callback that can refuse
-a phase. The transport and Terminal Registry/MLS lanes are separately
-reviewed. Verify those boundaries before installing a registered daemon.
-In particular the upstream explicit checked closer currently retries a failed
-rusqlite close via drop. The Journal helper does not authorize that path.
+Give Journal one `ExistingConnection` field for both modes. Preserve
+private-file preparation and checks, secret handling, PRAGMAs, migration
+and binding. In the guarded case check before file creation. Acquire
+guarded custody before keying and check after initialization before
+returning a Journal. Its synchronous binding/migration can finish as
+one admitted body. Provide a consuming checked Journal close for the
+daemon's first close/reopen proof. The reopen is an independent admission.
+A refusal beats an error from the admitted setup body. The mount owns
+checks before subsequent async turns and externally visible results.
+
+This slice has no live daemon call site. Candidate mounting depends on a
+separately reviewed upstream MDK account open/close ownership path,
+transport and Terminal Registry and room lanes. The locked
+`SqliteAccountStorage` managed opener has no injectable connection or
+callback that can refuse a phase. The explicit checked closer currently
+retries a failed rusqlite close via drop. The Journal helper grants no
+authority to that path.
 
 ## Qualification
 
 Test real SQLCipher backing files with a refused initial open, between open
 and key initialization, after one successful compatibility read before the
-next database, and at Journal explicit close. Use fresh processes for actual
+next database, and at Journal explicit close. Prove a refused read-only close prevents the next compatibility open. Use fresh processes for actual
 default VFS displacement. Reuse native Engine partial-handle and failed
 close callback tests to cover the shared primitive. Cover committed encrypted
 Journal data, real transaction rollback and verified cold reopen on the
