@@ -1,5 +1,6 @@
 use super::{super::qualification, *};
 use crate::{
+    command_engine::Admission,
     identity::BackendChoice,
     mdk_adapter::MdkOwner,
     transport::{ArtiDirs, RelayConnector, RelayPolicy, RouteMode, TransportLimits},
@@ -164,14 +165,15 @@ fn registration_subprocess() {
     let mut registered = prepared.register(&lease, &material).unwrap();
     let forwarding = registered.forwarding_verifier();
     registered.recheck(&lease, &material).unwrap();
-    let (ordinary_fatal, exact_forwarding, custody) =
-        registered.take_command_fence().unwrap().into_parts();
+    let fence = registered.take_command_fence().unwrap();
+    let ordinary_fatal = forwarding.fatal();
+    let ordinary = Admission::from_registered(fence);
     assert!(matches!(
         registered.take_command_fence(),
         Err(RegistrationFailure::LocalUnavailable)
     ));
     assert!(!ordinary_fatal.is_tripped());
-    exact_forwarding.recheck_default().unwrap();
+    assert!(ordinary.admit());
     assert_eq!(fs::read_dir(&peer).unwrap().count(), 0);
     assert!(matches!(
         prepare().register(&lease, &material),
@@ -195,6 +197,7 @@ fn registration_subprocess() {
             drop(attached);
             independent.recheck_default().unwrap();
             assert!(!ordinary_fatal.is_tripped());
+            assert!(ordinary.admit());
             verify_forwarded_ordinary_and_fenced_names(lease.root());
         }
         "topology" => {
@@ -262,7 +265,7 @@ fn registration_subprocess() {
         }
         "wake_after_unlock" | "delayed_notifier" | "guard_unwind" | "poison_backstop"
         | "custody_under_lock" => {
-            quota::verify_notification_case(&mode, &forwarding, &custody);
+            quota::verify_notification_case(&mode, &forwarding);
             assert!(ordinary_fatal.is_tripped());
         }
         "dead_lease" => {
@@ -295,6 +298,9 @@ fn registration_subprocess() {
             return;
         }
         _ => panic!("unrecognized registration test case"),
+    }
+    if ordinary_fatal.is_tripped() {
+        assert!(!ordinary.admit());
     }
     if mode.starts_with("displaced") {
         assert!(ordinary_fatal.is_tripped());

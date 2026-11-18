@@ -362,11 +362,7 @@ pub(crate) fn supported_directory_volume(directory: &File) -> Result<bool> {
 }
 
 #[cfg(test)]
-pub(crate) fn verify_notification_case(
-    case: &str,
-    forwarding: &ForwardingVerifier,
-    custody: &CustodyFault,
-) {
+pub(crate) fn verify_notification_case(case: &str, forwarding: &ForwardingVerifier) {
     use std::{
         future::Future,
         panic::catch_unwind,
@@ -449,7 +445,7 @@ pub(crate) fn verify_notification_case(
         }
         "custody_under_lock" => {
             let guard = REGISTRY.lock().unwrap();
-            custody.report();
+            CustodyFault(Arc::clone(&forwarding.0.trip)).report();
             assert!(fatal.is_tripped());
             assert!(matches!(&*guard, State::Registered(_)));
             drop(guard);

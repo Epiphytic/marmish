@@ -1,4 +1,7 @@
-use crate::dispatcher_fatal::{Fatal, Trip};
+use crate::dispatcher_fatal::Fatal;
+#[cfg(test)]
+use crate::dispatcher_fatal::Trip;
+use crate::peer_relay_trust::candidate_registration::RegisteredCommandFence;
 use crate::{Error, Result};
 use std::{sync::Arc, thread::JoinHandle};
 
@@ -15,12 +18,23 @@ pub(crate) struct Admission {
 
 impl Admission {
     #[allow(dead_code, reason = "candidate engine remains unmounted")]
+    pub(crate) fn from_registered(fence: RegisteredCommandFence) -> Self {
+        let (fatal, forwarding, custody) = fence.into_parts();
+        Self {
+            fatal,
+            verify: Arc::new(move || forwarding.recheck_default().is_ok()),
+            owner_failed: Arc::new(move || custody.report()),
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn new(trip: &Arc<Trip>, verify: impl Fn() -> bool + Send + Sync + 'static) -> Self {
-        let (fatal, owner_failed) = trip.custody_observation();
+        let fatal = trip.observe();
+        let trip = Arc::clone(trip);
         Self {
             fatal,
             verify: Arc::new(verify),
-            owner_failed: Arc::new(owner_failed),
+            owner_failed: Arc::new(move || trip.notify()),
         }
     }
 
@@ -28,7 +42,7 @@ impl Admission {
         self.fatal.is_tripped()
     }
 
-    pub(super) fn admit(&self) -> bool {
+    pub(crate) fn admit(&self) -> bool {
         !self.tripped() && (self.verify)() && !self.tripped()
     }
 }
