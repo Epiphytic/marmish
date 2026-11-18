@@ -32,8 +32,8 @@ mode evaluation.
 | Reviewed component | Existing contract |
 | --- | --- |
 | [Native tmux backend](../../crates/marmish-native/src/terminal_backend.rs) and [PTY dispatcher](../../crates/marmish-native/src/terminal_live_supervisor_io.rs) | The worker reads and writes the actual attachment PTY. The current supervisor stage collects up to 4,096 raw bytes and moves the whole stage at the first-byte 8 ms deadline or when full, subject to its output slot and authority. A raw PTY read or stage can end mid-control or mid-code point. |
-| [Safe output batches](../../crates/marmish-native/src/terminal_output_batches.rs) | `Batches` is a tested safe-unit seam with a 4,096-byte batch limit, one overflow unit and an 8 ms flush clock. It consumes fragmented source bytes. Its only callers in the reviewed baseline are its tests. Verify the final .1 owner and timer composition before proposing a change. |
-| [Display filter](../../crates/marmish-native/src/terminal_output.rs) and [foreground display](../../crates/marmish-native/src/terminal_frontend_display.rs) | The bounded parser accepts complete permitted display units and drops disallowed operations. `Display::record_committed` requires parser ground state and drained writes before receiving credit for an IPC output record. A non-ground record boundary fails closed. |
+| [Safe output batches](../../crates/marmish-native/src/terminal_output_batches.rs) | `Batches` is a tested safe-unit seam with a 4,096-byte batch limit, one overflow unit and an 8 ms flush clock. It consumes fragmented source bytes. In the live server stream, [`NativeOutput`](../../crates/marmish-native/src/terminal_live_stream.rs) owns it and retains the exact completed batch when the send window is full. |
+| [Display filter](../../crates/marmish-native/src/terminal_output.rs) and [foreground display](../../crates/marmish-native/src/terminal_frontend_display.rs) | The bounded parser accepts complete permitted display units and drops disallowed operations. `Display::record_committed` requires parser ground state and drained writes before receiving credit for an IPC output record. On TTY write readiness, the frontend coalesces queued units into writes of up to 4,096 bytes and retains exact partial-write progress. A non-ground framed record boundary fails closed. |
 | [Terminal delivery](terminal-frames.md) and [socket controller](../validation/terminal-socket-controller.md) | Native sequence, authenticated age, lease and fence remain authoritative. Output receipts follow actual local TTY writes or an explicit discard under the display policy. Close, Detach, and partial framing retain their established ordering. |
 | [TTY frontend](terminal-frontend-tty.md) | The dedicated foreground owner opens the controlling TTY, enters raw mode, applies bounded polling and exact signal and resize handling, and restores display state and saved termios. |
 
@@ -52,13 +52,17 @@ its independently enforced filter and raw-mode restoration.
 
 ## Measure the actual dispatch before changing it
 
-After .1 lands, add its reviewed commit and published qualification to this
-design before implementation. Identify the actual safe-unit producer, queue
-and age clock, eligibility time and output cap, publication permit and single
-unresolved room send slot, successful handoff/commit point, and ordered
-control, close and fence barrier owners. Identify who consumes raw PTY bytes
-into complete safe units, whether the integrated path wires in `Batches`,
-and where filtering first happens. That placement affects wire-byte counts.
+The published `3721bf52` baseline uses the bounded raw PTY stage followed
+by server-side `Batches`. The two 8 ms flush clocks apply to their respective
+stages and do not establish end-to-end latency. The client independently
+filters and coalesces writes without a frontend batching timer. Local
+checks for this commit are recorded in the
+[foreground TTY validation](../validation/terminal-frontend-tty.md#published-interactive-baseline).
+Before implementing a candidate, capture the baseline queue and age
+clock, eligibility time and output cap, publication permit and single
+unresolved room send slot, successful handoff and commit point, and the
+owners of ordered control, close and fence barriers. Server-side
+filter placement affects wire-byte counts.
 Baseline equivalence uses the permitted ordered output and display effects,
 including when two implementations discard forbidden bytes at different
 points. Compare traffic only against the same reviewed .1 filter placement.

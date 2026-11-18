@@ -64,6 +64,38 @@ Foreground process-group switch races, authenticated orderly drain and
 output commit, daemon IPC, relay throughput and native macOS and ARM64
 remain activation checks.
 
+## Published interactive baseline
+
+On commit `3721bf52aff085de9203d31b75d3f8f76ca45967`, both controlling
+PTY fixtures passed on Linux x86_64 with Rust 1.97.1 and tmux 3.4. The
+timings below come from one run per fixture in Cargo's test profile.
+
+| Exact integration test | Path | Local observation |
+| --- | --- | --- |
+| `frontend_local::terminal_frontend_renders_native_tmux` | Legacy unframed Unix bridge, real native tmux attachment worker and controlling PTY | 30 warm key-to-PTY samples, p50 254 µs and p95 309 µs. The interval from just before attachment launch to the first key-driven pane response was 57.018 ms. Detach to child exit took 5.089 ms. The fixture verified restored termios afterward. The bridge wrote output 34 times. |
+| `frontend_local::terminal_socket_frontend_native_pty` | Real framed IPC over a local Unix socket, fixture daemon endpoint and controlling PTY | First display and receipt took 809 µs for detach, 885 µs for peer close and 663 µs for input batching. Each case restored termios. The detach and batching cases also checked raw input and ordered resize. |
+
+The real tmux fixture also checked Unicode, color, alternate-screen
+recovery, the clipboard-control filter and pane survival after detach.
+`terminal_socket_display_core` passed 4 tests and
+`core_tests_terminal_frontend` passed 15, with one test in both sets.
+The measurement ends at bytes observed on the PTY master, or at the framed
+display receipt where stated. Relay latency, signed event counts and
+emulator paint were outside this run.
+
+Claude Code Sonnet in Auto mode confirmed the live server batching path,
+partial TTY writes and display receipt ordering in read-only review
+`a4c8c4c3-a280-4720-a55d-076acae7cd33`. The review found no renderer
+implementation gap. A separate paired experiment remains necessary to
+measure traffic or paint improvements.
+
+```sh
+MARMISH_TEST_TMUX=/usr/bin/tmux cargo test --locked -p marmish-native --test terminal_local_tmux frontend_local::terminal_frontend_renders_native_tmux -- --exact --ignored --nocapture --test-threads=1
+cargo test --locked -p marmish-native --test terminal_local_tmux frontend_local::terminal_socket_frontend_native_pty -- --exact --ignored --nocapture --test-threads=1
+cargo test --locked -p marmish-native --lib terminal_socket_display_core
+cargo test --locked -p marmish-native --lib core_tests_terminal_frontend
+```
+
 ## Reproduction
 
 ```sh
