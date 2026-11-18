@@ -25,3 +25,13 @@ absent-authority pre-acceptance case, and records the 18 negative
 invocations by layer. A dedicated comparison of room counts is outside
 the replay assertion scope. The heartbeat replay asserts retained native
 Duplicate and unchanged peer projection and permission state.
+
+## Integrated MDK master review
+
+Claude Code Auto session `7119f1d4-efce-408b-95c6-429ad7a2a61e` approved
+the exact integrated source `6fe45ed` with MDK `b3cd2cb1`. An earlier
+source inspection required current-lock test evidence. The final review
+compared the actual two-record and twelve-record WSS results, focused
+tests, strict Clippy and production exclusion probe with the updated
+validation record. The reviewer used static inspection and existing
+logs. The controller ran the Cargo checks and the private WSS tests.

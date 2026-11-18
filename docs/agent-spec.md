@@ -77,8 +77,10 @@ assembly in deterministic tests. The [heartbeat sampler](validation/peer-heartbe
 qualifies bounded host metrics and opt-in address collection on Linux x86_64.
 macOS has a source-level platform check. The [heartbeat planner](validation/peer-heartbeat-planner.md)
 qualifies directional scheduling, authorized field selection and replay-safe
-projection in a stand-alone test target. Status publication and reception
-remain inactive in the daemon.
+projection in a stand-alone test target. The [private WSS heartbeat proof](validation/peer-heartbeat-private-wss.md)
+checks SQLCipher publication state before the first publisher callback
+returns, then observes exact native retry and replay-safe client projection.
+Status publication and reception remain inactive in the installed daemon.
 
 **CI execution direction (2026-11-13):** prefer Epiphytic self-hosted runners;
 do not launch GitHub-hosted qualification as an implicit fallback. The

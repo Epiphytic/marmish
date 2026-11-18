@@ -4,9 +4,11 @@ The [reviewed fixture phase](../phases/peer-heartbeat-private-wss.md) used
 Linux AMD64 and Rust 1.97.1, the debug native test binary, upstream MDK
 `122ad45e` and source `031edb6db380d92f9532d7173bf6e5fa62410ec5`.
 The fixtures use fresh disposable native accounts, SQLCipher databases
-and a process-owned loopback TLS relay.
+and a process-owned loopback TLS relay. Keep the test executable in
+Cargo's output layout so the fixture can locate its sibling helpers.
 
 ```sh
+cargo build --locked --offline -p marmish-native --bins
 cargo test --locked --offline -p marmish-native --lib \
   private_wss_heartbeat_observes_provenance_before_publish -- --ignored --nocapture
 cargo test --locked --offline -p marmish-native --lib \
@@ -78,3 +80,35 @@ measures local preparation and projection independently.
 This qualification covers the test-only heartbeat path. Installed
 heartbeat startup, durable Prepared recovery after restart, permission
 page publication, macOS and Linux ARM64 were outside this run.
+
+## Revalidation on MDK master and schema 214
+
+Linux AMD64 source `6fe45ed` resolved MDK to `b3cd2cb1`. The two-record
+proof finished in 132.26 s, with 60.158 s in heartbeat operations, 2,553
+application bytes, 4,700 signed wire bytes, and two writes and projections.
+The following percentiles include both records.
+
+| Reservation to callback p50 / p95 | Callback lookup p50 / p95 | Reservation to ACK p50 / p95 | Reservation to projection p50 / p95 |
+| ---| --- | --- | --- |
+| 309 / 421 ms | 1 / 1 ms | 29,847 / 29,975 ms | 29,931 / 30,076 ms |
+
+The revalidation passed `--features installed-checks` to each test command
+above and the additional `peer_heartbeat_send_fences` and `peer_status_wire`
+selectors. The lint command was
+`cargo clippy --locked --offline -p marmish-native --features installed-checks --all-targets -- -D warnings`.
+The watchdog and independent private relay denials passed. The sender
+fence and wire selectors passed 12 and 16 cases respectively, with one
+opt-in case skipped in each. Strict all-target Clippy with
+`installed-checks`, the non-test library check, and the three-import
+non-test exclusion probe passed. The deadline negative advances the wall
+clock used by the authority check. The separate per-turn deadline branch
+was outside this negative fixture.
+
+The separate 12-record run passed in 436.16 s including a fresh enrollment,
+with 360.049 s in heartbeat operations. All 12 reservations produced one
+physical write and one client projection each. The records carried 5,403
+application bytes (largest 451) and 14,988 signed wire bytes.
+
+| Reservation to callback p50 / p95 | Callback lookup p50 / p95 | Reservation to ACK p50 / p95 | Reservation to projection p50 / p95 |
+| --- | --- | --- | --- |
+| 254 / 798 ms | 0 / 1 ms | 29,846 / 29,916 ms | 29,946 / 30,027 ms |
