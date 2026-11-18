@@ -22,7 +22,7 @@ use std::{
 use zeroize::Zeroizing;
 
 pub(crate) const PROFILE_FORMAT: u8 = 2;
-const MANIFEST_LIMIT: u64 = 8192;
+pub(crate) const MANIFEST_LIMIT: u64 = 8192;
 const HELPER_LIMIT: usize = 8192;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum BackendChoice {
@@ -331,6 +331,16 @@ impl ProfileLease {
         &self,
         material: &IdentityMaterial,
     ) -> Result<Zeroizing<[u8; 32]>> {
+        let manifest = self.prepared_peer_manifest(material)?;
+        self.derive_peer_qualification_key(manifest, material.sqlcipher_root())
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn check_prepared_peer_identity(&self, material: &IdentityMaterial) -> Result<()> {
+        self.prepared_peer_manifest(material).map(|_| ())
+    }
+
+    fn prepared_peer_manifest(&self, material: &IdentityMaterial) -> Result<&Manifest> {
         let manifest = self
             .manifest
             .as_ref()
@@ -341,7 +351,7 @@ impl ProfileLease {
         {
             return Err(Error::Identity("identity_mismatch"));
         }
-        self.derive_peer_qualification_key(manifest, material.sqlcipher_root())
+        Ok(manifest)
     }
 
     fn derive_peer_qualification_key(
@@ -530,11 +540,19 @@ impl ProfileLease {
         fs::remove_dir(&self.runtime)?;
         Ok(())
     }
-    pub fn mark_ready(&mut self, opened: &crate::mdk_adapter::OpenedAccountBinding) -> Result<()> {
+    pub(crate) fn check_opened_binding(
+        &self,
+        opened: &crate::mdk_adapter::OpenedAccountBinding,
+    ) -> Result<()> {
         if opened.profile_id() != self.profile_id || Some(opened.public_key()) != self.public_key()
         {
             return Err(Error::Identity("storage_binding_mismatch"));
         }
+        Ok(())
+    }
+
+    pub fn mark_ready(&mut self, opened: &crate::mdk_adapter::OpenedAccountBinding) -> Result<()> {
+        self.check_opened_binding(opened)?;
         let m = self
             .manifest
             .as_mut()
