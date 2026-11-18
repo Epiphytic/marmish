@@ -110,7 +110,7 @@ pub(super) struct Quota {
     panicked: AtomicBool,
     account: Mutex<Accounted>,
     #[cfg(test)]
-    crash_after_database_write: bool,
+    crash_after_database_write: AtomicBool,
 }
 
 // Safety: the captured VFS is SQLite's process-lifetime stock VFS. All
@@ -143,10 +143,10 @@ impl Quota {
         {
             return Err("stock_unix_vfs");
         }
-        let mut quota = Self::new(base, main, capacity, recover)?;
-        Arc::get_mut(&mut quota)
-            .expect("new_quota")
-            .crash_after_database_write = crash_after_database_write;
+        let quota = Self::new(base, main, capacity, recover)?;
+        quota
+            .crash_after_database_write
+            .store(crash_after_database_write, Ordering::Relaxed);
         let quota = Box::leak(Box::new(quota));
         let wrapper = Box::leak(Box::new(sql::sqlite3_vfs {
             iVersion: 1,
@@ -261,7 +261,7 @@ impl Quota {
                 recovery_synced: false,
             }),
             #[cfg(test)]
-            crash_after_database_write: false,
+            crash_after_database_write: AtomicBool::new(false),
         }))
     }
 
@@ -805,7 +805,10 @@ impl Handle {
         #[cfg(test)]
         if matches!(kind, Resize::Write { offset } if offset > 0)
             && self.index == 0
-            && self.state.crash_after_database_write
+            && self
+                .state
+                .crash_after_database_write
+                .load(Ordering::Relaxed)
             && state.journal_synced
         {
             // Abruptly stop after a database page was written and while the

@@ -470,7 +470,9 @@ impl ReceiverQuota<'_> {
             }
             #[cfg(test)]
             {
-                state.crash_after_database_write = crash_after_database_write;
+                state
+                    .crash_after_database_write
+                    .store(crash_after_database_write, Ordering::Relaxed);
             }
             Ok(quota)
         })();
@@ -1624,4 +1626,18 @@ impl ProfileSlots<'_> {
         self.crash_after_database_write = true;
         self
     }
+}
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn arm_package_generation_crash() {
+    ACTIVE.with(|scope| {
+        let active = scope.borrow();
+        let quota = active
+            .as_ref()
+            .expect("candidate package generation needs an active quota");
+        assert!(!quota.recovering());
+        quota
+            .crash_after_database_write
+            .store(true, Ordering::Relaxed);
+    });
 }

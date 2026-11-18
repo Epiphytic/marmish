@@ -32,6 +32,8 @@ struct Window {
     copy_cut: AtomicUsize,
     #[cfg(test)]
     trace_timing: AtomicBool,
+    #[cfg(test)]
+    crash_generation: AtomicBool,
 }
 
 #[derive(Clone, Copy)]
@@ -87,6 +89,8 @@ impl NativeWindow {
             copy_cut: AtomicUsize::new(0),
             #[cfg(test)]
             trace_timing: AtomicBool::new(false),
+            #[cfg(test)]
+            crash_generation: AtomicBool::new(false),
         }));
         if now.wall.abs_diff(anchored_wall) > Duration::from_secs(2) {
             return Err(Error::Clock);
@@ -186,6 +190,18 @@ impl NativeWindow {
                 "package_fixture_timing {stage}_ms={:.3}",
                 started.elapsed().as_secs_f64() * 1000.0
             );
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn crash_generation(&self) {
+        self.0.crash_generation.store(true, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn before_generation_fixture(&self) {
+        if self.0.crash_generation.load(Ordering::Acquire) {
+            crate::peer_quota_vfs::dispatch::arm_package_generation_crash();
         }
     }
 

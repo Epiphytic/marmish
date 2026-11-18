@@ -109,8 +109,13 @@ fn candidate_package_cold_attestation_under_registered_quota() {
         &["bound", "issue", "copy-cancel", "attest", "prepared"][..],
         &["bound-file", "fenced"],
         &["started-empty", "empty"],
+        &["early-stop", "bound"],
+        &["issue-stop", "empty"],
         &["signing-loss", "unsigned"],
+        &["generation-crash", "recover-unsigned"],
         &["issue", "copy-crash", "fenced"],
+        &["issue", "replace"],
+        &["issue", "cap"],
     ] {
         let root = package_fixture_root();
         for mode in cuts {
@@ -139,8 +144,9 @@ fn run_child(root: &Path, mode: &str) {
         std::thread::sleep(Duration::from_millis(10));
     }
     let output = child.wait_with_output().unwrap();
-    if mode == "copy-crash" && output.status.code() == Some(78) {
-        return;
+    match (mode, output.status.code()) {
+        ("copy-crash", Some(78)) | ("generation-crash", Some(80)) => return,
+        _ => {}
     }
     assert!(
         output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
@@ -275,6 +281,62 @@ fn package_child() {
             assert_eq!(fs::metadata(&stage).unwrap().len(), 0);
             drop(started);
         }
+        "early-stop" => {
+            let turn = window();
+            startup.stop();
+            assert!(owner.start_package(quota, &reservation, &turn).is_err());
+            assert!(!stage.exists());
+        }
+        "issue-stop" => {
+            let turn = window();
+            let started = owner
+                .start_package(quota, &reservation, &turn)
+                .unwrap()
+                .unwrap();
+            startup.stop();
+            assert!(
+                owner
+                    .issue_package(quota, &reservation, started, &turn)
+                    .is_err()
+            );
+            assert_eq!(turn.signs(), 0);
+            assert_eq!(fs::metadata(&stage).unwrap().len(), 0);
+        }
+        "generation-crash" => {
+            let turn = window();
+            let started = owner
+                .start_package(quota, &reservation, &turn)
+                .unwrap()
+                .unwrap();
+            turn.crash_generation();
+            let result = owner.issue_package(quota, &reservation, started, &turn);
+            panic!(
+                "native generation did not reach its interrupted write: {:?}",
+                result.err()
+            );
+        }
+        "recover-unsigned" => {
+            let before = owner.recover(now).unwrap();
+            assert!(matches!(before.classes[1], Class::JournalCandidate { .. }));
+            let turn = window();
+            assert!(
+                owner
+                    .attest_package(quota, &reservation, None, &turn)
+                    .is_err()
+            );
+            assert!(turn.sample().is_ok());
+            assert_eq!(turn.signs(), 0);
+            assert!(!snapshot.exists());
+            let after = owner.recover(now).unwrap();
+            assert!(matches!(after.classes[1], Class::Identified { .. }));
+            assert!(after.charged > RESERVED_BYTES);
+            assert!(
+                owner
+                    .start_package(quota, &reservation, &turn)
+                    .unwrap()
+                    .is_none()
+            );
+        }
         "signing-loss" => {
             let turn = window();
             let started = owner
@@ -385,6 +447,30 @@ fn package_child() {
             assert!(turn.sample().is_err());
             assert!(!snapshot.exists());
             assert_eq!(fs::read(&stage).unwrap(), before);
+        }
+        "replace" | "cap" => {
+            if mode == "replace" {
+                let old = root.join("fixture-replaced-original");
+                fs::rename(&stage, &old).unwrap();
+                fs::copy(old, &stage).unwrap();
+            } else {
+                OpenOptions::new()
+                    .write(true)
+                    .open(&stage)
+                    .unwrap()
+                    .set_len(crate::peer_quota_vfs::dispatch::CLOSED_STAGE_LIMIT + 1)
+                    .unwrap();
+            }
+            let before = fs::metadata(&stage).unwrap().len();
+            let turn = window();
+            assert!(
+                owner
+                    .attest_package(quota, &reservation, None, &turn)
+                    .is_err()
+            );
+            assert_eq!(turn.signs(), 0);
+            assert!(!snapshot.exists());
+            assert_eq!(fs::metadata(&stage).unwrap().len(), before);
         }
         "fenced" | "empty" | "unsigned" => {
             let before = fs::read(&stage).unwrap();

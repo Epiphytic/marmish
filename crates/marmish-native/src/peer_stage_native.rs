@@ -62,6 +62,14 @@ impl OpenStage {
             },
         )
         .map_err(|_| StageError::Storage)?;
+        #[cfg(test)]
+        if first_open {
+            let (count, elapsed) = storage.migration_summary();
+            eprintln!(
+                "managed first-open migrations={count} migration_ms={:.3}",
+                elapsed.as_secs_f64() * 1000.0
+            );
+        }
         if !first_open && storage.migration_summary().0 != 0 {
             return Err(StageError::Storage);
         }

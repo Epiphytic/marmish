@@ -195,6 +195,8 @@ impl OpenStage {
             #[cfg(test)]
             window.timing("native_runtime", point);
             window.check()?;
+            #[cfg(test)]
+            window.before_generation_fixture();
         }
         #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
         let point = std::time::Instant::now();
