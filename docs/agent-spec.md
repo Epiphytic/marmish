@@ -1639,6 +1639,13 @@ verifies the join and commits Pending without polling Welcome again.
 records the covered transitions, exact counts and remaining gaps.
 Installed daemon and application activation require separate qualification.
 
+The [candidate physical route handoff](validation/peer-candidate-physical-route.md)
+uses one attached lease to transfer its checked route into the authenticated
+recipient port. A second take leaves that port usable. Dropping the owner
+or losing its config witness revokes the port. Independent global dispatcher
+refusal takes priority over local refusal. These checks run in isolated Linux
+AMD64 tests and the candidate handoff is unmounted.
+
 The [terminal custody fixture](validation/peer-terminal-custody.md) makes
 Declined and Expired durable for an exact joined Pending invitation.
 The local fence excludes the same generation from approval and ordinary

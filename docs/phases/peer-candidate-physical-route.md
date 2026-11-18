@@ -115,8 +115,11 @@ comes from actual receiver preflight and registration.
   verifier and ordinary stock SQL still work.
 - Separate subprocess cases run before any recipient requests or control
   publishes. Exercise a foreign lease from a different disposable
-  profile, wrong material with a different SQLCipher root, and a dropped
-  unused admission. Each refuses future local scope. Assert cancellation
+  profile, a different material object carrying a different SQLCipher root,
+  and a dropped unused admission. The distinct object tests the attached
+  borrow check. The preflight registration case separately supplies material
+  with the wrong root before attachment, when the borrow check is absent.
+  Each refuses future local scope. Assert cancellation
   through the existing typed local recheck. Verify exact ordinary SQL
   forwarding while local failure leaves the global verifier current.
 - The displacement case combines real global default replacement with
@@ -130,7 +133,8 @@ comes from actual receiver preflight and registration.
   `registration_subprocess` entry point. Run each mode in a separate
   process and inspect both bracket edges with direct access to the shared
   cancellation token. Displace the global default before take with simultaneous local
-  drift and assert typed Indeterminate while the token remains uncancelled.
+  drift and assert typed Indeterminate while the token remains uncancelled
+  before dropping the registration.
   In another fresh process, use the private test callback to displace
   the real default exactly after a successful local check has moved the
   route, before the second verifier. Assert typed Indeterminate, no
