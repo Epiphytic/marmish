@@ -67,3 +67,30 @@ against `a1c655914a2f9ea31b7f8cba0a443dc29b21c5bd` in a detached Linux
 AMD64 checkout using the local build cache. Each matched at least one test.
 The suite recorded 149 passing test executions. Some selectors
 overlap. These numbers cover a local replay of the workflow test commands.
+
+## Current upstream MDK checkpoint
+
+The optimized Rust 1.97.1 binaries were rebuilt from
+`a9780fd8c875524a0f489222aef29705a3a36cad` with upstream MDK master
+resolved to `122ad45ece73c1d6f687a4e92a541b9b2febde34`. The two-job
+incremental release build took 259.74 s on Linux AMD64. Each executable
+required glibc 2.39 or earlier, reported the expected native provenance,
+and was packaged with the inventory generated from that lockfile.
+
+| Installer check | Observed result |
+| --- | --- |
+| File-backed quickstart, verified binaries, repeated setup, and payload tamper refusal | Passed on both attempts |
+| Typed closed-loopback startup refusal and cleanup | Passed in 11.991 s |
+| Active installed daemon on White Noise US, profile-lock refusal, and clean shutdown | Passed in 13.750 s |
+
+Both runs used a fresh installation root and the repository's shell installer
+rendered with locally packaged 0.3.1 assets. The installed executable and
+utilities ran without a Python runtime. The positive path checked ordinary
+daemon reachability. It sent no Peer enrollment or heartbeat records.
+
+The separate Linux AMD64 native suite built with the same MDK revision ran
+954 tests successfully in 1,364.77 s, with 107 opt-in tests ignored. The
+runner used an immutable copy of the native test executable and stable
+sibling fixture binaries. The
+[MDK preflight evidence](mdk-master-schema-213.md) documents a prior
+inconclusive run caused by replacing the executing harness.
