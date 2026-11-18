@@ -39,10 +39,6 @@ CREATE TABLE peer_retirement_intent (
 ) STRICT;
 CREATE UNIQUE INDEX peer_retirement_active_class ON peer_retirement_intent(class)
 WHERE step<3;
-CREATE TABLE peer_retirement_cooldown (
-    server BLOB NOT NULL PRIMARY KEY CHECK (length(server)=32),
-    until INTEGER NOT NULL CHECK (until>=86400)
-) STRICT;
 CREATE TRIGGER peer_retirement_freeze_stage BEFORE UPDATE ON peer_provisional_stage_v1
 WHEN EXISTS (
     SELECT 1 FROM peer_retirement_intent r
@@ -54,17 +50,14 @@ BEGIN SELECT RAISE(ABORT, 'stage is retiring'); END;
 #[derive(Clone, Copy)]
 pub(super) enum Writers {
     Intent,
-    Cooldown,
     Release,
 }
 
 const INTENT: &str = "peer_retirement_intent";
-const COOLDOWN: &str = "peer_retirement_cooldown";
 
 fn guarded_tables(writers: Writers) -> &'static [&'static str] {
     match writers {
         Writers::Intent | Writers::Release => &[INTENT],
-        Writers::Cooldown => &[COOLDOWN],
     }
 }
 
@@ -105,7 +98,8 @@ fn install_epoch(conn: &Connection) -> Result<()> {
         &stage_schema::STAGE_CLAIM_TRIGGER.replace("provisional stage v1", RETIREMENT_CLAIM_MARKER),
     )?;
     conn.execute_batch(EPOCH)?;
-    write_guards(conn, &[INTENT, COOLDOWN], true)
+    cooldown::install(conn)?;
+    write_guards(conn, &[INTENT], true)
 }
 
 pub(in super::super) type Entry = (String, String, String, Option<String>);

@@ -58,9 +58,11 @@ impl Checkpoint {
         }
         let Some((selector, _)) = coordinates(
             &tx,
-            "SELECT server,offer_id,offer_revision,generation
-             FROM peer_pending_custody
-             WHERE origin=?1 AND pending_deadline>?2 AND server=?3 AND state IN (2,3)",
+            "SELECT c.server,c.offer_id,c.offer_revision,c.generation
+             FROM peer_pending_custody c
+             WHERE c.origin=?1 AND c.pending_deadline>?2 AND c.server=?3 AND c.state IN (2,3)
+               AND NOT EXISTS (SELECT 1 FROM peer_pending_terminal t
+                   WHERE t.class=c.class AND t.generation=c.generation)",
             cx.origin,
             wall,
             founder,
@@ -174,5 +176,7 @@ const JOIN: &str = "
     WHERE origin=?1 AND held_deadline>?2 AND server=?3 AND state IN (0,1)";
 
 const AUTOMATIC: &str = "
-    SELECT server,offer_id,offer_revision,generation FROM peer_pending_custody
-    WHERE origin=?1 AND pending_deadline>?2 AND server=?3 AND state=2 AND mode=1";
+    SELECT c.server,c.offer_id,c.offer_revision,c.generation FROM peer_pending_custody c
+    WHERE c.origin=?1 AND c.pending_deadline>?2 AND c.server=?3 AND c.state=2 AND c.mode=1
+    AND NOT EXISTS (SELECT 1 FROM peer_pending_terminal t
+        WHERE t.class=c.class AND t.generation=c.generation)";

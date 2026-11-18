@@ -608,3 +608,284 @@ fn daemon_due_tracks_the_pinned_founder_and_yields_to_backoff() {
             .is_empty()
     );
 }
+
+fn joined_pending(f: &Fixture, founder: &Keys) -> (Checkpoint, Source, Selector) {
+    f.provisional();
+    drop(f.prepared().unwrap());
+    let mut cp = f.custody().unwrap();
+    let source = cp.bind_source(URL).unwrap();
+    let selector = exact_offer(&mut cp, &source, &f.client, founder);
+    let reservation = cp.reserve_provisioning(&source, selector, WALL).unwrap();
+    seed_exact_outbox(&mut cp, &source, &reservation, true);
+    let tx = cp.cursor.with_wall(source.origin, WALL + 2).unwrap();
+    let insert = custody_schema::Writer::Insert;
+    insert.guard(&tx, false).unwrap();
+    assert_eq!(held_insert(&tx, [0x64; 32]).unwrap(), 1);
+    insert.guard(&tx, true).unwrap();
+    let update = custody_schema::Writer::Update;
+    update.guard(&tx, false).unwrap();
+    tx.execute(
+        "UPDATE peer_pending_custody SET state=1,started_at=held_at+1",
+        [],
+    )
+    .unwrap();
+    tx.execute(
+        "UPDATE peer_pending_custody SET state=2,group_id=zeroblob(16),epoch_number=1,
+           epoch_identity=zeroblob(32),own_leaf=1,qualified_at=held_at+2,pending_deadline=held_deadline",
+        [],
+    ).unwrap();
+    update.guard(&tx, true).unwrap();
+    rows::advance_wall(&tx, WALL + 2).unwrap();
+    tx.commit().unwrap();
+    (cp, source, selector)
+}
+
+#[test]
+fn pending_terminal_exact_decline_and_release_preserves_fences_and_cooldown() {
+    use terminal::{TerminalReason, TerminalStep};
+
+    let f = Fixture::new();
+    let founder = Keys::generate();
+    let (mut cp, source, selector) = joined_pending(&f, &founder);
+    let local = cp.authorize_local(UID).unwrap();
+    let now = WALL + 3;
+    assert!(matches!(
+        cp.decline_pending_checked(&source, selector, 1, now, &local, || Err(Error::LocalOwner)),
+        Err(Error::LocalOwner)
+    ));
+    assert!(
+        cp.terminal_lookup(&source, selector, 1, now)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        !super::super::super::cooldown::under_cooldown(
+            &cp.cursor.conn,
+            selector.server.to_bytes(),
+            now
+        )
+        .unwrap()
+    );
+    assert!(matches!(
+        cp.decline_pending_checked(&source, selector, 2, now, &local, || Ok(())),
+        Err(Error::Cursor(CursorError::Stale))
+    ));
+
+    let fenced = cp
+        .decline_pending_checked(&source, selector, 1, now, &local, || Ok(()))
+        .unwrap();
+    assert_eq!(fenced.reason(), TerminalReason::Declined);
+    assert_eq!(fenced.decided_at(), now);
+    assert_eq!(fenced.step(), &TerminalStep::Fenced);
+    assert!(
+        cp.read_custody(&source, selector, 1, now)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        cp.daemon_inventory(&source, now, selector.server)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        cp.daemon_due(&source, now, true, selector.server)
+            .unwrap()
+            .is_none()
+    );
+    let witness = [[0x42; 32].as_slice(), &[0x12; 8], &[0x34; 8]].concat();
+    assert!(matches!(
+        cp.terminal_intent(&source, &fenced, now, &witness[..47]),
+        Err(Error::Cursor(CursorError::Binding))
+    ));
+    assert!(matches!(
+        cp.terminal_check(&source, &fenced, now - 1),
+        Err(Error::Cursor(CursorError::ClockRegressed))
+    ));
+    let tx = cp.cursor.begin(source.origin).unwrap();
+    custody_schema::Writer::Update.guard(&tx, false).unwrap();
+    assert!(
+        tx.execute(
+            "UPDATE peer_pending_custody SET state=3,approval=0,activating_at=qualified_at+1",
+            []
+        )
+        .is_err()
+    );
+    drop(tx);
+    assert_eq!(counts(&cp.cursor.conn), (1, 1, 1, 1, 1));
+
+    let intent = cp.terminal_intent(&source, &fenced, now, &witness).unwrap();
+    assert_eq!(intent.step(), &TerminalStep::Intent(witness.clone()));
+    assert!(matches!(
+        cp.terminal_check(&source, &fenced, now),
+        Err(Error::Cursor(CursorError::Stale))
+    ));
+    drop(cp);
+
+    // This is a storage-only fixture. The filesystem runner proves removal
+    // and a native stage cannot exist in this test.
+    let mut cp = f.custody().unwrap();
+    cp.policy.mode = Mode::Off;
+    cp.policy.blocked.insert(founder.public_key());
+    cp.cursor
+        .conn
+        .execute(
+            "UPDATE peer_cursor_origin SET quarantine_until=?1",
+            [seconds(WALL + 9_000).unwrap()],
+        )
+        .unwrap();
+    let stale_source = source;
+    let source = cp.bind_source(URL).unwrap();
+    let late = WALL + 3_500;
+    assert!(matches!(
+        cp.terminal_lookup(&stale_source, selector, 1, late),
+        Err(Error::Source)
+    ));
+    let intent = cp.terminal_cleanup_due(&source, late).unwrap().unwrap();
+    assert_eq!(intent.step(), &TerminalStep::Intent(witness.clone()));
+    assert!(intent.stage().is_some());
+    let removed = cp.terminal_files_removed(&source, &intent, late).unwrap();
+    assert_eq!(removed.step(), &TerminalStep::FilesRemoved(witness));
+    let released = cp.terminal_release(&source, &removed, late).unwrap();
+    assert_eq!(released.step(), &TerminalStep::Released);
+    assert!(released.stage().is_none());
+    assert_eq!(counts(&cp.cursor.conn), (0, 0, 0, 0, 0));
+    assert!(cp.terminal_cleanup_due(&source, late).unwrap().is_none());
+    let saved = cp
+        .terminal_lookup(&source, selector, 1, late)
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.reason(), TerminalReason::Declined);
+    assert_eq!(saved.step(), &TerminalStep::Released);
+    assert!(
+        cp.cursor.conn.query_row(
+            "SELECT outcome=0 AND retain_until>=replay_until AND retain_until>=offer_replay_until
+             FROM peer_pending_terminal", [], |row| row.get::<_,bool>(0)
+        ).unwrap()
+    );
+
+    cp.policy.mode = Mode::Manual;
+    cp.policy.blocked.clear();
+    cp.cursor
+        .conn
+        .execute("UPDATE peer_cursor_origin SET quarantine_until=NULL", [])
+        .unwrap();
+    let new = wire::Codec::new(wire::MAX_OUTER_BYTES)
+        .unwrap()
+        .prepare_offer(
+            &founder,
+            f.client.public_key(),
+            [0x72; 16],
+            &NostrRoutingV1::new([0xc4; 32], vec![URL.to_owned()]).unwrap(),
+            late,
+        )
+        .unwrap();
+    let event: nostr::event::Event = serde_json::from_slice(new.frame()).unwrap();
+    let new_record = RawRecord {
+        id: event.id.to_bytes(),
+        stamp: event.created_at.as_secs(),
+        bytes: new.frame(),
+    };
+    assert_eq!(
+        cp.admit(&source, new_record, late).unwrap().status,
+        Status::Accepted(TrustedOutcome::SkippedCooldown)
+    );
+    assert_eq!(
+        cp.reserve_provisioning(&source, Selector::from(&new.flight), late)
+            .err(),
+        Some(Error::Cooldown)
+    );
+
+    let raw = RawRecord {
+        id: [0x56; 32],
+        stamp: WALL,
+        bytes: b"schema fixture bytes",
+    };
+    assert!(matches!(
+        cp.custody_replay(&source, raw, late).unwrap(),
+        Replay::AlreadyApplied(_)
+    ));
+    assert!(matches!(
+        cp.custody_replay(
+            &source,
+            RawRecord {
+                bytes: b"wrong bytes",
+                ..raw
+            },
+            late
+        )
+        .unwrap(),
+        Replay::Invalid(_)
+    ));
+    assert!(matches!(
+        cp.custody_replay(&source, raw, WALL + 7_200).unwrap(),
+        Replay::Invalid(_)
+    ));
+    let replay_fence: i64 = cp
+        .cursor
+        .conn
+        .query_row(
+            "SELECT count(*) FROM peer_consent_fence WHERE origin=?1 AND revision=?2",
+            params![source.origin, selector.revision],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(replay_fence, 1);
+}
+
+#[test]
+fn pending_terminal_expiry_boundary_and_absorbing_block_preserve_slot() {
+    use terminal::{TerminalReason, TerminalStep};
+
+    let f = Fixture::new();
+    let founder = Keys::generate();
+    let (mut cp, source, selector) = joined_pending(&f, &founder);
+    let deadline = WALL + 3_300;
+    assert!(
+        cp.terminal_due(&source, selector.server, deadline - 1)
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        cp.expire_pending(&source, selector, 1, deadline - 1),
+        Err(Error::NotExpired)
+    ));
+    assert_eq!(
+        cp.terminal_due(&source, selector.server, deadline).unwrap(),
+        Some((selector, 1))
+    );
+    let local = cp.authorize_local(UID).unwrap();
+    assert!(matches!(
+        cp.decline_pending_checked(&source, selector, 1, deadline, &local, || Ok(())),
+        Err(Error::Expired)
+    ));
+    let fenced = cp.expire_pending(&source, selector, 1, deadline).unwrap();
+    assert_eq!(fenced.reason(), TerminalReason::Expired);
+    assert_eq!(fenced.decided_at(), deadline);
+    let blocked = cp.terminal_blocked(&source, &fenced, deadline).unwrap();
+    assert_eq!(blocked.step(), &TerminalStep::Blocked);
+    assert!(
+        cp.terminal_due(&source, selector.server, deadline)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        cp.terminal_cleanup_due(&source, deadline)
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        cp.terminal_release(&source, &blocked, deadline),
+        Err(Error::Cursor(CursorError::Stale))
+    ));
+    assert!(
+        !super::super::super::cooldown::under_cooldown(
+            &cp.cursor.conn,
+            selector.server.to_bytes(),
+            deadline
+        )
+        .unwrap()
+    );
+    assert_eq!(counts(&cp.cursor.conn), (1, 1, 1, 1, 1));
+    drop(cp);
+    assert_eq!(counts(&f.custody().unwrap().cursor.conn), (1, 1, 1, 1, 1));
+}

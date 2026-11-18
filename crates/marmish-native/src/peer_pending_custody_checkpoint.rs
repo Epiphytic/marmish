@@ -18,6 +18,11 @@ use super::*;
 mod custody_schema;
 pub(crate) use custody_schema::Epoch;
 
+#[path = "peer_pending_terminal_checkpoint.rs"]
+pub(crate) mod terminal;
+#[path = "peer_pending_terminal_schema.rs"]
+mod terminal_schema;
+
 #[cfg(test)]
 #[path = "peer_daemon_checkpoint.rs"]
 pub(crate) mod daemon;
@@ -370,6 +375,21 @@ pub(in super::super) fn owns(
     )?)
 }
 
+fn terminalized(tx: &Transaction<'_>, selector: Selector, origin: Origin) -> Result<bool> {
+    Ok(tx.query_row(
+        "SELECT EXISTS (SELECT 1 FROM peer_pending_terminal t JOIN peer_pending_custody c
+            ON c.class=t.class AND c.generation=t.generation
+            WHERE c.origin=?1 AND c.server=?2 AND c.offer_id=?3 AND c.offer_revision=?4)",
+        params![
+            origin,
+            selector.server.to_bytes(),
+            selector.id,
+            selector.revision
+        ],
+        |row| row.get(0),
+    )?)
+}
+
 impl Checkpoint {
     pub(crate) fn attach_pending_custody_fixture(
         conn: HardenedPeerConnection,
@@ -434,6 +454,9 @@ impl Checkpoint {
         if !self.policy.permits(selector.server) {
             return Err(Error::Policy);
         }
+        if terminalized(&tx, selector, cx.origin)? {
+            return Err(Error::Custodied);
+        }
         let Some(queued) = cx.exact_consent(&tx, selector)? else {
             return Ok(None);
         };
@@ -494,18 +517,23 @@ impl Checkpoint {
     ) -> Result<Replay> {
         raw.check()?;
         let cx = self.custody_context(source)?;
+        let digest = <[u8; 32]>::from(Sha256::digest(raw.bytes));
         let lookup = |tx: &Transaction<'_>| -> std::result::Result<Option<bool>, CursorError> {
             cx.verify(tx, wall).map_err(schema::cursor_error)?;
             Ok(tx
                 .query_row(
                     "SELECT origin=?2 AND outer_stamp=?3 AND frame=?4 AND replay_until>?5
-                 FROM peer_pending_custody WHERE delivery_carrier=?1",
+                 FROM peer_pending_custody WHERE delivery_carrier=?1
+                 UNION ALL
+                 SELECT origin=?2 AND outer_stamp=?3 AND delivery_digest=?6 AND replay_until>?5
+                 FROM peer_pending_terminal WHERE delivery_carrier=?1 AND step=3",
                     params![
                         raw.id,
                         cx.origin,
                         seconds(raw.stamp)?,
                         raw.bytes,
-                        seconds(wall)?
+                        seconds(wall)?,
+                        digest
                     ],
                     |r| r.get(0),
                 )
@@ -620,6 +648,9 @@ impl Checkpoint {
         if !self.policy.permits(selector.server) {
             return Err(Error::Policy);
         }
+        if terminalized(&tx, selector, cx.origin)? {
+            return Ok(None);
+        }
         let Some(queued) = cx.exact_consent(&tx, selector)? else {
             return Ok(None);
         };
@@ -690,6 +721,9 @@ impl Checkpoint {
         }
         let tx = self.cursor.with_wall(cx.origin, wall)?;
         cx.verify(&tx, wall)?;
+        if terminalized(&tx, selector, cx.origin)? {
+            return Err(CursorError::Stale.into());
+        }
         let queued = cx.exact_consent(&tx, selector)?.ok_or(CursorError::Stale)?;
         let current = cx.read_evidence(&tx, queued)?.ok_or(CursorError::Stale)?;
         if !current.same_turn(prior) {

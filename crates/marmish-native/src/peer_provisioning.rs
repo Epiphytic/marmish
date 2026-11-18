@@ -17,6 +17,9 @@ mod stage_schema;
 #[path = "peer_stage_journal.rs"]
 pub(crate) mod stage_journal;
 
+#[path = "peer_retirement_cooldown.rs"]
+pub(super) mod cooldown;
+
 #[cfg(test)]
 #[path = "peer_stage_retirement_journal.rs"]
 pub(crate) mod retirement;
@@ -299,10 +302,6 @@ impl Checkpoint {
             retirement::verify_epoch(&self.cursor.conn)?;
         }
         let (tx, origin, _) = self.live_provisioning_offer(source, key, wall)?;
-        #[cfg(test)]
-        if retirement_epoch && retirement::under_cooldown(&tx, key.server.to_bytes(), wall)? {
-            return Err(Error::Cooldown);
-        }
         if has_outbox(&tx, key, origin)? {
             return Err(CursorError::Conflict.into());
         }
@@ -344,14 +343,19 @@ impl Checkpoint {
             }
             _ => None,
         };
+        let cooldown_attached = self.cooldown_attached();
         let tx = self.cursor.with_wall(origin, wall)?;
         rows::check_wall(&tx, wall)?;
         #[cfg(test)]
-        if let Some((epoch, origins)) = custody {
-            epoch.verify(&tx, self.signer.public_key().to_bytes(), &origins)?;
-            if prepared_consent::custody::owns(&tx, key, origin)? {
-                return Err(Error::Custodied);
-            }
+        if let Some((epoch, origins)) = &custody {
+            epoch.verify(&tx, self.signer.public_key().to_bytes(), origins)?;
+        }
+        if cooldown_attached && cooldown::under_cooldown(&tx, key.server.to_bytes(), wall)? {
+            return Err(Error::Cooldown);
+        }
+        #[cfg(test)]
+        if custody.is_some() && prepared_consent::custody::owns(&tx, key, origin)? {
+            return Err(Error::Custodied);
         }
         let row = Invitation::load(&tx, key, origin)?;
         if wall >= row.expires {

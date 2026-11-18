@@ -75,18 +75,6 @@ pub(super) fn retiring(conn: &Connection, binding: Binding) -> Result<bool> {
     ))
 }
 
-pub(crate) fn under_cooldown(
-    conn: &Connection,
-    server: [u8; 32],
-    wall: u64,
-) -> super::super::super::Result<bool> {
-    Ok(conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM peer_retirement_cooldown WHERE server=?1 AND until>?2)",
-        params![server, seconds(wall)?],
-        |r| r.get(0),
-    )?)
-}
-
 fn guard_account(tx: &Transaction<'_>, binding: Binding, wall: u64) -> Result<Invitation> {
     if generation(tx, binding.key, binding.origin)? != Some(binding.generation)
         || has_outbox(tx, binding.key, binding.origin)?
@@ -418,7 +406,11 @@ impl Checkpoint {
     }
 }
 
-fn check_origin_wall(tx: &Transaction<'_>, origin: Origin, wall: u64) -> Result<()> {
+pub(in super::super) fn check_origin_wall(
+    tx: &Transaction<'_>,
+    origin: Origin,
+    wall: u64,
+) -> Result<()> {
     let saved = tx.query_row(
         "SELECT wall FROM peer_cursor_origin WHERE origin=?1",
         [origin],
@@ -457,17 +449,7 @@ fn start_intent(
     )?)?;
     schema::guard(tx, Writers::Intent, true)?;
     if action == Action::Decline {
-        schema::guard(tx, Writers::Cooldown, false)?;
-        tx.execute(
-            "DELETE FROM peer_retirement_cooldown WHERE until<=?1",
-            [seconds(wall)?],
-        )?;
-        capacity(tx, "SELECT count(*) FROM peer_retirement_cooldown")?;
-        rows::require_write(tx.execute(
-            "INSERT INTO peer_retirement_cooldown VALUES (?1,?2)",
-            params![binding.key.server.to_bytes(), after(wall, DAY)?],
-        )?)?;
-        schema::guard(tx, Writers::Cooldown, true)?;
+        cooldown::decline(tx, binding.key.server.to_bytes(), wall)?;
     }
     Ok(())
 }

@@ -45,7 +45,6 @@ pub(crate) enum Error {
     Retiring,
     #[cfg(test)]
     NotExpired,
-    #[cfg(test)]
     Cooldown,
     Cursor(CursorError),
 }
@@ -309,6 +308,21 @@ impl Checkpoint {
         })
     }
 
+    fn cooldown_attached(&self) -> bool {
+        #[cfg(test)]
+        {
+            self.retirement_epoch
+                || matches!(
+                    self.export_epoch,
+                    Some(provisioning::prepared_consent::Epoch::Custody(_))
+                )
+        }
+        #[cfg(not(test))]
+        {
+            false
+        }
+    }
+
     pub(crate) fn admit(
         &mut self,
         source: &Source,
@@ -342,6 +356,16 @@ impl Checkpoint {
         if retirement_epoch {
             provisioning::retirement::verify_epoch(&self.cursor.conn)?;
         }
+        #[cfg(test)]
+        let custody_context = match self.export_epoch {
+            Some(provisioning::prepared_consent::Epoch::Custody(epoch)) => Some((
+                epoch,
+                self.signer.public_key().to_bytes(),
+                self.cursor.origins.clone(),
+            )),
+            _ => None,
+        };
+        let cooldown_attached = self.cooldown_attached();
         let commit = CursorStore::commit_trusted;
         #[cfg(test)]
         let commit = if custody_epoch {
@@ -356,8 +380,11 @@ impl Checkpoint {
             wall,
             |tx: &rusqlite::Transaction<'_>| {
                 #[cfg(test)]
-                if retirement_epoch
-                    && provisioning::retirement::under_cooldown(tx, server.to_bytes(), wall)?
+                if let Some((epoch, account, origins)) = &custody_context {
+                    epoch.verify(tx, *account, origins)?;
+                }
+                if cooldown_attached
+                    && provisioning::cooldown::under_cooldown(tx, server.to_bytes(), wall)?
                 {
                     return Ok(TrustedOutcome::SkippedCooldown);
                 }

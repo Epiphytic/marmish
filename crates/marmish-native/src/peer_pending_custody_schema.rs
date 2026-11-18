@@ -9,9 +9,9 @@ use super::*;
 
 const DDL: &str = "
 CREATE TABLE peer_pending_custody_epoch (
-    epoch INTEGER PRIMARY KEY CHECK (epoch=2)
+    epoch INTEGER PRIMARY KEY CHECK (epoch=3)
 ) STRICT;
-INSERT INTO peer_pending_custody_epoch VALUES (2);
+INSERT INTO peer_pending_custody_epoch VALUES (3);
 CREATE TRIGGER peer_custody_epoch_insert BEFORE INSERT ON peer_pending_custody_epoch
 BEGIN SELECT RAISE(ABORT,'immutable custody epoch'); END;
 CREATE TRIGGER peer_custody_epoch_update BEFORE UPDATE ON peer_pending_custody_epoch
@@ -75,6 +75,7 @@ BEGIN SELECT RAISE(ABORT,'custody starts Held'); END;
 
 CREATE TRIGGER peer_custody_next BEFORE UPDATE ON peer_pending_custody
 WHEN NEW.state!=OLD.state+1 OR OLD.state=3
+    OR EXISTS (SELECT 1 FROM peer_pending_terminal t WHERE t.class=OLD.class AND t.generation=OLD.generation)
     OR OLD.class IS NOT NEW.class OR OLD.generation IS NOT NEW.generation
     OR OLD.account IS NOT NEW.account OR OLD.server IS NOT NEW.server
     OR OLD.offer_id IS NOT NEW.offer_id OR OLD.offer_revision IS NOT NEW.offer_revision
@@ -116,6 +117,7 @@ const EXACT_OUTBOX: &str = "
 pub(super) enum Writer {
     Insert,
     Update,
+    Delete,
 }
 
 impl Writer {
@@ -123,6 +125,7 @@ impl Writer {
         match self {
             Self::Insert => "INSERT",
             Self::Update => "UPDATE",
+            Self::Delete => "DELETE",
         }
     }
 
@@ -159,6 +162,8 @@ fn install(conn: &Connection) -> std::result::Result<(), CursorError> {
         install_guard(conn, verb)?;
     }
     install_guard(conn, "DELETE")?;
+    super::super::super::cooldown::install(conn).map_err(super::schema::cursor_error)?;
+    super::terminal_schema::install(conn).map_err(super::schema::cursor_error)?;
     Ok(())
 }
 
@@ -189,7 +194,7 @@ impl Epoch {
         }
         super::schema::verify_rows(tx, account, origins)?;
         let marker: i64 = tx.query_row(
-            "SELECT count(*) FROM peer_pending_custody_epoch WHERE epoch=2",
+            "SELECT count(*) FROM peer_pending_custody_epoch WHERE epoch=3",
             [],
             |row| row.get(0),
         )?;
@@ -206,7 +211,7 @@ impl Epoch {
         if marker != 1 || broken {
             return Err(CursorError::Binding);
         }
-        Ok(())
+        super::terminal_schema::verify_rows(tx, account).map_err(super::schema::cursor_error)
     }
 }
 
