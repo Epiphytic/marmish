@@ -88,7 +88,9 @@ async fn registered_route_subprocess() {
 
     match case.as_str() {
         "success" | "dropped_registration" => {
-            let route = attached.take_route(&lease, &material).unwrap();
+            let (quota, mut control) = attached.actor_parts();
+            quota.receiver_files(&lease).unwrap();
+            let route = control.take_route(&lease, &material).unwrap();
             let admission = ReceiverRouteAdmission::registered(route).unwrap();
             let mut port = PeerRecipientPort::open(admission, time_limit())
                 .await
@@ -103,10 +105,11 @@ async fn registered_route_subprocess() {
                 })
                 .unwrap();
             if case == "dropped_registration" {
+                quota.receiver_files(&lease).unwrap();
                 drop(attached);
             } else {
                 assert!(matches!(
-                    attached.take_route(&lease, &material),
+                    control.take_route(&lease, &material),
                     Err(RegistrationFailure::LocalUnavailable)
                 ));
                 let bounds = [wall.checked_sub(1).unwrap(), wall];
@@ -119,6 +122,8 @@ async fn registered_route_subprocess() {
                 })
                 .unwrap();
                 assert_eq!(relay.recipient_requests(account), 2);
+                quota.receiver_files(&lease).unwrap();
+                control.recheck(&lease, &material).unwrap();
                 replace_config_inode(lease.root());
             }
             assert!(port.use_current_recipient(|_, _, _| ()).is_err());

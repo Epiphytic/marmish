@@ -203,7 +203,7 @@ fn registration_subprocess() {
         }
         "displaced_before_take" => {
             let mut attached = registered.attach(&lease, &material).unwrap();
-            let cancel = attached.scope.ready.profile.cancel.clone();
+            let cancel = attached.route_scope.scope.ready.profile.cancel.clone();
             let config = lease.root().join("config.json");
             let mut changed = fs::read(&config).unwrap();
             changed.push(b'\n');
@@ -213,20 +213,22 @@ fn registration_subprocess() {
                 attached.take_route(&lease, &material),
                 Err(RegistrationFailure::Indeterminate)
             ));
-            assert!(attached.route.is_some());
+            assert!(attached.route_scope.route.is_some());
             assert!(!cancel.is_cancelled());
         }
         "displaced_after_take" => {
             let mut attached = registered.attach(&lease, &material).unwrap();
-            let cancel = attached.scope.ready.profile.cancel.clone();
+            let cancel = attached.route_scope.scope.ready.profile.cancel.clone();
+            let (quota, mut control) = attached.actor_parts();
+            assert!(std::ptr::eq(quota, control.quota));
             assert!(matches!(
-                attached.take_route_checked(&lease, &material, || {
+                control.take_route_checked(&lease, &material, || {
                     assert!(!cancel.is_cancelled());
                     displace_default();
                 }),
                 Err(RegistrationFailure::Indeterminate)
             ));
-            assert!(attached.route.is_none());
+            assert!(attached.route_scope.route.is_none());
             assert!(cancel.is_cancelled());
         }
         "dead_lease" => {

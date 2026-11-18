@@ -1,13 +1,16 @@
 //! Local readiness edges for one candidate worker and the existing daemon listener.
 
+use std::time::{Duration, Instant};
 use tokio::sync::watch;
+
+const STARTUP_BUDGET: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum State {
     Waiting,
     Registered,
     OrdinaryReady,
-    Ready,
+    Ready(Instant),
     Stopped,
 }
 
@@ -30,7 +33,7 @@ impl StopOnDrop {
                 (State::Waiting, Edge::Registered) => State::Registered,
                 (State::Waiting, Edge::OrdinaryReady) => State::OrdinaryReady,
                 (State::Registered, Edge::OrdinaryReady)
-                | (State::OrdinaryReady, Edge::Registered) => State::Ready,
+                | (State::OrdinaryReady, Edge::Registered) => State::Ready(Instant::now()),
                 (state, _) => state,
             };
             let changed = *state != next;
@@ -75,7 +78,7 @@ pub(crate) struct Readiness(watch::Receiver<State>);
 
 impl Readiness {
     pub(crate) fn is_current(&self) -> bool {
-        self.0.has_changed().is_ok() && *self.0.borrow() == State::Ready
+        self.0.has_changed().is_ok() && matches!(*self.0.borrow(), State::Ready(_))
     }
 }
 
@@ -89,11 +92,15 @@ impl WorkerStart {
         let state = *self
             .readiness
             .0
-            .wait_for(|state| matches!(state, State::Ready | State::Stopped))
+            .wait_for(|state| matches!(state, State::Ready(_) | State::Stopped))
             .await
             .ok()?;
-        (state == State::Ready).then(|| Ready {
+        let State::Ready(completed_at) = state else {
+            return None;
+        };
+        Some(Ready {
             readiness: self.readiness,
+            completed_at,
             _stop: self.stop,
         })
     }
@@ -102,12 +109,27 @@ impl WorkerStart {
 /// Revocable startup observation. The worker still checks its actual scope.
 pub(crate) struct Ready {
     readiness: Readiness,
+    completed_at: Instant,
     _stop: StopOnDrop,
 }
 
 impl Ready {
     pub(crate) fn is_current(&self) -> bool {
         self.readiness.is_current()
+    }
+
+    pub(crate) fn startup_remaining(&self) -> Option<Duration> {
+        self.startup_remaining_at(Instant::now())
+    }
+
+    fn startup_remaining_at(&self, now: Instant) -> Option<Duration> {
+        if !self.is_current() {
+            return None;
+        }
+        let elapsed = now.checked_duration_since(self.completed_at)?;
+        STARTUP_BUDGET
+            .checked_sub(elapsed)
+            .filter(|remaining| !remaining.is_zero())
     }
 
     pub(crate) async fn stopped(&mut self) {
@@ -175,6 +197,56 @@ mod tests {
                 .unwrap();
             assert!(ready.is_current());
             assert!(intake.is_current());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn startup_budget_starts_once_at_the_second_edge() {
+        for listener_first in [false, true] {
+            let (startup, listener, worker) = pair();
+            let intake = listener.readiness();
+            if listener_first {
+                listener.registered();
+            } else {
+                startup.ordinary_ready();
+            }
+
+            let before = Instant::now();
+            if listener_first {
+                startup.ordinary_ready();
+            } else {
+                listener.registered();
+            }
+            let after = Instant::now();
+            let State::Ready(completed_at) = *intake.0.borrow() else {
+                panic!("both edges must record one readiness instant");
+            };
+            assert!((before..=after).contains(&completed_at));
+
+            listener.registered();
+            startup.ordinary_ready();
+            assert!(matches!(*intake.0.borrow(), State::Ready(time) if time == completed_at));
+
+            let ready = worker.ready().await.unwrap();
+            assert_eq!(ready.completed_at, completed_at);
+            assert_eq!(
+                ready.startup_remaining_at(completed_at),
+                Some(STARTUP_BUDGET)
+            );
+            assert_eq!(
+                ready.startup_remaining_at(completed_at + Duration::from_secs(14)),
+                Some(Duration::from_secs(1))
+            );
+            for now in [
+                completed_at - Duration::from_millis(1),
+                completed_at + STARTUP_BUDGET,
+                completed_at + STARTUP_BUDGET + Duration::from_secs(1),
+            ] {
+                assert_eq!(ready.startup_remaining_at(now), None);
+            }
+            startup.stop();
+            assert_eq!(ready.startup_remaining_at(completed_at), None);
+            assert_eq!(ready.startup_remaining(), None);
         }
     }
 
