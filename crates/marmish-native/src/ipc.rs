@@ -21,9 +21,17 @@ const IO_TIMEOUT: Duration = Duration::from_secs(15);
 #[path = "terminal_socket_handshake.rs"]
 pub(crate) mod terminal_handshake;
 
+#[cfg(test)]
+#[path = "peer_pending_ipc.rs"]
+pub(crate) mod peer;
+
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Request {
+    #[cfg(test)]
+    Peer {
+        request: peer::WireRequest,
+    },
     TerminalStart {
         request: terminal_handshake::Start,
     },
@@ -108,6 +116,10 @@ pub(crate) enum Request {
 
 impl Request {
     pub(crate) fn is_command(&self) -> bool {
+        #[cfg(test)]
+        if matches!(self, Self::Peer { .. }) {
+            return false;
+        }
         if matches!(self, Self::TerminalStart { .. }) {
             return false;
         }
@@ -121,6 +133,10 @@ impl Request {
         )
     }
     pub(crate) fn uses_short_exchange(&self) -> bool {
+        #[cfg(test)]
+        if matches!(self, Self::Peer { .. }) {
+            return true;
+        }
         self.is_command() || matches!(self, Self::ClientInventory { .. })
     }
 }
@@ -433,31 +449,98 @@ pub(crate) async fn serve_inner(
     status: watch::Receiver<Response>,
     terminal: Option<terminal_handshake::Intake>,
 ) -> Result<()> {
+    serve_with_peer(
+        listener,
+        queue,
+        status,
+        terminal,
+        #[cfg(test)]
+        None,
+        #[cfg(test)]
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn serve_with_peer(
+    listener: UnixListener,
+    queue: mpsc::Sender<Pending>,
+    status: watch::Receiver<Response>,
+    terminal: Option<terminal_handshake::Intake>,
+    #[cfg(test)] peer: Option<peer::Listener>,
+    #[cfg(test)] drain: Option<oneshot::Receiver<()>>,
+) -> Result<()> {
+    #[cfg(test)]
+    let peer = peer.map(|peer| peer.register(&listener)).transpose()?;
+    let drain = async {
+        #[cfg(test)]
+        if let Some(drain) = drain {
+            let _ = drain.await;
+            return;
+        }
+        std::future::pending::<()>().await;
+    };
+    tokio::pin!(drain);
     let clients = std::sync::Arc::new(tokio::sync::Semaphore::new(64));
     let mut tasks = tokio::task::JoinSet::new();
-    loop {
+    let outcome = loop {
         tokio::select! {
+            _ = &mut drain => break Ok(()),
+            _ = tasks.join_next(), if !tasks.is_empty() => {}
             accepted = listener.accept() => {
                 let (mut stream, _) = match accepted {
                     Ok(accepted) => accepted,
                     Err(_) => {
+                        #[cfg(test)]
+                        if peer.is_some() {
+                            break Err(Error::Invalid("peer_listener_accept"));
+                        }
                         crate::diagnostics::event("ipc_accept", "retry_pending");
                         tokio::time::sleep(Duration::from_millis(50)).await;
                         continue;
                     }
                 };
+                #[cfg(test)]
+                let accepted_at = tokio::time::Instant::now();
+                #[cfg(test)]
+                let uid = match stream.peer_cred() {
+                    Ok(credentials) if verify_peer_uid(credentials.uid()).is_ok() =>
+                        credentials.uid(),
+                    _ => continue,
+                };
+                #[cfg(not(test))]
                 if verify_peer(&stream).is_err() { continue; }
                 let Ok(permit) = clients.clone().try_acquire_owned() else { continue };
                 let queue = queue.clone();
                 let status = status.clone();
                 let terminal = terminal.clone();
+                #[cfg(test)]
+                let intake = peer.as_ref().map(|(_, intake)| intake.clone());
                 tasks.spawn(async move {
                     let _permit = permit;
-                    let exchange_deadline = tokio::time::Instant::now() + IO_TIMEOUT;
-                    let result = tokio::time::timeout(IO_TIMEOUT, read_frame::<Request>(&mut stream)).await;
+                    #[cfg(not(test))]
+                    let accepted_at = tokio::time::Instant::now();
+                    let exchange_deadline = accepted_at + IO_TIMEOUT;
+                    let result = tokio::time::timeout_at(exchange_deadline, read_frame::<Request>(&mut stream)).await;
                     if let Ok(Ok(Request::TerminalStart { request })) = result {
                         let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
                         terminal_handshake::transfer(terminal, request, stream, _permit, deadline).await;
+                        return;
+                    }
+                    #[cfg(test)]
+                    if let Ok(Ok(Request::Peer { request })) = result {
+                        let response = peer::handle(
+                            intake.as_ref(),
+                            request,
+                            uid,
+                            exchange_deadline - Duration::from_millis(100),
+                        ).await;
+                        if tokio::time::Instant::now() < exchange_deadline {
+                            let _ = tokio::time::timeout_at(
+                                exchange_deadline,
+                                write_frame(&mut stream, &response),
+                            ).await;
+                        }
                         return;
                     }
                     let short_exchange = matches!(&result,Ok(Ok(request)) if request.uses_short_exchange());
@@ -481,9 +564,13 @@ pub(crate) async fn serve_inner(
                     let _ = tokio::time::timeout_at(write_deadline, write_frame(&mut stream, &response)).await;
                 });
             }
-            _ = tasks.join_next(), if !tasks.is_empty() => {}
         }
-    }
+    };
+    #[cfg(test)]
+    drop(peer);
+    drop(listener);
+    tasks.shutdown().await;
+    outcome
 }
 
 #[cfg(test)]

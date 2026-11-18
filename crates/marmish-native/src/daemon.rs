@@ -29,14 +29,32 @@ pub struct Config {
 }
 
 pub async fn open(config: Config) -> Result<(ProfileLease, MdkOwner)> {
-    let (profile, owner, _) = open_inner(config, false).await?;
-    Ok((profile, owner))
+    let opened = open_inner(
+        config,
+        false,
+        #[cfg(test)]
+        None,
+    )
+    .await?;
+    Ok((opened.profile, opened.owner))
+}
+
+struct Opened {
+    profile: ProfileLease,
+    owner: MdkOwner,
+    terminal: Option<terminal_owner::Prepared>,
+    #[cfg(test)]
+    peer_identity: Option<(
+        crate::identity::IdentityMaterial,
+        crate::command_config::Role,
+    )>,
 }
 
 async fn open_inner(
     config: Config,
     terminal: bool,
-) -> Result<(ProfileLease, MdkOwner, Option<terminal_owner::Prepared>)> {
+    #[cfg(test)] fixture: Option<&PeerFixture>,
+) -> Result<Opened> {
     let origin = crate::command_limits::ServiceLifetime::start(None)?;
     let (mut profile, material, policy, peers, retention, commands) =
         tokio::task::spawn_blocking(move || {
@@ -98,6 +116,17 @@ async fn open_inner(
             cache: profile.arti_cache().to_owned(),
         },
     )?;
+    #[cfg(test)]
+    let connector = match fixture.and_then(|fixture| fixture.connector.clone()) {
+        Some(selected)
+            if selected.policy().urls() == policy.urls()
+                && selected.policy().mode() == policy.mode() =>
+        {
+            selected
+        }
+        Some(_) => return Err(Error::Invalid("peer_fixture_ordinary_connector")),
+        None => connector,
+    };
     let lifetime = std::sync::Arc::new(
         origin.constrain(commands.as_ref().and_then(|c| c.limits().max_uptime))?,
     );
@@ -118,12 +147,23 @@ async fn open_inner(
         )?),
         None => None,
     };
+    #[cfg(test)]
+    let peer_role = commands.as_ref().map(|config| config.role());
     if let Some(commands) = commands {
-        let worker = crate::native_layout::resolve(&std::env::current_exe()?)?.worker;
+        let executable = std::env::current_exe()?;
+        #[cfg(test)]
+        let executable = fixture.map_or(&executable, |fixture| &fixture.layout);
+        let worker = crate::native_layout::resolve(executable.as_path())?.worker;
         owner.enable_commands(&profile, &material, commands, worker)?;
         owner.command_set_lifetime(lifetime);
     }
-    Ok((profile, owner, terminal))
+    Ok(Opened {
+        profile,
+        owner,
+        terminal,
+        #[cfg(test)]
+        peer_identity: peer_role.map(|role| (material, role)),
+    })
 }
 
 fn failure(error: Error) -> Response {
@@ -147,6 +187,10 @@ async fn dispatch(
     rooms: &mut crate::command_local::RoomIntents,
     request: Request,
 ) -> Result<Response> {
+    #[cfg(test)]
+    if matches!(request, Request::Peer { .. }) {
+        return Err(Error::Invalid("peer_local_operation"));
+    }
     if let Request::ClientInventory { request } = request {
         return Ok(Response::inventory(owner.client_inventory(request)));
     }
@@ -221,9 +265,79 @@ pub(crate) async fn run_with_startup(
     config: Config,
     startup: Option<crate::daemon_launch::StartupReporter>,
 ) -> Result<()> {
+    run_inner(
+        config,
+        startup,
+        #[cfg(test)]
+        None,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(crate) struct PeerFixture {
+    pub(crate) bootstrap: Option<crate::peer_invitation::daemon_peer::Bootstrap>,
+    pub(crate) connector: Option<RelayConnector>,
+    pub(crate) layout: PathBuf,
+    pub(crate) stop: tokio::sync::oneshot::Receiver<()>,
+}
+
+#[cfg(test)]
+pub(crate) async fn run_peer_fixture(
+    config: Config,
+    startup: Option<crate::daemon_launch::StartupReporter>,
+    fixture: PeerFixture,
+) -> Result<()> {
+    run_inner(config, startup, Some(fixture)).await
+}
+
+async fn run_inner(
+    config: Config,
+    startup: Option<crate::daemon_launch::StartupReporter>,
+    #[cfg(test)] fixture: Option<PeerFixture>,
+) -> Result<()> {
     use std::sync::Arc;
-    let (profile, mut owner, terminal) = open_inner(config, true).await?;
+    let opened = open_inner(
+        config,
+        true,
+        #[cfg(test)]
+        fixture.as_ref(),
+    )
+    .await?;
+    let Opened {
+        profile,
+        mut owner,
+        terminal,
+        #[cfg(test)]
+        peer_identity,
+    } = opened;
     let profile = Arc::new(profile);
+    #[cfg(test)]
+    let (fixture_stop, bootstrap) = match fixture {
+        Some(fixture) => (Some(fixture.stop), fixture.bootstrap),
+        None => (None, None),
+    };
+    #[cfg(test)]
+    let (peer_worker, peer_listener, peer_control) = match bootstrap.zip(peer_identity) {
+        Some((bootstrap, (material, role))) if bootstrap.eligible(role) => {
+            let (worker, listener, control) = ipc::peer::pair(&profile);
+            match crate::peer_invitation::daemon_peer::Runtime::start(
+                Arc::clone(&profile),
+                material,
+                role,
+                bootstrap,
+                worker,
+            ) {
+                Ok(runtime) => (Some(runtime), Some(listener), Some(control)),
+                Err(_) => {
+                    control.stop();
+                    crate::diagnostics::event("peer_owner", "startup_unavailable");
+                    (None, None, None)
+                }
+            }
+        }
+        _ => (None, None, None),
+    };
     let (runtime, control, setup) = match terminal
         .map(|terminal| terminal_owner::Runtime::start(terminal, profile.clone()))
         .transpose()
@@ -233,13 +347,36 @@ pub(crate) async fn run_with_startup(
         Err(error) => (None, None, Err(error)),
     };
     let result = match setup {
-        Ok(()) => serve_owner(&profile, &mut owner, startup, control).await,
+        Ok(()) => {
+            serve_owner(
+                &profile,
+                &mut owner,
+                startup,
+                control,
+                #[cfg(test)]
+                peer_listener,
+                #[cfg(test)]
+                peer_control.as_ref(),
+                #[cfg(test)]
+                fixture_stop,
+            )
+            .await
+        }
         Err(error) => Err(error),
     };
+    #[cfg(test)]
+    if let Some(control) = &peer_control {
+        control.stop();
+    }
     let joined = match runtime {
         Some(runtime) => runtime.join().await,
         None => Ok(()),
     };
+    #[cfg(test)]
+    let joined = joined.and(match peer_worker {
+        Some(runtime) => runtime.join().await,
+        None => Ok(()),
+    });
     // A fallback reaper can still hold the exact lease after the owning
     // workers join. Durable stop waits until that last owner releases it.
     let mut profile = profile;
@@ -259,6 +396,8 @@ pub(crate) async fn run_with_startup(
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     };
+    #[cfg(test)]
+    let incomplete = incomplete || matches!(result, Err(Error::Identity("owned_stop_incomplete")));
     let stopped = stop_reporting(profile, owner, joined.is_ok() && !incomplete).await;
     result.and(joined).and(if incomplete {
         Err(Error::Identity("owned_stop_incomplete"))
@@ -305,6 +444,9 @@ async fn serve_owner(
     owner: &mut MdkOwner,
     mut startup: Option<crate::daemon_launch::StartupReporter>,
     mut terminal: Option<terminal_owner::Control>,
+    #[cfg(test)] peer_listener: Option<ipc::peer::Listener>,
+    #[cfg(test)] peer_control: Option<&ipc::peer::Control>,
+    #[cfg(test)] fixture_stop: Option<tokio::sync::oneshot::Receiver<()>>,
 ) -> Result<()> {
     let lifetime = owner.command_lifetime();
     let expired = async move {
@@ -332,21 +474,57 @@ async fn serve_owner(
     let (status, snapshots) =
         watch::channel(Response::success(serde_json::json!({"state":"activating"})));
     let terminal_intake = terminal.as_ref().map(|terminal| terminal.intake.clone());
-    let server = tokio::spawn(ipc::serve_inner(
-        listener,
-        queue,
-        snapshots,
-        terminal_intake,
-    ));
+    #[cfg(test)]
+    let (drain, drain_request) = match fixture_stop.is_some() {
+        true => {
+            let (drain, request) = tokio::sync::oneshot::channel();
+            (Some(drain), Some(request))
+        }
+        false => (None, None),
+    };
+    let mut server = tokio::spawn(async move {
+        #[cfg(test)]
+        if drain_request.is_some() {
+            return ipc::serve_with_peer(
+                listener,
+                queue,
+                snapshots,
+                terminal_intake,
+                peer_listener,
+                drain_request,
+            )
+            .await;
+        }
+        ipc::serve_inner(listener, queue, snapshots, terminal_intake).await
+    });
+    #[cfg(test)]
+    let mut listener_joined = false;
     let shutdown_signal = async {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {},
             _ = terminate.recv() => {},
+            _ = async {
+                #[cfg(test)]
+                if let Some(stop) = fixture_stop {
+                    let _ = stop.await;
+                    return;
+                }
+                std::future::pending::<()>().await;
+            } => {},
         }
     };
     tokio::pin!(shutdown_signal);
+    #[cfg(test)]
+    let track_listener = drain.is_some();
+    #[cfg(not(test))]
+    let track_listener = false;
     let result = async {
         tokio::select! {
+            stopped = &mut server, if track_listener => {
+                #[cfg(test)]
+                { listener_joined = true; }
+                return listener_stop(stopped);
+            }
             activated = owner.activate(Instant::now() + Duration::from_secs(150)) => activated?,
             _ = &mut shutdown_signal => return Ok(()),
             _ = &mut expired => return Ok(()),
@@ -369,6 +547,11 @@ async fn serve_owner(
                 reporter.ready().await?;
             }
             tokio::select! {
+                stopped = &mut server, if track_listener => {
+                    #[cfg(test)]
+                    { listener_joined = true; }
+                    return listener_stop(stopped);
+                }
                 _ = &mut shutdown_signal => break,
                 _ = &mut expired => break,
                 Some(request) = async {
@@ -433,7 +616,29 @@ async fn serve_owner(
         }
         Ok::<_, Error>(())
     }.await;
+    #[cfg(test)]
+    if let Some(drain) = drain {
+        if let Some(control) = peer_control {
+            control.stop();
+        }
+        let _ = drain.send(());
+        if listener_joined {
+            return result;
+        }
+        let drained = server
+            .await
+            .map_err(|_| Error::Identity("owned_stop_incomplete"))?;
+        return result.and(drained);
+    }
     server.abort();
     let _ = server.await;
     result
+}
+
+fn listener_stop(outcome: std::result::Result<Result<()>, tokio::task::JoinError>) -> Result<()> {
+    match outcome {
+        Ok(Ok(())) => Err(Error::Invalid("ipc_listener_stopped")),
+        Ok(Err(error)) => Err(error),
+        Err(_) => Err(Error::Identity("owned_stop_incomplete")),
+    }
 }
