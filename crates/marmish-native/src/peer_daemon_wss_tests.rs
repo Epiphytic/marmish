@@ -38,6 +38,32 @@ const PROFILE: &str = "recipient";
 const STEP: Duration = Duration::from_secs(5);
 const WAIT: Duration = Duration::from_secs(35);
 
+fn run_native<F, Fut>(limit: Duration, body: F)
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()>,
+{
+    // Debug MDK and native Command futures exceed libtest's default stack.
+    let fixture = std::thread::Builder::new()
+        .name("peer-daemon-wss-fixture".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            tokio::task::LocalSet::new().block_on(&runtime, async {
+                timeout(limit, body())
+                    .await
+                    .expect("bounded private WSS and same-UID daemon qualification");
+            });
+        })
+        .unwrap();
+    if let Err(panic) = fixture.join() {
+        std::panic::resume_unwind(panic);
+    }
+}
+
 fn private() -> TempDir {
     tempfile::Builder::new()
         .permissions(Permissions::from_mode(0o700))
@@ -116,20 +142,6 @@ impl Round {
         let ordinary = Relay::start().await;
         let mut setup = ProfileLease::acquire(root.path(), PROFILE).unwrap();
         let signer = material(&mut setup, &daemon).public_key();
-        let config = json!({
-            "version": 1, "role": "client", "relays": [ordinary.url.as_str()],
-            "tor": "off", "cwd": "/", "limits": {}, "aliases": {},
-            "trusted_remotes": [command.public().to_hex()], "execution_clients": [],
-            "command_policy": {"version": 1, "defaults": {"allow_exec": []}}
-        });
-        OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(setup.root().join("config.json"))
-            .unwrap()
-            .write_all(&serde_json::to_vec(&config).unwrap())
-            .unwrap();
         drop(setup);
         ordinary.ordinary(signer);
         ordinary.ordinary(command.public());
@@ -156,7 +168,7 @@ impl Round {
         );
         relay.url = bound;
         let wall = Arc::new(AtomicU64::new(Wall::System.sample().unwrap().as_secs()));
-        Self {
+        let round = Self {
             ordinary,
             relay,
             command,
@@ -166,7 +178,38 @@ impl Round {
             founder_root,
             wall,
             daemon,
-        }
+        };
+        round.configure(Some("client"));
+        round
+    }
+
+    fn configure(&self, role: Option<&str>) {
+        let lease = ProfileLease::acquire(self.root.path(), PROFILE).unwrap();
+        let path = lease.root().join("config.json");
+        let Some(role) = role else {
+            std::fs::remove_file(path).unwrap();
+            return;
+        };
+        let config = json!({
+            "version": 1, "role": role, "relays": [self.ordinary.url.as_str()],
+            "tor": "off", "cwd": "/", "limits": {}, "aliases": {},
+            "trusted_remotes": [self.command.public().to_hex()], "execution_clients": [],
+            "command_policy": {"version": 1, "defaults": {"allow_exec": []}}
+        });
+        OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .unwrap()
+            .write_all(&serde_json::to_vec(&config).unwrap())
+            .unwrap();
+    }
+
+    fn assert_stopped(&self) {
+        assert!(!self.socket().exists());
+        assert!(ProfileLease::acquire(self.root.path(), PROFILE).is_ok());
     }
 
     fn socket(&self) -> PathBuf {
@@ -334,7 +377,7 @@ impl Round {
         delivery: &Delivery,
         expected: CustodyState,
         mode: Mode,
-    ) -> [u8; 32] {
+    ) -> (PathBuf, [u8; 32]) {
         let mut lease =
             ProfileLease::acquire(self.root.path(), PROFILE).expect("daemon released sole lease");
         let material = material(&mut lease, &self.daemon);
@@ -369,12 +412,11 @@ impl Round {
             .expect("exact native closed-room readback and consumed package");
         assert!(held.matches_pending_readback(&joined));
         let (binding, witness) = held.stage();
-        Paths::new(&lease, &material)
+        let stage = Paths::new(&lease, &material)
             .unwrap()
             .reopen_provisional(binding, witness)
-            .unwrap()
-            .digest()
-            .unwrap()
+            .unwrap();
+        (stage.path().to_owned(), stage.digest().unwrap())
     }
 }
 
@@ -465,6 +507,11 @@ async fn manual() {
     show(&socket, pending.selection, peer::State::Pending).await;
     tokio::time::sleep(Duration::from_millis(150)).await;
     show(&socket, pending.selection, peer::State::Pending).await;
+    let stale = peer::Selection {
+        generation: pending.selection.generation.checked_add(1).unwrap(),
+        ..pending.selection
+    };
+    expect_decision_refusal(&socket, stale, peer::Failure::Stale).await;
     let began = Instant::now();
     let request = || peer::Request::Approve {
         selection: pending.selection,
@@ -501,23 +548,10 @@ async fn manual() {
     assert_eq!(entry.activating_at, committed.activating_at);
     let retry = began.elapsed();
     round.wall.store(pending.expires_at, Ordering::Relaxed);
-    assert_eq!(
-        peer::client_request(
-            &socket,
-            peer::Request::Show {
-                selection: pending.selection
-            }
-        )
-        .await,
-        Err(peer::Failure::Expired),
-    );
-    assert_eq!(
-        peer::client_request(&socket, request()).await,
-        Err(peer::Failure::Expired),
-    );
+    expect_decision_refusal(&socket, pending.selection, peer::Failure::Expired).await;
+    assert_expired_hidden(&socket).await;
     daemon.stop().await;
-    assert!(!socket.exists());
-    assert!(ProfileLease::acquire(round.root.path(), PROFILE).is_ok());
+    round.assert_stopped();
     assert!(round.relay.peer_only_publications());
     assert_eq!(round.relay.peer_transcript().len(), 3);
     assert_eq!(round.ordinary.publication_attempts(7435), 0);
@@ -557,16 +591,104 @@ async fn automatic() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[ignore = "requires same-build native bins and two independent private TLS relays"]
-async fn peer_daemon_wss_manual_and_automatic_custody() {
-    tokio::task::LocalSet::new()
-        .run_until(timeout(Duration::from_secs(240), async {
-            manual().await;
-            automatic().await;
-        }))
+fn peer_daemon_wss_manual_and_automatic_custody() {
+    run_native(Duration::from_secs(240), || async {
+        manual().await;
+        automatic().await;
+    });
+}
+
+async fn expect_decision_refusal(
+    socket: &Path,
+    selection: peer::Selection,
+    refusal: peer::Failure,
+) {
+    for request in [
+        peer::Request::Show { selection },
+        peer::Request::Approve { selection },
+    ] {
+        assert_eq!(peer::client_request(socket, request).await, Err(refusal));
+    }
+}
+
+async fn assert_expired_hidden(socket: &Path) {
+    let peer::Reply::List { entries } = peer::client_request(socket, peer::Request::List {})
         .await
-        .expect("bounded same-UID/native WSS daemon qualification");
+        .unwrap()
+    else {
+        panic!("typed Peer inventory after expiry");
+    };
+    assert!(entries.is_empty());
+}
+
+async fn refusal() {
+    let round = Round::initialize().await;
+    let socket = round.socket();
+    let peer_path = round.root.path().join(PROFILE).join("peer");
+    for (role, admission) in [
+        (Some("client"), Admission::Off),
+        (Some("server"), Admission::Manual),
+        (None, Admission::Manual),
+    ] {
+        round.configure(role);
+        let daemon = round.start(admission, false).await;
+        assert_eq!(
+            peer::client_request(&socket, peer::Request::List {}).await,
+            Err(peer::Failure::Stopped),
+        );
+        assert!(!peer_path.exists());
+        assert!(!round.relay.authenticated(round.signer));
+        daemon.stop().await;
+        round.assert_stopped();
+    }
+
+    round.configure(Some("client"));
+    let daemon = round.start(Admission::Manual, false).await;
+    let (selector, delivery) = round.send_delivery().await;
+    let pending = entry(&socket, selector, peer::State::Pending).await;
+    show(&socket, pending.selection, peer::State::Pending).await;
+    daemon.stop().await;
+    round.assert_stopped();
+    let (stage, _) = round.closed_stage(
+        &pending.selection,
+        &delivery,
+        CustodyState::Pending,
+        Mode::Manual,
+    );
+    // Remove the expected image only after both owners have closed. Keep the
+    // exact inode in this disposable root so fault injection creates no copy.
+    let saved = round.root.path().join("isolated-provisional.db");
+    std::fs::rename(&stage, &saved).unwrap();
+
+    let daemon = round.start(Admission::Manual, false).await;
+    assert_eq!(
+        entry(&socket, selector, peer::State::Pending).await,
+        pending
+    );
+    expect_decision_refusal(&socket, pending.selection, peer::Failure::Unavailable).await;
+    daemon.stop().await;
+    round.assert_stopped();
+    std::fs::rename(saved, stage).unwrap();
+
+    let daemon = round.start(Admission::Manual, false).await;
+    show(&socket, pending.selection, peer::State::Pending).await;
+    round.wall.store(pending.expires_at, Ordering::Relaxed);
+    expect_decision_refusal(&socket, pending.selection, peer::Failure::Expired).await;
+    assert_expired_hidden(&socket).await;
+    assert_no_command(&socket).await;
+    daemon.stop().await;
+    round.assert_stopped();
+    assert_eq!(round.relay.peer_transcript().len(), 3);
+    assert!(round.relay.peer_only_publications());
+    assert_eq!(round.ordinary.publication_attempts(7435), 0);
+}
+
+#[test]
+#[ignore = "requires same-build native bins and two independent private TLS relays"]
+fn peer_daemon_wss_ineligible_and_pending_refusals() {
+    run_native(Duration::from_secs(180), refusal);
 }
 
 async fn ordinary_command(socket: &Path, remote: PublicKey, relay: &Relay, cat: &Path) {
@@ -817,8 +939,7 @@ async fn outage() {
     assert_eq!(round.relay.peer_transcript().len(), 3);
     round.command.stop_fixture_server(server).await;
     let stop = daemon.stop().await;
-    assert!(!socket.exists());
-    assert!(ProfileLease::acquire(round.root.path(), PROFILE).is_ok());
+    round.assert_stopped();
     eprintln!(
         "peer_daemon_wss outage decision_ms={} command_ms={} stop_ms={}",
         decision.as_millis(),
@@ -827,11 +948,8 @@ async fn outage() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[ignore = "requires same-build native bins and two independent private TLS relays"]
-async fn peer_daemon_wss_peer_outage_preserves_ordinary_commands() {
-    tokio::task::LocalSet::new()
-        .run_until(timeout(Duration::from_secs(160), outage()))
-        .await
-        .expect("bounded native Command during Peer-only outage");
+fn peer_daemon_wss_peer_outage_preserves_ordinary_commands() {
+    run_native(Duration::from_secs(160), outage);
 }
