@@ -51,3 +51,11 @@ focused tests. The changed Rust files match the author-reviewed source
 byte for byte. The current allowance covers observed extents. A future
 pager and dispatcher will still have to bound file growth before taking
 native authority.
+
+## Installer qualification diagnostics
+
+Claude Code Auto approved `f716b18` in session
+`566d59d8-b1af-4c33-b318-e191cda33832`. Four fixed native Peer errors now
+pass the qualification report's existing exact allowlist. The test still
+compares every reason with the native sources. All 61 Python keychain
+fixture unit tests passed, including hostile free-form diagnostic strings.
