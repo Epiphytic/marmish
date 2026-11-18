@@ -78,7 +78,9 @@ jobs:
           sh tools/marmish_interactive_core_case.sh -p marmish-native --test terminal_local_tmux terminal_socket_display_core
           sh tools/marmish_interactive_core_case.sh -p marmish-native --lib terminal_socket_session_rejects_input_and_resize_after_close
       - name: Check private Peer invitation records
-        run: sh tools/marmish_interactive_core_case.sh -p marmish-native --test peer_control_wire peer_control_core
+        run: |
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --test peer_control_wire peer_control_core
+          sh tools/marmish_interactive_core_case.sh -p marmish-native --lib peer_installed_offer_bad_remote_routes_do_not_block_the_cursor_page
       - name: Check scoped Peer publication permits
         run: sh tools/marmish_interactive_core_case.sh -p marmish-native --lib postjoin_gate::tests
       - name: Check Peer cursor reopening and effect rollback

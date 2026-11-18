@@ -70,6 +70,19 @@ pub(super) fn attach_with(
     let tx = cursor
         .conn
         .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if super::installed::present(&tx)? {
+        return Err(CursorError::Binding);
+    }
+    attach_rows(&tx, account, provisioning)?;
+    tx.commit()?;
+    Ok(())
+}
+
+pub(super) fn attach_rows(
+    tx: &Transaction<'_>,
+    account: PublicKey,
+    provisioning: impl FnOnce(&Transaction<'_>, bool) -> DbResult<()>,
+) -> DbResult<()> {
     let account = account.to_bytes();
     let existing: [u8; 32] = tx.query_row(
         "SELECT account FROM peer_cursor_version WHERE singleton=1 AND version=1",
@@ -87,7 +100,7 @@ pub(super) fn attach_with(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    provisioning(&tx, checkpoint.is_some())?;
+    provisioning(tx, checkpoint.is_some())?;
     match checkpoint {
         None => {
             tx.execute(
@@ -98,7 +111,6 @@ pub(super) fn attach_with(
         Some((2, stored)) if stored == account => {}
         _ => return Err(CursorError::Binding),
     }
-    tx.commit()?;
     Ok(())
 }
 
@@ -126,15 +138,20 @@ pub(super) fn advance_wall(tx: &Transaction<'_>, wall: u64) -> DbResult<()> {
 }
 
 pub(super) fn sweep(tx: &Transaction<'_>, wall: u64) -> DbResult<()> {
+    sweep_with(tx, wall, false)
+}
+
+pub(super) fn sweep_with(tx: &Transaction<'_>, wall: u64, retain_replay: bool) -> DbResult<()> {
     advance_wall(tx, wall)?;
     let wall = seconds(wall)?;
     tx.execute(
-        "DELETE FROM peer_consent_invite WHERE expires<=?1
+        "DELETE FROM peer_consent_invite
+            WHERE (CASE WHEN ?2 THEN replay_until ELSE expires END)<=?1
             AND NOT EXISTS (SELECT 1 FROM peer_consent_outbox o
                 WHERE o.server=peer_consent_invite.server AND o.expires>?1)
             AND NOT EXISTS (SELECT 1 FROM peer_provisioning_slot p
                 WHERE p.server=peer_consent_invite.server)",
-        [wall],
+        params![wall, retain_replay],
     )?;
     tx.execute(
         "DELETE FROM peer_consent_fence WHERE replay_until<=?1",

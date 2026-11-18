@@ -8,6 +8,8 @@ use super::*;
 
 #[path = "peer_consent_checkpoint_fixture.rs"]
 mod fixture;
+#[path = "peer_installed_offer_store_tests.rs"]
+mod installed_layout;
 #[path = "peer_provisioning_tests.rs"]
 mod provisioning;
 

@@ -77,7 +77,10 @@ replacement. A matching qualification record describes local evidence.
 Installed Peer activation still requires a reviewed owner and relay scope.
 The [offline invitation codec](validation/peer-control-codec.md)
 verifies the three signed Offer, Consent and Delivery flights, with sizes and
-local timing for each. The [offline Peer cursor store](validation/peer-cursor-store.md)
+local timing for each. The [v2 Offer checkpoint](validation/peer-installed-accepted-persistence.md)
+qualifies signature and ancestry verification, restart recovery, and durable
+cursor advancement past invalid signed routes in local SQLCipher. The daemon
+does not yet mount this checkpoint for live enrollment. The [offline Peer cursor store](validation/peer-cursor-store.md)
 verifies encrypted page and retry persistence, bounded replay, and transaction
 rollback. It remains a test target pending live carrier wiring. The
 [Peer Leave journal](validation/peer-native-leave-c1.md) tests atomic

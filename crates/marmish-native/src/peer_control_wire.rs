@@ -915,3 +915,5 @@ fn valid_retention_tag(tag: &Tag) -> bool {
 #[cfg(test)]
 #[path = "peer_control_wire_tests.rs"]
 mod tests;
+#[cfg(test)]
+pub(crate) use tests::replace_offer_relays;

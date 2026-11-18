@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use crate::peer_control_version::ControlVersion;
 use marmish_core::RelaySet;
 use nostr::event::Event;
 use nostr::key::{Keys, PublicKey};
@@ -14,6 +15,8 @@ use super::{
 use sha2::Digest as _;
 use zeroize::Zeroizing;
 
+#[path = "peer_installed_offer_store.rs"]
+mod installed;
 #[path = "peer_provisioning.rs"]
 pub(crate) mod provisioning;
 #[path = "peer_consent_checkpoint_rows.rs"]
@@ -36,6 +39,7 @@ pub(crate) enum Error {
     Policy,
     Missing,
     Expired,
+    Layout,
     Package,
     #[cfg(test)]
     Bound,
@@ -158,10 +162,17 @@ pub(crate) enum Work {
     Queued(Outbox),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Layout {
+    Legacy,
+    InstalledV2,
+}
+
 pub(crate) struct Checkpoint {
     pub(crate) cursor: CursorStore,
     signer: Keys,
     codec: Codec,
+    layout: Layout,
     owner: Arc<()>,
     owner_uid: u32,
     policy: Policy,
@@ -228,6 +239,7 @@ impl Checkpoint {
             cursor,
             signer,
             codec: Codec::new(MAX_OUTER_BYTES).map_err(|_| Error::Cursor(CursorError::Range))?,
+            layout: Layout::Legacy,
             owner: Arc::new(()),
             owner_uid,
             policy,
@@ -308,6 +320,13 @@ impl Checkpoint {
         })
     }
 
+    fn require_legacy(&self) -> Result<()> {
+        if self.layout != Layout::Legacy {
+            return Err(Error::Layout);
+        }
+        Ok(())
+    }
+
     fn cooldown_attached(&self) -> bool {
         #[cfg(test)]
         {
@@ -332,6 +351,9 @@ impl Checkpoint {
         let origin = self.origin(source)?;
         record.check()?;
         rows::check_wall(&self.cursor.conn, wall)?;
+        if self.layout == Layout::InstalledV2 {
+            installed::verify(&self.cursor.conn, self.signer.public_key(), origin)?;
+        }
         let Some(offer) = self.verify_offer(origin, record, wall)? else {
             return Ok(Disposition {
                 status: Status::Invalid,
@@ -339,6 +361,19 @@ impl Checkpoint {
             });
         };
 
+        match self.layout {
+            Layout::Legacy => self.admit_legacy(origin, record, wall, offer),
+            Layout::InstalledV2 => self.admit_installed(origin, record, wall, offer),
+        }
+    }
+
+    fn admit_legacy(
+        &mut self,
+        origin: Origin,
+        record: RawRecord<'_>,
+        wall: u64,
+        offer: Offer,
+    ) -> Result<Disposition> {
         let server = offer.flight().author;
         let reserved = self.policy.reserved.contains(&server);
         let automatic = matches!(self.policy.mode, Mode::Automatic);
@@ -392,6 +427,17 @@ impl Checkpoint {
                 rows::admit(tx, origin, record, &offer, reserved, decision_at)
             },
         );
+        self.finish_admission(origin, record, wall, &offer, result)
+    }
+
+    fn finish_admission(
+        &mut self,
+        origin: Origin,
+        record: RawRecord<'_>,
+        wall: u64,
+        offer: &Offer,
+        result: std::result::Result<(Receipt, TrustedOutcome), CursorError>,
+    ) -> Result<Disposition> {
         match result {
             Ok((receipt, outcome)) => Ok(Disposition {
                 status: Status::Accepted(outcome),
@@ -429,13 +475,11 @@ impl Checkpoint {
         if outer.id.to_bytes() != record.id || outer.created_at.as_secs() != record.stamp {
             return Err(Error::Index);
         }
-        let Ok(offer) = self.codec.open_offer(
-            &self.signer,
-            record.bytes,
-            None,
-            &self.route(origin)?.urls,
-            wall,
-        ) else {
+        let route = self.route(origin)?;
+        let Ok(offer) = self
+            .codec
+            .open_offer(&self.signer, record.bytes, None, &route.urls, wall)
+        else {
             return Ok(None);
         };
         let flight = offer.flight();
@@ -449,6 +493,7 @@ impl Checkpoint {
     }
 
     pub(crate) fn approve(&mut self, local: &Local, key: Selector, wall: u64) -> Result<()> {
+        self.require_legacy()?;
         let origin = self.authorized_row(local, key)?;
         let tx = self.cursor.with_wall(origin, wall)?;
         let row = Invitation::load_unowned(&tx, key, origin)?;
@@ -464,6 +509,7 @@ impl Checkpoint {
     }
 
     pub(crate) fn discard(&mut self, local: &Local, key: Selector, wall: u64) -> Result<()> {
+        self.require_legacy()?;
         self.check_local(local)?;
         let origin = rows::stored_origin(&self.cursor.conn, key)?;
         let tx = self.cursor.with_wall(origin, wall)?;
@@ -477,7 +523,13 @@ impl Checkpoint {
     pub(crate) fn sweep(&mut self, source: &Source, wall: u64) -> Result<()> {
         let origin = self.origin(source)?;
         let tx = self.cursor.with_wall(origin, wall)?;
-        rows::sweep(&tx, wall)?;
+        if self.layout == Layout::InstalledV2 {
+            installed::verify(&tx, self.signer.public_key(), origin)?;
+            installed::sweep(&tx, wall)?;
+            installed::verify(&tx, self.signer.public_key(), origin)?;
+        } else {
+            rows::sweep(&tx, wall)?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -508,6 +560,7 @@ impl Checkpoint {
         wall: u64,
         material: Option<Material<'_>>,
     ) -> Result<Work> {
+        self.require_legacy()?;
         if !self.policy.permits(key.server) {
             return Err(Error::Policy);
         }

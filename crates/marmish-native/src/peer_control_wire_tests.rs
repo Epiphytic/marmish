@@ -169,6 +169,35 @@ fn replace_body(
         .0
 }
 
+pub(crate) fn replace_offer_relays(
+    codec: &Codec,
+    frame: &[u8],
+    signer: &Keys,
+    recipient: &Keys,
+    relays: &[&str],
+) -> Vec<u8> {
+    let (_, _, mut rumor) = open_layers(recipient, frame);
+    let mut body: OfferWire = serde_json::from_str(&rumor.content).unwrap();
+    body.relays = relays.iter().map(|url| (*url).to_owned()).collect();
+    rumor.content = serde_json::to_string(&body).unwrap();
+    rumor.id = Some(rumor.compute_id());
+    codec
+        .prepare_with_cover(
+            signer,
+            &Keys::generate(),
+            recipient.public_key(),
+            &rumor,
+            body.expires_at,
+            Cover {
+                seal_offset: 0,
+                outer_offset: 0,
+                retention_buckets: 1,
+            },
+        )
+        .unwrap()
+        .0
+}
+
 #[tokio::test]
 async fn peer_control_core_three_flights_preserve_exact_signed_bytes() {
     let f = Fixture::new();

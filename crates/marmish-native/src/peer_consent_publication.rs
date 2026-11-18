@@ -28,6 +28,7 @@ impl Checkpoint {
         native_bytes: &[u8],
         wall: u64,
     ) -> Result<Option<Attempt>> {
+        self.require_legacy()?;
         let origin = self.origin(source)?;
         if !self.policy.permits(key.server) {
             return Err(Error::Policy);
@@ -80,6 +81,7 @@ impl Checkpoint {
         attempt: Attempt,
         wall: u64,
     ) -> Result<()> {
+        self.require_legacy()?;
         let origin = self.origin(source)?;
         let Attempt { key, row } = attempt;
         if row.origin != origin {
@@ -121,6 +123,7 @@ impl Checkpoint {
         source: &Source,
         wall: u64,
     ) -> Result<Vec<(Selector, bool)>> {
+        self.require_legacy()?;
         self.check_local(local)?;
         let origin = self.origin(source)?;
         let tx = self.cursor.with_wall(origin, wall)?;

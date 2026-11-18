@@ -110,7 +110,6 @@ impl CursorStore {
         self.commit_trusted_with(origin, record, wall, false, write_effect_and_fence)
     }
 
-    #[cfg(test)]
     pub(crate) fn commit_trusted_exact(
         &mut self,
         origin: Origin,
