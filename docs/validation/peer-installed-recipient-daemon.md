@@ -14,4 +14,10 @@ On Linux AMD64 with locked MDK `bdf9833` and the bundled SQLCipher pager, exact 
 
 The proof refused oversized or misaligned main images and preexisting journal, WAL, and SHM entries. It exercised a rollback journal near the page cap, observed `SQLITE_FULL`, and verified that rollback and cold reopen preserved all 1,450 rows and the previous extent. It retained every byte of 256 maximum-sized deferred records across a cold reopen and returned the bounded backlog error for the next record.
 
-Main extent is capped at 24 MiB. The conservative DELETE journal bound is 25,280,512 bytes with spilling disabled and the locked pager using one record per original database page. The combined bound is 50,511,872 bytes within the 49 MiB reservation. Ambiguous sidecars are kept and refused before SQLite opens them. The test-only opener still requires composed proof of ownership and path identity across first open, ordinary daemon startup, and both installed route outcomes. This slice does not qualify an installed build or macOS. [Design and code review](../reviews/peer-installed-recipient-daemon.md)
+Main extent is capped at 24 MiB. The conservative DELETE journal bound is 25,346,048 bytes with spilling disabled and the locked pager using one record per original database page. The combined bound is 50,511,872 bytes within the 49 MiB reservation. Ambiguous sidecars are kept and refused before SQLite opens them. The test-only opener still requires composed proof of ownership and path identity across first open, ordinary daemon startup, and both installed route outcomes. This slice does not qualify an installed build or macOS. [Design and code review](../reviews/peer-installed-recipient-daemon.md)
+
+The integrated source `0f60a06` on the authenticated route branch passed
+72 standalone cursor tests in 60.54 s with four opt-ins skipped. The
+four installed cursor cap checks in the native test binary passed in
+10.87 s. Rebasing over the published route evidence left the Rust and
+Cargo trees byte-identical.

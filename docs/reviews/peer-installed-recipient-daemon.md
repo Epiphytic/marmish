@@ -20,3 +20,11 @@ A disposable profile can qualify while an expired or ambiguously charged slot re
 Claude Code Sonnet in Auto mode approved exact source `df09a01c1e6c38f64d48694264aa6e9138b542b3`, session `58f73d22-623a-46b3-841f-503ddf2cf6be`. The reviewer compared the three Rust files to the previous opener, inspected the locked SQLCipher pager, and ran all four focused tests directly from the author's preserved test binary. A separate scratch SQLite check reproduced an oversized hot journal growing the main database before the page limit could protect it.
 
 The reviewer found no blocking changes and noted that spill-off is verified by pragma readback and the locked pager's behavior. The extent threshold has enough slack that the journal test alone does not distinguish spill-on from spill-off. The test uses one origin when filling the existing globally bounded deferred queue. The composed owner still needs the sole profile lease and its cursor inode checks. [Validation](../validation/peer-installed-recipient-daemon.md)
+
+Claude Code Opus in Auto mode approved the exact integrated source
+`0f60a06` in session `271f4996-52ba-4870-932e-2f90233803b7`. The
+review traced the locked pager's one-record-per-original-page bound,
+verified production callers retain the existing opener, and confirmed
+that the three cursor source files match the author-reviewed source.
+The independent journal upper-bound correction is incorporated in the
+[validation](../validation/peer-installed-recipient-daemon.md).
