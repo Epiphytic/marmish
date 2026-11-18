@@ -1,6 +1,6 @@
 # Self-hosted CI capability preflight
 
-2026-11-13; Beads `marmish-5z3`. **Incomplete: Phase A acceptance has not passed.**
+2026-11-13; Beads `marmish-5z3`. Historical Phase A results follow.
 This is capability inventory, not native product, installer, provider or transport
 qualification. No GitHub-hosted VM was used.
 
@@ -73,7 +73,25 @@ matched the first run. ARM64 reported Python 3.12.3, Git 2.43.0, curl 8.5.0,
 C compiler 13.3.0, make 4.3, Perl 5.38.2, host glibc 2.39 and Docker 29.9.0.
 Archive tools, readelf, D-Bus and setpriv were available. Image layers remained
 cached as declared. No product builds, provider checks or live transport tests
-were run, and no GitHub-hosted fallback was used. Phase A remains incomplete
+were run, and no GitHub-hosted fallback was used. This retry ended incomplete
 because macOS has not executed.
 Normal cancellation completed at 17:08:46 UTC, with macOS cancelled and no
 steps executed. No force-cancel was needed for this retry.
+
+## Interactive feature prerequisite check, 2026-11-18
+
+[Run 44366813751](https://github.com/Epiphytic/marmish/actions/runs/44366813751)
+was dispatched at 18:10:39 UTC from trusted master
+`3cef7a798d1da9e435aa4c1fcf68f5138c509d67`. All three native inventory
+jobs passed checkout, the prerequisite probe, and its cleanup step.
+
+| Platform | Started (UTC) | Job duration |
+| --- | --- | --- |
+| Linux AMD64 | 18:10:50 | 9 s |
+| Linux ARM64 | 18:22:55 | 11 s |
+| macOS ARM64 | 18:23:08 | 13 s |
+
+The two laptop jobs started roughly 12 minutes after dispatch and ran
+serially. This run completes the interactive feature prerequisite inventory.
+Candidate builds, installers, keychains, and live transport remain separate
+qualification steps. The run used only self-hosted runners.
