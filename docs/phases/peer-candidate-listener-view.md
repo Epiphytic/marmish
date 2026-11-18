@@ -10,20 +10,30 @@ qualify an installed Pending or Healthy Empty.
 
 ## Ownership and readiness
 
-Add a candidate-only, non-Clone listener offer containing the expected
-socket path from the held lease, the existing one-use
-`ListenerRegistration`, the same generation provided to
-`pending_view::pair`, the resulting `Reader`, and the exact registered
-read-only `Fatal`. The daemon composition is the only intended production
-constructor. The offer contains no lease, route, queue, key or storage.
-Consume it into the existing `ipc::serve_with_listener` and check
-`UnixListener::local_addr` against the expected pathname. A mismatch,
-failed check or retired offer stops the view and drops the readiness
-edge, while the ordinary listener continues serving. There is no retry
-with a changed generation. Only after validation can this listener
-record Registered. OrdinaryReady remains the daemon's responsibility.
-The listener registration survives for exactly the owning accept loop
-and stops the handshake and view before its client JoinSet drains.
+The daemon composition mints the nonzero listener generation. A
+candidate-only, non-Clone constructor accepts the generation and calls
+`pending_view::pair` itself, returning `(Offer, Producer)`. The offer
+holds the resulting reader and generation, the existing one-use
+`ListenerRegistration`, and the exact registered read-only `Fatal`.
+It contains no lease, route, queue, key or storage.
+
+Give the offer the identical `profile.socket_path()` pathname passed to
+`ipc::bind`. Consume it in the existing `ipc::serve_with_listener`
+and check that `UnixListener::local_addr().as_pathname()` is that path.
+This one-time check uses the name as bound. Later path changes in the
+same-UID private directory are bounded by that directory and the held
+lease, and the comparison does not attest to any later inode. A mismatch,
+failed check or already Stopped registration drops the offer while the
+ordinary listener continues serving. Only a valid listener records
+Registered. OrdinaryReady remains the daemon's responsibility.
+
+The offer retains a drop guard before and after consumption. On mismatch,
+early exit and future drop it calls `reader.stop()` and drops the
+registration to stop readiness. For a served offer, stop both before
+dropping the listener and awaiting `tasks.shutdown()`. The installed
+candidate must adopt the drain channel and explicitly await each accepted
+task set. The existing abort fallback remains stock or a deliberate test
+of view-stop-on-drop, which does not prove the joins.
 
 Read task intake can clone the immutable capability. It carries the
 view reader, its expected generation, the revocable readiness view
@@ -43,8 +53,11 @@ checks. If exact readiness is current and the fatal is healthy, try
 through a single bounded write. Recheck the same readiness and fatal
 immediately before asking `Read::reply_before_write` for the bounded
 projection. That method verifies the view stamp, matched selection,
-timing and liveness without native operations. Keep the permit until
-the write attempt finishes, even if a post-admission check fails.
+timing and liveness without native operations. Pass the same short
+reply deadline as the other inline exchanges, `exchange_deadline - 100ms`.
+Write under `timeout_at(exchange_deadline)`. Keep the permit until
+the write attempt finishes, including the unavailable response on
+post-admission refusal.
 An already admitted local write can race a later revocation. The
 candidate composition must cancel and actually join its socket task
 set on shutdown, before releasing ownership. No proof is claimed
@@ -52,17 +65,27 @@ about bytes already written before the cut.
 
 Unavailable, invalid, stale, mismatched or rate-limited Peer reads
 receive the existing fixed `peer_unavailable` response by that same
-short exchange where possible. There is no forwarding to the ordinary
+short exchange where possible. The existing 64-connection limit drops
+the connection before reading any request. There is no forwarding to the ordinary
 queue and no direct or refresh request to the actor. Keep the bounded
 typed List and Show decoder, fixture-only decision IPC and all other
-requests unchanged. Keep stock compilation free of the new capability.
+requests unchanged. Add an offer parameter only under
+`cfg(marmish_peer_receiver_candidate)`, independent of the existing
+`cfg(test)` inert listener fixture. The current `serve_inner` and
+daemon calls pass None in candidate builds until installed composition.
+Stock has no offer parameter. The dedicated no-offer `PeerRead` reply
+stays ahead of the ordinary queue arm.
 
 ## Qualification
 
 Use the actual same-UID socket and shared accept loop on Linux AMD64.
-Exercise wrong path, not Ready, no view, wrong generation, stopped
-readiness, tripped fatal, occupied four-permit budget and unconditional
-ordinary Status fallback. Add an exact synthetic test view if needed
+Exercise wrong path, already Stopped or dropped offer, not Ready, no
+view, wrong generation, Show with mismatched selection, stopped
+readiness and a fifth concurrent read. Test a cut between admission
+and the pre-write check with a deterministic test seam. Verify that
+aborting the serve future stops the view, any PeerRead result leaves
+the ordinary request queue untouched, and ordinary Status still works.
+Check that a stock build cannot use PeerRead. Add an exact synthetic test view if needed
 to verify the positive wire path mechanically. Qualifying the
 application's Pending and Empty proof still requires the actual actor
 and its real v2 and capped SQLCipher tests, with no installed synthetic
