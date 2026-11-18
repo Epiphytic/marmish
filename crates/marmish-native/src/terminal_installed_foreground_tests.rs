@@ -4,6 +4,9 @@ use std::io::{self, Read};
 use std::os::unix::fs::MetadataExt;
 use tokio::io::unix::AsyncFd;
 use tokio::process::Child;
+#[path = "terminal_installed_foreground_handoff_tests.rs"]
+mod handoff;
+pub(super) use handoff::prove_handoff;
 
 const SHELL: &[u8] =
     b"exec /usr/bin/env -i PATH=/usr/bin:/bin TERM=dumb LC_ALL=C PS1='MAR''MISH> ' /bin/sh -i\r";
@@ -342,16 +345,9 @@ async fn run_cli(
     let (master, slave) = open_cli_pty();
     let original = attributes(&slave);
     let original_size = size(&slave);
-    let flags = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_GETFL) };
-    assert_ne!(flags, -1);
-    assert_eq!(
-        unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) },
-        0
-    );
-    // File owns the same open master descriptor for the entire registration.
-    let pty = unsafe { AsyncFd::register(master) }.unwrap();
+    let pty = register_master(master);
     let began = Instant::now();
-    let mut child = spawn_cli(state, daemon, remote, &slave, false);
+    let mut child = spawn_cli(state, daemon, remote, &slave, CliMode::Default);
     let mut stderr = child.stderr.take().unwrap();
     let mut stderr_drain = tokio::spawn(async move {
         let mut chunk = [0; 4096];
@@ -395,4 +391,15 @@ async fn run_cli(
     );
     assert_restored(&slave, &original, restored_size);
     (cold, echo)
+}
+
+fn register_master(master: File) -> AsyncFd<File> {
+    let flags = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_GETFL) };
+    assert_ne!(flags, -1);
+    assert_eq!(
+        unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) },
+        0
+    );
+    // File owns the same open master descriptor for the entire registration.
+    unsafe { AsyncFd::register(master) }.unwrap()
 }

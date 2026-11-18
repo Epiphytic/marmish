@@ -129,6 +129,7 @@ enum Workload {
     QuietAuth,
     Foreground,
     Controls,
+    ForegroundHandoff,
     Cancel,
     ShellExit,
     Restart,
@@ -276,8 +277,13 @@ impl Drop for OwnedTmux {
     }
 }
 
+struct CommandTiming {
+    began: Instant,
+    finished: Instant,
+}
+
 enum CommandTurn {
-    Run(oneshot::Sender<Duration>),
+    Run(oneshot::Sender<CommandTiming>),
     ReplaceServer(Control),
     Stop,
 }
@@ -323,7 +329,7 @@ impl CommandOwners {
                     Some(CommandTurn::Run(reply)) => {
                         let began = Instant::now();
                         run_command(&mut self.client, &mut self.server, &self.command, &self.cat).await;
-                        let _ = reply.send(began.elapsed());
+                        let _ = reply.send(CommandTiming { began, finished: Instant::now() });
                     }
                     Some(CommandTurn::ReplaceServer(control)) => self.server_control = control,
                     Some(CommandTurn::Stop) | None => break,
@@ -341,6 +347,11 @@ impl CommandOwners {
 }
 
 async fn command(turns: &mpsc::Sender<CommandTurn>) -> Duration {
+    let timing = command_timing(turns).await;
+    timing.finished - timing.began
+}
+
+async fn command_timing(turns: &mpsc::Sender<CommandTurn>) -> CommandTiming {
     let (reply, response) = oneshot::channel();
     turns.send(CommandTurn::Run(reply)).await.unwrap();
     timeout(IO, response)
@@ -834,21 +845,30 @@ fn write_cli_config(state: &Path, remote: PublicKey, relay: &Relay) {
     .unwrap();
 }
 
+#[derive(Clone, Copy)]
+enum CliMode {
+    Default,
+    Observe,
+    Debug,
+}
+
 fn spawn_cli(
     state: &Path,
     daemon: &Path,
     remote: PublicKey,
     slave: &std::fs::File,
-    debug: bool,
+    mode: CliMode,
 ) -> tokio::process::Child {
     let mut command = tokio::process::Command::new(daemon.with_file_name("marmish"));
     command.arg("--state-dir").arg(state).args(["-i", "c"]);
-    if debug {
+    if matches!(mode, CliMode::Debug) {
         command.arg("--debug");
     }
+    command.arg("terminal").arg(remote.to_bech32().unwrap());
+    if matches!(mode, CliMode::Observe) {
+        command.arg("--observe");
+    }
     command
-        .arg("terminal")
-        .arg(remote.to_bech32().unwrap())
         .env_clear()
         .env("TERM", "dumb")
         .stdin(slave.try_clone().unwrap())
@@ -872,7 +892,7 @@ async fn run_quiet_cli(state: &Path, daemon: &Path, remote: PublicKey, relay: &R
     write_cli_config(state, remote, relay);
     let (_master, slave) = open_cli_pty();
     let began = Instant::now();
-    let mut child = spawn_cli(state, daemon, remote, &slave, true);
+    let mut child = spawn_cli(state, daemon, remote, &slave, CliMode::Debug);
     drop(slave);
     let mut stderr = child.stderr.take().unwrap().take(4097);
     let mut output = Vec::new();
@@ -1091,6 +1111,12 @@ async fn prove_writer(workload: Workload) -> Measurements {
             let mut sample = observe::prove(&socket, start, &cleanup, &turns, workload).await;
             sample.unloaded = before;
             return sample;
+        }
+        if matches!(workload, Workload::ForegroundHandoff) {
+            let sample = foreground::prove_handoff(temp.path(), &daemon, remote, &relay, &cleanup, &turns).await;
+            let after = command(&turns).await;
+            sample.report(before, after, relay.all_publication_attempts());
+            return Measurements::default();
         }
         if matches!(workload, Workload::Foreground | Workload::Controls) {
             let (cold, echo) = foreground::prove(

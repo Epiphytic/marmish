@@ -1016,6 +1016,16 @@ impl Relay {
             .count()
     }
 
+    pub(crate) fn all_publication_attempts(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap()
+            .observations
+            .iter()
+            .filter(|observation| matches!(observation, Observation::Write(..)))
+            .count()
+    }
+
     pub(crate) fn peer_only_publications(&self) -> bool {
         let state = self.state.lock().unwrap();
         state.peer.is_some()
