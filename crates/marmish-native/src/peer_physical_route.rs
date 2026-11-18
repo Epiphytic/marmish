@@ -128,7 +128,7 @@ impl CheckedPeerRoute {
         target_arch = "x86_64"
     ))]
     pub(super) fn origin(&self) -> &str {
-        &self.qualification.live_relay().0.origin
+        self.qualification.live_relay().0.origin.as_str()
     }
 
     fn recheck_using(&mut self, mut sample: impl FnMut() -> ClockSample) -> Result<()> {

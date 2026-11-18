@@ -28,6 +28,8 @@ struct Window {
     stop_after_signing: AtomicBool,
     #[cfg(test)]
     signs: AtomicUsize,
+    #[cfg(test)]
+    copy_cut: AtomicUsize,
 }
 
 #[derive(Clone, Copy)]
@@ -79,6 +81,8 @@ impl NativeWindow {
             stop_after_signing: AtomicBool::new(false),
             #[cfg(test)]
             signs: AtomicUsize::new(0),
+            #[cfg(test)]
+            copy_cut: AtomicUsize::new(0),
         }));
         if now.wall.abs_diff(anchored_wall) > Duration::from_secs(2) {
             return Err(Error::Clock);
@@ -146,6 +150,23 @@ impl NativeWindow {
         self.0.signs.fetch_add(1, Ordering::AcqRel);
         if self.0.stop_after_signing.load(Ordering::Acquire) {
             self.0.stop.store(true, Ordering::Release);
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_copy_cut(&self, crash: bool) {
+        self.0
+            .copy_cut
+            .store(if crash { 2 } else { 1 }, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(super) fn copy_cut(&self) {
+        match self.0.copy_cut.swap(0, Ordering::AcqRel) {
+            0 => {}
+            1 => self.0.route_cancel.cancel(),
+            2 => std::process::exit(78),
+            _ => unreachable!("closed fixture cut enum"),
         }
     }
 

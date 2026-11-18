@@ -154,7 +154,14 @@ impl<'p, 'l> PackageDirectory<'p, 'l> {
     ) -> Result<[u8; 32]> {
         fence.sample()?;
         let file = self.open_existing(family, id, size)?;
-        let digest = copy_bounded(file, size, &mut std::io::sink(), fence)?;
+        let digest = copy_bounded(
+            file,
+            size,
+            &mut std::io::sink(),
+            fence,
+            #[cfg(test)]
+            false,
+        )?;
         self.exact(family, id, Some(size))?;
         fence.sample()?;
         Ok(digest)
@@ -170,7 +177,14 @@ impl<'p, 'l> PackageDirectory<'p, 'l> {
         let created = FreshCopy { identity };
         let result = (|| {
             let original = self.open_existing(stage_names(false), main.identity, main.logical)?;
-            let digest = copy_bounded(original, main.logical, &mut file, fence)?;
+            let digest = copy_bounded(
+                original,
+                main.logical,
+                &mut file,
+                fence,
+                #[cfg(test)]
+                true,
+            )?;
             self.sync(&file, fence)?;
             if digest != initial
                 || self.original_digest(main, fence)? != initial
@@ -231,6 +245,7 @@ fn copy_bounded(
     size: u64,
     sink: &mut impl Write,
     fence: &NativeWindow,
+    #[cfg(test)] copying_snapshot: bool,
 ) -> Result<[u8; 32]> {
     if !(1..=crate::peer_quota_vfs::dispatch::CLOSED_STAGE_LIMIT).contains(&size) {
         return Err(Error::StageIdentityMismatch);
@@ -249,6 +264,10 @@ fn copy_bounded(
             return Err(Error::StageIdentityMismatch);
         }
         sink.write_all(&buffer[..count]).map_err(|_| Error::Path)?;
+        #[cfg(test)]
+        if copying_snapshot {
+            fence.copy_cut();
+        }
         digest.update(&buffer[..count]);
     }
     if total != size {

@@ -106,11 +106,11 @@ fn candidate_package_window_revocation_is_sticky() {
 #[ignore = "opt-in process-global checked VFS and real SQLCipher MDK"]
 fn candidate_package_cold_attestation_under_registered_quota() {
     for cuts in [
-        &["bound", "issue", "attest", "prepared"][..],
+        &["bound", "issue", "copy-cancel", "attest", "prepared"][..],
         &["bound-file", "fenced"],
         &["started-empty", "empty"],
         &["signing-loss", "unsigned"],
-        &["issue", "stray-copy", "fenced"],
+        &["issue", "copy-crash", "fenced"],
     ] {
         let root = package_fixture_root();
         for mode in cuts {
@@ -139,6 +139,9 @@ fn run_child(root: &Path, mode: &str) {
         std::thread::sleep(Duration::from_millis(10));
     }
     let output = child.wait_with_output().unwrap();
+    if mode == "copy-crash" && output.status.code() == Some(78) {
+        return;
+    }
     assert!(
         output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
         "package case failed: {mode}\n{}\n{}",
@@ -368,7 +371,20 @@ fn package_child() {
             );
             assert!(!snapshot.exists());
         }
-        "stray-copy" => create_empty(&snapshot),
+        "copy-cancel" | "copy-crash" => {
+            let before = fs::read(&stage).unwrap();
+            let turn = window();
+            turn.set_copy_cut(mode == "copy-crash");
+            assert!(
+                owner
+                    .attest_package(quota, &reservation, None, &turn)
+                    .is_err()
+            );
+            assert_eq!(mode, "copy-cancel", "actual bounded copy cut did not run");
+            assert!(turn.sample().is_err());
+            assert!(!snapshot.exists());
+            assert_eq!(fs::read(&stage).unwrap(), before);
+        }
         "fenced" | "empty" | "unsigned" => {
             let before = fs::read(&stage).unwrap();
             if mode == "fenced" && !snapshot.exists() {
@@ -407,7 +423,7 @@ fn package_child() {
                 );
             }
             if snapshot.exists() {
-                assert_eq!(fs::metadata(&snapshot).unwrap().len(), 0);
+                assert!(fs::metadata(&snapshot).unwrap().len() > 0);
             }
         }
         _ => panic!("unexpected private fixture case"),
