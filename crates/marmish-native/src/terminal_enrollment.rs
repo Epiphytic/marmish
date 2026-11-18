@@ -104,6 +104,9 @@ impl Owner {
     ) -> std::result::Result<Self, OpenFailure> {
         let authority = alias.adapter.authority.clone();
         let prepare = async {
+            if room_connector.terminal_lane_only() || authority.terminal_lane_only() {
+                return Err(Error::Storage("terminal_guarded_room_unavailable"));
+            }
             alias.adapter.check().await?;
             let confirmed = exchange.take_terminal(clock()?, authority.check().is_ok())?;
             let confirmed_at = Instant::from_std(confirmed.confirmed_at.monotonic);

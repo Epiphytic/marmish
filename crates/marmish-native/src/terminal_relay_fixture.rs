@@ -132,6 +132,8 @@ struct State {
     ordinary: BTreeSet<PublicKey>,
     connections: BTreeMap<usize, Connection>,
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    record_terminal_socket_ends: bool,
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     socket_ends: BTreeMap<usize, SocketEnd>,
     publication_limit: Option<usize>,
     publications: Vec<Event>,
@@ -820,7 +822,7 @@ async fn serve_connection(
     let mut state = state.lock().unwrap();
     state.connections.remove(&id);
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    if state.qualification && state.recipient_runtime {
+    if (state.qualification && state.recipient_runtime) || state.record_terminal_socket_ends {
         assert!(
             state.socket_ends.len() < MAX_OBSERVATIONS,
             "socket closure transcript bound"
@@ -1009,6 +1011,25 @@ impl Relay {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     pub(crate) fn runtime_socket_end(&self, id: usize) -> Option<SocketEnd> {
         self.state.lock().unwrap().socket_ends.get(&id).copied()
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(super) fn record_terminal_socket_ends(&self) {
+        let mut state = self.state.lock().unwrap();
+        assert!(!state.qualification && state.connections.is_empty());
+        state.record_terminal_socket_ends = true;
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(super) fn terminal_connection_for(&self, account: PublicKey) -> usize {
+        let state = self.state.lock().unwrap();
+        let mut matches = state
+            .connections
+            .iter()
+            .filter(|(_, connection)| connection.account == Some(account));
+        let (&id, _) = matches.next().expect("one authenticated Terminal socket");
+        assert!(matches.next().is_none());
+        id
     }
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

@@ -393,7 +393,7 @@ impl PeerRelayConnector {
             ))]
             if let Some(permit) = permit {
                 return connector
-                    .connect_stream_with_permit(&endpoint, Route::Direct, permit, true)
+                    .connect_stream_with_permit(&endpoint, Route::Direct, permit)
                     .await;
             }
             connector.connect_stream(&endpoint, 0, Route::Direct).await
@@ -553,6 +553,36 @@ impl RelayConnector {
         }
         self.cancel();
         Ok(())
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn dispatcher_fatal(&self) -> Option<&Fatal> {
+        self.0.fatal.as_ref()
+    }
+
+    pub(crate) fn terminal_lane_only(&self) -> bool {
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        {
+            self.dispatcher_fatal().is_some()
+        }
+        #[cfg(not(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        )))]
+        false
+    }
+
+    pub(crate) fn cancel_terminal_connects(&self) {
+        self.0.cancelled.cancel();
     }
 
     pub(crate) async fn reap_terminal_socket(&self, deadline: Instant) -> Result<()> {
@@ -848,8 +878,7 @@ impl RelayConnector {
                 .await
                 .map_err(|_| Error::Transport("shutdown"))?,
         );
-        self.connect_stream_with_permit(url, route, permit, false)
-            .await
+        self.connect_stream_with_permit(url, route, permit).await
     }
 
     async fn connect_stream_with_permit(
@@ -857,15 +886,6 @@ impl RelayConnector {
         url: &Url,
         route: Route,
         permit: Arc<tokio::sync::OwnedSemaphorePermit>,
-        #[cfg_attr(
-            not(all(
-                any(test, marmish_peer_receiver_candidate),
-                target_os = "linux",
-                target_arch = "x86_64"
-            )),
-            allow(unused_variables)
-        )]
-        registered: bool,
     ) -> Result<(
         Box<dyn NetworkStream>,
         Arc<tokio::sync::OwnedSemaphorePermit>,
@@ -912,8 +932,7 @@ impl RelayConnector {
             target_arch = "x86_64"
         ))]
         let stream: Box<dyn NetworkStream> = match &self.0.fatal {
-            Some(fatal) if registered => Box::new(FencedStream::with_slot(stream, fatal, &permit)),
-            Some(fatal) => Box::new(FencedStream::new(stream, fatal)),
+            Some(fatal) => Box::new(FencedStream::with_slot(stream, fatal, &permit)),
             None => stream,
         };
         crate::diagnostics::event("relay_stream", "connected");
