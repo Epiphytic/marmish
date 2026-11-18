@@ -217,6 +217,9 @@ enum FrontendCommand {
         /// Select an existing session by its 32-character slot ID.
         #[arg(long, value_parser = ipc::terminal_handshake::parse_slot)]
         session: Option<[u8; 16]>,
+        /// Hold writer input for up to this many milliseconds per batch (default 8).
+        #[arg(long, conflicts_with = "observe", value_parser = clap::value_parser!(u64).range(0..=50))]
+        input_batch_ms: Option<u64>,
     },
     /// Execute with binary stdin/stdout streams and explicit remote cancellation.
     Stream {
@@ -1564,6 +1567,7 @@ pub fn main(daemon_binary: bool) -> ExitCode {
         observe,
         takeover,
         session,
+        input_batch_ms,
     }) = &args.command
     {
         use ipc::terminal_handshake::Attach;
@@ -1574,9 +1578,12 @@ pub fn main(daemon_binary: bool) -> ExitCode {
             _ => Attach::Default,
         };
         let result = validate_terminal_options(&args, daemon_binary).and_then(|()| {
-            ipc::terminal_handshake::run_foreground(attach, *session, async |child_mask| {
-                prepare_terminal(&args, destination, child_mask).await
-            })
+            ipc::terminal_handshake::run_foreground(
+                attach,
+                *session,
+                std::time::Duration::from_millis(input_batch_ms.unwrap_or(8)),
+                async |child_mask| prepare_terminal(&args, destination, child_mask).await,
+            )
         });
         return match result {
             Ok(code) => ExitCode::from(code),
@@ -1695,7 +1702,13 @@ mod tests {
                 ..
             })
         ));
+        for delay in ["0", "8", "50"] {
+            assert!(parse(&["--input-batch-ms", delay]).is_ok());
+        }
         for flags in [
+            vec!["--input-batch-ms", "51"],
+            vec!["--input-batch-ms", "-1"],
+            vec!["--observe", "--input-batch-ms", "0"],
             vec!["--new", "--observe"],
             vec!["--new", "--takeover"],
             vec!["--observe", "--takeover"],

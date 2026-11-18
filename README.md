@@ -172,6 +172,11 @@ attach to an existing named slot. Enter `~.` at the beginning of a line
 to detach and leave the shell running. The daemon sends a keepalive every
 five minutes and expires an inactive endpoint after eleven minutes.
 
+Writer keystrokes are batched for up to 8 ms by default. Use
+`--input-batch-ms 0` for immediate delivery when credit is available, or set
+a value up to 50 ms. A full input record sends sooner. The CLI rejects
+`--input-batch-ms` together with `--observe`.
+
 The command history feature upgrades the encrypted profile journal. To keep a rollback path,
 back up the entire profile directory while its daemon is stopped before
 starting the new binary. An older binary requires the pre-upgrade backup.

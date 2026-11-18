@@ -75,6 +75,7 @@ pub(super) fn run(
     observer: bool,
     admitted_size: Option<(u16, u16)>,
     discard_typeahead: bool,
+    input_batch: Duration,
 ) -> Finished {
     let mut display = Display::default();
     let startup = signals.take();
@@ -93,7 +94,15 @@ pub(super) fn run(
         match entered {
             Ok(()) => (
                 true,
-                drive(tty, signals, channel, observer, admitted_size, &mut display),
+                drive(
+                    tty,
+                    signals,
+                    channel,
+                    observer,
+                    admitted_size,
+                    input_batch,
+                    &mut display,
+                ),
             ),
             Err(error) => (false, Err(error)),
         }
@@ -142,6 +151,7 @@ fn drive(
     channel: &mut impl Channel,
     observer: bool,
     admitted_size: Option<(u16, u16)>,
+    input_batch: Duration,
     display: &mut Display,
 ) -> Result<Exit> {
     let mut input = Input::new(observer);
@@ -152,6 +162,11 @@ fn drive(
     let mut record_pending = false;
     let mut detaching = false;
     let framed = channel.framed();
+    let mut batch = InputBatch::new(if framed && !observer {
+        input_batch
+    } else {
+        Duration::ZERO
+    });
     let mut size = tty.geometry()?;
     let mut resize = (!observer && admitted_size.is_some_and(|sent| sent != size)).then_some(size);
     let mut last_tick = Instant::now();
@@ -215,11 +230,13 @@ fn drive(
             && channel.wants_read();
         let buffered = read_channel && channel.buffered();
         channel.wait_for_input_progress(!queued.is_empty(), now);
+        let sampled = Instant::now();
+        let ready = batch.ready(queued.len(), sampled);
         let tty_events =
             event(read_keyboard, libc::POLLIN) | event(display.has_pending(), libc::POLLOUT);
         let channel_events = event(read_channel && !buffered, libc::POLLIN)
             | event(
-                channel.wants_write(!queued.is_empty()) || resize.is_some(),
+                channel.wants_write(ready) || resize.is_some(),
                 libc::POLLOUT,
             );
         let mut fds = [
@@ -240,6 +257,7 @@ fn drive(
             channel
                 .deadline()
                 .map(|end| end.saturating_duration_since(now)),
+            batch.remaining(sampled),
         ];
         poll(&mut fds, poll_timeout(buffered, timeout))?;
         if fds[1].revents != 0 || signals.pending() {
@@ -284,12 +302,13 @@ fn drive(
             match read_keys(tty, &mut keyboard, &mut input, &mut queued)? {
                 Some(Exit::Detached) if framed => {
                     queued.clear();
+                    batch.ready(0, after_poll);
                     channel.begin_detach(after_poll);
                     detaching = true;
                 }
                 Some(exit) => {
                     if !framed {
-                        try_input(channel, &mut queued, false)?;
+                        try_input(channel, &mut queued, true, false)?;
                     }
                     return Ok(exit);
                 }
@@ -299,8 +318,10 @@ fn drive(
         if signals.pending() {
             continue;
         }
+        let ready = batch.ready(queued.len(), Instant::now());
         if remote & libc::POLLOUT != 0 {
-            try_input(channel, &mut queued, framed)?;
+            try_input(channel, &mut queued, ready, framed)?;
+            batch.ready(queued.len(), Instant::now());
             if detaching && channel.detach_complete() {
                 return Ok(Exit::Detached);
             }
@@ -332,8 +353,46 @@ fn drive(
     }
 }
 
-fn try_input(channel: &mut impl Channel, queued: &mut Vec<u8>, controls: bool) -> Result<()> {
-    let offered = queued.len().min(RECORD);
+struct InputBatch {
+    delay: Duration,
+    started: Option<Instant>,
+    eligible: bool,
+}
+
+impl InputBatch {
+    fn new(delay: Duration) -> Self {
+        Self {
+            delay,
+            started: None,
+            eligible: false,
+        }
+    }
+
+    fn ready(&mut self, queued: usize, now: Instant) -> bool {
+        if queued == 0 {
+            self.started = None;
+            self.eligible = false;
+            return false;
+        }
+        let started = *self.started.get_or_insert(now);
+        self.eligible |= queued >= RECORD || now.duration_since(started) >= self.delay;
+        self.eligible
+    }
+
+    fn remaining(&self, now: Instant) -> Option<Duration> {
+        let started = self.started.filter(|_| !self.eligible)?;
+        let remaining = self.delay.saturating_sub(now.duration_since(started));
+        (!remaining.is_zero()).then_some(remaining)
+    }
+}
+
+fn try_input(
+    channel: &mut impl Channel,
+    queued: &mut Vec<u8>,
+    ready: bool,
+    controls: bool,
+) -> Result<()> {
+    let offered = if ready { queued.len().min(RECORD) } else { 0 };
     if (offered != 0 || controls)
         && let Some(count) = channel.write_input(&queued[..offered])?
     {
@@ -362,7 +421,7 @@ fn read_keys(
     Ok(detached.then_some(Exit::Detached))
 }
 
-fn poll_timeout(buffered: bool, deadlines: [Option<Duration>; 3]) -> i32 {
+fn poll_timeout(buffered: bool, deadlines: [Option<Duration>; 4]) -> i32 {
     if buffered {
         return 0;
     }
@@ -392,5 +451,41 @@ pub(super) fn poll(fds: &mut [libc::pollfd], millis: i32) -> Result<()> {
         Ok(())
     } else {
         Err(POLL)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_runtime_core_batch_uses_first_byte_and_stays_ready_after_partial_write() {
+        let mut batch = InputBatch::new(Duration::from_millis(8));
+        let start = Instant::now();
+        let early = start + Duration::from_millis(5);
+        let deadline = start + Duration::from_millis(8);
+        assert!(!batch.ready(1, start));
+        assert!(!batch.ready(2, early));
+        assert_eq!(batch.remaining(early), Some(Duration::from_millis(3)));
+        assert_eq!(batch.remaining(deadline), None);
+        assert!(batch.ready(3, deadline));
+        assert!(batch.ready(1, deadline));
+        assert_eq!(batch.remaining(deadline), None);
+        assert!(!batch.ready(0, deadline));
+        assert!(!batch.ready(1, deadline));
+        assert_eq!(batch.remaining(deadline), Some(Duration::from_millis(8)));
+    }
+
+    #[test]
+    fn terminal_runtime_core_batch_full_record_and_zero_delay_are_immediate() {
+        let now = Instant::now();
+        let mut batch = InputBatch::new(Duration::from_millis(50));
+        assert!(!batch.ready(RECORD - 1, now));
+        assert!(batch.ready(RECORD, now));
+        assert!(batch.ready(1, now));
+        assert_eq!(batch.remaining(now), None);
+        let mut immediate = InputBatch::new(Duration::ZERO);
+        assert!(immediate.ready(1, now));
+        assert_eq!(immediate.remaining(now), None);
     }
 }

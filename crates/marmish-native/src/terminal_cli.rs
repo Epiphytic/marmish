@@ -363,7 +363,12 @@ fn close_exit(reason: Close) -> Result<u8> {
     }))
 }
 
-fn run_ready(tty: &mut Tty, signals: &Signals, ready: Attachment) -> Result<Option<u8>> {
+fn run_ready(
+    tty: &mut Tty,
+    signals: &Signals,
+    ready: Attachment,
+    input_batch: Duration,
+) -> Result<Option<u8>> {
     let mut channel = ForegroundSocket::new(ready.socket, ready.role)?;
     if ready.attach == Attach::New {
         let _ = writeln!(
@@ -379,6 +384,7 @@ fn run_ready(tty: &mut Tty, signals: &Signals, ready: Attachment) -> Result<Opti
         ready.role == Role::Observer,
         Some(ready.geometry),
         ready.flush_input,
+        input_batch,
     );
     drop(channel);
     if !matches!(ended.reason, Ok(Exit::Interrupted(_))) {
@@ -399,6 +405,7 @@ fn run_ready(tty: &mut Tty, signals: &Signals, ready: Attachment) -> Result<Opti
 pub(crate) fn run(
     attach: Attach,
     slot: Option<[u8; 16]>,
+    input_batch: Duration,
     prepare: impl AsyncFn(libc::sigset_t) -> Result<Prepared>,
 ) -> Result<u8> {
     let signals = Signals::install()?;
@@ -428,7 +435,7 @@ pub(crate) fn run(
                 } else {
                     AfterSuspend::Exit
                 };
-                if let Some(code) = run_ready(&mut tty, &signals, ready)? {
+                if let Some(code) = run_ready(&mut tty, &signals, ready, input_batch)? {
                     return Ok(code);
                 }
                 after_suspend

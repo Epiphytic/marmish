@@ -415,8 +415,15 @@ fn run_child() -> i32 {
                 );
             }
             let mut bridge = Bridge { socket, observer };
-            let result =
-                terminal_frontend::run(&mut tty, &signals, &mut bridge, observer, None, false);
+            let result = terminal_frontend::run(
+                &mut tty,
+                &signals,
+                &mut bridge,
+                observer,
+                None,
+                false,
+                Duration::ZERO,
+            );
             result.restored_termios.unwrap();
             assert!(result.restored_display);
             use terminal_frontend::Exit;
@@ -434,7 +441,7 @@ fn run_child() -> i32 {
             }
             return 0;
         }
-        "framed-detach" | "framed-close" => {
+        "framed-detach" | "framed-close" | "framed-batch" => {
             let mut tty = tty::Tty::open().unwrap();
             // Child-only descriptor duplicated by this test's pre_exec.
             let socket = unsafe { UnixStream::from_raw_fd(CHANNEL_FD) };
@@ -443,8 +450,19 @@ fn run_child() -> i32 {
                 crate::terminal_ipc_wire::Role::Writer,
             )
             .unwrap();
-            let result =
-                terminal_frontend::run(&mut tty, &signals, &mut channel, false, None, false);
+            let result = terminal_frontend::run(
+                &mut tty,
+                &signals,
+                &mut channel,
+                false,
+                None,
+                false,
+                if mode == "framed-batch" {
+                    Duration::from_millis(50)
+                } else {
+                    Duration::ZERO
+                },
+            );
             result.restored_termios.unwrap();
             assert!(result.restored_display);
             let expected = if mode == "framed-close" {
@@ -1244,7 +1262,7 @@ fn terminal_socket_frontend_native_pty() {
     use terminal_socket_session::{DaemonSocket, ServerRead};
     use terminal_socket_state::InputEffect;
 
-    for mode in ["framed-detach", "framed-close"] {
+    for mode in ["framed-detach", "framed-close", "framed-batch"] {
         let mut frontend = fixture::Pty::new();
         let before = frontend.attrs();
         let (owner, socket) = UnixStream::pair().unwrap();
@@ -1284,7 +1302,8 @@ fn terminal_socket_frontend_native_pty() {
             started.elapsed().as_micros()
         );
 
-        if mode == "framed-detach" {
+        if mode != "framed-close" {
+            let typed = Instant::now();
             frontend.master.write_all(b"raw\x03\x1a").unwrap();
             assert!(poll(daemon.fd(), libc::POLLIN, 2000));
             assert_eq!(daemon.read(Instant::now()).unwrap(), ServerRead::Received);
@@ -1292,6 +1311,9 @@ fn terminal_socket_frontend_native_pty() {
                 daemon.next_input(),
                 Some(InputEffect::Bytes(b"raw\x03\x1a"))
             ));
+            if mode == "framed-batch" {
+                assert!(typed.elapsed() >= Duration::from_millis(50));
+            }
             daemon.input_written(5).unwrap();
 
             frontend.resize(44, 111);
