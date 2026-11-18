@@ -31,3 +31,12 @@ Command worker ownership, with no installed caller for `start_candidate`.
 The candidate daemon, registry recheck, inner SQLCipher opens and partial
 destructors, actual relay/Terminal shutdown and deployment qualification
 remain separate composition gates in the approved plan.
+
+## Composed regression
+
+After composing the benchmark documentation, the Linux AMD64 source
+`55e3738` passed 28 Command engine tests and six Command lifecycle tests.
+The opt-in real worker case separately passed in 0.47 s with all three
+native sibling executables present in the same private Cargo layout.
+It checks binary stdout and stderr, exit status, lock contention and
+continued output retrieval after the lock is released.
