@@ -195,7 +195,7 @@ struct HistorySetup {
     update_ms: u128,
 }
 
-async fn prepare_history(round: &Round, group_route: [u8; 32]) -> HistorySetup {
+async fn prepare_history(round: &Round, group_route: [u8; 32], delivery_ttl: u64) -> HistorySetup {
     let socket = round.socket();
     let daemon = round
         .start(Admission::Automatic, super::LostReply::None)
@@ -225,7 +225,7 @@ async fn prepare_history(round: &Round, group_route: [u8; 32]) -> HistorySetup {
         .unwrap();
     assert!(initial_membership.local_leaf_active);
     let delivery = round
-        .finish_delivery(&mut enrollment, &welcome.payload)
+        .finish_delivery_with_ttl(&mut enrollment, &welcome.payload, delivery_ttl)
         .await;
     let selected = entry(&socket, selector, peer::State::Activating).await;
     assert_no_command(&socket).await;
@@ -303,7 +303,7 @@ async fn prepare_history(round: &Round, group_route: [u8; 32]) -> HistorySetup {
 async fn history(case: History) {
     let group_route = random();
     let mut round = Round::initialize_with_group(Some(group_route)).await;
-    let setup = prepare_history(&round, group_route).await;
+    let setup = prepare_history(&round, group_route, 360).await;
     let HistorySetup {
         selector,
         generation,

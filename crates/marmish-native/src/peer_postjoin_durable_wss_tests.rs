@@ -3,7 +3,7 @@
 use super::*;
 use crate::peer_invitation::{
     postjoin_gate::{Permit, Scope},
-    postjoin_verify::{self as verify, Baseline, Capture},
+    postjoin_verify as verify,
     publication_socket::ReservedSocket,
     store::consent_checkpoint::provisioning::prepared_consent::custody::publication::{
         Kind, Publication, Step,
@@ -22,7 +22,7 @@ fn private_wss_recovers_lost_postjoin_ack_without_another_native_send() {
 async fn prove_lost_ack() {
     let group_route = random();
     let mut round = Round::initialize_with_group(Some(group_route)).await;
-    let setup = prepare_history(&round, group_route).await;
+    let setup = prepare_history(&round, group_route, 600).await;
     let mut founder = setup.founder;
     let stage = Stage {
         selector: setup.selector,
@@ -239,9 +239,7 @@ async fn prove_lost_ack() {
     );
     assert_eq!(round.relay.group_writes(), setup.writes);
     // This cut precedes application capture. Recover only native frozen rows.
-    drop(old_gate);
-    drop(recipient);
-    drop(owner);
+    drop((old_gate, recipient, owner, baseline, reservation));
     let reopen_started = Instant::now();
     let mut owner = open_owner();
     let held = stage.read(&mut owner, wall());
@@ -249,15 +247,17 @@ async fn prove_lost_ack() {
     let reservation = read_publication(&mut owner, &held, wall(), Step::Reserved);
     let gate = Gate::closed(scope.clone(), round.wall.clone());
     let recipient = stage.open(&owner, &held, &round.wall, gate.clone());
-    let capture = frozen(&recipient, &founder, &stage, &baseline, wall());
+    let initial =
+        verify::recover_reserved(&recipient, founder.runtime(), &image, &reservation, wall())
+            .unwrap();
     let publication = owner
         .state
         .checkpoint
         .capture_postjoin(
             &owner.state.source,
             &reservation,
-            &baseline,
-            &capture,
+            initial.baseline(),
+            initial.capture(),
             wall(),
         )
         .unwrap();
@@ -273,11 +273,18 @@ async fn prove_lost_ack() {
     let publication = read_publication(&mut owner, &held, wall(), Step::Captured);
     let gate = Gate::closed(scope.clone(), round.wall.clone());
     let mut recipient = stage.open(&owner, &held, &round.wall, gate.clone());
-    let fresh = verify::reopen(&recipient, founder.runtime(), &baseline, &capture, wall()).unwrap();
+    let fresh = verify::reopen(
+        &recipient,
+        founder.runtime(),
+        initial.baseline(),
+        initial.capture(),
+        wall(),
+    )
+    .unwrap();
 
     let event_id = fresh.event_id();
     let signed_digest = fresh.signed_digest();
-    let target = fresh.target().clone();
+    let target = *fresh.target();
     let lost_started = Instant::now();
     round.relay.group_fault(GroupFault::LoseNextAck);
     let recipient_socket = Arc::new(Mutex::new(recipient_socket));
@@ -327,12 +334,6 @@ async fn prove_lost_ack() {
         ),
         (1, false, false)
     );
-    let armed = read_publication(&mut owner, &held, wall(), Step::Armed { number: 1 });
-    owner
-        .state
-        .checkpoint
-        .record_publication_uncertain(&owner.state.source, &armed, wall())
-        .unwrap();
     assert_eq!(round.relay.group_writes().len(), 2);
     let exposed = &round.relay.group_writes()[1];
     assert_eq!(exposed.sender, round.signer);
@@ -342,15 +343,26 @@ async fn prove_lost_ack() {
 
     // Reopen both checked stores with a fresh gate. Seeing only the lost ACK
     // journal is insufficient until the independent founder has processed it.
-    drop(gate);
-    drop(recipient);
-    drop(recipient_socket);
-    drop(owner);
-    drop((baseline, capture, fresh, reservation));
+    drop((
+        gate,
+        recipient,
+        recipient_socket,
+        owner,
+        initial,
+        fresh,
+        reservation,
+        publication,
+    ));
     assert!(open_custody().is_err());
     let recover_started = Instant::now();
     let mut owner = open_owner();
     let held = stage.read(&mut owner, wall());
+    let armed = read_publication(&mut owner, &held, wall(), Step::Armed { number: 1 });
+    owner
+        .state
+        .checkpoint
+        .record_publication_uncertain(&owner.state.source, &armed, wall())
+        .unwrap();
     let uncertain = owner
         .state
         .checkpoint
@@ -373,7 +385,6 @@ async fn prove_lost_ack() {
     assert_eq!(gate.observe().unwrap().deliveries, 0);
     assert_eq!(round.relay.group_writes().len(), 2);
     let recovered = recover(&recipient, &founder, wall()).unwrap();
-    let baseline = recovered.baseline();
     let retry = recovered.capture();
     assert_eq!(retry.event_id(), event_id);
     assert_eq!(retry.signed_digest(), signed_digest);
@@ -410,25 +421,18 @@ async fn prove_lost_ack() {
     advance_retry(&recipient, &stage.group, &round.wall, deadline);
     recipient.run_due_maintenance().await.unwrap();
     assert!(gate.observe().unwrap().accepted);
-    // One extra native sweep, where needed, completes obligation bookkeeping
-    // after the PendingPublish state has reached the canonical target.
-    if verify::confirm_rotation(&recipient, founder.runtime(), baseline, retry, wall()).is_err() {
+    // Finish native bookkeeping under the spent permit before dropping every
+    // recipient handle and proving the canonical native result from disk.
+    let armed = read_publication(&mut owner, &held, wall(), Step::Armed { number: 2 });
+    if verify::confirm_rotation_cold(&recipient, founder.runtime(), &image, &armed, wall()).is_err()
+    {
         recipient.run_due_maintenance().await.unwrap();
     }
-    let rotation =
-        verify::confirm_rotation(&recipient, founder.runtime(), baseline, retry, wall()).unwrap();
     assert_eq!(
         stable_pin(&recipient, &stage.group),
         stable_pin(founder.runtime(), &stage.group),
     );
     match_stable_roster(&recipient, founder.runtime(), &stage.group, &stage.routing);
-    let armed = read_publication(&mut owner, &held, wall(), Step::Armed { number: 2 });
-    let confirmed = owner
-        .state
-        .checkpoint
-        .confirm_postjoin(&owner.state.source, &armed, &rotation, wall())
-        .unwrap();
-    assert_eq!(confirmed.step(), Step::Published { number: 2 });
     let writes = round.relay.group_writes();
     assert_eq!(writes.len(), 3);
     assert_eq!(writes[2].sender, round.signer);
@@ -436,16 +440,32 @@ async fn prove_lost_ack() {
     assert!(writes[2].duplicate && writes[2].acknowledged);
     let recover_ms = recover_started.elapsed().as_millis();
 
-    drop(gate);
-    drop(recipient);
-    drop(owner);
+    drop((
+        gate,
+        recipient,
+        owner,
+        recovered,
+        uncertain,
+        publication,
+        armed,
+    ));
     let mut owner = open_owner();
     let held = stage.read(&mut owner, wall());
     assert_eq!(held.stage(), (binding, witness));
     let gate = Gate::closed(scope, round.wall.clone());
     let mut recipient = stage.open(&owner, &held, &round.wall, gate.clone());
-    read_publication(&mut owner, &held, wall(), Step::Published { number: 2 });
-    verify::confirm_rotation(&recipient, founder.runtime(), baseline, retry, wall()).unwrap();
+    let armed = read_publication(&mut owner, &held, wall(), Step::Armed { number: 2 });
+    let rotation =
+        verify::confirm_rotation_cold(&recipient, founder.runtime(), &image, &armed, wall())
+            .unwrap();
+    let confirmed = owner
+        .state
+        .checkpoint
+        .confirm_recovered_postjoin(&owner.state.source, &rotation, wall())
+        .unwrap();
+    assert_eq!(confirmed.step(), Step::Published { number: 2 });
+    verify::confirm_rotation_cold(&recipient, founder.runtime(), &image, &confirmed, wall())
+        .unwrap();
     recipient.resume_outbound_fanouts().await.unwrap();
     assert_eq!(gate.observe().unwrap().commit_calls, 0);
     assert_eq!(round.relay.group_writes(), writes);
@@ -539,28 +559,6 @@ fn read_publication(
     row
 }
 
-fn frozen(
-    recipient: &Recipient,
-    founder: &PeerFounderRuntime<FounderTransport>,
-    stage: &Stage,
-    baseline: &Baseline,
-    wall: u64,
-) -> Capture {
-    let fanouts = recipient.outbound_fanouts_for_group(&stage.group).unwrap();
-    let [fanout] = fanouts.as_slice() else {
-        panic!("one native frozen turn");
-    };
-    verify::post_capture(
-        recipient,
-        founder.runtime(),
-        baseline,
-        fanout.request(),
-        1,
-        wall,
-    )
-    .unwrap()
-}
-
 fn advance_retry(recipient: &Recipient, group: &GroupId, wall: &AtomicU64, deadline: u64) {
     let delay = recipient
         .outbound_fanout_retry_delay_ms(group)
@@ -568,6 +566,9 @@ fn advance_retry(recipient: &Recipient, group: &GroupId, wall: &AtomicU64, deadl
         .unwrap();
     assert!(delay > 0);
     let next = wall.load(Ordering::Acquire) + delay.div_ceil(1_000);
-    assert!(next < deadline);
+    assert!(
+        next < deadline,
+        "native retry delay {delay} ms exceeds remaining custody lifetime"
+    );
     wall.store(next, Ordering::Release);
 }
