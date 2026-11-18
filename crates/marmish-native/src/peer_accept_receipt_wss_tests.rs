@@ -646,21 +646,18 @@ async fn retire_founder(
     assert!(repeated.accepted_at() < run.wall());
     assert_eq!(repeated.source().native_id, proof.native_id().as_slice());
 
-    // Retire once, then exercise re-delivery while acceptance is still live.
-    // A native duplicate may restore only the original application source.
-    assert!(founder_proof::retire(&mut founder, &repeated, expected, native_id).unwrap());
-    assert!(!founder_proof::retire(&mut founder, &repeated, expected, native_id).unwrap());
+    // Exercise replay while acceptance is live and the initial native source
+    // is still pending. Re-projection must return the original decision.
     let re_emitted = replay_founder(&mut founder, &delivery, native_id).await;
-    let next = founder_proof::pending(founder.runtime(), expected, run.wall()).unwrap();
-    assert_eq!(next.is_some(), re_emitted);
-    if let Some(next) = next {
-        assert_eq!(next.native_id(), native_id);
-        let same = db
-            .accept_verified_receipt(&source, &next, run.wall())
-            .unwrap();
-        assert_eq!(same.accepted_at(), saved_at);
-        assert_eq!(same.source().native_id, native_id.as_slice());
-    }
+    let next = founder_proof::pending(founder.runtime(), expected, run.wall())
+        .unwrap()
+        .unwrap();
+    assert_eq!(next.native_id(), native_id);
+    let same = db
+        .accept_verified_receipt(&source, &next, run.wall())
+        .unwrap();
+    assert_eq!(same.accepted_at(), saved_at);
+    assert_eq!(same.source().native_id, native_id.as_slice());
     drop((proof, repeated, db, founder));
 
     // Already-accepted rows can retire their exact native delivery after
@@ -692,10 +689,7 @@ async fn retire_founder(
         founder_proof::retire(&mut founder, &late, &wrong_leaf, native_id),
         Err(founder_proof::Refusal::Binding)
     ));
-    assert_eq!(
-        founder_proof::retire(&mut founder, &late, expected, native_id).unwrap(),
-        re_emitted
-    );
+    assert!(founder_proof::retire(&mut founder, &late, expected, native_id).unwrap());
     assert!(!founder_proof::retire(&mut founder, &late, expected, native_id).unwrap());
 
     let late_emitted = replay_founder(&mut founder, &delivery, native_id).await;
@@ -704,13 +698,11 @@ async fn retire_founder(
         .unwrap();
     assert_eq!(saved.accepted_at(), saved_at);
     assert_eq!(saved.source().native_id, native_id.as_slice());
-    assert_eq!(
-        founder_proof::retire(&mut founder, &saved, expected, native_id).unwrap(),
-        late_emitted
-    );
+    // MDK can report the exact replay as a callback without recreating
+    // a pending storage row. Only the latter needs exact local retirement.
     assert!(!founder_proof::retire(&mut founder, &saved, expected, native_id).unwrap());
     eprintln!(
-        "peer_founder_replay predeadline_reemitted={re_emitted} expired_reemitted={late_emitted}"
+        "peer_founder_replay predeadline_reemitted={re_emitted} expired_reemitted={late_emitted} expired_pending=false"
     );
 }
 
