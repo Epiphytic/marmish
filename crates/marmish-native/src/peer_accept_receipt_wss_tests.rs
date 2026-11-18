@@ -341,6 +341,7 @@ pub(super) async fn finish(mut run: ReceiptRun<'_, '_>) {
     let (row, published) = run.read(&mut owner, Step::Published { number: 2 });
     let mut recipient = run.open(&owner, &row, ReceiptGate::closed(run.round.wall.clone()));
     outbound::acknowledge_published(&recipient, run.image, &published, run.wall()).unwrap();
+    outbound::acknowledge_published(&recipient, run.image, &published, run.wall()).unwrap();
     let no_fanout = recipient
         .group_authority_view()
         .with_group_authority_snapshot(&run.stage.group, |storage, _| {
