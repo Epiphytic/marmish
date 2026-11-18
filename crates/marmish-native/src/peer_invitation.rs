@@ -2,6 +2,9 @@
 
 #[path = "peer_invitation_paths.rs"]
 mod paths;
+#[cfg(test)]
+#[path = "peer_stage_binding.rs"]
+mod provisional;
 #[path = "peer_raw_socket.rs"]
 mod socket;
 #[path = "peer_cursor_store.rs"]
@@ -38,6 +41,8 @@ use tokio::{net::UnixStream, time::Instant};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Error {
     Path,
+    #[cfg(test)]
+    StageIdentityMismatch,
     Clock,
     Binding,
     Cursor(store::Error),
@@ -112,6 +117,64 @@ enum PublishResult {
     Rejected,
 }
 
+struct InvitationState<'a> {
+    #[cfg(test)]
+    origin_url: String,
+    paths: Paths<'a>,
+    signer: Arc<Keys>,
+    origin: Origin,
+    checkpoint: Checkpoint,
+    source: Source,
+    wall: Wall,
+}
+
+impl<'a> InvitationState<'a> {
+    fn open(
+        lease: &'a ProfileLease,
+        material: &IdentityMaterial,
+        policy: Policy,
+        route: &Route,
+        wall: Wall,
+        open_checkpoint: impl FnOnce(
+            CursorStore,
+            Keys,
+            u32,
+            &[&str],
+            Policy,
+        ) -> consent_checkpoint::Result<Checkpoint>,
+    ) -> Result<(Self, paths::CheckedFile)> {
+        let paths = Paths::new(lease, material)?;
+        let checked = paths.cursor()?;
+        let conn = HardenedPeerConnection::open(checked.path(), *paths.cursor_key())?;
+        checked.unchanged()?;
+        let signer = material.signer();
+        let account = signer.public_key();
+        let origin = route.id;
+        let url = &route.urls[0];
+        let cursor = CursorStore::attach(conn, account.to_bytes(), &[origin])?;
+        // SAFETY: reads this Unix process's effective UID.
+        let owner_uid = unsafe { libc::geteuid() };
+        let mut checkpoint = open_checkpoint(cursor, (*signer).clone(), owner_uid, &[url], policy)?;
+        let source = checkpoint.bind_source(url)?;
+        checkpoint
+            .cursor
+            .require_available(origin, wall.sample()?.as_secs())?;
+        Ok((
+            Self {
+                #[cfg(test)]
+                origin_url: url.clone(),
+                paths,
+                signer,
+                origin,
+                checkpoint,
+                source,
+                wall,
+            },
+            checked,
+        ))
+    }
+}
+
 struct InvitationLane<'a> {
     paths: Paths<'a>,
     signer: Arc<Keys>,
@@ -140,37 +203,32 @@ impl<'a> InvitationLane<'a> {
         wall: Wall,
         deadline: Instant,
     ) -> Result<Self> {
-        let paths = Paths::new(lease, material)?;
-        let checked = paths.cursor()?;
-        let conn = HardenedPeerConnection::open(checked.path(), *paths.cursor_key())?;
-        checked.unchanged()?;
-        let signer = material.signer();
-        let account = signer.public_key();
-        let origin = qualified.route.id;
+        let (mut state, checked) = InvitationState::open(
+            lease,
+            material,
+            policy,
+            &qualified.route,
+            wall,
+            Checkpoint::attach,
+        )?;
         let url = &qualified.route.urls[0];
-        let cursor = CursorStore::attach(conn, account.to_bytes(), &[origin])?;
-        // SAFETY: reads this Unix process's effective UID.
-        let owner_uid = unsafe { libc::geteuid() };
-        let mut checkpoint =
-            Checkpoint::attach(cursor, (*signer).clone(), owner_uid, &[url], policy)?;
-        let source = checkpoint.bind_source(url)?;
-        checkpoint
-            .cursor
-            .require_available(origin, wall.sample()?.as_secs())?;
-        let socket = Owner::open(&qualified.connector, url, account, &signer, deadline).await?;
+        let account = state.signer.public_key();
+        let socket =
+            Owner::open(&qualified.connector, url, account, &state.signer, deadline).await?;
         checked.unchanged()?;
-        checkpoint
+        state
+            .checkpoint
             .cursor
-            .require_available(origin, wall.sample()?.as_secs())?;
+            .require_available(state.origin, state.wall.sample()?.as_secs())?;
         Ok(Self {
-            paths,
-            signer,
-            origin,
-            checkpoint,
-            source,
+            paths: state.paths,
+            signer: state.signer,
+            origin: state.origin,
+            checkpoint: state.checkpoint,
+            source: state.source,
             socket,
             recovery: true,
-            wall,
+            wall: state.wall,
         })
     }
 

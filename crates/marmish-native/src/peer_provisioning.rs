@@ -9,6 +9,14 @@ use super::{
     Checkpoint, CursorError, Error, Invitation, Local, Origin, Result, Selector, Source, rows,
 };
 
+#[cfg(test)]
+#[path = "peer_stage_journal_schema.rs"]
+mod stage_schema;
+
+#[cfg(test)]
+#[path = "peer_stage_journal.rs"]
+pub(crate) mod stage_journal;
+
 const START_INTERVAL: u64 = 600;
 
 // Keep persisted SQL stable. A schema change needs an explicit migration.
@@ -52,12 +60,20 @@ pub(super) fn attach(
     tx: &Transaction<'_>,
     has_checkpoint: bool,
 ) -> std::result::Result<(), CursorError> {
+    attach_with_claim_guard(tx, has_checkpoint, CLAIM_TRIGGER)
+}
+
+fn attach_with_claim_guard(
+    tx: &Transaction<'_>,
+    has_checkpoint: bool,
+    claim_trigger: &str,
+) -> std::result::Result<(), CursorError> {
     let schema = schema_entry(tx, "peer_provisioning_slot")?;
     match schema.as_deref() {
         None if schema_entry(tx, "peer_provisioning_reject_outbox")?.is_none()
             && schema_entry(tx, "peer_provisioning_reject_claim")?.is_none() =>
         {
-            for statement in [SLOT_TABLE, OUTBOX_TRIGGER, CLAIM_TRIGGER] {
+            for statement in [SLOT_TABLE, OUTBOX_TRIGGER, claim_trigger] {
                 tx.execute_batch(statement)?;
             }
             tx.execute(
@@ -68,7 +84,7 @@ pub(super) fn attach(
         Some(actual) if has_checkpoint && actual == SLOT_TABLE.trim() => {
             for (name, expected) in [
                 ("peer_provisioning_reject_outbox", OUTBOX_TRIGGER),
-                ("peer_provisioning_reject_claim", CLAIM_TRIGGER),
+                ("peer_provisioning_reject_claim", claim_trigger),
             ] {
                 if schema_entry(tx, name)?.as_deref() != Some(expected.trim()) {
                     return Err(CursorError::Binding);
@@ -96,16 +112,28 @@ fn schema_entry(tx: &Transaction<'_>, name: &str) -> rusqlite::Result<Option<Str
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Generation {
+pub(crate) struct Generation {
     pub(super) known: bool,
     pub(super) count: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Binding {
+pub(crate) struct Binding {
     pub(super) key: Selector,
     pub(super) origin: Origin,
     pub(super) generation: Generation,
+}
+
+#[cfg(test)]
+impl Binding {
+    pub(crate) fn coordinates(self) -> (bool, u64, Origin, Selector) {
+        (
+            self.generation.known,
+            self.generation.count,
+            self.origin,
+            self.key,
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -256,6 +284,32 @@ impl Checkpoint {
         wall: u64,
         new_class: Option<bool>,
     ) -> Result<Reservation> {
+        let (tx, origin, _) = self.live_provisioning_offer(source, key, wall)?;
+        if has_outbox(&tx, key, origin)? {
+            return Err(CursorError::Conflict.into());
+        }
+        let generation = match generation(&tx, key, origin)? {
+            Some(generation) => generation,
+            None => acquire(&tx, key, origin, new_class.ok_or(Error::Missing)?, wall)?,
+        };
+        rows::advance_wall(&tx, wall)?;
+        tx.commit()?;
+        Ok(Reservation {
+            owner: self.owner.clone(),
+            binding: Binding {
+                key,
+                origin,
+                generation,
+            },
+        })
+    }
+
+    fn live_provisioning_offer(
+        &mut self,
+        source: &Source,
+        key: Selector,
+        wall: u64,
+    ) -> Result<(Transaction<'_>, Origin, u64)> {
         let origin = self.origin(source)?;
         if !self.policy.permits(key.server) {
             return Err(Error::Policy);
@@ -282,23 +336,7 @@ impl Checkpoint {
         if quarantined {
             return Err(CursorError::RelayContract.into());
         }
-        if has_outbox(&tx, key, origin)? {
-            return Err(CursorError::Conflict.into());
-        }
-        let generation = match generation(&tx, key, origin)? {
-            Some(generation) => generation,
-            None => acquire(&tx, key, origin, new_class.ok_or(Error::Missing)?, wall)?,
-        };
-        rows::advance_wall(&tx, wall)?;
-        tx.commit()?;
-        Ok(Reservation {
-            owner: self.owner.clone(),
-            binding: Binding {
-                key,
-                origin,
-                generation,
-            },
-        })
+        Ok((tx, origin, row.expires))
     }
 
     pub(crate) fn retirement_target(
@@ -335,6 +373,10 @@ impl Checkpoint {
             generation,
         } = target.binding;
         let tx = self.cursor.with_wall(origin, wall)?;
+        #[cfg(test)]
+        if self.provisional_schema && stage_journal::load(&tx, target.binding)?.is_some() {
+            return Err(Error::Bound);
+        }
         rows::advance_wall(&tx, wall)?;
         let row = Invitation::load(&tx, key, origin)?;
         if has_outbox(&tx, key, origin)? {

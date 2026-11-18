@@ -59,6 +59,14 @@ CREATE TABLE IF NOT EXISTS peer_consent_outbox (
 ";
 
 pub(super) fn attach(cursor: &mut CursorStore, account: PublicKey) -> DbResult<()> {
+    attach_with(cursor, account, super::provisioning::attach)
+}
+
+pub(super) fn attach_with(
+    cursor: &mut CursorStore,
+    account: PublicKey,
+    provisioning: impl FnOnce(&Transaction<'_>, bool) -> DbResult<()>,
+) -> DbResult<()> {
     let tx = cursor
         .conn
         .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -79,7 +87,7 @@ pub(super) fn attach(cursor: &mut CursorStore, account: PublicKey) -> DbResult<(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    super::provisioning::attach(&tx, checkpoint.is_some())?;
+    provisioning(&tx, checkpoint.is_some())?;
     match checkpoint {
         None => {
             tx.execute(

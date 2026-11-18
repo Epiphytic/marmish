@@ -1,5 +1,9 @@
 //! Sign an isolated stage's KeyPackage without granting MDK any transport access.
 
+#[cfg(test)]
+#[path = "peer_stage_native.rs"]
+mod provisional;
+
 use super::*;
 use cgka_engine::key_package::durably_owned_key_packages;
 use cgka_traits::maintenance::{
@@ -115,6 +119,15 @@ impl OpenStage {
     }
 
     async fn prepare_new(&self, sample: Duration) -> StageResult<()> {
+        self.prepare_new_with_publisher(sample, self.publisher())
+            .await
+    }
+
+    async fn prepare_new_with_publisher(
+        &self,
+        sample: Duration,
+        publisher: WithheldPublisher,
+    ) -> StageResult<()> {
         let role = SessionConfig::with_storage(
             self.storage.clone(),
             Duration::ZERO,
@@ -128,7 +141,7 @@ impl OpenStage {
             Ok::<_, marmot_session::SessionError>((
                 NoIo,
                 StaticTransportRouting::new(endpoints.clone()),
-                self.publisher(),
+                publisher,
             ))
         })
         .map_err(|_| StageError::Storage)?
@@ -150,10 +163,14 @@ impl OpenStage {
     }
 
     fn publisher(&self) -> WithheldPublisher {
-        WithheldPublisher(Publisher {
-            keys: self.signer.clone(),
-            relay: Arc::new(NoIo),
-        })
+        WithheldPublisher {
+            publisher: Publisher {
+                keys: self.signer.clone(),
+                relay: Arc::new(NoIo),
+            },
+            #[cfg(test)]
+            withhold_signing: false,
+        }
     }
 
     fn check_pending(&self, pending: &PendingKeyPackageReplacement, wall: u64) -> StageResult<()> {
@@ -257,7 +274,11 @@ impl WallClock for StageWall {
     }
 }
 
-struct WithheldPublisher(Publisher);
+struct WithheldPublisher {
+    publisher: Publisher,
+    #[cfg(test)]
+    withhold_signing: bool,
+}
 
 #[async_trait]
 impl KeyPackagePublisher for WithheldPublisher {
@@ -265,7 +286,13 @@ impl KeyPackagePublisher for WithheldPublisher {
         &self,
         publication: KeyPackagePublication,
     ) -> std::result::Result<SignedPublicationArtifact, KeyPackagePublishError> {
-        let mut artifact = self.0.prepare_key_package(publication).await?;
+        #[cfg(test)]
+        if self.withhold_signing {
+            return Err(KeyPackagePublishError::unexposed(
+                "peer_fixture_unsigned_cut",
+            ));
+        }
+        let mut artifact = self.publisher.prepare_key_package(publication).await?;
         let event: Event = serde_json::from_slice(&artifact.bytes)
             .map_err(|_| KeyPackagePublishError::unexposed("peer_package_decode"))?;
         artifact.bytes = serde_json::to_vec(&event)

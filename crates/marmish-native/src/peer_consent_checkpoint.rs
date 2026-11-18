@@ -15,7 +15,7 @@ use sha2::Digest as _;
 use zeroize::Zeroizing;
 
 #[path = "peer_provisioning.rs"]
-mod provisioning;
+pub(crate) mod provisioning;
 #[path = "peer_consent_checkpoint_rows.rs"]
 mod rows;
 #[cfg(test)]
@@ -37,6 +37,8 @@ pub(crate) enum Error {
     Missing,
     Expired,
     Package,
+    #[cfg(test)]
+    Bound,
     Cursor(CursorError),
 }
 
@@ -157,6 +159,8 @@ pub(crate) struct Checkpoint {
     owner_uid: u32,
     policy: Policy,
     routes: Vec<Route>,
+    #[cfg(test)]
+    provisional_schema: bool,
 }
 
 impl Checkpoint {
@@ -165,12 +169,35 @@ impl Checkpoint {
         self.cursor.conn.execute_batch(sql).unwrap();
     }
 
+    #[cfg(test)]
+    pub(crate) fn fixture_try_statement(
+        &self,
+        sql: &str,
+        identity: Option<&[u8; 32]>,
+    ) -> rusqlite::Result<usize> {
+        match identity {
+            Some(identity) => self.cursor.conn.execute(sql, [identity]),
+            None => self.cursor.conn.execute(sql, []),
+        }
+    }
+
     pub(crate) fn attach(
+        cursor: CursorStore,
+        signer: Keys,
+        owner_uid: u32,
+        urls: &[&str],
+        policy: Policy,
+    ) -> Result<Self> {
+        Self::attach_with(cursor, signer, owner_uid, urls, policy, rows::attach)
+    }
+
+    fn attach_with(
         mut cursor: CursorStore,
         signer: Keys,
         owner_uid: u32,
         urls: &[&str],
         policy: Policy,
+        open_rows: impl FnOnce(&mut CursorStore, PublicKey) -> std::result::Result<(), CursorError>,
     ) -> Result<Self> {
         if !(1..=MAX_ORIGINS).contains(&urls.len()) {
             return Err(Error::Source);
@@ -183,7 +210,7 @@ impl Checkpoint {
         if ids.len() != routes.len() || !ids.iter().eq(&cursor.origins) {
             return Err(Error::Source);
         }
-        rows::attach(&mut cursor, signer.public_key())?;
+        open_rows(&mut cursor, signer.public_key())?;
         Ok(Self {
             cursor,
             signer,
@@ -192,6 +219,8 @@ impl Checkpoint {
             owner_uid,
             policy,
             routes,
+            #[cfg(test)]
+            provisional_schema: false,
         })
     }
 
@@ -234,7 +263,11 @@ impl Checkpoint {
     }
 
     fn check_local(&self, local: &Local) -> Result<()> {
-        if !Arc::ptr_eq(&self.owner, &local.owner) {
+        self.check_local_owner(&local.owner)
+    }
+
+    fn check_local_owner(&self, owner: &Arc<()>) -> Result<()> {
+        if !Arc::ptr_eq(&self.owner, owner) {
             return Err(Error::LocalOwner);
         }
         Ok(())
@@ -449,7 +482,7 @@ impl Checkpoint {
             expires: flight.expires_at,
             frame: Zeroizing::new(consent.frame().to_vec()),
             package_id: consent.flight.binding().event_id,
-            package_digest: Sha256::digest(consent.flight.package_bytes()).into(),
+            package_digest: package_digest(consent.flight.package_bytes()),
             attempt: 0,
             retry_at: None,
             acknowledged_at: None,
@@ -483,3 +516,7 @@ impl Checkpoint {
 
 #[path = "peer_consent_publication.rs"]
 mod publication;
+
+fn package_digest(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}

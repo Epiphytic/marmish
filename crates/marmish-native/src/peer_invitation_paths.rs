@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "peer_stage_files.rs"]
+mod provisional;
+
 use super::{Error, Result};
 use crate::identity::{IdentityMaterial, ProfileLease, check_dir, open_private};
 use hkdf::Hkdf;
@@ -85,14 +89,7 @@ impl Paths<'_> {
     }
 
     fn key(&self, domain: &[u8], slot: &[u8]) -> Zeroizing<[u8; 32]> {
-        let mut key = Zeroizing::new([0; 32]);
-        self.keys
-            .expand_multi_info(
-                &[domain, self.lease.profile_id().as_bytes(), slot],
-                &mut key[..],
-            )
-            .expect("fixed HKDF output length is valid");
-        key
+        expand_peer_key(&self.keys, domain, self.lease.profile_id().as_bytes(), slot)
     }
 
     fn stage_path(&self, slot: StageSlot) -> PathBuf {
@@ -102,6 +99,18 @@ impl Paths<'_> {
     fn directory(&self) -> PathBuf {
         self.lease.root().join("peer")
     }
+}
+
+fn expand_peer_key(
+    keys: &Hkdf<Sha256>,
+    domain: &[u8],
+    profile_id: &[u8],
+    slot: &[u8],
+) -> Zeroizing<[u8; 32]> {
+    let mut key = Zeroizing::new([0; 32]);
+    keys.expand_multi_info(&[domain, profile_id, slot], &mut key[..])
+        .expect("fixed HKDF output length is valid");
+    key
 }
 
 impl CheckedFile {
