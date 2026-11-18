@@ -1448,4 +1448,12 @@ authenticated loopback WSS. The fixture stops before native ingest. Replaying
 Delivery leaves the cursor and provisional stage unchanged, and native custody
 checks confirm that the original KeyPackage is unconsumed. This is
 [Linux AMD64 fixture evidence](validation/peer-private-wss-enrollment-m1.md).
-Joined Pending custody and deployment qualification are separate phases.
+The [joined Pending custody fixture](phases/peer-pending-join-custody.md)
+stores an authenticated Delivery only after the exact Consent publication is
+acknowledged. It commits `JoinStarted` before the one mutable native ingest.
+After restart it inspects independently reopened encrypted copies. A verified
+room reaches `Pending`, then `Activating` via a same-UID manual decision or
+the original and current automatic policy. An uncertain closed image retains
+its stage reservation. Exact replay remains a cursor operation throughout.
+The installed daemon, invitation CLI, room activation, telemetry and platform
+qualification have separate acceptance criteria.
