@@ -127,9 +127,22 @@ fn peer_receiver_inventory_recovers_only_exact_witness_and_retains_expired_slot(
         .start_stage(&owner.source, &stage, witness, f.now)
         .unwrap();
     let journal = f.stage().with_extension("db-journal");
-    write_extent(&journal, 8192);
+    let journal_file = write_extent(&journal, 8192);
     let inventory = owner.recover(f.now).unwrap();
-    assert_eq!(inventory.classes[1], Class::Identified(binding));
+    assert_eq!(
+        inventory.classes[1],
+        Class::JournalCandidate {
+            binding,
+            journal: FileExtent {
+                identity: (
+                    u64::from_be_bytes(journal_file.device),
+                    u64::from_be_bytes(journal_file.inode),
+                ),
+                logical: 8192,
+                charged: 8192,
+            },
+        },
+    );
     assert_eq!(inventory.charged, RESERVED_BYTES + 12_288);
     assert!(owner.recover(f.now - 1).is_err());
 
@@ -143,6 +156,14 @@ fn peer_receiver_inventory_recovers_only_exact_witness_and_retains_expired_slot(
             .is_err()
     );
     assert_eq!(owner.recover(f.now + 86_401).unwrap(), inventory);
+    let known = f.stage().with_file_name("provisional-known.db");
+    write_extent(&known, TOTAL_ADMISSION - inventory.charged + 1);
+    let over_budget = owner.recover(f.now).unwrap();
+    assert_eq!(over_budget.classes, [Class::Fenced; 2]);
+    assert_eq!(over_budget.charged, TOTAL_ADMISSION + 1);
+    assert!(journal.exists());
+    fs::remove_file(known).unwrap();
+    assert_eq!(owner.recover(f.now).unwrap(), inventory);
     fs::remove_file(journal).unwrap();
     assert_eq!(
         owner.recover(f.now).unwrap().classes[1],

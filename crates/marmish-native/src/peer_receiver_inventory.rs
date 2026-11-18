@@ -29,6 +29,10 @@ enum Class {
     Vacant,
     Create(Binding),
     Identified(Binding),
+    JournalCandidate {
+        binding: Binding,
+        journal: FileExtent,
+    },
     Fenced,
 }
 
@@ -112,48 +116,57 @@ impl Inventory {
                 .try_fold(0u64, |sum, file| sum.checked_add(file.charged))
                 .ok_or(Error::Path)?;
         }
-        let mut classes = [Class::Fenced; 2];
-        for (index, (charge, family)) in charges.into_iter().zip(&files).enumerate() {
-            let absent = family.iter().all(Option::is_none);
-            classes[index] = match charge {
-                None if absent => Class::Vacant,
-                Some(Charge { binding, stage })
-                    if absent && matches!(stage, None | Some(State::Bound)) =>
-                {
-                    Class::Create(binding)
-                }
-                Some(Charge {
-                    binding,
-                    stage: Some(State::NativeStarted(witness) | State::Prepared(witness, _)),
-                }) if family[0].is_some_and(|main| {
-                    main.identity
-                        == (
-                            u64::from_be_bytes(witness.device),
-                            u64::from_be_bytes(witness.inode),
-                        )
-                        && main.logical <= CLOSED_STAGE_LIMIT
-                }) && family[2..].iter().all(Option::is_none) =>
-                {
-                    Class::Identified(binding)
-                }
-                _ => Class::Fenced,
-            };
-        }
         let charged = extents
             .iter()
             .try_fold(RESERVED_BYTES, |sum, extent| sum.checked_add(*extent))
             .ok_or(Error::Path)?;
-        // The installed policy has no Known founder source. Any retained Known
-        // state still contributes to capacity. An interrupted copy fences both.
-        classes[0] = Class::Fenced;
-        if files[2].iter().any(Option::is_some) || charged >= TOTAL_ADMISSION {
-            classes.fill(Class::Fenced);
-        }
+        // Known contributes to capacity but cannot be selected. A shared copy
+        // or lack of remaining capacity also fences the Unknown family.
+        let unknown = if files[2].iter().any(Option::is_some) || charged >= TOTAL_ADMISSION {
+            Class::Fenced
+        } else {
+            classify_unknown(charges[1], files[1])
+        };
         Ok(Self {
-            classes,
+            classes: [Class::Fenced, unknown],
             extents,
             charged,
         })
+    }
+}
+
+fn classify_unknown(charge: Option<Charge>, family: [Option<FileExtent>; 4]) -> Class {
+    match (charge, family) {
+        (None, [None, None, None, None]) => Class::Vacant,
+        (
+            Some(Charge {
+                binding,
+                stage: None | Some(State::Bound),
+            }),
+            [None, None, None, None],
+        ) => Class::Create(binding),
+        (
+            Some(Charge {
+                binding,
+                stage: Some(State::NativeStarted(witness) | State::Prepared(witness, _)),
+            }),
+            [Some(main), journal, None, None],
+        ) if main.identity
+            == (
+                u64::from_be_bytes(witness.device),
+                u64::from_be_bytes(witness.inode),
+            )
+            && main.logical <= CLOSED_STAGE_LIMIT =>
+        {
+            // The caller has charged both observed extents against the exact
+            // allowance left by the cursor and other families. A candidate
+            // still needs a scoped pager check before native access.
+            match journal {
+                Some(journal) => Class::JournalCandidate { binding, journal },
+                None => Class::Identified(binding),
+            }
+        }
+        _ => Class::Fenced,
     }
 }
 

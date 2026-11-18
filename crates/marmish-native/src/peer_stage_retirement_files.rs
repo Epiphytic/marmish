@@ -256,7 +256,7 @@ pub(in super::super) mod recovery {
         c"receiver-join-snapshot.db-shm",
     ];
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(in super::super::super) struct FileExtent {
         pub(in super::super::super) identity: Identity,
         pub(in super::super::super) logical: u64,
