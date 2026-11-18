@@ -55,6 +55,56 @@ fixture produce independent evidence. Cross-host interoperability, Keychain
 providers, the three-target release renderer and benchmarking have their own
 gates.
 
+## Build, install and run the installed Terminal subset
+
+Use this opt-in mode on Linux ARM64, macOS ARM64, or Linux AMD64 as a
+comparison. Use Python 3.11 or later, the pinned native Rust toolchain, the
+native build prerequisites and tmux 3.3 or later from the stock lookup. The
+host needs space for a fresh release build and libtest target in a private
+directory under the operator's home. Collect the license inventory from the
+same lockfile, then run with the locked Cargo dependencies already cached.
+
+```sh
+python3 tools/marmish_local_qualification.py \
+  --source "$SOURCE_CHECKOUT" --commit "$SOURCE_SHA" \
+  --build-installed-terminal --licenses "$NATIVE_LICENSE_INVENTORY" \
+  --tmux "$STOCK_TMUX_ABSOLUTE_PATH"
+```
+
+This mode builds and packages the locked checkout, inspects its native ABI,
+checks the local installer and a rejected tampered replacement, then exercises
+digest-identical copies of the installed executables. The selected native
+controller uses one private loopback WSS fixture to check ordinary Command,
+literal Unicode output, terminal resize, Ctrl-C, detach/resume and PTY
+restoration. The server shell comes from the test account's normal login shell.
+The independent stock foreground-daemon check expects typed closure on a held,
+non-listening loopback endpoint.
+
+The JSON distinguishes the installed subset from the broader Terminal suite,
+stock-to-stock private WSS, cross-host runs, Observe/Takeover and Peer. Those
+are all marked `unrun` by this mode. Linux packaging enforces glibc 2.39 or
+earlier dependencies. macOS packaging requires a 15.0 deployment target and
+strictly verifies ad hoc signatures. The fixture and packaging commands make
+no public relay requests. Run on each ARM64 platform to qualify that platform.
+[Phase plan](../phases/terminal-arm64-installed-baseline.md).
+
+### Linux AMD64 author control
+
+For `bc39ea06f9503060d0db1abbb86e63de93c3d27b`, the author built the
+native payloads and exact fixture controller with locked offline Cargo in a
+warm debug target. The real package producer, installer and installed fixture
+steps passed in 77.468 seconds after compilation. The one selected Terminal
+controls case took 30.764 seconds. This run passed the glibc 2.39 inspection,
+fresh quickstart, idempotent setup, manifest and byte provenance, both
+same-size tamper refusals, the stock foreground closed-relay refusal and
+explicit private IPC, tmux and runtime cleanup. The installed fixture used
+digest-identical shadow payloads and a private loopback relay.
+
+The separate clean-target release command passed preflight and entered the
+build before the author stopped it to preserve build resources. The author
+control did not exercise a clean optimized build or either ARM64 host.
+[Claude review and failure disposition](../reviews/terminal-arm64-installed-baseline.md).
+
 ## Observed Linux x86-64 result
 
 The artifact-only run used debug binaries from
