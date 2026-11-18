@@ -95,10 +95,10 @@ impl TestFlight<'_> {
 #[test]
 #[ignore = "uses a real private TLS relay, installed native worker, SQLCipher, and tmux"]
 fn terminal_selection_native_wss_echo_and_resize() {
-    // Debug builds place several joined native MLS futures on this test's
-    // stack. Leave normal libtest worker stacks unchanged.
+    // Debug builds place joined native MLS futures and nested Group ingest
+    // on this worker's stack. Keep the larger stack local to this fixture.
     std::thread::Builder::new()
-        .stack_size(32 * 1024 * 1024)
+        .stack_size(64 * 1024 * 1024)
         .spawn(|| {
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
