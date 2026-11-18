@@ -705,10 +705,11 @@ async fn peer_installed_custody_reopens_signed_prepared_consent_and_held_deliver
         assert_eq!(installed_pending_effects(), effects);
 
         for policy in [ReceivePolicy::AutoAny, ReceivePolicy::Off] {
+            let off = matches!(policy, ReceivePolicy::Off);
             let mut other = open_custody(&f, &f.client, A, Policy::default(), policy).unwrap();
             let other_source = other.bind_source(A).unwrap();
             let held = other.read_custody(&other_source, key, generation, wall);
-            if matches!(policy, ReceivePolicy::Off) {
+            if off {
                 assert_eq!(held.err(), Some(Error::Policy));
             } else {
                 let held = held.unwrap().unwrap();
