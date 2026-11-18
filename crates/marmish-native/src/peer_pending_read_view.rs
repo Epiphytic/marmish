@@ -1,4 +1,9 @@
 //! Memory-only local projection. Durable and native proof stay with the actor.
+#![allow(
+    dead_code,
+    reason = "private actor and listener mount are separately reviewed"
+)]
+
 use super::{Entry, Reply, Request, Selection};
 use std::{
     num::NonZeroU64,
@@ -8,7 +13,10 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::{Semaphore, SemaphorePermit};
+use tokio::{
+    sync::{Semaphore, SemaphorePermit},
+    time::Instant as ExchangeInstant,
+};
 
 const LIFETIME: Duration = Duration::from_secs(1);
 const READ_LIMIT: usize = 4;
@@ -21,6 +29,7 @@ struct Stamp {
     sequence: u64,
 }
 
+#[cfg(test)]
 struct Ticket {
     stamp: Stamp,
     origin: Instant,
@@ -47,10 +56,11 @@ impl Sample {
     }
 }
 
-// The durable bridge will construct this only from its exact fenced readback.
+// The installed owner must supply an opaque proof from its exact fenced readback.
 struct Observation {
     entry: Option<Entry>,
     wall_floor: u64,
+    #[cfg(test)]
     verified_wall: u64,
 }
 
@@ -127,8 +137,9 @@ impl Shared {
     }
 }
 
-struct Producer(Arc<Shared>);
+pub(crate) struct Producer(Arc<Shared>);
 
+#[cfg(test)]
 impl Producer {
     fn begin(&self, changes_image: bool, origin: impl FnOnce() -> Instant) -> Option<Ticket> {
         let mut inner = self.0.view.lock().ok()?;
@@ -193,10 +204,10 @@ impl Drop for Producer {
 }
 
 #[derive(Clone)]
-struct Reader(Arc<Shared>);
+pub(crate) struct Reader(Arc<Shared>);
 
 impl Reader {
-    fn admit(&self, listener: NonZeroU64) -> Option<Read<'_>> {
+    pub(crate) fn admit(&self, listener: NonZeroU64) -> Option<Read<'_>> {
         if listener != self.0.listener || self.0.view.is_poisoned() {
             return None;
         }
@@ -206,12 +217,12 @@ impl Reader {
         })
     }
 
-    fn stop(&self) {
+    pub(crate) fn stop(&self) {
         self.0.stop();
     }
 }
 
-struct Read<'view> {
+pub(crate) struct Read<'view> {
     shared: &'view Shared,
     _permit: SemaphorePermit<'view>,
 }
@@ -223,6 +234,27 @@ struct Selected {
 }
 
 impl Read<'_> {
+    /// Invoke on the admitted same-UID connection immediately before its write.
+    /// The caller retains this permit through the write and uses the same deadline.
+    pub(crate) fn reply_before_write(
+        &self,
+        request: Request,
+        listener: NonZeroU64,
+        deadline: ExchangeInstant,
+    ) -> Option<Reply> {
+        if listener != self.shared.listener {
+            return None;
+        }
+        let sample = || {
+            if ExchangeInstant::now() >= deadline {
+                return None;
+            }
+            Sample::now()
+        };
+        let selected = self.select(request, sample)?;
+        self.reply(selected, sample)
+    }
+
     fn select(
         &self,
         request: Request,
@@ -258,7 +290,7 @@ impl Read<'_> {
     }
 }
 
-fn pair(listener: NonZeroU64) -> Option<(Producer, Reader)> {
+pub(crate) fn pair(listener: NonZeroU64) -> Option<(Producer, Reader)> {
     let actor = NEXT_ACTOR
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |last| {
             last.checked_add(1)

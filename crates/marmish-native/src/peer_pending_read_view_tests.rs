@@ -55,6 +55,48 @@ fn query(
 }
 
 #[test]
+fn admitted_reply_uses_real_clocks_and_rechecks_listener_and_deadline() {
+    let listener = generation();
+    let foreign_listener = NonZeroU64::new(2).unwrap();
+    let (producer, reader) = pair(listener).unwrap();
+    let read = reader.admit(listener).unwrap();
+    let deadline = ExchangeInstant::now() + Duration::from_secs(5);
+    assert_eq!(read.reply_before_write(LIST, listener, deadline), None);
+
+    let ticket = producer.begin(false, Instant::now).unwrap();
+    let observed = Sample::now().unwrap();
+    let row = Entry {
+        held_at: observed.wall,
+        expires_at: observed.wall + 30,
+        ..entry()
+    };
+    assert!(producer.publish(
+        ticket,
+        Observation {
+            entry: Some(row),
+            wall_floor: observed.wall,
+            verified_wall: observed.wall,
+        },
+        Sample::now,
+    ));
+    assert_eq!(
+        read.reply_before_write(LIST, foreign_listener, deadline),
+        None
+    );
+    assert_eq!(
+        read.reply_before_write(LIST, listener, ExchangeInstant::now()),
+        None
+    );
+    assert_eq!(
+        read.reply_before_write(LIST, listener, deadline),
+        Some(Reply::List { entries: vec![row] })
+    );
+    reader.stop();
+    assert_eq!(read.reply_before_write(LIST, listener, deadline), None);
+    assert!(reader.admit(listener).is_none());
+}
+
+#[test]
 fn only_a_qualified_observation_lists_or_shows() {
     let time = Instant::now();
     let current = sample(time, FLOOR);

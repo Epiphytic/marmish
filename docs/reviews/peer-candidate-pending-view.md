@@ -29,3 +29,17 @@ author fixed all three. Only a current authenticated producer ticket
 can record expiry. The author ran the candidate tests, all-targets
 Clippy and non-test binary inspection in
 [the memory view validation](../validation/peer-candidate-pending-view.md).
+
+## Candidate reply admission
+
+Claude Code Auto with `claude-sonnet-5-5` approved exact source
+`f82d832033ef9553b51002474c1d5019f1097b57` on `584e439` in session
+`1812b7e7-5845-4a17-9620-08b315199012`. The reviewer checked the
+three-file change against the Pending view and Manual actor designs and
+reran all eight view tests from the author's built candidate executable.
+No blocking findings remained. The review confirmed that positive
+publication stays test-only and that final reply admission checks the
+same listener generation, view stamp, real clocks and exchange deadline.
+The listener must retain the permit through the bounded write. The
+[validation record](../validation/peer-candidate-pending-view.md#candidate-reply-admission)
+records the candidate build and the scope of the future owner handoff.

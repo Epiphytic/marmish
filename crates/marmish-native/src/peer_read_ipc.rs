@@ -6,9 +6,8 @@ use std::path::Path;
 
 pub(crate) use super::peer_selection::Selection;
 
-#[cfg(test)]
 #[path = "peer_pending_read_view.rs"]
-mod pending_view;
+pub(crate) mod pending_view;
 
 const LIST_LIMIT: usize = 16;
 pub(super) const UNAVAILABLE: &str = "peer_unavailable";
