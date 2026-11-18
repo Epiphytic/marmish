@@ -77,6 +77,7 @@ pub(super) struct ReceiptRun<'a, 'profile> {
     pub(super) sender_socket: Arc<Mutex<Owner>>,
     pub(super) recipient_signer: Arc<Keys>,
     pub(super) inner: [u8; 32],
+    pub(super) started: Instant,
 }
 
 impl ReceiptRun<'_, '_> {
@@ -121,11 +122,10 @@ impl ReceiptRun<'_, '_> {
 }
 
 pub(super) async fn finish(mut run: ReceiptRun<'_, '_>) {
-    let started = Instant::now();
     let mut owner = (run.reopen)();
     let (row, native_started) = run.read(&mut owner, Step::NativeStarted);
     let gate = ReceiptGate::closed(run.round.wall.clone());
-    let mut recipient = run.open(&owner, &row, gate.clone());
+    let recipient = run.open(&owner, &row, gate.clone());
     let captured = outbound::capture(&recipient, run.image, &native_started, run.wall()).unwrap();
     let candidate = captured.event_id();
     let digest = captured.signed_digest();
@@ -137,6 +137,23 @@ pub(super) async fn finish(mut run: ReceiptRun<'_, '_>) {
     assert_eq!(recorded.step(), Step::Captured);
     let deadline = recorded.deadline();
     assert!(outbound::capture(&recipient, run.image, &native_started, deadline).is_err());
+    drop(captured);
+    drop((recipient, gate, native_started, recorded, owner));
+
+    let mut owner = (run.reopen)();
+    let (row, recorded) = run.read(&mut owner, Step::Captured);
+    let gate = ReceiptGate::closed(run.round.wall.clone());
+    let mut recipient = run.open(&owner, &row, gate.clone());
+    assert!(
+        outbound::check_captured(
+            &recipient,
+            &run.image.with_file_name("wrong-receipt-stage"),
+            &recorded,
+            run.wall(),
+        )
+        .is_err()
+    );
+    let request = outbound::check_captured(&recipient, run.image, &recorded, run.wall()).unwrap();
     advance_retry(&recipient, &run.stage.group, &run.round.wall, deadline);
     let socket = ReservedSocket::reserve(
         run.sender_socket.clone(),
@@ -156,7 +173,7 @@ pub(super) async fn finish(mut run: ReceiptRun<'_, '_>) {
             &mut owner.state.checkpoint,
             &owner.state.source,
             attempt,
-            captured.request(),
+            &request,
             Kind::AcceptReceipt,
         )
         .unwrap();
@@ -172,7 +189,7 @@ pub(super) async fn finish(mut run: ReceiptRun<'_, '_>) {
 
     // Stop the recipient before its terminal SQL decision. The founder has
     // not yet changed the durable acceptance journal.
-    drop((recipient, gate, captured, owner));
+    drop((recipient, gate, request, recorded, owner));
     let record = record.unwrap();
     assert!(run.founder_socket.accepts_group_record(&record));
     assert_eq!(record.fingerprint().id, candidate);
@@ -335,7 +352,7 @@ pub(super) async fn finish(mut run: ReceiptRun<'_, '_>) {
     assert_eq!(run.round.relay.group_writes(), writes);
     eprintln!(
         "peer_receipt_durable acceptance_ms={} ack_loss_ms={ack_loss_ms} retry_ms={retry_ms} group_writes=5",
-        started.elapsed().as_millis()
+        run.started.elapsed().as_millis()
     );
 }
 
@@ -389,6 +406,13 @@ async fn project_founder(
     let signer = || (*run.round.founder).clone();
     // SAFETY: reads the process's effective Unix UID without mutating state.
     let uid = unsafe { libc::geteuid() };
+    let origin_id = Route::configured(origin).unwrap().id;
+    let bare =
+        CursorStore::attach(connect(), signer().public_key().to_bytes(), &[origin_id]).unwrap();
+    drop(
+        Checkpoint::attach_for_provisional_proof(bare, signer(), uid, &[origin], Policy::default())
+            .unwrap(),
+    );
     drop(
         Checkpoint::attach_prepared_consent_fixture(
             connect(),
@@ -450,6 +474,7 @@ async fn project_founder(
     let saved_at = durable.accepted_at();
     drop((db, source, proof, founder, durable));
 
+    run.round.wall.fetch_add(1, Ordering::AcqRel);
     let mut founder = run.founder.closed();
     let mut db = checkpoint();
     let source = db.bind_source(origin).unwrap();
@@ -460,15 +485,9 @@ async fn project_founder(
         .accept_verified_receipt(&source, &proof, run.wall())
         .unwrap();
     assert_eq!(repeated.accepted_at(), saved_at);
+    assert!(repeated.accepted_at() < run.wall());
     assert_eq!(repeated.source().native_id, proof.native_id().as_slice());
-    founder
-        .runtime()
-        .group_authority_view()
-        .with_group_authority_snapshot(expected.group, |storage, _| {
-            storage.delete_pending_application_events(std::slice::from_ref(proof.native_id()))?;
-            Ok::<_, marmot_session::SessionError>(())
-        })
-        .unwrap();
+    founder.acknowledge_application_source(proof.native_id());
     assert!(
         founder_proof::pending(founder.runtime(), expected, run.wall())
             .unwrap()

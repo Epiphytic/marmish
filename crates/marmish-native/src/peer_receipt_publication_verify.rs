@@ -57,10 +57,6 @@ impl CapturedReceipt<'_> {
         self.0.publication
     }
 
-    pub(crate) fn request(&self) -> &TransportPublishRequest {
-        &self.0.request
-    }
-
     pub(crate) fn observed_at(&self) -> u64 {
         self.0.observed_at
     }
@@ -132,6 +128,32 @@ pub(crate) fn capture<'a>(
         return Err(Refusal::Binding);
     }
     let (evidence, fanout) = read(recipient, image, publication, wall)?;
+    require_closed_capture(&fanout)?;
+    Ok(CapturedReceipt(evidence))
+}
+
+pub(crate) fn check_captured(
+    recipient: &AccountDeviceRuntime<
+        impl TransportAdapter,
+        impl TransportRoutingPolicy,
+        impl KeyPackagePublisher,
+    >,
+    image: &Path,
+    publication: &Publication,
+    wall: u64,
+) -> Result<TransportPublishRequest, Refusal> {
+    if publication.step() != Step::Captured {
+        return Err(Refusal::Binding);
+    }
+    let (evidence, fanout) = read(recipient, image, publication, wall)?;
+    require_closed_capture(&fanout)?;
+    if publication.candidate() != Some(evidence.binding) {
+        return Err(Refusal::Binding);
+    }
+    Ok(evidence.request)
+}
+
+fn require_closed_capture(fanout: &OutboundFanout) -> Result<(), Refusal> {
     if fanout.target_statuses() != [FanoutTargetStatus::RetryableUnavailable]
         || fanout.target_attempt_count(0) != 1
         || fanout
@@ -142,7 +164,7 @@ pub(crate) fn capture<'a>(
     {
         return Err(Refusal::Binding);
     }
-    Ok(CapturedReceipt(evidence))
+    Ok(())
 }
 
 pub(crate) fn recover<'a>(
@@ -209,7 +231,9 @@ pub(crate) fn acknowledge_published(
         return Err(Refusal::Binding);
     };
     let (_, application) = accepted(recipient, image, publication, number, wall)?;
-    recipient.acknowledge_published_app_messages(&[application])?;
+    recipient
+        .acknowledge_published_app_messages(&[application])
+        .map_err(|_| Refusal::Storage)?;
     Ok(())
 }
 

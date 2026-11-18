@@ -481,6 +481,7 @@ async fn prove_lost_ack(with_receipt: bool) {
             wall(),
         )
         .unwrap();
+        let started = Instant::now();
         let reserved = owner
             .state
             .checkpoint
@@ -501,6 +502,7 @@ async fn prove_lost_ack(with_receipt: bool) {
             sender_socket: retry_socket.clone(),
             recipient_signer: recipient_signer.clone(),
             inner,
+            started,
         })
         .await;
     }

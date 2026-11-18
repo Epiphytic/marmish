@@ -339,9 +339,16 @@ pub(crate) async fn peer_enrollment_welcome(
 
 pub(crate) struct PeerFounderRuntime<A: TransportAdapter = NoIo>(
     AccountDeviceRuntime<A, StaticTransportRouting, Publisher>,
+    SqliteAccountStorage,
 );
 
 impl<A: TransportAdapter> PeerFounderRuntime<A> {
+    pub(crate) fn acknowledge_application_source(&self, source: &MessageId) {
+        self.1
+            .delete_pending_application_events(std::slice::from_ref(source))
+            .unwrap();
+    }
+
     pub(crate) fn runtime(
         &self,
     ) -> &AccountDeviceRuntime<
@@ -470,9 +477,9 @@ pub(crate) async fn peer_enrollment_founder(
     package: KeyPackage,
 ) -> (PeerFounderRuntime, GroupId, TransportMessage) {
     let founder = Store::new(dir, "peer-founder.db", founder);
-    let (runtime, group, welcome) =
+    let (storage, runtime, group, welcome) =
         prepare_peer_founder(&founder, recipient, routing, room_id, package).await;
-    (PeerFounderRuntime(runtime), group, welcome)
+    (PeerFounderRuntime(runtime, storage), group, welcome)
 }
 
 pub(crate) async fn peer_enrollment_founder_with_group<A: TransportAdapter>(
@@ -490,9 +497,9 @@ pub(crate) async fn peer_enrollment_founder_with_group<A: TransportAdapter>(
     PeerFounderReopen,
 ) {
     let founder = Store::new(dir, "peer-founder.db", signer);
-    let (runtime, group, welcome) =
+    let (storage, runtime, group, welcome) =
         prepare_peer_founder(&founder, recipient, routing, room_id, package).await;
-    drop(runtime);
+    drop((runtime, storage));
     // The group ID is assigned during native founding, before the scoped
     // route is installed. Keep the storage authority independent of the socket.
     let info = std::fs::symlink_metadata(&founder.path).unwrap();
@@ -542,7 +549,7 @@ impl PeerFounderReopen {
             .open_with_routing(router, adapter, Arc::new(NoIo));
         assert_eq!(storage.migration_summary().0, 0);
         check();
-        PeerFounderRuntime(runtime)
+        PeerFounderRuntime(runtime, storage)
     }
 }
 
@@ -552,9 +559,14 @@ async fn prepare_peer_founder(
     routing: &NostrRoutingV1,
     room_id: [u8; 16],
     package: KeyPackage,
-) -> (StageRuntime, GroupId, TransportMessage) {
+) -> (
+    SqliteAccountStorage,
+    StageRuntime,
+    GroupId,
+    TransportMessage,
+) {
     let recipient = MemberId::new(recipient.to_bytes().to_vec());
-    let (_store, mut runtime) = founder.open_with(
+    let (storage, mut runtime) = founder.open_with(
         &recipient,
         routing
             .relays
@@ -576,7 +588,7 @@ async fn prepare_peer_founder(
     .await;
     let welcome = welcomes.pop().expect("one recipient Welcome");
     assert!(welcomes.is_empty());
-    (runtime, group, welcome)
+    (storage, runtime, group, welcome)
 }
 
 // The ordinary provider exercises actual Command wire payload authentication.

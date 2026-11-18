@@ -239,6 +239,7 @@ async fn prepare_history(
         .await;
     let selected = entry(&socket, selector, peer::State::Activating).await;
     assert_no_command(&socket).await;
+    let activation_ms = started.elapsed().as_millis();
     let ordinary_server = if check_command {
         let started = Instant::now();
         let server = verify_ordinary_command(round, &socket).await;
@@ -253,7 +254,6 @@ async fn prepare_history(
     };
     daemon.stop().await;
     round.assert_stopped(&socket);
-    let activation_ms = started.elapsed().as_millis();
 
     let prior_welcome = founder
         .runtime()
