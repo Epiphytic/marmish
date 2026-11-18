@@ -24,10 +24,10 @@ const MAX_PATTERNS: usize = 256;
 const MAX_PATTERN_BYTES: usize = 1024;
 const OVERSIZE_LIMIT: usize = MAX_PATTERNS * (2 * MAX_PATTERN_BYTES + 3) + MAX_LAYERS * 64 + 128;
 const DOMAIN: &[u8] = b"marmish/peer/permission-description/v1\0";
-const MAX_DISKS: usize = 8;
-const MAX_IPS: usize = 8;
-const MAX_UPTIME: u64 = 31_557_600_000;
-const MAX_LOAD: u32 = 1_000_000_000;
+pub(crate) const MAX_DISKS: usize = 8;
+pub(crate) const MAX_IPS: usize = 8;
+pub(crate) const MAX_UPTIME: u64 = 31_557_600_000;
+pub(crate) const MAX_LOAD: u32 = 1_000_000_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WireError {
@@ -141,7 +141,7 @@ fn decode_ips<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Vec<I
         .map(Some)
 }
 
-fn safe_text(value: &str, max: usize) -> bool {
+pub(crate) fn safe_text(value: &str, max: usize) -> bool {
     !value.is_empty() && value.len() <= max && !value.chars().any(|character| {
         character.is_control() || matches!(character,
             '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
@@ -155,7 +155,7 @@ impl Heartbeat {
 }
 
 impl HostStatus {
-    fn valid(&self) -> bool {
+    pub(crate) fn valid(&self) -> bool {
         self.username
             .as_ref()
             .is_none_or(|name| safe_text(name, 64))
@@ -175,7 +175,7 @@ impl HostStatus {
 }
 
 impl DiskStatus {
-    fn valid(&self) -> bool {
+    pub(crate) fn valid(&self) -> bool {
         safe_text(&self.label, 32)
             && !self.label.contains('/')
             && self
