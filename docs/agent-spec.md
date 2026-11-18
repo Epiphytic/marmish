@@ -121,6 +121,11 @@ The [candidate VFS registration proof](validation/peer-candidate-preflight-regis
 qualifies sealed receiver registration under the ordinary profile lease,
 forwards ordinary SQLite calls and fences reserved Peer database names. It
 is currently exercised in isolated test processes.
+The [candidate Command SQLCipher fence](validation/peer-candidate-engine-sqlcipher-fence.md)
+checks startup, retained output and connection close in the unmounted
+candidate Command worker. Linux AMD64 tests exercised real SQLCipher
+handle refusal and worker cleanup. Live dispatcher displacement and
+installed shutdown remain separate integration checks.
 
 **CI execution direction (2026-11-13):** prefer Epiphytic self-hosted runners;
 do not launch GitHub-hosted qualification as an implicit fallback. The
