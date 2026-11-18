@@ -356,6 +356,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[ignore = "run the live loopback publication fixture separately from the native integration suite"]
     async fn headless_publication_checks_directory_and_uses_the_local_signer() {
         let home = std::env::var_os("HOME").unwrap();
         let root = tempfile::Builder::new()

@@ -31,3 +31,9 @@ real sign-and-publish fixture, config commit, both relay fixtures and the
 loopback TLS fixture. Format and Clippy checks passed. The review covered
 the test-only relay, directory and terminal seams and their separation
 from production paths.
+
+The same Claude session approved the test-only follow-up in auto mode after
+an Apple libc pointer correction. The reviewer ran the controlling-terminal
+fixture, the isolated publication fixture, the full 22-test profile filter,
+the core filters and the native formatting check on Linux. macOS runtime
+coverage remains pending.

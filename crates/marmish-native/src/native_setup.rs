@@ -625,6 +625,160 @@ mod tests {
             .tempdir_in(std::env::var_os("HOME").unwrap())
             .unwrap()
     }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "opt-in Unix controlling-terminal fixture"]
+    async fn identifier_confirmation_on_controlling_terminal() {
+        const CHILD_NPUB: &str = "MARMISH_TEST_SETUP_CONTROLLING_TTY_NPUB";
+        if let Ok(npub) = std::env::var(CHILD_NPUB) {
+            // SAFETY: these process identity calls have no pointer arguments.
+            assert!(unsafe { libc::getsid(0) == libc::getpid() });
+            let root = private_state();
+            let profile = ProfileLease::acquire(&root.path().join("state"), "default").unwrap();
+            let config = proposed(None, &options()).unwrap().0;
+            let request = IdentifierGrant {
+                id: "client@example.org".parse().unwrap(),
+                expected: None,
+            };
+            let lookup = || {
+                LOOKUP_FIXTURE.with(|fixture| {
+                    fixture.replace(Some((
+                        request.id.clone(),
+                        profile_onboarding::Candidate {
+                            npub: npub.clone(),
+                            relays_queried: 1,
+                            relays_complete: 1,
+                        },
+                    )));
+                });
+                resolve_grant(&request, &profile, &config)
+            };
+            assert!(matches!(
+                lookup().await,
+                Err(Error::Invalid("profile_key_unconfirmed"))
+            ));
+            assert_eq!(lookup().await.unwrap(), npub);
+            assert!(matches!(lookup().await, Err(Error::Invalid("interrupted"))));
+            return;
+        }
+
+        use std::os::fd::FromRawFd;
+        use std::os::unix::process::CommandExt;
+        use std::process::{Child, Command, Stdio};
+
+        struct ReapChild(Child);
+        impl Drop for ReapChild {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
+        let npub = nostr::key::Keys::generate()
+            .public_key()
+            .to_bech32()
+            .unwrap();
+        let mut master_fd = -1;
+        let mut slave_fd = -1;
+        // SAFETY: the descriptor pointers are writable; null chooses default PTY attributes.
+        let opened = unsafe {
+            libc::openpty(
+                &mut master_fd,
+                &mut slave_fd,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(
+            opened,
+            0,
+            "opening PTY: {}",
+            std::io::Error::last_os_error()
+        );
+        // SAFETY: openpty returned two owned descriptors.
+        let (mut master, slave) =
+            unsafe { (File::from_raw_fd(master_fd), File::from_raw_fd(slave_fd)) };
+        let mut terminal = std::mem::MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: the live slave fd and aligned output buffer belong to this test.
+        let terminal = unsafe {
+            assert_eq!(libc::tcgetattr(slave_fd, terminal.as_mut_ptr()), 0);
+            terminal.assume_init()
+        };
+        assert_ne!(terminal.c_lflag & libc::ICANON, 0);
+        for fd in [master_fd, slave_fd] {
+            // SAFETY: both descriptors are live and this call consumes no pointer.
+            assert_eq!(
+                unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
+                0
+            );
+        }
+
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--ignored",
+                "--exact",
+                "native_setup::tests::identifier_confirmation_on_controlling_terminal",
+                "--nocapture",
+            ])
+            .env(CHILD_NPUB, &npub)
+            .stdin(Stdio::from(slave.try_clone().unwrap()))
+            .stdout(Stdio::from(slave.try_clone().unwrap()))
+            .stderr(Stdio::from(slave));
+        // SAFETY: pre_exec only makes libc calls and reports their errno. fd 0
+        // is the PTY slave and is opened as standard input by Command before this runs.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 || libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY, 0) == -1
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = ReapChild(command.spawn().unwrap());
+        drop(command);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        let prompt = b"then type it to grant access: ";
+        for input in [
+            format!("{}\n", &npub[..12]).into_bytes(),
+            format!("{npub}\n").into_bytes(),
+            vec![terminal.c_cc[libc::VEOF]],
+        ] {
+            let mut output = Vec::new();
+            while !output.windows(prompt.len()).any(|window| window == prompt) {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                let mut fd = libc::pollfd {
+                    fd: master.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let timeout = remaining.as_millis().try_into().unwrap();
+                // SAFETY: fd points to a writable single-element pollfd array.
+                let ready = unsafe { libc::poll(&mut fd, 1, timeout) };
+                assert!(
+                    ready > 0 && fd.revents & libc::POLLIN != 0,
+                    "setup prompt unavailable: {}",
+                    String::from_utf8_lossy(&output)
+                );
+                let mut buffer = [0; 512];
+                let bytes = master.read(&mut buffer).unwrap();
+                assert!(bytes > 0 && output.len() < 8_192);
+                output.extend_from_slice(&buffer[..bytes]);
+            }
+            master.write_all(&input).unwrap();
+        }
+        loop {
+            if let Some(exit) = child.0.try_wait().unwrap() {
+                assert!(exit.success(), "TTY child failed: {exit}");
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "TTY child timed out");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
     #[tokio::test(flavor = "current_thread")]
     async fn identifier_grant_commits_only_the_verified_key() {
         let root = private_state();

@@ -7,6 +7,7 @@ are disposable. Tests use loopback sockets or in-process inputs.
 ```sh
 cargo test --locked --offline -p marmish-native --lib profile_ -- --include-ignored --nocapture
 cargo test --locked --offline -p marmish-native --lib identifier_grant_commits_only_the_verified_key
+cargo test --locked --offline -p marmish-native --lib identifier_confirmation_on_controlling_terminal -- --ignored
 ```
 
 The first command runs the onboarding parser and policy tests, both TLS
@@ -16,6 +17,8 @@ second exercises actual setup, the profile lock and atomic config commit
 using a verified candidate fixture. A mismatched full npub leaves the config
 byte-identical. A match preserves only the public key. A changed directory
 response fails against the earlier confirmation and preserves the grant.
+The opt-in controlling-terminal fixture passed on Linux. A real `/dev/tty`
+rejects a shortened npub, accepts the exact full key, and handles end of file.
 
 The built Linux CLI completed local file-backed setup in an isolated profile.
 In separate processes without a controlling terminal, identifier setup and
@@ -60,3 +63,8 @@ executable. In that run, 31 existing subprocess tests tried to reopen the
 replaced executable and failed with ENOENT. Two representative tests passed
 in isolated reruns. The full-library rerun uses a pinned hard link to the
 final harness so a later Cargo build cannot replace the executable mid-test.
+That run had 659 passes, six ignored tests, and one failure. The live loopback
+publication fixture exceeded its 40-second deadline under the parallel suite.
+It passed in 7.34 seconds in an isolated run and in 8.3 seconds in Claude's
+independent rerun. Run it separately by name with `-- --ignored`, or use the
+`profile_` command above. The core Actions filters are unchanged.
