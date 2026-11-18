@@ -23,6 +23,7 @@ impl ProvisionalPackage {
 }
 
 impl OpenStage {
+    #[cfg(test)]
     pub(crate) fn open_provisional(
         path: &Path,
         key: &SqlCipherKey,
@@ -31,13 +32,33 @@ impl OpenStage {
         slot: String,
         first_open: bool,
     ) -> StageResult<Self> {
+        Self::open_provisional_with_options(
+            path,
+            key,
+            signer,
+            origin,
+            slot,
+            first_open,
+            SqliteStorageOptions::default(),
+        )
+    }
+
+    fn open_provisional_with_options(
+        path: &Path,
+        key: &SqlCipherKey,
+        signer: Arc<Keys>,
+        origin: &str,
+        slot: String,
+        first_open: bool,
+        options: SqliteStorageOptions,
+    ) -> StageResult<Self> {
         marmish_engine::initialize_storage().map_err(|_| StageError::Storage)?;
         let storage = SqliteAccountStorage::open_encrypted_with_options(
             path,
             key,
             SqliteStorageOptions {
                 journal_mode: SqliteJournalMode::Delete,
-                ..SqliteStorageOptions::default()
+                ..options
             },
         )
         .map_err(|_| StageError::Storage)?;
@@ -52,6 +73,7 @@ impl OpenStage {
         })
     }
 
+    #[cfg(test)]
     pub(crate) async fn generate_provisional(
         &self,
         sample: Duration,
@@ -75,11 +97,13 @@ impl OpenStage {
         self.provisional_artifact(event, sample)
     }
 
+    #[cfg(test)]
     pub(crate) fn provisional_is_signed(&self, sample: Duration) -> StageResult<bool> {
         self.load_provisional_pending(sample)
             .map(|(_, pending)| pending.signed_event.is_some())
     }
 
+    #[cfg(test)]
     pub(crate) async fn finalize_provisional(
         &self,
         sample: Duration,
@@ -99,6 +123,65 @@ impl OpenStage {
         lifecycle.pending_replacement = Some(pending);
         self.save(&lifecycle)?;
         self.provisional_artifact(event, sample)
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(test, marmish_peer_receiver_candidate)
+    ))]
+    pub(crate) fn open_managed_provisional(
+        path: &Path,
+        key: &SqlCipherKey,
+        signer: Arc<Keys>,
+        origin: &str,
+        slot: String,
+        issue: bool,
+        window: &crate::peer_invitation::NativeWindow,
+    ) -> StageResult<Self> {
+        window.check()?;
+        Self::open_provisional_with_options(
+            path,
+            key,
+            signer,
+            origin,
+            slot,
+            issue,
+            SqliteStorageOptions {
+                busy_timeout_ms: 0,
+                ..SqliteStorageOptions::default()
+            },
+        )
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(test, marmish_peer_receiver_candidate)
+    ))]
+    pub(crate) async fn issue_managed_provisional(
+        &self,
+        window: &crate::peer_invitation::NativeWindow,
+    ) -> StageResult<ProvisionalPackage> {
+        self.require_unjoined_provisional()?;
+        if self.load()?.is_some()
+            || !durably_owned_key_packages(&self.storage, ProtocolProfile::Current)
+                .map_err(|_| StageError::Storage)?
+                .is_empty()
+        {
+            return Err(StageError::Invalid);
+        }
+        window.check()?;
+        self.save(&KeyPackageLifecycleState::slot_only(self.slot.clone()))?;
+        let mut publisher = self.publisher();
+        publisher.window = Some(window.clone());
+        let sample = window.stage_sample()?;
+        self.prepare_new_with_publisher(sample, publisher).await?;
+        window.check()?;
+        self.require_unjoined_provisional()?;
+        let artifact = self.read_provisional(window.stage_sample()?)?;
+        window.check()?;
+        Ok(artifact)
     }
 
     pub(crate) fn read_provisional(&self, sample: Duration) -> StageResult<ProvisionalPackage> {
@@ -121,10 +204,12 @@ impl OpenStage {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn fixture_replace_with_slot_only(&self) -> StageResult<()> {
         self.save(&KeyPackageLifecycleState::slot_only(self.slot.clone()))
     }
 
+    #[cfg(test)]
     fn provisional_artifact(
         &self,
         event: NativePackage,

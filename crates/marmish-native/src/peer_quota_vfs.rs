@@ -54,18 +54,41 @@ struct Accounted {
     evidence: Evidence,
     opened_main: bool,
     uncertain: bool,
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     journal_synced: bool,
     journal_witness: Option<(u64, u64)>,
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     recovered_journal: bool,
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     recovery_write: bool,
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     recovery_synced: bool,
 }
 
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
 struct RecoveryImage {
     files: crate::peer_invitation::RollbackFiles,
     header: recovery_header::JournalHeader,
@@ -78,7 +101,11 @@ pub(super) struct Quota {
     #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
     founder_main_limit: Option<u64>,
     witness: Option<(u64, u64)>,
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     recovery: Option<RecoveryImage>,
     panicked: AtomicBool,
     account: Mutex<Accounted>,
@@ -188,7 +215,11 @@ impl Quota {
             #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
             founder_main_limit: None,
             witness: None,
-            #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+            #[cfg(all(
+                any(test, marmish_peer_receiver_candidate),
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
             recovery: None,
             panicked: AtomicBool::new(false),
             account: Mutex::new(Accounted {
@@ -200,14 +231,33 @@ impl Quota {
                 },
                 opened_main: false,
                 uncertain: false,
-                #[cfg(test)]
+                #[cfg(any(
+                    test,
+                    all(
+                        marmish_peer_receiver_candidate,
+                        target_os = "linux",
+                        target_arch = "x86_64"
+                    )
+                ))]
                 journal_synced: false,
                 journal_witness: None,
-                #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+                #[cfg(all(
+                    any(test, marmish_peer_receiver_candidate),
+                    target_os = "linux",
+                    target_arch = "x86_64"
+                ))]
                 recovered_journal: false,
-                #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+                #[cfg(all(
+                    any(test, marmish_peer_receiver_candidate),
+                    target_os = "linux",
+                    target_arch = "x86_64"
+                ))]
                 recovery_write: false,
-                #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+                #[cfg(all(
+                    any(test, marmish_peer_receiver_candidate),
+                    target_os = "linux",
+                    target_arch = "x86_64"
+                ))]
                 recovery_synced: false,
             }),
             #[cfg(test)]
@@ -215,12 +265,20 @@ impl Quota {
         }))
     }
 
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     fn recovering(&self) -> bool {
         self.recovery.is_some()
     }
 
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     fn check_recovery_access(&self, name: *const c_char, flag: c_int) -> bool {
         if name.is_null() {
             return false;
@@ -269,7 +327,11 @@ impl Quota {
 
     fn verify_dispatch(&self) -> Result<(), &'static str> {
         let mut state = self.account.lock().map_err(|_| "dispatch_indeterminate")?;
-        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
         if self.recovering() && !state.recovered_journal {
             return Err("dispatch_no_clean_receipt");
         }
@@ -297,7 +359,11 @@ impl Quota {
                 .ok()
                 .map(|meta| (meta.dev(), meta.ino()))
         };
-        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
         if let Some(recovery) = &self.recovery
             && !recovery
                 .files
@@ -404,7 +470,11 @@ unsafe fn open_managed(
         state.uncertain = true;
         return sql::SQLITE_IOERR;
     }
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     if quota.recovering()
         && (flags & sql::SQLITE_OPEN_CREATE != 0
             || (index == 0 && flags & sql::SQLITE_OPEN_READWRITE == 0))
@@ -422,9 +492,17 @@ unsafe fn open_managed(
         }
         stock.cast::<u8>().write_bytes(0, base.szOsFile as usize);
         let stock = Stock(stock);
-        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
         let mut actual = 0;
-        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
         let out_flags = if quota.recovering() && out_flags.is_null() {
             &mut actual
         } else {
@@ -445,7 +523,11 @@ unsafe fn open_managed(
             state: quota.clone(),
             index,
         };
-        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
         if let Some(recovery) = &quota.recovery
             && (quota.observe(&mut state) != sql::SQLITE_OK
                 || (flags & sql::SQLITE_OPEN_READWRITE != 0
@@ -456,7 +538,11 @@ unsafe fn open_managed(
             return sql::SQLITE_IOERR;
         }
         let replace_journal_witness = quota.witness.is_some() && index == 1;
-        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
         let replace_journal_witness = replace_journal_witness && !quota.recovering();
         if replace_journal_witness {
             state.journal_witness = quota.files[1]
@@ -563,7 +649,14 @@ unsafe fn close_stock(stock: *mut sql::sqlite3_file) -> c_int {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 enum Resize {
     Write { offset: i64 },
     Truncate,
@@ -594,7 +687,11 @@ impl Handle {
         sql::SQLITE_IOERR_FSTAT
     }
 
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     fn check_recovery_header(&self, header: &recovery_header::JournalHeader) -> bool {
         let mut length = 0;
         let mut head = [0_u8; 28];
@@ -623,12 +720,24 @@ impl Handle {
     fn resize(
         &self,
         end: u64,
-        #[cfg(test)] kind: Resize,
+        #[cfg(any(
+            test,
+            all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            )
+        ))]
+        kind: Resize,
         operation: impl FnOnce() -> c_int,
     ) -> c_int {
         let mut state = self.state.account.lock().unwrap();
         let old = state.lengths[self.index];
-        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
         if self.state.recovering() {
             if self.index == 1 {
                 state.uncertain = true;
@@ -676,7 +785,11 @@ impl Handle {
         if rc != sql::SQLITE_OK || measured != sql::SQLITE_OK {
             return if rc != sql::SQLITE_OK { rc } else { measured };
         }
-        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
         if self.state.recovering() {
             state.recovery_synced = false;
             state.recovery_write |= matches!(kind, Resize::Write { .. });
@@ -732,7 +845,14 @@ unsafe extern "C" fn write(
         let handle = unsafe { Handle::get(file) };
         handle.resize(
             end,
-            #[cfg(test)]
+            #[cfg(any(
+                test,
+                all(
+                    marmish_peer_receiver_candidate,
+                    target_os = "linux",
+                    target_arch = "x86_64"
+                )
+            ))]
             Resize::Write { offset },
             || unsafe { handle.methods().xWrite.unwrap()(handle.stock.0, data, count, offset) },
         )
@@ -747,7 +867,14 @@ unsafe extern "C" fn truncate(file: *mut sql::sqlite3_file, size: i64) -> c_int 
         let handle = unsafe { Handle::get(file) };
         handle.resize(
             end,
-            #[cfg(test)]
+            #[cfg(any(
+                test,
+                all(
+                    marmish_peer_receiver_candidate,
+                    target_os = "linux",
+                    target_arch = "x86_64"
+                )
+            ))]
             Resize::Truncate,
             || unsafe { handle.methods().xTruncate.unwrap()(handle.stock.0, size) },
         )
@@ -758,11 +885,22 @@ unsafe extern "C" fn sync(file: *mut sql::sqlite3_file, flags: c_int) -> c_int {
     guarded(sql::SQLITE_IOERR_FSYNC, || {
         let handle = unsafe { Handle::get(file) };
         let rc = unsafe { handle.methods().xSync.unwrap()(handle.stock.0, flags) };
-        #[cfg(test)]
+        #[cfg(any(
+            test,
+            all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            )
+        ))]
         if rc == sql::SQLITE_OK && handle.index == 1 {
             handle.state.account.lock().unwrap().journal_synced = true;
         }
-        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
         if rc == sql::SQLITE_OK && handle.index == 0 && handle.state.recovering() {
             let mut state = handle.state.account.lock().unwrap();
             state.recovery_synced = state.recovery_write;
@@ -818,7 +956,11 @@ fn delete_managed(quota: &Quota, name: *const c_char, sync_dir: c_int) -> c_int 
         return sql::SQLITE_IOERR_DELETE;
     }
     let mut state = quota.account.lock().unwrap();
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     if quota.recovering()
         && (state.uncertain
             || !state.journal_synced
@@ -841,7 +983,14 @@ fn delete_managed(quota: &Quota, name: *const c_char, sync_dir: c_int) -> c_int 
         }
         if matches!(bytes(&quota.files[1]), Ok(None)) {
             state.journal_witness = None;
-            #[cfg(test)]
+            #[cfg(any(
+                test,
+                all(
+                    marmish_peer_receiver_candidate,
+                    target_os = "linux",
+                    target_arch = "x86_64"
+                )
+            ))]
             {
                 state.journal_synced = false;
             }
@@ -852,7 +1001,11 @@ fn delete_managed(quota: &Quota, name: *const c_char, sync_dir: c_int) -> c_int 
         }
         quota.observe(&mut state)
     });
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     if quota.recovering() {
         state.recovered_journal =
             rc == sql::SQLITE_OK && measured == sql::SQLITE_OK && state.journal_witness.is_none();
@@ -883,7 +1036,11 @@ unsafe extern "C" fn read(
 ) -> c_int {
     guarded(sql::SQLITE_IOERR, || {
         let handle = unsafe { Handle::get(file) };
-        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
         if handle.state.recovering() {
             let mut state = handle.state.account.lock().unwrap();
             if state.uncertain || handle.state.observe(&mut state) != sql::SQLITE_OK {
@@ -968,7 +1125,11 @@ static METHODS: sql::sqlite3_io_methods = sql::sqlite3_io_methods {
     xUnfetch: None,
 };
 
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
 #[path = "peer_quota_recovery_header.rs"]
 mod recovery_header;
 

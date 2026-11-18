@@ -57,7 +57,7 @@ impl<'a> CleanFiles<'a> {
         quota: &'a ReceiverQuota<'a>,
         lease: &'a ProfileLease,
         binding: Binding,
-        fence: &TurnFence<'_>,
+        fence: impl Into<NativeFence<'a>>,
     ) -> Result<Self> {
         let (known, generation, _, _) = binding.coordinates();
         if known || !owner.paths.owns_lease(lease) {
@@ -65,7 +65,7 @@ impl<'a> CleanFiles<'a> {
         }
         let generation = NonZeroU64::new(generation).ok_or(Error::StageIdentityMismatch)?;
         let files = quota.receiver_files(lease).map_err(|_| Error::Path)?;
-        let measured = owner.recover(fence.wall()?)?;
+        let measured = owner.recover(fence.into().wall()?)?;
         let clean = measured.clean_extent(binding)?;
         Ok(Self {
             files,
@@ -79,6 +79,10 @@ impl<'a> CleanFiles<'a> {
 
     pub(super) fn files(&self) -> &ReceiverFiles<'_> {
         &self.files
+    }
+
+    pub(super) fn original(&self) -> FileExtent {
+        self.original
     }
 
     pub(super) fn snapshot_path(&self, length: u64) -> Result<&Path> {
@@ -99,10 +103,12 @@ impl<'a> CleanFiles<'a> {
     pub(super) fn original_permit<'b>(
         &'b self,
         owner: &mut RecoveredOwner<'_>,
-        fence: &TurnFence<'_>,
+        fence: impl Into<NativeFence<'b>>,
     ) -> Result<CleanPermit<'b>> {
         self.check_owner(owner)?;
-        let clean = owner.recover(fence.wall()?)?.clean_extent(self.binding)?;
+        let clean = owner
+            .recover(fence.into().wall()?)?
+            .clean_extent(self.binding)?;
         if clean.main != self.original {
             return Err(Error::StageIdentityMismatch);
         }
@@ -119,9 +125,9 @@ impl<'a> CleanFiles<'a> {
         &'b self,
         owner: &mut RecoveredOwner<'_>,
         identity: (u64, u64),
-        fence: &TurnFence<'_>,
+        fence: impl Into<NativeFence<'b>>,
     ) -> Result<CleanPermit<'b>> {
-        let (copy, charged) = self.measure_snapshot(owner, identity, fence)?;
+        let (copy, charged) = self.measure_snapshot(owner, identity, &fence.into())?;
         if copy.logical != self.original.logical {
             return Err(Error::StageIdentityMismatch);
         }
@@ -134,13 +140,13 @@ impl<'a> CleanFiles<'a> {
         })
     }
 
-    pub(super) fn snapshot_closed(
+    pub(super) fn snapshot_closed<'b>(
         &self,
         owner: &mut RecoveredOwner<'_>,
         identity: (u64, u64),
-        fence: &TurnFence<'_>,
+        fence: impl Into<NativeFence<'b>>,
     ) -> Result<()> {
-        self.measure_snapshot(owner, identity, fence)?;
+        self.measure_snapshot(owner, identity, &fence.into())?;
         Ok(())
     }
 
@@ -148,7 +154,7 @@ impl<'a> CleanFiles<'a> {
         &self,
         owner: &mut RecoveredOwner<'_>,
         identity: (u64, u64),
-        fence: &TurnFence<'_>,
+        fence: &NativeFence<'_>,
     ) -> Result<(FileExtent, u64)> {
         self.check_owner(owner)?;
         let (charges, files) = owner.observe(fence.wall()?)?;
@@ -174,14 +180,16 @@ impl<'a> CleanFiles<'a> {
         Ok((copy, measured.charged))
     }
 
-    pub(super) fn finish(
+    pub(super) fn finish<'b>(
         &self,
         owner: &mut RecoveredOwner<'_>,
-        fence: &TurnFence<'_>,
+        fence: impl Into<NativeFence<'b>>,
         original_unchanged: bool,
     ) -> Result<()> {
         self.check_owner(owner)?;
-        let clean = owner.recover(fence.wall()?)?.clean_extent(self.binding)?;
+        let clean = owner
+            .recover(fence.into().wall()?)?
+            .clean_extent(self.binding)?;
         if clean.main.identity != self.original.identity
             || (original_unchanged && clean.main != self.original)
         {

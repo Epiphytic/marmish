@@ -433,3 +433,27 @@ fn verify_forwarded_ordinary_and_fenced_names(root: &Path) {
         }
     }
 }
+
+pub(crate) fn package_fixture_root() -> tempfile::TempDir {
+    start_profile()
+}
+
+pub(crate) fn package_fixture_registration(
+    root: &Path,
+) -> (Arc<ProfileLease>, IdentityMaterial, RegisteredReceiver) {
+    let (lease, material, config) = scope(root);
+    let profile = ProfileFiles::open(Arc::clone(&lease)).unwrap();
+    let key = lease
+        .peer_qualification_key_from_material(&material)
+        .unwrap();
+    if !lease.root().join("peer-relay-qualification.json").exists() {
+        qualification::write_candidate_fixture(&profile, &key);
+    }
+    drop(profile);
+    let registered = ReceiverPreflight::prepare(&lease, &material, &config)
+        .unwrap()
+        .unwrap()
+        .register(&lease, &material)
+        .unwrap();
+    (lease, material, registered)
+}

@@ -62,5 +62,6 @@ fn sidecar(path: &Path, suffix: &str) -> std::path::PathBuf {
     full.into()
 }
 
+#[cfg(test)]
 #[path = "peer_installed_cursor_tests.rs"]
 mod tests;

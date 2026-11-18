@@ -20,6 +20,19 @@ pub(crate) mod daemon_peer;
 #[cfg(test)]
 #[path = "peer_daemon_wss_tests.rs"]
 mod daemon_wss_tests;
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "peer_candidate_native_fence.rs"]
+mod native_fence;
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub(crate) use native_fence::{NativeFence, NativeWindow};
 #[path = "peer_invitation_paths.rs"]
 mod paths;
 #[cfg(test)]
@@ -31,15 +44,35 @@ mod postjoin_verify;
 #[cfg(test)]
 #[path = "peer_prepared_consent_owner.rs"]
 pub(super) mod prepared_consent;
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
 #[path = "peer_receiver_inventory.rs"]
 mod receiver_inventory;
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
 pub(crate) use paths::retirement::recovery::RollbackFiles;
 #[cfg(test)]
 pub(crate) use prepared_consent::leave_owner::{LeaveSnapshot, TurnFence};
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
-pub(crate) use receiver_inventory::CleanPermit;
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub(crate) use receiver_inventory::{CleanPermit, package::PackageOperation};
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub(crate) use store::consent_checkpoint::provisioning::stage_journal::{
+    BoundStage, FileWitness, NativeStart,
+};
 #[cfg(test)]
 #[path = "peer_private_wss_tests.rs"]
 mod private_wss_tests;
@@ -95,7 +128,7 @@ use tokio::{net::UnixStream, time::Instant};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Error {
     Path,
-    #[cfg(test)]
+    #[cfg(any(test, marmish_peer_receiver_candidate))]
     StageIdentityMismatch,
     Clock,
     Binding,

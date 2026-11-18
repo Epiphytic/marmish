@@ -1,9 +1,25 @@
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 #[path = "peer_stage_files.rs"]
 mod provisional;
 #[cfg(test)]
-pub(super) use provisional::{MAX_STAGE_LEN, ProvisionalFile};
+pub(super) use provisional::MAX_STAGE_LEN;
 #[cfg(test)]
+pub(super) use provisional::ProvisionalFile;
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 #[path = "peer_stage_retirement_files.rs"]
 pub(super) mod retirement;
 
@@ -39,8 +55,24 @@ pub(super) struct CheckedFile {
     before: (u64, u64),
 }
 
-impl Paths<'_> {
-    #[cfg(test)]
+impl<'lease> Paths<'lease> {
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(super) fn lease(&self) -> &'lease ProfileLease {
+        self.lease
+    }
+
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     pub(super) fn owns_lease(&self, lease: &ProfileLease) -> bool {
         std::ptr::eq(self.lease, lease)
     }

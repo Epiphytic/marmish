@@ -28,7 +28,7 @@ pub(crate) const CLOSED_STAGE_LIMIT: u64 = 16 * 1024 * 1024;
 // owner exists at this revision; the proof fixture supplies the other charges.
 pub(crate) const TOTAL_ADMISSION: u64 = 128 * 1024 * 1024;
 const NAMES: [&str; 2] = ["provisional-known.db", "provisional-unknown.db"];
-#[cfg(test)]
+#[cfg(any(test, marmish_peer_receiver_candidate))]
 const SNAPSHOT: usize = NAMES.len();
 #[cfg(test)]
 const SNAPSHOT_NAME: &str = "terminal-leave-snapshot.db";
@@ -51,7 +51,7 @@ struct Dispatch {
     wrapper: *mut sql::sqlite3_vfs,
     paths: OnceLock<ReservedPaths>,
     slots: Mutex<[Slot; SLOT_COUNT]>,
-    #[cfg(test)]
+    #[cfg(any(test, marmish_peer_receiver_candidate))]
     file_turn: Mutex<()>,
     #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
     founder_paths: OnceLock<founder::FounderPaths>,
@@ -222,7 +222,7 @@ pub(crate) struct ReceiverQuota<'a> {
 enum SlotClass {
     Known,
     Unknown,
-    #[cfg(test)]
+    #[cfg(any(test, marmish_peer_receiver_candidate))]
     Snapshot,
 }
 
@@ -231,7 +231,7 @@ impl SlotClass {
         match self {
             Self::Known => 0,
             Self::Unknown => 1,
-            #[cfg(test)]
+            #[cfg(any(test, marmish_peer_receiver_candidate))]
             Self::Snapshot => SNAPSHOT,
         }
     }
@@ -247,12 +247,17 @@ pub(crate) struct Reservation<'a> {
     crash_after_database_write: bool,
 }
 
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
 pub(crate) struct RecoveryRequest<'a> {
     pub(crate) generation: NonZeroU64,
     pub(crate) files: crate::peer_invitation::RollbackFiles,
     pub(crate) charged_other: u64,
     pub(crate) key: &'a SqlCipherKey,
+    #[cfg(test)]
     pub(crate) interrupt_after_write: bool,
 }
 
@@ -265,7 +270,11 @@ impl ReceiverQuota<'_> {
         Ok(ReceiverQuota { dispatch, lease })
     }
 
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     pub(crate) fn receiver_files(&self, lease: &ProfileLease) -> Result<ReceiverFiles<'_>> {
         if !ptr::eq(self.lease, lease) {
             return Err("dispatch_reservation_owner");
@@ -286,11 +295,15 @@ impl ReceiverQuota<'_> {
         })
     }
 
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     pub(crate) fn recover_unknown(
         &self,
         exact: RecoveryRequest<'_>,
-        fence: &crate::peer_invitation::TurnFence<'_>,
+        fence: &crate::peer_invitation::NativeFence<'_>,
     ) -> Result<()> {
         fence.check().map_err(|_| "recovery_fence")?;
         let key = exact.key;
@@ -305,7 +318,11 @@ impl ReceiverQuota<'_> {
         result
     }
 
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     fn admit_recovery(&self, exact: RecoveryRequest<'_>) -> Result<QuotaTurn<'_>> {
         self.admit_checked(
             Reservation {
@@ -314,6 +331,7 @@ impl ReceiverQuota<'_> {
                 generation: exact.generation,
                 witness: exact.files.main_identity(),
                 charged_other: exact.charged_other,
+                #[cfg(test)]
                 crash_after_database_write: exact.interrupt_after_write,
             },
             Some(exact.files),
@@ -323,7 +341,11 @@ impl ReceiverQuota<'_> {
     pub(crate) fn admit(&self, reservation: Reservation<'_>) -> Result<QuotaTurn<'_>> {
         self.admit_checked(
             reservation,
-            #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+            #[cfg(all(
+                any(test, marmish_peer_receiver_candidate),
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
             None,
         )
     }
@@ -331,9 +353,12 @@ impl ReceiverQuota<'_> {
     fn admit_checked(
         &self,
         reservation: Reservation<'_>,
-        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))] recovery: Option<
-            crate::peer_invitation::RollbackFiles,
-        >,
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        recovery: Option<crate::peer_invitation::RollbackFiles>,
     ) -> Result<QuotaTurn<'_>> {
         if !ptr::eq(self, reservation.owner) {
             return Err("dispatch_reservation_owner");
@@ -387,7 +412,11 @@ impl ReceiverQuota<'_> {
             {
                 return Err("dispatch_stage_witness");
             }
-            #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+            #[cfg(all(
+                any(test, marmish_peer_receiver_candidate),
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
             let recovery = recovery
                 .map(|files| {
                     if !matches!(class, SlotClass::Unknown)
@@ -410,7 +439,11 @@ impl ReceiverQuota<'_> {
                 })
                 .transpose()?;
             let recover = false;
-            #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+            #[cfg(all(
+                any(test, marmish_peer_receiver_candidate),
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
             let recover = recover || recovery.is_some();
             let mut quota = Quota::new(
                 self.dispatch.managed,
@@ -422,7 +455,11 @@ impl ReceiverQuota<'_> {
             )?;
             let state = Arc::get_mut(&mut quota).expect("new_quota");
             state.witness = Some(file);
-            #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+            #[cfg(all(
+                any(test, marmish_peer_receiver_candidate),
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
             if let Some(image) = recovery {
                 let recorded = state
                     .account
@@ -460,11 +497,15 @@ impl ReceiverQuota<'_> {
     }
 }
 
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
 fn recover_database(
     path: &Path,
     key: &SqlCipherKey,
-    fence: &crate::peer_invitation::TurnFence<'_>,
+    fence: &crate::peer_invitation::NativeFence<'_>,
 ) -> Result<()> {
     use rusqlite::{Connection, OpenFlags};
     use storage_sqlite::{SqlCipherHardening, open_hardened_sqlcipher};
@@ -634,7 +675,7 @@ impl Dispatch {
             wrapper: Box::into_raw(Box::new(descriptor)),
             paths,
             slots: Mutex::default(),
-            #[cfg(test)]
+            #[cfg(any(test, marmish_peer_receiver_candidate))]
             file_turn: Mutex::default(),
             #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
             founder_paths: OnceLock::new(),
@@ -850,19 +891,44 @@ impl<'a> ProfileSlots<'a> {
 }
 
 /// The existing file exclusion, restricted to the checked receiver role.
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
 pub(crate) struct ReceiverFiles<'a> {
     quota: &'a ReceiverQuota<'a>,
     snapshot: &'a Path,
     _lock: std::sync::MutexGuard<'a, ()>,
 }
 
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
 impl ReceiverFiles<'_> {
     pub(crate) fn snapshot(&self) -> &Path {
         self.snapshot
     }
 
+    pub(crate) fn check_package_paths(
+        &self,
+        directories: [(u64, u64); 2],
+        unknown: &Path,
+        snapshot: &Path,
+    ) -> Result<()> {
+        let paths = self.quota.dispatch.checked_paths(self.quota.lease)?;
+        if paths.directories != directories
+            || paths.mains[SlotClass::Unknown.index()] != unknown
+            || self.snapshot != snapshot
+        {
+            return Err("dispatch_package_topology");
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
     pub(crate) fn matches_quota(&self, quota: &ReceiverQuota<'_>) -> bool {
         ptr::eq(self.quota, quota)
     }
@@ -893,6 +959,7 @@ impl ReceiverFiles<'_> {
             generation: measured.generation,
             witness: measured.identity,
             charged_other: measured.charged_other,
+            #[cfg(test)]
             crash_after_database_write: false,
         })?;
         turn.enter()?;
@@ -910,6 +977,52 @@ impl ReceiverFiles<'_> {
         result
     }
 
+    pub(crate) fn generate_package(
+        &self,
+        permit: crate::peer_invitation::CleanPermit<'_>,
+        operation: crate::peer_invitation::PackageOperation<'_>,
+        start: crate::peer_invitation::NativeStart,
+        stage: &crate::peer_invitation::BoundStage,
+        file: crate::peer_invitation::FileWitness,
+    ) -> Result<
+        std::result::Result<
+            crate::mdk_adapter::peer_native_signer::ProvisionalPackage,
+            crate::mdk_adapter::peer_native_signer::StageError,
+        >,
+    > {
+        let measured = permit
+            .verify(self, false)
+            .ok_or("dispatch_reservation_owner")?;
+        if measured.logical != 0
+            || measured.identity
+                != (
+                    u64::from_be_bytes(file.device),
+                    u64::from_be_bytes(file.inode),
+                )
+            || !start.matches(stage, file)
+        {
+            return Err("dispatch_reservation_owner");
+        }
+        let (path, turn) = self.measured_turn(permit, SlotClass::Unknown)?;
+        let result = resolve_once(operation.issue(path));
+        turn.finish()?;
+        result
+    }
+
+    pub(crate) fn attest_package(
+        &self,
+        permit: crate::peer_invitation::CleanPermit<'_>,
+        operation: crate::peer_invitation::PackageOperation<'_>,
+    ) -> Result<
+        std::result::Result<
+            crate::mdk_adapter::peer_native_signer::ProvisionalPackage,
+            crate::mdk_adapter::peer_native_signer::StageError,
+        >,
+    > {
+        self.inspect_snapshot(permit, |path| Ok(operation.attest(path)))
+    }
+
+    #[cfg(test)]
     pub(crate) fn prepare_join(
         &self,
         permit: crate::peer_invitation::CleanPermit<'_>,
@@ -918,6 +1031,7 @@ impl ReceiverFiles<'_> {
         self.inspect_snapshot(permit, |path| Ok(operation.prepare(path)))
     }
 
+    #[cfg(test)]
     pub(crate) fn read_join(
         &self,
         permit: crate::peer_invitation::CleanPermit<'_>,
@@ -926,6 +1040,7 @@ impl ReceiverFiles<'_> {
         self.inspect_snapshot(permit, |path| Ok(operation.read(path)))
     }
 
+    #[cfg(test)]
     pub(crate) fn join_original(
         &self,
         permit: crate::peer_invitation::CleanPermit<'_>,
@@ -935,13 +1050,14 @@ impl ReceiverFiles<'_> {
         operation.join(path, turn)
     }
 
+    #[cfg(test)]
     pub(crate) fn check_snapshot_cipher(
         &self,
         permit: crate::peer_invitation::CleanPermit<'_>,
         key: &SqlCipherKey,
         fence: &crate::peer_invitation::TurnFence<'_>,
     ) -> Result<()> {
-        self.inspect_snapshot(permit, |path| recover_database(path, key, fence))
+        self.inspect_snapshot(permit, |path| recover_database(path, key, &fence.into()))
     }
 }
 
@@ -1096,9 +1212,23 @@ use crate::mdk_adapter::peer_native_signer::{
 };
 #[cfg(test)]
 use nostr::key::Keys;
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 use std::time::Duration;
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 use storage_sqlite::SqlCipherKey;
 
 #[cfg(test)]
@@ -1281,7 +1411,14 @@ impl NativeTurn<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 pub(crate) fn resolve_once<T>(future: impl std::future::Future<Output = T>) -> Result<T> {
     use std::task::{Context, Poll, Waker};
     // The private publisher does not await I/O. Drop both the owning handle
@@ -1296,7 +1433,14 @@ fn witness(meta: &fs::Metadata) -> (u64, u64) {
     (meta.dev(), meta.ino())
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 pub(crate) fn local_volume(path: &Path) -> Result<bool> {
     let name = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| "stage_parent")?;
     let mut status = std::mem::MaybeUninit::<libc::statfs>::uninit();
@@ -1385,7 +1529,11 @@ unsafe extern "C" fn forward_access(
     let base = dispatcher(vfs).stock;
     // The stock callback was present at registration.
     let stock_access = || unsafe { (*base).xAccess.unwrap_unchecked()(base, name, flag, result) };
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     return guarded(sql::SQLITE_IOERR_ACCESS, || {
         let quota = ACTIVE
             .try_with(|scope| scope.borrow().clone())
@@ -1397,7 +1545,11 @@ unsafe extern "C" fn forward_access(
         }
         stock_access()
     });
-    #[cfg(not(all(test, target_os = "linux", target_arch = "x86_64")))]
+    #[cfg(not(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    )))]
     stock_access()
 }
 delegate!(forward_path, xFullPathname, c_int, name: *const c_char, len: c_int, out: *mut c_char);

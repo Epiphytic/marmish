@@ -236,7 +236,19 @@ fn private_stat(
     Ok(Some(((device, entry.st_ino), entry)))
 }
 
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "peer_candidate_package_files.rs"]
+pub(in super::super) mod package_files;
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
 pub(in super::super) mod recovery {
     use super::*;
     use std::collections::BTreeSet;
@@ -249,7 +261,7 @@ pub(in super::super) mod recovery {
         c"cursor.db-shm",
     ];
 
-    const SNAPSHOT: [&CStr; 4] = [
+    pub(super) const SNAPSHOT: [&CStr; 4] = [
         c"receiver-join-snapshot.db",
         c"receiver-join-snapshot.db-journal",
         c"receiver-join-snapshot.db-wal",

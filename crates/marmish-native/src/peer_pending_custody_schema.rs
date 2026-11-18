@@ -3,9 +3,11 @@
 use rusqlite::{Connection, Transaction, TransactionBehavior};
 use std::sync::OnceLock;
 
-use super::super::super::super::super::{HardenedPeerConnection, MAX_ORIGINS, check_hardening};
+#[cfg(test)]
+use super::super::super::super::super::MAX_ORIGINS;
+use super::super::super::super::super::{CursorStore, HardenedPeerConnection, check_hardening};
 use super::super::super::super::installed;
-use super::super::super::retirement::schema::{Entry, inventory};
+use super::super::super::layout_inventory::{Entry, inventory};
 use super::super::super::stage_schema;
 use super::*;
 use nostr::key::{Keys, PublicKey};
@@ -359,6 +361,7 @@ fn verify_hardening(conn: &Connection) -> std::result::Result<(), CursorError> {
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn open(
     HardenedPeerConnection(mut conn): HardenedPeerConnection,
     account: [u8; 32],

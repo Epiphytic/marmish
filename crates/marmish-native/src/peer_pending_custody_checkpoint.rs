@@ -1,22 +1,32 @@
 //! Durable single-carrier ownership in the existing SQLCipher checkpoint.
 
+use super::super::super::super::HardenedPeerConnection;
+use super::super::super::{Layout, Mode, Policy, wire};
+use nostr::key::Keys;
 use nostr::key::PublicKey;
-use rusqlite::{OptionalExtension, Transaction, params};
+#[cfg(test)]
+use rusqlite::OptionalExtension;
+use rusqlite::Transaction;
+use rusqlite::params;
+#[cfg(test)]
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeSet;
+#[cfg(test)]
 use std::sync::Arc;
+#[cfg(test)]
 use zeroize::Zeroizing;
 
 use crate::peer_control_version::ControlVersion;
+#[cfg(test)]
 use crate::peer_invitation::prepared_consent::{JoinedReadback, NativeAttestation};
 
 use super::super::super::super::read_seconds;
+#[cfg(test)]
 use super::super::super::wire::{
     Delivery, IncomingDelivery, PackageBinding, VerifiedDeliveryPackage,
 };
-use super::super::super::{
-    Disposition, Layout, Local, Mode, Policy, RawRecord, Status, TrustedOutcome,
-};
+#[cfg(test)]
+use super::super::super::{Disposition, Local, RawRecord, Status, TrustedOutcome};
 use super::*;
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
@@ -26,6 +36,7 @@ native_offer_ingress_fixture!();
 mod custody_schema;
 pub(crate) use custody_schema::Epoch;
 
+#[cfg(test)]
 #[path = "peer_pending_terminal_checkpoint.rs"]
 pub(crate) mod terminal;
 #[path = "peer_pending_terminal_schema.rs"]
@@ -57,7 +68,11 @@ mod activation_schema;
 #[path = "peer_activation_checkpoint.rs"]
 pub(crate) mod publication;
 
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
 #[path = "peer_receiver_inventory_store.rs"]
 pub(crate) mod receiver_inventory_store;
 
@@ -77,11 +92,14 @@ pub(crate) enum ReceivePolicy {
     AutoFounders(BTreeSet<PublicKey>),
 }
 
+#[cfg(test)]
 const MARGIN: u64 = 300;
+#[cfg(test)]
 const PENDING_WINDOW_SECONDS: u64 = 86_400;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
+#[cfg(test)]
 pub(crate) enum CustodyState {
     Held,
     JoinStarted,
@@ -89,17 +107,20 @@ pub(crate) enum CustodyState {
     Activating,
 }
 
+#[cfg(test)]
 pub(crate) enum Replay {
     Absent,
     AlreadyApplied(Disposition),
     Invalid(Disposition),
 }
 
+#[cfg(test)]
 pub(crate) enum Approval<'a> {
     Manual(&'a Local),
     Automatic,
 }
 
+#[cfg(test)]
 enum HeldInput<'a> {
     Observed(RawRecord<'a>),
     #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
@@ -107,6 +128,7 @@ enum HeldInput<'a> {
     Saved(&'a super::super::super::super::retry::Snapshot),
 }
 
+#[cfg(test)]
 impl<'a> HeldInput<'a> {
     fn record(&self) -> RawRecord<'a> {
         match *self {
@@ -118,16 +140,20 @@ impl<'a> HeldInput<'a> {
     }
 }
 
+#[cfg(test)]
 pub(crate) struct CustodyConsent {
+    #[cfg(test)]
     owner: Arc<()>,
     authority: ConsentAuthority,
 }
 
+#[cfg(test)]
 enum ConsentAuthority {
     Fresh(Box<Queued>),
     Held(Box<HeldEvidence>),
 }
 
+#[cfg(test)]
 impl CustodyConsent {
     pub(crate) fn carrier(&self) -> [u8; 32] {
         match &self.authority {
@@ -163,6 +189,7 @@ impl CustodyConsent {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+#[cfg(test)]
 struct JoinedCoordinates {
     group: Vec<u8>,
     epoch: u64,
@@ -170,6 +197,7 @@ struct JoinedCoordinates {
     own_leaf: u32,
 }
 
+#[cfg(test)]
 impl JoinedCoordinates {
     fn eq_readback(&self, proof: &JoinedReadback) -> bool {
         let (group, epoch, epoch_identity, own_leaf) = proof.coordinates();
@@ -183,6 +211,7 @@ impl JoinedCoordinates {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+#[cfg(test)]
 enum Progress {
     Held,
     JoinStarted {
@@ -201,6 +230,7 @@ enum Progress {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+#[cfg(test)]
 struct Qualified {
     native: JoinedCoordinates,
     qualified_at: u64,
@@ -208,6 +238,7 @@ struct Qualified {
 }
 
 #[derive(Eq, PartialEq)]
+#[cfg(test)]
 struct Saved {
     carrier: [u8; 32],
     outer_stamp: u64,
@@ -229,6 +260,7 @@ struct Saved {
 
 /// A saved authority witness, constructed only by the exact durable owner
 /// reader. It carries no live socket, receipt or prepared-package capability.
+#[cfg(test)]
 pub(crate) struct HeldEvidence {
     owner: Arc<()>,
     offer: Offer,
@@ -239,6 +271,7 @@ pub(crate) struct HeldEvidence {
     active: bool,
 }
 
+#[cfg(test)]
 impl HeldEvidence {
     pub(crate) fn offer(&self) -> &Offer {
         &self.offer
@@ -355,12 +388,14 @@ impl HeldEvidence {
     }
 }
 
+#[cfg(test)]
 pub(crate) struct JoinStarted {
     owner: Arc<()>,
     stage: (Binding, FileWitness),
     carrier: [u8; 32],
 }
 
+#[cfg(test)]
 impl JoinStarted {
     pub(crate) fn matches(&self, held: &HeldEvidence) -> bool {
         Arc::ptr_eq(&self.owner, &held.owner)
@@ -375,8 +410,11 @@ pub(super) struct Context {
     epoch: Epoch,
     origins: Vec<Origin>,
     origin: Origin,
+    #[cfg(test)]
     route: super::super::super::Route,
+    #[cfg(test)]
     signer: Keys,
+    #[cfg(test)]
     codec: wire::Codec,
     owner: Arc<()>,
 }
@@ -396,6 +434,7 @@ impl Context {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn exact_consent(
         &self,
         tx: &Transaction<'_>,
@@ -450,11 +489,13 @@ impl Context {
         Ok(())
     }
 
+    #[cfg(test)]
     fn read_evidence(&self, tx: &Transaction<'_>, queued: Queued) -> Result<Option<HeldEvidence>> {
         let Some(saved) = load(tx, &queued)? else {
             return Ok(None);
         };
         Ok(Some(HeldEvidence {
+            #[cfg(test)]
             owner: self.owner.clone(),
             stage: queued.stage(),
             offer: queued.prepared.offer,
@@ -485,6 +526,7 @@ pub(in super::super) fn owns(
     )?)
 }
 
+#[cfg(test)]
 fn terminalized(tx: &Transaction<'_>, selector: Selector, origin: Origin) -> Result<bool> {
     Ok(tx.query_row(
         "SELECT EXISTS (SELECT 1 FROM peer_pending_terminal t JOIN peer_pending_custody c
@@ -522,6 +564,7 @@ impl Checkpoint {
         Ok(checkpoint)
     }
 
+    #[cfg(test)]
     pub(crate) fn attach_pending_custody_fixture(
         conn: HardenedPeerConnection,
         signer: Keys,
@@ -548,6 +591,7 @@ impl Checkpoint {
         self.installed_receive.as_ref()
     }
 
+    #[cfg(test)]
     pub(super) fn read_installed_consent<T>(
         &mut self,
         source: &Source,
@@ -582,6 +626,7 @@ impl Checkpoint {
         read(&tx, &cx)
     }
 
+    #[cfg(test)]
     pub(crate) fn check_installed_consent_scope(
         &mut self,
         source: &Source,
@@ -592,6 +637,7 @@ impl Checkpoint {
         self.read_installed_consent(source, account, url, wall, |_, _| Ok(()))
     }
 
+    #[cfg(test)]
     pub(crate) fn custody_codec(&self) -> wire::Codec {
         self.codec
     }
@@ -623,19 +669,24 @@ impl Checkpoint {
             return Err(CursorError::Binding.into());
         };
         let origin = self.origin(source)?;
+        #[cfg(test)]
         let route = super::super::super::Route::configured(&self.route(origin)?.urls[0])?;
         Ok(Context {
             account: self.signer.public_key().to_bytes(),
             epoch,
             origins: self.cursor.origins.clone(),
             origin,
+            #[cfg(test)]
             route,
+            #[cfg(test)]
             signer: self.signer.clone(),
+            #[cfg(test)]
             codec: self.codec,
             owner: self.owner.clone(),
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn custody_owned(
         &mut self,
         source: &Source,
@@ -652,6 +703,7 @@ impl Checkpoint {
         Ok(owned)
     }
 
+    #[cfg(test)]
     pub(crate) fn custody_consent(
         &mut self,
         source: &Source,
@@ -684,6 +736,7 @@ impl Checkpoint {
         }))
     }
 
+    #[cfg(test)]
     pub(crate) fn verify_custody_delivery(
         &self,
         recovered: &CustodyConsent,
@@ -717,6 +770,7 @@ impl Checkpoint {
             .map_err(|_| Error::Package)
     }
 
+    #[cfg(test)]
     pub(crate) fn custody_replay(
         &mut self,
         source: &Source,
@@ -776,6 +830,7 @@ impl Checkpoint {
         Ok(Replay::Absent)
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_custody_held(
         &mut self,
         source: &Source,
@@ -795,6 +850,7 @@ impl Checkpoint {
         )
     }
 
+    #[cfg(test)]
     fn commit_custody_held_input(
         &mut self,
         source: &Source,
@@ -874,6 +930,7 @@ impl Checkpoint {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn read_custody(
         &mut self,
         source: &Source,
@@ -897,6 +954,7 @@ impl Checkpoint {
         cx.read_evidence(&tx, queued)
     }
 
+    #[cfg(test)]
     pub(crate) fn start_custody_join(
         &mut self,
         source: &Source,
@@ -914,6 +972,7 @@ impl Checkpoint {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_custody_pending(
         &mut self,
         source: &Source,
@@ -927,6 +986,7 @@ impl Checkpoint {
         self.transition_custody(source, prior, wall, Change::Qualify(proof))
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_custody_activating(
         &mut self,
         source: &Source,
@@ -949,6 +1009,7 @@ impl Checkpoint {
         self.transition_custody(source, prior, wall, Change::Activate { proof, automatic })
     }
 
+    #[cfg(test)]
     fn transition_custody(
         &mut self,
         source: &Source,
@@ -960,6 +1021,7 @@ impl Checkpoint {
             .map(|_| ())
     }
 
+    #[cfg(test)]
     fn transition_custody_guarded(
         &mut self,
         source: &Source,
@@ -994,6 +1056,7 @@ impl Checkpoint {
     }
 }
 
+#[cfg(test)]
 enum Change<'a> {
     Start,
     Qualify(&'a JoinedReadback),
@@ -1005,6 +1068,7 @@ enum Change<'a> {
     },
 }
 
+#[cfg(test)]
 impl Change<'_> {
     fn apply(self, tx: &Transaction<'_>, prior: &HeldEvidence, wall: u64) -> Result<usize> {
         if wall < prior.held_at() {
@@ -1062,6 +1126,7 @@ impl Change<'_> {
     }
 }
 
+#[cfg(test)]
 fn qualify_pending(
     tx: &Transaction<'_>,
     prior: &HeldEvidence,
@@ -1091,10 +1156,12 @@ fn qualify_pending(
     )?)
 }
 
+#[cfg(test)]
 fn exact_readback(prior: &HeldEvidence, proof: &JoinedReadback) -> bool {
     prior.stage == proof.stage() && prior.delivery_carrier() == proof.carrier()
 }
 
+#[cfg(test)]
 struct HeldWrite<'a> {
     raw: RawRecord<'a>,
     delivery: &'a Delivery,
@@ -1104,6 +1171,7 @@ struct HeldWrite<'a> {
     deadline: u64,
 }
 
+#[cfg(test)]
 impl HeldWrite<'_> {
     fn insert(self, tx: &Transaction<'_>, current: &Queued) -> Result<()> {
         let Self {
@@ -1167,6 +1235,7 @@ impl HeldWrite<'_> {
     }
 }
 
+#[cfg(test)]
 fn load(tx: &Transaction<'_>, queued: &Queued) -> Result<Option<Saved>> {
     let binding = queued.prepared.binding;
     let transcript = queued.row.transcript;

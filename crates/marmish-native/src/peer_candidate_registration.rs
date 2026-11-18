@@ -324,3 +324,6 @@ fn open_member(root: &File) -> io::Result<File> {
 #[cfg(test)]
 #[path = "peer_candidate_registration_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::{package_fixture_registration, package_fixture_root};

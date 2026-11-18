@@ -1,7 +1,9 @@
 //! Fixture-only ownership of Consent produced from a Prepared native stage.
 
+#[cfg(test)]
 use nostr::key::Keys;
 
+#[cfg(test)]
 use super::super::super::{CursorStore, HardenedPeerConnection};
 use super::*;
 
@@ -13,10 +15,12 @@ pub(crate) mod custody;
 
 #[derive(Clone, Copy)]
 pub(in super::super) enum Epoch {
+    #[cfg(test)]
     Prepared,
     Custody(custody::Epoch),
 }
 
+#[cfg(test)]
 impl Checkpoint {
     pub(crate) fn attach_prepared_consent_fixture(
         conn: HardenedPeerConnection,
@@ -41,16 +45,21 @@ impl Checkpoint {
 #[path = "peer_prepared_consent_schema_tests.rs"]
 mod schema_tests;
 
+#[cfg(test)]
 use super::super::{
     Offer,
     wire::{self, Transcript},
 };
+#[cfg(test)]
 use rusqlite::Transaction;
+#[cfg(test)]
 use stage_journal::{Artifact, FileWitness, State};
 
+#[cfg(test)]
 #[path = "peer_prepared_consent_rows.rs"]
 mod outbox;
 
+#[cfg(test)]
 impl super::super::Selector {
     pub(crate) fn from_delivery(incoming: &wire::IncomingDelivery) -> Self {
         let offer = incoming.offer();
@@ -62,6 +71,7 @@ impl super::super::Selector {
     }
 }
 
+#[cfg(test)]
 pub(crate) struct Candidate {
     account: [u8; 32],
     binding: Binding,
@@ -70,6 +80,7 @@ pub(crate) struct Candidate {
     offer: Offer,
 }
 
+#[cfg(test)]
 impl Candidate {
     pub(crate) fn stage(&self) -> (Binding, FileWitness) {
         (self.binding, self.witness)
@@ -94,11 +105,13 @@ impl Candidate {
     }
 }
 
+#[cfg(test)]
 pub(crate) struct Queued {
     prepared: Candidate,
     row: outbox::Outbox,
 }
 
+#[cfg(test)]
 impl Queued {
     #[cfg(test)]
     pub(crate) fn frame(&self) -> &[u8] {
@@ -115,6 +128,7 @@ impl Queued {
     }
 }
 
+#[cfg(test)]
 pub(crate) struct Unsaved {
     binding: Binding,
     witness: FileWitness,
@@ -122,6 +136,7 @@ pub(crate) struct Unsaved {
     row: outbox::Outbox,
 }
 
+#[cfg(test)]
 impl Checkpoint {
     pub(crate) fn require_reservation_owner(&self, reservation: &Reservation) -> Result<()> {
         self.check_local_owner(&reservation.owner)
@@ -352,6 +367,8 @@ impl Checkpoint {
     }
 }
 
+#[cfg(test)]
 #[path = "peer_prepared_consent_attempt.rs"]
 pub(crate) mod publication;
+#[cfg(test)]
 pub(crate) use publication::Attempt;
