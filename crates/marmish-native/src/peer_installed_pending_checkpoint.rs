@@ -9,6 +9,15 @@ use crate::{
     peer_quota_vfs::dispatch::ReceiverQuota,
 };
 
+impl JoinStarted {
+    pub(in crate::peer_invitation) fn matches_installed_turn(&self, held: &HeldEvidence) -> bool {
+        std::sync::Arc::ptr_eq(&self.owner, &held.owner)
+            && self.stage == held.stage
+            && self.carrier == held.delivery_carrier()
+            && held.state() == CustodyState::JoinStarted
+    }
+}
+
 impl Checkpoint {
     pub(in crate::peer_invitation) fn read_installed_join_custody(
         &mut self,

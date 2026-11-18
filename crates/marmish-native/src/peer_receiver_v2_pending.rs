@@ -124,9 +124,6 @@ impl<'lease> PendingReceiver<'lease> {
             selector,
             generation,
         )?;
-        if current.state() != CustodyState::JoinStarted {
-            return Err(Error::Binding);
-        }
         let clock = Wall::System;
         let fence = TurnFence::new(&clock, stop, None, wall, current.held_deadline())?;
         self.native
@@ -337,7 +334,7 @@ impl<'lease> NativePending<'lease> {
     ) -> Result<(Result<()>, JoinMetrics)> {
         let ArmedWelcome { prepared, started } = armed;
         self.check(owner, held, delivery)?;
-        if !started.matches(held)
+        if !started.matches_installed_turn(held)
             || !prepared.matches_quota(self.quota)
             || !prepared.matches(held, delivery)
         {
