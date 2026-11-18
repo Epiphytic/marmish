@@ -1199,7 +1199,13 @@ mod tests {
             ],
         )
         .unwrap();
-        (Journal { conn }, expected, bytes)
+        (
+            Journal {
+                conn: marmish_engine::ExistingConnection::stock(conn),
+            },
+            expected,
+            bytes,
+        )
     }
     type LegacyRow = (String, Vec<u8>, bool, bool, Vec<u8>);
     fn legacy_rows(journal: &Journal) -> Vec<LegacyRow> {
