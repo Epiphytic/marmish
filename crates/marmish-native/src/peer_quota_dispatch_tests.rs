@@ -97,6 +97,8 @@ fn run(test: &str, var: &str, value: &str, restart: Option<&Path>) {
                 | "dispatch-proof faults"
                 | "dispatch-proof poisoned_drop"
                 | "dispatch-proof reservation"
+                | "dispatch-proof receiver_first"
+                | "dispatch-proof fixture_first"
         )
     }) {
         println!("{line}");
@@ -108,6 +110,15 @@ fn run(test: &str, var: &str, value: &str, restart: Option<&Path>) {
             .any(|line| line.starts_with("dispatch-proof ")),
         "dispatch_no_report {value}"
     );
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+#[ignore = "isolated receiver path registration"]
+fn dispatch_receiver_registration() {
+    for mode in ["receiver_first", "fixture_first"] {
+        run(CHILD, MODE, mode, None);
+    }
 }
 
 #[test]
@@ -124,6 +135,12 @@ fn dispatch_child() {
     let lease = ProfileLease::acquire(temp.path(), "fixture").unwrap();
     let parent = lease.root().join("peer");
     fs::DirBuilder::new().mode(0o700).create(&parent).unwrap();
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    if matches!(mode.as_str(), "receiver_first" | "fixture_first") {
+        receiver_registration(lease, &parent, mode == "receiver_first");
+        println!("dispatch-proof {mode}");
+        return;
+    }
     let profile = ProfileSlots::reserve(&lease, TOTAL_ADMISSION - 4 * 1024 * 1024).unwrap();
     let main = parent.join(NAMES[0]);
     let metadata = OpenOptions::new()
@@ -164,6 +181,82 @@ fn dispatch_child() {
         _ => panic!("unsupported_dispatch_case"),
     }
     println!("dispatch-proof {mode}");
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn receiver_registration(mut lease: ProfileLease, parent: &Path, receiver_first: bool) {
+    lease
+        .prepare(
+            crate::identity::BackendChoice::File,
+            Path::new(""),
+            Instant::now() + Duration::from_secs(5),
+        )
+        .unwrap();
+    let lease = Arc::new(lease);
+    if !receiver_first {
+        let _fixture = ProfileSlots::reserve(&lease, 0).unwrap();
+        assert!(ReceiverQuota::bind_receiver(&lease).is_err());
+        return;
+    }
+    let owner = ReceiverQuota::bind_receiver(&lease).unwrap();
+    let other_reference = lease.clone();
+    let rebound = ReceiverQuota::bind_receiver(&other_reference).unwrap();
+    assert!(ptr::eq(owner.dispatch, rebound.dispatch));
+    assert!(ProfileSlots::reserve(&lease, 0).is_err());
+    let reserved = owner.dispatch.checked_paths(&lease).unwrap();
+    assert_eq!(
+        reserved.mains[SNAPSHOT],
+        parent.join(RECEIVER_SNAPSHOT_NAME)
+    );
+    assert!(
+        reserved
+            .all
+            .contains(&parent.join("receiver-join-snapshot.db-journal"))
+    );
+    let different = ProfileLease::acquire(lease.root().parent().unwrap(), "different").unwrap();
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(different.root().join("peer"))
+        .unwrap();
+    assert!(ReceiverQuota::bind_receiver(&Arc::new(different)).is_err());
+
+    let first = parent.with_file_name("peer-original");
+    fs::rename(parent, &first).unwrap();
+    fs::DirBuilder::new().mode(0o700).create(parent).unwrap();
+    assert!(ReceiverQuota::bind_receiver(&lease).is_err());
+    assert!(owner.dispatch.checked_paths(&lease).is_err());
+    fs::remove_dir(parent).unwrap();
+    fs::rename(first, parent).unwrap();
+    assert!(owner.dispatch.checked_paths(&lease).is_ok());
+
+    // SAFETY: the replacement is owned until unregistered and SQLite never
+    // opens an ordinary file through it.
+    unsafe {
+        let mut duplicate = Box::new(forwarding_descriptor(&*owner.dispatch.stock).unwrap());
+        duplicate.zName = c"unix".as_ptr();
+        assert_eq!(
+            sql::sqlite3_vfs_register(&raw mut *duplicate, 0),
+            sql::SQLITE_OK
+        );
+        let checked = owner.dispatch.checked_paths(&lease).err();
+        assert_eq!(
+            sql::sqlite3_vfs_unregister(&raw mut *duplicate),
+            sql::SQLITE_OK
+        );
+        assert_eq!(checked, Some("dispatch_stock_displaced"));
+    }
+    assert!(owner.dispatch.checked_paths(&lease).is_ok());
+
+    let profile_id = lease.profile_id().to_owned();
+    let base = lease.root().parent().unwrap().to_path_buf();
+    drop(other_reference);
+    drop(lease);
+    let fresh = Arc::new(ProfileLease::acquire(&base, "fixture").unwrap());
+    assert_eq!(fresh.profile_id(), profile_id);
+    assert_eq!(
+        ReceiverQuota::bind_receiver(&fresh).err(),
+        Some("dispatch_lease_conflict")
+    );
 }
 
 fn reservation(profile: &ProfileSlots<'_>, lease: &ProfileLease, binding: RawBinding<'_>) {

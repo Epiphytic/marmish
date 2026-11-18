@@ -240,7 +240,7 @@ fn private_stat(
 pub(in super::super) mod recovery {
     use super::*;
     use std::collections::BTreeSet;
-    use std::os::unix::ffi::OsStrExt;
+    use std::os::fd::IntoRawFd;
 
     const CURSOR: [&CStr; 4] = [
         c"cursor.db",
@@ -263,6 +263,58 @@ pub(in super::super) mod recovery {
         pub(in super::super::super) charged: u64,
     }
 
+    struct DirectoryEntries(*mut libc::DIR);
+
+    impl Drop for DirectoryEntries {
+        fn drop(&mut self) {
+            // SAFETY: this stream exclusively owns its descriptor.
+            unsafe { libc::closedir(self.0) };
+        }
+    }
+
+    fn enumerate(descriptor: &File, peer: Identity, families: &[[&CStr; 4]; 3]) -> Result<()> {
+        let flags = libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_RDONLY;
+        // SAFETY: the original descriptor and terminated "." are live.
+        let fd = unsafe { libc::openat(descriptor.as_raw_fd(), c".".as_ptr(), flags) };
+        if fd < 0 {
+            return Err(Error::Path);
+        }
+        // SAFETY: openat returned a fresh descriptor and file description.
+        let independent = unsafe { File::from_raw_fd(fd) };
+        if checked_dir(&independent, peer.0)? != peer {
+            return Err(Error::StageIdentityMismatch);
+        }
+        // SAFETY: fdopendir takes ownership only on success.
+        let stream = unsafe { libc::fdopendir(independent.as_raw_fd()) };
+        if stream.is_null() {
+            return Err(Error::Path);
+        }
+        let _ = independent.into_raw_fd();
+        let entries = DirectoryEntries(stream);
+        let allowed = CURSOR.iter().chain(families.iter().flatten());
+        let maximum = allowed.clone().count() + 2;
+        for count in 0..=maximum {
+            // SAFETY: this thread owns the stream and its errno. A successful
+            // entry remains valid until the next readdir on this stream.
+            let (entry, errno) = unsafe {
+                *libc::__errno_location() = 0;
+                let entry = libc::readdir(entries.0);
+                (entry, *libc::__errno_location())
+            };
+            if entry.is_null() {
+                return if errno == 0 { Ok(()) } else { Err(Error::Path) };
+            }
+            // SAFETY: readdir supplies a terminated d_name on success.
+            let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+            if count == maximum
+                || (name != c"." && name != c".." && !allowed.clone().any(|entry| *entry == name))
+            {
+                return Err(Error::StageIdentityMismatch);
+            }
+        }
+        Err(Error::StageIdentityMismatch)
+    }
+
     pub(in super::super::super) fn inspect(
         paths: &Paths<'_>,
         cursor: &CheckedFile,
@@ -270,16 +322,7 @@ pub(in super::super) mod recovery {
         cursor.unchanged()?;
         let (descriptor, profile, peer) = open_dirs(paths)?;
         let families = [stage_names(true), stage_names(false), SNAPSHOT];
-        for entry in fs::read_dir(paths.directory()).map_err(|_| Error::Path)? {
-            let name = entry.map_err(|_| Error::Path)?.file_name();
-            if !CURSOR
-                .iter()
-                .chain(families.iter().flatten())
-                .any(|expected| expected.to_bytes() == name.as_bytes())
-            {
-                return Err(Error::StageIdentityMismatch);
-            }
-        }
+        enumerate(&descriptor, peer, &families)?;
         let Some((id, _)) = private_stat(&descriptor, peer, CURSOR[0])? else {
             return Err(Error::StageIdentityMismatch);
         };
@@ -319,6 +362,36 @@ pub(in super::super) mod recovery {
             return Err(Error::StageIdentityMismatch);
         }
         Ok(extents)
+    }
+
+    #[test]
+    fn peer_receiver_inventory_rescans_same_descriptor_after_abort() {
+        use crate::peer_invitation::provisional::tests::Fixture;
+
+        let fixture = Fixture::new();
+        let paths = Paths::new(&fixture.lease, &fixture.identity).unwrap();
+        let (descriptor, _, peer) = open_dirs(&paths).unwrap();
+        let unrecognized = paths.directory().join("unexpected.db");
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&unrecognized)
+            .unwrap();
+        let families = [stage_names(true), stage_names(false), SNAPSHOT];
+        for _ in 0..2 {
+            assert!(matches!(
+                enumerate(&descriptor, peer, &families),
+                Err(Error::StageIdentityMismatch)
+            ));
+        }
+        fs::remove_file(unrecognized).unwrap();
+        enumerate(&descriptor, peer, &families).unwrap();
+        // SAFETY: the live descriptor belongs to the unenumerated original.
+        assert_eq!(
+            unsafe { libc::lseek(descriptor.as_raw_fd(), 0, libc::SEEK_CUR) },
+            0
+        );
     }
 }
 

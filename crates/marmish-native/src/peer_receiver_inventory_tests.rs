@@ -1,4 +1,5 @@
 use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, symlink};
 use std::path::Path;
 
@@ -144,6 +145,7 @@ fn peer_receiver_inventory_recovers_only_exact_witness_and_retains_expired_slot(
         },
     );
     assert_eq!(inventory.charged, RESERVED_BYTES + 12_288);
+    assert!(inventory.clean_extent(binding).is_err());
     assert!(owner.recover(f.now - 1).is_err());
 
     let stale_source = owner.source;
@@ -165,10 +167,7 @@ fn peer_receiver_inventory_recovers_only_exact_witness_and_retains_expired_slot(
     fs::remove_file(known).unwrap();
     assert_eq!(owner.recover(f.now).unwrap(), inventory);
     fs::remove_file(journal).unwrap();
-    assert_eq!(
-        owner.recover(f.now).unwrap().classes[1],
-        Class::Identified(binding)
-    );
+    assert_clean_charge(&f, &mut owner, binding);
 
     let staged = OpenOptions::new().read(true).open(f.stage()).unwrap();
     fs::remove_file(f.stage()).unwrap();
@@ -176,6 +175,26 @@ fn peer_receiver_inventory_recovers_only_exact_witness_and_retains_expired_slot(
     write_extent(&f.stage(), 4096);
     assert_eq!(owner.recover(f.now).unwrap().classes[1], Class::Fenced);
     drop(staged);
+}
+
+fn assert_clean_charge(f: &Fixture, owner: &mut RecoveredOwner<'_>, binding: Binding) {
+    let clean = owner.recover(f.now).unwrap().clean_extent(binding).unwrap();
+    assert_eq!(clean.main.logical, 4096);
+    assert_eq!(clean.charged_other, RESERVED_BYTES + 1);
+
+    let mut stage = OpenOptions::new().write(true).open(f.stage()).unwrap();
+    stage.write_all(&[1]).unwrap();
+    stage.set_len(1).unwrap();
+    stage.sync_all().unwrap();
+    let physical = (stage.metadata().unwrap().blocks() * 512).max(1);
+    drop(stage);
+    let known = f.stage().with_file_name("provisional-known.db");
+    write_extent(&known, 8192);
+    let clean = owner.recover(f.now).unwrap().clean_extent(binding).unwrap();
+    assert_eq!(clean.main.logical, 1);
+    assert_eq!(clean.main.charged, physical);
+    assert_eq!(clean.charged_other, RESERVED_BYTES + physical + 8192);
+    fs::remove_file(known).unwrap();
 }
 
 #[test]
