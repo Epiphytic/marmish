@@ -34,13 +34,23 @@ const CHILD_FLAG: &str = "MARMISH_INSTALLED_DELIVERY_AFTER_RETRY";
 #[test]
 #[ignore = "private TLS with native KeyPackage and an actual 60-second Consent retry"]
 fn peer_installed_delivery_recovers_after_lost_ack() {
+    run_child("normal");
+}
+
+#[test]
+#[ignore = "private TLS with an actual 60-second Consent retry and a read-only wake transaction"]
+fn peer_installed_delivery_recovers_when_wake_cannot_write() {
+    run_child("wake-refuses");
+}
+
+fn run_child(case: &str) {
     let name = concat!(
         "peer_invitation::prepared_consent::installed_consent::delivery::tests::",
         "peer_installed_delivery_child"
     );
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args(["--ignored", "--exact", name, "--nocapture"])
-        .env(CHILD_FLAG, "1")
+        .env(CHILD_FLAG, case)
         .stdin(Stdio::null())
         .spawn()
         .unwrap();
@@ -62,26 +72,28 @@ fn peer_installed_delivery_recovers_after_lost_ack() {
 #[test]
 #[ignore = "child of the installed Delivery WSS proof"]
 fn peer_installed_delivery_child() {
-    if std::env::var_os(CHILD_FLAG).is_none() {
-        return;
-    }
+    let wake_refuses = match std::env::var(CHILD_FLAG).as_deref() {
+        Ok("normal") => false,
+        Ok("wake-refuses") => true,
+        _ => return,
+    };
     mount_for_proof().unwrap();
     std::thread::Builder::new()
         .name("installed-delivery".into())
         .stack_size(32 << 20)
-        .spawn(|| {
+        .spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap();
-            runtime.block_on(Box::pin(run()));
+            runtime.block_on(Box::pin(run(wake_refuses)));
         })
         .unwrap()
         .join()
         .unwrap();
 }
 
-async fn run() {
+async fn run(wake_refuses: bool) {
     let founder = Arc::new(Keys::generate());
     let second = Keys::generate();
     let (relay, _test_home, lease, material) = qualified_recipient_fixture(
@@ -328,7 +340,11 @@ async fn run() {
         .position(|record| record.id == delivery_id)
         .unwrap();
     let before = delivery_state(&fixture);
-    let inspected = observe_delivery(&mut fixture, &mut recipient, &page, delivery_index);
+    let inspected = observe_delivery(
+        &mut fixture,
+        &mut recipient,
+        Input::History(&page, delivery_index),
+    );
     let (stage, checked_wall) = inspected.native_coordinates();
     let native = fixture.attest(stage, checked_wall).unwrap();
     recipient.stop(time_limit()).await.unwrap();
@@ -495,6 +511,26 @@ async fn run() {
     assert_eq!(before[..2], after[..2]);
     assert_eq!(before[4..], after[4..]);
 
+    let expires = wall() + 7;
+    let expiring = codec
+        .prepare_delivery(&founder, &consent, &welcome, wall(), expires + 300)
+        .unwrap();
+    assert!(
+        sender
+            .publish(&expiring, expiring.flight.flight(), time_limit())
+            .await
+            .unwrap()
+    );
+    let expiring_id = expiring.flight.flight().carrier_id.to_bytes();
+    let deadline = time_limit();
+    let expiring_live = loop {
+        let record = recipient.wait_live(deadline).await.unwrap().unwrap();
+        if record.arrival().id == expiring_id {
+            break record;
+        }
+    };
+    assert_observed_expiry(&mut fixture, &mut recipient, &expiring_live, expires).await;
+
     // The first retry is due one second after deferral. Confirm the
     // stored work is actually eligible before asserting no native read.
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -546,16 +582,34 @@ async fn run() {
         .iter()
         .position(|record| record.id == competing_id)
         .unwrap();
-    let competing_inspection = observe_delivery(&mut fixture, &mut recipient, &page, index);
+    let competing_inspection =
+        observe_delivery(&mut fixture, &mut recipient, Input::History(&page, index));
     let (stage, sample) = competing_inspection.native_coordinates();
     let package = fixture.attest(stage, sample).unwrap();
+    if wake_refuses {
+        fixture.cut = Some(Cut::ReadOnlyDeliveryWake);
+    }
     assert_eq!(
         recipient
             .publish_prepared_consent(&mut fixture, selector, time_limit())
             .await,
         PublicationOutcome::Settled
     );
-    assert!(fixture.wake_failure.is_none());
+    if wake_refuses {
+        assert!(fixture.wake_failure.is_some());
+        assert!(
+            fixture
+                .queued(selector, wall())
+                .unwrap()
+                .unwrap()
+                .publication_state()
+                .2
+                .is_some(),
+            "the failed wake must preserve the settled Consent"
+        );
+    } else {
+        assert!(fixture.wake_failure.is_none());
+    }
     let before = delivery_state(&fixture);
     let state = &mut fixture.owner.state;
     let competes = recipient
@@ -627,8 +681,23 @@ async fn run() {
         .unwrap()
         .0;
     assert!(statuses.contains(&Status::Accepted(TrustedOutcome::AlreadyApplied)));
+    let page = recipient.page([stamp, stamp], time_limit()).await.unwrap();
+    let index = page
+        .records()
+        .iter()
+        .position(|r| r.id == competing_id)
+        .unwrap();
+    let reads = fixture.package_reads.get();
+    assert_eq!(
+        fixture
+            .delivery_input(&mut recipient, Input::History(&page, index))
+            .unwrap()
+            .status,
+        Status::Invalid,
+    );
+    assert_eq!(fixture.package_reads.get(), reads);
     eprintln!(
-        "installed_delivery mixed_ms={page_millis} retry_cold_ms={retry_cold_ms} ack_to_held_ms={held_ms} held_cold_ms={held_cold_ms} delivery_bytes={}",
+        "installed_delivery wake_refuses={wake_refuses} mixed_ms={page_millis} retry_cold_ms={retry_cold_ms} ack_to_held_ms={held_ms} held_cold_ms={held_cold_ms} delivery_bytes={}",
         observed_delivery.len()
     );
 }
@@ -644,12 +713,11 @@ fn delivery_state(fixture: &Fixture<'_>) -> [i64; 6] {
 fn observe_delivery(
     fixture: &mut Fixture<'_>,
     recipient: &mut PeerRecipientPort,
-    page: &Page,
-    index: usize,
+    input: Input<'_>,
 ) -> Box<consent_checkpoint::provisioning::prepared_consent::custody::delivery_ingress::Prepared> {
     let state = &mut fixture.owner.state;
-    let observed = recipient
-        .use_page_carrier(page, index, |carrier| {
+    let observed = input
+        .observe(recipient, |carrier| {
             state
                 .checkpoint
                 .observe_installed_delivery(&state.source, carrier)
@@ -660,4 +728,41 @@ fn observe_delivery(
         panic!("Delivery should still require inspected KeyPackage evidence");
     };
     inspected
+}
+
+async fn assert_observed_expiry(
+    fixture: &mut Fixture<'_>,
+    recipient: &mut PeerRecipientPort,
+    live: &LiveRecord,
+    expires: u64,
+) {
+    let before = delivery_state(fixture);
+    let prepared = observe_delivery(fixture, recipient, Input::Live(live));
+    let (stage, checked_wall) = prepared.native_coordinates();
+    let native = fixture.attest(stage, checked_wall).unwrap();
+    while wall() < expires {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let state = &mut fixture.owner.state;
+    let refused = Input::Live(live)
+        .observe(recipient, |carrier| {
+            state
+                .checkpoint
+                .finish_installed_delivery(&state.source, carrier, *prepared, &native)
+        })
+        .unwrap();
+    assert_eq!(refused.err(), Some(consent_checkpoint::Error::Expired));
+    assert_eq!(delivery_state(fixture), before);
+    let reads = fixture.package_reads.get();
+    assert_eq!(
+        fixture
+            .delivery_input(recipient, Input::Live(live))
+            .unwrap()
+            .status,
+        Status::Invalid,
+    );
+    assert_eq!(fixture.package_reads.get(), reads);
+    let after = delivery_state(fixture);
+    assert_eq!(before[..2], after[..2]);
+    assert_eq!(before[4..], after[4..]);
 }

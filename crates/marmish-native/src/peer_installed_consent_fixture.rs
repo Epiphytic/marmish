@@ -20,6 +20,7 @@ pub(in crate::peer_invitation) struct Fixture<'a> {
 enum Cut {
     ReplaceStagedImage,
     ReadOnlySettlement,
+    ReadOnlyDeliveryWake,
 }
 
 #[path = "peer_installed_consent_wss_tests.rs"]
@@ -242,13 +243,19 @@ impl<'a> Fixture<'a> {
     ) -> Result<usize> {
         self.cursor.unchanged()?;
         let state = &mut self.owner.state;
-        Ok(state.checkpoint.wake_installed_delivery(
-            &state.source,
-            settled,
-            account,
-            origin,
-            wall,
-        )?)
+        let read_only = self.cut == Some(Cut::ReadOnlyDeliveryWake);
+        if read_only {
+            self.cut = None;
+            state.checkpoint.fixture_statement("PRAGMA query_only=ON");
+        }
+        let wake =
+            state
+                .checkpoint
+                .wake_installed_delivery(&state.source, settled, account, origin, wall);
+        if read_only {
+            state.checkpoint.fixture_statement("PRAGMA query_only=OFF");
+        }
+        Ok(wake?)
     }
 
     pub(in crate::peer_invitation) fn record_wake_failure(&mut self, error: Error) {
