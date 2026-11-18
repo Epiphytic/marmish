@@ -23,7 +23,7 @@ use consent_checkpoint::{
     },
     wire::{Delivery, StatusNegotiation},
 };
-use prepared_consent::{read_image, snapshot_inode, snapshot_sidecars};
+use snapshot_image::{read_image, snapshot_inode, snapshot_sidecars};
 use socket::owner::recipient::PeerRecipientPort;
 
 thread_local! {

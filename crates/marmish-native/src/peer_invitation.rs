@@ -57,6 +57,16 @@ pub(super) mod prepared_consent;
 ))]
 #[path = "peer_receiver_inventory.rs"]
 mod receiver_inventory;
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
+#[path = "peer_snapshot_image.rs"]
+mod snapshot_image;
 #[cfg(all(
     any(test, marmish_peer_receiver_candidate),
     target_os = "linux",

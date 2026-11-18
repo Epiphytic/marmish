@@ -5,9 +5,9 @@ use crate::{
     mdk_adapter::peer_native_signer::{JoinWitness, JoinedAuthority},
 };
 use std::{
-    fs::{self, Metadata, OpenOptions},
+    fs::{self, OpenOptions},
     io::{self, Read},
-    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::Path,
 };
 use storage_sqlite::SqlCipherKey;
@@ -19,6 +19,7 @@ use consent_checkpoint::provisioning::{
     stage_journal::{Artifact, FileWitness},
 };
 pub(crate) use consent_checkpoint::wire::Delivery;
+use snapshot_image::{read_image, snapshot_inode, snapshot_sidecars};
 
 #[path = "peer_capped_join.rs"]
 pub(in crate::peer_invitation) mod capped_join;
@@ -193,51 +194,6 @@ impl JoinedReadback {
     pub(in crate::peer_invitation) fn coordinates(&self) -> (&[u8], u64, [u8; 32], u32) {
         self.authority.coordinates()
     }
-}
-
-pub(super) fn snapshot_sidecars(path: &Path) -> Result<()> {
-    for suffix in ["-journal", "-wal", "-shm"] {
-        let mut name = path.as_os_str().to_owned();
-        name.push(suffix);
-        match fs::symlink_metadata(name) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            _ => return Err(Error::StageIdentityMismatch),
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn snapshot_inode(metadata: &Metadata) -> Result<(u64, u64)> {
-    if !metadata.is_file() || metadata.nlink() != 1 || metadata.mode() & 0o7777 != 0o600 {
-        return Err(Error::StageIdentityMismatch);
-    }
-    Ok((metadata.dev(), metadata.ino()))
-}
-
-pub(super) fn read_image(path: &Path) -> Result<([u8; 32], (u64, u64))> {
-    use sha2::Digest;
-    snapshot_sidecars(path)?;
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(path)
-        .map_err(|_| Error::Path)?;
-    let metadata = file.metadata().map_err(|_| Error::Path)?;
-    let inode = snapshot_inode(&metadata)?;
-    let mut digest = Sha256::new();
-    let sum =
-        io::copy(&mut file.take(paths::MAX_STAGE_LEN + 1), &mut digest).map_err(|_| Error::Path)?;
-    let after = fs::symlink_metadata(path).map_err(|_| Error::Path)?;
-    snapshot_sidecars(path)?;
-    if sum == 0
-        || sum > paths::MAX_STAGE_LEN
-        || sum != metadata.len()
-        || after.len() != sum
-        || snapshot_inode(&after)? != inode
-    {
-        return Err(Error::StageIdentityMismatch);
-    }
-    Ok((digest.finalize().into(), inode))
 }
 
 enum Epoch {
