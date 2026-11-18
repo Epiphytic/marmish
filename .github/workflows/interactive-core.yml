@@ -83,3 +83,7 @@ jobs:
           cargo test --locked -p marmish-native --test peer_cursor_store peer_cursor_core_effect_fence_cleanup_rolls_back_and_page_replays
       - name: Check private Peer socket bounds
         run: cargo test --locked -p marmish-native --lib peer_raw_socket_core_reserves_and_budgets
+      - name: Check Terminal writer selection records
+        run: cargo test --locked -p marmish-native --lib terminal_selection
+      - name: Check durable Peer heartbeat reservations
+        run: cargo test --locked -p marmish-native --test peer_heartbeat_send_fences peer_heartbeat_send_fences::core_tests::core_
