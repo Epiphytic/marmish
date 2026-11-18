@@ -190,7 +190,7 @@ impl Checkpoint {
     }
 
     fn fixture_change_custody(&mut self, carrier: [u8; 32], statement: &str) -> Result<()> {
-        use super::super::super::super::retirement::schema::inventory;
+        use super::super::super::retirement::schema::inventory;
         use rusqlite::TransactionBehavior;
 
         if !self.is_installed_custody() {
