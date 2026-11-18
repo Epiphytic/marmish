@@ -1649,6 +1649,9 @@ AMD64 tests and the candidate handoff is unmounted. The
 exact attached quota usable before and after route transfer through
 the same controller. Dropping the registration while that controller
 is still borrowed is rejected at compile time.
+The [candidate startup clock](validation/peer-candidate-ready-clock.md)
+measures its 15-second startup allowance from the second readiness
+edge and revokes it on stop.
 
 The [terminal custody fixture](validation/peer-terminal-custody.md) makes
 Declined and Expired durable for an exact joined Pending invitation.
