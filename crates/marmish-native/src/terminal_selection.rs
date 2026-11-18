@@ -22,7 +22,7 @@ const CONFIRM: Duration = Duration::from_secs(5);
 const ATTACHMENT: Duration = Duration::from_secs(8 * 60 * 60);
 
 #[derive(Default)]
-pub(super) struct SourceTokens(u64);
+pub(crate) struct SourceTokens(u64);
 
 impl SourceTokens {
     fn next(&mut self) -> Result<NonZeroU64> {
@@ -59,52 +59,56 @@ impl WriterGuard {
         })
     }
 
+    pub(super) fn renew(&self, at: Duration) -> GuardResult<bool> {
+        self.admitted.renew(self.source.0.id, at)
+    }
+
     pub(super) fn admitted(&mut self) -> &mut AdmittedTerminal {
         &mut self.admitted
     }
 }
 
-pub(super) enum ServerOutcome {
+pub(crate) enum ServerOutcome {
     Attached(ServerAttachment),
     Busy,
-    Refused(Refusal),
+    Refused(#[cfg(test)] Refusal),
 }
 
-pub(super) struct ServerAttachment {
-    writer: WriterGuard,
-    room: AttachedRoom,
+pub(crate) struct ServerAttachment {
+    pub(super) writer: WriterGuard,
+    pub(super) room: AttachedRoom,
 }
 
 impl ServerAttachment {
-    async fn check_live(&self) -> Result<()> {
+    pub(super) async fn check_live(&self) -> Result<GuardResult<()>> {
         if let Err(error) = self.room.check_live().await {
             self.writer.source.0.retire(Reason::Authority);
             return Err(error);
         }
-        let binding = self.writer.binding()?;
-        if !self
-            .writer
-            .matches_binding(binding.claim, binding.generation)
-        {
-            return Err(SOURCE);
-        }
-        Ok(())
+        Ok(self.writer.source.0.check())
     }
 
-    async fn close(self) -> Result<()> {
+    pub(crate) async fn close(self) -> Result<()> {
         let Self { writer, room } = self;
         drop(writer);
         room.close().await
     }
 }
 
-pub(super) enum ClientOutcome {
-    Attached { room: AttachedRoom, slot: SlotId },
+pub(crate) enum ClientOutcome {
+    Attached {
+        room: AttachedRoom,
+        #[cfg_attr(
+            not(test),
+            allow(dead_code, reason = "named reattachment starts with Observe/Takeover")
+        )]
+        slot: SlotId,
+    },
     Busy,
     Refused(Refusal),
 }
 
-pub(super) async fn accept(
+pub(crate) async fn accept(
     mut room: ReadyEnrollment,
     control: &LiveControl,
     tokens: &mut SourceTokens,
@@ -163,7 +167,10 @@ pub(super) async fn accept(
             )
             .await?;
             room.close().await?;
-            return Ok(ServerOutcome::Refused(reason));
+            return Ok(ServerOutcome::Refused(
+                #[cfg(test)]
+                reason,
+            ));
         }
     };
 
@@ -224,7 +231,7 @@ async fn start_and_wait(
     .map_err(|_| Error::Timeout)?
 }
 
-pub(super) async fn request(
+pub(crate) async fn request(
     mut room: ReadyEnrollment,
     choice: Choice,
     size: Size,

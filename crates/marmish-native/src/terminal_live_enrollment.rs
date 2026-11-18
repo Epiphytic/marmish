@@ -1,8 +1,8 @@
 //! Single direct-WSS Terminal admission on a verified Command binding.
 use super::terminal_enrollment::Owner;
 use super::terminal_enrollment_room::{App, RoomWitness};
-pub(crate) use super::terminal_enrollment_transport::EnrollmentCeiling;
-use super::terminal_enrollment_transport::{Authority, Lane};
+use super::terminal_enrollment_transport::{Authority, Lane, Read};
+pub(crate) use super::terminal_enrollment_transport::{EnrollmentCeiling, Reapers};
 use super::{AuthenticatedCommandContext, CommandDirection, TransportEndpoint};
 use crate::terminal_backend::supervisor::live::selection::WriterGuard;
 use crate::terminal_bootstrap::state::{Advance, Exchange, Time};
@@ -11,18 +11,18 @@ use crate::terminal_fence::{AttachmentFence, FenceState};
 use crate::terminal_frames;
 use crate::transport::{RelayConnector, RelayPolicy};
 use crate::{Error, Result};
-use cgka_traits::TransportDeliveryPlane;
 use std::num::NonZeroU64;
-use std::sync::Arc;
+use std::sync::{Arc, atomic::AtomicBool};
 use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinHandle;
-use tokio::time::{Instant, timeout_at};
+use tokio::time::Instant;
 
 #[path = "terminal_live_enrollment_clock.rs"]
 mod clock;
 
-use clock::{ConsumedProbes, Freshness, Sample};
+use clock::Sample;
+pub(crate) use clock::{AdmissionLedger, InboundState};
 
 const BINDING: Error = Error::Invalid("terminal_bootstrap_binding");
 const ROUTE: Error = Error::Transport("terminal_transport_unavailable");
@@ -31,7 +31,19 @@ const CAPACITY: Error = Error::Invalid("terminal_enrollment_capacity");
 const ORDER: Error = Error::Invalid("terminal_enrollment_order");
 const BOOTSTRAP_OUTER: usize = 32 * 1024;
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(30);
-const CHALLENGE_TIMEOUT: Duration = Duration::from_secs(5);
+const PROBE_RETRIES: [Duration; 4] = [
+    Duration::from_secs(2),
+    Duration::from_secs(5),
+    Duration::from_secs(10),
+    Duration::from_secs(18),
+];
+const NO_CHALLENGE: Error = Error::Transport("terminal_bootstrap_no_challenge");
+
+pub(super) struct CarrierScope {
+    pub(super) reapers: Arc<Reapers>,
+    pub(super) grant: Arc<dyn Fn() -> bool + Send + Sync>,
+    pub(super) local_closed: Option<Arc<AtomicBool>>,
+}
 
 pub(super) struct Carrier {
     context: AuthenticatedCommandContext,
@@ -62,18 +74,13 @@ pub(super) fn admit(
     })
 }
 
-#[derive(Default)]
-pub(super) struct InboundState {
-    clock: Freshness,
-    consumed: ConsumedProbes,
-}
-
 pub(super) struct Bootstrap {
     carrier: Carrier,
     exchange: Exchange,
     signing: BoundSigning,
     lane: Lane,
     client_start: Option<EnrollmentCeiling>,
+    probe_started: Option<Instant>,
 }
 
 pub(super) struct GrantedEnrollment {
@@ -112,8 +119,12 @@ impl ReservedRoom {
         let runtime = tokio::runtime::Handle::try_current().ok()?;
         let (owner, permit) = self.owner.take()?;
         owner.alias_adapter.authority.retire();
+        let cleanup = owner.alias_adapter.authority.reap();
         Some(runtime.spawn(async move {
             let result = owner.close().await;
+            if let Some(cleanup) = cleanup {
+                cleanup.completed(&result);
+            }
             if result.is_ok() {
                 permit.release_after_reap();
             }
@@ -160,7 +171,9 @@ pub(crate) struct ReadyEnrollment {
     ceiling: EnrollmentCeiling,
 }
 
-pub(crate) struct AttachedRoom {
+pub(crate) struct AttachedRoom(Box<AttachedRoomState>);
+
+struct AttachedRoomState {
     reserved: ReservedRoom,
     binding: SelectionBinding,
     frames: terminal_frames::Binding,
@@ -380,12 +393,12 @@ impl ReadyEnrollment {
             role: terminal_frames::Role::Writer,
         };
         self.authority().begin_attachment_at(frames, ceiling)?;
-        Ok(AttachedRoom {
+        Ok(AttachedRoom(Box::new(AttachedRoomState {
             reserved: self.enrollment.reserved,
             binding: self.binding,
             frames,
             ceiling,
-        })
+        })))
     }
 
     #[cfg(test)]
@@ -418,24 +431,27 @@ impl ReadyEnrollment {
 
 impl AttachedRoom {
     pub(crate) fn binding(&self) -> &SelectionBinding {
-        &self.binding
+        &self.0.binding
     }
 
     pub(crate) fn frame_binding(&self) -> terminal_frames::Binding {
-        self.frames
+        self.0.frames
     }
 
     pub(crate) async fn check_live(&self) -> Result<()> {
-        let owner = self.reserved.owner();
+        let owner = self.0.reserved.owner();
         let result = async {
-            self.ceiling.check()?;
-            owner.alias_adapter.authority.permits_frames(self.frames)?;
-            if owner.ready().await? != self.binding.transcript
-                || owner.room.witness()? != self.binding.native
+            self.0.ceiling.check()?;
+            owner
+                .alias_adapter
+                .authority
+                .permits_frames(self.0.frames)?;
+            if owner.ready().await? != self.0.binding.transcript
+                || owner.room.witness()? != self.0.binding.native
             {
                 return Err(BINDING);
             }
-            self.ceiling.check()
+            self.0.ceiling.check()
         }
         .await;
         if result.is_err() {
@@ -447,34 +463,91 @@ impl AttachedRoom {
     pub(crate) async fn send_frame(&mut self, bytes: Vec<u8>) -> Result<()> {
         self.check_live().await?;
         let result = self
+            .0
             .reserved
             .owner_mut()
-            .send_frame(self.frames, bytes)
+            .send_frame(self.0.frames, bytes)
             .await;
         if result.is_err() {
-            self.reserved.owner().alias_adapter.authority.retire();
+            self.0.reserved.owner().alias_adapter.authority.retire();
         }
         result?;
         self.check_live().await
     }
 
+    #[cfg(test)]
     pub(crate) async fn receive_frame(&mut self) -> Result<App> {
         self.check_live().await?;
-        let result = self.reserved.owner_mut().receive_frame(self.frames).await;
+        let result = self
+            .0
+            .reserved
+            .owner_mut()
+            .receive_frame(self.0.frames)
+            .await;
         if result.is_err() {
-            self.reserved.owner().alias_adapter.authority.retire();
+            self.0.reserved.owner().alias_adapter.authority.retire();
         }
         let app = result?;
-        if app.sender_leaf_index != self.binding.native.peer_leaf {
-            self.reserved.owner().alias_adapter.authority.retire();
+        if app.sender_leaf_index != self.0.binding.native.peer_leaf {
+            self.0.reserved.owner().alias_adapter.authority.retire();
             return Err(BINDING);
         }
         self.check_live().await?;
         Ok(app)
     }
 
+    pub(crate) async fn try_receive_frame(
+        &mut self,
+    ) -> Result<Option<(terminal_frames::Admitted, Duration)>> {
+        self.check_live().await?;
+        let result = async {
+            let Some(app) = self
+                .0
+                .reserved
+                .owner_mut()
+                .room
+                .receive_queued_app()
+                .await?
+            else {
+                return Ok(None);
+            };
+            let clock = Sample::read()?;
+            if app.sender_leaf_index != self.0.binding.native.peer_leaf {
+                return Err(BINDING);
+            }
+            let direction = match self.0.binding.direction {
+                CommandDirection::Client => terminal_frames::Direction::FromServer,
+                CommandDirection::Server => terminal_frames::Direction::ToServer,
+            };
+            let arrival = terminal_frames::Arrival {
+                retention: Some(app.retention),
+                wall: Some(clock.wall.as_secs()),
+                monotonic: Some(clock.tick),
+            };
+            let received = terminal_frames::decode_app(
+                &app.bytes,
+                &self.0.binding.peer_terminal,
+                self.0.frames,
+                direction,
+                arrival,
+            )
+            .ok_or(ORDER)?;
+            self.check_live().await?;
+            Ok(Some((received, clock.tick)))
+        }
+        .await;
+        if result.is_err() {
+            self.0.reserved.owner().alias_adapter.authority.retire();
+        }
+        result
+    }
+
+    pub(crate) fn ceiling(&self) -> EnrollmentCeiling {
+        self.0.ceiling
+    }
+
     pub(crate) async fn close(self) -> Result<()> {
-        self.reserved.close().await
+        self.0.reserved.close().await
     }
 }
 
@@ -490,6 +563,7 @@ impl Carrier {
         Ok(TransportEndpoint(policy.urls()[0].to_string()))
     }
 
+    #[cfg(test)]
     pub(super) async fn open(
         self,
         signing: BoundSigning,
@@ -497,12 +571,29 @@ impl Carrier {
         connector: RelayConnector,
         deadline: Instant,
     ) -> Result<Bootstrap> {
+        self.open_inner(signing, codec, connector, deadline, None)
+            .await
+    }
+
+    pub(super) async fn open_inner(
+        self,
+        signing: BoundSigning,
+        codec: Codec,
+        connector: RelayConnector,
+        deadline: Instant,
+        scope: Option<CarrierScope>,
+    ) -> Result<Bootstrap> {
         signing.check_context(&self.context, &codec)?;
         let endpoint = self.verify_scope(&connector)?;
         let authority = Authority::from_fence(
             self.fence.clone(),
             deadline.min(Instant::now() + BOOTSTRAP_TIMEOUT),
+            scope.as_ref().map(|scope| scope.reapers.clone()),
+            scope.as_ref().and_then(|scope| scope.local_closed.clone()),
         )?;
+        if let Some(scope) = scope {
+            authority.install_grant(scope.grant)?;
+        }
         let keys = Arc::new(codec.inbound_alias());
         let mut lane = Lane::open_verified(connector, endpoint, keys, authority, 64 * 1024).await?;
         if let Err(error) = lane.activate_inbox().await {
@@ -521,6 +612,7 @@ impl Carrier {
             signing,
             lane,
             client_start: None,
+            probe_started: None,
         })
     }
 }
@@ -564,20 +656,41 @@ impl Bootstrap {
         self.lane.adapter.authority.wait_live().await?;
         self.exchange.start_bound(&self.signing, current()?.0)?;
         self.lane.begin_active_bootstrap();
+        self.probe_started = Some(Instant::now());
         self.send(Step::Probe).await
     }
 
     pub(super) async fn retry_probe(&mut self) -> Result<()> {
-        self.send(Step::Probe).await
+        self.lane.adapter.authority.wait_live().await?;
+        let frame = self
+            .exchange
+            .rewrap_probe_bound(&self.signing, current()?.0)?;
+        self.lane.publish_alias(&frame).await
     }
 
     pub(super) async fn finish_client(&mut self) -> Result<()> {
-        let expected = timeout_at(
-            Instant::now() + CHALLENGE_TIMEOUT,
-            self.next(|_, _, _| Err(ORDER)),
-        )
-        .await
-        .map_err(|_| Error::Timeout)??;
+        let began = self.probe_started.take().ok_or(ORDER)?;
+        let mut retries = PROBE_RETRIES.into_iter().peekable();
+        let expected = loop {
+            let retry = retries.peek().map(|delay| began + *delay);
+            match self.next_until(retry, |_, _, _| Err(ORDER)).await {
+                Ok(Some(advance)) => break advance,
+                Ok(None) if retries.next().is_some() => {
+                    // A native placement or publication can pass more than
+                    // one cadence point. Never replay a burst of missed sends.
+                    self.retry_probe().await?;
+                    while retries
+                        .peek()
+                        .is_some_and(|delay| began + *delay <= Instant::now())
+                    {
+                        retries.next();
+                    }
+                }
+                Ok(None) => return Err(ORDER),
+                Err(Error::Timeout) => return Err(NO_CHALLENGE),
+                Err(error) => return Err(error),
+            }
+        };
         if expected != Advance::Send(Step::Confirm) {
             return Err(ORDER);
         }
@@ -617,13 +730,14 @@ impl Bootstrap {
         if self.carrier.context.direction() != CommandDirection::Server {
             return Err(BINDING);
         }
+        self.lane.discard_stored_alias_inbox()?;
         let first = self
             .next(|step, id, sample| {
                 if step != Step::Probe {
                     return Err(ORDER);
                 }
-                state.clock.check(sample)?;
-                state.consumed.charge(id, sample.tick)
+                permitted(grant.as_ref())?;
+                state.charge(id, sample)
             })
             .await?;
         if first != Advance::Send(Step::Challenge) {
@@ -641,7 +755,7 @@ impl Bootstrap {
                 if step == Step::Probe {
                     return Ok(false);
                 }
-                state.clock.check(sample)?;
+                state.check(sample)?;
                 permitted(grant.as_ref())?;
                 authority.install_grant(grant.clone())?;
                 match rooms.clone().try_acquire_owned() {
@@ -670,13 +784,26 @@ impl Bootstrap {
 
     async fn next(
         &mut self,
-        mut gate: impl FnMut(Step, [u8; 32], Sample) -> Result<bool>,
+        gate: impl FnMut(Step, [u8; 32], Sample) -> Result<bool>,
     ) -> Result<Advance> {
+        self.next_until(None, gate).await?.ok_or(ORDER)
+    }
+
+    async fn next_until(
+        &mut self,
+        retry: Option<Instant>,
+        mut gate: impl FnMut(Step, [u8; 32], Sample) -> Result<bool>,
+    ) -> Result<Option<Advance>> {
         loop {
-            let delivery = self
+            let delivery = match self
                 .lane
-                .receive(TransportDeliveryPlane::AccountInbox, None, BOOTSTRAP_OUTER)
-                .await?;
+                .receive_inbox_until(BOOTSTRAP_OUTER, retry)
+                .await?
+            {
+                Read::Delivery(delivery) => delivery,
+                Read::Tick => return Ok(None),
+                Read::Empty => return Err(ORDER),
+            };
             self.lane.acknowledge(&delivery.message.id).await;
             self.lane.adapter.authority.wait_live().await?;
             let (now, sample) = current()?;
@@ -706,7 +833,7 @@ impl Bootstrap {
             if let Ok(advance) = advanced
                 && advance != Advance::Duplicate
             {
-                return Ok(advance);
+                return Ok(Some(advance));
             }
         }
     }

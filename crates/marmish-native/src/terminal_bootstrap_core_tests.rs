@@ -117,6 +117,61 @@ fn finish_exchange(fixture: &Fixture, client: Codec, server: Codec, time: Time, 
 }
 
 #[test]
+fn probe_rewrap_keeps_one_authenticated_rumor_and_admission() {
+    let fixture = Fixture::new();
+    let (codec, receiver) = fixture.codecs(b"Probe retry");
+    let signer = BoundSigning::from_codec(&codec, Arc::new(fixture.client.clone())).unwrap();
+    let server_signer =
+        BoundSigning::from_codec(&receiver, Arc::new(fixture.server.clone())).unwrap();
+    let began = clock();
+    let late = Time {
+        unix: NOW + 18,
+        monotonic: began.monotonic + Duration::from_secs(18),
+        ..began
+    };
+    let mut client = Exchange::new(codec);
+    client.start_bound(&signer, began).unwrap();
+    let first = client
+        .retry(Step::Probe, began, true)
+        .unwrap()
+        .frame
+        .clone();
+    assert!(client.rewrap_probe_bound(&server_signer, late).is_err());
+    let retry = client.rewrap_probe_bound(&signer, late).unwrap();
+    let outer = |frame: &[u8]| serde_json::from_slice::<Event>(frame).unwrap().id;
+    assert_ne!(outer(&first), outer(&retry));
+    let opened = receiver.open(&first, late.unix).unwrap();
+    let reopened = receiver.open(&retry, late.unix).unwrap();
+    assert_eq!(opened.id, reopened.id);
+    assert!(opened.body == reopened.body);
+    let mut server = Exchange::new(receiver);
+    let mut charges = 0;
+    for (frame, expected) in [
+        (&first, Advance::Send(Step::Challenge)),
+        (&retry, Advance::Duplicate),
+    ] {
+        let verdict = server
+            .receive_bound(&server_signer, frame, late, |step, id| {
+                assert_eq!(step, Step::Probe);
+                assert_eq!(id, opened.id);
+                charges += 1;
+                Ok(true)
+            })
+            .unwrap();
+        assert_eq!(verdict, expected);
+    }
+    assert_eq!(charges, 1);
+    let challenge = &server.retry(Step::Challenge, late, true).unwrap().frame;
+    assert_eq!(
+        client
+            .receive_bound(&signer, challenge, late, |_, _| unreachable!())
+            .unwrap(),
+        Advance::Send(Step::Confirm)
+    );
+    assert!(client.rewrap_probe_bound(&signer, late).is_err());
+}
+
+#[test]
 fn signed_exchange_binds_current_command_room() {
     let fixture = Fixture::new();
     let (client, server) = fixture.codecs(b"one Command room");
@@ -365,10 +420,14 @@ fn unlinked_skipped_restarted_and_revoked_exchanges_never_confirm() {
         Advance::Duplicate
     );
     let second_probe = send(Body::Probe { client: [9; 16] });
-    assert!(matches!(
-        server.receive(&fixture.server, &second_probe.frame, time, true),
-        Err(Error::Invalid("terminal_bootstrap_rate"))
-    ));
+    assert_eq!(
+        server
+            .receive_checked(&fixture.server, &second_probe.frame, time, true, |_, _| {
+                panic!("competing Probe must not reach the owner gate")
+            })
+            .unwrap(),
+        Advance::Duplicate
+    );
     let response = &server.retry(Step::Challenge, time, true).unwrap().frame;
     let challenge = client_codec.open(response, NOW).unwrap();
     let Body::Challenge { pair, .. } = challenge.body else {
@@ -432,10 +491,15 @@ fn unlinked_skipped_restarted_and_revoked_exchanges_never_confirm() {
             .is_err()
     );
     assert!(server.confirmed(expired, true).is_err());
-    assert!(matches!(
-        server.receive(&fixture.server, &probe.frame, expired, true),
-        Err(Error::Invalid("terminal_bootstrap_rate"))
-    ));
+    assert_eq!(
+        server
+            .receive_checked(&fixture.server, &probe.frame, expired, true, |_, id| {
+                assert_eq!(id, probe.id);
+                Ok(false)
+            })
+            .unwrap(),
+        Advance::Duplicate
+    );
 
     assert!(matches!(
         restarted.retry(Step::Challenge, time, false),

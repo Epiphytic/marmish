@@ -14,6 +14,44 @@ fn context(id: u8) -> AuthenticatedCommandContext {
 }
 
 #[test]
+fn terminal_runtime_core_listener_pass_is_bounded_and_reaches_later_rooms() {
+    let per_peer = |peers: u8| {
+        (0..peers)
+            .map(|peer| {
+                (
+                    [peer; 32],
+                    VecDeque::from([context(peer), context(peer + peers)]),
+                )
+            })
+            .collect()
+    };
+    let groups = |selected: Vec<AuthenticatedCommandContext>| {
+        selected
+            .into_iter()
+            .map(|context| context.mls_group()[0])
+            .collect::<Vec<_>>()
+    };
+    let now = Instant::now();
+    let mut schedule = ListenerSchedule::default();
+    assert_eq!(
+        groups(schedule.select(per_peer(32), now)),
+        (0..32).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        groups(schedule.select(per_peer(32), now + LISTENER_PASS - Duration::from_millis(1))),
+        (0..32).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        groups(schedule.select(per_peer(32), now + LISTENER_PASS)),
+        (32..64).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        groups(schedule.select(per_peer(2), now + LISTENER_PASS)),
+        [0, 1, 2, 3]
+    );
+}
+
+#[test]
 fn terminal_command_authority_core_bounds_and_never_reuses_generation() {
     let mut authority = Authority::default();
     assert!(authority.stage(None).entries.is_empty());

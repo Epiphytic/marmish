@@ -49,6 +49,22 @@ impl Filter {
         matches!(self.state, State::Ground)
     }
 
+    /// Reject records that end inside a control or would change on display.
+    pub(super) fn validate_batch(bytes: &[u8]) -> Result<()> {
+        let mut filter = Self::default();
+        let mut rest = bytes;
+        for &byte in bytes {
+            if let Some(unit) = filter.push(byte)? {
+                rest = rest.strip_prefix(unit.bytes()).ok_or(POLICY)?;
+            }
+        }
+        if filter.is_ground() && rest.is_empty() {
+            Ok(())
+        } else {
+            Err(POLICY)
+        }
+    }
+
     /// The frontend calls this only for elapsed time when it can consume data.
     pub(super) fn advance(&mut self, elapsed: Duration) -> Result<()> {
         if self.is_ground() {

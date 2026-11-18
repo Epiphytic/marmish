@@ -7,7 +7,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::sync::{
     Arc, Mutex, MutexGuard, TryLockError,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU32, Ordering},
     mpsc,
 };
 use std::time::{Duration, Instant};
@@ -16,6 +16,7 @@ use tokio::sync::{Notify, oneshot};
 pub(super) const BYTES: usize = 4096;
 const BATCH: Duration = Duration::from_millis(8);
 const HEALTH: Duration = Duration::from_millis(10);
+const MIRROR_BUDGET: Duration = Duration::from_millis(250);
 const STALL: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
@@ -93,23 +94,138 @@ pub(super) enum Event {
     Closed(Reason),
 }
 
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "only Observe selects current writer geometry")
+)]
+pub(super) enum GeometryHint {
+    Size((u16, u16)),
+    Withheld,
+    Unavailable,
+}
+
 pub(super) struct Port {
     pub source: Arc<Source>,
     wake: Wake,
+    writer: Option<WriterLink>,
+    geometry: AtomicU32,
     changed: Notify,
     event_retry: AtomicBool,
+    writer_event_waiting: AtomicBool,
     buffer: Mutex<Buffer>,
+}
+
+struct WriterLink {
+    port: Arc<Port>,
+    claim: Claim,
 }
 
 impl Port {
     pub(super) fn new(source: Arc<Source>, wake: Wake) -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new(Self::with_writer(source, wake, None))
+    }
+
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "native observer installation follows writer-only activation"
+        )
+    )]
+    pub(super) fn observer(
+        source: Arc<Source>,
+        wake: Wake,
+        writer: &Arc<Port>,
+        writer_claim: Claim,
+    ) -> Arc<Self> {
+        Arc::new(Self::with_writer(
             source,
             wake,
+            Some(WriterLink {
+                port: Arc::clone(writer),
+                claim: writer_claim,
+            }),
+        ))
+    }
+
+    fn with_writer(source: Arc<Source>, wake: Wake, writer: Option<WriterLink>) -> Self {
+        Self {
+            source,
+            wake,
+            writer,
+            geometry: AtomicU32::new(0),
             changed: Notify::new(),
             event_retry: AtomicBool::new(false),
+            writer_event_waiting: AtomicBool::new(false),
             buffer: Mutex::default(),
-        })
+        }
+    }
+
+    fn geometry(&self) -> Option<(u16, u16)> {
+        let packed = self.geometry.load(Ordering::Acquire);
+        let (rows, cols) = ((packed >> 16) as u16, packed as u16);
+        super::valid_size(rows, cols).then_some((rows, cols))
+    }
+
+    fn publish_geometry(&self, (rows, cols): (u16, u16)) {
+        self.geometry
+            .store((u32::from(rows) << 16) | u32::from(cols), Ordering::Release);
+    }
+
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "geometry is queried during observer admission")
+    )]
+    pub(super) fn checked_geometry(&self, claim: Claim, deadline: Duration) -> GeometryHint {
+        if self.writer.is_some() {
+            return GeometryHint::Unavailable;
+        }
+        match self
+            .source
+            .with_effect(claim, Duration::MAX, guard::sample, || {
+                if guard::sample()?.continuous >= deadline {
+                    return None;
+                }
+                self.geometry()
+            }) {
+            GuardResult::Applied(Some(size)) => GeometryHint::Size(size),
+            GuardResult::Withheld => GeometryHint::Withheld,
+            GuardResult::Applied(None) | GuardResult::Retired(_) => GeometryHint::Unavailable,
+        }
+    }
+
+    pub(super) fn writer_live(&self) -> GuardResult<()> {
+        let Some(writer) = &self.writer else {
+            return GuardResult::Applied(());
+        };
+        match writer.port.source.check() {
+            GuardResult::Applied(()) => (),
+            GuardResult::Withheld => return GuardResult::Withheld,
+            GuardResult::Retired(_) => return GuardResult::Retired(Reason::Authority),
+        }
+        match writer.port.source.health(writer.claim, guard::sample) {
+            GuardResult::Applied(_)
+                if self
+                    .geometry()
+                    .is_some_and(|size| writer.port.geometry() == Some(size)) =>
+            {
+                if self.writer_event_waiting.swap(false, Ordering::AcqRel) {
+                    self.changed.notify_one();
+                }
+                GuardResult::Applied(())
+            }
+            GuardResult::Applied(_) | GuardResult::Withheld => GuardResult::Withheld,
+            GuardResult::Retired(_) => GuardResult::Retired(Reason::Authority),
+        }
+    }
+
+    fn health(&self, claim: Claim) -> GuardResult<Option<Duration>> {
+        match self.writer_live() {
+            GuardResult::Applied(()) => self.source.health(claim, guard::sample),
+            GuardResult::Withheld => GuardResult::Withheld,
+            GuardResult::Retired(reason) => GuardResult::Retired(reason),
+        }
     }
 
     fn lock(&self) -> Option<MutexGuard<'_, Buffer>> {
@@ -124,6 +240,9 @@ impl Port {
     }
 
     pub(super) fn push(&self, operation: Operation) -> Result<(), PushError> {
+        if self.writer.is_some() {
+            return Err(PushError::Closed(Reason::Authority));
+        }
         let Some(mut buffer) = self.lock() else {
             return Err(match self.source.reason() {
                 Some(reason) => PushError::Closed(reason),
@@ -143,10 +262,21 @@ impl Port {
         Ok(())
     }
 
-    pub(super) fn event(&self) -> Option<Event> {
+    pub(super) fn event(&self, allow_output: bool) -> Option<Event> {
         let reason = self.source.reason();
         if let Some(reason) = reason.filter(|reason| *reason != Reason::ShellExit) {
             return Some(Event::Closed(reason));
+        }
+        if self.writer.is_some() {
+            match self.writer_live() {
+                GuardResult::Retired(_) => return Some(Event::Closed(Reason::Authority)),
+                GuardResult::Withheld => {
+                    self.writer_event_waiting.store(true, Ordering::Release);
+                    self.wake.notify();
+                    return None;
+                }
+                GuardResult::Applied(()) => (),
+            }
         }
         let Some(mut buffer) = self.lock() else {
             // The one consumer may already have consumed the producer's
@@ -158,10 +288,16 @@ impl Port {
         let event = if let Some(complete) = buffer.complete.take() {
             buffer.in_flight = false;
             Some(Event::Complete(complete))
-        } else if let Some(output) = buffer.output.take() {
-            Some(Event::Output(output.bytes))
-        } else {
+        } else if allow_output {
+            buffer
+                .output
+                .take()
+                .map(|output| Event::Output(output.bytes))
+                .or_else(|| reason.map(Event::Closed))
+        } else if buffer.output.is_none() {
             reason.map(Event::Closed)
+        } else {
+            None
         };
         drop(buffer);
         if event.is_some() {
@@ -175,6 +311,7 @@ impl Port {
         self.lock().is_some_and(|buffer| buffer.output.is_some())
     }
 
+    #[cfg(test)]
     pub(super) async fn changed(&self) {
         if self.event_retry.load(Ordering::Acquire) {
             tokio::task::yield_now().await;
@@ -198,6 +335,58 @@ pub(super) struct Native {
     pub attachment: Attachment,
 }
 
+impl Native {
+    fn watches(&self, slot: SlotId, port: &Arc<Port>, claim: Claim) -> bool {
+        self.slot == slot
+            && self
+                .port
+                .writer
+                .as_ref()
+                .is_some_and(|link| link.claim == claim && Arc::ptr_eq(&link.port, port))
+    }
+
+    fn apply_writer_geometry(&mut self, deadline: Duration) -> GuardResult<Result<(), Reason>> {
+        let Some(writer) = self.port.writer.as_ref() else {
+            return GuardResult::Retired(Reason::Authority);
+        };
+        let source = &self.port.source;
+        match source.health(self.claim, guard::sample) {
+            GuardResult::Applied(_) => (),
+            GuardResult::Withheld => return GuardResult::Withheld,
+            GuardResult::Retired(reason) => return GuardResult::Retired(reason),
+        }
+        match source.check() {
+            GuardResult::Applied(()) => (),
+            GuardResult::Withheld => return GuardResult::Withheld,
+            GuardResult::Retired(reason) => return GuardResult::Retired(reason),
+        }
+        // This guard belongs to the writer. An observer's shorter deadline
+        // must never retire that source.
+        writer
+            .port
+            .source
+            .with_effect(writer.claim, Duration::MAX, guard::sample, || {
+                if guard::sample().ok_or(Reason::Clock)?.continuous >= deadline {
+                    return Err(Reason::Deadline);
+                }
+                if let Some(reason) = source.reason() {
+                    return Err(reason);
+                }
+                let (rows, cols) = writer.port.geometry().ok_or(Reason::Io)?;
+                self.attachment
+                    .mirror_geometry(self.claim.generation, rows, cols)
+                    .map_err(|_| Reason::Io)?;
+                self.port.publish_geometry((rows, cols));
+                Ok(())
+            })
+    }
+
+    fn retire_terminal(&mut self, reason: Reason) {
+        self.port.close(reason);
+        self.attachment.master.take();
+    }
+}
+
 pub(super) struct Installing {
     pub native: Native,
     pub deadline: Duration,
@@ -213,6 +402,12 @@ struct Session {
     next: Duration,
     interests: libc::c_short,
     retry_write: Duration,
+    mirror: Option<MirrorWait>,
+}
+
+struct MirrorWait {
+    deadline: Duration,
+    retry: Duration,
 }
 
 impl Drop for Session {
@@ -234,16 +429,55 @@ impl Session {
             next: Duration::ZERO,
             interests: libc::POLLIN,
             retry_write: Duration::ZERO,
+            mirror: None,
         }
     }
 
+    fn catch_up_geometry(&mut self, now: Duration) -> Option<Reason> {
+        let native = self.native.as_mut()?;
+        let writer = native.port.writer.as_ref()?;
+        if native.port.geometry() == writer.port.geometry() {
+            self.mirror = None;
+            return None;
+        }
+        let Some(deadline) = now.checked_add(MIRROR_BUDGET) else {
+            return Some(Reason::Clock);
+        };
+        let wait = self.mirror.get_or_insert(MirrorWait {
+            deadline,
+            retry: now,
+        });
+        if now >= wait.deadline {
+            return Some(Reason::Deadline);
+        }
+        if now < wait.retry {
+            return None;
+        }
+        match native.apply_writer_geometry(wait.deadline) {
+            GuardResult::Applied(Ok(())) => self.mirror = None,
+            GuardResult::Withheld => {
+                wait.retry = now.checked_add(HEALTH).unwrap_or(wait.deadline);
+            }
+            GuardResult::Applied(Err(reason)) | GuardResult::Retired(reason) => {
+                return Some(reason);
+            }
+        }
+        None
+    }
+
     fn next_poll(&mut self, at: Sample) -> Option<Reason> {
+        if let Some(reason) = self.catch_up_geometry(at.continuous) {
+            return Some(reason);
+        }
         let native = self.native.as_ref()?;
         let port = &native.port;
         let Some(mut next) = at.continuous.checked_add(HEALTH) else {
             return Some(Reason::Clock);
         };
-        match port.source.health(native.claim, guard::sample) {
+        if let Some(wait) = &self.mirror {
+            next = next.min(wait.retry).min(wait.deadline);
+        }
+        match port.health(native.claim) {
             GuardResult::Applied(Some(deadline)) => next = next.min(deadline),
             GuardResult::Retired(reason) => return Some(reason),
             GuardResult::Withheld => {
@@ -334,7 +568,7 @@ impl Session {
             Some(Ok(exited)) => exited,
             _ => return Some(Reason::Io),
         };
-        let may_read = match native.port.source.health(native.claim, guard::sample) {
+        let may_read = match native.port.health(native.claim) {
             GuardResult::Retired(reason) => return Some(reason),
             GuardResult::Withheld => false,
             GuardResult::Applied(_) => true,
@@ -367,7 +601,7 @@ impl Session {
                     if stopping.load(Ordering::Acquire) {
                         return Err(Reason::OwnerLost);
                     }
-                    apply(&mut native.attachment, native.claim, pending)
+                    apply(&mut native.attachment, &native.port, native.claim, pending)
                 },
             ) {
                 GuardResult::Applied(Ok(Some(complete))) => {
@@ -412,14 +646,14 @@ impl Session {
                 });
             }
         }
-        native.port.close(reason);
-        drop(native.attachment.master.take());
+        native.retire_terminal(reason);
         Some(native)
     }
 }
 
 fn apply(
     attachment: &mut Attachment,
+    port: &Port,
     claim: Claim,
     operation: &mut Operation,
 ) -> Result<Option<Completion>, Reason> {
@@ -428,6 +662,7 @@ fn apply(
             attachment
                 .resize(claim.generation, *rows, *cols)
                 .map_err(|_| Reason::Io)?;
+            port.publish_geometry((*rows, *cols));
             Ok(Some(Completion::Resized(operation.sequence)))
         }
         Input::Bytes(bytes) => match attachment.write(claim.generation, &bytes[operation.offset..])
@@ -455,6 +690,14 @@ pub(super) fn run(
     let mut sessions = Vec::<Session>::with_capacity(MAX_LIVE);
     loop {
         if stopping.load(Ordering::Acquire) {
+            for native in sessions
+                .iter_mut()
+                .filter_map(|session| session.native.as_mut())
+            {
+                if native.port.writer.is_some() {
+                    native.retire_terminal(Reason::OwnerLost);
+                }
+            }
             for session in sessions.drain(..) {
                 send_retiring(&reaping, session, Reason::OwnerLost);
             }
@@ -474,7 +717,7 @@ pub(super) fn run(
         while pos < sessions.len() {
             let reason = at.map_or(Some(Reason::Clock), |at| sessions[pos].next_poll(at));
             if let Some(reason) = reason {
-                send_retiring(&reaping, sessions.remove(pos), reason);
+                retire_at(&mut sessions, pos, &reaping, reason);
             } else {
                 pos += 1;
             }
@@ -506,13 +749,95 @@ pub(super) fn run(
             }
         }
         for (pos, event) in events[1..1 + sessions.len()].iter().enumerate().rev() {
+            let previous = sessions[pos]
+                .native
+                .as_ref()
+                .and_then(|native| native.port.geometry());
             if let Some(reason) = sessions[pos].ready(event.revents, stopping) {
-                send_retiring(&reaping, sessions.remove(pos), reason);
+                retire_at(&mut sessions, pos, &reaping, reason);
+            } else if let Some(native) = &sessions[pos].native
+                && native.port.geometry() != previous
+            {
+                mirror_resize(&mut sessions, pos);
             }
         }
         if !sessions.is_empty() {
             sessions.rotate_right(1);
         }
+    }
+}
+
+fn mirror_resize(sessions: &mut [Session], writer_index: usize) {
+    let Some(writer) = sessions[writer_index].native.as_ref() else {
+        return;
+    };
+    let (slot, port, claim) = (writer.slot, Arc::clone(&writer.port), writer.claim);
+    let at = guard::sample();
+    for session in sessions {
+        if session
+            .native
+            .as_ref()
+            .is_some_and(|native| native.watches(slot, &port, claim))
+            && let Some(reason) = at.map_or(Some(Reason::Clock), |at| {
+                session.catch_up_geometry(at.continuous)
+            })
+            && let Some(observer) = session.native.as_mut()
+        {
+            observer.retire_terminal(reason);
+        }
+    }
+}
+
+fn retire_at(
+    sessions: &mut Vec<Session>,
+    index: usize,
+    reaping: &mpsc::SyncSender<Native>,
+    reason: Reason,
+) {
+    let retiring = sessions.remove(index);
+    if let Some(writer) = retiring.native.as_ref() {
+        for observer in sessions
+            .iter_mut()
+            .filter_map(|session| session.native.as_mut())
+        {
+            if observer.watches(writer.slot, &writer.port, writer.claim) {
+                observer.retire_terminal(Reason::Authority);
+            }
+        }
+    }
+    send_retiring(reaping, retiring, reason);
+}
+
+fn prepare_geometry(
+    native: &mut Native,
+    deadline: Duration,
+    sessions: &[Session],
+) -> Result<(), Reason> {
+    match (&native.port.writer, native.attachment.role) {
+        (Some(link), backend::Role::Observer)
+            if sessions
+                .iter()
+                .filter_map(|session| session.native.as_ref())
+                .any(|writer| {
+                    writer.slot == native.slot
+                        && writer.claim == link.claim
+                        && Arc::ptr_eq(&writer.port, &link.port)
+                        && writer.attachment.role == backend::Role::Writer
+                }) =>
+        {
+            match native.apply_writer_geometry(deadline) {
+                GuardResult::Applied(result) => result,
+                GuardResult::Withheld => Err(Reason::Authority),
+                GuardResult::Retired(reason) => Err(reason),
+            }
+        }
+        (None, backend::Role::Writer) => {
+            if let Ok(size) = native.attachment.geometry() {
+                native.port.publish_geometry(size);
+            }
+            Ok(())
+        }
+        _ => Err(Reason::Authority),
     }
 }
 
@@ -523,7 +848,7 @@ fn install_one(
     stopping: &AtomicBool,
 ) {
     let Installing {
-        native,
+        mut native,
         deadline,
         reply,
     } = request;
@@ -533,7 +858,7 @@ fn install_one(
         Some(at) if at.continuous >= deadline || reply.is_closed() => Some(Reason::Deadline),
         Some(_) if sessions.len() == MAX_LIVE => Some(Reason::OwnerLost),
         Some(at) => match native.port.source.install(native.claim, at) {
-            GuardResult::Applied(()) => None,
+            GuardResult::Applied(()) => prepare_geometry(&mut native, deadline, sessions).err(),
             GuardResult::Withheld => Some(Reason::Authority),
             GuardResult::Retired(reason) => Some(reason),
         },
@@ -560,6 +885,7 @@ fn install_one(
         slot: native.slot,
         claim: native.claim,
         port: Arc::clone(&native.port),
+        #[cfg(test)]
         closed_reported: false,
     };
     sessions.push(Session::new(native));
@@ -614,6 +940,343 @@ mod tests {
         Session::new(native)
     }
 
+    fn pty_native(rows: u16, cols: u16) -> (Native, File) {
+        // SAFETY: geteuid only reads process identity.
+        let (master, slave) = backend::os::pty(unsafe { libc::geteuid() }).unwrap();
+        backend::os::resize(master.as_raw_fd(), rows, cols).unwrap();
+        (native(master, None), slave)
+    }
+
+    fn pty_observer(writer: &Arc<Port>, claim: Claim) -> (Native, File) {
+        let (mut observer, slave) = pty_native(34, 110);
+        observer.claim = Claim {
+            random: [9; 16],
+            generation: 2,
+        };
+        observer
+            .attachment
+            .supersede(observer.claim.generation)
+            .unwrap();
+        observer.attachment.role = backend::Role::Observer;
+        observer.port = Port::observer(
+            Arc::clone(&observer.port.source),
+            observer.port.wake.clone(),
+            writer,
+            claim,
+        );
+        (observer, slave)
+    }
+
+    fn install_for_test(
+        sessions: &mut Vec<Session>,
+        reaping: &mpsc::SyncSender<Native>,
+        native: Native,
+    ) -> StartOutcome {
+        let (reply, mut result) = oneshot::channel();
+        install_one(
+            sessions,
+            reaping,
+            Installing {
+                native,
+                deadline: guard::sample().unwrap().continuous + Duration::from_secs(3),
+                reply,
+            },
+            &AtomicBool::new(false),
+        );
+        result.try_recv().unwrap()
+    }
+
+    #[test]
+    fn core_tests_terminal_live_observer_geometry_and_retirement() {
+        let (writer, _writer_slave) = pty_native(34, 110);
+        let writer_port = Arc::clone(&writer.port);
+        let writer_claim = writer.claim;
+        let (reaping, returned) = mpsc::sync_channel(MAX_LIVE);
+        let mut sessions = Vec::new();
+        let StartOutcome::Attached(_writer) = install_for_test(&mut sessions, &reaping, writer)
+        else {
+            panic!("writer installation failed")
+        };
+        let until = guard::sample().unwrap().continuous + Duration::from_secs(4);
+        assert_eq!(
+            writer_port.checked_geometry(writer_claim, until),
+            GeometryHint::Size((34, 110))
+        );
+        let writer = sessions[0].native.as_mut().unwrap();
+        assert!(matches!(
+            writer
+                .attachment
+                .mirror_geometry(writer_claim.generation, 13, 43),
+            Err(crate::Error::Invalid("terminal_attachment_read_only"))
+        ));
+
+        let (observer, _observer_slave) = pty_observer(&writer_port, writer_claim);
+        let observer_port = Arc::clone(&observer.port);
+
+        resize_for_test(&mut sessions, 1, until, 42, 126);
+        assert_eq!(
+            writer_port.checked_geometry(writer_claim, until),
+            GeometryHint::Size((42, 126))
+        );
+        assert_eq!(observer.attachment.geometry().unwrap(), (34, 110));
+        let StartOutcome::Attached(_observer) = install_for_test(&mut sessions, &reaping, observer)
+        else {
+            panic!("observer installation failed")
+        };
+        let observer = sessions[1].native.as_mut().unwrap();
+        assert_eq!(observer.attachment.geometry().unwrap(), (42, 126));
+        assert!(matches!(
+            observer
+                .attachment
+                .mirror_geometry(writer_claim.generation, 13, 43),
+            Err(crate::Error::Invalid("terminal_attachment_generation"))
+        ));
+        assert!(matches!(
+            observer
+                .attachment
+                .resize(observer.claim.generation, 13, 43),
+            Err(crate::Error::Invalid("terminal_attachment_read_only"))
+        ));
+        assert_eq!(observer.attachment.geometry().unwrap(), (42, 126));
+        assert!(matches!(
+            observer
+                .attachment
+                .write(observer.claim.generation, b"ignored"),
+            Err(crate::Error::Invalid("terminal_attachment_read_only"))
+        ));
+        for input in [Input::Resize { rows: 13, cols: 43 }, Input::Bytes(vec![1])] {
+            assert!(matches!(
+                observer_port.push(Operation::new(1, until, input).unwrap()),
+                Err(PushError::Closed(Reason::Authority))
+            ));
+        }
+
+        resize_for_test(&mut sessions, 2, until, 40, 120);
+        assert_eq!(
+            sessions[1]
+                .native
+                .as_ref()
+                .unwrap()
+                .attachment
+                .geometry()
+                .unwrap(),
+            (40, 120)
+        );
+        retire_at(&mut sessions, 0, &reaping, Reason::ShellExit);
+        assert!(returned.try_recv().unwrap().attachment.master.is_none());
+        assert!(
+            sessions[0]
+                .native
+                .as_ref()
+                .unwrap()
+                .attachment
+                .master
+                .is_none()
+        );
+        assert_eq!(
+            observer_port.event(true),
+            Some(Event::Closed(Reason::Authority))
+        );
+    }
+
+    #[test]
+    fn core_tests_terminal_live_observer_wrong_exact_writer_and_failed_mirror() {
+        let (writer, _writer_slave) = pty_native(34, 110);
+        let writer_port = Arc::clone(&writer.port);
+        let writer_claim = writer.claim;
+        let (reaping, returned) = mpsc::sync_channel(MAX_LIVE);
+        let mut sessions = Vec::new();
+        let StartOutcome::Attached(_writer) = install_for_test(&mut sessions, &reaping, writer)
+        else {
+            panic!("writer installation failed")
+        };
+        let wrong_writer = Port::new(Arc::clone(&writer_port.source), writer_port.wake.clone());
+        let (wrong, _wrong_slave) = pty_observer(&wrong_writer, writer_claim);
+        assert!(matches!(
+            install_for_test(&mut sessions, &reaping, wrong),
+            StartOutcome::Refused(_)
+        ));
+        assert!(returned.try_recv().unwrap().attachment.master.is_none());
+        assert_eq!(sessions.len(), 1);
+
+        let (observer, _observer_slave) = pty_observer(&writer_port, writer_claim);
+        let observer_port = Arc::clone(&observer.port);
+        let StartOutcome::Attached(_observer) = install_for_test(&mut sessions, &reaping, observer)
+        else {
+            panic!("observer installation failed")
+        };
+        drop(
+            sessions[1]
+                .native
+                .as_mut()
+                .unwrap()
+                .attachment
+                .master
+                .take(),
+        );
+        let until = guard::sample().unwrap().continuous + Duration::from_secs(4);
+        resize_for_test(&mut sessions, 1, until, 40, 120);
+        assert_eq!(observer_port.event(true), Some(Event::Closed(Reason::Io)));
+        assert_eq!(
+            writer_port.checked_geometry(writer_claim, until),
+            GeometryHint::Size((40, 120))
+        );
+        assert!(writer_port.source.reason().is_none());
+    }
+
+    #[test]
+    fn core_tests_terminal_live_observer_install_binding_and_cutoff() {
+        let (writer, _writer_slave) = pty_native(34, 110);
+        let writer_port = Arc::clone(&writer.port);
+        let writer_claim = writer.claim;
+        let (reaping, returned) = mpsc::sync_channel(MAX_LIVE);
+        let mut sessions = Vec::new();
+        let StartOutcome::Attached(_writer) = install_for_test(&mut sessions, &reaping, writer)
+        else {
+            panic!("writer installation failed")
+        };
+        let wrong_claim = Claim {
+            generation: writer_claim.generation + 1,
+            ..writer_claim
+        };
+        let (wrong, _wrong_slave) = pty_observer(&writer_port, wrong_claim);
+        let (mut foreign, _foreign_slave) = pty_observer(&writer_port, writer_claim);
+        foreign.slot = SlotId([7; 16]);
+        for observer in [wrong, foreign] {
+            assert!(matches!(
+                install_for_test(&mut sessions, &reaping, observer),
+                StartOutcome::Refused(_)
+            ));
+            assert!(returned.try_recv().unwrap().attachment.master.is_none());
+        }
+        assert_eq!(
+            writer_port.checked_geometry(writer_claim, Duration::ZERO),
+            GeometryHint::Unavailable
+        );
+        let (mut observer, _observer_slave) = pty_observer(&writer_port, writer_claim);
+        let at = guard::sample().unwrap();
+        assert_eq!(
+            observer.port.source.install(observer.claim, at),
+            GuardResult::Applied(())
+        );
+        assert_eq!(
+            prepare_geometry(&mut observer, Duration::ZERO, &sessions),
+            Err(Reason::Deadline)
+        );
+        assert!(writer_port.source.reason().is_none());
+        let observer_claim = observer.claim;
+        let observer_port = Arc::clone(&observer.port);
+        let (chained, _chained_slave) = pty_observer(&observer_port, observer_claim);
+        sessions.push(Session::new(observer));
+        assert!(matches!(
+            install_for_test(&mut sessions, &reaping, chained),
+            StartOutcome::Refused(_)
+        ));
+        assert!(returned.try_recv().unwrap().attachment.master.is_none());
+        writer_port.close(Reason::Detached);
+        let (stale, _stale_slave) = pty_observer(&writer_port, writer_claim);
+        assert!(matches!(
+            install_for_test(&mut sessions, &reaping, stale),
+            StartOutcome::Refused(_)
+        ));
+        assert!(returned.try_recv().unwrap().attachment.master.is_none());
+    }
+
+    #[test]
+    fn core_tests_terminal_live_observer_mirror_retries_and_fences_at_cutoff() {
+        let (mut writer, _writer_slave) = pty_native(34, 110);
+        let (wake, _receiver) = Wake::open().unwrap();
+        let (writer_source, writer_fence) = super::super::tests::source(8);
+        writer.port = Port::new(writer_source, wake.clone());
+        let writer_port = Arc::clone(&writer.port);
+        let writer_claim = writer.claim;
+        let (reaping, _returned) = mpsc::sync_channel(MAX_LIVE);
+        let mut sessions = Vec::new();
+        let StartOutcome::Attached(_writer) = install_for_test(&mut sessions, &reaping, writer)
+        else {
+            panic!("writer installation failed")
+        };
+        let (mut observer, _observer_slave) = pty_observer(&writer_port, writer_claim);
+        let (observer_source, observer_fence) = super::super::tests::source(9);
+        observer.port = Port::observer(observer_source, wake, &writer_port, writer_claim);
+        let observer_port = Arc::clone(&observer.port);
+        let StartOutcome::Attached(_observer) = install_for_test(&mut sessions, &reaping, observer)
+        else {
+            panic!("observer installation failed")
+        };
+        let until = guard::sample().unwrap().continuous + Duration::from_secs(4);
+        let observer_update = observer_fence.begin_update().unwrap();
+        resize_for_test(&mut sessions, 1, until, 42, 126);
+        let deadline = sessions[1].mirror.as_ref().unwrap().deadline;
+        resize_for_test(&mut sessions, 2, until, 40, 120);
+        assert_eq!(sessions[1].mirror.as_ref().unwrap().deadline, deadline);
+        assert_eq!(observer_port.writer_live(), GuardResult::Withheld);
+        let at = guard::sample().unwrap().continuous;
+        observer_port.lock().unwrap().output = Some(Output { bytes: vec![4], at });
+        assert_eq!(observer_port.event(false), None);
+        assert_eq!(observer_port.event(true), None);
+        observer_update.resolve(Some([9; 32]));
+        let retry = sessions[1].mirror.as_ref().unwrap().retry;
+        assert_eq!(sessions[1].catch_up_geometry(retry), None);
+        assert!(sessions[1].mirror.is_none());
+        assert_eq!(observer_port.geometry(), Some((40, 120)));
+        assert_eq!(observer_port.event(false), None);
+        assert_eq!(observer_port.event(true), Some(Event::Output(vec![4])));
+
+        apply_resize_for_test(&mut sessions[0], 3, until, 42, 126);
+        let writer_update = writer_fence.begin_update().unwrap();
+        assert_eq!(
+            writer_port.checked_geometry(writer_claim, until),
+            GeometryHint::Withheld
+        );
+        mirror_resize(&mut sessions, 0);
+        assert!(observer_port.source.reason().is_none());
+        let deadline = sessions[1].mirror.as_ref().unwrap().deadline;
+        assert_eq!(
+            sessions[1].catch_up_geometry(deadline),
+            Some(Reason::Deadline)
+        );
+        writer_update.resolve(Some([9; 32]));
+        assert_eq!(
+            writer_port.checked_geometry(writer_claim, until),
+            GeometryHint::Size((42, 126))
+        );
+        assert!(writer_port.source.reason().is_none());
+    }
+
+    fn resize_for_test(
+        sessions: &mut [Session],
+        sequence: u64,
+        deadline: Duration,
+        rows: u16,
+        cols: u16,
+    ) {
+        let port = apply_resize_for_test(&mut sessions[0], sequence, deadline, rows, cols);
+        mirror_resize(sessions, 0);
+        assert_eq!(sessions[0].next_poll(guard::sample().unwrap()), None);
+        assert_eq!(
+            port.event(true),
+            Some(Event::Complete(Completion::Resized(sequence)))
+        );
+    }
+
+    fn apply_resize_for_test(
+        writer: &mut Session,
+        sequence: u64,
+        deadline: Duration,
+        rows: u16,
+        cols: u16,
+    ) -> Arc<Port> {
+        let port = Arc::clone(&writer.native.as_ref().unwrap().port);
+        assert!(
+            port.push(Operation::new(sequence, deadline, Input::Resize { rows, cols }).unwrap())
+                .is_ok()
+        );
+        assert_eq!(writer.next_poll(guard::sample().unwrap()), None);
+        assert_eq!(writer.ready(0, &AtomicBool::new(false)), None);
+        port
+    }
+
     #[cfg(target_os = "linux")]
     fn partial_wire() -> (Session, UnixStream) {
         let (native, peer) = socket_native();
@@ -662,14 +1325,14 @@ mod tests {
         peer.read_exact(&mut bytes).unwrap();
         assert!(bytes[..2240].iter().all(|byte| *byte == 7));
         assert!(bytes[2240..].iter().all(|byte| *byte == 9));
-        assert_eq!(port.event(), None);
+        assert_eq!(port.event(true), None);
         assert_eq!(session.ready(libc::POLLOUT, &AtomicBool::new(false)), None);
         assert_eq!(session.next_poll(guard::sample().unwrap()), None);
         assert_eq!(
-            port.event(),
+            port.event(true),
             Some(Event::Complete(Completion::Written(1, BYTES)))
         );
-        assert_eq!(port.event(), None);
+        assert_eq!(port.event(true), None);
         let mut suffix = vec![0; BYTES - offset];
         peer.read_exact(&mut suffix).unwrap();
         assert!(suffix.iter().all(|byte| *byte == 9));
@@ -689,7 +1352,7 @@ mod tests {
         let written = head.offset;
         assert_eq!(session.next_poll(at), Some(Reason::Deadline));
         drop(session.retire(Reason::Deadline));
-        assert_eq!(port.event(), Some(Event::Closed(Reason::Deadline)));
+        assert_eq!(port.event(true), Some(Event::Closed(Reason::Deadline)));
         let mut bytes = Vec::new();
         peer.read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes.len(), 2240 + written);
@@ -767,7 +1430,7 @@ mod tests {
             Some(Reason::ShellExit)
         );
         drop(session.retire(Reason::ShellExit));
-        assert_eq!(port.event(), Some(Event::Closed(Reason::ShellExit)));
+        assert_eq!(port.event(true), Some(Event::Closed(Reason::ShellExit)));
     }
 
     #[tokio::test]
@@ -786,7 +1449,7 @@ mod tests {
             panic!("fixture I/O owner unwind");
         });
         assert!(worker.join().is_err());
-        assert_eq!(port.event(), Some(Event::Closed(Reason::OwnerLost)));
+        assert_eq!(port.event(true), Some(Event::Closed(Reason::OwnerLost)));
         assert_eq!(peer.read(&mut [0]).unwrap(), 0);
         tokio::time::timeout(Duration::from_secs(4), async {
             while Arc::strong_count(&profile) > 1 {
@@ -853,15 +1516,18 @@ mod tests {
             port.changed.notify_one();
         }
         port.changed().await;
-        assert_eq!(port.event(), Some(Event::Complete(Completion::Resized(1))));
+        assert_eq!(
+            port.event(true),
+            Some(Event::Complete(Completion::Resized(1)))
+        );
         {
             let _during_owner_turn = port.buffer.lock().unwrap();
-            assert_eq!(port.event(), None);
+            assert_eq!(port.event(true), None);
         }
         tokio::time::timeout(Duration::from_secs(1), port.changed())
             .await
             .expect("contested event forgot the prior wake");
-        assert_eq!(port.event(), Some(Event::Output(vec![5])));
-        assert_eq!(port.event(), None);
+        assert_eq!(port.event(true), Some(Event::Output(vec![5])));
+        assert_eq!(port.event(true), None);
     }
 }

@@ -3,21 +3,34 @@
 mod guard;
 #[path = "terminal_live_supervisor_io.rs"]
 mod io;
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "slot decisions are deferred to Observe/Takeover")
+)]
+#[path = "terminal_live_slot_policy.rs"]
+mod slot_policy;
 #[path = "terminal_selection.rs"]
 pub(crate) mod selection;
 #[path = "terminal_selection_wire.rs"]
-mod selection_wire;
+pub(crate) mod selection_wire;
+#[path = "terminal_live_stream.rs"]
+pub(crate) mod stream;
+#[cfg(test)]
 #[path = "terminal_live_supervisor_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+use super::IdentityMaterial;
 use super::{
-    Account, CAPACITY, CLEANUP, CheckedLaunch, DENIED, Error, IdentityMaterial, Instant, MISSING,
-    Manager, ProfileLease, REQUEST, Registry, Result, Role, Shutdown, Slot, SlotId, State,
-    UNAVAILABLE, backend, random, recovery, tmux,
+    Account, CAPACITY, CLEANUP, CheckedLaunch, DENIED, Error, Instant, MISSING, Manager,
+    ProfileLease, REQUEST, Registry, Result, Role, Shutdown, Slot, SlotId, State, UNAVAILABLE,
+    backend, random, recovery, tmux,
 };
 use crate::command_config::CommandConfig;
 use guard::Source;
-use io::{Event, Installing, Native, Operation, Port, PushError, Wake};
+#[cfg(test)]
+use io::Event;
+use io::{Installing, Native, Operation, Port, PushError, Wake};
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
@@ -110,7 +123,17 @@ struct VerifiedStart {
 
 enum StartOutcome {
     Attached(AdmittedTerminal),
-    Busy { slot: SlotId, writer: Claim },
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "Observe/Takeover binds offers to the occupied writer"
+        )
+    )]
+    Busy {
+        slot: SlotId,
+        writer: Claim,
+    },
     Refused(Error),
 }
 
@@ -118,6 +141,7 @@ struct AdmittedTerminal {
     slot: SlotId,
     claim: Claim,
     port: Arc<Port>,
+    #[cfg(test)]
     closed_reported: bool,
 }
 
@@ -126,15 +150,17 @@ impl AdmittedTerminal {
         self.port.push(operation)
     }
 
+    #[cfg(test)]
     fn try_event(&mut self) -> Option<Event> {
         if self.closed_reported {
             return None;
         }
-        let event = self.port.event()?;
+        let event = self.port.event(true)?;
         self.closed_reported = matches!(event, Event::Closed(_));
         Some(event)
     }
 
+    #[cfg(test)]
     async fn changed(&self) {
         self.port.changed().await;
     }
@@ -166,8 +192,15 @@ type Start = (VerifiedStart, oneshot::Sender<StartOutcome>);
 type Release = (SlotId, oneshot::Sender<Result<()>>);
 
 #[derive(Clone)]
-struct LiveControl {
+pub(crate) struct LiveControl {
     start: mpsc::SyncSender<Start>,
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "explicit slot release is only submitted by native proof today"
+        )
+    )]
     release: mpsc::SyncSender<Release>,
     owner: Thread,
     stopping: Arc<AtomicBool>,
@@ -183,6 +216,7 @@ impl LiveControl {
         self.submit(&self.start, (start, reply))
     }
 
+    #[cfg(test)]
     fn release(
         &self,
         slot: SlotId,
@@ -215,29 +249,46 @@ impl LiveControl {
     }
 }
 
-struct LiveSupervisor {
-    control: LiveControl,
+pub(crate) struct LiveSupervisor {
+    pub(crate) control: LiveControl,
     wake: Wake,
     control_worker: Option<JoinHandle<()>>,
     io_worker: Option<JoinHandle<Result<()>>>,
 }
 
 impl LiveSupervisor {
+    #[cfg(test)]
     fn start(
         profile: Arc<ProfileLease>,
         material: &IdentityMaterial,
         daemon: &Path,
         tmux: &Path,
     ) -> Result<Self> {
+        let config = CommandConfig::load(profile.root())?;
+        let registry = Registry::open(&profile, material)?;
+        Self::start_prepared(profile, config, registry, daemon, tmux, Arc::default())
+    }
+
+    pub(crate) fn start_prepared(
+        profile: Arc<ProfileLease>,
+        config: CommandConfig,
+        registry: Registry,
+        daemon: &Path,
+        tmux: &Path,
+        stopping: Arc<AtomicBool>,
+    ) -> Result<Self> {
+        backend::paths::checked_uid()?;
         backend::paths::daemon(daemon)?;
+        if stopping.load(Ordering::Acquire) {
+            return Err(STOPPED);
+        }
         let mut manager = Manager::new(tmux, profile.root())?;
         manager.profile = Some(Arc::clone(&profile));
         let (wake, reader) = Wake::open()?;
-        let stopping = Arc::new(AtomicBool::new(false));
         let submission = Arc::new(Mutex::new(()));
         let mut owner = ControlOwner {
-            config: CommandConfig::load(profile.root())?,
-            registry: Registry::open(&profile, material)?,
+            config,
+            registry,
             manager,
             daemon: daemon.to_owned(),
             active: HashMap::with_capacity(MAX_LIVE),
@@ -246,6 +297,9 @@ impl LiveSupervisor {
             profile,
         };
         owner.reconcile()?;
+        if stopping.load(Ordering::Acquire) {
+            return Err(STOPPED);
+        }
         let (install, installs) = mpsc::sync_channel(1);
         let (returned, reap) = mpsc::sync_channel(MAX_LIVE);
         let (start, starts) = mpsc::sync_channel(MAX_LIVE);
@@ -261,7 +315,16 @@ impl LiveSupervisor {
             .spawn(move || {
                 owner.run(starts, releases, install, reap, &close_submission);
                 drop(guard);
-            })?;
+            });
+        let control_worker = match control_worker {
+            Ok(worker) => worker,
+            Err(error) => {
+                stopping.store(true, Ordering::Release);
+                wake.notify();
+                let _ = io_worker.join();
+                return Err(error.into());
+            }
+        };
         let control = LiveControl {
             start,
             release,
@@ -277,13 +340,13 @@ impl LiveSupervisor {
         })
     }
 
-    fn stop(&self) {
+    pub(crate) fn stop(&self) {
         self.control.stopping.store(true, Ordering::Release);
         self.wake.notify();
         self.control.owner.unpark();
     }
 
-    fn join_if_finished(&mut self) -> Option<Result<()>> {
+    pub(crate) fn join_if_finished(&mut self) -> Option<Result<()>> {
         if !self.control_worker.as_ref()?.is_finished() || !self.io_worker.as_ref()?.is_finished() {
             return None;
         }
@@ -422,8 +485,13 @@ impl ControlOwner {
     }
 
     fn reconcile(&mut self) -> Result<()> {
+        let limit = guard::sample()
+            .ok_or(DEADLINE)?
+            .continuous
+            .checked_add(Duration::from_secs(20))
+            .ok_or(DEADLINE)?;
         for slot in self.registry.slots()? {
-            let until = Instant::now() + RECONCILE_TURN;
+            let until = self.reconcile_deadline(limit)?;
             let cleanup = !self.config.terminal_allowed(&slot.account)
                 || matches!(slot.state, State::Retiring(_));
             match recovery::inventory(&mut self.registry, &mut self.manager, slot, until) {
@@ -433,6 +501,7 @@ impl ControlOwner {
                         self.registry.retiring(row)?;
                         row = self.row(slot.id)?;
                     }
+                    let until = self.reconcile_deadline(limit)?;
                     if self.manager.kill_session(row.id, inventory, until).is_ok() {
                         let _ = recovery::retire_if_absent(
                             &mut self.registry,
@@ -453,7 +522,22 @@ impl ControlOwner {
                 }
             }
         }
+        self.reconcile_deadline(limit)?;
         Ok(())
+    }
+
+    fn reconcile_deadline(&self, limit: Duration) -> Result<Instant> {
+        if self.stopping.load(Ordering::Acquire) {
+            return Err(STOPPED);
+        }
+        let now = guard::sample().ok_or(DEADLINE)?.continuous;
+        let remaining = limit
+            .checked_sub(now)
+            .filter(|time| !time.is_zero())
+            .ok_or(DEADLINE)?;
+        Instant::now()
+            .checked_add(remaining.min(RECONCILE_TURN))
+            .ok_or(DEADLINE)
     }
 
     fn row(&self, id: SlotId) -> Result<Slot> {

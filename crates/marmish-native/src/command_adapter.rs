@@ -323,14 +323,10 @@ impl MdkOwner {
                 {
                     return Err(Error::Mdk("command_authority_changed"));
                 }
-                #[cfg(test)]
-                let verified = route.relays;
-                #[cfg(not(test))]
-                let verified = ();
-                Ok(verified)
+                Ok(route.relays)
             });
         match verified {
-            Ok(_relay_endpoints) => Ok(AuthenticatedCommandContext {
+            Ok(relay_endpoints) => Ok(AuthenticatedCommandContext {
                 local_account: fixed_hex::<32>(&self.identity)?,
                 peer_account: room.peer,
                 mls_group: room.group,
@@ -339,8 +335,7 @@ impl MdkOwner {
                 direction: room.direction,
                 target_uid: unsafe { libc::geteuid() },
                 authority_digest: room.authority,
-                #[cfg(test)]
-                relay_endpoints: _relay_endpoints,
+                relay_endpoints,
             }),
             Err(Error::Mdk(_) | Error::Invalid(_)) => {
                 self.revoke_owned_command_room(group)?;

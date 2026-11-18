@@ -41,8 +41,12 @@ and ordinary Command traffic alongside the resulting Terminal room. The
 [writer selection proof](validation/terminal-writer-selection.md) exercises
 Default, New, Busy, reattach and revocation on Linux x86_64 with a private
 WSS relay and tmux.
-Installed Terminal admission, reattach,
-inbound Peer invitations and network heartbeat remain in development.
+The [native writer runtime](validation/terminal-installed-runtime.md)
+connects same-user IPC to an isolated volatile MDK runtime and native tmux.
+The Linux x86_64 private WSS fixture covers Default, New, Busy, warm reattach,
+byte preservation, resize and simultaneous ordinary Command. Installed
+process and cross-platform qualification, Observe, Takeover, inbound Peer
+invitations and network heartbeat remain in development.
 The [Peer aggregate ingress proof](validation/peer-aggregate-ingress-proof.md)
 qualifies one shared canonical origin in a native loopback fixture. A copy
 arriving first on an ineligible relay can suppress the eligible copy from

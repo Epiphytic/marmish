@@ -18,14 +18,12 @@ use tokio::{
 const FRAME_LIMIT: usize = 65_536;
 const IO_TIMEOUT: Duration = Duration::from_secs(15);
 
-#[cfg(test)]
 #[path = "terminal_socket_handshake.rs"]
 pub(crate) mod terminal_handshake;
 
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Request {
-    #[cfg(test)]
     TerminalStart {
         request: terminal_handshake::Start,
     },
@@ -110,7 +108,6 @@ pub(crate) enum Request {
 
 impl Request {
     pub(crate) fn is_command(&self) -> bool {
-        #[cfg(test)]
         if matches!(self, Self::TerminalStart { .. }) {
             return false;
         }
@@ -138,7 +135,6 @@ pub struct Response {
     pub(crate) command: Option<crate::command_local::LocalResult>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) stream: Option<crate::stream_service::StreamLocalResult>,
-    #[cfg(test)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) terminal_stream: Option<crate::terminal_ipc_wire::Role>,
 }
@@ -152,7 +148,6 @@ impl Response {
                 error: None,
                 command: None,
                 stream: None,
-                #[cfg(test)]
                 terminal_stream: None,
             },
             Err(_) => Self::failure("response_encoding"),
@@ -166,7 +161,6 @@ impl Response {
             error: Some(category.to_owned()),
             command: None,
             stream: None,
-            #[cfg(test)]
             terminal_stream: None,
         }
     }
@@ -177,7 +171,6 @@ impl Response {
             error: None,
             command: Some(result),
             stream: None,
-            #[cfg(test)]
             terminal_stream: None,
         }
     }
@@ -188,7 +181,6 @@ impl Response {
             error: None,
             command: None,
             stream: Some(result),
-            #[cfg(test)]
             terminal_stream: None,
         }
     }
@@ -426,26 +418,20 @@ fn stream_failure(category: &str) -> Result<crate::stream_service::StreamLocalRe
 
 /// The caller owns the listener task and cancels/joins it on shutdown. At most
 /// 64 clients may hold connections; a full owner queue returns busy immediately.
+#[cfg(test)]
 pub(crate) async fn serve(
     listener: UnixListener,
     queue: mpsc::Sender<Pending>,
     status: watch::Receiver<Response>,
 ) -> Result<()> {
-    serve_inner(
-        listener,
-        queue,
-        status,
-        #[cfg(test)]
-        None,
-    )
-    .await
+    serve_inner(listener, queue, status, None).await
 }
 
-async fn serve_inner(
+pub(crate) async fn serve_inner(
     listener: UnixListener,
     queue: mpsc::Sender<Pending>,
     status: watch::Receiver<Response>,
-    #[cfg(test)] terminal: Option<terminal_handshake::Intake>,
+    terminal: Option<terminal_handshake::Intake>,
 ) -> Result<()> {
     let clients = std::sync::Arc::new(tokio::sync::Semaphore::new(64));
     let mut tasks = tokio::task::JoinSet::new();
@@ -464,15 +450,14 @@ async fn serve_inner(
                 let Ok(permit) = clients.clone().try_acquire_owned() else { continue };
                 let queue = queue.clone();
                 let status = status.clone();
-                #[cfg(test)]
                 let terminal = terminal.clone();
                 tasks.spawn(async move {
                     let _permit = permit;
                     let exchange_deadline = tokio::time::Instant::now() + IO_TIMEOUT;
                     let result = tokio::time::timeout(IO_TIMEOUT, read_frame::<Request>(&mut stream)).await;
-                    #[cfg(test)]
                     if let Ok(Ok(Request::TerminalStart { request })) = result {
-                        terminal_handshake::transfer(terminal, request, stream, _permit, exchange_deadline).await;
+                        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+                        terminal_handshake::transfer(terminal, request, stream, _permit, deadline).await;
                         return;
                     }
                     let short_exchange = matches!(&result,Ok(Ok(request)) if request.uses_short_exchange());

@@ -236,11 +236,21 @@ pub(crate) fn launch(
     state: &Path,
     identity: &str,
 ) -> Result<()> {
+    launch_with_child_mask(executable, argv, state, identity, None)
+}
+
+pub(crate) fn launch_with_child_mask(
+    executable: &Path,
+    argv: &[OsString],
+    state: &Path,
+    identity: &str,
+    child_mask: Option<libc::sigset_t>,
+) -> Result<()> {
     let log = append_log(state, identity)?;
     let mut foreground = Vec::with_capacity(argv.len() + 1);
     foreground.push(OsString::from("--foreground"));
     foreground.extend_from_slice(argv);
-    let (child, channel) = spawn_child(executable, &foreground, log, CLEANUP_GRACE)?;
+    let (child, channel) = spawn_child(executable, &foreground, log, CLEANUP_GRACE, child_mask)?;
     await_startup(child, channel, STARTUP_TIMEOUT)
 }
 
@@ -249,6 +259,7 @@ fn spawn_child(
     argv: &[OsString],
     log: File,
     grace: Duration,
+    child_mask: Option<libc::sigset_t>,
 ) -> Result<(OwnedChild, UnixStream)> {
     let (parent, child) = UnixStream::pair()?;
     set_cloexec(parent.as_raw_fd())?;
@@ -273,6 +284,11 @@ fn spawn_child(
     unsafe {
         command.pre_exec(move || {
             if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if let Some(mask) = &child_mask
+                && libc::sigprocmask(libc::SIG_SETMASK, mask, std::ptr::null_mut()) < 0
+            {
                 return Err(std::io::Error::last_os_error());
             }
             inherit_channel(child_fd)
@@ -499,6 +515,7 @@ mod tests {
             &args,
             append_log(root, "test").unwrap(),
             Duration::from_millis(500),
+            None,
         )
         .unwrap()
     }
@@ -567,6 +584,64 @@ mod tests {
     }
 
     #[test]
+    fn child_with_terminal_launch_mask() {
+        if !is_fixture() {
+            return;
+        }
+        let mut mask = std::mem::MaybeUninit::uninit();
+        assert_eq!(
+            unsafe {
+                libc::pthread_sigmask(libc::SIG_SETMASK, std::ptr::null(), mask.as_mut_ptr())
+            },
+            0
+        );
+        assert_eq!(
+            unsafe { libc::sigismember(mask.as_ptr(), libc::SIGTERM) },
+            0
+        );
+        let reporter = StartupReporter::take_from_env(true).unwrap().unwrap();
+        runtime().block_on(reporter.ready()).unwrap();
+    }
+
+    #[test]
+    fn foreground_launch_restores_child_signal_mask() {
+        std::thread::spawn(|| {
+            let root = private_root();
+            let mut blocked = std::mem::MaybeUninit::uninit();
+            assert_eq!(unsafe { libc::sigemptyset(blocked.as_mut_ptr()) }, 0);
+            assert_eq!(
+                unsafe { libc::sigaddset(blocked.as_mut_ptr(), libc::SIGTERM) },
+                0
+            );
+            let mut saved = std::mem::MaybeUninit::uninit();
+            assert_eq!(
+                unsafe {
+                    libc::pthread_sigmask(libc::SIG_BLOCK, blocked.as_ptr(), saved.as_mut_ptr())
+                },
+                0
+            );
+            let mut saved = unsafe { saved.assume_init() };
+            assert_eq!(unsafe { libc::sigdelset(&mut saved, libc::SIGTERM) }, 0);
+            let args = [
+                "--exact",
+                "daemon_launch::tests::child_with_terminal_launch_mask",
+            ]
+            .map(OsString::from);
+            let (child, channel) = spawn_child(
+                &std::env::current_exe().unwrap(),
+                &args,
+                append_log(root.path(), "test").unwrap(),
+                Duration::from_millis(500),
+                Some(saved),
+            )
+            .unwrap();
+            await_startup(child, channel, Duration::from_secs(5)).unwrap();
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
     fn child_closed_stdio() {
         if !is_fixture() {
             return;
@@ -593,7 +668,7 @@ mod tests {
         // No panic/unwrap until original stdio is restored. This intentionally
         // makes socketpair allocate a stdio descriptor before the reservation.
         let nested = append_log(root.path(), "nested")
-            .and_then(|log| spawn_child(&executable, &args, log, Duration::from_millis(500)))
+            .and_then(|log| spawn_child(&executable, &args, log, Duration::from_millis(500), None))
             // The parent socket itself may occupy fd0/1/2. Complete the
             // handshake before restoring stdio over those descriptor numbers.
             .and_then(|(child, channel)| await_startup(child, channel, Duration::from_secs(5)));

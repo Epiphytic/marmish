@@ -16,7 +16,7 @@ pub(super) struct Session {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Choice {
+pub(crate) enum Choice {
     Default,
     New,
 }
@@ -28,7 +28,7 @@ pub(super) struct Binding {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Refusal {
+pub(crate) enum Refusal {
     Capacity,
     Permission,
     Unavailable,

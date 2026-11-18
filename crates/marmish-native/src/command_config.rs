@@ -59,6 +59,7 @@ pub(crate) struct CommandLimits {
     pub(crate) max_uptime: Option<Duration>,
 }
 
+#[derive(Clone)]
 pub(crate) struct CommandConfig {
     role: Role,
     relay_policy: RelayPolicy,
@@ -388,7 +389,7 @@ impl<'de> Deserialize<'de> for RawAliases {
         d.deserialize_map(AliasesVisitor)
     }
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawPolicy {
     version: u32,
@@ -397,13 +398,13 @@ struct RawPolicy {
     #[serde(default)]
     keys: Vec<RawKeyRestrictions>,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawKeyRestrictions {
     principal: String,
     restrictions: RawRestrictions,
 }
-#[derive(Default, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawRestrictions {
     #[serde(default, deserialize_with = "non_null_optional")]

@@ -12,9 +12,11 @@ mod command_runtime;
 pub(crate) mod installed_check;
 #[path = "stream_runtime.rs"]
 mod stream_runtime;
-#[cfg(test)]
 #[path = "terminal_command_authority.rs"]
 mod terminal_command_authority;
+pub(crate) use terminal_command_authority::Binding;
+#[path = "terminal_enrollment_driver.rs"]
+pub(crate) mod terminal_enrollment_driver;
 use crate::foundation::{self, Body, Envelope};
 use crate::identity::{IdentityMaterial, ProfileLease};
 pub use crate::journal::{Conversation, ReceivedMessage, SendStatus};
@@ -104,7 +106,6 @@ pub(crate) struct AuthenticatedCommandContext {
     direction: CommandDirection,
     target_uid: u32,
     authority_digest: crate::command_wire::Digest,
-    #[cfg(test)]
     relay_endpoints: Vec<String>,
 }
 
@@ -140,7 +141,6 @@ impl AuthenticatedCommandContext {
         self.authority_digest
     }
 
-    #[cfg(test)]
     pub(crate) fn relay_endpoints(&self) -> &[String] {
         &self.relay_endpoints
     }
@@ -876,7 +876,6 @@ pub struct MdkOwner {
     command_creation_test: Option<command_runtime::CreationTest>,
     #[cfg(test)]
     relay_proof_ingress: Option<Vec<MessageId>>,
-    #[cfg(test)]
     terminal_authority: terminal_command_authority::Authority,
     retention: u64,
     welcome_retry: HashMap<Vec<u8>, (Instant, u8)>,
@@ -1042,7 +1041,6 @@ impl MdkOwner {
             command_creation_test: None,
             #[cfg(test)]
             relay_proof_ingress: None,
-            #[cfg(test)]
             terminal_authority: terminal_command_authority::Authority::default(),
             retention: 86400,
             welcome_retry: HashMap::new(),
@@ -1269,7 +1267,6 @@ impl MdkOwner {
 }
 impl Drop for MdkOwner {
     fn drop(&mut self) {
-        #[cfg(test)]
         self.terminal_authority.retire_all();
         self.connector.cancel();
         if let Some(forwarder) = self.forwarder.take() {
@@ -1280,13 +1277,11 @@ impl Drop for MdkOwner {
 
 impl MdkOwner {
     fn remove_owned_route(&mut self, group: &GroupId) {
-        #[cfg(test)]
         self.terminal_authority.retire(group.as_slice());
         self.routing.remove(group);
     }
 
     fn revoke_owned_command_room(&mut self, group: &GroupId) -> Result<()> {
-        #[cfg(test)]
         self.terminal_authority.retire(group.as_slice());
         self.journal.command_revoke_room(group.as_slice())
     }
@@ -1475,13 +1470,11 @@ impl MdkOwner {
         // Drain may publish. All transport admission and Arti bootstrap above
         // must therefore finish first. Reconcile retained pending work before
         // accepting a fresh command from IPC.
-        #[cfg(test)]
         let updates = self.terminal_authority.stage(None);
         let effects = tokio::time::timeout_at(deadline, self.runtime.drain())
             .await
             .map_err(|_| Error::Timeout)?;
         self.apply_effects(mdk(effects)?, deadline).await?;
-        #[cfg(test)]
         self.terminal_finish(updates);
         self.replay_pending(deadline).await?;
         self.submit_unsubmitted(deadline).await?;
@@ -1674,7 +1667,6 @@ impl MdkOwner {
             }],
             initial_admins: vec![],
         };
-        #[cfg(test)]
         let updates = self.terminal_authority.stage(None);
         let (group, effects) =
             tokio::time::timeout_at(deadline, self.runtime.create_group(request))
@@ -1690,7 +1682,6 @@ impl MdkOwner {
         self.journal.bind_authority(group.as_slice(), &digest)?;
         self.routing.group(group, route)?;
         self.apply_effects(effects, deadline).await?;
-        #[cfg(test)]
         self.terminal_finish(updates);
         mdk(self.runtime.sync_transport_groups(None).await)?;
         self.journal
@@ -1760,7 +1751,6 @@ impl MdkOwner {
             now()?,
         )?;
         self.journal.mark(group.as_slice(), &event.id, "prepared")?;
-        #[cfg(test)]
         let updates = self.terminal_authority.stage(Some(&group));
         let effects = tokio::time::timeout_at(
             deadline,
@@ -1775,7 +1765,6 @@ impl MdkOwner {
         let effects = mdk(effects)?;
         self.bind_queued(&effects, &event.id)?;
         let result = self.apply_effects(effects, deadline).await;
-        #[cfg(test)]
         if result.is_ok() {
             self.terminal_finish(updates);
         }
@@ -1977,7 +1966,6 @@ impl MdkOwner {
         Ok(())
     }
     fn forget_and_confirm(&mut self, group: &GroupId) -> Result<()> {
-        #[cfg(test)]
         self.terminal_authority.retire(group.as_slice());
         mdk(self.runtime.forget_group_local(group))?;
         let pending = mdk(self.storage.list_pending_application_events())?;
@@ -2234,7 +2222,6 @@ impl MdkOwner {
             // Commit the ambiguity boundary BEFORE crossing into MDK. A crash
             // after this point must never regenerate ciphertext without proof.
             self.journal.mark(&p.group, &p.event_id, "prepared")?;
-            #[cfg(test)]
             let updates = self.terminal_authority.stage(Some(&group));
             let effects = tokio::time::timeout_at(
                 deadline,
@@ -2249,7 +2236,6 @@ impl MdkOwner {
             let effects = mdk(effects)?;
             self.bind_queued(&effects, &p.event_id)?;
             self.apply_effects(effects, deadline).await?;
-            #[cfg(test)]
             self.terminal_finish(updates);
         }
         Ok(())
@@ -2313,7 +2299,6 @@ impl MdkOwner {
                     (attempt + 1) % 3,
                 ),
             );
-            #[cfg(test)]
             let updates = self.terminal_authority.stage(Some(&group));
             let effects =
                 tokio::time::timeout_at(deadline, self.runtime.redeliver_welcome(&message.id))
@@ -2321,7 +2306,6 @@ impl MdkOwner {
                     .map_err(|_| Error::Timeout)?
                     .map_err(|_| Error::Transport("welcome_retry"))?;
             self.apply_effects(effects, deadline).await?;
-            #[cfg(test)]
             self.terminal_finish(updates);
         }
         for c in self
@@ -2359,7 +2343,6 @@ impl MdkOwner {
             .is_none_or(|task| task.is_finished());
         let connected = self.network_connected().await;
         if !self.recovery && (stopped || loss != self.loss_baseline || !connected) {
-            #[cfg(test)]
             self.terminal_authority.retire_all();
             self.recovery = true;
             self.publication.pause();
@@ -2425,7 +2408,6 @@ impl MdkOwner {
                     assert!(observed.len() < 64, "bounded relay proof observations");
                     observed.push(delivery.message.id.clone());
                 }
-                #[cfg(test)]
                 let updates = {
                     let group = self
                         .terminal_authority
@@ -2456,10 +2438,7 @@ impl MdkOwner {
                     crate::diagnostics::event("mdk_delivery", "no_application_events");
                 }
                 let projected = self.apply_effects(effects.effects, deadline).await;
-                #[cfg(test)]
                 self.terminal_after_ingest(updates, &effects.outcome, durable, projected)?;
-                #[cfg(not(test))]
-                projected?;
                 if durable {
                     self.adapter
                         .ack_replay_delivery(&self.account, &delivery.message.id)
@@ -2470,7 +2449,6 @@ impl MdkOwner {
                 mdk(self.runtime.sync_transport_groups(None).await)?;
             }
             Ok(failure @ (Ok(None) | Err(_))) => {
-                #[cfg(test)]
                 self.terminal_authority.retire_all();
                 return Err(Error::Transport(if failure.is_ok() {
                     "delivery_closed"
@@ -2509,7 +2487,6 @@ impl MdkOwner {
         if !self.active {
             return Err(Error::Mdk("inactive"));
         }
-        #[cfg(test)]
         self.terminal_prune_grants();
         self.progress_commands()?;
         self.progress_streams()?;
@@ -2540,13 +2517,11 @@ impl MdkOwner {
             .await
             .map_err(|_| Error::Timeout)?
             .map_err(|_| Error::Transport("subscription_sync"))?;
-        #[cfg(test)]
         let updates = self.terminal_authority.stage(None);
         let effects = tokio::time::timeout_at(deadline, self.runtime.drain())
             .await
             .map_err(|_| Error::Timeout)?;
         self.apply_effects(mdk(effects)?, deadline).await?;
-        #[cfg(test)]
         self.terminal_finish(updates);
         self.receive_one(deadline).await?;
         self.drive_retained(deadline).await?;
@@ -2559,7 +2534,6 @@ impl MdkOwner {
         Ok(())
     }
     pub async fn shutdown(&mut self, deadline: Instant) -> Result<()> {
-        #[cfg(test)]
         self.terminal_authority.retire_all();
         let mut result =
             match tokio::time::timeout_at(deadline, self.adapter.deactivate_account(&self.account))
@@ -3101,19 +3075,15 @@ pub(crate) mod trust_tests;
 #[path = "terminal_memory_proof_tests.rs"]
 mod terminal_memory_proof_tests;
 
-#[cfg(test)]
 #[path = "terminal_live_enrollment.rs"]
 pub(crate) mod terminal_live_enrollment;
 
-#[cfg(test)]
 #[path = "terminal_enrollment.rs"]
 mod terminal_enrollment;
 
-#[cfg(test)]
 #[path = "terminal_enrollment_room.rs"]
 mod terminal_enrollment_room;
 
-#[cfg(test)]
 #[path = "terminal_enrollment_transport.rs"]
 mod terminal_enrollment_transport;
 

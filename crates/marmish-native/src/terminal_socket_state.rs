@@ -16,7 +16,7 @@ enum Resize {
     Applied,
 }
 
-pub(super) enum InputEffect<'a> {
+pub(crate) enum InputEffect<'a> {
     Bytes(&'a [u8]),
     Resize(Geometry),
 }
@@ -237,5 +237,6 @@ impl DaemonOutput {
     }
 }
 
+#[cfg(test)]
 #[path = "terminal_socket_state_tests.rs"]
 mod tests;

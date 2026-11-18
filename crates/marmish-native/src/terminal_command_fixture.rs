@@ -17,6 +17,9 @@ mod terminal_bootstrap_wss_tests;
 #[path = "terminal_enrollment_wss_tests.rs"]
 mod terminal_enrollment_wss_tests;
 
+#[path = "terminal_installed_runtime_tests.rs"]
+mod terminal_installed_runtime_tests;
+
 struct CommandPeer {
     material: IdentityMaterial,
     lease: ProfileLease,

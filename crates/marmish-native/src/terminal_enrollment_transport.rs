@@ -35,17 +35,99 @@ const AUTHORITY: Error = Error::Invalid("terminal_enrollment_authority");
 const ROUTE: Error = Error::Transport("terminal_enrollment_route");
 const DISCONNECTED: Error = Error::Transport("terminal_enrollment_disconnected");
 
+enum ReadMode {
+    Wait(Option<Instant>),
+    Queued,
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "keep deliveries inline to avoid allocating for every received Terminal event"
+)]
+pub(super) enum Read {
+    Delivery(TransportDelivery),
+    Empty,
+    Tick,
+}
+
+async fn retry_tick(deadline: Option<Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending().await,
+    }
+}
+
 enum AuthoritySource {
+    #[cfg(test)]
     Proof(Arc<dyn Fn(u64) -> bool + Send + Sync>),
     Command(Arc<AttachmentFence>),
 }
 
 pub(crate) struct Authority {
+    #[cfg(test)]
     generation: u64,
     source: AuthoritySource,
     retired: AtomicBool,
     deadline: Mutex<Deadline>,
     grant: OnceLock<Arc<dyn Fn() -> bool + Send + Sync>>,
+    reapers: Option<Arc<Reapers>>,
+    local_closed: Option<Arc<AtomicBool>>,
+}
+
+#[derive(Default)]
+pub(crate) struct Reapers {
+    active: std::sync::atomic::AtomicUsize,
+    uncertain: std::sync::atomic::AtomicUsize,
+    failed: AtomicBool,
+}
+
+struct Uncertain<'a>(&'a Reapers);
+
+impl Drop for Uncertain<'_> {
+    fn drop(&mut self) {
+        self.0.uncertain.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+pub(super) struct Reaping(Arc<Reapers>, bool);
+
+impl Reaping {
+    pub(super) fn completed(mut self, result: &Result<()>) {
+        self.1 = result.is_ok();
+    }
+}
+
+impl Drop for Reaping {
+    fn drop(&mut self) {
+        if !self.1 {
+            self.0.failed.store(true, Ordering::Release);
+        }
+        self.0.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+impl Reapers {
+    pub(crate) fn available(&self) -> bool {
+        !self.failed.load(Ordering::Acquire) && self.uncertain.load(Ordering::Acquire) == 0
+    }
+
+    fn uncertain(&self) -> Uncertain<'_> {
+        if self.uncertain.fetch_add(1, Ordering::AcqRel) == 0 {
+            crate::diagnostics::event("terminal_owner", "relay_reap_pending");
+        }
+        Uncertain(self)
+    }
+
+    pub(crate) async fn finish(&self) -> Result<()> {
+        while self.active.load(Ordering::Acquire) != 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        if self.failed.load(Ordering::Acquire) {
+            Err(Error::Identity("owned_stop_incomplete"))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -193,6 +275,7 @@ impl Deadline {
 }
 
 impl Authority {
+    #[cfg(test)]
     pub(super) fn new(
         generation: u64,
         current: Arc<dyn Fn(u64) -> bool + Send + Sync>,
@@ -209,22 +292,44 @@ impl Authority {
                 exact: None,
             }),
             grant: OnceLock::new(),
+            reapers: None,
+            local_closed: None,
         })
     }
 
-    pub(super) fn from_fence(fence: Arc<AttachmentFence>, deadline: Instant) -> Result<Arc<Self>> {
+    pub(super) fn from_fence(
+        fence: Arc<AttachmentFence>,
+        deadline: Instant,
+        reapers: Option<Arc<Reapers>>,
+        local_closed: Option<Arc<AtomicBool>>,
+    ) -> Result<Arc<Self>> {
         Ok(Arc::new(Self {
+            #[cfg(test)]
             generation: fence.generation().get(),
             source: AuthoritySource::Command(fence),
             retired: AtomicBool::new(false),
             deadline: Mutex::new(Deadline::new(deadline, Phase::Bootstrap, true)?),
             grant: OnceLock::new(),
+            reapers,
+            local_closed,
         }))
     }
 
     pub(super) fn install_grant(&self, grant: Arc<dyn Fn() -> bool + Send + Sync>) -> Result<()> {
-        self.grant.set(grant).map_err(|_| AUTHORITY)?;
+        if self
+            .grant
+            .get()
+            .is_none_or(|active| !Arc::ptr_eq(active, &grant))
+        {
+            self.grant.set(grant).map_err(|_| AUTHORITY)?;
+        }
         self.check()
+    }
+
+    pub(super) fn reap(&self) -> Option<Reaping> {
+        let reapers = self.reapers.clone()?;
+        reapers.active.fetch_add(1, Ordering::AcqRel);
+        Some(Reaping(reapers, false))
     }
 
     fn fence_state(&self) -> FenceState {
@@ -232,13 +337,23 @@ impl Authority {
             return FenceState::Retired;
         }
         match &self.source {
+            #[cfg(test)]
             AuthoritySource::Proof(current) if current(self.generation) => FenceState::Live,
+            #[cfg(test)]
             AuthoritySource::Proof(_) => FenceState::Retired,
             AuthoritySource::Command(fence) => fence.state(),
         }
     }
 
     pub(crate) fn check(&self) -> Result<()> {
+        if self
+            .local_closed
+            .as_ref()
+            .is_some_and(|closed| closed.load(Ordering::Acquire))
+        {
+            self.retire();
+            return Err(Error::Invalid("terminal_start_closed"));
+        }
         if self.retired.load(Ordering::Acquire) || self.fence_state() == FenceState::Retired {
             self.retire();
             return Err(AUTHORITY);
@@ -334,6 +449,7 @@ impl Authority {
     pub(super) fn permits_frames(&self, binding: terminal_frames::Binding) -> Result<()> {
         self.check()?;
         match &self.source {
+            #[cfg(test)]
             AuthoritySource::Proof(_) if self.generation == binding.generation => Ok(()),
             AuthoritySource::Command(_)
                 if self.deadline.lock().map_err(|_| AUTHORITY)?.phase
@@ -390,6 +506,7 @@ impl Authority {
                 .await
                 .map_err(|_| Error::Timeout)
                 .and_then(|result| result),
+            #[cfg(test)]
             AuthoritySource::Proof(_) => tokio::select! {
                 biased;
                 revoked = self.wait_for_retirement() => revoked,
@@ -412,6 +529,20 @@ impl Authority {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
+}
+
+#[test]
+fn terminal_runtime_core_uncertain_reaps_hold_only_the_affected_direction() {
+    let server = Reapers::default();
+    let client = Reapers::default();
+    let first = server.uncertain();
+    let second = server.uncertain();
+    assert!(!server.available());
+    assert!(client.available());
+    drop(first);
+    assert!(!server.available());
+    drop(second);
+    assert!(server.available());
 }
 
 #[test]
@@ -450,7 +581,7 @@ async fn enrollment_listener_starts_a_full_flight_after_initial_socket_budget() 
     let started = Instant::now();
     let socket_deadline = started + Duration::from_secs(30);
     let listener_deadline = started + Duration::from_secs(60);
-    let authority = Authority::from_fence(fence.clone(), socket_deadline).unwrap();
+    let authority = Authority::from_fence(fence.clone(), socket_deadline, None, None).unwrap();
     authority.begin_listener(listener_deadline).unwrap();
     tokio::time::advance(Duration::from_secs(35)).await;
     let flight_deadline = Instant::now() + Duration::from_secs(30);
@@ -460,7 +591,7 @@ async fn enrollment_listener_starts_a_full_flight_after_initial_socket_budget() 
     assert_eq!(authority.deadline().unwrap(), flight_deadline);
 
     let late_socket_deadline = Instant::now() + Duration::from_secs(30);
-    let expired_listener = Authority::from_fence(fence, late_socket_deadline).unwrap();
+    let expired_listener = Authority::from_fence(fence, late_socket_deadline, None, None).unwrap();
     expired_listener
         .begin_listener(late_socket_deadline)
         .unwrap();
@@ -479,7 +610,7 @@ async fn enrollment_pauses_for_suspect_fence_and_installs_one_writer_lease() {
     let digest = [3; 32];
     let cancel = AttachmentFence::new(NonZeroU64::new(1).unwrap(), digest);
     let short = Instant::now() + Duration::from_millis(100);
-    let authority = Authority::from_fence(cancel.clone(), short).unwrap();
+    let authority = Authority::from_fence(cancel.clone(), short, None, None).unwrap();
     let writer = terminal_frames::Binding {
         transcript: [4; 32],
         attachment: [5; 16],
@@ -674,6 +805,7 @@ impl TransportAdapter for GuardedAdapter {
             .wait_live()
             .await
             .map_err(|_| TransportAdapterError::Closed)?;
+        #[cfg(test)]
         if matches!(&self.authority.source, AuthoritySource::Proof(_)) {
             let report = self.native.publish(request).await?;
             self.check()
@@ -910,6 +1042,20 @@ impl Lane {
         self.verified
     }
 
+    pub(super) fn discard_stored_alias_inbox(&mut self) -> Result<()> {
+        if !self.verified {
+            return Err(AUTH);
+        }
+        let inbox = self.inbox_id()?.to_owned();
+        // The authenticated EOSE separates staged history from the live channel.
+        self.staged.retain(|incoming| {
+            incoming.plane != TransportDeliveryPlane::AccountInbox
+                || incoming.relay.subscription_id.as_deref() != Some(inbox.as_str())
+        });
+        Ok(())
+    }
+
+    #[cfg(test)]
     pub(super) fn stored_backlog(&self) -> (usize, usize) {
         (self.staged.len(), self.staged_losses)
     }
@@ -978,10 +1124,30 @@ impl Lane {
             _ => return Err(ROUTE),
         };
         let authority = self.adapter.authority.clone();
-        authority
-            .run(self.read_exact(plane, &expected_id, cap, true))
+        match authority
+            .run(self.read_exact(plane, &expected_id, cap, ReadMode::Wait(None)))
             .await?
-            .ok_or(DISCONNECTED)
+        {
+            Read::Delivery(delivery) => Ok(delivery),
+            Read::Empty | Read::Tick => Err(DISCONNECTED),
+        }
+    }
+
+    pub(super) async fn receive_inbox_until(
+        &mut self,
+        cap: usize,
+        retry: Option<Instant>,
+    ) -> Result<Read> {
+        let inbox = self.inbox_id()?.to_owned();
+        let authority = self.adapter.authority.clone();
+        authority
+            .run(self.read_exact(
+                TransportDeliveryPlane::AccountInbox,
+                &inbox,
+                cap,
+                ReadMode::Wait(retry),
+            ))
+            .await
     }
 
     pub(super) async fn receive_queued_group(
@@ -990,9 +1156,19 @@ impl Lane {
         cap: usize,
     ) -> Result<Option<TransportDelivery>> {
         let authority = self.adapter.authority.clone();
-        authority
-            .run(self.read_exact(TransportDeliveryPlane::Group, subscription_id, cap, false))
-            .await
+        match authority
+            .run(self.read_exact(
+                TransportDeliveryPlane::Group,
+                subscription_id,
+                cap,
+                ReadMode::Queued,
+            ))
+            .await?
+        {
+            Read::Delivery(delivery) => Ok(Some(delivery)),
+            Read::Empty => Ok(None),
+            Read::Tick => Err(ROUTE),
+        }
     }
 
     async fn read_exact(
@@ -1000,14 +1176,14 @@ impl Lane {
         plane: TransportDeliveryPlane,
         subscription_id: &str,
         cap: usize,
-        wait: bool,
-    ) -> Result<Option<TransportDelivery>> {
+        mode: ReadMode,
+    ) -> Result<Read> {
         let mut remaining = self.staged.len() + self.incoming.as_ref().ok_or(ROUTE)?.len();
         loop {
             self.adapter.check().await?;
-            if !wait {
+            if matches!(mode, ReadMode::Queued) {
                 let Some(next) = remaining.checked_sub(1) else {
-                    return Ok(None);
+                    return Ok(Read::Empty);
                 };
                 remaining = next;
             }
@@ -1015,20 +1191,22 @@ impl Lane {
                 Some(incoming) => incoming,
                 None => {
                     let incoming = self.incoming.as_mut().ok_or(ROUTE)?;
-                    if wait {
-                        tokio::select! {
+                    match mode {
+                        ReadMode::Wait(retry) => tokio::select! {
                             biased;
                             retired = self.adapter.authority.wait_for_retirement::<Incoming>() => retired?,
                             value = incoming.recv() => value.ok_or(DISCONNECTED)?,
-                        }
-                    } else {
-                        match incoming.try_recv() {
+                            () = retry_tick(retry) => return Ok(Read::Tick),
+                        },
+                        ReadMode::Queued => match incoming.try_recv() {
                             Ok(incoming) => incoming,
-                            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => return Ok(None),
+                            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                                return Ok(Read::Empty);
+                            }
                             Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
                                 return Err(DISCONNECTED);
                             }
-                        }
+                        },
                     }
                 }
             };
@@ -1079,7 +1257,7 @@ impl Lane {
                 self.acknowledge(&delivery.message.id).await;
                 continue;
             }
-            return Ok(Some(delivery));
+            return Ok(Read::Delivery(delivery));
         }
     }
 
@@ -1128,26 +1306,14 @@ impl Lane {
     }
 
     async fn close_inner(mut self, retire: bool) -> Result<()> {
-        let deactivated = self.deactivate(retire).await;
-        if let Some(pump) = self.pump.take() {
-            match pump.await {
-                Ok(()) => {}
-                Err(error) if error.is_cancelled() => {}
-                Err(_) => {
-                    let _ = shutdown(&self.client, &self.connector).await;
-                    return Err(ROUTE);
-                }
-            }
-        }
-        let result = shutdown(&self.client, &self.connector).await;
-        let reaped = if self.verified {
-            self.connector
-                .reap_terminal_socket(Instant::now() + Duration::from_secs(2))
-                .await
-        } else {
-            Ok(())
-        };
-        let outcome = deactivated.and(result).and(reaped);
+        let _ = self.deactivate(retire).await;
+        let outcome = stop_lane(
+            self.pump.take(),
+            &self.client,
+            &self.connector,
+            self.adapter.authority.reapers.as_deref(),
+        )
+        .await;
         if outcome.is_ok() {
             self.closed.store(true, Ordering::Release);
         }
@@ -1166,8 +1332,15 @@ impl Drop for Lane {
         }
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             let (client, connector) = (self.client.clone(), self.connector.clone());
+            let pump = self.pump.take();
+            let authority = self.adapter.authority.clone();
+            let cleanup = authority.reap();
             runtime.spawn(async move {
-                let _ = shutdown(&client, &connector).await;
+                let result =
+                    stop_lane(pump, &client, &connector, authority.reapers.as_deref()).await;
+                if let Some(cleanup) = cleanup {
+                    cleanup.completed(&result);
+                }
             });
         } else {
             self.connector.cancel();
@@ -1175,15 +1348,38 @@ impl Drop for Lane {
     }
 }
 
-// The SDK owns the socket after requesting disconnect, including any final
-// control writes. Cancel the connector only if that request itself times out.
-async fn shutdown(client: &Client, connector: &RelayConnector) -> Result<()> {
-    match tokio::time::timeout(Duration::from_secs(2), client.shutdown()).await {
-        Ok(()) => Ok(()),
-        Err(_) => {
-            connector.cancel();
-            Err(Error::Timeout)
+async fn stop_lane(
+    pump: Option<tokio::task::JoinHandle<()>>,
+    client: &Client,
+    connector: &RelayConnector,
+    reapers: Option<&Reapers>,
+) -> Result<()> {
+    if let Some(pump) = pump {
+        // A panic and an abort both terminate this sole producer.
+        let _ = pump.await;
+    }
+    let stopped = tokio::time::timeout(Duration::from_secs(2), client.shutdown())
+        .await
+        .map_err(|_| Error::Timeout);
+    let reaped = connector
+        .reap_terminal_socket(Instant::now() + Duration::from_secs(2))
+        .await;
+    let Some(reapers) = reapers else {
+        return stopped.and(reaped);
+    };
+    // Exact slot acquisition after connector cancellation proves both SDK
+    // stream halves are gone even if the SDK disconnect request timed out.
+    if reaped.is_ok() {
+        return Ok(());
+    }
+    let _uncertain = reapers.uncertain();
+    let turn = Duration::from_millis(250);
+    loop {
+        let next = Instant::now() + turn;
+        if connector.reap_terminal_socket(next).await.is_ok() {
+            return Ok(());
         }
+        tokio::time::sleep_until(next).await;
     }
 }
 

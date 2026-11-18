@@ -12,6 +12,46 @@ fn pair(role: Role) -> Result<(ForegroundSocket, DaemonSocket<UnixStream>)> {
 }
 
 #[test]
+fn terminal_runtime_core_capacity_and_slow_reader() -> Result<()> {
+    let (_blocked, mut slow) = pair(Role::Writer)?;
+    let (mut display, mut healthy) = pair(Role::Writer)?;
+    let now = Instant::now();
+    let deadline = now + STALL;
+    let native_deadline = deadline + STALL;
+    let mut output = [0; MAX_DATA];
+
+    slow.flush(now, native_deadline)?;
+    assert_eq!(slow.offer(1, b"held", now, native_deadline)?, None);
+    slow.flush(now, native_deadline)?;
+    assert_eq!(slow.offer(1, b"held", now, native_deadline)?, None);
+    assert!(slow.offer(2, b"next", now, native_deadline).is_err());
+
+    healthy.flush(now, native_deadline)?;
+    assert_eq!(display.read(&mut output, now)?, FrontendOutput::Pending);
+    assert_eq!(healthy.offer(1, b"ready", now, native_deadline)?, None);
+    healthy.flush(now, native_deadline)?;
+    assert_eq!(display.read(&mut output, now)?, FrontendOutput::Bytes(5));
+    assert_eq!(&output[..5], b"ready");
+    display.display_committed()?;
+    assert_eq!(display.write(&[], now)?, 0);
+    assert_eq!(healthy.read(now)?, ServerRead::Received);
+    assert_eq!(healthy.offer(1, b"ready", now, native_deadline)?, Some(5));
+
+    assert_eq!(slow.deadline(), Some(deadline));
+    assert_eq!(
+        slow.offer(
+            1,
+            b"held",
+            deadline - Duration::from_millis(1),
+            native_deadline
+        )?,
+        None
+    );
+    assert!(matches!(slow.read(deadline), Err(Error::Timeout)));
+    Ok(())
+}
+
+#[test]
 fn terminal_socket_session_credit_resize_display_and_detach() -> Result<()> {
     let (mut front, mut daemon) = pair(Role::Writer)?;
     let now = Instant::now();

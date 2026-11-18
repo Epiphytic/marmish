@@ -146,10 +146,26 @@ will be able to run executables outside the ordinary command allowlist.
 
 Merge this entry into the existing config. `setup --update --revoke CLIENT_NPUB`
 also removes its shell grant. The inventory's `terminal_shell_granted` reports
-the configured grant. `interactive_shell_enabled` continues to report false
-while the local worker awaits remote integration. Use matching binaries for
+the configured grant. Its `interactive_shell_enabled` field still reports
+false and does not indicate runtime availability. Use matching binaries for
 inventory queries and remove the `terminal` object before rolling back to a
 binary that predates it.
+
+With the interactive development build on both ends, install tmux 3.3 or
+later on the server and run `marmishd` as the normal user that owns the
+sessions. Use a controlling terminal on the client and a configured direct
+WSS relay on both ends.
+
+```sh
+marmish terminal SERVER_NPUB@relay.example
+marmish terminal --new SERVER_NPUB@relay.example
+```
+
+The default command attaches to that identity's default session. A second
+writer receives Busy. Use `--new` for a separate tmux session. Enter `~.` at the
+beginning of a line to detach, then repeat the default command to return to the running shell.
+The daemon sends a keepalive every five minutes and expires an inactive
+endpoint after eleven minutes.
 
 The command history feature upgrades the encrypted profile journal. To keep a rollback path,
 back up the entire profile directory while its daemon is stopped before

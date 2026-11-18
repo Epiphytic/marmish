@@ -1,39 +1,55 @@
-//! Test-gated local terminal registry and sole owner of PTY effects.
+//! Local terminal registry and native PTY ownership.
 #[path = "terminal_live_supervisor.rs"]
 pub(crate) mod live;
 #[path = "terminal_live_supervisor_recovery.rs"]
 mod recovery;
 #[path = "terminal_supervisor_store.rs"]
 mod store;
+#[cfg(test)]
 #[path = "terminal_supervisor_tests.rs"]
 mod tests;
 #[path = "terminal_supervisor_tmux.rs"]
 mod tmux;
 
-use super::{self as backend, Attachment, CheckedLaunch, ReadStatus, Role, Shutdown, WriteStatus};
+use super::{self as backend, CheckedLaunch, Role, Shutdown};
+#[cfg(test)]
+use super::{Attachment, ReadStatus, WriteStatus};
+#[cfg(test)]
 use crate::command_config::CommandConfig;
 use crate::command_wire::Account;
-use crate::identity::{IdentityMaterial, ProfileLease};
+#[cfg(test)]
+use crate::identity::IdentityMaterial;
+use crate::identity::ProfileLease;
 use crate::{Error, Result};
+#[cfg(test)]
 use std::collections::HashMap;
+#[cfg(test)]
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
-use store::{Registry, Slot, State};
-use tmux::{ClientChange, Inventory, Manager};
+#[cfg(test)]
+use std::time::Duration;
+use std::time::Instant;
+pub(crate) use store::Registry;
+use store::{Slot, State};
+use tmux::Manager;
+#[cfg(test)]
+use tmux::{ClientChange, Inventory};
 
 const DENIED: Error = Error::Invalid("terminal_grant_denied");
 const MISSING: Error = Error::Invalid("terminal_slot_missing");
 const UNAVAILABLE: Error = Error::Invalid("terminal_slot_unavailable");
+#[cfg(test)]
 const STALE: Error = Error::Invalid("terminal_claim_stale");
 const CAPACITY: Error = Error::Invalid("terminal_capacity");
 const CLEANUP: Error = Error::Invalid("terminal_cleanup_pending");
 const REQUEST: Error = Error::Invalid("terminal_attach_request");
 const MAX_SLOTS: usize = 16;
+#[cfg(test)]
 const MAX_ATTACHMENTS: usize = 4;
+#[cfg(test)]
 const REAP_TURN: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct SlotId([u8; 16]);
+pub(crate) struct SlotId([u8; 16]);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Claim {
@@ -41,6 +57,7 @@ struct Claim {
     generation: u64,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 enum Selection {
     Default,
@@ -48,6 +65,7 @@ enum Selection {
     New,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 enum Mode {
     Writer,
@@ -55,24 +73,28 @@ enum Mode {
     Takeover(Claim),
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 enum Admission {
     Attached { slot: SlotId, claim: Claim },
     Busy { slot: SlotId, writer: Claim },
 }
 
+#[cfg(test)]
 struct Link {
     claim: Claim,
     role: Role,
     io: Attachment,
 }
 
+#[cfg(test)]
 #[derive(Default)]
 struct Active {
     links: Vec<Link>,
     reaping: Vec<Attachment>,
 }
 
+#[cfg(test)]
 struct Supervisor<'a> {
     _profile: &'a ProfileLease,
     config: CommandConfig,
@@ -82,6 +104,7 @@ struct Supervisor<'a> {
     active: HashMap<SlotId, Active>,
 }
 
+#[cfg(test)]
 impl<'a> Supervisor<'a> {
     fn open(
         profile: &'a ProfileLease,
@@ -345,6 +368,7 @@ impl<'a> Supervisor<'a> {
     }
 }
 
+#[cfg(test)]
 impl Drop for Supervisor<'_> {
     fn drop(&mut self) {
         for active in self.active.values_mut() {
@@ -354,6 +378,7 @@ impl Drop for Supervisor<'_> {
     }
 }
 
+#[cfg(test)]
 impl Active {
     fn writer(&self) -> Option<Claim> {
         self.links

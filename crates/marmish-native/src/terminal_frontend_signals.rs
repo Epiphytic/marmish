@@ -28,6 +28,7 @@ static TERMINATION: AtomicI32 = AtomicI32::new(0);
 pub(super) struct Signals {
     read: RawFd,
     installed: Vec<(libc::c_int, libc::sigaction)>,
+    previous_mask: libc::sigset_t,
 }
 
 #[derive(Default)]
@@ -61,9 +62,9 @@ impl Signals {
     }
 
     fn install_owned(fail_at: Option<usize>) -> Result<Self> {
-        let mask = managed_mask()?;
+        let mask = signal_mask(MANAGED)?;
         let old_mask = mask_change(libc::SIG_BLOCK, &mask)?;
-        let result = Self::register(&mask, fail_at);
+        let result = Self::register(&mask, old_mask, fail_at);
         let mut signals = match result {
             Ok(signals) => signals,
             Err(error) => {
@@ -79,7 +80,11 @@ impl Signals {
         Ok(signals)
     }
 
-    fn register(mask: &libc::sigset_t, fail_at: Option<usize>) -> Result<Self> {
+    fn register(
+        mask: &libc::sigset_t,
+        previous_mask: libc::sigset_t,
+        fail_at: Option<usize>,
+    ) -> Result<Self> {
         let (read, write) = match PIPE.get() {
             Some(&pipe) => pipe,
             None => {
@@ -94,6 +99,7 @@ impl Signals {
         let mut signals = Self {
             read,
             installed: Vec::with_capacity(MANAGED.len()),
+            previous_mask,
         };
         signals.clear();
         let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
@@ -118,14 +124,58 @@ impl Signals {
         self.read
     }
 
+    pub(super) fn previous_mask(&self) -> libc::sigset_t {
+        self.previous_mask
+    }
+
     pub(super) fn take(&self) -> Events {
         drain(self.read);
         let bits = PENDING.swap(0, Ordering::AcqRel);
-        let termination = TERMINATION.load(Ordering::Acquire);
         Events {
             bits,
-            termination: (termination != 0).then_some(termination),
+            termination: self.termination(),
         }
+    }
+
+    pub(super) fn termination(&self) -> Option<libc::c_int> {
+        let termination = TERMINATION.load(Ordering::Acquire);
+        (termination != 0).then_some(termination)
+    }
+
+    pub(super) fn suspend(&self) -> Result<()> {
+        let managed = signal_mask(MANAGED)?;
+        let stop = signal_mask([libc::SIGTSTP])?;
+
+        let before = mask_change(libc::SIG_BLOCK, &managed)?;
+        let result = (|| {
+            if self.termination().is_some() {
+                return Ok(());
+            }
+            let mut saved = MaybeUninit::zeroed();
+            let mut default: libc::sigaction = unsafe { std::mem::zeroed() };
+            default.sa_sigaction = libc::SIG_DFL;
+            default.sa_mask = managed;
+            if unsafe { libc::sigaction(libc::SIGTSTP, &default, saved.as_mut_ptr()) } != 0 {
+                return Err(SIGNAL);
+            }
+
+            // A job-control parent can resume this stop. POSIX discards the
+            // same default stop for an orphaned process group.
+            let stopped = if unsafe { libc::raise(libc::SIGTSTP) } == 0 {
+                mask_change(libc::SIG_UNBLOCK, &stop)
+                    .and_then(|_| mask_change(libc::SIG_BLOCK, &stop))
+                    .map(|_| ())
+            } else {
+                Err(SIGNAL)
+            };
+            if unsafe { libc::sigaction(libc::SIGTSTP, saved.as_ptr(), std::ptr::null_mut()) } != 0
+            {
+                return Err(SIGNAL);
+            }
+            stopped
+        })();
+        let restored = mask_change(libc::SIG_SETMASK, &before);
+        result.and(restored.map(|_| ()))
     }
 
     pub(super) fn pending(&self) -> bool {
@@ -149,7 +199,7 @@ impl Signals {
 impl Drop for Signals {
     fn drop(&mut self) {
         if !self.installed.is_empty() {
-            if let Ok(mask) = managed_mask() {
+            if let Ok(mask) = signal_mask(MANAGED) {
                 let _ = mask_change(libc::SIG_BLOCK, &mask);
             }
             self.restore_actions();
@@ -185,13 +235,13 @@ extern "C" fn signal_handler(signal: libc::c_int) {
     unsafe { *errno = saved };
 }
 
-fn managed_mask() -> Result<libc::sigset_t> {
+fn signal_mask(signals: impl IntoIterator<Item = libc::c_int>) -> Result<libc::sigset_t> {
     let mut mask = MaybeUninit::zeroed();
     if unsafe { libc::sigemptyset(mask.as_mut_ptr()) } != 0 {
         return Err(SIGNAL);
     }
     let mut mask = unsafe { mask.assume_init() };
-    for signal in MANAGED {
+    for signal in signals {
         if unsafe { libc::sigaddset(&mut mask, signal) } != 0 {
             return Err(SIGNAL);
         }
@@ -205,6 +255,11 @@ fn mask_change(how: libc::c_int, mask: &libc::sigset_t) -> Result<libc::sigset_t
         return Err(SIGNAL);
     }
     Ok(unsafe { old.assume_init() })
+}
+
+pub(crate) fn block_on_worker() {
+    let mask = signal_mask(MANAGED).expect("valid foreground signal set");
+    mask_change(libc::SIG_BLOCK, &mask).expect("block foreground signals on an auxiliary worker");
 }
 
 fn create_pipe() -> Result<(RawFd, RawFd)> {
@@ -246,6 +301,10 @@ fn drain(fd: RawFd) {
 }
 
 #[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "called only from the isolated controlling PTY fixture"
+)]
 pub(super) fn verify_install_rollback() {
     fn current_action(signal: libc::c_int) -> libc::sigaction {
         let mut action = MaybeUninit::zeroed();
@@ -256,9 +315,20 @@ pub(super) fn verify_install_rollback() {
         unsafe { action.assume_init() }
     }
 
-    let mask = managed_mask().unwrap();
+    let mask = signal_mask(MANAGED).unwrap();
     let saved_mask = mask_change(libc::SIG_BLOCK, &mask).unwrap();
     let saved_actions = MANAGED.map(current_action);
+    std::thread::spawn(|| {
+        let mask = signal_mask(MANAGED).unwrap();
+        mask_change(libc::SIG_UNBLOCK, &mask).unwrap();
+        block_on_worker();
+        let blocked = mask_change(libc::SIG_BLOCK, &mask).unwrap();
+        for signal in MANAGED {
+            assert_eq!(unsafe { libc::sigismember(&blocked, signal) }, 1);
+        }
+    })
+    .join()
+    .unwrap();
     let public_flags = libc::SA_NOCLDSTOP
         | libc::SA_NOCLDWAIT
         | libc::SA_NODEFER
@@ -297,6 +367,10 @@ pub(super) fn verify_install_rollback() {
     }
     let owner = Signals::install().unwrap();
     assert_eq!(owner.fd(), descriptors.0);
+    let before_install = owner.previous_mask();
+    for signal in MANAGED {
+        assert_eq!(unsafe { libc::sigismember(&before_install, signal) }, 1);
+    }
     drop(owner);
     mask_change(libc::SIG_SETMASK, &saved_mask).unwrap();
 }

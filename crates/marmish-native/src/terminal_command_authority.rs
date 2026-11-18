@@ -7,29 +7,71 @@ use super::{
 use crate::command_wire::{Account, Id};
 use crate::terminal_fence::{AttachmentFence, FenceState, UpdateToken};
 use crate::{Error, Result};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const CAPACITY: usize = 32;
+const MAX_LISTENER_CANDIDATES: usize = 64;
+const LISTENER_PASS: Duration = Duration::from_secs(30);
+
+#[derive(Default)]
+struct ListenerSchedule {
+    offset: usize,
+    next_pass: Option<Instant>,
+}
+
+impl ListenerSchedule {
+    fn select(
+        &mut self,
+        mut by_peer: BTreeMap<Account, VecDeque<AuthenticatedCommandContext>>,
+        now: Instant,
+    ) -> Vec<AuthenticatedCommandContext> {
+        let count = by_peer.values().map(VecDeque::len).sum();
+        let mut ordered = Vec::with_capacity(count);
+        while !by_peer.is_empty() {
+            by_peer.retain(|_, entries| {
+                if let Some(context) = entries.pop_front() {
+                    ordered.push(context);
+                }
+                !entries.is_empty()
+            });
+        }
+        if count <= CAPACITY {
+            *self = Self::default();
+            return ordered;
+        }
+        if self.next_pass.is_some_and(|deadline| now >= deadline) {
+            self.offset = (self.offset + CAPACITY) % count;
+            self.next_pass = None;
+        }
+        self.next_pass.get_or_insert(now + LISTENER_PASS);
+        ordered.rotate_left(self.offset % count);
+        ordered.truncate(CAPACITY);
+        ordered
+    }
+}
 
 #[derive(Clone)]
-pub(super) struct Binding {
-    pub(super) context: AuthenticatedCommandContext,
-    pub(super) fence: Arc<AttachmentFence>,
+pub(crate) struct Binding {
+    pub(crate) context: AuthenticatedCommandContext,
+    pub(crate) fence: Arc<AttachmentFence>,
 }
 
 #[derive(Default)]
 pub(super) struct Authority {
     generation: u64,
     entries: BTreeMap<Vec<u8>, Binding>,
+    listeners: ListenerSchedule,
+    #[cfg(test)]
     pause_samples: Option<Vec<Duration>>,
 }
 
 #[derive(Default)]
 pub(super) struct Updates {
     entries: Vec<(Binding, UpdateToken)>,
+    #[cfg(test)]
     began: Option<Instant>,
 }
 
@@ -42,10 +84,14 @@ impl Authority {
             }
             self.retire(group);
         }
-        if self.entries.len() == CAPACITY {
-            self.prune_retired();
-        }
-        if self.entries.len() == CAPACITY {
+        self.prune_retired();
+        if self
+            .entries
+            .values()
+            .filter(|entry| entry.context.direction() == context.direction())
+            .count()
+            >= CAPACITY
+        {
             return Err(Error::Invalid("terminal_authority_capacity"));
         }
         self.generation = self
@@ -79,6 +125,7 @@ impl Authority {
             return Updates::default();
         }
         self.prune_retired();
+        #[cfg(test)]
         let began = self.pause_samples.as_ref().map(|_| Instant::now());
         let entries: Vec<_> = self
             .entries
@@ -92,6 +139,7 @@ impl Authority {
             })
             .collect();
         Updates {
+            #[cfg(test)]
             began: began.filter(|_| !entries.is_empty()),
             entries,
         }
@@ -102,10 +150,23 @@ impl Authority {
             .retain(|_, entry| entry.fence.state() != FenceState::Retired);
     }
 
+    fn prune_unused(&mut self) {
+        self.entries.retain(|_, entry| {
+            if Arc::strong_count(&entry.fence) == 1 {
+                entry.fence.retire();
+                false
+            } else {
+                true
+            }
+        });
+    }
+
+    #[cfg(test)]
     pub(super) fn measure_pauses(&mut self) {
         self.pause_samples = Some(Vec::with_capacity(1024));
     }
 
+    #[cfg(test)]
     pub(super) fn measured_pauses(&mut self) -> Vec<Duration> {
         self.pause_samples.take().unwrap_or_default()
     }
@@ -182,6 +243,7 @@ impl MdkOwner {
     }
 
     pub(super) fn terminal_finish(&mut self, updates: Updates) {
+        #[cfg(test)]
         let mut restored = true;
         for (entry, token) in updates.entries {
             let group = GroupId::new(entry.context.mls_group().to_vec());
@@ -192,9 +254,13 @@ impl MdkOwner {
                 .map(|current| current.authority_digest());
             if token.resolve(digest) == FenceState::Retired {
                 self.terminal_authority.retire(group.as_slice());
-                restored = false;
+                #[cfg(test)]
+                {
+                    restored = false;
+                }
             }
         }
+        #[cfg(test)]
         if restored
             && let Some(began) = updates.began
             && let Some(samples) = self.terminal_authority.pause_samples.as_mut()
@@ -228,13 +294,16 @@ impl MdkOwner {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(super) fn terminal_client_binding(
+    pub(crate) fn terminal_client_binding(
         &mut self,
         peer: Account,
         relays: &[String],
         session: Id,
     ) -> Result<Option<Binding>> {
+        if !self.active || self.recovery {
+            return Err(Error::Transport("terminal_transport_unavailable"));
+        }
+        self.terminal_authority.prune_unused();
         let ready = match self.command_can_prepare(peer, relays) {
             Ok(()) => self.command_ready_session(peer, relays, session),
             Err(error @ Error::Invalid("commands_disabled" | "command_unauthorized")) => Err(error),
@@ -267,8 +336,18 @@ impl MdkOwner {
     }
 
     #[cfg(test)]
-    pub(super) fn terminal_server_bindings(&mut self) -> Result<Vec<Binding>> {
-        let mut accepted = Vec::new();
+    pub(super) fn terminal_server_binding_for_test(&mut self, group: &[u8]) -> Result<Binding> {
+        let context = self.terminal_validate(&GroupId::new(group.to_vec()))?;
+        self.terminal_authority.register(context)
+    }
+
+    pub(crate) fn terminal_server_bindings(&mut self) -> Result<Vec<Binding>> {
+        if !self.active || self.recovery {
+            return Err(Error::Transport("terminal_transport_unavailable"));
+        }
+        self.terminal_authority.prune_unused();
+        let mut candidates = 0;
+        let mut accepted: BTreeMap<_, VecDeque<_>> = BTreeMap::new();
         for room in self.journal.command_rooms()? {
             if room.revoked
                 || room.direction != CommandDirection::Server
@@ -279,8 +358,22 @@ impl MdkOwner {
             {
                 continue;
             }
+            candidates += 1;
+            if candidates > MAX_LISTENER_CANDIDATES {
+                return Err(Error::Invalid("terminal_listener_candidates"));
+            }
             match self.terminal_validate(&GroupId::new(room.group)) {
-                Ok(context) => accepted.push(context),
+                Ok(context)
+                    if context.relay_endpoints().iter().any(|origin| {
+                        self.connector.policy().direct_wss_scope(origin).is_some()
+                    }) =>
+                {
+                    accepted
+                        .entry(context.peer_account())
+                        .or_default()
+                        .push_back(context);
+                }
+                Ok(_) => (),
                 Err(
                     Error::Mdk(_) | Error::Invalid(_) | Error::Transport("group_state_unavailable"),
                 ) => {
@@ -290,24 +383,27 @@ impl MdkOwner {
             }
         }
         self.terminal_authority.prune_retired();
-        let additions = accepted
-            .iter()
-            .filter(|entry| {
-                !self
-                    .terminal_authority
-                    .entries
-                    .contains_key(entry.mls_group())
-            })
-            .count();
-        if self.terminal_authority.entries.len() + additions > CAPACITY {
-            return Err(Error::Invalid("terminal_authority_capacity"));
+        for entries in accepted.values_mut() {
+            entries.make_contiguous().sort_by(|left, right| {
+                (left.session(), left.mls_group()).cmp(&(right.session(), right.mls_group()))
+            });
         }
-        accepted
-            .into_iter()
-            .map(|entry| self.terminal_authority.register(entry))
-            .collect()
+        let selected = self
+            .terminal_authority
+            .listeners
+            .select(accepted, Instant::now());
+        let mut bindings = Vec::new();
+        for context in selected {
+            match self.terminal_authority.register(context) {
+                Ok(binding) => bindings.push(binding),
+                Err(Error::Invalid("terminal_authority_capacity")) => (),
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(bindings)
     }
 }
 
+#[cfg(test)]
 #[path = "terminal_command_authority_tests.rs"]
 mod tests;

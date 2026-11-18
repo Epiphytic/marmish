@@ -67,6 +67,10 @@ struct State {
     publication_limit: Option<usize>,
     publications: Vec<Event>,
     observations: Vec<Observation>,
+    hold_gift_wrap_to: Option<PublicKey>,
+    held_gift_wrap: Option<Event>,
+    hold_eose_for: Option<PublicKey>,
+    held_eose: Option<(usize, String)>,
 }
 
 impl State {
@@ -100,20 +104,16 @@ impl State {
             if kind == 445 {
                 self.observe(Observation::WriteBytes(event.id, text_bytes));
             }
-            assert!(
-                self.publications.len() < self.publication_limit.unwrap_or(MAX_PUBLICATIONS),
-                "relay event bound"
-            );
-            for peer in self.connections.values() {
-                for subscription in &peer.subscriptions {
-                    if subscription.matches(&event) {
-                        peer.outgoing
-                            .try_send(json!(["EVENT", subscription.id, event]))
-                            .expect("bounded fixture dispatch");
-                    }
-                }
+            if kind == 1059
+                && self
+                    .hold_gift_wrap_to
+                    .is_some_and(|recipient| auth_tag(&event, "p", &recipient.to_hex()))
+            {
+                assert!(self.held_gift_wrap.replace(event.clone()).is_none());
+                self.hold_gift_wrap_to = None;
+            } else {
+                self.dispatch(event.clone());
             }
-            self.publications.push(event.clone());
         }
         let reason = if !authenticated {
             "auth-required: fixture authentication required"
@@ -123,6 +123,23 @@ impl State {
             ""
         };
         json!(["OK", event.id, accepted, reason])
+    }
+
+    fn dispatch(&mut self, event: Event) {
+        assert!(
+            self.publications.len() < self.publication_limit.unwrap_or(MAX_PUBLICATIONS),
+            "relay event bound"
+        );
+        for peer in self.connections.values() {
+            for subscription in &peer.subscriptions {
+                if subscription.matches(&event) {
+                    peer.outgoing
+                        .try_send(json!(["EVENT", subscription.id, event]))
+                        .expect("bounded fixture dispatch");
+                }
+            }
+        }
+        self.publications.push(event);
     }
 }
 
@@ -305,7 +322,14 @@ fn handle_message(
                 .filter(|event| subscription.matches(event))
                 .map(|event| json!(["EVENT", subscription_id, event]))
                 .collect();
-            responses.push(json!(["EOSE", subscription_id]));
+            if state.hold_eose_for.is_some_and(|alias| {
+                account == Some(alias) && subscription.serves(1059, "#p", &json!(alias))
+            }) {
+                assert!(state.held_eose.replace((id, subscription.id)).is_none());
+                state.hold_eose_for = None;
+            } else {
+                responses.push(json!(["EOSE", subscription_id]));
+            }
             responses
         }
         Some("CLOSE") => {
@@ -481,6 +505,49 @@ impl Relay {
         }
     }
 
+    pub(super) fn roots(&self) -> rustls::RootCertStore {
+        self.roots.clone()
+    }
+
+    pub(super) fn allow_installed_benchmark(&self) {
+        let mut state = self.state.lock().unwrap();
+        assert!(state.publications.is_empty());
+        state.publication_limit = Some(8_192);
+    }
+
+    pub(super) fn hold_next_gift_wrap(&self, recipient: PublicKey) {
+        let mut state = self.state.lock().unwrap();
+        assert!(state.hold_gift_wrap_to.is_none() && state.held_gift_wrap.is_none());
+        state.hold_gift_wrap_to = Some(recipient);
+    }
+
+    pub(super) fn gift_wrap_is_held(&self) -> bool {
+        self.state.lock().unwrap().held_gift_wrap.is_some()
+    }
+
+    pub(super) fn release_gift_wrap(&self) {
+        let mut state = self.state.lock().unwrap();
+        let event = state.held_gift_wrap.take().expect("one held gift wrap");
+        state.dispatch(event);
+    }
+
+    pub(super) fn hold_next_alias_eose(&self, alias: PublicKey) {
+        let mut state = self.state.lock().unwrap();
+        assert!(state.hold_eose_for.is_none() && state.held_eose.is_none());
+        state.hold_eose_for = Some(alias);
+    }
+
+    pub(super) fn release_alias_eose(&self) {
+        let mut state = self.state.lock().unwrap();
+        let (connection, subscription) = state.held_eose.take().expect("authenticated alias EOSE");
+        // Use the same ordered queue as live EVENT dispatch: the first
+        // client Probe already queued for this socket precedes this EOSE.
+        state.connections[&connection]
+            .outgoing
+            .try_send(json!(["EOSE", subscription]))
+            .expect("bounded fixture EOSE dispatch");
+    }
+
     pub(super) fn allow_multi_room_workload(&self) {
         let mut state = self.state.lock().unwrap();
         assert!(state.publications.is_empty());
@@ -579,6 +646,42 @@ impl Relay {
             .values()
             .filter(|connection| connection.account == Some(account))
             .any(|connection| connection.subscriptions.iter().any(|sub| sub.id == id))
+    }
+
+    pub(super) fn stored_gift_wraps_to(&self, recipient: PublicKey) -> usize {
+        let recipient = recipient.to_hex();
+        self.state
+            .lock()
+            .unwrap()
+            .publications
+            .iter()
+            .filter(|event| u16::from(event.kind) == 1059 && auth_tag(event, "p", &recipient))
+            .count()
+    }
+
+    pub(super) fn distinct_gift_wraps_before_reply(
+        &self,
+        receiver: PublicKey,
+        reply_receiver: PublicKey,
+    ) -> usize {
+        let receiver = receiver.to_hex();
+        let reply_receiver = reply_receiver.to_hex();
+        let state = self.state.lock().unwrap();
+        let wraps = state
+            .publications
+            .iter()
+            .filter(|event| u16::from(event.kind) == 1059);
+        assert!(
+            wraps
+                .clone()
+                .any(|event| auth_tag(event, "p", &reply_receiver))
+        );
+        wraps
+            .take_while(|event| !auth_tag(event, "p", &reply_receiver))
+            .filter(|event| auth_tag(event, "p", &receiver))
+            .map(|event| event.id)
+            .collect::<BTreeSet<_>>()
+            .len()
     }
 
     pub(super) fn assert_healthy(&self) {

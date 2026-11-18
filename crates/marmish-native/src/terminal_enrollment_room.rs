@@ -612,6 +612,7 @@ impl Room {
         Ok((room.route, &room.subscription))
     }
 
+    #[cfg(test)]
     pub(super) fn verify_mismatches(&self) -> Result<()> {
         let room = self.room.as_ref().ok_or(STATE)?;
         let mut route = room.route;

@@ -71,14 +71,14 @@ impl Start {
 }
 
 #[derive(Clone)]
-pub(super) struct Intake {
+pub(crate) struct Intake {
     send: mpsc::Sender<PendingStart>,
     pending: Arc<Semaphore>,
     attached: Arc<Semaphore>,
 }
 
 impl Intake {
-    pub(super) fn new() -> (Self, mpsc::Receiver<PendingStart>) {
+    pub(crate) fn new() -> (Self, mpsc::Receiver<PendingStart>) {
         let (send, receive) = mpsc::channel(PENDING);
         (
             Self {
@@ -91,10 +91,10 @@ impl Intake {
     }
 }
 
-pub(super) struct PendingStart {
-    pub(super) request: Start,
-    stream: UnixStream,
-    deadline: Instant,
+pub(crate) struct PendingStart {
+    pub(crate) request: Start,
+    stream: OwnedStream,
+    pub(crate) deadline: Instant,
     attached: Arc<Semaphore>,
     _pending: OwnedSemaphorePermit,
 }
@@ -106,7 +106,7 @@ struct Ready {
     terminal_stream: Role,
 }
 
-pub(super) struct Attached {
+pub(crate) struct Attached {
     stream: OwnedStream,
     _permit: OwnedSemaphorePermit,
 }
@@ -167,10 +167,13 @@ pub(super) async fn transfer(
     }
     let Ok(pending) = route.pending.try_acquire_owned() else {
         drop(classify);
-        refuse(stream, deadline, "terminal_busy").await;
+        refuse(stream, deadline, "terminal_capacity").await;
         return;
     };
     drop(classify);
+    let Ok(stream) = stream.into_std() else {
+        return;
+    };
     let candidate = PendingStart {
         request,
         stream,
@@ -181,62 +184,107 @@ pub(super) async fn transfer(
     if let Err(error) = route.send.try_send(candidate) {
         let reason = match error {
             mpsc::error::TrySendError::Closed(_) => "terminal_unavailable",
-            mpsc::error::TrySendError::Full(_) => "terminal_busy",
+            mpsc::error::TrySendError::Full(_) => "terminal_capacity",
         };
         let PendingStart {
             stream, _pending, ..
         } = error.into_inner();
         drop(_pending);
-        refuse(stream, deadline, reason).await;
+        if let Ok(stream) = UnixStream::from_std(stream) {
+            refuse(stream, deadline, reason).await;
+        }
     }
 }
 
+pub(crate) struct LocalStart {
+    pub(crate) request: Start,
+    stream: UnixStream,
+    pub(crate) deadline: Instant,
+    attached: Arc<Semaphore>,
+    pending: OwnedSemaphorePermit,
+}
+
 impl PendingStart {
-    /// Race this against enrollment. No valid client bytes precede Ready.
-    pub(super) async fn cancelled(&self) -> Error {
-        let watch = async {
-            loop {
-                if let Err(error) = self.stream.readable().await {
-                    return error.into();
-                }
-                match self.stream.try_read(&mut [0u8; 1]) {
-                    Ok(0) => return Error::Invalid("terminal_start_closed"),
-                    Ok(_) => return Error::Invalid("terminal_start_invalid"),
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => continue,
-                    Err(error) => return error.into(),
-                }
-            }
-        };
-        timeout_at(self.deadline, watch)
-            .await
-            .unwrap_or(Error::Timeout)
+    pub(crate) fn register(self) -> Result<LocalStart> {
+        Ok(LocalStart {
+            request: self.request,
+            stream: UnixStream::from_std(self.stream)?,
+            deadline: self.deadline,
+            attached: self.attached,
+            pending: self._pending,
+        })
     }
 
-    pub(super) async fn admit(self) -> Result<Attached> {
+    #[cfg(test)]
+    async fn admit(self) -> Result<Attached> {
+        self.register()?.admit().await
+    }
+}
+
+async fn cancellation(stream: &UnixStream, deadline: Instant) -> Error {
+    let watch = async {
+        loop {
+            if let Err(error) = stream.readable().await {
+                return error.into();
+            }
+            match stream.try_read(&mut [0u8; 1]) {
+                Ok(0) => return Error::Invalid("terminal_start_closed"),
+                Ok(_) => return Error::Invalid("terminal_start_invalid"),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => continue,
+                Err(error) => return error.into(),
+            }
+        }
+    };
+    timeout_at(deadline, watch).await.unwrap_or(Error::Timeout)
+}
+
+impl LocalStart {
+    /// Race this against admission with no local protocol bytes before Ready.
+    pub(crate) async fn cancelled(&self) -> Error {
+        cancellation(&self.stream, self.deadline).await
+    }
+
+    pub(crate) async fn refuse(self, category: &'static str) {
         let Self {
-            request,
+            stream,
+            deadline,
+            pending,
+            ..
+        } = self;
+        drop(pending);
+        refuse(stream, deadline, category).await;
+    }
+
+    pub(crate) fn reserve(&self) -> Result<OwnedSemaphorePermit> {
+        if !matches!(self.request.attach, Attach::Default | Attach::New) {
+            return Err(Error::Invalid("terminal_mode_unavailable"));
+        }
+        self.attached
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Error::Invalid("terminal_capacity"))
+    }
+
+    #[cfg(test)]
+    async fn admit(self) -> Result<Attached> {
+        match self.reserve() {
+            Ok(permit) => self.admit_reserved(permit).await,
+            Err(error @ Error::Invalid(reason)) => {
+                self.refuse(reason).await;
+                Err(error)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(crate) async fn admit_reserved(self, permit: OwnedSemaphorePermit) -> Result<Attached> {
+        let Self {
             mut stream,
             deadline,
-            attached,
-            _pending,
+            pending,
+            ..
         } = self;
-        let result = if request.attach != Attach::Default {
-            Err(Error::Invalid("terminal_mode_unavailable"))
-        } else {
-            attached
-                .try_acquire_owned()
-                .map_err(|_| Error::Invalid("terminal_busy"))
-        };
-        let permit = match result {
-            Ok(permit) => permit,
-            Err(Error::Invalid(reason)) => {
-                drop(_pending);
-                refuse(stream, deadline, reason).await;
-                return Err(Error::Invalid(reason));
-            }
-            Err(error) => return Err(error),
-        };
-        drop(_pending);
+        drop(pending);
         if Instant::now() >= deadline {
             return Err(Error::Timeout);
         }
@@ -255,7 +303,7 @@ impl PendingStart {
     }
 }
 
-pub(super) async fn start(path: &Path, request: Start, deadline: Instant) -> Result<OwnedStream> {
+pub(crate) async fn start(path: &Path, request: Start, deadline: Instant) -> Result<OwnedStream> {
     request.validate()?;
     if Instant::now() >= deadline {
         return Err(Error::Timeout);
@@ -277,36 +325,42 @@ pub(super) async fn start(path: &Path, request: Start, deadline: Instant) -> Res
         if response.result.is_some() || response.command.is_some() || response.stream.is_some() {
             return Err(Error::Invalid("terminal_start_response"));
         }
-        match (
-            response.ok,
-            response.error.as_deref(),
-            response.terminal_stream,
-        ) {
-            (false, Some("terminal_start_invalid"), None) => {
-                Err(Error::Invalid("terminal_start_invalid"))
-            }
-            (false, Some("terminal_busy"), None) => Err(Error::Invalid("terminal_busy")),
-            (false, Some("terminal_unavailable"), None) => {
-                Err(Error::Invalid("terminal_unavailable"))
-            }
-            (false, Some("terminal_mode_unavailable"), None) => {
-                Err(Error::Invalid("terminal_mode_unavailable"))
-            }
-            _ => Err(Error::Invalid("terminal_start_response")),
+        if response.ok || response.terminal_stream.is_some() {
+            return Err(Error::Invalid("terminal_start_response"));
         }
+        Err(Error::Invalid(match response.error.as_deref() {
+            Some("invalid_request") => "terminal_daemon_upgrade_required",
+            Some("terminal_busy") => "terminal_busy",
+            Some("terminal_bootstrap_no_challenge") => "terminal_bootstrap_no_challenge",
+            Some("terminal_attach_deadline") => "terminal_attach_deadline",
+            Some("terminal_capacity") => "terminal_capacity",
+            Some("terminal_command_binding") => "terminal_command_binding",
+            Some("terminal_grant_denied") => "terminal_grant_denied",
+            Some("terminal_mode_unavailable") => "terminal_mode_unavailable",
+            Some("terminal_owner_unavailable") => "terminal_owner_unavailable",
+            Some("terminal_start_invalid") => "terminal_start_invalid",
+            Some("terminal_transport_unavailable") => "terminal_transport_unavailable",
+            Some("terminal_unavailable") => "terminal_unavailable",
+            _ => "terminal_start_response",
+        }))
     })
     .await
     .map_err(|_| Error::Timeout)?
 }
 
+#[cfg(test)]
 #[path = "terminal_socket_handshake_tests.rs"]
 mod tests;
 
+#[path = "terminal_cli.rs"]
+mod terminal_cli;
+pub(crate) use terminal_cli::{Prepared, block_on_worker, run as run_foreground};
+
 #[path = "terminal_socket_state.rs"]
-mod terminal_socket_state;
+pub(crate) mod terminal_socket_state;
 
 #[path = "terminal_socket_io.rs"]
 mod terminal_socket_io;
 
 #[path = "terminal_socket_session.rs"]
-mod terminal_socket_session;
+pub(crate) mod terminal_socket_session;

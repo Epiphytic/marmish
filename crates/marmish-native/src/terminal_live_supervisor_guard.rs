@@ -72,6 +72,7 @@ pub(super) struct Source {
 }
 
 impl Source {
+    #[cfg(test)]
     pub(super) fn new(id: SourceId, command: Arc<AttachmentFence>) -> Arc<Self> {
         Self::with_ceiling(id, command, None)
     }

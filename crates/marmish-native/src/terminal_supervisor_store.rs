@@ -91,7 +91,7 @@ pub(super) struct Slot {
     pub proof: Option<Proof>,
 }
 
-pub(super) struct Registry {
+pub(crate) struct Registry {
     pub(super) connection: Connection,
 }
 
@@ -178,7 +178,7 @@ impl Registry {
         Ok(Self { connection })
     }
 
-    pub fn slots(&self) -> Result<Vec<Slot>> {
+    pub(super) fn slots(&self) -> Result<Vec<Slot>> {
         let mut statement = self
             .connection
             .prepare("SELECT slot, account, is_default, marker, state, native_id, native_proof FROM slot ORDER BY slot LIMIT ?1")
@@ -212,7 +212,7 @@ impl Registry {
         Ok(slots)
     }
 
-    pub fn prepare(&mut self, slot: Slot) -> Result<()> {
+    pub(super) fn prepare(&mut self, slot: Slot) -> Result<()> {
         let tx = self.connection.transaction().map_err(db)?;
         let count: i64 = tx
             .query_row("SELECT count(*) FROM slot", [], |row| row.get(0))
@@ -228,7 +228,7 @@ impl Registry {
         tx.commit().map_err(db)
     }
 
-    pub fn ready(&mut self, slot: Slot, native_id: u32, proof: Option<Proof>) -> Result<()> {
+    pub(super) fn ready(&mut self, slot: Slot, native_id: u32, proof: Option<Proof>) -> Result<()> {
         let proof = proof.map(Proof::encode).transpose()?;
         changed(self.connection.execute(
             "UPDATE slot SET state=1,native_id=?2,native_proof=?3 WHERE slot=?1 AND state=0 AND account=?4 AND marker=?5",
@@ -236,7 +236,7 @@ impl Registry {
         ))
     }
 
-    pub fn pin(&mut self, slot: Slot, proof: Proof, native_id: u32) -> Result<()> {
+    pub(super) fn pin(&mut self, slot: Slot, proof: Proof, native_id: u32) -> Result<()> {
         let proof = proof.encode()?;
         changed(self.connection.execute(
             "UPDATE slot SET native_proof=?2 WHERE slot=?1 AND native_id=?3 AND native_proof IS NULL AND account=?4 AND marker=?5 AND state IN (1,2)",
@@ -244,21 +244,21 @@ impl Registry {
         ))
     }
 
-    pub fn retiring(&mut self, slot: Slot) -> Result<()> {
+    pub(super) fn retiring(&mut self, slot: Slot) -> Result<()> {
         changed(self.connection.execute(
             "UPDATE slot SET state=2 WHERE slot=?1 AND account=?2 AND marker=?3",
             params![slot.id.0, slot.account, slot.marker],
         ))
     }
 
-    pub fn retired(&mut self, slot: Slot) -> Result<()> {
+    pub(super) fn retired(&mut self, slot: Slot) -> Result<()> {
         changed(self.connection.execute(
             "DELETE FROM slot WHERE slot=?1 AND state=2 AND account=?2 AND marker=?3",
             params![slot.id.0, slot.account, slot.marker],
         ))
     }
 
-    pub fn retire_old_boot(&mut self, slot: Slot, proof: Proof) -> Result<()> {
+    pub(super) fn retire_old_boot(&mut self, slot: Slot, proof: Proof) -> Result<()> {
         let proof = proof.encode()?;
         changed(self.connection.execute(
             "DELETE FROM slot WHERE slot=?1 AND account=?2 AND marker=?3 AND native_proof=?4 AND state IN (1,2)",
@@ -266,14 +266,14 @@ impl Registry {
         ))
     }
 
-    pub fn retire_unstarted(&mut self, slot: Slot) -> Result<()> {
+    pub(super) fn retire_unstarted(&mut self, slot: Slot) -> Result<()> {
         changed(self.connection.execute(
             "DELETE FROM slot WHERE slot=?1 AND account=?2 AND marker=?3 AND state IN (0,2) AND native_id IS NULL AND native_proof IS NULL",
             params![slot.id.0, slot.account, slot.marker],
         ))
     }
 
-    pub fn allocate(&mut self) -> Result<u64> {
+    pub(super) fn allocate(&mut self) -> Result<u64> {
         let tx = self.connection.transaction().map_err(db)?;
         let previous: [u8; 8] = tx
             .query_row("SELECT generation FROM binding WHERE id=1", [], |row| {

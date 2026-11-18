@@ -1,5 +1,7 @@
 //! Private owner for one authenticated, non-resumable Terminal enrollment.
-use super::terminal_enrollment_room::{App, HeldWelcome, OpenFailure, Room, entropy, unix_now};
+#[cfg(test)]
+use super::terminal_enrollment_room::App;
+use super::terminal_enrollment_room::{HeldWelcome, OpenFailure, Room, entropy, unix_now};
 use super::terminal_enrollment_transport::{Authority, EnrollmentCeiling, GuardedAdapter, Lane};
 use super::*;
 use crate::terminal_bootstrap::enrollment::{
@@ -80,6 +82,7 @@ impl AliasWatch {
 }
 
 impl Owner {
+    #[cfg(test)]
     pub(super) async fn open(
         exchange: Exchange,
         signer: Arc<Keys>,
@@ -208,6 +211,7 @@ impl Owner {
             .await
     }
 
+    #[cfg(test)]
     pub(super) async fn hold_welcome(&mut self) -> Result<()> {
         let authority = self.authority();
         authority
@@ -403,6 +407,7 @@ impl Owner {
         self.room.send_app(bytes).await
     }
 
+    #[cfg(test)]
     pub(super) async fn receive_frame(&mut self, binding: frames::Binding) -> Result<App> {
         self.authority().permits_frames(binding)?;
         if self.ready().await? != binding.transcript {

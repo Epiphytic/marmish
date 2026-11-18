@@ -30,11 +30,7 @@ impl TestFlight<'_> {
                 self.command.session,
             )?
             .ok_or(Error::Invalid("fixture_client_binding_not_ready"))?;
-        let server_binding = server
-            .terminal_server_bindings()?
-            .into_iter()
-            .find(|binding| binding.context.mls_group() == self.command.group)
-            .ok_or(Error::Invalid("fixture_no_exact_command_binding"))?;
+        let server_binding = server.terminal_server_binding_for_test(&self.command.group)?;
         let command_route = server_binding.context.transport_group().to_vec();
         let fence = server_binding.fence.clone();
         let (client_signing, client_codec) =

@@ -10,7 +10,7 @@ const PULSE_INTERVAL: Duration = Duration::from_secs(300);
 const LEASE: Duration = Duration::from_secs(660);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Fault {
+pub(crate) enum Fault {
     Closed,
     Conflict,
     Window,
@@ -22,7 +22,7 @@ pub(super) enum Fault {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Receipt {
+pub(crate) enum Receipt {
     Ignored,
     Ordered,
     Ack,
@@ -31,20 +31,22 @@ pub(super) enum Receipt {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Progress {
+pub(crate) enum Progress {
     Pending,
     Committed,
 }
 
-pub(super) enum Offer<'a> {
+pub(crate) enum Offer<'a> {
     Bytes(u64, &'a [u8]),
     Resize(u64, Size),
 }
 
-pub(super) enum Effect {
+pub(crate) enum Effect {
     Wrote(usize),
     Resized,
+    #[cfg(test)]
     WouldBlock,
+    #[cfg(test)]
     Failed,
 }
 
@@ -129,6 +131,7 @@ impl Incoming {
             return Err(Fault::Sink);
         };
         match (&item.data, effect) {
+            #[cfg(test)]
             (_, Effect::WouldBlock) => return Ok(Progress::Pending),
             (Data::Resize(_), Effect::Resized) => {}
             (Data::Input(bytes) | Data::Output(bytes), Effect::Wrote(count))
@@ -253,7 +256,7 @@ impl Outgoing {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Control {
+pub(crate) enum Control {
     Ack(u64),
     Pulse(u64),
     Close,
@@ -279,7 +282,7 @@ struct Controls {
     close: bool,
 }
 
-pub(super) struct Attachment {
+pub(crate) struct Attachment {
     binding: Binding,
     incoming: Direction,
     rx: Incoming,
@@ -291,7 +294,7 @@ pub(super) struct Attachment {
 }
 
 impl Attachment {
-    pub(super) fn new(binding: Binding, incoming: Direction, admitted: Duration) -> Option<Self> {
+    pub(crate) fn new(binding: Binding, incoming: Direction, admitted: Duration) -> Option<Self> {
         if binding.generation == 0 {
             return None;
         }
@@ -307,7 +310,7 @@ impl Attachment {
         })
     }
 
-    pub(super) fn poll(&mut self, now: Duration) -> Result<(), Fault> {
+    pub(crate) fn poll(&mut self, now: Duration) -> Result<(), Fault> {
         if self.closed {
             return Err(Fault::Closed);
         }
@@ -334,7 +337,7 @@ impl Attachment {
         self.last_activity = self.last_activity.max(now);
     }
 
-    pub(super) fn admit(&mut self, item: Admitted, now: Duration) -> Result<Receipt, Fault> {
+    pub(crate) fn admit(&mut self, item: Admitted, now: Duration) -> Result<Receipt, Fault> {
         if self.closed
             || item.binding != self.binding
             || item.direction != self.incoming
@@ -378,12 +381,13 @@ impl Attachment {
     }
 
     /// Call after rechecking generation, grant and lease in the same owner turn.
-    pub(super) fn begin_sink(&mut self, now: Duration) -> Result<Option<Offer<'_>>, Fault> {
+    #[cfg(test)]
+    pub(crate) fn begin_sink(&mut self, now: Duration) -> Result<Option<Offer<'_>>, Fault> {
         Ok(self.begin_timed_sink(now)?.map(|(offer, _)| offer))
     }
 
     /// Preserve the same signed-age and ordered head deadlines for a deferred native sink.
-    pub(super) fn begin_timed_sink(
+    pub(crate) fn begin_timed_sink(
         &mut self,
         now: Duration,
     ) -> Result<Option<(Offer<'_>, Duration)>, Fault> {
@@ -406,7 +410,7 @@ impl Attachment {
         Ok(Some((offer, until)))
     }
 
-    pub(super) fn sink_progress(
+    pub(crate) fn sink_progress(
         &mut self,
         sequence: u64,
         effect: Effect,
@@ -422,7 +426,7 @@ impl Attachment {
         Ok(progress)
     }
 
-    pub(super) fn enqueue(&mut self, data: Data, now: Duration) -> Result<u64, Fault> {
+    pub(crate) fn enqueue(&mut self, data: Data, now: Duration) -> Result<u64, Fault> {
         self.poll(now)?;
         // A caller trying to enqueue with no credits gets backpressure, not a protocol error.
         // It retains ownership of any upstream bytes until it can enqueue them.
@@ -433,9 +437,17 @@ impl Attachment {
         result
     }
 
+    pub(crate) fn acknowledged(&self) -> u64 {
+        self.tx.acknowledged
+    }
+
+    pub(crate) fn output_drained(&self) -> bool {
+        self.tx.queue.is_empty() && self.controls.ack.is_none()
+    }
+
     /// The caller owns the single unresolved native publication and frozen signed event.
     /// A definite transient refusal keeps this exact prepared application payload.
-    pub(super) fn begin_handoff(
+    pub(crate) fn begin_handoff(
         &mut self,
         author: &[u8; 32],
         created: u64,
@@ -457,7 +469,7 @@ impl Attachment {
     }
 
     /// Report a native handoff when the outer owner retains the frozen signed event.
-    pub(super) fn handed_off(&mut self, sequence: u64, now: Duration) -> Result<(), Fault> {
+    pub(crate) fn handed_off(&mut self, sequence: u64, now: Duration) -> Result<(), Fault> {
         self.poll(now)?;
         if self
             .tx
@@ -471,7 +483,7 @@ impl Attachment {
         Ok(())
     }
 
-    pub(super) fn control(&mut self, now: Duration) -> Result<Option<Control>, Fault> {
+    pub(crate) fn control(&mut self, now: Duration) -> Result<Option<Control>, Fault> {
         if self.controls.close {
             return Ok(Some(Control::Close));
         }
@@ -490,12 +502,12 @@ impl Attachment {
         }
         Ok(self
             .controls
-            .pulse
-            .map(Control::Pulse)
-            .or_else(|| self.controls.ack.map(Control::Ack)))
+            .ack
+            .map(Control::Ack)
+            .or_else(|| self.controls.pulse.map(Control::Pulse)))
     }
 
-    pub(super) fn control_begun(&mut self, sent: Control, now: Duration) {
+    pub(crate) fn control_begun(&mut self, sent: Control, now: Duration) {
         match sent {
             Control::Ack(sequence) if self.controls.ack == Some(sequence) => {
                 self.controls.ack = None;
@@ -518,7 +530,7 @@ impl Attachment {
         self.last_handoff = self.last_handoff.max(now);
     }
 
-    pub(super) fn close(&mut self) {
+    pub(crate) fn close(&mut self) {
         if !self.closed {
             self.fence();
             self.controls.close = true;
@@ -527,7 +539,7 @@ impl Attachment {
 
     /// Faults abandon pending controls too. The peer's independent lease
     /// handles closure when no best-effort Close is available.
-    pub(super) fn fence(&mut self) {
+    pub(crate) fn fence(&mut self) {
         self.rx = Incoming::default();
         self.tx = Outgoing::default();
         self.controls = Controls::default();
@@ -535,7 +547,7 @@ impl Attachment {
     }
 
     #[cfg(test)]
-    pub(super) fn seed_counters(&mut self, committed: u64, assigned: u64, sent_pulse: u64) {
+    pub(crate) fn seed_counters(&mut self, committed: u64, assigned: u64, sent_pulse: u64) {
         self.rx.committed = committed;
         self.tx.assigned = assigned;
         self.controls.last_sent_pulse = sent_pulse;

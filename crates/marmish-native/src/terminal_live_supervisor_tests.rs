@@ -37,6 +37,47 @@ pub(super) fn claim() -> Claim {
 }
 
 #[test]
+fn terminal_runtime_core_revoked_binding_cannot_commit() {
+    let (old, fence) = source(5);
+    let old_claim = claim();
+    assert_eq!(
+        old.install(old_claim, at(1).unwrap()),
+        GuardResult::Applied(())
+    );
+    let effects = std::cell::Cell::new(0);
+    let apply = || effects.set(effects.get() + 1);
+    let update = fence.begin_update().unwrap();
+    assert_eq!(
+        old.with_effect(old_claim, seconds(9), || at(2), apply),
+        GuardResult::Withheld
+    );
+    assert_eq!(update.resolve(None), FenceState::Retired);
+    assert_eq!(
+        old.with_effect(old_claim, seconds(9), || at(3), apply),
+        GuardResult::Retired(Reason::Authority)
+    );
+
+    let (successor, _) = source(6);
+    let successor_claim = Claim {
+        generation: 2,
+        ..old_claim
+    };
+    assert_eq!(
+        successor.install(successor_claim, at(3).unwrap()),
+        GuardResult::Applied(())
+    );
+    assert_eq!(
+        successor.with_effect(successor_claim, seconds(9), || at(4), apply),
+        GuardResult::Applied(())
+    );
+    assert_eq!(
+        old.with_effect(old_claim, seconds(9), || at(5), apply),
+        GuardResult::Retired(Reason::Authority)
+    );
+    assert_eq!(effects.get(), 1);
+}
+
+#[test]
 fn core_tests_terminal_live_supervisor_exact_clock_and_authority() {
     let (source, fence) = source(5);
     let claim = claim();

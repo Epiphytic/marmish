@@ -5,6 +5,7 @@ use super::terminal_frontend_signals::Signals;
 use super::terminal_frontend_tty::Tty;
 use super::terminal_input::Input;
 use super::{Error, Result};
+use crate::terminal_ipc_wire::Close;
 use std::os::fd::RawFd;
 use std::time::{Duration, Instant};
 
@@ -47,6 +48,9 @@ pub(super) trait Channel {
     fn detach_complete(&self) -> bool {
         true
     }
+    fn peer_close(&self) -> Option<Close> {
+        None
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,6 +59,7 @@ pub(super) enum Exit {
     Suspended,
     Interrupted(libc::c_int),
     Closed,
+    PeerClosed(Close),
 }
 
 pub(super) struct Finished {
@@ -68,6 +73,7 @@ pub(super) fn run(
     signals: &Signals,
     channel: &mut impl Channel,
     observer: bool,
+    admitted_size: Option<(u16, u16)>,
 ) -> Finished {
     let mut display = Display::default();
     let startup = signals.take();
@@ -79,7 +85,10 @@ pub(super) fn run(
         (false, Err(POLL))
     } else {
         match tty.raw() {
-            Ok(()) => (true, drive(tty, signals, channel, observer, &mut display)),
+            Ok(()) => (
+                true,
+                drive(tty, signals, channel, observer, admitted_size, &mut display),
+            ),
             Err(error) => (false, Err(error)),
         }
     };
@@ -87,7 +96,8 @@ pub(super) fn run(
         Ok(Exit::Detached) => Marker::Detached,
         Ok(Exit::Suspended) => Marker::Suspended,
         Ok(Exit::Interrupted(_)) => Marker::Interrupted,
-        Ok(Exit::Closed) | Err(_) => Marker::TerminalError,
+        Ok(Exit::PeerClosed(Close::Ended)) => Marker::Ended,
+        Ok(Exit::Closed | Exit::PeerClosed(_)) | Err(_) => Marker::TerminalError,
     };
     let mut cleanup = display.cleanup(marker);
     let began = Instant::now();
@@ -125,6 +135,7 @@ fn drive(
     signals: &Signals,
     channel: &mut impl Channel,
     observer: bool,
+    admitted_size: Option<(u16, u16)>,
     display: &mut Display,
 ) -> Result<Exit> {
     let mut input = Input::new(observer);
@@ -136,7 +147,7 @@ fn drive(
     let mut detaching = false;
     let framed = channel.framed();
     let mut size = tty.geometry()?;
-    let mut resize = None;
+    let mut resize = (!observer && admitted_size.is_some_and(|sent| sent != size)).then_some(size);
     let mut last_tick = Instant::now();
     loop {
         let events = signals.take();
@@ -303,7 +314,7 @@ fn drive(
             && let Some(count) = channel.read_output(&mut output)?
         {
             match count {
-                0 if framed => return Ok(Exit::Detached),
+                0 if framed => return channel.peer_close().map(Exit::PeerClosed).ok_or(IPC),
                 0 => return Ok(Exit::Closed),
                 1..=RECORD => {
                     pending_output = 0..count;

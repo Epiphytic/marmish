@@ -113,7 +113,7 @@ async fn terminal_socket_core_request_and_reply_keep_both_directions_open() {
 }
 
 #[tokio::test]
-async fn terminal_socket_core_pending_and_attached_have_independent_capacity() {
+async fn terminal_runtime_core_pending_and_attached_have_independent_capacity() {
     let mut fixture = Listener::open();
     let mut pending = Vec::new();
     for _ in 0..PENDING {
@@ -121,7 +121,7 @@ async fn terminal_socket_core_pending_and_attached_have_independent_capacity() {
     }
     assert!(matches!(
         start(&fixture.path, single_request(), Instant::now() + STEP).await,
-        Err(Error::Invalid("terminal_busy"))
+        Err(Error::Invalid("terminal_capacity"))
     ));
     let mut attached = Vec::new();
     for (candidate, client) in pending {
@@ -136,11 +136,11 @@ async fn terminal_socket_core_pending_and_attached_have_independent_capacity() {
     let (candidate, mut client) = fixture.offer().await;
     assert!(matches!(
         candidate.admit().await,
-        Err(Error::Invalid("terminal_busy"))
+        Err(Error::Invalid("terminal_capacity"))
     ));
     let response: Response = read_frame(&mut client).await.unwrap();
     assert!(!response.ok);
-    assert_eq!(response.error.as_deref(), Some("terminal_busy"));
+    assert_eq!(response.error.as_deref(), Some("terminal_capacity"));
     assert_eq!(client.read(&mut [0]).await.unwrap(), 0);
     drop(attached.pop());
     let (candidate, _client) = fixture.offer().await;
@@ -338,12 +338,14 @@ async fn terminal_socket_core_pending_owner_watches_deadline_eof_and_early_bytes
     let mut fixture = Listener::open();
     let (mut expires, expiry_client) = fixture.offer().await;
     expires.deadline = Instant::now() + std::time::Duration::from_millis(10);
+    let expires = expires.register().unwrap();
     assert!(matches!(expires.cancelled().await, Error::Timeout));
     drop(expires);
     drop(expiry_client);
 
     let (closed, closed_client) = fixture.offer().await;
     drop(closed_client);
+    let closed = closed.register().unwrap();
     assert!(matches!(
         closed.cancelled().await,
         Error::Invalid("terminal_start_closed")
@@ -352,6 +354,7 @@ async fn terminal_socket_core_pending_owner_watches_deadline_eof_and_early_bytes
 
     let (early, mut early_client) = fixture.offer().await;
     early_client.write_all(b"X").await.unwrap();
+    let early = early.register().unwrap();
     assert!(matches!(
         early.cancelled().await,
         Error::Invalid("terminal_start_invalid")

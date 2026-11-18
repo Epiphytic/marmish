@@ -4,10 +4,8 @@ use nostr::key::{Keys, PublicKey};
 use std::time::{Duration, Instant};
 
 const DEADLINE: Duration = Duration::from_secs(30);
-const PROBE_INTERVAL: Duration = Duration::from_secs(60);
 const AUTHORITY: Error = Error::Invalid("terminal_bootstrap_authority");
 const ORDER: Error = Error::Invalid("terminal_bootstrap_order");
-const RATE: Error = Error::Invalid("terminal_bootstrap_rate");
 const ENTROPY: Error = Error::Invalid("terminal_bootstrap_entropy");
 
 #[derive(Clone, Copy)]
@@ -25,11 +23,10 @@ pub(crate) enum Advance {
     Confirmed,
 }
 
-/// One in-memory exchange and one Probe rate record for a Command binding.
+/// One in-memory transcript. Its owner gates fresh Probe replay and rate.
 pub(crate) struct Exchange {
     codec: Option<Codec>,
     live: Option<Live>,
-    last_probe: Option<Instant>,
 }
 
 pub(crate) struct ConfirmedTerminal {
@@ -43,6 +40,7 @@ pub(crate) struct ConfirmedTerminal {
 struct Live {
     began: Instant,
     last: Body,
+    probe_created_at: Option<u64>,
     ids: [Option<RumorId>; 4],
     sent: [Option<Prepared>; 4],
     local_terminal: Option<Keys>,
@@ -54,6 +52,7 @@ impl Live {
         Self {
             began,
             last: body,
+            probe_created_at: None,
             ids: [Some(id), None, None, None],
             sent: [const { None }; 4],
             local_terminal: None,
@@ -64,6 +63,9 @@ impl Live {
     fn advance(&mut self, id: RumorId, body: Body) {
         self.ids[body.step() as usize] = Some(id);
         self.last = body;
+        if body.step() != Step::Probe {
+            self.probe_created_at = None;
+        }
     }
 
     fn remember(&mut self, prepared: Prepared, body: Body) {
@@ -77,7 +79,6 @@ impl Exchange {
         Self {
             codec: Some(codec),
             live: None,
-            last_probe: None,
         }
     }
 
@@ -101,24 +102,12 @@ impl Exchange {
         Ok(())
     }
 
-    fn admit_probe(&mut self, now: Time) -> Result<()> {
-        if self
-            .last_probe
-            .is_some_and(|last| now.monotonic.saturating_duration_since(last) < PROBE_INTERVAL)
-        {
-            return Err(RATE);
-        }
-        // A valid Probe consumes the rate interval even if generation fails.
-        self.last_probe = Some(now.monotonic);
-        Ok(())
-    }
-
     pub(crate) fn start(&mut self, signer: &Keys, now: Time, authority: bool) -> Result<()> {
         self.refresh(now, authority)?;
-        if self.codec.as_ref().ok_or(AUTHORITY)?.binding.role != Role::Client {
+        if self.codec.as_ref().ok_or(AUTHORITY)?.binding.role != Role::Client || self.live.is_some()
+        {
             return Err(ORDER);
         }
-        self.admit_probe(now)?;
         let body = Body::Probe {
             client: challenge()?,
         };
@@ -128,6 +117,7 @@ impl Exchange {
             .ok_or(AUTHORITY)?
             .wrap(signer, body, now.unix)?;
         let mut live = Live::probe(now.monotonic, body, prepared.id);
+        live.probe_created_at = Some(now.unix);
         live.remember(prepared, body);
         self.live = Some(live);
         Ok(())
@@ -136,6 +126,26 @@ impl Exchange {
     pub(crate) fn start_bound(&mut self, signer: &BoundSigning, now: Time) -> Result<()> {
         let keys = signer.for_codec(self.codec.as_ref().ok_or(AUTHORITY)?)?;
         self.start(keys, now, true)
+    }
+
+    pub(crate) fn rewrap_probe_bound(
+        &mut self,
+        signer: &BoundSigning,
+        now: Time,
+    ) -> Result<Vec<u8>> {
+        self.refresh(now, true)?;
+        let codec = self.codec.as_ref().ok_or(AUTHORITY)?;
+        let keys = signer.for_codec(codec)?;
+        let live = self.live.as_ref().ok_or(ORDER)?;
+        if codec.binding.role != Role::Client || !matches!(live.last, Body::Probe { .. }) {
+            return Err(ORDER);
+        }
+        let original = live.sent[Step::Probe as usize].as_ref().ok_or(ORDER)?;
+        let retry = codec.wrap(keys, live.last, live.probe_created_at.ok_or(ORDER)?)?;
+        if retry.id != original.id || live.ids[Step::Probe as usize] != Some(retry.id) {
+            return Err(ORDER);
+        }
+        Ok(retry.frame)
     }
 
     pub(crate) fn receive_bound(
@@ -149,6 +159,7 @@ impl Exchange {
         self.receive_checked(keys, frame, now, true, admit)
     }
 
+    #[cfg(test)]
     pub(crate) fn receive(
         &mut self,
         signer: &Keys,
@@ -183,10 +194,9 @@ impl Exchange {
             return Ok(Advance::Duplicate);
         }
         if let Body::Probe { client } = verified.body {
-            if !admit(Step::Probe, verified.id)? {
+            if self.live.is_some() || !admit(Step::Probe, verified.id)? {
                 return Ok(Advance::Duplicate);
             }
-            self.admit_probe(now)?;
             let response = Body::Challenge {
                 pair: Pair {
                     client,
@@ -360,4 +370,57 @@ fn challenge() -> Result<Challenge> {
     let mut bytes = [0; 16];
     getrandom::fill(&mut bytes).map_err(|_| ENTROPY)?;
     Ok(bytes)
+}
+
+#[cfg(test)]
+#[test]
+fn probe_rewrap_refuses_changed_identity_retirement_and_cutoff() {
+    use crate::command_wire::Account;
+    use crate::mdk_adapter::{AuthenticatedCommandContext, CommandDirection};
+    use std::sync::Arc;
+
+    let local = Arc::new(Keys::generate());
+    let remote: Account = Keys::generate().public_key().to_bytes();
+    let context = AuthenticatedCommandContext::test_fixture(
+        local.public_key().to_bytes(),
+        remote,
+        b"Probe retry scope".to_vec(),
+        [1; 16],
+        CommandDirection::Client,
+    );
+    let (signer, codec) = BoundSigning::bind(&context, local).unwrap();
+    let began = Time {
+        unix: 10_000,
+        monotonic: Instant::now(),
+        continuous: None,
+    };
+    let mut exchange = Exchange::new(codec);
+    exchange.start_bound(&signer, began).unwrap();
+    exchange.live.as_mut().unwrap().sent[Step::Probe as usize]
+        .as_mut()
+        .unwrap()
+        .id = [0; 32];
+    assert!(matches!(
+        exchange.rewrap_probe_bound(&signer, began),
+        Err(Error::Invalid("terminal_bootstrap_order"))
+    ));
+    let cutoff = Time {
+        unix: began.unix + DEADLINE.as_secs(),
+        monotonic: began.monotonic + DEADLINE,
+        ..began
+    };
+    assert!(matches!(
+        exchange.rewrap_probe_bound(&signer, cutoff),
+        Err(Error::Invalid("terminal_bootstrap_order"))
+    ));
+    assert!(exchange.live.is_none());
+    exchange.start_bound(&signer, cutoff).unwrap();
+    assert!(matches!(
+        exchange.refresh(cutoff, false),
+        Err(Error::Invalid("terminal_bootstrap_authority"))
+    ));
+    assert!(matches!(
+        exchange.rewrap_probe_bound(&signer, cutoff),
+        Err(Error::Invalid("terminal_bootstrap_authority"))
+    ));
 }

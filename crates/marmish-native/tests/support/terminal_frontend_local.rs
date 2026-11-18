@@ -15,12 +15,20 @@ use std::time::{Duration, Instant};
 mod terminal_frontend;
 #[path = "../../src/terminal_frontend_display.rs"]
 mod terminal_frontend_display;
+#[expect(
+    dead_code,
+    reason = "job-control stop is exercised by the installed binary"
+)]
 #[path = "../../src/terminal_frontend_signals.rs"]
 mod terminal_frontend_signals;
 #[path = "../../src/terminal_frontend_tty.rs"]
 mod terminal_frontend_tty;
 #[path = "../../src/terminal_input.rs"]
 mod terminal_input;
+#[expect(
+    dead_code,
+    reason = "the standalone foreground harness omits network batch admission"
+)]
 #[path = "../../src/terminal_output.rs"]
 mod terminal_output;
 #[path = "../../src/terminal_socket_frontend.rs"]
@@ -101,6 +109,20 @@ mod fixture {
             }
         }
 
+        pub(super) fn inherited_job_pty() -> Self {
+            let slave = unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_DUPFD_CLOEXEC, 3) };
+            assert!(slave >= 3);
+            assert_eq!(
+                unsafe { libc::fcntl(CHANNEL_FD, libc::F_SETFD, libc::FD_CLOEXEC) },
+                0
+            );
+            Self {
+                master: unsafe { File::from_raw_fd(CHANNEL_FD) },
+                slave: unsafe { File::from_raw_fd(slave) },
+                captured: Vec::new(),
+            }
+        }
+
         pub(super) fn attrs(&self) -> libc::termios {
             let mut attrs = MaybeUninit::zeroed();
             assert_eq!(
@@ -171,29 +193,56 @@ mod fixture {
             mode: &str,
             channel: Option<&UnixStream>,
         ) -> Self {
-            let stdin = Stdio::from(in_tty.slave.try_clone().unwrap());
-            let stdout = Stdio::from(out_tty.slave.try_clone().unwrap());
+            let cmd = Self::reexecute(in_tty, out_tty, mode);
+            Self::spawn_with_tty(
+                cmd,
+                mode != "no-control",
+                channel.map(AsRawFd::as_raw_fd),
+                false,
+            )
+        }
+
+        fn reexecute(in_tty: &Pty, out_tty: &Pty, mode: &str) -> Command {
             let mut cmd = Command::new(std::env::current_exe().unwrap());
             cmd.args(["--exact", CHILD, "--ignored", "--nocapture"])
                 .env_clear()
                 .env(MODE, mode)
-                .stdin(stdin)
-                .stdout(stdout)
+                .stdin(Stdio::from(in_tty.slave.try_clone().unwrap()))
+                .stdout(Stdio::from(out_tty.slave.try_clone().unwrap()))
                 .stderr(Stdio::inherit());
-            let inherited = channel.map(AsRawFd::as_raw_fd);
-            let take_controlling = mode != "no-control";
+            cmd
+        }
+
+        pub(super) fn spawn_job_fixture(terminal: &Pty, mode: &str) -> Self {
+            let cmd = Self::reexecute(terminal, terminal, mode);
+            Self::spawn_with_tty(cmd, true, Some(terminal.master.as_raw_fd()), false)
+        }
+
+        pub(super) fn spawn_installed(
+            terminal: &Pty,
+            arguments: &[&std::ffi::OsStr],
+            job_child: bool,
+        ) -> Self {
+            let mut cmd = Command::new(env!("CARGO_BIN_EXE_marmish"));
+            cmd.args(arguments)
+                .stdin(Stdio::from(terminal.slave.try_clone().unwrap()))
+                .stdout(Stdio::from(terminal.slave.try_clone().unwrap()))
+                .stderr(Stdio::from(terminal.slave.try_clone().unwrap()));
+            Self::spawn_with_tty(cmd, true, None, job_child)
+        }
+
+        fn spawn_with_tty(
+            mut cmd: Command,
+            take_controlling: bool,
+            inherited: Option<libc::c_int>,
+            job_child: bool,
+        ) -> Self {
             assert!(inherited != Some(CHANNEL_FD));
             // Only async-signal-safe operations run between fork and exec.
             unsafe {
                 cmd.pre_exec(move || {
                     if let Some(fd) = inherited
                         && libc::dup2(fd, CHANNEL_FD) != CHANNEL_FD
-                    {
-                        return Err(io::Error::last_os_error());
-                    }
-                    if libc::setsid() == -1
-                        || (take_controlling
-                            && libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY, 0) == -1)
                     {
                         return Err(io::Error::last_os_error());
                     }
@@ -210,6 +259,20 @@ mod fixture {
                     let error = libc::pthread_sigmask(libc::SIG_BLOCK, &mask, std::ptr::null_mut());
                     if error != 0 {
                         return Err(io::Error::from_raw_os_error(error));
+                    }
+                    if job_child {
+                        // The test parent owns the same tty session, just as a
+                        // job-control shell owns the calling client's session.
+                        if libc::setpgid(0, 0) == -1
+                            || libc::tcsetpgrp(libc::STDIN_FILENO, libc::getpgrp()) == -1
+                        {
+                            return Err(io::Error::last_os_error());
+                        }
+                    } else if libc::setsid() == -1
+                        || (take_controlling
+                            && libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY, 0) == -1)
+                    {
+                        return Err(io::Error::last_os_error());
                     }
                     Ok(())
                 });
@@ -288,6 +351,17 @@ fn run_child() -> i32 {
         signals::verify_install_rollback();
         return 0;
     }
+    match mode.as_str() {
+        "installed-job-default" => {
+            installed_cooked_admission_resize_and_resume(fixture::Pty::inherited_job_pty());
+            return 0;
+        }
+        "installed-job-new" => {
+            installed_cancels_new(fixture::Pty::inherited_job_pty());
+            return 0;
+        }
+        _ => {}
+    }
     let signals = signals::Signals::install().unwrap();
     assert!(signals::Signals::install().is_err());
     match mode.as_str() {
@@ -328,7 +402,7 @@ fn run_child() -> i32 {
                 );
             }
             let mut bridge = Bridge { socket, observer };
-            let result = terminal_frontend::run(&mut tty, &signals, &mut bridge, observer);
+            let result = terminal_frontend::run(&mut tty, &signals, &mut bridge, observer, None);
             result.restored_termios.unwrap();
             assert!(result.restored_display);
             use terminal_frontend::Exit;
@@ -355,10 +429,15 @@ fn run_child() -> i32 {
                 crate::terminal_ipc_wire::Role::Writer,
             )
             .unwrap();
-            let result = terminal_frontend::run(&mut tty, &signals, &mut channel, false);
+            let result = terminal_frontend::run(&mut tty, &signals, &mut channel, false, None);
             result.restored_termios.unwrap();
             assert!(result.restored_display);
-            assert_eq!(result.reason.unwrap(), terminal_frontend::Exit::Detached);
+            let expected = if mode == "framed-close" {
+                terminal_frontend::Exit::PeerClosed(crate::terminal_ipc_wire::Close::Ended)
+            } else {
+                terminal_frontend::Exit::Detached
+            };
+            assert_eq!(result.reason.unwrap(), expected);
             return 0;
         }
         "active" => {}
@@ -562,6 +641,357 @@ fn terminal_frontend_displays_sanitized_output_and_restores() {
         );
         assert_attrs(&before, &frontend.attrs());
     }
+}
+
+struct InstalledIpc {
+    state: tempfile::TempDir,
+    socket: std::os::unix::net::UnixListener,
+    path: std::path::PathBuf,
+}
+
+impl InstalledIpc {
+    const ACCOUNT: &str = "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+    const SESSION: &str = "0123456789abcdef0123456789abcdef";
+    const RELAY: &str = "wss://relay.example/";
+
+    fn new() -> Self {
+        use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
+        let state = tempfile::Builder::new()
+            .prefix("mw-tty-")
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let home = state.path().join("default");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&home)
+            .unwrap();
+        let config = serde_json::json!({
+            "version": 1, "role": "client", "tor": "auto", "relays": [Self::RELAY],
+            "trusted_remotes": [], "execution_clients": [], "command_policy": {"version": 1},
+            "cwd": null, "limits": {}, "aliases": {}
+        });
+        let mut file = File::options()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(home.join("config.json"))
+            .unwrap();
+        serde_json::to_writer(&mut file, &config).unwrap();
+        let path = state.path().join("m");
+        let socket = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        Self {
+            state,
+            socket,
+            path,
+        }
+    }
+
+    fn spawn(&self, tty: &fixture::Pty, new: bool, job_child: bool) -> fixture::Held {
+        use nostr::nips::nip19::ToBech32 as _;
+        use std::ffi::OsStr;
+        let npub = nostr::key::PublicKey::from_hex(Self::ACCOUNT)
+            .unwrap()
+            .to_bech32()
+            .unwrap();
+        let mut args = vec![
+            OsStr::new("--state-dir"),
+            self.state.path().as_os_str(),
+            OsStr::new("--socket"),
+            self.path.as_os_str(),
+            OsStr::new("terminal"),
+            OsStr::new(&npub),
+        ];
+        if new {
+            args.push(OsStr::new("--new"));
+        }
+        fixture::Held::spawn_installed(tty, &args, job_child)
+    }
+
+    fn accept(&self) -> UnixStream {
+        assert!(poll(
+            self.socket.as_raw_fd(),
+            libc::POLLIN,
+            LIMIT.as_millis() as i32
+        ));
+        let (stream, _) = self.socket.accept().unwrap();
+        stream.set_read_timeout(Some(LIMIT)).unwrap();
+        stream.set_write_timeout(Some(LIMIT)).unwrap();
+        stream
+    }
+
+    fn reply(stream: &mut UnixStream, value: serde_json::Value) {
+        let data = value.to_string();
+        stream
+            .write_all(&(data.len() as u32).to_be_bytes())
+            .unwrap();
+        stream.write_all(data.as_bytes()).unwrap();
+    }
+
+    fn read(stream: &mut UnixStream) -> serde_json::Value {
+        let mut length = [0; 4];
+        stream.read_exact(&mut length).unwrap();
+        let length = u32::from_be_bytes(length) as usize;
+        assert!((1..=4096).contains(&length));
+        let mut data = vec![0; length];
+        stream.read_exact(&mut data).unwrap();
+        serde_json::from_slice(&data).unwrap()
+    }
+
+    fn preparing(&self) -> UnixStream {
+        use serde_json::json;
+        let mut status = self.accept();
+        assert_eq!(Self::read(&mut status), json!({"operation":"status"}));
+        Self::reply(
+            &mut status,
+            json!({"ok":true,"result":{"state":"ready"},"error":null}),
+        );
+        drop(status);
+        let mut prepare = self.accept();
+        let request = Self::read(&mut prepare);
+        assert_eq!(request["operation"], "command_prepare");
+        assert_eq!(request["remote"], Self::ACCOUNT);
+        assert_eq!(request["relays"], json!([Self::RELAY]));
+        assert!(request["fresh"].is_null());
+        prepare
+    }
+
+    fn pending(&self, attach: &str, (rows, columns): (u16, u16)) -> UnixStream {
+        use serde_json::json;
+        let mut prepare = self.preparing();
+        Self::reply(
+            &mut prepare,
+            json!({
+                "ok": true,
+                "command": {"state":"ready","session":Self::SESSION,"local_account":Self::ACCOUNT}
+            }),
+        );
+        drop(prepare);
+        let mut start = self.accept();
+        assert_eq!(
+            Self::read(&mut start),
+            json!({"operation":"terminal_start","request":{
+                "remote":Self::ACCOUNT,"session":Self::SESSION,"relays":[Self::RELAY],
+                "rows":rows,"columns":columns,"attach":attach
+            }})
+        );
+        start
+    }
+}
+
+#[test]
+#[ignore = "native controlling PTY and installed frontend process"]
+fn terminal_installed_frontend_cooked_admission_resize_and_resume() {
+    let tty = fixture::Pty::new();
+    fixture::Held::spawn_job_fixture(&tty, "installed-job-default").finish(0);
+}
+
+fn installed_cooked_admission_resize_and_resume(mut tty: fixture::Pty) {
+    use super::terminal_ipc_wire::{Close, Direction, Record, Role, encode};
+    use serde_json::json;
+    let before = tty.attrs();
+    let ipc = InstalledIpc::new();
+    let mut child = ipc.spawn(&tty, false, true);
+    let mut first = ipc.pending("default", (37, 99));
+    assert_attrs(&before, &tty.attrs());
+    tty.resize(42, 102);
+    InstalledIpc::reply(&mut first, json!({"ok":true,"terminal_stream":"writer"}));
+    let resize = encode(
+        Direction::ToDaemon,
+        Role::Writer,
+        Record::Resize {
+            rows: 42,
+            columns: 102,
+        },
+    )
+    .unwrap();
+    let mut bytes = vec![0; resize.len()];
+    first.read_exact(&mut bytes).unwrap();
+    assert_eq!(bytes, resize);
+    assert_ne!(
+        tty.attrs().c_lflag & libc::ICANON,
+        before.c_lflag & libc::ICANON
+    );
+    child.signal(libc::SIGTSTP);
+    tty.read_through(b"\r\n[marmish: suspended]\r\n");
+    child.stopped();
+    assert_attrs(&before, &tty.attrs());
+    assert_eq!(first.read(&mut [0]).unwrap(), 0);
+
+    child.signal(libc::SIGCONT);
+    let mut resumed = ipc.pending("default", (42, 102));
+    assert_attrs(&before, &tty.attrs());
+    InstalledIpc::reply(&mut resumed, json!({"ok":true,"terminal_stream":"writer"}));
+    let ended = encode(
+        Direction::ToClient,
+        Role::Writer,
+        Record::Close(Close::Ended),
+    )
+    .unwrap();
+    resumed.write_all(&ended).unwrap();
+    resumed.shutdown(std::net::Shutdown::Write).unwrap();
+    tty.read_through(b"\r\n[marmish: terminal ended]\r\n");
+    child.finish(0);
+    assert_attrs(&before, &tty.attrs());
+}
+
+#[test]
+#[ignore = "native controlling PTY and installed frontend process"]
+fn terminal_installed_frontend_rejects_old_or_malformed_daemon_and_cancels_new() {
+    use serde_json::json;
+    for (reply, category) in [
+        (
+            json!({"ok":false,"result":null,"error":"invalid_request"}),
+            b"terminal_daemon_upgrade_required".as_slice(),
+        ),
+        (
+            json!({"ok":false,"result":null,"error":"terminal_grant_denied"}),
+            b"terminal_grant_denied".as_slice(),
+        ),
+        (
+            json!({"ok":true,"terminal_stream":"writer","extra":true}),
+            b"terminal_start_response".as_slice(),
+        ),
+    ] {
+        let mut tty = fixture::Pty::new();
+        let before = tty.attrs();
+        let ipc = InstalledIpc::new();
+        let mut child = ipc.spawn(&tty, false, false);
+        let mut request = ipc.pending("default", (37, 99));
+        assert_attrs(&before, &tty.attrs());
+        InstalledIpc::reply(&mut request, reply);
+        tty.read_through(category);
+        child.finish(255);
+        assert_attrs(&before, &tty.attrs());
+    }
+
+    let tty = fixture::Pty::new();
+    fixture::Held::spawn_job_fixture(&tty, "installed-job-new").finish(0);
+}
+
+fn installed_cancels_new(mut tty: fixture::Pty) {
+    let before = tty.attrs();
+    let ipc = InstalledIpc::new();
+    let mut child = ipc.spawn(&tty, true, true);
+    let mut request = ipc.pending("new", (37, 99));
+    child.signal(libc::SIGTSTP);
+    child.stopped();
+    assert_eq!(request.read(&mut [0]).unwrap(), 0);
+    assert_attrs(&before, &tty.attrs());
+    child.signal(libc::SIGCONT);
+    tty.read_through(b"terminal_new_reattach_unavailable");
+    child.finish(255);
+    assert!(!poll(ipc.socket.as_raw_fd(), libc::POLLIN, 0));
+    assert_attrs(&before, &tty.attrs());
+}
+
+#[test]
+#[ignore = "native controlling PTY and installed frontend process"]
+fn terminal_installed_frontend_orphan_suspend_and_cooked_interrupt() {
+    let tty = fixture::Pty::new();
+    let before = tty.attrs();
+    let ipc = InstalledIpc::new();
+    let mut child = ipc.spawn(&tty, false, false);
+    let mut first = ipc.pending("default", (37, 99));
+    assert_attrs(&before, &tty.attrs());
+
+    child.signal(libc::SIGTSTP);
+    assert_eq!(first.read(&mut [0]).unwrap(), 0);
+    // This process group is orphaned. It progresses without any SIGCONT.
+    let mut resumed = ipc.pending("default", (37, 99));
+    child.signal(libc::SIGINT);
+    assert_eq!(resumed.read(&mut [0]).unwrap(), 0);
+    child.finish(128 + libc::SIGINT);
+    assert_attrs(&before, &tty.attrs());
+}
+
+#[test]
+#[ignore = "native controlling PTY and installed frontend process"]
+fn terminal_installed_frontend_reports_frozen_command_binding() {
+    use serde_json::json;
+    let mut tty = fixture::Pty::new();
+    let before = tty.attrs();
+    let ipc = InstalledIpc::new();
+    let mut child = ipc.spawn(&tty, false, false);
+    let mut prepare = ipc.preparing();
+    InstalledIpc::reply(
+        &mut prepare,
+        json!({
+            "ok": true,
+            "command": {"state":"failure","category":"command_preparation_binding","handle":null}
+        }),
+    );
+    tty.read_through(b"terminal_command_binding");
+    child.finish(255);
+    assert!(!poll(ipc.socket.as_raw_fd(), libc::POLLIN, 0));
+    assert_attrs(&before, &tty.attrs());
+}
+
+#[test]
+#[ignore = "native controlling PTY and installed frontend process"]
+fn terminal_installed_frontend_reports_typed_idle_close() {
+    use super::terminal_ipc_wire::{Close, Direction, Record, Role, encode};
+    use serde_json::json;
+    let mut tty = fixture::Pty::new();
+    let before = tty.attrs();
+    let ipc = InstalledIpc::new();
+    let mut child = ipc.spawn(&tty, false, false);
+    let mut stream = ipc.pending("default", (37, 99));
+    InstalledIpc::reply(&mut stream, json!({"ok":true,"terminal_stream":"writer"}));
+    let idle = encode(
+        Direction::ToClient,
+        Role::Writer,
+        Record::Close(Close::Idle),
+    )
+    .unwrap();
+    stream.write_all(&idle).unwrap();
+    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    tty.read_through(b"terminal_idle");
+    child.finish(255);
+    assert_attrs(&before, &tty.attrs());
+}
+
+#[test]
+#[ignore = "native controlling PTY and installed frontend process"]
+fn terminal_installed_frontend_preserves_hangup_exit() {
+    use super::terminal_ipc_wire::{Direction, Record, Role, encode};
+    use serde_json::json;
+    let mut tty = fixture::Pty::new();
+    let ipc = InstalledIpc::new();
+    let mut child = ipc.spawn(&tty, false, false);
+    let mut stream = ipc.pending("default", (37, 99));
+    InstalledIpc::reply(&mut stream, json!({"ok":true,"terminal_stream":"writer"}));
+    let output = encode(
+        Direction::ToClient,
+        Role::Writer,
+        Record::Output {
+            id: 1.try_into().unwrap(),
+            bytes: READY,
+        },
+    )
+    .unwrap();
+    stream.write_all(&output).unwrap();
+    tty.read_through(READY);
+    drop(tty.master);
+    child.finish(128 + libc::SIGHUP);
+}
+
+#[test]
+#[ignore = "installed frontend process"]
+fn terminal_installed_frontend_requires_tty_before_preparation() {
+    let output = Command::new(env!("CARGO_BIN_EXE_marmish"))
+        .args([
+            "--state-dir",
+            "/nonexistent-marmish-fixture",
+            "terminal",
+            "fixture",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(255));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("terminal_tty"));
 }
 
 #[test]
@@ -825,7 +1255,12 @@ fn terminal_socket_frontend_native_pty() {
             daemon.flush(Instant::now(), limit).unwrap();
             drop(daemon);
         }
-        frontend.read_through(DETACH_MARKER);
+        let marker = if mode == "framed-close" {
+            b"\r\n[marmish: terminal ended]\r\n".as_slice()
+        } else {
+            DETACH_MARKER
+        };
+        frontend.read_through(marker);
         child.finish(0);
         frontend.drain_after_exit();
         assert_attrs(&before, &frontend.attrs());

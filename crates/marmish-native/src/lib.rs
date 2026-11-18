@@ -33,16 +33,12 @@ mod stream_runner;
 mod stream_service;
 #[doc(hidden)]
 pub mod terminal_backend;
-#[cfg(test)]
 mod terminal_bootstrap;
-#[cfg(test)]
 mod terminal_fence;
-#[cfg(test)]
 mod terminal_ipc_wire;
-#[cfg(test)]
 mod terminal_output;
-#[cfg(test)]
 mod terminal_output_batches;
+mod terminal_owner;
 pub mod transport;
 pub use error::{Error, Result};
 pub(crate) use mdk_adapter::command_local;
@@ -111,7 +107,6 @@ mod copy_commit_hook;
 #[cfg(test)]
 mod peer_host_sampling_proof_tests;
 
-#[cfg(test)]
 mod terminal_frames;
 
 #[cfg(test)]

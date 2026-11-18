@@ -190,5 +190,6 @@ fn retryable(error: &io::Error) -> bool {
     )
 }
 
+#[cfg(test)]
 #[path = "terminal_socket_io_tests.rs"]
 mod tests;

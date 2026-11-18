@@ -2,8 +2,7 @@
 #[path = "terminal_backend_os.rs"]
 mod os;
 #[path = "terminal_backend_paths.rs"]
-mod paths;
-#[cfg(test)]
+pub(crate) mod paths;
 #[path = "terminal_supervisor.rs"]
 pub(crate) mod supervisor;
 
@@ -505,6 +504,31 @@ impl Attachment {
 
     pub fn resize(&mut self, generation: u64, rows: u16, cols: u16) -> Result<()> {
         self.check_sink(generation)?;
+        os::resize(self.master.as_ref().ok_or(IO)?.as_raw_fd(), rows, cols)
+    }
+
+    fn geometry(&self) -> Result<(u16, u16)> {
+        let master = self.master.as_ref().ok_or(IO)?;
+        let mut size = libc::winsize {
+            ws_row: 0,
+            ws_col: 0,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: the live descriptor and writable winsize outlive the ioctl.
+        if unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCGWINSZ, &raw mut size) } != 0 {
+            return Err(IO);
+        }
+        Ok((size.ws_row, size.ws_col))
+    }
+
+    fn mirror_geometry(&mut self, generation: u64, rows: u16, cols: u16) -> Result<()> {
+        if self.generation != generation {
+            return Err(STALE);
+        }
+        if self.role != Role::Observer {
+            return Err(READ_ONLY);
+        }
         os::resize(self.master.as_ref().ok_or(IO)?.as_raw_fd(), rows, cols)
     }
 

@@ -12,6 +12,7 @@ use sha2::{Digest as _, Sha256};
 use std::sync::Arc;
 use zeroize::Zeroizing;
 
+#[cfg(test)]
 #[path = "terminal_bootstrap_core_tests.rs"]
 mod core_tests;
 #[path = "terminal_enrollment_codec.rs"]
@@ -234,6 +235,7 @@ impl Codec {
         Keys::new(self.inbound.secret.clone())
     }
 
+    #[cfg(test)]
     pub(crate) fn outbound_alias(&self) -> PublicKey {
         self.outbound
     }

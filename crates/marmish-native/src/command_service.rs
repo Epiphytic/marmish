@@ -138,7 +138,6 @@ impl CommandService {
             && matches!(self.config.role(), Role::Server | Role::Both)
             && self.config.execution_clients().contains(peer)
     }
-    #[cfg(test)]
     pub(crate) fn can_accept_terminal(&self, peer: &Account) -> bool {
         self.can_accept(peer) && self.config.terminal_allowed(peer)
     }

@@ -150,5 +150,6 @@ impl Drop for UpdateToken {
     }
 }
 
+#[cfg(test)]
 #[path = "terminal_fence_tests.rs"]
 mod tests;

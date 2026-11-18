@@ -1,4 +1,4 @@
-//! Test-gated Terminal v1 framing. Callers establish MLS and grant authority.
+//! Terminal v1 framing. Callers establish MLS and grant authority.
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use cgka_traits::app_event::{AppMessageRetentionDecision, MarmotAppEvent};
 use std::time::Duration;
@@ -16,7 +16,7 @@ const HEADER: usize = 60;
 #[path = "terminal_frames_core_tests.rs"]
 mod core_tests;
 #[path = "terminal_frames_delivery.rs"]
-mod delivery;
+pub(crate) mod delivery;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Direction {
@@ -25,7 +25,7 @@ pub(crate) enum Direction {
 }
 
 impl Direction {
-    fn reverse(self) -> Self {
+    pub(crate) fn reverse(self) -> Self {
         match self {
             Self::ToServer => Self::FromServer,
             Self::FromServer => Self::ToServer,
@@ -36,6 +36,10 @@ impl Direction {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Role {
     Writer,
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "writer-only activation cannot admit an observer")
+    )]
     Observer,
 }
 

@@ -769,7 +769,8 @@ async fn refuses_incomplete_auth_and_retires_lost_exact_wss_source() {
         let generation = NonZeroU64::new(1).unwrap();
         let fence = AttachmentFence::new(generation, [1; 32]);
         let authority =
-            Authority::from_fence(fence, Instant::now() + Duration::from_secs(8)).unwrap();
+            Authority::from_fence(fence, Instant::now() + Duration::from_secs(8), None, None)
+                .unwrap();
         let endpoint = TransportEndpoint(relay.url.to_string());
         let mut lane = TerminalLane::open_verified(
             relay.connector(temp.path(), true, None),
@@ -813,7 +814,8 @@ async fn refuses_incomplete_auth_and_retires_lost_exact_wss_source() {
         let generation = NonZeroU64::new(1).unwrap();
         let fence = AttachmentFence::new(generation, [1; 32]);
         let authority =
-            Authority::from_fence(fence, Instant::now() + Duration::from_secs(8)).unwrap();
+            Authority::from_fence(fence, Instant::now() + Duration::from_secs(8), None, None)
+                .unwrap();
         let endpoint = TransportEndpoint(relay.url.to_string());
         let mut lane = TerminalLane::open_verified(
             relay.connector(temp.path(), true, None),

@@ -185,6 +185,7 @@ mod tests {
         };
         observe(&mut state, &relay, &closed).unwrap();
         observe(&mut state, &relay, &exact).unwrap();
+        assert!(!state.is_ready());
         observe(&mut state, &relay, &challenge).unwrap();
         let auth_id = auth.make_auth_event(&relay, "test").await.unwrap().id;
         let accepted = RelayMessage::Ok {
@@ -198,6 +199,8 @@ mod tests {
         observe(&mut state, &relay, &accepted).unwrap();
         observe(&mut state, &relay, &wrong).unwrap();
         assert!(!state.is_ready());
+        observe(&mut state, &relay, &exact).unwrap();
+        assert!(state.is_ready());
         observe(&mut state, &relay, &exact).unwrap();
         assert!(state.is_ready());
         assert!(observe(&mut state, &relay, &closed).is_err());

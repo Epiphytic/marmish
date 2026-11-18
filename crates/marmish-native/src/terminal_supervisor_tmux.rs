@@ -83,6 +83,7 @@ impl Manager {
         self.root.join(hex::encode(slot.0)).join("s")
     }
 
+    #[cfg(test)]
     pub fn create(&mut self, slot: Slot, rows: u16, cols: u16) -> Result<Inventory> {
         self.create_until(slot, rows, cols, Instant::now() + TIMEOUT * 2, || Ok(()))
     }
@@ -172,6 +173,7 @@ impl Manager {
         self.inventory_until(slot, None, deadline)
     }
 
+    #[cfg(test)]
     pub fn inventory(&mut self, slot: Slot, native_id: Option<u32>) -> Result<Inventory> {
         self.inventory_until(slot, native_id, Instant::now() + TIMEOUT)
     }
@@ -229,6 +231,7 @@ impl Manager {
         Ok(raw.len() / 2)
     }
 
+    #[cfg(test)]
     pub fn wait_clients(
         &mut self,
         slot: SlotId,
@@ -274,6 +277,7 @@ impl Manager {
         }
     }
 
+    #[cfg(test)]
     pub fn terminate(&mut self, slot: SlotId, inventory: Inventory) -> Result<()> {
         let socket = self.socket(slot);
         let until = Instant::now() + TIMEOUT;

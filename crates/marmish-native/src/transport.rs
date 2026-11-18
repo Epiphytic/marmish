@@ -159,7 +159,6 @@ impl RelayPolicy {
     pub fn limits(&self) -> TransportLimits {
         self.limits
     }
-    #[cfg(test)]
     pub(crate) fn direct_wss_scope(&self, endpoint: &str) -> Option<Self> {
         let index = self.urls.iter().position(|url| url.as_str() == endpoint)?;
         if self.routes[index] != Route::Direct || !endpoint.starts_with("wss://") {
@@ -357,7 +356,6 @@ impl RelayConnector {
         Ok(connector)
     }
 
-    #[cfg(test)]
     pub(crate) async fn reap_terminal_socket(&self, deadline: Instant) -> Result<()> {
         let [slot] = self.0.slots.as_slice() else {
             return Err(Error::Transport("terminal_enrollment_reap"));
@@ -365,12 +363,15 @@ impl RelayConnector {
         // Cancel before waiting, so no reconnect can take the single-route
         // slot. Its permit lives in both halves of the actual SDK socket.
         self.0.cancelled.cancel();
-        let reaped = timeout_at(deadline, slot.acquire())
+        let permit = timeout_at(deadline, slot.acquire())
             .await
             .map_err(|_| Error::Timeout)
-            .and_then(|result| result.map_err(|_| Error::Transport("terminal_enrollment_reap")));
+            .and_then(|result| result.map_err(|_| Error::Transport("terminal_enrollment_reap")))?;
+        // Keep the semaphore open after a timeout so the same owner can
+        // retry the proof. A cancelled connector cannot reconnect meanwhile.
         self.cancel();
-        reaped.map(drop)
+        drop(permit);
+        Ok(())
     }
 
     pub fn policy(&self) -> &RelayPolicy {
@@ -1167,6 +1168,27 @@ mod tests {
             drop(occupied);
             assert!(connector.0.slots[0].clone().try_acquire_owned().is_ok());
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn terminal_runtime_core_reap_waits_for_both_socket_halves_after_timeout() {
+        let connector = connector(policy(&["wss://example.com/"], RouteMode::Off).unwrap());
+        let sink = Arc::new(connector.0.slots[0].clone().acquire_owned().await.unwrap());
+        let stream = sink.clone();
+        let retry = Duration::from_millis(250);
+
+        let first = connector.reap_terminal_socket(Instant::now() + retry).await;
+        assert!(matches!(first, Err(Error::Timeout)));
+        assert!(connector.0.cancelled.is_cancelled());
+        drop(sink);
+        let second = connector.reap_terminal_socket(Instant::now() + retry).await;
+        assert!(matches!(second, Err(Error::Timeout)));
+        drop(stream);
+        connector
+            .reap_terminal_socket(Instant::now() + retry)
+            .await
+            .unwrap();
+        assert!(connector.0.slots[0].is_closed());
     }
 
     #[tokio::test(start_paused = true)]

@@ -126,6 +126,7 @@ impl Display {
 
 pub(super) enum Marker {
     Detached,
+    Ended,
     Suspended,
     Interrupted,
     TerminalError,
@@ -208,6 +209,7 @@ fn normalization(alternate: bool, incomplete: bool, marker: &Marker) -> Vec<u8> 
     );
     bytes.extend_from_slice(match marker {
         Marker::Detached => b"\r\n[marmish: detached]\r\n",
+        Marker::Ended => b"\r\n[marmish: terminal ended]\r\n",
         Marker::Suspended => b"\r\n[marmish: suspended]\r\n",
         Marker::Interrupted => b"\r\n[marmish: interrupted]\r\n",
         Marker::TerminalError => b"\r\n[marmish: terminal error]\r\n",
@@ -292,6 +294,7 @@ mod core_tests_terminal_frontend {
     fn cleanup_finishes_only_the_partial_unit_and_uses_local_markers() -> Result<()> {
         for (marker, ending) in [
             (Marker::Detached, b"\r\n[marmish: detached]\r\n".as_slice()),
+            (Marker::Ended, b"\r\n[marmish: terminal ended]\r\n"),
             (Marker::Suspended, b"\r\n[marmish: suspended]\r\n"),
             (Marker::Interrupted, b"\r\n[marmish: interrupted]\r\n"),
             (Marker::TerminalError, b"\r\n[marmish: terminal error]\r\n"),

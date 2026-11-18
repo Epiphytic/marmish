@@ -3,6 +3,7 @@
 use super::terminal_frontend::Channel;
 use super::terminal_socket_session::{ForegroundSocket, FrontendOutput};
 use super::{Error, Result};
+use crate::terminal_ipc_wire::Close;
 use std::{os::fd::RawFd, time::Instant};
 
 impl Channel for ForegroundSocket {
@@ -65,5 +66,9 @@ impl Channel for ForegroundSocket {
 
     fn detach_complete(&self) -> bool {
         self.detach_complete()
+    }
+
+    fn peer_close(&self) -> Option<Close> {
+        self.peer_close()
     }
 }

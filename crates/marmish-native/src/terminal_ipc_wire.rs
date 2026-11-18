@@ -261,5 +261,6 @@ impl Decoder {
     }
 }
 
+#[cfg(test)]
 #[path = "terminal_ipc_wire_tests.rs"]
 mod tests;

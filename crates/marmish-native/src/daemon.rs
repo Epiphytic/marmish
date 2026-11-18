@@ -5,6 +5,7 @@ use crate::{
     identity::{BackendChoice, ProfileLease},
     ipc::{self, Pending, Request, Response},
     mdk_adapter::MdkOwner,
+    terminal_owner,
     transport::{ArtiDirs, RelayConnector, RelayPolicy},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -28,6 +29,14 @@ pub struct Config {
 }
 
 pub async fn open(config: Config) -> Result<(ProfileLease, MdkOwner)> {
+    let (profile, owner, _) = open_inner(config, false).await?;
+    Ok((profile, owner))
+}
+
+async fn open_inner(
+    config: Config,
+    terminal: bool,
+) -> Result<(ProfileLease, MdkOwner, Option<terminal_owner::Prepared>)> {
     let origin = crate::command_limits::ServiceLifetime::start(None)?;
     let (mut profile, material, policy, peers, retention, commands) =
         tokio::task::spawn_blocking(move || {
@@ -83,7 +92,7 @@ pub async fn open(config: Config) -> Result<(ProfileLease, MdkOwner)> {
         .await
         .map_err(|_| Error::Identity("initialization_worker"))??;
     let connector = RelayConnector::new(
-        policy,
+        policy.clone(),
         ArtiDirs {
             state: profile.arti_state().to_owned(),
             cache: profile.arti_cache().to_owned(),
@@ -100,12 +109,21 @@ pub async fn open(config: Config) -> Result<(ProfileLease, MdkOwner)> {
     owner.set_retention(retention)?;
     owner.reconcile_client_inventory(commands.as_ref())?;
     profile.mark_ready(owner.opened_binding())?;
+    let terminal = match commands.as_ref().filter(|_| terminal) {
+        Some(config) => Some(terminal_owner::Prepared::open(
+            &profile,
+            &material,
+            Some(config.clone()),
+            policy,
+        )?),
+        None => None,
+    };
     if let Some(commands) = commands {
         let worker = crate::native_layout::resolve(&std::env::current_exe()?)?.worker;
         owner.enable_commands(&profile, &material, commands, worker)?;
         owner.command_set_lifetime(lifetime);
     }
-    Ok((profile, owner))
+    Ok((profile, owner, terminal))
 }
 
 fn failure(error: Error) -> Response {
@@ -203,14 +221,50 @@ pub(crate) async fn run_with_startup(
     config: Config,
     startup: Option<crate::daemon_launch::StartupReporter>,
 ) -> Result<()> {
-    let (profile, mut owner) = open(config).await?;
-    let result = serve_owner(&profile, &mut owner, startup).await;
-    let stopped = stop(profile, owner).await;
-    result.and(stopped)
-}
-
-pub(crate) async fn stop(profile: ProfileLease, owner: MdkOwner) -> Result<()> {
-    stop_reporting(profile, owner, true).await
+    use std::sync::Arc;
+    let (profile, mut owner, terminal) = open_inner(config, true).await?;
+    let profile = Arc::new(profile);
+    let (runtime, control, setup) = match terminal
+        .map(|terminal| terminal_owner::Runtime::start(terminal, profile.clone()))
+        .transpose()
+    {
+        Ok(Some((runtime, control))) => (Some(runtime), Some(control), Ok(())),
+        Ok(None) => (None, None, Ok(())),
+        Err(error) => (None, None, Err(error)),
+    };
+    let result = match setup {
+        Ok(()) => serve_owner(&profile, &mut owner, startup, control).await,
+        Err(error) => Err(error),
+    };
+    let joined = match runtime {
+        Some(runtime) => runtime.join().await,
+        None => Ok(()),
+    };
+    // A fallback reaper can still hold the exact lease after the owning
+    // workers join. Durable stop waits until that last owner releases it.
+    let mut profile = profile;
+    let mut incomplete = false;
+    let began = crate::command_limits::continuous_time().ok();
+    let profile = loop {
+        match Arc::try_unwrap(profile) {
+            Ok(profile) => break profile,
+            Err(leased) => profile = leased,
+        }
+        let elapsed = began
+            .zip(crate::command_limits::continuous_time().ok())
+            .and_then(|(began, now)| now.checked_sub(began));
+        if !incomplete && elapsed.is_none_or(|elapsed| elapsed >= Duration::from_secs(15)) {
+            incomplete = true;
+            crate::diagnostics::event("terminal_owner", "owned_stop_incomplete");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+    let stopped = stop_reporting(profile, owner, joined.is_ok() && !incomplete).await;
+    result.and(joined).and(if incomplete {
+        Err(Error::Identity("owned_stop_incomplete"))
+    } else {
+        stopped
+    })
 }
 
 pub(crate) async fn stop_silent(profile: ProfileLease, owner: MdkOwner) -> Result<()> {
@@ -250,6 +304,7 @@ async fn serve_owner(
     profile: &ProfileLease,
     owner: &mut MdkOwner,
     mut startup: Option<crate::daemon_launch::StartupReporter>,
+    mut terminal: Option<terminal_owner::Control>,
 ) -> Result<()> {
     let lifetime = owner.command_lifetime();
     let expired = async move {
@@ -276,7 +331,13 @@ async fn serve_owner(
     let (queue, mut receive) = mpsc::channel::<Pending>(64);
     let (status, snapshots) =
         watch::channel(Response::success(serde_json::json!({"state":"activating"})));
-    let server = tokio::spawn(ipc::serve(listener, queue, snapshots));
+    let terminal_intake = terminal.as_ref().map(|terminal| terminal.intake.clone());
+    let server = tokio::spawn(ipc::serve_inner(
+        listener,
+        queue,
+        snapshots,
+        terminal_intake,
+    ));
     let shutdown_signal = async {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {},
@@ -295,6 +356,9 @@ async fn serve_owner(
         let mut last_retry_notice = None;
         loop {
             if owner.command_count_exit_ready()? {break;}
+            if let Some(terminal) = terminal.as_mut() {
+                terminal.refresh(owner);
+            }
             let mut snapshot = serde_json::to_value(owner.status()?)
                 .map_err(|_| Error::Invalid("status_encoding"))?;
             snapshot["state"] = serde_json::Value::String(
@@ -307,6 +371,12 @@ async fn serve_owner(
             tokio::select! {
                 _ = &mut shutdown_signal => break,
                 _ = &mut expired => break,
+                Some(request) = async {
+                    match terminal.as_mut() {
+                        Some(terminal) => terminal.requests.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => request.complete(owner),
                 pending = receive.recv() => {
                     let Some(pending) = pending else { break };
                     if pending.request.uses_short_exchange() && (pending.deadline<=Instant::now() || pending.respond.is_closed()) {continue;}

@@ -20,7 +20,7 @@ pub(super) fn same_nonroot_ids(ids: &[libc::uid_t], groups: &[libc::gid_t]) -> b
             .is_some_and(|gid| *gid != 0 && groups.iter().all(|value| value == gid))
 }
 
-pub(super) fn checked_uid() -> Result<libc::uid_t> {
+pub(crate) fn checked_uid() -> Result<libc::uid_t> {
     #[cfg(target_os = "linux")]
     {
         let (mut real, mut effective, mut saved) = (0, 0, 0);
@@ -60,7 +60,6 @@ pub(super) fn checked_uid() -> Result<libc::uid_t> {
 pub(super) struct User {
     pub name: String,
     pub home: PathBuf,
-    #[cfg(test)]
     pub shell: PathBuf,
 }
 
@@ -105,7 +104,6 @@ pub(super) fn user(uid: libc::uid_t) -> Result<User> {
         return Ok(User {
             name: name.to_owned(),
             home: home.to_owned(),
-            #[cfg(test)]
             shell: shell.to_owned(),
         });
     }

@@ -29,12 +29,15 @@ fn invalid(category: &'static str) -> Error {
 
 /// Called only after target selection rejects always/onion routes. The dedicated
 /// runtime is destroyed before this function returns any resolver result.
-pub(crate) async fn resolve(names: &[String]) -> Result<Vec<String>> {
+pub(crate) async fn resolve(names: &[String], initialize: Option<fn()>) -> Result<Vec<String>> {
     let names = owners(names)?;
     let (send, receive) = tokio::sync::oneshot::channel();
     let thread = std::thread::Builder::new()
         .name("marmish-srv-setup".into())
         .spawn(move || {
+            if let Some(initialize) = initialize {
+                initialize();
+            }
             let began = Instant::now();
             let result = hickory_resolver::system_conf::read_system_conf()
                 .map_err(|_| invalid("srv_backend_unavailable"))

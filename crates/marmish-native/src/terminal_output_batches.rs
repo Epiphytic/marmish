@@ -50,6 +50,10 @@ impl Batches {
             || self.flush_at.is_some_and(|deadline| now >= deadline)
     }
 
+    pub(crate) fn has_pending(&self) -> bool {
+        !self.pending.is_empty() || self.next.is_some()
+    }
+
     pub(crate) fn take(&mut self, now: Duration) -> Option<Vec<u8>> {
         if !self.ready(now) {
             return None;
@@ -62,6 +66,7 @@ impl Batches {
         Some(batch)
     }
 
+    #[cfg(test)]
     pub(crate) fn deadline(&self, now: Duration) -> Option<Duration> {
         if self.ready(now) {
             return Some(Duration::ZERO);
@@ -77,6 +82,28 @@ impl Batches {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_socket_display_core_canonical_batches_are_idempotent() -> Result<()> {
+        let mut output = Batches::default();
+        let now = Duration::from_millis(10);
+        let prefix = vec![b'a'; MAX_DATA - 1];
+        assert_eq!(output.push(&prefix, now)?, prefix.len());
+        assert_eq!(output.push("☃".as_bytes(), now)?, 3);
+        let full = output.take(now).unwrap();
+        assert_eq!(full, prefix);
+        Filter::validate_batch(&full)?;
+
+        let tail = b"\x1b]0;untrusted title\x07\x1b[?1049h";
+        assert_eq!(output.push(tail, now)?, tail.len());
+        let complete = output.take(now + FLUSH_AFTER).unwrap();
+        assert_eq!(complete, "☃\x1b[?1049h".as_bytes());
+        Filter::validate_batch(&complete)?;
+        for invalid in [b"\x1b[".as_slice(), tail.as_slice(), b"\xe2\x98"] {
+            assert!(Filter::validate_batch(invalid).is_err());
+        }
+        Ok(())
+    }
 
     #[test]
     fn terminal_socket_display_core_batches_preserve_split_display_units() -> Result<()> {

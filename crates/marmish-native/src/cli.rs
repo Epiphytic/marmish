@@ -202,6 +202,13 @@ enum FrontendCommand {
     Get(CopyArgs),
     /// Rsync remote shell: rsync -s -e 'marmish rsh'. Global options go before rsh.
     Rsh,
+    /// Attach a controlling terminal to the remote tmux session.
+    Terminal {
+        destination: String,
+        /// Start a separate tmux session.
+        #[arg(long)]
+        new: bool,
+    },
     /// Execute with binary stdin/stdout streams and explicit remote cancellation.
     Stream {
         destination: String,
@@ -372,6 +379,57 @@ fn validate_daemon_options(args: &Args, daemon_binary: bool) -> Result<()> {
         return Err(Error::Invalid("new_session_operation"));
     }
     Ok(())
+}
+
+fn validate_terminal_options(args: &Args, daemon_binary: bool) -> Result<()> {
+    if daemon_binary {
+        return Err(Error::Invalid("daemon_operation"));
+    }
+    if args.max_commands.is_some() || args.max_uptime.is_some() {
+        return Err(Error::Invalid("server_limit_operation"));
+    }
+    if args.new_session || args.stdin || args.stdin_none || args.detach || args.trailing.is_some() {
+        return Err(Error::Invalid("terminal_arguments"));
+    }
+    Ok(())
+}
+
+async fn prepare_terminal(
+    args: &Args,
+    destination: &str,
+    child_mask: libc::sigset_t,
+) -> Result<ipc::terminal_handshake::Prepared> {
+    use ipc::terminal_handshake::Prepared;
+    crate::identity::validate_name(&args.identity)?;
+    let state = state_dir(args.state_dir.clone())?;
+    let config = CommandConfig::load(&state.join(&args.identity))?;
+    let target = resolve_target_with_user(
+        &config,
+        args,
+        Some(destination),
+        args.user.as_deref(),
+        Some(ipc::terminal_handshake::block_on_worker),
+    )
+    .await?;
+    let context = Context {
+        socket: command_socket_with_mask(args, &state, &config, Some(child_mask)).await?,
+        profile: args.identity.clone(),
+    };
+    let (session, _) = context
+        .prepare(target.remote, target.relays.clone(), false)
+        .await
+        .map_err(|error| match error {
+            Error::Invalid("command_preparation_binding") => {
+                Error::Invalid("terminal_command_binding")
+            }
+            other => other,
+        })?;
+    Ok(Prepared {
+        socket: context.socket,
+        remote: hex::encode(target.remote),
+        session: hex::encode(session),
+        relays: target.relays,
+    })
 }
 
 async fn run(
@@ -819,6 +877,7 @@ async fn run_stream_command(args: &Args, state: &std::path::Path) -> Result<u8> 
                     args,
                     Some(&rsh.destination),
                     rsh.login.as_deref(),
+                    None,
                 ),
             )
             .await?;
@@ -979,6 +1038,7 @@ async fn autostart_daemon(
     args: &Args,
     state: &std::path::Path,
     config: &CommandConfig,
+    child_mask: Option<libc::sigset_t>,
 ) -> Result<()> {
     let executable = std::env::current_exe()?.canonicalize()?;
     let daemon = executable
@@ -1017,7 +1077,9 @@ async fn autostart_daemon(
     let state = state.to_owned();
     let identity = args.identity.clone();
     let launched = tokio::task::spawn_blocking(move || {
-        crate::daemon_launch::launch(&daemon, &arguments, &state, &identity)
+        crate::daemon_launch::launch_with_child_mask(
+            &daemon, &arguments, &state, &identity, child_mask,
+        )
     })
     .await
     .map_err(|_| Error::Invalid("daemon_startup_worker"))?;
@@ -1033,6 +1095,15 @@ async fn command_socket(
     args: &Args,
     state: &std::path::Path,
     config: &CommandConfig,
+) -> Result<PathBuf> {
+    command_socket_with_mask(args, state, config, None).await
+}
+
+async fn command_socket_with_mask(
+    args: &Args,
+    state: &std::path::Path,
+    config: &CommandConfig,
+    child_mask: Option<libc::sigset_t>,
 ) -> Result<PathBuf> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
     let mut started = false;
@@ -1078,7 +1149,7 @@ async fn command_socket(
             return Err(Error::Invalid("daemon_unavailable"));
         }
         if !started {
-            autostart_daemon(args, state, config).await?;
+            autostart_daemon(args, state, config, child_mask).await?;
             started = true;
         }
         if tokio::time::Instant::now() >= deadline {
@@ -1093,7 +1164,7 @@ async fn resolve_target(
     args: &Args,
     destination: Option<&str>,
 ) -> Result<crate::command_target::ResolvedTarget> {
-    resolve_target_with_user(config, args, destination, args.user.as_deref()).await
+    resolve_target_with_user(config, args, destination, args.user.as_deref(), None).await
 }
 
 async fn resolve_target_with_user(
@@ -1101,6 +1172,7 @@ async fn resolve_target_with_user(
     args: &Args,
     destination: Option<&str>,
     user: Option<&str>,
+    initialize_resolver: Option<fn()>,
 ) -> Result<crate::command_target::ResolvedTarget> {
     use crate::command_target::{self, RelaySource};
     let target = command_target::parse(config, destination, user, &args.relay, &args.srv)?;
@@ -1112,7 +1184,7 @@ async fn resolve_target_with_user(
             .map(ToString::to_string)
             .collect(),
         RelaySource::Explicit(relays) => relays,
-        RelaySource::Srv(names) => crate::command_srv::resolve(&names).await?,
+        RelaySource::Srv(names) => crate::command_srv::resolve(&names, initialize_resolver).await?,
     };
     // Freeze and compare the complete DNS answer before opening a profile or IPC.
     command_target::finalize(config, target.remote, &relays)
@@ -1420,7 +1492,10 @@ pub fn main(daemon_binary: bool) -> ExitCode {
         args.command,
         Some(FrontendCommand::Put(_) | FrontendCommand::Get(_))
     );
-    let failure_code = if command_action(&args) || stream_action(&args) {
+    let failure_code = if command_action(&args)
+        || stream_action(&args)
+        || matches!(args.command, Some(FrontendCommand::Terminal { .. }))
+    {
         255
     } else {
         1
@@ -1473,6 +1548,20 @@ pub fn main(daemon_binary: bool) -> ExitCode {
     }
     if args.debug {
         crate::diagnostics::enable();
+    }
+    if let Some(FrontendCommand::Terminal { destination, new }) = &args.command {
+        let result = validate_terminal_options(&args, daemon_binary).and_then(|()| {
+            ipc::terminal_handshake::run_foreground(*new, async |child_mask| {
+                prepare_terminal(&args, destination, child_mask).await
+            })
+        });
+        return match result {
+            Ok(code) => ExitCode::from(code),
+            Err(error) => {
+                print_error(&error);
+                ExitCode::from(failure_code)
+            }
+        };
     }
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -1536,6 +1625,28 @@ fn print_error(error: &Error) {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    #[test]
+    fn terminal_cli_does_not_reuse_the_ordinary_command_flags() {
+        let parse =
+            |items: &[&str]| parse_public(&items.iter().map(OsString::from).collect::<Vec<_>>());
+        let args = parse(&["marmish", "terminal", "alias@relay.example", "--new"]).unwrap();
+        assert!(matches!(
+            &args.command,
+            Some(FrontendCommand::Terminal { destination, new: true })
+                if destination == "alias@relay.example"
+        ));
+        assert!(validate_terminal_options(&args, false).is_ok());
+        assert!(validate_terminal_options(&args, true).is_err());
+        for flag in ["--new-session", "--detach", "--stdin", "--stdin-none"] {
+            let args = parse(&["marmish", flag, "terminal", "alias"]).unwrap();
+            assert!(validate_terminal_options(&args, false).is_err());
+        }
+        assert!(parse(&["marmish", "terminal", "alias", "--", "echo"]).is_err());
+        let args = parse(&["marmish", "alias", "--", "echo", "--new"]).unwrap();
+        assert!(command_action(&args));
+        assert_eq!(args.trailing.unwrap(), ["echo", "--new"]);
+    }
 
     #[test]
     fn client_inventory_does_not_start_daemon_and_requires_bound_continuations() {

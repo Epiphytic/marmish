@@ -81,6 +81,10 @@ impl ForegroundSocket {
         self.stream.as_raw_fd()
     }
 
+    pub(super) fn peer_close(&self) -> Option<Close> {
+        self.close
+    }
+
     pub(super) fn deadline(&self) -> Option<Instant> {
         self.reader
             .deadline()
@@ -299,13 +303,13 @@ enum ServerSent {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum ServerRead {
+pub(crate) enum ServerRead {
     Pending,
     Received,
     Detached,
 }
 
-pub(super) struct DaemonSocket<S> {
+pub(crate) struct DaemonSocket<S> {
     stream: S,
     reader: Reader,
     writer: Writer<ServerSent>,
@@ -318,7 +322,7 @@ pub(super) struct DaemonSocket<S> {
 }
 
 impl<S: ReadWrite> DaemonSocket<S> {
-    pub(super) fn new(stream: S, role: Role) -> Self {
+    pub(crate) fn new(stream: S, role: Role) -> Self {
         Self {
             stream,
             reader: Reader::new(Direction::ToDaemon, role),
@@ -332,11 +336,12 @@ impl<S: ReadWrite> DaemonSocket<S> {
         }
     }
 
-    pub(super) fn fd(&self) -> RawFd {
+    #[cfg(test)]
+    pub(crate) fn fd(&self) -> RawFd {
         self.stream.as_raw_fd()
     }
 
-    pub(super) fn read(&mut self, now: Instant) -> Result<ServerRead> {
+    pub(crate) fn read(&mut self, now: Instant) -> Result<ServerRead> {
         self.check_deadline(now)?;
         let mut detach = false;
         let event = self
@@ -370,27 +375,27 @@ impl<S: ReadWrite> DaemonSocket<S> {
         }
     }
 
-    pub(super) fn next_input(&self) -> Option<InputEffect<'_>> {
+    pub(crate) fn next_input(&self) -> Option<InputEffect<'_>> {
         if self.close.is_some() || self.closed {
             return None;
         }
         self.input.as_ref()?.next()
     }
 
-    pub(super) fn input_written(&mut self, bytes: usize) -> Result<()> {
+    pub(crate) fn input_written(&mut self, bytes: usize) -> Result<()> {
         self.input.as_mut().ok_or(IO)?.wrote(bytes)
     }
 
-    pub(super) fn resize_applied(&mut self) -> Result<()> {
+    pub(crate) fn resize_applied(&mut self) -> Result<()> {
         self.input.as_mut().ok_or(IO)?.resize_applied()
     }
 
-    pub(super) fn begin_close(&mut self, reason: Close) {
+    pub(crate) fn begin_close(&mut self, reason: Close) {
         self.close.get_or_insert(reason);
         self.output_at = None;
     }
 
-    pub(super) fn deadline(&self) -> Option<Instant> {
+    pub(crate) fn deadline(&self) -> Option<Instant> {
         let receive = self
             .close
             .is_none()
@@ -403,7 +408,8 @@ impl<S: ReadWrite> DaemonSocket<S> {
             .min()
     }
 
-    pub(super) fn buffered(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn buffered(&self) -> bool {
         self.reader.has_buffered()
     }
 
@@ -414,7 +420,7 @@ impl<S: ReadWrite> DaemonSocket<S> {
         Ok(())
     }
 
-    pub(super) fn wants_write(&self) -> Result<bool> {
+    pub(crate) fn wants_write(&self) -> Result<bool> {
         if self.closed {
             return Ok(false);
         }
@@ -429,7 +435,7 @@ impl<S: ReadWrite> DaemonSocket<S> {
 
     /// Offer the same native head until it is committed, leaving other control
     /// records ahead of a fresh output frame.
-    pub(super) fn offer(
+    pub(crate) fn offer(
         &mut self,
         sequence: u64,
         bytes: &[u8],
@@ -468,7 +474,7 @@ impl<S: ReadWrite> DaemonSocket<S> {
         }
     }
 
-    pub(super) fn flush(&mut self, now: Instant, limit: Instant) -> Result<()> {
+    pub(crate) fn flush(&mut self, now: Instant, limit: Instant) -> Result<()> {
         self.check_deadline(now)?;
         if !self.writer.has_frame() && !self.closed {
             if let Some(reason) = self.close {
@@ -504,7 +510,7 @@ impl<S: ReadWrite> DaemonSocket<S> {
     }
 }
 
-pub(super) trait ReadWrite: std::io::Read + std::io::Write + AsRawFd {
+pub(crate) trait ReadWrite: std::io::Read + std::io::Write + AsRawFd {
     fn finish_write(&mut self) -> Result<()>;
 }
 
@@ -514,5 +520,6 @@ impl ReadWrite for UnixStream {
     }
 }
 
+#[cfg(test)]
 #[path = "terminal_socket_session_tests.rs"]
 mod tests;
