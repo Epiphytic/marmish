@@ -352,15 +352,19 @@ pub(super) async fn finish(mut run: ReceiptRun<'_, '_>) {
     let mut owner = (run.reopen)();
     let (row, published) = run.read(&mut owner, Step::Published { number: 2 });
     let mut recipient = run.open(&owner, &row, ReceiptGate::closed(run.round.wall.clone()));
+    let fanout_count =
+        |recipient: &AccountDeviceRuntime<ReceiptGate, StaticTransportRouting, Gate>| {
+            recipient
+                .group_authority_view()
+                .with_group_authority_snapshot(&run.stage.group, |storage, _| {
+                    Ok::<_, marmot_session::SessionError>(storage.list_outbound_fanouts()?.len())
+                })
+                .unwrap()
+        };
+    assert_eq!(fanout_count(&recipient), 1);
     outbound::acknowledge_published(&recipient, run.image, &published, run.wall()).unwrap();
     outbound::acknowledge_published(&recipient, run.image, &published, run.wall()).unwrap();
-    let no_fanout = recipient
-        .group_authority_view()
-        .with_group_authority_snapshot(&run.stage.group, |storage, _| {
-            Ok::<_, marmot_session::SessionError>(storage.list_outbound_fanouts()?.is_empty())
-        })
-        .unwrap();
-    assert!(no_fanout);
+    assert_eq!(fanout_count(&recipient), 0);
     assert!(
         recipient
             .resume_outbound_fanouts()
@@ -610,9 +614,12 @@ fn project_founder(
         .unwrap()
         .unwrap();
     assert_eq!(same_native.native_id(), native_id);
-    assert!(
+    assert_eq!(
         db.accept_verified_receipt(&source, &same_native, run.wall())
-            .is_err()
+            .err(),
+        Some(consent_checkpoint::Error::Cursor(
+            crate::peer_invitation::store::Error::Binding
+        ))
     );
 
     let durable = db
