@@ -976,15 +976,10 @@ impl MdkOwner {
             &mut startup,
         );
         let mut owner = pending.map_err(|error| startup.finish_error(error))?;
-        let result = mode.effect(Step::Binding, || {
-            if owner.opened_binding().profile_id() != profile.profile_id()
-                || owner.opened_binding().public_key() != material.public_key()
-            {
-                return Err(Error::Storage("identity_binding"));
-            }
-            Ok(())
-        });
-        match result.and_then(|()| owner.reconcile_startup(&mode)) {
+        let result = mode
+            .before(Step::Binding)
+            .and_then(|()| owner.reconcile_startup(&mode));
+        match result {
             Ok(()) => Ok(owner),
             Err(error) => {
                 #[cfg(any(test, marmish_peer_receiver_candidate))]

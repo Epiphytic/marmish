@@ -28,8 +28,16 @@ fn fault(case: &str) -> Option<Fault> {
         "cut_smoke_close" => Fault::Cut(AccountSmokeClose),
         "cut_account" => Fault::Cut(AccountOpen),
         "cut_journal" => Fault::Cut(JournalSmoke),
+        "cut_journal_close" => Fault::Cut(JournalSmokeClose),
+        "cut_journal_open" => Fault::Cut(JournalOpen),
+        "cut_lifecycle_read" => Fault::Cut(LifecycleRead),
+        "cut_lifecycle_write" => Fault::Cut(LifecycleWrite),
+        "cut_runtime_open" => Fault::Cut(Runtime),
         "cut_runtime" => Fault::Cut(RuntimeOpened),
         "cut_return" => Fault::Cut(Return),
+        "panic_account_reopen" => Fault::Panic(AccountOpen),
+        "panic_journal_smoke" => Fault::Panic(JournalSmoke),
+        "panic_journal_reopen" => Fault::Panic(JournalOpen),
         "panic_partial" => Fault::Panic(LifecycleRead),
         "panic_binding" => Fault::Panic(Binding),
         "panic_revoked" => Fault::Panic(Revoked),
@@ -165,8 +173,11 @@ pub(crate) fn qualify(
         _ => panic!("unexpected startup disposition: {case}"),
     }
 
-    if matches!(case, "cut_initialize" | "cut_smoke" | "cut_account") {
-        assert!(fatal.is_tripped());
+    if matches!(
+        case,
+        "cut_initialize" | "cut_smoke" | "cut_account" | "panic_account_reopen"
+    ) {
+        assert_eq!(fatal.is_tripped(), case != "panic_account_reopen");
         assert_eq!(descriptors(account_path), 0);
         assert_eq!(descriptors(journal_path), 0);
         assert_eq!(Arc::strong_count(lease), lease_baseline);
@@ -177,17 +188,34 @@ pub(crate) fn qualify(
         assert!(fatal.is_tripped());
         assert_eq!(Arc::strong_count(lease), lease_baseline + 1);
         assert!(descriptors(account_path) > 0);
-        if !matches!(case, "cut_smoke_close" | "cut_journal" | "close_failure") {
-            assert!(descriptors(journal_path) > 0);
-        }
+        let journal_live = !matches!(
+            case,
+            "cut_smoke_close"
+                | "cut_journal"
+                | "cut_journal_open"
+                | "panic_journal_smoke"
+                | "panic_journal_reopen"
+                | "close_failure"
+        );
+        assert_eq!(descriptors(journal_path) > 0, journal_live);
     } else {
         assert!(!fatal.is_tripped());
         assert_eq!(Arc::strong_count(lease), lease_baseline);
     }
     match case {
-        "wrong_key" | "cut_initialize" | "cut_smoke" | "cut_smoke_close" | "cut_account"
-        | "cut_journal" => assert_eq!(evidence(journal_path), orig_journal),
-        "cut_runtime" => assert_eq!(evidence(journal_path), rc.borrow().unwrap()),
+        "wrong_key"
+        | "cut_initialize"
+        | "cut_smoke"
+        | "cut_smoke_close"
+        | "cut_account"
+        | "cut_journal"
+        | "panic_account_reopen"
+        | "panic_journal_smoke" => {
+            assert_eq!(evidence(journal_path), orig_journal);
+        }
+        case if case.starts_with("cut_") || case.starts_with("panic_") => {
+            assert_eq!(evidence(journal_path), rc.borrow().unwrap());
+        }
         _ => {}
     }
 }
