@@ -12,12 +12,13 @@ use nostr::key::PublicKey;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    command_limits::continuous_time,
     identity::BackendChoice,
     peer_control_version::ControlVersion,
     peer_quota_vfs::dispatch::{
         ProfileSlots, ReceiverQuota, TOTAL_ADMISSION,
         founder::{Expected, FounderQuota},
-        mount_for_proof, resolve_once,
+        mount_for_proof, resolve_once, welcome_counts,
     },
     peer_relay_trust::{ReceiverRouteAdmission, qualified_recipient_fixture},
     transport::{ArtiDirs, RelayPolicy, RouteMode, TransportLimits},
@@ -26,7 +27,7 @@ use crate::{
 use super::*;
 use crate::peer_invitation::{
     founder_ledger::{Ledger, Outbound, ledger_binding},
-    receiver_inventory::v2_pending::PendingReceiver,
+    receiver_inventory::v2_pending::{PendingReceiver, committed_custody_changes},
     socket::owner::recipient::PublicationOutcome,
     store::consent_checkpoint::{
         Status,
@@ -171,9 +172,12 @@ async fn private_v2_pending_survives_cold_cuts() {
                 .await;
         }
         assert_eq!(relay.peer_transcript().len(), 3);
-        assert_eq!(relay.all_publication_attempts(), before);
+        let bridge_publications = relay.all_publication_attempts() - before;
+        assert_eq!(bridge_publications, 0);
         relay.stop().await;
-        println!("private-v2-pending scenario={scenario} bridge_publications=0");
+        println!(
+            "private-v2-pending scenario={scenario} bridge_publications={bridge_publications}"
+        );
     }
 }
 
@@ -376,6 +380,57 @@ async fn run_founder(public: &Path, setup: &PublicSetup) {
     );
 }
 
+#[derive(Clone, Copy)]
+struct Effects {
+    polls: usize,
+    closed_joins: usize,
+    custody_changes: usize,
+}
+
+impl Effects {
+    fn read() -> Self {
+        let (polls, closed_joins) = welcome_counts();
+        Self {
+            polls,
+            closed_joins,
+            custody_changes: committed_custody_changes(),
+        }
+    }
+
+    fn assert_since(self, window: &str, expected: (usize, usize, usize)) {
+        let current = Self::read();
+        let polls = current.polls - self.polls;
+        let closed_joins = current.closed_joins - self.closed_joins;
+        let custody_changes = current.custody_changes - self.custody_changes;
+        assert_eq!((polls, closed_joins, custody_changes), expected, "{window}");
+        println!(
+            "private-v2-pending window={window} welcome_polls={polls} closed_native_joins={closed_joins} committed_custody_rows={custody_changes}"
+        );
+    }
+}
+
+fn observe_turn<T>(window: &str, signed_end: u64, run: impl FnOnce() -> T) -> T {
+    let wall = Wall::System;
+    let began = wall.sample().unwrap().as_secs();
+    let ticks = continuous_time().unwrap();
+    let output = run();
+    let elapsed = continuous_time().unwrap().checked_sub(ticks).unwrap();
+    let ended = wall.sample().unwrap().as_secs();
+    assert!(
+        began <= ended && ended < signed_end,
+        "{window} exceeded signed custody bounds"
+    );
+    assert!(
+        elapsed < Duration::from_secs((signed_end - began).min(5)),
+        "{window} exceeded its continuous time bound"
+    );
+    println!(
+        "private-v2-pending window={window} continuous_ms={}",
+        elapsed.as_millis()
+    );
+    output
+}
+
 async fn run_recipient(
     public: &Path,
     home: &Path,
@@ -405,15 +460,17 @@ async fn run_recipient(
     let mut receiver =
         PendingReceiver::open(&lease, &quota, &material, &setup.origin, &mut port).unwrap();
     let stop = AtomicBool::new(false);
-    let started = std::time::Instant::now();
+    let effects = Effects::read();
     match step {
         "start" => {
+            let held = receiver
+                .saved_custody(&mut port, selector, exact.generation)
+                .unwrap();
             assert_eq!(
-                receiver
-                    .custody_state(&mut port, selector, exact.generation)
-                    .unwrap(),
+                (held.state(), held.delivery_carrier()),
                 (CustodyState::Held, exact.carrier)
             );
+            let signed_end = held.held_deadline();
             assert!(
                 receiver
                     .arm(&mut port, selector, exact.generation + 1, &stop)
@@ -429,17 +486,21 @@ async fn run_recipient(
                     )
                     .is_err()
             );
-            let armed = receiver
-                .arm(&mut port, selector, exact.generation, &stop)
-                .unwrap();
-            let prepare_ms = started.elapsed().as_millis();
+            effects.assert_since("start-refusals", (0, 0, 0));
+            let armed = observe_turn("preflight-and-start", signed_end, || {
+                receiver
+                    .arm(&mut port, selector, exact.generation, &stop)
+                    .unwrap()
+            });
+            effects.assert_since("preflight-and-start", (0, 0, 1));
+            let native_effects = Effects::read();
             assert!(
                 receiver
                     .arm(&mut port, selector, exact.generation, &stop)
                     .is_err()
             );
-            let ingest = std::time::Instant::now();
-            let polls = if scenario == "capacity" {
+            native_effects.assert_since("repeat-start-refusal", (0, 0, 0));
+            if scenario == "capacity" {
                 let original = lease.root().join("peer/provisional-unknown.db");
                 let known = lease.root().join("peer/provisional-known.db");
                 let bytes = fs::read(&original).unwrap();
@@ -457,7 +518,9 @@ async fn run_recipient(
                 budget
                     .set_len(TOTAL_ADMISSION - store::installed::RESERVED_BYTES - charge - 1)
                     .unwrap();
-                let (result, metrics) = receiver.ingest(&mut port, armed, &stop).unwrap();
+                let (result, metrics) = observe_turn("journal-refusal", signed_end, || {
+                    receiver.ingest(&mut port, armed, &stop).unwrap()
+                });
                 assert!(result.is_err());
                 assert_eq!(metrics.polls, 1);
                 assert!(metrics.main_opens > 0);
@@ -473,43 +536,44 @@ async fn run_recipient(
                     "private-v2-pending quota_peak={} journal_refused={} main_opens={}",
                     metrics.peak, metrics.rejected[1], metrics.main_opens
                 );
-                metrics.polls
+                native_effects.assert_since("journal-refusal", (1, 0, 0));
             } else if scenario == "joined" {
-                let (result, metrics) = receiver.ingest(&mut port, armed, &stop).unwrap();
+                let (result, metrics) = observe_turn("welcome-ingest", signed_end, || {
+                    receiver.ingest(&mut port, armed, &stop).unwrap()
+                });
                 result.unwrap();
                 assert_eq!(metrics.polls, 1);
                 assert!(metrics.main_opens > 0);
                 assert_eq!(metrics.rejected, [0; 2]);
                 assert!(metrics.peak > 0);
-                metrics.polls
+                native_effects.assert_since("welcome-ingest", (1, 1, 0));
             } else {
                 assert_eq!(scenario, "before-native");
                 drop(armed);
-                0
-            };
+                native_effects.assert_since("pre-effect-cut", (0, 0, 0));
+            }
             assert_eq!(
                 receiver
                     .custody_state(&mut port, selector, exact.generation)
                     .unwrap(),
                 (CustodyState::JoinStarted, exact.carrier)
-            );
-            println!(
-                "private-v2-pending prepare_ms={prepare_ms} ingest_ms={} polls={polls} start=1 native_commit={}",
-                ingest.elapsed().as_millis(),
-                scenario == "joined"
             );
         }
         "qualify" => {
+            let held = receiver
+                .saved_custody(&mut port, selector, exact.generation)
+                .unwrap();
             assert_eq!(
-                receiver
-                    .custody_state(&mut port, selector, exact.generation)
-                    .unwrap(),
+                (held.state(), held.delivery_carrier()),
                 (CustodyState::JoinStarted, exact.carrier)
             );
             if scenario == "joined" {
-                let joined = receiver
-                    .qualify(&mut port, selector, exact.generation, &stop)
-                    .unwrap();
+                let joined =
+                    observe_turn("joined-readback-and-pending", held.held_deadline(), || {
+                        receiver
+                            .qualify(&mut port, selector, exact.generation, &stop)
+                            .unwrap()
+                    });
                 native.check(joined.coordinates());
                 assert_eq!(
                     receiver
@@ -517,15 +581,13 @@ async fn run_recipient(
                         .unwrap(),
                     (CustodyState::Pending, exact.carrier)
                 );
-                println!(
-                    "private-v2-pending cold_readback_ms={} pending=1",
-                    started.elapsed().as_millis()
-                );
+                effects.assert_since("joined-readback-and-pending", (0, 0, 1));
             } else {
                 assert!(
-                    receiver
-                        .qualify(&mut port, selector, exact.generation, &stop)
-                        .is_err()
+                    observe_turn("unjoined-readback", held.held_deadline(), || {
+                        receiver.qualify(&mut port, selector, exact.generation, &stop)
+                    })
+                    .is_err()
                 );
                 assert!(
                     receiver
@@ -538,16 +600,25 @@ async fn run_recipient(
                         .unwrap(),
                     (CustodyState::JoinStarted, exact.carrier)
                 );
+                effects.assert_since("unjoined-readback", (0, 0, 0));
             }
         }
         "replay" => {
             if scenario == "joined" {
-                native.check(
-                    receiver
-                        .qualify(&mut port, selector, exact.generation, &stop)
-                        .unwrap()
-                        .coordinates(),
+                let pending = receiver
+                    .saved_custody(&mut port, selector, exact.generation)
+                    .unwrap();
+                let readback = observe_turn(
+                    "pending-readback",
+                    pending.pending_deadline().unwrap(),
+                    || {
+                        receiver
+                            .qualify(&mut port, selector, exact.generation, &stop)
+                            .unwrap()
+                    },
                 );
+                native.check(readback.coordinates());
+                effects.assert_since("pending-readback", (0, 0, 0));
                 drop(receiver);
                 let mut fixture = Fixture::open(&lease, &material, &route).unwrap();
                 let cursor = fixture
@@ -571,10 +642,18 @@ async fn run_recipient(
                     Status::Accepted(TrustedOutcome::AlreadyApplied)
                 );
                 assert_eq!(fixture.package_reads.get(), 0);
-                println!(
-                    "private-v2-pending replay_ms={} native_ingest=0 custody_transition=0",
-                    started.elapsed().as_millis()
+                drop(fixture);
+                let mut receiver =
+                    PendingReceiver::open(&lease, &quota, &material, &setup.origin, &mut port)
+                        .unwrap();
+                let after = receiver
+                    .saved_custody(&mut port, selector, exact.generation)
+                    .unwrap();
+                assert!(
+                    pending.same_saved_pending(&after),
+                    "retained Pending changed during replay"
                 );
+                effects.assert_since("pending-and-delivery-replay", (0, 0, 0));
             } else {
                 assert_eq!(
                     receiver
@@ -587,6 +666,7 @@ async fn run_recipient(
                         .qualify(&mut port, selector, exact.generation, &stop)
                         .is_err()
                 );
+                effects.assert_since("unjoined-replay", (0, 0, 0));
             }
         }
         _ => panic!("unknown Pending child step"),

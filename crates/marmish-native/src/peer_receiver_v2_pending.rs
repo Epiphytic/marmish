@@ -1,6 +1,7 @@
 //! Measured native Welcome turns for the private installed-v2 recipient proof.
 
 use std::{
+    cell::Cell,
     fs::{self, OpenOptions},
     io::{self, Read as _},
     os::unix::fs::OpenOptionsExt as _,
@@ -24,6 +25,18 @@ use consent_checkpoint::{
 };
 use prepared_consent::{read_image, snapshot_inode, snapshot_sidecars};
 use socket::owner::recipient::PeerRecipientPort;
+
+thread_local! {
+    static CUSTODY_CHANGES: Cell<usize> = const { Cell::new(0) };
+}
+
+pub(in crate::peer_invitation) fn record_custody_changes(changed: usize) {
+    CUSTODY_CHANGES.set(CUSTODY_CHANGES.get() + changed);
+}
+
+pub(in crate::peer_invitation) fn committed_custody_changes() -> usize {
+    CUSTODY_CHANGES.get()
+}
 
 pub(in crate::peer_invitation) struct PendingReceiver<'lease> {
     owner: RecoveredOwner<'lease>,
@@ -68,6 +81,16 @@ impl<'lease> PendingReceiver<'lease> {
         selector: Selector,
         generation: u64,
     ) -> Result<(CustodyState, [u8; 32])> {
+        let held = self.saved_custody(port, selector, generation)?;
+        Ok((held.state(), held.delivery_carrier()))
+    }
+
+    pub(in crate::peer_invitation) fn saved_custody(
+        &mut self,
+        port: &mut PeerRecipientPort,
+        selector: Selector,
+        generation: u64,
+    ) -> Result<HeldEvidence> {
         self.owner.cursor.unchanged()?;
         let (held, _, _) = self.owner.checkpoint.read_installed_join_custody(
             &self.owner.source,
@@ -75,7 +98,7 @@ impl<'lease> PendingReceiver<'lease> {
             selector,
             generation,
         )?;
-        Ok((held.state(), held.delivery_carrier()))
+        Ok(held)
     }
 
     pub(in crate::peer_invitation) fn arm(

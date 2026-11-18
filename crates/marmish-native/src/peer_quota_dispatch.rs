@@ -1016,6 +1016,17 @@ pub(crate) struct JoinMetrics {
 }
 
 #[cfg(test)]
+thread_local! {
+    static WELCOME_POLLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static CLOSED_JOINS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn welcome_counts() -> (usize, usize) {
+    (WELCOME_POLLS.get(), CLOSED_JOINS.get())
+}
+
+#[cfg(test)]
 #[derive(Clone, Copy)]
 pub(crate) struct RawBinding<'a> {
     pub(crate) path: &'a Path,
@@ -1076,6 +1087,7 @@ impl JoinTurn<'_> {
                 let mut welcome = std::pin::pin!(stage.join_once_fenced(self.join, self.fence));
                 resolve_once(poll_fn(|cx| {
                     polls += 1;
+                    WELCOME_POLLS.set(WELCOME_POLLS.get() + 1);
                     welcome.as_mut().poll(cx)
                 }))
             }
@@ -1083,8 +1095,12 @@ impl JoinTurn<'_> {
         };
         turn.finish()?;
         let evidence = turn.quota.evidence();
+        let result = result?;
+        if result.is_ok() {
+            CLOSED_JOINS.set(CLOSED_JOINS.get() + 1);
+        }
         Ok((
-            result?,
+            result,
             JoinMetrics {
                 polls,
                 peak: evidence.peak,

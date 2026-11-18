@@ -957,6 +957,7 @@ impl Checkpoint {
         change: Change<'_>,
     ) -> Result<()> {
         self.transition_custody_guarded(source, prior, wall, change, || Ok(()))
+            .map(|_| ())
     }
 
     fn transition_custody_guarded(
@@ -966,7 +967,7 @@ impl Checkpoint {
         wall: u64,
         change: Change<'_>,
         guard: impl FnOnce() -> Result<()>,
-    ) -> Result<()> {
+    ) -> Result<usize> {
         self.check_local_owner(&prior.owner)?;
         let cx = self.custody_context(source)?;
         let selector = prior.stage.0.key;
@@ -985,11 +986,11 @@ impl Checkpoint {
             return Err(CursorError::Stale.into());
         }
         guard()?;
-        change.apply(&tx, &current, wall)?;
+        let changed = change.apply(&tx, &current, wall)?;
         cx.verify(&tx, wall)?;
         rows::advance_wall(&tx, wall)?;
         tx.commit()?;
-        Ok(())
+        Ok(changed)
     }
 }
 
@@ -1005,7 +1006,7 @@ enum Change<'a> {
 }
 
 impl Change<'_> {
-    fn apply(self, tx: &Transaction<'_>, prior: &HeldEvidence, wall: u64) -> Result<()> {
+    fn apply(self, tx: &Transaction<'_>, prior: &HeldEvidence, wall: u64) -> Result<usize> {
         if wall < prior.held_at() {
             return Err(CursorError::ClockRegressed.into());
         }
@@ -1057,7 +1058,7 @@ impl Change<'_> {
         };
         rows::require_write(changed)?;
         writer.guard(tx, true)?;
-        Ok(())
+        Ok(changed)
     }
 }
 

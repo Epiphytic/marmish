@@ -3,11 +3,23 @@
 use super::*;
 use crate::{
     peer_invitation::{
-        TurnFence, receiver_inventory::v2_pending::PreparedWelcome,
+        TurnFence,
+        receiver_inventory::v2_pending::{PreparedWelcome, record_custody_changes},
         socket::owner::recipient::PeerRecipientPort,
     },
     peer_quota_vfs::dispatch::ReceiverQuota,
 };
+
+impl HeldEvidence {
+    pub(in crate::peer_invitation) fn same_saved_pending(&self, other: &Self) -> bool {
+        self.state() == CustodyState::Pending
+            && !self.is_active()
+            && !other.is_active()
+            && self.stage == other.stage
+            && self.row == other.row
+            && self.saved == other.saved
+    }
+}
 
 impl JoinStarted {
     pub(in crate::peer_invitation) fn matches_installed_turn(&self, held: &HeldEvidence) -> bool {
@@ -52,10 +64,12 @@ impl Checkpoint {
             if !prepared.matches_quota(quota) || !prepared.matches(prior, &delivery) {
                 return Err(CursorError::Binding.into());
             }
-            self.transition_custody_guarded(source, prior, wall, Change::Start, || {
-                fence.wall().map_err(|_| Error::Source)?;
-                Ok(())
-            })?;
+            let changed =
+                self.transition_custody_guarded(source, prior, wall, Change::Start, || {
+                    fence.wall().map_err(|_| Error::Source)?;
+                    Ok(())
+                })?;
+            record_custody_changes(changed);
             Ok(JoinStarted {
                 owner: self.owner.clone(),
                 stage: prior.stage,
@@ -100,7 +114,7 @@ impl Checkpoint {
                 fence.wall().map_err(|_| Error::Source)?;
                 return Ok(());
             }
-            self.transition_custody_guarded(
+            let changed = self.transition_custody_guarded(
                 source,
                 prior,
                 wall,
@@ -109,7 +123,9 @@ impl Checkpoint {
                     fence.wall().map_err(|_| Error::Source)?;
                     Ok(())
                 },
-            )
+            )?;
+            record_custody_changes(changed);
+            Ok(())
         })
         .map_err(|_| Error::Source)?
     }
