@@ -9,6 +9,10 @@ use rusqlite::{
 use sha2::{Digest, Sha256};
 use storage_sqlite::{SqlCipherHardening, SqlCipherKey, open_hardened_sqlcipher};
 
+#[cfg(test)]
+#[path = "peer_installed_cursor.rs"]
+mod installed;
+
 #[path = "peer_cursor_pages.rs"]
 mod pages;
 #[path = "peer_cursor_retry.rs"]
@@ -58,21 +62,7 @@ pub(crate) struct HardenedPeerConnection(Connection);
 
 impl HardenedPeerConnection {
     pub(crate) fn open(path: &Path, key: [u8; 32]) -> Result<Self> {
-        marmish_engine::initialize_storage().map_err(|_| Error::Storage)?;
-        let conn = Connection::open_with_flags(
-            path,
-            OpenFlags::SQLITE_OPEN_READ_WRITE
-                | OpenFlags::SQLITE_OPEN_NO_MUTEX
-                | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-        )?;
-        open_hardened_sqlcipher(
-            &conn,
-            &SqlCipherKey::raw(key),
-            SqlCipherHardening::live_cache(),
-        )
-        .map_err(|_| Error::Storage)?;
-        conn.busy_timeout(Duration::from_secs(2))?;
-        conn.execute_batch("PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;")?;
+        let conn = open_keyed(path, key)?;
         let mode: String = conn.query_row("PRAGMA journal_mode=DELETE", [], |row| row.get(0))?;
         if mode != "delete" {
             return Err(Error::Storage);
@@ -80,6 +70,25 @@ impl HardenedPeerConnection {
         check_hardening(&conn)?;
         Ok(Self(conn))
     }
+}
+
+fn open_keyed(path: &Path, key: [u8; 32]) -> Result<Connection> {
+    marmish_engine::initialize_storage().map_err(|_| Error::Storage)?;
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
+    open_hardened_sqlcipher(
+        &conn,
+        &SqlCipherKey::raw(key),
+        SqlCipherHardening::live_cache(),
+    )
+    .map_err(|_| Error::Storage)?;
+    conn.busy_timeout(Duration::from_secs(2))?;
+    conn.execute_batch("PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;")?;
+    Ok(conn)
 }
 
 fn check_hardening(conn: &Connection) -> Result<()> {
