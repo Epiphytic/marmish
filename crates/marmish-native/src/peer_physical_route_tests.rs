@@ -119,6 +119,7 @@ fn physical_route_clock_rejects_regression_drift_and_overflow() {
 pub(crate) async fn qualified_recipient_fixture(
     founder: PublicKey,
     live_founder: PublicKey,
+    leaf_lifetime: Duration,
 ) -> (
     Relay,
     tempfile::TempDir,
@@ -127,7 +128,7 @@ pub(crate) async fn qualified_recipient_fixture(
 ) {
     let plan = probe::Plan::new().unwrap();
     let (accounts, group) = plan.relay_registration();
-    let relay = Relay::start_peer_qualification(accounts, group).await;
+    let relay = Relay::start_recipient_qualification(accounts, group, leaf_lifetime).await;
     let (temp, lease, material) = fresh_profile();
     let fixture = QualificationFixture::from_ready(&relay, temp, lease.clone());
     let checked = qualification::CheckedAttestation::read(

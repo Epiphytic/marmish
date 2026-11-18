@@ -596,9 +596,26 @@ impl Socket {
     async fn text(&mut self, budget: &mut Budget, mut deadline: Instant) -> Result<String> {
         loop {
             self.refresh(&mut deadline)?;
-            let arrival = timeout_at(deadline, self.stream.next())
-                .await
-                .map_err(|_| Failure::Deadline)?;
+            let incoming = timeout_at(deadline, self.stream.next());
+            let arrival = if let Some(physical) = &self.physical {
+                let cancel = physical.cancellation();
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => return Err(Failure::Retired),
+                    incoming = incoming => incoming,
+                }
+            } else {
+                incoming.await
+            };
+            let arrival = match arrival {
+                Ok(arrival) => arrival,
+                Err(_) => {
+                    if let Some(physical) = &mut self.physical {
+                        physical.observe().map_err(|_| Failure::Retired)?;
+                    }
+                    return Err(Failure::Deadline);
+                }
+            };
             check_received(deadline)?;
             self.refresh(&mut deadline)?;
             if let Some(text) = self.inspect(arrival, budget, deadline).await? {

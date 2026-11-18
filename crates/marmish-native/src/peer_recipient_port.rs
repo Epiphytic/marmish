@@ -56,6 +56,7 @@ pub(in crate::peer_invitation) enum ControlOutcome {
 /// producer is unmounted. Tests issue this from an exact prepared v2 frame.
 pub(in crate::peer_invitation) struct ControlSendPermit<'a> {
     scope: Arc<Scope>,
+    author: PublicKey,
     remote: PublicKey,
     carrier: [u8; 32],
     digest: [u8; 32],
@@ -187,7 +188,12 @@ impl PeerRecipientPort {
             .0
             .active(async |owner| {
                 let mut end = deadline;
-                owner.socket()?.refresh(&mut end)?;
+                let socket = owner.socket()?;
+                socket.refresh(&mut end)?;
+                let route = socket.physical.as_ref().ok_or(Failure::Binding)?;
+                if permit.author != route.account() {
+                    return Err(Failure::Binding);
+                }
                 owner.predrain(&mut budget, end).await?;
                 if permit.digest != sealed_digest(permit.bytes) {
                     return Err(Failure::Binding);

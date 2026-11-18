@@ -743,7 +743,7 @@ async fn serve_connection(
     state.lock().unwrap().connections.remove(&id);
 }
 
-fn tls() -> (TlsAcceptor, rustls::RootCertStore, Vec<u8>) {
+fn tls(leaf_lifetime: Option<Duration>) -> (TlsAcceptor, rustls::RootCertStore, Vec<u8>) {
     let mut ca = CertificateParams::default();
     ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     ca.key_usages.push(KeyUsagePurpose::KeyCertSign);
@@ -751,10 +751,11 @@ fn tls() -> (TlsAcceptor, rustls::RootCertStore, Vec<u8>) {
     let ca_cert = ca.self_signed(&ca_key).unwrap();
     let issuer = Issuer::new(ca, ca_key);
     let leaf_key = KeyPair::generate().unwrap();
-    let leaf = CertificateParams::new(vec!["127.0.0.1".into()])
-        .unwrap()
-        .signed_by(&leaf_key, &issuer)
-        .unwrap();
+    let mut leaf = CertificateParams::new(vec!["127.0.0.1".into()]).unwrap();
+    if let Some(lifetime) = leaf_lifetime {
+        leaf.not_after = (std::time::SystemTime::now() + lifetime).into();
+    }
+    let leaf = leaf.signed_by(&leaf_key, &issuer).unwrap();
     let config = rustls::ServerConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),
     ))
@@ -818,15 +819,15 @@ impl<'a> PeerMode<'a> {
 
 impl Relay {
     pub(crate) async fn start() -> Self {
-        Self::start_with(None, None, None).await
+        Self::start_with(None, None, None, None).await
     }
 
     pub(crate) async fn start_peer(accounts: [PublicKey; 2]) -> Self {
-        Self::start_with(Some(accounts), None, None).await
+        Self::start_with(Some(accounts), None, None, None).await
     }
 
     pub(crate) async fn start_peer_group(accounts: [PublicKey; 2], route: [u8; 32]) -> Self {
-        Self::start_with(Some(accounts), Some(route), None).await
+        Self::start_with(Some(accounts), Some(route), None, None).await
     }
 
     pub(crate) async fn start_peer_qualification(
@@ -835,7 +836,21 @@ impl Relay {
     ) -> Self {
         // Receive an over-cap event so the scoped policy can explicitly refuse
         // it. Existing fixture modes retain their original websocket bound.
-        Self::start_with(Some(accounts), Some(route), Some(128 * 1024)).await
+        Self::start_with(Some(accounts), Some(route), Some(128 * 1024), None).await
+    }
+
+    pub(crate) async fn start_recipient_qualification(
+        accounts: [PublicKey; 2],
+        route: [u8; 32],
+        leaf_lifetime: Duration,
+    ) -> Self {
+        Self::start_with(
+            Some(accounts),
+            Some(route),
+            Some(128 * 1024),
+            Some(leaf_lifetime),
+        )
+        .await
     }
 
     pub(crate) fn qualification_fault(&self, fault: QualificationFault) {
@@ -1028,10 +1043,11 @@ impl Relay {
         accounts: Option<[PublicKey; 2]>,
         group: Option<[u8; 32]>,
         probe_limit: Option<usize>,
+        leaf_lifetime: Option<Duration>,
     ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = Url::parse(&format!("wss://{}/", listener.local_addr().unwrap())).unwrap();
-        let (acceptor, roots, qualification_ca) = tls();
+        let (acceptor, roots, qualification_ca) = tls(leaf_lifetime);
         let peer = accounts.map(|accounts| PeerIdentity {
             origin: url.clone(),
             accounts,

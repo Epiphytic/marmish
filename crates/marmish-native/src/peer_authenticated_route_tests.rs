@@ -15,6 +15,11 @@ use crate::{
 };
 use cgka_traits::app_components::NostrRoutingV1;
 use std::{
+    path::Path,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     task::Context,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -58,6 +63,7 @@ fn permit<'a>(
     );
     ControlSendPermit {
         scope: port.0.scope.clone(),
+        author: flight.author,
         remote: flight.recipient,
         carrier: flight.carrier_id.to_bytes(),
         digest: sealed_digest(prepared.frame()),
@@ -87,8 +93,13 @@ async fn peer_authenticated_route_private_wss_installed_marker_and_exact_send() 
     let started = Instant::now();
     let founder = Keys::generate();
     let live_founder = Keys::generate();
-    let (mut relay, _temp, lease, material) =
-        qualified_recipient_fixture(founder.public_key(), live_founder.public_key()).await;
+    let leaf_lifetime = Duration::from_secs(20);
+    let (mut relay, _temp, lease, material) = qualified_recipient_fixture(
+        founder.public_key(),
+        live_founder.public_key(),
+        leaf_lifetime,
+    )
+    .await;
     let qualified = Instant::now();
     assert_eq!(relay.qualification_connections(), 4);
     let recipient_keys = material.signer();
@@ -387,7 +398,75 @@ async fn peer_authenticated_route_private_wss_installed_marker_and_exact_send() 
         assert_eq!(relay.recipient_requests(recipient), before + requests);
     }
     assert_eq!(relay.qualification_connections(), 14);
+    for (frame, requests) in [(2, 0), (3, 1)] {
+        let before = relay.recipient_requests(recipient);
+        assert_revoked_handshake(open_port(), &lease.root().join("config.json"), frame).await;
+        assert_eq!(relay.recipient_requests(recipient), before + requests);
+    }
+    let mut different_author = PeerRecipientPort::open(open_port(), time_limit())
+        .await
+        .unwrap();
+    let mut current = |_, _| true;
+    let mut permit_with_wrong_author = permit(&different_author, &outgoing, &mut current);
+    permit_with_wrong_author.author = founder.public_key();
+    assert!(matches!(
+        different_author
+            .publish_control(permit_with_wrong_author, time_limit())
+            .await,
+        ControlOutcome::NotSent(Failure::Binding)
+    ));
+    assert_eq!(relay.publication_attempts(wire::CARRIER), 6);
+    for cut in [
+        CheckedCut::Expired,
+        CheckedCut::Withdraw,
+        CheckedCut::CancelFlush,
+    ] {
+        let port = PeerRecipientPort::open(open_port(), time_limit())
+            .await
+            .unwrap();
+        assert_checked_cut(port, &outgoing, cut).await;
+    }
+    assert_eq!(relay.publication_attempts(wire::CARRIER), 6);
+    assert_retired_when_cancelled(
+        PeerRecipientPort::open(open_port(), time_limit())
+            .await
+            .unwrap(),
+    )
+    .await;
+    let mut certificate_port = PeerRecipientPort::open(open_port(), time_limit())
+        .await
+        .unwrap();
+    let mut revoked = PeerRecipientPort::open(open_port(), time_limit())
+        .await
+        .unwrap();
+    let page = revoked.page([0, wall_now()], time_limit()).await.unwrap();
+    let ca = lease.root().join("peer-relay-ca.der");
+    let replacement = lease.root().join("replaced-ca.der");
+    let held_ca = lease.root().join("held-ca.der");
+    std::fs::copy(&ca, &replacement).unwrap();
+    std::fs::rename(&ca, &held_ca).unwrap();
+    std::fs::rename(replacement, &ca).unwrap();
+    assert_eq!(
+        revoked.use_page(&page, |_| panic!("revoked page exposed")),
+        Err(Failure::Retired)
+    );
+    assert_eq!(
+        revoked.use_page(&page, |_| panic!("retired page exposed again")),
+        Err(Failure::Binding)
+    );
+    std::fs::rename(held_ca, &ca).unwrap();
+    assert_eq!(relay.qualification_connections(), 23);
     assert_eq!(relay.peer_transcript().len(), 5);
+    assert!(matches!(
+        certificate_port
+            .wait_live(Instant::now() + leaf_lifetime)
+            .await,
+        Err(Failure::Retired)
+    ));
+    assert!(matches!(
+        certificate_port.wait_live(time_limit()).await,
+        Err(Failure::Retired)
+    ));
     relay.stop().await;
     lease.cleanup_runtime().unwrap();
     eprintln!(
@@ -398,6 +477,170 @@ async fn peer_authenticated_route_private_wss_installed_marker_and_exact_send() 
         admitted.elapsed().as_millis(),
         started.elapsed().as_millis(),
     );
+}
+
+async fn assert_revoked_handshake(
+    admission: ReceiverRouteAdmission,
+    config: &Path,
+    replace_at_frame: usize,
+) {
+    let deadline = time_limit();
+    let (physical, signer, sink, stream) =
+        admission.open(wire::MESSAGE_LIMIT, deadline).await.unwrap();
+    let endpoint = physical.endpoint().clone();
+    let config = config.to_owned();
+    let staged = config.with_extension("fixture-replace");
+    let original = config.with_extension("fixture-held");
+    let restore = (config.clone(), original.clone());
+    std::fs::copy(&config, &staged).unwrap();
+    let mut seen = 0;
+    let stream = stream.inspect(move |_| {
+        seen += 1;
+        if seen == replace_at_frame {
+            std::fs::rename(&config, &original).unwrap();
+            std::fs::rename(&staged, &config).unwrap();
+        }
+    });
+    let socket = Socket {
+        sink,
+        stream: Box::pin(stream),
+        physical: Some(physical),
+    };
+    assert_eq!(
+        Owner::open_socket(socket, &endpoint, &signer, deadline)
+            .await
+            .err(),
+        Some(Failure::Retired)
+    );
+    std::fs::rename(restore.1, restore.0).unwrap();
+}
+
+async fn assert_retired_when_cancelled(mut port: PeerRecipientPort) {
+    let cancel = port
+        .0
+        .socket()
+        .unwrap()
+        .physical
+        .as_ref()
+        .unwrap()
+        .cancellation();
+    // The reader is polled first and has no frame available in this turn.
+    let (received, ()) = tokio::join!(
+        biased;
+        port.wait_live(time_limit()),
+        async {
+            tokio::task::yield_now().await;
+            cancel.cancel();
+        }
+    );
+    assert!(matches!(received, Err(Failure::Retired)));
+    assert!(matches!(
+        port.wait_live(time_limit()).await,
+        Err(Failure::Retired)
+    ));
+}
+
+#[derive(Clone, Copy)]
+enum CheckedCut {
+    Expired,
+    Withdraw,
+    CancelFlush,
+}
+
+type Counts = (usize, usize, usize);
+
+struct CheckedSink {
+    counts: Arc<Mutex<Counts>>,
+    current: Arc<AtomicBool>,
+    cut: CheckedCut,
+    cancel: tokio_util::sync::CancellationToken,
+}
+
+impl Sink<Message> for CheckedSink {
+    type Error = nostr_sdk::error::Error;
+
+    fn poll_ready(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), Self::Error>> {
+        self.counts.lock().unwrap().0 += 1;
+        if matches!(self.cut, CheckedCut::Withdraw) {
+            self.current.store(false, Ordering::Release);
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
+        }
+        Poll::Ready(Ok(()))
+    }
+
+    fn start_send(self: Pin<&mut Self>, _message: Message) -> std::result::Result<(), Self::Error> {
+        self.counts.lock().unwrap().1 += 1;
+        Ok(())
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), Self::Error>> {
+        self.counts.lock().unwrap().2 += 1;
+        assert!(matches!(self.cut, CheckedCut::CancelFlush));
+        self.cancel.cancel();
+        Poll::Pending
+    }
+
+    fn poll_close(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), Self::Error>> {
+        panic!("retirement must drop without flushing");
+    }
+}
+
+async fn assert_checked_cut(
+    mut port: PeerRecipientPort,
+    outgoing: &Prepared<Offer>,
+    cut: CheckedCut,
+) {
+    let counts = Arc::new(Mutex::new((0, 0, 0)));
+    let current = Arc::new(AtomicBool::new(true));
+    let socket = port.0.socket().unwrap();
+    let cancel = socket.physical.as_ref().unwrap().cancellation();
+    socket.sink = Box::pin(CheckedSink {
+        counts: counts.clone(),
+        current: current.clone(),
+        cut,
+        cancel,
+    });
+    let mut same_row = move |_, _| current.load(Ordering::Acquire);
+    let mut outgoing = permit(&port, outgoing, &mut same_row);
+    if matches!(cut, CheckedCut::Expired) {
+        outgoing.deadline = wall_now();
+    }
+    let outcome = port.publish_control(outgoing, time_limit()).await;
+    let expected = match cut {
+        CheckedCut::Expired => {
+            assert!(matches!(
+                outcome,
+                ControlOutcome::NotSent(Failure::Retired | Failure::Deadline)
+            ));
+            (0, 0, 0)
+        }
+        CheckedCut::Withdraw => {
+            assert!(matches!(outcome, ControlOutcome::NotSent(Failure::Retired)));
+            (1, 0, 0)
+        }
+        CheckedCut::CancelFlush => {
+            assert!(matches!(
+                outcome,
+                ControlOutcome::PossiblyExposed(Failure::Retired)
+            ));
+            (1, 1, 1)
+        }
+    };
+    assert_eq!(*counts.lock().unwrap(), expected);
+    assert!(matches!(
+        port.wait_live(time_limit()).await,
+        Err(Failure::Retired)
+    ));
 }
 
 #[derive(Default)]
