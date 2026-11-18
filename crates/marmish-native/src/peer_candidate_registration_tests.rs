@@ -21,6 +21,9 @@ const DIR_ENV: &str = "MARMISH_TEST_CANDIDATE_REGISTRATION_ROOT";
 const CASE_ENV: &str = "MARMISH_TEST_CANDIDATE_REGISTRATION_CASE";
 const CHILD: &str = "peer_relay_trust::candidate_registration::tests::registration_subprocess";
 
+#[path = "peer_candidate_mdk_owner_tests.rs"]
+mod mdk_owner;
+
 fn prepare(lease: &mut ProfileLease) -> IdentityMaterial {
     lease
         .prepare(
@@ -79,7 +82,7 @@ fn scope(root: &Path) -> (Arc<ProfileLease>, IdentityMaterial, CommandConfig) {
 
 #[test]
 fn candidate_registration_scope_and_irreversible_dispatch() {
-    for mode in [
+    run_registration_cases(&[
         "local",
         "ordinary",
         "host_storage_healthy",
@@ -102,7 +105,11 @@ fn candidate_registration_scope_and_irreversible_dispatch() {
         "guard_unwind",
         "poison_backstop",
         "custody_under_lock",
-    ] {
+    ]);
+}
+
+fn run_registration_cases(modes: &[&str]) {
+    for &mode in modes {
         let root = start_profile();
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args(["--ignored", "--exact", CHILD, "--nocapture"])
@@ -189,6 +196,11 @@ fn registration_subprocess() {
         prepare().register(&lease, &material),
         Err(RegistrationFailure::LocalUnavailable)
     ));
+    if let Some(mode) = mode.strip_prefix("mdk_") {
+        mdk_owner::qualify(mode, &lease, &material, &ordinary, &ordinary_fatal);
+        return;
+    }
+
     match mode.as_str() {
         "ordinary" => {
             let independent = forwarding.clone();

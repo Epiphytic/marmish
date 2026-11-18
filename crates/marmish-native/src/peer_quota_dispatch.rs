@@ -1491,6 +1491,29 @@ fn dispatcher(vfs: *mut sql::sqlite3_vfs) -> &'static Dispatch {
     unsafe { &*(*vfs).pAppData.cast::<Dispatch>() }
 }
 
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) mod account_open_probe {
+    use std::cell::Cell;
+
+    thread_local! {
+        static OPEN: Cell<Option<fn()>> = const { Cell::new(None) };
+    }
+
+    pub(crate) fn before_main_open(probe: fn()) {
+        OPEN.with(|armed| {
+            assert!(armed.replace(Some(probe)).is_none());
+        });
+    }
+
+    pub(super) fn stock_open(flags: std::ffi::c_int) {
+        if flags & rusqlite::ffi::SQLITE_OPEN_MAIN_DB != 0
+            && let Some(probe) = OPEN.with(Cell::take)
+        {
+            probe();
+        }
+    }
+}
+
 unsafe extern "C" fn dispatch_open(
     vfs: *mut sql::sqlite3_vfs,
     name: *const c_char,
@@ -1510,6 +1533,8 @@ unsafe extern "C" fn dispatch_open(
         if dispatch.protected(name) {
             return sql::SQLITE_CANTOPEN;
         }
+        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        account_open_probe::stock_open(flags);
         let base = dispatch.stock;
         unsafe { (*base).xOpen.expect("stock_open")(base, name, outer, flags, out_flags) }
     })
