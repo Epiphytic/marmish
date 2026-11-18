@@ -10,7 +10,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use cgka_traits::{
-    EpochPin, EpochState, GroupId, MemberId, Timestamp, TransportAccountActivation,
+    EpochPin, EpochState, GroupId, MemberId, MessageStorage, Timestamp, TransportAccountActivation,
     TransportAdapter, TransportAdapterError, TransportDelivery, TransportEndpoint,
     TransportEndpointAckKind, TransportEndpointReceipt, TransportGroupSync, TransportPublishReport,
     TransportPublishRequest, TransportPublishTarget,
@@ -22,7 +22,6 @@ use marmot_session::{
     AccountDeviceRuntime, KeyPackagePublisher, MaintenanceTiming, OsMaintenanceRandom,
     StaticTransportRouting, SystemMonotonicClock, TransportRoutingPolicy, WallClock,
 };
-use nostr::event::Event;
 use storage_sqlite::{SqlCipherKey, SqliteAccountStorage, SqliteJournalMode, SqliteStorageOptions};
 use tokio::sync::Mutex;
 
