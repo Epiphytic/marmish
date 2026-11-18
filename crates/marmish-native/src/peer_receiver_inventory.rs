@@ -66,6 +66,8 @@ struct CleanExtent {
 #[path = "peer_receiver_clean_charge.rs"]
 mod clean;
 pub(crate) use clean::CleanPermit;
+#[path = "peer_receiver_v2_pending.rs"]
+pub(super) mod v2_pending;
 
 impl<'lease> RecoveredOwner<'lease> {
     fn open(lease: &'lease ProfileLease, material: &IdentityMaterial, relay: &str) -> Result<Self> {

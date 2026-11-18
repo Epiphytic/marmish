@@ -195,7 +195,7 @@ impl JoinedReadback {
     }
 }
 
-fn snapshot_sidecars(path: &Path) -> Result<()> {
+pub(super) fn snapshot_sidecars(path: &Path) -> Result<()> {
     for suffix in ["-journal", "-wal", "-shm"] {
         let mut name = path.as_os_str().to_owned();
         name.push(suffix);
@@ -207,14 +207,14 @@ fn snapshot_sidecars(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn snapshot_inode(metadata: &Metadata) -> Result<(u64, u64)> {
+pub(super) fn snapshot_inode(metadata: &Metadata) -> Result<(u64, u64)> {
     if !metadata.is_file() || metadata.nlink() != 1 || metadata.mode() & 0o7777 != 0o600 {
         return Err(Error::StageIdentityMismatch);
     }
     Ok((metadata.dev(), metadata.ino()))
 }
 
-fn read_image(path: &Path) -> Result<([u8; 32], (u64, u64))> {
+pub(super) fn read_image(path: &Path) -> Result<([u8; 32], (u64, u64))> {
     use sha2::Digest;
     snapshot_sidecars(path)?;
     let file = OpenOptions::new()

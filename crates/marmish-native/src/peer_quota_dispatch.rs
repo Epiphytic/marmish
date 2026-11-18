@@ -812,16 +812,17 @@ impl ReceiverFiles<'_> {
         ptr::eq(self.quota, quota)
     }
 
-    fn snapshot_native<T>(
+    fn measured_native<T>(
         &self,
         permit: crate::peer_invitation::CleanPermit<'_>,
+        class: SlotClass,
         run: impl FnOnce(&Path) -> Result<T>,
     ) -> Result<T> {
         let measured = permit
-            .verify(self, true)
+            .verify(self, matches!(class, SlotClass::Snapshot))
             .ok_or("dispatch_reservation_owner")?;
-        self.quota.dispatch.checked_paths(self.quota.lease)?;
-        let path = self.snapshot;
+        let paths = self.quota.dispatch.checked_paths(self.quota.lease)?;
+        let path = &paths.mains[class.index()];
         let stat = path
             .symlink_metadata()
             .map_err(|_| "dispatch_stage_extent")?;
@@ -834,7 +835,7 @@ impl ReceiverFiles<'_> {
         }
         let mut turn = self.quota.admit(Reservation {
             owner: self.quota,
-            class: SlotClass::Snapshot,
+            class,
             generation: measured.generation,
             witness: measured.identity,
             charged_other: measured.charged_other,
@@ -851,7 +852,9 @@ impl ReceiverFiles<'_> {
         permit: crate::peer_invitation::CleanPermit<'_>,
         operation: JoinTurn<'_>,
     ) -> Result<std::result::Result<(), StageError>> {
-        self.snapshot_native(permit, |path| Ok(operation.prepare(path)))
+        self.measured_native(permit, SlotClass::Snapshot, |path| {
+            Ok(operation.prepare(path))
+        })
     }
 
     pub(crate) fn read_join(
@@ -859,7 +862,15 @@ impl ReceiverFiles<'_> {
         permit: crate::peer_invitation::CleanPermit<'_>,
         operation: JoinTurn<'_>,
     ) -> Result<std::result::Result<JoinedAuthority, StageError>> {
-        self.snapshot_native(permit, |path| Ok(operation.read(path)))
+        self.measured_native(permit, SlotClass::Snapshot, |path| Ok(operation.read(path)))
+    }
+
+    pub(crate) fn join_original(
+        &self,
+        permit: crate::peer_invitation::CleanPermit<'_>,
+        operation: JoinTurn<'_>,
+    ) -> Result<std::result::Result<(), StageError>> {
+        self.measured_native(permit, SlotClass::Unknown, |path| operation.join(path))
     }
 
     pub(crate) fn check_snapshot_cipher(
@@ -868,7 +879,9 @@ impl ReceiverFiles<'_> {
         key: &SqlCipherKey,
         fence: &crate::peer_invitation::TurnFence<'_>,
     ) -> Result<()> {
-        self.snapshot_native(permit, |path| recover_database(path, key, fence))
+        self.measured_native(permit, SlotClass::Snapshot, |path| {
+            recover_database(path, key, fence)
+        })
     }
 }
 
