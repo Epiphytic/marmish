@@ -188,7 +188,7 @@ async fn prove_lost_ack() {
         recipient.maintenance_obligations_for_group(&stage.group).unwrap().as_slice(),
         [obligation] if obligation.phase == cgka_traits::maintenance::MaintenancePhase::Jitter
     ));
-    assert_eq!(old_gate.observe().unwrap().commit_calls, 0);
+    assert_gate(&old_gate, 0, 0, false);
     let history_ms = history_started.elapsed().as_millis();
     let baseline = verify::pre_capture(
         &recipient,
@@ -228,27 +228,28 @@ async fn prove_lost_ack() {
     assert_eq!(reservation.step(), Step::Reserved);
     old_gate.begin_capture(scope.clone()).unwrap();
     recipient.run_due_maintenance().await.unwrap();
-    let first_capture = old_gate.observe().unwrap();
-    assert_eq!(
-        (
-            first_capture.commit_calls,
-            first_capture.deliveries,
-            first_capture.violation
-        ),
-        (1, 0, false)
-    );
+    assert_gate(&old_gate, 1, 0, false);
     assert_eq!(round.relay.group_writes(), setup.writes);
     // This cut precedes application capture. Recover only native frozen rows.
-    drop((old_gate, recipient, owner, baseline, reservation));
+    drop((
+        old_gate,
+        recipient,
+        owner,
+        baseline,
+        reservation,
+        scope,
+        image,
+    ));
     let reopen_started = Instant::now();
     let mut owner = open_owner();
     let held = stage.read(&mut owner, wall());
     assert_eq!(held.stage(), (binding, witness));
+    let image = checked_image(&owner, &held);
     let reservation = read_publication(&mut owner, &held, wall(), Step::Reserved);
-    let gate = Gate::closed(scope.clone(), round.wall.clone());
+    let gate = Gate::closed(publication_scope(&reservation), round.wall.clone());
     let recipient = stage.open(&owner, &held, &round.wall, gate.clone());
     let initial =
-        verify::recover_reserved(&recipient, founder.runtime(), &image, &reservation, wall())
+        verify::recover_unexposed(&recipient, founder.runtime(), &image, &reservation, wall())
             .unwrap();
     let publication = owner
         .state
@@ -265,22 +266,29 @@ async fn prove_lost_ack() {
     let reopen_ms = reopen_started.elapsed().as_millis();
     // The second cut follows durable capture. Exact native readback and the
     // application journal must still agree before the first physical turn.
-    drop(gate);
-    drop(recipient);
-    drop(owner);
+    assert_gate(&gate, 0, 0, false);
+    drop((
+        gate,
+        recipient,
+        owner,
+        initial,
+        reservation,
+        publication,
+        image,
+    ));
     let mut owner = open_owner();
     let held = stage.read(&mut owner, wall());
+    let image = checked_image(&owner, &held);
     let publication = read_publication(&mut owner, &held, wall(), Step::Captured);
+    let scope = publication_scope(&publication);
+    let deadline = publication.deadline();
     let gate = Gate::closed(scope.clone(), round.wall.clone());
     let mut recipient = stage.open(&owner, &held, &round.wall, gate.clone());
-    let fresh = verify::reopen(
-        &recipient,
-        founder.runtime(),
-        initial.baseline(),
-        initial.capture(),
-        wall(),
-    )
-    .unwrap();
+    let recovered =
+        verify::recover_unexposed(&recipient, founder.runtime(), &image, &publication, wall())
+            .unwrap();
+    assert_gate(&gate, 0, 0, false);
+    let fresh = recovered.capture();
 
     let event_id = fresh.event_id();
     let signed_digest = fresh.signed_digest();
@@ -311,8 +319,8 @@ async fn prove_lost_ack() {
         )
         .unwrap();
     gate.arm(
-        Permit::verify_reconstructed(&scope, &fresh).unwrap(),
-        &fresh,
+        Permit::verify_recovery(&scope, &recovered).unwrap(),
+        fresh,
         Some(turn.into_postjoin_sink().unwrap()),
     )
     .unwrap();
@@ -325,15 +333,7 @@ async fn prove_lost_ack() {
     let founder_record = founder_record.unwrap();
     assert!(founder_socket.accepts_group_record(&founder_record));
     assert_eq!(founder_record.fingerprint().id, event_id);
-    let observation = gate.observe().unwrap();
-    assert_eq!(
-        (
-            observation.deliveries,
-            observation.accepted,
-            observation.violation
-        ),
-        (1, false, false)
-    );
+    assert_gate(&gate, 1, 1, false);
     assert_eq!(round.relay.group_writes().len(), 2);
     let exposed = &round.relay.group_writes()[1];
     assert_eq!(exposed.sender, round.signer);
@@ -348,15 +348,16 @@ async fn prove_lost_ack() {
         recipient,
         recipient_socket,
         owner,
-        initial,
-        fresh,
-        reservation,
+        recovered,
         publication,
+        scope,
+        image,
     ));
     assert!(open_custody().is_err());
     let recover_started = Instant::now();
     let mut owner = open_owner();
     let held = stage.read(&mut owner, wall());
+    let image = checked_image(&owner, &held);
     let armed = read_publication(&mut owner, &held, wall(), Step::Armed { number: 1 });
     owner
         .state
@@ -369,6 +370,8 @@ async fn prove_lost_ack() {
         .read_uncertain_postjoin(&owner.state.source, &held, wall())
         .unwrap()
         .unwrap();
+    let scope = publication_scope(uncertain.publication());
+    let deadline = uncertain.publication().deadline();
     let gate = Gate::closed(scope.clone(), round.wall.clone());
     let mut recipient = stage.open(&owner, &held, &round.wall, gate.clone());
     let recover = |recipient: &Recipient, founder: &PeerFounderRuntime<FounderTransport>, wall| {
@@ -382,7 +385,7 @@ async fn prove_lost_ack() {
             .await
     );
     assert!(recover(&recipient, &founder, deadline).is_err());
-    assert_eq!(gate.observe().unwrap().deliveries, 0);
+    assert_gate(&gate, 0, 0, false);
     assert_eq!(round.relay.group_writes().len(), 2);
     let recovered = recover(&recipient, &founder, wall()).unwrap();
     let retry = recovered.capture();
@@ -420,7 +423,7 @@ async fn prove_lost_ack() {
     .unwrap();
     advance_retry(&recipient, &stage.group, &round.wall, deadline);
     recipient.run_due_maintenance().await.unwrap();
-    assert!(gate.observe().unwrap().accepted);
+    assert_gate(&gate, 1, 1, true);
     // Finish native bookkeeping under the spent permit before dropping every
     // recipient handle and proving the canonical native result from disk.
     let armed = read_publication(&mut owner, &held, wall(), Step::Armed { number: 2 });
@@ -428,6 +431,7 @@ async fn prove_lost_ack() {
     {
         recipient.run_due_maintenance().await.unwrap();
     }
+    assert_gate(&gate, 1, 1, true);
     assert_eq!(
         stable_pin(&recipient, &stage.group),
         stable_pin(founder.runtime(), &stage.group),
@@ -448,13 +452,16 @@ async fn prove_lost_ack() {
         uncertain,
         publication,
         armed,
+        scope,
+        image,
     ));
     let mut owner = open_owner();
     let held = stage.read(&mut owner, wall());
     assert_eq!(held.stage(), (binding, witness));
-    let gate = Gate::closed(scope, round.wall.clone());
-    let mut recipient = stage.open(&owner, &held, &round.wall, gate.clone());
+    let image = checked_image(&owner, &held);
     let armed = read_publication(&mut owner, &held, wall(), Step::Armed { number: 2 });
+    let gate = Gate::closed(publication_scope(&armed), round.wall.clone());
+    let mut recipient = stage.open(&owner, &held, &round.wall, gate.clone());
     let rotation =
         verify::confirm_rotation_cold(&recipient, founder.runtime(), &image, &armed, wall())
             .unwrap();
@@ -467,7 +474,7 @@ async fn prove_lost_ack() {
     verify::confirm_rotation_cold(&recipient, founder.runtime(), &image, &confirmed, wall())
         .unwrap();
     recipient.resume_outbound_fanouts().await.unwrap();
-    assert_eq!(gate.observe().unwrap().commit_calls, 0);
+    assert_gate(&gate, 0, 0, false);
     assert_eq!(round.relay.group_writes(), writes);
     founder_socket.stop(Instant::now() + STEP).await.unwrap();
     retry_socket
@@ -485,6 +492,33 @@ async fn prove_lost_ack() {
         "peer_postjoin_durable stage_ms={} history_ms={history_ms} reopen_ms={reopen_ms} ack_loss_ms={lost_ms} retry_ms={recover_ms} group_writes=3",
         setup.activation_ms,
     );
+}
+
+fn assert_gate(gate: &Gate, commits: u8, deliveries: u8, accepted: bool) {
+    let observation = gate.observe().unwrap();
+    assert_eq!(
+        (
+            observation.commit_calls,
+            observation.deliveries,
+            observation.accepted,
+            observation.denied,
+            observation.violation
+        ),
+        (commits, deliveries, accepted, 0, false),
+    );
+}
+
+fn publication_scope(publication: &Publication) -> Scope {
+    Scope::new(
+        cgka_traits::MemberId::new(publication.recipient().to_bytes()),
+        GroupId::new(publication.group()),
+        publication.route(),
+        TransportEndpoint(publication.origin().into()),
+        publication.generation(),
+        publication.deadline(),
+        MessageId::new(publication.semantic_id()),
+    )
+    .unwrap()
 }
 
 struct Stage {

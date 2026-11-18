@@ -375,7 +375,7 @@ impl Context {
             offer: queued.prepared.offer,
             row: queued.row,
             #[cfg(test)]
-            active: matches!(self.epoch, Epoch::Publication)
+            active: self.epoch.is_publication()
                 && activation_schema::active_exists(tx, saved.carrier)?,
             saved,
         }))

@@ -411,9 +411,9 @@ impl RecoveredPostJoin {
     }
 }
 
-/// Recovers an initial native capture after the owner forgot the closed gate.
-/// The relay must still be unreachable to the stage during this readback.
-pub(super) fn recover_reserved<A, R, K, F, S, Q>(
+/// Recover the frozen native request before the first armed publication.
+/// A persisted capture must match the independently reopened native request.
+pub(super) fn recover_unexposed<A, R, K, F, S, Q>(
     runtime: &AccountDeviceRuntime<A, R, K>,
     founder: &AccountDeviceRuntime<F, S, Q>,
     image: &Path,
@@ -432,9 +432,7 @@ where
         return Err(Refusal::Expired);
     }
     if publication.kind() != Kind::PostJoin
-        || publication.step() != Step::Reserved
-        || publication.candidate().is_some()
-        || publication.target_pin().is_some()
+        || !matches!(publication.step(), Step::Reserved | Step::Captured)
         || publication.attempt_wall().is_some()
     {
         return Err(Refusal::Invalid);
@@ -451,6 +449,12 @@ where
     let capture = bind_frozen_pending(&rows, &baseline, Exposure::BeforeSend, wall)?;
     if capture.attempts != 1 || capture.first_attempt_ms != capture.last_attempt_ms {
         return Err(Refusal::Invalid);
+    }
+    match publication.step() {
+        Step::Reserved
+            if publication.candidate().is_none() && publication.target_pin().is_none() => {}
+        Step::Captured if matches_captured_publication(publication, &baseline, &capture) => {}
+        _ => return Err(Refusal::Invalid),
     }
     verify_founder(
         founder,
@@ -504,13 +508,7 @@ where
     )?;
     let baseline = stage.baseline(image, publication, &rows)?;
     let capture = bind_frozen_pending(&rows, &baseline, Exposure::PossiblyExposed, wall)?;
-    let candidate = publication.candidate().ok_or(Refusal::Invalid)?;
-    let target = publication.target_pin().ok_or(Refusal::Invalid)?;
-    if candidate.event_id != capture.event_id()
-        || candidate.signed_digest != capture.signed_digest()
-        || target.ordinal != capture.target().epoch.0
-        || target.authenticator != capture.target().identity
-        || target.recipient_leaf != baseline.recipient_leaf()
+    if !matches_captured_publication(publication, &baseline, &capture)
         // The first native invocation froze the request behind the closed
         // gate. Only the first persisted egress can be outstanding here.
         || capture.attempts != EXPOSED_NATIVE_ATTEMPTS
@@ -529,6 +527,21 @@ where
     )?;
     baseline.check_image(wall)?;
     Ok(RecoveredPostJoin { baseline, capture })
+}
+
+fn matches_captured_publication(
+    publication: &Publication,
+    baseline: &Baseline,
+    capture: &Capture,
+) -> bool {
+    publication.candidate().is_some_and(|candidate| {
+        candidate.event_id == capture.event_id()
+            && candidate.signed_digest == capture.signed_digest()
+    }) && publication.target_pin().is_some_and(|target| {
+        target.ordinal == capture.target().epoch.0
+            && target.authenticator == capture.target().identity
+            && target.recipient_leaf == baseline.recipient_leaf()
+    })
 }
 
 struct JournalStage {

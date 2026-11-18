@@ -575,7 +575,7 @@ impl Checkpoint {
 
     fn publication_context(&self, source: &Source, other: PublicKey) -> Result<Context> {
         let cx = self.custody_context(source)?;
-        if !matches!(cx.epoch, Epoch::Publication) {
+        if !cx.epoch.is_publication() {
             return Err(CursorError::Binding.into());
         }
         if !self.policy.permits(other) {

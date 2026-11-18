@@ -170,15 +170,6 @@ impl Permit {
         Self::from_capture(scope, recovered.capture())
     }
 
-    /// Authorize the initial turn from exact native capture after it is
-    /// durably matched to the journal. No live candidate survived the cut.
-    pub(super) fn verify_reconstructed(
-        scope: &Scope,
-        capture: &Capture,
-    ) -> Result<Self, GateError> {
-        Self::from_capture(scope, capture)
-    }
-
     fn from_capture(scope: &Scope, capture: &Capture) -> Result<Self, GateError> {
         let operation = Operation::from_capture(capture);
         let request = capture.request();
