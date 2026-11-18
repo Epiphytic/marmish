@@ -1,6 +1,9 @@
 //! Bounded local record storage. A matching record never grants egress.
 
-use super::{ProbeAuthority, ProfileFiles, inode, open_regular, private_mode, read_bounded};
+use super::{
+    CheckedCa, HeldFile, ProbeAuthority, ProfileFiles, inode, open_regular, private_mode,
+    read_bounded, wall_in,
+};
 use crate::{
     Error, Result,
     command_config::{
@@ -15,6 +18,7 @@ use std::{
     ffi::CStr,
     fs::{File, OpenOptions},
     io::{self, Write},
+    ops::Range,
     os::{
         fd::AsRawFd,
         unix::fs::{MetadataExt, OpenOptionsExt},
@@ -202,11 +206,21 @@ impl CheckedAttestation {
         if !meta.is_file() || meta.nlink() != 1 || !private_mode(&meta, 0o600) {
             return Err(ATTESTATION_REFUSED);
         }
-        let bytes = read_bounded(file, RECORD_LIMIT).map_err(|_| ATTESTATION_REFUSED)?;
+        let bytes = read_bounded(&file, RECORD_LIMIT).map_err(|_| ATTESTATION_REFUSED)?;
+        Self::decode(&bytes, inode(&meta), relay, now, managed)
+    }
+
+    fn decode(
+        bytes: &[u8],
+        file: (u64, u64),
+        relay: &Relay,
+        now: u64,
+        managed: bool,
+    ) -> Result<Self> {
         if bytes.iter().find(|byte| !byte.is_ascii_whitespace()) != Some(&b'{') {
             return Err(ATTESTATION_REFUSED);
         }
-        let data: Attestation = serde_json::from_slice(&bytes).map_err(|_| ATTESTATION_REFUSED)?;
+        let data: Attestation = serde_json::from_slice(bytes).map_err(|_| ATTESTATION_REFUSED)?;
         if data.schema != 1
             || data.origin != relay.origin.as_str()
             || data.trust != trust_expression(&relay.trust)
@@ -243,7 +257,7 @@ impl CheckedAttestation {
         }
         Ok(Self {
             data,
-            file: inode(&meta),
+            file,
             digest: Sha256::digest(canonical).into(),
         })
     }
@@ -261,13 +275,6 @@ impl CheckedAttestation {
             "Enforcement source: {:?}\nAttestation validity: {} to {} (Unix seconds)\nConfirm the v1 Control retention, limits and access rules, and Group access and reconnect history.",
             self.data.enforcement_source, self.data.valid_from, self.data.valid_until
         )
-    }
-
-    fn read_managed(profile: &ProfileFiles, relay: &Relay, now: u64) -> Result<Self> {
-        let file = profile
-            .required(MANAGED_ATTESTATION)
-            .map_err(|_| ATTESTATION_REFUSED)?;
-        Self::read_file(file, relay, now, true)
     }
 }
 
@@ -470,7 +477,7 @@ fn read_record(profile: &ProfileFiles) -> Option<Record> {
     let read_checked = || -> Result<Option<Record>> {
         profile.recheck()?;
         let file = profile.required(RECORD)?;
-        let bytes = read_bounded(file, RECORD_LIMIT)?;
+        let bytes = read_bounded(&file, RECORD_LIMIT)?;
         profile.recheck()?;
         Ok(Record::decode(&bytes))
     };
@@ -497,16 +504,120 @@ pub(super) fn read_issued(
     key: &[u8; 32],
     now: u64,
 ) -> Result<IssuedQualification> {
-    check_build_scope()?;
-    let (config, snapshot) = profile.command_snapshot()?;
-    if config.bound_peer_relay(&config)? != relay {
+    let held = read_issued_held(profile, key, now)?;
+    if &held.relay != relay {
         return Err(EVIDENCE_REFUSED);
     }
-    let ca = profile.ca_snapshot(&relay.trust, now)?;
-    let file = profile.required(RECORD).map_err(|_| EVIDENCE_REFUSED)?;
-    let id = inode(&file.metadata().map_err(|_| EVIDENCE_REFUSED)?);
-    let bytes = read_bounded(file, RECORD_LIMIT).map_err(|_| EVIDENCE_REFUSED)?;
-    let record = Record::decode(&bytes).ok_or(EVIDENCE_REFUSED)?;
+    Ok(held.issued)
+}
+
+pub(super) struct HeldQualification {
+    relay: Relay,
+    config: HeldFile,
+    ca: Option<CheckedCa>,
+    record: HeldFile,
+    attestation: HeldFile,
+    issued: IssuedQualification,
+    attestation_window: Range<u64>,
+}
+
+impl HeldQualification {
+    #[cfg(test)]
+    pub(super) fn test_descriptor(&self, name: &str) -> &File {
+        match name {
+            "config.json" => &self.config.file,
+            "peer-relay-ca.der" => &self.ca.as_ref().unwrap().file.file,
+            "peer-relay-qualification.json" => &self.record.file,
+            "peer-relay-attestation.json" => &self.attestation.file,
+            _ => panic!("unexpected route file"),
+        }
+    }
+
+    pub(super) fn check_time(&self, now: u64) -> Result<()> {
+        let record = &self.issued.record;
+        if !(record.last_observed_at..record.expires_at).contains(&now)
+            || !self.attestation_window.contains(&now)
+        {
+            return Err(EVIDENCE_REFUSED);
+        }
+        if self.ca.as_ref().is_some_and(|ca| !wall_in(&ca.window, now)) {
+            return Err(super::CA_ERROR);
+        }
+        Ok(())
+    }
+
+    pub(super) fn recheck_files(&self, profile: &ProfileFiles) -> Result<()> {
+        self.config
+            .recheck(profile)
+            .map_err(|_| super::PROFILE_CHANGED)?;
+        if let Some(ca) = &self.ca {
+            ca.file.recheck(profile).map_err(|_| super::CA_ERROR)?;
+        }
+        self.record.recheck(profile).map_err(|_| EVIDENCE_REFUSED)?;
+        self.attestation
+            .recheck(profile)
+            .map_err(|_| EVIDENCE_REFUSED)
+    }
+}
+
+pub(super) fn read_issued_held(
+    profile: &ProfileFiles,
+    key: &[u8; 32],
+    now: u64,
+) -> Result<HeldQualification> {
+    check_build_scope()?;
+    let (loaded, config) = profile.checked_command()?;
+    let relay = loaded.bound_peer_relay(&loaded)?;
+    let ca = match relay.trust {
+        Trust::CaSha256(pin) => Some(profile.read_ca(&pin, now)?),
+        Trust::SpkiSha256(_) => None,
+    };
+    let (record, bytes) =
+        HeldFile::open(profile, RECORD, RECORD_LIMIT).map_err(|_| EVIDENCE_REFUSED)?;
+    let parsed = authenticated_record(&bytes, profile, relay, key, now)?;
+    let (attestation, bytes) = HeldFile::open(profile, MANAGED_ATTESTATION, RECORD_LIMIT)
+        .map_err(|_| ATTESTATION_REFUSED)?;
+    let checked =
+        CheckedAttestation::decode(&bytes, attestation.witness.file_id, relay, now, true)?;
+    if parsed.operator_evidence != hex::encode(checked.digest)
+        || checked.data.valid_from > parsed.qualified_at
+        || parsed.expires_at
+            != parsed
+                .qualified_at
+                .saturating_add(MAX_VALIDITY)
+                .min(checked.data.valid_until)
+    {
+        return Err(EVIDENCE_REFUSED);
+    }
+    let held = HeldQualification {
+        relay: relay.clone(),
+        config,
+        ca,
+        issued: IssuedQualification {
+            record: parsed,
+            files: EvidenceFiles {
+                record: record.witness.file_id,
+                attestation: attestation.witness.file_id,
+            },
+        },
+        record,
+        attestation,
+        attestation_window: checked.data.valid_from..checked.data.valid_until,
+    };
+    profile.recheck()?;
+    held.recheck_files(profile)?;
+    profile.recheck()?;
+    Ok(held)
+}
+
+fn authenticated_record(
+    bytes: &[u8],
+    profile: &ProfileFiles,
+    relay: &Relay,
+    key: &[u8; 32],
+    now: u64,
+) -> Result<Record> {
+    let record = Record::decode(bytes).ok_or(EVIDENCE_REFUSED)?;
     let scope = Scope {
         profile_id: profile.lease.profile_id(),
         relay,
@@ -524,39 +635,7 @@ pub(super) fn read_issued(
         .mac(key)?
         .verify_slice(&tag)
         .map_err(|_| EVIDENCE_REFUSED)?;
-    let attestation = CheckedAttestation::read_managed(profile, relay, now)?;
-    if record.operator_evidence != hex::encode(attestation.digest)
-        || attestation.data.valid_from > record.qualified_at
-        || record.expires_at
-            != record
-                .qualified_at
-                .saturating_add(MAX_VALIDITY)
-                .min(attestation.data.valid_until)
-    {
-        return Err(EVIDENCE_REFUSED);
-    }
-    profile.check_command_snapshot(snapshot)?;
-    if profile.ca_snapshot(&relay.trust, now)? != ca {
-        return Err(EVIDENCE_REFUSED);
-    }
-    let live = profile.required(RECORD).map_err(|_| EVIDENCE_REFUSED)?;
-    let current = profile
-        .required(MANAGED_ATTESTATION)
-        .map_err(|_| EVIDENCE_REFUSED)?;
-    if file_id(Some(&live))? != Some(id)
-        || read_bounded(live, RECORD_LIMIT).map_err(|_| EVIDENCE_REFUSED)? != bytes
-        || file_id(Some(&current))? != Some(attestation.file)
-        || CheckedAttestation::read_file(current, relay, now, true)?.digest != attestation.digest
-    {
-        return Err(EVIDENCE_REFUSED);
-    }
-    Ok(IssuedQualification {
-        record,
-        files: EvidenceFiles {
-            record: id,
-            attestation: attestation.file,
-        },
-    })
+    Ok(record)
 }
 
 #[cfg(test)]
@@ -607,7 +686,7 @@ impl Snapshot {
         checked_optional(&profile.dir, name)?
             .map(|file| {
                 let id = inode(&file.metadata().map_err(|_| WRITE_REFUSED)?);
-                let bytes = read_bounded(file, RECORD_LIMIT).map_err(|_| WRITE_REFUSED)?;
+                let bytes = read_bounded(&file, RECORD_LIMIT).map_err(|_| WRITE_REFUSED)?;
                 Ok(Self { id, bytes })
             })
             .transpose()

@@ -455,11 +455,11 @@ fn write_issuer_root(lease: &ProfileLease) {
     );
 }
 
-struct QualificationFixture {
-    temp: tempfile::TempDir,
-    owner: PeerRelayOwner,
+pub(super) struct QualificationFixture {
+    pub(super) temp: tempfile::TempDir,
+    pub(super) owner: PeerRelayOwner,
     config: CommandConfig,
-    attestation_path: std::path::PathBuf,
+    pub(super) attestation_path: std::path::PathBuf,
     attestation: serde_json::Value,
 }
 
@@ -467,6 +467,14 @@ impl QualificationFixture {
     fn new(transport: &Relay) -> Self {
         let (temp, lease) = test_lease();
         write_issuer_root(&lease);
+        Self::from_ready(transport, temp, lease)
+    }
+
+    pub(super) fn from_ready(
+        transport: &Relay,
+        temp: tempfile::TempDir,
+        lease: Arc<ProfileLease>,
+    ) -> Self {
         let trust = format!(
             "ca-sha256:{}",
             hex::encode(Sha256::digest(transport.qualification_ca()))
@@ -510,7 +518,7 @@ impl QualificationFixture {
         }
     }
 
-    fn authority<'a>(
+    pub(super) fn authority<'a>(
         &'a self,
         checked: &'a qualification::CheckedAttestation,
     ) -> ProbeAuthority<'a> {
@@ -528,11 +536,11 @@ impl QualificationFixture {
         }
     }
 
-    fn relay(&self) -> &crate::command_config::peer_intent::Relay {
+    pub(super) fn relay(&self) -> &crate::command_config::peer_intent::Relay {
         self.config.bound_peer_relay(&self.config).unwrap()
     }
 
-    fn issuer_key(&self) -> zeroize::Zeroizing<[u8; 32]> {
+    pub(super) fn issuer_key(&self) -> zeroize::Zeroizing<[u8; 32]> {
         self.owner
             .profile
             .lease

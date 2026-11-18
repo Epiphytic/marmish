@@ -324,11 +324,36 @@ impl ProfileLease {
                 NativeProvider { helper, deadline }.load("sqlcipher", &manifest.sqlcipher_ref)?
             }
         };
+        self.derive_peer_qualification_key(manifest, &root)
+    }
+
+    pub(crate) fn peer_qualification_key_from_material(
+        &self,
+        material: &IdentityMaterial,
+    ) -> Result<Zeroizing<[u8; 32]>> {
+        let manifest = self
+            .manifest
+            .as_ref()
+            .filter(|manifest| manifest.phase == Phase::Ready)
+            .ok_or(Error::Identity("missing_manifest"))?;
+        if self.public_key() != Some(material.public_key())
+            || decode_hex::<16>(&manifest.device_slot)? != *material.device_slot()
+        {
+            return Err(Error::Identity("identity_mismatch"));
+        }
+        self.derive_peer_qualification_key(manifest, material.sqlcipher_root())
+    }
+
+    fn derive_peer_qualification_key(
+        &self,
+        manifest: &Manifest,
+        root: &[u8; 32],
+    ) -> Result<Zeroizing<[u8; 32]>> {
         let account = self
             .public_key()
             .ok_or(Error::Identity("identity_mismatch"))?;
         let mut key = Zeroizing::new([0; 32]);
-        hkdf::Hkdf::<sha2::Sha256>::new(Some(b"marmish/peer/qualification/issuer/v1"), &root[..])
+        hkdf::Hkdf::<sha2::Sha256>::new(Some(b"marmish/peer/qualification/issuer/v1"), root)
             .expand_multi_info(
                 &[
                     self.profile_id.as_bytes(),

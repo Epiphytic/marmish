@@ -38,6 +38,9 @@ mod probe;
 #[path = "peer_relay_qualification.rs"]
 mod qualification;
 
+#[path = "peer_physical_route.rs"]
+mod physical_route;
+
 pub(crate) use qualification::Report as QualificationReport;
 
 #[cfg(test)]
@@ -45,6 +48,7 @@ pub(crate) use qualification::Report as QualificationReport;
 mod tests;
 
 const CERT_LIMIT: usize = 16_384;
+const CONFIG_FILE: &CStr = c"config.json";
 const CA_FILE: &CStr = c"peer-relay-ca.der";
 const PROFILE_CHANGED: Error = Error::Identity("peer_profile_changed");
 const CA_ERROR: Error = Error::Transport("peer_tls_ca");
@@ -387,7 +391,7 @@ fn matching_ec_parameters(cert: &X509Certificate<'_>, curve: &str) -> bool {
 struct ProfileFiles {
     lease: Arc<ProfileLease>,
     dir: File,
-    manifest_file: (u64, u64),
+    manifest: File,
     cancel: CancellationToken,
     record_writer: Mutex<()>,
 }
@@ -397,11 +401,10 @@ impl ProfileFiles {
         let dir = open_profile_directory(&lease)?;
         let manifest =
             open_regular(&dir, c"profile.json", libc::O_RDONLY).map_err(|_| PROFILE_CHANGED)?;
-        let manifest_file = inode(&manifest.metadata().map_err(|_| PROFILE_CHANGED)?);
         let owned = Self {
             lease,
             dir,
-            manifest_file,
+            manifest,
             cancel: CancellationToken::new(),
             record_writer: Mutex::new(()),
         };
@@ -426,7 +429,9 @@ impl ProfileFiles {
         let manifest = self
             .required(c"profile.json")
             .map_err(|_| PROFILE_CHANGED)?;
-        if inode(&manifest.metadata().map_err(|_| PROFILE_CHANGED)?) != self.manifest_file {
+        if inode(&manifest.metadata().map_err(|_| PROFILE_CHANGED)?)
+            != inode(&self.manifest.metadata().map_err(|_| PROFILE_CHANGED)?)
+        {
             return Err(PROFILE_CHANGED);
         }
         self.lease
@@ -443,24 +448,22 @@ impl ProfileFiles {
     }
 
     fn command_snapshot(&self) -> Result<(CommandConfig, ConfigWitness)> {
+        self.checked_command()
+            .map(|(config, held)| (config, held.witness))
+    }
+
+    fn checked_command(&self) -> Result<(CommandConfig, HeldFile)> {
         self.recheck()?;
-        let file = self.required(c"config.json").map_err(|_| PROFILE_CHANGED)?;
-        let file_id = inode(&file.metadata().map_err(|_| PROFILE_CHANGED)?);
-        let bytes = read_bounded(file, crate::command_config::MAX_CONFIG as usize)
-            .map_err(|_| PROFILE_CHANGED)?;
+        let (held, bytes) = HeldFile::open(
+            self,
+            CONFIG_FILE,
+            crate::command_config::MAX_CONFIG as usize,
+        )
+        .map_err(|_| PROFILE_CHANGED)?;
         self.recheck()?;
-        let live = self.required(c"config.json").map_err(|_| PROFILE_CHANGED)?;
-        if inode(&live.metadata().map_err(|_| PROFILE_CHANGED)?) != file_id {
-            return Err(PROFILE_CHANGED);
-        }
+        held.check_path(self).map_err(|_| PROFILE_CHANGED)?;
         let config = CommandConfig::from_bytes(&bytes).map_err(|_| PROFILE_CHANGED)?;
-        Ok((
-            config,
-            ConfigWitness {
-                file_id,
-                digest: Sha256::digest(bytes).into(),
-            },
-        ))
+        Ok((config, held))
     }
 
     fn check_command_snapshot(&self, expected: ConfigWitness) -> Result<()> {
@@ -471,19 +474,16 @@ impl ProfileFiles {
     }
 
     fn read_ca(&self, pin: &[u8; 32], now: u64) -> Result<CheckedCa> {
-        let file = self.required(CA_FILE).map_err(|_| CA_ERROR)?;
-        let file_id = inode(&file.metadata().map_err(|_| CA_ERROR)?);
-        let bytes = read_bounded(file, CERT_LIMIT).map_err(|_| CA_ERROR)?;
-        let digest = Sha256::digest(&bytes).into();
-        let live = self.required(CA_FILE).map_err(|_| CA_ERROR)?;
-        if digest != *pin || inode(&live.metadata().map_err(|_| CA_ERROR)?) != file_id {
+        let (file, bytes) = HeldFile::open(self, CA_FILE, CERT_LIMIT).map_err(|_| CA_ERROR)?;
+        if file.witness.digest != *pin {
             return Err(CA_ERROR);
         }
+        file.check_path(self).map_err(|_| CA_ERROR)?;
         let window = ca_window(&bytes)
             .filter(|window| wall_in(window, now))
             .ok_or(CA_ERROR)?;
         Ok(CheckedCa {
-            witness: ConfigWitness { file_id, digest },
+            file,
             bytes,
             window,
         })
@@ -491,14 +491,14 @@ impl ProfileFiles {
 
     fn ca_snapshot(&self, trust: &Trust, now: u64) -> Result<Option<ConfigWitness>> {
         match trust {
-            Trust::CaSha256(pin) => self.read_ca(pin, now).map(|ca| Some(ca.witness)),
+            Trust::CaSha256(pin) => self.read_ca(pin, now).map(|ca| Some(ca.file.witness)),
             Trust::SpkiSha256(_) => Ok(None),
         }
     }
 }
 
 struct CheckedCa {
-    witness: ConfigWitness,
+    file: HeldFile,
     bytes: Vec<u8>,
     window: std::ops::RangeInclusive<i64>,
 }
@@ -507,6 +507,56 @@ struct CheckedCa {
 struct ConfigWitness {
     file_id: (u64, u64),
     digest: [u8; 32],
+}
+
+// The descriptor prevents inode reuse while the associated read is held.
+struct HeldFile {
+    file: File,
+    witness: ConfigWitness,
+    name: &'static CStr,
+    limit: usize,
+}
+
+impl HeldFile {
+    fn open(
+        profile: &ProfileFiles,
+        name: &'static CStr,
+        limit: usize,
+    ) -> io::Result<(Self, Vec<u8>)> {
+        let file = profile.required(name)?;
+        let bytes = read_bounded(&file, limit)?;
+        let witness = ConfigWitness {
+            file_id: inode(&file.metadata()?),
+            digest: Sha256::digest(&bytes).into(),
+        };
+        Ok((
+            Self {
+                file,
+                witness,
+                name,
+                limit,
+            },
+            bytes,
+        ))
+    }
+
+    fn check_path(&self, profile: &ProfileFiles) -> io::Result<File> {
+        let current = profile.required(self.name)?;
+        let held_id = inode(&self.file.metadata()?);
+        if inode(&current.metadata()?) != held_id {
+            return Err(io::Error::from(io::ErrorKind::InvalidData));
+        }
+        Ok(current)
+    }
+
+    fn recheck(&self, profile: &ProfileFiles) -> io::Result<()> {
+        let current = self.check_path(profile)?;
+        if Sha256::digest(read_bounded(&current, self.limit)?)[..] != self.witness.digest {
+            return Err(io::Error::from(io::ErrorKind::InvalidData));
+        }
+        self.check_path(profile)?;
+        Ok(())
+    }
 }
 
 fn open_profile_directory(lease: &ProfileLease) -> Result<File> {
@@ -547,7 +597,7 @@ fn inode(meta: &Metadata) -> (u64, u64) {
     (meta.dev(), meta.ino())
 }
 
-fn read_bounded(file: File, limit: usize) -> io::Result<Vec<u8>> {
+fn read_bounded(file: &File, limit: usize) -> io::Result<Vec<u8>> {
     if file.metadata()?.len() > limit as u64 {
         return Err(io::Error::from(io::ErrorKind::InvalidData));
     }
