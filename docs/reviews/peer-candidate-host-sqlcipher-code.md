@@ -20,3 +20,11 @@ passing. See the [author's results](../validation/peer-candidate-host-sqlcipher.
 The fixture's byte check establishes an unchanged following Journal
 even if a refused attempt leaves a parked MDK read handle. The
 preflight's error propagation stops the next scan immediately.
+
+A separate Auto integration review `c89aacc1-ee43-4e1d-9c2d-96eab3d46aae`
+checked composed source `c402af4`. It verified the exact ordinary merge
+tree, the identical patches from both parents and the preserved tests.
+The host source above and reviewed route source `80dad0f` are both
+ancestors of this commit. The integration review ran Git checks. The
+native validation results cited here are from the exact component
+executables.
