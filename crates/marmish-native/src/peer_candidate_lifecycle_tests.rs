@@ -155,11 +155,18 @@ use crate::{
     mdk_adapter::terminal_relay_fixture::Relay,
     transport::{RelayPolicy, RouteMode, TransportLimits},
 };
-use std::{path::Path, time::Duration};
+use std::{fs::Permissions, os::unix::fs::PermissionsExt, path::Path, time::Duration};
 use tokio::time::timeout;
 
 const PROFILE: &str = "inert";
 const WAIT: Duration = Duration::from_secs(30);
+
+fn private_base() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .permissions(Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap()
+}
 
 fn inputs(
     root: &Path,
@@ -256,7 +263,7 @@ async fn ordinary_round_trip(root: &Path) {
 async fn inert_daemon_readiness_retry_and_owned_drain() {
     tokio::task::LocalSet::new()
         .run_until(async {
-            let root = tempfile::tempdir().unwrap();
+            let root = private_base();
             let mut relay = Relay::start().await;
             let (release, blocked) = oneshot::channel();
             let (config, fixture, stop, mut events) = inputs(
@@ -303,7 +310,7 @@ async fn inert_daemon_readiness_retry_and_owned_drain() {
 async fn inert_daemon_registration_refusal_keeps_ordinary_socket() {
     tokio::task::LocalSet::new()
         .run_until(async {
-            let root = tempfile::tempdir().unwrap();
+            let root = private_base();
             let mut relay = Relay::start().await;
             let (config, fixture, stop, mut events) =
                 inputs(root.path(), &relay, ListenerMode::WrongPath, None);
@@ -327,7 +334,7 @@ async fn inert_daemon_registration_refusal_keeps_ordinary_socket() {
 async fn inert_daemon_bind_refusal_stops_waiting_worker() {
     tokio::task::LocalSet::new()
         .run_until(async {
-            let root = tempfile::tempdir().unwrap();
+            let root = private_base();
             let mut relay = Relay::start().await;
             let (config, fixture, _stop, mut events) =
                 inputs(root.path(), &relay, ListenerMode::Normal, None);
@@ -368,7 +375,7 @@ async fn inert_daemon_bind_refusal_stops_waiting_worker() {
 async fn inert_daemon_observes_actual_listener_exit() {
     tokio::task::LocalSet::new()
         .run_until(async {
-            let root = tempfile::tempdir().unwrap();
+            let root = private_base();
             let mut relay = Relay::start().await;
             let (config, fixture, _stop, mut events) =
                 inputs(root.path(), &relay, ListenerMode::UnexpectedExit, None);
@@ -397,7 +404,7 @@ async fn inert_daemon_reporter_wait_prevents_release_on_failure_or_stop() {
         .run_until(async {
             let mut relay = Relay::start().await;
             for stop_during_ack in [false, true] {
-                let root = tempfile::tempdir().unwrap();
+                let root = private_base();
                 let (config, fixture, stop, mut events) =
                     inputs(root.path(), &relay, ListenerMode::Normal, None);
                 let (reporter, mut parent) =
