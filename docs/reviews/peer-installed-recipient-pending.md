@@ -34,3 +34,8 @@ review was static. The integration keeps the custody successor test-only
 and requires a later per-turn checked configuration rebind before an
 installed daemon can use it. Cold readback of the captured mode, a
 conflicting Held replay and wrong-codec input remain separate tests.
+
+The eight-commit range from `31116d0` through `383c071` was rebased on
+the published Terminal test and benchmark source `dd5484b`. Git
+range-diff confirmed patch identity for each commit, with no conflict.
+The published regression copy is `d20c126`.

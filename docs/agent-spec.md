@@ -1554,6 +1554,14 @@ increment](reviews/peer-installed-config.md) validates optional Peer intent and
 preserves it through ordinary setup. The parsed fields currently have no
 runtime consumer, so this increment does not open Peer relay connections.
 
+The [installed v2 custody checkpoint](validation/peer-installed-recipient-pending.md)
+uses the separate Prepared Consent outbox and verifies signed ancestry again
+after cold SQLCipher reopen. Linux AMD64 tests reopened both Prepared Consent
+and authenticated Held Delivery, verified replay and refused the legacy
+layout. The successor is available to library tests and stops before native
+Welcome ingestion. Installed custody, activation and status still need their
+own measured integration.
+
 The [terminal custody fixture](validation/peer-terminal-custody.md) makes
 Declined and Expired durable for an exact joined Pending invitation.
 The local fence excludes the same generation from approval and ordinary
