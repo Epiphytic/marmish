@@ -45,9 +45,23 @@ pub(crate) enum Error {
     Expired,
     Layout,
     Package,
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     Bound,
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     Custodied,
     #[cfg(test)]
     Retiring,
@@ -170,7 +184,14 @@ pub(crate) enum Work {
 enum Layout {
     Legacy,
     InstalledV2,
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     InstalledCustodyV2,
 }
 
@@ -183,15 +204,36 @@ pub(crate) struct Checkpoint {
     owner_uid: u32,
     policy: Policy,
     routes: Vec<Route>,
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     provisional_schema: bool,
     #[cfg(test)]
     retirement_epoch: bool,
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     export_epoch: Option<provisioning::prepared_consent::Epoch>,
     #[cfg(test)]
     retirement_fault: Option<provisioning::retirement::Fault>,
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     installed_receive: Option<provisioning::prepared_consent::custody::ReceivePolicy>,
 }
 
@@ -252,15 +294,36 @@ impl Checkpoint {
             owner_uid,
             policy,
             routes,
-            #[cfg(test)]
+            #[cfg(any(
+                test,
+                all(
+                    marmish_peer_receiver_candidate,
+                    target_os = "linux",
+                    target_arch = "x86_64"
+                )
+            ))]
             provisional_schema: false,
             #[cfg(test)]
             retirement_epoch: false,
-            #[cfg(test)]
+            #[cfg(any(
+                test,
+                all(
+                    marmish_peer_receiver_candidate,
+                    target_os = "linux",
+                    target_arch = "x86_64"
+                )
+            ))]
             export_epoch: None,
             #[cfg(test)]
             retirement_fault: None,
-            #[cfg(test)]
+            #[cfg(any(
+                test,
+                all(
+                    marmish_peer_receiver_candidate,
+                    target_os = "linux",
+                    target_arch = "x86_64"
+                )
+            ))]
             installed_receive: None,
         })
     }
@@ -349,7 +412,23 @@ impl Checkpoint {
                     Some(provisioning::prepared_consent::Epoch::Custody(_))
                 )
         }
-        #[cfg(not(test))]
+        #[cfg(all(
+            not(test),
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        {
+            self.is_installed_custody()
+        }
+        #[cfg(not(any(
+            test,
+            all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            )
+        )))]
         {
             false
         }
@@ -361,7 +440,14 @@ impl Checkpoint {
         record: RawRecord<'_>,
         wall: u64,
     ) -> Result<Disposition> {
-        #[cfg(test)]
+        #[cfg(any(
+            test,
+            all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            )
+        ))]
         if self.layout == Layout::InstalledCustodyV2 {
             return Err(Error::Layout);
         }
@@ -381,7 +467,14 @@ impl Checkpoint {
         match self.layout {
             Layout::Legacy => self.admit_legacy(origin, record, wall, offer),
             Layout::InstalledV2 => self.admit_installed(origin, record, wall, offer),
-            #[cfg(test)]
+            #[cfg(any(
+                test,
+                all(
+                    marmish_peer_receiver_candidate,
+                    target_os = "linux",
+                    target_arch = "x86_64"
+                )
+            ))]
             Layout::InstalledCustodyV2 => Err(Error::Layout),
         }
     }
@@ -540,7 +633,14 @@ impl Checkpoint {
     }
 
     pub(crate) fn sweep(&mut self, source: &Source, wall: u64) -> Result<()> {
-        #[cfg(test)]
+        #[cfg(any(
+            test,
+            all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            )
+        ))]
         if self.layout == Layout::InstalledCustodyV2 {
             return Err(Error::Layout);
         }

@@ -1,6 +1,6 @@
 //! Recovered capacity for the sole Manual recipient lease.
 
-use std::{num::NonZeroU64, sync::Arc};
+use std::num::NonZeroU64;
 use storage_sqlite::SqlCipherKey;
 
 use crate::peer_quota_vfs::dispatch::{
@@ -28,6 +28,9 @@ struct RecoveredOwner<'lease> {
     cursor: CheckedFile,
     checkpoint: Checkpoint,
     source: Source,
+    signer: Arc<Keys>,
+    relay: String,
+    package_quota: Option<&'lease ReceiverQuota<'lease>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,11 +69,40 @@ struct CleanExtent {
 #[path = "peer_receiver_clean_charge.rs"]
 mod clean;
 pub(crate) use clean::CleanPermit;
+#[path = "peer_candidate_package_owner.rs"]
+pub(super) mod package;
+#[cfg(test)]
 #[path = "peer_receiver_v2_pending.rs"]
 pub(super) mod v2_pending;
 
 impl<'lease> RecoveredOwner<'lease> {
+    fn open_registered<'profile: 'lease>(
+        lease: &'lease Arc<ProfileLease>,
+        material: &IdentityMaterial,
+        quota: &'lease ReceiverQuota<'profile>,
+        route: &mut crate::peer_relay_trust::candidate_registration::ReceiverRouteControl<
+            '_,
+            'profile,
+        >,
+    ) -> Result<Self> {
+        let relay = route
+            .package_origin(lease, material, quota)
+            .map_err(|_| Error::Binding)?;
+        let _files = quota.receiver_files(lease).map_err(|_| Error::Path)?;
+        Self::open_core(lease, material, &relay, Some(quota))
+    }
+
+    #[cfg(test)]
     fn open(lease: &'lease ProfileLease, material: &IdentityMaterial, relay: &str) -> Result<Self> {
+        Self::open_core(lease, material, relay, None)
+    }
+
+    fn open_core(
+        lease: &'lease ProfileLease,
+        material: &IdentityMaterial,
+        relay: &str,
+        package_quota: Option<&'lease ReceiverQuota<'lease>>,
+    ) -> Result<Self> {
         let paths = Paths::new(lease, material)?;
         let cursor = paths.cursor()?;
         if !local_volume(cursor.path()).map_err(|_| Error::Path)? {
@@ -114,9 +146,13 @@ impl<'lease> RecoveredOwner<'lease> {
             cursor,
             checkpoint,
             source,
+            signer,
+            relay: relay.to_owned(),
+            package_quota,
         })
     }
 
+    #[cfg(test)]
     fn recover_journal(
         &mut self,
         lease: &Arc<ProfileLease>,
@@ -125,7 +161,7 @@ impl<'lease> RecoveredOwner<'lease> {
         interrupt_after_write: bool,
     ) -> Result<CleanExtent> {
         let quota = ReceiverQuota::bind_receiver(lease).map_err(|_| Error::Path)?;
-        self.rollback_journal(lease, &quota, exact, fence, interrupt_after_write)
+        self.rollback_journal(lease, &quota, exact, &fence.into(), interrupt_after_write)
     }
 
     fn rollback_journal(
@@ -133,8 +169,8 @@ impl<'lease> RecoveredOwner<'lease> {
         lease: &ProfileLease,
         quota: &ReceiverQuota<'_>,
         exact: Binding,
-        fence: &TurnFence<'_>,
-        interrupt_after_write: bool,
+        fence: &NativeFence<'_>,
+        #[cfg(test)] interrupt_after_write: bool,
     ) -> Result<CleanExtent> {
         if !self.paths.owns_lease(lease) {
             return Err(Error::StageIdentityMismatch);
@@ -171,6 +207,7 @@ impl<'lease> RecoveredOwner<'lease> {
                     files,
                     charged_other,
                     key: &key,
+                    #[cfg(test)]
                     interrupt_after_write,
                 },
                 fence,
@@ -286,5 +323,6 @@ fn classify_unknown(charge: Option<Charge>, family: [Option<FileExtent>; 4]) -> 
     }
 }
 
+#[cfg(test)]
 #[path = "peer_receiver_inventory_tests.rs"]
 mod tests;

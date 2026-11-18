@@ -9,7 +9,14 @@ use rusqlite::{
 use sha2::{Digest, Sha256};
 use storage_sqlite::{SqlCipherHardening, SqlCipherKey, open_hardened_sqlcipher};
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 #[path = "peer_installed_cursor.rs"]
 pub(crate) mod installed;
 

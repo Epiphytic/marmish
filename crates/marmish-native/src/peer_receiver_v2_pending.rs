@@ -467,7 +467,7 @@ impl<'lease> NativePending<'lease> {
                 Class::JournalCandidate { binding: recovered, .. } if recovered == binding
             )
         {
-            owner.rollback_journal(self.lease, self.quota, binding, fence, false)?;
+            owner.rollback_journal(self.lease, self.quota, binding, &fence.into(), false)?;
         }
         let welcome = JoinWitness::new(delivery, self.origin, enrollment.package_digest)?;
         let key = SqlCipherKey::raw(*owner.paths.provisional_key(binding));

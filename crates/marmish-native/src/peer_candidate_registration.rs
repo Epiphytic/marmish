@@ -261,6 +261,23 @@ impl ReceiverRouteControl<'_, '_> {
         })
     }
 
+    pub(crate) fn package_origin(
+        &mut self,
+        lease: &Arc<ProfileLease>,
+        material: &IdentityMaterial,
+        quota: &ReceiverQuota<'_>,
+    ) -> std::result::Result<String, RegistrationFailure> {
+        self.recheck(lease, material)?;
+        if !std::ptr::eq(self.quota, quota) {
+            return Err(RegistrationFailure::LocalUnavailable);
+        }
+        self.route_scope
+            .route
+            .as_ref()
+            .map(|route| route.origin().to_owned())
+            .ok_or(RegistrationFailure::LocalUnavailable)
+    }
+
     fn check_local(
         &mut self,
         lease: &Arc<ProfileLease>,
@@ -399,3 +416,6 @@ fn open_member(root: &File) -> io::Result<File> {
 #[cfg(test)]
 #[path = "peer_candidate_registration_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::{package_fixture_registration, package_fixture_root};

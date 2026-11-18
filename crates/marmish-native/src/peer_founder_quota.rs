@@ -231,7 +231,9 @@ impl<'a> FounderQuota<'a> {
         let state = Arc::get_mut(&mut quota).expect("new_founder_quota");
         state.witness = Some(file);
         state.founder_main_limit = Some(CLOSED_STAGE_LIMIT);
-        state.crash_after_database_write = self.stop_in_transaction;
+        state
+            .crash_after_database_write
+            .store(self.stop_in_transaction, Ordering::Relaxed);
         let _active = Active::enter(&quota)?;
         let value = operation(&main)?;
         if Arc::strong_count(&quota) != 2 {

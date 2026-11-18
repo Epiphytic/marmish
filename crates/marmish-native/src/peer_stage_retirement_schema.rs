@@ -102,19 +102,7 @@ fn install_epoch(conn: &Connection) -> Result<()> {
     write_guards(conn, &[INTENT], true)
 }
 
-pub(in super::super) type Entry = (String, String, String, Option<String>);
-
-pub(in super::super) fn inventory(conn: &Connection) -> Result<Vec<Entry>> {
-    let temp: i64 = conn.query_row("SELECT count(*) FROM sqlite_temp_schema", [], |r| r.get(0))?;
-    if temp != 0 {
-        return Err(CursorError::Binding.into());
-    }
-    let mut query = conn.prepare(
-        "SELECT type,name,tbl_name,sql FROM main.sqlite_schema ORDER BY type,name,tbl_name",
-    )?;
-    let rows = query.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
-}
+pub(in super::super) use super::super::layout_inventory::{Entry, inventory};
 
 pub(in super::super) fn expected(epoch: bool) -> Result<&'static [Entry]> {
     static STAGE: OnceLock<Vec<Entry>> = OnceLock::new();

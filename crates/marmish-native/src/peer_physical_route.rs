@@ -131,6 +131,15 @@ impl CheckedPeerRoute {
         result
     }
 
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(super) fn origin(&self) -> &str {
+        self.qualification.live_relay().0.origin.as_str()
+    }
+
     fn recheck_using(&mut self, mut sample: impl FnMut() -> ClockSample) -> Result<()> {
         let result = (|| {
             self.profile.recheck()?;

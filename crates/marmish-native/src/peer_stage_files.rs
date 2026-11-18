@@ -1,7 +1,10 @@
 //! Two fixed, generation-keyed paths in the held profile.
 
-use std::io::{self, Read};
+use std::io;
+#[cfg(test)]
+use std::io::Read;
 
+#[cfg(test)]
 use sha2::Digest as _;
 
 use super::super::store::consent_checkpoint::provisioning::Binding;
@@ -17,6 +20,7 @@ pub(in super::super) struct ProvisionalFile {
 }
 
 impl Paths<'_> {
+    #[cfg(test)]
     pub(in super::super) fn require_unallocated(&self, binding: Binding) -> Result<()> {
         self.provisional_device()?;
         let path = self.provisional_path(binding);
@@ -24,6 +28,7 @@ impl Paths<'_> {
         clean_sidecars(&path)
     }
 
+    #[cfg(test)]
     pub(in super::super) fn resume_allocation(&self, binding: Binding) -> Result<ProvisionalFile> {
         self.provisional_device()?;
         let path = self.provisional_path(binding);
@@ -129,6 +134,7 @@ impl ProvisionalFile {
         self.read_file().map(|_| ())
     }
 
+    #[cfg(test)]
     pub(in super::super) fn digest(&self) -> Result<[u8; 32]> {
         let mut file = self.read_file()?.take(MAX_STAGE_LEN + 1);
         let mut digest = Sha256::new();
