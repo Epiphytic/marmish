@@ -663,7 +663,7 @@ fn founder_delivery(
 ) -> postjoin_gate::DeliverySink {
     let founder = founder.clone();
     let group = group.clone();
-    let target = target.clone();
+    let target = *target;
     let member = MemberId::new(fixture.server.public_key().to_bytes().to_vec());
     let wall = fixture.wall.clone();
     Box::new(move |message: TransportMessage| {
