@@ -27,15 +27,26 @@ impl TryFrom<Coordinates> for Selection {
     type Error = &'static str;
 
     fn try_from(raw: Coordinates) -> std::result::Result<Self, Self::Error> {
-        let server = PublicKey::from_bech32(&raw.server).map_err(|_| "peer_server_npub")?;
-        if server.to_bech32().ok().as_deref() != Some(&raw.server) || raw.generation == 0 {
+        Self::parse(&raw.server, &raw.offer_id, &raw.revision, raw.generation)
+    }
+}
+
+impl Selection {
+    pub(crate) fn parse(
+        server: &str,
+        offer_id: &str,
+        revision: &str,
+        generation: u64,
+    ) -> Result<Self, &'static str> {
+        let key = PublicKey::from_bech32(server).map_err(|_| "peer_server_npub")?;
+        if key.to_bech32().ok().as_deref() != Some(server) || generation == 0 {
             return Err("peer_selection");
         }
         Ok(Self {
-            server,
-            offer_id: lowercase_hex(&raw.offer_id).ok_or("peer_offer_id")?,
-            revision: lowercase_hex(&raw.revision).ok_or("peer_revision")?,
-            generation: raw.generation,
+            server: key,
+            offer_id: lowercase_hex(offer_id).ok_or("peer_offer_id")?,
+            revision: lowercase_hex(revision).ok_or("peer_revision")?,
+            generation,
         })
     }
 }

@@ -179,8 +179,29 @@ enum ClientInventoryCommand {
     },
 }
 
+#[cfg(marmish_peer_receiver_candidate)]
+#[derive(Subcommand)]
+enum ServerReadCommand {
+    /// List current Pending server enrollments.
+    List,
+    /// Show a current Pending enrollment by its exact selector.
+    Show {
+        #[arg(long, value_name = "NPUB")]
+        server: String,
+        #[arg(long, value_name = "HEX")]
+        offer_id: String,
+        #[arg(long, value_name = "HEX")]
+        revision: String,
+        #[arg(long, value_name = "N")]
+        generation: u64,
+    },
+}
+
 #[derive(Subcommand)]
 enum FrontendCommand {
+    #[cfg(marmish_peer_receiver_candidate)]
+    #[command(skip)]
+    Servers(ipc::peer_read::Request),
     #[command(skip)]
     PeerRelayShow,
     #[command(skip)]
@@ -545,6 +566,34 @@ async fn run(
             "{}",
             serde_json::to_string(&report).map_err(|_| Error::Invalid("report_encoding"))?
         );
+        return Ok(0);
+    }
+    #[cfg(marmish_peer_receiver_candidate)]
+    if let Some(FrontendCommand::Servers(request)) = &args.command {
+        let socket = match &args.socket {
+            Some(path) => path.clone(),
+            None => socket_path_for(
+                &state_dir(args.state_dir.clone())
+                    .map_err(|_| Error::Invalid("peer_unavailable"))?,
+                &args.identity,
+            )
+            .map_err(|_| Error::Invalid("peer_unavailable"))?,
+        };
+        let reply = ipc::peer_read::client_request(&socket, *request)
+            .await
+            .map_err(|failure| {
+                use ipc::peer_read::Failure;
+                match failure {
+                    Failure::Unavailable => Error::Invalid("peer_unavailable"),
+                    Failure::Busy => Error::Invalid("peer_busy"),
+                    Failure::Timeout => Error::Timeout,
+                    Failure::InvalidRequest => Error::Invalid("peer_read_request"),
+                    Failure::InvalidResponse => Error::Invalid("peer_read_response"),
+                }
+            })?;
+        let json = serde_json::to_string(&reply).map_err(|_| Error::Invalid("report_encoding"))?;
+        use std::io::Write as _;
+        writeln!(std::io::stdout().lock(), "{json}")?;
         return Ok(0);
     }
     if let Some(FrontendCommand::Clients { action }) = &args.command {
@@ -1381,12 +1430,16 @@ async fn keychain_authorize(
 }
 
 fn authorization_disallowed(matches: &clap::ArgMatches) -> bool {
+    has_disallowed_globals(matches, &["debug", "state_dir", "identity"])
+}
+
+fn has_disallowed_globals(matches: &clap::ArgMatches, allowed: &[&str]) -> bool {
     // Derive groups also have CommandLine sources; inspect actual arguments,
     // rather than accidentally treating the enclosing Args group as a flag.
     Args::command().get_arguments().any(|arg| {
         let id = arg.get_id().as_str();
         matches.value_source(id) == Some(clap::parser::ValueSource::CommandLine)
-            && !matches!(id, "debug" | "state_dir" | "identity")
+            && !allowed.contains(&id)
     })
 }
 
@@ -1425,7 +1478,14 @@ fn parse_frontend(raw: &[OsString], daemon_binary: bool) -> std::result::Result<
             .subcommand_required(true);
         parser = parser.subcommand(ClientInventoryCommand::augment_subcommands(clients));
     }
+    #[cfg(not(marmish_peer_receiver_candidate))]
     let mut matches = parser.try_get_matches_from(root)?;
+    #[cfg(marmish_peer_receiver_candidate)]
+    let (mut matches, servers) = if daemon_binary {
+        (parser.try_get_matches_from(root)?, None)
+    } else {
+        candidate_client_matches(parser, root)?
+    };
     let inventory = if daemon_binary && matches.subcommand_name() == Some("clients") {
         let (_, client_matches) = matches.remove_subcommand().expect("matched clients");
         Some(ClientInventoryCommand::from_arg_matches(&client_matches)?)
@@ -1433,6 +1493,10 @@ fn parse_frontend(raw: &[OsString], daemon_binary: bool) -> std::result::Result<
         None
     };
     let mut args = Args::from_arg_matches(&matches)?;
+    #[cfg(marmish_peer_receiver_candidate)]
+    if let Some(request) = servers {
+        args.command = Some(FrontendCommand::Servers(request));
+    }
     if let Some(action) = inventory {
         args.command = Some(FrontendCommand::Clients { action });
     }
@@ -1459,6 +1523,56 @@ fn parse_frontend(raw: &[OsString], daemon_binary: bool) -> std::result::Result<
     };
     args.rsh = rsh;
     Ok(args)
+}
+
+#[cfg(marmish_peer_receiver_candidate)]
+fn candidate_client_matches(
+    parser: clap::Command,
+    raw: &[OsString],
+) -> std::result::Result<(clap::ArgMatches, Option<ipc::peer_read::Request>), clap::Error> {
+    // Let the stock parser recognize explicit remote argv before reserving
+    // the unqualified local name. An unrelated separator cannot mask a bad
+    // local invocation such as `servers list -- value`.
+    if let Some(separator) = raw.iter().position(|arg| arg == "--")
+        && let Ok(matches) = parser.clone().try_get_matches_from(raw)
+        && let Ok(Args {
+            command: Some(FrontendCommand::Remote(parts)),
+            ..
+        }) = Args::from_arg_matches(&matches)
+        && validate_separator(&parts, &raw[separator + 1..], parts != raw[separator + 1..]).is_ok()
+    {
+        return Ok((matches, None));
+    }
+    let servers = clap::Command::new("servers")
+        .about("Inspect local Pending server enrollments")
+        .subcommand_required(true);
+    let mut matches = parser
+        .subcommand(ServerReadCommand::augment_subcommands(servers))
+        .try_get_matches_from(raw)?;
+    if matches.subcommand_name() != Some("servers") {
+        return Ok((matches, None));
+    }
+    let invalid = |reason| clap::Error::raw(clap::error::ErrorKind::InvalidValue, reason);
+    if has_disallowed_globals(&matches, &["debug", "state_dir", "identity", "socket"])
+        || raw.iter().any(|arg| arg == "--")
+    {
+        return Err(invalid("invalid local servers arguments"));
+    }
+    let (_, subcommand) = matches.remove_subcommand().expect("matched servers");
+    use ipc::peer_read::{Request, Selection};
+    let request = match ServerReadCommand::from_arg_matches(&subcommand)? {
+        ServerReadCommand::List => Request::List {},
+        ServerReadCommand::Show {
+            server,
+            offer_id,
+            revision,
+            generation,
+        } => Request::Show {
+            selection: Selection::parse(&server, &offer_id, &revision, generation)
+                .map_err(|_| invalid("invalid servers selection"))?,
+        },
+    };
+    Ok((matches, Some(request)))
 }
 
 fn exact_peer_relay_command(parts: &[OsString], raw: &[OsString]) -> Option<FrontendCommand> {
@@ -2061,6 +2175,157 @@ mod tests {
                 Some(FrontendCommand::Remote(_))
             ));
         }
+    }
+
+    #[test]
+    fn servers_name_is_candidate_client_only() {
+        let user_help = public(&["marmish", "--help"]).err().unwrap();
+        assert_eq!(
+            user_help
+                .to_string()
+                .contains("Inspect local Pending server enrollments"),
+            cfg!(marmish_peer_receiver_candidate)
+        );
+        let raw = ["marmishd", "--help"].map(OsString::from);
+        let daemon_help = parse_frontend(&raw, true).err().unwrap();
+        assert!(
+            !daemon_help
+                .to_string()
+                .contains("Inspect local Pending server enrollments")
+        );
+
+        let raw = ["marmishd", "servers", "list"].map(OsString::from);
+        assert!(matches!(
+            parse_frontend(&raw, true).unwrap().command,
+            Some(FrontendCommand::Remote(_))
+        ));
+        #[cfg(not(marmish_peer_receiver_candidate))]
+        assert!(matches!(
+            public(&["marmish", "servers", "list"]).unwrap().command,
+            Some(FrontendCommand::Remote(_))
+        ));
+    }
+
+    #[cfg(marmish_peer_receiver_candidate)]
+    #[test]
+    fn candidate_servers_checks_exact_selector_and_local_options() {
+        use ipc::peer_read::Request;
+        use nostr::nips::nip19::ToBech32 as _;
+
+        let args = public(&[
+            "marmish",
+            "--debug",
+            "--state-dir",
+            "state",
+            "servers",
+            "list",
+            "--identity",
+            "worker",
+            "--socket",
+            "explicit.sock",
+        ])
+        .unwrap();
+        assert!(matches!(
+            args.command,
+            Some(FrontendCommand::Servers(Request::List {}))
+        ));
+        assert_eq!(args.identity, "worker");
+        assert_eq!(args.socket, Some(PathBuf::from("explicit.sock")));
+        assert_eq!(args.state_dir, Some(PathBuf::from("state")));
+        assert!(args.debug);
+
+        let founder = nostr::key::Keys::generate().public_key();
+        let npub = founder.to_bech32().unwrap();
+        let offer = "ab".repeat(16);
+        let revision = "cd".repeat(32);
+        let show = |principal: &str, offer: &str, revision: &str, generation: &str| {
+            public(&[
+                "marmish",
+                "servers",
+                "show",
+                "--server",
+                principal,
+                "--offer-id",
+                offer,
+                "--revision",
+                revision,
+                "--generation",
+                generation,
+            ])
+        };
+        assert!(matches!(
+            show(&npub, &offer, &revision, "3").unwrap().command,
+            Some(FrontendCommand::Servers(Request::Show { selection }))
+                if selection.server == founder && selection.generation == 3
+                    && selection.offer_id == [0xab; 16] && selection.revision == [0xcd; 32]
+        ));
+        for invalid in [
+            show(&npub.to_ascii_uppercase(), &offer, &revision, "3"),
+            show("founder-alias", &offer, &revision, "3"),
+            show(&npub, &offer.to_ascii_uppercase(), &revision, "3"),
+            show(&npub, &offer, "cd", "3"),
+            show(&npub, &offer, &revision, "0"),
+        ] {
+            assert_eq!(usage_exit_code(&invalid.err().unwrap()), 255);
+        }
+        for invalid in [
+            &["servers"][..],
+            &["servers", "show"],
+            &["servers", "approve"],
+            &["servers", "list", "--", "extra"],
+            &["servers", "list", "extra"],
+            &["-u", "other", "servers", "list"],
+            &["servers", "list", "--tor", "always"],
+            &["servers", "list", "--relay", "wss://relay.example"],
+            &["servers", "list", "--detach"],
+        ] {
+            let raw = std::iter::once(OsString::from("marmish"))
+                .chain(invalid.iter().map(OsString::from))
+                .collect::<Vec<_>>();
+            assert_eq!(usage_exit_code(&parse_public(&raw).err().unwrap()), 255);
+        }
+        let help = public(&["marmish", "servers", "show", "--help"])
+            .err()
+            .unwrap();
+        assert_eq!(usage_exit_code(&help), 0);
+        for flag in ["--server", "--offer-id", "--revision", "--generation"] {
+            assert!(help.to_string().contains(flag));
+        }
+    }
+
+    #[test]
+    fn explicit_servers_destinations_and_rsync_use_ordinary_parser() {
+        for values in [
+            &[
+                "marmish",
+                "--state-dir",
+                "private",
+                "servers",
+                "--",
+                "/bin/echo",
+                "list",
+            ][..],
+            &[
+                "marmish",
+                "servers@relay.example",
+                "--",
+                "/bin/echo",
+                "show",
+            ],
+            &["marmish", "-u", "name", "--", "servers", "list"],
+        ] {
+            let args = public(values).unwrap();
+            let Some(FrontendCommand::Remote(values)) = args.command else {
+                panic!("expected a remote command");
+            };
+            let trailing = args.trailing.unwrap();
+            assert!(validate_separator(&values, &trailing, values != trailing).is_ok());
+        }
+        let rsync = public(&["marmish", "rsh", "servers", "rsync", "--server", "-s"])
+            .unwrap()
+            .rsh
+            .unwrap();
+        assert_eq!(rsync.destination, "servers");
     }
 
     #[test]

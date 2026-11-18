@@ -78,8 +78,6 @@ fn decode_reply(request: Request, response: Response) -> Result<Reply, Failure> 
     valid.then_some(reply).ok_or(Failure::InvalidResponse)
 }
 
-// The candidate frontend is wired together with the checked owner.
-#[allow(dead_code)]
 pub(crate) async fn client_request(path: &Path, request: Request) -> Result<Reply, Failure> {
     if matches!(request, Request::Show { selection } if selection.generation == 0) {
         return Err(Failure::InvalidRequest);
