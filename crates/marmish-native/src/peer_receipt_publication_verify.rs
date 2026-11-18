@@ -18,7 +18,7 @@ use transport_nostr_peeler::NostrTransportEvent;
 use super::{
     postjoin_verify::check_image,
     store::consent_checkpoint::provisioning::prepared_consent::custody::publication::{
-        CandidateBinding, Kind, NativeReceiptStart, Publication, Step,
+        CandidateBinding, Kind, Publication, Step,
     },
 };
 
@@ -47,6 +47,7 @@ struct Evidence<'a> {
     publication: &'a Publication,
     request: TransportPublishRequest,
     binding: CandidateBinding,
+    observed_at: u64,
 }
 
 pub(crate) struct CapturedReceipt<'a>(Evidence<'a>);
@@ -58,6 +59,10 @@ impl CapturedReceipt<'_> {
 
     pub(crate) fn request(&self) -> &TransportPublishRequest {
         &self.0.request
+    }
+
+    pub(crate) fn observed_at(&self) -> u64 {
+        self.0.observed_at
     }
 
     pub(crate) fn event_id(&self) -> [u8; 32] {
@@ -80,6 +85,10 @@ impl RecoveredReceipt<'_> {
         &self.0.request
     }
 
+    pub(crate) fn observed_at(&self) -> u64 {
+        self.0.observed_at
+    }
+
     pub(crate) fn event_id(&self) -> [u8; 32] {
         self.0.binding.event_id
     }
@@ -97,6 +106,10 @@ pub(crate) struct ConfirmedReceipt<'a> {
 impl ConfirmedReceipt<'_> {
     pub(crate) fn publication(&self) -> &Publication {
         self.evidence.publication
+    }
+
+    pub(crate) fn observed_at(&self) -> u64 {
+        self.evidence.observed_at
     }
 
     pub(crate) fn event_id(&self) -> [u8; 32] {
@@ -119,10 +132,9 @@ pub(crate) fn capture<'a>(
         impl KeyPackagePublisher,
     >,
     image: &Path,
-    start: &'a NativeReceiptStart,
+    publication: &'a Publication,
     wall: u64,
 ) -> Result<CapturedReceipt<'a>, Refusal> {
-    let publication = start.publication();
     if publication.step() != Step::NativeStarted || publication.candidate().is_some() {
         return Err(Refusal::Binding);
     }
@@ -154,12 +166,17 @@ pub(crate) fn recover<'a>(
         return Err(Refusal::Binding);
     }
     let (evidence, fanout) = read(recipient, image, publication, wall)?;
-    if publication.candidate() != Some(evidence.binding)
-        || fanout.target_statuses() != [FanoutTargetStatus::PossiblyExposed]
-        || fanout.target_attempt_count(0) != 2
-        || fanout
+    let interrupted = match fanout.target_statuses() {
+        [FanoutTargetStatus::Attempting] => true,
+        [FanoutTargetStatus::PossiblyExposed] => fanout
             .target_failure(0)
-            .is_none_or(|failure| failure.pre_send)
+            .is_some_and(|failure| !failure.pre_send),
+        _ => false,
+    };
+    if publication.candidate() != Some(evidence.binding)
+        || !interrupted
+        || fanout.target_attempt_count(0) != 2
+        || !ordered_attempt(publication, &fanout, wall)
         || !fanout.target_may_hold_event(0)
         || fanout.first_acceptance_observation().is_some()
     {
@@ -198,6 +215,14 @@ pub(crate) fn confirm<'a>(
     let accepted = fanout
         .first_acceptance_observation()
         .ok_or(Refusal::Binding)?;
+    if !ordered_attempt(publication, &fanout, wall)
+        || fanout
+            .target_last_attempt_at_ms(0)
+            .is_none_or(|attempted| accepted.at_ms < attempted)
+        || accepted.at_ms / 1_000 > wall
+    {
+        return Err(Refusal::Binding);
+    }
     let application = fanout.application_message().ok_or(Refusal::Binding)?;
     Ok(ConfirmedReceipt {
         application: PublishedApplicationMessage {
@@ -294,9 +319,18 @@ fn read<'a>(
             publication,
             request,
             binding,
+            observed_at: wall,
         },
         fanout,
     ))
+}
+
+fn ordered_attempt(publication: &Publication, fanout: &OutboundFanout, wall: u64) -> bool {
+    publication.attempt_wall().is_some_and(|armed| {
+        fanout
+            .target_last_attempt_at_ms(0)
+            .is_some_and(|attempted| armed <= attempted / 1_000 && attempted / 1_000 <= wall)
+    })
 }
 
 fn read_request(
