@@ -52,3 +52,19 @@ checkout, then confirmed both executables had the same digest.
 [Integrated validation](../validation/peer-installed-delivery-cursor.md)
 records the exact results. The Delivery owner callback and WSS remain
 separate.
+
+## Integrated Delivery source
+
+Claude Code Auto (`claude-sonnet-5-5`, session
+`6b19d7b7-189e-4d0c-954f-02d4481a8e65`) approved exact composed
+`f183141f047f51c16f4a34a225926475a15f3f18` subject to the exact build,
+live repeat and non-ignored library checks. The preceding implementation
+review (`25f94aeb-6526-4a86-a142-8166576aa57c`) approved the Delivery
+source contingent on real saved-row expiry coverage. The composed reviewer
+confirmed the reviewed source and candidate CLI compose independently and
+the only Delivery follow-up changed the exact Held replay assertion.
+Earlier rounds requested separate typed relay and local refusals, one
+checked saved snapshot and cold native expiry coverage. Each was resolved
+in the reviewed source. The reviewer inspected the exact diff and tests.
+The author ran the build and runtime checks recorded in
+[private WSS validation](../validation/peer-installed-delivery-private-wss.md).

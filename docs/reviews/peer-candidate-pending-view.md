@@ -18,3 +18,14 @@ latch and the documented limits on clock rollback after restart and
 delivery to a slow local reader. All rounds used read-only design and
 source inspection. Code and mounted-actor qualification have their own
 gates.
+
+## Memory-only state machine
+
+Claude Code Auto session `813f8e9a-15b8-4f33-98c0-c78d4329c30e`
+required changes to expiry learned by the producer, the cross-actor test
+and exact clock coverage at `5b63822`. The same reviewer approved exact
+composed source `1f63e9fd9405586c8687e61a8d69b67379ee8491` after the
+author fixed all three. Only a current authenticated producer ticket
+can record expiry. The author ran the candidate tests, all-targets
+Clippy and non-test binary inspection in
+[the memory view validation](../validation/peer-candidate-pending-view.md).
