@@ -105,16 +105,27 @@ diagnostic includes URL, account, pin, certificate bytes or event data.
    conservatively reject a certificate list with unused expired entries.
    No extra presented certificate is a trust root. No early data or
    session resumption. Recheck this window and frozen path trust against
-   the same effective clock through socket use. The test CA on the real
-   path is an installed profile credential verified by the qualifier,
-   with no fixture TLS bypass or process-global roots.
+   the same effective clock through socket use. In SPKI mode use the
+   existing bundled roots and pin. There is no configured anchor
+   window there. Clamp each operation's deadline to the earliest
+   exclusive end of the trust windows using the checked effective
+   time and monotonic sample. Convert inclusive certificate/CA ends
+   with checked addition, and don’t extend the projected deadline on
+   a later poll. Actual samples still recheck the original interval.
+   Excessive wall/monotonic divergence retires the whole binding.
+   The test CA on the real path is an installed profile credential
+   verified by the qualifier, with no fixture TLS bypass or
+   process-global roots.
 3. Split the existing exact `Socket::ready` protocol into authentication
    and live-open operations. Reuse one bounded budget across both.
    Wait for one bounded fresh relay challenge, sign exact kind 22242
    with current origin and challenge, and require the positive ACK for
    that exact signed ID. Recheck before AUTH send, after its correlated
    ACK, before the exact recipient kind 7435 `#p` REQ, and after the
-   matching EOSE before marking the generation ready. Missing or
+   matching EOSE before marking the generation ready. Apply the
+   write-poll route/expiry check to AUTH, REQ and CLOSE as well as
+   EVENT. Only EVENT requires a durable operation witness. If recheck
+   fails, drop the socket without CLOSE. Missing or
    negative ACK, wrong EOSE, unexpected challenge, stale or mismatched
    ID, or cancelled or changed binding retires the generation. Evidence
    cannot cross a connection. No unauthenticated readiness.
@@ -164,7 +175,8 @@ bounded packet flow and exact ACK correlation.
 fields. It carries the exact bytes and borrowed synchronous row-check
 capability alongside the pinned coordinates. The type has no production
 issuer in this increment. The single production-compiled send core is
-exercised through the `cfg(test)` sealed exact permit. The route cannot construct operation authority from
+exercised through the `cfg(test)` sealed exact permit. The route
+cannot construct operation authority from
 `ready_to_publish`, an arbitrary event/request, or relay ACK. A
 synchronous fence owned by the operation caller checks the same durable
 row and exposes no SQL handle to the socket. The test-only exact
@@ -217,7 +229,8 @@ Transport owns `transport.rs`, `peer_relay_trust.rs`,
 `peer_physical_route.rs`, recipient `peer_raw_socket*.rs` and
 a narrow `peer_invitation.rs` origin/port boundary coordinated with
 recipient startup. Any private relay harness change is test-only and
-coordinated with the current Terminal fixture owners. Enrollment owns profile role/quota/cursor/consent,
+coordinated with the current Terminal fixture owners. Enrollment
+owns profile role/quota/cursor/consent,
 daemon mounting and product status. Cursor keeps the reviewed native
 quota/capped Join scope. No configuration/schema changes in this
 increment. Preserve Command and Terminal routes and privacy policy,
@@ -229,12 +242,16 @@ and existing Peer qualification behavior.
   existing available/admit/page commit operations through checked port
   observations. Cold reopen reads `installed_live_offer` and stored
   scan coordinates using a fresh Source. It does not use legacy
-  `InvitationLane`. In a disposable Ready profile, qualify the private WSS relay with
-  existing production qualification, close and cold-bind, open actual
+  `InvitationLane`. Qualify the private WSS relay under a disposable
+  Ready profile with the existing issuer, close and cold-bind, open actual
   authenticated v2 recipient scope, receive an exact signed cold
   history Offer and a distinct live Offer, and verify installed marker
   and bounded cursor after native SQLCipher reopen. Count the probe and
-  live sockets separately. Exercise stale/mismatched incarnation use
+  live sockets separately. The fixture can switch the exact same
+  listener to its runtime disposable accounts after the completed
+  probe sockets close. Retain the original port and CA and separate
+  the probe and runtime observations. Exercise stale/mismatched
+  incarnation use
   and prove that invalid/wrong-recipient/v1 traffic confers no marker or
   native custody. Prove no different relay is contacted.
 - Drive missing, negative and wrong AUTH ACK and a mismatched EOSE on
