@@ -184,13 +184,32 @@ impl OpenStage {
         witness: &JoinWitness<'_>,
         sample: Duration,
     ) -> StageResult<()> {
+        self.join_with_sample(witness, || Ok(sample.as_secs()))
+            .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn join_once_fenced(
+        self,
+        witness: &JoinWitness<'_>,
+        fence: &crate::peer_invitation::TurnFence<'_>,
+    ) -> StageResult<()> {
+        self.join_with_sample(witness, || fence.sample()).await
+    }
+
+    async fn join_with_sample(
+        self,
+        witness: &JoinWitness<'_>,
+        sample: impl FnOnce() -> StageResult<u64>,
+    ) -> StageResult<()> {
         self.check_join_stage(witness)?;
         let io = RefusingIo::default();
         let mut runtime = self.join_runtime(&io)?;
+        let message = witness.welcome.clone();
         let delivery = TransportDelivery {
             account_id: JoinWitness::member(self.signer.public_key()),
             group_id_hint: None,
-            received_at: Timestamp(sample.as_secs()),
+            received_at: Timestamp(sample()?),
             source: TransportDeliverySource {
                 transport: witness.welcome.source.clone(),
                 plane: TransportDeliveryPlane::AccountInbox,
@@ -198,7 +217,7 @@ impl OpenStage {
                 subscription_id: Some(SUBSCRIPTION.into()),
                 wire: None,
             },
-            message: witness.welcome.clone(),
+            message,
         };
         let receipt = runtime.ingest_delivery(&delivery).await;
         drop(runtime);

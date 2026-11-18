@@ -93,18 +93,18 @@ fn record(frame: &[u8]) -> RawRecord<'_> {
     }
 }
 
-struct PendingStage {
-    row: HeldEvidence,
-    selector: Selector,
-    generation: u64,
-    group: GroupId,
+pub(super) struct PendingStage {
+    pub(super) row: HeldEvidence,
+    pub(super) selector: Selector,
+    pub(super) generation: u64,
+    pub(super) group: GroupId,
     routing: NostrRoutingV1,
-    welcome: TransportMessage,
-    consent: consent_checkpoint::wire::Consent,
-    delivery: Delivery,
+    pub(super) welcome: TransportMessage,
+    pub(super) consent: consent_checkpoint::wire::Consent,
+    pub(super) delivery: Delivery,
 }
 
-async fn reach_pending(
+pub(super) async fn reach_held(
     fixture: &Fixture,
     owner: &mut PreparedConsentOwner<'_>,
     founder_dir: &Path,
@@ -201,23 +201,10 @@ async fn reach_pending(
             .status,
         Status::Accepted(TrustedOutcome::Held)
     );
-    assert_eq!(
-        owner
-            .advance_custody(selector, generation, |_| Ok(()))
-            .await
-            .unwrap(),
-        CustodyProgress::Pending
-    );
-    let pending = custody(
-        owner,
-        selector,
-        generation,
-        fixture.now,
-        CustodyState::Pending,
-    );
+    let held = custody(owner, selector, generation, fixture.now, CustodyState::Held);
     (
         PendingStage {
-            row: pending,
+            row: held,
             selector,
             generation,
             group,
@@ -228,6 +215,29 @@ async fn reach_pending(
         },
         founder,
     )
+}
+
+async fn reach_pending(
+    fixture: &Fixture,
+    owner: &mut PreparedConsentOwner<'_>,
+    founder_dir: &Path,
+) -> (PendingStage, PeerFounderRuntime) {
+    let (mut stage, founder) = reach_held(fixture, owner, founder_dir).await;
+    assert_eq!(
+        owner
+            .advance_custody(stage.selector, stage.generation, |_| Ok(()))
+            .await
+            .unwrap(),
+        CustodyProgress::Pending
+    );
+    stage.row = custody(
+        owner,
+        stage.selector,
+        stage.generation,
+        fixture.now,
+        CustodyState::Pending,
+    );
+    (stage, founder)
 }
 
 async fn reach_activating(

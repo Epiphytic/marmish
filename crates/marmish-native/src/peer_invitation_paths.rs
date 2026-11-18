@@ -40,6 +40,11 @@ pub(super) struct CheckedFile {
 }
 
 impl Paths<'_> {
+    #[cfg(test)]
+    pub(super) fn owns_lease(&self, lease: &ProfileLease) -> bool {
+        std::ptr::eq(self.lease, lease)
+    }
+
     pub(super) fn new<'a>(
         lease: &'a ProfileLease,
         material: &IdentityMaterial,

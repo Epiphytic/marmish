@@ -20,6 +20,8 @@ use consent_checkpoint::provisioning::{
 };
 pub(crate) use consent_checkpoint::wire::Delivery;
 
+#[path = "peer_capped_join.rs"]
+pub(in crate::peer_invitation) mod capped_join;
 #[path = "peer_pending_join_native_tests.rs"]
 mod joined_tests;
 #[path = "peer_terminal_leave_owner.rs"]

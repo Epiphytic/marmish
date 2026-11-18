@@ -30,6 +30,8 @@ struct Dispatch {
     wrapper: *mut sql::sqlite3_vfs,
     paths: OnceLock<ReservedPaths>,
     slots: Mutex<[Slot; SLOT_COUNT]>,
+    #[cfg(test)]
+    file_turn: Mutex<()>,
 }
 
 // SQLite owns the captured stock descriptors for process lifetime. Our
@@ -335,6 +337,7 @@ impl Dispatch {
             wrapper: Box::into_raw(descriptor),
             paths: OnceLock::new(),
             slots: Mutex::default(),
+            file_turn: Mutex::default(),
         }));
         unsafe {
             (*dispatch.wrapper).pAppData = ptr::from_ref(dispatch).cast_mut().cast();
@@ -492,45 +495,25 @@ impl<'a> ProfileSlots<'a> {
             })
     }
 
-    pub(crate) fn leave_snapshot_path(&self, extent: u64) -> Result<&Path> {
+    pub(crate) fn file_turn(&self) -> Result<FixtureFileTurn<'_>> {
         self.dispatch.assert_default()?;
-        let paths = self.dispatch.paths.get().expect("reserved_paths");
-        if !(1..=CLOSED_STAGE_LIMIT).contains(&extent)
-            || paths.all[SNAPSHOT * 4..]
-                .iter()
-                .any(|name| !matches!(bytes(name), Ok(None)))
-        {
-            return Err("dispatch_snapshot_present");
+        let exclusive = self
+            .dispatch
+            .file_turn
+            .try_lock()
+            .map_err(|_| "dispatch_file_turn_unavailable")?;
+        let slots = self
+            .dispatch
+            .slots
+            .try_lock()
+            .map_err(|_| "dispatch_reservations")?;
+        if slots[SNAPSHOT].quarantined || slots.iter().any(|slot| slot.active.is_some()) {
+            return Err("dispatch_file_turn_unavailable");
         }
-        self.other_charge(SNAPSHOT)?
-            .checked_add(extent)
-            .filter(|total| *total <= TOTAL_ADMISSION)
-            .ok_or("dispatch_admission")?;
-        Ok(&paths.mains[SNAPSHOT])
-    }
-
-    pub(crate) fn inspect_leave_snapshot(
-        &self,
-        path: &Path,
-        file: (u64, u64),
-        operation: LeaveTurn<'_>,
-        expected: Option<[u8; 32]>,
-    ) -> Result<std::result::Result<LeaveInspection, StageError>> {
-        if self.dispatch.paths.get().expect("reserved_paths").mains[SNAPSHOT] != path {
-            return Err("dispatch_stage_path");
-        }
-        let mut turn = self.owner.admit(Reservation {
-            owner: &self.owner,
-            class: SlotClass::Snapshot,
-            generation: NonZeroU64::MIN,
-            witness: file,
-            charged_other: self.other_charge(SNAPSHOT)?,
-            crash_after_database_write: false,
-        })?;
-        turn.enter()?;
-        let result = operation.inspect(path, expected);
-        self.finish(&turn)?;
-        result
+        Ok(FixtureFileTurn {
+            slots: self,
+            _exclusive: exclusive,
+        })
     }
 
     pub(crate) fn leave_turn(
@@ -539,20 +522,8 @@ impl<'a> ProfileSlots<'a> {
         operation: LeaveTurn<'_>,
         expected: (&[u8], u64, [u8; 32], u32),
     ) -> Result<std::result::Result<cgka_traits::MessageId, StageError>> {
-        if self.dispatch.paths.get().expect("reserved_paths").all[SNAPSHOT * 4..]
-            .iter()
-            .any(|name| !matches!(bytes(name), Ok(None)))
-        {
-            return Err("dispatch_snapshot_present");
-        }
-        let index = usize::from(!binding.known);
-        if self.dispatch.paths.get().expect("reserved_paths").mains[index] != binding.path {
-            return Err("dispatch_stage_path");
-        }
-        let mut turn = self
-            .owner
-            .admit(self.reservation(binding, self.other_charge(index)?))?;
-        turn.enter()?;
+        let files = self.file_turn()?;
+        let turn = files.original(binding)?;
         let result = operation.run(binding.path, expected);
         self.finish(&turn)?;
         result
@@ -563,11 +534,147 @@ impl<'a> ProfileSlots<'a> {
         binding: RawBinding<'_>,
         operation: NativeTurn<'_>,
     ) -> Result<NativeResult> {
+        let files = self.file_turn()?;
+        files.require_empty_snapshot()?;
         let turn = self.begin(binding)?;
         let result = operation.run(binding.path);
         self.finish(&turn)?;
         Ok(result)
     }
+}
+
+#[cfg(test)]
+pub(crate) struct FixtureFileTurn<'a> {
+    slots: &'a ProfileSlots<'a>,
+    _exclusive: std::sync::MutexGuard<'a, ()>,
+}
+
+#[cfg(test)]
+impl FixtureFileTurn<'_> {
+    fn paths(&self) -> &ReservedPaths {
+        self.slots.dispatch.paths.get().expect("reserved_paths")
+    }
+
+    fn require_empty_snapshot(&self) -> Result<()> {
+        if self.paths().all[SNAPSHOT * 4..]
+            .iter()
+            .any(|name| !matches!(bytes(name), Ok(None)))
+        {
+            return Err("dispatch_snapshot_present");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn snapshot_path(&self, extent: u64) -> Result<&Path> {
+        self.require_empty_snapshot()?;
+        if !(1..=CLOSED_STAGE_LIMIT).contains(&extent) {
+            return Err("dispatch_snapshot_present");
+        }
+        self.slots
+            .other_charge(SNAPSHOT)?
+            .checked_add(extent)
+            .filter(|total| *total <= TOTAL_ADMISSION)
+            .ok_or("dispatch_admission")?;
+        Ok(&self.paths().mains[SNAPSHOT])
+    }
+
+    pub(crate) fn quarantine_snapshot(&self) {
+        // If this mutex was poisoned, every later acquisition already refuses.
+        if let Ok(mut slots) = self.slots.dispatch.slots.lock() {
+            slots[SNAPSHOT].quarantined = true;
+        }
+    }
+
+    fn inspect_snapshot<T>(
+        &self,
+        path: &Path,
+        file: (u64, u64),
+        inspect: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        if self.paths().mains[SNAPSHOT] != path {
+            return Err("dispatch_stage_path");
+        }
+        let mut turn = self.slots.owner.admit(Reservation {
+            owner: &self.slots.owner,
+            class: SlotClass::Snapshot,
+            generation: NonZeroU64::MIN,
+            witness: file,
+            charged_other: self.slots.other_charge(SNAPSHOT)?,
+            crash_after_database_write: false,
+        })?;
+        turn.enter()?;
+        let result = inspect();
+        turn.finish()?;
+        result
+    }
+
+    pub(crate) fn inspect_leave_snapshot(
+        &self,
+        path: &Path,
+        file: (u64, u64),
+        operation: LeaveTurn<'_>,
+        expected: Option<[u8; 32]>,
+    ) -> Result<std::result::Result<LeaveInspection, StageError>> {
+        self.inspect_snapshot(path, file, || operation.inspect(path, expected))
+    }
+
+    pub(crate) fn prepare_join_snapshot(
+        &self,
+        path: &Path,
+        file: (u64, u64),
+        operation: JoinTurn<'_>,
+    ) -> Result<std::result::Result<(), StageError>> {
+        self.inspect_snapshot(path, file, || Ok(operation.prepare(path)))
+    }
+
+    pub(crate) fn read_join_snapshot(
+        &self,
+        path: &Path,
+        file: (u64, u64),
+        operation: JoinTurn<'_>,
+    ) -> Result<std::result::Result<JoinedAuthority, StageError>> {
+        self.inspect_snapshot(path, file, || Ok(operation.read(path)))
+    }
+
+    fn original(&self, binding: RawBinding<'_>) -> Result<QuotaTurn<'_>> {
+        self.require_empty_snapshot()?;
+        let index = usize::from(!binding.known);
+        if self.paths().mains[index] != binding.path {
+            return Err("dispatch_stage_path");
+        }
+        let mut turn = self.slots.owner.admit(
+            self.slots
+                .reservation(binding, self.slots.other_charge(index)?),
+        )?;
+        turn.enter()?;
+        Ok(turn)
+    }
+
+    pub(crate) fn join_original(
+        &self,
+        binding: RawBinding<'_>,
+        operation: JoinTurn<'_>,
+    ) -> Result<(std::result::Result<(), StageError>, JoinMetrics)> {
+        let turn = self.original(binding)?;
+        let result = operation.join(binding.path);
+        turn.finish()?;
+        let evidence = turn.quota.evidence();
+        Ok((
+            result?,
+            JoinMetrics {
+                peak: evidence.peak,
+                rejected: evidence.rejected,
+                main_opens: evidence.database_opens,
+            },
+        ))
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct JoinMetrics {
+    pub(crate) peak: u64,
+    pub(crate) rejected: [u64; 2],
+    pub(crate) main_opens: u64,
 }
 
 #[cfg(test)]
@@ -581,7 +688,7 @@ pub(crate) struct RawBinding<'a> {
 
 #[cfg(test)]
 use crate::mdk_adapter::peer_native_signer::{
-    JoinWitness, LeaveInspection, OpenStage, ProvisionalPackage, StageError,
+    JoinWitness, JoinedAuthority, LeaveInspection, OpenStage, ProvisionalPackage, StageError,
 };
 #[cfg(test)]
 use nostr::key::Keys;
@@ -589,6 +696,49 @@ use nostr::key::Keys;
 use std::time::Duration;
 #[cfg(test)]
 use storage_sqlite::SqlCipherKey;
+
+#[cfg(test)]
+pub(crate) struct JoinTurn<'a> {
+    pub(crate) key: &'a SqlCipherKey,
+    pub(crate) signer: Arc<Keys>,
+    pub(crate) origin: &'a str,
+    pub(crate) label: String,
+    pub(crate) join: &'a JoinWitness<'a>,
+    pub(crate) fence: &'a crate::peer_invitation::TurnFence<'a>,
+}
+
+#[cfg(test)]
+impl JoinTurn<'_> {
+    fn open(&self, path: &Path) -> std::result::Result<OpenStage, StageError> {
+        self.fence.check()?;
+        OpenStage::open_provisional(
+            path,
+            self.key,
+            self.signer.clone(),
+            self.origin,
+            self.label.clone(),
+            false,
+        )
+    }
+
+    fn prepare(self, path: &Path) -> std::result::Result<(), StageError> {
+        let stage = self.open(path)?;
+        stage.require_prepared_join(self.join, Duration::from_secs(self.fence.sample()?))
+    }
+
+    fn join(self, path: &Path) -> Result<std::result::Result<(), StageError>> {
+        match self.open(path) {
+            Ok(stage) => resolve_once(stage.join_once_fenced(self.join, self.fence)),
+            Err(error) => Ok(Err(error)),
+        }
+    }
+
+    fn read(self, path: &Path) -> std::result::Result<JoinedAuthority, StageError> {
+        let stage = self.open(path)?;
+        self.fence.check()?;
+        stage.read_joined(self.join)
+    }
+}
 
 #[cfg(test)]
 pub(crate) struct LeaveTurn<'a> {

@@ -188,6 +188,30 @@ fn reservation(profile: &ProfileSlots<'_>, lease: &ProfileLease, binding: RawBin
     drop(Connection::open(binding.path).unwrap());
     turn.finish().unwrap();
     drop(turn);
+
+    let files = profile.file_turn().unwrap();
+    assert_eq!(
+        another.file_turn().err(),
+        Some("dispatch_file_turn_unavailable")
+    );
+    let managed = files.original(advanced).unwrap();
+    let connection = Connection::open(binding.path).unwrap();
+    let mut polls = 0;
+    let never_ready = std::future::poll_fn(move |_| {
+        polls += 1;
+        assert_eq!(polls, 1);
+        std::hint::black_box(&connection);
+        std::task::Poll::<()>::Pending
+    });
+    assert_eq!(resolve_once(never_ready), Err("dispatch_pending"));
+    managed.finish().unwrap();
+    assert_eq!(managed.quota.evidence().database_opens, 1);
+    drop(managed);
+    drop(files);
+    assert!(ACTIVE.with(|active| active.borrow().is_none()));
+    assert!(Connection::open(binding.path).is_err());
+    assert!(profile.file_turn().is_ok());
+
     assert_eq!(
         profile.owner.admit(reserve(binding)).err(),
         Some("dispatch_stage_generation")

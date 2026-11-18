@@ -27,7 +27,7 @@ pub(crate) struct TurnFence<'a> {
 }
 
 impl<'a> TurnFence<'a> {
-    fn new(
+    pub(in crate::peer_invitation) fn new(
         clock: &'a Wall,
         stop: &'a AtomicBool,
         injected_ticks: Option<&'a AtomicU64>,
@@ -60,7 +60,7 @@ impl<'a> TurnFence<'a> {
         }
     }
 
-    fn wall(&self) -> Result<u64> {
+    pub(in crate::peer_invitation) fn wall(&self) -> Result<u64> {
         let wall = self.clock.sample()?.as_secs();
         let ticks = Self::ticks(self.injected_ticks)?;
         if self.stop.load(Ordering::Acquire)
@@ -76,8 +76,19 @@ impl<'a> TurnFence<'a> {
         Ok(wall)
     }
 
+    pub(in crate::peer_invitation) fn require_deadline(&self, deadline: u64) -> Result<()> {
+        if self.wall_limit > deadline {
+            return Err(Error::Clock);
+        }
+        self.wall().map(|_| ())
+    }
+
     pub(crate) fn check(&self) -> std::result::Result<(), StageError> {
-        self.wall().map(|_| ()).map_err(|_| StageError::Unavailable)
+        self.sample().map(|_| ())
+    }
+
+    pub(crate) fn sample(&self) -> std::result::Result<u64, StageError> {
+        self.wall().map_err(|_| StageError::Unavailable)
     }
 }
 
@@ -262,10 +273,11 @@ impl<'a> LeaveOwner<'a> {
         operation: LeaveTurn<'_>,
         expected: Option<[u8; 32]>,
     ) -> Result<LeaveSnapshot> {
+        let files = slots.file_turn().map_err(|_| Error::Path)?;
         let image = original.digest()?;
         let reader = original.read_file()?;
         let length = reader.metadata().map_err(|_| Error::Path)?.len();
-        let name = slots.leave_snapshot_path(length).map_err(|_| Error::Path)?;
+        let name = files.snapshot_path(length).map_err(|_| Error::Path)?;
         let mut copy = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -284,7 +296,7 @@ impl<'a> LeaveOwner<'a> {
         if copied != length || read_image(name)? != (image, inode) || original.digest()? != image {
             return Err(Error::StageIdentityMismatch);
         }
-        let inspected = slots
+        let inspected = files
             .inspect_leave_snapshot(name, inode, operation, expected)
             .map_err(|_| Error::Path)?;
         if read_image(name)?.1 != inode || original.digest()? != image {
