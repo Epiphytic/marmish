@@ -42,9 +42,7 @@ shared host, so it does not quantify the effect of compiler optimization.
 
 ## Regression at the candidate physical route head
 
-The Linux AMD64 fixture passed again on source `9344290` with the
-private candidate libtest and unoptimized stock native helpers. All
-helpers had the same source revision and MDK lock. Foreground attached
+The Linux AMD64 fixture passed again on source `9344290`. Foreground attached
 in 6.451 s and echoed one byte in 128.907 ms. Ordinary Command before
 and after took 1.923 s and 1.658 s. The separate named resume and
 takeover test passed in 73.04 s.
@@ -58,9 +56,8 @@ publications. First named observer Ready took 7.305 s.
 | Observer | 20 | 119.508 ms | 139.768 ms | 24,347 | 4,511 B/s | 44 |
 
 The same 20,480-byte serial shell workload completed in 5.397 s,
-including 2.024 s of intentional pre-turn drains. This shared-host
-debug run measures local receipt and acknowledgement over private
-loopback WSS.
+including 2.024 s of intentional pre-turn drains. The fixture measured
+local receipt and acknowledgement over private loopback TLS.
 
 ## Reproduce
 
