@@ -23,3 +23,27 @@ incomplete. A later production registry issuer must bind the process
 signal to the exact registered route or retained verifier before the
 daemon mount. The design alone establishes no production issuer or
 runtime result. The independent review was read-only.
+
+## Completed code review
+
+Claude Code Sonnet 5.5 reviewed exact Linux AMD64 source in Auto
+permission mode against the approved R2 design.
+
+| Round | Exact source | Session | Verdict |
+| --- | --- | --- | --- |
+| R1 | `dc851af05761e37f6881d8326c04e9a980e9f932` | `23c47146-47fb-43a4-8466-3480c0f4f7dc` | Approve |
+| R2 | `78359dbb6a1e6c3e4f223150feee8aec27a41d83` | `627d04db-2e80-4853-8f24-8d671e25674e` | Approve by source inspection |
+| R3 | `5b319577a1cd5606eb236b5e304069a468907e5a` | `bbcc7961-9fb4-4f0f-be94-5539515ae351` | Approve |
+
+The R2 tests put the fatal cut directly through the real TLS-backed
+WebSocket read and write halves with profile cancellation still live.
+R2 also preserves existing Ping flush behavior for unregistered routes.
+The compiler required an explicit unit type for the pending unregistered
+Ping waiter. R3 supplies that type as its only change from R2.
+
+The final reviewer inspected all eight Rust files and independently
+verified their formatting, the diff and the exact candidate test binary
+digest. Both raw I/O unit tests passed in that independent run. The
+reviewer left the opt-in current private WSS run to the author to avoid
+overlapping validation. The [validation record](../validation/peer-candidate-raw-transport-fatal.md)
+contains the author results. No blocking findings remain.
