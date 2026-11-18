@@ -21,3 +21,9 @@ The integrated source `0f60a06` on the authenticated route branch passed
 four installed cursor cap checks in the native test binary passed in
 10.87 s. Rebasing over the published route evidence left the Rust and
 Cargo trees byte-identical.
+
+## Preexisting Ready startup proof
+
+On Linux AMD64, exact source `d64dd85865c40d770e909ac2978fbcf581212746` passed three focused startup scope tests in 20.49 s, all 23 existing identity tests in 0.24 s, strict all-target native Clippy, and scoped rustfmt and staged whitespace checks. The tests use local temporary profiles with real prepared credentials and ordinary SQLCipher MDK owner bindings. They require no relay connection.
+
+The checks cover preexisting Ready Manual Client and Both after reacquisition, an Initializing profile that remains ineligible even after Ready is written on the same lease, absent/Off/automatic receive modes, server-only startup, and Tor Always. They also cover a different lease or prepared identity, a mismatched opened binding, byte changes, inode replacement, and refusal after restoration. The preserved opened binding check is read-only. The ordinary Ready write still updates the manifest, and a later mounted qualified startup must use the read-only check to preserve its captured inode. [Design](../phases/peer-installed-recipient-daemon.md)

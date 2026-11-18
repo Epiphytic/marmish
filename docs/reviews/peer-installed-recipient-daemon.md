@@ -28,3 +28,9 @@ verified production callers retain the existing opener, and confirmed
 that the three cursor source files match the author-reviewed source.
 The independent journal upper-bound correction is incorporated in the
 [validation](../validation/peer-installed-recipient-daemon.md).
+
+## Preexisting Ready startup proof
+
+Claude Code Sonnet in Auto mode approved the initial four-file Rust source `be63e4875aa1bd677e8bb22749311ff459eb45b3` in session `e8285f7a-c4e5-475c-b9d2-e89d2e144ed0`. The reviewer recommended proving the profile was Ready when its lease was acquired. The revision records that validated manifest state at acquisition, changes the fixture to reacquire an existing Ready profile, and proves a lease that writes Ready during setup remains ineligible.
+
+Claude approved exact revised Rust source `d64dd85865c40d770e909ac2978fbcf581212746` in Auto session `ee8b386c-af0c-47fc-8619-20cae902b3ee`, with three independent focused passes in 19.3 s and no blocking findings. The review checked the immutable acquisition bit, exact Manual intent, prepared account, same lease, held files, and read-only opened binding against the phase design. The Linux AMD64 test-only scope has no daemon mount. [Validation](../validation/peer-installed-recipient-daemon.md)
