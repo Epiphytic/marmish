@@ -25,6 +25,7 @@ fn dispatch_native_checkpoint_and_ordinary_routes() {
         "postcheck",
         "faults",
         "poisoned_drop",
+        "reservation",
     ] {
         run(CHILD, MODE, mode, None);
     }
@@ -95,6 +96,7 @@ fn run(test: &str, var: &str, value: &str, restart: Option<&Path>) {
                 | "dispatch-proof postcheck"
                 | "dispatch-proof faults"
                 | "dispatch-proof poisoned_drop"
+                | "dispatch-proof reservation"
         )
     }) {
         println!("{line}");
@@ -143,6 +145,7 @@ fn dispatch_child() {
         "routes" => routes(&profile, binding, &ordinary),
         "faults" => faults(&profile, binding),
         "poisoned_drop" => poisoned_drop(&profile, binding),
+        "reservation" => reservation(&profile, &lease, binding),
         "displaced" => {
             unsafe { sql::sqlite3_vfs_register(dispatch.stock, 1) };
             assert_eq!(profile.begin(binding).err(), Some("dispatch_displaced"));
@@ -161,6 +164,109 @@ fn dispatch_child() {
         _ => panic!("unsupported_dispatch_case"),
     }
     println!("dispatch-proof {mode}");
+}
+
+fn reservation(profile: &ProfileSlots<'_>, lease: &ProfileLease, binding: RawBinding<'_>) {
+    let another = ProfileSlots::reserve(lease, profile.charged_other).unwrap();
+    let reserve = |exact| profile.reservation(exact, profile.charged_other);
+    assert_eq!(
+        another.owner.admit(reserve(binding)).err(),
+        Some("dispatch_reservation_owner")
+    );
+    let advanced = RawBinding {
+        generation: NonZeroU64::new(2).unwrap(),
+        ..binding
+    };
+    let mut turn = profile.owner.admit(reserve(advanced)).unwrap();
+    assert!(Connection::open(binding.path).is_err());
+    assert_eq!(
+        profile.owner.admit(reserve(advanced)).err(),
+        Some("dispatch_active_turn")
+    );
+    turn.enter().unwrap();
+    assert_eq!(turn.enter(), Err("dispatch_recursive_turn"));
+    drop(Connection::open(binding.path).unwrap());
+    turn.finish().unwrap();
+    drop(turn);
+    assert_eq!(
+        profile.owner.admit(reserve(binding)).err(),
+        Some("dispatch_stage_generation")
+    );
+    let wrong_witness = RawBinding {
+        witness: (advanced.witness.0, advanced.witness.1 ^ 1),
+        ..advanced
+    };
+    assert_eq!(
+        profile.owner.admit(reserve(wrong_witness)).err(),
+        Some("dispatch_stage_generation")
+    );
+    let unentered = profile.owner.admit(reserve(advanced)).unwrap();
+    drop(unentered);
+    assert!(profile.owner.admit(reserve(advanced)).is_ok());
+}
+
+#[test]
+fn receiver_eligibility_reads_only_its_lease_config() {
+    use serde_json::json;
+    use std::io::Write;
+
+    let temp = tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
+    let lease = Arc::new(ProfileLease::acquire(temp.path(), "receiver").unwrap());
+    let other = Arc::new(ProfileLease::acquire(temp.path(), "unrelated").unwrap());
+    assert!(ReceiverCandidate::evaluate(&lease).unwrap().is_none());
+    let mut config = json!({"version":1,"role":"both","relays":["wss://ordinary.example/"],
+        "tor":"auto","trusted_remotes":[],"execution_clients":[],"command_policy":{"version":1},
+        "cwd":null,"limits":{},"aliases":{}});
+    let write = |config: &serde_json::Value| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(lease.root().join("config.json"))
+            .unwrap();
+        file.write_all(&serde_json::to_vec(config).unwrap())
+            .unwrap();
+    };
+    write(&config);
+    assert!(ReceiverCandidate::evaluate(&lease).unwrap().is_none());
+    config["role"] = json!("server");
+    write(&config);
+    assert!(ReceiverCandidate::evaluate(&lease).unwrap().is_none());
+    config["role"] = json!("client");
+    config["peer"] = json!({
+        "receive": {"mode":"manual"},
+        "relay": "wss://private.example/",
+        "relay_trust": format!("spki-sha256:{}", "ab".repeat(32)),
+    });
+    write(&config);
+    let client = ReceiverCandidate::evaluate(&lease).unwrap();
+    assert_eq!(
+        client.is_some(),
+        cfg!(all(target_os = "linux", target_arch = "x86_64"))
+    );
+    if let Some(client) = client {
+        client.recheck(&lease).unwrap();
+        assert!(client.recheck(&other).is_err());
+        config["role"] = json!("both");
+        write(&config);
+        assert!(client.recheck(&lease).is_err());
+        let both = ReceiverCandidate::evaluate(&lease).unwrap().unwrap();
+        both.recheck(&lease).unwrap();
+        config["peer"]["receive"] = json!({"mode":"auto_any"});
+        write(&config);
+        assert!(both.recheck(&lease).is_err());
+        assert!(ReceiverCandidate::evaluate(&lease).unwrap().is_some());
+        config["tor"] = json!("always");
+        write(&config);
+        assert!(ReceiverCandidate::evaluate(&lease).unwrap().is_none());
+    }
+    assert!(!lease.root().join("peer").exists());
+    assert!(!lease.mdk_database().exists());
+    assert!(!lease.journal_database().exists());
 }
 
 fn routes(profile: &ProfileSlots<'_>, binding: RawBinding<'_>, ordinary: &Path) {

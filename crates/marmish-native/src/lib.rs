@@ -114,7 +114,7 @@ mod peer_invitation;
 #[cfg(test)]
 mod peer_host_sampling_proof_tests;
 
-#[cfg(test)]
+#[allow(dead_code, reason = "the installed receive quota owner is unmounted")]
 mod peer_quota_vfs;
 
 mod terminal_frames;

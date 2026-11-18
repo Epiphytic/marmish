@@ -1,17 +1,10 @@
-//! Test-only default-VFS dispatch for the two fixed provisional Peer slots.
+//! Default-VFS routing and scoped quota for fixed provisional Peer slots.
 
 use super::*;
 
-use crate::identity::ProfileLease;
+use crate::{command_config::CommandConfig, identity::ProfileLease};
 use std::{
-    cell::RefCell,
-    ffi::OsStr,
-    future::Future,
-    marker::PhantomData,
-    num::NonZeroU64,
-    rc::Rc,
-    sync::OnceLock,
-    task::{Context, Poll, Waker},
+    cell::RefCell, ffi::OsStr, marker::PhantomData, num::NonZeroU64, rc::Rc, sync::OnceLock,
 };
 
 const RAW_AUTOPROXY: c_int = 0x20;
@@ -20,11 +13,15 @@ pub(super) const CLOSED_STAGE_LIMIT: u64 = 16 * 1024 * 1024;
 // owner exists at this revision; the proof fixture supplies the other charges.
 const TOTAL_ADMISSION: u64 = 128 * 1024 * 1024;
 const NAMES: [&str; 2] = ["provisional-known.db", "provisional-unknown.db"];
+#[cfg(test)]
 const SNAPSHOT: usize = NAMES.len();
+#[cfg(test)]
 const SNAPSHOT_NAME: &str = "terminal-leave-snapshot.db";
+const SLOT_COUNT: usize = NAMES.len() + cfg!(test) as usize;
 const SIDECARS: [&str; 3] = ["-journal", "-wal", "-shm"];
 
 type Result<T> = std::result::Result<T, &'static str>;
+#[cfg(test)]
 type NativeResult = std::result::Result<(ProvisionalPackage, bool), StageError>;
 
 struct Dispatch {
@@ -32,7 +29,7 @@ struct Dispatch {
     managed: *mut sql::sqlite3_vfs,
     wrapper: *mut sql::sqlite3_vfs,
     paths: OnceLock<ReservedPaths>,
-    slots: Mutex<[Slot; 3]>,
+    slots: Mutex<[Slot; SLOT_COUNT]>,
 }
 
 // SQLite owns the captured stock descriptors for process lifetime. Our
@@ -50,34 +47,234 @@ struct Slot {
 
 struct ReservedPaths {
     profile_id: String,
-    mains: [PathBuf; 3],
-    all: [PathBuf; 12],
+    mains: [PathBuf; SLOT_COUNT],
+    all: [PathBuf; SLOT_COUNT * 4],
 }
 
+#[cfg(test)]
 pub(crate) struct ProfileSlots<'a> {
     dispatch: &'static Dispatch,
-    lease: &'a ProfileLease,
     charged_other: u64,
     crash_after_database_write: bool,
+    owner: ReceiverQuota<'a>,
+}
+
+/// Validated receive intent for this lease incarnation. No relay or quota
+/// admission can be constructed from this candidate alone.
+pub(crate) struct ReceiverCandidate {
+    lease: Arc<ProfileLease>,
+    config: CommandConfig,
+}
+
+impl ReceiverCandidate {
+    pub(crate) fn evaluate(lease: &Arc<ProfileLease>) -> crate::Result<Option<Self>> {
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return Ok(None);
+        }
+        let config = match CommandConfig::load(lease.root()) {
+            Ok(config) => config,
+            Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        if config.peer_receive().is_none() {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            lease: lease.clone(),
+            config,
+        }))
+    }
+
+    pub(crate) fn recheck(&self, lease: &Arc<ProfileLease>) -> crate::Result<()> {
+        if !Arc::ptr_eq(&self.lease, lease) {
+            return Err(crate::Error::Invalid("peer_profile_changed"));
+        }
+        let loaded = CommandConfig::load(lease.root())?;
+        self.config.bound_peer_relay(&loaded)?;
+        Ok(())
+    }
+}
+
+/// A mounted owner has no production constructor in this phase.
+pub(crate) struct ReceiverQuota<'a> {
+    dispatch: &'static Dispatch,
+    lease: &'a ProfileLease,
+}
+
+#[derive(Clone, Copy)]
+enum SlotClass {
+    Known,
+    Unknown,
+    #[cfg(test)]
+    Snapshot,
+}
+
+impl SlotClass {
+    fn index(self) -> usize {
+        match self {
+            Self::Known => 0,
+            Self::Unknown => 1,
+            #[cfg(test)]
+            Self::Snapshot => SNAPSHOT,
+        }
+    }
+}
+
+pub(crate) struct Reservation<'a> {
+    owner: &'a ReceiverQuota<'a>,
+    class: SlotClass,
+    generation: NonZeroU64,
+    witness: (u64, u64),
+    charged_other: u64,
+    #[cfg(test)]
+    crash_after_database_write: bool,
+}
+
+impl ReceiverQuota<'_> {
+    pub(crate) fn admit(&self, reservation: Reservation<'_>) -> Result<QuotaTurn<'_>> {
+        if !ptr::eq(self, reservation.owner) {
+            return Err("dispatch_reservation_owner");
+        }
+        let Reservation {
+            class,
+            generation,
+            witness: file,
+            charged_other,
+            #[cfg(test)]
+            crash_after_database_write,
+            ..
+        } = reservation;
+        let index = class.index();
+        self.dispatch.assert_default()?;
+        if ACTIVE.with(|active| active.borrow().is_some()) {
+            return Err("dispatch_recursive_turn");
+        }
+        let paths = self.dispatch.paths.get().ok_or("dispatch_unreserved")?;
+        let main = paths.mains.get(index).ok_or("dispatch_stage_path")?;
+        if paths.profile_id != self.lease.profile_id()
+            || main.parent().and_then(Path::parent) != Some(self.lease.root())
+        {
+            return Err("dispatch_stage_path");
+        }
+        let mut slots = self
+            .dispatch
+            .slots
+            .lock()
+            .map_err(|_| "dispatch_reservations")?;
+        if slots.iter().any(|slot| slot.active.is_some()) {
+            return Err("dispatch_active_turn");
+        }
+        let slot = &mut slots[index];
+        if slot.quarantined
+            || (index < NAMES.len()
+                && (slot.generation.is_some_and(|current| generation < current)
+                    || (slot.generation == Some(generation) && slot.witness != Some(file))))
+        {
+            return Err("dispatch_stage_generation");
+        }
+        let checked = main
+            .symlink_metadata()
+            .map_err(|_| "dispatch_stage_missing");
+        let quota = (|| {
+            let meta = checked?;
+            if witness(&meta) != file
+                || main
+                    .parent()
+                    .expect("stage_parent")
+                    .symlink_metadata()
+                    .map_err(|_| "stage_parent")?
+                    .dev()
+                    != meta.dev()
+                || bytes(main)? != Some(meta.len())
+                || meta.len() > CLOSED_STAGE_LIMIT
+            {
+                return Err("dispatch_stage_witness");
+            }
+            let mut quota = Quota::new(
+                self.dispatch.managed,
+                main,
+                TOTAL_ADMISSION
+                    .checked_sub(charged_other)
+                    .ok_or("dispatch_admission")?,
+                false,
+            )?;
+            let state = Arc::get_mut(&mut quota).expect("new_quota");
+            state.witness = Some(file);
+            #[cfg(test)]
+            {
+                state.crash_after_database_write = crash_after_database_write;
+            }
+            Ok(quota)
+        })();
+        let quota = match quota {
+            Ok(quota) => quota,
+            Err(error) => {
+                slot.generation = Some(generation);
+                slot.witness = Some(file);
+                slot.quarantined = true;
+                return Err(error);
+            }
+        };
+        slot.generation = Some(generation);
+        slot.witness = Some(file);
+        slot.active = Some(quota.clone());
+        Ok(QuotaTurn {
+            dispatch: self.dispatch,
+            slot: index,
+            quota,
+            entered: false,
+            _local: PhantomData,
+        })
+    }
 }
 
 thread_local! {
     static ACTIVE: RefCell<Option<Arc<Quota>>> = const { RefCell::new(None) };
 }
 
-struct Turn<'a> {
-    profile: &'a ProfileSlots<'a>,
+pub(crate) struct QuotaTurn<'a> {
+    dispatch: &'a Dispatch,
     slot: usize,
     quota: Arc<Quota>,
+    entered: bool,
     _local: PhantomData<Rc<()>>,
 }
 
-impl Drop for Turn<'_> {
-    fn drop(&mut self) {
+impl QuotaTurn<'_> {
+    // Private to the checked dispatcher. Merely holding the permission does
+    // not put arbitrary work on this thread inside the quota scope.
+    fn enter(&mut self) -> Result<()> {
+        self.dispatch.assert_default()?;
         ACTIVE.with(|active| {
-            active.borrow_mut().take();
-        });
-        let (mut slots, poisoned) = match self.profile.dispatch.slots.lock() {
+            let mut active = active.borrow_mut();
+            if self.entered || active.is_some() {
+                return Err("dispatch_recursive_turn");
+            }
+            *active = Some(self.quota.clone());
+            self.entered = true;
+            Ok(())
+        })
+    }
+
+    fn finish(&self) -> Result<()> {
+        self.dispatch.assert_default()?;
+        if Arc::strong_count(&self.quota) != 3 {
+            return Err("dispatch_live_handles");
+        }
+        self.quota.verify_dispatch()
+    }
+}
+
+impl Drop for QuotaTurn<'_> {
+    fn drop(&mut self) {
+        if self.entered {
+            ACTIVE.with(|active| {
+                active.borrow_mut().take();
+            });
+        }
+        let (mut slots, poisoned) = match self.dispatch.slots.lock() {
             Ok(slots) => (slots, false),
             Err(error) => (error.into_inner(), true),
         };
@@ -93,7 +290,7 @@ impl Drop for Turn<'_> {
             // guard only to quarantine and clear this exact ownership claim.
             if poisoned
                 || Arc::strong_count(&self.quota) != 2
-                || self.quota.verify_dispatch().is_err()
+                || (self.entered && self.quota.verify_dispatch().is_err())
             {
                 slot.quarantined = true;
             }
@@ -103,11 +300,13 @@ impl Drop for Turn<'_> {
 }
 
 impl Dispatch {
+    #[cfg(test)]
     fn mount() -> Result<&'static Self> {
         static DISPATCH: OnceLock<Result<&'static Dispatch>> = OnceLock::new();
         *DISPATCH.get_or_init(Self::register)
     }
 
+    #[cfg(test)]
     fn register() -> Result<&'static Self> {
         marmish_engine::initialize_storage().map_err(|_| "sqlite_initialize")?;
         let stock = unsafe { sql::sqlite3_vfs_find(ptr::null()) };
@@ -191,6 +390,7 @@ impl Dispatch {
     }
 }
 
+#[cfg(test)]
 impl<'a> ProfileSlots<'a> {
     pub(crate) fn reserve(lease: &'a ProfileLease, charged_other: u64) -> Result<Self> {
         let dispatch = Dispatch::mount()?;
@@ -236,112 +436,42 @@ impl<'a> ProfileSlots<'a> {
         }
         Ok(Self {
             dispatch,
-            lease,
             charged_other,
             crash_after_database_write: false,
+            owner: ReceiverQuota { dispatch, lease },
         })
     }
 
-    fn begin(&self, exact: RawBinding) -> Result<Turn<'_>> {
+    fn begin(&self, exact: RawBinding) -> Result<QuotaTurn<'_>> {
         let index = usize::from(!exact.known);
-        self.begin_exact(
-            exact.path,
-            index,
-            exact.generation,
-            exact.witness,
-            self.charged_other,
-        )
-    }
-
-    fn begin_exact(
-        &self,
-        path: &Path,
-        index: usize,
-        generation: NonZeroU64,
-        file: (u64, u64),
-        charged_other: u64,
-    ) -> Result<Turn<'_>> {
-        self.dispatch.assert_default()?;
-        if ACTIVE.with(|active| active.borrow().is_some()) {
-            return Err("dispatch_recursive_turn");
-        }
-        let main = &self.dispatch.paths.get().expect("reserved_paths").mains[index];
-        if main != path || main.parent().and_then(Path::parent) != Some(self.lease.root()) {
+        let paths = self.dispatch.paths.get().ok_or("dispatch_unreserved")?;
+        if paths.mains[index] != exact.path {
             return Err("dispatch_stage_path");
         }
-        let mut slots = self
-            .dispatch
-            .slots
-            .lock()
-            .map_err(|_| "dispatch_reservations")?;
-        if slots.iter().any(|slot| slot.active.is_some()) {
-            return Err("dispatch_active_turn");
-        }
-        let slot = &mut slots[index];
-        if slot.quarantined
-            || (index != SNAPSHOT
-                && (slot.generation.is_some_and(|current| generation < current)
-                    || (slot.generation == Some(generation) && slot.witness != Some(file))))
-        {
-            return Err("dispatch_stage_generation");
-        }
-        let checked = main
-            .symlink_metadata()
-            .map_err(|_| "dispatch_stage_missing");
-        let quota = (|| {
-            let meta = checked?;
-            if witness(&meta) != file
-                || main
-                    .parent()
-                    .expect("stage_parent")
-                    .symlink_metadata()
-                    .map_err(|_| "stage_parent")?
-                    .dev()
-                    != meta.dev()
-                || bytes(main)? != Some(meta.len())
-                || meta.len() > CLOSED_STAGE_LIMIT
-            {
-                return Err("dispatch_stage_witness");
-            }
-            let mut quota = Quota::new(
-                self.dispatch.managed,
-                main,
-                TOTAL_ADMISSION
-                    .checked_sub(charged_other)
-                    .ok_or("dispatch_admission")?,
-                false,
-                index != SNAPSHOT && self.crash_after_database_write,
-            )?;
-            Arc::get_mut(&mut quota).expect("new_quota").witness = Some(file);
-            Ok(quota)
-        })();
-        let quota = match quota {
-            Ok(quota) => quota,
-            Err(error) => {
-                slot.generation = Some(generation);
-                slot.witness = Some(file);
-                slot.quarantined = true;
-                return Err(error);
-            }
-        };
-        slot.generation = Some(generation);
-        slot.witness = Some(file);
-        slot.active = Some(quota.clone());
-        ACTIVE.with(|active| *active.borrow_mut() = Some(quota.clone()));
-        Ok(Turn {
-            profile: self,
-            slot: index,
-            quota,
-            _local: PhantomData,
-        })
+        let mut turn = self
+            .owner
+            .admit(self.reservation(exact, self.charged_other))?;
+        turn.enter()?;
+        Ok(turn)
     }
 
-    fn finish(&self, turn: &Turn<'_>) -> Result<()> {
-        self.dispatch.assert_default()?;
-        if Arc::strong_count(&turn.quota) != 3 {
-            return Err("dispatch_live_handles");
+    fn reservation(&self, exact: RawBinding<'_>, charged_other: u64) -> Reservation<'_> {
+        Reservation {
+            owner: &self.owner,
+            class: if exact.known {
+                SlotClass::Known
+            } else {
+                SlotClass::Unknown
+            },
+            generation: exact.generation,
+            witness: exact.witness,
+            charged_other,
+            crash_after_database_write: self.crash_after_database_write,
         }
-        turn.quota.verify_dispatch()
+    }
+
+    fn finish(&self, turn: &QuotaTurn<'_>) -> Result<()> {
+        turn.finish()
     }
 
     fn other_charge(&self, active: usize) -> Result<u64> {
@@ -386,13 +516,18 @@ impl<'a> ProfileSlots<'a> {
         operation: LeaveTurn<'_>,
         expected: Option<[u8; 32]>,
     ) -> Result<std::result::Result<LeaveInspection, StageError>> {
-        let turn = self.begin_exact(
-            path,
-            SNAPSHOT,
-            NonZeroU64::MIN,
-            file,
-            self.other_charge(SNAPSHOT)?,
-        )?;
+        if self.dispatch.paths.get().expect("reserved_paths").mains[SNAPSHOT] != path {
+            return Err("dispatch_stage_path");
+        }
+        let mut turn = self.owner.admit(Reservation {
+            owner: &self.owner,
+            class: SlotClass::Snapshot,
+            generation: NonZeroU64::MIN,
+            witness: file,
+            charged_other: self.other_charge(SNAPSHOT)?,
+            crash_after_database_write: false,
+        })?;
+        turn.enter()?;
         let result = operation.inspect(path, expected);
         self.finish(&turn)?;
         result
@@ -410,13 +545,14 @@ impl<'a> ProfileSlots<'a> {
         {
             return Err("dispatch_snapshot_present");
         }
-        let turn = self.begin_exact(
-            binding.path,
-            usize::from(!binding.known),
-            binding.generation,
-            binding.witness,
-            self.other_charge(usize::from(!binding.known))?,
-        )?;
+        let index = usize::from(!binding.known);
+        if self.dispatch.paths.get().expect("reserved_paths").mains[index] != binding.path {
+            return Err("dispatch_stage_path");
+        }
+        let mut turn = self
+            .owner
+            .admit(self.reservation(binding, self.other_charge(index)?))?;
+        turn.enter()?;
         let result = operation.run(binding.path, expected);
         self.finish(&turn)?;
         result
@@ -434,6 +570,7 @@ impl<'a> ProfileSlots<'a> {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 pub(crate) struct RawBinding<'a> {
     pub(crate) path: &'a Path,
@@ -442,13 +579,18 @@ pub(crate) struct RawBinding<'a> {
     pub(crate) witness: (u64, u64),
 }
 
+#[cfg(test)]
 use crate::mdk_adapter::peer_native_signer::{
     JoinWitness, LeaveInspection, OpenStage, ProvisionalPackage, StageError,
 };
+#[cfg(test)]
 use nostr::key::Keys;
+#[cfg(test)]
 use std::time::Duration;
+#[cfg(test)]
 use storage_sqlite::SqlCipherKey;
 
+#[cfg(test)]
 pub(crate) struct LeaveTurn<'a> {
     pub(crate) key: &'a SqlCipherKey,
     pub(crate) signer: Arc<Keys>,
@@ -458,6 +600,7 @@ pub(crate) struct LeaveTurn<'a> {
     pub(crate) fence: &'a crate::peer_invitation::TurnFence<'a>,
 }
 
+#[cfg(test)]
 impl LeaveTurn<'_> {
     fn run(
         self,
@@ -504,6 +647,7 @@ impl LeaveTurn<'_> {
     }
 }
 
+#[cfg(test)]
 pub(crate) struct NativeTurn<'a> {
     pub(crate) key: &'a SqlCipherKey,
     pub(crate) signer: Arc<Keys>,
@@ -513,11 +657,13 @@ pub(crate) struct NativeTurn<'a> {
     pub(crate) operation: NativeOperation,
 }
 
+#[cfg(test)]
 pub(crate) enum NativeOperation {
     Generate { withhold_signing: bool },
     Reopen { prepared: bool },
 }
 
+#[cfg(test)]
 impl NativeTurn<'_> {
     fn run(self, path: &Path) -> NativeResult {
         resolve_once(self.run_unscoped(path)).map_err(|_| StageError::Unavailable)?
@@ -553,7 +699,9 @@ impl NativeTurn<'_> {
     }
 }
 
-pub(crate) fn resolve_once<T>(future: impl Future<Output = T>) -> Result<T> {
+#[cfg(test)]
+pub(crate) fn resolve_once<T>(future: impl std::future::Future<Output = T>) -> Result<T> {
+    use std::task::{Context, Poll, Waker};
     // The private publisher does not await I/O. Drop both the owning handle
     // and any uncompleted future before leaving the scoped caller thread.
     match std::pin::pin!(future).poll(&mut Context::from_waker(Waker::noop())) {
@@ -566,6 +714,7 @@ fn witness(meta: &fs::Metadata) -> (u64, u64) {
     (meta.dev(), meta.ino())
 }
 
+#[cfg(test)]
 fn local_volume(path: &Path) -> Result<bool> {
     let name = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| "stage_parent")?;
     let mut status = std::mem::MaybeUninit::<libc::statfs>::uninit();
@@ -686,9 +835,11 @@ fn forwarding_descriptor(stock: &sql::sqlite3_vfs) -> Result<sql::sqlite3_vfs> {
     })
 }
 
+#[cfg(test)]
 #[path = "peer_quota_dispatch_tests.rs"]
 mod tests;
 
+#[cfg(test)]
 pub(crate) fn mount_for_proof() -> Result<()> {
     Dispatch::mount().map(|_| ())
 }
@@ -705,6 +856,7 @@ pub(super) fn poison_scope() {
     });
 }
 
+#[cfg(test)]
 impl ProfileSlots<'_> {
     pub(crate) fn fixture_stop_in_synced_transaction(mut self) -> Self {
         self.crash_after_database_write = true;

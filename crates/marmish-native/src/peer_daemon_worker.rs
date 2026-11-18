@@ -83,7 +83,7 @@ impl Bootstrap {
     }
 
     pub(crate) fn eligible(&self, role: Role) -> bool {
-        matches!(role, Role::Client | Role::Both) && self.admission != Admission::Off
+        role.can_receive_peers() && self.admission != Admission::Off
     }
 
     fn open<'a>(

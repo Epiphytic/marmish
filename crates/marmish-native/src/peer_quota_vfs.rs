@@ -1,4 +1,4 @@
-//! An isolated test VFS for measuring and limiting provisional SQLCipher files.
+//! Checked SQLite file operations for provisional Peer SQLCipher storage.
 
 use std::{
     cell::Cell,
@@ -36,6 +36,7 @@ const ATOMIC_CAPABILITIES: c_int = sql::SQLITE_IOCAP_ATOMIC
     | sql::SQLITE_IOCAP_ATOMIC64K
     | sql::SQLITE_IOCAP_BATCH_ATOMIC;
 
+#[cfg(test)]
 #[derive(Clone, Copy, Default)]
 pub(super) struct Evidence {
     pub(super) peak: u64,
@@ -49,8 +50,11 @@ pub(super) struct Evidence {
 
 struct Accounted {
     lengths: [u64; 2],
+    #[cfg(test)]
     evidence: Evidence,
+    opened_main: bool,
     uncertain: bool,
+    #[cfg(test)]
     journal_synced: bool,
     journal_witness: Option<(u64, u64)>,
 }
@@ -62,6 +66,7 @@ pub(super) struct Quota {
     witness: Option<(u64, u64)>,
     panicked: AtomicBool,
     account: Mutex<Accounted>,
+    #[cfg(test)]
     crash_after_database_write: bool,
 }
 
@@ -79,6 +84,7 @@ struct Handle {
 }
 
 impl Quota {
+    #[cfg(test)]
     pub(super) fn install(
         main: &Path,
         capacity: u64,
@@ -94,13 +100,11 @@ impl Quota {
         {
             return Err("stock_unix_vfs");
         }
-        let quota = Box::leak(Box::new(Self::new(
-            base,
-            main,
-            capacity,
-            recover,
-            crash_after_database_write,
-        )?));
+        let mut quota = Self::new(base, main, capacity, recover)?;
+        Arc::get_mut(&mut quota)
+            .expect("new_quota")
+            .crash_after_database_write = crash_after_database_write;
+        let quota = Box::leak(Box::new(quota));
         let wrapper = Box::leak(Box::new(sql::sqlite3_vfs {
             iVersion: 1,
             szOsFile: size_of::<Handle>().try_into().map_err(|_| "file_header")?,
@@ -138,7 +142,6 @@ impl Quota {
         main: &Path,
         capacity: u64,
         recover: bool,
-        crash_after_database_write: bool,
     ) -> Result<Arc<Self>, &'static str> {
         let parent = main.parent().ok_or("stage_parent")?;
         let metadata = parent.symlink_metadata().map_err(|_| "stage_directory")?;
@@ -170,15 +173,19 @@ impl Quota {
             panicked: AtomicBool::new(false),
             account: Mutex::new(Accounted {
                 lengths,
+                #[cfg(test)]
                 evidence: Evidence {
                     peak: sum,
                     ..Evidence::default()
                 },
+                opened_main: false,
                 uncertain: false,
+                #[cfg(test)]
                 journal_synced: false,
                 journal_witness: None,
             }),
-            crash_after_database_write,
+            #[cfg(test)]
+            crash_after_database_write: false,
         }))
     }
 
@@ -193,6 +200,7 @@ impl Quota {
             .position(|path| path.as_os_str().as_bytes() == name)
     }
 
+    #[cfg(test)]
     pub(super) fn evidence(&self) -> Evidence {
         let (uncertain, evidence) = {
             let state = self.account.lock().unwrap();
@@ -202,6 +210,7 @@ impl Quota {
         evidence
     }
 
+    #[cfg(test)]
     pub(super) fn admitted_length(&self) -> u64 {
         let state = self.account.lock().unwrap();
         state.lengths[0] + state.lengths[1]
@@ -211,7 +220,7 @@ impl Quota {
         let mut state = self.account.lock().map_err(|_| "dispatch_indeterminate")?;
         if self.panicked.load(Ordering::Relaxed)
             || state.uncertain
-            || state.evidence.database_opens == 0
+            || !state.opened_main
             || state.journal_witness.is_some()
             || bytes(&self.files[1])?.is_some()
             || bytes(&sidecar(&self.files[0], "-wal"))?.is_some()
@@ -251,7 +260,10 @@ impl Quota {
             && measured == state.lengths
             && total <= self.capacity
         {
-            state.evidence.peak = state.evidence.peak.max(total);
+            #[cfg(test)]
+            {
+                state.evidence.peak = state.evidence.peak.max(total);
+            }
             return sql::SQLITE_OK;
         }
         state.uncertain = true;
@@ -281,11 +293,13 @@ fn bytes(path: &Path) -> Result<Option<u64>, &'static str> {
     }
 }
 
+#[cfg(test)]
 fn vfs_state(vfs: *mut sql::sqlite3_vfs) -> &'static Arc<Quota> {
     // Called only by SQLite using the registered wrapper and its stable pAppData.
     unsafe { &*(*vfs).pAppData.cast::<Arc<Quota>>() }
 }
 
+#[cfg(test)]
 unsafe extern "C" fn open(
     vfs: *mut sql::sqlite3_vfs,
     name: *const c_char,
@@ -316,7 +330,10 @@ unsafe fn open_managed(
             1
         }
         _ => {
-            state.evidence.refused_opens += 1;
+            #[cfg(test)]
+            {
+                state.evidence.refused_opens += 1;
+            }
             return sql::SQLITE_CANTOPEN;
         }
     };
@@ -336,7 +353,10 @@ unsafe fn open_managed(
         let stock = Stock(stock);
         let rc = base.xOpen.unwrap()(quota.base, name, stock.0, flags, out_flags);
         if rc != sql::SQLITE_OK {
-            state.evidence.ordinary_errors += 1;
+            #[cfg(test)]
+            {
+                state.evidence.ordinary_errors += 1;
+            }
             preserve_failure_errno(rc, || drop(stock));
             return rc;
         }
@@ -369,7 +389,11 @@ unsafe fn open_managed(
             return rc;
         }
         if index == 0 {
-            state.evidence.database_opens += 1;
+            state.opened_main = true;
+            #[cfg(test)]
+            {
+                state.evidence.database_opens += 1;
+            }
         }
         outer.cast::<Handle>().write(handle);
         sql::SQLITE_OK
@@ -447,6 +471,7 @@ unsafe fn close_stock(stock: *mut sql::sqlite3_file) -> c_int {
     }
 }
 
+#[cfg(test)]
 enum Resize {
     Write { offset: i64 },
     Truncate,
@@ -477,7 +502,12 @@ impl Handle {
         sql::SQLITE_IOERR_FSTAT
     }
 
-    fn resize(&self, end: u64, kind: Resize, operation: impl FnOnce() -> c_int) -> c_int {
+    fn resize(
+        &self,
+        end: u64,
+        #[cfg(test)] kind: Resize,
+        operation: impl FnOnce() -> c_int,
+    ) -> c_int {
         let mut state = self.state.account.lock().unwrap();
         let old = state.lengths[self.index];
         if !self.state.identities(&state) {
@@ -492,10 +522,14 @@ impl Handle {
                 .checked_add(state.lengths[1 - self.index])
                 .is_none_or(|sum| sum > self.state.capacity)
         {
-            state.evidence.rejected[self.index] += 1;
+            #[cfg(test)]
+            {
+                state.evidence.rejected[self.index] += 1;
+            }
             return sql::SQLITE_FULL;
         }
         let rc = operation();
+        #[cfg(test)]
         if rc != sql::SQLITE_OK {
             state.evidence.ordinary_errors += 1;
         }
@@ -504,12 +538,15 @@ impl Handle {
         if rc != sql::SQLITE_OK || measured != sql::SQLITE_OK {
             return if rc != sql::SQLITE_OK { rc } else { measured };
         }
+        #[cfg(test)]
         if matches!(kind, Resize::Truncate) && end > old {
             state.evidence.growth_truncates += 1;
         }
+        #[cfg(test)]
         if matches!(kind, Resize::Write { .. }) && self.index == 1 && end > old {
             state.evidence.journal_writes += 1;
         }
+        #[cfg(test)]
         if matches!(kind, Resize::Write { offset } if offset > 0)
             && self.index == 0
             && self.state.crash_after_database_write
@@ -550,9 +587,12 @@ unsafe extern "C" fn write(
             return sql::SQLITE_IOERR_WRITE;
         };
         let handle = unsafe { Handle::get(file) };
-        handle.resize(end, Resize::Write { offset }, || unsafe {
-            handle.methods().xWrite.unwrap()(handle.stock.0, data, count, offset)
-        })
+        handle.resize(
+            end,
+            #[cfg(test)]
+            Resize::Write { offset },
+            || unsafe { handle.methods().xWrite.unwrap()(handle.stock.0, data, count, offset) },
+        )
     })
 }
 
@@ -562,9 +602,12 @@ unsafe extern "C" fn truncate(file: *mut sql::sqlite3_file, size: i64) -> c_int 
             return sql::SQLITE_IOERR_TRUNCATE;
         };
         let handle = unsafe { Handle::get(file) };
-        handle.resize(end, Resize::Truncate, || unsafe {
-            handle.methods().xTruncate.unwrap()(handle.stock.0, size)
-        })
+        handle.resize(
+            end,
+            #[cfg(test)]
+            Resize::Truncate,
+            || unsafe { handle.methods().xTruncate.unwrap()(handle.stock.0, size) },
+        )
     })
 }
 
@@ -572,6 +615,7 @@ unsafe extern "C" fn sync(file: *mut sql::sqlite3_file, flags: c_int) -> c_int {
     guarded(sql::SQLITE_IOERR_FSYNC, || {
         let handle = unsafe { Handle::get(file) };
         let rc = unsafe { handle.methods().xSync.unwrap()(handle.stock.0, flags) };
+        #[cfg(test)]
         if rc == sql::SQLITE_OK && handle.index == 1 {
             handle.state.account.lock().unwrap().journal_synced = true;
         }
@@ -610,6 +654,7 @@ unsafe extern "C" fn capabilities(file: *mut sql::sqlite3_file) -> c_int {
     })
 }
 
+#[cfg(test)]
 unsafe extern "C" fn delete(
     vfs: *mut sql::sqlite3_vfs,
     name: *const c_char,
@@ -637,8 +682,12 @@ fn delete_managed(quota: &Quota, name: *const c_char, sync_dir: c_int) -> c_int 
         }
         if matches!(bytes(&quota.files[1]), Ok(None)) {
             state.journal_witness = None;
-            state.journal_synced = false;
+            #[cfg(test)]
+            {
+                state.journal_synced = false;
+            }
         }
+        #[cfg(test)]
         if rc != sql::SQLITE_OK && rc != sql::SQLITE_IOERR_DELETE_NOENT {
             state.evidence.ordinary_errors += 1;
         }
@@ -666,6 +715,7 @@ file_delegate!(unlock, xUnlock, level: c_int);
 file_delegate!(reserved, xCheckReservedLock, result: *mut c_int);
 file_delegate!(sector_size, xSectorSize);
 
+#[cfg(test)]
 macro_rules! vfs_delegate {
     ($name:ident, $member:ident $(, $arg:ident : $ty:ty)*) => {
         unsafe extern "C" fn $name(vfs: *mut sql::sqlite3_vfs $(, $arg: $ty)*) -> c_int {
@@ -675,23 +725,32 @@ macro_rules! vfs_delegate {
     };
 }
 
+#[cfg(test)]
 vfs_delegate!(access, xAccess, name: *const c_char, flags: c_int, result: *mut c_int);
+#[cfg(test)]
 vfs_delegate!(full_pathname, xFullPathname, name: *const c_char, len: c_int, out: *mut c_char);
+#[cfg(test)]
 vfs_delegate!(randomness, xRandomness, len: c_int, out: *mut c_char);
+#[cfg(test)]
 vfs_delegate!(sleep, xSleep, micros: c_int);
+#[cfg(test)]
 vfs_delegate!(current_time, xCurrentTime, out: *mut f64);
+#[cfg(test)]
 vfs_delegate!(last_error, xGetLastError, len: c_int, out: *mut c_char);
 
+#[cfg(test)]
 unsafe extern "C" fn no_dl_open(_: *mut sql::sqlite3_vfs, _: *const c_char) -> *mut c_void {
     ptr::null_mut()
 }
 
+#[cfg(test)]
 unsafe extern "C" fn no_dl_error(_: *mut sql::sqlite3_vfs, len: c_int, out: *mut c_char) {
     if len > 0 && !out.is_null() {
         unsafe { out.write(0) };
     }
 }
 
+#[cfg(test)]
 unsafe extern "C" fn no_dl_symbol(
     _: *mut sql::sqlite3_vfs,
     _: *mut c_void,
@@ -700,6 +759,7 @@ unsafe extern "C" fn no_dl_symbol(
     None
 }
 
+#[cfg(test)]
 unsafe extern "C" fn no_dl_close(_: *mut sql::sqlite3_vfs, _: *mut c_void) {}
 
 static METHODS: sql::sqlite3_io_methods = sql::sqlite3_io_methods {
@@ -727,5 +787,6 @@ static METHODS: sql::sqlite3_io_methods = sql::sqlite3_io_methods {
 #[path = "peer_quota_dispatch.rs"]
 pub(crate) mod dispatch;
 
+#[cfg(test)]
 #[path = "peer_quota_vfs_tests.rs"]
 mod tests;

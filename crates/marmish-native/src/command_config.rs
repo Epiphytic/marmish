@@ -29,6 +29,12 @@ pub(crate) enum Role {
     Both,
 }
 
+impl Role {
+    pub(crate) fn can_receive_peers(self) -> bool {
+        matches!(self, Self::Client | Self::Both)
+    }
+}
+
 /// The transport parser supplies the canonical immutable set, without DNS.
 #[derive(Clone, Debug)]
 pub(crate) struct RelaySet(RelayPolicy);
@@ -108,6 +114,17 @@ impl CommandConfig {
             .relay
             .as_ref()
             .ok_or(Error::Invalid("peer_relay_missing"))
+    }
+
+    pub(crate) fn peer_receive(&self) -> Option<&peer_intent::Receive> {
+        if !self.role.can_receive_peers()
+            || self.relay_policy.mode() == RouteMode::Always
+            || self._peer.relay.is_none()
+            || self._peer.receive == peer_intent::Receive::Off
+        {
+            return None;
+        }
+        Some(&self._peer.receive)
     }
 
     pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self> {
@@ -442,7 +459,7 @@ pub(crate) mod peer_intent {
 
     #[derive(Clone, PartialEq, Eq)]
     #[cfg_attr(test, derive(Debug))]
-    pub(super) enum Receive {
+    pub(crate) enum Receive {
         Off,
         Manual,
         AutoAny,
@@ -468,7 +485,7 @@ impl RawPeer {
     fn normalize(self, role: Role) -> Result<peer_intent::PeerIntent> {
         use peer_intent::{PeerIntent, Relay};
         let receives = !matches!(self.receive, RawPeerReceive::Off {});
-        if (receives && role == Role::Server) || (self.originate && role == Role::Client) {
+        if (receives && !role.can_receive_peers()) || (self.originate && role == Role::Client) {
             return Err(Error::Invalid("config_peer_directions"));
         }
         let receive = self.receive.normalize()?;
