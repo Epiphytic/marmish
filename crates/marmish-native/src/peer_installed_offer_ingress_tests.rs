@@ -468,10 +468,12 @@ async fn peer_installed_custody_offer_checked_history_live_and_cold_recovery() {
     let record = port.wait_live(time_limit()).await.unwrap().unwrap();
     assert_eq!(
         status(
-            port.use_live_carrier(&record, |carrier| checkpoint
-                .admit_installed_custody_offer(&source, carrier))
-                .unwrap()
-                .unwrap()
+            port.use_live_carrier(&record, |carrier| {
+                received.push(observed_record(&carrier, &live));
+                checkpoint.admit_installed_custody_offer(&source, carrier)
+            })
+            .unwrap()
+            .unwrap()
         ),
         Status::Accepted(TrustedOutcome::Applied)
     );
@@ -492,6 +494,7 @@ async fn peer_installed_custody_offer_checked_history_live_and_cold_recovery() {
     );
     checked.unchanged().unwrap();
     let conn = sql(checked.path(), key);
+    assert_eq!(received.len(), 2);
     received.sort_unstable();
     assert!(
         saved(&conn) == received,
