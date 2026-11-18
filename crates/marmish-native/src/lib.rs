@@ -28,6 +28,8 @@ mod rsync_cli;
 mod stream_cli;
 mod stream_runner;
 mod stream_service;
+#[doc(hidden)]
+pub mod terminal_backend;
 pub mod transport;
 pub use error::{Error, Result};
 pub(crate) use mdk_adapter::command_local;

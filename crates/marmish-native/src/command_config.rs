@@ -434,6 +434,7 @@ fn accounts(values: Vec<String>) -> Result<BTreeSet<Account>> {
 }
 fn alias_name(value: &str) -> bool {
     !value.is_empty()
+        && value != crate::terminal_backend::WORKER_ENTRYPOINT
         && !matches!(
             value,
             "init"

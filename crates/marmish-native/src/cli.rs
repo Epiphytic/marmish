@@ -1292,6 +1292,15 @@ fn parse_public(raw: &[OsString]) -> std::result::Result<Args, clap::Error> {
 }
 
 fn parse_frontend(raw: &[OsString], daemon_binary: bool) -> std::result::Result<Args, clap::Error> {
+    if raw
+        .get(1)
+        .is_some_and(|arg| arg == OsStr::new(crate::terminal_backend::WORKER_ENTRYPOINT))
+    {
+        return Err(clap::Error::raw(
+            clap::error::ErrorKind::InvalidValue,
+            "reserved invocation",
+        ));
+    }
     let rsh = crate::rsync_cli::split(raw, Args::command())?;
     let root = rsh.as_ref().map_or(raw, |rsh| rsh.root.as_slice());
     let mut parser = Args::command();
@@ -1332,6 +1341,15 @@ fn parse_frontend(raw: &[OsString], daemon_binary: bool) -> std::result::Result<
 
 pub fn main(daemon_binary: bool) -> ExitCode {
     let raw = std::env::args_os().collect::<Vec<_>>();
+    if raw
+        .get(1)
+        .is_some_and(|arg| arg == OsStr::new(crate::terminal_backend::WORKER_ENTRYPOINT))
+    {
+        if daemon_binary {
+            crate::terminal_backend::worker_entry(&raw[2..]);
+        }
+        return ExitCode::from(125);
+    }
     if raw
         .get(1)
         .is_some_and(|arg| arg == OsStr::new(marmish_stream::copy_protocol::HELPER_ENTRYPOINT))

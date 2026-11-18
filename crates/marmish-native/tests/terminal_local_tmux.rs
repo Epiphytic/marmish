@@ -1,4 +1,4 @@
-//! Opt-in local PTY and tmux qualification. No Marmish daemon or network.
+//! Opt-in local PTY and tmux qualification without network access.
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use std::fs::{self, File};
@@ -699,6 +699,9 @@ fn terminal_local_tmux_pane() {
         match key[0] {
             b'j' => output.write_all(b"\r\nMWK_FIRST_KEY").unwrap(),
             b'k' => output.write_all(b"\r\nMWK_REATTACH").unwrap(),
+            b'v' => output
+                .write_all("\r\nMWK_UTF8_é_界_END".as_bytes())
+                .unwrap(),
             b'q' => break,
             key if KEYS.contains(&key) => {
                 write!(output, "\r\nMWK_ACK_{}", char::from(key)).unwrap()
@@ -958,4 +961,309 @@ fn local_tmux_attachment() {
         first_render.as_micros(),
         reattach.as_micros()
     );
+}
+
+#[test]
+fn core_tests_terminal_backend_reserved_dispatch() {
+    for path in [
+        env!("CARGO_BIN_EXE_marmish"),
+        env!("CARGO_BIN_EXE_marmishd"),
+    ] {
+        let denied = Command::new(path)
+            .env_clear()
+            .arg("_terminal-worker")
+            .args(["bad", "bad", "bad"])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(denied.status.code(), Some(125));
+        assert!(denied.stdout.is_empty() && denied.stderr.is_empty());
+        let help = Command::new(path)
+            .env_clear()
+            .arg("--help")
+            .output()
+            .unwrap();
+        assert!(help.status.success());
+        assert!(
+            !help
+                .stdout
+                .windows(b"_terminal-worker".len())
+                .any(|part| part == b"_terminal-worker")
+        );
+    }
+}
+
+use marmish_native::terminal_backend::{
+    Attachment, CheckedLaunch, ReadStatus, Shutdown, WriteStatus,
+};
+
+fn native_marker(attachment: &mut Attachment, marker: &[u8]) {
+    let deadline = Instant::now() + WAIT;
+    let mut output = Vec::new();
+    let mut buffer = [0; 4096];
+    loop {
+        assert!(
+            Instant::now() < deadline && output.len() < 65_536,
+            "terminal_native_marker_budget"
+        );
+        let ready = attachment
+            .poll(false, None, deadline)
+            .expect("terminal_native_poll");
+        match attachment.read(&mut buffer).expect("terminal_native_read") {
+            ReadStatus::Data(size) => output.extend_from_slice(&buffer[..size]),
+            ReadStatus::WouldBlock => assert!(!ready.child_exited, "terminal_native_child_exited"),
+            ReadStatus::Hangup => panic!("terminal_native_hangup"),
+        }
+        if output.windows(marker.len()).any(|part| part == marker) {
+            return;
+        }
+    }
+}
+
+fn native_key(attachment: &mut Attachment, generation: u64, key: u8) {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        assert!(Instant::now() < deadline, "terminal_native_write_budget");
+        match attachment
+            .write(generation, &[key])
+            .expect("terminal_native_write")
+        {
+            WriteStatus::Complete => return,
+            WriteStatus::WouldBlock => {
+                let ready = attachment
+                    .poll(true, None, deadline)
+                    .expect("terminal_native_poll");
+                assert!(
+                    !ready.hangup && !ready.child_exited,
+                    "terminal_native_write_exited"
+                );
+            }
+            status => panic!("terminal_native_invalid_write_status {status:?}"),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn native_slave(fixture: &Fixture) -> u64 {
+    let tty = fixture
+        .control(&["list-clients", "-F", "#{client_tty}"])
+        .expect("terminal_native_client");
+    let tty = std::str::from_utf8(trim(&tty)).expect("terminal_native_client_tty");
+    assert!(
+        tty.strip_prefix("/dev/pts/").is_some_and(
+            |index| !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit())
+        ),
+        "terminal_native_client_tty"
+    );
+    fs::metadata(tty)
+        .expect("terminal_native_client_device")
+        .rdev()
+}
+
+#[test]
+#[ignore = "requires a trusted tmux path and a native daemon worker"]
+fn terminal_native_backend_tmux() {
+    let (tmux, version) = trusted_tmux();
+    let fixture = Fixture::start(&tmux);
+    fixture.start_pane();
+    let proof = wait_pane_ready(&fixture);
+    let daemon = Path::new(env!("CARGO_BIN_EXE_marmishd"))
+        .canonicalize()
+        .expect("terminal_native_daemon");
+    let socket = fixture
+        .socket
+        .canonicalize()
+        .expect("terminal_native_socket");
+    let launch =
+        CheckedLaunch::new(&daemon, &tmux, &socket, &fixture.nonce).expect("terminal_native_paths");
+    let nonexistent = CheckedLaunch::new(&daemon, &tmux, &socket, "missing-session").unwrap();
+    assert!(
+        nonexistent.launch(1, 24, 80).is_err(),
+        "terminal_native_exact_target"
+    );
+
+    let started = Instant::now();
+    let mut first = launch.launch(1, 24, 80).expect("terminal_native_launch");
+    native_marker(&mut first, MARKER);
+    let first_render = started.elapsed();
+    #[cfg(target_os = "linux")]
+    let old_slave = native_slave(&fixture);
+    first.resize(1, 32, 100).expect("terminal_native_resize");
+    native_marker(&mut first, b"MWK_SIZE_32_100");
+    native_key(&mut first, 1, b'v');
+    native_marker(&mut first, "MWK_UTF8_é_界_END".as_bytes());
+    native_key(&mut first, 1, 3);
+    native_marker(&mut first, b"MWK_SIGINT");
+    assert!(
+        !first
+            .poll(false, None, Instant::now())
+            .unwrap()
+            .child_exited
+    );
+
+    let started = Instant::now();
+    assert_eq!(first.shutdown(started + WAIT).unwrap(), Shutdown::Reaped);
+    let detach = started.elapsed();
+    assert_eq!(first.read(&mut [0; 32]).unwrap(), ReadStatus::Hangup);
+    assert!(
+        pane_proof(&fixture) == proof,
+        "terminal_native_retained_pane"
+    );
+    #[cfg(target_os = "linux")]
+    {
+        verify_proc_fds(fixture.server.pid(), "", Some(old_slave));
+        verify_proc_fds(proof.pid, "", Some(old_slave));
+    }
+
+    let started = Instant::now();
+    let mut second = launch.launch(2, 24, 80).expect("terminal_native_reattach");
+    native_marker(&mut second, MARKER);
+    let reattach = started.elapsed();
+    assert!(
+        pane_proof(&fixture) == proof,
+        "terminal_native_retained_pane"
+    );
+    native_key(&mut second, 2, b'k');
+    native_marker(&mut second, b"MWK_REATTACH");
+    let mut samples = Vec::with_capacity(KEYS.len());
+    for key in KEYS {
+        std::thread::sleep(POLL);
+        let marker = format!("MWK_ACK_{}", char::from(*key));
+        let started = Instant::now();
+        native_key(&mut second, 2, *key);
+        native_marker(&mut second, marker.as_bytes());
+        samples.push(started.elapsed());
+    }
+    samples.sort_unstable();
+    // Let the real pane finish so the attach child exits without an API shutdown.
+    native_key(&mut second, 2, b'q');
+    let deadline = Instant::now() + WAIT;
+    let (mut child_exited, mut hangup) = (false, false);
+    while Instant::now() < deadline && !(child_exited && hangup) {
+        let event = second.poll(false, None, deadline).unwrap();
+        child_exited |= event.child_exited;
+        hangup |= second.read(&mut [0; 1024]).unwrap() == ReadStatus::Hangup;
+    }
+    assert!(child_exited && hangup, "terminal_native_child_hangup");
+    assert_eq!(
+        second.shutdown(Instant::now() + WAIT).unwrap(),
+        Shutdown::Reaped
+    );
+    verify_exit(fixture);
+    println!(
+        "terminal-native platform={}-{} tmux={version} samples={} p50_us={} p95_us={} first_render_us={} detach_us={} reattach_us={}",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        samples.len(),
+        samples[14].as_micros(),
+        samples[28].as_micros(),
+        first_render.as_micros(),
+        detach.as_micros(),
+        reattach.as_micros()
+    );
+}
+
+#[test]
+fn core_tests_terminal_backend_failed_exec_and_inherited_descriptor() {
+    // SAFETY: geteuid has no arguments or preconditions.
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("skipped native worker exec and descriptor probe as root");
+        return;
+    }
+    let daemon = Path::new(env!("CARGO_BIN_EXE_marmishd"))
+        .canonicalize()
+        .unwrap();
+    let work = tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir_in(daemon.parent().unwrap())
+        .unwrap();
+    let sock_dir = tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir_in("/tmp")
+        .unwrap();
+    let socket = sock_dir.path().canonicalize().unwrap().join("sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    let helper = work.path().join("terminal-helper");
+    for (script, expected, exit) in [
+        (
+            &b"#!/no-such-marmish-interpreter\n"[..],
+            &b"\x01\x02\x04"[..],
+            125,
+        ),
+        (
+            &b"#!/bin/sh\n[ ! -e /dev/fd/98 ] && [ -t 0 ] && [ -t 1 ] && [ -t 2 ]\n"[..],
+            &b"\x01\x02"[..],
+            0,
+        ),
+    ] {
+        fs::write(&helper, script).unwrap();
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
+        let (mut master, mut slave) = (-1, -1);
+        // SAFETY: both descriptor outputs are writable; null requests standard PTY settings.
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        // SAFETY: openpty returned these exclusively owned descriptors.
+        let (master, slave) = unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) };
+        for fd in [master.as_raw_fd(), slave.as_raw_fd()] {
+            // SAFETY: fd belongs to the held PTY; the setter only changes descriptor flags.
+            assert_eq!(
+                unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
+                0
+            );
+        }
+        let inherited = File::open(&helper).unwrap();
+        let inherited_fd = inherited.as_raw_fd();
+        assert_ne!(inherited_fd, 98);
+        let mut command = Command::new(&daemon);
+        command
+            .env_clear()
+            .arg("_terminal-worker")
+            .arg(&helper)
+            .arg(&socket)
+            .arg("unrelated")
+            .stdin(slave)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        // SAFETY: the test child sets one deliberate inherited probe fd with async-safe calls.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::dup2(inherited_fd, 98) == 98 {
+                    Ok(())
+                } else {
+                    Err(io::Error::last_os_error())
+                }
+            });
+        }
+        let mut child = OwnedChild::new(command.spawn().unwrap(), false);
+        drop(command);
+        drop(inherited);
+        assert!(
+            child.ready_to_reap(WAIT).unwrap(),
+            "terminal_worker_test_deadline"
+        );
+        let result = child.child.wait().unwrap();
+        child.reaped = true;
+        assert_eq!(result.code(), Some(exit));
+        let mut bytes = Vec::new();
+        child
+            .child
+            .stdout
+            .take()
+            .unwrap()
+            .take(9)
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert_eq!(bytes, expected);
+        drop(master);
+    }
 }

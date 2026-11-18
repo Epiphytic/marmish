@@ -41,3 +41,7 @@ jobs:
           cargo test --locked -p marmish-engine --lib policy::inventory_core_tests
           cargo test --locked -p marmish-native --lib client_inventory::core_tests
           cargo test --locked -p marmish-native --lib journal::client_inventory_store::core_tests
+      - name: Check Terminal worker dispatch and PTY ownership
+        run: |
+          cargo test --locked -p marmish-native --lib core_tests_terminal_backend
+          cargo test --locked -p marmish-native --test terminal_local_tmux core_tests_terminal_backend
