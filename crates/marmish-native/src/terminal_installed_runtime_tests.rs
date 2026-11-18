@@ -790,13 +790,18 @@ fn open_cli_pty() -> (std::fs::File, std::fs::File) {
                 &mut slave,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                &size,
+                std::ptr::null_mut(),
             )
         },
         0
     );
     let master = unsafe { std::fs::File::from_raw_fd(master) };
     let slave = unsafe { std::fs::File::from_raw_fd(slave) };
+    // Set size separately because openpty's final pointer differs by platform.
+    assert_eq!(
+        unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSWINSZ, &size) },
+        0
+    );
     for fd in [master.as_raw_fd(), slave.as_raw_fd()] {
         assert_eq!(
             unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
