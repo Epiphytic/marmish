@@ -31,3 +31,51 @@ The existing unoptimized local display-filter benchmark produced the following 4
 Run `cargo test --offline --locked -p marmish-native --test terminal_local_tmux benchmark -- --include-ignored --nocapture` to repeat these local measurements.
 
 The isolated build enables the local controller and intentionally omits unfinished daemon activation. Strict Clippy hit unused daemon-side code and an unguarded dependency fixture module in that frozen source. The integrated source must supply its own native lint result. Background continuation as a shell job exits with the foreground-ownership diagnostic. Default continuation makes a fresh bounded Start and may encounter Busy if remote retirement is still in flight. Qualification of the controlling-terminal path on macOS ARM64 and execution on Linux ARM64 belong to the native platform runs.
+
+## Private WSS foreground with native and packaged binaries
+
+On Linux AMD64 the ignored
+`terminal_installed_runtime_native_foreground` test launched the native
+`marmish terminal` frontend in a controlling PTY and connected through
+same-user IPC, verified loopback WSS, native MDK, a real worker and tmux.
+The test required local raw mode, one remote tmux socket, a shell
+prompt, single-key echo, and synthesized output containing shell
+punctuation and UTF-8. After a remote `exit 0`, it required CLI exit
+status 0, empty stderr and exact restoration of termios and window size.
+The fixture also executed ordinary Command before and after the
+attachment and retained its checks that relay records and raw durable files omit the generated
+marker.
+
+| Linux AMD64 run | Result | Raw attach | Key echo | Ordinary Command before / after |
+| --- | --- | ---: | ---: | ---: |
+| Normal Cargo binaries, source `464300c` | Passed in 22.04 s | 7.890 s | 141.667 ms | 1.696 / 1.856 s |
+| Optimized shell-installed payload, source `d091cc8` | Passed in 20.69 s | 6.974 s | 175.470 ms | 1.679 / 1.910 s |
+
+Each timing is one wall-clock sample on private loopback WSS. Raw attach
+ends when the frontend sets raw mode and the tmux socket exists. The
+shell prompt is checked after that measurement. These timings include
+setup and transport scheduling and do not measure internet latency.
+
+For the optimized check, the shell installer installed the three
+executables from the exact local package in 0.866 s. Each installed
+executable matched its package input byte for byte. The test harness
+used the same MDK lock, source `d091cc8` plus the two
+[reviewed test-only changes](../reviews/terminal-installed-foreground.md),
+and the exact package build stamp `d091cc81125036a1bfcb04723d44e05c47ea9594`.
+Two preliminary package runs exercised the layout check with a
+mismatched harness stamp. The supervisor stayed unavailable before
+attachment. Building only the harness with the matching
+`MARMISH_BUILD_COMMIT` resolved those failures. The installed
+executables and layout validation stayed intact.
+
+The quiet AUTH startup regression passed in 17.58 s. It required the
+exact refusal category, zero tmux sockets, and unchanged publication
+counts. Strict all-target Clippy with `installed-checks` passed in
+43.65 s on `464300c`, and the normal binary build took 25.84 s.
+
+The private relay uses a fixture-provided TLS root and prepared local
+owners. This run covers the installed frontend and worker payloads.
+A standalone production daemon against an external qualified relay,
+macOS, Linux ARM64, and CLI-level resize, interrupt, detach, paste and
+takeover remain separate validation cases. The private framed-client
+fixtures cover backend takeover, resume and observation independently.

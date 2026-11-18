@@ -61,9 +61,12 @@ The installed renderer uses ordered PTY batches. The comparison leaves
 installed traffic and latency unmeasured.
 The [Linux AMD64 installer and Command report](validation/interactive-linux-amd64-installer.md)
 qualifies local-asset quickstart, repeat setup, tamper refusal and an ordinary
-command over an explicit relay. Installed interactive-process and
-cross-platform qualification, inbound Peer invitations and network heartbeat
-remain in development.
+command over an explicit relay. The [installed foreground report](validation/terminal-installed-foreground.md)
+qualifies a shell-installed Linux AMD64 frontend against private
+loopback WSS with native tmux, literal UTF-8 output and terminal
+restoration. Standalone external-relay and cross-platform validation,
+inbound Peer invitations and installed network heartbeat remain in
+development.
 The [Peer aggregate ingress proof](validation/peer-aggregate-ingress-proof.md)
 qualifies one shared canonical origin in a native loopback fixture. A copy
 arriving first on an ineligible relay can suppress the eligible copy from
