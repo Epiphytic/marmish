@@ -950,6 +950,24 @@ fn pending_terminal_expiry_boundary_and_absorbing_block_preserve_slot() {
     let f = Fixture::new();
     let founder = Keys::generate();
     let (mut cp, source, selector) = joined_pending(&f, &founder);
+    let local = cp.authorize_local(UID).unwrap();
+    let regressed = WALL + 1;
+    assert!(matches!(
+        cp.decline_pending_checked(&source, selector, 1, regressed, &local, || Ok(())),
+        Err(Error::Cursor(CursorError::ClockRegressed))
+    ));
+    assert!(matches!(
+        cp.expire_pending(&source, selector, 1, regressed),
+        Err(Error::Cursor(CursorError::ClockRegressed))
+    ));
+    assert!(matches!(
+        cp.terminal_due(&source, selector.server, regressed),
+        Err(Error::Cursor(CursorError::ClockRegressed))
+    ));
+    assert!(matches!(
+        cp.terminal_cleanup_due(&source, regressed),
+        Err(Error::Cursor(CursorError::ClockRegressed))
+    ));
     let deadline = WALL + 3_300;
     assert!(
         cp.terminal_due(&source, selector.server, deadline - 1)
@@ -964,7 +982,6 @@ fn pending_terminal_expiry_boundary_and_absorbing_block_preserve_slot() {
         cp.terminal_due(&source, selector.server, deadline).unwrap(),
         Some((selector, 1))
     );
-    let local = cp.authorize_local(UID).unwrap();
     assert!(matches!(
         cp.decline_pending_checked(&source, selector, 1, deadline, &local, || Ok(())),
         Err(Error::Expired)
