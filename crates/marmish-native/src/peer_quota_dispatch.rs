@@ -812,12 +812,11 @@ impl ReceiverFiles<'_> {
         ptr::eq(self.quota, quota)
     }
 
-    fn measured_native<T>(
+    fn measured_turn(
         &self,
         permit: crate::peer_invitation::CleanPermit<'_>,
         class: SlotClass,
-        run: impl FnOnce(&Path, &QuotaTurn<'_>) -> Result<T>,
-    ) -> Result<T> {
+    ) -> Result<(&Path, QuotaTurn<'_>)> {
         let measured = permit
             .verify(self, matches!(class, SlotClass::Snapshot))
             .ok_or("dispatch_reservation_owner")?;
@@ -842,7 +841,16 @@ impl ReceiverFiles<'_> {
             crash_after_database_write: false,
         })?;
         turn.enter()?;
-        let result = run(path, &turn);
+        Ok((path, turn))
+    }
+
+    fn inspect_snapshot<T>(
+        &self,
+        permit: crate::peer_invitation::CleanPermit<'_>,
+        inspect: impl FnOnce(&Path) -> Result<T>,
+    ) -> Result<T> {
+        let (path, turn) = self.measured_turn(permit, SlotClass::Snapshot)?;
+        let result = inspect(path);
         turn.finish()?;
         result
     }
@@ -852,9 +860,7 @@ impl ReceiverFiles<'_> {
         permit: crate::peer_invitation::CleanPermit<'_>,
         operation: JoinTurn<'_>,
     ) -> Result<std::result::Result<(), StageError>> {
-        self.measured_native(permit, SlotClass::Snapshot, |path, _| {
-            Ok(operation.prepare(path))
-        })
+        self.inspect_snapshot(permit, |path| Ok(operation.prepare(path)))
     }
 
     pub(crate) fn read_join(
@@ -862,9 +868,7 @@ impl ReceiverFiles<'_> {
         permit: crate::peer_invitation::CleanPermit<'_>,
         operation: JoinTurn<'_>,
     ) -> Result<std::result::Result<JoinedAuthority, StageError>> {
-        self.measured_native(permit, SlotClass::Snapshot, |path, _| {
-            Ok(operation.read(path))
-        })
+        self.inspect_snapshot(permit, |path| Ok(operation.read(path)))
     }
 
     pub(crate) fn join_original(
@@ -872,9 +876,8 @@ impl ReceiverFiles<'_> {
         permit: crate::peer_invitation::CleanPermit<'_>,
         operation: JoinTurn<'_>,
     ) -> Result<(std::result::Result<(), StageError>, JoinMetrics)> {
-        self.measured_native(permit, SlotClass::Unknown, |path, turn| {
-            operation.join(path, turn)
-        })
+        let (path, turn) = self.measured_turn(permit, SlotClass::Unknown)?;
+        operation.join(path, turn)
     }
 
     pub(crate) fn check_snapshot_cipher(
@@ -883,9 +886,7 @@ impl ReceiverFiles<'_> {
         key: &SqlCipherKey,
         fence: &crate::peer_invitation::TurnFence<'_>,
     ) -> Result<()> {
-        self.measured_native(permit, SlotClass::Snapshot, |path, _| {
-            recover_database(path, key, fence)
-        })
+        self.inspect_snapshot(permit, |path| recover_database(path, key, fence))
     }
 }
 
@@ -1002,9 +1003,7 @@ impl FixtureFileTurn<'_> {
         operation: JoinTurn<'_>,
     ) -> Result<(std::result::Result<(), StageError>, JoinMetrics)> {
         let turn = self.original(binding)?;
-        let result = operation.join(binding.path, &turn);
-        turn.finish()?;
-        result
+        operation.join(binding.path, turn)
     }
 }
 
@@ -1068,7 +1067,7 @@ impl JoinTurn<'_> {
     fn join(
         self,
         path: &Path,
-        turn: &QuotaTurn<'_>,
+        turn: QuotaTurn<'_>,
     ) -> Result<(std::result::Result<(), StageError>, JoinMetrics)> {
         use std::future::{Future as _, poll_fn};
         let mut polls = 0;
@@ -1078,13 +1077,14 @@ impl JoinTurn<'_> {
                 resolve_once(poll_fn(|cx| {
                     polls += 1;
                     welcome.as_mut().poll(cx)
-                }))?
+                }))
             }
-            Err(error) => Err(error),
+            Err(error) => Ok(Err(error)),
         };
+        turn.finish()?;
         let evidence = turn.quota.evidence();
         Ok((
-            result,
+            result?,
             JoinMetrics {
                 polls,
                 peak: evidence.peak,

@@ -31,8 +31,6 @@ pub(in crate::peer_invitation) struct PendingReceiver<'lease> {
 }
 
 pub(in crate::peer_invitation) struct ArmedWelcome<'lease> {
-    held: HeldEvidence,
-    delivery: Delivery,
     prepared: PreparedWelcome<'lease>,
     started: JoinStarted,
 }
@@ -109,12 +107,7 @@ impl<'lease> PendingReceiver<'lease> {
             self.native.quota,
             &fence,
         )?;
-        Ok(ArmedWelcome {
-            held,
-            delivery,
-            prepared,
-            started,
-        })
+        Ok(ArmedWelcome { prepared, started })
     }
 
     pub(in crate::peer_invitation) fn ingest(
@@ -124,20 +117,20 @@ impl<'lease> PendingReceiver<'lease> {
         stop: &AtomicBool,
     ) -> Result<(Result<()>, JoinMetrics)> {
         self.owner.cursor.unchanged()?;
+        let (_, generation, _, selector) = armed.prepared.enrollment.stage.0.coordinates();
         let (current, delivery, wall) = self.owner.checkpoint.read_installed_join_custody(
             &self.owner.source,
             port,
-            Selector::from(armed.held.offer()),
-            armed.held.stage().0.coordinates().1,
+            selector,
+            generation,
         )?;
-        if current.state() != CustodyState::JoinStarted
-            || !armed.prepared.matches(&current, &delivery)
-        {
+        if current.state() != CustodyState::JoinStarted {
             return Err(Error::Binding);
         }
         let clock = Wall::System;
         let fence = TurnFence::new(&clock, stop, None, wall, current.held_deadline())?;
-        self.native.join(&mut self.owner, port, &fence, armed)
+        self.native
+            .join(&mut self.owner, port, &fence, armed, &current, &delivery)
     }
 
     pub(in crate::peer_invitation) fn qualify(
@@ -339,23 +332,20 @@ impl<'lease> NativePending<'lease> {
         port: &mut PeerRecipientPort,
         fence: &TurnFence<'_>,
         armed: ArmedWelcome<'_>,
+        held: &HeldEvidence,
+        delivery: &Delivery,
     ) -> Result<(Result<()>, JoinMetrics)> {
-        let ArmedWelcome {
-            held,
-            delivery,
-            prepared,
-            started,
-        } = armed;
-        self.check(owner, &held, &delivery)?;
-        if !started.matches(&held)
+        let ArmedWelcome { prepared, started } = armed;
+        self.check(owner, held, delivery)?;
+        if !started.matches(held)
             || !prepared.matches_quota(self.quota)
-            || !prepared.matches(&held, &delivery)
+            || !prepared.matches(held, delivery)
         {
             return Err(Error::Binding);
         }
         fence.require_deadline(prepared.enrollment.deadline)?;
         let (binding, witness) = prepared.enrollment.stage;
-        let welcome = JoinWitness::new(&delivery, self.origin, prepared.enrollment.package_digest)?;
+        let welcome = JoinWitness::new(delivery, self.origin, prepared.enrollment.package_digest)?;
         let key = SqlCipherKey::raw(*owner.paths.provisional_key(binding));
         let operation = self.operation(owner, binding, &key, &welcome, fence);
         let files = CleanFiles::begin(owner, self.quota, self.lease, binding, fence)?;
