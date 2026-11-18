@@ -1012,6 +1012,18 @@ impl Relay {
     }
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(super) fn terminal_connection_for(&self, account: PublicKey) -> usize {
+        let state = self.state.lock().unwrap();
+        let mut matches = state
+            .connections
+            .iter()
+            .filter(|(_, connection)| connection.account == Some(account));
+        let (&id, _) = matches.next().expect("one authenticated Terminal socket");
+        assert!(matches.next().is_none());
+        id
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     pub(crate) fn runtime_socket_active(&self, id: usize) -> bool {
         self.state.lock().unwrap().connections.contains_key(&id)
     }

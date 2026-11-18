@@ -35,6 +35,12 @@ pub(crate) struct Route {
     signer: Arc<Keys>,
     client_reapers: Arc<Reapers>,
     server_reapers: Arc<Reapers>,
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    physical_stop: Option<crate::dispatcher_fatal::Fatal>,
     #[cfg(test)]
     fixture_roots: Option<rustls::RootCertStore>,
     #[cfg(test)]
@@ -49,11 +55,31 @@ impl Route {
             signer,
             client_reapers: Arc::default(),
             server_reapers: Arc::default(),
+            #[cfg(all(
+                any(test, marmish_peer_receiver_candidate),
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            physical_stop: None,
             #[cfg(test)]
             fixture_roots: None,
             #[cfg(test)]
             fixture_quiet_open: None,
         }
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    fn physical_fixture(
+        profile: RelayPolicy,
+        directories: ArtiDirs,
+        signer: Arc<Keys>,
+        roots: rustls::RootCertStore,
+        stop: crate::dispatcher_fatal::Fatal,
+    ) -> Result<Self> {
+        let mut route = Self::new(profile, directories, signer);
+        route.set_fixture_roots(roots)?;
+        route.physical_stop = Some(stop);
+        Ok(route)
     }
 
     #[cfg(test)]
@@ -149,19 +175,31 @@ impl Route {
             .direct_wss_scope(endpoint)
             .ok_or(Error::Transport("terminal_transport_unavailable"))?;
         #[cfg(test)]
-        if let Some(roots) = &self.fixture_roots {
+        let connector = if let Some(roots) = &self.fixture_roots {
             let [url] = policy.urls() else {
                 return Err(Error::Invalid("fixture_relay_trust"));
             };
             let exact = url.clone();
-            return RelayConnector::for_loopback_fixture(
+            RelayConnector::for_loopback_fixture(
                 policy,
                 self.directories.clone(),
                 exact,
                 roots.clone(),
-            );
+            )
+        } else {
+            RelayConnector::new(policy, self.directories.clone())
+        }?;
+        #[cfg(not(test))]
+        let connector = RelayConnector::new(policy, self.directories.clone())?;
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        if let Some(fatal) = &self.physical_stop {
+            return connector.with_fatal(fatal.clone());
         }
-        RelayConnector::new(policy, self.directories.clone())
+        Ok(connector)
     }
 
     pub(crate) async fn outbound(
@@ -285,3 +323,7 @@ async fn complete(
     room.ready(&|| grant() && binding.fence.state() == FenceState::Live)
         .await
 }
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "terminal_enrollment_fatal_tests.rs"]
+mod physical_stop_tests;

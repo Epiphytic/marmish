@@ -4,6 +4,12 @@ mod readiness;
 
 use super::terminal_live_enrollment::RELAY_AUTH_CHALLENGE_TIMEOUT;
 use super::*;
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+use crate::dispatcher_fatal::Fatal;
 use crate::terminal_fence::{AttachmentFence, FenceState};
 use crate::terminal_frames;
 use cgka_traits::TransportDeliveryPlane;
@@ -34,6 +40,12 @@ const ACTIVE_ENROLLMENT: u8 = 2;
 const REPLAY_WINDOW: usize = 32;
 const AUTHORITY: Error = Error::Invalid("terminal_enrollment_authority");
 const ROUTE: Error = Error::Transport("terminal_enrollment_route");
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+const DISPATCHER_FATAL: Error = Error::Transport("dispatcher_fatal");
 const DISCONNECTED: Error = Error::Transport("terminal_enrollment_disconnected");
 
 enum ReadMode {
@@ -64,6 +76,29 @@ enum AuthoritySource {
     Command(Arc<AttachmentFence>),
 }
 
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+async fn until_fatal<T>(
+    fatal: &Fatal,
+    future: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    let mut future = std::pin::pin!(future);
+    tokio::select! {
+        biased;
+        _ = fatal.tripped() => Err(DISPATCHER_FATAL),
+        result = std::future::poll_fn(|cx| {
+            if fatal.is_tripped() {
+                std::task::Poll::Ready(Err(DISPATCHER_FATAL))
+            } else {
+                future.as_mut().poll(cx)
+            }
+        }) => result,
+    }
+}
+
 pub(crate) struct Authority {
     #[cfg(test)]
     generation: u64,
@@ -73,6 +108,12 @@ pub(crate) struct Authority {
     grant: OnceLock<Arc<dyn Fn() -> bool + Send + Sync>>,
     reapers: Option<Arc<Reapers>>,
     local_closed: Option<Arc<AtomicBool>>,
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    physical_stop: OnceLock<Fatal>,
 }
 
 #[derive(Default)]
@@ -117,6 +158,15 @@ impl Reapers {
             crate::diagnostics::event("terminal_owner", "relay_reap_pending");
         }
         Uncertain(self)
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(super) fn custody(&self) -> (usize, usize, bool) {
+        (
+            self.active.load(Ordering::Acquire),
+            self.uncertain.load(Ordering::Acquire),
+            self.failed.load(Ordering::Acquire),
+        )
     }
 
     pub(crate) async fn finish(&self) -> Result<()> {
@@ -295,6 +345,12 @@ impl Authority {
             grant: OnceLock::new(),
             reapers: None,
             local_closed: None,
+            #[cfg(all(
+                any(test, marmish_peer_receiver_candidate),
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            physical_stop: OnceLock::new(),
         })
     }
 
@@ -313,7 +369,88 @@ impl Authority {
             grant: OnceLock::new(),
             reapers,
             local_closed,
+            #[cfg(all(
+                any(test, marmish_peer_receiver_candidate),
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            physical_stop: OnceLock::new(),
         }))
+    }
+
+    fn bind_physical_stop(&self, connector: &RelayConnector) -> Result<Option<Reaping>> {
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        if let Some(fatal) = connector.dispatcher_fatal() {
+            self.physical_stop
+                .set(fatal.clone())
+                .map_err(|_| AUTHORITY)?;
+            self.check_physical_stop()?;
+            return self.reap().map(Some).ok_or(ROUTE);
+        }
+        if connector.terminal_lane_only() || self.terminal_lane_only() {
+            return Err(ROUTE);
+        }
+        Ok(None)
+    }
+
+    pub(super) fn terminal_lane_only(&self) -> bool {
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        {
+            self.physical_stop.get().is_some()
+        }
+        #[cfg(not(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        )))]
+        false
+    }
+
+    fn check_physical_stop(&self) -> Result<()> {
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        if self.physical_stop.get().is_some_and(Fatal::is_tripped) {
+            return Err(DISPATCHER_FATAL);
+        }
+        Ok(())
+    }
+
+    async fn through_physical_stop<T>(
+        &self,
+        future: impl std::future::Future<Output = Result<T>>,
+    ) -> Result<T> {
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        if let Some(fatal) = self.physical_stop.get() {
+            return until_fatal(fatal, future).await;
+        }
+        future.await
+    }
+
+    async fn deactivate_physical(
+        &self,
+        future: impl std::future::Future<Output = Result<()>>,
+    ) -> Result<()> {
+        self.through_physical_stop(async {
+            tokio::time::timeout(Duration::from_secs(2), future)
+                .await
+                .map_err(|_| Error::Timeout)?
+        })
+        .await
     }
 
     pub(super) fn install_grant(&self, grant: Arc<dyn Fn() -> bool + Send + Sync>) -> Result<()> {
@@ -347,6 +484,7 @@ impl Authority {
     }
 
     pub(crate) fn check(&self) -> Result<()> {
+        self.check_physical_stop()?;
         if self
             .local_closed
             .as_ref()
@@ -374,14 +512,17 @@ impl Authority {
     }
 
     pub(super) async fn wait_live(&self) -> Result<()> {
-        loop {
-            self.check()?;
-            match self.fence_state() {
-                FenceState::Live => return Ok(()),
-                FenceState::Suspect => tokio::time::sleep(Duration::from_millis(10)).await,
-                FenceState::Retired => return Err(AUTHORITY),
+        self.through_physical_stop(async {
+            loop {
+                self.check()?;
+                match self.fence_state() {
+                    FenceState::Live => return Ok(()),
+                    FenceState::Suspect => tokio::time::sleep(Duration::from_millis(10)).await,
+                    FenceState::Retired => return Err(AUTHORITY),
+                }
             }
-        }
+        })
+        .await
     }
 
     /// Once issued, the operation keeps its cleanup ownership. Recheck the
@@ -390,9 +531,15 @@ impl Authority {
         &self,
         future: impl std::future::Future<Output = Result<T>>,
     ) -> Result<T> {
-        let result = tokio::time::timeout_at(self.deadline()?, future).await;
+        let result = self
+            .through_physical_stop(async {
+                tokio::time::timeout_at(self.deadline()?, future)
+                    .await
+                    .map_err(|_| Error::Timeout)?
+            })
+            .await;
         self.wait_live().await?;
-        result.map_err(|_| Error::Timeout)?
+        result
     }
 
     pub(super) fn begin_enrollment(&self, deadline: Instant) -> Result<()> {
@@ -502,20 +649,24 @@ impl Authority {
     ) -> Result<T> {
         self.check()?;
         let deadline = self.deadline()?;
-        let result = match &self.source {
-            AuthoritySource::Command(_) => tokio::time::timeout_at(deadline, future)
-                .await
-                .map_err(|_| Error::Timeout)
-                .and_then(|result| result),
-            #[cfg(test)]
-            AuthoritySource::Proof(_) => tokio::select! {
-                biased;
-                revoked = self.wait_for_retirement() => revoked,
-                result = tokio::time::timeout_at(deadline, future) => {
-                    result.map_err(|_| Error::Timeout).and_then(|result| result)
+        let result = self
+            .through_physical_stop(async {
+                match &self.source {
+                    AuthoritySource::Command(_) => tokio::time::timeout_at(deadline, future)
+                        .await
+                        .map_err(|_| Error::Timeout)
+                        .and_then(|result| result),
+                    #[cfg(test)]
+                    AuthoritySource::Proof(_) => tokio::select! {
+                        biased;
+                        revoked = self.wait_for_retirement() => revoked,
+                        result = tokio::time::timeout_at(deadline, future) => {
+                            result.map_err(|_| Error::Timeout).and_then(|result| result)
+                        }
+                    },
                 }
-            },
-        };
+            })
+            .await;
         if result.is_err() {
             self.retire();
         }
@@ -869,6 +1020,7 @@ pub(super) struct Lane {
     inbox_cap: usize,
     closed: AtomicBool,
     deactivated: AtomicBool,
+    physical_custody: Option<Reaping>,
     acknowledged: VecDeque<[u8; 32]>,
 }
 
@@ -922,9 +1074,7 @@ impl Lane {
             ))?,
             None => connector.sdk_client(keys.clone())?,
         };
-        authority
-            .run(connector.bootstrap(authority.deadline()?))
-            .await?;
+        let physical_custody = authority.bind_physical_stop(&connector)?;
         let account = MemberId::new(keys.public_key().to_bytes().to_vec());
         let relay = Arc::new(NostrSdkRelayClient::with_account_signer(
             client.clone(),
@@ -932,7 +1082,7 @@ impl Lane {
             keys,
         ));
         let notifications = relay.notifications();
-        Ok(Self {
+        let lane = Self {
             client,
             connector,
             adapter: GuardedAdapter {
@@ -956,8 +1106,14 @@ impl Lane {
             inbox_cap,
             closed: AtomicBool::new(false),
             deactivated: AtomicBool::new(false),
+            physical_custody,
             acknowledged: VecDeque::with_capacity(REPLAY_WINDOW),
-        })
+        };
+        lane.adapter
+            .authority
+            .run(lane.connector.bootstrap(lane.adapter.authority.deadline()?))
+            .await?;
+        Ok(lane)
     }
 
     pub(super) async fn activate_inbox(&mut self) -> Result<()> {
@@ -1321,15 +1477,23 @@ impl Lane {
         if self.deactivated.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
-        tokio::time::timeout(
-            Duration::from_secs(2),
-            self.adapter
-                .native
-                .deactivate_account(&self.adapter.account),
-        )
-        .await
-        .map_err(|_| Error::Timeout)?
-        .map_err(|_| ROUTE)
+        self.adapter
+            .authority
+            .deactivate_physical(async {
+                self.adapter
+                    .native
+                    .deactivate_account(&self.adapter.account)
+                    .await
+                    .map_err(|_| ROUTE)
+            })
+            .await
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(super) fn hold_fixture_pump(&mut self, pump: tokio::task::JoinHandle<()>) {
+        assert!(self.connector.terminal_lane_only());
+        assert!(self.pump.is_none());
+        self.pump = Some(pump);
     }
 
     pub(super) async fn close(self) -> Result<()> {
@@ -1343,7 +1507,7 @@ impl Lane {
     async fn close_inner(mut self, retire: bool) -> Result<()> {
         let _ = self.deactivate(retire).await;
         let outcome = stop_lane(
-            self.pump.take(),
+            &mut self.pump,
             &self.client,
             &self.connector,
             self.adapter.authority.reapers.as_deref(),
@@ -1351,6 +1515,9 @@ impl Lane {
         .await;
         if outcome.is_ok() {
             self.closed.store(true, Ordering::Release);
+            if let Some(custody) = self.physical_custody.take() {
+                custody.completed(&outcome);
+            }
         }
         outcome
     }
@@ -1367,16 +1534,18 @@ impl Drop for Lane {
         }
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             let (client, connector) = (self.client.clone(), self.connector.clone());
-            let pump = self.pump.take();
+            let mut pump = self.pump.take();
             let authority = self.adapter.authority.clone();
-            let cleanup = authority.reap();
+            let cleanup = self.physical_custody.take().or_else(|| authority.reap());
             runtime.spawn(async move {
                 let result =
-                    stop_lane(pump, &client, &connector, authority.reapers.as_deref()).await;
+                    stop_lane(&mut pump, &client, &connector, authority.reapers.as_deref()).await;
                 if let Some(cleanup) = cleanup {
                     cleanup.completed(&result);
                 }
             });
+        } else if self.connector.terminal_lane_only() {
+            self.connector.cancel_terminal_connects();
         } else {
             self.connector.cancel();
         }
@@ -1384,15 +1553,20 @@ impl Drop for Lane {
 }
 
 async fn stop_lane(
-    pump: Option<tokio::task::JoinHandle<()>>,
+    pump: &mut Option<tokio::task::JoinHandle<()>>,
     client: &Client,
     connector: &RelayConnector,
     reapers: Option<&Reapers>,
 ) -> Result<()> {
-    if let Some(pump) = pump {
-        // A panic and an abort both terminate this sole producer.
+    if connector.terminal_lane_only() {
+        connector.cancel_terminal_connects();
+    }
+    if let Some(pump) = pump.as_mut() {
+        // Keep the handle under Lane ownership until termination. A canceled
+        // close can then transfer it to the same counted cleanup as the slot.
         let _ = pump.await;
     }
+    pump.take();
     let stopped = tokio::time::timeout(Duration::from_secs(2), client.shutdown())
         .await
         .map_err(|_| Error::Timeout);
@@ -1416,6 +1590,37 @@ async fn stop_lane(
         }
         tokio::time::sleep_until(next).await;
     }
+}
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[tokio::test]
+async fn terminal_fatal_deactivation_cancels_before_second_poll() {
+    use std::cell::Cell;
+    use std::task::Poll;
+
+    let (trip, fatal) = crate::dispatcher_fatal::Trip::new();
+    let authority = Authority::from_fence(
+        AttachmentFence::new(std::num::NonZeroU64::MIN, [1; 32]),
+        Instant::now() + Duration::from_secs(5),
+        None,
+        None,
+    )
+    .unwrap();
+    assert!(authority.physical_stop.set(fatal).is_ok());
+    let polls = Cell::new(0);
+    let mut deactivation =
+        std::pin::pin!(authority.deactivate_physical(std::future::poll_fn(|_| {
+            polls.set(polls.get() + 1);
+            Poll::Pending
+        },)));
+    assert!(futures_util::poll!(&mut deactivation).is_pending());
+    assert_eq!(polls.get(), 1);
+    trip.mark_cut();
+    assert!(matches!(
+        deactivation.await,
+        Err(Error::Transport("dispatcher_fatal"))
+    ));
+    assert_eq!(polls.get(), 1);
 }
 
 struct GroupRoute {

@@ -102,6 +102,11 @@ impl Room {
         authority: Arc<Authority>,
         verified: bool,
     ) -> std::result::Result<Self, OpenFailure> {
+        if connector.terminal_lane_only() || authority.terminal_lane_only() {
+            return Err(OpenFailure::before_open(Error::Storage(
+                "terminal_guarded_room_unavailable",
+            )));
+        }
         let own = keys.public_key();
         if client == server || (own != client && own != server) {
             return Err(OpenFailure::before_open(STATE));
