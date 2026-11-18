@@ -79,6 +79,10 @@ impl CommandConfig {
     pub(crate) fn load(profile_root: &Path) -> Result<Self> {
         crate::identity::check_dir(profile_root)?;
         let file = crate::identity::open_private(&profile_root.join("config.json"), false)?;
+        Self::from_file(file)
+    }
+
+    pub(crate) fn from_file(file: std::fs::File) -> Result<Self> {
         if file.metadata()?.len() > MAX_CONFIG {
             return Err(Error::Invalid("config_size"));
         }
@@ -89,6 +93,23 @@ impl CommandConfig {
         }
         Self::from_bytes(&bytes)
     }
+    #[allow(dead_code, reason = "installed Peer owner remains gated")]
+    pub(crate) fn bound_peer_relay(&self, loaded: &Self) -> Result<&peer_intent::Relay> {
+        if self.role != loaded.role
+            || self.relay_policy.mode() != loaded.relay_policy.mode()
+            || self._peer != loaded._peer
+        {
+            return Err(Error::Invalid("peer_profile_changed"));
+        }
+        if self.relay_policy.mode() == RouteMode::Always {
+            return Err(Error::Transport("routing_unsupported"));
+        }
+        self._peer
+            .relay
+            .as_ref()
+            .ok_or(Error::Invalid("peer_relay_missing"))
+    }
+
     pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() as u64 > MAX_CONFIG {
             return Err(Error::Invalid("config_size"));
@@ -407,20 +428,20 @@ fn peer_object<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
     dead_code,
     reason = "validated intent has no installed Peer consumer yet"
 )]
-mod peer_intent {
+pub(crate) mod peer_intent {
     use super::{BTreeSet, PublicKey};
     use nostr::types::Url;
 
-    #[derive(Clone)]
-    #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
+    #[derive(Clone, PartialEq, Eq)]
+    #[cfg_attr(test, derive(Debug))]
     pub(super) struct PeerIntent {
         pub(super) receive: Receive,
         pub(super) originate: bool,
         pub(super) relay: Option<Relay>,
     }
 
-    #[derive(Clone)]
-    #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
+    #[derive(Clone, PartialEq, Eq)]
+    #[cfg_attr(test, derive(Debug))]
     pub(super) enum Receive {
         Off,
         Manual,
@@ -428,16 +449,16 @@ mod peer_intent {
         AutoFounders(BTreeSet<PublicKey>),
     }
 
-    #[derive(Clone)]
-    #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
-    pub(super) struct Relay {
-        pub(super) origin: Url,
-        pub(super) trust: Trust,
+    #[derive(Clone, PartialEq, Eq)]
+    #[cfg_attr(test, derive(Debug))]
+    pub(crate) struct Relay {
+        pub(crate) origin: Url,
+        pub(crate) trust: Trust,
     }
 
-    #[derive(Clone)]
-    #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
-    pub(super) enum Trust {
+    #[derive(Clone, PartialEq, Eq)]
+    #[cfg_attr(test, derive(Debug))]
+    pub(crate) enum Trust {
         SpkiSha256([u8; 32]),
         CaSha256([u8; 32]),
     }
@@ -503,7 +524,7 @@ impl RawPeerReceive {
     }
 }
 
-fn peer_origin(input: String) -> Result<nostr::types::Url> {
+pub(crate) fn peer_origin(input: String) -> Result<nostr::types::Url> {
     let invalid = || Error::Invalid("config_peer_relay");
     let (scheme, endpoint) = input.split_once("://").ok_or_else(invalid)?;
     let authority = endpoint.strip_suffix('/').unwrap_or(endpoint);
@@ -522,7 +543,7 @@ fn peer_origin(input: String) -> Result<nostr::types::Url> {
         .ok_or_else(invalid)
 }
 
-fn peer_trust(input: &str) -> Result<peer_intent::Trust> {
+pub(crate) fn peer_trust(input: &str) -> Result<peer_intent::Trust> {
     use peer_intent::Trust;
     let invalid = || Error::Invalid("config_peer_relay_trust");
     let (model, hex) = input.split_once(':').ok_or_else(invalid)?;

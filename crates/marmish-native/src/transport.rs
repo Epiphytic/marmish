@@ -3,7 +3,10 @@
 //! Construction is configuration-only. The owner must open encrypted state
 //! before calling `bootstrap`; no SDK default connector or proxy is used.
 
-use crate::{Error, Result};
+use crate::{
+    Error, Result,
+    peer_relay_trust::{BoundPeerTls, PeerTlsAttempt},
+};
 use arti_client::{BootstrapBehavior, TorClient, config::TorClientConfigBuilder};
 use async_wsocket::Message;
 use futures_util::{SinkExt, StreamExt};
@@ -264,6 +267,7 @@ pub struct ArtiDirs {
 
 struct ConnectorState {
     policy: RelayPolicy,
+    peer_tls: Option<BoundPeerTls>,
     dirs: ArtiDirs,
     tor: Mutex<Option<Arc<TorClient<PreferredRuntime>>>>,
     bootstrap_lock: Mutex<()>,
@@ -278,6 +282,44 @@ struct ConnectorState {
 
 #[derive(Clone)]
 pub struct RelayConnector(Arc<ConnectorState>);
+
+/// The inner state enforces Peer TLS for every socket and SDK clone.
+#[allow(dead_code, reason = "installed Peer owner remains gated")]
+pub(crate) struct PeerRelayConnector(RelayConnector);
+
+#[allow(dead_code, reason = "installed Peer owner remains gated")]
+impl PeerRelayConnector {
+    pub(crate) fn bound(
+        policy: RelayPolicy,
+        dirs: ArtiDirs,
+        tls: BoundPeerTls,
+        cancel: CancellationToken,
+    ) -> Result<Self> {
+        if policy.mode() != RouteMode::Off || policy.urls.len() != 1 {
+            return Err(Error::Transport("routing_unsupported"));
+        }
+        let mut connector = RelayConnector::new(policy, dirs)?;
+        let state = Arc::get_mut(&mut connector.0).expect("new connector is unshared");
+        state.peer_tls = Some(tls);
+        state.cancelled = cancel;
+        Ok(Self(connector))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_spki_roots(&mut self, roots: rustls::RootCertStore) {
+        Arc::get_mut(&mut self.0.0)
+            .unwrap()
+            .peer_tls
+            .as_mut()
+            .unwrap()
+            .use_test_spki_roots(roots);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_transport(&self) -> RelayConnector {
+        self.0.clone()
+    }
+}
 
 impl fmt::Debug for RelayConnector {
     fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -301,6 +343,7 @@ impl RelayConnector {
             .collect();
         Ok(Self(Arc::new(ConnectorState {
             policy,
+            peer_tls: None,
             dirs,
             tor: Mutex::new(None),
             bootstrap_lock: Mutex::new(()),
@@ -552,10 +595,28 @@ impl RelayConnector {
         }
         self.connection_phases(
             route,
-            self.connect_stream(url, index, route),
-            |(stream, permit)| self.finish_socket(url, stream, permit),
+            async {
+                let peer_tls = self
+                    .0
+                    .peer_tls
+                    .as_ref()
+                    .map(|peer| peer.attempt(url))
+                    .transpose()?;
+                let (stream, permit) = self.connect_stream(url, index, route).await?;
+                Ok((stream, permit, peer_tls))
+            },
+            |(stream, permit, peer_tls)| self.finish_socket(url, stream, permit, peer_tls),
         )
         .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn peer_test_open(
+        &self,
+        url: &Url,
+        proxy: Option<SocketAddr>,
+    ) -> Result<(WebSocketSink, WebSocketStream)> {
+        self.open_socket(url, proxy).await
     }
 
     // The stream future includes permit acquisition. Direct retains one total
@@ -660,6 +721,7 @@ impl RelayConnector {
         url: &Url,
         stream: Box<dyn NetworkStream>,
         permit: Arc<tokio::sync::OwnedSemaphorePermit>,
+        peer_tls: Option<PeerTlsAttempt>,
     ) -> Result<(WebSocketSink, WebSocketStream)> {
         let parsed = url::Url::parse(url.as_str()).map_err(|_| Error::Invalid("relay_url"))?;
         let host = parsed
@@ -667,6 +729,16 @@ impl RelayConnector {
             .ok_or(Error::Invalid("relay_host"))?
             .trim_start_matches('[')
             .trim_end_matches(']');
+        if let Some(attempt) = peer_tls {
+            if parsed.scheme() != "wss" {
+                return Err(Error::Transport("routing_unsupported"));
+            }
+            let stream = attempt.connect(stream, host).await?;
+            if self.0.cancelled.is_cancelled() {
+                return Err(Error::Transport("shutdown"));
+            }
+            return self.websocket(url, stream, permit).await;
+        }
         #[cfg(test)]
         if let Some(roots) = &self.0.fixture_roots {
             let (_, roots) = roots
@@ -750,8 +822,11 @@ pub(crate) async fn tls_stream(
     stream: Box<dyn NetworkStream>,
     host: &str,
 ) -> Result<Box<dyn NetworkStream>> {
-    let roots = rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    tls_stream_using_roots(stream, host, roots).await
+    tls_stream_using_roots(stream, host, bundled_tls_roots()).await
+}
+
+pub(crate) fn bundled_tls_roots() -> rustls::RootCertStore {
+    rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned())
 }
 
 #[cfg(test)]
@@ -768,21 +843,32 @@ async fn tls_stream_using_roots(
     host: &str,
     roots: rustls::RootCertStore,
 ) -> Result<Box<dyn NetworkStream>> {
+    let config = client_tls_config(roots)?;
+    Ok(Box::new(secure_tls_stream(stream, host, config).await?))
+}
+
+pub(crate) fn client_tls_config(roots: rustls::RootCertStore) -> Result<rustls::ClientConfig> {
     // Explicit provider avoids ambient process-wide provider selection.
-    let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+    Ok(rustls::ClientConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),
     ))
     .with_safe_default_protocol_versions()
     .map_err(|_| Error::Transport("tls_configuration"))?
     .with_root_certificates(roots)
-    .with_no_client_auth();
+    .with_no_client_auth())
+}
+
+pub(crate) async fn secure_tls_stream(
+    stream: Box<dyn NetworkStream>,
+    host: &str,
+    config: rustls::ClientConfig,
+) -> Result<tokio_rustls::client::TlsStream<Box<dyn NetworkStream>>> {
     let name = rustls::pki_types::ServerName::try_from(host.to_owned())
         .map_err(|_| Error::Transport("tls_hostname"))?;
-    let secured = tokio_rustls::TlsConnector::from(Arc::new(config))
+    tokio_rustls::TlsConnector::from(Arc::new(config))
         .connect(name, stream)
         .await
-        .map_err(|_| Error::Transport("tls_verification"))?;
-    Ok(Box::new(secured))
+        .map_err(|_| Error::Transport("tls_verification"))
 }
 
 fn check_private_directory(path: &std::path::Path) -> Result<()> {
@@ -828,6 +914,10 @@ fn connector_error_label(error: &Error) -> &'static str {
                     | "tls_configuration"
                     | "tls_hostname"
                     | "tls_verification"
+                    | "peer_tls_pin"
+                    | "peer_tls_ca"
+                    | "peer_tls_certificate"
+                    | "routing_unsupported"
             ) =>
         {
             label

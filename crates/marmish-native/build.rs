@@ -1,4 +1,4 @@
-use std::process::Command;
+use std::{fs, process::Command};
 fn main() {
     println!("cargo:rerun-if-env-changed=MARMISH_BUILD_COMMIT");
     // Track the actual worktree HEAD and symbolic ref, including linked worktrees.
@@ -43,4 +43,71 @@ fn main() {
     );
     println!("cargo:rustc-env=MARMISH_BUILD_TARGET={target}");
     println!("cargo:rustc-env=MARMISH_BUILD_COMMIT={commit}");
+    const LOCK: &str = "../../Cargo.lock";
+    println!("cargo:rerun-if-changed={LOCK}");
+    let lock = fs::read_to_string(LOCK).ok();
+    let mdk = lock
+        .as_deref()
+        .and_then(locked_mdk_revision)
+        .unwrap_or_default();
+    println!("cargo:rustc-env=MARMISH_MDK_REVISION={mdk}");
+}
+
+// Cargo generates one source line per locked package in this format.
+fn locked_mdk_revision(lock: &str) -> Option<&str> {
+    const REPOSITORY: &str = "git+https://github.com/marmot-protocol/mdk";
+    const MASTER: &str = "?branch=master#";
+    const DIRECT: [&str; 6] = [
+        "cgka-engine",
+        "cgka-traits",
+        "marmot-session",
+        "storage-sqlite",
+        "transport-nostr-adapter",
+        "transport-nostr-peeler",
+    ];
+    let mut direct = std::collections::BTreeSet::new();
+    let mut revision = None;
+    for package in lock
+        .split(
+            "
+[[package]]
+",
+        )
+        .skip(1)
+    {
+        let name = lock_string(package, "name = \"");
+        let source = lock_string(package, "source = \"");
+        let root = name.filter(|name| DIRECT.contains(name));
+        let mdk = match source.and_then(|source| source.strip_prefix(REPOSITORY)) {
+            Some(source) => Some(source.strip_prefix(MASTER)?),
+            None => None,
+        };
+        if let Some(root) = root
+            && (!direct.insert(root) || mdk.is_none())
+        {
+            return None;
+        }
+        if let Some(mdk) = mdk {
+            if mdk.len() != 40
+                || !mdk
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+                || revision.is_some_and(|revision| revision != mdk)
+            {
+                return None;
+            }
+            revision = Some(mdk);
+        }
+    }
+    if direct.len() == DIRECT.len() {
+        revision
+    } else {
+        None
+    }
+}
+
+fn lock_string<'a>(package: &'a str, prefix: &str) -> Option<&'a str> {
+    package
+        .lines()
+        .find_map(|line| line.strip_prefix(prefix)?.strip_suffix('"'))
 }

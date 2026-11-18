@@ -235,6 +235,32 @@ impl ProfileLease {
             }),
         }
     }
+    #[allow(dead_code, reason = "installed Peer owner remains gated")]
+    pub(crate) fn match_peer_lock(&self, candidate: &File) -> Result<()> {
+        let held = self._lock.metadata()?;
+        let candidate = candidate.metadata()?;
+        if (held.dev(), held.ino()) != (candidate.dev(), candidate.ino()) {
+            return Err(Error::Identity("peer_profile_changed"));
+        }
+        Ok(())
+    }
+
+    #[allow(dead_code, reason = "installed Peer owner remains gated")]
+    pub(crate) fn match_peer_manifest(&self, file: File) -> Result<()> {
+        let manifest = parse_manifest(file)?;
+        validate_manifest(&manifest, &self.name)?;
+        if !self
+            .manifest
+            .as_ref()
+            .is_some_and(|manifest| manifest.phase == Phase::Ready)
+            || manifest.phase != Phase::Ready
+            || manifest.profile_id != self.profile_id
+        {
+            return Err(Error::Identity("peer_profile_changed"));
+        }
+        Ok(())
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -528,21 +554,21 @@ fn validate_manifest(m: &Manifest, name: &str) -> Result<()> {
     Ok(())
 }
 fn read_manifest(path: &Path) -> Result<Option<Manifest>> {
-    let mut file = match open_private(path, false) {
+    let file = match open_private(path, false) {
         Ok(f) => f,
         Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e),
     };
+    parse_manifest(file).map(Some)
+}
+
+fn parse_manifest(file: File) -> Result<Manifest> {
     let mut bytes = Vec::new();
-    Read::by_ref(&mut file)
-        .take(MANIFEST_LIMIT + 1)
-        .read_to_end(&mut bytes)?;
+    file.take(MANIFEST_LIMIT + 1).read_to_end(&mut bytes)?;
     if bytes.len() > MANIFEST_LIMIT as usize {
         return Err(Error::Identity("invalid_manifest"));
     }
-    serde_json::from_slice(&bytes)
-        .map(Some)
-        .map_err(|_| Error::Identity("invalid_manifest"))
+    serde_json::from_slice(&bytes).map_err(|_| Error::Identity("invalid_manifest"))
 }
 fn valid_hex(s: &str, n: usize) -> bool {
     s.len() == 2 * n

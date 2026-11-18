@@ -39,6 +39,9 @@ mod terminal_ipc_wire;
 mod terminal_output;
 mod terminal_output_batches;
 mod terminal_owner;
+// Private Peer TLS and record substrate with no installed owner yet.
+#[allow(dead_code, reason = "installed Peer owner remains gated")]
+mod peer_relay_trust;
 pub mod transport;
 pub use error::{Error, Result};
 pub(crate) use mdk_adapter::command_local;
