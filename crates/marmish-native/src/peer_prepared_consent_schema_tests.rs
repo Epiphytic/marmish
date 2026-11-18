@@ -50,7 +50,9 @@ fn prepared_consent_exact_epoch_attachment_and_exclusion() {
     drop(base);
 
     let checkpoint = export().unwrap();
-    assert!(checkpoint.export_epoch && checkpoint.provisional_schema);
+    assert!(
+        matches!(checkpoint.export_epoch, Some(Epoch::Prepared)) && checkpoint.provisional_schema
+    );
     assert!(!checkpoint.retirement_epoch);
     drop(checkpoint);
     drop(export().unwrap());

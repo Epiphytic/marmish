@@ -7,6 +7,9 @@ mod peer_cursor_store;
 // and local ACK authority exist in the library fixture, so there are no values
 // of either capability in this target.
 mod peer_invitation {
+    pub(crate) use crate::peer_cursor_store::consent_checkpoint::provisioning::
+        prepared_consent::custody::HeldEvidence;
+
     pub(crate) mod prepared_consent {
         use crate::peer_cursor_store::consent_checkpoint::{
             Result,
@@ -26,6 +29,22 @@ mod peer_invitation {
                 _: Artifact,
                 _: u64,
             ) -> Result<&[u8]> {
+                match *self {}
+            }
+        }
+
+        pub(crate) enum JoinedReadback {}
+
+        impl JoinedReadback {
+            pub(crate) fn stage(&self) -> (Binding, FileWitness) {
+                match *self {}
+            }
+
+            pub(crate) fn carrier(&self) -> [u8; 32] {
+                match *self {}
+            }
+
+            pub(crate) fn coordinates(&self) -> (&[u8], u64, [u8; 32], u32) {
                 match *self {}
             }
         }

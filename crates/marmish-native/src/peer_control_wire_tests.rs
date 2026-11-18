@@ -729,15 +729,30 @@ async fn peer_control_core_checks_causal_and_native_signed_windows() {
         Some(Error::Package)
     );
     assert_eq!(
-        package_window(&meta, meta.not_before, meta.not_after, meta.not_before),
+        package_window(
+            meta.lifetime(),
+            meta.not_before,
+            meta.not_after,
+            meta.not_before
+        ),
         Ok(())
     );
     assert_eq!(
-        package_window(&meta, meta.not_before - 1, meta.not_after, meta.not_before),
+        package_window(
+            meta.lifetime(),
+            meta.not_before - 1,
+            meta.not_after,
+            meta.not_before
+        ),
         Err(Error::PackageLifetime)
     );
     assert_eq!(
-        package_window(&meta, meta.not_before, meta.not_after, meta.not_after),
+        package_window(
+            meta.lifetime(),
+            meta.not_before,
+            meta.not_after,
+            meta.not_after
+        ),
         Err(Error::PackageLifetime)
     );
 

@@ -5,6 +5,11 @@
 mod provisional;
 #[cfg(test)]
 pub(crate) use provisional::ProvisionalPackage;
+#[cfg(test)]
+#[path = "peer_stage_joined.rs"]
+mod joined;
+#[cfg(test)]
+pub(crate) use joined::{JoinWitness, JoinedAuthority};
 
 use super::*;
 use cgka_engine::key_package::durably_owned_key_packages;

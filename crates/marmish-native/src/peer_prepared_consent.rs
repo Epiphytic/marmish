@@ -8,6 +8,15 @@ use super::*;
 #[path = "peer_prepared_consent_schema.rs"]
 mod schema;
 
+#[path = "peer_pending_custody_checkpoint.rs"]
+pub(crate) mod custody;
+
+#[derive(Clone, Copy)]
+pub(in super::super) enum Epoch {
+    Prepared,
+    Custody(custody::Epoch),
+}
+
 impl Checkpoint {
     pub(crate) fn attach_prepared_consent_fixture(
         conn: HardenedPeerConnection,
@@ -23,7 +32,7 @@ impl Checkpoint {
         let cursor = schema::open(conn, signer.public_key().to_bytes(), origins)?;
         let mut checkpoint = Self::attach_with(cursor, signer, uid, urls, policy, |_, _| Ok(()))?;
         checkpoint.provisional_schema = true;
-        checkpoint.export_epoch = true;
+        checkpoint.export_epoch = Some(Epoch::Prepared);
         Ok(checkpoint)
     }
 }
@@ -120,7 +129,7 @@ impl Checkpoint {
         wall: u64,
     ) -> Result<Candidate> {
         self.check_local_owner(&reservation.owner)?;
-        self.read_live_prepared(source, reservation.binding, wall, |_, candidate, _| {
+        self.read_live_prepared(source, reservation.binding, wall, |_, candidate, _, _| {
             Ok(candidate)
         })
     }
@@ -130,11 +139,9 @@ impl Checkpoint {
         source: &Source,
         binding: Binding,
         wall: u64,
-        work: impl FnOnce(&Transaction<'_>, Candidate, &[Origin]) -> Result<T>,
+        work: impl FnOnce(&Transaction<'_>, Candidate, &[Origin], &Epoch) -> Result<T>,
     ) -> Result<T> {
-        if !self.export_epoch {
-            return Err(CursorError::Binding.into());
-        }
+        let epoch = self.export_epoch.ok_or(CursorError::Binding)?;
         let account = self.signer.public_key().to_bytes();
         let signer = self.signer.clone();
         let codec = super::super::Codec::new(super::super::MAX_OUTER_BYTES)
@@ -142,15 +149,16 @@ impl Checkpoint {
         let route = self.route(binding.origin)?;
         let signed_route = super::super::Route::configured(&route.urls[0])?;
         let origins = self.cursor.origins.clone();
+        // Stage access and schema checking run through the same exact owner turn.
         let (tx, _) = self.stage_transaction(source, binding, wall)?;
-        schema::verify(&tx, account, &origins)?;
+        schema::verify_for_epoch(&tx, account, &origins, &epoch)?;
         let current = Invitation::load(&tx, binding.key, binding.origin)?;
         if current.decision_at.is_some() {
             return Err(CursorError::Binding.into());
         }
         let offer = Self::check_signed_offer(&codec, &signer, &signed_route, &current, wall)?;
         let candidate = Candidate::read(&tx, binding, account, offer)?;
-        let result = work(&tx, candidate, &origins)?;
+        let result = work(&tx, candidate, &origins, &epoch)?;
         rows::advance_wall(&tx, wall)?;
         tx.commit()?;
         Ok(result)
@@ -202,14 +210,14 @@ impl Checkpoint {
             source,
             reservation.binding,
             wall,
-            |tx, prepared, origins| {
+            |tx, prepared, origins, epoch| {
                 if (prepared.witness, prepared.artifact) != (unsaved.witness, unsaved.artifact)
                     || wall >= unsaved.row.transcript.expires
                 {
                     return Err(Error::Package);
                 }
                 unsaved.row.insert(tx, &prepared)?;
-                schema::verify(tx, prepared.account, origins)?;
+                schema::verify_for_epoch(tx, prepared.account, origins, epoch)?;
                 before_commit(tx)?;
                 Ok(Queued {
                     prepared,
@@ -238,9 +246,7 @@ impl Checkpoint {
         key: Selector,
         wall: u64,
     ) -> Result<Option<Queued>> {
-        if !self.export_epoch {
-            return Err(CursorError::Binding.into());
-        }
+        let epoch = self.export_epoch.ok_or(CursorError::Binding)?;
         let origin = self.origin(source)?;
         if !self.policy.permits(key.server) {
             return Err(Error::Policy);
@@ -251,7 +257,10 @@ impl Checkpoint {
         let account = self.signer.public_key().to_bytes();
         let tx = self.cursor.with_wall(origin, wall)?;
         rows::check_wall(&tx, wall)?;
-        schema::verify(&tx, account, &origins)?;
+        schema::verify_for_epoch(&tx, account, &origins, &epoch)?;
+        if matches!(epoch, Epoch::Custody(_)) && custody::owns(&tx, key, origin)? {
+            return Ok(None);
+        }
         let quarantined: bool = tx.query_row(
             "SELECT quarantine_until IS NOT NULL FROM peer_cursor_origin WHERE origin=?1",
             [origin],

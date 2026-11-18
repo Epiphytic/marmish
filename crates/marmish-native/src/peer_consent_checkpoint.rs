@@ -40,6 +40,8 @@ pub(crate) enum Error {
     #[cfg(test)]
     Bound,
     #[cfg(test)]
+    Custodied,
+    #[cfg(test)]
     Retiring,
     #[cfg(test)]
     NotExpired,
@@ -170,7 +172,7 @@ pub(crate) struct Checkpoint {
     #[cfg(test)]
     retirement_epoch: bool,
     #[cfg(test)]
-    export_epoch: bool,
+    export_epoch: Option<provisioning::prepared_consent::Epoch>,
     #[cfg(test)]
     retirement_fault: Option<provisioning::retirement::Fault>,
 }
@@ -236,7 +238,7 @@ impl Checkpoint {
             #[cfg(test)]
             retirement_epoch: false,
             #[cfg(test)]
-            export_epoch: false,
+            export_epoch: None,
             #[cfg(test)]
             retirement_fault: None,
         })
@@ -325,23 +327,44 @@ impl Checkpoint {
 
         let server = offer.flight().author;
         let reserved = self.policy.reserved.contains(&server);
-        let decision_at = matches!(self.policy.mode, Mode::Automatic).then_some(wall);
+        let automatic = matches!(self.policy.mode, Mode::Automatic);
+        #[cfg(test)]
+        let custody_epoch = matches!(
+            self.export_epoch,
+            Some(provisioning::prepared_consent::Epoch::Custody(_))
+        );
+        #[cfg(test)]
+        let automatic = automatic && !custody_epoch;
+        let decision_at = automatic.then_some(wall);
         #[cfg(test)]
         let retirement_epoch = self.retirement_epoch;
         #[cfg(test)]
         if retirement_epoch {
             provisioning::retirement::verify_epoch(&self.cursor.conn)?;
         }
-        let result = self.cursor.commit_trusted(origin, record, wall, |tx| {
-            #[cfg(test)]
-            if retirement_epoch
-                && provisioning::retirement::under_cooldown(tx, server.to_bytes(), wall)?
-            {
-                return Ok(TrustedOutcome::SkippedCooldown);
-            }
-            rows::sweep(tx, wall)?;
-            rows::admit(tx, origin, record, &offer, reserved, decision_at)
-        });
+        let commit = CursorStore::commit_trusted;
+        #[cfg(test)]
+        let commit = if custody_epoch {
+            CursorStore::commit_trusted_exact
+        } else {
+            commit
+        };
+        let result = commit(
+            &mut self.cursor,
+            origin,
+            record,
+            wall,
+            |tx: &rusqlite::Transaction<'_>| {
+                #[cfg(test)]
+                if retirement_epoch
+                    && provisioning::retirement::under_cooldown(tx, server.to_bytes(), wall)?
+                {
+                    return Ok(TrustedOutcome::SkippedCooldown);
+                }
+                rows::sweep(tx, wall)?;
+                rows::admit(tx, origin, record, &offer, reserved, decision_at)
+            },
+        );
         match result {
             Ok((receipt, outcome)) => Ok(Disposition {
                 status: Status::Accepted(outcome),

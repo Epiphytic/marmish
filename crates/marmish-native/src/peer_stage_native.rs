@@ -148,7 +148,7 @@ impl OpenStage {
         Ok(artifact)
     }
 
-    fn load_provisional_pending(
+    pub(super) fn load_provisional_pending(
         &self,
         sample: Duration,
     ) -> StageResult<(KeyPackageLifecycleState, PendingKeyPackageReplacement)> {

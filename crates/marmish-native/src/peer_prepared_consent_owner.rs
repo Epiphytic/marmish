@@ -1,6 +1,9 @@
 //! Leased staged-Consent fixture. No connector or production route.
 
-use crate::command_config::Role;
+use crate::{
+    command_config::Role,
+    mdk_adapter::peer_native_signer::{JoinWitness, JoinedAuthority},
+};
 use std::{
     fs::{self, Metadata, OpenOptions},
     io::{self, Read},
@@ -15,11 +18,19 @@ use consent_checkpoint::provisioning::{
     Binding, Reservation,
     stage_journal::{Artifact, FileWitness},
 };
+pub(crate) use consent_checkpoint::wire::Delivery;
 
+#[path = "peer_pending_join_native_tests.rs"]
+mod joined_tests;
 #[path = "peer_prepared_consent_owner_tests.rs"]
 mod tests;
 
 struct SnapshotArea(TempDir);
+
+enum SnapshotCopy {
+    Unjoined,
+    Joined,
+}
 
 impl SnapshotArea {
     fn new() -> Result<Self> {
@@ -39,6 +50,43 @@ impl SnapshotArea {
         before_open: impl FnOnce(&Path) -> Result<()>,
     ) -> Result<(NativePackage, [u8; 32])> {
         let original = state.paths.reopen_provisional(binding, witness)?;
+        self.with_snapshot(&original, SnapshotCopy::Unjoined, before_open, |path| {
+            let native = open_existing_stage(state, binding, path)?;
+            native.require_unjoined_provisional()?;
+            Ok(native.read_provisional(sample)?.event)
+        })
+    }
+
+    fn read_joined(
+        &self,
+        state: &InvitationState<'_>,
+        stage: (Binding, FileWitness),
+        delivery: &Delivery,
+        package_digest: [u8; 32],
+    ) -> Result<JoinedReadback> {
+        let (binding, file) = stage;
+        let original = state.paths.reopen_provisional(binding, file)?;
+        let witness = JoinWitness::new(delivery, &state.origin_url, package_digest)?;
+        let (authority, _) = self.with_snapshot(
+            &original,
+            SnapshotCopy::Joined,
+            |_| Ok(()),
+            |path| Ok(open_existing_stage(state, binding, path)?.read_joined(&witness)?),
+        )?;
+        Ok(JoinedReadback {
+            stage,
+            carrier: delivery.flight().carrier_id.to_bytes(),
+            authority,
+        })
+    }
+
+    fn with_snapshot<T>(
+        &self,
+        original: &paths::ProvisionalFile,
+        mode: SnapshotCopy,
+        before_open: impl FnOnce(&Path) -> Result<()>,
+        validate: impl FnOnce(&Path) -> Result<T>,
+    ) -> Result<(T, [u8; 32])> {
         let digest = original.digest()?;
         let path = self.0.path().join("image.db");
         snapshot_sidecars(&path)?;
@@ -51,6 +99,15 @@ impl SnapshotArea {
             .map_err(|_| Error::Path)?;
         let result = (|| {
             let inode = snapshot_inode(&copy.metadata().map_err(|_| Error::Path)?)?;
+            let origin = original.witness();
+            if inode
+                == (
+                    u64::from_be_bytes(origin.device),
+                    u64::from_be_bytes(origin.inode),
+                )
+            {
+                return Err(Error::StageIdentityMismatch);
+            }
             let copied = io::copy(
                 &mut original.read_file()?.take(paths::MAX_STAGE_LEN + 1),
                 &mut copy,
@@ -68,27 +125,62 @@ impl SnapshotArea {
             if read_image(&path)? != (digest, inode) {
                 return Err(Error::StageIdentityMismatch);
             }
-            let native = OpenStage::open_provisional(
-                &path,
-                &SqlCipherKey::raw(*state.paths.provisional_key(binding)),
-                state.signer.clone(),
-                &state.origin_url,
-                state.paths.provisional_label(binding),
-                false,
-            )?;
-            native.require_unjoined_provisional()?;
-            let package = native.read_provisional(sample)?.event;
-            drop(native);
-            if read_image(&path)? != (digest, inode) || original.digest()? != digest {
+            let result = validate(&path);
+            let (copy_digest, copy_inode) = read_image(&path)?;
+            // Preserve the native error when a rejected unjoined copy changed
+            // during an attempted migration. Successful Unjoined attestation
+            // still requires byte-for-byte equality.
+            if copy_inode != inode
+                || (result.is_ok()
+                    && matches!(mode, SnapshotCopy::Unjoined)
+                    && copy_digest != digest)
+                || original.digest()? != digest
+            {
                 return Err(Error::StageIdentityMismatch);
             }
-            Ok((package, digest))
+            result.map(|value| (value, digest))
         })();
         // Leave an unresolved name or sidecar obstructing the next owner turn.
         // TempDir owns cleanup of this fixture on final teardown.
         fs::remove_file(&path).map_err(|_| Error::Path)?;
         snapshot_sidecars(&path)?;
         result
+    }
+}
+
+fn open_existing_stage(
+    state: &InvitationState<'_>,
+    binding: Binding,
+    path: &Path,
+) -> Result<OpenStage> {
+    Ok(OpenStage::open_provisional(
+        path,
+        &SqlCipherKey::raw(*state.paths.provisional_key(binding)),
+        state.signer.clone(),
+        &state.origin_url,
+        state.paths.provisional_label(binding),
+        false,
+    )?)
+}
+
+/// Ephemeral authority bound to one exact stage and verified Delivery.
+pub(crate) struct JoinedReadback {
+    stage: (Binding, FileWitness),
+    carrier: [u8; 32],
+    authority: JoinedAuthority,
+}
+
+impl JoinedReadback {
+    pub(in crate::peer_invitation) fn stage(&self) -> (Binding, FileWitness) {
+        self.stage
+    }
+
+    pub(in crate::peer_invitation) fn carrier(&self) -> [u8; 32] {
+        self.carrier
+    }
+
+    pub(in crate::peer_invitation) fn coordinates(&self) -> (&[u8], u64, [u8; 32], u32) {
+        self.authority.coordinates()
     }
 }
 
@@ -119,11 +211,19 @@ fn read_image(path: &Path) -> Result<([u8; 32], (u64, u64))> {
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(path)
         .map_err(|_| Error::Path)?;
-    let inode = snapshot_inode(&file.metadata().map_err(|_| Error::Path)?)?;
+    let metadata = file.metadata().map_err(|_| Error::Path)?;
+    let inode = snapshot_inode(&metadata)?;
     let mut digest = Sha256::new();
     let sum =
         io::copy(&mut file.take(paths::MAX_STAGE_LEN + 1), &mut digest).map_err(|_| Error::Path)?;
-    if sum == 0 || sum > paths::MAX_STAGE_LEN {
+    let after = fs::symlink_metadata(path).map_err(|_| Error::Path)?;
+    snapshot_sidecars(path)?;
+    if sum == 0
+        || sum > paths::MAX_STAGE_LEN
+        || sum != metadata.len()
+        || after.len() != sum
+        || snapshot_inode(&after)? != inode
+    {
         return Err(Error::StageIdentityMismatch);
     }
     Ok((digest.finalize().into(), inode))
@@ -132,10 +232,49 @@ fn read_image(path: &Path) -> Result<([u8; 32], (u64, u64))> {
 pub(super) struct PreparedConsentOwner<'a> {
     pub(super) state: InvitationState<'a>,
     role: Role,
+    custody: bool,
     snapshot: SnapshotArea,
 }
 
 impl<'a> PreparedConsentOwner<'a> {
+    /// The custody caller must consume its committed JoinStarted guard first.
+    pub(in crate::peer_invitation) async fn join_custody_stage(
+        &self,
+        stage: (Binding, FileWitness),
+        delivery: &Delivery,
+        package_digest: [u8; 32],
+        sample: Duration,
+    ) -> Result<()> {
+        let original = self.state.paths.reopen_provisional(stage.0, stage.1)?;
+        let witness = JoinWitness::new(delivery, &self.state.origin_url, package_digest)?;
+        let (_, prepared_image) = self.snapshot.with_snapshot(
+            &original,
+            SnapshotCopy::Unjoined,
+            |_| Ok(()),
+            |path| {
+                Ok(open_existing_stage(&self.state, stage.0, path)?
+                    .require_prepared_join(&witness, sample)?)
+            },
+        )?;
+        if original.digest()? != prepared_image {
+            return Err(Error::StageIdentityMismatch);
+        }
+        let native = open_existing_stage(&self.state, stage.0, original.path())?;
+        let result = native.join_once(&witness, sample).await;
+        original.digest()?;
+        Ok(result?)
+    }
+
+    pub(in crate::peer_invitation) fn inspect_joined(
+        &self,
+        stage: (Binding, FileWitness),
+        delivery: &Delivery,
+        package_digest: [u8; 32],
+    ) -> Result<JoinedReadback> {
+        self.snapshot
+            .read_joined(&self.state, stage, delivery, package_digest)
+    }
+
     pub(super) fn open(
         lease: &'a ProfileLease,
         material: &IdentityMaterial,
@@ -143,6 +282,29 @@ impl<'a> PreparedConsentOwner<'a> {
         policy: Policy,
         route: &Route,
         wall: Wall,
+    ) -> Result<Self> {
+        Self::open_with_epoch(lease, material, role, policy, route, wall, false)
+    }
+
+    pub(super) fn open_custody(
+        lease: &'a ProfileLease,
+        material: &IdentityMaterial,
+        role: Role,
+        policy: Policy,
+        route: &Route,
+        wall: Wall,
+    ) -> Result<Self> {
+        Self::open_with_epoch(lease, material, role, policy, route, wall, true)
+    }
+
+    fn open_with_epoch(
+        lease: &'a ProfileLease,
+        material: &IdentityMaterial,
+        role: Role,
+        policy: Policy,
+        route: &Route,
+        wall: Wall,
+        custody: bool,
     ) -> Result<Self> {
         if role == Role::Server {
             return Err(Error::Binding);
@@ -155,13 +317,12 @@ impl<'a> PreparedConsentOwner<'a> {
         let url = &route.urls[0];
         // SAFETY: reads the Unix effective UID.
         let uid = unsafe { libc::geteuid() };
-        let checkpoint = Checkpoint::attach_prepared_consent_fixture(
-            conn,
-            (*signer).clone(),
-            uid,
-            &[url],
-            policy,
-        )?;
+        let attach = if custody {
+            Checkpoint::attach_pending_custody_fixture
+        } else {
+            Checkpoint::attach_prepared_consent_fixture
+        };
+        let checkpoint = attach(conn, (*signer).clone(), uid, &[url], policy)?;
         let source = checkpoint.bind_source(url)?;
         checked.unchanged()?;
         Ok(Self {
@@ -175,6 +336,7 @@ impl<'a> PreparedConsentOwner<'a> {
                 origin_url: url.clone(),
             },
             role,
+            custody,
             snapshot: SnapshotArea::new()?,
         })
     }
@@ -255,6 +417,15 @@ impl PreparedConsentOwner<'_> {
             .checkpoint
             .require_reservation_owner(reservation)?;
         let (_, _, _, selector) = reservation.stage_binding().coordinates();
+        let wall = self.sample()?.as_secs();
+        if self.custody
+            && self
+                .state
+                .checkpoint
+                .custody_owned(&self.state.source, selector, wall)?
+        {
+            return Err(consent_checkpoint::Error::Custodied.into());
+        }
         if let Some(transcript) = self.recover_queued_consent(selector)? {
             return Ok(transcript);
         }
@@ -477,4 +648,4 @@ impl PreparedConsentOwner<'_> {
 
 #[path = "peer_prepared_consent_wss.rs"]
 mod wss;
-pub(super) use wss::{History, Received, VerifiedDelivery};
+pub(super) use wss::{CustodyProgress, History, JoinCut, Received, VerifiedDelivery};

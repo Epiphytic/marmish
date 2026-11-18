@@ -122,8 +122,9 @@ valid-carrier disposition. Compare the complete original event JSON bytes
    under current policy, clock and saved provenance. Keep or release
    deferred work only with the corresponding exact raw record. A signed
    event whose ID matches a retained carrier but has different stamp or
-   raw bytes is an invalid disposition, never a replacement. A signed
-   event for the same exact consumed Consent with different carrier ID
+   raw bytes is an invalid disposition, never a replacement. Replays of
+   retained carriers at or after their exclusive horizon are invalid.
+   A signed event for the same exact consumed Consent with different carrier ID
    must pass seal and exact signed Consent coordinate checks, then gets
    a stable invalid disposition without opening the stage. Gate the
    Prepared Consent queue, reserve, publish and native preparation entry
@@ -277,6 +278,15 @@ one CAS for these decisions and never call the legacy `approve()` method.
 No remote action can mark Activating.
 
 ## Validation
+
+The standalone SQLCipher fixture exercises epoch attachment, exact graph
+and writer guards, legacy sweep, and storage replay. The integrated owner
+must execute the actual signed Held transaction, including deferred
+cleanup and same-turn matching, and recover and qualify the closed native
+stage through Pending and Activating. Exercise the exact native proof
+binding, deadline boundaries, wrong owner, and manual and automatic policy
+through the integrated owner before closing this milestone. Direct SQL
+fixtures alone cannot establish those authority boundaries.
 
 Start with one no-network case using the package and founder helpers
 from `tests/peer_public_runtime.rs`. Close the prepared stage before

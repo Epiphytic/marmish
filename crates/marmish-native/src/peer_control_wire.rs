@@ -3,7 +3,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use cgka_traits::app_components::{NOSTR_ROUTING_MAX_RELAYS, NostrRoutingV1};
 use cgka_traits::engine::KeyPackage;
-use nostr::event::{EventBuilder, EventId, FinalizeEvent, Kind, Tag, UnsignedEvent};
+use nostr::event::{Event, EventBuilder, EventId, FinalizeEvent, Kind, Tag, UnsignedEvent};
 use nostr::key::{Keys, PublicKey};
 use nostr::nips::nip44::{self, Version};
 use nostr::types::Timestamp;
@@ -18,9 +18,12 @@ mod prepared_consent;
 #[path = "peer_control_wire_seal.rs"]
 mod seal;
 #[cfg(test)]
-pub(crate) use prepared_consent::{ClientCarrier, IncomingDelivery, Transcript};
+pub(crate) use prepared_consent::{
+    ClientCarrier, IncomingDelivery, Transcript, VerifiedDeliveryPackage,
+};
 
-use self::artifact::{PackageBinding, VerifiedPackage};
+pub(crate) use self::artifact::PackageBinding;
+use self::artifact::VerifiedPackage;
 use self::seal::{BODY_CAP, OUTER_CONTENT_CAP, fixed_hex, is_exact_recipient, is_recipient_tag};
 
 pub(crate) const MAX_OUTER_BYTES: usize = 64 * 1024;
@@ -306,7 +309,7 @@ impl Codec {
             created_at,
             &offer.routing.relays,
         )?;
-        consent_times(offer.flight, &native, created_at, expires_at, now)?;
+        consent_times(offer.flight, native.lifetime(), created_at, expires_at, now)?;
         let wire = ConsentWire {
             v: 1,
             expires_at,
@@ -366,7 +369,7 @@ impl Codec {
         }
         consent_times(
             offer.flight,
-            &native,
+            native.lifetime(),
             flight.created_at,
             wire.expires_at,
             now,
@@ -393,7 +396,7 @@ impl Codec {
         let created_at = child_time(consent.flight, now)?;
         delivery_times(
             consent.flight.created_at..consent.flight.expires_at,
-            &consent.native,
+            consent.native.lifetime(),
             created_at,
             expires_at,
             now,
@@ -451,7 +454,8 @@ impl Codec {
                 offer: &consent.offer,
                 revision: consent.flight.revision,
                 window: consent.flight.created_at..consent.flight.expires_at,
-                package: &consent.native,
+                package: consent.native.binding,
+                lifetime: consent.native.lifetime(),
             },
             now,
         )
@@ -476,7 +480,7 @@ impl Codec {
         )?;
         if rumor.pubkey != authority.offer.flight.author
             || consent_revision != authority.revision
-            || package != authority.package.binding
+            || package != authority.package
         {
             return Err(Error::Binding);
         }
@@ -484,7 +488,7 @@ impl Codec {
         let flight = flight(carrier_id, rumor, client, wire.expires_at, now)?;
         delivery_times(
             authority.window,
-            authority.package,
+            authority.lifetime,
             flight.created_at,
             flight.expires_at,
             now,
@@ -591,6 +595,14 @@ impl Codec {
             return Err(Error::Size);
         }
         let outer = seal::verify_signed(frame, Error::Outer)?;
+        Self::open_outer(local, outer, expected_author)
+    }
+
+    fn open_outer(
+        local: &Keys,
+        outer: Event,
+        expected_author: Option<PublicKey>,
+    ) -> Result<(EventId, u64, UnsignedEvent)> {
         if outer.content.len() > OUTER_CONTENT_CAP {
             return Err(Error::Size);
         }
@@ -727,13 +739,12 @@ fn child_time(parent: Flight, now: u64) -> Result<u64> {
 }
 
 fn package_window(
-    pack: &VerifiedPackage,
+    lifetime: std::ops::Range<u64>,
     created_at: u64,
     expires_at: u64,
     now: u64,
 ) -> Result<()> {
-    let lifetime = pack.not_before..pack.not_after;
-    if !lifetime.contains(&created_at) || !lifetime.contains(&now) || expires_at > pack.not_after {
+    if !lifetime.contains(&created_at) || !lifetime.contains(&now) || expires_at > lifetime.end {
         return Err(Error::PackageLifetime);
     }
     Ok(())
@@ -741,7 +752,7 @@ fn package_window(
 
 fn consent_times(
     offer: Flight,
-    package: &VerifiedPackage,
+    lifetime: std::ops::Range<u64>,
     created_at: u64,
     expires_at: u64,
     now: u64,
@@ -750,19 +761,20 @@ fn consent_times(
     if expires_at <= created_at || expires_at > deadline(created_at, FLIGHT_TTL)? {
         return Err(Error::Time);
     }
-    package_window(package, created_at, expires_at, now)
+    package_window(lifetime, created_at, expires_at, now)
 }
 
 struct DeliveryAuthority<'a> {
     offer: &'a Offer,
     revision: EventId,
     window: std::ops::Range<u64>,
-    package: &'a VerifiedPackage,
+    package: PackageBinding,
+    lifetime: std::ops::Range<u64>,
 }
 
 fn delivery_times(
     window: std::ops::Range<u64>,
-    package: &VerifiedPackage,
+    lifetime: std::ops::Range<u64>,
     created_at: u64,
     expires_at: u64,
     now: u64,
@@ -774,7 +786,7 @@ fn delivery_times(
     {
         return Err(Error::Time);
     }
-    package_window(package, created_at, expires_at, now)
+    package_window(lifetime, created_at, expires_at, now)
 }
 
 #[derive(Clone, Copy)]

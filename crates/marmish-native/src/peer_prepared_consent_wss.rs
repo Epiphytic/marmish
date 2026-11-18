@@ -14,6 +14,13 @@ use crate::peer_invitation::{
 };
 use tokio::time::Instant;
 
+#[path = "peer_pending_join_ingress.rs"]
+mod pending_join_ingress;
+#[path = "peer_pending_join_owner.rs"]
+mod pending_join_owner;
+
+pub(in crate::peer_invitation) use pending_join_owner::{CustodyProgress, JoinCut};
+
 pub(in crate::peer_invitation) enum Received {
     Admitted(Disposition),
     Delivery(Box<VerifiedDelivery>),
@@ -62,6 +69,7 @@ impl PreparedConsentOwner<'_> {
         socket: &mut Owner,
         selector: Selector,
         deadline: Instant,
+        after_settlement: impl FnOnce() -> Result<()>,
     ) -> Result<bool> {
         self.require_socket(socket)?;
         socket.ready_to_publish(deadline)?;
@@ -90,6 +98,13 @@ impl PreparedConsentOwner<'_> {
             wall,
         )?;
         self.verify_custody(&native)?;
+        after_settlement()?;
+        if self.custody {
+            self.state
+                .checkpoint
+                .cursor
+                .wake(self.state.origin, carrier, wall)?;
+        }
         Ok(true)
     }
 
@@ -149,6 +164,11 @@ impl PreparedConsentOwner<'_> {
     }
 
     fn receive_arrival(&mut self, arrival: &Arrival) -> Result<Received> {
+        if self.custody {
+            return self
+                .receive_custody_record(record(arrival))
+                .map(Received::Admitted);
+        }
         let sample = self.available_sample()?;
         let wall = sample.as_secs();
         let codec = Codec::new(MAX_OUTER_BYTES).map_err(|_| Error::Binding)?;

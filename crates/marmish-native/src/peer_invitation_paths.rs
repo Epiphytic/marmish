@@ -2,7 +2,7 @@
 #[path = "peer_stage_files.rs"]
 mod provisional;
 #[cfg(test)]
-pub(super) use provisional::MAX_STAGE_LEN;
+pub(super) use provisional::{MAX_STAGE_LEN, ProvisionalFile};
 #[cfg(test)]
 #[path = "peer_stage_retirement_files.rs"]
 pub(super) mod retirement;

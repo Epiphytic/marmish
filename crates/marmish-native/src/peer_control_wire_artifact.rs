@@ -45,6 +45,12 @@ pub(super) struct VerifiedPackage {
     pub(super) not_after: u64,
 }
 
+impl VerifiedPackage {
+    pub(super) fn lifetime(&self) -> std::ops::Range<u64> {
+        self.not_before..self.not_after
+    }
+}
+
 pub(super) fn verify_package(
     raw: &[u8],
     author: PublicKey,

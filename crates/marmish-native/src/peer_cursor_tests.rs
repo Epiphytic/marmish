@@ -396,6 +396,34 @@ fn peer_cursor_core_effect_fence_cleanup_rolls_back_and_page_replays() {
 }
 
 #[test]
+fn peer_cursor_exact_custody_cleanup_preserves_a_competing_raw_tuple() {
+    let fixture = Fixture::new();
+    let mut store = fixture.open();
+    effect_tables(&store);
+    let raw = record(1, W - 1);
+    let competing = RawRecord {
+        bytes: b"competing bytes under the same claimed ID",
+        ..raw
+    };
+    store
+        .defer(A, competing, metadata(Auth::Unverified, None), W)
+        .unwrap();
+    store
+        .commit_trusted_exact(A, raw, W, |tx| effect(tx, A, raw.id))
+        .unwrap();
+    assert_eq!(effect_count(&store), 1);
+    let retained = store.existing(A, raw.id).unwrap().unwrap();
+    assert_eq!(retained.record().bytes, competing.bytes);
+
+    let (_, replay) = store
+        .commit_trusted_exact(A, competing, W, |tx| effect(tx, A, raw.id))
+        .unwrap();
+    assert_eq!(replay, TrustedOutcome::AlreadyApplied);
+    assert!(store.existing(A, raw.id).unwrap().is_none());
+    assert_eq!(effect_count(&store), 1);
+}
+
+#[test]
 fn peer_cursor_core_failed_writes_and_missing_deferrals_leave_cursor_unmoved() {
     let fixture = Fixture::new();
     let mut store = fixture.open();

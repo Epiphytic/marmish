@@ -337,8 +337,22 @@ impl Checkpoint {
             .iter()
             .find(|route| route.id == origin)
             .ok_or(Error::Source)?;
+        #[cfg(test)]
+        let custody = match self.export_epoch {
+            Some(prepared_consent::Epoch::Custody(epoch)) => {
+                Some((epoch, self.cursor.origins.clone()))
+            }
+            _ => None,
+        };
         let tx = self.cursor.with_wall(origin, wall)?;
         rows::check_wall(&tx, wall)?;
+        #[cfg(test)]
+        if let Some((epoch, origins)) = custody {
+            epoch.verify(&tx, self.signer.public_key().to_bytes(), &origins)?;
+            if prepared_consent::custody::owns(&tx, key, origin)? {
+                return Err(Error::Custodied);
+            }
+        }
         let row = Invitation::load(&tx, key, origin)?;
         if wall >= row.expires {
             rows::advance_wall(&tx, wall)?;

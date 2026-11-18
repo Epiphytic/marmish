@@ -39,10 +39,8 @@ impl Checkpoint {
     ) -> Result<T> {
         let binding = prior.prepared.binding;
         let account = self.signer.public_key().to_bytes();
-        if !self.export_epoch
-            || self.origin(source)? != binding.origin
-            || prior.prepared.account != account
-        {
+        let epoch = self.export_epoch.as_ref().ok_or(CursorError::Binding)?;
+        if self.origin(source)? != binding.origin || prior.prepared.account != account {
             return Err(CursorError::Binding.into());
         }
         if !self.policy.permits(binding.key.server) {
@@ -51,7 +49,10 @@ impl Checkpoint {
         let origins = self.cursor.origins.clone();
         let tx = self.cursor.with_wall(binding.origin, wall)?;
         rows::check_wall(&tx, wall)?;
-        schema::verify(&tx, account, &origins)?;
+        schema::verify_for_epoch(&tx, account, &origins, epoch)?;
+        if matches!(epoch, Epoch::Custody(_)) && custody::owns(&tx, binding.key, binding.origin)? {
+            return Err(Error::Custodied);
+        }
         let quarantined: bool = tx.query_row(
             "SELECT quarantine_until IS NOT NULL FROM peer_cursor_origin WHERE origin=?1",
             [binding.origin],
@@ -72,7 +73,7 @@ impl Checkpoint {
             return Err(Error::Expired);
         }
         let result = work(&tx, &prior.prepared, &current)?;
-        schema::verify(&tx, account, &origins)?;
+        schema::verify_for_epoch(&tx, account, &origins, epoch)?;
         rows::advance_wall(&tx, wall)?;
         tx.commit()?;
         Ok(result)

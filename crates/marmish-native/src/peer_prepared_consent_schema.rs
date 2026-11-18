@@ -131,6 +131,12 @@ fn expected() -> std::result::Result<&'static [Entry], CursorError> {
     if let Some(entries) = EXPORT.get() {
         return Ok(entries);
     }
+    let template = template()?;
+    let entries = inventory(&template).map_err(cursor_error)?;
+    Ok(EXPORT.get_or_init(|| entries))
+}
+
+pub(super) fn template() -> std::result::Result<Connection, CursorError> {
     let template = Connection::open_in_memory()?;
     for ddl in [
         super::super::super::super::SCHEMA,
@@ -145,11 +151,10 @@ fn expected() -> std::result::Result<&'static [Entry], CursorError> {
         template.execute_batch(ddl)?;
     }
     install(&template)?;
-    let entries = inventory(&template).map_err(cursor_error)?;
-    Ok(EXPORT.get_or_init(|| entries))
+    Ok(template)
 }
 
-fn cursor_error(error: Error) -> CursorError {
+pub(super) fn cursor_error(error: Error) -> CursorError {
     match error {
         Error::Cursor(cause) => cause,
         _ => CursorError::Binding,
@@ -164,6 +169,26 @@ pub(super) fn verify(
     if inventory(conn).map_err(cursor_error)? != expected()? {
         return Err(CursorError::Binding);
     }
+    verify_rows(conn, account, origins)
+}
+
+pub(super) fn verify_for_epoch(
+    conn: &rusqlite::Transaction<'_>,
+    account: [u8; 32],
+    origins: &[Origin],
+    epoch: &Epoch,
+) -> std::result::Result<(), CursorError> {
+    match epoch {
+        Epoch::Prepared => verify(conn, account, origins),
+        Epoch::Custody(epoch) => epoch.verify(conn, account, origins),
+    }
+}
+
+pub(super) fn verify_rows(
+    conn: &rusqlite::Transaction<'_>,
+    account: [u8; 32],
+    origins: &[Origin],
+) -> std::result::Result<(), CursorError> {
     let marker: i64 = conn.query_row(
         "SELECT count(*) FROM peer_prepared_consent_epoch WHERE epoch=1",
         [],

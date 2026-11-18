@@ -87,7 +87,17 @@ pub(crate) enum TrustedOutcome {
     Applied,
     AlreadyApplied,
     #[cfg(test)]
+    Held,
+    #[cfg(test)]
     SkippedCooldown,
+}
+
+fn clear_exact(tx: &Transaction<'_>, origin: Origin, record: RawRecord<'_>) -> Result<()> {
+    tx.execute(
+        "DELETE FROM peer_cursor_deferred WHERE origin=?1 AND id=?2 AND stamp=?3 AND frame=?4",
+        params![origin, record.id, seconds(record.stamp)?, record.bytes],
+    )?;
+    Ok(())
 }
 
 impl CursorStore {
@@ -98,15 +108,41 @@ impl CursorStore {
         wall: u64,
         write_effect_and_fence: impl FnOnce(&Transaction<'_>) -> Result<TrustedOutcome>,
     ) -> Result<(Receipt, TrustedOutcome)> {
+        self.commit_trusted_with(origin, record, wall, false, write_effect_and_fence)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn commit_trusted_exact(
+        &mut self,
+        origin: Origin,
+        record: RawRecord<'_>,
+        wall: u64,
+        write_effect_and_fence: impl FnOnce(&Transaction<'_>) -> Result<TrustedOutcome>,
+    ) -> Result<(Receipt, TrustedOutcome)> {
+        self.commit_trusted_with(origin, record, wall, true, write_effect_and_fence)
+    }
+
+    fn commit_trusted_with(
+        &mut self,
+        origin: Origin,
+        record: RawRecord<'_>,
+        wall: u64,
+        exact: bool,
+        write_effect_and_fence: impl FnOnce(&Transaction<'_>) -> Result<TrustedOutcome>,
+    ) -> Result<(Receipt, TrustedOutcome)> {
         record.check()?;
         let tx = self.with_wall(origin, wall)?;
         // This is a trusted, synchronous owner seam. Its callback uses only owner
         // tables and cannot control this transaction. An unwind drops the transaction.
         let outcome = write_effect_and_fence(&tx)?;
-        tx.execute(
-            "DELETE FROM peer_cursor_deferred WHERE origin=?1 AND id=?2",
-            params![origin, record.id],
-        )?;
+        if exact {
+            clear_exact(&tx, origin, record)?;
+        } else {
+            tx.execute(
+                "DELETE FROM peer_cursor_deferred WHERE origin=?1 AND id=?2",
+                params![origin, record.id],
+            )?;
+        }
         tx.commit()?;
         Ok((Receipt::new(origin, record, ReceiptKind::Accepted), outcome))
     }
@@ -119,10 +155,7 @@ impl CursorStore {
     ) -> Result<Receipt> {
         record.check()?;
         let tx = self.with_wall(origin, wall)?;
-        tx.execute(
-            "DELETE FROM peer_cursor_deferred WHERE origin=?1 AND id=?2 AND stamp=?3 AND frame=?4",
-            params![origin, record.id, seconds(record.stamp)?, record.bytes],
-        )?;
+        clear_exact(&tx, origin, record)?;
         tx.commit()?;
         Ok(Receipt::new(origin, record, ReceiptKind::Invalid))
     }

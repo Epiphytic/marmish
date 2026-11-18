@@ -14,6 +14,8 @@ mod provisional;
 #[cfg(test)]
 #[path = "peer_stage_retirement.rs"]
 mod retirement;
+#[cfg(test)]
+pub(crate) use store::consent_checkpoint::provisioning::prepared_consent::custody::HeldEvidence;
 #[path = "peer_raw_socket.rs"]
 mod socket;
 #[path = "peer_cursor_store.rs"]
@@ -195,6 +197,11 @@ impl<'a> InvitationState<'a> {
     }
 }
 
+fn verified_local(checkpoint: &Checkpoint, connection: &UnixStream) -> Result<Local> {
+    let creds = connection.peer_cred().map_err(|_| Error::Binding)?;
+    Ok(checkpoint.authorize_local(creds.uid())?)
+}
+
 struct InvitationLane<'a> {
     paths: Paths<'a>,
     signer: Arc<Keys>,
@@ -337,25 +344,20 @@ impl<'a> InvitationLane<'a> {
         Ok(Some(status))
     }
 
-    fn local(&self, connection: &UnixStream) -> Result<Local> {
-        let creds = connection.peer_cred().map_err(|_| Error::Binding)?;
-        Ok(self.checkpoint.authorize_local(creds.uid())?)
-    }
-
     fn approve(&mut self, connection: &UnixStream, key: Selector) -> Result<()> {
-        let local = self.local(connection)?;
+        let local = verified_local(&self.checkpoint, connection)?;
         let wall = self.eligible_wall()?;
         Ok(self.checkpoint.approve(&local, key, wall)?)
     }
 
     fn discard(&mut self, connection: &UnixStream, key: Selector) -> Result<()> {
-        let local = self.local(connection)?;
+        let local = verified_local(&self.checkpoint, connection)?;
         let wall = self.eligible_wall()?;
         Ok(self.checkpoint.discard(&local, key, wall)?)
     }
 
     fn summaries(&mut self, connection: &UnixStream) -> Result<Vec<(Selector, bool)>> {
-        let local = self.local(connection)?;
+        let local = verified_local(&self.checkpoint, connection)?;
         let wall = self.eligible_wall()?;
         Ok(self.checkpoint.summaries(&local, &self.source, wall)?)
     }

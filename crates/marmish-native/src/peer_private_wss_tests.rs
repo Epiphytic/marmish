@@ -7,6 +7,9 @@ use crate::mdk_adapter::{
 use cgka_traits::app_components::NostrRoutingV1;
 use consent_checkpoint::wire::{Codec, Delivery, MAX_OUTER_BYTES};
 use prepared_consent::{History, PreparedConsentOwner, Received, VerifiedDelivery};
+
+#[path = "peer_pending_join_wss_tests.rs"]
+mod custody;
 use sha2::Digest;
 use std::{fs::Permissions, os::unix::fs::PermissionsExt, sync::atomic::AtomicU64};
 
@@ -23,12 +26,12 @@ fn deadline() -> Instant {
 #[tokio::test]
 #[ignore = "explicit bounded loopback TLS and SQLCipher qualification"]
 async fn peer_private_wss_offer_consent_delivery() {
-    tokio::time::timeout(Duration::from_secs(120), enroll())
+    tokio::time::timeout(Duration::from_secs(120), enroll(None, false))
         .await
         .expect("bounded native Peer exchange");
 }
 
-async fn enroll() {
+async fn enroll(custody_mode: Option<consent_checkpoint::Mode>, stop_before_ingest: bool) {
     let (private, lease, material) = tests::client();
     let founder_private = tempfile::Builder::new()
         .permissions(Permissions::from_mode(0o700))
@@ -58,7 +61,7 @@ async fn enroll() {
         )
         .expect("initialize validated provisional checkpoint"),
     );
-    let open_local = || {
+    let open_prepared = || {
         PreparedConsentOwner::open(
             &lease,
             &material,
@@ -69,6 +72,27 @@ async fn enroll() {
         )
         .unwrap()
     };
+    let open_local = || {
+        if let Some(mode) = custody_mode {
+            PreparedConsentOwner::open_custody(
+                &lease,
+                &material,
+                Role::Client,
+                Policy {
+                    mode,
+                    ..Policy::default()
+                },
+                route,
+                Wall::Fixture(fixed_wall.clone()),
+            )
+            .unwrap()
+        } else {
+            open_prepared()
+        }
+    };
+    if custody_mode.is_some() {
+        drop(open_prepared());
+    }
     let mut local = open_local();
     let open_client = || {
         Owner::open(
@@ -158,15 +182,58 @@ async fn enroll() {
             .unwrap()
     };
     let original_image = stage_image();
+    if let Some(mode) = custody_mode {
+        let (_, generation, _, _) = binding.coordinates();
+        let paths = Paths::new(&lease, &material).unwrap();
+        let guarded = paths.reopen_provisional(binding, witness).unwrap();
+        let context = custody::Round {
+            mode,
+            stop_before_ingest,
+            wall,
+            fixed_wall: &fixed_wall,
+            stage_image: &stage_image,
+            stage_path: guarded.path(),
+            original_image,
+            selector,
+            generation,
+            codec: &codec,
+            signer: &signer,
+            founder: &founder,
+            founder_path: founder_private.path(),
+            offer: &offer.flight,
+            consent_frame: queued.frame(),
+            lease: &lease,
+            material: &material,
+            route,
+        };
+        drop(local);
+        context.exchange(&mut client, &mut server).await;
+        let writes = relay.peer_transcript();
+        assert_eq!(writes.len(), 4);
+        assert_eq!(
+            writes
+                .iter()
+                .filter(|entry| entry.sender == signer.public_key())
+                .count(),
+            1
+        );
+        assert!(writes.iter().any(|entry| {
+            entry.sender == signer.public_key() && entry.bytes_sha256 == exact_consent
+        }));
+        client.stop(deadline()).await.unwrap();
+        server.stop(deadline()).await.unwrap();
+        relay.stop().await;
+        return;
+    }
     assert!(
         local
-            .publish_consent_wss(&mut client, selector, deadline())
+            .publish_consent_wss(&mut client, selector, deadline(), || Ok(()))
             .await
             .unwrap()
     );
     assert!(
         !local
-            .publish_consent_wss(&mut client, selector, deadline())
+            .publish_consent_wss(&mut client, selector, deadline(), || Ok(()))
             .await
             .unwrap()
     );
