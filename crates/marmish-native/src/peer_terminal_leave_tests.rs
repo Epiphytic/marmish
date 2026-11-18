@@ -99,6 +99,18 @@ fn epoch_five_requires_exact_prepared_or_existing_composed_schema() {
     drop(leave_checkpoint(&f).unwrap());
     assert_eq!(f.inventory(), installed);
 
+    for (keys, url) in [
+        (Keys::generate(), URL),
+        (f.client.clone(), "wss://other-origin.example/"),
+    ] {
+        assert_eq!(
+            Checkpoint::attach_terminal_leave_fixture(f.open(), keys, UID, url, Policy::default())
+                .err(),
+            Some(BINDING)
+        );
+        assert_eq!(f.inventory(), installed);
+    }
+
     let HardenedPeerConnection(tamper) = f.open();
     tamper
         .execute_batch("DROP TRIGGER peer_terminal_leave_deny_UPDATE")
@@ -177,8 +189,10 @@ fn epoch_five_hold_decision_is_atomic_and_both_entry_points_refuse_retroactive_h
         Some(STALE)
     );
     assert_eq!(row_counts(&tx), (1, 0, 1));
+    let last_eligible = i64::MAX as u64 - WINDOW;
+    assert_eq!(deadline(last_eligible).unwrap(), i64::MAX as u64);
     assert_eq!(
-        deadline(i64::MAX as u64).err(),
+        deadline(last_eligible + 1).err(),
         Some(Error::Cursor(CursorError::Range))
     );
 }
@@ -222,12 +236,12 @@ fn epoch_five_live_and_expired_hold_never_open_ordinary_retirement() {
         "UPDATE peer_terminal_native_leave SET route=zeroblob(32)",
         "INSERT INTO peer_terminal_native_leave SELECT * FROM peer_terminal_native_leave",
     ] {
-        assert!(tx.execute(sql, []).is_err());
+        assert_denied(tx.execute(sql, []), "terminal leave owner required");
     }
     terminal_schema::Writer::Progress.guard(&tx, false).unwrap();
-    assert!(
-        tx.execute("UPDATE peer_pending_terminal SET step=4", [])
-            .is_err()
+    assert_denied(
+        tx.execute("UPDATE peer_pending_terminal SET step=4", []),
+        "terminal leave hold requires reconciled authority",
     );
     drop(tx);
     drop(cp);
@@ -271,6 +285,11 @@ fn epoch_five_recovery_uses_exact_1s_2s_floors_and_durable_third_stop() {
         );
         if at < floor {
             assert!(cp.leave_recovery_due(&source, floor - 1).unwrap().is_none());
+            assert_eq!(
+                cp.reserve_or_park_leave_recovery(&source, &next, floor - 1)
+                    .err(),
+                Some(STALE)
+            );
         }
         drop(cp);
         cp = leave_checkpoint(&f).unwrap();
@@ -323,17 +342,6 @@ fn epoch_five_recovery_uses_exact_1s_2s_floors_and_durable_third_stop() {
         cp.read_leave_hold(&source, key, 1, NOW + 4).err(),
         Some(Error::Cursor(CursorError::ClockRegressed))
     );
-
-    let tx = cp.cursor.begin(source.origin).unwrap();
-    leave_schema::Writer::Update.guard(&tx, false).unwrap();
-    for sql in [
-        "UPDATE peer_terminal_native_leave SET route=zeroblob(32)",
-        "UPDATE peer_terminal_native_leave SET recovery_attempts=4",
-        "UPDATE peer_terminal_native_leave SET recovery_state=1",
-        "UPDATE peer_terminal_native_leave SET recovery_not_before=recovery_not_before+1",
-    ] {
-        assert!(tx.execute(sql, []).is_err());
-    }
 }
 
 #[test]
@@ -448,4 +456,85 @@ fn epoch_five_expiry_hold_rechecks_the_original_signed_route() {
     assert_eq!(cp.leave_recovery_due(&source, at).err(), Some(BINDING));
     assert!(cp.terminal_cleanup_due(&source, at).unwrap().is_none());
     assert_eq!(row_counts(&cp.cursor.conn), (1, 1, 1));
+}
+
+fn assert_denied(result: rusqlite::Result<usize>, expected: &str) {
+    assert!(
+        matches!(
+            result, Err(rusqlite::Error::SqliteFailure(_, Some(ref message))) if message == expected
+        ),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn epoch_five_sql_recovery_trigger_checks_each_transition_independently() {
+    let f = Fixture::new();
+    let (mut cp, source, key) = pending(&f);
+    let local = cp.authorize_local(UID).unwrap();
+    cp.hold_pending_decline(&source, key, 1, NOW, &local, || Ok(()))
+        .unwrap();
+
+    let tx = cp.cursor.begin(source.origin).unwrap();
+    leave_schema::Writer::Update.guard(&tx, false).unwrap();
+    let update = |(state, attempts, at, floor): (u8, u8, Option<u64>, u64)| {
+        tx.execute(
+            "UPDATE peer_terminal_native_leave
+             SET recovery_state=?1,recovery_attempts=?2,recovery_reserved_at=?3,recovery_not_before=?4",
+            params![state, attempts, at.map(|at| seconds(at).unwrap()), seconds(floor).unwrap()],
+        )
+    };
+    let deny = |cases: &[(u8, u8, Option<u64>, u64)]| {
+        for case in cases {
+            assert_denied(update(*case), "exact leave recovery transition required");
+        }
+    };
+
+    deny(&[
+        (1, 1, Some(NOW), NOW + 2),     // Wrong first delay.
+        (1, 1, Some(NOW + 1), NOW + 2), // Timestamp differs from the qualified wall.
+        (1, 2, Some(NOW), NOW + 2),     // Skip the first attempt.
+        (2, 3, Some(NOW), NOW),         // Idle cannot park.
+    ]);
+    assert_eq!(update((1, 1, Some(NOW), NOW + 1)).unwrap(), 1);
+    deny(&[
+        (1, 2, Some(NOW), NOW + 2), // Reservation before the previous floor.
+        (2, 1, Some(NOW), NOW + 1), // Cannot park with one attempt.
+        (0, 0, None, NOW),          // Cannot reset.
+    ]);
+    advance_local_wall(&tx, source.origin, NOW + 1).unwrap();
+    deny(&[(1, 2, Some(NOW + 1), NOW + 2)]); // Wrong second delay.
+    assert_eq!(update((1, 2, Some(NOW + 1), NOW + 3)).unwrap(), 1);
+    advance_local_wall(&tx, source.origin, NOW + 3).unwrap();
+    deny(&[(1, 3, Some(NOW + 3), NOW + 4)]); // Third reservation must preserve the floor.
+    assert_eq!(update((1, 3, Some(NOW + 3), NOW + 3)).unwrap(), 1);
+    deny(&[(1, 4, Some(NOW + 3), NOW + 3)]); // No fourth attempt.
+
+    // This artificial origin rollback isolates the trigger's park-time floor.
+    // The owner itself rejects a regressed wall before it can reach this aperture.
+    tx.execute(
+        "UPDATE peer_cursor_origin SET wall=?1 WHERE origin=?2",
+        params![seconds(NOW + 2).unwrap(), source.origin],
+    )
+    .unwrap();
+    deny(&[(2, 3, Some(NOW + 3), NOW + 3)]);
+    advance_local_wall(&tx, source.origin, NOW + 3).unwrap();
+    assert_eq!(update((2, 3, Some(NOW + 3), NOW + 3)).unwrap(), 1);
+    deny(&[(1, 3, Some(NOW + 3), NOW + 3)]); // A parked row cannot reopen or change.
+    assert_denied(
+        tx.execute(
+            "UPDATE peer_terminal_native_leave SET route=zeroblob(32)",
+            [],
+        ),
+        "exact leave recovery transition required",
+    );
+    leave_schema::Writer::Update.guard(&tx, true).unwrap();
+    tx.commit().unwrap();
+    assert_eq!(
+        cp.read_leave_hold(&source, key, 1, NOW + 3)
+            .unwrap()
+            .unwrap()
+            .recovery(),
+        Recovery::Parked { at: NOW + 3 },
+    );
 }

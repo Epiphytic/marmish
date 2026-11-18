@@ -88,24 +88,24 @@ BEGIN SELECT RAISE(ABORT,'terminal leave hold requires reconciled authority'); E
 const EXACT_PAIR: &str = "
 SELECT 1 FROM peer_pending_terminal t
 JOIN peer_pending_custody c ON c.class=t.class AND c.generation=t.generation
-WHERE t.class=h.class AND t.generation=h.generation AND t.step=0 AND c.state=2
-    AND t.origin=h.origin AND t.account=h.account AND t.server=h.founder
-    AND t.offer_id=h.offer_id AND t.offer_revision=h.offer_revision
-    AND t.consent_carrier=h.consent_carrier AND c.consent_revision=h.consent_revision
-    AND t.delivery_carrier=h.delivery_carrier AND t.delivery_digest=h.delivery_digest
-    AND c.welcome_id=h.welcome_id AND t.welcome_digest=h.welcome_digest
-    AND t.device=h.device AND t.inode=h.inode
-    AND t.group_id=h.group_id AND t.epoch_number=h.epoch_number
-    AND t.epoch_identity=h.epoch_identity AND t.own_leaf=h.own_leaf
+WHERE t.class={hold}.class AND t.generation={hold}.generation AND t.step=0 AND c.state=2
+    AND t.origin={hold}.origin AND t.account={hold}.account AND t.server={hold}.founder
+    AND t.offer_id={hold}.offer_id AND t.offer_revision={hold}.offer_revision
+    AND t.consent_carrier={hold}.consent_carrier AND c.consent_revision={hold}.consent_revision
+    AND t.delivery_carrier={hold}.delivery_carrier AND t.delivery_digest={hold}.delivery_digest
+    AND c.welcome_id={hold}.welcome_id AND t.welcome_digest={hold}.welcome_digest
+    AND t.device={hold}.device AND t.inode={hold}.inode
+    AND t.group_id={hold}.group_id AND t.epoch_number={hold}.epoch_number
+    AND t.epoch_identity={hold}.epoch_identity AND t.own_leaf={hold}.own_leaf
     AND t.decided_at<=9223372036854689407
-    AND h.hold_deadline=t.decided_at+86400 AND h.hold_deadline>t.decided_at
-    AND h.recovery_not_before>=t.decided_at
-    AND (h.recovery_reserved_at IS NULL OR h.recovery_reserved_at>=t.decided_at)
-    AND CASE h.recovery_attempts
-        WHEN 0 THEN h.recovery_not_before=t.decided_at
-        WHEN 1 THEN h.recovery_not_before-h.recovery_reserved_at=1
-        WHEN 2 THEN h.recovery_not_before-h.recovery_reserved_at=2
-        WHEN 3 THEN h.recovery_not_before<=h.recovery_reserved_at END
+    AND {hold}.hold_deadline=t.decided_at+86400 AND {hold}.hold_deadline>t.decided_at
+    AND {hold}.recovery_not_before>=t.decided_at
+    AND ({hold}.recovery_reserved_at IS NULL OR {hold}.recovery_reserved_at>=t.decided_at)
+    AND CASE {hold}.recovery_attempts
+        WHEN 0 THEN {hold}.recovery_not_before=t.decided_at
+        WHEN 1 THEN {hold}.recovery_not_before-{hold}.recovery_reserved_at=1
+        WHEN 2 THEN {hold}.recovery_not_before-{hold}.recovery_reserved_at=2
+        WHEN 3 THEN {hold}.recovery_not_before<={hold}.recovery_reserved_at END
 ";
 
 #[derive(Clone, Copy)]
@@ -148,7 +148,7 @@ pub(super) fn install(conn: &Connection) -> rusqlite::Result<()> {
              WHERE t.class=NEW.class AND t.generation=NEW.generation)
             OR NOT EXISTS ({})
          BEGIN SELECT RAISE(ABORT,'exact terminal leave hold required'); END",
-        EXACT_PAIR.replace("h.", "NEW.")
+        EXACT_PAIR.replace("{hold}", "NEW")
     ))?;
     for operation in ["INSERT", "UPDATE", "DELETE"] {
         deny(conn, operation)?;
@@ -157,12 +157,13 @@ pub(super) fn install(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 pub(super) fn verify_rows(tx: &Transaction<'_>, account: [u8; 32]) -> Result<()> {
+    let pair = EXACT_PAIR.replace("{hold}", "h");
     let matches: bool = tx.query_row(
         &format!(
             "SELECT (SELECT count(*) FROM peer_terminal_leave_epoch WHERE epoch=5)=1
              AND NOT EXISTS (
                 SELECT 1 FROM peer_terminal_native_leave h
-                WHERE h.account!=?1 OR NOT EXISTS ({EXACT_PAIR})
+                WHERE h.account!=?1 OR NOT EXISTS ({pair})
                   OR NOT EXISTS (SELECT 1 FROM peer_cursor_origin o WHERE o.origin=h.origin
                                  AND (h.recovery_reserved_at IS NULL OR o.wall>=h.recovery_reserved_at))
              )"

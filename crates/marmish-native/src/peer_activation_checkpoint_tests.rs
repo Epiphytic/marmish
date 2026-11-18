@@ -344,11 +344,27 @@ fn durable_attempts(epoch_five: bool) {
 
 #[test]
 fn founder_accepts_only_one_durable_exact_source_and_refuses_late_first_receipt() {
+    founder_acceptance(false);
+}
+
+#[test]
+fn epoch_five_preserves_founder_enrollment_and_acceptance() {
+    founder_acceptance(true);
+}
+
+fn founder_acceptance(epoch_five: bool) {
+    let reopen = if epoch_five {
+        leave_checkpoint
+    } else {
+        publication_checkpoint
+    };
     let fixture = Fixture::new();
     fixture.provisional();
     drop(fixture.prepared().unwrap());
-    drop(fixture.custody().unwrap());
-    let mut cp = publication_checkpoint(&fixture).unwrap();
+    if !epoch_five {
+        drop(fixture.custody().unwrap());
+    }
+    let mut cp = reopen(&fixture).unwrap();
     let source = cp.bind_source(URL).unwrap();
     let receipt = Receipt {
         founder: fixture.client.public_key(),
@@ -459,7 +475,7 @@ fn founder_accepts_only_one_durable_exact_source_and_refuses_late_first_receipt(
     assert_eq!(accepted.source().decoded.receipt.epoch, u64::MAX);
     drop(cp);
 
-    let mut cp = publication_checkpoint(&fixture).unwrap();
+    let mut cp = reopen(&fixture).unwrap();
     let source = cp.bind_source(URL).unwrap();
     let accepted = cp
         .read_founder_acceptance(&source, receipt.recipient, WALL + 10)
