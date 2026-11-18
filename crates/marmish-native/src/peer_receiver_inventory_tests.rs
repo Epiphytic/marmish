@@ -328,6 +328,12 @@ fn clean_turn_child(
     assert!(turn.files().matches_quota(&quota));
     assert!(!turn.files().matches_quota(&second));
     assert!(second.receiver_files(lease).is_err());
+    let foreign = Fixture::new();
+    let mut foreign_owner = open(&foreign);
+    assert!(matches!(
+        turn.original_permit(&mut foreign_owner, fence),
+        Err(Error::StageIdentityMismatch)
+    ));
     let original = turn
         .original_permit(owner, fence)
         .unwrap()

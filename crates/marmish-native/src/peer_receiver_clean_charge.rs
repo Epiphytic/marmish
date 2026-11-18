@@ -43,6 +43,7 @@ pub(crate) struct MeasuredExtent {
 /// This value is never retained across the independent custody transaction.
 pub(super) struct CleanFiles<'a> {
     files: ReceiverFiles<'a>,
+    lease: &'a ProfileLease,
     binding: Binding,
     generation: NonZeroU64,
     original: FileExtent,
@@ -53,7 +54,7 @@ impl<'a> CleanFiles<'a> {
     pub(super) fn begin(
         owner: &mut RecoveredOwner<'_>,
         quota: &'a ReceiverQuota<'a>,
-        lease: &ProfileLease,
+        lease: &'a ProfileLease,
         binding: Binding,
         fence: &TurnFence<'_>,
     ) -> Result<Self> {
@@ -67,6 +68,7 @@ impl<'a> CleanFiles<'a> {
         let clean = measured.clean_extent(binding)?;
         Ok(Self {
             files,
+            lease,
             binding,
             generation,
             original: clean.main,
@@ -98,6 +100,7 @@ impl<'a> CleanFiles<'a> {
         owner: &mut RecoveredOwner<'_>,
         fence: &TurnFence<'_>,
     ) -> Result<CleanPermit<'b>> {
+        self.check_owner(owner)?;
         let clean = owner.recover(fence.wall()?)?.clean_extent(self.binding)?;
         if clean.main != self.original {
             return Err(Error::StageIdentityMismatch);
@@ -146,6 +149,7 @@ impl<'a> CleanFiles<'a> {
         identity: (u64, u64),
         fence: &TurnFence<'_>,
     ) -> Result<(FileExtent, u64)> {
+        self.check_owner(owner)?;
         let (charges, files) = owner.observe(fence.wall()?)?;
         let [Some(copy), None, None, None] = files[2] else {
             return Err(Error::StageIdentityMismatch);
@@ -175,10 +179,18 @@ impl<'a> CleanFiles<'a> {
         fence: &TurnFence<'_>,
         original_unchanged: bool,
     ) -> Result<()> {
+        self.check_owner(owner)?;
         let clean = owner.recover(fence.wall()?)?.clean_extent(self.binding)?;
         if clean.main.identity != self.original.identity
             || (original_unchanged && clean.main != self.original)
         {
+            return Err(Error::StageIdentityMismatch);
+        }
+        Ok(())
+    }
+
+    fn check_owner(&self, owner: &RecoveredOwner<'_>) -> Result<()> {
+        if !owner.paths.owns_lease(self.lease) {
             return Err(Error::StageIdentityMismatch);
         }
         Ok(())
