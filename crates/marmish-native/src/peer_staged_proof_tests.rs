@@ -1187,14 +1187,14 @@ async fn disposition_precedes_native_loopback_startup_retry() {
     live.activate_transport(None).await.unwrap();
     live.sync_transport_groups(None).await.unwrap();
     live.deliver_owed_welcomes_with_audit_context(
-        &[confirmed.id.clone()],
+        std::slice::from_ref(&confirmed.id),
         confirmed_group,
         Default::default(),
     )
     .await
     .unwrap();
     live.deliver_owed_welcomes_with_audit_context(
-        &[cancelled.id.clone()],
+        std::slice::from_ref(&cancelled.id),
         cancelled_group,
         Default::default(),
     )
