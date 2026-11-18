@@ -85,3 +85,12 @@ suite does not independently mutate genuine rows for every account,
 founder, leaf, route, record-count, epoch, format or size refusal. The
 shared SelfRemove verifier retains its existing signed event, authority
 and MLS checks. macOS ARM64 remains unverified for C2.
+
+## Integrated Linux rerun
+
+Composed source `1a973f0` passed the two fast `peer_terminal_leave_effect_`
+unit tests and all nine `epoch_five` regressions. The opt-in
+`peer_terminal_leave_completes_in_one_managed_poll` passed with the real
+native runtime and independent cold subprocess cuts in 119.65 s. Strict
+all-target Clippy passed in 32.97 s. The C2 source and approved design
+paths were byte-identical to the author revision after composition.

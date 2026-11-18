@@ -28,3 +28,20 @@ and native checkpoints. The remaining negative coverage and platform
 limits are recorded alongside the exact dependency and Linux results in
 [validation](../validation/peer-native-leave-c2.md). The test clock and
 crash hooks must remain confined to proof fixtures.
+
+## Integrated review
+
+Claude Code Sonnet 5.5 approved composed source `1a973f0` in Auto session
+`7061a0dd-b1ca-4c98-9e17-1432163c9ecb`. It checked the transaction and
+wall fences, one-use dispatch, authenticated stage inspection, zero egress,
+and test-only mounting. The source-only review identified additional
+negative coverage for a future production owner, including wrong native
+bindings, Rust-side deadline paths, and epoch-6 refusal of epoch-5 recovery
+methods. It also noted that the original image digest binds the live token
+and the first cut exercises image preservation. The author and integration
+runs below supply the native evidence.
+
+Ripwire flagged test helper token matches, similar schema guards and short
+churn. Review retained independent predicates for exact schema and owner
+admission. A shared constructor would couple the epoch checks, and a shared
+native-turn helper would hide the difference between inspection and dispatch.
