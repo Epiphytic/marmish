@@ -49,9 +49,21 @@ pub(crate) use physical_route::{LivePhysicalRoute, PeerLiveDial, ReceiverRouteAd
 
 pub(crate) use qualification::Report as QualificationReport;
 
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
 #[path = "peer_ready_scope.rs"]
 mod ready_scope;
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "peer_candidate_registration.rs"]
+pub(crate) mod candidate_registration;
 
 #[cfg(test)]
 #[path = "peer_relay_trust_tests.rs"]

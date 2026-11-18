@@ -9,6 +9,14 @@ pub(crate) mod founder;
 #[path = "peer_quota_recovery_guard_tests.rs"]
 pub(crate) mod recovery_guard_tests;
 
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "peer_quota_candidate_registration.rs"]
+pub(crate) mod candidate_registration;
+
 use crate::{command_config::CommandConfig, identity::ProfileLease};
 use std::{
     cell::RefCell, ffi::OsStr, marker::PhantomData, num::NonZeroU64, rc::Rc, sync::OnceLock,
@@ -24,9 +32,13 @@ const NAMES: [&str; 2] = ["provisional-known.db", "provisional-unknown.db"];
 const SNAPSHOT: usize = NAMES.len();
 #[cfg(test)]
 const SNAPSHOT_NAME: &str = "terminal-leave-snapshot.db";
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
 const RECEIVER_SNAPSHOT_NAME: &str = "receiver-join-snapshot.db";
-const SLOT_COUNT: usize = NAMES.len() + cfg!(test) as usize;
+const SLOT_COUNT: usize = NAMES.len() + cfg!(any(test, marmish_peer_receiver_candidate)) as usize;
 const SIDECARS: [&str; 3] = ["-journal", "-wal", "-shm"];
 
 type Result<T> = std::result::Result<T, &'static str>;
@@ -64,7 +76,11 @@ struct ReservedPaths {
     directories: [(u64, u64); 2],
     mains: [PathBuf; SLOT_COUNT],
     all: [PathBuf; SLOT_COUNT * 4],
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     receiver: Option<std::sync::Weak<ProfileLease>>,
 }
 
@@ -98,6 +114,16 @@ impl ReservedPaths {
         if !local_volume(&directory)? {
             return Err("dispatch_profile");
         }
+        Ok(Self::with_names(lease, directories, &directory, snapshot))
+    }
+
+    #[cfg(any(test, marmish_peer_receiver_candidate))]
+    fn with_names(
+        lease: &ProfileLease,
+        directories: [(u64, u64); 2],
+        directory: &Path,
+        snapshot: &str,
+    ) -> Self {
         let mains = [NAMES[0], NAMES[1], snapshot].map(|name| directory.join(name));
         let all = std::array::from_fn(|index| {
             let main = &mains[index / 4];
@@ -106,15 +132,15 @@ impl ReservedPaths {
                 offset => sidecar(main, SIDECARS[offset - 1]),
             }
         });
-        Ok(Self {
+        Self {
             profile_id: lease.profile_id().to_owned(),
-            root,
+            root: lease.root().to_path_buf(),
             directories,
             mains,
             all,
             #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
             receiver: None,
-        })
+        }
     }
 
     fn check(&self, lease: &ProfileLease) -> Result<()> {
@@ -124,7 +150,11 @@ impl ReservedPaths {
         {
             return Err("dispatch_profile_conflict");
         }
-        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
         if let Some(owner) = &self.receiver
             && owner
                 .upgrade()
@@ -549,6 +579,22 @@ impl Dispatch {
 
     #[cfg(test)]
     fn register() -> Result<&'static Self> {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        let _guard = candidate_registration::fixture_registration_guard()?;
+        let (stock, managed) = Self::checked_stock()?;
+        let descriptor = forwarding_descriptor(unsafe { &*stock })?;
+        let dispatch = Self::with_descriptor(stock, managed, descriptor, OnceLock::new());
+        unsafe {
+            if sql::sqlite3_vfs_register(dispatch.wrapper, 1) != sql::SQLITE_OK {
+                return Err("dispatch_registration");
+            }
+        }
+        dispatch.assert_default()?;
+        Ok(dispatch)
+    }
+
+    #[cfg(any(test, marmish_peer_receiver_candidate))]
+    fn checked_stock() -> Result<(*mut sql::sqlite3_vfs, *mut sql::sqlite3_vfs)> {
         marmish_engine::initialize_storage().map_err(|_| "sqlite_initialize")?;
         let stock = unsafe { sql::sqlite3_vfs_find(ptr::null()) };
         if stock.is_null()
@@ -569,25 +615,34 @@ impl Dispatch {
         {
             return Err("sqlite_compile_options");
         }
-        let descriptor = Box::new(forwarding_descriptor(unsafe { &*stock })?);
+        if unsafe { sql::sqlite3_vfs_find(c"unix".as_ptr()) } != stock {
+            return Err("stock_unix_vfs");
+        }
+        Ok((stock, managed))
+    }
+
+    #[cfg(any(test, marmish_peer_receiver_candidate))]
+    fn with_descriptor(
+        stock: *mut sql::sqlite3_vfs,
+        managed: *mut sql::sqlite3_vfs,
+        descriptor: sql::sqlite3_vfs,
+        paths: OnceLock<ReservedPaths>,
+    ) -> &'static Self {
         let dispatch = Box::leak(Box::new(Self {
             stock,
             managed,
-            wrapper: Box::into_raw(descriptor),
-            paths: OnceLock::new(),
+            wrapper: Box::into_raw(Box::new(descriptor)),
+            paths,
             slots: Mutex::default(),
+            #[cfg(test)]
             file_turn: Mutex::default(),
             #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
             founder_paths: OnceLock::new(),
         }));
         unsafe {
             (*dispatch.wrapper).pAppData = ptr::from_ref(dispatch).cast_mut().cast();
-            if sql::sqlite3_vfs_register(dispatch.wrapper, 1) != sql::SQLITE_OK {
-                return Err("dispatch_registration");
-            }
         }
-        dispatch.assert_default()?;
-        Ok(dispatch)
+        dispatch
     }
 
     fn assert_default(&self) -> Result<()> {
@@ -1204,11 +1259,16 @@ pub(crate) fn local_volume(path: &Path) -> Result<bool> {
     #[cfg(target_os = "macos")]
     let local = status.f_flags & libc::MNT_LOCAL as u32 != 0;
     #[cfg(target_os = "linux")]
-    let local = matches!(
+    let local = supported_linux_volume(&status);
+    Ok(local)
+}
+
+#[cfg(all(target_os = "linux", any(test, marmish_peer_receiver_candidate)))]
+fn supported_linux_volume(status: &libc::statfs) -> bool {
+    matches!(
         status.f_type as u32,
         0xef53 | 0x58465342 | 0x9123683e | 0x01021994 | 0x794c7630 | 0x2fc12fc1
-    );
-    Ok(local)
+    )
 }
 
 fn dispatcher(vfs: *mut sql::sqlite3_vfs) -> &'static Dispatch {
