@@ -1478,6 +1478,11 @@ acceptance receipts, and installed Peer authorization have separate gates.
 The [MDK master refresh](reviews/mdk-master-private-wss-refresh.md) revalidated
 this history cut and ordinary Command during a Peer relay outage on Linux
 AMD64. It includes a forward schema migration in native account databases.
+The [installed Peer design](phases/peer-installed.md) records the current
+join-before-decision behavior, operator interface and separate platform and
+relay gates. A join can expose Pending only after exact native custody.
+The planned installed owner, private relay qualification and status
+transmission remain gated on separate validation.
 
 The [terminal custody fixture](validation/peer-terminal-custody.md) makes
 Declined and Expired durable for an exact joined Pending invitation.

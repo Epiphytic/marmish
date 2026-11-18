@@ -1,5 +1,9 @@
 # Staged Peer invitation inspection
 
+The [installed Peer design](peer-installed.md) supersedes this proposal's
+pre-Join user decision. The current design verifies joined local custody
+before presenting a Manual invitation as Pending without Peer authority.
+
 This is an alternative to the first-Welcome admission dependency in the
 [Peer invitation design](peer-invitations.md). It keeps the pinned upstream MDK,
 the canonical Nostr identities, and the existing Peer authority and CLI rules.
