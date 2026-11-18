@@ -46,11 +46,25 @@ stdout. On server restart, the inventory showed a newer authenticated receipt
 and an unchanged engine-admission time. The query output contained no command
 arguments or native invocation identifiers.
 
-Earlier live checks used a stale sibling `marmish-worker` and returned
-`recovery_uncertain`. Rebuilding the worker together with both launchers
-fixed that test setup. Disposable profiles and processes are local to the
-checks. Linux ARM64, macOS, and a separate-UID socket attempt need independent
-validation.
+An earlier live run using a stale sibling `marmish-worker` returned
+`recovery_uncertain`. The positive and deny results above came from
+the first fixture after rebuilding the worker together with both
+launchers. The three-launch check separately verified that a revoked
+client disappears and a regrant starts with empty history.
+
+In a different fresh-profile fixture, a live command returned
+`recovery_uncertain` with matching build metadata in all three binaries.
+The inventory still showed durable engine admission, and a bounded
+process trace found no worker exec. The same fresh-profile fixture
+returned `recovery_uncertain` with the pre-inventory source
+`3cef7a798d1da9e435aa4c1fcf68f5138c509d67` after both identities had
+published key packages. The failing and successful fixtures report
+different outcomes. Beads `marmish-dwt.6` tracks qualification of command
+launch in the fresh-profile fixture. Inventory acceptance rests on the
+first live run and the local SQLCipher and IPC cases above.
+
+Disposable profiles and processes are local to the checks. Linux ARM64,
+macOS, and a separate-UID socket attempt need independent validation.
 
 ## Local query benchmark
 
