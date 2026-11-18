@@ -68,6 +68,14 @@ pub(crate) enum RecipientFault {
     ReformattedHistory(EventId),
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SocketEnd {
+    Raw,
+    WebSocketClose,
+    Other,
+}
+
 #[derive(Clone, Debug)]
 pub(super) enum Observation {
     Authentication(PublicKey, bool),
@@ -123,6 +131,8 @@ struct State {
     duplicate_acks: usize,
     ordinary: BTreeSet<PublicKey>,
     connections: BTreeMap<usize, Connection>,
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    socket_ends: BTreeMap<usize, SocketEnd>,
     publication_limit: Option<usize>,
     publications: Vec<Event>,
     observations: Vec<Observation>,
@@ -738,6 +748,8 @@ async fn serve_connection(
         );
         quiet || state.mode == Mode::NoChallenge
     };
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    let mut socket_end = SocketEnd::Other;
     let challenge = hex::encode(super::random::<32>().unwrap());
     let started = Instant::now();
     let challenge_message = Message::Text(json!(["AUTH", challenge]).to_string().into());
@@ -759,6 +771,22 @@ async fn serve_connection(
                         if socket.flush().await.is_err() { break; }
                         vec![]
                     }
+                    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+                    other => {
+                        socket_end = match other {
+                            Some(Ok(Message::Close(_))) => SocketEnd::WebSocketClose,
+                            None | Some(Err(tokio_tungstenite::tungstenite::Error::Protocol(
+                                tokio_tungstenite::tungstenite::error::ProtocolError::ResetWithoutClosingHandshake
+                            ))) => SocketEnd::Raw,
+                            Some(Err(tokio_tungstenite::tungstenite::Error::Io(error)))
+                                if matches!(error.kind(), std::io::ErrorKind::UnexpectedEof
+                                    | std::io::ErrorKind::ConnectionReset
+                                    | std::io::ErrorKind::ConnectionAborted) => SocketEnd::Raw,
+                            _ => SocketEnd::Other,
+                        };
+                        break;
+                    }
+                    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
                     _ => break,
                 },
                 outgoing = queued.recv() => match outgoing {
@@ -789,7 +817,16 @@ async fn serve_connection(
             }
         }
     }
-    state.lock().unwrap().connections.remove(&id);
+    let mut state = state.lock().unwrap();
+    state.connections.remove(&id);
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    if state.qualification && state.recipient_runtime {
+        assert!(
+            state.socket_ends.len() < MAX_OBSERVATIONS,
+            "socket closure transcript bound"
+        );
+        state.socket_ends.insert(id, socket_end);
+    }
 }
 
 fn tls(leaf_lifetime: Option<Duration>) -> (TlsAcceptor, rustls::RootCertStore, Vec<u8>) {
@@ -966,6 +1003,27 @@ impl Relay {
             .observations
             .iter()
             .filter(|item| matches!(item, Observation::Request(who, _) if *who == account))
+            .count()
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn runtime_socket_end(&self, id: usize) -> Option<SocketEnd> {
+        self.state.lock().unwrap().socket_ends.get(&id).copied()
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn runtime_socket_active(&self, id: usize) -> bool {
+        self.state.lock().unwrap().connections.contains_key(&id)
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn recipient_closes(&self, account: PublicKey) -> usize {
+        self.state
+            .lock()
+            .unwrap()
+            .observations
+            .iter()
+            .filter(|item| matches!(item, Observation::Close(who, _) if *who == account))
             .count()
     }
 

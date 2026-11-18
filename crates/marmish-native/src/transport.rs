@@ -287,10 +287,24 @@ struct ConnectorState {
     ))]
     fatal: Option<Fatal>,
     #[cfg(test)]
-    direct_attempts: std::sync::atomic::AtomicUsize,
+    direct_attempts: Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(test)]
     fixture_roots: Option<Vec<(Url, rustls::RootCertStore)>>,
 }
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "peer_socket_drain.rs"]
+mod peer_socket_drain;
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub(crate) use peer_socket_drain::{PeerSocketDrain, PeerSocketStart};
 
 #[derive(Clone)]
 pub struct RelayConnector(Arc<ConnectorState>);
@@ -342,29 +356,58 @@ impl PeerRelayConnector {
         authority: PeerLiveDial,
         deadline: Instant,
     ) -> Result<(WebSocketSink, WebSocketStream, PeerTlsWindow)> {
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        let (authority, registered) = authority.take_start();
         let (endpoint, policy, dirs, tls, cancel) = authority.take();
         if policy.urls() != [endpoint.clone()] || policy.mode() != RouteMode::Off {
             return Err(Error::Transport("relay_not_configured"));
         }
         let mut connector = RelayConnector::new(policy, dirs)?;
-        Arc::get_mut(&mut connector.0)
-            .expect("new connector is unshared")
-            .cancelled = cancel;
+        let state = Arc::get_mut(&mut connector.0).expect("new connector is unshared");
+        state.cancelled = cancel;
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        let permit = if let Some(registered) = registered {
+            if registered.fatal().is_tripped() {
+                return Err(Error::Transport("dispatcher_fatal"));
+            }
+            let (fatal, permit) = registered.install(state);
+            connector = connector.with_fatal(fatal)?;
+            Some(permit)
+        } else {
+            None
+        };
         connector.bootstrap(deadline).await?;
-        let open = connector.connection_phases(
-            Route::Direct,
-            connector.connect_stream(&endpoint, 0, Route::Direct),
-            |(stream, permit)| async {
-                let host = endpoint
-                    .host_str()
-                    .ok_or(Error::Invalid("relay_host"))?
-                    .trim_start_matches('[')
-                    .trim_end_matches(']');
-                let (stream, window) = tls.connect_live(stream, host).await?;
-                let (sink, stream) = connector.websocket(&endpoint, stream, permit).await?;
-                Ok((sink, stream, window))
-            },
-        );
+        let stream = async {
+            #[cfg(all(
+                any(test, marmish_peer_receiver_candidate),
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            if let Some(permit) = permit {
+                return connector
+                    .connect_stream_with_permit(&endpoint, Route::Direct, permit, true)
+                    .await;
+            }
+            connector.connect_stream(&endpoint, 0, Route::Direct).await
+        };
+        let open = connector.connection_phases(Route::Direct, stream, |(stream, permit)| async {
+            let host = endpoint
+                .host_str()
+                .ok_or(Error::Invalid("relay_host"))?
+                .trim_start_matches('[')
+                .trim_end_matches(']');
+            let (stream, window) = tls.connect_live(stream, host).await?;
+            let (sink, stream) = connector.websocket(&endpoint, stream, permit).await?;
+            Ok((sink, stream, window))
+        });
         timeout_at(deadline, open)
             .await
             .map_err(|_| Error::Timeout)?
@@ -422,7 +465,7 @@ impl RelayConnector {
             ))]
             fatal: None,
             #[cfg(test)]
-            direct_attempts: std::sync::atomic::AtomicUsize::new(0),
+            direct_attempts: Arc::default(),
             #[cfg(test)]
             fixture_roots: None,
         })))
@@ -805,6 +848,28 @@ impl RelayConnector {
                 .await
                 .map_err(|_| Error::Transport("shutdown"))?,
         );
+        self.connect_stream_with_permit(url, route, permit, false)
+            .await
+    }
+
+    async fn connect_stream_with_permit(
+        &self,
+        url: &Url,
+        route: Route,
+        permit: Arc<tokio::sync::OwnedSemaphorePermit>,
+        #[cfg_attr(
+            not(all(
+                any(test, marmish_peer_receiver_candidate),
+                target_os = "linux",
+                target_arch = "x86_64"
+            )),
+            allow(unused_variables)
+        )]
+        registered: bool,
+    ) -> Result<(
+        Box<dyn NetworkStream>,
+        Arc<tokio::sync::OwnedSemaphorePermit>,
+    )> {
         let parsed = url::Url::parse(url.as_str()).map_err(|_| Error::Invalid("relay_url"))?;
         let host = parsed.host_str().ok_or(Error::Invalid("relay_host"))?;
         let host = host.trim_start_matches('[').trim_end_matches(']');
@@ -847,6 +912,7 @@ impl RelayConnector {
             target_arch = "x86_64"
         ))]
         let stream: Box<dyn NetworkStream> = match &self.0.fatal {
+            Some(fatal) if registered => Box::new(FencedStream::with_slot(stream, fatal, &permit)),
             Some(fatal) => Box::new(FencedStream::new(stream, fatal)),
             None => stream,
         };
