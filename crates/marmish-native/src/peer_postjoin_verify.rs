@@ -38,7 +38,7 @@ use super::store::consent_checkpoint::provisioning::prepared_consent::custody::p
 
 const MAX_SIGNED_EVENT_BYTES: usize = 65_536;
 const MAX_REFUSALS: u32 = 2;
-const MAX_RECOVERY_ATTEMPTS: u32 = MAX_REFUSALS + 1;
+const EXPOSED_NATIVE_ATTEMPTS: u32 = 2;
 
 #[derive(Clone, Copy)]
 enum Exposure {
@@ -79,7 +79,7 @@ impl From<SessionError> for Refusal {
 
 type Result<T> = std::result::Result<T, Refusal>;
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct Authority {
     pin: EpochPin,
     leaves: Vec<GroupMemberLeaf>,
@@ -397,10 +397,15 @@ fn advances_exact_capture(prior: &Capture, candidate: &Capture) -> bool {
 }
 
 pub(super) struct RecoveredPostJoin {
+    baseline: Baseline,
     capture: Capture,
 }
 
 impl RecoveredPostJoin {
+    pub(super) fn baseline(&self) -> &Baseline {
+        &self.baseline
+    }
+
     pub(super) fn capture(&self) -> &Capture {
         &self.capture
     }
@@ -412,8 +417,7 @@ impl RecoveredPostJoin {
 pub(super) fn recover_exposed<A, R, K, F, S, Q>(
     runtime: &AccountDeviceRuntime<A, R, K>,
     founder: &AccountDeviceRuntime<F, S, Q>,
-    baseline: &Baseline,
-    prior: &Capture,
+    image: &Path,
     witness: &UncertainPostJoin,
     wall: u64,
 ) -> Result<RecoveredPostJoin>
@@ -425,50 +429,82 @@ where
     S: TransportRoutingPolicy,
     Q: KeyPackagePublisher,
 {
-    baseline.check_image(wall)?;
     let publication = witness.publication();
-    let (_, file) = publication.stage();
-    let (device, inode) = baseline.inode();
-    let candidate = publication.candidate().ok_or(Refusal::Invalid)?;
-    let source = publication.source_pin();
-    let target = publication.target_pin().ok_or(Refusal::Invalid)?;
+    let reserved_at = publication.created_at();
+    if wall < reserved_at || wall >= publication.deadline() {
+        return Err(Refusal::Expired);
+    }
+
     let armed_at = publication.attempt_wall().ok_or(Refusal::Invalid)?;
     if publication.kind() != Kind::PostJoin
         || publication.step() != (Step::Uncertain { number: 1 })
-        || publication.generation() != baseline.generation()
-        || publication.deadline() != baseline.deadline()
-        || publication.group() != baseline.group().as_slice()
-        || publication.recipient().to_bytes().as_slice() != baseline.recipient().as_slice()
-        || publication.founder().to_bytes().as_slice() != baseline.founder().as_slice()
-        || publication.route() != baseline.route()
-        || publication.origin() != baseline.origin()
-        || publication.semantic_id() != baseline.obligation_id().as_slice()
-        || file.device != device.to_be_bytes()
-        || file.inode != inode.to_be_bytes()
-        || candidate.event_id != prior.event_id()
-        || candidate.signed_digest != prior.signed_digest()
-        || source.ordinal != baseline.source().epoch.0
-        || source.authenticator != baseline.source().identity
-        || source.recipient_leaf != baseline.recipient_leaf()
-        || target.ordinal != prior.target().epoch.0
-        || target.authenticator != prior.target().identity
-        || target.recipient_leaf != baseline.recipient_leaf()
-        || armed_at < prior.last_attempt_ms / 1_000
-        || armed_at > wall
+        || !(reserved_at..=wall).contains(&armed_at)
     {
         return Err(Refusal::Invalid);
     }
 
-    let recovered = verify_pending(
+    let (_, file) = publication.stage();
+    let inode = (
+        u64::from_be_bytes(file.device),
+        u64::from_be_bytes(file.inode),
+    );
+    check_image(image, inode)?;
+    let group = GroupId::new(publication.group());
+    let account = MemberId::new(publication.recipient().to_bytes());
+    let founder_id = MemberId::new(publication.founder().to_bytes());
+    let welcome = MessageId::new(publication.welcome_id());
+    let rows = read_rows(
         runtime,
-        baseline,
-        prior.request(),
-        Exposure::PossiblyExposed,
-        wall,
+        &group,
+        &account,
+        GroupLifecycleState::PendingPublish,
     )?;
-    if !advances_exact_capture(prior, &recovered)
-        || prior.attempts.checked_add(1) != Some(recovered.attempts)
-        || recovered.last_attempt_ms / 1_000 < armed_at
+    let authority = &rows.authority;
+    let source = publication.source_pin();
+    if account == founder_id
+        || authority.admission.created_locally
+        || authority.admission.via_welcome.as_ref() != Some(&welcome)
+        || authority.route.nostr_group_id != publication.route()
+        || authority.route.relays.as_slice() != [publication.origin()]
+        || authority.pin.epoch.0 != source.ordinal
+        || authority.pin.identity != source.authenticator
+        || authority.local_leaf != source.recipient_leaf
+        || rows.obligation.id.as_slice() != publication.semantic_id()
+    {
+        return Err(Refusal::Invalid);
+    }
+
+    let baseline = Baseline {
+        image: image.to_owned(),
+        inode,
+        group,
+        account,
+        founder: founder_id,
+        generation: publication.generation(),
+        deadline: publication.deadline(),
+        wall: reserved_at,
+        authority: authority.clone(),
+        obligation: rows.obligation.id.clone(),
+        welcome,
+    };
+    let fanout = rows.fanout.as_ref().ok_or(Refusal::Invalid)?;
+    let mut request = fanout.request().clone();
+    // Match MDK's exact per-target request for a single endpoint. The
+    // journal records the signed payload; the wrapper is canonical here.
+    request.required_acks = 1;
+    let capture = bind_pending(&rows, &baseline, &request, Exposure::PossiblyExposed, wall)?;
+    let candidate = publication.candidate().ok_or(Refusal::Invalid)?;
+    let target = publication.target_pin().ok_or(Refusal::Invalid)?;
+    if candidate.event_id != capture.event_id()
+        || candidate.signed_digest != capture.signed_digest()
+        || target.ordinal != capture.target().epoch.0
+        || target.authenticator != capture.target().identity
+        || target.recipient_leaf != baseline.recipient_leaf()
+        // The first native invocation froze the request behind the closed
+        // gate. Only the first persisted egress can be outstanding here.
+        || capture.attempts != EXPOSED_NATIVE_ATTEMPTS
+        || capture.first_attempt_ms / 1_000 > armed_at
+        || capture.last_attempt_ms / 1_000 < armed_at
     {
         return Err(Refusal::Invalid);
     }
@@ -477,11 +513,11 @@ where
         baseline.group(),
         baseline.founder(),
         &baseline.authority,
-        recovered.target(),
-        Some(&recovered.request().message.id),
+        capture.target(),
+        Some(&capture.request().message.id),
     )?;
     baseline.check_image(wall)?;
-    Ok(RecoveredPostJoin { capture: recovered })
+    Ok(RecoveredPostJoin { baseline, capture })
 }
 
 pub(crate) struct ConfirmedRotation<'a> {
@@ -628,6 +664,18 @@ where
         &baseline.account,
         GroupLifecycleState::PendingPublish,
     )?;
+    let capture = bind_pending(&rows, baseline, candidate, exposure, wall)?;
+    baseline.check_image(wall)?;
+    Ok(capture)
+}
+
+fn bind_pending(
+    rows: &Rows,
+    baseline: &Baseline,
+    candidate: &TransportPublishRequest,
+    exposure: Exposure,
+    wall: u64,
+) -> Result<Capture> {
     let evolution = exact_evolution(rows.evolution.as_ref(), baseline)?;
     let fanout = rows.fanout.as_ref().ok_or(Refusal::Invalid)?;
     let pending = rows.pending.as_ref().ok_or(Refusal::Invalid)?;
@@ -642,7 +690,7 @@ where
         return Err(Refusal::Invalid);
     }
     let pending_ref = evolution.pending_ref.ok_or(Refusal::Invalid)?;
-    let native = rows.native_pending.ok_or(Refusal::Invalid)?;
+    let native = rows.native_pending.as_ref().ok_or(Refusal::Invalid)?;
     if native.reference != pending_ref || native.target.epoch != evolution.target_epoch {
         return Err(Refusal::Invalid);
     }
@@ -655,7 +703,6 @@ where
         exposure,
         wall,
     )?;
-    baseline.check_image(wall)?;
     Ok(Capture {
         request: candidate.clone(),
         evolution: evolution.id.clone(),
@@ -784,7 +831,7 @@ impl Exposure {
     fn max_attempts(self) -> u32 {
         match self {
             Self::BeforeSend => MAX_REFUSALS,
-            Self::PossiblyExposed => MAX_RECOVERY_ATTEMPTS,
+            Self::PossiblyExposed => EXPOSED_NATIVE_ATTEMPTS,
         }
     }
 }
