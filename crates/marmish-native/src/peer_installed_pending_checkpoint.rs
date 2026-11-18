@@ -2,14 +2,22 @@
 
 use super::*;
 use crate::{
+    mdk_adapter::peer_native_signer::WelcomeFence,
     peer_invitation::{
-        TurnFence,
-        receiver_inventory::v2_pending::{PreparedWelcome, record_custody_changes},
+        receiver_inventory::v2_pending::PreparedWelcome,
         socket::owner::recipient::PeerRecipientPort,
     },
     peer_quota_vfs::dispatch::ReceiverQuota,
 };
 
+#[cfg(test)]
+use crate::peer_invitation::receiver_inventory::v2_pending::record_custody_changes;
+
+fn require_current(fence: &WelcomeFence<'_>) -> Result<()> {
+    fence.sample().map(drop).map_err(|_| Error::Source)
+}
+
+#[cfg(test)]
 impl HeldEvidence {
     pub(in crate::peer_invitation) fn same_saved_pending(&self, other: &Self) -> bool {
         self.state() == CustodyState::Pending
@@ -56,7 +64,7 @@ impl Checkpoint {
         prior: &HeldEvidence,
         prepared: &PreparedWelcome<'_>,
         quota: &ReceiverQuota<'_>,
-        fence: &TurnFence<'_>,
+        fence: &WelcomeFence<'_>,
     ) -> Result<JoinStarted> {
         port.use_current_recipient(|account, origin, wall| {
             self.check_installed_consent_scope(source, account, origin, wall)?;
@@ -64,12 +72,12 @@ impl Checkpoint {
             if !prepared.matches_quota(quota) || !prepared.matches(prior, &delivery) {
                 return Err(CursorError::Binding.into());
             }
-            let changed =
+            let _changed =
                 self.transition_custody_guarded(source, prior, wall, Change::Start, || {
-                    fence.wall().map_err(|_| Error::Source)?;
-                    Ok(())
+                    require_current(fence)
                 })?;
-            record_custody_changes(changed);
+            #[cfg(test)]
+            record_custody_changes(_changed);
             Ok(JoinStarted {
                 owner: self.owner.clone(),
                 stage: prior.stage,
@@ -88,7 +96,7 @@ impl Checkpoint {
         prior: &HeldEvidence,
         joined: &InstalledJoinedReadback<'_>,
         quota: &ReceiverQuota<'_>,
-        fence: &TurnFence<'_>,
+        fence: &WelcomeFence<'_>,
     ) -> Result<()> {
         port.use_current_recipient(|account, origin, wall| {
             self.check_installed_consent_scope(source, account, origin, wall)?;
@@ -111,20 +119,18 @@ impl Checkpoint {
                 {
                     return Err(CursorError::Stale.into());
                 }
-                fence.wall().map_err(|_| Error::Source)?;
+                require_current(fence)?;
                 return Ok(());
             }
-            let changed = self.transition_custody_guarded(
+            let _changed = self.transition_custody_guarded(
                 source,
                 prior,
                 wall,
                 Change::QualifyInstalled(joined),
-                || {
-                    fence.wall().map_err(|_| Error::Source)?;
-                    Ok(())
-                },
+                || require_current(fence),
             )?;
-            record_custody_changes(changed);
+            #[cfg(test)]
+            record_custody_changes(_changed);
             Ok(())
         })
         .map_err(|_| Error::Source)?
@@ -164,8 +170,9 @@ impl Checkpoint {
     }
 }
 
-// This module is mounted only in the Linux AMD64 native test target. Change
+// This module is mounted for Linux AMD64 native tests. Change
 // one field in its disposable profile while preserving the exact schema.
+#[cfg(test)]
 impl Checkpoint {
     pub(in crate::peer_invitation) fn fixture_change_custody_frame(
         &mut self,

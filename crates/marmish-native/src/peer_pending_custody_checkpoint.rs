@@ -1028,7 +1028,7 @@ impl Checkpoint {
         prior: &HeldEvidence,
         wall: u64,
         change: Change<'_>,
-        guard: impl FnOnce() -> Result<()>,
+        mut guard: impl FnMut() -> Result<()>,
     ) -> Result<usize> {
         self.check_local_owner(&prior.owner)?;
         let cx = self.custody_context(source)?;
@@ -1051,6 +1051,7 @@ impl Checkpoint {
         let changed = change.apply(&tx, &current, wall)?;
         cx.verify(&tx, wall)?;
         rows::advance_wall(&tx, wall)?;
+        guard()?;
         tx.commit()?;
         Ok(changed)
     }

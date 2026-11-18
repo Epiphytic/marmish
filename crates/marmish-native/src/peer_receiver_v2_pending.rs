@@ -1,7 +1,6 @@
 //! Measured native Welcome turns for the private installed-v2 recipient proof.
 
 use std::{
-    cell::Cell,
     fs::{self, OpenOptions},
     io::{self, Read as _},
     os::unix::fs::OpenOptionsExt as _,
@@ -11,10 +10,13 @@ use std::{
 
 use crate::{
     mdk_adapter::peer_native_signer::{JoinWitness, JoinedAuthority, WelcomeFence},
-    peer_quota_vfs::dispatch::{ClosedJoin, JoinMetrics, JoinTurn},
+    peer_candidate_startup::Readiness,
+    peer_quota_vfs::dispatch::{ClosedJoin, JoinTurn},
 };
 
 use super::*;
+#[cfg(test)]
+use crate::peer_quota_vfs::dispatch::JoinMetrics;
 use clean::CleanFiles;
 use consent_checkpoint::{
     provisioning::{
@@ -25,20 +27,26 @@ use consent_checkpoint::{
 };
 use snapshot_image::{read_image, snapshot_inode, snapshot_sidecars};
 use socket::owner::recipient::PeerRecipientPort;
+#[cfg(test)]
+use std::cell::Cell;
 
+#[cfg(test)]
 thread_local! {
     static LOSE_JOIN_RESULT: Cell<bool> = const { Cell::new(false) };
     static CUSTODY_CHANGES: Cell<usize> = const { Cell::new(0) };
 }
 
+#[cfg(test)]
 pub(in crate::peer_invitation) fn record_custody_changes(changed: usize) {
     CUSTODY_CHANGES.set(CUSTODY_CHANGES.get() + changed);
 }
 
+#[cfg(test)]
 pub(in crate::peer_invitation) fn committed_custody_changes() -> usize {
     CUSTODY_CHANGES.get()
 }
 
+#[cfg(test)]
 pub(in crate::peer_invitation) struct PendingReceiver<'lease> {
     owner: RecoveredOwner<'lease>,
     lease: &'lease ProfileLease,
@@ -54,6 +62,7 @@ pub(in crate::peer_invitation) struct ArmedWelcome<'lease> {
     started: JoinStarted,
 }
 
+#[cfg(test)]
 impl<'lease> PendingReceiver<'lease> {
     pub(in crate::peer_invitation) fn open(
         lease: &'lease ProfileLease,
@@ -84,7 +93,8 @@ impl<'lease> PendingReceiver<'lease> {
         generation: u64,
         stop: &AtomicBool,
     ) -> Result<ArmedWelcome<'lease>> {
-        self.turn()?.arm(port, selector, generation, stop)
+        self.turn()?
+            .arm(port, selector, generation, PendingClock::Fixture(stop))
     }
 
     pub(in crate::peer_invitation) fn ingest(
@@ -93,7 +103,17 @@ impl<'lease> PendingReceiver<'lease> {
         armed: ArmedWelcome<'lease>,
         stop: &AtomicBool,
     ) -> Result<(Result<()>, JoinMetrics)> {
-        self.turn()?.ingest(port, armed, stop)
+        let result = self
+            .turn()?
+            .ingest(port, armed, PendingClock::Fixture(stop))?;
+        let (result, metrics) = result.test_parts();
+        let result = result.map_err(Into::into);
+        let result = if result.is_ok() && LOSE_JOIN_RESULT.replace(false) {
+            Err(Error::Checkpoint(consent_checkpoint::Error::Source))
+        } else {
+            result
+        };
+        Ok((result, metrics))
     }
 
     pub(in crate::peer_invitation) fn qualify(
@@ -103,7 +123,8 @@ impl<'lease> PendingReceiver<'lease> {
         generation: u64,
         stop: &AtomicBool,
     ) -> Result<InstalledJoinedReadback<'lease>> {
-        self.turn()?.qualify(port, selector, generation, stop)
+        self.turn()?
+            .qualify(port, selector, generation, PendingClock::Fixture(stop))
     }
 
     pub(in crate::peer_invitation) fn custody_state(
@@ -133,6 +154,49 @@ impl<'lease> PendingReceiver<'lease> {
     }
 }
 
+pub(super) enum PendingClock<'a> {
+    Candidate {
+        readiness: &'a Readiness,
+        stop: &'a Arc<AtomicBool>,
+    },
+    #[cfg(test)]
+    Fixture(&'a AtomicBool),
+}
+
+impl PendingClock<'_> {
+    fn run<T>(
+        self,
+        port: &mut PeerRecipientPort,
+        native: &NativePending<'_>,
+        observed_wall: u64,
+        deadline: u64,
+        run: impl FnOnce(&mut PeerRecipientPort, &WelcomeFence<'_>) -> Result<T>,
+    ) -> Result<T> {
+        match self {
+            Self::Candidate { readiness, stop } => {
+                let window = port.use_current_native(|scope| {
+                    if scope.account() != native.signer.public_key()
+                        || scope.origin() != native.origin
+                        || scope.wall() < observed_wall
+                    {
+                        return Err(Error::Binding);
+                    }
+                    scope
+                        .window(readiness.clone(), stop.clone(), deadline)
+                        .map_err(|_| Error::Binding)
+                })??;
+                run(port, &WelcomeFence::Candidate(&window))
+            }
+            #[cfg(test)]
+            Self::Fixture(stop) => {
+                let clock = Wall::System;
+                let fence = TurnFence::new(&clock, stop, None, observed_wall, deadline)?;
+                run(port, &WelcomeFence::Fixture(&fence))
+            }
+        }
+    }
+}
+
 impl<'turn, 'lease> PendingTurn<'turn, 'lease> {
     pub(super) fn borrow(
         owner: &'turn mut RecoveredOwner<'lease>,
@@ -158,7 +222,7 @@ impl<'turn, 'lease> PendingTurn<'turn, 'lease> {
         port: &mut PeerRecipientPort,
         selector: Selector,
         generation: u64,
-        stop: &AtomicBool,
+        clock: PendingClock<'_>,
     ) -> Result<ArmedWelcome<'lease>> {
         self.owner.cursor.unchanged()?;
         let (held, delivery, wall) = self.owner.checkpoint.read_installed_join_custody(
@@ -167,30 +231,34 @@ impl<'turn, 'lease> PendingTurn<'turn, 'lease> {
             selector,
             generation,
         )?;
-        let clock = Wall::System;
-        let fence = TurnFence::new(&clock, stop, None, wall, held.held_deadline())?;
-        let prepared =
-            self.native
-                .prepare(self.owner, &held, &delivery, &WelcomeFence::Fixture(&fence))?;
-        fence.wall()?;
-        self.owner.cursor.unchanged()?;
-        let started = self.owner.checkpoint.start_installed_join(
-            &self.owner.source,
+        clock.run(
             port,
-            &held,
-            &prepared,
-            self.native.quota,
-            &fence,
-        )?;
-        Ok(ArmedWelcome { prepared, started })
+            &self.native,
+            wall,
+            held.held_deadline(),
+            |port, fence| {
+                let prepared = self.native.prepare(self.owner, &held, &delivery, fence)?;
+                fence.sample()?;
+                self.owner.cursor.unchanged()?;
+                let started = self.owner.checkpoint.start_installed_join(
+                    &self.owner.source,
+                    port,
+                    &held,
+                    &prepared,
+                    self.native.quota,
+                    fence,
+                )?;
+                Ok(ArmedWelcome { prepared, started })
+            },
+        )
     }
 
     pub(in crate::peer_invitation) fn ingest(
         &mut self,
         port: &mut PeerRecipientPort,
         armed: ArmedWelcome<'lease>,
-        stop: &AtomicBool,
-    ) -> Result<(Result<()>, JoinMetrics)> {
+        clock: PendingClock<'_>,
+    ) -> Result<ClosedJoin> {
         self.owner.cursor.unchanged()?;
         let (_, generation, _, selector) = armed.prepared.enrollment.stage.0.coordinates();
         let (current, delivery, wall) = self.owner.checkpoint.read_installed_join_custody(
@@ -199,24 +267,16 @@ impl<'turn, 'lease> PendingTurn<'turn, 'lease> {
             selector,
             generation,
         )?;
-        let clock = Wall::System;
-        let fence = TurnFence::new(&clock, stop, None, wall, current.held_deadline())?;
-        let result = self.native.join(
-            self.owner,
+        clock.run(
             port,
-            &WelcomeFence::Fixture(&fence),
-            armed,
-            &current,
-            &delivery,
-        )?;
-        let (result, metrics) = result.test_parts();
-        let result = result.map_err(Into::into);
-        let result = if result.is_ok() && LOSE_JOIN_RESULT.replace(false) {
-            Err(Error::Checkpoint(consent_checkpoint::Error::Source))
-        } else {
-            result
-        };
-        Ok((result, metrics))
+            &self.native,
+            wall,
+            current.held_deadline(),
+            |port, fence| {
+                self.native
+                    .join(self.owner, port, fence, armed, &current, &delivery)
+            },
+        )
     }
 
     pub(in crate::peer_invitation) fn qualify(
@@ -224,7 +284,7 @@ impl<'turn, 'lease> PendingTurn<'turn, 'lease> {
         port: &mut PeerRecipientPort,
         selector: Selector,
         generation: u64,
-        stop: &AtomicBool,
+        clock: PendingClock<'_>,
     ) -> Result<InstalledJoinedReadback<'lease>> {
         self.owner.cursor.unchanged()?;
         let (held, delivery, wall) = self.owner.checkpoint.read_installed_join_custody(
@@ -236,28 +296,26 @@ impl<'turn, 'lease> PendingTurn<'turn, 'lease> {
         let deadline = held
             .pending_deadline()
             .unwrap_or_else(|| held.held_deadline());
-        let clock = Wall::System;
-        let fence = TurnFence::new(&clock, stop, None, wall, deadline)?;
-        let joined = self.native.read_joined(
-            self.owner,
-            &held,
-            &delivery,
-            &WelcomeFence::Fixture(&fence),
-        )?;
-        fence.wall()?;
-        self.owner.cursor.unchanged()?;
-        self.owner.checkpoint.commit_installed_pending(
-            &self.owner.source,
-            port,
-            &held,
-            &joined,
-            self.native.quota,
-            &fence,
-        )?;
-        Ok(joined)
+        clock.run(port, &self.native, wall, deadline, |port, fence| {
+            let joined = self
+                .native
+                .read_joined(self.owner, &held, &delivery, fence)?;
+            fence.sample()?;
+            self.owner.cursor.unchanged()?;
+            self.owner.checkpoint.commit_installed_pending(
+                &self.owner.source,
+                port,
+                &held,
+                &joined,
+                self.native.quota,
+                fence,
+            )?;
+            Ok(joined)
+        })
     }
 }
 
+#[cfg(test)]
 impl PendingReceiver<'_> {
     pub(in crate::peer_invitation) fn fixture_legacy_start(
         &mut self,
@@ -281,14 +339,17 @@ impl PendingReceiver<'_> {
     }
 }
 
+#[cfg(test)]
 pub(in crate::peer_invitation) fn fixture_lose_join_result() {
     assert!(!LOSE_JOIN_RESULT.replace(true));
 }
 
+#[cfg(test)]
 pub(in crate::peer_invitation) fn fixture_join_result_lost() -> bool {
     !LOSE_JOIN_RESULT.get()
 }
 
+#[cfg(test)]
 pub(in crate::peer_invitation) fn fixture_check_enrollment(
     held: &HeldEvidence,
     delivery: &Delivery,
