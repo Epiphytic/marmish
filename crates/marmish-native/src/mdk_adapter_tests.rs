@@ -4828,3 +4828,92 @@ async fn copy_actor_changed_get_destination_refuses_before_fresh_open() {
     }
     assert_eq!(f.copy_journal_snapshot(0, "copy_local_receivers"), retained);
 }
+
+#[tokio::test]
+#[ignore = "offline native MLS and SQLCipher listener capacity fixture"]
+async fn terminal_runtime_native_rotates_registered_command_listeners() {
+    use crate::terminal_fence::FenceState;
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
+    use std::time::Instant as ScheduleTime;
+
+    let mut fixture = Fixture::new(3);
+    let relays = vec!["wss://127.0.0.1:9/".to_owned()];
+    let clients = [0, 2].map(|index| fixture.materials[index].public_key().to_hex());
+    let config = crate::command_config::CommandConfig::from_bytes(
+        &serde_json::to_vec(&serde_json::json!({
+            "version":1,"role":"server","relays":relays,
+            "tor":"off","trusted_remotes":[],"execution_clients":clients,
+            "terminal":{"clients":clients},
+            "command_policy":{"version":1},"cwd":"/","limits":{},"aliases":{}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fixture.owners[1].active = true;
+    fixture.owners[1].commands = Some(crate::command_service::CommandService::new(config, None));
+
+    let mut expected = BTreeSet::new();
+    for creator_index in [0, 2] {
+        fixture.owners.swap(0, creator_index);
+        let creator = fixture.owners[0].identity.clone();
+        for _ in 0..17 {
+            let origin = expected.len() as u8 + 1;
+            let (group, _) = fixture
+                .join_with_route(
+                    &[1],
+                    RoomPurpose::Command.description(),
+                    false,
+                    foundation::fresh_id(now().unwrap()).unwrap(),
+                    NostrRoutingV1::new([origin; 32], relays.clone()).unwrap(),
+                )
+                .await;
+            let accepted = fixture.owners[1]
+                .accept_command_group(&group, &creator)
+                .unwrap();
+            assert!(accepted.direction == CommandDirection::Server);
+            assert!(expected.insert(group.as_slice().to_vec()));
+        }
+        fixture.owners.swap(0, creator_index);
+    }
+    assert_eq!(expected.len(), 34);
+
+    let server = &mut fixture.owners[1];
+    let groups = |bindings: &[Binding]| {
+        bindings
+            .iter()
+            .map(|binding| binding.context.mls_group().to_vec())
+            .collect::<BTreeSet<_>>()
+    };
+    let now = ScheduleTime::now();
+    let first = server.terminal_server_bindings_at(now).unwrap();
+    let first_groups = groups(&first);
+    assert_eq!(first_groups.len(), 32);
+    let active = first[..8].to_vec();
+
+    let turn = now + Duration::from_secs(30);
+    let blocked = server.terminal_server_bindings_at(turn).unwrap();
+    assert_eq!(blocked.len(), 30);
+    assert!(groups(&blocked).is_subset(&first_groups));
+    drop((first, blocked));
+
+    let next = server.terminal_server_bindings_at(turn).unwrap();
+    let next_groups = groups(&next);
+    assert_eq!(next_groups.len(), 32);
+    assert_eq!(
+        first_groups
+            .union(&next_groups)
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        expected
+    );
+    assert_eq!(groups(&active).union(&next_groups).count(), 32);
+    for saved in &active {
+        let returned = next
+            .iter()
+            .find(|binding| binding.context.mls_group() == saved.context.mls_group())
+            .unwrap();
+        assert_eq!(saved.fence.state(), FenceState::Live);
+        assert!(Arc::ptr_eq(&saved.fence, &returned.fence));
+    }
+}

@@ -16,40 +16,84 @@ const CAPACITY: usize = 32;
 const MAX_LISTENER_CANDIDATES: usize = 64;
 const LISTENER_PASS: Duration = Duration::from_secs(30);
 
-#[derive(Default)]
+type RoomKey = (Id, Vec<u8>);
+
+#[derive(Clone, Default)]
 struct ListenerSchedule {
-    offset: usize,
     next_pass: Option<Instant>,
+    start_peer: Option<Account>,
+    after_room: BTreeMap<Account, RoomKey>,
+    credited: Vec<(Account, RoomKey)>,
 }
 
 impl ListenerSchedule {
     fn select(
         &mut self,
-        mut by_peer: BTreeMap<Account, VecDeque<AuthenticatedCommandContext>>,
+        by_peer: BTreeMap<Account, VecDeque<AuthenticatedCommandContext>>,
         now: Instant,
     ) -> Vec<AuthenticatedCommandContext> {
-        let count = by_peer.values().map(VecDeque::len).sum();
-        let mut ordered = Vec::with_capacity(count);
-        while !by_peer.is_empty() {
-            by_peer.retain(|_, entries| {
-                if let Some(context) = entries.pop_front() {
-                    ordered.push(context);
-                }
-                !entries.is_empty()
-            });
-        }
+        let count: usize = by_peer.values().map(VecDeque::len).sum();
+        let mut peers = by_peer.into_iter().collect::<Vec<_>>();
         if count <= CAPACITY {
             *self = Self::default();
-            return ordered;
+        } else {
+            self.order_pass(&mut peers, now);
         }
+        let mut selected = Vec::with_capacity(count.min(CAPACITY));
+        while !peers.is_empty() && selected.len() < CAPACITY {
+            let remaining = CAPACITY - selected.len();
+            selected.extend(
+                peers
+                    .iter_mut()
+                    .filter_map(|(_, rooms)| rooms.pop_front())
+                    .take(remaining),
+            );
+            peers.retain(|(_, rooms)| !rooms.is_empty());
+        }
+        selected
+    }
+
+    fn order_pass(
+        &mut self,
+        peers: &mut [(Account, VecDeque<AuthenticatedCommandContext>)],
+        now: Instant,
+    ) {
+        let mut start =
+            peers.partition_point(|(peer, _)| self.start_peer.is_some_and(|start| *peer < start));
         if self.next_pass.is_some_and(|deadline| now >= deadline) {
-            self.offset = (self.offset + CAPACITY) % count;
+            start = (start + self.credited.len().max(1)) % peers.len();
+            self.start_peer = Some(peers[start].0);
+            self.after_room.extend(self.credited.drain(..));
             self.next_pass = None;
         }
+        self.start_peer.get_or_insert(peers[0].0);
         self.next_pass.get_or_insert(now + LISTENER_PASS);
-        ordered.rotate_left(self.offset % count);
-        ordered.truncate(CAPACITY);
-        ordered
+        self.after_room
+            .retain(|peer, _| peers.binary_search_by_key(peer, |(peer, _)| *peer).is_ok());
+        for (peer, rooms) in peers.iter_mut() {
+            if let Some((session, group)) = self.after_room.get(peer) {
+                let offset = rooms.partition_point(|context| {
+                    (context.session(), context.mls_group()) <= (*session, group.as_slice())
+                });
+                rooms.rotate_left(offset);
+            }
+        }
+        peers.rotate_left(start);
+    }
+
+    fn record(&mut self, prefix: &[Binding]) {
+        if self.next_pass.is_some() && prefix.len() >= self.credited.len() {
+            self.credited = prefix
+                .iter()
+                .map(|binding| {
+                    let context = &binding.context;
+                    (
+                        context.peer_account(),
+                        (context.session(), context.mls_group().to_vec()),
+                    )
+                })
+                .collect();
+        }
     }
 }
 
@@ -106,6 +150,29 @@ impl Authority {
         let binding = Binding { context, fence };
         self.entries.insert(group, binding.clone());
         Ok(binding)
+    }
+
+    fn register_listeners(
+        &mut self,
+        candidates: BTreeMap<Account, VecDeque<AuthenticatedCommandContext>>,
+        now: Instant,
+    ) -> Result<Vec<Binding>> {
+        // Publish cursor progress only after building the complete snapshot.
+        let mut schedule = self.listeners.clone();
+        let mut bindings = Vec::new();
+        let mut prefix_end = None;
+        for context in schedule.select(candidates, now) {
+            match self.register(context) {
+                Ok(binding) => bindings.push(binding),
+                Err(Error::Invalid("terminal_authority_capacity")) => {
+                    prefix_end.get_or_insert(bindings.len());
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        schedule.record(&bindings[..prefix_end.unwrap_or(bindings.len())]);
+        self.listeners = schedule;
+        Ok(bindings)
     }
 
     pub(super) fn retire(&mut self, group: &[u8]) {
@@ -342,6 +409,10 @@ impl MdkOwner {
     }
 
     pub(crate) fn terminal_server_bindings(&mut self) -> Result<Vec<Binding>> {
+        self.terminal_server_bindings_at(Instant::now())
+    }
+
+    pub(super) fn terminal_server_bindings_at(&mut self, now: Instant) -> Result<Vec<Binding>> {
         if !self.active || self.recovery {
             return Err(Error::Transport("terminal_transport_unavailable"));
         }
@@ -388,19 +459,7 @@ impl MdkOwner {
                 (left.session(), left.mls_group()).cmp(&(right.session(), right.mls_group()))
             });
         }
-        let selected = self
-            .terminal_authority
-            .listeners
-            .select(accepted, Instant::now());
-        let mut bindings = Vec::new();
-        for context in selected {
-            match self.terminal_authority.register(context) {
-                Ok(binding) => bindings.push(binding),
-                Err(Error::Invalid("terminal_authority_capacity")) => (),
-                Err(error) => return Err(error),
-            }
-        }
-        Ok(bindings)
+        self.terminal_authority.register_listeners(accepted, now)
     }
 }
 

@@ -13,42 +13,204 @@ fn context(id: u8) -> AuthenticatedCommandContext {
     context
 }
 
+fn listener_candidates(counts: &[u8]) -> BTreeMap<Account, VecDeque<AuthenticatedCommandContext>> {
+    let mut id = 0;
+    counts
+        .iter()
+        .enumerate()
+        .map(|(peer, count)| {
+            let peer = [peer as u8; 32];
+            let rooms = (0..*count)
+                .map(|_| {
+                    let mut room = context(id);
+                    room.peer_account = peer;
+                    room.direction = CommandDirection::Server;
+                    id += 1;
+                    room
+                })
+                .collect();
+            (peer, rooms)
+        })
+        .collect()
+}
+
+fn bound_rooms(bindings: &[Binding]) -> Vec<u8> {
+    bindings
+        .iter()
+        .map(|binding| binding.context.mls_group()[0])
+        .collect()
+}
+
+fn listener_snapshot(authority: &mut Authority, counts: &[u8], now: Instant) -> Vec<Binding> {
+    authority.prune_unused();
+    authority
+        .register_listeners(listener_candidates(counts), now)
+        .unwrap()
+}
+
 #[test]
 fn terminal_runtime_core_listener_pass_is_bounded_and_reaches_later_rooms() {
-    let per_peer = |peers: u8| {
-        (0..peers)
-            .map(|peer| {
-                (
-                    [peer; 32],
-                    VecDeque::from([context(peer), context(peer + peers)]),
-                )
-            })
-            .collect()
-    };
-    let groups = |selected: Vec<AuthenticatedCommandContext>| {
-        selected
-            .into_iter()
-            .map(|context| context.mls_group()[0])
-            .collect::<Vec<_>>()
-    };
     let now = Instant::now();
+    let mut authority = Authority::default();
+    let rooms = [2; 32];
+    let first = listener_snapshot(&mut authority, &rooms, now);
+    let first_rooms = (0..64).step_by(2).collect::<Vec<_>>();
+    assert_eq!(bound_rooms(&first), first_rooms);
+    assert_eq!(authority.listeners.next_pass, Some(now + LISTENER_PASS));
+    drop(first);
+    let early = now + LISTENER_PASS - Duration::from_millis(1);
+    assert_eq!(
+        bound_rooms(&listener_snapshot(&mut authority, &rooms, early)),
+        first_rooms
+    );
+    assert_eq!(authority.listeners.next_pass, Some(now + LISTENER_PASS));
+    let boundary = now + LISTENER_PASS;
+    assert_eq!(
+        bound_rooms(&listener_snapshot(&mut authority, &rooms, boundary)),
+        (1..64).step_by(2).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        authority.listeners.next_pass,
+        Some(boundary + LISTENER_PASS)
+    );
+    assert_eq!(
+        bound_rooms(&listener_snapshot(&mut authority, &[2; 2], boundary)),
+        [0, 2, 1, 3]
+    );
+    assert!(authority.listeners.next_pass.is_none());
+    assert!(authority.listeners.start_peer.is_none());
+    assert!(authority.listeners.after_room.is_empty());
+    assert!(authority.listeners.credited.is_empty());
+    assert_eq!(
+        bound_rooms(&listener_snapshot(&mut authority, &rooms, boundary)),
+        first_rooms
+    );
+}
+
+#[test]
+fn terminal_runtime_core_listener_pass_is_peer_fair_with_skew_and_full_capacity() {
+    let start = Instant::now();
+    let mut authority = Authority::default();
+    let mut skew = [1; 32];
+    skew[0] = 33;
+    for pass in 0..33 {
+        let snapshot = listener_snapshot(&mut authority, &skew, start + LISTENER_PASS * pass);
+        assert_eq!(snapshot.len(), CAPACITY);
+        assert_eq!(bound_rooms(&snapshot)[0], pass as u8);
+        assert_eq!(bound_rooms(&snapshot)[1..], (33u8..64).collect::<Vec<_>>());
+    }
+
+    let mut authority = Authority::default();
+    let mut slots = [0; 20];
+    for pass in 0..5 {
+        let snapshot = listener_snapshot(&mut authority, &[3; 20], start + LISTENER_PASS * pass);
+        assert_eq!(snapshot.len(), CAPACITY);
+        for binding in &snapshot {
+            slots[binding.context.peer_account()[0] as usize] += 1;
+        }
+    }
+    assert_eq!(slots, [8; 20]);
+}
+
+#[test]
+fn terminal_runtime_core_listener_rotation_keeps_held_fences_and_reaches_tail() {
+    let now = Instant::now();
+    let mut authority = Authority::default();
+    let initial = listener_snapshot(&mut authority, &[64], now);
+    let held = initial[..16].to_vec();
+    assert_eq!(initial.len(), CAPACITY);
+    assert!(listener_snapshot(&mut authority, &[64], now + LISTENER_PASS).is_empty());
+    assert_eq!(authority.entries.len(), CAPACITY);
+    assert!(authority.listeners.credited.is_empty());
+    drop(initial);
+    let next = listener_snapshot(&mut authority, &[64], now + LISTENER_PASS);
+    assert_eq!(bound_rooms(&next), (32..48).collect::<Vec<_>>());
+    assert_eq!(authority.entries.len(), CAPACITY);
+    drop(next);
+    let tail = listener_snapshot(&mut authority, &[64], now + LISTENER_PASS * 2);
+    assert_eq!(bound_rooms(&tail)[..16], (48..64).collect::<Vec<_>>());
+    assert_eq!(bound_rooms(&tail)[16..], (0..16).collect::<Vec<_>>());
+    assert_eq!(authority.entries.len(), CAPACITY);
+    for (saved, returned) in held.iter().zip(&tail[16..]) {
+        assert!(Arc::ptr_eq(&saved.fence, &returned.fence));
+        assert_eq!(saved.fence.state(), FenceState::Live);
+    }
+}
+
+#[test]
+fn terminal_runtime_core_listener_uses_identity_to_resume_after_removal_and_zero_credit() {
+    let now = Instant::now();
+    let mut authority = Authority::default();
+    let initial = listener_snapshot(&mut authority, &[3; 20], now);
     let mut schedule = ListenerSchedule::default();
+    schedule.select(listener_candidates(&[3; 20]), now);
+    schedule.record(&initial);
+    let selected = schedule.select(listener_candidates(&[3; 20]), now + LISTENER_PASS);
+    assert_eq!(selected[0].peer_account(), [12; 32]);
+    assert_eq!(selected[0].mls_group(), [37; 32]);
+
+    let mut changed = listener_candidates(&[3; 20]);
+    changed.remove(&[12; 32]);
+    changed.get_mut(&[13; 32]).unwrap().pop_front();
+    let selected = schedule.select(changed.clone(), now + LISTENER_PASS);
+    assert_eq!(selected[0].peer_account(), [13; 32]);
+    assert_eq!(selected[0].mls_group(), [40; 32]);
+    assert!(schedule.credited.is_empty());
+    let after_room = schedule.after_room.clone();
+    let selected = schedule.select(changed, now + LISTENER_PASS * 2);
+    assert_eq!(selected[0].peer_account(), [14; 32]);
+    assert_eq!(schedule.after_room, after_room);
+}
+
+#[test]
+fn terminal_runtime_core_listener_prefix_uses_high_water_and_survives_failure() {
+    let now = Instant::now();
+    let mut authority = Authority::default();
+    let first = listener_snapshot(&mut authority, &[2; 32], now);
+    let full = authority.listeners.credited.clone();
+    authority.listeners.record(&first[..31]);
+    assert_eq!(authority.listeners.credited, full);
+
+    let mut schedule = ListenerSchedule::default();
+    schedule.select(listener_candidates(&[2; 32]), now);
+    schedule.record(&first[..3]);
+    let previous = schedule.credited.clone();
+    schedule.record(&first[5..7]);
+    assert_eq!(schedule.credited, previous);
+    schedule.record(&first[5..8]);
+    assert_ne!(schedule.credited, previous);
+    assert_eq!(schedule.credited[0].0, [5; 32]);
+
+    drop(first);
+    authority.prune_unused();
+    authority.generation = u64::MAX;
+    assert!(matches!(
+        authority.register_listeners(listener_candidates(&[2; 32]), now + LISTENER_PASS),
+        Err(Error::Invalid("terminal_authority_generation"))
+    ));
+    assert_eq!(authority.listeners.credited, full);
+    assert_eq!(authority.listeners.next_pass, Some(now + LISTENER_PASS));
+}
+
+#[test]
+fn terminal_runtime_core_listener_soft_refusal_preserves_later_registrations() {
+    let now = Instant::now();
+    let mut authority = Authority::default();
+    let mut held = listener_snapshot(&mut authority, &[33], now);
+    drop(held.remove(0));
+    authority.prune_unused();
+    let mut all = listener_candidates(&[33]);
+    let candidate = all.values_mut().next().unwrap().pop_back().unwrap();
+    let following = authority.register(candidate).unwrap();
+    let refreshed = listener_snapshot(&mut authority, &[33], now + LISTENER_PASS);
     assert_eq!(
-        groups(schedule.select(per_peer(32), now)),
-        (0..32).collect::<Vec<_>>()
+        bound_rooms(&refreshed),
+        [32].into_iter().chain(1..31).collect::<Vec<_>>()
     );
-    assert_eq!(
-        groups(schedule.select(per_peer(32), now + LISTENER_PASS - Duration::from_millis(1))),
-        (0..32).collect::<Vec<_>>()
-    );
-    assert_eq!(
-        groups(schedule.select(per_peer(32), now + LISTENER_PASS)),
-        (32..64).collect::<Vec<_>>()
-    );
-    assert_eq!(
-        groups(schedule.select(per_peer(2), now + LISTENER_PASS)),
-        [0, 1, 2, 3]
-    );
+    assert!(Arc::ptr_eq(&following.fence, &refreshed[0].fence));
+    assert!(Arc::ptr_eq(&held[0].fence, &refreshed[1].fence));
+    assert_eq!(authority.listeners.credited.len(), 1);
+    assert_eq!(authority.listeners.credited[0].1.1, [32; 32]);
 }
 
 #[test]

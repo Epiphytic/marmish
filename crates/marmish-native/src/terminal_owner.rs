@@ -46,6 +46,38 @@ fn listener_delay(failures: u8) -> Duration {
     }
 }
 
+async fn await_listener_registration(
+    current: impl Fn() -> bool,
+    eligible: impl Fn() -> bool,
+    mut register: impl FnMut() -> Result<InboundState>,
+    mut report: impl FnMut(),
+) -> Option<InboundState> {
+    let mut next_attempt = Instant::now();
+    let mut next_report = next_attempt;
+    let mut failures = 0u8;
+    while current() {
+        if Instant::now() < next_attempt {
+            tokio::time::sleep_until(next_attempt).await;
+            continue;
+        }
+        if !eligible() {
+            tokio::time::sleep(POLL).await;
+            continue;
+        }
+        if let Ok(inbound) = register() {
+            return Some(inbound);
+        }
+        let now = Instant::now();
+        if now >= next_report {
+            report();
+            next_report = now + Duration::from_secs(30);
+        }
+        failures = failures.saturating_add(1);
+        next_attempt = now + listener_delay(failures);
+    }
+    None
+}
+
 pub(crate) struct Prepared {
     route: Route,
     server: Option<(CommandConfig, Registry, PathBuf)>,
@@ -326,24 +358,36 @@ impl Server {
         stop: Arc<AtomicBool>,
         control: LiveControl,
     ) {
-        let Ok(mut inbound) = InboundState::register(
-            self.ledger.clone(),
-            binding.context.peer_account(),
-            endpoint.clone(),
-        ) else {
-            crate::diagnostics::event("terminal_listener", "admission_unavailable");
+        let current = || {
+            !self.stop.load(Ordering::Acquire)
+                && !stop.load(Ordering::Acquire)
+                && binding.fence.state() != FenceState::Retired
+        };
+        let eligible = || {
+            self.latest.borrow().fresh()
+                && binding.fence.state() == FenceState::Live
+                && self.route.server_available()
+        };
+        let Some(mut inbound) = await_listener_registration(
+            current,
+            eligible,
+            || {
+                InboundState::register(
+                    self.ledger.clone(),
+                    binding.context.peer_account(),
+                    endpoint.clone(),
+                )
+            },
+            || crate::diagnostics::event("terminal_listener", "admission_unavailable"),
+        )
+        .await
+        else {
             return;
         };
         let mut tokens = selection::SourceTokens::default();
         let mut failures = 0u8;
-        while !self.stop.load(Ordering::Acquire)
-            && !stop.load(Ordering::Acquire)
-            && binding.fence.state() != FenceState::Retired
-        {
-            if !self.latest.borrow().fresh()
-                || binding.fence.state() != FenceState::Live
-                || !self.route.server_available()
-            {
+        while current() {
+            if !eligible() {
                 tokio::time::sleep(POLL).await;
                 continue;
             }
@@ -643,6 +687,105 @@ mod tests {
             [0, 1, 2, 3, 4, u8::MAX].map(|failures| listener_delay(failures).as_millis()),
             [25, 250, 500, 1000, 2000, 2000]
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn terminal_runtime_core_listener_registration_is_paced() {
+        use std::cell::{Cell, RefCell};
+
+        let ledger = Arc::new(AdmissionLedger::default());
+        let endpoint = "wss://relay.example/";
+        let mut occupied = (0..64u8)
+            .map(|id| InboundState::register(ledger.clone(), [id; 32], endpoint.into()).unwrap())
+            .collect::<Vec<_>>();
+        let eligible = Cell::new(true);
+        let attempts = RefCell::new(Vec::new());
+        let reports = RefCell::new(Vec::new());
+        let start = Instant::now();
+        let elapsed = || start.elapsed().as_millis();
+        let registration = await_listener_registration(
+            || true,
+            || eligible.get(),
+            || {
+                attempts.borrow_mut().push(elapsed());
+                InboundState::register(ledger.clone(), [64; 32], endpoint.into())
+            },
+            || reports.borrow_mut().push(elapsed()),
+        );
+        tokio::pin!(registration);
+        assert!(futures_util::poll!(registration.as_mut()).is_pending());
+        for (index, attempt) in [250u64, 750, 1750, 3750, 5750].into_iter().enumerate() {
+            let delay = attempt - elapsed() as u64;
+            tokio::time::advance(Duration::from_millis(delay - 1)).await;
+            assert!(futures_util::poll!(registration.as_mut()).is_pending());
+            assert_eq!(attempts.borrow().len(), index + 1);
+            tokio::time::advance(Duration::from_millis(1)).await;
+            assert!(futures_util::poll!(registration.as_mut()).is_pending());
+            assert_eq!(attempts.borrow().last(), Some(&(attempt as u128)));
+        }
+        assert_eq!(*attempts.borrow(), [0, 250, 750, 1750, 3750, 5750]);
+        assert_eq!(*reports.borrow(), [0]);
+        for expected in (7750u128..=31750).step_by(2000) {
+            tokio::time::advance(Duration::from_secs(2)).await;
+            assert!(futures_util::poll!(registration.as_mut()).is_pending());
+            assert_eq!(attempts.borrow().last(), Some(&expected));
+            if expected < 30_000 {
+                assert_eq!(*reports.borrow(), [0]);
+            }
+        }
+        assert_eq!(*reports.borrow(), [0, 31750]);
+
+        eligible.set(false);
+        tokio::time::advance(Duration::from_secs(2)).await;
+        assert!(futures_util::poll!(registration.as_mut()).is_pending());
+        assert_eq!(attempts.borrow().last(), Some(&31750));
+        drop(occupied.pop());
+        eligible.set(true);
+        tokio::time::advance(POLL).await;
+        assert!(matches!(
+            futures_util::poll!(registration.as_mut()),
+            std::task::Poll::Ready(Some(_))
+        ));
+        assert_eq!(attempts.borrow().last(), Some(&33775));
+        assert_eq!(*reports.borrow(), [0, 31750]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn terminal_runtime_core_listener_eviction_ends_registration_wait() {
+        use std::cell::Cell;
+
+        let current = Cell::new(true);
+        let eligible = Cell::new(false);
+        let attempts = Cell::new(0);
+        let registration = await_listener_registration(
+            || current.get(),
+            || eligible.get(),
+            || {
+                attempts.set(attempts.get() + 1);
+                Err(Error::Invalid("terminal_bootstrap_rate"))
+            },
+            || (),
+        );
+        tokio::pin!(registration);
+        assert!(futures_util::poll!(registration.as_mut()).is_pending());
+        assert_eq!(attempts.get(), 0);
+        eligible.set(true);
+        tokio::time::advance(POLL).await;
+        assert!(futures_util::poll!(registration.as_mut()).is_pending());
+        assert_eq!(attempts.get(), 1);
+        eligible.set(false);
+        tokio::time::advance(POLL).await;
+        eligible.set(true);
+        assert!(futures_util::poll!(registration.as_mut()).is_pending());
+        assert_eq!(attempts.get(), 1);
+
+        current.set(false);
+        tokio::time::advance(Duration::from_millis(250)).await;
+        assert!(matches!(
+            futures_util::poll!(registration.as_mut()),
+            std::task::Poll::Ready(None)
+        ));
+        assert_eq!(attempts.get(), 1);
     }
 
     #[test]

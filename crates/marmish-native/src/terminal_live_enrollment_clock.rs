@@ -251,6 +251,38 @@ mod tests {
     }
 
     #[test]
+    fn terminal_runtime_core_listener_clock_refusals_preserve_replay_state() {
+        let ledger = Arc::new(AdmissionLedger::default());
+        let scope = ([1; 32], "wss://relay.example/".to_owned());
+        let listener =
+            InboundState::register_at(ledger.clone(), scope.clone(), time(1000, 0)).unwrap();
+        assert!(listener.charge([3; 32], time(1000, 0)).unwrap());
+        drop(listener);
+
+        let other = ([2; 32], scope.1.clone());
+        assert!(matches!(
+            InboundState::register_at(ledger.clone(), other.clone(), time(1008, 15)),
+            Err(Error::Invalid("terminal_bootstrap_clock"))
+        ));
+        for tick in 16..56 {
+            assert!(matches!(
+                InboundState::register_at(ledger.clone(), other.clone(), time(1000 + tick, tick)),
+                Err(Error::Invalid("terminal_bootstrap_clock"))
+            ));
+        }
+        {
+            let state = ledger.0.lock().unwrap();
+            assert_eq!(state.clock.uncertain_since, Some(Duration::from_secs(15)));
+            assert_eq!(state.scopes.len(), 1);
+            let row = &state.scopes[&scope];
+            assert_eq!(row.ids, [([3; 32], Duration::ZERO)]);
+            assert_eq!(row.listeners, 0);
+        }
+        let recovered = InboundState::register_at(ledger, scope, time(1056, 56)).unwrap();
+        assert!(!recovered.charge([3; 32], time(1056, 56)).unwrap());
+    }
+
+    #[test]
     fn full_scope_table_reclaims_only_expired_reaped_rows() {
         let ledger = Arc::new(AdmissionLedger::default());
         let mut listeners = Vec::new();
