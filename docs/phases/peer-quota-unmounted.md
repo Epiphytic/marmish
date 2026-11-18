@@ -1,8 +1,9 @@
 # Unmounted Peer receiver quota boundary
 
-The implementation scope is one private eligibility and callable quota boundary
-at `ffb9b219cf9c4e3a24634bcae4c4f4428c2b1bb6`. Use bundled SQLCipher and
-Cargo.lock MDK `b3cd2cb1c3a585372c5061b8f35d31a93ce9cdc1`. The
+The approved design starts from one private eligibility and callable quota
+boundary at `ffb9b219cf9c4e3a24634bcae4c4f4428c2b1bb6`, using bundled
+SQLCipher and upstream MDK `b3cd2cb1`. The integrated build uses upstream MDK
+`bdf9833e`. Both builds use their checked-in lockfile. The
 [dispatcher design](peer-quota-dispatch.md) retains its VFS, capacity, isolation,
 and two-platform production mount requirements.
 

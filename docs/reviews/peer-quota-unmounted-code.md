@@ -23,3 +23,12 @@ charges. The fixture still supplies a scalar budget. A successful admission
 records generation and witness before entry. The installed phase must account
 for the possibility that the subsequent entry check refuses. Neither observation
 qualifies the physical cap in a mounted production process.
+
+Claude Code Sonnet 5.5 Auto session `61bf2e42-f200-473d-a7f3-04925e86dcd7`
+approved the composed source `f7b1bc6` after a static review. The six Rust
+files match the author source byte for byte. The reviewer confirmed the
+existing installed Offer and qualification issuer have no caller that can
+register the quota. The review required exact tests and a binary marker
+check after the MDK lock refresh. The validation report records both.
+The upstream compare covers app recovery code outside Marmish's dependency
+graph and reports no storage migration between the two locked revisions.

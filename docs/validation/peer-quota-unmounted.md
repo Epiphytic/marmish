@@ -46,3 +46,17 @@ This run used Linux AMD64 only. Linux ARM64 and macOS ARM64 remain closed for
 receiver eligibility. Actual mounted daemon qualification, the physical
 release-shaped quota and restart proof and the APFS requirements remain
 separate. [Approved phase design](../phases/peer-quota-unmounted.md).
+
+## Integrated result
+
+The Linux AMD64 run on `f7b1bc6ef5459b557e2cd064242ddbb7a6c198f3` (tree
+`88b46c7b425e921a7f7e6f097b960e0f8e75ea3e`) used the upstream MDK lock at
+`bdf9833e340909f29c628f4fc2f9a3d6873f1cf5`. Eight exact quota tests,
+including the native migration and hot-journal fixture, passed in 17.98 s.
+The same run measured a 2,445,888 byte aggregate peak and the 32,768 byte
+raw bound. Six configuration tests passed in 0.03 s. Strict Clippy with
+`installed-checks` passed across all targets in 47.28 s.
+
+Normal `marmish` and `marmishd` binaries linked in 29.81 s and reported
+0.3.1. Neither binary contained the two test VFS names or the
+`dispatch-proof` marker. This run adds no installed receiver activation.
