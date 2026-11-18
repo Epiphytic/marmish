@@ -1,21 +1,124 @@
-# Installed Peer receiver quota boundary
+# Unmounted Peer receiver quota boundary
 
-Build the private receiver eligibility and quota boundary on `ffb9b219cf9c4e3a24634bcae4c4f4428c2b1bb6`, with bundled SQLCipher and Cargo.lock MDK `b3cd2cb1c3a585372c5061b8f35d31a93ce9cdc1`. The [dispatcher proof](peer-quota-dispatch.md) controls VFS behavior, capacity, isolation, and the two-platform mount gate. This addendum defines the unmounted interface and the split between compile and runtime evidence.
+The implementation scope is one private eligibility and callable quota boundary
+at `ffb9b219cf9c4e3a24634bcae4c4f4428c2b1bb6`. Use bundled SQLCipher and
+Cargo.lock MDK `b3cd2cb1c3a585372c5061b8f35d31a93ce9cdc1`. The
+[dispatcher design](peer-quota-dispatch.md) retains its VFS, capacity, isolation,
+and two-platform production mount requirements.
 
-## 1. Compile a private receiver boundary
+## Implementation scope
 
-- Give normalized `CommandConfig` a private projection of receive intent. The private receiver eligibility function takes that config and the sole borrowed `ProfileLease` and returns either `Off`, a closed reason, or a sealed, non-cloneable receiver candidate. Only Client and Both with Manual, AutoAny, or AutoFounders enter candidacy. Missing config, Off, and Server create no Peer paths, initialize no Peer storage or dispatcher, and perform no Peer I/O. Server origination is a different direction. Check the initialized profile/config binding and preserve exact receive intent. The candidate borrows the lease and can be consumed only by the future owner in that same profile incarnation. No CLI, IPC, relay, install, or default changes.
-- Give the private quota owner boundary a callable `ReceiverQuota::admit(&self, reservation) -> Result<QuotaTurn<'_>>` contract. The reservation must come from the same live owner and carry the exact known/unknown class, generation and file witness. A turn is non-Send and borrows the owner for one synchronous, closed native operation. It cannot return a connection or transferable permit. The owner will use one durable aggregate charge snapshot and exclusive turn; callers cannot supply a byte count, pathname, or ownership flag. `ReceiverCandidate` is only eligibility to attempt owner initialization. Later `ReceiverAdmission` must be minted by the composed route owner only after the actual quota owner is verified, together with all independently approved route gates. Keep current fixture `ProfileSlots` and its scalar charges separate from this contract.
-- Compile the shared checked callback/accounting path and effective target classification in normal builds. The constructor for a mounted `ReceiverQuota` and the process-default registrar have no non-test call path in this cut. Keep fixture mounts, snapshot-only scope, callback failure injection, and crash stops test-only. Reuse one checked `Quota`/forwarding implementation in both builds, with fixture-only code clearly excluded. The standalone proof VFS and its name stay test-only. Add no Cargo feature, runtime switch, daemon mount, or registration shortcut, including through `installed-checks`. On all platforms the installed quota is still unavailable. Linux AMD64 is a qualification candidate. macOS ARM64 stays closed pending APFS evidence. Unsupported targets remain closed.
-- In this cut, verify closed eligibility and unchanged ordinary behavior with focused tests covering Off/missing, Server, Client, Both, lease/config mismatch, stale witness and bounded turn. Re-run the reviewed private quota cases on the current lock, plus normal non-test and `installed-checks` builds, scoped Clippy, and package/entrypoint inspection for absence of installed mount and fault hooks. Record source and artifact identity. Linker elimination of unreachable code is expected. Compile evidence establishes type/cfg parity and test evidence establishes fixture mechanics, with neither granting installed eligibility.
+1. Project receive intent from normalized `CommandConfig` into a private
+   eligibility check. It checks immutable configuration against the same
+   `Arc<ProfileLease>` incarnation from which it was loaded. The sealed,
+   non-cloneable `ReceiverCandidate` keeps the same lease and exact normalized
+   receive policy. Compare the exact current bound configuration before any
+   later owner initialization. Only Client and Both with Manual, AutoAny, or
+   AutoFounders and an explicit supported private relay are candidates. Off,
+   missing config, Server, and `RouteMode::Always` remain closed. The existing
+   parser refuses Server with receive intent. On Linux AMD64, candidacy means
+   the target can be considered for later qualification. Linux ARM64, macOS
+   ARM64 and all other targets are closed. Evaluation performs no storage,
+   network, or relay operations. Keep test bootstrap's fixture authorization
+   separate from installed candidacy and reuse the common role predicate.
+2. Add a callable private `ReceiverQuota::admit(&self, Reservation<'_>) ->
+   Result<QuotaTurn<'_>>` boundary. The owner alone mints a non-cloneable
+   reservation branded to its own lease and charge snapshot, with exact
+   known/unknown slot, generation and file witness. `admit` consumes it and
+   checks owner, current witness, capacity and exclusive dispatch slot under
+   the existing reservation mutex before issuing a non-Send turn. The turn
+   borrows the owner and accepts only one bounded synchronous native operation
+   through the closed guard. Callers cannot supply a charge scalar, a path, or
+   a constructor for a live owner or turn. Keep `ProfileSlots` fixture inputs
+   available only in tests. Test the same checked admission against the
+   private harness using a fixture constructor compiled only in tests.
+3. Compile the shared checked quota callbacks, forwarding and admission code
+   in normal builds. Keep all mounting and construction of a mounted owner
+   test-only in this cut. This includes the separate proof VFS, injected crash
+   and poison controls (`Quota::resize`, `ProfileSlots`), and C2's synthetic
+   snapshot turn. Test-only instrumentation does not supply release accounting.
+   No CLI, IPC, Cargo feature, installation or daemon changes. Neither this
+   boundary nor `installed-checks` can mint the later route `ReceiverAdmission`.
+   It requires the actual quota owner as well as the independently approved
+   route gates.
+4. Verify missing/Off, Client, Both, inert Server and Always, exact lease and
+   configuration binding, wrong owner, stale/reused witness and turn
+   exclusivity. Re-run the opt-in quota harness on the current lock. Compile
+   non-test and `installed-checks` builds and run scoped strict Clippy. Audit
+   the reachable source and package entrypoints for no added defaults or mount
+   callers, and inspect artifacts for Rust-specific fixture names and crash
+   controls. Linker elimination of unmounted code is expected. These checks
+   establish compiler coverage and exact fixture behavior. The installed daemon
+   continues to have zero live receiver quota mounts.
 
-## 2. Qualify the real Linux owner on a separately reviewed candidate
+## Dependencies and evidence for a later runtime phase
 
-- Build the production owner charge source before installing a registrar. Reconstruct the live known/unknown reservation and quarantine inventory from durable custody under the one held lease. Count each admitted native main, DELETE journal and covered artifact once across the 128 MiB domain, including abandoned/quarantined state. Apply the independent 16 MiB closed-main limit. Hold exclusion for charge-changing work from the checked snapshot through final handle close, recalculate or quarantine on mismatch, and retain charge/witness across process death. No synthetic scalar, unbounded fallback, or promotion of test snapshot/founder/accepted-epoch paths. If complete accounting cannot be established under this owner, the owner cannot mount.
-- Specify the only installed registrar caller as the fresh foreground `marmishd` child bootstrap. Inspect the entire shipping call graph from `bin/marmishd.rs` through CLI foreground/re-exec on the pinned graph. Register once after existing config/lease/material preparation and before `daemon::open_inner` calls `native_preflight::check`. The latter opens an existing SQLCipher DB read-only, before `MdkOwner::open`, so startup proof must use a populated profile as well as a fresh one. Neither SQLCipher initialization nor observing the stock default establishes pre-open order. No late fallback or public programmatic entry that can mount from a process already using SQLite. Establish actual order in qualification using an external observation of bundled registration versus the first SQLite open, and verify that preflight's ordinary handles use stock file methods through the dispatcher. If an eligible startup cannot mount cleanly, preserve ordinary startup, and keep Peer closed. If registration already succeeded, leave verified ordinary forwarding in place; if it cannot be verified, do not claim a safe activated candidate.
-- The shortest useful runtime run needs a later approved, isolated integration candidate that reaches the actual owner through the real authenticated private WSS ingress. Build the normal release-shaped daemon and client from that exact source, with no fixture flags or injected transport. On ordinary UID and a local Linux AMD64 filesystem, use a populated disposable profile. Start the installed daemon, verify original stock descriptor/method passthrough, and overlap actual Command and ephemeral Terminal I/O with one authenticated known stage and one bounded unknown stage on the same daemon. Induce quota pressure through bounded, authenticated lifecycle input or naturally occupied owned quota. Observe independently charged main and journal, refusals before quota-violating underlying growth, no forbidden sidecars or scope escapes, and ordinary readiness after refusal. Test a second process competing for the lease.
-- Stop or kill the owned daemon externally at a verified real partial transaction with a charged DELETE journal, then restart the exact binary. Collect evidence that the same inode and generation remain charged and quarantined, no reuse or automatic unbounded reopen occurs, and ordinary Command/Terminal still work. An external kill can miss the transaction. A run that misses that window or never reaches journal growth is inconclusive. Use a separate opt-in test harness for deliberately displaced VFS/default, wider syscall/callback fault coverage, and independently demonstrated named-VFS/direct file bypass controls. Audit pinned app and MDK paths to exclude those bypasses from real installed Peer ingress. No fixture hooks in any published executable. Measure elapsed time and preserve only sanitized results. The unmounted binary alone cannot validate simultaneous installed behavior or crash/reopen of its disabled owner.
+The following defines the qualification handoff. The runtime integration needs
+its own detailed approval, including un-gating the exact authenticated Peer
+receive and durable custody chain. It cannot be tested in the unmounted cut.
 
-## 3. Close platform and activation gates
-
-Linux runtime evidence stays scoped to the exact candidate, dependency lock, target, filesystem, build flags, and tested entry points. Require the [original APFS matrix](peer-quota-dispatch.md#subsequent-code-and-test-gate) independently on macOS ARM64, including local-volume and alias checks, `unix-posix` locks, explicit AUTOPROXY refusal, `SQLITE_FORCE_PROXY_LOCKING=1`, audited bundled SQLite build flags, crash/reopen, and mixed installed behavior. Keep APFS ineligible without that evidence. The existing dual-platform production-mount condition still applies. A request to release Linux activation separately would require a separate design disposition. A non-test qualification binary with the mount is a later reviewed candidate held and run privately. Require exact independent review of that candidate and both platform qualifications before authorizing a production mount under the current plan.
+- **Ownership and budget.** A future authorized daemon path starts at fresh
+  foreground `run_with_startup` → `run_inner` from the installed binary. Give
+  it sole access to registration. Split preflight setup so that path owns an
+  `Arc<ProfileLease>` before evaluating intent, mounts before
+  `native_preflight::check`, and carries the same Arc through the Peer owner.
+  Test `marmishd init`, the public `daemon::open` including two-profile
+  installed checks, and ordinary daemon startup with Peer Off, with no mount.
+  A read-only preflight on a populated profile is already a SQLite open.
+  Prove build-time call ordering and actual registration before that open.
+  Relay unavailability or any pre-registration refusal leaves ordinary startup
+  on the stock VFS. If registration's invariant fails after the irreversible
+  switch, fail the private candidate rather than run against an unverified
+  default. This is a release qualification failure.
+- **Charge inventory.** Reconstruct known and unknown durable reservation and
+  quarantine ownership from actual custody under the sole profile lease. The
+  128 MiB aggregate counts each native provisional main and rollback journal
+  and each other Peer provisioned artifact owned by those same reservations,
+  including abandoned or quarantined bytes, once. The later phase must name
+  each allowed artifact and its owner before mounting. Charge unknown entries
+  conservatively by fencing the inventory. Command, Terminal, copy, stream,
+  ordinary MDK, Arti and future accepted-stage stores are outside this scope.
+  C2-only snapshot and founder fixture paths cannot be admitted. Bind fixed
+  native stage path fences without SQLite before registering. Read the custody
+  checkpoint through audited ordinary storage after registration. The custody
+  journal itself is separate from the native stage mains and never enters a
+  managed turn. No managed turn or receiver admission before inventory proof.
+  Keep the independent 16 MiB clean closed-main guard. Reconstruct actual lengths on
+  restart and hold ownership exclusion until all managed handles close. Audit
+  both the current MDK call graph, worker assumptions and SQLite flags, and
+  every ordinary SQLite consumer in the current packed graph, including the
+  Command family, Terminal recovery and Arti's lazy directory cache in Auto.
+- **Shortest useful Linux run.** A separately approved private candidate uses
+  normal release-shaped AMD64 client and daemon binaries, ordinary UID, an
+  explicit authenticated private WSS relay and a populated disposable profile,
+  without installed fixture switches. Prove registration and stock methods in
+  a symbolized build of those exact artifacts by observing the Marmish caller
+  and ensuing ordinary open/method table. Compare syscalls against an unmounted
+  run for ordinary I/O and use directory metadata to measure both managed file
+  lengths. Concurrently drive real Command and ephemeral Terminal, an actual
+  known stage and a bounded unknown stage through the genuine owner. Reach a
+  real quota-refusal case using bounded authenticated input or a legitimately
+  occupied admitted budget. Verify no violating physical growth and ordinary
+  function after refusal and restart. Check second-process lease refusal. Stage
+  reports must distinguish observed overlap, main growth, journal growth and
+  refusal. A fixture scalar cannot close the installed cap claim.
+- **Crash/reopen.** Observe journal write and durable sync, then stop and kill
+  the owned daemon externally while the verified transaction is still open.
+  A supervisor can pause the exact process at a symbolized boundary after
+  observed journal sync, with a bounded timeout and cleanup. A missed cut is
+  inconclusive. Before restart inspect file lengths and inode independently.
+  After restart inspect durable generation, charge and quarantine using an
+  independently reviewed, sanitized read-only snapshot under the lease or
+  other exact observation approved for that phase. Verify preserved files,
+  no reallocation or uncapped open, and ordinary Command/Terminal. Use opt-in
+  harnesses separately for deliberate default displacement, injected callback
+  failures, and named-VFS/direct OS bypass controls. Keep the installed source
+  paths audited against those bypasses. Report exact source, lock, target,
+  flags and sanitized measurements.
+- **APFS and activation.** Keep APFS closed until the
+  [original platform matrix](peer-quota-dispatch.md#subsequent-code-and-test-gate)
+  passes independently. It includes canonical local APFS paths, `unix-posix`
+  locks, explicit AUTOPROXY and nonlocal-volume refusal, forced proxy env and
+  compiled flags, mixed real applications and crash/reopen. Private Linux
+  evidence can precede APFS. Both platform qualifications and separate review
+  remain prerequisites to production mount under the original approved design.
