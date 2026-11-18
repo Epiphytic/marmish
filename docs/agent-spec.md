@@ -56,8 +56,10 @@ rollback. It remains a test target pending live carrier wiring. The
 heartbeat fields, capability states and complete permission snapshot
 assembly in deterministic tests. The [heartbeat sampler](validation/peer-heartbeat-sampler.md)
 qualifies bounded host metrics and opt-in address collection on Linux x86_64.
-macOS has a source-level platform check. Status publication and reception remain
-inactive in the daemon.
+macOS has a source-level platform check. The [heartbeat planner](validation/peer-heartbeat-planner.md)
+qualifies directional scheduling, authorized field selection and replay-safe
+projection in a stand-alone test target. Status publication and reception
+remain inactive in the daemon.
 
 **CI execution direction (2026-11-13):** prefer Epiphytic self-hosted runners;
 do not launch GitHub-hosted qualification as an implicit fallback. The
