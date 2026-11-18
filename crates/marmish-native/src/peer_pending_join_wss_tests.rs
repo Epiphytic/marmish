@@ -5,7 +5,9 @@ use crate::peer_invitation::{
         TrustedOutcome,
         consent_checkpoint::{
             Mode,
-            provisioning::prepared_consent::custody::{CustodyState, Replay},
+            provisioning::prepared_consent::custody::{
+                Approval, CustodyState, HeldEvidence, Replay,
+            },
         },
     },
 };
@@ -72,7 +74,11 @@ impl Round<'_> {
         .unwrap()
     }
 
-    fn assert_state(&self, owner: &mut PreparedConsentOwner<'_>, state: CustodyState) {
+    fn assert_state(
+        &self,
+        owner: &mut PreparedConsentOwner<'_>,
+        state: CustodyState,
+    ) -> HeldEvidence {
         let row = owner
             .state
             .checkpoint
@@ -85,6 +91,7 @@ impl Round<'_> {
             .unwrap()
             .expect("qualified durable custody");
         assert_eq!(row.state(), state);
+        row
     }
 
     pub(super) async fn exchange(self, client: &mut Owner, server: &mut Owner) {
@@ -103,7 +110,9 @@ impl Round<'_> {
             consent.key_package().clone(),
         )
         .await;
-        let expires = consent.flight().expires_at - 1;
+        // The signed expiry stays valid while the custody deadline (five
+        // minutes earlier) can be reached within the qualified clock skew.
+        let expires = self.wall + 360;
         let delivery = self
             .codec
             .prepare_delivery(self.founder, &consent, &welcome, self.wall, expires)
@@ -209,7 +218,15 @@ impl Round<'_> {
                     .await,
                 Ok(CustodyProgress::Unavailable(_))
             ));
-            self.assert_state(&mut local, CustodyState::JoinStarted);
+            let stopped = self.assert_state(&mut local, CustodyState::JoinStarted);
+            self.fixed_wall
+                .store(stopped.held_deadline(), Ordering::Relaxed);
+            assert_eq!(
+                local
+                    .advance_custody(self.selector, self.generation, |_| unreachable!())
+                    .await,
+                Err(Error::Checkpoint(consent_checkpoint::Error::Expired))
+            );
             assert_eq!((self.stage_image)(), self.original_image);
             return;
         }
@@ -297,7 +314,35 @@ impl Round<'_> {
         drop(blocked);
 
         let mut local = self.open_as(Mode::Automatic);
-        self.assert_state(&mut local, CustodyState::Pending);
+        let pending = self.assert_state(&mut local, CustodyState::Pending);
+        let pending_deadline = pending.pending_deadline().unwrap();
+        self.fixed_wall.store(pending_deadline, Ordering::Relaxed);
+        assert_eq!(
+            local.activate_custody(
+                self.selector,
+                self.generation,
+                Some(&connection),
+                |_| unreachable!()
+            ),
+            Err(Error::Checkpoint(consent_checkpoint::Error::Expired))
+        );
+        if !manual {
+            let joined = local
+                .inspect_joined(pending.stage(), &delivery.flight, pending.package_digest())
+                .unwrap();
+            assert_eq!(
+                local.state.checkpoint.commit_custody_activating(
+                    &local.state.source,
+                    &pending,
+                    &joined,
+                    Approval::Automatic,
+                    pending_deadline,
+                ),
+                Err(consent_checkpoint::Error::Expired)
+            );
+        }
+        self.fixed_wall
+            .store(self.wall + if manual { 2 } else { 0 }, Ordering::Relaxed);
         assert_eq!(
             local
                 .advance_custody(self.selector, self.generation, |cut| {
@@ -355,6 +400,13 @@ impl Round<'_> {
             local.recover_wss(client, deadline()).await.unwrap(),
             History::Committed
         ));
+        self.fixed_wall.store(pending_deadline, Ordering::Relaxed);
+        assert_eq!(
+            local
+                .advance_custody(self.selector, self.generation, |_| unreachable!())
+                .await,
+            Err(Error::Checkpoint(consent_checkpoint::Error::Expired))
+        );
 
         // The durable cursor can be tested at logical expiry without moving
         // the live owner's qualified wall outside its system-clock tolerance.
@@ -371,7 +423,10 @@ impl Round<'_> {
                 .unwrap(),
             Replay::Invalid(_)
         ));
-        self.fixed_wall.store(expires, Ordering::Relaxed);
+        self.fixed_wall.store(
+            delivery.flight.flight().replay_safe_until,
+            Ordering::Relaxed,
+        );
         assert_eq!(
             local
                 .advance_custody(self.selector, self.generation, |_| unreachable!())
