@@ -3099,7 +3099,7 @@ pub(crate) mod terminal_relay_fixture;
 #[path = "terminal_route_proof_tests.rs"]
 mod terminal_route_proof_tests;
 #[cfg(test)]
-pub(crate) use terminal_route_proof_tests::CommandPeer;
+pub(crate) use terminal_route_proof_tests::{CommandPeer, open_cli_pty};
 
 #[cfg(test)]
 #[path = "peer_staged_proof_tests.rs"]

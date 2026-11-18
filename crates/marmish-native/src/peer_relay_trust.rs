@@ -62,6 +62,7 @@ pub(crate) async fn qualify(
     identity: &str,
     attestation: PathBuf,
 ) -> Result<QualificationReport> {
+    qualification::check_build_scope()?;
     let lease = Arc::new(ProfileLease::acquire_ready(state, identity)?);
     let profile = ProfileFiles::open(lease.clone())?;
     let (config, snapshot) = profile.command_snapshot()?;
@@ -101,8 +102,7 @@ pub(crate) async fn qualify(
     };
     let started = authority.check()?;
     let completed = plan.execute(&owner.connector, &authority, started).await?;
-    authority.check()?;
-    qualification::issue(&owner.profile, relay, &checked, completed)
+    qualification::issue(&authority, completed)
 }
 
 /// Created only by the selected profile's confirmed operator turn. A raw URL
@@ -116,7 +116,13 @@ pub(crate) struct ProbeAuthority<'a> {
 }
 
 impl ProbeAuthority<'_> {
-    pub(crate) fn endpoint(&self) -> Result<&Url> {
+    pub(crate) fn endpoint(&self, tls: &BoundPeerTls) -> Result<&Url> {
+        if tls.origin != self.relay.origin
+            || tls.trust != self.relay.trust
+            || !std::ptr::eq(tls.profile.as_ptr(), self.profile)
+        {
+            return Err(Error::Transport("relay_not_configured"));
+        }
         self.check()?;
         Ok(&self.relay.origin)
     }

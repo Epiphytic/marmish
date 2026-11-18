@@ -41,6 +41,16 @@ pub(super) enum Mode {
     WrongAuthAcknowledgement,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+pub(crate) enum QualificationFault {
+    AcceptUnregisteredAuth,
+    AcceptOversize,
+    AcceptWrongGroupWrite,
+    AlterControlHistory,
+    ExtraControlHistory,
+    LeakWideControl,
+}
+
 #[derive(Clone, Debug)]
 pub(super) enum Observation {
     Authentication(PublicKey, bool),
@@ -84,6 +94,9 @@ struct State {
     mode: Mode,
     quiet: Option<QuietAliases>,
     peer: Option<peer::Scope>,
+    qualification: bool,
+    qualification_connections: usize,
+    qualification_fault: Option<QualificationFault>,
     acknowledge_duplicates: bool,
     duplicate_acks: usize,
     ordinary: BTreeSet<PublicKey>,
@@ -110,6 +123,21 @@ impl State {
         let account = self.connections[&connection].account;
         let kind = u16::from(event.kind);
         let authenticated = account.is_some();
+        if self.qualification && kind == 7435 {
+            let raw_event = serde_json::from_str::<(&str, &serde_json::value::RawValue)>(raw)
+                .expect("qualified fixture event framing")
+                .1;
+            if raw_event.get().len() > 65_536 {
+                let accepted = self.qualification_fault == Some(QualificationFault::AcceptOversize);
+                self.observe(Observation::Write(event.id, kind, accepted));
+                return Some(json!([
+                    "OK",
+                    event.id,
+                    accepted,
+                    "invalid: event size exceeds 65536 bytes"
+                ]));
+            }
+        }
         let authorized_author = account.is_some_and(|account| {
             self.mode != Mode::AuthorsMustAuthenticate
                 || self.ordinary.contains(&account)
@@ -120,6 +148,9 @@ impl State {
             let result = account.and_then(|sender| group.accept(sender, &event, raw));
             self.observe(Observation::Write(event.id, kind, result.is_some()));
             let Some((duplicate, acknowledged)) = result else {
+                if self.qualification_fault == Some(QualificationFault::AcceptWrongGroupWrite) {
+                    return Some(json!(["OK", event.id, true, ""]));
+                }
                 return Some(json!([
                     "OK",
                     event.id,
@@ -369,7 +400,9 @@ fn handle_message(
                 .abs_diff(Timestamp::now().as_secs())
                 <= 30
                 && challenge_started.elapsed() <= Duration::from_secs(30);
-            let accepted = eligible
+            let accept_unregistered =
+                state.qualification_fault == Some(QualificationFault::AcceptUnregisteredAuth);
+            let accepted = (eligible || accept_unregistered)
                 && fresh
                 && u16::from(event.kind) == 22242
                 && event.verify().is_ok()
@@ -406,6 +439,19 @@ fn handle_message(
             );
             state.observe(Observation::Read(permitted, account));
             if !permitted {
+                if state.qualification_fault == Some(QualificationFault::LeakWideControl)
+                    && account.is_some()
+                    && subscription_id == "control-wide"
+                    && let Some(event) = state
+                        .publications
+                        .iter()
+                        .find(|event| u16::from(event.kind) == 7435)
+                {
+                    return vec![
+                        json!(["EVENT", subscription_id, event]),
+                        json!(["EOSE", subscription_id]),
+                    ];
+                }
                 let reason = if account.is_none() {
                     "auth-required: fixture authentication required"
                 } else {
@@ -464,6 +510,17 @@ fn handle_message(
                 .into_iter()
                 .map(|event| json!(["EVENT", subscription_id, event]))
                 .collect();
+            if state.qualification && subscription_id == "control" && !responses.is_empty() {
+                match state.qualification_fault {
+                    Some(QualificationFault::AlterControlHistory) => {
+                        responses[0][2]["content"] = json!("altered")
+                    }
+                    Some(QualificationFault::ExtraControlHistory) => {
+                        responses.push(responses[0].clone())
+                    }
+                    _ => {}
+                }
+            }
             if state.hold_eose_for.is_some_and(|alias| {
                 account == Some(alias) && subscription.serves(1059, "#p", &json!(alias))
             }) {
@@ -703,6 +760,21 @@ impl Relay {
         Self::start_with(Some(accounts), Some(route), Some(128 * 1024)).await
     }
 
+    pub(crate) fn qualification_fault(&self, fault: QualificationFault) {
+        let mut state = self.state.lock().unwrap();
+        assert!(state.qualification && state.qualification_fault.replace(fault).is_none());
+    }
+
+    pub(crate) fn qualification_register(&self, accounts: [PublicKey; 2], route: [u8; 32]) {
+        let mut state = self.state.lock().unwrap();
+        assert!(state.qualification && state.qualification_connections == 0);
+        state.peer = Some(peer::Scope::new(accounts).with_group(Some(route)));
+    }
+
+    pub(crate) fn qualification_connections(&self) -> usize {
+        self.state.lock().unwrap().qualification_connections
+    }
+
     pub(crate) fn qualification_ca(&self) -> &[u8] {
         &self.qualification_ca
     }
@@ -837,6 +909,7 @@ impl Relay {
         });
         let state = Arc::new(Mutex::new(State {
             peer: accounts.map(|accounts| peer::Scope::new(accounts).with_group(group)),
+            qualification: probe_limit.is_some(),
             ..State::default()
         }));
         let worker_state = state.clone();
@@ -850,6 +923,9 @@ impl Relay {
                         let (raw, _) = accepted.unwrap();
                         assert!(peers.len() < MAX_CONNECTIONS, "fixture socket bound");
                         next += 1;
+                        if probe_limit.is_some() {
+                            worker_state.lock().unwrap().qualification_connections = next;
+                        }
                         peers.spawn(serve_connection(raw, acceptor.clone(), worker_state.clone(), worker_url.clone(), next, probe_limit));
                     }
                     result = peers.join_next(), if !peers.is_empty() => {

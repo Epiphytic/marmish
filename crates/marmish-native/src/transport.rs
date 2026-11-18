@@ -310,7 +310,13 @@ impl PeerRelayConnector {
         authority: &ProbeAuthority<'_>,
         deadline: Instant,
     ) -> Result<(WebSocketSink, WebSocketStream)> {
-        let url = authority.endpoint()?;
+        let tls = self
+            .0
+            .0
+            .peer_tls
+            .as_ref()
+            .ok_or(Error::Transport("relay_not_configured"))?;
+        let url = authority.endpoint(tls)?;
         if self.0.0.policy.urls.first() != Some(url) {
             return Err(Error::Transport("relay_not_configured"));
         }

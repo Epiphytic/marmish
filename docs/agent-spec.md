@@ -658,6 +658,18 @@ that exact set, not merely be a subset. CLI options cannot broaden or replace a
 live owner's connector policy. Aliases bind an exact remote npub and exact relay
 set, not a hostname-based authorization rule.
 
+The development branch exposes local `peer relay show` and
+`peer relay qualify --attestation <file>` for a ready, stopped profile with an
+explicit private Peer relay and typed trust policy. `show` uses only current
+local record metadata. `qualify` uses a foreground controlling terminal,
+operator attestation, and disposable identities on one pinned private WSS
+origin. It issues a schema 2 record only after the bounded positive and negative
+probe. The record provides status metadata and grants no live Peer capability.
+A matching relay deployment still needs independent qualification for the
+[installed Peer phase](phases/peer-installed-heartbeat-first.md#as-first-patch-relay-cli-and-production-transport-boundary).
+Ordinary Command defaults and routing are unaffected.
+
+
 Commands require the separator before argv, for example:
 
 ```

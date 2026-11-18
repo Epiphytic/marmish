@@ -775,7 +775,7 @@ fn serve_ipc(
     (listener, ordinary)
 }
 
-fn open_cli_pty() -> (std::fs::File, std::fs::File) {
+pub(crate) fn open_cli_pty() -> (std::fs::File, std::fs::File) {
     let (mut master, mut slave) = (-1, -1);
     let size = libc::winsize {
         ws_row: 24,

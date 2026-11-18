@@ -78,7 +78,7 @@ impl Plan {
         wrong[0] ^= 1;
         let wrong = hex::encode(wrong);
         let recipient = self.recipient.public_key();
-        let control = self.control(recipient, started, "")?;
+        let control = self.control(recipient, started, &"x".repeat(40_800))?;
         let oversize = self.control(recipient, started, &"x".repeat(49_152))?;
         if control.bytes.len() > CONTROL_CAP || oversize.bytes.len() <= CONTROL_CAP {
             return Err(REFUSED);
@@ -86,21 +86,54 @@ impl Plan {
         let group = self.group(&route, started)?;
         let wrong_group = self.group(&wrong, started)?;
         let mut writer = io.connect(connector, &self.writer, true).await?;
-        writer.publish(&mut io, &control, true).await?;
-        writer.publish(&mut io, &group, true).await?;
-        writer.publish(&mut io, &oversize, false).await?;
-        writer.publish(&mut io, &wrong_group, false).await?;
-        // The writer cannot read the recipient's exact protected scope.
-        let control_filter = json!({"kinds":[CONTROL], "#p":[recipient], "limit":4});
+        writer.publish(&mut io, &control, None).await?;
         writer
-            .refuse_history(&mut io, "foreign-recipient", control_filter.clone())
+            .publish(&mut io, &oversize, Some(Refusal::Size))
+            .await?;
+        writer.publish(&mut io, &group, None).await?;
+        writer
+            .publish(&mut io, &wrong_group, Some(Refusal::Scope))
+            .await?;
+        // The writer cannot read the recipient's exact protected scope.
+        let control_filter = json!({
+            "kinds":[CONTROL], "#p":[recipient], "since":started, "until":started, "limit":4,
+        });
+        writer
+            .refuse_history(
+                &mut io,
+                "foreign-recipient",
+                control_filter.clone(),
+                Refusal::Scope,
+                false,
+            )
             .await?;
         drop(writer);
 
-        let outsider = io.connect(connector, &self.outsider, false).await?;
-        drop(outsider);
-
         let group_filter = json!({"kinds":[GROUP], "#h":[route]});
+        let mut outsider = io.connect(connector, &self.outsider, false).await?;
+        let outsider_control = self.control(recipient, started, " outsider")?;
+        outsider
+            .publish(&mut io, &outsider_control, Some(Refusal::Unauthenticated))
+            .await?;
+        outsider
+            .refuse_history(
+                &mut io,
+                "unauth-control",
+                control_filter.clone(),
+                Refusal::Unauthenticated,
+                false,
+            )
+            .await?;
+        outsider
+            .refuse_history(
+                &mut io,
+                "unauth-group",
+                group_filter.clone(),
+                Refusal::Unauthenticated,
+                false,
+            )
+            .await?;
+        drop(outsider);
         for (control_req, group_req) in [("control", "group"), ("control-reopen", "group-reopen")] {
             let mut reader = io.connect(connector, &self.recipient, true).await?;
             reader
@@ -114,17 +147,27 @@ impl Plan {
                     .refuse_history(
                         &mut io,
                         "control-wide",
-                        json!({"kinds":[CONTROL], "limit":4}),
+                        json!({"kinds":[CONTROL], "since":started, "until":started, "limit":4}),
+                        Refusal::Scope,
+                        true,
                     )
                     .await?;
                 reader
-                    .refuse_history(&mut io, "group-wide", json!({"kinds":[GROUP]}))
+                    .refuse_history(
+                        &mut io,
+                        "group-wide",
+                        json!({"kinds":[GROUP]}),
+                        Refusal::Scope,
+                        true,
+                    )
                     .await?;
                 reader
                     .refuse_history(
                         &mut io,
                         "group-wrong",
                         json!({"kinds":[GROUP], "#h":[wrong]}),
+                        Refusal::Scope,
+                        false,
                     )
                     .await?;
             }
@@ -140,6 +183,7 @@ impl Plan {
             trust: qualification::trust_expression(&relay.trust),
             started,
             finished,
+            begun: io.begun,
         })
     }
 
@@ -176,10 +220,15 @@ pub(super) struct Completed {
     trust: String,
     started: u64,
     finished: u64,
+    begun: Instant,
 }
 
 impl Completed {
-    pub(super) fn evidence(self, relay: &Relay) -> Result<(u64, u64, [u8; 32])> {
+    pub(super) fn valid_clock(&self, wall: u64) -> bool {
+        reasonable_clock(self.started, self.finished, wall, self.begun.elapsed())
+    }
+
+    pub(super) fn evidence(&self, relay: &Relay, wall: u64) -> Result<(u64, u64, [u8; 32])> {
         #[derive(Serialize)]
         struct Summary<'a> {
             schema: u8,
@@ -189,10 +238,11 @@ impl Completed {
             trust_digest: String,
             started: u64,
             finished: u64,
-            passed: [&'static str; 12],
+            passed: [&'static str; 13],
         }
         if self.origin != relay.origin.as_str()
             || self.trust != qualification::trust_expression(&relay.trust)
+            || !self.valid_clock(wall)
         {
             return Err(REFUSED);
         }
@@ -207,6 +257,7 @@ impl Completed {
             passed: [
                 "registered-nip42",
                 "unregistered-nip42-refused",
+                "unauthenticated-control-write-and-both-history-scopes-refused",
                 "control-write",
                 "control-read-eose-exact-bytes",
                 "control-reconnect-eose-exact-bytes",
@@ -244,6 +295,8 @@ impl Signed {
 struct Budget<'a> {
     authority: &'a ProbeAuthority<'a>,
     last_wall: u64,
+    initial_wall: u64,
+    begun: Instant,
     deadline: Instant,
     frames: usize,
     bytes: usize,
@@ -251,10 +304,13 @@ struct Budget<'a> {
 
 impl<'a> Budget<'a> {
     fn new(authority: &'a ProbeAuthority<'a>, wall: u64) -> Self {
+        let begun = Instant::now();
         Self {
             authority,
             last_wall: wall,
-            deadline: Instant::now() + Duration::from_secs(30),
+            initial_wall: wall,
+            begun,
+            deadline: begun + Duration::from_secs(30),
             frames: FRAME_BUDGET,
             bytes: BYTE_BUDGET,
         }
@@ -271,8 +327,8 @@ impl<'a> Budget<'a> {
 
     fn recheck(&mut self) -> Result<()> {
         let now = self.authority.check()?;
-        if now < self.last_wall {
-            return Err(REFUSED);
+        if !reasonable_clock(self.initial_wall, self.last_wall, now, self.begun.elapsed()) {
+            return Err(Error::Invalid("peer_qualification_clock"));
         }
         self.last_wall = now;
         Ok(())
@@ -309,7 +365,13 @@ impl<'a> Budget<'a> {
         socket
             .send(self, format!("[\"AUTH\",{}]", auth.bytes))
             .await?;
-        socket.ack(self, &auth.id, registered).await?;
+        socket
+            .ack(
+                self,
+                &auth.id,
+                (!registered).then_some(Refusal::Unregistered),
+            )
+            .await?;
         Ok(socket)
     }
 }
@@ -355,7 +417,12 @@ impl Socket {
         }
     }
 
-    async fn ack(&mut self, budget: &mut Budget<'_>, id: &str, positive: bool) -> Result<()> {
+    async fn ack(
+        &mut self,
+        budget: &mut Budget<'_>,
+        id: &str,
+        refusal: Option<Refusal>,
+    ) -> Result<()> {
         let text = self.text(budget).await?;
         let fields: Vec<&RawValue> = serde_json::from_str(&text).map_err(|_| REFUSED)?;
         let [verb, event, accepted, reason] = fields.as_slice() else {
@@ -363,8 +430,9 @@ impl Socket {
         };
         if string(verb).as_deref() != Some("OK")
             || string(event).as_deref() != Some(id)
-            || accepted.get() != if positive { "true" } else { "false" }
-            || !string(reason).is_some_and(|reason| positive || explicit_refusal(&reason))
+            || accepted.get() != if refusal.is_none() { "true" } else { "false" }
+            || !string(reason)
+                .is_some_and(|reason| refusal.is_none_or(|expected| expected.matches(&reason)))
         {
             return Err(REFUSED);
         }
@@ -375,11 +443,11 @@ impl Socket {
         &mut self,
         budget: &mut Budget<'_>,
         event: &Signed,
-        positive: bool,
+        refusal: Option<Refusal>,
     ) -> Result<()> {
         self.send(budget, format!("[\"EVENT\",{}]", event.bytes))
             .await?;
-        self.ack(budget, &event.id, positive).await
+        self.ack(budget, &event.id, refusal).await
     }
 
     async fn history(
@@ -419,19 +487,30 @@ impl Socket {
         budget: &mut Budget<'_>,
         id: &str,
         filter: Value,
+        refusal: Refusal,
+        exact_positive_already_observed: bool,
     ) -> Result<()> {
         self.send(budget, json!(["REQ", id, filter]).to_string())
             .await?;
         let text = self.text(budget).await?;
         let fields: Vec<&RawValue> = serde_json::from_str(&text).map_err(|_| REFUSED)?;
-        if !matches!(fields.as_slice(), [verb, request, reason]
-            if string(verb).as_deref() == Some("CLOSED")
-                && string(request).as_deref() == Some(id)
-                && string(reason).is_some_and(|text| explicit_refusal(&text)))
-        {
-            return Err(REFUSED);
+        match fields.as_slice() {
+            [verb, request, reason]
+                if string(verb).as_deref() == Some("CLOSED")
+                    && string(request).as_deref() == Some(id)
+                    && string(reason).is_some_and(|text| refusal.matches(&text)) =>
+            {
+                Ok(())
+            }
+            [verb, request]
+                if exact_positive_already_observed
+                    && string(verb).as_deref() == Some("EOSE")
+                    && string(request).as_deref() == Some(id) =>
+            {
+                self.send(budget, json!(["CLOSE", id]).to_string()).await
+            }
+            _ => Err(REFUSED),
         }
-        Ok(())
     }
 }
 
@@ -439,9 +518,65 @@ fn string(value: &RawValue) -> Option<String> {
     serde_json::from_str(value.get()).ok()
 }
 
-fn explicit_refusal(text: &str) -> bool {
-    matches!(
-        text.split_once(':'),
-        Some(("restricted" | "blocked" | "invalid" | "auth-required", _))
-    )
+#[derive(Clone, Copy)]
+enum Refusal {
+    Unregistered,
+    Unauthenticated,
+    Scope,
+    Size,
+}
+
+impl Refusal {
+    fn matches(self, message: &str) -> bool {
+        let Some((code, detail)) = message.split_once(':') else {
+            return false;
+        };
+        match self {
+            Self::Unregistered => matches!(code, "restricted" | "blocked"),
+            Self::Unauthenticated => code == "auth-required",
+            Self::Scope => code == "restricted",
+            Self::Size => {
+                let detail = detail.to_ascii_lowercase();
+                matches!(code, "invalid" | "restricted")
+                    && (detail.contains("size") || detail.contains("too large"))
+            }
+        }
+    }
+}
+
+fn reasonable_clock(initial: u64, previous: u64, current: u64, elapsed: Duration) -> bool {
+    // Whole-second wall readings straddle a fractional monotonic observation.
+    current >= previous && current.saturating_sub(initial) <= elapsed.as_secs().saturating_add(2)
+}
+
+#[cfg(test)]
+pub(super) fn check_test_budget(authority: &ProbeAuthority<'_>) {
+    let wall = authority.check().unwrap();
+    let mut count = Budget::new(authority, wall);
+    for _ in 0..FRAME_BUDGET {
+        count.admit(1).unwrap();
+    }
+    assert!(matches!(
+        count.admit(1),
+        Err(Error::Transport("peer_qualification_probe"))
+    ));
+
+    let mut size = Budget::new(authority, wall);
+    size.admit(BYTE_BUDGET - 1).unwrap();
+    size.admit(1).unwrap();
+    assert!(matches!(
+        size.admit(1),
+        Err(Error::Transport("peer_qualification_probe"))
+    ));
+
+    let mut time = Budget::new(authority, wall);
+    time.deadline = Instant::now();
+    assert!(matches!(
+        time.admit(1),
+        Err(Error::Transport("peer_qualification_deadline"))
+    ));
+    assert!(reasonable_clock(100, 101, 102, Duration::ZERO));
+    assert!(!reasonable_clock(100, 101, 100, Duration::ZERO));
+    assert!(!reasonable_clock(100, 101, 103, Duration::ZERO));
+    assert!(reasonable_clock(100, 103, 131, Duration::from_secs(30)));
 }

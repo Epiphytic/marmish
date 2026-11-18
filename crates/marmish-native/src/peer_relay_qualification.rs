@@ -1,6 +1,6 @@
 //! Bounded local record storage. A matching record never grants egress.
 
-use super::{ProfileFiles, inode, open_regular, private_mode, read_bounded};
+use super::{ProbeAuthority, ProfileFiles, inode, open_regular, private_mode, read_bounded};
 use crate::{
     Error, Result,
     command_config::{
@@ -250,17 +250,31 @@ impl CheckedAttestation {
     }
 }
 
+pub(super) fn check_build_scope() -> Result<()> {
+    if !crate::foundation::valid_hex(env!("MARMISH_MDK_REVISION"), 40)
+        || !valid_label(env!("MARMISH_BUILD_TARGET"), 128)
+    {
+        return Err(Error::Invalid("peer_qualification_build"));
+    }
+    Ok(())
+}
+
 pub(super) fn issue(
-    profile: &ProfileFiles,
-    relay: &Relay,
-    attestation: &CheckedAttestation,
+    authority: &ProbeAuthority<'_>,
     completed: super::probe::Completed,
 ) -> Result<Report> {
-    let (started, finished, evidence) = completed.evidence(relay)?;
+    let ProbeAuthority {
+        profile,
+        relay,
+        attestation,
+        ..
+    } = *authority;
+    let now = authority.check()?;
+    let (started, finished, evidence) = completed.evidence(relay, now)?;
     let expires_at = started
         .saturating_add(MAX_VALIDITY)
         .min(attestation.data.valid_until);
-    if finished < started || finished >= expires_at {
+    if finished < started || now >= expires_at {
         return Err(WRITE_REFUSED);
     }
     let record = Record {
@@ -279,7 +293,21 @@ pub(super) fn issue(
         last_observed_at: finished,
         expires_at,
     };
-    replace(profile, relay, VERSIONS, &record)?;
+    let staged_check = || {
+        let wall = authority.check().map_err(io::Error::other)?;
+        if wall >= expires_at || !completed.valid_clock(wall) {
+            return Err(io::Error::from(io::ErrorKind::InvalidData));
+        }
+        Ok(())
+    };
+    replace_using(
+        profile,
+        relay,
+        VERSIONS,
+        &record,
+        staged_check,
+        File::sync_all,
+    )?;
     let exact = read_record(profile).ok_or(WRITE_UNCERTAIN)?;
     if exact != record {
         return Err(WRITE_UNCERTAIN);
@@ -410,6 +438,7 @@ const WRITE_REFUSED: Error = Error::Storage("peer_qualification_write");
 const WRITE_UNCERTAIN: Error = Error::Storage("peer_qualification_write_uncertain");
 
 // The issuer calls this only after both independent evidence checks.
+#[cfg(test)]
 fn replace(
     profile: &ProfileFiles,
     relay: &Relay,

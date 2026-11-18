@@ -372,6 +372,33 @@ these public relays; choose `--tor always` to request experimental Tor routing.
 An explicit hostname or relay selection must match the configured relay set;
 errors never cause a fallback to public relays.
 
+### Private Peer relay qualification
+
+On the development branch, a ready profile can check its separate Peer relay
+while its daemon is stopped.
+
+```sh
+marmish -i PROFILE peer relay show
+marmish -i PROFILE peer relay qualify --attestation ./peer-relay-attestation.json
+```
+
+Configure one private `wss://` origin and TLS trust expression in the profile's
+`peer.relay` and `peer.relay_trust` fields. Use `ca-sha256:<digest>` with the
+matching private CA in the profile's `peer-relay-ca.der`, or
+`spki-sha256:<digest>` with a certificate chaining to the bundled roots.
+The [qualification contract](docs/phases/peer-installed-heartbeat-first.md#as-first-patch-relay-cli-and-production-transport-boundary)
+defines the owner-only attestation file and the required relay behavior.
+
+`show` reads local status without opening a connection. For `qualify`, register
+the two disposable test identities and grant them access to the test route
+printed by the command. Leave the third identity unregistered. Enter the exact
+confirmation at the foreground terminal once the scope is ready. The probe
+checks authenticated access, retention across a reconnect, and the exact bytes
+returned by the relay. A qualification record reports the outcome of this
+probe and the operator's attestation. Peer enrollment and heartbeats remain
+disabled. Ordinary Command relay selection is unchanged.
+
+
 Replace `CLIENT_NPUB` and `SERVER_NPUB` with complete `npub1…` values and
 `relay.example` with your configured relay hostname. The relay selection must
 match the profile's complete configured relay set. A bare hostname means

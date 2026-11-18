@@ -436,69 +436,114 @@ fn peer_tls_caps_chain_and_requires_private_ca_descriptor() {
     ));
 }
 
+use crate::mdk_adapter::terminal_relay_fixture::{GroupFault, QualificationFault, Relay};
+
+struct QualificationFixture {
+    temp: tempfile::TempDir,
+    owner: PeerRelayOwner,
+    config: CommandConfig,
+    attestation_path: std::path::PathBuf,
+    attestation: serde_json::Value,
+}
+
+impl QualificationFixture {
+    fn new(transport: &Relay) -> Self {
+        let (temp, lease) = test_lease();
+        let trust = format!(
+            "ca-sha256:{}",
+            hex::encode(Sha256::digest(transport.qualification_ca()))
+        );
+        let config = config_fixture(&lease, transport.url.as_str(), &trust, "off");
+        private_write(
+            &lease.root().join("peer-relay-ca.der"),
+            transport.qualification_ca(),
+        );
+        let attestation_path = temp.path().join("attestation.json");
+        let now = qualification::wall().unwrap();
+        let attestation = json!({
+            "schema":1, "origin":transport.url, "trust":trust, "enforcement_source":"fixture contract",
+            "valid_from":now-1, "valid_until":now+90,
+            "control_limits":{
+                "event_bytes":65536, "stored_per_recipient":256, "per_timestamp_second":3,
+                "accepted_per_600s":32, "stored_per_writer_recipient":32, "retention_max_seconds":324000
+            },
+            "enforcement":{
+                "control_registered_writer":true, "control_exact_recipient_auth":true,
+                "control_expiration_no_early_eviction":true, "group_exact_route_acl":true,
+                "group_authenticated_members":true, "group_reconnect_history":true
+            }
+        });
+        private_write(&attestation_path, attestation.to_string().as_bytes());
+        let owner = PeerRelayOwner::bind_with_limits(
+            lease,
+            &config,
+            TransportLimits {
+                max_frame_bytes: 128 * 1024,
+                ..TransportLimits::default()
+            },
+        )
+        .unwrap();
+        Self {
+            temp,
+            owner,
+            config,
+            attestation_path,
+            attestation,
+        }
+    }
+
+    fn authority<'a>(
+        &'a self,
+        checked: &'a qualification::CheckedAttestation,
+    ) -> ProbeAuthority<'a> {
+        ProbeAuthority {
+            profile: &self.owner.profile,
+            relay: self.relay(),
+            snapshot: self.owner.profile.command_snapshot().unwrap().1,
+            attestation: checked,
+            attestation_path: &self.attestation_path,
+        }
+    }
+
+    fn relay(&self) -> &crate::command_config::peer_intent::Relay {
+        self.config.bound_peer_relay(&self.config).unwrap()
+    }
+
+    fn record(&self) -> std::path::PathBuf {
+        self.owner
+            .profile
+            .lease
+            .root()
+            .join("peer-relay-qualification.json")
+    }
+}
+
 #[tokio::test]
 async fn peer_qualification_loopback_requires_all_evidence_and_rechecks_profile() {
-    use crate::mdk_adapter::terminal_relay_fixture::Relay;
     let plan = probe::Plan::new().unwrap();
     let (accounts, route) = plan.relay_registration();
     let mut transport = Relay::start_peer_qualification(accounts, route).await;
-    let (temp, lease) = test_lease();
-    let trust = format!(
-        "ca-sha256:{}",
-        hex::encode(Sha256::digest(transport.qualification_ca()))
-    );
-    let config = config_fixture(&lease, transport.url.as_str(), &trust, "off");
-    private_write(
-        &lease.root().join("peer-relay-ca.der"),
-        transport.qualification_ca(),
-    );
-    let relay = config.bound_peer_relay(&config).unwrap();
-    let attestation_path = temp.path().join("attestation.json");
+    let fixture = QualificationFixture::new(&transport);
+    let attestation_path = &fixture.attestation_path;
+    let mut attestation = fixture.attestation.clone();
     let now = qualification::wall().unwrap();
-    let mut attestation = json!({
-        "schema":1, "origin": relay.origin, "trust": trust, "enforcement_source":"fixture contract",
-        "valid_from":now-1, "valid_until":now+60,
-        "control_limits":{
-            "event_bytes":65536, "stored_per_recipient":256, "per_timestamp_second":3,
-            "accepted_per_600s":32, "stored_per_writer_recipient":32, "retention_max_seconds":324000
-        },
-        "enforcement":{
-            "control_registered_writer":true, "control_exact_recipient_auth":true,
-            "control_expiration_no_early_eviction":true, "group_exact_route_acl":true,
-            "group_authenticated_members":true, "group_reconnect_history":true
-        }
-    });
-    let save = |value: &serde_json::Value| fs::write(&attestation_path, value.to_string()).unwrap();
-    private_write(&attestation_path, attestation.to_string().as_bytes());
+    let relay = fixture.relay();
+    let owner = &fixture.owner;
+    let save = |value: &serde_json::Value| fs::write(attestation_path, value.to_string()).unwrap();
     attestation["enforcement"]["group_reconnect_history"] = json!(false);
     save(&attestation);
-    assert!(qualification::CheckedAttestation::read(&attestation_path, relay, now).is_err());
+    assert!(qualification::CheckedAttestation::read(attestation_path, relay, now).is_err());
     attestation["enforcement"]["group_reconnect_history"] = json!(true);
     save(&attestation);
-    let checked = qualification::CheckedAttestation::read(&attestation_path, relay, now).unwrap();
-    assert!(qualification::CheckedAttestation::read(&attestation_path, relay, now + 60).is_err());
-    let alias = temp.path().join("attestation-link.json");
-    std::os::unix::fs::symlink(&attestation_path, &alias).unwrap();
+    let checked = qualification::CheckedAttestation::read(attestation_path, relay, now).unwrap();
+    assert!(qualification::CheckedAttestation::read(attestation_path, relay, now + 90).is_err());
+    let alias = fixture.temp.path().join("attestation-link.json");
+    std::os::unix::fs::symlink(attestation_path, &alias).unwrap();
     assert!(qualification::CheckedAttestation::read(&alias, relay, now).is_err());
 
-    let owner = PeerRelayOwner::bind_with_limits(
-        lease.clone(),
-        &config,
-        TransportLimits {
-            max_frame_bytes: 128 * 1024,
-            ..TransportLimits::default()
-        },
-    )
-    .unwrap();
-    let snapshot = owner.profile.command_snapshot().unwrap().1;
-    let authority = ProbeAuthority {
-        profile: &owner.profile,
-        relay,
-        snapshot,
-        attestation: &checked,
-        attestation_path: &attestation_path,
-    };
-    let record = lease.root().join("peer-relay-qualification.json");
+    let authority = fixture.authority(&checked);
+    probe::check_test_budget(&authority);
+    let record = fixture.record();
     assert!(!record.exists());
     let report = |value| serde_json::to_value(value).unwrap();
     assert_eq!(
@@ -514,19 +559,21 @@ async fn peer_qualification_loopback_requires_all_evidence_and_rechecks_profile(
     attestation["enforcement_source"] = json!("fixture contract");
     save(&attestation);
     assert!(matches!(
-        qualification_status(temp.path(), "test"),
+        qualification_status(fixture.temp.path(), "test"),
         Err(Error::Identity("profile_in_use"))
     ));
 
-    let completed = plan
+    let result = plan
         .execute(&owner.connector, &authority, authority.check().unwrap())
-        .await
-        .unwrap();
+        .await;
+    let completed = result.unwrap_or_else(|error| {
+        panic!("qualification failed {error:?}, writer authenticated {}, recipient authenticated {}, control writes {}, group writes {}, Group publications attempted {}, Control publications attempted {}", transport.authenticated(accounts[0]), transport.authenticated(accounts[1]), transport.peer_transcript().len(), transport.group_writes().len(), transport.publication_attempts(445), transport.publication_attempts(7435))
+    });
     assert_eq!(transport.peer_transcript().len(), 1);
     assert_eq!(transport.group_writes().len(), 1);
     assert!(transport.authenticated(accounts[0]) && transport.authenticated(accounts[1]));
     assert!(!record.exists());
-    let issued = qualification::issue(&owner.profile, relay, &checked, completed).unwrap();
+    let issued = qualification::issue(&authority, completed).unwrap();
     assert_eq!(report(issued)["status"], "qualified");
     let bytes = fs::read(&record).unwrap();
     let mut issued: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
@@ -539,7 +586,9 @@ async fn peer_qualification_loopback_requires_all_evidence_and_rechecks_profile(
     let qualified = report(qualification::show(&owner.profile, relay));
     assert_eq!(qualified["status"], "qualified");
     assert_eq!(qualified["origin"], transport.url.as_str());
-    assert!(qualified["trust"].as_str().unwrap().len() < trust.len());
+    assert!(
+        qualified["trust"].as_str().unwrap().len() < attestation["trust"].as_str().unwrap().len()
+    );
 
     issued["schema"] = json!(1);
     fs::write(&record, issued.to_string()).unwrap();
@@ -547,11 +596,251 @@ async fn peer_qualification_loopback_requires_all_evidence_and_rechecks_profile(
         report(qualification::show(&owner.profile, relay))["status"],
         "unqualified"
     );
+    let QualificationFixture { temp, owner, .. } = fixture;
     drop(owner);
-    drop(lease);
     assert_eq!(
         report(qualification_status(temp.path(), "test").unwrap())["status"],
         "unqualified"
     );
+    transport.stop().await;
+}
+
+#[tokio::test]
+async fn peer_qualification_rejects_faulty_private_wss_and_never_writes() {
+    for fault in [
+        Some(QualificationFault::AcceptUnregisteredAuth),
+        Some(QualificationFault::AcceptOversize),
+        Some(QualificationFault::AcceptWrongGroupWrite),
+        Some(QualificationFault::AlterControlHistory),
+        Some(QualificationFault::ExtraControlHistory),
+        Some(QualificationFault::LeakWideControl),
+        None,
+    ] {
+        let plan = probe::Plan::new().unwrap();
+        let (accounts, route) = plan.relay_registration();
+        let mut transport = Relay::start_peer_qualification(accounts, route).await;
+        if let Some(fault) = fault {
+            transport.qualification_fault(fault);
+        } else {
+            transport.group_fault(GroupFault::Disconnect);
+        }
+        let fixture = QualificationFixture::new(&transport);
+        let now = qualification::wall().unwrap();
+        let checked = qualification::CheckedAttestation::read(
+            &fixture.attestation_path,
+            fixture.relay(),
+            now,
+        )
+        .unwrap();
+        let authority = fixture.authority(&checked);
+        let result = plan
+            .execute(
+                &fixture.owner.connector,
+                &authority,
+                authority.check().unwrap(),
+            )
+            .await;
+        assert!(result.is_err(), "accepted relay fault {fault:?}");
+        assert!(transport.authenticated(accounts[0]));
+        assert!(!fixture.record().exists());
+        transport.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn peer_qualification_rejects_config_and_ca_drift_before_network() {
+    let plan = probe::Plan::new().unwrap();
+    let (accounts, route) = plan.relay_registration();
+    let mut transport = Relay::start_peer_qualification(accounts, route).await;
+    let fixture = QualificationFixture::new(&transport);
+    let now = qualification::wall().unwrap();
+    let checked =
+        qualification::CheckedAttestation::read(&fixture.attestation_path, fixture.relay(), now)
+            .unwrap();
+    let authority = fixture.authority(&checked);
+    let config_path = fixture.owner.profile.lease.root().join("config.json");
+    let config = fs::read(&config_path).unwrap();
+    let mut different: serde_json::Value = serde_json::from_slice(&config).unwrap();
+    different["peer"]["relay"] = json!("wss://also.invalid/");
+    fs::write(&config_path, different.to_string()).unwrap();
+    assert!(matches!(
+        authority.check(),
+        Err(Error::Identity("peer_profile_changed"))
+    ));
+    fs::write(&config_path, config).unwrap();
+
+    let ca_path = fixture.owner.profile.lease.root().join("peer-relay-ca.der");
+    fs::write(ca_path, Authority::new().der.as_ref()).unwrap();
+    let result = plan
+        .execute(
+            &fixture.owner.connector,
+            &authority,
+            authority.check().unwrap(),
+        )
+        .await;
+    assert!(matches!(result, Err(Error::Transport("peer_tls_ca"))));
+    assert!(!transport.authenticated(accounts[0]));
+    assert!(!fixture.record().exists());
+    transport.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARMISH_TEST_PEER_CLI pointing to the matching native marmish executable"]
+async fn peer_qualification_native_cli_requires_exact_controlling_tty_confirmation() {
+    use std::{io::Write as _, process::Stdio};
+    use tokio::io::{AsyncReadExt as _, BufReader};
+    use tokio::process::Command;
+
+    let binary = std::env::var_os("MARMISH_TEST_PEER_CLI").expect("matching native CLI executable");
+    let plan = probe::Plan::new().unwrap();
+    let (decoys, decoy_route) = plan.relay_registration();
+    let mut transport = Relay::start_peer_qualification(decoys, decoy_route).await;
+    let fixture = QualificationFixture::new(&transport);
+    let QualificationFixture {
+        temp,
+        owner,
+        attestation_path,
+        ..
+    } = fixture;
+    let record = owner
+        .profile
+        .lease
+        .root()
+        .join("peer-relay-qualification.json");
+    drop(owner);
+
+    let cli = || {
+        let mut command = Command::new(&binary);
+        command
+            .arg("--state-dir")
+            .arg(temp.path())
+            .args(["-i", "test", "peer", "relay"]);
+        command.env_clear().kill_on_drop(true);
+        command
+    };
+    let show = || async {
+        let output = timeout(TEST_TIMEOUT, cli().arg("show").output())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    assert_eq!(show().await["status"], "unqualified");
+    let mut no_terminal = cli();
+    no_terminal
+        .args(["qualify", "--attestation"])
+        .arg(&attestation_path)
+        .stdin(Stdio::null());
+    // SAFETY: setsid is async-signal-safe and detaches the child from any
+    // controlling terminal inherited by this opt-in test runner.
+    unsafe {
+        no_terminal.pre_exec(|| {
+            if libc::setsid() == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+    let without_tty = timeout(TEST_TIMEOUT, no_terminal.output())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!without_tty.status.success());
+    assert!(without_tty.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&without_tty.stderr).contains("no_tty"));
+    assert_eq!(transport.qualification_connections(), 0);
+    assert!(!record.exists());
+
+    for affirmative in [false, true] {
+        let (mut master, slave) = crate::mdk_adapter::open_cli_pty();
+        let mut command = cli();
+        command
+            .args(["qualify", "--attestation"])
+            .arg(&attestation_path)
+            .stdin(slave)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        // SAFETY: after fork the closure makes only async-signal-safe tty
+        // calls and returns immediately on success or failure.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 || libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY, 0) == -1
+                {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            });
+        }
+        let child = command.spawn().unwrap();
+        drop(command);
+        let mut reader = BufReader::new(tokio::fs::File::from_std(master.try_clone().unwrap()));
+        let mut bytes = Vec::new();
+        timeout(TEST_TIMEOUT, async {
+            while bytes.len() < 4096 {
+                bytes.push(reader.read_u8().await.unwrap());
+                if bytes.ends_with(b"authorize the bounded relay probe: ") {
+                    return;
+                }
+            }
+            panic!("bounded foreground prompt missing");
+        })
+        .await
+        .unwrap();
+        assert_eq!(transport.qualification_connections(), 0);
+        assert!(!record.exists());
+        let prompt = std::str::from_utf8(&bytes).unwrap();
+        if affirmative {
+            let keys = prompt
+                .lines()
+                .find_map(|line| {
+                    let registration = line.strip_prefix("Register disposable writer ")?;
+                    let (writer, recipient) = registration
+                        .strip_suffix(" for this test.")?
+                        .split_once(" and recipient ")?;
+                    Some([
+                        nostr::key::PublicKey::parse(writer).unwrap(),
+                        nostr::key::PublicKey::parse(recipient).unwrap(),
+                    ])
+                })
+                .unwrap();
+            let route = prompt
+                .lines()
+                .find_map(|line| {
+                    let route = line
+                        .strip_prefix("Authorize the two registered principals on Group route ")?;
+                    hex::decode(route.strip_suffix('.')?).ok()?.try_into().ok()
+                })
+                .unwrap();
+            transport.qualification_register(keys, route);
+        }
+        let suffix = if affirmative { "" } else { " " };
+        writeln!(master, "qualify {}{suffix}", transport.url).unwrap();
+        let output = timeout(Duration::from_secs(35), child.wait_with_output())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(output.status.success(), affirmative);
+        if affirmative {
+            assert!(output.stderr.is_empty());
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["status"],
+                "qualified"
+            );
+            assert_eq!(transport.qualification_connections(), 4);
+            assert_eq!(show().await["status"], "qualified");
+            assert!(record.exists());
+        } else {
+            assert!(output.stdout.is_empty());
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("peer_qualification_confirmation")
+            );
+            assert_eq!(transport.qualification_connections(), 0);
+            assert!(!record.exists());
+        }
+    }
     transport.stop().await;
 }
