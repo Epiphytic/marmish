@@ -22,3 +22,26 @@ The raw TCP test owns real transport streams and withholds an explicit
 slot clone. It does not measure a live SDK holding the permit, actual
 SQLite dispatcher loss, an installed daemon, or script and package
 behavior. Those remain in the [mounted phase](../phases/peer-candidate-dispatcher-shutdown.md).
+
+## Composed candidate
+
+The private Linux AMD64 candidate at
+`61be37534b6f0549e34da7fc95c45a0b76bd21ec` combines the relay write fence
+with the [Pending reader permit](peer-candidate-pending-view.md).
+One exact native test executable covered the following selectors.
+
+| Check | Result |
+| --- | --- |
+| `ipc::peer_read` | 11 passed in 0.01 s |
+| `dispatcher_fatal` | 1 passed in less than 0.01 s |
+| `transport::tests` | 18 passed in 0.01 s |
+| `registration_scope_and_irreversible_dispatch` | 1 passed in 19.32 s, including the five isolated SQLCipher cases |
+| `inert_daemon --ignored` | 5 passed in 21.74 s on private loopback WSS |
+| Strict all-target Clippy | Passed in 29.73 s stock and 29.86 s candidate |
+| Formatting and diff checks | Passed |
+
+The exact candidate executable SHA-256 is
+`dc3d7f8cdf6354107886a56fd2d17fcaa655990c778588fdc75411c82d73bcec`.
+These tests cover the inert APIs and existing listener behavior. Active
+Peer observations and socket teardown on daemon dispatcher loss require
+the mounted phase.

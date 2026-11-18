@@ -57,3 +57,18 @@ candidate connector must receive the same fatal observer before sharing
 or bootstrap. The raw Peer opener must transfer its socket with its
 lifetime proof. Full SDK, Lane and daemon teardown evidence belongs to
 the mounted shutdown increment.
+
+## Composed relay fence and Pending reader
+
+Claude Code Sonnet 5.5 Auto approved exact composed head
+`61be37534b6f0549e34da7fc95c45a0b76bd21ec` in session
+`2012ef7b-79ea-49de-8a98-59ef42b2da13`. It checked the transport and
+IPC compile gates, socket fencing and reaping, reader ownership and
+deadline handling, and the absence of installed API users. The
+author ran 36 focused libtest cases plus strict stock and candidate
+Clippy. See the [composed validation](../validation/peer-candidate-dispatcher-shutdown.md#composed-candidate).
+
+The mounted increment must trip on an observer failure, cover a fatal
+signal during graceful stop, and preserve the read permit through the
+actual IPC write and its deadline. The reviewer scoped these obligations
+to the future mount.
