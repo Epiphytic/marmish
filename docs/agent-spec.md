@@ -43,14 +43,18 @@ qualifies one shared canonical origin in a native loopback fixture. A copy
 arriving first on an ineligible relay can suppress the eligible copy from
 another relay in the SDK's account-wide seen-ID tracker. Production Peer
 activation is specified in the reviewed [Peer live routing and recovery
-plan](phases/peer-live.md). The [offline invitation codec](validation/peer-control-codec.md)
+plan](phases/peer-live.md). The [raw Peer WSS proof](validation/peer-raw-socket.md)
+qualifies readiness, one bounded history page, and exact publication using a
+private loopback relay. The [offline invitation codec](validation/peer-control-codec.md)
 verifies the three signed Offer, Consent and Delivery flights, with sizes and
 local timing for each. The [offline Peer cursor store](validation/peer-cursor-store.md)
 verifies encrypted page and retry persistence, bounded replay, and transaction
 rollback. It remains a test target pending live carrier wiring. The
 [private Peer record codec](validation/peer-status-codec.md) verifies
 heartbeat fields, capability states and complete permission snapshot
-assembly in deterministic tests. Status publication and reception remain
+assembly in deterministic tests. The [heartbeat sampler](validation/peer-heartbeat-sampler.md)
+qualifies bounded host metrics and opt-in address collection on Linux x86_64.
+macOS has a source-level platform check. Status publication and reception remain
 inactive in the daemon.
 
 **CI execution direction (2026-11-13):** prefer Epiphytic self-hosted runners;

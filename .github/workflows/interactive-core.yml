@@ -80,3 +80,5 @@ jobs:
         run: |
           cargo test --locked -p marmish-native --test peer_cursor_store peer_cursor_core_ties_cutoffs_and_periodic_restart_survive_reopen
           cargo test --locked -p marmish-native --test peer_cursor_store peer_cursor_core_effect_fence_cleanup_rolls_back_and_page_replays
+      - name: Check private Peer socket bounds
+        run: cargo test --locked -p marmish-native --lib peer_raw_socket_core_reserves_and_budgets

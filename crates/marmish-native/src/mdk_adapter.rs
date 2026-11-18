@@ -3136,6 +3136,10 @@ mod peer_staged_proof_tests;
 mod peer_aggregate_ingress_proof_tests;
 
 #[cfg(test)]
+#[path = "peer_raw_socket.rs"]
+mod peer_raw_socket;
+
+#[cfg(test)]
 mod scheduler_tests {
     use super::*;
     #[test]

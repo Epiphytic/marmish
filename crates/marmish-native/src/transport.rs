@@ -316,6 +316,11 @@ impl RelayConnector {
     }
 
     #[cfg(test)]
+    pub(crate) fn direct_attempt_count(&self) -> usize {
+        self.0.direct_attempts.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
     pub(crate) fn for_loopback_fixture(
         policy: RelayPolicy,
         dirs: ArtiDirs,
