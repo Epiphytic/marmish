@@ -4,7 +4,8 @@ use std::{sync::Arc, thread::JoinHandle};
 
 /// One daemon lifetime's shared latch and bounded, synchronous default VFS check.
 /// Installation must pass the exact registration observer that trips under its
-/// registry guard. The observer is called without holding any engine lock.
+/// registry guard. The observer is called without holding any engine lock and
+/// must never panic, including when called during worker unwinding.
 #[derive(Clone)]
 pub(crate) struct Admission {
     fatal: Fatal,

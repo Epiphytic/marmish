@@ -178,6 +178,10 @@ fn completed_panicked_thread_stays_failed_after_fatal_handoff() {
         Err(Error::Storage("engine_thread_failed"))
     ));
     assert!(handle.thread.is_none());
+    assert!(matches!(
+        handle.stop_outcome(deadline()),
+        Err(Error::Storage("engine_thread_failed"))
+    ));
     trip.trip();
     assert!(matches!(
         handle.stop_outcome(deadline()),

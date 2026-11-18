@@ -14,8 +14,8 @@ Peer route, and registry remain owned by their existing slices.
   and either `test` or `marmish_peer_receiver_candidate`). It accepts a typed
   `Admission` that combines the shared `Fatal` and a bounded synchronous check.
   The eventual `ForwardingVerifier` plus `Trip` must perform recheck/latch in
-  one registry-guarded observation. That function cannot reenter engine/SQLite
-  or perform I/O. Worker admission fails on a refusal or a fatal signal before
+  one registry-guarded observation. The check cannot panic, reenter
+  engine/SQLite or perform I/O. Worker admission fails on a refusal or a fatal signal before
   or during the check. The frontend keeps the same latch for cheap memory-only
   gates. No installed entry point can construct this path.
 - On the worker thread, gate before the engine open and before each independently
@@ -57,8 +57,9 @@ The existing public stock `shutdown` may keep its original signature and fail
 closed if given the dormant kind by a future miswire. Do not let a typed fatal
 result pass into the stock keeper's retry/cleanup loop. At actual composition,
 the candidate lifecycle replaces its stop observer with this typed outcome and
-chooses the fatal path once; the rest of frontend/daemon convergence remains an
-explicit dependency of the first mount.
+chooses the fatal path once. It switches paths before waiting for any remaining
+`observation_pending` records, which can persist after a trip. The rest of
+frontend/daemon convergence remains a dependency of the first mount.
 
 Once the signal has tripped, `CommandEngine::into_fatal_join(self)` consumes
 only the original instance and extracts a one-use thread join. Disconnect all
@@ -67,8 +68,9 @@ the receiver wakes a full synchronous send, including one admitted just before
 the cut. This handoff does not collect events or enqueue a stop marker. Its
 result is typed joined, or failed if the worker panicked. If a previous
 ordinary stop attempt already consumed the OS handle on panic, preserve that
-failed result in the owner. A second consumer is impossible by move; repeated
-observation of an existing join result cannot change it to success.
+failed result in the owner. Both repeated candidate stop observation and the
+consuming fatal handoff preserve that failure. The stock stop API preserves its
+existing retry behavior.
 
 Reuse the existing blocking-keeper ownership pattern in `command_lifecycle` to
 run that exact join while holding an `Arc<ProfileLease>` from the same lifetime.

@@ -63,8 +63,9 @@ impl Mode {
     }
 
     fn retire_storage<T>(&self, storage: T) {
-        if !self.admit() {
-            std::mem::forget(storage);
+        let storage = std::mem::ManuallyDrop::new(storage);
+        if self.admit() {
+            drop(std::mem::ManuallyDrop::into_inner(storage));
         }
     }
 }
@@ -537,7 +538,7 @@ impl CommandEngine {
                     self.collect();
                     thread::sleep(Duration::from_millis(1));
                 }
-                Err(_) => return Ok(self.stop_report(false)),
+                Err(_) => return self.stop_report(false),
             }
         }
         while self.thread.as_ref().is_some_and(|t| !t.is_finished()) && Instant::now() < deadline {
@@ -555,18 +556,20 @@ impl CommandEngine {
                 return Err(Error::Storage("engine_thread_failed"));
             }
         }
-        Ok(self.stop_report(complete))
+        self.stop_report(complete)
     }
 
-    fn stop_report(&self, complete: bool) -> StopOutcome {
+    fn stop_report(&self, complete: bool) -> Result<StopOutcome> {
         if self.mode.tripped() {
-            StopOutcome::Fatal
-        } else {
-            StopOutcome::Ordinary(StopReport {
-                complete,
-                quiesced: self.cleanup == CleanupState::Quiesced,
-            })
+            return Ok(StopOutcome::Fatal);
         }
+        if self.mode.candidate() && self.thread_failed {
+            return Err(Error::Storage("engine_thread_failed"));
+        }
+        Ok(StopOutcome::Ordinary(StopReport {
+            complete,
+            quiesced: self.cleanup == CleanupState::Quiesced,
+        }))
     }
 
     #[cfg(all(
