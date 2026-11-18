@@ -63,10 +63,67 @@ or quota, expiration in each state, lost route or role, unequal v2 negotiation,
 wrong native package, roster or epoch, and a separately injected uncertain
 native effect. Cold pre-effect and capacity readback prove that qualification
 was withheld. Their generic refusal assertion leaves the precise readback
-error unmeasured. The replay proves `AlreadyApplied` and zero package reads.
-There are no SQLite statement counters. The supervised daemon, installed
+error unmeasured. The supervised daemon, installed
 approvals, application status, application or receipt egress and other
 architectures need separate qualification.
+
+## Measured accounting on the composed source
+
+Exact source `7d725d01d59e8be5fe940fd2186bb2d83375a068` counts the SQLite
+rows affected by the installed Start and Qualify statements after successful
+transaction commit. The native counter measures actual Welcome future polls
+and successful joins whose managed turn closed. Other cursor bookkeeping and
+snapshot writes remain outside these counters. A successful cold MLS readback
+independently corroborates the observed Welcome success. For capacity refusal,
+unchanged encrypted original bytes corroborate no committed join.
+
+Each measured window begins after quota mount, physical route setup and the
+exact custody read. It covers the named local operation, uses the suspend-aware
+continuous clock, and asserts an elapsed duration under five seconds and below
+the remaining exact signed custody bound. An independent wall sample after each
+window also asserts the signed bound has not expired. Relay fixture setup and
+Delivery replay retrieval do not contribute to the named local latency.
+
+After the positive path reopened Pending, the test saved its exact retained
+custody evidence, independently verified the MLS coordinates, and fetched the
+exact signed Delivery again from the relay. It reopened the SQLCipher owner
+and reread Pending. The before and after reads matched exact saved evidence,
+including the durable row, stage and custody identity. The replay returned
+`AlreadyApplied`, performed zero package reads and caused zero observed
+Welcome polls, closed native joins and committed Start or Qualify rows.
+The exact persisted evidence comparison establishes that the retained
+Pending row was unchanged. The scoped SQL counter only covers Start and
+Qualify, not every writer.
+
+The managed journal branch in native readback calls
+`RecoveredOwner::rollback_journal`. Commit `e942577` split this inner turn
+from the fixture wrapper and changed shared charge arithmetic after the
+original rollback qualification `6a8846ec2a6f3b363ec9b7cdf8f90faf15fbe188`,
+guard matrix `515557a61235f81debdb3deb6d52bdb60a6cafee` and evidence record
+`ccf2beb100d01613a7b1fd2052dff79e58a98169`. On exact composed source
+`7d725d01d59e8be5fe940fd2186bb2d83375a068`, both the author and the reviewer
+reran `managed_recovery_hot_journal_and_stock_wal` from the same binary,
+validating actual journal sync and main write, a separate interrupted
+rollback and verified keyed recovery through the current wrapper and inner
+turn. The private WSS process cuts reach fresh joined readback after a
+completed Welcome. A crash during an uncommitted Welcome still requires fresh
+joined evidence before any Pending transition.
+[Earlier managed rollback validation](peer-receiver-charge-recovery.md)
+
+| Measured exact private WSS scenario | Local observations |
+| --- | --- |
+| Successful managed Welcome | Start 367 ms with one committed row. Welcome 356 ms with one poll and one closed successful native join. Cold readback and Pending 470 ms with one committed row. Fresh Pending readback 372 ms and exact Delivery replay left all effect counts at zero. |
+| Pre-effect process exit | Start 390 ms with one committed row. The cut and subsequent cold refusal performed zero Welcome polls, closed native joins or committed custody rows. Cold refusal 250 ms. |
+| Managed capacity refusal | Start 381 ms with one committed row. Native refusal 118 ms with one poll, one rejected journal write and zero closed native joins or committed custody rows. The 2,416,640-byte peak and retained encrypted source were observed. Cold refusal 247 ms with zero effects. |
+
+All three fresh process-cut scenarios passed in 122.85 s excluding build.
+Their post-Held relay publication-attempt deltas were zero. The sibling
+managed rollback test passed on the same exact binary in 5.72 s for the author
+and 7.03 s for the reviewer. The same binary's legacy capped Welcome proof
+passed all four subprocess cases in 96.44 s. These reruns shared the host
+with other validation. The normal
+and `installed-checks` binary checks passed in 9.32 and 15.11 s respectively.
+Strict all-target Clippy with `installed-checks` passed in 39.59 s.
 
 ## Reproduce
 
@@ -77,4 +134,5 @@ cargo test --offline --locked -p marmish-native --lib -j2 managed_recovery_hot_j
 cargo check --offline --locked -p marmish-native --bins -j2
 cargo check --offline --locked -p marmish-native --features installed-checks --bins -j2
 cargo clippy --offline --locked -p marmish-native --all-targets -j2 -- -D warnings
+cargo clippy --offline --locked -p marmish-native --features installed-checks --all-targets -j2 -- -D warnings
 ```

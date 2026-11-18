@@ -57,3 +57,27 @@ uncertain-effect injection remain open. The earlier 36.91-second author test
 covered two scenarios. The exact R2 source passed all three scenarios in
 57.50 seconds. Approval conditions and commands are recorded in the
 [author validation](../validation/peer-installed-capped-pending-bridge.md).
+
+## Composed accounting follow-up
+
+Claude Code Sonnet 5.5 in Auto permission mode requested changes for the
+composition at `d9ea132`, session
+`e3c8b15e`. The review identified literal effect counts, missing time
+assertions, incomplete replay row comparison, unlinked current rollback
+evidence and a required refusal matrix.
+
+The follow-up session `509581fc-f216-448f-b739-828a7e690da3` inspected
+exact accounting code `7d725d01d59e8be5fe940fd2186bb2d83375a068`. It
+confirmed the source changes, including preserved ordinary custody
+transaction semantics, and requested two evidence corrections. The custom
+counter is scoped to installed Start and Qualify. The saved Pending row
+comparison independently substantiates replay. The earlier rollback
+qualification preceded the helper split in `e942577`. The author and
+reviewer both passed the rollback test from the exact accounting binary
+after that split, in 5.72 and 7.03 seconds respectively. Full author WSS
+results and the separate rollback evidence appear in
+[composed validation](../validation/peer-installed-capped-pending-bridge.md).
+
+The scoped follow-up result text SHA-256 with one trailing newline is
+`99648a9c0259efbc11d05e47b52e8073cba90c6191ef5921f8f4ed3c579dad19`.
+The separate refusal matrix remains outside this accounting follow-up.

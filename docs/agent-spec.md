@@ -1618,7 +1618,9 @@ starts from real signed Held on private WSS and verifies the founder's exact
 native group in a fresh recipient process. A successful one-poll Welcome
 allows a local Pending transition. Pre-effect exit and a managed journal
 write refusal leave charged JoinStarted custody and prevent retries. The
-bridge runs in the opt-in Linux AMD64 test suite. Direct bridge coverage of
+test measures one native poll, the committed custody changes, and exact
+Pending custody across replay. The bridge runs in the opt-in Linux AMD64
+test suite. Direct bridge coverage of
 wrong scope, expiry and an injected uncertain native effect remains open.
 Installed daemon and application activation require separate qualification.
 
