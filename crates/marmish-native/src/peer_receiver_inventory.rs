@@ -219,6 +219,11 @@ impl<'lease> RecoveredOwner<'lease> {
         Ok(clean)
     }
 
+    #[cfg(marmish_peer_receiver_candidate)]
+    pub(super) fn reconcile_startup(&mut self, wall: u64) -> Result<()> {
+        self.recover(wall).map(|_| ())
+    }
+
     fn recover(&mut self, wall: u64) -> Result<Inventory> {
         let (charges, files) = self.observe(wall)?;
         Inventory::calculate(charges, files)
