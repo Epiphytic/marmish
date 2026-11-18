@@ -5,7 +5,7 @@ use super::stage_journal::{self, State};
 use super::*;
 
 #[path = "peer_stage_retirement_schema.rs"]
-mod schema;
+pub(super) mod schema;
 
 use nostr::key::Keys;
 use rusqlite::Connection;

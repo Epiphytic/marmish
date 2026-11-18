@@ -8,7 +8,7 @@ use super::super::store::consent_checkpoint::provisioning::Binding;
 use super::super::store::consent_checkpoint::provisioning::stage_journal::FileWitness;
 use super::*;
 
-const MAX_STAGE_LEN: u64 = 16 * 1024 * 1024;
+pub(in super::super) const MAX_STAGE_LEN: u64 = 16 * 1024 * 1024;
 const SIDECARS: &[&str] = &["-journal", "-wal", "-shm"];
 
 pub(in super::super) struct ProvisionalFile {
@@ -140,7 +140,7 @@ impl ProvisionalFile {
         Ok(digest.finalize().into())
     }
 
-    fn read_file(&self) -> Result<File> {
+    pub(in super::super) fn read_file(&self) -> Result<File> {
         clean_sidecars(&self.checked.path)?;
         self.checked
             .unchanged()

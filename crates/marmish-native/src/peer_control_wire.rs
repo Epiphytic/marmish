@@ -12,8 +12,13 @@ use zeroize::Zeroizing;
 
 #[path = "peer_control_wire_artifact.rs"]
 mod artifact;
+#[cfg(test)]
+#[path = "peer_prepared_consent_wire.rs"]
+mod prepared_consent;
 #[path = "peer_control_wire_seal.rs"]
 mod seal;
+#[cfg(test)]
+pub(crate) use prepared_consent::Transcript;
 
 use self::artifact::{PackageBinding, VerifiedPackage};
 use self::seal::{BODY_CAP, OUTER_CONTENT_CAP, fixed_hex, is_exact_recipient, is_recipient_tag};

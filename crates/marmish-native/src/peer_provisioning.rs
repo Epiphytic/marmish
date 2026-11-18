@@ -21,6 +21,10 @@ pub(crate) mod stage_journal;
 #[path = "peer_stage_retirement_journal.rs"]
 pub(crate) mod retirement;
 
+#[cfg(test)]
+#[path = "peer_prepared_consent.rs"]
+pub(crate) mod prepared_consent;
+
 const START_INTERVAL: u64 = 600;
 
 // Keep persisted SQL stable. A schema change needs an explicit migration.

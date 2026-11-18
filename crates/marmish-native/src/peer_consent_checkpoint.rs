@@ -170,6 +170,8 @@ pub(crate) struct Checkpoint {
     #[cfg(test)]
     retirement_epoch: bool,
     #[cfg(test)]
+    export_epoch: bool,
+    #[cfg(test)]
     retirement_fault: Option<provisioning::retirement::Fault>,
 }
 
@@ -233,6 +235,8 @@ impl Checkpoint {
             provisional_schema: false,
             #[cfg(test)]
             retirement_epoch: false,
+            #[cfg(test)]
+            export_epoch: false,
             #[cfg(test)]
             retirement_fault: None,
         })

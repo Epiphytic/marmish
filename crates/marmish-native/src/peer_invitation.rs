@@ -3,6 +3,9 @@
 #[path = "peer_invitation_paths.rs"]
 mod paths;
 #[cfg(test)]
+#[path = "peer_prepared_consent_owner.rs"]
+pub(super) mod prepared_consent;
+#[cfg(test)]
 #[path = "peer_stage_binding.rs"]
 mod provisional;
 #[cfg(test)]

@@ -255,7 +255,7 @@ impl Checkpoint {
         Ok(())
     }
 
-    fn stage_transaction(
+    pub(super) fn stage_transaction(
         &mut self,
         source: &Source,
         binding: Binding,

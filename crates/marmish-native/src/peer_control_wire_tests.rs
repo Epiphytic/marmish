@@ -624,6 +624,30 @@ async fn peer_control_core_checks_causal_and_native_signed_windows() {
     let offer = f.offer(now + 300);
     let consent = f.consent(&offer.flight, &package, now);
     assert_eq!(consent.flight.flight().created_at, now + 300);
+    let capped = f
+        .codec
+        .prepare_capped_fixture_consent(&f.client, &offer.flight, &package, now + 600, now)
+        .unwrap();
+    let transcript = Transcript::from_consent(&capped.flight);
+    assert_eq!(transcript.expires, now + 600);
+    transcript
+        .verify(&f.client, &offer.flight, capped.frame(), &package, now)
+        .unwrap();
+    let received = f
+        .codec
+        .open_consent(&f.server, capped.frame(), &offer.flight, now)
+        .unwrap();
+    assert_eq!(Transcript::from_consent(&received), transcript);
+    assert_eq!(
+        transcript.verify(
+            &f.client,
+            &offer.flight,
+            capped.frame(),
+            &package,
+            now + 600
+        ),
+        Err(Error::Binding)
+    );
     assert_eq!(
         f.codec
             .prepare_consent(&f.client, &offer.flight, &package, now - 1, now + 600)
