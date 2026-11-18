@@ -1475,6 +1475,9 @@ copies reach the same native epoch and active roster. The recipient stays at
 its original pin when the relay omits the update or its end-of-history
 marker. The fixture stops at Activating. Durable WSS PostJoin egress,
 acceptance receipts, and installed Peer authorization have separate gates.
+The [MDK master refresh](reviews/mdk-master-private-wss-refresh.md) revalidated
+this history cut and ordinary Command during a Peer relay outage on Linux
+AMD64. It includes a forward schema migration in native account databases.
 
 The [terminal custody fixture](validation/peer-terminal-custody.md) makes
 Declined and Expired durable for an exact joined Pending invitation.
