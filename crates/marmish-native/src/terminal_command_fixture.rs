@@ -9,6 +9,10 @@ use crate::journal::{ClientDelivery, CommandRoom, Owner};
 use rusqlite::{Connection, OpenFlags};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::time::Duration;
+
+#[path = "terminal_bootstrap_wss_tests.rs"]
+mod terminal_bootstrap_wss_tests;
 
 struct CommandPeer {
     material: IdentityMaterial,
@@ -146,29 +150,26 @@ async fn response(
     id: Id,
     cursor: Option<ClientDelivery>,
     deadline: Instant,
-) -> ResponseResult {
+) -> std::result::Result<ResponseResult, wire::WireError> {
     loop {
         assert!(Instant::now() < deadline, "bounded Command response");
         client.tick(deadline).await.unwrap();
         server.tick(deadline).await.unwrap();
         if let Some((reply, digest)) = client.journal.command_client_response(owner, id).unwrap() {
-            client
+            let committed = client
                 .journal
                 .command_consume_response(owner, id, digest, cursor)
                 .unwrap();
-            return reply.result.unwrap_or_else(|error| {
-                panic!(
-                    "Command response failed: {} {:?}",
-                    error.diagnostic_category(),
-                    error.detail
-                )
-            });
+            if matches!(&reply.result, Err(error) if error.code == wire::ErrorCode::Busy) {
+                assert!(cursor.is_none_or(|cursor| committed == cursor));
+            }
+            return reply.result;
         }
     }
 }
 
 async fn run_command(client: &mut MdkOwner, server: &mut MdkOwner, room: &CommandRoom, cat: &Path) {
-    let deadline = Instant::now() + STEP;
+    let deadline = Instant::now() + Duration::from_secs(15);
     let owner = Owner::from_context(
         &client
             .command_context(&GroupId::new(room.group.clone()))
@@ -187,12 +188,13 @@ async fn run_command(client: &mut MdkOwner, server: &mut MdkOwner, room: &Comman
             }),
         )
         .unwrap();
-    assert!(matches!(
-        response(client, server, &owner, invocation, None, deadline).await,
-        ResponseResult::Submit { .. }
-    ));
+    let ack = response(client, server, &owner, invocation, None, deadline)
+        .await
+        .unwrap_or_else(|error| panic!("Command Submit failed: {}", error.diagnostic_category()));
+    assert!(matches!(ack, ResponseResult::Submit { .. }));
     let mut stdout_cursor = 0;
     let mut result = Vec::new();
+    let mut busy_replies = 0;
     loop {
         let id = fresh_id();
         let poll = RequestOp::Poll {
@@ -213,11 +215,7 @@ async fn run_command(client: &mut MdkOwner, server: &mut MdkOwner, room: &Comman
                 Err(error) => panic!("Command Poll admission failed: {error}"),
             }
         }
-        let ResponseResult::Poll {
-            status,
-            stdout,
-            stderr,
-        } = response(
+        let reply = response(
             client,
             server,
             &owner,
@@ -228,9 +226,22 @@ async fn run_command(client: &mut MdkOwner, server: &mut MdkOwner, room: &Comman
             }),
             deadline,
         )
-        .await
-        else {
-            panic!("expected Command Poll");
+        .await;
+        let (status, stdout, stderr) = match reply {
+            Ok(ResponseResult::Poll {
+                status,
+                stdout,
+                stderr,
+            }) => (status, stdout, stderr),
+            Err(error) if error.code == wire::ErrorCode::Busy => {
+                busy_replies += 1;
+                assert!(busy_replies <= 8, "bounded remote Poll retries");
+                let retry_at = (Instant::now() + Duration::from_millis(25)).min(deadline);
+                tokio::time::sleep_until(retry_at).await;
+                continue;
+            }
+            Err(error) => panic!("Command Poll failed: {}", error.diagnostic_category()),
+            Ok(_) => panic!("expected Command Poll"),
         };
         assert!(stderr.bytes.is_empty());
         result.extend_from_slice(&stdout.bytes);

@@ -492,15 +492,17 @@ impl Relay {
     }
 
     pub(super) fn assert_zero_package_writes(&self) {
-        assert!(
-            !self
-                .state
-                .lock()
-                .unwrap()
-                .observations
-                .iter()
-                .any(|observation| { matches!(observation, Observation::Write(_, 30443, _)) })
-        );
+        assert_eq!(self.package_writes(), 0);
+    }
+
+    pub(super) fn package_writes(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap()
+            .observations
+            .iter()
+            .filter(|observation| matches!(observation, Observation::Write(_, 30443, _)))
+            .count()
     }
 
     pub(super) async fn subscription(
