@@ -16,6 +16,10 @@ use tokio::{
     time::Instant,
 };
 
+#[cfg(test)]
+#[path = "peer_candidate_lifecycle_tests.rs"]
+pub(crate) mod candidate_lifecycle;
+
 pub struct Config {
     pub state_dir: PathBuf,
     pub identity: String,
@@ -53,7 +57,7 @@ struct Opened {
 async fn open_inner(
     config: Config,
     terminal: bool,
-    #[cfg(test)] fixture: Option<&PeerFixture>,
+    #[cfg(test)] fixture: Option<FixtureTransport<'_>>,
 ) -> Result<Opened> {
     let origin = crate::command_limits::ServiceLifetime::start(None)?;
     let (mut profile, material, policy, peers, retention, commands) =
@@ -117,7 +121,10 @@ async fn open_inner(
         },
     )?;
     #[cfg(test)]
-    let connector = match fixture.and_then(|fixture| fixture.connector.clone()) {
+    let connector = match fixture
+        .as_ref()
+        .and_then(|fixture| fixture.connector.cloned())
+    {
         Some(selected)
             if selected.policy().urls() == policy.urls()
                 && selected.policy().mode() == policy.mode() =>
@@ -151,9 +158,10 @@ async fn open_inner(
     let peer_role = commands.as_ref().map(|config| config.role());
     if let Some(commands) = commands {
         let executable = std::env::current_exe()?;
+        let executable = executable.as_path();
         #[cfg(test)]
-        let executable = fixture.map_or(&executable, |fixture| &fixture.layout);
-        let worker = crate::native_layout::resolve(executable.as_path())?.worker;
+        let executable = fixture.map_or(executable, |fixture| fixture.layout);
+        let worker = crate::native_layout::resolve(executable)?.worker;
         owner.enable_commands(&profile, &material, commands, worker)?;
         owner.command_set_lifetime(lifetime);
     }
@@ -274,6 +282,8 @@ pub(crate) async fn run_with_startup(
         startup,
         #[cfg(test)]
         None,
+        #[cfg(test)]
+        None,
     )
     .await
 }
@@ -287,25 +297,49 @@ pub(crate) struct PeerFixture {
 }
 
 #[cfg(test)]
+struct FixtureTransport<'a> {
+    connector: Option<&'a RelayConnector>,
+    layout: &'a std::path::Path,
+}
+
+#[cfg(test)]
+struct ServeFixture<'a> {
+    peer_listener: Option<ipc::peer::Listener>,
+    peer_control: Option<&'a ipc::peer::Control>,
+    stop: Option<tokio::sync::oneshot::Receiver<()>>,
+    candidate_stop: Option<tokio::sync::oneshot::Receiver<()>>,
+    candidate: Option<&'a mut candidate_lifecycle::Runtime>,
+}
+
+#[cfg(test)]
 pub(crate) async fn run_peer_fixture(
     config: Config,
     startup: Option<crate::daemon_launch::StartupReporter>,
     fixture: PeerFixture,
 ) -> Result<()> {
-    run_inner(config, startup, Some(fixture)).await
+    run_inner(config, startup, Some(fixture), None).await
 }
 
 async fn run_inner(
     config: Config,
     startup: Option<crate::daemon_launch::StartupReporter>,
     #[cfg(test)] fixture: Option<PeerFixture>,
+    #[cfg(test)] candidate: Option<candidate_lifecycle::Fixture>,
 ) -> Result<()> {
     use std::sync::Arc;
+    #[cfg(test)]
+    let transport = fixture
+        .as_ref()
+        .map(|fixture| FixtureTransport {
+            connector: fixture.connector.as_ref(),
+            layout: &fixture.layout,
+        })
+        .or_else(|| candidate.as_ref().map(|fixture| fixture.transport()));
     let opened = open_inner(
         config,
         true,
         #[cfg(test)]
-        fixture.as_ref(),
+        transport,
     )
     .await?;
     let Opened {
@@ -316,6 +350,14 @@ async fn run_inner(
         peer_identity,
     } = opened;
     let profile = Arc::new(profile);
+    #[cfg(test)]
+    let (mut candidate, candidate_stop) = match candidate {
+        Some(fixture) => {
+            let (runtime, stop) = fixture.start(Arc::clone(&profile));
+            (Some(runtime), Some(stop))
+        }
+        None => (None, None),
+    };
     #[cfg(test)]
     let (fixture_stop, bootstrap) = match fixture {
         Some(fixture) => (Some(fixture.stop), fixture.bootstrap),
@@ -358,11 +400,13 @@ async fn run_inner(
                 startup,
                 control,
                 #[cfg(test)]
-                peer_listener,
-                #[cfg(test)]
-                peer_control.as_ref(),
-                #[cfg(test)]
-                fixture_stop,
+                ServeFixture {
+                    peer_listener,
+                    peer_control: peer_control.as_ref(),
+                    stop: fixture_stop,
+                    candidate_stop,
+                    candidate: candidate.as_mut(),
+                },
             )
             .await
         }
@@ -372,12 +416,21 @@ async fn run_inner(
     if let Some(control) = &peer_control {
         control.stop();
     }
+    #[cfg(test)]
+    if let Some(candidate) = &candidate {
+        candidate.stop();
+    }
     let joined = match runtime {
         Some(runtime) => runtime.join().await,
         None => Ok(()),
     };
     #[cfg(test)]
     let joined = joined.and(match peer_worker {
+        Some(runtime) => runtime.join().await,
+        None => Ok(()),
+    });
+    #[cfg(test)]
+    let joined = joined.and(match candidate {
         Some(runtime) => runtime.join().await,
         None => Ok(()),
     });
@@ -448,10 +501,16 @@ async fn serve_owner(
     owner: &mut MdkOwner,
     mut startup: Option<crate::daemon_launch::StartupReporter>,
     mut terminal: Option<terminal_owner::Control>,
-    #[cfg(test)] peer_listener: Option<ipc::peer::Listener>,
-    #[cfg(test)] peer_control: Option<&ipc::peer::Control>,
-    #[cfg(test)] fixture_stop: Option<tokio::sync::oneshot::Receiver<()>>,
+    #[cfg(test)] fixture: ServeFixture<'_>,
 ) -> Result<()> {
+    #[cfg(test)]
+    let ServeFixture {
+        peer_listener,
+        peer_control,
+        stop: fixture_stop,
+        candidate_stop,
+        candidate,
+    } = fixture;
     let lifetime = owner.command_lifetime();
     let expired = async move {
         loop {
@@ -479,7 +538,17 @@ async fn serve_owner(
         watch::channel(Response::success(serde_json::json!({"state":"activating"})));
     let terminal_intake = terminal.as_ref().map(|terminal| terminal.intake.clone());
     #[cfg(test)]
-    let (drain, drain_request) = match fixture_stop.is_some() {
+    let mut candidate = candidate;
+    #[cfg(test)]
+    let candidate_listener = candidate
+        .as_deref_mut()
+        .map(|candidate| candidate.listener(socket));
+    #[cfg(test)]
+    let candidate_mode = candidate.is_some();
+    #[cfg(test)]
+    let mut ordinary_ready = false;
+    #[cfg(test)]
+    let (drain, drain_request) = match candidate_mode || fixture_stop.is_some() {
         true => {
             let (drain, request) = tokio::sync::oneshot::channel();
             (Some(drain), Some(request))
@@ -489,13 +558,14 @@ async fn serve_owner(
     let mut server = tokio::spawn(async move {
         #[cfg(test)]
         if drain_request.is_some() {
-            return ipc::serve_with_peer(
+            return ipc::serve_with_listener(
                 listener,
                 queue,
                 snapshots,
                 terminal_intake,
                 peer_listener,
                 drain_request,
+                candidate_listener,
             )
             .await;
         }
@@ -509,7 +579,7 @@ async fn serve_owner(
             _ = terminate.recv() => {},
             _ = async {
                 #[cfg(test)]
-                if let Some(stop) = fixture_stop {
+                if let Some(stop) = fixture_stop.or(candidate_stop) {
                     let _ = stop.await;
                     return;
                 }
@@ -550,6 +620,23 @@ async fn serve_owner(
             if let Some(reporter) = startup.take() {
                 reporter.ready().await?;
             }
+            #[cfg(test)]
+            if let Some(candidate) = candidate.as_deref_mut()
+                && !degraded && !ordinary_ready {
+                tokio::select! {
+                    biased;
+                    stopped = &mut server => {
+                        listener_joined = true;
+                        return listener_stop(stopped);
+                    }
+                    _ = &mut shutdown_signal => break,
+                    _ = &mut expired => break,
+                    _ = std::future::ready(()) => {}
+                }
+                if owner.command_count_exit_ready()? { break; }
+                candidate.ordinary_ready();
+                ordinary_ready = true;
+            }
             tokio::select! {
                 stopped = &mut server, if track_listener => {
                     #[cfg(test)]
@@ -565,7 +652,14 @@ async fn serve_owner(
                     }
                 } => request.complete(owner),
                 pending = receive.recv() => {
-                    let Some(pending) = pending else { break };
+                    let Some(pending) = pending else {
+                        #[cfg(test)]
+                        if candidate_mode {
+                            listener_joined = true;
+                            return listener_stop((&mut server).await);
+                        }
+                        break;
+                    };
                     if pending.request.uses_short_exchange() && (pending.deadline<=Instant::now() || pending.respond.is_closed()) {continue;}
                     let response = tokio::select! {
                         _ = &mut shutdown_signal => break,
@@ -575,7 +669,14 @@ async fn serve_owner(
                     let _ = pending.respond.send(response);
                 }
                 _ = interval.tick() => {
-                    if server.is_finished() { return Err(Error::Invalid("ipc_listener_stopped")); }
+                    if server.is_finished() {
+                        #[cfg(test)]
+                        if candidate_mode {
+                            listener_joined = true;
+                            return listener_stop((&mut server).await);
+                        }
+                        return Err(Error::Invalid("ipc_listener_stopped"));
+                    }
                     let outcome = tokio::select! {
                         _ = &mut shutdown_signal => break,
                         _ = &mut expired => break,
@@ -621,6 +722,10 @@ async fn serve_owner(
         Ok::<_, Error>(())
     }.await;
     #[cfg(test)]
+    if let Some(candidate) = candidate {
+        candidate.stop();
+    }
+    #[cfg(test)]
     if let Some(drain) = drain {
         if let Some(control) = peer_control {
             control.stop();
@@ -631,8 +736,12 @@ async fn serve_owner(
         }
         let drained = server
             .await
-            .map_err(|_| Error::Identity("owned_stop_incomplete"))?;
-        return result.and(drained);
+            .map_err(|_| Error::Identity("owned_stop_incomplete"));
+        return if candidate_mode {
+            result.and(drained.flatten())
+        } else {
+            result.and(drained?)
+        };
     }
     server.abort();
     let _ = server.await;

@@ -471,7 +471,7 @@ pub(crate) async fn serve_inner(
     status: watch::Receiver<Response>,
     terminal: Option<terminal_handshake::Intake>,
 ) -> Result<()> {
-    serve_with_peer(
+    serve_with_listener(
         listener,
         queue,
         status,
@@ -480,20 +480,43 @@ pub(crate) async fn serve_inner(
         None,
         #[cfg(test)]
         None,
+        #[cfg(test)]
+        None,
     )
     .await
 }
 
+#[cfg(test)]
 pub(crate) async fn serve_with_peer(
+    listener: UnixListener,
+    queue: mpsc::Sender<Pending>,
+    status: watch::Receiver<Response>,
+    terminal: Option<terminal_handshake::Intake>,
+    peer: Option<peer::Listener>,
+    drain: Option<oneshot::Receiver<()>>,
+) -> Result<()> {
+    serve_with_listener(listener, queue, status, terminal, peer, drain, None).await
+}
+
+pub(crate) async fn serve_with_listener(
     listener: UnixListener,
     queue: mpsc::Sender<Pending>,
     status: watch::Receiver<Response>,
     terminal: Option<terminal_handshake::Intake>,
     #[cfg(test)] peer: Option<peer::Listener>,
     #[cfg(test)] drain: Option<oneshot::Receiver<()>>,
+    #[cfg(test)] mut candidate: Option<crate::daemon::candidate_lifecycle::Listener>,
 ) -> Result<()> {
     #[cfg(test)]
     let peer = peer.map(|peer| peer.register(&listener)).transpose()?;
+    #[cfg(test)]
+    if let Some(registration) = candidate.as_mut() {
+        if !registration.register(&listener) {
+            candidate = None;
+        } else if registration.exits() {
+            return Err(Error::Invalid("candidate_fixture_listener_exit"));
+        }
+    }
     let drain = async {
         #[cfg(test)]
         if let Some(drain) = drain {
@@ -509,7 +532,13 @@ pub(crate) async fn serve_with_peer(
         tokio::select! {
             _ = &mut drain => break Ok(()),
             _ = tasks.join_next(), if !tasks.is_empty() => {}
-            accepted = listener.accept() => {
+            accepted = async {
+                #[cfg(test)]
+                if candidate.as_mut().is_some_and(|listener| listener.transient_accept_error()) {
+                    return Err(std::io::ErrorKind::Interrupted.into());
+                }
+                listener.accept().await
+            } => {
                 let (mut stream, _) = match accepted {
                     Ok(accepted) => accepted,
                     Err(_) => {
@@ -582,6 +611,10 @@ pub(crate) async fn serve_with_peer(
     };
     #[cfg(test)]
     drop(peer);
+    #[cfg(test)]
+    if let Some(candidate) = candidate {
+        candidate.before_drain();
+    }
     drop(listener);
     tasks.shutdown().await;
     outcome

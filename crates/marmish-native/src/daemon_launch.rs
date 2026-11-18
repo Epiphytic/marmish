@@ -35,6 +35,16 @@ fn failure(message: &str) -> Error {
 pub(crate) struct StartupReporter(Arc<Mutex<Option<UnixStream>>>);
 
 impl StartupReporter {
+    #[cfg(test)]
+    pub(crate) fn test_channel() -> Result<(Self, tokio::net::UnixStream)> {
+        let (child, parent) = UnixStream::pair()?;
+        parent.set_nonblocking(true)?;
+        Ok((
+            Self(Arc::new(Mutex::new(Some(child)))),
+            tokio::net::UnixStream::from_std(parent)?,
+        ))
+    }
+
     /// Call once at single-threaded entry, before Tokio or provider access.
     pub(crate) fn take_from_env(foreground_daemon: bool) -> Result<Option<Self>> {
         let Some(marker) = std::env::var_os(MARKER) else {
