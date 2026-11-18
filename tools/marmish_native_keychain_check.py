@@ -193,7 +193,8 @@ def stop(child):
 
 
 def execute(argv, environment, timeout=15, data=None, success=True, error_map=None, *,
-            cwd=None, max_capture=MAX_CAPTURE):
+            cwd=None, max_capture=None):
+    max_capture = MAX_CAPTURE if max_capture is None else max_capture
     require(data is None or len(data) <= 4096, 'operation_input_limit')
     child = subprocess.Popen(argv, env=environment, stdin=subprocess.PIPE if data is not None
         else subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
