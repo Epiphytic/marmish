@@ -340,3 +340,13 @@ impl ServiceTurn {
         }
     }
 }
+
+impl CursorStore {
+    pub(crate) fn require_available(&mut self, origin: Origin, wall: u64) -> Result<()> {
+        let tx = self.with_wall(origin, wall)?;
+        if load(&tx, origin)?.quarantine_until.is_some() {
+            return Err(Error::RelayContract);
+        }
+        Ok(())
+    }
+}

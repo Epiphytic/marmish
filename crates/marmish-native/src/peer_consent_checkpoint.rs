@@ -1,4 +1,4 @@
-//! Test-only client checkpoint. Source, UID and wall qualify outside this seam.
+//! Durable client consent checkpoint. Source, UID and wall qualify outside this seam.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -14,18 +14,22 @@ use super::{
 use sha2::Digest as _;
 use zeroize::Zeroizing;
 
+#[path = "peer_provisioning.rs"]
+mod provisioning;
 #[path = "peer_consent_checkpoint_rows.rs"]
 mod rows;
+#[cfg(test)]
 #[path = "peer_consent_checkpoint_tests.rs"]
 mod tests;
 #[path = "peer_control_wire.rs"]
-mod wire;
+pub(crate) mod wire;
 
-use rows::{Invitation, Outbox};
+use rows::Invitation;
+pub(crate) use rows::Outbox;
 use wire::{Codec, MAX_OUTER_BYTES, Offer};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Error {
+pub(crate) enum Error {
     Source,
     LocalOwner,
     Index,
@@ -48,10 +52,10 @@ impl From<rusqlite::Error> for Error {
     }
 }
 
-type Result<T> = std::result::Result<T, Error>;
+pub(crate) type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Clone, Copy, Default)]
-enum Mode {
+pub(crate) enum Mode {
     #[default]
     Manual,
     Automatic,
@@ -59,10 +63,10 @@ enum Mode {
 }
 
 #[derive(Default)]
-struct Policy {
-    mode: Mode,
-    reserved: BTreeSet<PublicKey>,
-    blocked: BTreeSet<PublicKey>,
+pub(crate) struct Policy {
+    pub(crate) mode: Mode,
+    pub(crate) reserved: BTreeSet<PublicKey>,
+    pub(crate) blocked: BTreeSet<PublicKey>,
 }
 
 impl Policy {
@@ -72,10 +76,10 @@ impl Policy {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Selector {
-    server: PublicKey,
-    id: [u8; 16],
-    revision: [u8; 32],
+pub(crate) struct Selector {
+    pub(crate) server: PublicKey,
+    pub(crate) id: [u8; 16],
+    pub(crate) revision: [u8; 32],
 }
 
 impl From<&Offer> for Selector {
@@ -90,33 +94,33 @@ impl From<&Offer> for Selector {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Status {
+pub(crate) enum Status {
     Accepted(TrustedOutcome),
     Deferred,
     Invalid,
 }
 
-struct Disposition {
-    status: Status,
-    receipt: Receipt,
+pub(crate) struct Disposition {
+    pub(crate) status: Status,
+    pub(crate) receipt: Receipt,
 }
 
-struct Source {
+pub(crate) struct Source {
     owner: Arc<()>,
-    origin: Origin,
+    pub(crate) origin: Origin,
 }
 
-struct Local {
+pub(crate) struct Local {
     owner: Arc<()>,
 }
 
-struct Route {
-    id: Origin,
-    urls: [String; 1],
+pub(crate) struct Route {
+    pub(crate) id: Origin,
+    pub(crate) urls: [String; 1],
 }
 
 impl Route {
-    fn configured(value: &str) -> Result<Self> {
+    pub(crate) fn configured(value: &str) -> Result<Self> {
         let urls = [value.to_owned()];
         let canonical = RelaySet::parse(&urls, true).map_err(|_| Error::Source)?;
         if canonical.as_slice() != urls || !value.starts_with("wss://") {
@@ -132,21 +136,21 @@ impl Route {
     }
 }
 
-struct Material<'a> {
-    origin: Origin,
-    selector: Selector,
-    package: &'a [u8],
-    expires: u64,
+pub(crate) struct Material<'a> {
+    pub(crate) origin: Origin,
+    pub(crate) selector: Selector,
+    pub(crate) package: &'a [u8],
+    pub(crate) expires: u64,
 }
 
-enum Work {
+pub(crate) enum Work {
     Pending,
     NeedPackage { origin: Origin },
     Queued(Outbox),
 }
 
-struct Checkpoint {
-    cursor: CursorStore,
+pub(crate) struct Checkpoint {
+    pub(crate) cursor: CursorStore,
     signer: Keys,
     codec: Codec,
     owner: Arc<()>,
@@ -156,7 +160,12 @@ struct Checkpoint {
 }
 
 impl Checkpoint {
-    fn attach(
+    #[cfg(test)]
+    pub(crate) fn fixture_statement(&self, sql: &str) {
+        self.cursor.conn.execute_batch(sql).unwrap();
+    }
+
+    pub(crate) fn attach(
         mut cursor: CursorStore,
         signer: Keys,
         owner_uid: u32,
@@ -186,8 +195,8 @@ impl Checkpoint {
         })
     }
 
-    // Only the test harness stands in for the authenticated socket owner.
-    fn bind_source(&self, url: &str) -> Result<Source> {
+    // Callers must already hold the authenticated socket owner.
+    pub(crate) fn bind_source(&self, url: &str) -> Result<Source> {
         let route = self
             .routes
             .iter()
@@ -199,8 +208,8 @@ impl Checkpoint {
         })
     }
 
-    // The fixture supplies the verified peer UID, never data from an Offer.
-    fn authorize_local(&self, verified_uid: u32) -> Result<Local> {
+    // Callers must obtain this UID from a connected Unix stream.
+    pub(crate) fn authorize_local(&self, verified_uid: u32) -> Result<Local> {
         if verified_uid != self.owner_uid {
             return Err(Error::LocalOwner);
         }
@@ -231,7 +240,12 @@ impl Checkpoint {
         Ok(())
     }
 
-    fn admit(&mut self, source: &Source, record: RawRecord<'_>, wall: u64) -> Result<Disposition> {
+    pub(crate) fn admit(
+        &mut self,
+        source: &Source,
+        record: RawRecord<'_>,
+        wall: u64,
+    ) -> Result<Disposition> {
         let origin = self.origin(source)?;
         record.check()?;
         rows::check_wall(&self.cursor.conn, wall)?;
@@ -305,10 +319,10 @@ impl Checkpoint {
         .then_some(offer))
     }
 
-    fn approve(&mut self, local: &Local, key: Selector, wall: u64) -> Result<()> {
+    pub(crate) fn approve(&mut self, local: &Local, key: Selector, wall: u64) -> Result<()> {
         let origin = self.authorized_row(local, key)?;
         let tx = self.cursor.with_wall(origin, wall)?;
-        let row = Invitation::load(&tx, key, origin)?;
+        let row = Invitation::load_unowned(&tx, key, origin)?;
         if wall >= row.expires {
             return Err(Error::Expired);
         }
@@ -320,18 +334,18 @@ impl Checkpoint {
         Ok(())
     }
 
-    fn discard(&mut self, local: &Local, key: Selector, wall: u64) -> Result<()> {
+    pub(crate) fn discard(&mut self, local: &Local, key: Selector, wall: u64) -> Result<()> {
         self.check_local(local)?;
         let origin = rows::stored_origin(&self.cursor.conn, key)?;
         let tx = self.cursor.with_wall(origin, wall)?;
-        let row = Invitation::load(&tx, key, origin)?;
+        let row = Invitation::load_unowned(&tx, key, origin)?;
         rows::advance_wall(&tx, wall)?;
         row.remove(&tx)?;
         tx.commit()?;
         Ok(())
     }
 
-    fn sweep(&mut self, source: &Source, wall: u64) -> Result<()> {
+    pub(crate) fn sweep(&mut self, source: &Source, wall: u64) -> Result<()> {
         let origin = self.origin(source)?;
         let tx = self.cursor.with_wall(origin, wall)?;
         rows::sweep(&tx, wall)?;
@@ -347,6 +361,7 @@ impl Checkpoint {
         rows::stored_origin(&self.cursor.conn, key)
     }
 
+    #[cfg(test)]
     fn work(
         &mut self,
         local: &Local,
@@ -354,7 +369,20 @@ impl Checkpoint {
         wall: u64,
         material: Option<Material<'_>>,
     ) -> Result<Work> {
-        let origin = self.authorized_row(local, key)?;
+        self.check_local(local)?;
+        self.approved_work(key, wall, material)
+    }
+
+    pub(crate) fn approved_work(
+        &mut self,
+        key: Selector,
+        wall: u64,
+        material: Option<Material<'_>>,
+    ) -> Result<Work> {
+        if !self.policy.permits(key.server) {
+            return Err(Error::Policy);
+        }
+        let origin = rows::stored_origin(&self.cursor.conn, key)?;
         let route = self
             .routes
             .iter()
@@ -362,7 +390,7 @@ impl Checkpoint {
             .ok_or(Error::Source)?;
         let tx = self.cursor.with_wall(origin, wall)?;
         rows::check_wall(&tx, wall)?;
-        let row = Invitation::load(&tx, key, origin)?;
+        let row = Invitation::load_unowned(&tx, key, origin)?;
         let outcome = if let Some(queued) = row.outbox(&tx)? {
             if wall >= queued.expires {
                 return Err(Error::Expired);
@@ -403,17 +431,7 @@ impl Checkpoint {
         if material.origin != route.id || material.selector != row.key {
             return Err(Error::Package);
         }
-        let signed_offer = codec
-            .open_offer(signer, &row.frame, Some(row.key.server), &route.urls, wall)
-            .map_err(|_| Error::Cursor(CursorError::Binding))?;
-        let flight = signed_offer.flight();
-        if Selector::from(&signed_offer) != row.key
-            || flight.carrier_id.to_bytes() != row.carrier
-            || flight.expires_at != row.expires
-            || flight.replay_safe_until != row.replay_until
-        {
-            return Err(Error::Cursor(CursorError::Binding));
-        }
+        let signed_offer = Self::check_signed_offer(codec, signer, route, row, wall)?;
         let consent = codec
             .prepare_consent(
                 signer,
@@ -430,8 +448,38 @@ impl Checkpoint {
             revision: flight.revision.to_bytes(),
             expires: flight.expires_at,
             frame: Zeroizing::new(consent.frame().to_vec()),
+            package_id: consent.flight.binding().event_id,
+            package_digest: Sha256::digest(consent.flight.package_bytes()).into(),
+            attempt: 0,
+            retry_at: None,
+            acknowledged_at: None,
         };
         row.save_outbox(tx, &queued)?;
         Ok(queued)
     }
+
+    fn check_signed_offer(
+        codec: &Codec,
+        signer: &Keys,
+        route: &Route,
+        row: &Invitation,
+        wall: u64,
+    ) -> Result<Offer> {
+        let signed_offer = codec
+            .open_offer(signer, &row.frame, Some(row.key.server), &route.urls, wall)
+            .map_err(|_| Error::Cursor(CursorError::Binding))?;
+        let flight = signed_offer.flight();
+        if flight.author == flight.recipient
+            || Selector::from(&signed_offer) != row.key
+            || flight.carrier_id.to_bytes() != row.carrier
+            || flight.expires_at != row.expires
+            || flight.replay_safe_until != row.replay_until
+        {
+            return Err(Error::Cursor(CursorError::Binding));
+        }
+        Ok(signed_offer)
+    }
 }
+
+#[path = "peer_consent_publication.rs"]
+mod publication;

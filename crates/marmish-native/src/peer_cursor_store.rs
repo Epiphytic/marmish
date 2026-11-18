@@ -14,12 +14,15 @@ mod pages;
 #[path = "peer_cursor_retry.rs"]
 mod retry;
 
-#[cfg(test)]
 #[path = "peer_consent_checkpoint.rs"]
-mod consent_checkpoint;
+pub(crate) mod consent_checkpoint;
 
-pub(crate) use pages::{Page, ScanStart, ServiceTurn, Turn};
-pub(crate) use retry::{Auth, Metadata, RetryFinding, TrustedOutcome};
+pub(crate) use pages::{Page, ScanStart};
+#[cfg(test)]
+pub(crate) use pages::{ServiceTurn, Turn};
+#[cfg(test)]
+pub(crate) use retry::RetryFinding;
+pub(crate) use retry::{Auth, Metadata, TrustedOutcome};
 
 pub(crate) const EVENT_BYTES: usize = 64 * 1024;
 const VISIBLE: usize = 256;

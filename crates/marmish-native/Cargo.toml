@@ -79,6 +79,9 @@ transport-nostr-adapter = { git = "https://github.com/marmot-protocol/mdk", bran
 transport-nostr-peeler = { git = "https://github.com/marmot-protocol/mdk", branch = "master" }
 
 [dev-dependencies]
+openmls_basic_credential = { git = "https://github.com/openmls/openmls.git", rev = "6100df3fb1d8c3eeab53e349fcbd621f98c44fe2" }
+openmls = { git = "https://github.com/openmls/openmls.git", rev = "6100df3fb1d8c3eeab53e349fcbd621f98c44fe2", features = ["extensions-draft"] }
+openmls_rust_crypto = { git = "https://github.com/openmls/openmls.git", rev = "6100df3fb1d8c3eeab53e349fcbd621f98c44fe2", features = ["extensions-draft"] }
 marmot-session = { git = "https://github.com/marmot-protocol/mdk", branch = "master", features = ["test-support"] }
 rcgen = { version = "=0.14.8", default-features = false, features = ["ring"] }
 tempfile.workspace = true

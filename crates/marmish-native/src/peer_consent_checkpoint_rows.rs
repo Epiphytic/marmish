@@ -12,7 +12,7 @@ const FENCES_PER_ORIGIN_CLASS: u16 = 256;
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS peer_consent_version (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-    version INTEGER NOT NULL CHECK (version = 1),
+    version INTEGER NOT NULL CHECK (version = 2),
     account BLOB NOT NULL CHECK (length(account) = 32),
     wall INTEGER NOT NULL DEFAULT 0 CHECK (wall >= 0)
 ) STRICT;
@@ -46,6 +46,13 @@ CREATE TABLE IF NOT EXISTS peer_consent_outbox (
     revision BLOB NOT NULL CHECK (length(revision) = 32),
     expires INTEGER NOT NULL CHECK (expires > 0),
     frame BLOB NOT NULL CHECK (length(frame) BETWEEN 1 AND 65536),
+    package_id BLOB NOT NULL CHECK (length(package_id) = 32),
+    package_digest BLOB NOT NULL CHECK (length(package_digest) = 32),
+    attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+    retry_at INTEGER CHECK (retry_at >= 0),
+    acknowledged_at INTEGER CHECK (acknowledged_at >= 0 AND acknowledged_at < expires),
+    CHECK ((attempt = 0) = (retry_at IS NULL)),
+    CHECK (acknowledged_at IS NULL OR attempt > 0),
     FOREIGN KEY (server, offer_id, offer_revision, origin)
         REFERENCES peer_consent_invite (server, offer_id, revision, origin) ON DELETE CASCADE
 ) STRICT;
@@ -72,14 +79,15 @@ pub(super) fn attach(cursor: &mut CursorStore, account: PublicKey) -> DbResult<(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
+    super::provisioning::attach(&tx, checkpoint.is_some())?;
     match checkpoint {
         None => {
             tx.execute(
-                "INSERT INTO peer_consent_version (singleton, version, account) VALUES (1, 1, ?1)",
+                "INSERT INTO peer_consent_version (singleton, version, account) VALUES (1, 2, ?1)",
                 [account],
             )?;
         }
-        Some((1, stored)) if stored == account => {}
+        Some((2, stored)) if stored == account => {}
         _ => return Err(CursorError::Binding),
     }
     tx.commit()?;
@@ -115,7 +123,9 @@ pub(super) fn sweep(tx: &Transaction<'_>, wall: u64) -> DbResult<()> {
     tx.execute(
         "DELETE FROM peer_consent_invite WHERE expires<=?1
             AND NOT EXISTS (SELECT 1 FROM peer_consent_outbox o
-                WHERE o.server=peer_consent_invite.server AND o.expires>?1)",
+                WHERE o.server=peer_consent_invite.server AND o.expires>?1)
+            AND NOT EXISTS (SELECT 1 FROM peer_provisioning_slot p
+                WHERE p.server=peer_consent_invite.server)",
         [wall],
     )?;
     tx.execute(
@@ -178,7 +188,7 @@ pub(super) fn admit(
     Ok(TrustedOutcome::Applied)
 }
 
-fn require_write(changed: usize) -> DbResult<()> {
+pub(super) fn require_write(changed: usize) -> DbResult<()> {
     if changed != 1 {
         return Err(CursorError::Storage);
     }
@@ -224,12 +234,17 @@ pub(super) struct Invitation {
     pub(super) frame: Zeroizing<Vec<u8>>,
 }
 
-pub(super) struct Outbox {
-    pub(super) origin: Origin,
-    pub(super) carrier: [u8; 32],
-    pub(super) revision: [u8; 32],
-    pub(super) expires: u64,
-    pub(super) frame: Zeroizing<Vec<u8>>,
+pub(crate) struct Outbox {
+    pub(crate) origin: Origin,
+    pub(crate) carrier: [u8; 32],
+    pub(crate) revision: [u8; 32],
+    pub(crate) expires: u64,
+    pub(crate) frame: Zeroizing<Vec<u8>>,
+    pub(crate) package_id: [u8; 32],
+    pub(crate) package_digest: [u8; 32],
+    pub(crate) attempt: u64,
+    pub(crate) retry_at: Option<u64>,
+    pub(crate) acknowledged_at: Option<u64>,
 }
 
 impl Invitation {
@@ -286,7 +301,8 @@ impl Invitation {
     pub(super) fn outbox(&self, tx: &Transaction<'_>) -> DbResult<Option<Outbox>> {
         Ok(tx
             .query_row(
-                "SELECT carrier, revision, expires, frame FROM peer_consent_outbox
+                "SELECT carrier, revision, expires, frame, package_id, package_digest,
+                        attempt, retry_at, acknowledged_at FROM peer_consent_outbox
                 WHERE server=?1 AND offer_id=?2 AND offer_revision=?3 AND origin=?4",
                 params![
                     self.key.server.to_bytes(),
@@ -301,6 +317,11 @@ impl Invitation {
                         revision: row.get(1)?,
                         expires: read_seconds(row, 2)?,
                         frame: Zeroizing::new(row.get(3)?),
+                        package_id: row.get(4)?,
+                        package_digest: row.get(5)?,
+                        attempt: read_seconds(row, 6)?,
+                        retry_at: read_optional_seconds(row, 7)?,
+                        acknowledged_at: read_optional_seconds(row, 8)?,
                     })
                 },
             )
@@ -313,8 +334,8 @@ impl Invitation {
         }
         require_write(tx.execute(
             "INSERT INTO peer_consent_outbox
-                (server, offer_id, offer_revision, origin, carrier, revision, expires, frame)
-                VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                (server, offer_id, offer_revision, origin, carrier, revision, expires, frame, package_id, package_digest)
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             params![
                 self.key.server.to_bytes(),
                 self.key.id,
@@ -323,7 +344,9 @@ impl Invitation {
                 outbox.carrier,
                 outbox.revision,
                 seconds(outbox.expires)?,
-                outbox.frame.as_slice()
+                outbox.frame.as_slice(),
+                outbox.package_id,
+                outbox.package_digest
             ],
         )?)?;
         Ok(())

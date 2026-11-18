@@ -8,6 +8,8 @@ use super::*;
 
 #[path = "peer_consent_checkpoint_fixture.rs"]
 mod fixture;
+#[path = "peer_provisioning_tests.rs"]
+mod provisioning;
 
 use fixture::{A, B, DB_KEY, Fixture, UID, native_package, raw, rewrap};
 

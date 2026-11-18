@@ -1,0 +1,394 @@
+//! Client receipt and publication on a qualified private Peer origin.
+
+#[path = "peer_invitation_paths.rs"]
+mod paths;
+#[path = "peer_raw_socket.rs"]
+mod socket;
+#[path = "peer_cursor_store.rs"]
+mod store;
+#[cfg(test)]
+#[path = "peer_invitation_tests.rs"]
+mod tests;
+
+use crate::{
+    identity::{IdentityMaterial, ProfileLease},
+    mdk_adapter::peer_native_signer::{NativePackage, OpenStage, StageError},
+    transport::RelayConnector,
+};
+use hkdf::Hkdf;
+use nostr::key::Keys;
+use paths::{Paths, StageSlot};
+use sha2::Sha256;
+use socket::{
+    owner::Owner,
+    wire::{Arrival, Failure},
+};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use store::{
+    CursorStore, HardenedPeerConnection, Origin, Page, RawRecord, ScanStart,
+    consent_checkpoint::{
+        self, Checkpoint, Local, Material, Policy, Route, Selector, Source, Status, Work,
+    },
+};
+use tokio::{net::UnixStream, time::Instant};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Error {
+    Path,
+    Clock,
+    Binding,
+    Cursor(store::Error),
+    Checkpoint(consent_checkpoint::Error),
+    Socket(Failure),
+    Native(StageError),
+}
+
+impl From<store::Error> for Error {
+    fn from(error: store::Error) -> Self {
+        Self::Cursor(error)
+    }
+}
+impl From<consent_checkpoint::Error> for Error {
+    fn from(error: consent_checkpoint::Error) -> Self {
+        Self::Checkpoint(error)
+    }
+}
+impl From<Failure> for Error {
+    fn from(error: Failure) -> Self {
+        Self::Socket(error)
+    }
+}
+impl From<StageError> for Error {
+    fn from(error: StageError) -> Self {
+        Self::Native(error)
+    }
+}
+
+type Result<T> = std::result::Result<T, Error>;
+
+struct QualifiedOrigin {
+    connector: RelayConnector,
+    route: Route,
+}
+
+impl QualifiedOrigin {
+    #[cfg(test)]
+    fn for_fixture(relay: &socket::fixture::Relay, private: &std::path::Path) -> Result<Self> {
+        Ok(Self {
+            connector: relay.connector(private),
+            route: Route::configured(relay.url.as_str())?,
+        })
+    }
+}
+
+enum Wall {
+    System,
+    #[cfg(test)]
+    Fixture(Arc<std::sync::atomic::AtomicU64>),
+}
+
+impl Wall {
+    fn sample(&self) -> Result<Duration> {
+        match self {
+            Self::System => SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| Error::Clock),
+            #[cfg(test)]
+            Self::Fixture(wall) => Ok(Duration::from_secs(
+                wall.load(std::sync::atomic::Ordering::Relaxed),
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PublishResult {
+    Pending,
+    Throttled,
+    Accepted,
+    Rejected,
+}
+
+struct InvitationLane<'a> {
+    paths: Paths<'a>,
+    signer: Arc<Keys>,
+    origin: Origin,
+    checkpoint: Checkpoint,
+    source: Source,
+    socket: Owner,
+    recovery: bool,
+    wall: Wall,
+}
+
+impl<'a> InvitationLane<'a> {
+    fn initialize(lease: &ProfileLease, material: &IdentityMaterial) -> Result<()> {
+        Paths::new(lease, material)?.initialize()
+    }
+
+    fn allocate(lease: &ProfileLease, material: &IdentityMaterial, slot: StageSlot) -> Result<()> {
+        Paths::new(lease, material)?.allocate(slot)
+    }
+
+    async fn open(
+        lease: &'a ProfileLease,
+        material: &IdentityMaterial,
+        policy: Policy,
+        qualified: QualifiedOrigin,
+        wall: Wall,
+        deadline: Instant,
+    ) -> Result<Self> {
+        let paths = Paths::new(lease, material)?;
+        let checked = paths.cursor()?;
+        let conn = HardenedPeerConnection::open(checked.path(), *paths.cursor_key())?;
+        checked.unchanged()?;
+        let signer = material.signer();
+        let account = signer.public_key();
+        let origin = qualified.route.id;
+        let url = &qualified.route.urls[0];
+        let cursor = CursorStore::attach(conn, account.to_bytes(), &[origin])?;
+        // SAFETY: reads this Unix process's effective UID.
+        let owner_uid = unsafe { libc::geteuid() };
+        let mut checkpoint =
+            Checkpoint::attach(cursor, (*signer).clone(), owner_uid, &[url], policy)?;
+        let source = checkpoint.bind_source(url)?;
+        checkpoint
+            .cursor
+            .require_available(origin, wall.sample()?.as_secs())?;
+        let socket = Owner::open(&qualified.connector, url, account, &signer, deadline).await?;
+        checked.unchanged()?;
+        checkpoint
+            .cursor
+            .require_available(origin, wall.sample()?.as_secs())?;
+        Ok(Self {
+            paths,
+            signer,
+            origin,
+            checkpoint,
+            source,
+            socket,
+            recovery: true,
+            wall,
+        })
+    }
+
+    fn eligible_wall(&mut self) -> Result<u64> {
+        Ok(self.eligible_sample()?.as_secs())
+    }
+
+    fn eligible_sample(&mut self) -> Result<Duration> {
+        let sample = self.wall.sample()?;
+        self.checkpoint
+            .cursor
+            .require_available(self.origin, sample.as_secs())?;
+        Ok(sample)
+    }
+
+    async fn history_step(&mut self, deadline: Instant) -> Result<bool> {
+        let wall = self.eligible_wall()?;
+        let start = if self.recovery {
+            ScanStart::Recovery
+        } else {
+            ScanStart::Periodic
+        };
+        let Some(cursor) = self.checkpoint.cursor.scan(self.origin, start, wall)? else {
+            return Ok(false);
+        };
+        self.recovery = false;
+        let page = self
+            .socket
+            .page([cursor.lower, cursor.until], deadline)
+            .await?;
+        if !self.socket.accepts_page(&page) {
+            return Err(Error::Binding);
+        }
+        let wall = self.eligible_wall()?;
+        let records: Vec<_> = page.records().iter().map(record).collect();
+        let receipts = records
+            .iter()
+            .map(|raw| {
+                self.checkpoint
+                    .admit(&self.source, *raw, wall)
+                    .map(|disposition| disposition.receipt)
+            })
+            .collect::<consent_checkpoint::Result<Vec<_>>>()?;
+        let (_, [since, until]) = page.request();
+        self.checkpoint.cursor.commit_page(
+            &cursor,
+            &Page {
+                origin: self.origin,
+                since,
+                until,
+                records: &records,
+            },
+            &receipts,
+            wall,
+        )?;
+        Ok(true)
+    }
+
+    async fn live_step(&mut self, deadline: Instant) -> Result<Option<Status>> {
+        self.eligible_wall()?;
+        let Some(live) = self.socket.wait_live(deadline).await? else {
+            return Ok(None);
+        };
+        if !self.socket.accepts_live(&live) {
+            return Err(Error::Binding);
+        }
+        let wall = self.eligible_wall()?;
+        let disposition = self
+            .checkpoint
+            .admit(&self.source, record(live.arrival()), wall)?;
+        Ok(Some(disposition.status))
+    }
+
+    fn deferred_step(&mut self) -> Result<Option<Status>> {
+        let wall = self.eligible_wall()?;
+        let Some(snapshot) = self.checkpoint.cursor.due(self.origin, wall)? else {
+            return Ok(None);
+        };
+        let status = self
+            .checkpoint
+            .admit(&self.source, snapshot.record(), wall)?
+            .status;
+        if status == Status::Deferred {
+            self.checkpoint.cursor.retry_again(&snapshot, wall)?;
+        }
+        Ok(Some(status))
+    }
+
+    fn local(&self, connection: &UnixStream) -> Result<Local> {
+        let creds = connection.peer_cred().map_err(|_| Error::Binding)?;
+        Ok(self.checkpoint.authorize_local(creds.uid())?)
+    }
+
+    fn approve(&mut self, connection: &UnixStream, key: Selector) -> Result<()> {
+        let local = self.local(connection)?;
+        let wall = self.eligible_wall()?;
+        Ok(self.checkpoint.approve(&local, key, wall)?)
+    }
+
+    fn discard(&mut self, connection: &UnixStream, key: Selector) -> Result<()> {
+        let local = self.local(connection)?;
+        let wall = self.eligible_wall()?;
+        Ok(self.checkpoint.discard(&local, key, wall)?)
+    }
+
+    fn summaries(&mut self, connection: &UnixStream) -> Result<Vec<(Selector, bool)>> {
+        let local = self.local(connection)?;
+        let wall = self.eligible_wall()?;
+        Ok(self.checkpoint.summaries(&local, &self.source, wall)?)
+    }
+
+    async fn publish_approved(
+        &mut self,
+        key: Selector,
+        slot: StageSlot,
+        deadline: Instant,
+    ) -> Result<PublishResult> {
+        let sample = self.eligible_sample()?;
+        let wall = sample.as_secs();
+        let new = match self.checkpoint.approved_work(key, wall, None)? {
+            Work::Pending => return Ok(PublishResult::Pending),
+            Work::NeedPackage { origin } if origin == self.origin => true,
+            Work::Queued(outbox) if outbox.origin == self.origin => {
+                if outbox.acknowledged_at.is_some()
+                    || outbox.retry_at.is_some_and(|retry| wall < retry)
+                {
+                    return Ok(PublishResult::Throttled);
+                }
+                false
+            }
+            _ => return Err(Error::Binding),
+        };
+        self.socket.ready_to_publish(deadline)?;
+        let package = self.stage_package(key, slot, sample, new).await?;
+        let wall = self.eligible_wall()?;
+        if new {
+            let material = Material {
+                origin: self.origin,
+                selector: key,
+                package: &package.bytes,
+                expires: package
+                    .expires
+                    .min(wall.checked_add(86_400).ok_or(Error::Clock)?),
+            };
+            if !matches!(
+                self.checkpoint.approved_work(key, wall, Some(material))?,
+                Work::Queued(_)
+            ) {
+                return Err(Error::Binding);
+            }
+        }
+
+        self.socket.ready_to_publish(deadline)?;
+        let Some(attempt) =
+            self.checkpoint
+                .reserve_attempt(&self.source, key, package.id, &package.bytes, wall)?
+        else {
+            return Ok(PublishResult::Throttled);
+        };
+        let carrier = attempt.carrier();
+        let receipt = self
+            .socket
+            .publish_bytes(attempt.bytes(), key.server, carrier, deadline)
+            .await?;
+        if !self.socket.accepted(&receipt, carrier) {
+            return Ok(PublishResult::Rejected);
+        }
+        let wall = self.eligible_wall()?;
+        self.checkpoint
+            .record_acceptance(&self.source, attempt, wall)?;
+        Ok(PublishResult::Accepted)
+    }
+
+    async fn stage_package(
+        &self,
+        key: Selector,
+        slot: StageSlot,
+        sample: Duration,
+        new: bool,
+    ) -> Result<NativePackage> {
+        let path = self.paths.stage(slot)?;
+        let db_key = self.paths.stage_key(slot);
+        let slot_id = slot_id(&db_key, self.origin, key);
+        let stage = OpenStage::open(
+            path.path(),
+            *db_key,
+            self.signer.clone(),
+            self.socket.origin(),
+            slot_id,
+        )?;
+        path.unchanged()?;
+        let package = stage.package(sample, new).await?;
+        path.unchanged()?;
+        Ok(package)
+    }
+}
+
+fn slot_id(key: &[u8; 32], origin: Origin, selector: Selector) -> String {
+    let mut slot = [0; 16];
+    Hkdf::<Sha256>::new(None, key)
+        .expand_multi_info(
+            &[
+                b"marmish/peer/native-slot/1",
+                &origin,
+                &selector.server.to_bytes(),
+                &selector.id,
+                &selector.revision,
+            ],
+            &mut slot,
+        )
+        .expect("fixed HKDF output length is valid");
+    hex::encode(slot)
+}
+
+fn record(arrival: &Arrival) -> RawRecord<'_> {
+    RawRecord {
+        id: arrival.id,
+        stamp: arrival.stamp,
+        bytes: arrival.body.get().as_bytes(),
+    }
+}

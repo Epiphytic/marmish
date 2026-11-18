@@ -311,11 +311,18 @@ async fn peer_raw_socket_native_wss_signed_offer_and_slot() {
     assert_ne!(relayed, original_text);
     assert_eq!(flight.recipient, reader.public_key());
     assert_ne!(flight.recipient, writer.public_key());
-    let (ack, ()) = tokio::join!(source.publish(&prepared, flight, deadline()), async {
-        let event = sender.publication(&original, writer.public_key()).await;
-        sender.ack(&event, true).await;
-    });
-    assert!(ack.unwrap());
+    let carrier = flight.carrier_id.to_bytes();
+    let (ack, ()) = tokio::join!(
+        source.publish_bytes(&original, flight.recipient, carrier, deadline()),
+        async {
+            let event = sender.publication(&original, writer.public_key()).await;
+            sender.ack(&event, true).await;
+        }
+    );
+    let ack = ack.unwrap();
+    assert!(source.accepted(&ack, carrier));
+    assert!(!source.accepted(&ack, [0; 32]));
+    assert!(!incoming.accepted(&ack, carrier));
     let (live, ()) = tokio::join!(
         incoming.wait_live(deadline()),
         receiver.deliver(&live_id, &relayed)
@@ -404,6 +411,12 @@ async fn peer_raw_socket_native_wss_signed_offer_and_slot() {
     let (_, _, third_id) = attached(&relay, &reader_connector, &reader).await;
     assert_ne!(third_id, replacement_id);
     assert_eq!(reader_connector.direct_attempt_count(), 3);
+    let (stopped, ()) = tokio::join!(source.stop(deadline()), async {
+        sender.close(&sender_id).await;
+        assert!(matches!(sender.receive().await, Message::Close(_)));
+    });
+    stopped.unwrap();
+    assert!(!source.accepted(&ack, carrier));
 }
 
 #[tokio::test]

@@ -104,6 +104,9 @@ mod copy_io_abort_tests;
 #[cfg(test)]
 mod copy_commit_hook;
 
+#[allow(dead_code)] // Deployment qualification must precede daemon activation.
+mod peer_invitation;
+
 #[cfg(test)]
 mod peer_host_sampling_proof_tests;
 

@@ -8,15 +8,15 @@ use serde_json::value::RawValue;
 
 use super::peer_control_wire::MAX_OUTER_BYTES;
 
-pub(super) const CARRIER: u16 = 7435;
-pub(super) const MESSAGE_LIMIT: usize = MAX_OUTER_BYTES + 256;
-pub(super) const RECORD_LIMIT: usize = 4;
+pub(in crate::peer_invitation) const CARRIER: u16 = 7435;
+pub(in crate::peer_invitation) const MESSAGE_LIMIT: usize = MAX_OUTER_BYTES + 256;
+pub(in crate::peer_invitation) const RECORD_LIMIT: usize = 4;
 const RESERVE_BYTES: usize = RECORD_LIMIT * MAX_OUTER_BYTES;
 const FRAME_LIMIT: u8 = 24;
 const CONTROL_LIMIT: u8 = 8;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(super) enum Failure {
+pub(in crate::peer_invitation) enum Failure {
     Binding,
     Size,
     Grammar,
@@ -27,16 +27,16 @@ pub(super) enum Failure {
     Ambiguous,
 }
 
-pub(super) type Result<T> = std::result::Result<T, Failure>;
+pub(in crate::peer_invitation) type Result<T> = std::result::Result<T, Failure>;
 
-pub(super) enum Packet<'a> {
+pub(in crate::peer_invitation) enum Packet<'a> {
     Challenge(String),
     Event(String, &'a RawValue),
     End(String),
     Acknowledged([u8; 32], bool),
 }
 
-pub(super) fn packet(text: &str) -> Result<Packet<'_>> {
+pub(in crate::peer_invitation) fn packet(text: &str) -> Result<Packet<'_>> {
     if text.len() > MESSAGE_LIMIT {
         return Err(Failure::Size);
     }
@@ -131,14 +131,14 @@ struct Fields<'a> {
 }
 
 #[derive(Debug)]
-pub(super) struct Arrival {
-    pub(super) id: [u8; 32],
-    pub(super) stamp: u64,
-    pub(super) body: Box<RawValue>,
+pub(in crate::peer_invitation) struct Arrival {
+    pub(in crate::peer_invitation) id: [u8; 32],
+    pub(in crate::peer_invitation) stamp: u64,
+    pub(in crate::peer_invitation) body: Box<RawValue>,
 }
 
 impl Arrival {
-    pub(super) fn parse(body: &RawValue, recipient: &[u8; 32]) -> Result<Self> {
+    pub(in crate::peer_invitation) fn parse(body: &RawValue, recipient: &[u8; 32]) -> Result<Self> {
         let (id, stamp) = Self::index(body, recipient)?;
         Ok(Self {
             id,
@@ -147,7 +147,10 @@ impl Arrival {
         })
     }
 
-    pub(super) fn index(body: &RawValue, recipient: &[u8; 32]) -> Result<([u8; 32], u64)> {
+    pub(in crate::peer_invitation) fn index(
+        body: &RawValue,
+        recipient: &[u8; 32],
+    ) -> Result<([u8; 32], u64)> {
         if body.get().len() > MAX_OUTER_BYTES {
             return Err(Failure::Size);
         }
@@ -171,13 +174,13 @@ impl Arrival {
 }
 
 #[derive(Default)]
-pub(super) struct Reserve {
+pub(in crate::peer_invitation) struct Reserve {
     records: usize,
     bytes: usize,
 }
 
 impl Reserve {
-    pub(super) fn charge(&mut self, size: usize) -> Result<()> {
+    pub(in crate::peer_invitation) fn charge(&mut self, size: usize) -> Result<()> {
         if size > MAX_OUTER_BYTES {
             return Err(Failure::Size);
         }
@@ -189,20 +192,20 @@ impl Reserve {
         Ok(())
     }
 
-    pub(super) fn release(&mut self, size: usize) {
+    pub(in crate::peer_invitation) fn release(&mut self, size: usize) {
         self.records -= 1;
         self.bytes -= size;
     }
 }
 
 #[derive(Default)]
-pub(super) struct Budget {
+pub(in crate::peer_invitation) struct Budget {
     total: u8,
     control: u8,
 }
 
 impl Budget {
-    pub(super) fn admit(&mut self, control: bool) -> Result<()> {
+    pub(in crate::peer_invitation) fn admit(&mut self, control: bool) -> Result<()> {
         if self.total >= FRAME_LIMIT || control && self.control >= CONTROL_LIMIT {
             return Err(Failure::Capacity);
         }

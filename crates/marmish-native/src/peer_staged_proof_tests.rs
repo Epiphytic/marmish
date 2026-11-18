@@ -155,6 +155,20 @@ impl Store {
         SqliteAccountStorage,
         AccountDeviceRuntime<A, StaticTransportRouting, Publisher>,
     ) {
+        let routing =
+            StaticTransportRouting::new(relays.clone()).with_inbox_route(peer.clone(), relays);
+        self.open_with_routing(routing, adapter, relay)
+    }
+
+    fn open_with_routing<A: TransportAdapter>(
+        &self,
+        routing: StaticTransportRouting,
+        adapter: A,
+        relay: Arc<dyn NostrRelayClient>,
+    ) -> (
+        SqliteAccountStorage,
+        AccountDeviceRuntime<A, StaticTransportRouting, Publisher>,
+    ) {
         marmish_engine::initialize_storage().unwrap();
         let storage =
             SqliteAccountStorage::open_encrypted(&self.path, &SqlCipherKey::raw(self.key)).unwrap();
@@ -177,8 +191,6 @@ impl Store {
                 .into_iter()
                 .chain([NOSTR_ROUTING_COMPONENT_ID]),
         );
-        let routing =
-            StaticTransportRouting::new(relays.clone()).with_inbox_route(peer.clone(), relays);
         let runtime = AccountDeviceRuntime::open(config, || {
             Ok::<_, marmot_session::SessionError>((
                 adapter,
@@ -1217,3 +1229,6 @@ async fn disposition_precedes_native_loopback_startup_retry() {
     assert!(live.outstanding_welcome_deliveries().unwrap().is_empty());
     sdk.disconnect().await;
 }
+
+#[path = "peer_pending_leave_proof_tests.rs"]
+mod peer_pending_leave_proof_tests;

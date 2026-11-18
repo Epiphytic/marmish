@@ -22,10 +22,10 @@ use tokio::time::{Instant, timeout_at};
 
 use crate::transport::RelayConnector;
 
-use super::{
-    peer_control_wire::{Flight, Prepared},
-    wire::{self, Arrival, Budget, CARRIER, Failure, Packet, RECORD_LIMIT, Reserve, Result},
-};
+use super::wire::{self, Arrival, Budget, CARRIER, Failure, Packet, RECORD_LIMIT, Reserve, Result};
+
+#[cfg(test)]
+use super::peer_control_wire::{Flight, Prepared};
 
 const PREDRAIN_LIMIT: usize = 12;
 
@@ -38,7 +38,7 @@ struct Scope {
 }
 
 #[derive(Debug)]
-pub(super) struct Page {
+pub(in crate::peer_invitation) struct Page {
     scope: Arc<Scope>,
     request: String,
     bounds: [u64; 2],
@@ -46,33 +46,33 @@ pub(super) struct Page {
 }
 
 impl Page {
-    pub(super) fn request(&self) -> (&str, [u64; 2]) {
+    pub(in crate::peer_invitation) fn request(&self) -> (&str, [u64; 2]) {
         (&self.request, self.bounds)
     }
 
-    pub(super) fn is_full(&self) -> bool {
+    pub(in crate::peer_invitation) fn is_full(&self) -> bool {
         self.records.len() == RECORD_LIMIT
     }
 
-    pub(super) fn records(&self) -> &[Arrival] {
+    pub(in crate::peer_invitation) fn records(&self) -> &[Arrival] {
         &self.records
     }
 }
 
 #[derive(Debug)]
-pub(super) struct LiveRecord {
+pub(in crate::peer_invitation) struct LiveRecord {
     scope: Arc<Scope>,
     subscription: String,
     arrival: Arrival,
 }
 
 impl LiveRecord {
-    pub(super) fn arrival(&self) -> &Arrival {
+    pub(in crate::peer_invitation) fn arrival(&self) -> &Arrival {
         &self.arrival
     }
 }
 
-pub(super) struct Owner {
+pub(in crate::peer_invitation) struct Owner {
     socket: Option<Socket>,
     scope: Arc<Scope>,
     live_id: String,
@@ -81,8 +81,14 @@ pub(super) struct Owner {
     live_reserve: Reserve,
 }
 
+pub(in crate::peer_invitation) struct Acknowledgement {
+    scope: Arc<Scope>,
+    carrier: [u8; 32],
+    positive: bool,
+}
+
 impl Owner {
-    pub(super) async fn open(
+    pub(in crate::peer_invitation) async fn open(
         connector: &RelayConnector,
         origin: &str,
         recipient: PublicKey,
@@ -122,15 +128,15 @@ impl Owner {
         })
     }
 
-    pub(super) fn accepts_page(&self, page: &Page) -> bool {
+    pub(in crate::peer_invitation) fn accepts_page(&self, page: &Page) -> bool {
         self.current(&page.scope)
     }
 
-    pub(super) fn origin(&self) -> &str {
+    pub(in crate::peer_invitation) fn origin(&self) -> &str {
         &self.scope.origin
     }
 
-    pub(super) fn accepts_live(&self, record: &LiveRecord) -> bool {
+    pub(in crate::peer_invitation) fn accepts_live(&self, record: &LiveRecord) -> bool {
         self.current(&record.scope) && record.subscription == self.live_id
     }
 
@@ -138,7 +144,10 @@ impl Owner {
         Arc::ptr_eq(scope, &self.scope) && scope.live.load(Ordering::Acquire)
     }
 
-    pub(super) async fn wait_live(&mut self, deadline: Instant) -> Result<Option<LiveRecord>> {
+    pub(in crate::peer_invitation) async fn wait_live(
+        &mut self,
+        deadline: Instant,
+    ) -> Result<Option<LiveRecord>> {
         self.socket()?;
         if deadline <= Instant::now() {
             return Ok(None);
@@ -168,7 +177,11 @@ impl Owner {
         Some(record)
     }
 
-    pub(super) async fn page(&mut self, bounds: [u64; 2], deadline: Instant) -> Result<Page> {
+    pub(in crate::peer_invitation) async fn page(
+        &mut self,
+        bounds: [u64; 2],
+        deadline: Instant,
+    ) -> Result<Page> {
         self.socket()?;
         check_deadline(deadline)?;
         match self
@@ -230,49 +243,71 @@ impl Owner {
         })
     }
 
-    pub(super) async fn publish<T>(
+    #[cfg(test)]
+    pub(in crate::peer_invitation) async fn publish<T>(
         &mut self,
         prepared: &Prepared<T>,
         flight: Flight,
         deadline: Instant,
     ) -> Result<bool> {
-        self.socket()?;
-        check_deadline(deadline)?;
+        Ok(self
+            .publish_bytes(
+                prepared.frame(),
+                flight.recipient,
+                flight.carrier_id.to_bytes(),
+                deadline,
+            )
+            .await?
+            .positive)
+    }
+
+    pub(in crate::peer_invitation) async fn publish_bytes(
+        &mut self,
+        bytes: &[u8],
+        recipient: PublicKey,
+        carrier: [u8; 32],
+        deadline: Instant,
+    ) -> Result<Acknowledgement> {
+        self.ready_to_publish(deadline)?;
         let mut budget = Budget::default();
         let outcome = self
             .active(async |owner| {
-                let frame = owner
-                    .prepare_write(prepared, flight, &mut budget, deadline)
-                    .await?;
+                owner.predrain(&mut budget, deadline).await?;
+                let frame = exact_publication(bytes, recipient, carrier)?;
+                check_deadline(deadline)?;
                 owner
-                    .publish_flight(frame, flight, &mut budget, deadline)
+                    .publish_flight(frame, carrier, &mut budget, deadline)
                     .await
                     .map_err(|_| Failure::Ambiguous)
             })
             .await;
         match outcome {
-            Ok(accepted) => Ok(accepted),
+            Ok(positive) => Ok(Acknowledgement {
+                scope: self.scope.clone(),
+                carrier,
+                positive,
+            }),
             Err(error) => self.fail(error),
         }
     }
 
-    async fn prepare_write<T>(
-        &mut self,
-        prepared: &Prepared<T>,
-        flight: Flight,
-        budget: &mut Budget,
-        deadline: Instant,
-    ) -> Result<String> {
-        self.predrain(budget, deadline).await?;
-        let text = publication(prepared.frame(), flight)?;
-        check_deadline(deadline)?;
-        Ok(text)
+    pub(in crate::peer_invitation) fn ready_to_publish(&mut self, deadline: Instant) -> Result<()> {
+        self.socket()?;
+        check_deadline(deadline)
+    }
+
+    pub(in crate::peer_invitation) fn accepted(
+        &self,
+        receipt: &Acknowledgement,
+        carrier: [u8; 32],
+    ) -> bool {
+        receipt.positive && receipt.carrier == carrier && self.current(&receipt.scope)
     }
 
     async fn publish_flight(
         &mut self,
         frame: String,
-        flight: Flight,
+        carrier: [u8; 32],
         budget: &mut Budget,
         deadline: Instant,
     ) -> Result<bool> {
@@ -280,7 +315,7 @@ impl Owner {
         loop {
             let text = self.socket()?.text(budget, deadline).await?;
             match wire::packet(&text)? {
-                Packet::Acknowledged(id, positive) if id == flight.carrier_id.to_bytes() => {
+                Packet::Acknowledged(id, positive) if id == carrier => {
                     return Ok(positive);
                 }
                 packet => self.push_live(packet)?,
@@ -320,7 +355,7 @@ impl Owner {
         Ok(())
     }
 
-    pub(super) async fn stop(&mut self, deadline: Instant) -> Result<()> {
+    pub(in crate::peer_invitation) async fn stop(&mut self, deadline: Instant) -> Result<()> {
         self.socket()?;
         check_deadline(deadline)?;
         let message = json!(["CLOSE", self.live_id]).to_string();
@@ -470,10 +505,15 @@ impl Socket {
     }
 }
 
-pub(super) fn publication(bytes: &[u8], flight: Flight) -> Result<String> {
+#[cfg(test)]
+pub(in crate::peer_invitation) fn publication(bytes: &[u8], flight: Flight) -> Result<String> {
+    exact_publication(bytes, flight.recipient, flight.carrier_id.to_bytes())
+}
+
+fn exact_publication(bytes: &[u8], recipient: PublicKey, carrier: [u8; 32]) -> Result<String> {
     let raw: &RawValue = serde_json::from_slice(bytes).map_err(|_| Failure::Binding)?;
-    let (id, _) = Arrival::index(raw, &flight.recipient.to_bytes())?;
-    if id != flight.carrier_id.to_bytes() || raw.get().as_bytes() != bytes {
+    let (id, _) = Arrival::index(raw, &recipient.to_bytes())?;
+    if id != carrier || raw.get().as_bytes() != bytes {
         return Err(Failure::Binding);
     }
     let event: Event = serde_json::from_str(raw.get()).map_err(|_| Failure::Binding)?;

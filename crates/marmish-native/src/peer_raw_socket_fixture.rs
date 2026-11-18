@@ -25,15 +25,15 @@ use tokio_tungstenite::{
 use crate::transport::{ArtiDirs, RelayConnector, RelayPolicy, RouteMode, TransportLimits};
 
 const STEP: Duration = Duration::from_secs(5);
-pub(super) const CHALLENGE: &str = "private peer proof";
-pub(super) const FIXTURE_FRAME_LIMIT: usize = (1024 * 1024) + 1024;
+pub(in crate::peer_invitation) const CHALLENGE: &str = "private peer proof";
+pub(in crate::peer_invitation) const FIXTURE_FRAME_LIMIT: usize = (1024 * 1024) + 1024;
 
-pub(super) fn deadline() -> Instant {
+pub(in crate::peer_invitation) fn deadline() -> Instant {
     Instant::now() + STEP
 }
 
-pub(super) struct Relay {
-    pub(super) url: Url,
+pub(in crate::peer_invitation) struct Relay {
+    pub(in crate::peer_invitation) url: Url,
     listener: TcpListener,
     tls: TlsAcceptor,
     roots: rustls::RootCertStore,
@@ -41,7 +41,7 @@ pub(super) struct Relay {
 }
 
 impl Relay {
-    pub(super) async fn new() -> Self {
+    pub(in crate::peer_invitation) async fn new() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = Url::parse(&format!("wss://{}/", listener.local_addr().unwrap())).unwrap();
         let (tls, roots) = tls();
@@ -54,7 +54,7 @@ impl Relay {
         }
     }
 
-    pub(super) fn connector(&self, path: &Path) -> RelayConnector {
+    pub(in crate::peer_invitation) fn connector(&self, path: &Path) -> RelayConnector {
         let policy = RelayPolicy::parse(
             &[self.url.to_string()],
             RouteMode::Off,
@@ -73,7 +73,7 @@ impl Relay {
         .unwrap()
     }
 
-    pub(super) async fn accept(&self) -> Peer {
+    pub(in crate::peer_invitation) async fn accept(&self) -> Peer {
         let (tcp, _) = timeout(STEP, self.listener.accept())
             .await
             .unwrap()
@@ -94,7 +94,10 @@ impl Relay {
         Peer { socket }
     }
 
-    pub(super) async fn authenticated(&self, account: PublicKey) -> (Peer, Event) {
+    pub(in crate::peer_invitation) async fn authenticated(
+        &self,
+        account: PublicKey,
+    ) -> (Peer, Event) {
         let mut peer = self.accept().await;
         let n = self.next_challenge.fetch_add(1, Ordering::Relaxed);
         let challenge = format!("{CHALLENGE} {n}");
@@ -103,7 +106,7 @@ impl Relay {
         (peer, auth)
     }
 
-    pub(super) async fn ready(&self, account: PublicKey) -> (Peer, String) {
+    pub(in crate::peer_invitation) async fn ready(&self, account: PublicKey) -> (Peer, String) {
         let (mut peer, auth) = self.authenticated(account).await;
         peer.ack(&auth, true).await;
         let sub = peer.request(account, None).await;
@@ -112,19 +115,19 @@ impl Relay {
     }
 }
 
-pub(super) struct Peer {
+pub(in crate::peer_invitation) struct Peer {
     socket: WebSocketStream<TlsStream<TcpStream>>,
 }
 
 impl Peer {
-    pub(super) async fn frame(&mut self, frame: Message) {
+    pub(in crate::peer_invitation) async fn frame(&mut self, frame: Message) {
         timeout(STEP, self.socket.send(frame))
             .await
             .unwrap()
             .unwrap();
     }
 
-    pub(super) async fn receive(&mut self) -> Message {
+    pub(in crate::peer_invitation) async fn receive(&mut self) -> Message {
         timeout(STEP, self.socket.next())
             .await
             .unwrap()
@@ -132,25 +135,25 @@ impl Peer {
             .unwrap()
     }
 
-    pub(super) async fn assert_no_request(&mut self) {
+    pub(in crate::peer_invitation) async fn assert_no_request(&mut self) {
         if let Ok(Some(Ok(message))) = timeout(Duration::from_millis(80), self.socket.next()).await
         {
             assert!(matches!(message, Message::Close(_)), "{message:?}");
         }
     }
 
-    pub(super) async fn packet(&mut self, value: Value) {
+    pub(in crate::peer_invitation) async fn packet(&mut self, value: Value) {
         self.frame(Message::Text(value.to_string().into())).await;
     }
 
-    pub(super) async fn text(&mut self) -> String {
+    pub(in crate::peer_invitation) async fn text(&mut self) -> String {
         let Message::Text(text) = self.receive().await else {
             panic!("expected a relay application message");
         };
         text.to_string()
     }
 
-    pub(super) async fn authentication(
+    pub(in crate::peer_invitation) async fn authentication(
         &mut self,
         url: &Url,
         account: PublicKey,
@@ -171,7 +174,11 @@ impl Peer {
         event
     }
 
-    pub(super) async fn request(&mut self, account: PublicKey, bounds: Option<[u64; 2]>) -> String {
+    pub(in crate::peer_invitation) async fn request(
+        &mut self,
+        account: PublicKey,
+        bounds: Option<[u64; 2]>,
+    ) -> String {
         let text = self.text().await;
         let (verb, id, filter): (String, String, Value) = serde_json::from_str(&text).unwrap();
         assert_eq!(verb, "REQ");
@@ -200,28 +207,40 @@ impl Peer {
         id
     }
 
-    pub(super) async fn ack(&mut self, event: &Event, accepted: bool) {
+    pub(in crate::peer_invitation) async fn ack(&mut self, event: &Event, accepted: bool) {
         self.packet(json!(["OK", event.id, accepted, "fixture detail"]))
             .await;
     }
 
-    pub(super) async fn publication(&mut self, original: &[u8], account: PublicKey) -> Event {
+    pub(in crate::peer_invitation) async fn publication(
+        &mut self,
+        original: &[u8],
+        account: PublicKey,
+    ) -> Event {
+        let (event, bytes) = self.signed_publication(account).await;
+        assert_eq!(bytes, original);
+        event
+    }
+
+    pub(in crate::peer_invitation) async fn signed_publication(
+        &mut self,
+        account: PublicKey,
+    ) -> (Event, Vec<u8>) {
         let text = self.text().await;
         let (verb, raw): (String, &RawValue) = serde_json::from_str(&text).unwrap();
         assert_eq!(verb, "EVENT");
-        assert_eq!(raw.get().as_bytes(), original);
         let event: Event = serde_json::from_str(raw.get()).unwrap();
         assert_ne!(event.pubkey, account);
         assert_eq!(u16::from(event.kind), 7435);
         event.verify().unwrap();
-        event
+        (event, raw.get().as_bytes().to_vec())
     }
 
-    pub(super) async fn deliver(&mut self, sub: &str, raw: &str) {
+    pub(in crate::peer_invitation) async fn deliver(&mut self, sub: &str, raw: &str) {
         self.frame(event_message(sub, raw)).await;
     }
 
-    pub(super) async fn batch(&mut self, frames: Vec<Message>) {
+    pub(in crate::peer_invitation) async fn batch(&mut self, frames: Vec<Message>) {
         timeout(STEP, async {
             for frame in frames {
                 self.socket.feed(frame).await?;
@@ -233,17 +252,17 @@ impl Peer {
         .unwrap();
     }
 
-    pub(super) async fn end(&mut self, sub: &str) {
+    pub(in crate::peer_invitation) async fn end(&mut self, sub: &str) {
         self.packet(json!(["EOSE", sub])).await;
     }
 
-    pub(super) async fn close(&mut self, sub: &str) {
+    pub(in crate::peer_invitation) async fn close(&mut self, sub: &str) {
         let close: Value = serde_json::from_str(&self.text().await).unwrap();
         assert_eq!(close, json!(["CLOSE", sub]));
     }
 }
 
-pub(super) fn event_message(sub: &str, raw: &str) -> Message {
+pub(in crate::peer_invitation) fn event_message(sub: &str, raw: &str) -> Message {
     let sub = serde_json::to_string(sub).unwrap();
     Message::Text(format!("[\"EVENT\",{sub},{raw}]").into())
 }

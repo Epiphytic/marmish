@@ -3107,9 +3107,8 @@ mod peer_staged_proof_tests;
 #[path = "peer_aggregate_ingress_proof_tests.rs"]
 mod peer_aggregate_ingress_proof_tests;
 
-#[cfg(test)]
-#[path = "peer_raw_socket.rs"]
-mod peer_raw_socket;
+#[path = "peer_native_signer.rs"]
+pub(crate) mod peer_native_signer;
 
 #[cfg(test)]
 mod scheduler_tests {
