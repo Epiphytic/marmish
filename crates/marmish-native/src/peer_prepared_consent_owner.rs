@@ -352,7 +352,7 @@ impl<'a> PreparedConsentOwner<'a> {
     }
 }
 
-pub(super) struct NativeAttestation {
+pub(crate) struct NativeAttestation {
     binding: Binding,
     witness: FileWitness,
     package: NativePackage,
@@ -564,7 +564,7 @@ struct Sent {
     receipt: Receipt,
 }
 
-pub(super) struct MatchingAck(Attempt);
+pub(crate) struct MatchingAck(Attempt);
 
 impl MatchingAck {
     pub(super) fn into_attempt(self) -> Attempt {

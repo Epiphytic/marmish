@@ -53,6 +53,15 @@ pub(crate) struct BoundStage {
 }
 
 impl BoundStage {
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn require_package_owner(&self, checkpoint: &Checkpoint) -> Result<()> {
+        checkpoint.check_local_owner(&self.owner)
+    }
+
     pub(crate) fn binding(&self) -> Binding {
         self.binding
     }

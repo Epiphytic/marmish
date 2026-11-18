@@ -45,17 +45,44 @@ impl Checkpoint {
 #[path = "peer_prepared_consent_schema_tests.rs"]
 mod schema_tests;
 
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
+use super::super::Offer;
 #[cfg(test)]
-use super::super::{
-    Offer,
-    wire::{self, Transcript},
-};
-#[cfg(test)]
+use super::super::wire::{self, Transcript};
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 use rusqlite::Transaction;
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 use stage_journal::{Artifact, FileWitness, State};
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 #[path = "peer_prepared_consent_rows.rs"]
 mod outbox;
 
@@ -71,7 +98,14 @@ impl super::super::Selector {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 pub(crate) struct Candidate {
     account: [u8; 32],
     binding: Binding,
@@ -80,7 +114,14 @@ pub(crate) struct Candidate {
     offer: Offer,
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 impl Candidate {
     pub(crate) fn stage(&self) -> (Binding, FileWitness) {
         (self.binding, self.witness)
@@ -105,13 +146,27 @@ impl Candidate {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 pub(crate) struct Queued {
     prepared: Candidate,
     row: outbox::Outbox,
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 impl Queued {
     #[cfg(test)]
     pub(crate) fn frame(&self) -> &[u8] {
@@ -125,6 +180,76 @@ impl Queued {
 
     pub(crate) fn stage(&self) -> (Binding, FileWitness) {
         self.prepared.stage()
+    }
+}
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub(crate) struct PackageTarget {
+    owner: std::sync::Arc<()>,
+    binding: Binding,
+    file: FileWitness,
+    artifact: Artifact,
+    deadline: u64,
+}
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+impl PackageTarget {
+    pub(crate) fn stage(&self) -> (Binding, FileWitness) {
+        (self.binding, self.file)
+    }
+
+    pub(crate) fn artifact(&self) -> Artifact {
+        self.artifact
+    }
+
+    pub(crate) fn deadline(&self) -> u64 {
+        self.deadline
+    }
+}
+
+/// Read-only challenge bound to the current checkpoint incarnation and exact
+/// outbox bytes, including its attempt, retry and acknowledgment state.
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub(crate) struct ManagedQueued {
+    target: PackageTarget,
+    queued: Queued,
+}
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+impl ManagedQueued {
+    pub(crate) fn target(&self) -> &PackageTarget {
+        &self.target
+    }
+
+    pub(crate) fn into_target(self) -> PackageTarget {
+        self.target
+    }
+}
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+impl Checkpoint {
+    pub(crate) fn require_managed_package_target(&self, target: &PackageTarget) -> Result<()> {
+        self.check_local_owner(&target.owner)
     }
 }
 
@@ -190,6 +315,34 @@ impl Checkpoint {
         wall: u64,
     ) -> Result<Unsaved> {
         let exact = package.require(candidate.stage(), candidate.artifact, wall)?;
+        self.sign_exact_prepared_fixture(candidate, exact, wall)
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn sign_managed_prepared_fixture(
+        &self,
+        candidate: &Candidate,
+        target: &PackageTarget,
+        exact: &[u8],
+        wall: u64,
+    ) -> Result<Unsaved> {
+        self.require_managed_package_target(target)?;
+        if candidate.stage() != target.stage()
+            || candidate.artifact != target.artifact
+            || wall >= target.deadline
+            || Artifact::new(target.artifact.id, exact, target.artifact.expires) != target.artifact
+        {
+            return Err(Error::Package);
+        }
+        self.sign_exact_prepared_fixture(candidate, exact, wall)
+    }
+
+    fn sign_exact_prepared_fixture(
+        &self,
+        candidate: &Candidate,
+        exact: &[u8],
+        wall: u64,
+    ) -> Result<Unsaved> {
         let prepared = self
             .codec
             .prepare_capped_fixture_consent(

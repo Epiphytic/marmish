@@ -6,6 +6,7 @@ use super::clean::CleanFiles;
 use super::paths::retirement::package_files::PackageDirectory;
 use super::store::consent_checkpoint::provisioning::{
     Reservation,
+    prepared_consent::{ManagedQueued, PackageTarget},
     stage_journal::{Artifact, BoundStage, FileWitness, NativeStart},
 };
 use super::*;
@@ -79,24 +80,32 @@ pub(super) struct PrestagedPackage {
     window: NativeWindow,
 }
 
-pub(super) struct PackageProof {
-    stage: BoundStage,
-    file: FileWitness,
-    artifact: Artifact,
+pub(super) struct PackageProof<'lease> {
+    target: PackageTarget,
+    extent: FileExtent,
+    digest: [u8; 32],
     package: ProvisionalPackage,
+    quota: &'lease ReceiverQuota<'lease>,
 }
 
-impl RecoveredOwner<'_> {
+impl<'lease> RecoveredOwner<'lease> {
+    fn exact_package_quota(
+        &self,
+        quota: &ReceiverQuota<'_>,
+    ) -> Result<&'lease ReceiverQuota<'lease>> {
+        self.package_quota
+            .filter(|owned| std::ptr::eq(*owned, quota))
+            .ok_or(Error::Binding)
+    }
+
     fn package_scope(
         &mut self,
         quota: &ReceiverQuota<'_>,
         reservation: &Reservation,
         fence: NativeFence<'_>,
     ) -> Result<BoundStage> {
-        if !self
-            .package_quota
-            .is_some_and(|owned| std::ptr::eq(owned, quota))
-            || reservation.stage_binding().coordinates().0
+        self.exact_package_quota(quota)?;
+        if reservation.stage_binding().coordinates().0
             || !self.checkpoint.is_installed_custody()
             || !matches!(
                 self.checkpoint.installed_receive_policy(),
@@ -242,7 +251,7 @@ impl RecoveredOwner<'_> {
         reservation: &Reservation,
         live: Option<Artifact>,
         window: &NativeWindow,
-    ) -> Result<PackageProof> {
+    ) -> Result<PackageProof<'lease>> {
         let stage = self.package_scope(quota, reservation, NativeFence::Candidate(window))?;
         let (file, recorded) = match stage.state() {
             State::NativeStarted(file) => (file, None),
@@ -267,37 +276,7 @@ impl RecoveredOwner<'_> {
                 false,
             )?;
         }
-        let package = {
-            let files = CleanFiles::begin(self, quota, lease, binding, fence())?;
-            let original = files.original();
-            files.snapshot_path(original.logical)?;
-            let (copy, digest) =
-                PackageDirectory::open(&self.paths, files.files())?.copy(original, window)?;
-            let result = (|| {
-                let permit = files.snapshot_permit(self, copy.identity(), fence())?;
-                PackageDirectory::open(&self.paths, files.files())?.verify_copy(
-                    &copy,
-                    original.logical,
-                    digest,
-                    window,
-                )?;
-                let operation = self.package_operation(binding, window);
-                let read = files
-                    .files()
-                    .attest_package(permit, operation)
-                    .map_err(|_| Error::Path)?;
-                files.snapshot_closed(self, copy.identity(), fence())?;
-                Ok::<_, Error>(read?)
-            })();
-            let directory = PackageDirectory::open(&self.paths, files.files())?;
-            directory.remove_copy(copy)?;
-            let package = result?;
-            if directory.original_digest(original, &fence())? != digest {
-                return Err(Error::StageIdentityMismatch);
-            }
-            files.finish(self, fence(), true)?;
-            package
-        };
+        let (package, extent, digest) = self.read_charged_package(quota, binding, file, window)?;
         let artifact = exact_artifact(&package, window)?;
         if live.is_some_and(|live| live != artifact)
             || recorded.is_some_and(|stored| stored != artifact)
@@ -311,13 +290,128 @@ impl RecoveredOwner<'_> {
             artifact,
             window.sample()?.as_secs(),
         )?;
+        let target = self.checkpoint.issued_package_target(
+            &self.source,
+            self.signer.public_key(),
+            &self.relay,
+            &stage,
+            (file, artifact),
+            window.sample()?.as_secs(),
+        )?;
         window.sample()?;
         Ok(PackageProof {
-            stage,
-            file,
-            artifact,
+            target,
+            extent,
+            digest,
             package,
+            quota: self.exact_package_quota(quota)?,
         })
+    }
+
+    pub(super) fn attest_queued_package(
+        &mut self,
+        quota: &ReceiverQuota<'_>,
+        queued: ManagedQueued,
+        window: &NativeWindow,
+    ) -> Result<PackageProof<'lease>> {
+        let quota = self.exact_package_quota(quota)?;
+        let target = queued.target();
+        window.require_offer_limit(target.deadline())?;
+        let confirm = |owner: &mut Self| -> Result<()> {
+            owner.checkpoint.confirm_managed_queued(
+                &owner.source,
+                owner.signer.public_key(),
+                &owner.relay,
+                &queued,
+                window.sample()?.as_secs(),
+            )?;
+            Ok(())
+        };
+        confirm(self)?;
+        let (binding, file) = target.stage();
+        let (package, extent, digest) = self.read_charged_package(quota, binding, file, window)?;
+        if exact_artifact(&package, window)? != target.artifact() {
+            return Err(Error::Binding);
+        }
+        confirm(self)?;
+        window.sample()?;
+        Ok(PackageProof {
+            target: queued.into_target(),
+            extent,
+            digest,
+            package,
+            quota,
+        })
+    }
+
+    pub(super) fn recheck_managed_package(
+        &mut self,
+        quota: &ReceiverQuota<'_>,
+        proof: &PackageProof<'_>,
+        window: &NativeWindow,
+    ) -> Result<()> {
+        if !std::ptr::eq(self.exact_package_quota(quota)?, proof.quota) {
+            return Err(Error::Binding);
+        }
+        self.checkpoint
+            .require_managed_package_target(&proof.target)?;
+        window.require_offer_limit(proof.target.deadline())?;
+        let fence = || NativeFence::Candidate(window);
+        let (binding, file) = proof.target.stage();
+        let files = CleanFiles::begin(self, quota, self.paths.lease(), binding, fence())?;
+        let original = files.original();
+        check_file_witness(original, file)?;
+        if original != proof.extent
+            || PackageDirectory::open(&self.paths, files.files())?
+                .original_digest(original, &fence())?
+                != proof.digest
+            || files.finish(self, fence(), true)? != original
+        {
+            return Err(Error::StageIdentityMismatch);
+        }
+        window.sample()?;
+        Ok(())
+    }
+
+    fn read_charged_package(
+        &mut self,
+        quota: &ReceiverQuota<'_>,
+        binding: Binding,
+        file: FileWitness,
+        window: &NativeWindow,
+    ) -> Result<(ProvisionalPackage, FileExtent, [u8; 32])> {
+        let fence = || NativeFence::Candidate(window);
+        let files = CleanFiles::begin(self, quota, self.paths.lease(), binding, fence())?;
+        let original = files.original();
+        check_file_witness(original, file)?;
+        files.snapshot_path(original.logical)?;
+        let (copy, digest) =
+            PackageDirectory::open(&self.paths, files.files())?.copy(original, window)?;
+        let result = (|| {
+            let permit = files.snapshot_permit(self, copy.identity(), fence())?;
+            PackageDirectory::open(&self.paths, files.files())?.verify_copy(
+                &copy,
+                original.logical,
+                digest,
+                window,
+            )?;
+            let operation = self.package_operation(binding, window);
+            let read = files
+                .files()
+                .attest_package(permit, operation)
+                .map_err(|_| Error::Path)?;
+            files.snapshot_closed(self, copy.identity(), fence())?;
+            Ok::<_, Error>(read?)
+        })();
+        let directory = PackageDirectory::open(&self.paths, files.files())?;
+        directory.remove_copy(copy)?;
+        let package = result?;
+        if directory.original_digest(original, &fence())? != digest
+            || files.finish(self, fence(), true)? != original
+        {
+            return Err(Error::StageIdentityMismatch);
+        }
+        Ok((package, original, digest))
     }
 
     fn package_operation<'a>(
@@ -333,6 +427,20 @@ impl RecoveredOwner<'_> {
             window,
         }
     }
+}
+
+// The native file witness records device and inode. Callers separately verify
+// the measured extent and, when reusing proof, the ciphertext digest.
+fn check_file_witness(extent: FileExtent, file: FileWitness) -> Result<()> {
+    if extent.identity
+        != (
+            u64::from_be_bytes(file.device),
+            u64::from_be_bytes(file.inode),
+        )
+    {
+        return Err(Error::StageIdentityMismatch);
+    }
+    Ok(())
 }
 
 fn lifetime_possible(offer_expires: u64, wall: u64) -> bool {

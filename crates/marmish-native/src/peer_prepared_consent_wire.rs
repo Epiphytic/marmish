@@ -132,16 +132,6 @@ impl VerifiedDeliveryPackage {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Transcript {
-    pub(crate) carrier: [u8; 32],
-    pub(crate) revision: [u8; 32],
-    pub(crate) created_at: u64,
-    pub(crate) expires: u64,
-    pub(crate) package_ref: [u8; 32],
-    pub(crate) package_slot: [u8; 16],
-}
-
 impl Transcript {
     pub(crate) fn from_consent(consent: &Consent) -> Self {
         let flight = consent.flight();

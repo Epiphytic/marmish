@@ -11,7 +11,6 @@ use rusqlite::params;
 #[cfg(test)]
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeSet;
-#[cfg(test)]
 use std::sync::Arc;
 #[cfg(test)]
 use zeroize::Zeroizing;
@@ -410,11 +409,32 @@ pub(super) struct Context {
     epoch: Epoch,
     origins: Vec<Origin>,
     origin: Origin,
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     route: super::super::super::Route,
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     signer: Keys,
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     codec: wire::Codec,
     owner: Arc<()>,
 }
@@ -434,7 +454,14 @@ impl Context {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     pub(super) fn exact_consent(
         &self,
         tx: &Transaction<'_>,
@@ -591,7 +618,14 @@ impl Checkpoint {
         self.installed_receive.as_ref()
     }
 
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     pub(super) fn read_installed_consent<T>(
         &mut self,
         source: &Source,
@@ -624,6 +658,124 @@ impl Checkpoint {
             return Err(CursorError::ClockRegressed.into());
         }
         read(&tx, &cx)
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn issued_package_target(
+        &mut self,
+        source: &Source,
+        account: PublicKey,
+        url: &str,
+        stage: &stage_journal::BoundStage,
+        expected: (FileWitness, Artifact),
+        wall: u64,
+    ) -> Result<PackageTarget> {
+        stage.require_package_owner(self)?;
+        let binding = stage.binding();
+        self.read_installed_consent(source, account, url, wall, |tx, cx| {
+            if binding.generation.known
+                || binding.origin != cx.origin
+                || generation(tx, binding.key, cx.origin)? != Some(binding.generation)
+                || outbox::exists(tx, binding.key, cx.origin)?
+                || owns(tx, binding.key, cx.origin)?
+                || stage_journal::load(tx, binding)?
+                    != Some(State::Prepared(expected.0, expected.1))
+                || wall >= stage.offer_expires().min(expected.1.expires)
+            {
+                return Err(CursorError::Binding.into());
+            }
+            let invite = Invitation::load(tx, binding.key, cx.origin)?;
+            let offer =
+                Checkpoint::check_signed_offer(&cx.codec, &cx.signer, &cx.route, &invite, wall)?;
+            if invite.decision_at.is_some() || offer.flight().expires_at != stage.offer_expires() {
+                return Err(CursorError::Stale.into());
+            }
+            Ok(PackageTarget {
+                owner: cx.owner.clone(),
+                binding,
+                file: expected.0,
+                artifact: expected.1,
+                deadline: stage.offer_expires().min(expected.1.expires),
+            })
+        })
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn read_managed_queued(
+        &mut self,
+        source: &Source,
+        account: PublicKey,
+        url: &str,
+        selector: Selector,
+        wall: u64,
+    ) -> Result<Option<ManagedQueued>> {
+        if !self.policy.permits(selector.server) {
+            return Err(Error::Policy);
+        }
+        self.read_installed_consent(source, account, url, wall, |tx, cx| {
+            // Terminal custody rows retain the matching custody owner.
+            if owns(tx, selector, cx.origin)? {
+                return Err(Error::Custodied);
+            }
+            let Some(queued) = cx.exact_consent(tx, selector)? else {
+                return Ok(None);
+            };
+            let prepared = &queued.prepared;
+            let deadline = prepared
+                .offer
+                .flight()
+                .expires_at
+                .min(prepared.artifact.expires)
+                .min(queued.row.transcript.expires);
+            if prepared.binding.generation.known || wall >= deadline {
+                return Err(CursorError::Binding.into());
+            }
+            let target = PackageTarget {
+                owner: cx.owner.clone(),
+                binding: prepared.binding,
+                file: prepared.witness,
+                artifact: prepared.artifact,
+                deadline,
+            };
+            Ok(Some(ManagedQueued { target, queued }))
+        })
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn confirm_managed_queued(
+        &mut self,
+        source: &Source,
+        account: PublicKey,
+        url: &str,
+        prior: &ManagedQueued,
+        wall: u64,
+    ) -> Result<()> {
+        self.require_managed_package_target(&prior.target)?;
+        let current = self
+            .read_managed_queued(source, account, url, prior.target.binding.key, wall)?
+            .ok_or(CursorError::Stale)?;
+        if current.target.stage() != prior.target.stage()
+            || current.target.artifact != prior.target.artifact
+            || current.target.deadline != prior.target.deadline
+            || current.queued.prepared.offer.flight().carrier_id
+                != prior.queued.prepared.offer.flight().carrier_id
+            || current.queued.row != prior.queued.row
+        {
+            return Err(CursorError::Stale.into());
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -669,18 +821,46 @@ impl Checkpoint {
             return Err(CursorError::Binding.into());
         };
         let origin = self.origin(source)?;
-        #[cfg(test)]
+        #[cfg(any(
+            test,
+            all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            )
+        ))]
         let route = super::super::super::Route::configured(&self.route(origin)?.urls[0])?;
         Ok(Context {
             account: self.signer.public_key().to_bytes(),
             epoch,
             origins: self.cursor.origins.clone(),
             origin,
-            #[cfg(test)]
+            #[cfg(any(
+                test,
+                all(
+                    marmish_peer_receiver_candidate,
+                    target_os = "linux",
+                    target_arch = "x86_64"
+                )
+            ))]
             route,
-            #[cfg(test)]
+            #[cfg(any(
+                test,
+                all(
+                    marmish_peer_receiver_candidate,
+                    target_os = "linux",
+                    target_arch = "x86_64"
+                )
+            ))]
             signer: self.signer.clone(),
-            #[cfg(test)]
+            #[cfg(any(
+                test,
+                all(
+                    marmish_peer_receiver_candidate,
+                    target_os = "linux",
+                    target_arch = "x86_64"
+                )
+            ))]
             codec: self.codec,
             owner: self.owner.clone(),
         })

@@ -132,6 +132,23 @@ fn candidate_package_cold_attestation_under_registered_quota() {
     }
 }
 
+#[test]
+#[ignore = "opt-in process-global checked VFS and real SQLCipher MDK"]
+fn managed_queued_package_uses_unchanged_charged_image_across_restart() {
+    let root = package_fixture_root();
+    for mode in [
+        "issue",
+        "queue",
+        "queued-attest",
+        "queued-replaced",
+        "queued-journal",
+        "queued-copy-crash",
+        "queued-fenced",
+    ] {
+        run_child(root.path(), mode);
+    }
+}
+
 fn run_child(root: &Path, mode: &str) {
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args(["--ignored", "--exact", CHILD, "--nocapture"])
@@ -153,7 +170,7 @@ fn run_child(root: &Path, mode: &str) {
     }
     let output = child.wait_with_output().unwrap();
     match (mode, output.status.code()) {
-        ("copy-crash", Some(78)) | ("generation-crash", Some(80)) => return,
+        ("copy-crash" | "queued-copy-crash", Some(78)) | ("generation-crash", Some(80)) => return,
         _ => {}
     }
     assert!(
@@ -253,10 +270,6 @@ fn package_child() {
     let (quota, mut route) = registration.actor_parts();
     let mut owner = RecoveredOwner::open_registered(&lease, &identity, quota, &mut route).unwrap();
     assert!(std::ptr::eq(owner.package_quota.unwrap(), quota));
-    let reservation = owner
-        .checkpoint
-        .reserve_provisioning(&owner.source, selector, now)
-        .unwrap();
     let (startup, listener, _worker) = peer_candidate_startup::pair();
     listener.registered();
     startup.ordinary_ready();
@@ -271,7 +284,165 @@ fn package_child() {
         .unwrap()
     };
 
+    if mode.starts_with("queued-") {
+        let turn = window();
+        let cursor_before = fs::read(&cursor_path).unwrap();
+        let original = fs::read(&stage).unwrap();
+        let wall = turn.sample().unwrap().as_secs();
+        let mut read = |url, signer, at| {
+            owner
+                .checkpoint
+                .read_managed_queued(&owner.source, signer, url, selector, at)
+        };
+        let account = identity.public_key();
+        if mode == "queued-attest" {
+            assert!(matches!(
+                read("wss://foreign.example/", account, wall),
+                Err(CheckpointError::Source)
+            ));
+            assert!(matches!(
+                read(RELAY, Keys::generate().public_key(), wall),
+                Err(CheckpointError::Source)
+            ));
+            assert!(read(RELAY, account, 0).is_err());
+            assert!(read(RELAY, account, expires).is_err());
+            assert!(!snapshot.exists());
+            assert_eq!(fs::read(&cursor_path).unwrap(), cursor_before);
+            assert_eq!(fs::read(&stage).unwrap(), original);
+            let queued = read(RELAY, account, wall).unwrap().unwrap();
+            let mut foreign =
+                RecoveredOwner::open_registered(&lease, &identity, quota, &mut route).unwrap();
+            let foreign_turn = window();
+            assert!(matches!(
+                foreign.attest_queued_package(quota, queued, &foreign_turn),
+                Err(Error::Checkpoint(CheckpointError::LocalOwner))
+            ));
+            assert_eq!(foreign_turn.signs(), 0);
+            assert!(!snapshot.exists());
+            assert_eq!(fs::read(&cursor_path).unwrap(), cursor_before);
+            assert_eq!(fs::read(&stage).unwrap(), original);
+        }
+        let queued = owner
+            .checkpoint
+            .read_managed_queued(&owner.source, account, RELAY, selector, wall)
+            .unwrap()
+            .unwrap();
+        if matches!(mode.as_str(), "queued-replaced" | "queued-journal") {
+            let observed = if mode == "queued-replaced" {
+                let moved = root.join("fixture-replaced-original");
+                fs::rename(&stage, &moved).unwrap();
+                fs::copy(&moved, &stage).unwrap();
+                (moved, original.as_slice())
+            } else {
+                let journal = stage.with_extension("db-journal");
+                create_empty(&journal);
+                (journal, &[][..])
+            };
+            assert!(matches!(
+                owner.attest_queued_package(quota, queued, &turn),
+                Err(Error::StageIdentityMismatch)
+            ));
+            assert_eq!(turn.signs(), 0);
+            assert!(!snapshot.exists());
+            assert_eq!(fs::read(&cursor_path).unwrap(), cursor_before);
+            assert_eq!(fs::read(&stage).unwrap(), original);
+            assert_eq!(fs::read(&observed.0).unwrap(), observed.1);
+            if mode == "queued-replaced" {
+                fs::rename(observed.0, &stage).unwrap();
+            } else {
+                fs::remove_file(observed.0).unwrap();
+            }
+            return;
+        }
+        if mode == "queued-copy-crash" {
+            turn.set_copy_cut(true);
+        }
+        let point = Instant::now();
+        let proof = owner.attest_queued_package(quota, queued, &turn);
+        if mode == "queued-fenced" {
+            assert!(proof.is_err());
+            assert!(snapshot.exists());
+        } else {
+            let proof = proof.unwrap();
+            assert_eq!(
+                proof.target.artifact().id.as_slice(),
+                fs::read(root.join("fixture-artifact-id")).unwrap()
+            );
+            println!(
+                "package_fixture_timing {mode}_ms={:.3} image_bytes={}",
+                point.elapsed().as_secs_f64() * 1000.0,
+                original.len()
+            );
+            assert!(!snapshot.exists());
+            let point = Instant::now();
+            owner
+                .recheck_managed_package(quota, &proof, &window())
+                .unwrap();
+            println!(
+                "package_fixture_timing redigest_ms={:.3}",
+                point.elapsed().as_secs_f64() * 1000.0
+            );
+            let mut foreign =
+                RecoveredOwner::open_registered(&lease, &identity, quota, &mut route).unwrap();
+            assert!(matches!(
+                foreign.recheck_managed_package(quota, &proof, &window()),
+                Err(Error::Checkpoint(CheckpointError::LocalOwner))
+            ));
+            let image = OpenOptions::new().write(true).open(&stage).unwrap();
+            use std::os::unix::fs::FileExt as _;
+            let offset = u64::try_from(original.len() - 1).unwrap();
+            image
+                .write_all_at(&[original[original.len() - 1] ^ 1], offset)
+                .unwrap();
+            assert!(matches!(
+                owner.recheck_managed_package(quota, &proof, &window()),
+                Err(Error::StageIdentityMismatch)
+            ));
+            image
+                .write_all_at(&original[original.len() - 1..], offset)
+                .unwrap();
+            owner
+                .recheck_managed_package(quota, &proof, &window())
+                .unwrap();
+            startup.stop();
+            assert!(owner.recheck_managed_package(quota, &proof, &turn).is_err());
+        }
+        assert_eq!(turn.signs(), 0);
+        assert_eq!(fs::read(&cursor_path).unwrap(), cursor_before);
+        assert_eq!(fs::read(&stage).unwrap(), original);
+        return;
+    }
+    let reservation = owner
+        .checkpoint
+        .reserve_provisioning(&owner.source, selector, now)
+        .unwrap();
+
     match mode.as_str() {
+        "queue" => {
+            let turn = window();
+            let proof = owner
+                .attest_package(quota, &reservation, None, &turn)
+                .unwrap();
+            let wall = turn.sample().unwrap().as_secs();
+            let candidate = owner
+                .checkpoint
+                .inspect_prepared_consent(&owner.source, &reservation, wall)
+                .unwrap();
+            let unsaved = owner
+                .checkpoint
+                .sign_managed_prepared_fixture(
+                    &candidate,
+                    &proof.target,
+                    &proof.package.event.bytes,
+                    wall,
+                )
+                .unwrap();
+            owner
+                .checkpoint
+                .queue_prepared_consent(&owner.source, &reservation, unsaved, wall, |_| Ok(()))
+                .unwrap();
+            assert!(!snapshot.exists());
+        }
         "bound" | "bound-file" => {
             let bound = owner
                 .checkpoint
@@ -495,11 +666,11 @@ fn package_child() {
                 "package_fixture_timing {mode}_ms={:.3}",
                 point.elapsed().as_secs_f64() * 1000.0
             );
-            assert_eq!(read.artifact.id.as_slice(), id);
-            assert_eq!(read.stage.binding(), reservation.stage_binding());
-            assert_eq!(read.package.event.id, read.artifact.id);
+            assert_eq!(read.target.artifact().id.as_slice(), id);
+            assert_eq!(read.target.stage().0, reservation.stage_binding());
+            assert_eq!(read.package.event.id, read.target.artifact().id);
             assert_eq!(
-                read.artifact,
+                read.target.artifact(),
                 exact_artifact(&read.package, &window()).unwrap()
             );
             assert_eq!(fs::read(&stage).unwrap(), before);
@@ -514,11 +685,11 @@ fn package_child() {
                     )
                     .unwrap()
                     .state(),
-                State::Prepared(read.file, read.artifact)
+                State::Prepared(read.target.stage().1, read.target.artifact())
             );
             let incorrect = Artifact {
                 digest: [0; 32],
-                ..read.artifact
+                ..read.target.artifact()
             };
             assert!(
                 owner

@@ -396,7 +396,7 @@ fn advances_exact_capture(prior: &Capture, candidate: &Capture) -> bool {
             || candidate.last_attempt_ms == prior.last_attempt_ms)
 }
 
-pub(super) struct RecoveredPostJoin {
+pub(crate) struct RecoveredPostJoin {
     baseline: Baseline,
     capture: Capture,
 }

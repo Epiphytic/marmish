@@ -19,9 +19,25 @@ mod prepared_consent;
 #[path = "peer_control_wire_seal.rs"]
 mod seal;
 #[cfg(test)]
-pub(crate) use prepared_consent::{
-    ClientCarrier, IncomingDelivery, Transcript, VerifiedDeliveryPackage,
-};
+pub(crate) use prepared_consent::{ClientCarrier, IncomingDelivery, VerifiedDeliveryPackage};
+
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Transcript {
+    pub(crate) carrier: [u8; 32],
+    pub(crate) revision: [u8; 32],
+    pub(crate) created_at: u64,
+    pub(crate) expires: u64,
+    pub(crate) package_ref: [u8; 32],
+    pub(crate) package_slot: [u8; 16],
+}
 
 use crate::peer_control_version::{ControlVersion, ReceiptCoordinates};
 
@@ -59,7 +75,17 @@ pub(crate) enum Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
-#[cfg_attr(test, derive(Clone, Copy))]
+#[cfg_attr(
+    any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ),
+    derive(Clone, Copy)
+)]
 pub(crate) struct Codec {
     outer_cap: usize,
     version: ControlVersion,
