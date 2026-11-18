@@ -23,6 +23,30 @@ pub(super) trait Channel {
     fn read_output(&mut self, bytes: &mut [u8]) -> Result<Option<usize>>;
     fn write_input(&mut self, bytes: &[u8]) -> Result<Option<usize>>;
     fn resize(&mut self, rows: u16, cols: u16) -> Result<bool>;
+
+    fn framed(&self) -> bool {
+        false
+    }
+    fn wants_read(&self) -> bool {
+        true
+    }
+    fn buffered(&self) -> bool {
+        false
+    }
+    fn wants_write(&self, has_input: bool) -> bool {
+        has_input
+    }
+    fn wait_for_input_progress(&mut self, _has_input: bool, _now: Instant) {}
+    fn deadline(&self) -> Option<Instant> {
+        None
+    }
+    fn display_committed(&mut self) -> Result<()> {
+        Ok(())
+    }
+    fn begin_detach(&mut self, _now: Instant) {}
+    fn detach_complete(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -108,6 +132,9 @@ fn drive(
     let mut keyboard = [0; RECORD];
     let mut output = [0; RECORD];
     let mut pending_output = 0..0;
+    let mut record_pending = false;
+    let mut detaching = false;
+    let framed = channel.framed();
     let mut size = tty.geometry()?;
     let mut resize = None;
     let mut last_tick = Instant::now();
@@ -133,9 +160,13 @@ fn drive(
         }
 
         let now = Instant::now();
+        if channel.deadline().is_some_and(|end| now >= end) {
+            return Err(Error::Timeout);
+        }
         let elapsed = now.duration_since(last_tick);
         last_tick = now;
-        let read_keyboard = resize.is_none() && queued.len() <= QUEUE - RECORD - INPUT_CARRY;
+        let read_keyboard =
+            !detaching && resize.is_none() && queued.len() <= QUEUE - RECORD - INPUT_CARRY;
         input.set_paste_mode(display.paste_enabled(), &mut queued);
         input.advance(
             elapsed,
@@ -149,24 +180,51 @@ fn drive(
         display.advance(elapsed)?;
         pending_output.start += display.ingest(&output[pending_output.clone()])?;
 
+        if record_pending && display.record_committed(pending_output.len())? {
+            channel.display_committed()?;
+            record_pending = false;
+        }
+        if framed
+            && !detaching
+            && let Some((rows, cols)) = resize
+        {
+            channel.resize(rows, cols)?;
+            resize = None;
+        }
+        let read_channel = !detaching
+            && pending_output.is_empty()
+            && !record_pending
+            && display.can_ingest()
+            && channel.wants_read();
+        let buffered = read_channel && channel.buffered();
+        channel.wait_for_input_progress(!queued.is_empty(), now);
         let tty_events =
             event(read_keyboard, libc::POLLIN) | event(display.has_pending(), libc::POLLOUT);
-        let channel_events = event(
-            pending_output.is_empty() && display.can_ingest(),
-            libc::POLLIN,
-        ) | event(!queued.is_empty() || resize.is_some(), libc::POLLOUT);
+        let channel_events = event(read_channel && !buffered, libc::POLLIN)
+            | event(
+                channel.wants_write(!queued.is_empty()) || resize.is_some(),
+                libc::POLLOUT,
+            );
         let mut fds = [
             poll_fd(tty.fd(), tty_events),
             poll_fd(signals.fd(), libc::POLLIN),
-            poll_fd(channel.fd(), channel_events),
+            poll_fd(
+                if channel_events == 0 {
+                    -1
+                } else {
+                    channel.fd()
+                },
+                channel_events,
+            ),
         ];
-        let timeout = input
-            .deadline(read_keyboard)
-            .into_iter()
-            .chain(display.deadline())
-            .min()
-            .map_or(-1, ceil_millis);
-        poll(&mut fds, timeout)?;
+        let timeout = [
+            input.deadline(read_keyboard),
+            display.deadline(),
+            channel
+                .deadline()
+                .map(|end| end.saturating_duration_since(now)),
+        ];
+        poll(&mut fds, poll_timeout(buffered, timeout))?;
         if fds[1].revents != 0 || signals.pending() {
             continue;
         }
@@ -192,7 +250,7 @@ fn drive(
         if remote & (libc::POLLERR | libc::POLLNVAL) != 0 {
             return Err(IPC);
         }
-        if remote & libc::POLLHUP != 0 {
+        if !framed && remote & libc::POLLHUP != 0 {
             return Ok(Exit::Closed);
         }
         if signals.pending() {
@@ -205,49 +263,61 @@ fn drive(
         if signals.pending() {
             continue;
         }
-        if local & libc::POLLIN != 0
-            && let Some(count) = tty.read(&mut keyboard)?
-        {
-            if count == 0 {
-                input.flush(&mut queued);
-                try_input(channel, &mut queued)?;
-                return Ok(Exit::Closed);
-            }
-            if keyboard[..count]
-                .iter()
-                .any(|&byte| input.push(byte, &mut queued))
-            {
-                try_input(channel, &mut queued)?;
-                return Ok(Exit::Detached);
+        if local & libc::POLLIN != 0 {
+            match read_keys(tty, &mut keyboard, &mut input, &mut queued)? {
+                Some(Exit::Detached) if framed => {
+                    queued.clear();
+                    channel.begin_detach(after_poll);
+                    detaching = true;
+                }
+                Some(exit) => {
+                    if !framed {
+                        try_input(channel, &mut queued, false)?;
+                    }
+                    return Ok(exit);
+                }
+                None => {}
             }
         }
         if signals.pending() {
             continue;
         }
         if remote & libc::POLLOUT != 0 {
-            try_input(channel, &mut queued)?;
-            if let Some((rows, cols)) = resize
+            try_input(channel, &mut queued, framed)?;
+            if detaching && channel.detach_complete() {
+                return Ok(Exit::Detached);
+            }
+            if !framed
+                && let Some((rows, cols)) = resize
                 && queued.is_empty()
                 && channel.resize(rows, cols)?
             {
                 resize = None;
             }
         }
-        if remote & libc::POLLIN != 0
+        if framed && detaching && remote & libc::POLLHUP != 0 {
+            return Err(IPC);
+        }
+        if !detaching
+            && (buffered || read_channel && remote & (libc::POLLIN | libc::POLLHUP) != 0)
             && let Some(count) = channel.read_output(&mut output)?
         {
             match count {
+                0 if framed => return Ok(Exit::Detached),
                 0 => return Ok(Exit::Closed),
-                1..=RECORD => pending_output = 0..count,
+                1..=RECORD => {
+                    pending_output = 0..count;
+                    record_pending = framed;
+                }
                 _ => return Err(IPC),
             }
         }
     }
 }
 
-fn try_input(channel: &mut impl Channel, queued: &mut Vec<u8>) -> Result<()> {
+fn try_input(channel: &mut impl Channel, queued: &mut Vec<u8>, controls: bool) -> Result<()> {
     let offered = queued.len().min(RECORD);
-    if offered != 0
+    if (offered != 0 || controls)
         && let Some(count) = channel.write_input(&queued[..offered])?
     {
         if count == 0 || count > offered {
@@ -258,8 +328,31 @@ fn try_input(channel: &mut impl Channel, queued: &mut Vec<u8>) -> Result<()> {
     Ok(())
 }
 
-fn ceil_millis(duration: Duration) -> i32 {
-    let millis = duration.as_nanos().div_ceil(1_000_000);
+fn read_keys(
+    tty: &mut Tty,
+    bytes: &mut [u8; RECORD],
+    input: &mut Input,
+    queued: &mut Vec<u8>,
+) -> Result<Option<Exit>> {
+    let Some(count) = tty.read(bytes)? else {
+        return Ok(None);
+    };
+    if count == 0 {
+        input.flush(queued);
+        return Ok(Some(Exit::Closed));
+    }
+    let detached = bytes[..count].iter().any(|&byte| input.push(byte, queued));
+    Ok(detached.then_some(Exit::Detached))
+}
+
+fn poll_timeout(buffered: bool, deadlines: [Option<Duration>; 3]) -> i32 {
+    if buffered {
+        return 0;
+    }
+    let Some(deadline) = deadlines.into_iter().flatten().min() else {
+        return -1;
+    };
+    let millis = deadline.as_nanos().div_ceil(1_000_000);
     millis.min(i32::MAX as u128) as i32
 }
 

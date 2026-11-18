@@ -28,10 +28,11 @@ carry no locally supplied identity or session override.
 | Daemon to CLI, either role | 5 | 11–4106 | Nonzero u64 output ID, then 1–4096 output bytes |
 | Daemon to CLI, writer | 6 | 10 | Monotonic cumulative u64 input-byte credit (positive) |
 | Daemon to CLI, either role | 7 | 3 | One fixed close-category discriminant |
+| Daemon to CLI, writer | 8 | 2 | Resize applied at the accepted input boundary |
 
 Close discriminants are 1 ended, 2 idle, 3 replaced, 4 authority, 5
-transport and 6 budget. Clock failure and the 15-second output head stall
-map to transport. A stale offer is a
+transport and 6 budget. Clock failure and the five-second local output stall
+map to transport. The local timer is clamped to the native head deadline. A stale offer is a
 typed startup refusal before a stream exists. Close ends the daemon-to-CLI
 direction. Bytes after Close in that direction are a protocol error. Once
 the daemon sends Close, it still accepts acknowledgments for output IDs sent

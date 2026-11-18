@@ -6,7 +6,16 @@ use crate::transport::{RelayPolicy, RouteMode, TransportLimits};
 use crate::{Error, Result};
 use nostr::key::PublicKey;
 use serde::{Deserialize, Serialize};
-use std::{os::unix::net::UnixStream as OwnedStream, path::Path, sync::Arc};
+use std::{
+    io::{self, Read, Write},
+    net::Shutdown,
+    os::{
+        fd::{AsRawFd, RawFd},
+        unix::net::UnixStream as OwnedStream,
+    },
+    path::Path,
+    sync::Arc,
+};
 use tokio::{
     net::UnixStream,
     sync::{OwnedSemaphorePermit, Semaphore, mpsc},
@@ -102,6 +111,35 @@ pub(super) struct Attached {
     _permit: OwnedSemaphorePermit,
 }
 
+impl Read for Attached {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        self.stream.read(bytes)
+    }
+}
+
+impl Write for Attached {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.stream.write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.stream.flush()
+    }
+}
+
+impl AsRawFd for Attached {
+    fn as_raw_fd(&self) -> RawFd {
+        self.stream.as_raw_fd()
+    }
+}
+
+impl terminal_socket_session::ReadWrite for Attached {
+    fn finish_write(&mut self) -> Result<()> {
+        self.stream.shutdown(Shutdown::Write)?;
+        Ok(())
+    }
+}
+
 async fn refuse(mut stream: UnixStream, deadline: Instant, category: &'static str) {
     let _ = timeout_at(
         deadline,
@@ -154,6 +192,26 @@ pub(super) async fn transfer(
 }
 
 impl PendingStart {
+    /// Race this against enrollment. No valid client bytes precede Ready.
+    pub(super) async fn cancelled(&self) -> Error {
+        let watch = async {
+            loop {
+                if let Err(error) = self.stream.readable().await {
+                    return error.into();
+                }
+                match self.stream.try_read(&mut [0u8; 1]) {
+                    Ok(0) => return Error::Invalid("terminal_start_closed"),
+                    Ok(_) => return Error::Invalid("terminal_start_invalid"),
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => continue,
+                    Err(error) => return error.into(),
+                }
+            }
+        };
+        timeout_at(self.deadline, watch)
+            .await
+            .unwrap_or(Error::Timeout)
+    }
+
     pub(super) async fn admit(self) -> Result<Attached> {
         let Self {
             request,
@@ -245,4 +303,10 @@ pub(super) async fn start(path: &Path, request: Start, deadline: Instant) -> Res
 mod tests;
 
 #[path = "terminal_socket_state.rs"]
-mod state;
+mod terminal_socket_state;
+
+#[path = "terminal_socket_io.rs"]
+mod terminal_socket_io;
+
+#[path = "terminal_socket_session.rs"]
+mod terminal_socket_session;

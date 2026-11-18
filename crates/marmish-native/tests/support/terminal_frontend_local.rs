@@ -23,6 +23,15 @@ mod terminal_frontend_tty;
 mod terminal_input;
 #[path = "../../src/terminal_output.rs"]
 mod terminal_output;
+#[path = "../../src/terminal_socket_frontend.rs"]
+mod terminal_socket_frontend;
+#[path = "../../src/terminal_socket_io.rs"]
+mod terminal_socket_io;
+#[path = "../../src/terminal_socket_session.rs"]
+mod terminal_socket_session;
+#[path = "../../src/terminal_socket_state.rs"]
+mod terminal_socket_state;
+
 use terminal_frontend_signals as signals;
 use terminal_frontend_tty as tty;
 
@@ -335,6 +344,21 @@ fn run_child() -> i32 {
             if mode == "suspend" {
                 assert_eq!(unsafe { libc::raise(libc::SIGSTOP) }, 0);
             }
+            return 0;
+        }
+        "framed-detach" | "framed-close" => {
+            let mut tty = tty::Tty::open().unwrap();
+            // Child-only descriptor duplicated by this test's pre_exec.
+            let socket = unsafe { UnixStream::from_raw_fd(CHANNEL_FD) };
+            let mut channel = terminal_socket_session::ForegroundSocket::new(
+                socket,
+                crate::terminal_ipc_wire::Role::Writer,
+            )
+            .unwrap();
+            let result = terminal_frontend::run(&mut tty, &signals, &mut channel, false);
+            result.restored_termios.unwrap();
+            assert!(result.restored_display);
+            assert_eq!(result.reason.unwrap(), terminal_frontend::Exit::Detached);
             return 0;
         }
         "active" => {}
@@ -724,4 +748,86 @@ fn terminal_frontend_renders_native_tmux() {
         first_render.as_micros(),
         restore.as_micros(),
     );
+}
+
+#[test]
+#[ignore = "native controlling PTY and real framed IPC socket"]
+fn terminal_socket_frontend_native_pty() {
+    use super::terminal_ipc_wire::{Close, Role};
+    use terminal_socket_session::{DaemonSocket, ServerRead};
+    use terminal_socket_state::InputEffect;
+
+    for mode in ["framed-detach", "framed-close"] {
+        let mut frontend = fixture::Pty::new();
+        let before = frontend.attrs();
+        let (owner, socket) = UnixStream::pair().unwrap();
+        owner.set_nonblocking(true).unwrap();
+        let mut daemon = DaemonSocket::new(owner, Role::Writer);
+        let mut child = fixture::Held::spawn_inner(&frontend, &frontend, mode, Some(&socket));
+        drop(socket);
+        let started = Instant::now();
+        let limit = started + LIMIT;
+        daemon.flush(Instant::now(), limit).unwrap();
+
+        let screen = b"\x1b]52;c;refuse\x07\x1b[32;1m\xe2\x98\x83ready\x1b[0m";
+        assert_eq!(
+            daemon.offer(7, screen, Instant::now(), limit).unwrap(),
+            None
+        );
+        daemon.flush(Instant::now(), limit).unwrap();
+        assert_eq!(
+            daemon.offer(7, screen, Instant::now(), limit).unwrap(),
+            None
+        );
+        frontend.read_through(b"\x1b[32;1m\xe2\x98\x83ready\x1b[0m");
+        assert!(
+            !frontend
+                .captured
+                .windows(6)
+                .any(|window| window == b"refuse")
+        );
+        assert!(poll(daemon.fd(), libc::POLLIN, 2000));
+        assert_eq!(daemon.read(Instant::now()).unwrap(), ServerRead::Received);
+        assert_eq!(
+            daemon.offer(7, screen, Instant::now(), limit).unwrap(),
+            Some(screen.len())
+        );
+        eprintln!(
+            "framed PTY first physical display and receipt: {} us",
+            started.elapsed().as_micros()
+        );
+
+        if mode == "framed-detach" {
+            frontend.master.write_all(b"raw\x03\x1a").unwrap();
+            assert!(poll(daemon.fd(), libc::POLLIN, 2000));
+            assert_eq!(daemon.read(Instant::now()).unwrap(), ServerRead::Received);
+            assert!(matches!(
+                daemon.next_input(),
+                Some(InputEffect::Bytes(b"raw\x03\x1a"))
+            ));
+            daemon.input_written(5).unwrap();
+
+            frontend.resize(44, 111);
+            assert!(poll(daemon.fd(), libc::POLLIN, 2000));
+            assert_eq!(daemon.read(Instant::now()).unwrap(), ServerRead::Received);
+            assert!(matches!(
+                daemon.next_input(),
+                Some(InputEffect::Resize((44, 111)))
+            ));
+            daemon.resize_applied().unwrap();
+            daemon.flush(Instant::now(), limit).unwrap();
+
+            frontend.master.write_all(b"\r~.ignored").unwrap();
+            assert!(poll(daemon.fd(), libc::POLLIN, 2000));
+            assert_eq!(daemon.read(Instant::now()).unwrap(), ServerRead::Detached);
+        } else {
+            daemon.begin_close(Close::Ended);
+            daemon.flush(Instant::now(), limit).unwrap();
+            drop(daemon);
+        }
+        frontend.read_through(DETACH_MARKER);
+        child.finish(0);
+        frontend.drain_after_exit();
+        assert_attrs(&before, &frontend.attrs());
+    }
 }

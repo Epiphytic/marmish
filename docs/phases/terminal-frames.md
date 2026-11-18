@@ -103,12 +103,12 @@ and the current grant and lease in the same owner turn as each write.
 `WouldBlock` does not advance the offset. A fully written record advances the
 committed watermark once. A Resize shares ordering with Input and commits
 only after its syscall succeeds. The frontend reports progress over local
-IPC once every byte in the record was written to the terminal or consumed as a
-disallowed control or bounded parser state. An approved byte waiting in a
-filter output buffer has not progressed. Bounded parser state may consume a
-split escape or UTF-8 prefix. A filter failure or oversized control string closes the
-attachment with no new acknowledgment. Complete disallowed controls can be
-intentionally consumed, and such bytes never reach the terminal display. The I/O owners consume
+IPC once every byte in the record was written to the terminal or deliberately
+discarded under the display policy. Native output batches end at a complete
+safe parser unit. A filter failure, oversized control string or non-ground
+parser at the local record boundary closes without a new acknowledgment.
+A local display stall has a five-second limit from first offer, clamped to the
+remaining authenticated native record deadline. The I/O owners consume
 records through an explicit begin/progress API; merely moving a record into
 another buffer never acknowledges it. After ambiguity, expiry or any sink
 error close and abandon the prefix. Never translate old unacknowledged data

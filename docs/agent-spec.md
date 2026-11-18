@@ -30,7 +30,9 @@ authority fence](validation/terminal-ipc-fence.md) qualify fixed-storage framing
 role checks and revocation ordering in test builds. The [local socket and
 display commit](validation/terminal-socket-handshake.md) qualify same-user
 handshake, independent socket limits, and acknowledgment after display
-writes in test builds. The [Command owner authority handoff](validation/terminal-command-authority.md)
+writes in test builds. The [framed socket controller](validation/terminal-socket-controller.md)
+adds verified input credit, display receipts, and Close and Detach ordering
+with real local tmux tests. The [Command owner authority handoff](validation/terminal-command-authority.md)
 qualifies the live ownership fence in a local WSS fixture with native membership
 and protected route changes. The [Command-backed direct WSS
 enrollment](validation/terminal-live-enrollment.md) further qualifies exact

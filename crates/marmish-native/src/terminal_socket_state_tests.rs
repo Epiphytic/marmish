@@ -85,6 +85,7 @@ fn terminal_socket_state_core_exact_display_ack_gates_native_commit() {
     assert!(daemon.ack(number(2)).is_err());
     assert_eq!(daemon.offer(42, 11).unwrap(), OutputOffer::Waiting);
     daemon.ack(number(1)).unwrap();
+    assert!(daemon.ack(number(1)).is_err());
     assert_eq!(daemon.offer(42, 11).unwrap(), OutputOffer::Committed(11));
     daemon.ack(number(1)).unwrap();
     assert!(daemon.offer(42, 11).is_err());

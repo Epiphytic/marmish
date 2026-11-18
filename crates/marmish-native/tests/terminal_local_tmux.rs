@@ -1,6 +1,7 @@
 //! Opt-in local PTY and tmux qualification without network access.
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
+use marmish_native::{Error, Result};
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -519,7 +520,11 @@ fn verify_proc_fds(pid: libc::pid_t, master_index: &str, forbidden_slave: Option
     }
 }
 
-fn read_through(master: &mut File, marker: &[u8], limit: Duration) -> Result<(), &'static str> {
+fn read_through(
+    master: &mut File,
+    marker: &[u8],
+    limit: Duration,
+) -> std::result::Result<(), &'static str> {
     let deadline = Instant::now() + limit;
     let mut bytes = Vec::new();
     while Instant::now() < deadline && bytes.len() < 65_536 {
@@ -1295,3 +1300,6 @@ fn core_tests_terminal_backend_failed_exec_and_inherited_descriptor() {
 
 #[path = "support/terminal_frontend_local.rs"]
 mod frontend_local;
+
+#[path = "../src/terminal_ipc_wire.rs"]
+mod terminal_ipc_wire;

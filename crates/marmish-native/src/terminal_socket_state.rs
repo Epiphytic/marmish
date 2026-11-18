@@ -5,7 +5,7 @@ use crate::{Error, Result};
 use std::collections::VecDeque;
 use std::num::NonZeroU64;
 
-const INPUT_WINDOW: u64 = 16 * 1024;
+pub(super) const INPUT_WINDOW: u64 = 16 * 1024;
 const INPUT: Error = Error::Invalid("terminal_socket_input");
 const OUTPUT: Error = Error::Invalid("terminal_socket_ack");
 
@@ -134,6 +134,10 @@ impl ForegroundResize {
         self.latest = Some(size);
     }
 
+    pub(super) fn is_ready(&self) -> bool {
+        !self.outstanding && self.latest.is_some()
+    }
+
     pub(super) fn take_ready(&mut self) -> Option<Geometry> {
         if self.outstanding {
             return None;
@@ -174,6 +178,10 @@ pub(super) enum OutputOffer {
 }
 
 impl DaemonOutput {
+    pub(super) fn has_head(&self) -> bool {
+        self.head.is_some()
+    }
+
     pub(super) fn offer(&mut self, sequence: u64, length: usize) -> Result<OutputOffer> {
         if let Some(head) = &self.head {
             if (sequence, length) != (head.sequence, head.length) {
@@ -222,7 +230,7 @@ impl DaemonOutput {
         let head = self
             .head
             .as_mut()
-            .filter(|head| head.id == id && head.written)
+            .filter(|head| head.id == id && head.written && !head.acknowledged)
             .ok_or(OUTPUT)?;
         head.acknowledged = true;
         Ok(())

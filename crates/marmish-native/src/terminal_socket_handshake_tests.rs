@@ -332,3 +332,43 @@ async fn terminal_socket_handshake_bench() {
         samples[49], samples[94]
     );
 }
+
+#[tokio::test]
+async fn terminal_socket_core_pending_owner_watches_deadline_eof_and_early_bytes() {
+    let mut fixture = Listener::open();
+    let (mut expires, expiry_client) = fixture.offer().await;
+    expires.deadline = Instant::now() + std::time::Duration::from_millis(10);
+    assert!(matches!(expires.cancelled().await, Error::Timeout));
+    drop(expires);
+    drop(expiry_client);
+
+    let (closed, closed_client) = fixture.offer().await;
+    drop(closed_client);
+    assert!(matches!(
+        closed.cancelled().await,
+        Error::Invalid("terminal_start_closed")
+    ));
+    drop(closed);
+
+    let (early, mut early_client) = fixture.offer().await;
+    early_client.write_all(b"X").await.unwrap();
+    assert!(matches!(
+        early.cancelled().await,
+        Error::Invalid("terminal_start_invalid")
+    ));
+    drop(early);
+    drop(early_client);
+
+    let (fresh, mut fresh_client) = fixture.offer().await;
+    let attached = fresh.admit().await.unwrap();
+    let response: Ready = read_frame(&mut fresh_client).await.unwrap();
+    assert!(response.ok);
+    let mut daemon = terminal_socket_session::DaemonSocket::new(attached, Role::Writer);
+    let now = std::time::Instant::now();
+    daemon.flush(now, now + STEP).unwrap();
+    let mut packet = [0; 12];
+    fresh_client.read_exact(&mut packet).await.unwrap();
+    let mut decoder = terminal_ipc_wire::Decoder::new(Direction::ToClient, Role::Writer);
+    let (_, record) = decoder.push(&packet).unwrap();
+    assert!(matches!(record, Some(Record::Credit(_))));
+}
