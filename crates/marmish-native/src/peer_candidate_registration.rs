@@ -116,29 +116,79 @@ impl RegisteredReceiver {
         let quota = self.dispatch.attach(lease, &self.scope.directories)?;
         Ok(LocalReceiverRegistration {
             quota,
-            scope: self.scope,
-            route: Some(self.route),
-            material,
+            route_scope: AttachedRouteScope {
+                scope: self.scope,
+                route: Some(self.route),
+                material,
+            },
         })
     }
 }
 
 pub(crate) struct LocalReceiverRegistration<'lease> {
     quota: ReceiverQuota<'lease>,
+    route_scope: AttachedRouteScope<'lease>,
+}
+
+struct AttachedRouteScope<'lease> {
     scope: RegisteredScope,
     route: Option<CheckedPeerRoute>,
     material: &'lease IdentityMaterial,
 }
 
 impl<'lease> LocalReceiverRegistration<'lease> {
+    pub(crate) fn actor_parts(
+        &mut self,
+    ) -> (&ReceiverQuota<'lease>, ReceiverRouteControl<'_, 'lease>) {
+        let quota = &self.quota;
+        let controller = ReceiverRouteControl {
+            route_scope: &mut self.route_scope,
+            quota,
+        };
+        (quota, controller)
+    }
+
     pub(crate) fn recheck(
         &mut self,
         lease: &Arc<ProfileLease>,
         material: &IdentityMaterial,
     ) -> std::result::Result<(), RegistrationFailure> {
-        self.scope.forwarding.recheck_default()?;
+        self.actor_parts().1.recheck(lease, material)
+    }
+
+    pub(crate) fn take_route(
+        &mut self,
+        lease: &Arc<ProfileLease>,
+        material: &IdentityMaterial,
+    ) -> std::result::Result<RegisteredRoute, RegistrationFailure> {
+        self.actor_parts().1.take_route(lease, material)
+    }
+
+    pub(crate) fn quota(&self) -> &ReceiverQuota<'lease> {
+        &self.quota
+    }
+}
+
+impl Drop for LocalReceiverRegistration<'_> {
+    fn drop(&mut self) {
+        self.route_scope.scope.ready.profile.cancel.cancel();
+    }
+}
+
+pub(crate) struct ReceiverRouteControl<'owner, 'lease> {
+    route_scope: &'owner mut AttachedRouteScope<'lease>,
+    quota: &'owner ReceiverQuota<'lease>,
+}
+
+impl ReceiverRouteControl<'_, '_> {
+    pub(crate) fn recheck(
+        &mut self,
+        lease: &Arc<ProfileLease>,
+        material: &IdentityMaterial,
+    ) -> std::result::Result<(), RegistrationFailure> {
+        self.route_scope.scope.forwarding.recheck_default()?;
         let result = self.check_local(lease, material);
-        self.scope.forwarding.recheck_default()?;
+        self.route_scope.scope.forwarding.recheck_default()?;
         result
     }
 
@@ -161,21 +211,22 @@ impl<'lease> LocalReceiverRegistration<'lease> {
         material: &IdentityMaterial,
         #[cfg(test)] after_take: impl FnOnce(),
     ) -> std::result::Result<RegisteredRoute, RegistrationFailure> {
-        self.scope.forwarding.recheck_default()?;
-        if self.route.is_none() {
+        self.route_scope.scope.forwarding.recheck_default()?;
+        if self.route_scope.route.is_none() {
             return Err(RegistrationFailure::LocalUnavailable);
         }
         let taken = self.check_local(lease, material).and_then(|()| {
-            self.route
+            self.route_scope
+                .route
                 .take()
                 .ok_or(RegistrationFailure::LocalUnavailable)
         });
         #[cfg(test)]
         after_take();
-        self.scope.forwarding.recheck_default()?;
+        self.route_scope.scope.forwarding.recheck_default()?;
         Ok(RegisteredRoute {
             route: taken?,
-            signer: self.material.signer(),
+            signer: self.route_scope.material.signer(),
         })
     }
 
@@ -184,24 +235,16 @@ impl<'lease> LocalReceiverRegistration<'lease> {
         lease: &Arc<ProfileLease>,
         material: &IdentityMaterial,
     ) -> std::result::Result<(), RegistrationFailure> {
-        if !std::ptr::eq(self.material, material) {
-            self.scope.ready.profile.cancel.cancel();
+        if !std::ptr::eq(self.route_scope.material, material) {
+            self.route_scope.scope.ready.profile.cancel.cancel();
             return Err(RegistrationFailure::LocalUnavailable);
         }
-        self.scope
-            .check_local(lease, material, self.route.as_mut(), |directories| {
-                self.quota.recheck_registered_lease(lease, directories)
-            })
-    }
-
-    pub(crate) fn quota(&self) -> &ReceiverQuota<'lease> {
-        &self.quota
-    }
-}
-
-impl Drop for LocalReceiverRegistration<'_> {
-    fn drop(&mut self) {
-        self.scope.ready.profile.cancel.cancel();
+        self.route_scope.scope.check_local(
+            lease,
+            material,
+            self.route_scope.route.as_mut(),
+            |directories| self.quota.recheck_registered_lease(lease, directories),
+        )
     }
 }
 
