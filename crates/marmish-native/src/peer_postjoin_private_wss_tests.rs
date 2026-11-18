@@ -167,7 +167,7 @@ async fn history(case: History) {
     let group_route = random();
     let mut round = Round::initialize_with_group(Some(group_route)).await;
     let socket = round.socket();
-    let daemon = round.start(Admission::Automatic, false).await;
+    let daemon = round.start(Admission::Automatic, super::LostReply::None).await;
     let started = Instant::now();
     let mut enrollment = round.send_offer(group_route).await;
     let selector = Selector::from(enrollment.consent.offer());
