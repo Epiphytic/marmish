@@ -3,7 +3,7 @@
 The handshake requires both exact listener registration and completion of
 ordinary startup in one candidate generation. Stop permanently revokes
 that generation. The module is selected by the private candidate build
-scope and has no daemon or listener call site yet.
+scope. The only daemon and listener call sites are currently test-only.
 
 | Check | Result |
 | --- | --- |
@@ -12,7 +12,6 @@ scope and has no daemon or listener call site yet.
 | `cargo fmt --all -- --check` and `git diff --check` | Passed. |
 
 The focused test binary links the existing candidate Tokio dependency only.
-A full candidate Cargo check and the daemon tests remain part of composition.
-Actual registration refusal, transient accept retry and stop-before-drain
-ordering require the [integrated mount](../phases/peer-candidate-daemon-mount.md)
-and its real listener and worker ownership.
+The [composed inert lifecycle tests](peer-candidate-inert-lifecycle.md)
+exercise the real Unix listener with an inert worker and private relay.
+The live candidate actor mount remains separate.

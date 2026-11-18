@@ -28,3 +28,15 @@ production composition still needs the limit and signal cases, real
 Command and Terminal regression with candidate Peer unavailable, and the
 actual candidate read aperture. The reviewer confirmed the existing
 bounded background ACK wait remains intact.
+
+## Integrated code review
+
+Claude Code in Auto mode with Claude Sonnet 5.5 approved exact integrated
+source `956aabfe8d8fd5ac9e6b9b0bbb7905227c9580bb` in session
+`75e79fb5-0e4a-4f1b-b45c-08113edfda74`. The handshake source matches
+`35f08c2`. The four daemon lifecycle files match `61f4f31`. The reviewer
+verified the inherited base changes, the test-only listener and reporter
+hooks, unavailable candidate reads, stock behavior and that the original
+lease outlives the parked worker. Claude ran formatting and diff checks.
+The integrator ran the [exact test and compiler checks](../validation/peer-candidate-inert-lifecycle.md#integrated-validation).
+The live mount, physical-only fatal cleanup and positive reads remain open.

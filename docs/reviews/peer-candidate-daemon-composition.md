@@ -4,8 +4,9 @@ The [startup composition plan](../phases/peer-candidate-daemon-composition.md)
 was independently reviewed with Claude Code in Auto permission mode
 using Claude Sonnet 5.5. The public source base is `a14b8c8`. The review
 also checked the exact private registration source and Pending view R4.
-This review concerns the design. The phase has no runtime patch or
-installed verification at this cut.
+This review concerns the design. The [inert lifecycle code review](peer-candidate-inert-lifecycle.md)
+covers the later test-only daemon adapter. Installed verification requires the
+live actor mount.
 
 | Round | Exact plan | Claude session | Outcome |
 | --- | --- | --- | --- |

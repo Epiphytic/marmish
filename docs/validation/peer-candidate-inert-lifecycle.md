@@ -54,3 +54,30 @@ cargo test --offline --locked -p marmish-native --lib ipc::
 cargo clippy --offline --locked -p marmish-native --lib --tests -- -D warnings
 cargo fmt --all --check
 ```
+
+## Integrated validation
+
+The composed Linux AMD64 source was
+`956aabfe8d8fd5ac9e6b9b0bbb7905227c9580bb`, tree
+`41a576c327edd25801cfa62998d5b50a51321683`. The stock test executable's
+SHA-256 was `3366d12147fbc9ab3fa13dd2e5881a7a7dabfadb3184489e23ed6b410ec60b55`.
+The explicit candidate test executable's SHA-256 was
+`a3e2929dcdf2738f1fd0e1f0faf56ddaf47be9a8d6da573e8bdfc17f8db360ac`.
+
+| Linux AMD64 composed check | Result | Elapsed |
+| --- | --- | ---: |
+| Stock inert daemon private WSS suite | 5 passed | 22.11 s |
+| Candidate inert daemon private WSS suite | 5 passed | 21.99 s |
+| Stock startup handshake and shared IPC | 65 passed, 2 benchmark opt-ins skipped | 0.11 s |
+| Stock isolated registration subprocess harness | 1 passed, including 4 fixture processes | 14.74 s |
+| Stock and installed-checks non-test binaries | Passed | 8.65 s and 14.81 s |
+| Stock strict Clippy, all native targets | Passed | 28.39 s |
+| Candidate all-target check and strict Clippy | Passed | 23.58 s and 28.70 s |
+
+The five lifecycle cases remain explicit ignored tests. Both runs use a
+private loopback WSS relay. The candidate run also checks that a connection
+to the real same-UID listener receives `peer_unavailable`. The IPC run
+includes the legacy paired listener. Exact stock and candidate warm libtest
+build times were 42.17 s and 43.83 s. Formatting and diff checks passed.
+The [integrated review](../reviews/peer-candidate-inert-lifecycle.md#integrated-code-review)
+approved this source.
