@@ -6,7 +6,7 @@ use sha2::Digest as _;
 
 use super::recovery::{FileExtent, SNAPSHOT};
 use super::*;
-use crate::peer_invitation::NativeWindow;
+use crate::peer_invitation::{NativeFence, NativeWindow};
 
 pub(in super::super::super) struct PackageDirectory<'p, 'l> {
     paths: &'p Paths<'l>,
@@ -140,7 +140,7 @@ impl<'p, 'l> PackageDirectory<'p, 'l> {
     pub(in super::super::super) fn original_digest(
         &self,
         main: FileExtent,
-        fence: &NativeWindow,
+        fence: &NativeFence,
     ) -> Result<[u8; 32]> {
         self.digest(stage_names(false), main.identity, main.logical, fence)
     }
@@ -150,9 +150,9 @@ impl<'p, 'l> PackageDirectory<'p, 'l> {
         family: [&CStr; 4],
         id: Identity,
         size: u64,
-        fence: &NativeWindow,
+        fence: &NativeFence,
     ) -> Result<[u8; 32]> {
-        fence.sample()?;
+        fence.wall()?;
         let file = self.open_existing(family, id, size)?;
         let digest = copy_bounded(
             file,
@@ -163,7 +163,7 @@ impl<'p, 'l> PackageDirectory<'p, 'l> {
             false,
         )?;
         self.exact(family, id, Some(size))?;
-        fence.sample()?;
+        fence.wall()?;
         Ok(digest)
     }
 
@@ -172,7 +172,7 @@ impl<'p, 'l> PackageDirectory<'p, 'l> {
         main: FileExtent,
         fence: &NativeWindow,
     ) -> Result<(FreshCopy, [u8; 32])> {
-        let initial = self.original_digest(main, fence)?;
+        let initial = self.original_digest(main, &NativeFence::Candidate(fence))?;
         let (mut file, identity) = self.create(SNAPSHOT, fence)?;
         let created = FreshCopy { identity };
         let result = (|| {
@@ -181,14 +181,19 @@ impl<'p, 'l> PackageDirectory<'p, 'l> {
                 original,
                 main.logical,
                 &mut file,
-                fence,
+                &NativeFence::Candidate(fence),
                 #[cfg(test)]
                 true,
             )?;
             self.sync(&file, fence)?;
             if digest != initial
-                || self.original_digest(main, fence)? != initial
-                || self.digest(SNAPSHOT, identity, main.logical, fence)? != initial
+                || self.original_digest(main, &NativeFence::Candidate(fence))? != initial
+                || self.digest(
+                    SNAPSHOT,
+                    identity,
+                    main.logical,
+                    &NativeFence::Candidate(fence),
+                )? != initial
             {
                 return Err(Error::StageIdentityMismatch);
             }
@@ -209,7 +214,13 @@ impl<'p, 'l> PackageDirectory<'p, 'l> {
         expected: [u8; 32],
         fence: &NativeWindow,
     ) -> Result<()> {
-        if self.digest(SNAPSHOT, copy.identity, logical, fence)? != expected {
+        if self.digest(
+            SNAPSHOT,
+            copy.identity,
+            logical,
+            &NativeFence::Candidate(fence),
+        )? != expected
+        {
             return Err(Error::StageIdentityMismatch);
         }
         Ok(())
@@ -244,7 +255,7 @@ fn copy_bounded(
     mut file: File,
     size: u64,
     sink: &mut impl Write,
-    fence: &NativeWindow,
+    fence: &NativeFence,
     #[cfg(test)] copying_snapshot: bool,
 ) -> Result<[u8; 32]> {
     if !(1..=crate::peer_quota_vfs::dispatch::CLOSED_STAGE_LIMIT).contains(&size) {
@@ -254,7 +265,7 @@ fn copy_bounded(
     let mut buffer = [0; 64 * 1024];
     let mut digest = Sha256::new();
     loop {
-        fence.sample()?;
+        fence.wall()?;
         let count = file.read(&mut buffer).map_err(|_| Error::Path)?;
         if count == 0 {
             break;
@@ -265,14 +276,14 @@ fn copy_bounded(
         }
         sink.write_all(&buffer[..count]).map_err(|_| Error::Path)?;
         #[cfg(test)]
-        if copying_snapshot {
-            fence.copy_cut();
+        if copying_snapshot && let NativeFence::Candidate(window) = fence {
+            window.copy_cut();
         }
         digest.update(&buffer[..count]);
     }
     if total != size {
         return Err(Error::StageIdentityMismatch);
     }
-    fence.sample()?;
+    fence.wall()?;
     Ok(digest.finalize().into())
 }

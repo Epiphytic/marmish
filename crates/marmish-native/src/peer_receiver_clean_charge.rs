@@ -185,7 +185,7 @@ impl<'a> CleanFiles<'a> {
         owner: &mut RecoveredOwner<'_>,
         fence: impl Into<NativeFence<'b>>,
         original_unchanged: bool,
-    ) -> Result<()> {
+    ) -> Result<FileExtent> {
         self.check_owner(owner)?;
         let clean = owner
             .recover(fence.into().wall()?)?
@@ -195,7 +195,7 @@ impl<'a> CleanFiles<'a> {
         {
             return Err(Error::StageIdentityMismatch);
         }
-        Ok(())
+        Ok(clean.main)
     }
 
     fn check_owner(&self, owner: &RecoveredOwner<'_>) -> Result<()> {

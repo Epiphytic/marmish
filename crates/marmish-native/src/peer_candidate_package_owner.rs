@@ -15,6 +15,17 @@ type NativeResult<T> = std::result::Result<T, StageError>;
 const MIN_PACKAGE_MARGIN: u64 = 600 + 120;
 const NATIVE_PACKAGE_LIFETIME: u64 = 30 * 86_400;
 
+pub(crate) struct SchemaOperation<'a> {
+    key: SqlCipherKey,
+    window: &'a SchemaWindow,
+}
+
+impl SchemaOperation<'_> {
+    pub(crate) fn run(self, path: &std::path::Path) -> NativeResult<()> {
+        OpenStage::prestage_managed_provisional(path, &self.key, self.window)
+    }
+}
+
 pub(crate) struct PackageOperation<'a> {
     key: SqlCipherKey,
     signer: Arc<Keys>,
@@ -27,7 +38,7 @@ impl PackageOperation<'_> {
     pub(crate) async fn issue(self, path: &std::path::Path) -> NativeResult<ProvisionalPackage> {
         #[cfg(test)]
         let point = std::time::Instant::now();
-        let opened = self.open(path, true);
+        let opened = self.open(path);
         #[cfg(test)]
         self.window.timing("native_open", point);
         let stage = opened?;
@@ -35,21 +46,20 @@ impl PackageOperation<'_> {
     }
 
     pub(crate) fn attest(self, path: &std::path::Path) -> NativeResult<ProvisionalPackage> {
-        let stage = self.open(path, false)?;
+        let stage = self.open(path)?;
         stage.require_unjoined_provisional()?;
         let package = stage.read_provisional(self.window.stage_sample()?)?;
         self.window.check()?;
         Ok(package)
     }
 
-    fn open(&self, path: &std::path::Path, issue: bool) -> NativeResult<OpenStage> {
+    fn open(&self, path: &std::path::Path) -> NativeResult<OpenStage> {
         OpenStage::open_managed_provisional(
             path,
             &self.key,
             self.signer.clone(),
             self.relay,
             self.label.clone(),
-            issue,
             self.window,
         )
     }
@@ -58,6 +68,15 @@ impl PackageOperation<'_> {
 pub(super) struct StartedPackage {
     native: NativeStart,
     file: FileWitness,
+    window: NativeWindow,
+}
+
+pub(super) struct PrestagedPackage {
+    native: NativeStart,
+    file: FileWitness,
+    extent: FileExtent,
+    digest: [u8; 32],
+    window: NativeWindow,
 }
 
 pub(super) struct PackageProof {
@@ -72,7 +91,7 @@ impl RecoveredOwner<'_> {
         &mut self,
         quota: &ReceiverQuota<'_>,
         reservation: &Reservation,
-        window: &NativeWindow,
+        fence: NativeFence<'_>,
     ) -> Result<BoundStage> {
         if !self
             .package_quota
@@ -86,10 +105,10 @@ impl RecoveredOwner<'_> {
         {
             return Err(Error::Binding);
         }
-        let stage =
-            self.checkpoint
-                .bind_stage(&self.source, reservation, window.sample()?.as_secs())?;
-        window.require_offer_limit(stage.offer_expires())?;
+        let stage = self
+            .checkpoint
+            .bind_stage(&self.source, reservation, fence.wall()?)?;
+        fence.require_offer_limit(stage.offer_expires())?;
         Ok(stage)
     }
 
@@ -99,7 +118,7 @@ impl RecoveredOwner<'_> {
         reservation: &Reservation,
         window: &NativeWindow,
     ) -> Result<Option<StartedPackage>> {
-        let stage = self.package_scope(quota, reservation, window)?;
+        let stage = self.package_scope(quota, reservation, NativeFence::Candidate(window))?;
         if stage.state() != State::Bound {
             return Ok(None);
         }
@@ -135,36 +154,82 @@ impl RecoveredOwner<'_> {
             self.checkpoint
                 .start_stage(&self.source, &stage, file, window.sample()?.as_secs())?;
         window.sample()?;
-        Ok(Some(StartedPackage { native, file }))
+        Ok(Some(StartedPackage {
+            native,
+            file,
+            window: window.clone(),
+        }))
+    }
+
+    pub(super) fn prestage_package(
+        &mut self,
+        quota: &ReceiverQuota<'_>,
+        reservation: &Reservation,
+        started: StartedPackage,
+    ) -> Result<PrestagedPackage> {
+        let schema = started.window.schema_turn()?;
+        let fence = || NativeFence::Schema(&schema);
+        let stage = self.package_scope(quota, reservation, fence())?;
+        if !started.native.same_stage(&stage, started.file)
+            || stage.state() != State::NativeStarted(started.file)
+        {
+            return Err(Error::StageIdentityMismatch);
+        }
+        let binding = stage.binding();
+        let files = CleanFiles::begin(self, quota, self.paths.lease(), binding, fence())?;
+        PackageDirectory::open(&self.paths, files.files())?;
+        let permit = files.original_permit(self, fence())?;
+        let operation = SchemaOperation {
+            key: SqlCipherKey::raw(*self.paths.provisional_key(binding)),
+            window: &schema,
+        };
+        let result = files
+            .files()
+            .prestage_package(permit, operation, started.file)
+            .map_err(|_| Error::Path)?;
+        let extent = files.finish(self, fence(), false)?;
+        result?;
+        let digest = PackageDirectory::open(&self.paths, files.files())?
+            .original_digest(extent, &fence())?;
+        schema.require_offer_limit(stage.offer_expires())?;
+        let window = schema.into_issue()?;
+        Ok(PrestagedPackage {
+            native: started.native,
+            file: started.file,
+            extent,
+            digest,
+            window,
+        })
     }
 
     pub(super) fn issue_package(
         &mut self,
         quota: &ReceiverQuota<'_>,
         reservation: &Reservation,
-        started: StartedPackage,
-        window: &NativeWindow,
+        prepared: PrestagedPackage,
     ) -> Result<Artifact> {
-        let stage = self.package_scope(quota, reservation, window)?;
-        if stage.state() != State::NativeStarted(started.file) {
+        let window = &prepared.window;
+        let fence = || NativeFence::Candidate(window);
+        let stage = self.package_scope(quota, reservation, fence())?;
+        if stage.state() != State::NativeStarted(prepared.file) {
             return Err(Error::StageIdentityMismatch);
         }
         let binding = stage.binding();
-        let files = CleanFiles::begin(
-            self,
-            quota,
-            self.paths.lease(),
-            binding,
-            NativeFence::Candidate(window),
-        )?;
-        PackageDirectory::open(&self.paths, files.files())?;
-        let permit = files.original_permit(self, NativeFence::Candidate(window))?;
+        let files = CleanFiles::begin(self, quota, self.paths.lease(), binding, fence())?;
+        if files.original() != prepared.extent
+            || PackageDirectory::open(&self.paths, files.files())?
+                .original_digest(prepared.extent, &fence())?
+                != prepared.digest
+        {
+            return Err(Error::StageIdentityMismatch);
+        }
+        let permit = files.original_permit(self, fence())?;
         let operation = self.package_operation(binding, window);
         let package = files
             .files()
-            .generate_package(permit, operation, started.native, &stage, started.file)
+            .generate_package(permit, operation, prepared.native, &stage, prepared.file)
             .map_err(|_| Error::Path)?;
-        files.finish(self, NativeFence::Candidate(window), false)?;
+        files.finish(self, fence(), false)?;
         exact_artifact(&package?, window)
     }
 
@@ -175,7 +240,7 @@ impl RecoveredOwner<'_> {
         live: Option<Artifact>,
         window: &NativeWindow,
     ) -> Result<PackageProof> {
-        let stage = self.package_scope(quota, reservation, window)?;
+        let stage = self.package_scope(quota, reservation, NativeFence::Candidate(window))?;
         let (file, recorded) = match stage.state() {
             State::NativeStarted(file) => (file, None),
             State::Prepared(file, artifact) => (file, Some(artifact)),
@@ -224,7 +289,7 @@ impl RecoveredOwner<'_> {
             let directory = PackageDirectory::open(&self.paths, files.files())?;
             directory.remove_copy(copy)?;
             let package = result?;
-            if directory.original_digest(original, window)? != digest {
+            if directory.original_digest(original, &fence())? != digest {
                 return Err(Error::StageIdentityMismatch);
             }
             files.finish(self, fence(), true)?;

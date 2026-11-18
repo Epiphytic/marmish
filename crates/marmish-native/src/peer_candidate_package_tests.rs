@@ -110,7 +110,10 @@ fn candidate_package_cold_attestation_under_registered_quota() {
         &["bound-file", "fenced"],
         &["started-empty", "empty"],
         &["early-stop", "bound"],
-        &["issue-stop", "empty"],
+        &["schema-stop", "empty"],
+        &["issue-stop", "unsigned"],
+        &["prestage-lost", "unsigned"],
+        &["prestage-extent", "unsigned"],
         &["signing-loss", "unsigned"],
         &["generation-crash", "recover-unsigned"],
         &["issue", "copy-crash", "fenced"],
@@ -134,7 +137,7 @@ fn run_child(root: &Path, mode: &str) {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(30);
     while child.try_wait().unwrap().is_none() {
         if Instant::now() >= deadline {
             child.kill().unwrap();
@@ -287,7 +290,7 @@ fn package_child() {
             assert!(owner.start_package(quota, &reservation, &turn).is_err());
             assert!(!stage.exists());
         }
-        "issue-stop" => {
+        "schema-stop" => {
             let turn = window();
             let started = owner
                 .start_package(quota, &reservation, &turn)
@@ -296,20 +299,48 @@ fn package_child() {
             startup.stop();
             assert!(
                 owner
-                    .issue_package(quota, &reservation, started, &turn)
+                    .prestage_package(quota, &reservation, started)
                     .is_err()
             );
-            assert_eq!(turn.signs(), 0);
             assert_eq!(fs::metadata(&stage).unwrap().len(), 0);
         }
-        "generation-crash" => {
-            let turn = window();
+        "issue-stop" | "prestage-lost" | "prestage-extent" => {
             let started = owner
-                .start_package(quota, &reservation, &turn)
+                .start_package(quota, &reservation, &window())
                 .unwrap()
                 .unwrap();
-            turn.crash_generation();
-            let result = owner.issue_package(quota, &reservation, started, &turn);
+            let staged = owner
+                .prestage_package(quota, &reservation, started)
+                .unwrap();
+            assert!(fs::metadata(&stage).unwrap().len() > 0);
+            if mode == "prestage-lost" {
+                return;
+            }
+            if mode == "issue-stop" {
+                startup.stop();
+            } else {
+                let image = fs::OpenOptions::new().append(true).open(&stage).unwrap();
+                image.set_len(staged.extent.logical + 1).unwrap();
+            }
+            let observed = staged.window.clone();
+            assert!(owner.issue_package(quota, &reservation, staged).is_err());
+            assert_eq!(observed.signs(), 0);
+            if mode == "prestage-extent" {
+                // Restore the exact image for the following unsigned-prestage restart check.
+                let image = fs::OpenOptions::new().write(true).open(&stage).unwrap();
+                image.set_len(image.metadata().unwrap().len() - 1).unwrap();
+            }
+        }
+        "generation-crash" => {
+            let started = owner
+                .start_package(quota, &reservation, &window())
+                .unwrap()
+                .unwrap();
+            let staged = owner
+                .prestage_package(quota, &reservation, started)
+                .unwrap();
+            staged.window.crash_generation();
+            let result = owner.issue_package(quota, &reservation, staged);
             panic!(
                 "native generation did not reach its interrupted write: {:?}",
                 result.err()
@@ -338,17 +369,16 @@ fn package_child() {
             );
         }
         "signing-loss" => {
-            let turn = window();
             let started = owner
-                .start_package(quota, &reservation, &turn)
+                .start_package(quota, &reservation, &window())
                 .unwrap()
                 .unwrap();
+            let staged = owner
+                .prestage_package(quota, &reservation, started)
+                .unwrap();
+            let turn = staged.window.clone();
             turn.stop_after_signing();
-            assert!(
-                owner
-                    .issue_package(quota, &reservation, started, &turn)
-                    .is_err()
-            );
+            assert!(owner.issue_package(quota, &reservation, staged).is_err());
             assert_eq!(turn.signs(), 1);
             assert!(turn.sample().is_err());
         }
@@ -357,11 +387,14 @@ fn package_child() {
                 .start_package(quota, &reservation, &window())
                 .unwrap()
                 .unwrap();
+            let staged = owner
+                .prestage_package(quota, &reservation, started)
+                .unwrap();
             let point = Instant::now();
-            let turn = window();
+            let turn = staged.window.clone();
             turn.trace_timing();
             let artifact = owner
-                .issue_package(quota, &reservation, started, &turn)
+                .issue_package(quota, &reservation, staged)
                 .unwrap_or_else(|error| {
                     panic!(
                         "package issue failed after {:.2}s with {} signs: {error:?}",

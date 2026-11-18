@@ -81,6 +81,10 @@ pub(crate) struct NativeStart {
 
 impl NativeStart {
     pub(crate) fn matches(self, stage: &BoundStage, witness: FileWitness) -> bool {
+        self.same_stage(stage, witness)
+    }
+
+    pub(crate) fn same_stage(&self, stage: &BoundStage, witness: FileWitness) -> bool {
         Arc::ptr_eq(&self.owner, &stage.owner)
             && self.binding == stage.binding
             && self.witness == witness

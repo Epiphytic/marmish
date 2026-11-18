@@ -32,7 +32,7 @@ mod native_fence;
     target_os = "linux",
     target_arch = "x86_64"
 ))]
-pub(crate) use native_fence::{NativeFence, NativeWindow};
+pub(crate) use native_fence::{NativeFence, NativeWindow, SchemaWindow};
 #[path = "peer_invitation_paths.rs"]
 mod paths;
 #[cfg(test)]
@@ -64,7 +64,10 @@ pub(crate) use prepared_consent::leave_owner::{LeaveSnapshot, TurnFence};
     target_os = "linux",
     target_arch = "x86_64"
 ))]
-pub(crate) use receiver_inventory::{CleanPermit, package::PackageOperation};
+pub(crate) use receiver_inventory::{
+    CleanPermit,
+    package::{PackageOperation, SchemaOperation},
+};
 #[cfg(all(
     any(test, marmish_peer_receiver_candidate),
     target_os = "linux",

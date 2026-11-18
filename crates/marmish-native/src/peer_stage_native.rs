@@ -52,24 +52,7 @@ impl OpenStage {
         first_open: bool,
         options: SqliteStorageOptions,
     ) -> StageResult<Self> {
-        marmish_engine::initialize_storage().map_err(|_| StageError::Storage)?;
-        let storage = SqliteAccountStorage::open_encrypted_with_options(
-            path,
-            key,
-            SqliteStorageOptions {
-                journal_mode: SqliteJournalMode::Delete,
-                ..options
-            },
-        )
-        .map_err(|_| StageError::Storage)?;
-        #[cfg(test)]
-        if first_open {
-            let (count, elapsed) = storage.migration_summary();
-            eprintln!(
-                "managed first-open migrations={count} migration_ms={:.3}",
-                elapsed.as_secs_f64() * 1000.0
-            );
-        }
+        let storage = open_provisional_storage(path, key, options)?;
         if !first_open && storage.migration_summary().0 != 0 {
             return Err(StageError::Storage);
         }
@@ -138,13 +121,43 @@ impl OpenStage {
         target_arch = "x86_64",
         any(test, marmish_peer_receiver_candidate)
     ))]
+    pub(crate) fn prestage_managed_provisional(
+        path: &Path,
+        key: &SqlCipherKey,
+        window: &crate::peer_invitation::SchemaWindow,
+    ) -> StageResult<()> {
+        let check = || crate::peer_invitation::NativeFence::Schema(window).check();
+        check()?;
+        #[cfg(test)]
+        let point = std::time::Instant::now();
+        let storage = open_provisional_storage(path, key, managed_options())?;
+        #[cfg(test)]
+        {
+            let (count, elapsed) = storage.migration_summary();
+            println!(
+                "package_fixture_timing schema_open_ms={:.3} migrations={count} migration_ms={:.3}",
+                point.elapsed().as_secs_f64() * 1000.0,
+                elapsed.as_secs_f64() * 1000.0,
+            );
+        }
+        check()?;
+        Self::require_unjoined_storage(&storage)?;
+        Self::require_empty_package_storage(&storage)?;
+        drop(storage);
+        check()
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(test, marmish_peer_receiver_candidate)
+    ))]
     pub(crate) fn open_managed_provisional(
         path: &Path,
         key: &SqlCipherKey,
         signer: Arc<Keys>,
         origin: &str,
         slot: String,
-        issue: bool,
         window: &crate::peer_invitation::NativeWindow,
     ) -> StageResult<Self> {
         window.check()?;
@@ -154,11 +167,8 @@ impl OpenStage {
             signer,
             origin,
             slot,
-            issue,
-            SqliteStorageOptions {
-                busy_timeout_ms: 0,
-                ..SqliteStorageOptions::default()
-            },
+            false,
+            managed_options(),
         )
     }
 
@@ -174,13 +184,7 @@ impl OpenStage {
         #[cfg(test)]
         let point = std::time::Instant::now();
         self.require_unjoined_provisional()?;
-        if self.load()?.is_some()
-            || !durably_owned_key_packages(&self.storage, ProtocolProfile::Current)
-                .map_err(|_| StageError::Storage)?
-                .is_empty()
-        {
-            return Err(StageError::Invalid);
-        }
+        Self::require_empty_package_storage(&self.storage)?;
         window.check()?;
         self.save(&KeyPackageLifecycleState::slot_only(self.slot.clone()))?;
         #[cfg(test)]
@@ -203,13 +207,35 @@ impl OpenStage {
     }
 
     pub(crate) fn require_unjoined_provisional(&self) -> StageResult<()> {
+        Self::require_unjoined_storage(&self.storage)
+    }
+
+    fn require_unjoined_storage(storage: &SqliteAccountStorage) -> StageResult<()> {
         use cgka_traits::storage::GroupStorage;
 
-        if !self
-            .storage
+        if !storage
             .list_groups()
             .map_err(|_| StageError::Storage)?
             .is_empty()
+        {
+            return Err(StageError::Invalid);
+        }
+        Ok(())
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(test, marmish_peer_receiver_candidate)
+    ))]
+    fn require_empty_package_storage(storage: &SqliteAccountStorage) -> StageResult<()> {
+        if storage
+            .key_package_lifecycle()
+            .map_err(|_| StageError::Storage)?
+            .is_some()
+            || !durably_owned_key_packages(storage, ProtocolProfile::Current)
+                .map_err(|_| StageError::Storage)?
+                .is_empty()
         {
             return Err(StageError::Invalid);
         }
@@ -264,5 +290,34 @@ impl OpenStage {
         }
         self.check_pending(&pending, sample.as_secs())?;
         Ok((lifecycle, pending))
+    }
+}
+
+fn open_provisional_storage(
+    path: &Path,
+    key: &SqlCipherKey,
+    options: SqliteStorageOptions,
+) -> StageResult<SqliteAccountStorage> {
+    marmish_engine::initialize_storage().map_err(|_| StageError::Storage)?;
+    SqliteAccountStorage::open_encrypted_with_options(
+        path,
+        key,
+        SqliteStorageOptions {
+            journal_mode: SqliteJournalMode::Delete,
+            ..options
+        },
+    )
+    .map_err(|_| StageError::Storage)
+}
+
+#[cfg(all(
+    target_os = "linux",
+    target_arch = "x86_64",
+    any(test, marmish_peer_receiver_candidate)
+))]
+fn managed_options() -> SqliteStorageOptions {
+    SqliteStorageOptions {
+        busy_timeout_ms: 0,
+        ..SqliteStorageOptions::default()
     }
 }

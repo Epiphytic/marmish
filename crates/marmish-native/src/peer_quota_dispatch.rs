@@ -979,6 +979,24 @@ impl ReceiverFiles<'_> {
         result
     }
 
+    pub(crate) fn prestage_package(
+        &self,
+        permit: crate::peer_invitation::CleanPermit<'_>,
+        operation: crate::peer_invitation::SchemaOperation<'_>,
+        file: crate::peer_invitation::FileWitness,
+    ) -> Result<std::result::Result<(), crate::mdk_adapter::peer_native_signer::StageError>> {
+        let measured = permit
+            .verify(self, false)
+            .ok_or("dispatch_reservation_owner")?;
+        if measured.logical != 0 || measured.identity != package_file_identity(file) {
+            return Err("dispatch_reservation_owner");
+        }
+        let (path, turn) = self.measured_turn(permit, SlotClass::Unknown)?;
+        let result = operation.run(path);
+        turn.finish()?;
+        Ok(result)
+    }
+
     pub(crate) fn generate_package(
         &self,
         permit: crate::peer_invitation::CleanPermit<'_>,
@@ -995,12 +1013,8 @@ impl ReceiverFiles<'_> {
         let measured = permit
             .verify(self, false)
             .ok_or("dispatch_reservation_owner")?;
-        if measured.logical != 0
-            || measured.identity
-                != (
-                    u64::from_be_bytes(file.device),
-                    u64::from_be_bytes(file.inode),
-                )
+        if measured.logical == 0
+            || measured.identity != package_file_identity(file)
             || !start.matches(stage, file)
         {
             return Err("dispatch_reservation_owner");
@@ -1061,6 +1075,14 @@ impl ReceiverFiles<'_> {
     ) -> Result<()> {
         self.inspect_snapshot(permit, |path| recover_database(path, key, &fence.into()))
     }
+}
+
+#[cfg(any(test, marmish_peer_receiver_candidate))]
+fn package_file_identity(file: crate::peer_invitation::FileWitness) -> (u64, u64) {
+    (
+        u64::from_be_bytes(file.device),
+        u64::from_be_bytes(file.inode),
+    )
 }
 
 #[cfg(test)]

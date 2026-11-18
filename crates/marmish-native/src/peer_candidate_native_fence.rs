@@ -60,11 +60,37 @@ impl NativeWindow {
         end_exclusive: u64,
     ) -> Result<Self> {
         let now = Sample::now()?;
-        let anchor = Sample {
-            wall: anchored_wall.max(now.wall),
-            tick: now.tick,
-        };
-        let wall_end = Duration::from_secs(end_exclusive);
+        if now.wall.abs_diff(anchored_wall) > Duration::from_secs(2) {
+            return Err(Error::Clock);
+        }
+        Self::new(
+            readiness,
+            stop,
+            route_cancel,
+            Sample {
+                wall: anchored_wall.max(now.wall),
+                tick: now.tick,
+            },
+            Duration::from_secs(end_exclusive),
+            now,
+            Duration::from_secs(5),
+        )
+    }
+
+    fn new(
+        readiness: Readiness,
+        stop: Arc<AtomicBool>,
+        route_cancel: CancellationToken,
+        anchor: Sample,
+        wall_end: Duration,
+        floor: Sample,
+        limit: Duration,
+    ) -> Result<Self> {
+        let now = Sample::now()?;
+        let projected = anchor
+            .wall
+            .checked_add(now.tick.checked_sub(anchor.tick).ok_or(Error::Clock)?)
+            .ok_or(Error::Clock)?;
         let window = Self(Arc::new(Window {
             readiness,
             stop,
@@ -75,12 +101,12 @@ impl NativeWindow {
                 .tick
                 .checked_add(
                     wall_end
-                        .checked_sub(anchor.wall)
+                        .checked_sub(now.wall.max(projected))
                         .ok_or(Error::Clock)?
-                        .min(Duration::from_secs(5)),
+                        .min(limit),
                 )
                 .ok_or(Error::Clock)?,
-            floor: Mutex::new(Some(now)),
+            floor: Mutex::new(Some(floor)),
             #[cfg(test)]
             stop_after_signing: AtomicBool::new(false),
             #[cfg(test)]
@@ -92,11 +118,28 @@ impl NativeWindow {
             #[cfg(test)]
             crash_generation: AtomicBool::new(false),
         }));
-        if now.wall.abs_diff(anchored_wall) > Duration::from_secs(2) {
-            return Err(Error::Clock);
-        }
         window.sample()?;
         Ok(window)
+    }
+
+    fn next(&self, limit: Duration) -> Result<Self> {
+        let mut floor = self.0.floor.lock().map_err(|_| Error::Clock)?;
+        let before = floor.take().ok_or(Error::Clock)?;
+        let now = Sample::now()?;
+        self.observe(now, before)?;
+        Self::new(
+            self.0.readiness.clone(),
+            self.0.stop.clone(),
+            self.0.route_cancel.clone(),
+            self.0.anchor,
+            self.0.wall_end,
+            now,
+            limit,
+        )
+    }
+
+    pub(super) fn schema_turn(&self) -> Result<SchemaWindow> {
+        self.next(Duration::from_secs(15)).map(SchemaWindow)
     }
 
     fn observe(&self, now: Sample, floor: Sample) -> Result<Duration> {
@@ -216,9 +259,27 @@ impl NativeWindow {
     }
 }
 
+/// The longer schema-only window never reaches the package publisher.
+pub(crate) struct SchemaWindow(NativeWindow);
+
+impl SchemaWindow {
+    pub(super) fn sample(&self) -> Result<Duration> {
+        self.0.sample()
+    }
+
+    pub(super) fn require_offer_limit(&self, offer_expires: u64) -> Result<()> {
+        self.0.require_offer_limit(offer_expires)
+    }
+
+    pub(super) fn into_issue(self) -> Result<NativeWindow> {
+        self.0.next(Duration::from_secs(5))
+    }
+}
+
 /// Carries the existing fixture fence without relaxing its checks.
 pub(crate) enum NativeFence<'a> {
     Candidate(&'a NativeWindow),
+    Schema(&'a SchemaWindow),
     #[cfg(test)]
     Fixture(&'a TurnFence<'a>),
 }
@@ -227,8 +288,18 @@ impl NativeFence<'_> {
     pub(super) fn wall(&self) -> Result<u64> {
         match self {
             Self::Candidate(window) => window.sample().map(|wall| wall.as_secs()),
+            Self::Schema(window) => window.sample().map(|wall| wall.as_secs()),
             #[cfg(test)]
             Self::Fixture(fence) => fence.wall(),
+        }
+    }
+
+    pub(super) fn require_offer_limit(&self, offer_expires: u64) -> Result<()> {
+        match self {
+            Self::Candidate(window) => window.require_offer_limit(offer_expires),
+            Self::Schema(window) => window.require_offer_limit(offer_expires),
+            #[cfg(test)]
+            Self::Fixture(_) => Err(Error::Binding),
         }
     }
 
