@@ -1,5 +1,13 @@
 # Installed Peer v2 admission design review
 
+Claude Code Sonnet 5.5 approved composed commit `6d9654a03bca95e6d99b18c858e404e405daf0f4`
+in Auto session `68ed85af-a44e-46f7-98d3-7469f4a81e66`. The source review
+verified that the nine reviewed Rust files are byte-identical to the
+approved author version. It also checked the transaction and scope fences
+and the one deterministic selector added to the existing master-only,
+self-hosted core workflow. The integration author ran the exact local
+checks recorded in the validation note.
+
 Claude Code Sonnet 5.5 reviewed the design in Auto mode. The reviews read
 source and design documents without builds or relay traffic.
 

@@ -39,3 +39,8 @@ and cursor continuation, and 0.80 s for Automatic restart and exact v2
 ancestry. The composed branch adds the first selector to the existing
 self-hosted core workflow. The remaining Offer persistence cases can run
 locally using the cohort selector above.
+
+On composed commit `6d9654a`, the exact workflow helper passed one
+network-free cursor selector in 0.17 s of test runtime. The six-case cohort
+passed in 2.32 s. Strict Clippy with `--features installed-checks --all-targets`
+passed in 41.84 s on Linux AMD64. These checks ran locally.
