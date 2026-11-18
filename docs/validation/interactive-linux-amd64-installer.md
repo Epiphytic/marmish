@@ -94,3 +94,32 @@ runner used an immutable copy of the native test executable and stable
 sibling fixture binaries. The
 [MDK preflight evidence](mdk-master-schema-213.md) documents a prior
 inconclusive run caused by replacing the executing harness.
+
+## Packaged Command and Terminal relay comparison
+
+Two installed processes from the same optimized package used disposable
+file-backed identities and an explicitly selected White Noise US relay.
+The server granted the client's identity and set its Terminal shell grant.
+Across three attempts, ordinary Command returned exact literal bytes
+containing quotes, shell substitution syntax, wildcard characters, a
+backslash, a newline and Unicode. The successful Command wall times
+were 8.256 s, 6.217 s and 4.702 s.
+
+In each attempt the installed Terminal client exited before becoming a
+writer. It reported `terminal_transport_unavailable`. On the final run,
+both daemons successfully connected over TLS and WebSocket. The inbound
+and outbound Terminal open stages recorded the same refusal category.
+Both daemons stopped and the disposable profile state was removed. A
+separate six-second kind-1059 recipient-only subscription received EOSE
+and observed no NIP-42 AUTH challenge. This is a single-origin observation.
+The current Terminal enrollment requires an ordered NIP-42 challenge,
+positive acknowledgement and exact inbox EOSE. These results do not
+qualify that relay for interactive Terminal use.
+
+The same MDK lock passed the separate private TLS
+`terminal_installed_runtime_native_writer` fixture on Linux AMD64 at
+`de33dd3701a76129997c4feac7c556c29e2b072b`. The fixture ran the native
+entry points with its test-only trust mount. It passed byte input, detach
+and tmux reattachment, with ordinary Command before, during and after
+attachment. The fixture took 75.03 s. Individual readiness samples were
+7.549 s cold and 8.478 s warm. One key-echo sample took 135.4 ms.
