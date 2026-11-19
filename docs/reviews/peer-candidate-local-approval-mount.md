@@ -65,3 +65,20 @@ refuses the projection ticket otherwise. The original test expected a
 synthetic empty proof available only in unit tests. The correction
 `bcc2a7a` requires Unavailable from the private List and Show while the
 registered route remains live. It preserves the cold SQLCipher assertions.
+
+Claude Code Auto session `97eebb22-a0d7-4b78-84f9-69d6b1e71582` approved
+publication of the first private mounted increment at `4328f92` on the
+feature branch. The reviewer reproduced deterministic offline socket,
+decision, custody and lifecycle tests from the compiled archive and verified
+the [installed results](../validation/peer-candidate-local-approval-mount.md).
+The installed binaries were built at `dca025b`. The later lifecycle helper
+extraction was read independently and covered by the offline regression.
+The separate standalone cursor crate also includes the test-only binding
+source. Follow-up `50ab8b7` limits the compatibility correction to that
+fixture's visibility and leaves its body unchanged.
+
+The full design gate remains open. The reviewer asked for composed evidence
+of opposite-epoch startup refusal, lost-reply recovery and authenticated
+history supersession, plus internal decision timing. Existing isolated
+tests and installed happy-path restart evidence cover separate parts of
+those cases. The publication approval leaves the private scope intact.

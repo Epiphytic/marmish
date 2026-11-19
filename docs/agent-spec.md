@@ -151,6 +151,14 @@ adds `marmish servers list` and exact `servers show` selectors for local Pending
 reads. The installed Manual proof covers positive Pending results. The read
 surface returns `peer_unavailable` while the source is unqualified or
 disconnected. Stock client and daemon command parsing remain unchanged.
+The [installed candidate approval proof](validation/peer-candidate-local-approval-mount.md)
+adds a same-UID `marmish servers approve` decision in a fresh private Linux
+AMD64 approval profile. The installed run recorded the exact selection as
+Activating, withheld the old Pending proof, and verified the original MLS
+file and decision after restart. CLI approval took 799 ms and the immediate
+Unix socket retry took 289 ms in one loopback run. The intent stays behind
+the private candidate qualification driver. Public approval, founder
+confirmation, automatic acceptance and installed heartbeats remain open.
 The [candidate VFS registration proof](validation/peer-candidate-preflight-registration.md)
 qualifies sealed receiver registration under the ordinary profile lease,
 forwards ordinary SQLite calls and fences reserved Peer database names. It
