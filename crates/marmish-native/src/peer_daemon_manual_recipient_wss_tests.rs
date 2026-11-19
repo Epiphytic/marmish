@@ -21,6 +21,9 @@ use refresh_benchmark::RefreshLog;
 #[path = "peer_daemon_manual_copy_observation.rs"]
 mod exact_copy_observation;
 
+#[path = "peer_daemon_manual_approval_reply_loss.rs"]
+mod approval_reply_loss;
+
 async fn acknowledge(report: &mut UnixStream) {
     timeout(STEP, report.write_all(b"A"))
         .await
@@ -135,6 +138,7 @@ enum ManualCase {
     Pending,
     NearCap,
     Approve,
+    ApproveReplyLost,
 }
 
 async fn expect_no_pending_proof(socket: &Path, selection: peer_read::Selection) {
@@ -153,6 +157,7 @@ async fn expect_no_pending_proof(socket: &Path, selection: peer_read::Selection)
 
 async fn mounted(case: ManualCase) {
     let measure_near_cap = case == ManualCase::NearCap;
+    let approve = matches!(case, ManualCase::Approve | ManualCase::ApproveReplyLost);
     let example = PathBuf::from(std::env::var_os(EXAMPLE).expect("private example"));
     assert_eq!(example.canonicalize().unwrap(), example);
     let daemon = PathBuf::from(std::env::var_os(DAEMON).expect("installed candidate daemon"));
@@ -190,7 +195,7 @@ async fn mounted(case: ManualCase) {
     let ca = root.path().join("fixture-root.der");
     write_private(&ca, ordinary.qualification_ca());
     let mut args = arguments(&daemon, root.path(), &ordinary, &ca);
-    let intent = if case == ManualCase::Approve {
+    let intent = if approve {
         "--manual-approval-recipient"
     } else {
         "--manual-recipient"
@@ -281,7 +286,7 @@ async fn mounted(case: ManualCase) {
         .await
         .expect("installed listener still projects verified Pending");
 
-    if case == ManualCase::Approve {
+    if approve {
         use crate::ipc::peer_approve::{self, Failure};
         let wrong = peer_approve::Selection {
             generation: exact.selection.generation.checked_add(1).unwrap(),
@@ -291,42 +296,49 @@ async fn mounted(case: ManualCase) {
             peer_approve::client_request(&socket, wrong).await,
             Err(Failure::Stale),
         );
-        use nostr::nips::nip19::ToBech32 as _;
-
         let clock = Instant::now();
-        let cli = timeout(
-            STEP,
-            tokio::process::Command::new(daemon.with_file_name("marmish"))
-                .kill_on_drop(true)
-                .arg("--state-dir")
-                .arg(root.path())
-                .arg("--identity")
-                .arg(PROFILE)
-                .arg("--socket")
-                .arg(&socket)
-                .args(["servers", "approve", "--server"])
-                .arg(exact.selection.server.to_bech32().unwrap())
-                .arg("--offer-id")
-                .arg(hex::encode(exact.selection.offer_id))
-                .arg("--revision")
-                .arg(hex::encode(exact.selection.revision))
-                .arg("--generation")
-                .arg(exact.selection.generation.to_string())
+        if case == ManualCase::ApproveReplyLost {
+            let cli = approval_reply_loss::test_lost_reply(
+                &daemon,
+                root.path(),
+                PROFILE,
+                &socket,
+                exact.selection,
+            )
+            .await;
+            assert_eq!(cli.status.code(), Some(1));
+            assert!(cli.stdout.is_empty());
+            assert_eq!(cli.stderr, b"marmish: operation_uncertain\n");
+            println!(
+                "manual_approval_lost_reply_ms {}",
+                clock.elapsed().as_millis()
+            );
+        } else {
+            let cli = timeout(
+                STEP,
+                approval_reply_loss::approval_cli(
+                    &daemon,
+                    root.path(),
+                    PROFILE,
+                    &socket,
+                    exact.selection,
+                )
                 .output(),
-        )
-        .await
-        .expect("installed approval CLI exits")
-        .expect("installed approval CLI starts");
-        assert!(cli.status.success(), "{:?}", cli.status);
-        assert_eq!(cli.stdout, b"recorded local approval\n");
-        assert!(cli.stderr.is_empty());
-        println!("manual_approval_cli_ms {}", clock.elapsed().as_millis());
-        let clock = Instant::now();
-        assert_eq!(
-            peer_approve::client_request(&socket, exact.selection).await,
-            Ok(()),
-        );
-        println!("manual_approval_retry_ms {}", clock.elapsed().as_millis());
+            )
+            .await
+            .expect("installed approval CLI exits")
+            .expect("installed approval CLI starts");
+            assert!(cli.status.success(), "{:?}", cli.status);
+            assert_eq!(cli.stdout, b"recorded local approval\n");
+            assert!(cli.stderr.is_empty());
+            println!("manual_approval_cli_ms {}", clock.elapsed().as_millis());
+            let clock = Instant::now();
+            assert_eq!(
+                peer_approve::client_request(&socket, exact.selection).await,
+                Ok(()),
+            );
+            println!("manual_approval_retry_ms {}", clock.elapsed().as_millis());
+        }
         expect_no_pending_proof(&socket, exact.selection).await;
         assert!(peer.runtime_socket_active(recipient));
         assert_manual_requests(&peer, signer, recipient);
@@ -377,7 +389,7 @@ async fn mounted(case: ManualCase) {
         println!("manual_approval_native_retry_ns {retry}");
     }
     let mut cold_lease = ProfileLease::acquire_ready(root.path(), PROFILE).unwrap();
-    let committed_approval = (case == ManualCase::Approve).then(|| {
+    let committed_approval = approve.then(|| {
         let identity = material(&mut cold_lease, &daemon);
         near_cap_fixture::committed_approval(&cold_lease, &identity, peer.url.as_str(), &exact)
             .expect("exact Activating row, monotonic floors and retained keeper")
@@ -423,21 +435,41 @@ async fn mounted(case: ManualCase) {
     wait_active(&mut reopened, &socket).await;
     let reopened_recipient = recipient + 2;
     manual_recipient_live(&peer, signer, reopened_recipient).await;
-    if case == ManualCase::Approve {
+    if approve {
         use crate::ipc::peer_approve::{self, Failure};
-        let retry = timeout(WAIT, async {
-            loop {
-                match peer_approve::client_request(&socket, exact.selection).await {
-                    Err(Failure::Busy | Failure::Unavailable) => {
-                        tokio::time::sleep(Duration::from_millis(50)).await;
+        if case == ManualCase::ApproveReplyLost {
+            let clock = Instant::now();
+            let cli = approval_reply_loss::retry_approval_cli(
+                &daemon,
+                root.path(),
+                PROFILE,
+                &socket,
+                exact.selection,
+                WAIT,
+            )
+            .await;
+            assert_eq!(cli.status.code(), Some(0));
+            assert_eq!(cli.stdout, b"recorded local approval\n");
+            assert!(cli.stderr.is_empty());
+            println!(
+                "manual_approval_lost_reply_retry_ms {}",
+                clock.elapsed().as_millis()
+            );
+        } else {
+            let retry = timeout(WAIT, async {
+                loop {
+                    match peer_approve::client_request(&socket, exact.selection).await {
+                        Err(Failure::Busy | Failure::Unavailable) => {
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                        result => break result,
                     }
-                    result => break result,
                 }
-            }
-        })
-        .await
-        .expect("reopened candidate replies to the original selection");
-        assert_eq!(retry, Ok(()), "read-only exact approval retry after reopen");
+            })
+            .await
+            .expect("reopened candidate replies to the original selection");
+            assert_eq!(retry, Ok(()), "read-only exact approval retry after reopen");
+        }
         assert_manual_requests(&peer, signer, reopened_recipient);
         assert_eq!(peer.qualification_connections(), reopened_recipient);
         expect_no_pending_proof(&socket, exact.selection).await;
@@ -699,4 +731,10 @@ async fn reopen_manual_schema(example: &Path, daemon: &Path, matching: &str, opp
 #[ignore = "opt-in Manual schema isolation over matching installed Linux AMD64 packages and private WSS"]
 fn installed_registered_manual_rejects_incompatible_schema() {
     run_native(LIMIT, incompatible_manual_schemas);
+}
+
+#[test]
+#[ignore = "opt-in committed local reply loss with matching installed packages and private WSS"]
+fn installed_registered_manual_approval_lost_reply() {
+    run_native(LIMIT, || mounted(ManualCase::ApproveReplyLost));
 }
