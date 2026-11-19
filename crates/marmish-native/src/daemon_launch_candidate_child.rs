@@ -436,8 +436,19 @@ mod tests {
                     sent += written;
                     assert!(sent < 4 * 1024 * 1024);
                 }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return sent,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
                 Err(error) => panic!("could not fill fixture socket: {error}"),
+            }
+        }
+        // Prove the exact one-byte write is also backpressured.
+        loop {
+            match channel.0.write(b"x") {
+                Ok(1) => {
+                    sent += 1;
+                    assert!(sent < 4 * 1024 * 1024);
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return sent,
+                result => panic!("unexpected one-byte fixture write: {result:?}"),
             }
         }
     }
