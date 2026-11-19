@@ -51,15 +51,89 @@ struct ChildControl {
 
 static CONTROL: OnceLock<ChildControl> = OnceLock::new();
 
-fn refuse() -> ! {
-    refuse_at("control")
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StatusState {
+    Activating,
+    Active,
+    Degraded,
+    Unexpected,
 }
 
-fn refuse_at(stage: &str) -> ! {
+fn status_state(response: &Response) -> StatusState {
+    if !response.ok
+        || response.error.is_some()
+        || response.command.is_some()
+        || response.stream.is_some()
+        || response.terminal_stream.is_some()
+    {
+        return StatusState::Unexpected;
+    }
+    match response
+        .result
+        .as_ref()
+        .and_then(|result| result.get("state"))
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("activating") => StatusState::Activating,
+        Some("active") => StatusState::Active,
+        Some("transport_degraded") => StatusState::Degraded,
+        _ => StatusState::Unexpected,
+    }
+}
+
+macro_rules! refusal_categories {
+    ($($name:ident = $category:literal),+ $(,)?) => {
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        enum Refusal { $($name),+ }
+
+        impl Refusal {
+            fn code(self) -> &'static str {
+                match self { $(Self::$name => $category),+ }
+            }
+
+            fn from_bytes(bytes: &[u8]) -> Option<Self> {
+                match std::str::from_utf8(bytes).ok()? {
+                    $($category => Some(Self::$name),)+
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+refusal_categories! {
+    Boot = "control_boot",
+    ReleaseFrame = "release_frame",
+    ReleaseOrder = "release_order",
+    ReleaseReceiver = "release_receiver",
+    ControlLost = "control_lost_after_release",
+    CandidateReturned = "candidate_returned",
+    RepeatedCut = "repeated_cut",
+    DeadlineBeforeImage = "deadline_before_image",
+    ImageDeadline = "image_deadline",
+    ImageUnavailable = "image_unavailable",
+    DeadlineAfterImage = "deadline_after_image",
+    DispatcherReplacement = "dispatcher_replacement",
+    SampleWrite = "sample_write",
+    OwnAdmission = "own_admission",
+    BeforeCommitAdmission = "before_commit_admission",
+    ReadinessFailure = "readiness_failure",
+    StatusDegradedBeforeCut = "status_degraded_before_cut",
+    RepeatedStatus = "repeated_status",
+    BeforeStatusAdmission = "before_status_admission",
+    StatusFatalUnobserved = "status_fatal_unobserved",
+    FinishBasis = "finish_basis",
+    FinishCut = "finish_cut",
+    FinishWrite = "finish_write",
+    FinishRelease = "finish_release",
+}
+
+fn refuse_at(stage: Refusal) -> ! {
+    crate::diagnostics::event("registered_fault_fixture", stage.code());
     if let Some(control) = CONTROL.get()
         && let Ok(mut writer) = control.writer.try_lock()
     {
-        let _ = send(&mut writer, b'X', stage.as_bytes());
+        let _ = send(&mut writer, b'X', stage.code().as_bytes());
     }
     std::process::exit(FAILURE_EXIT);
 }
@@ -152,23 +226,26 @@ fn start_control(mut reader: UnixStream) -> io::Result<Vec<OsString>> {
         .name("marmish-test-fault-control".into())
         .spawn(move || {
             let Ok((b'G', body)) = recv(&mut reader, 0) else {
-                refuse()
+                refuse_at(Refusal::ReleaseFrame)
             };
-            let control = CONTROL.get().unwrap_or_else(|| refuse());
+            let control = CONTROL.get().unwrap_or_else(|| refuse_at(Refusal::Boot));
             // Serialize against exact completion of the physical frame write.
-            let writer = control.writer.lock().unwrap_or_else(|_| refuse());
+            let writer = control
+                .writer
+                .lock()
+                .unwrap_or_else(|_| refuse_at(Refusal::ReleaseOrder));
             if !body.is_empty() || control.finish.load(Ordering::Acquire) != 1 {
                 drop(writer);
-                refuse();
+                refuse_at(Refusal::ReleaseOrder);
             }
             drop(writer);
             if tx.send(()).is_err() {
-                refuse();
+                refuse_at(Refusal::ReleaseReceiver);
             }
             // The test child exits without further control traffic. Extra
             // bytes or controller loss before that race are fixture failure.
             let _ = recv(&mut reader, 0);
-            refuse();
+            refuse_at(Refusal::ControlLost);
         })?;
     Ok(args)
 }
@@ -180,28 +257,28 @@ fn dispatcher_loss_child() {
         std::process::exit(FAILURE_EXIT)
     };
     crate::diagnostics::enable();
-    let args = start_control(control).unwrap_or_else(|_| refuse());
+    let args = start_control(control).unwrap_or_else(|_| refuse_at(Refusal::Boot));
     let _ = crate::registered_qualification::run_fault_fixture(startup, args.into_iter());
     // A qualified child must terminate through the unmodified fatal path.
-    refuse_at("candidate_returned");
+    refuse_at(Refusal::CandidateReturned);
 }
 
 fn displace(control: &ChildControl, deadline: Instant) {
     let one_second = Duration::from_secs(1);
     if control.cut.swap(1, Ordering::AcqRel) != 0 {
-        refuse_at("repeated_cut");
+        refuse_at(Refusal::RepeatedCut);
     }
     if deadline.saturating_duration_since(Instant::now()) < one_second {
-        refuse_at("deadline_before_image");
+        refuse_at(Refusal::DeadlineBeforeImage);
     }
     let image = Image::capture(&control.root).unwrap_or_else(|error| {
         if error.kind() == io::ErrorKind::TimedOut {
-            refuse_at("image_deadline");
+            refuse_at(Refusal::ImageDeadline);
         }
-        refuse_at("image_unavailable");
+        refuse_at(Refusal::ImageUnavailable);
     });
     if deadline.saturating_duration_since(Instant::now()) < one_second {
-        refuse_at("deadline_after_image");
+        refuse_at(Refusal::DeadlineAfterImage);
     }
     // SAFETY: this exact test child owns live registration, the static
     // initialized unix descriptor lasts for the process, and no restore runs.
@@ -214,16 +291,19 @@ fn displace(control: &ChildControl, deadline: Instant) {
             || sql::sqlite3_vfs_register(stock, 1) != sql::SQLITE_OK
             || sql::sqlite3_vfs_find(std::ptr::null()) != stock
         {
-            refuse_at("dispatcher_replacement");
+            refuse_at(Refusal::DispatcherReplacement);
         }
     }
     let mut frame = Vec::with_capacity(1 + image.bytes().len());
     frame.push(control.scenario as u8);
     frame.extend_from_slice(image.bytes());
-    let mut writer = control.writer.lock().unwrap_or_else(|_| refuse());
+    let mut writer = control
+        .writer
+        .lock()
+        .unwrap_or_else(|_| refuse_at(Refusal::SampleWrite));
     if send(&mut writer, b'S', &frame).is_err() {
         drop(writer);
-        refuse();
+        refuse_at(Refusal::SampleWrite);
     }
 }
 
@@ -231,7 +311,7 @@ pub(crate) fn own_admission(admission: &Admission) {
     if let Some(control) = CONTROL.get()
         && (!admission.admit() || control.admission.set(admission.clone()).is_err())
     {
-        refuse_at("own_admission");
+        refuse_at(Refusal::OwnAdmission);
     }
 }
 
@@ -240,7 +320,7 @@ pub(crate) fn before_commit(admission: &Admission, deadline: Instant) {
         && control.scenario == Scenario::Ready
     {
         if !admission.admit() {
-            refuse_at("before_commit_admission");
+            refuse_at(Refusal::BeforeCommitAdmission);
         }
         displace(control, deadline);
     }
@@ -251,7 +331,7 @@ pub(crate) fn readiness_failure(failure: Failure) {
         && control.scenario == Scenario::Ready
     {
         if failure != Failure::Fatal || control.cut.load(Ordering::Acquire) != 1 {
-            refuse_at("readiness_failure");
+            refuse_at(Refusal::ReadinessFailure);
         }
         control.ready_failure.store(1, Ordering::Release);
     }
@@ -264,24 +344,23 @@ pub(crate) async fn before_status_write(
 ) {
     let Some(control) = CONTROL.get() else { return };
     let Some(fatal) = fatal else { return };
-    if control.scenario != Scenario::Status
-        || !response.ok
-        || response
-            .result
-            .as_ref()
-            .and_then(|result| result.get("state"))
-            .and_then(serde_json::Value::as_str)
-            != Some("active")
-    {
+    if control.scenario != Scenario::Status {
         return;
+    }
+    match status_state(response) {
+        StatusState::Active => {}
+        StatusState::Degraded if control.active_status.load(Ordering::Acquire) == 1 => {
+            refuse_at(Refusal::StatusDegradedBeforeCut);
+        }
+        _ => return,
     }
     match control.active_status.fetch_add(1, Ordering::AcqRel) {
         0 => return,
         1 => {}
-        _ => refuse_at("repeated_status"),
+        _ => refuse_at(Refusal::RepeatedStatus),
     }
     if fatal.is_tripped() || !control.admission.get().is_some_and(Admission::admit) {
-        refuse_at("before_status_admission");
+        refuse_at(Refusal::BeforeStatusAdmission);
     }
     displace(control, deadline);
     let observed_by = deadline - Duration::from_millis(250);
@@ -291,7 +370,7 @@ pub(crate) async fn before_status_write(
         .await
         .is_err()
     {
-        refuse();
+        refuse_at(Refusal::StatusFatalUnobserved);
     }
 }
 
@@ -300,10 +379,10 @@ pub(crate) fn before_fatal_exit(report: &OwnerReport, listener_joined: bool, fat
     let basis = match control.scenario {
         Scenario::Ready if control.ready_failure.load(Ordering::Acquire) == 1 => 1,
         Scenario::Status if control.active_status.load(Ordering::Acquire) == 2 => 2,
-        _ => refuse(),
+        _ => refuse_at(Refusal::FinishBasis),
     };
     if control.cut.load(Ordering::Acquire) != 1 {
-        refuse();
+        refuse_at(Refusal::FinishCut);
     }
     let mut body = vec![
         basis,
@@ -312,16 +391,22 @@ pub(crate) fn before_fatal_exit(report: &OwnerReport, listener_joined: bool, fat
         u8::from(report.graceful_complete),
     ];
     body.extend_from_slice(&report.fixture_physical());
-    let mut writer = control.writer.lock().unwrap_or_else(|_| refuse());
+    let mut writer = control
+        .writer
+        .lock()
+        .unwrap_or_else(|_| refuse_at(Refusal::FinishWrite));
     if control.finish.load(Ordering::Acquire) != 0 || send(&mut writer, b'P', &body).is_err() {
         drop(writer);
-        refuse();
+        refuse_at(Refusal::FinishWrite);
     }
     control.finish.store(1, Ordering::Release);
     drop(writer);
-    let release = control.release.lock().unwrap_or_else(|_| refuse());
+    let release = control
+        .release
+        .lock()
+        .unwrap_or_else(|_| refuse_at(Refusal::FinishRelease));
     if release.recv_timeout(FINISH).is_err() {
-        refuse();
+        refuse_at(Refusal::FinishRelease);
     }
 }
 

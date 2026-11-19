@@ -499,6 +499,16 @@ pub(crate) async fn send_fault_fixture_status(stream: &mut UnixStream) -> Result
     write_frame(stream, &Request::Status {}).await
 }
 
+#[cfg(all(
+    test,
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub(crate) async fn read_fault_fixture_status(stream: &mut UnixStream) -> Result<Response> {
+    read_frame(stream).await
+}
+
 pub(crate) async fn request(path: &Path, request: &Request) -> Result<Response> {
     exchange(path, request, Duration::from_secs(180)).await
 }
