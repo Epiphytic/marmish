@@ -26,7 +26,16 @@ mod prepared_consent;
 #[path = "peer_control_wire_seal.rs"]
 mod seal;
 #[cfg(test)]
-pub(crate) use prepared_consent::{ClientCarrier, IncomingDelivery, VerifiedDeliveryPackage};
+pub(crate) use prepared_consent::VerifiedDeliveryPackage;
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
+pub(crate) use prepared_consent::{ClientCarrier, IncomingDelivery};
 
 #[cfg(any(
     test,

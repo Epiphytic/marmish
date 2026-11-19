@@ -178,7 +178,14 @@ pub(super) fn verify(
     verify_rows(conn, account, origins)
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 pub(super) fn verify_for_epoch(
     conn: &rusqlite::Transaction<'_>,
     account: [u8; 32],
@@ -186,6 +193,7 @@ pub(super) fn verify_for_epoch(
     epoch: &Epoch,
 ) -> std::result::Result<(), CursorError> {
     match epoch {
+        #[cfg(test)]
         Epoch::Prepared => verify(conn, account, origins),
         Epoch::Custody(epoch) => epoch.verify(conn, account, origins),
     }

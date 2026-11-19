@@ -281,6 +281,16 @@ impl Checkpoint {
         binding: Binding,
         wall: u64,
     ) -> Result<(Transaction<'_>, u64)> {
+        self.stage_transaction_with_expiry(source, binding, wall, true)
+    }
+
+    pub(super) fn stage_transaction_with_expiry(
+        &mut self,
+        source: &Source,
+        binding: Binding,
+        wall: u64,
+        advance_on_expiry: bool,
+    ) -> Result<(Transaction<'_>, u64)> {
         if !self.provisional_schema || binding.origin != self.origin(source)? {
             return Err(Error::Source);
         }
@@ -292,7 +302,7 @@ impl Checkpoint {
             }
         }
         let (tx, origin, offer_expires) =
-            self.live_provisioning_offer(source, binding.key, wall)?;
+            self.live_provisioning_offer(source, binding.key, wall, advance_on_expiry)?;
         if generation(&tx, binding.key, origin)? != Some(binding.generation)
             || has_outbox(&tx, binding.key, origin)?
         {

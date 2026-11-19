@@ -2,9 +2,7 @@
 
 use super::*;
 use crate::peer_invitation::{
-    Error as Local, Selector,
-    prepared_consent::installed_consent::Fixture,
-    store::consent_checkpoint::{self, provisioning::prepared_consent::Attempt},
+    Error as Local, Selector, prepared_consent::installed_consent::Fixture,
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -16,34 +14,32 @@ pub(in crate::peer_invitation) enum PublicationOutcome {
     Settled,
 }
 
-fn operation(attempt: &Attempt) -> Operation {
-    Operation {
-        id: attempt.carrier(),
-        generation: attempt.sequence(),
-    }
-}
-
-impl CheckedAck<'_> {
-    pub(in crate::peer_invitation) fn exact_attempt(
-        &self,
-        attempt: &Attempt,
-        origin: &str,
-    ) -> consent_checkpoint::Result<u64> {
-        if self.account != attempt.account()
-            || self.origin != origin
-            || self.carrier != attempt.carrier()
-            || self.operation != operation(attempt)
-        {
-            return Err(consent_checkpoint::Error::Source);
-        }
-        if self.wall >= attempt.deadline() {
-            return Err(consent_checkpoint::Error::Expired);
-        }
-        Ok(self.wall)
-    }
-}
-
 impl PeerRecipientPort {
+    pub(in crate::peer_invitation) async fn fixture_publish_managed_attempt(
+        &mut self,
+        attempt: &Attempt,
+        deadline: Instant,
+        before_flush: impl FnOnce(u64) -> std::result::Result<(), Local>,
+    ) -> ControlOutcome {
+        let operation = operation(attempt);
+        let mut current = |candidate, _| candidate == operation;
+        let permit = ControlSendPermit {
+            scope: self.0.scope.clone(),
+            author: attempt.account(),
+            remote: attempt.founder(),
+            carrier: attempt.carrier(),
+            digest: sealed_digest(attempt.bytes()),
+            operation,
+            deadline: attempt.deadline(),
+            bytes: attempt.bytes(),
+            current: &mut current,
+        };
+        self.publish_control_with(permit, deadline, |wall| {
+            before_flush(wall).map_err(|_| Failure::Binding)
+        })
+        .await
+    }
+
     pub(in crate::peer_invitation) async fn publish_prepared_consent(
         &mut self,
         fixture: &mut Fixture<'_>,

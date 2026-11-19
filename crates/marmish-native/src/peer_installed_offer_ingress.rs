@@ -2,8 +2,8 @@
 
 use super::super::super::super::installed;
 use super::*;
-use wire::ClientCarrier;
 use crate::peer_invitation::socket::owner::recipient::CheckedCarrier;
+use wire::ClientCarrier;
 
 pub(in crate::peer_invitation) enum OfferIngress {
     Recorded(Disposition),
@@ -20,10 +20,30 @@ pub(in crate::peer_invitation) enum InstalledCarrier {
 }
 
 pub(in crate::peer_invitation) struct OfferInput<'a> {
-    pub(in crate::peer_invitation) account: PublicKey,
-    pub(in crate::peer_invitation) origin: &'a str,
-    pub(in crate::peer_invitation) wall: u64,
-    pub(in crate::peer_invitation) record: RawRecord<'a>,
+    pub(super) account: PublicKey,
+    pub(super) origin: &'a str,
+    pub(super) wall: u64,
+    pub(super) record: RawRecord<'a>,
+}
+
+#[cfg(test)]
+impl<'a> OfferInput<'a> {
+    pub(in crate::peer_invitation) fn fixture(
+        account: PublicKey,
+        origin: &'a str,
+        wall: u64,
+        record: RawRecord<'a>,
+    ) -> Self {
+        Self {
+            account,
+            origin,
+            wall,
+            record,
+        }
+    }
+    pub(in crate::peer_invitation) fn corrupt_id_fixture(&mut self) {
+        self.record.id[0] ^= 1;
+    }
 }
 
 impl<'a> From<&CheckedCarrier<'a>> for OfferInput<'a> {
@@ -43,10 +63,19 @@ impl Checkpoint {
         source: &Source,
         carrier: CheckedCarrier<'_>,
     ) -> Result<OfferIngress> {
-        self.admit_offer_fixture(source, (&carrier).into())
+        self.admit_checked_offer(source, (&carrier).into())
     }
 
+    #[cfg(test)]
     pub(in crate::peer_invitation) fn admit_offer_fixture(
+        &mut self,
+        source: &Source,
+        input: OfferInput<'_>,
+    ) -> Result<OfferIngress> {
+        self.admit_checked_offer(source, input)
+    }
+
+    fn admit_checked_offer(
         &mut self,
         source: &Source,
         input: OfferInput<'_>,
@@ -149,6 +178,7 @@ impl Checkpoint {
     }
 }
 
+#[cfg(test)]
 pub(in crate::peer_invitation) mod fault_fixture {
     use super::*;
 

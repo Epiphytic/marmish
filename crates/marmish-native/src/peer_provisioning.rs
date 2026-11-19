@@ -337,7 +337,7 @@ impl Checkpoint {
         if retirement_epoch {
             retirement::verify_epoch(&self.cursor.conn)?;
         }
-        let (tx, origin, _) = self.live_provisioning_offer(source, key, wall)?;
+        let (tx, origin, _) = self.live_provisioning_offer(source, key, wall, true)?;
         if has_outbox(&tx, key, origin)? {
             return Err(CursorError::Conflict.into());
         }
@@ -362,6 +362,7 @@ impl Checkpoint {
         source: &Source,
         key: Selector,
         wall: u64,
+        advance_on_expiry: bool,
     ) -> Result<(Transaction<'_>, Origin, u64)> {
         let origin = self.origin(source)?;
         #[cfg(any(
@@ -433,8 +434,10 @@ impl Checkpoint {
         }
         let row = Invitation::load(&tx, key, origin)?;
         if wall >= row.expires {
-            rows::advance_wall(&tx, wall)?;
-            tx.commit()?;
+            if advance_on_expiry {
+                rows::advance_wall(&tx, wall)?;
+                tx.commit()?;
+            }
             return Err(Error::Expired);
         }
         Self::check_signed_offer(&self.codec, &self.signer, route, &row, wall)?;

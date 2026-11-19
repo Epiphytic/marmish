@@ -109,16 +109,16 @@ fn synthetic<'a>(
     wall: u64,
 ) -> OfferInput<'a> {
     let event: Event = serde_json::from_slice(prepared.frame()).unwrap();
-    OfferInput {
+    OfferInput::fixture(
         account,
         origin,
         wall,
-        record: crate::peer_invitation::RawRecord {
+        crate::peer_invitation::RawRecord {
             id: event.id.to_bytes(),
             stamp: event.created_at.as_secs(),
             bytes: prepared.frame(),
         },
-    }
+    )
 }
 
 fn temp_cursor() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -255,7 +255,7 @@ fn peer_installed_custody_offer_refusals_leave_state_unchanged() {
         Ok(OfferIngress::NotOffer)
     ));
     let mut mismatched = synthetic(&frame, recipient.public_key(), URL, wall);
-    mismatched.record.id[0] ^= 1;
+    mismatched.corrupt_id_fixture();
     assert!(matches!(
         checkpoint.admit_offer_fixture(&source, mismatched),
         Err(Error::Index)

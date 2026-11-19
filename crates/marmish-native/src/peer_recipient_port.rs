@@ -60,9 +60,15 @@ enum CarrierCoordinates {
     },
 }
 
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
 pub(in crate::peer_invitation) struct CheckedCarrier<'a> {
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
     scope: &'a Arc<Scope>,
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
     location: CarrierLocation<'a>,
     account: PublicKey,
     origin: &'a str,
@@ -70,8 +76,13 @@ pub(in crate::peer_invitation) struct CheckedCarrier<'a> {
     record: crate::peer_invitation::RawRecord<'a>,
 }
 
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
 impl<'a> CheckedCarrier<'a> {
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
     pub(in crate::peer_invitation) fn witness(&self) -> CarrierWitness {
         let location = match self.location {
             CarrierLocation::Live(subscription) => CarrierCoordinates::Live(subscription.into()),
@@ -94,6 +105,7 @@ impl<'a> CheckedCarrier<'a> {
         }
     }
 
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
     pub(in crate::peer_invitation) fn matches(&self, witness: &CarrierWitness) -> bool {
         let location = match &witness.location {
             CarrierCoordinates::Live(subscription) => CarrierLocation::Live(subscription),
@@ -143,6 +155,52 @@ pub(in crate::peer_invitation) struct CheckedAck<'a> {
     wall: u64,
     carrier: [u8; 32],
     operation: Operation,
+}
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+use crate::peer_invitation::store::consent_checkpoint::{
+    self, provisioning::prepared_consent::Attempt,
+};
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+fn operation(attempt: &Attempt) -> Operation {
+    Operation {
+        id: attempt.carrier(),
+        generation: attempt.sequence(),
+    }
+}
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+impl CheckedAck<'_> {
+    pub(in crate::peer_invitation) fn exact_attempt(
+        &self,
+        attempt: &Attempt,
+        origin: &str,
+    ) -> consent_checkpoint::Result<u64> {
+        if self.account != attempt.account()
+            || self.origin != origin
+            || self.carrier != attempt.carrier()
+            || self.operation != operation(attempt)
+        {
+            return Err(consent_checkpoint::Error::Source);
+        }
+        if self.wall >= attempt.deadline() {
+            return Err(consent_checkpoint::Error::Expired);
+        }
+        Ok(self.wall)
+    }
 }
 
 pub(in crate::peer_invitation) struct Acknowledgement {
@@ -246,7 +304,11 @@ impl PeerRecipientPort {
         }))
     }
 
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     pub(in crate::peer_invitation) fn use_page_carrier<T>(
         &mut self,
         page: &Page,
@@ -260,7 +322,9 @@ impl PeerRecipientPort {
                 return Err(Failure::Binding);
             }
             Ok(use_checked(CheckedCarrier {
+                #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
                 scope: &page.scope,
+                #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
                 location: CarrierLocation::History {
                     request: checked.request,
                     bounds: checked.bounds,
@@ -274,7 +338,11 @@ impl PeerRecipientPort {
         })?
     }
 
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     pub(in crate::peer_invitation) fn use_live_carrier<T>(
         &mut self,
         live: &LiveRecord,
@@ -282,7 +350,9 @@ impl PeerRecipientPort {
     ) -> Result<T> {
         self.use_live(live, |checked| {
             use_checked(CheckedCarrier {
+                #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
                 scope: &live.scope,
+                #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
                 location: CarrierLocation::Live(&live.subscription),
                 account: checked.account,
                 origin: checked.origin,

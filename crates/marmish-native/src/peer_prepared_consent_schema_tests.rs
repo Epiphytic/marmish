@@ -218,6 +218,7 @@ impl Checkpoint {
             .inspect_prepared_consent(source, reservation, wall)
             .unwrap();
         let signed = Unsaved {
+            offer_carrier: [0; 32],
             binding: prepared.binding,
             witness: prepared.witness,
             artifact: prepared.artifact,

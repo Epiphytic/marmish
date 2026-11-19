@@ -42,15 +42,40 @@ use super::super::super::super::read_seconds;
         target_arch = "x86_64"
     )
 ))]
+use super::super::super::wire::IncomingDelivery;
+#[cfg(test)]
+use super::super::super::wire::VerifiedDeliveryPackage;
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 use super::super::super::wire::{Delivery, PackageBinding};
 #[cfg(test)]
-use super::super::super::wire::{IncomingDelivery, VerifiedDeliveryPackage};
-#[cfg(test)]
 use super::super::super::{Disposition, Local, RawRecord, Status, TrustedOutcome};
+#[cfg(all(
+    not(test),
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+use super::super::super::{Disposition, RawRecord, Status, TrustedOutcome};
 use super::*;
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 native_offer_ingress_fixture!();
+
+#[cfg(all(
+    not(test),
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "peer_installed_offer_ingress.rs"]
+pub(in crate::peer_invitation) mod offer_ingress;
 
 #[path = "peer_pending_custody_schema.rs"]
 mod custody_schema;
@@ -754,6 +779,34 @@ impl Checkpoint {
         wall: u64,
         read: impl FnOnce(&Transaction<'_>, &Context) -> Result<T>,
     ) -> Result<T> {
+        let cx = self.installed_consent_context(source, account, url)?;
+        let tx = self.cursor.conn.transaction()?;
+        cx.verify(&tx, wall)?;
+        let floor = tx.query_row(
+            "SELECT wall FROM peer_cursor_origin WHERE origin=?1",
+            [cx.origin],
+            |row| read_seconds(row, 0),
+        )?;
+        if wall < floor {
+            return Err(CursorError::ClockRegressed.into());
+        }
+        read(&tx, &cx)
+    }
+
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
+    fn installed_consent_context(
+        &self,
+        source: &Source,
+        account: PublicKey,
+        url: &str,
+    ) -> Result<Context> {
         if !self.is_installed_custody() {
             return Err(Error::Layout);
         }
@@ -767,17 +820,59 @@ impl Checkpoint {
         {
             return Err(Error::Source);
         }
-        let tx = self.cursor.conn.transaction()?;
-        cx.verify(&tx, wall)?;
-        let floor = tx.query_row(
-            "SELECT wall FROM peer_cursor_origin WHERE origin=?1",
-            [cx.origin],
-            |row| read_seconds(row, 0),
-        )?;
-        if wall < floor {
-            return Err(CursorError::ClockRegressed.into());
+        Ok(cx)
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(super) fn change_installed_consent<T>(
+        &mut self,
+        source: &Source,
+        prior: &Queued,
+        wall: u64,
+        change: impl FnOnce(&Transaction<'_>, &Queued) -> Result<Option<T>>,
+        before_commit: impl FnOnce() -> Result<()>,
+    ) -> Result<Option<T>> {
+        let prepared = &prior.prepared;
+        let binding = prepared.binding;
+        if !self.policy.permits(binding.key.server) {
+            return Err(Error::Policy);
         }
-        read(&tx, &cx)
+        let url = self.route(binding.origin)?.urls[0].clone();
+        let account = prepared.offer.flight().recipient;
+        let cx = self.installed_consent_context(source, account, &url)?;
+        if cx.origin != binding.origin
+            || cx.account != prepared.account
+            || binding.generation.known
+            || prepared.offer.version() != ControlVersion::V2
+        {
+            return Err(CursorError::Binding.into());
+        }
+        let tx = self.cursor.with_wall(cx.origin, wall)?;
+        cx.verify(&tx, wall)?;
+        if owns(&tx, binding.key, cx.origin)? {
+            return Err(Error::Custodied);
+        }
+        let current = cx
+            .exact_consent(&tx, binding.key)?
+            .ok_or(CursorError::Stale)?;
+        if !current.matches_exact(prior) {
+            return Err(CursorError::Stale.into());
+        }
+        if wall >= current.deadline() {
+            return Err(Error::Expired);
+        }
+        let Some(result) = change(&tx, &current)? else {
+            return Ok(None);
+        };
+        cx.verify(&tx, wall)?;
+        rows::advance_wall(&tx, wall)?;
+        before_commit()?;
+        tx.commit()?;
+        Ok(Some(result))
     }
 
     #[cfg(all(
@@ -886,12 +981,8 @@ impl Checkpoint {
         let current = self
             .read_managed_queued(source, account, url, prior.target.binding.key, wall)?
             .ok_or(CursorError::Stale)?;
-        if current.target.stage() != prior.target.stage()
-            || current.target.artifact != prior.target.artifact
+        if !current.queued.matches_exact(&prior.queued)
             || current.target.deadline != prior.target.deadline
-            || current.queued.prepared.offer.flight().carrier_id
-                != prior.queued.prepared.offer.flight().carrier_id
-            || current.queued.row != prior.queued.row
         {
             return Err(CursorError::Stale.into());
         }

@@ -18,7 +18,14 @@ pub(super) struct Outbox {
 }
 
 impl Outbox {
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     pub(super) fn new(prepared: &Candidate, transcript: Transcript, frame: &[u8]) -> Self {
         debug_assert_eq!(
             prepared.account,
@@ -34,7 +41,14 @@ impl Outbox {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     pub(super) fn insert(&self, tx: &Transaction<'_>, prepared: &Candidate) -> Result<()> {
         let binding = prepared.binding;
         let native = prepared.artifact;
@@ -140,13 +154,27 @@ pub(super) fn exists(tx: &Transaction<'_>, key: Selector, origin: Origin) -> Res
 
 pub(super) const RETRY_SECONDS: u64 = 60;
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 pub(super) enum Advance {
     Reserve { attempt: u64, retry_at: u64 },
     Acknowledge { wall: u64 },
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 pub(super) fn advance(
     tx: &Transaction<'_>,
     prepared: &Candidate,

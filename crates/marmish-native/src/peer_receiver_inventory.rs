@@ -69,6 +69,8 @@ struct CleanExtent {
 #[path = "peer_receiver_clean_charge.rs"]
 mod clean;
 pub(crate) use clean::CleanPermit;
+#[path = "peer_managed_consent_turn.rs"]
+mod managed_consent;
 #[path = "peer_candidate_package_owner.rs"]
 pub(super) mod package;
 #[path = "peer_receiver_v2_pending.rs"]
