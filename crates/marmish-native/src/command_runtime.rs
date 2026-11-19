@@ -1,11 +1,71 @@
 //! Command lifecycle on the existing serialized identity owner.
 use super::*;
 use crate::command_config::CommandConfig;
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+use crate::command_engine::Admission;
 use crate::command_engine::{CommandEngine, EngineSettings};
 use crate::command_service::CommandService;
 use crate::command_wire::{self as wire, Account, Id, Request, RequestOp};
-use crate::journal::{CommandRoom, InvocationRecord};
+use crate::journal::{CommandRoom, InvocationRecord, RecoveryRecord};
 use std::path::PathBuf;
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "command_startup_tests.rs"]
+mod command_startup_tests;
+
+enum CommandStartup {
+    Stock,
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    Candidate(Admission),
+}
+
+impl CommandStartup {
+    fn check(&self) -> Result<()> {
+        match self {
+            Self::Stock => Ok(()),
+            #[cfg(all(
+                any(test, marmish_peer_receiver_candidate),
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            Self::Candidate(admission) => admission
+                .admit()
+                .then_some(())
+                .ok_or(Error::Storage("candidate_dispatcher_lost")),
+        }
+    }
+
+    fn start(
+        &self,
+        settings: EngineSettings,
+        recovery: Vec<RecoveryRecord>,
+    ) -> Result<CommandEngine> {
+        self.check()?;
+        match self {
+            Self::Stock => CommandEngine::start(settings, recovery),
+            #[cfg(all(
+                any(test, marmish_peer_receiver_candidate),
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            Self::Candidate(admission) => {
+                CommandEngine::start_candidate(settings, recovery, admission.clone())
+            }
+        }
+    }
+}
+
+fn resolve_command_helper() -> Result<PathBuf> {
+    Ok(crate::native_layout::resolve(&std::env::current_exe()?)?.helper)
+}
 
 type PublicationProofs = BTreeMap<(Vec<u8>, Vec<u8>), crate::journal::PublicationKey>;
 
@@ -68,6 +128,50 @@ impl MdkOwner {
         config: CommandConfig,
         worker: PathBuf,
     ) -> Result<()> {
+        self.enable_commands_inner(
+            profile,
+            material,
+            config,
+            worker,
+            CommandStartup::Stock,
+            resolve_command_helper,
+        )
+    }
+
+    /// The caller retains this owner for disposition on every startup error.
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    #[allow(dead_code, reason = "registered daemon Command startup is unmounted")]
+    pub(crate) fn enable_candidate_commands(
+        &mut self,
+        profile: &ProfileLease,
+        material: &IdentityMaterial,
+        config: CommandConfig,
+        worker: PathBuf,
+        admission: Admission,
+    ) -> Result<()> {
+        self.enable_commands_inner(
+            profile,
+            material,
+            config,
+            worker,
+            CommandStartup::Candidate(admission),
+            resolve_command_helper,
+        )
+    }
+
+    fn enable_commands_inner(
+        &mut self,
+        profile: &ProfileLease,
+        material: &IdentityMaterial,
+        config: CommandConfig,
+        worker: PathBuf,
+        startup: CommandStartup,
+        resolve_helper: impl FnOnce() -> Result<PathBuf>,
+    ) -> Result<()> {
         if self.commands.is_some()
             || config.relay_policy().urls() != self.connector.policy().urls()
             || config.relay_policy().mode() != self.connector.policy().mode()
@@ -80,6 +184,7 @@ impl MdkOwner {
         {
             return Err(Error::Identity("command_runtime_binding"));
         }
+        startup.check()?;
         let historical = self.journal.command_historical_principals()?;
         let policy = config.engine_policy(
             profile.root().join("commands"),
@@ -90,29 +195,31 @@ impl MdkOwner {
         let inventory_policy = policy
             .as_ref()
             .and_then(|policy| policy.command_policy.clone());
+        startup.check()?;
         self.journal.command_configure(config.limits())?;
         let material = crate::command_identity::derive(
             profile.profile_id(),
             account,
             material.sqlcipher_root(),
         )?;
+        startup.check()?;
         self.journal.command_bind_engine(
             crate::command_identity::DERIVATION_VERSION,
             &material.root_id,
             &material.key_id,
         )?;
         let engine = match policy {
-            Some(policy) => Some(CommandEngine::start(
-                EngineSettings {
+            Some(policy) => {
+                let settings = EngineSettings {
                     policy,
                     binding: material.binding,
                     master: material.master,
-                    canonical_native_image: Some(
-                        crate::native_layout::resolve(&std::env::current_exe()?)?.helper,
-                    ),
-                },
-                self.journal.command_recovery()?,
-            )?),
+                    canonical_native_image: Some(resolve_helper()?),
+                };
+                startup.check()?;
+                let recovery = self.journal.command_recovery()?;
+                Some(startup.start(settings, recovery)?)
+            }
             None => None,
         };
         self.commands = Some(CommandService::new_with_policy(
@@ -120,7 +227,8 @@ impl MdkOwner {
             engine,
             inventory_policy,
         ));
-        Ok(())
+        // Only the owner may extract and physically join a successfully started worker.
+        startup.check()
     }
 
     pub(crate) fn reconcile_client_inventory(
