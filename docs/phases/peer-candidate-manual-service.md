@@ -8,12 +8,26 @@ Pending and show that row through the existing same-UID read socket. Keep the
 existing candidate discriminator, qualified direct WSS, Ready-at-acquire Manual
 Client/Both and registered quota. Maintain stock Command and Terminal behavior.
 Manual approval, Auto, Active, founder, reconnect, public relay and installer
-enablement remain out of scope. This increment leaves Healthy Empty closed.
+enablement remain out of scope. This work leaves Healthy Empty closed.
+
+Land guarded ingress and one exact recovery page progression first, unmounted.
+The durable selector and the daemon/Producer mount come afterward. The first
+slice uses existing same-owner managed Offer/Delivery and exact cursor/port
+APIs with the narrow additions below. It needs neither the existing native
+expiry follow-up nor a new startup entry point. Compose private installed
+qualification only after the extra work gates pass.
 
 ## Owner, deadlines and loss
 
 - Replace the private passive probe branch with a Manual service only in the
   qualification composition. Keep the passive proof callable independently.
+  Add one private `QualificationIntent::ManualRecipient` alongside
+  `PassiveRecipient` in the existing qualification example and argument
+  parser, with the same registered-only refusal before any stock fallback.
+  No installed CLI flag or environment selector. `Recipient::start` can reuse
+  `ipc::peer_read_listener::Offer::new` to create the single view pair, and
+  `CandidateListener::registered` carries that Offer to the existing listener.
+  `Offer::register` records the listener edge only after kernel path checks.
   `peer_installed_recipient::run/attach/hold_port` already owns the thread,
   material, lease, registered quota/route, recovered cursor/Source, and paired
   raw drain. Reuse those instances. Use the existing listener and its exact
@@ -64,16 +78,21 @@ use_live_carrier/use_current_native`. Port opening installs the distinct live
 subscription before history. `Owner::page` already predrains and buffers
 interleaved live on the same authenticated connection, requires exact EOSE
 and closes the history subscription. `read_ack` also buffers live. Add a
-guarded, nonblocking take of one buffered `LiveRecord` next to `wait_live`
-if required. It still uses private `Owner::pop_live`, accounts bytes, and
-checks current socket scope. Do not return bytes from an arbitrary owner.
-Only one operation polls the port at a time. Give queued live a turn before
-starting a new history/ACK operation that cannot fit the remaining reserve.
-The existing raw backlog/frame limits and checked failures stay authoritative.
+checked nonblocking `Owner::take_buffered_live` through a private port
+accessor. Check current scope and use `Owner::pop_live` to account bytes.
+Before History or a managed Consent send, process at most the four
+already-buffered records through the same live classifier and guard. This
+drain overrides the rotor's standalone one-live quota. No raw socket poll
+occurs in the drain, so nothing refills it or starves the selected turn.
+A burst above the four-record/byte reserve during one indivisible page or ACK
+still returns typed Capacity and retires the socket. Durable facts survive.
 
 1. Start `installed_delivery_scan(..., Recovery)` using this owner's checked
    port/source and current wall. Resume an existing durable revision with its
-   original bounds and anchor. Never reset bounds on retry and never copy a
+   original bounds and anchor. `CursorStore::scan(Recovery)` can return only
+   `Some(active_or_new)` or an error under this schema. Its `Ok(None)` cadence
+   branch applies only to Periodic, so treat an absent Recovery cursor as
+   a local invariant failure. Never reset bounds on retry and never copy a
    prior port's in-memory completion. The first service increment drives this
    one finite recovery scan, then continues live, durable and saved work.
    A future periodic recovery can use `ScanStart::Periodic` without changing
@@ -88,19 +107,14 @@ The existing raw backlog/frame limits and checked failures stay authoritative.
    attestation, decoupled bytes, or independent keyed cursor is accepted.
    Recheck physical scope across these borrows and after each returned result.
    Reuse the existing lexical conflict and same-event replay disposition.
-3. Remount a guarded owner wrapper around `installed_delivery_scan`,
+3. Add guarded owner wrappers around `installed_delivery_scan`,
    `observe_installed_delivery`, and `commit_installed_delivery_page`.
-   Use the existing `commit_page_with_fence` and custody/applied-wall checks,
-   adding the current actor/route predicate inside mutating transactions just
-   before commit, including direct invalid/Offer receipt and saved retry
-   paths. Existing test adapters may use their existing fences. An outer
-   actor check does not replace a commit check. Closures use the exact
-   current in-memory stop/Ready/physical witness and independent forwarding
-   verification, plus the existing SQL source/row/wall checks, without
-   touching the socket or borrowing the owner recursively. Classification
-   and any other SQL helpers that write must thread the same guard to their
-   commit, or the runner must refuse that path. Audit each call and keep
-   the wrapper private instead of creating a general transactional escape.
+   Keep the inner custody/applied-wall checks and add a final synchronous
+   guard (see below). Preserve source-compatible fixture entry points.
+   Guard every legitimate Offer, invalid and exact Held receipt while
+   preserving classification. True lexical conflicts still stop or roll back.
+   The first slice ends with scan, guarded history/live classification and
+   measured fresh-Delivery completion on one recovered owner and port.
 4. Each carrier must yield one exact `Disposition.receipt`, including a
    durable Deferred receipt where the current classifier permits it. Commit
    the page once through `use_page`, under exact cursor revision, bounds,
@@ -108,7 +122,8 @@ The existing raw backlog/frame limits and checked failures stay authoritative.
    stored successor with stable origin/anchor and incremented revision.
    `Ok(None)` after the last guarded commit is checked completion of this
    recovery run. Keep a private completion marker bound to the port,
-   cursor/source generation and completed coordinates. Earlier per-record
+   cursor/source generation and completed coordinates. Prohibit a second
+   Recovery scan in this incarnation. Earlier per-record
    commits survive a failed page commit. Cold replay uses their existing
    idempotent dispositions and exact cursor. A partial page, lost EOSE,
    conflicting receipt, overflow, stale source or timeout neither commits
@@ -122,6 +137,34 @@ The existing raw backlog/frame limits and checked failures stay authoritative.
    Pending after the recovery scan finishes; individual received, deferred
    or absent rows provide no view on their own.
 
+### Commit and effect boundaries
+
+Use one cheap prebound synchronous predicate over Ready, the shared stop,
+independent forwarding verification and the current physical route token and
+clock. It cannot reborrow the port, use SQL or poll the socket. Keep each
+existing source, wall and transaction custody check. The predicate checks
+the current route and the latched monotonic ceiling immediately before a
+mutating commit or native effect. A cut after admission does not undo its
+effects. The first five rows are the ingress slice. A read transaction such
+as `read_installed_consent` only checks its wall floor and needs no commit hook.
+
+| Turn | Checked boundary |
+| --- | --- |
+| `installed_delivery_scan` | Add a final hook to `CursorStore::scan` after each `with_wall` path (resumed or new Recovery and the existing Periodic cadence branch where used). Refusal rolls back floor and revision. |
+| Offer via `record_installed_offer` | Use `commit_trusted_exact_guarded` after marker/admission/sweep and receipt writes, including cooldown skip and duplicate. Keep custody and parent checks. |
+| Invalid and Held replay | Thread `commit_invalid_delivery_guarded` through malformed, expired, terminal-ancestry and inexact or aged Held cases. Use `commit_trusted_exact_guarded` for exact current Held replay. Final hooks follow lexical/ancestry checks and receipt writes. |
+| Measured fresh Delivery | Supplement `Native::check_at` at measurement admission and in the final callbacks for `commit_invalid_queued_delivery`, `defer_installed_delivery` and `commit_custody_held_input`. Preserve reclassification and exact saved bytes. |
+| `commit_installed_delivery_page` | Keep the `commit_page_with_fence` context check and floor update. Add a final hook after normal advance/completion and after quarantine UPDATE, immediately before each commit. |
+| Provisioning and package | Guard `reserve_provisioning`, `recover_provisioning` (including floor writes), `start_stage` and `record_prepared` before commit. Keep the independent managed file/package admission windows before each native effect. |
+| Managed Consent | Reuse `queue_managed_consent_with`, checked reserve and before-flush, ACK CAS and `wake_installed_delivery_fenced` final hooks with the owner predicate. Retain existing exposure accounting. |
+| Saved Delivery | Its readiness probe must be read-only. `due_installed_delivery` advances floors via `due_with_fence`; add a final hook there and to the no-ACK `retry_again_with_fence` update. Reuse `finish_retry_guarded` or guarded Held/invalid final hooks. Expired rows only use separate reviewed native cleanup. |
+| Held and JoinStarted | Compose the predicate with `WelcomeFence` before native effects and in `start_installed_join` and `commit_installed_pending` immediately before their guarded transition. Existing Pending replay is a checked read. |
+
+A contract-invalid checked page can persist its existing 60-second quarantine.
+That timer does not clear the guard, including after restart. This increment
+has no requalification call and does not open a replacement port. Missing
+EOSE or current-owner refusal cannot supply completion.
+
 ## Deterministic work selection
 
 Use a pure rotor over `Live, History, Durable, SavedDelivery, Observe`,
@@ -133,13 +176,17 @@ selection. With continuously eligible classes, each is selected within five
 completed choices. No latency claim is implied while a finite operation owns
 the port or a synchronous native call has not returned.
 
-- Live gets one nonblocking buffered attempt per pass of its position. When
-  no buffered item exists, poll one bounded raw live slice before advancing,
-  even with continuously ready local work. The idle case waits for live,
-  next known checked due time, 500 ms maintenance, or stop. Do not spin on an
-  empty rotation. A page/send already in progress retains its exclusive port
-  until its checked finish or failure. Use the existing time and queue limits
-  to bound reads between choices. The rotor is local scheduling, not a permit.
+- Live pops one buffered item per pass. With nothing buffered and other
+  work ready, poll raw live once for up to 20 ms, clamped by route and
+  maintenance deadlines. Use the separate buffered take even when that
+  deadline has passed because raw `wait_live` checks deadline first.
+  Idle waits until live, checked due time, 500 ms maintenance, or stop.
+  Only pure page/live reads allow select-on-stop or revocation, with no
+  reuse after cancelling the raw `active` read. Never preempt a page for
+  another class. Managed Consent settles or retains its typed uncertain
+  outcome under its own bounded write and ACK fences, with no enclosing
+  cancellation select. The candidate rotor leaves the fixture's
+  `Service`/`Batch` and reconnect/backoff unchanged.
 - Add a candidate-private, bounded read-only lookup on the existing checkpoint
   and recovered owner. Return at most one exact row key, generation, step and
   next eligible deadline for local work; no stored frame or native authority.
@@ -175,18 +222,23 @@ the port or a synchronous native call has not returned.
   `finish_measured_saved_delivery` under exact current source and route.
   Once expired, do not keep selecting a row whose checked native challenge
   refuses its deadline. Preserve its charge, block resurrection, and keep
-  the view unavailable for that ownership. Use a separately reviewed expiry
+  the view unavailable for that ownership. Latch the exact expired selector and
+  generation and bar new Unknown reservations while it holds the slot.
+  Use a separately reviewed expiry
   disposition only after its source is integrated; a missing disposition
   does not require inventing another retirement path here.
 - `PendingTurn::borrow` consumes no new lease or cursor. For Held, arm and
-  poll exactly one original Welcome under the existing capped NativeWindow.
+  poll exactly one original Welcome as one selection under one shared
+  NativeWindow and hard deadline, preserving narrower samples. Neither
+  `ArmedWelcome` nor `ClosedJoin` crosses a selection boundary.
   A result loss after durable JoinStarted never schedules another Welcome.
   A separate JoinStarted choice performs exact capped Joined readback and
   guarded Pending CAS; preserve pre-effect or ambiguous custody and charge
   if it cannot prove native state. Pending observation uses the existing
   sealed `observe_pending` independently of package/ACK effects. Invalidate
-  the view before an operation that may change its facts. Issue a producer
-  ticket before either observation read. Reuse the short dual-clock freshness,
+  the view before an operation that may change its facts. Use only
+  `Producer::invalidate(&self)` as the non-authorizing addition. Issue the
+  existing producer read ticket before either observation read. Reuse the short dual-clock freshness,
   500 ms refresh due time and final before-write check. A stale/failed
   refresh results in Unavailable; an existing exact expired-proof List
   mask may expire as already specified. No synthetic Empty or raw row
@@ -194,27 +246,28 @@ the port or a synchronous native call has not returned.
 
 ## Composition and qualification
 
-Split the candidate-only service/rotor and exact guarded wrappers from the
-small `peer_installed_recipient.rs` and daemon/listener composition. The owner
-of managed dispositions implements the read-only lookup and commit checks
-alongside existing checkpoint and cursor code. The runner owns scheduling,
-typed outcomes and stop propagation, using the exact borrowed owner.
-Root coordinates one Producer/read mount. Keep in-flight expiry and paired
-baseline patches disjoint. Prior to runtime composition pin their compatible
-source, the sealed Pending projection, and the currently reviewed exact
-managed turns. Clean read visibility can mount with the real service after
-source-matched qualification. A partial runner may remain private with reads
-Unavailable. There is no terminal publication of this increment until the
-actual installed path is verified.
+First own only guarded cursor/port ingress, checkpoint commit paths and a
+disjoint exact private WSS regression. That slice may be reviewed and
+composed independently and adds no installed entry, projection or new
+authority. Use current paired fixture owners, exercised on real authenticated
+history and live, and a small deterministic final-admission cut. The second
+slice adds the read-only due probes, fair rotor and one owner of effect
+selection. Root coordinates the third slice's Producer, daemon and listener
+handoff; a partial runner stays private with reads Unavailable. Keep
+in-flight expiry and paired baseline files disjoint and pin reviewed composed
+inputs before the installed proof. This first deployment proof can expose
+inert Pending only after the full real service and same-UID qualification.
 
 - Deterministic selector tests cover every ready combination, steady
   continuously ready work, busy live and retry, sparse/idle rotation,
   no-progress advance and exact re-eligibility. Verify no read-only probe
   advances row/floor/attempt state. Reuse milestone and custody fault tests
   for charge/cap effects. Add focused tests for effect and commit fence loss,
-  failed page, resumed exact revision, same raw event via both sources and
-  any added buffer-take scope/byte bounds. Assert durable effects and socket
-  observations, not only an error return.
+  failed page, exact revision resume, a quarantined restart, same event via
+  both sources and refusal of a second Recovery scan after completion.
+  Exercise prebuffer drain, live interleaving during both history and ACK,
+  exact byte accounting and independently triggered genuine overflow.
+  Assert the durable effects and socket observations alongside errors.
 - Run one source-matched private installed Linux AMD64 candidate on distinct
   loopback authenticated Peer and ordinary Command WSS. Use a disposable
   founder. Hold both Ready/report edges and demonstrate zero pre-open Peer
@@ -230,7 +283,10 @@ actual installed path is verified.
   check the barrier or Held respectively stays unavailable; force local
   loss and confirm the paired raw drain. Reuse reviewed global loss/interrupt
   tests and add one focused registered-stop seam check for the new runner.
-  Quiet checked recovery still yields `peer_unavailable`, not Healthy Empty.
+  Quiet checked recovery yields `peer_unavailable`. Prove live work and
+  positive Pending more than 20 seconds after Ready. Report freshness
+  misses during bounded page or native work. Route or TLS expiry stops
+  the service and reaps this exact connection, with no reconnect.
   A manifest, socket authentication, fixture-only test or stand-alone
   successful publication does not qualify this installed behavior.
 - Record proof wall time and existing phase timestamps for page, send to ACK,
