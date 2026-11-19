@@ -163,7 +163,7 @@ mod tests {
     use std::{
         sync::{
             Arc,
-            atomic::{AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
         },
         time::Duration,
     };
@@ -243,12 +243,15 @@ mod tests {
         let (reporter, mut parent) = StartupReporter::test_channel().unwrap();
         let channel = ChildChannel::take(&reporter).unwrap();
         let (trip, fatal, _) = admission();
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let observed = attempts.clone();
+        let ack_sent = Arc::new(AtomicBool::new(false));
+        let commit_attempts = Arc::new(AtomicUsize::new(0));
         let admission = Admission::new(&trip, {
             let trip = trip.clone();
+            let ack_sent = ack_sent.clone();
+            let commit_attempts = commit_attempts.clone();
             move || {
-                if observed.fetch_add(1, Ordering::Relaxed) == 1 {
+                if ack_sent.load(Ordering::Relaxed) {
+                    commit_attempts.fetch_add(1, Ordering::Relaxed);
                     trip.trip();
                 }
                 true
@@ -259,11 +262,14 @@ mod tests {
         let parent_exchange = async {
             expect_byte(&mut parent, b'R').await;
             parent.write_all(b"A").await.unwrap();
+            // This branch and the exchange share a task. No commit attempt
+            // can intervene between the successful send and this flag.
+            ack_sent.store(true, Ordering::Relaxed);
             expect_eof(&mut parent).await;
         };
         let (result, ()) = tokio::join!(child, parent_exchange);
         assert!(matches!(result, Err(Failure::Fatal)));
-        assert_eq!(attempts.load(Ordering::Relaxed), 2);
+        assert_eq!(commit_attempts.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]
