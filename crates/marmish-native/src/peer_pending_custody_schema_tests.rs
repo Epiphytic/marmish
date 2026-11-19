@@ -1165,7 +1165,7 @@ fn installed_approval_epochs_are_exclusive_and_preserve_the_v2_inventory() {
         ),
     ] {
         let f = Fixture::new();
-        if exact == V2 {
+        if matches!(exact, V2) {
             attach_installed_parent(&f);
         }
         let mut checkpoint = open_installed(&f, exact).unwrap();
