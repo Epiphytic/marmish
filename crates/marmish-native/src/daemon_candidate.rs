@@ -399,14 +399,11 @@ impl RegisteredOwner {
             if owner.command_count_exit_ready()? {
                 return Ok(());
             }
-            enum Next {
-                Request(Option<Pending>),
-                Tick,
-            }
             let work = async {
                 tokio::select! {
-                    pending = requests.recv() => Next::Request(pending),
-                    _ = interval.tick() => Next::Tick,
+                    pending = requests.recv() => pending.map(Some)
+                        .ok_or(Error::Invalid("ipc_listener_stopped")),
+                    _ = interval.tick() => Ok(None),
                 }
             };
             // Stops are prioritized independently of the fair selection
@@ -417,11 +414,10 @@ impl RegisteredOwner {
                 _ = shutdown.as_mut() => return Ok(()),
                 _ = expired.as_mut() => return Ok(()),
                 _ = listener.exited() => return Err(listener.exit_error()),
-                work = work => work,
+                work = work => work?,
             };
             match next {
-                Next::Request(pending) => {
-                    let pending = pending.ok_or(Error::Invalid("ipc_listener_stopped"))?;
+                Some(pending) => {
                     admit(admission)?;
                     if pending.deadline <= Instant::now() || pending.respond.is_closed() {
                         continue;
@@ -440,7 +436,7 @@ impl RegisteredOwner {
                     }
                     let _ = pending.respond.send(reply.unwrap_or_else(super::failure));
                 }
-                Next::Tick => {
+                None => {
                     let turn = tick(owner, &mut rooms);
                     let degraded = tokio::select! {
                         biased;
