@@ -222,6 +222,13 @@ impl AccountCustody {
         }
     }
 
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(super) fn owns(&self, lease: &Arc<ProfileLease>) -> bool {
+        self.held
+            .as_ref()
+            .is_some_and(|(_, _, held_lease)| Arc::ptr_eq(held_lease, lease))
+    }
+
     pub(super) fn close(self) -> Result<()> {
         self.close_with(|root| mdk(root.close()))
     }

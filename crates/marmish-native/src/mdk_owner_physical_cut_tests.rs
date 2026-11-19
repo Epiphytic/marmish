@@ -72,7 +72,7 @@ impl Fixture {
     fn install_engine(
         &self,
         owner: &mut MdkOwner,
-        trip: &Arc<Trip>,
+        admission: &Admission,
         relay_url: &str,
         execution_client: [u8; 32],
     ) {
@@ -117,7 +117,7 @@ impl Fixture {
                 canonical_native_image: None,
             },
             vec![],
-            Admission::new(trip, || true),
+            admission.clone(),
         )
         .unwrap();
         owner.commands = Some(CommandService::new(config, Some(engine)));
@@ -189,7 +189,12 @@ fn rejects_without_cut_authority_and_preserves_the_owner() {
     let mut owner = rejected(fixture.open(direct(&fixture, fatal)), &fixture.lease);
     let unrelated = Arc::new(Trip::new().0);
     let peer = Keys::generate().public_key().to_bytes();
-    fixture.install_engine(&mut owner, &unrelated, "wss://127.0.0.1:9/", peer);
+    fixture.install_engine(
+        &mut owner,
+        &Admission::new(&unrelated, || true),
+        "wss://127.0.0.1:9/",
+        peer,
+    );
     trip.trip();
     unrelated.trip();
     let mut owner = rejected(owner, &fixture.lease);
@@ -467,7 +472,12 @@ async fn private_wss() {
     let local = fixture.material.public_key();
     relay.ordinary(local);
     let peer = Keys::generate().public_key().to_bytes();
-    fixture.install_engine(&mut owner, &trip, relay.url.as_str(), peer);
+    fixture.install_engine(
+        &mut owner,
+        &Admission::new(&trip, || true),
+        relay.url.as_str(),
+        peer,
+    );
     until(|| {
         matches!(
             owner
@@ -578,4 +588,122 @@ async fn private_wss() {
     assert!(ManuallyDrop::into_inner(parked.refused_engine).is_none());
     relay.stop().await;
     assert!(ProfileLease::acquire(directory.path(), PROFILE).is_ok());
+}
+
+fn open_healthy(fixture: &Fixture, trip: &Arc<Trip>, admission: &Admission) -> Box<MdkOwner> {
+    Box::new(
+        MdkOwner::open_candidate(
+            &fixture.lease,
+            &fixture.material,
+            direct(fixture, trip.observe()),
+            vec![],
+            admission.clone(),
+        )
+        .unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn healthy_owned_stop_binds_exact_admission_and_closes_after_native_drain() {
+    use crate::mdk_adapter::healthy_stop::HealthyStop;
+    let fixture = Fixture::new();
+    let trip = Trip::new();
+    let admission = Admission::new(&trip, || true);
+    let owner = open_healthy(&fixture, &trip, &admission);
+    let another_admission = Admission::new(&trip, || true);
+    let owner = HealthyStop::begin(owner, &fixture.lease, &another_admission)
+        .err()
+        .expect("separate admission with the same latch must refuse");
+    let mut stopping = HealthyStop::begin(owner, &fixture.lease, &admission)
+        .ok()
+        .expect("exact owner");
+    let report = stopping.observe(deadline()).await;
+    assert!(report.physical.all_complete());
+    assert!(report.graceful_complete && !report.fatal);
+    let calls = std::cell::Cell::new(0);
+    assert!(
+        stopping
+            .complete(|| {
+                calls.set(calls.get() + 1);
+                fixture.lease.cleanup_runtime()
+            })
+            .is_ok()
+    );
+    assert_eq!(calls.get(), 1);
+    assert_eq!(Arc::strong_count(&fixture.lease), 1);
+    // A stock process can acquire/reopen the same real native profile.
+    drop(fixture.lease);
+    let lease = ProfileLease::acquire(fixture.directory.path(), PROFILE).unwrap();
+    let connector = RelayConnector::new(
+        RelayPolicy::parse(
+            &["wss://127.0.0.1:9/".into()],
+            RouteMode::Off,
+            TransportLimits::default(),
+        )
+        .unwrap(),
+        ArtiDirs {
+            state: lease.arti_state().into(),
+            cache: lease.arti_cache().into(),
+        },
+    )
+    .unwrap();
+    let mut stock = MdkOwner::open(&lease, &fixture.material, connector, vec![]).unwrap();
+    stock.shutdown(deadline()).await.unwrap();
+}
+
+#[tokio::test]
+async fn healthy_owned_stop_keeps_forwarder_and_refuses_effects_after_cut() {
+    use crate::mdk_adapter::healthy_stop::HealthyStop;
+    let fixture = Fixture::new();
+    let trip = Trip::new();
+    let admission = Admission::new(&trip, || true);
+    let mut owner = open_healthy(&fixture, &trip, &admission);
+    let (release, hold) = oneshot::channel();
+    owner.forwarder = Some(tokio::spawn(async { hold.await.unwrap() }));
+    let mut stopping = HealthyStop::begin(owner, &fixture.lease, &admission)
+        .ok()
+        .unwrap();
+    let report = stopping
+        .observe(Instant::now() + Duration::from_millis(10))
+        .await;
+    assert_eq!(report.physical.forwarder, Barrier::Pending);
+    assert!(report.physical.requires_process_hold());
+    assert!(!report.graceful_complete && !report.fatal);
+    trip.notify();
+    let report = stopping
+        .observe(Instant::now() + Duration::from_millis(10))
+        .await;
+    assert_eq!(report.physical.forwarder, Barrier::Pending);
+    assert!(!report.graceful_complete && report.fatal);
+    release.send(()).unwrap();
+    let report = stopping.observe(deadline()).await;
+    assert!(report.physical.all_complete());
+    assert!(!report.graceful_complete && report.fatal);
+    let retained = stopping.complete(|| panic!("fatal stop cannot clean runtime"));
+    assert!(retained.is_err());
+    assert!(Arc::strong_count(&fixture.lease) > 1);
+}
+
+#[tokio::test]
+async fn healthy_owned_stop_reports_cut_during_final_cleanup_and_retains_lease() {
+    use crate::mdk_adapter::healthy_stop::HealthyStop;
+    let fixture = Fixture::new();
+    let trip = Trip::new();
+    let admission = Admission::new(&trip, || true);
+    let owner = open_healthy(&fixture, &trip, &admission);
+    let mut stopping = HealthyStop::begin(owner, &fixture.lease, &admission)
+        .ok()
+        .unwrap();
+    assert!(stopping.observe(deadline()).await.graceful_complete);
+    let mut retained = stopping
+        .complete(|| {
+            trip.notify();
+            Ok(())
+        })
+        .err()
+        .expect("post-cleanup admission must refuse success");
+    assert!(Arc::strong_count(&fixture.lease) > 1);
+    let report = retained.observe(deadline()).await;
+    assert!(report.physical.all_complete());
+    assert!(!report.graceful_complete && report.fatal);
 }

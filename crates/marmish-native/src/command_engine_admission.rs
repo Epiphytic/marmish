@@ -53,8 +53,17 @@ impl Admission {
         dead_code,
         reason = "ordinary candidate physical cut remains unmounted"
     )]
-    pub(super) fn is_for(&self, fatal: &Fatal) -> bool {
+    pub(crate) fn is_for(&self, fatal: &Fatal) -> bool {
         self.fatal.same_lifetime(fatal)
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn same_registration(&self, other: &Self) -> bool {
+        self.fatal.same_lifetime(&other.fatal) && Arc::ptr_eq(&self.verify, &other.verify)
     }
 
     pub(super) fn tripped(&self) -> bool {
@@ -111,6 +120,17 @@ impl Mode {
         self.checked.as_ref().map(Admission::connection_fence)
     }
 
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(super) fn same_registration(&self, expected: &Admission) -> bool {
+        self.checked
+            .as_ref()
+            .is_some_and(|admission| admission.same_registration(expected))
+    }
+
     pub(super) fn tripped(&self) -> bool {
         self.checked.as_ref().is_some_and(Admission::tripped)
     }
@@ -126,7 +146,11 @@ mod tests {
 
     #[test]
     fn fatal_join_requires_worker_or_successful_previous_join() {
-        assert!(FatalEngineJoin::new(None, WorkerJoin::Joined).wait().is_ok());
+        assert!(
+            FatalEngineJoin::new(None, WorkerJoin::Joined)
+                .wait()
+                .is_ok()
+        );
         for outcome in [WorkerJoin::Pending, WorkerJoin::Panicked] {
             assert!(matches!(
                 FatalEngineJoin::new(None, outcome).wait(),

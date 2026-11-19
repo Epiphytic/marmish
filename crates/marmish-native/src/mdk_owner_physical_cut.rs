@@ -1,7 +1,9 @@
 //! Physical shutdown of an ordinary owner after registered dispatcher loss.
 use super::MdkOwner;
 use crate::{
-    Error, Result, command_engine::CommandEngine, command_lifecycle::keep_fatal_engine,
+    Error, Result,
+    command_engine::CommandEngine,
+    command_lifecycle::keep_fatal_engine,
     identity::ProfileLease,
     stream_runner::{ReapObservation, RunnerHandle},
     transport::RelayConnector,
@@ -38,6 +40,18 @@ pub(crate) struct Report {
 }
 
 impl Report {
+    pub(super) fn all_complete(self) -> bool {
+        [
+            self.engine,
+            self.runners,
+            self.sdk,
+            self.forwarder,
+            self.raw,
+        ]
+        .into_iter()
+        .all(|barrier| barrier == Barrier::Complete)
+    }
+
     pub(crate) fn requires_process_hold(self) -> bool {
         [
             self.engine,
@@ -51,13 +65,13 @@ impl Report {
     }
 }
 
-struct Task<T> {
-    status: Barrier,
+pub(super) struct Task<T> {
+    pub(super) status: Barrier,
     handle: Option<JoinHandle<T>>,
 }
 
 impl<T> Task<T> {
-    fn new(handle: Option<JoinHandle<T>>) -> Self {
+    pub(super) fn new(handle: Option<JoinHandle<T>>) -> Self {
         let status = if handle.is_some() {
             Barrier::Pending
         } else {
@@ -66,7 +80,7 @@ impl<T> Task<T> {
         Self { status, handle }
     }
 
-    async fn observe(&mut self, deadline: Instant, check: fn(T) -> Barrier) {
+    pub(super) async fn observe(&mut self, deadline: Instant, check: fn(T) -> Barrier) {
         let Some(handle) = self.handle.as_mut() else {
             return;
         };
@@ -143,10 +157,7 @@ impl PhysicalCut {
         }
 
         let runners = owner.stream_runner_barriers();
-        for runner in &runners {
-            runner.suspend_input();
-            runner.cancel();
-        }
+        cancel_runners(&runners);
         owner.connector.cancel_terminal_connects();
 
         let mut engine = Task::new(None);
@@ -163,9 +174,7 @@ impl PhysicalCut {
                 }
             }
         }
-        let relay = owner.relay.clone();
-        let sdk = Task::new(Some(runtime.spawn(async move { relay.shutdown().await })));
-        let forwarder = Task::new(owner.forwarder.take());
+        let (sdk, forwarder) = stop_sdk(owner, &runtime);
         let runners_status = if runners.is_empty() {
             Barrier::Complete
         } else {
@@ -214,7 +223,24 @@ impl PhysicalCut {
     }
 }
 
-async fn observe_runners(runners: &[RunnerHandle], status: &mut Barrier, deadline: Instant) {
+pub(super) fn stop_sdk(owner: &mut MdkOwner, runtime: &Handle) -> (Task<()>, Task<()>) {
+    let relay = owner.relay.clone();
+    let sdk = Task::new(Some(runtime.spawn(async move { relay.shutdown().await })));
+    (sdk, Task::new(owner.forwarder.take()))
+}
+
+pub(super) fn cancel_runners(runners: &[RunnerHandle]) {
+    for runner in runners {
+        runner.suspend_input();
+        runner.cancel();
+    }
+}
+
+pub(super) async fn observe_runners(
+    runners: &[RunnerHandle],
+    status: &mut Barrier,
+    deadline: Instant,
+) {
     if *status != Barrier::Pending {
         return;
     }

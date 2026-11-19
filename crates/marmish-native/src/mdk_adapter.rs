@@ -3374,6 +3374,15 @@ mod terminal_room_fixture;
 #[path = "mdk_owner_physical_cut.rs"]
 mod physical_cut;
 
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[allow(dead_code, reason = "registered daemon stop is composed separately")]
+#[path = "mdk_owner_healthy_stop.rs"]
+pub(crate) mod healthy_stop;
+
 #[cfg(test)]
 #[path = "terminal_relay_fixture.rs"]
 pub(crate) mod terminal_relay_fixture;

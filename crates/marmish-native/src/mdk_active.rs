@@ -51,6 +51,20 @@ impl ActiveMode {
         Self::default()
     }
 
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(super) fn matches_stop_admission(
+        &self,
+        expected: &crate::command_engine::Admission,
+    ) -> bool {
+        self.admission
+            .as_ref()
+            .is_some_and(|admission| admission.same_registration(expected))
+    }
+
     fn checked(&self) -> bool {
         #[cfg(any(test, marmish_peer_receiver_candidate))]
         if self.admission.is_some() {

@@ -608,6 +608,15 @@ impl CommandEngine {
         target_os = "linux",
         target_arch = "x86_64"
     ))]
+    pub(crate) fn matches_stop_admission(&self, expected: &Admission) -> bool {
+        self.mode.same_registration(expected)
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     #[allow(dead_code, reason = "registered stop is composed separately")]
     pub(crate) fn worker_joined(&self) -> bool {
         self.worker_join == WorkerJoin::Joined

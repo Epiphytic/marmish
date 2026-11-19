@@ -553,6 +553,18 @@ impl RelayConnector {
         if !self.0.fatal.as_ref().is_some_and(Fatal::is_tripped) {
             return Err(Error::Transport("dispatcher_fatal_required"));
         }
+        self.reap_registered_sockets(deadline).await
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) async fn reap_registered_sockets(&self, deadline: Instant) -> Result<()> {
+        if self.0.fatal.is_none() {
+            return Err(Error::Transport("dispatcher_fatal_required"));
+        }
         self.0.cancelled.cancel();
         let mut reaped = Vec::with_capacity(self.0.slots.len());
         for slot in &self.0.slots {
