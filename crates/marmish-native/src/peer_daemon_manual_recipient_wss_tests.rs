@@ -37,7 +37,7 @@ async fn pending(
     offered: &founder_fixture::Offered,
     delivered: &Delivered,
     deadline: Instant,
-) -> peer_read::Entry {
+) -> Option<peer_read::Entry> {
     use peer_read::{Failure, Reply, Request, Selection, State, client_request};
     let selector = offered.selector();
     let entry = timeout_at(deadline, async {
@@ -57,7 +57,7 @@ async fn pending(
         }
     })
     .await
-    .expect("installed listener projects verified Pending");
+    .ok()?;
     assert!(entry.selection.server == selector.server);
     assert!(
         entry.selection.offer_id == selector.id && entry.selection.revision == selector.revision
@@ -86,7 +86,7 @@ async fn pending(
         client_request(socket, Request::Show { selection: wrong }).await,
         Err(Failure::Unavailable),
     );
-    entry
+    Some(entry)
 }
 
 fn manual_failure_log(log: &File) -> String {
@@ -204,7 +204,9 @@ async fn mounted(measure_near_cap: bool) {
     };
     unavailable(&socket).await;
     let delivered = founder.publish_delivery(&consented, deadline).await;
-    let exact = pending(&socket, &offered, &delivered, deadline).await;
+    let exact = pending(&socket, &offered, &delivered, deadline)
+        .await
+        .expect("installed listener projects verified Pending");
     let offer_to_pending = turn.elapsed();
     for id in [offered.carrier(), consented.carrier(), delivered.carrier] {
         assert_eq!(peer.accepted_manual_control_count(id), 1);
@@ -224,7 +226,9 @@ async fn mounted(measure_near_cap: bool) {
     .await;
     let first_time = clock.elapsed();
     assert!(peer.runtime_socket_active(recipient));
-    pending(&socket, &offered, &delivered, Instant::now() + STEP).await;
+    pending(&socket, &offered, &delivered, Instant::now() + STEP)
+        .await
+        .expect("installed listener still projects verified Pending");
 
     let requests_before_loss = peer.recipient_requests(signer);
     let clock = Instant::now();
@@ -303,10 +307,11 @@ async fn mounted(measure_near_cap: bool) {
     wait_active(&mut reopened, &socket).await;
     let reopened_recipient = recipient + 2;
     manual_recipient_live(&peer, signer, reopened_recipient).await;
-    assert_eq!(
-        pending(&socket, &offered, &delivered, Instant::now() + WAIT).await,
-        exact,
-    );
+    let cold_entry = pending(&socket, &offered, &delivered, Instant::now() + WAIT).await;
+    if measure_near_cap && cold_entry.is_none() {
+        RefreshLog::new(cold_log.try_clone().unwrap()).report_cold_failure();
+    }
+    assert_eq!(cold_entry, Some(exact), "exact cold Pending projection");
     let cold_pending = clock.elapsed();
     let mut qualification_passed = true;
     if let Some(stage) = &near_cap {

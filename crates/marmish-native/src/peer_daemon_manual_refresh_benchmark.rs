@@ -142,6 +142,22 @@ impl RefreshLog {
         assert_eq!(read.outcome, ReadOutcome::Unavailable);
     }
 
+    pub(super) fn report_cold_failure(&mut self) {
+        self.collect();
+        let mut outcomes = Outcomes::default();
+        for record in &self.records {
+            outcomes.add(record.outcome);
+        }
+        println!(
+            "manual_near_cap_cold_failure {}",
+            json!({
+                "events": self.records.len(),
+                "refresh_outcomes": outcomes,
+                "bytes_read": self.offset,
+            })
+        );
+    }
+
     async fn anchor_pending(&mut self) -> i64 {
         timeout(WAIT, async {
             loop {
@@ -165,8 +181,8 @@ impl RefreshLog {
         let deadline = Instant::now() + PERIOD * SAMPLE_COUNT as u32 + Duration::from_secs(2);
         loop {
             self.collect();
-            // Wait one additional record to bracket a missing final publication.
-            // A fixed terminal deadline also preserves incomplete windows.
+            // If the final slot did not publish, wait for a later publication
+            // to bracket the gap. The deadline preserves incomplete windows.
             if self
                 .records
                 .iter()
