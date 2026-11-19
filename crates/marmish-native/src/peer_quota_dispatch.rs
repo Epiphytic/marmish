@@ -621,6 +621,16 @@ impl Drop for QuotaTurn<'_> {
     }
 }
 
+#[cfg(all(
+    test,
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub(crate) fn assert_unmanaged_fixture_default() -> Result<()> {
+    Dispatch::checked_stock().map(drop)
+}
+
 impl Dispatch {
     #[cfg(test)]
     fn mount() -> Result<&'static Self> {

@@ -352,6 +352,62 @@ impl Epoch {
     }
 }
 
+#[cfg(all(
+    test,
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[allow(
+    dead_code,
+    reason = "the standalone cursor target has no offline native stage"
+)]
+pub(crate) fn fixture_pending_stage(
+    tx: &Transaction<'_>,
+    account: PublicKey,
+    origin: Origin,
+    (key, generation, held_at, deadline): (Selector, u64, u64, u64),
+) -> Result<(Binding, FileWitness)> {
+    Epoch(Kind::InstalledV2).verify(tx, account.to_bytes(), &[origin])?;
+    let exact: bool = tx.query_row(
+        "SELECT (SELECT count(*) FROM peer_pending_custody WHERE state=2)=1
+           AND EXISTS(SELECT 1 FROM peer_pending_custody WHERE class=0
+               AND generation=?1 AND account=?2 AND server=?3 AND offer_id=?4
+               AND offer_revision=?5 AND origin=?6 AND held_at=?7
+               AND pending_deadline=?8 AND mode=0 AND state=2)",
+        params![
+            seconds(generation)?,
+            account.to_bytes(),
+            key.server.to_bytes(),
+            key.id,
+            key.revision,
+            origin,
+            seconds(held_at)?,
+            seconds(deadline)?
+        ],
+        |row| row.get(0),
+    )?;
+    if !exact {
+        return Err(CursorError::Binding.into());
+    }
+    let binding = Binding {
+        key,
+        origin,
+        generation: Generation {
+            known: false,
+            count: generation,
+        },
+    };
+    match stage_journal::load(tx, binding)? {
+        Some(State::Prepared(witness, _))
+            if witness.device != [0; 8] && witness.inode != [0; 8] =>
+        {
+            Ok((binding, witness))
+        }
+        _ => Err(CursorError::Binding.into()),
+    }
+}
+
 fn verify_hardening(conn: &Connection) -> std::result::Result<(), CursorError> {
     check_hardening(conn)?;
     let enforcing: i64 = conn.query_row("PRAGMA ignore_check_constraints", [], |row| row.get(0))?;

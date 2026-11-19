@@ -160,6 +160,8 @@ macro_rules! native_installed_pending_fixture {
         #[path = "peer_installed_pending_checkpoint.rs"]
         mod installed_pending;
         use crate::peer_invitation::receiver_inventory::v2_pending::InstalledJoinedReadback;
+        #[cfg(marmish_peer_receiver_candidate)]
+        pub(in crate::peer_invitation) use custody_schema::fixture_pending_stage;
     };
 }
 #[cfg(test)]

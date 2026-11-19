@@ -11,12 +11,25 @@ const ORIGIN: &str = "wss://stage-fixture.example/";
 #[tokio::test]
 #[ignore = "opt-in isolated public native join and guarded SQLCipher readback"]
 async fn exact_joined_snapshot_proof_requires_closed_image_and_receipt() {
-    tokio::time::timeout(Duration::from_secs(120), qualify_joined_snapshot())
+    tokio::time::timeout(Duration::from_secs(120), qualify_joined_snapshot(false))
         .await
         .expect("bounded native joined-image proof");
 }
 
-async fn qualify_joined_snapshot() {
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[tokio::test]
+#[ignore = "opt-in offline near-cap SQLCipher growth with real joined native stage"]
+async fn exact_joined_snapshot_grows_to_near_cap() {
+    tokio::time::timeout(Duration::from_secs(120), qualify_joined_snapshot(true))
+        .await
+        .expect("bounded native near-cap proof");
+}
+
+async fn qualify_joined_snapshot(grow: bool) {
     let fixture = Fixture::new();
     drop(fixture.start(Policy::default()));
     let mut owner = PreparedConsentOwner::open(
@@ -170,6 +183,31 @@ async fn qualify_joined_snapshot() {
         sample,
     )
     .await;
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    if grow {
+        let exact = owner
+            .inspect_joined(stage, &delivery, package_digest)
+            .unwrap();
+        super::super::near_cap_fixture::verify_joined_fixture(&owner.state.paths, stage);
+        let enlarged = owner
+            .inspect_joined(stage, &delivery, package_digest)
+            .unwrap();
+        assert_eq!(enlarged.coordinates(), exact.coordinates());
+        assert_eq!(enlarged.carrier(), exact.carrier());
+        assert!(owner.snapshot.0.path().read_dir().unwrap().next().is_none());
+        drop(owner);
+        super::super::near_cap_fixture::verify_bound_refusal(fixture.lease);
+    }
+    #[cfg(not(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )))]
+    assert!(!grow);
 }
 
 async fn create_alternate_package(

@@ -46,6 +46,14 @@ pub(crate) use store::consent_checkpoint::wire::Delivery;
 ))]
 #[path = "peer_installed_recipient.rs"]
 pub(crate) mod installed_recipient;
+#[cfg(all(
+    test,
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "peer_near_cap_fixture.rs"]
+pub(crate) mod near_cap_fixture;
 #[path = "peer_invitation_paths.rs"]
 mod paths;
 #[cfg(test)]
