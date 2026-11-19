@@ -31,13 +31,7 @@ impl ApprovalSettlement {
     // Caller independently verifies the owning service and current port before
     // releasing the reply. The socket token checks its own lifetime again.
     pub(in crate::peer_invitation) fn respond(self) {
-        let reply = match self.result {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(ApprovalFailure::Stale)) => Err(ReplyFailure::Stale),
-            Ok(Err(ApprovalFailure::Expired)) => Err(ReplyFailure::Expired),
-            Ok(Err(ApprovalFailure::Ambiguous)) => Err(ReplyFailure::Uncertain),
-            _ => Err(ReplyFailure::Unavailable),
-        };
+        let reply = reply_status(self.result);
         match self.exchange {
             Exchange::Claimed(request) => {
                 request.refuse(reply.err().unwrap_or(ReplyFailure::Uncertain))
@@ -45,6 +39,16 @@ impl ApprovalSettlement {
             Exchange::Consumed(request) => request.complete(reply),
             Exchange::Revoked => {}
         }
+    }
+}
+
+fn reply_status(result: PortDecision) -> std::result::Result<(), ReplyFailure> {
+    match result {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(ApprovalFailure::Stale)) => Err(ReplyFailure::Stale),
+        Ok(Err(ApprovalFailure::Expired)) => Err(ReplyFailure::Expired),
+        Ok(Err(ApprovalFailure::Ambiguous)) => Err(ReplyFailure::Uncertain),
+        _ => Err(ReplyFailure::Unavailable),
     }
 }
 
@@ -58,6 +62,32 @@ impl DecisionGuard<'_> {
         guard: ApprovalGuard,
     ) -> std::result::Result<u64, ApprovalFailure> {
         (self.0)(guard)
+    }
+}
+
+fn window_failure(failure: crate::peer_invitation::WindowFailure) -> ApprovalFailure {
+    use crate::peer_invitation::WindowFailure;
+    match failure {
+        WindowFailure::Clock => ApprovalFailure::Clock,
+        WindowFailure::Unavailable => ApprovalFailure::Unavailable,
+        WindowFailure::SignedExpired => ApprovalFailure::Expired,
+    }
+}
+
+fn joined_failure(
+    error: Error,
+    window: &crate::peer_invitation::NativeWindow,
+    request_live: bool,
+) -> ApprovalFailure {
+    if let Err(cause) = window.approval_sample() {
+        return window_failure(cause);
+    }
+    if !request_live {
+        return ApprovalFailure::Unavailable;
+    }
+    match error {
+        Error::Path | Error::StageIdentityMismatch => ApprovalFailure::Integrity,
+        _ => ApprovalFailure::Stale,
     }
 }
 
@@ -142,12 +172,9 @@ impl PendingTurn<'_, '_> {
                     forwarding,
                     cutoff,
                 )
-                .map_err(|_| ApprovalFailure::Unavailable)?;
+                .map_err(window_failure)?;
             let route_wall = scope.wall().as_secs();
-            let wall = window
-                .sample()
-                .map_err(|_| ApprovalFailure::Unavailable)?
-                .as_secs();
+            let wall = window.approval_sample().map_err(window_failure)?.as_secs();
             if wall < route_wall {
                 return Err(ApprovalFailure::Clock);
             }
@@ -175,8 +202,8 @@ impl PendingTurn<'_, '_> {
             )?;
             let deadline = held.pending_deadline().ok_or(ApprovalFailure::Integrity)?;
             let bounded = window
-                .clamp_signed(deadline)
-                .map_err(|_| ApprovalFailure::Unavailable)?;
+                .clamp_signed_for_approval(deadline)
+                .map_err(window_failure)?;
             if !request.check_live() {
                 return Err(ApprovalFailure::Unavailable);
             }
@@ -188,7 +215,7 @@ impl PendingTurn<'_, '_> {
                     &delivery,
                     &WelcomeFence::Candidate(&bounded),
                 )
-                .map_err(|_| ApprovalFailure::Stale)?;
+                .map_err(|error| joined_failure(error, &bounded, request.check_live()))?;
             let (binding, file) = held.stage();
             let owner = &mut *self.owner;
             owner
@@ -215,15 +242,41 @@ impl PendingTurn<'_, '_> {
                         .map_err(|_| ApprovalFailure::Integrity)?;
                     paths
                         .reopen_provisional(binding, file)
-                        .map_err(|_| ApprovalFailure::Stale)?;
+                        .map_err(|_| ApprovalFailure::Integrity)?;
                     exchange.check(lease, selection, guard)?;
-                    Ok(window
-                        .sample()
-                        .map_err(|_| ApprovalFailure::Unavailable)?
-                        .as_secs())
+                    Ok(bounded.approval_sample().map_err(window_failure)?.as_secs())
                 }),
             )
         });
         ApprovalSettlement { result, exchange }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn approval_only_reports_uncertain_for_the_attempted_ambiguous_commit() {
+        for (decision, reply) in [
+            (Ok(()), Ok(())),
+            (Err(ApprovalFailure::Stale), Err(ReplyFailure::Stale)),
+            (Err(ApprovalFailure::Expired), Err(ReplyFailure::Expired)),
+            (
+                Err(ApprovalFailure::Ambiguous),
+                Err(ReplyFailure::Uncertain),
+            ),
+            (Err(ApprovalFailure::Clock), Err(ReplyFailure::Unavailable)),
+            (
+                Err(ApprovalFailure::Integrity),
+                Err(ReplyFailure::Unavailable),
+            ),
+            (
+                Err(ApprovalFailure::Unavailable),
+                Err(ReplyFailure::Unavailable),
+            ),
+        ] {
+            assert_eq!(reply_status(Ok(decision)), reply);
+        }
     }
 }

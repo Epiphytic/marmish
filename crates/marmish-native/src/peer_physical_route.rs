@@ -418,6 +418,12 @@ pub(crate) struct NativeRouteFence {
     target_arch = "x86_64"
 ))]
 impl NativeRouteFence {
+    fn before(&self, cutoff: tokio::time::Instant) -> Self {
+        let mut fence = self.clone();
+        fence.horizon = fence.horizon.min(cutoff);
+        fence
+    }
+
     pub(crate) fn wall(&self) -> Duration {
         self.wall
     }
@@ -492,6 +498,9 @@ impl NativeRouteWindow<'_> {
         signed_end_exclusive: u64,
         forwarding: &ForwardingVerifier,
     ) -> Result<crate::peer_invitation::NativeWindow> {
+        if !self.matches_fatal(&forwarding.fatal()) {
+            return Err(Error::Invalid("peer_receiver_forwarding"));
+        }
         self.manual_window_before(
             readiness,
             stop,
@@ -499,6 +508,7 @@ impl NativeRouteWindow<'_> {
             forwarding,
             self.horizon(),
         )
+        .map_err(|_| Error::Invalid("peer_native_clock"))
     }
 
     pub(crate) fn manual_window_before(
@@ -508,14 +518,16 @@ impl NativeRouteWindow<'_> {
         signed_end_exclusive: u64,
         forwarding: &ForwardingVerifier,
         cutoff: tokio::time::Instant,
-    ) -> Result<crate::peer_invitation::NativeWindow> {
+    ) -> std::result::Result<
+        crate::peer_invitation::NativeWindow,
+        crate::peer_invitation::WindowFailure,
+    > {
         if !self.matches_fatal(&forwarding.fatal()) {
-            return Err(Error::Invalid("peer_receiver_forwarding"));
+            return Err(crate::peer_invitation::WindowFailure::Unavailable);
         }
-        let mut fence = self.fence.clone();
+        let mut fence = self.fence.before(cutoff);
         fence.forwarding = Some(forwarding.clone());
-        fence.horizon = fence.horizon.min(cutoff);
-        crate::peer_invitation::NativeWindow::start_checked(
+        crate::peer_invitation::NativeWindow::start_checked_typed(
             readiness,
             stop,
             signed_end_exclusive,
@@ -790,8 +802,14 @@ async fn native_window_honors_absolute_route_horizon_and_fatal_cut() {
     assert!(NativeFence::Candidate(&before_fatal).check().is_err());
 
     let (_live, fatal) = Trip::new();
-    let before_horizon = start(NativeRouteFence { fatal, ..route });
+    let route = NativeRouteFence { fatal, ..route };
+    let quarter = Duration::from_millis(250);
+    let before_request = start(route.before(tokio::time::Instant::now() + quarter));
+    let before_horizon = start(route);
+    assert!(NativeFence::Candidate(&before_request).check().is_ok());
+    tokio::time::advance(quarter).await;
+    assert!(NativeFence::Candidate(&before_request).check().is_err());
     assert!(NativeFence::Candidate(&before_horizon).check().is_ok());
-    tokio::time::advance(Duration::from_secs(1)).await;
+    tokio::time::advance(Duration::from_secs(1) - quarter).await;
     assert!(NativeFence::Candidate(&before_horizon).check().is_err());
 }

@@ -101,18 +101,64 @@ fn commit(tx: Transaction<'_>) -> Result<()> {
     tx.commit().map_err(|_| ApprovalFailure::Ambiguous)
 }
 
+pub(super) struct Target {
+    pub(super) origin: Origin,
+    pub(super) carrier: [u8; 32],
+    pub(super) generation: u64,
+    pub(super) initial_wall: u64,
+}
+
+type SavedTiming = (u64, u64, Option<u64>);
+
 pub(super) fn record(
     tx: Transaction<'_>,
-    origin: Origin,
-    carrier: [u8; 32],
-    generation: u64,
-    at: u64,
-    verify: impl FnOnce(&Transaction<'_>) -> Result<()>,
+    target: Target,
+    check: impl FnOnce(&Transaction<'_>, u64) -> Result<SavedTiming>,
+    mut guard: impl FnMut(ApprovalGuard) -> Result<u64>,
+    verify: impl FnOnce(&Transaction<'_>, u64) -> Result<()>,
 ) -> Result<usize> {
-    let changed = write(&tx, origin, carrier, generation, at)?;
-    verify(&tx)?;
+    let (qualified, deadline, decided_at) = check(&tx, target.initial_wall)?;
+    if decided_at.is_some() {
+        return Err(ApprovalFailure::Stale);
+    }
+    let (origin, global) = floors(&tx, target.origin)?;
+    let at = guard(ApprovalGuard::Consume)?;
+    check_wall(
+        at,
+        target.initial_wall.max(qualified).max(origin).max(global),
+        deadline,
+    )?;
+    let changed = write(&tx, target.origin, target.carrier, target.generation, at)?;
+    verify(&tx, at)?;
+    if floors(&tx, target.origin)? != (at, at) {
+        return Err(ApprovalFailure::Integrity);
+    }
+    check_wall(guard(ApprovalGuard::Verify)?, at, deadline)?;
     commit(tx)?;
     Ok(changed)
+}
+
+pub(super) fn retry(
+    conn: &mut rusqlite::Connection,
+    origin: Origin,
+    initial_wall: u64,
+    check: impl FnOnce(&Transaction<'_>, u64) -> Result<SavedTiming>,
+    mut guard: impl FnMut(ApprovalGuard) -> Result<u64>,
+) -> Result<()> {
+    let sampled = guard(ApprovalGuard::Consume)?;
+    let tx = conn.transaction()?;
+    let (qualified, deadline, decided_at) = check(&tx, sampled)?;
+    let decided_at = decided_at.ok_or(ApprovalFailure::Stale)?;
+    let (origin_floor, global) = floors(&tx, origin)?;
+    if origin_floor < decided_at || global < decided_at {
+        return Err(ApprovalFailure::Integrity);
+    }
+    check_wall(
+        sampled,
+        initial_wall.max(qualified).max(origin_floor).max(global),
+        deadline,
+    )?;
+    check_wall(guard(ApprovalGuard::Verify)?, sampled, deadline)
 }
 
 #[cfg(test)]

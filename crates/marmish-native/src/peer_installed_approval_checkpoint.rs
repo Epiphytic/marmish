@@ -63,50 +63,23 @@ impl Checkpoint {
             Ok((saved.qualified_at, saved.deadline, decided_at))
         };
         if let Progress::Activating { .. } = prior.saved.progress {
-            // The capability must be consumed before the final read-only retry.
-            let sampled = guard.check(ApprovalGuard::Consume)?;
-            let tx = self.cursor.conn.transaction().map_err(Error::from)?;
-            let (qualified, deadline, decided_at) = check(&tx, sampled)?;
-            let decided_at = decided_at.ok_or(ApprovalFailure::Stale)?;
-            let floors = decision::floors(&tx, cx.origin)?;
-            if floors.0 < decided_at || floors.1 < decided_at {
-                return Err(ApprovalFailure::Integrity);
-            }
-            decision::check_wall(
-                sampled,
-                wall.max(qualified).max(floors.0).max(floors.1),
-                deadline,
-            )?;
-            let final_wall = guard.check(ApprovalGuard::Verify)?;
-            decision::check_wall(final_wall, sampled, deadline)?;
-            return Ok(());
+            return decision::retry(&mut self.cursor.conn, cx.origin, wall, check, |step| {
+                guard.check(step)
+            });
         }
         let tx = self.cursor.begin(cx.origin)?;
-        let (qualified, deadline, decided_at) = check(&tx, wall)?;
-        if decided_at.is_some() {
-            return Err(ApprovalFailure::Stale);
-        }
-        let floors = decision::floors(&tx, cx.origin)?;
-        let at = guard.check(ApprovalGuard::Consume)?;
-        decision::check_wall(
-            at,
-            wall.max(qualified).max(floors.0).max(floors.1),
-            deadline,
-        )?;
+        let target = decision::Target {
+            origin: cx.origin,
+            carrier: prior.delivery_carrier(),
+            generation: scope.generation,
+            initial_wall: wall,
+        };
         let changed = decision::record(
             tx,
-            cx.origin,
-            prior.delivery_carrier(),
-            scope.generation,
-            at,
-            |tx| {
-                cx.verify(tx, at)?;
-                if decision::floors(tx, cx.origin)? != (at, at) {
-                    return Err(ApprovalFailure::Integrity);
-                }
-                let final_wall = guard.check(ApprovalGuard::Verify)?;
-                decision::check_wall(final_wall, at, deadline)
-            },
+            target,
+            check,
+            |step| guard.check(step),
+            |tx, at| Ok(cx.verify(tx, at)?),
         )?;
         #[cfg(test)]
         record_custody_changes(changed);

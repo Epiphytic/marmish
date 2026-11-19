@@ -32,7 +32,7 @@ mod native_fence;
     target_os = "linux",
     target_arch = "x86_64"
 ))]
-pub(crate) use native_fence::{NativeFence, NativeWindow, SchemaWindow};
+pub(crate) use native_fence::{NativeFence, NativeWindow, SchemaWindow, WindowFailure};
 #[cfg(all(
     any(test, marmish_peer_receiver_candidate),
     target_os = "linux",

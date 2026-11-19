@@ -27,7 +27,7 @@ struct Window {
     anchor: Sample,
     ceiling: Ceiling,
     tick_end: Duration,
-    floor: Mutex<Option<Sample>>,
+    floor: Mutex<WindowResult<Sample>>,
     #[cfg(test)]
     stop_after_signing: AtomicBool,
     #[cfg(test)]
@@ -70,6 +70,16 @@ struct Sample {
     wall: Duration,
     tick: Duration,
 }
+
+/// The first failed shared sample preserves its reason through native cleanup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WindowFailure {
+    Unavailable,
+    Clock,
+    SignedExpired,
+}
+
+type WindowResult<T> = std::result::Result<T, WindowFailure>;
 
 #[cfg(test)]
 thread_local! {
@@ -131,6 +141,7 @@ impl NativeWindow {
                 route: RouteFence::Fixture(route_cancel),
             },
         )
+        .map_err(|_| Error::Clock)
     }
 
     #[allow(dead_code, reason = "consumed by the separately mounted Manual actor")]
@@ -140,6 +151,16 @@ impl NativeWindow {
         end_exclusive: u64,
         route: NativeRouteFence,
     ) -> crate::Result<Self> {
+        Self::start_checked_typed(readiness, stop, end_exclusive, route)
+            .map_err(|_| crate::Error::Invalid("peer_native_clock"))
+    }
+
+    pub(crate) fn start_checked_typed(
+        readiness: Readiness,
+        stop: Arc<AtomicBool>,
+        end_exclusive: u64,
+        route: NativeRouteFence,
+    ) -> WindowResult<Self> {
         Self::start_with(
             readiness,
             stop,
@@ -149,7 +170,6 @@ impl NativeWindow {
                 route: RouteFence::Checked(route),
             },
         )
-        .map_err(|_| crate::Error::Invalid("peer_native_clock"))
     }
 
     fn start_with(
@@ -157,10 +177,10 @@ impl NativeWindow {
         stop: Arc<AtomicBool>,
         anchored_wall: Duration,
         ceiling: Ceiling,
-    ) -> Result<Self> {
-        let now = Sample::now()?;
+    ) -> WindowResult<Self> {
+        let now = Sample::now().map_err(|_| WindowFailure::Clock)?;
         if now.wall.abs_diff(anchored_wall) > Duration::from_secs(2) {
-            return Err(Error::Clock);
+            return Err(WindowFailure::Clock);
         }
         Self::new(
             readiness,
@@ -182,16 +202,20 @@ impl NativeWindow {
         ceiling: Ceiling,
         floor: Sample,
         limit: Duration,
-    ) -> Result<Self> {
-        let now = Sample::now()?;
+    ) -> WindowResult<Self> {
+        let now = Sample::now().map_err(|_| WindowFailure::Clock)?;
         let projected = anchor
             .wall
-            .checked_add(now.tick.checked_sub(anchor.tick).ok_or(Error::Clock)?)
-            .ok_or(Error::Clock)?;
+            .checked_add(
+                now.tick
+                    .checked_sub(anchor.tick)
+                    .ok_or(WindowFailure::Clock)?,
+            )
+            .ok_or(WindowFailure::Clock)?;
         let remaining = ceiling
             .wall
             .checked_sub(now.wall.max(projected))
-            .ok_or(Error::Clock)?;
+            .ok_or(WindowFailure::Unavailable)?;
         let state = Window {
             readiness,
             stop,
@@ -200,8 +224,8 @@ impl NativeWindow {
             tick_end: now
                 .tick
                 .checked_add(remaining.min(limit))
-                .ok_or(Error::Clock)?,
-            floor: Mutex::new(Some(floor)),
+                .ok_or(WindowFailure::Clock)?,
+            floor: Mutex::new(Ok(floor)),
             #[cfg(test)]
             stop_after_signing: AtomicBool::new(false),
             #[cfg(test)]
@@ -216,15 +240,18 @@ impl NativeWindow {
             expire_schema: AtomicBool::new(false),
         };
         let window = Self(Arc::new(state), None);
-        window.sample()?;
+        window.checked_sample_typed()?;
         Ok(window)
     }
 
     fn next(&self, limit: Duration) -> Result<Self> {
         let mut floor = self.0.floor.lock().map_err(|_| Error::Clock)?;
-        let before = floor.take().ok_or(Error::Clock)?;
-        let now = Sample::now()?;
-        self.observe(now, before)?;
+        let before = (*floor).map_err(|_| Error::Clock)?;
+        let checked = Sample::now()
+            .map_err(|_| WindowFailure::Clock)
+            .and_then(|now| self.observe(now, before).map(|_| now));
+        *floor = Err(checked.err().unwrap_or(WindowFailure::Unavailable));
+        let now = checked.map_err(|_| Error::Clock)?;
         Self::new(
             self.0.readiness.clone(),
             self.0.stop.clone(),
@@ -233,6 +260,7 @@ impl NativeWindow {
             now,
             limit,
         )
+        .map_err(|_| Error::Clock)
     }
 
     pub(super) fn schema_turn(&self) -> Result<SchemaWindow> {
@@ -248,39 +276,57 @@ impl NativeWindow {
         Ok(SchemaWindow(window))
     }
 
-    fn observe(&self, now: Sample, floor: Sample) -> Result<Duration> {
+    fn observe(&self, now: Sample, floor: Sample) -> WindowResult<Duration> {
         let window = &self.0;
         if !window.readiness.is_current()
             || window.stop.load(Ordering::Acquire)
             || !window.ceiling.route.is_current()
-            || now.wall < floor.wall
-            || now.tick < floor.tick
             || now.tick >= window.tick_end
         {
-            return Err(Error::Clock);
+            return Err(WindowFailure::Unavailable);
+        }
+        if now.wall < floor.wall || now.tick < floor.tick {
+            return Err(WindowFailure::Clock);
         }
         let elapsed = now
             .tick
             .checked_sub(window.anchor.tick)
-            .ok_or(Error::Clock)?;
+            .ok_or(WindowFailure::Clock)?;
         let projected = window
             .anchor
             .wall
             .checked_add(elapsed)
-            .ok_or(Error::Clock)?;
+            .ok_or(WindowFailure::Clock)?;
         let wall = now.wall.max(projected);
-        if wall >= window.ceiling.wall || now.wall.abs_diff(projected) > Duration::from_secs(2) {
-            return Err(Error::Clock);
+        if now.wall.abs_diff(projected) > Duration::from_secs(2) {
+            return Err(WindowFailure::Clock);
+        }
+        if wall >= window.ceiling.wall {
+            return Err(WindowFailure::Unavailable);
         }
         Ok(wall)
     }
 
     /// Narrow the wall ceiling without restarting the visit's elapsed clock.
     pub(super) fn clamp_signed(&self, exclusive: u64) -> Result<Self> {
-        let ceiling = Duration::from_secs(exclusive).min(self.wall_ceiling());
-        let window = Self(Arc::clone(&self.0), Some(ceiling));
+        let window = self.with_wall_ceiling(exclusive);
         window.sample()?;
         Ok(window)
+    }
+
+    #[cfg(marmish_peer_receiver_candidate)]
+    pub(in crate::peer_invitation) fn clamp_signed_for_approval(
+        &self,
+        exclusive: u64,
+    ) -> WindowResult<Self> {
+        let window = self.with_wall_ceiling(exclusive);
+        window.checked_sample_typed()?;
+        Ok(window)
+    }
+
+    fn with_wall_ceiling(&self, exclusive: u64) -> Self {
+        let ceiling = Duration::from_secs(exclusive).min(self.wall_ceiling());
+        Self(Arc::clone(&self.0), Some(ceiling))
     }
 
     fn wall_ceiling(&self) -> Duration {
@@ -299,13 +345,24 @@ impl NativeWindow {
     }
 
     fn checked_sample(&self) -> Result<(Duration, Duration)> {
-        let mut floor = self.0.floor.lock().map_err(|_| Error::Clock)?;
-        let previous = floor.take().ok_or(Error::Clock)?;
-        let now = Sample::now()?;
-        let wall = self.observe(now, previous)?;
-        *floor = Some(now);
+        self.checked_sample_typed().map_err(|_| Error::Clock)
+    }
+
+    #[cfg(marmish_peer_receiver_candidate)]
+    pub(in crate::peer_invitation) fn approval_sample(&self) -> WindowResult<Duration> {
+        self.checked_sample_typed().map(|(wall, _)| wall)
+    }
+
+    fn checked_sample_typed(&self) -> WindowResult<(Duration, Duration)> {
+        let mut floor = self.0.floor.lock().map_err(|_| WindowFailure::Clock)?;
+        let previous = (*floor)?;
+        let checked = Sample::now()
+            .map_err(|_| WindowFailure::Clock)
+            .and_then(|now| self.observe(now, previous).map(|wall| (now, wall)));
+        *floor = checked.map(|(now, _)| now);
+        let (now, wall) = checked?;
         if wall >= self.wall_ceiling() {
-            return Err(Error::Clock);
+            return Err(WindowFailure::SignedExpired);
         }
         Ok((wall, now.tick))
     }
@@ -510,6 +567,47 @@ mod tests {
             assert!(window.sample().is_ok());
             stop.store(true, Ordering::Release);
             assert!(matches!(narrowed.sample(), Err(Error::Clock)));
+        });
+    }
+    #[test]
+    fn approval_window_distinguishes_signed_expiry_clock_and_lifecycle() {
+        let (startup, listener, _worker) = crate::peer_candidate_startup::pair();
+        startup.ordinary_ready();
+        listener.registered();
+        let stop = Arc::new(AtomicBool::new(false));
+        let wall = Duration::from_secs(10_000);
+        fixture_retirement_wall(wall, || {
+            let make = || {
+                NativeWindow::start(
+                    listener.readiness(),
+                    stop.clone(),
+                    CancellationToken::new(),
+                    wall,
+                    wall.as_secs() + 60,
+                )
+                .unwrap()
+            };
+            let window = make();
+            let narrowed = window.with_wall_ceiling(wall.as_secs());
+            assert_eq!(
+                narrowed.checked_sample_typed(),
+                Err(WindowFailure::SignedExpired)
+            );
+            assert!(window.checked_sample_typed().is_ok());
+            let original = RETIREMENT_WALL.get().unwrap();
+            RETIREMENT_WALL.set(Some(Sample {
+                wall: original.wall - Duration::from_secs(1),
+                ..original
+            }));
+            assert_eq!(window.checked_sample_typed(), Err(WindowFailure::Clock));
+            RETIREMENT_WALL.set(Some(original));
+            assert_eq!(window.checked_sample_typed(), Err(WindowFailure::Clock));
+            let active = make();
+            stop.store(true, Ordering::Release);
+            assert_eq!(
+                active.checked_sample_typed(),
+                Err(WindowFailure::Unavailable)
+            );
         });
     }
 }
