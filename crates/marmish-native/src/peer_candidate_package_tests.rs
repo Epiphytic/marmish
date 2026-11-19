@@ -20,10 +20,13 @@ use crate::{
 };
 
 use super::super::super::store::{
-    TrustedOutcome,
+    Error as CursorError, TrustedOutcome,
     consent_checkpoint::{Error as CheckpointError, wire},
 };
 use super::*;
+
+#[path = "peer_managed_consent_wss_tests.rs"]
+mod checked_ack;
 
 const RELAY: &str = "wss://private.example/";
 const ROOT: &str = "MARMISH_PACKAGE_FIXTURE_ROOT";
@@ -146,6 +149,20 @@ fn managed_queued_package_uses_unchanged_charged_image_across_restart() {
         "queued-fenced",
     ] {
         run_child(root.path(), mode);
+    }
+}
+
+#[test]
+#[ignore = "opt-in registered SQLCipher and real staged package"]
+fn managed_consent_queue_and_attempt_preserve_exact_authority() {
+    for cuts in [
+        ["issue", "queue-managed", "queued-managed-attempt"],
+        ["issue", "queue-commit-cut", "queued-managed-attempt"],
+    ] {
+        let root = package_fixture_root();
+        for mode in cuts {
+            run_child(root.path(), mode);
+        }
     }
 }
 
@@ -289,6 +306,70 @@ fn package_child() {
         let cursor_before = fs::read(&cursor_path).unwrap();
         let original = fs::read(&stage).unwrap();
         let wall = turn.sample().unwrap().as_secs();
+        if mode == "queued-managed-attempt" {
+            let account = identity.public_key();
+            let load = |owner: &mut RecoveredOwner<'_>| {
+                owner
+                    .checkpoint
+                    .read_managed_queued(
+                        &owner.source,
+                        account,
+                        RELAY,
+                        selector,
+                        turn.sample().unwrap().as_secs(),
+                    )
+                    .unwrap()
+                    .unwrap()
+            };
+            let first = load(&mut owner);
+            let stale = load(&mut owner);
+            let proof = owner.attest_queued_package(quota, &first, &turn).unwrap();
+            let before = owner.checkpoint.consent_fixture_clocks();
+            let rejected = owner.checkpoint.reserve_managed_consent(
+                &owner.source,
+                first,
+                &proof,
+                wall.max(before.0).max(before.1) + 1,
+                || Err(CheckpointError::Expired),
+            );
+            assert!(matches!(rejected, Err(CheckpointError::Expired)));
+            assert_eq!(owner.checkpoint.consent_fixture_clocks(), before);
+            assert_eq!(fs::read(&cursor_path).unwrap(), cursor_before);
+
+            let first = load(&mut owner);
+            let point = Instant::now();
+            let reserved = owner
+                .reserve_managed_consent(quota, first, &turn)
+                .unwrap()
+                .unwrap();
+            println!(
+                "package_fixture_timing managed_reserve_ms={:.3} image_bytes={}",
+                point.elapsed().as_secs_f64() * 1000.0,
+                original.len()
+            );
+            assert_eq!(reserved.attempt().sequence(), 1);
+            owner.managed_before_flush(quota, &reserved).unwrap();
+            let after = owner.checkpoint.consent_fixture_clocks();
+            let cursor_after = fs::read(&cursor_path).unwrap();
+
+            assert!(matches!(
+                owner.reserve_managed_consent(quota, stale, &turn),
+                Err(Error::Checkpoint(CheckpointError::Cursor(
+                    CursorError::Stale
+                )))
+            ));
+            let current = load(&mut owner);
+            let deferred = owner
+                .reserve_managed_consent(quota, current, &turn)
+                .unwrap();
+            assert!(deferred.is_none());
+            assert_eq!(owner.checkpoint.consent_fixture_clocks(), after);
+            assert_eq!(fs::read(&cursor_path).unwrap(), cursor_after);
+            assert_eq!(fs::read(&stage).unwrap(), original);
+            assert_eq!(turn.signs(), 0);
+            assert!(!snapshot.exists());
+            return;
+        }
         let mut read = |url, signer, at| {
             owner
                 .checkpoint
@@ -314,7 +395,7 @@ fn package_child() {
                 RecoveredOwner::open_registered(&lease, &identity, quota, &mut route).unwrap();
             let foreign_turn = window();
             assert!(matches!(
-                foreign.attest_queued_package(quota, queued, &foreign_turn),
+                foreign.attest_queued_package(quota, &queued, &foreign_turn),
                 Err(Error::Checkpoint(CheckpointError::LocalOwner))
             ));
             assert_eq!(foreign_turn.signs(), 0);
@@ -339,7 +420,7 @@ fn package_child() {
                 (journal, &[][..])
             };
             assert!(matches!(
-                owner.attest_queued_package(quota, queued, &turn),
+                owner.attest_queued_package(quota, &queued, &turn),
                 Err(Error::StageIdentityMismatch)
             ));
             assert_eq!(turn.signs(), 0);
@@ -358,7 +439,7 @@ fn package_child() {
             turn.set_copy_cut(true);
         }
         let point = Instant::now();
-        let proof = owner.attest_queued_package(quota, queued, &turn);
+        let proof = owner.attest_queued_package(quota, &queued, &turn);
         if mode == "queued-fenced" {
             assert!(proof.is_err());
             assert!(snapshot.exists());
@@ -418,6 +499,66 @@ fn package_child() {
         .unwrap();
 
     match mode.as_str() {
+        "queue-managed" | "queue-commit-cut" => {
+            let turn = window();
+            let proof = owner
+                .attest_package(quota, &reservation, None, &turn)
+                .unwrap();
+            let original = fs::read(&stage).unwrap();
+            let saved_cursor = fs::read(&cursor_path).unwrap();
+            let floors = owner.checkpoint.consent_fixture_clocks();
+            assert!(matches!(
+                owner
+                    .checkpoint
+                    .sign_managed_consent(&owner.source, &reservation, &proof, expires,),
+                Err(CheckpointError::Expired)
+            ));
+            assert_eq!(owner.checkpoint.consent_fixture_clocks(), floors);
+            assert_eq!(fs::read(&cursor_path).unwrap(), saved_cursor);
+            let point = Instant::now();
+            if mode == "queue-commit-cut" {
+                assert!(
+                    owner
+                        .queue_managed_consent_with(quota, &reservation, &proof, &turn, || {
+                            startup.stop();
+                        })
+                        .is_err()
+                );
+                let wall = Wall::System.sample().unwrap().as_secs();
+                assert!(
+                    owner
+                        .checkpoint
+                        .read_managed_queued(
+                            &owner.source,
+                            identity.public_key(),
+                            RELAY,
+                            selector,
+                            wall,
+                        )
+                        .unwrap()
+                        .is_some()
+                );
+            } else {
+                owner
+                    .queue_managed_consent(quota, &reservation, &proof, &turn)
+                    .unwrap();
+                let saved = fs::read(&cursor_path).unwrap();
+                assert!(
+                    owner
+                        .queue_managed_consent(quota, &reservation, &proof, &turn)
+                        .is_err()
+                );
+                assert_eq!(fs::read(&cursor_path).unwrap(), saved);
+            }
+            println!(
+                "package_fixture_timing {mode}_ms={:.3} image_bytes={}",
+                point.elapsed().as_secs_f64() * 1000.0,
+                original.len()
+            );
+            assert_eq!(turn.signs(), 1);
+            assert_eq!(fs::read(&stage).unwrap(), original);
+            assert!(!snapshot.exists());
+        }
         "queue" => {
             let turn = window();
             let proof = owner

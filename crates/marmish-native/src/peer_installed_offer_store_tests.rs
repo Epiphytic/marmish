@@ -507,6 +507,81 @@ fn peer_installed_custody_preserves_exact_offer_ancestry_and_fences_old_writers(
     assert!(reopened.recover_provisioning(&source, key, f.wall).is_ok());
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[tokio::test]
+async fn managed_consent_transaction_refuses_each_exclusive_deadline() {
+    for cutoff in ["offer", "consent", "artifact"] {
+        let f = Fixture::new();
+        let (package, wall) = native_package(&f.client, A).await;
+        let offer = offer(&f, &f.server, A, wall);
+        let key = Selector::from(&offer.flight);
+        let offer_end = offer.flight.flight().expires_at;
+        let (consent_end, boundary, refusal) = match cutoff {
+            "offer" => (offer_end + 1, offer_end, Error::Expired),
+            "consent" => (wall + 120, wall + 120, Error::Package),
+            _ => (wall + 120, wall + 120, Error::Expired),
+        };
+        let at = wall + 2;
+        let signed = codec()
+            .prepare_consent(&f.client, &offer.flight, &package, at, consent_end)
+            .unwrap();
+        let consent = codec()
+            .open_consent(&f.server, signed.frame(), &offer.flight, at)
+            .unwrap();
+        {
+            let mut cp = open(&f, &f.client, A, Policy::default()).unwrap();
+            let source = cp.bind_source(A).unwrap();
+            assert_eq!(
+                f.submit(&mut cp, &source, &offer),
+                Status::Accepted(TrustedOutcome::Applied),
+                "{cutoff}"
+            );
+        }
+        let mut cp =
+            open_custody(&f, &f.client, A, Policy::default(), ReceivePolicy::Manual).unwrap();
+        let source = cp.bind_source(A).unwrap();
+        let reservation = cp.reserve_provisioning(&source, key, at).unwrap();
+        let stage = cp.bind_stage(&source, &reservation, at).unwrap();
+        let witness = FileWitness {
+            device: [1; 8],
+            inode: [2; 8],
+        };
+        cp.start_stage(&source, &stage, witness, at).unwrap();
+        let artifact = Artifact::new(consent.binding().event_id, &package, offer_end + 600);
+        if cutoff == "artifact" {
+            // The schema is monotonic. Inject the shortened cutoff only at
+            // the fixture's NativeStarted-to-Prepared transition. Real
+            // issuance requires an artifact valid beyond the Offer.
+            assert_eq!(
+                cp.cursor
+                    .conn
+                    .execute(
+                        "UPDATE peer_provisional_stage_v1 SET state=2, package_id=?1,
+                            package_digest=?2, package_expires=?3 WHERE class=0 AND state=1",
+                        params![
+                            artifact.id,
+                            artifact.digest,
+                            i64::try_from(boundary).unwrap()
+                        ],
+                    )
+                    .unwrap(),
+                1
+            );
+        } else {
+            cp.record_prepared(&source, &stage, witness, artifact, at)
+                .unwrap();
+        }
+        cp.fixture_assert_managed_consent_boundaries(
+            &source,
+            &reservation,
+            &signed,
+            at,
+            boundary,
+            refusal,
+        );
+    }
+}
+
 #[tokio::test]
 async fn peer_installed_custody_reopens_signed_prepared_consent_and_held_delivery() {
     let f = Fixture::new();
@@ -614,6 +689,8 @@ async fn peer_installed_custody_reopens_signed_prepared_consent_and_held_deliver
             .status,
             Status::Accepted(TrustedOutcome::Held)
         );
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        cp.fixture_assert_managed_consent_custodied(&source, &queued, wall);
     }
 
     let mut cp = reopen();

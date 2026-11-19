@@ -80,12 +80,37 @@ pub(super) struct PrestagedPackage {
     window: NativeWindow,
 }
 
-pub(super) struct PackageProof<'lease> {
+pub(in crate::peer_invitation) struct PackageProof<'lease> {
     target: PackageTarget,
     extent: FileExtent,
     digest: [u8; 32],
     package: ProvisionalPackage,
     quota: &'lease ReceiverQuota<'lease>,
+}
+
+impl PackageProof<'_> {
+    pub(in crate::peer_invitation) fn target(&self) -> &PackageTarget {
+        &self.target
+    }
+
+    pub(in crate::peer_invitation) fn require(
+        &self,
+        checkpoint: &Checkpoint,
+        target: &PackageTarget,
+        wall: u64,
+    ) -> Result<&[u8]> {
+        checkpoint.require_managed_package_target(&self.target)?;
+        checkpoint.require_managed_package_target(target)?;
+        if self.target.stage() != target.stage()
+            || self.target.artifact() != target.artifact()
+            || self.target.deadline() != target.deadline()
+            || wall >= target.deadline()
+        {
+            return Err(Error::Binding);
+        }
+        self.package.check_lifetime(wall)?;
+        Ok(self.package.event.bytes.as_slice())
+    }
 }
 
 impl<'lease> RecoveredOwner<'lease> {
@@ -311,7 +336,7 @@ impl<'lease> RecoveredOwner<'lease> {
     pub(super) fn attest_queued_package(
         &mut self,
         quota: &ReceiverQuota<'_>,
-        queued: ManagedQueued,
+        queued: &ManagedQueued,
         window: &NativeWindow,
     ) -> Result<PackageProof<'lease>> {
         let quota = self.exact_package_quota(quota)?;
@@ -322,7 +347,7 @@ impl<'lease> RecoveredOwner<'lease> {
                 &owner.source,
                 owner.signer.public_key(),
                 &owner.relay,
-                &queued,
+                queued,
                 window.sample()?.as_secs(),
             )?;
             Ok(())
@@ -336,7 +361,7 @@ impl<'lease> RecoveredOwner<'lease> {
         confirm(self)?;
         window.sample()?;
         Ok(PackageProof {
-            target: queued.into_target(),
+            target: target.clone(),
             extent,
             digest,
             package,
