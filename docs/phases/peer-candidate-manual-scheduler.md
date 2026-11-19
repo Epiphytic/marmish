@@ -27,11 +27,11 @@ The live arm calls `live_turn` for at most one record. When work is pending, pas
 clock. When idle, pass the next view tick, or the next 500 ms rotor check if
 history is incomplete. Ingress further clamps either deadline to its 500 ms
 live limit and the current physical horizon. The idle read is admitted for at
-most 20 ms per work-bearing pass, exclusive of a measured record. Pass history a deadline at least `now + 5 s`, independent of the next rotor
-or view tick. History then clamps to its own five-second limit after draining
-buffered records and to the current route horizon. Pass that five-second page
-allowance plus up to 20 seconds for the admitted buffered native windows so a
-full bounded drain cannot cut short the page. A page timeout stops the
+most 20 ms per work-bearing pass, exclusive of a measured record. The actor's history turns use the existing five-second page limit computed
+inside `history_turn` after the buffered drain. Make the outer deadline
+optional so the actor can pass `None` and the existing timeout fixtures can
+still pass `Some(deadline)`. Both paths honor the current route horizon.
+The actor never clamps a page by a rotor or maintenance tick. A page timeout stops the
 generation. A same-founder cursor `Backlog` also stops it permanently. The scheduler never drops an ingress future to satisfy a maintenance tick. Only permanent stop or Fatal may discard it with the entire port and generation. A measured live record can outlast the idle deadline. Only the port can classify timeout as an idle read. Page failure cannot become completion.
 
 Use proven exact reads for the next due selectors. The existing test-only `daemon_due` is founder-specific and includes Auto, so it cannot choose candidate work. Reuse its verified query predicates and coordinate decoder where the schema matches. Derive an installed-owned due selector from the single Unknown charge for active stage, outbox, Held, JoinStarted or Pending. Check source and verified wall, exact nonterminal custody and current stage generation, and honor retry and signed deadlines. The fresh received-Offer choice orders currently eligible unreserved invitations by exact canonical server bytes, Offer ID and Offer revision. Existing rows record no local arrival sequence. Neither signed time, nullable decision time nor SQLite rowid supplies one. Use the existing bounded lifetime, quotas and cooldowns without promising first-arrival ordering. If there is a charged slot, an ambiguous image or a failed proof, fresh provisioning is ineligible. Revalidate selection in each effect's existing aperture. A selection read lends coordinates only. It cannot create a Reservation, a signed package, or a joined witness. The saved-Delivery visit uses the exact two-step work described below. Apply the following closed retirement table after the Manual exit check.
@@ -107,7 +107,7 @@ Held effects as they are mounted.
 | Observed snapshot | One rotor disposition |
 | --- | --- |
 | `ManagedSaved::Waiting` | The checked no-ACK backoff already updates the same row under its guarded transaction. Keep the port, grant no native witness and honor that due time. |
-| `ManagedSaved::Live` | Use `use_saved_delivery_native` or the current saved-native challenge seam to seal the exact `PreparedSaved` challenge. Pass the same owner predicate to `measure_delivery_guarded` and the guarded `finish_measured_saved_delivery`. Re-enter the same port through `use_saved_delivery` for finish, rechecking signed lifetime and source, before the existing Held or invalid commit. Reobserve next visit if a current snapshot has aged past its cutoff, cancelling any tentative live commit. No other errors can convert live data to expired retirement. |
+| `ManagedSaved::Live` | Use `use_delivery_native(prepared.challenge(), ...)` to seal the exact `PreparedSaved` challenge. Pass the same owner predicate to `measure_delivery_guarded` and the guarded `finish_measured_saved_delivery`. Re-enter the same port through `use_saved_delivery` for finish, rechecking signed lifetime and source, before the existing Held or invalid commit. Reobserve next visit if a current snapshot has aged past its cutoff, cancelling any tentative live commit. No other errors can convert live data to expired retirement. |
 | `ManagedSaved::Expired` | Use `use_expired_delivery_native` to obtain the historical sealed measurement, then `retire_expired_delivery` in the current stop and readiness window with the owner predicate. Map only the exact retirement outcome through its table. Historical authority grants deletion only. |
 
 The pass admits at most 85.020 s of explicitly timed awaits and native
