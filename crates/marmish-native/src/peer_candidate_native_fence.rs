@@ -503,6 +503,10 @@ mod tests {
                 window.clamp_signed(wall.as_secs()),
                 Err(Error::Clock)
             ));
+            let mut anchor = RETIREMENT_WALL.get().unwrap();
+            anchor.wall += Duration::from_secs(1);
+            RETIREMENT_WALL.set(Some(anchor));
+            assert!(matches!(narrowed.sample(), Err(Error::Clock)));
             assert!(window.sample().is_ok());
             stop.store(true, Ordering::Release);
             assert!(matches!(narrowed.sample(), Err(Error::Clock)));

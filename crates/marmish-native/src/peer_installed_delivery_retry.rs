@@ -92,6 +92,7 @@ impl Checkpoint {
         let (account, origin, wall) = route;
         self.check_installed_consent_scope(source, account, origin, wall)?;
         let cx = self.custody_context(source)?;
+        let mut refusal = None;
         let due = self.cursor.acquire_due(
             cx.origin,
             wall,
@@ -100,8 +101,9 @@ impl Checkpoint {
                 cx.verify(tx, wall)?;
                 rows::advance_wall(tx, wall)
             },
-            || before_commit().map_err(schema::cursor_error),
-        )?;
+            || preserve_refusal(&mut refusal, before_commit()),
+        );
+        let due = due.map_err(|cause| refusal.unwrap_or_else(|| cause.into()))?;
         Ok(due.map(|snapshot| SavedDelivery {
             snapshot,
             owner: cx.owner,
@@ -172,7 +174,8 @@ impl Checkpoint {
             })?;
 
         if wall < expires && queued.row.ack_at.is_none() {
-            self.cursor.retry_again_guarded(
+            let mut refusal = None;
+            let recorded = self.cursor.retry_again_guarded(
                 &saved.snapshot,
                 wall,
                 |tx| {
@@ -190,8 +193,9 @@ impl Checkpoint {
                     }
                     rows::advance_wall(tx, wall)
                 },
-                || before_retry_commit(expires).map_err(schema::cursor_error),
-            )?;
+                || preserve_refusal(&mut refusal, before_retry_commit(expires)),
+            );
+            recorded.map_err(|cause| refusal.unwrap_or_else(|| cause.into()))?;
             return Ok(None);
         }
 
@@ -332,4 +336,16 @@ impl Checkpoint {
         )?;
         Ok(None)
     }
+}
+
+// CursorStore only knows its own error enum. Recover the precise owner refusal
+// after the transaction has dropped, without broadening CursorStore's API.
+fn preserve_refusal(
+    refusal: &mut Option<Error>,
+    result: Result<()>,
+) -> std::result::Result<(), CursorError> {
+    result.map_err(|error| {
+        *refusal = Some(error);
+        schema::cursor_error(error)
+    })
 }

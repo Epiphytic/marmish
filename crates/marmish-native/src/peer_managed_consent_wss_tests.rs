@@ -17,6 +17,8 @@ use crate::{
 mod joined_port;
 #[path = "peer_manual_ingress_wss_tests.rs"]
 mod manual_ingress;
+#[path = "peer_saved_delivery_visit_wss_tests.rs"]
+mod saved_visit;
 
 const ACK_CASE: &str = "MARMISH_MANAGED_CONSENT_ACK_CASE";
 
@@ -82,9 +84,7 @@ async fn managed_consent_ack_child() {
         .unwrap()
         .register(&lease, &material)
         .unwrap();
-    let forwarding = case
-        .starts_with("ingress")
-        .then(|| registered.forwarding_verifier());
+    let forwarding = registered.forwarding_verifier();
     create_empty(&lease.root().join("peer/cursor.db"));
     let mut registered = registered.attach(&lease, &material).unwrap();
     let (quota, mut route) = registered.actor_parts();
@@ -114,7 +114,7 @@ async fn managed_consent_ack_child() {
             founder: &founder,
             account,
             owner: &mut owner,
-            forwarding: forwarding.unwrap(),
+            forwarding: forwarding.clone(),
         })
         .await;
         return;
@@ -141,14 +141,14 @@ async fn managed_consent_ack_child() {
     listener.registered();
     let ready = worker.ready().await.unwrap();
     let stopped = Arc::new(AtomicBool::new(false));
-    let mut ingress = if let Some(forwarding) = forwarding {
+    let mut ingress = if case.starts_with("ingress") {
         let mut ingress =
             crate::peer_invitation::receiver_inventory::manual_ingress::Ingress::recover(
                 &mut owner,
                 &mut port,
                 ready.readiness(),
                 Arc::clone(&stopped),
-                forwarding,
+                forwarding.clone(),
             )
             .unwrap();
         assert!(
@@ -214,6 +214,30 @@ async fn managed_consent_ack_child() {
             profile: lease.root(),
         };
         manual_ingress::measured_delivery(ingress, &mut fixture, &mut owner, &queued).await;
+        return;
+    }
+    if matches!(case.as_str(), "saved-waiting" | "saved-live-cliff") {
+        let fixture = joined_port::Fixture {
+            relay: &relay,
+            port: &mut port,
+            sender: &mut sender,
+            founder: &founder,
+            offer: &offer.flight,
+            quota,
+            readiness: ready.readiness(),
+            stop: stopped,
+            profile: lease.root(),
+        };
+        saved_visit::run(
+            &case,
+            fixture,
+            owner,
+            queued,
+            &forwarding,
+            &lease,
+            &material,
+        )
+        .await;
         return;
     }
     if let Some(case) = case.strip_prefix("port-") {

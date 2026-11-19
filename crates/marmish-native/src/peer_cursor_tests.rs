@@ -698,7 +698,32 @@ fn saved_delivery_final_refusals_rollback_both_floors_and_exact_row() {
             .err(),
         Some(Error::Stale)
     );
-    store.commit_invalid(A, raw, W).unwrap();
+    // Bumping the same ID's revision is also an exact head change.
+    assert_eq!(probe(&mut store, wall), Some(coordinate));
+    store
+        .retry_again_with_fence(&unchanged, wall, advance)
+        .unwrap();
+    let next = store.existing(A, raw.id).unwrap().unwrap();
+    assert_ne!(probe(&mut store, next.retry_at), Some(coordinate));
+    assert_eq!(
+        store
+            .acquire_due(
+                A,
+                next.retry_at,
+                Some(coordinate),
+                refuse_if_reached,
+                || Ok(())
+            )
+            .err(),
+        Some(Error::Stale)
+    );
+    assert_eq!(
+        store.existing(A, raw.id).unwrap().unwrap().retry_at,
+        next.retry_at
+    );
+    assert_walls(&store, wall);
+
+    store.commit_invalid(A, raw, wall).unwrap();
     assert_eq!(probe(&mut store, wall), None);
     assert_eq!(
         store
@@ -706,7 +731,7 @@ fn saved_delivery_final_refusals_rollback_both_floors_and_exact_row() {
             .err(),
         Some(Error::Stale)
     );
-    assert_walls(&store, W);
+    assert_walls(&store, wall);
 }
 
 #[test]

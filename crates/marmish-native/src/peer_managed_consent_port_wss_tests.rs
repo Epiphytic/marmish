@@ -104,7 +104,7 @@ impl Fixture<'_, '_> {
         (flight.carrier_id.to_bytes(), expires - 300)
     }
 
-    async fn defer_delivery(
+    pub(super) async fn defer_delivery(
         &mut self,
         owner: &mut RecoveredOwner<'_>,
         queued: &ManagedQueued,

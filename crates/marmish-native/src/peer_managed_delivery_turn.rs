@@ -107,7 +107,10 @@ impl<'lease> RecoveredOwner<'lease> {
         let window = port.use_current_native(|route| {
             route
                 .manual_window(readiness.clone(), Arc::clone(stop), u64::MAX, forwarding)
-                .map_err(|_| Error::Clock)
+                .map_err(|error| match error {
+                    crate::Error::Invalid("peer_receiver_forwarding") => Error::Binding,
+                    _ => Error::Clock,
+                })
         })??;
         match self.visit_saved_delivery(quota, port, coordinate, &window) {
             Err(
@@ -169,36 +172,7 @@ impl<'lease> RecoveredOwner<'lease> {
         match observed {
             ManagedSaved::Waiting => Ok(SavedVisit::Waiting),
             ManagedSaved::Live(prepared) => {
-                let signed_end = prepared.challenge().deadline();
-                let live = || {
-                    if check()?.as_secs() >= signed_end {
-                        return Err(CursorError::Stale.into());
-                    }
-                    Ok(())
-                };
-                let outcome = (|| -> Result<SavedVisit> {
-                    live()?;
-                    let scoped_window = window.clamp_signed(signed_end)?;
-                    let measured = port.use_delivery_native(prepared.challenge(), |route| {
-                        self.measure_delivery_in_window(quota, route, scoped_window, &live)
-                    })??;
-                    port.use_saved_delivery(&saved, |checked| {
-                        self.finish_measured_saved_delivery_guarded(
-                            quota, checked, prepared, measured, &live,
-                        )
-                    })??;
-                    Ok(SavedVisit::Applied)
-                })();
-                let can_have_crossed = matches!(
-                    outcome,
-                    Err(Error::Clock
-                        | Error::Checkpoint(consent_checkpoint::Error::Expired)
-                        | Error::Native(StageError::Unavailable))
-                );
-                if can_have_crossed && matches!(check(), Ok(wall) if wall.as_secs() >= signed_end) {
-                    return Ok(SavedVisit::Reobserve);
-                }
-                outcome
+                self.visit_live_saved(quota, port, &saved, prepared, window)
             }
             ManagedSaved::Expired(expired) => {
                 let retired = port.use_expired_delivery_native(expired, |checked| {
@@ -217,6 +191,52 @@ impl<'lease> RecoveredOwner<'lease> {
                     Retirement::Stop => SavedVisit::Stop,
                 })
             }
+        }
+    }
+
+    pub(in crate::peer_invitation) fn visit_live_saved(
+        &mut self,
+        quota: &ReceiverQuota<'_>,
+        port: &mut PeerRecipientPort,
+        saved: &SavedDelivery,
+        prepared: PreparedSaved<'_>,
+        window: &NativeWindow,
+    ) -> Result<SavedVisit> {
+        let signed_end = prepared.challenge().deadline();
+        let check = || {
+            window
+                .sample()
+                .map_err(|_| consent_checkpoint::Error::Expired)
+        };
+        let live = || {
+            if check()?.as_secs() >= signed_end {
+                return Err(CursorError::Stale.into());
+            }
+            Ok(())
+        };
+        let outcome = (|| -> Result<SavedVisit> {
+            live()?;
+            let scoped_window = window.clamp_signed(signed_end)?;
+            let measured = port.use_delivery_native(prepared.challenge(), |route| {
+                self.measure_delivery_in_window(quota, route, scoped_window, &live)
+            })??;
+            port.use_saved_delivery(saved, |checked| {
+                self.finish_measured_saved_delivery_guarded(
+                    quota, checked, prepared, measured, &live,
+                )
+            })??;
+            Ok(SavedVisit::Applied)
+        })();
+        match outcome {
+            Err(
+                Error::Clock
+                | Error::Checkpoint(consent_checkpoint::Error::Expired)
+                | Error::Native(StageError::Unavailable)
+                | Error::Checkpoint(consent_checkpoint::Error::Cursor(CursorError::Stale)),
+            ) if matches!(check(), Ok(wall) if wall.as_secs() >= signed_end) => {
+                Ok(SavedVisit::Reobserve)
+            }
+            other => other,
         }
     }
 
