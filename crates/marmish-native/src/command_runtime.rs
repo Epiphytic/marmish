@@ -255,6 +255,31 @@ impl MdkOwner {
             .ok_or(crate::client_inventory::InventoryError::ServerUnavailable)?
             .client_inventory(&self.journal, request)
     }
+    /// Keep lost admission distinct from the existing domain query result.
+    /// The listener must independently check before writing a response.
+    #[cfg(any(test, marmish_peer_receiver_candidate))]
+    #[allow(dead_code)] // Held for the reviewed candidate dispatcher mount.
+    pub(crate) fn checked_client_inventory(
+        &self,
+        request: crate::client_inventory::InventoryRequest,
+    ) -> Result<
+        std::result::Result<
+            crate::client_inventory::ClientInventoryReply,
+            crate::client_inventory::InventoryError,
+        >,
+    > {
+        #[cfg(test)]
+        self.active_mode
+            .observe(super::Observation::InventoryBeforeQuery);
+        self.active_mode.admit()?;
+        let outcome = self.client_inventory(request);
+        #[cfg(test)]
+        self.active_mode
+            .observe(super::Observation::InventoryAfterQuery);
+        self.active_mode.admit()?;
+        Ok(outcome)
+    }
+
     pub(super) fn progress_commands(&mut self) -> Result<()> {
         if let Some(service) = &mut self.commands {
             service.poll_completions(&mut self.journal, now()?)?;

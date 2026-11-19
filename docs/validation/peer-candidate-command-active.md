@@ -42,3 +42,35 @@ of exact original Welcome and generic, Stream and Command publication bytes
 across restart, and measuring admission cost under load, remain part of that
 exit. The subsequent composed mount requires real private WSS, the same-UID
 listener, startup reporting and physical custody on failure.
+
+## Follow-up active owner effect cuts
+
+Exact source `ec4305264e03a22ec5728c99a053fd5aac0f182c` passed Linux AMD64
+candidate libtest linking in 40.96 s, candidate all-target Clippy with
+`-D warnings` in 27.54 s, stock all-target Clippy with `-D warnings` in
+27.43 s, scoped Rust formatting and `git diff --check`.
+The opt-in `candidate_native_owner_active_effect_cut_qualification` passed
+all six fresh-process cases in 23.19 s. The stock-mode observer unit check
+also passed. Claude independently reran both selectors, with the six-case
+selector passing in 23.32 s. The candidate archive SHA-256 is
+`735cb3b61811fd201fb98ebff373061ba94e8d2bbef5029c4635fabe07c017f8`.
+The cut timing includes child startup and SQLCipher and gives no standalone
+admission or relay latency measurement.
+
+The selector measures the real adapter wait entering Pending, then loss at
+the next poll. A separate case waits for the bounded inner receive to resolve
+and checks that the outer dispatcher loss wins before the result is mapped. It also measures the first
+native orphan forget before the next ordered record is refused, checks
+inventory loss before a query and after a typed `ServerUnavailable`, and
+checks the real owner publication gate and a shared-mode publisher before
+signing. Each child compares the account and Journal database families and
+socket count at displacement and at the end of the observed turn. The
+orphan case uses no Journal rows, and there is no native read after the cut.
+
+Successful inventory through a running Command service and a real private
+WSS owner remain separate acceptance cases. The mounted path still needs
+to distinguish native work pending from replay ACK and prove byte-exact
+retention of Welcome and generic, Stream and Command publications across
+restart. The [follow-up design](../phases/peer-candidate-command-active-cuts.md)
+records the remaining room, maintenance, republish and drain boundaries.
+No daemon routing or release path changes in this increment.

@@ -55,3 +55,41 @@ restart projections and verification of SDK callback refusal. The mount must
 preserve the Command request allowlist and check fatal before reply
 classification, including timeout and generic fallback. [Validation and
 remaining checks](../validation/peer-candidate-command-active.md).
+
+## Follow-up effect-cut design
+
+Claude Code Sonnet in Auto mode reviewed the follow-up plan at
+`46f0270830518d3c56d3040b311c2c369c124ad4` and requested changes
+(`3f8902fc-2b40-4d48-b5aa-631b8eba295a`). It identified a vacuous Journal
+assertion for native-only orphan records and a test observer that could miss
+cloned adapters. It also found that normal cold reopen would erase the evidence
+and that a loopback connect did not establish an actual pending effect.
+
+The independent R2 reviewer approved exact plan
+`4e71f5cc2f058c72c4d5c60ac0e6f8bb0cdcb495`
+(`e42b1b5a-4a22-48b1-b0ae-13b8e52fbe2c`). The plan shares observations
+through test-only owner clones, measures real orphan progress before the cut
+and exercises the actual adapter notification wait. The reviewer checked
+source reachability, unchanged stock admission, use of typed refusals and
+the unmounted scope. The implementation should assert exact visit order,
+fail when the first wait never reaches Pending, and confirm stock test builds
+ignore installed observers. Both design reviews were read-only.
+
+## Follow-up effect-cut code
+
+Claude Code Sonnet in Auto mode approved exact Rust
+`ec4305264e03a22ec5728c99a053fd5aac0f182c` in session
+`2ddf317f-7cdc-40ab-9369-c9948c1c061f`, with no blocking findings. An earlier
+static pass (`421a93aa-9ba7-441a-8b6e-77b470faf92c`) reviewed a draft before
+the final test compile correction. The final reviewer checked the exact
+source and archive hash and reran the six fresh-process cases and the
+stock observer check. The author ran stock and candidate strict Clippy.
+The draft validation document was outside the reviewed Rust commit.
+
+The ready-edge fixture checks that dispatcher loss supersedes the inner
+result and leaves its exact outcome unspecified. Inventory after-query
+coverage uses the typed `ServerUnavailable` result. The package publisher
+fixture exercises the gate before signing using the same active admission.
+It does not qualify the mounted SDK callback or WSS route. The daemon
+caller still needs an independent admission check before any reply write.
+[Measured validation](../validation/peer-candidate-command-active.md).
