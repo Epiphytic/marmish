@@ -161,6 +161,7 @@ mod tests {
     use super::*;
     use crate::dispatcher_fatal::Trip;
     use std::{
+        os::fd::AsRawFd,
         sync::{
             Arc,
             atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -299,6 +300,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn gate_expiry_after_ack_before_commit_admission() {
+        let (reporter, mut parent) = StartupReporter::test_channel().unwrap();
+        let channel = ChildChannel::take(&reporter).unwrap();
+        let child_fd = channel.0.as_raw_fd();
+        let (trip, fatal, _) = admission();
+        let ack_sent = AtomicBool::new(false);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let admission = Admission::new(&trip, {
+            let attempts = attempts.clone();
+            move || {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                true
+            }
+        });
+
+        let child = channel.exchange(&admission, &fatal, |_| {
+            if !ack_sent.load(Ordering::Relaxed) {
+                return None;
+            }
+
+            // SAFETY: the exchange still owns this fd while invoking its gate.
+            // Peek at one socket byte without consuming it or blocking.
+            let mut byte = 0u8;
+            let count = unsafe {
+                libc::recv(
+                    child_fd,
+                    (&mut byte as *mut u8).cast(),
+                    1,
+                    libc::MSG_DONTWAIT | libc::MSG_PEEK,
+                )
+            };
+            if count == 1 {
+                assert_eq!(byte, b'A');
+                return None;
+            }
+            assert_eq!(count, -1);
+            assert_eq!(io::Error::last_os_error().kind(), io::ErrorKind::WouldBlock);
+            Some(Interrupt::Expired)
+        });
+        let parent_exchange = async {
+            expect_byte(&mut parent, b'R').await;
+            let offer_attempts = attempts.load(Ordering::Relaxed);
+            parent.write_all(b"A").await.unwrap();
+            ack_sent.store(true, Ordering::Relaxed);
+            expect_eof(&mut parent).await;
+            offer_attempts
+        };
+        let (result, offer_attempts) = tokio::join!(child, parent_exchange);
+        assert!(matches!(
+            result,
+            Err(Failure::Interrupted(Interrupt::Expired))
+        ));
+        assert_ne!(offer_attempts, 0);
+        assert_eq!(attempts.load(Ordering::Relaxed), offer_attempts);
+    }
+
+    #[tokio::test]
+    async fn nonfatal_denial_blocks_offer_commit_and_failure_frame() {
+        let (trip, fatal, _) = admission();
+        let denied = Admission::new(&trip, || false);
+        let (reporter, mut parent) = StartupReporter::test_channel().unwrap();
+        let channel = ChildChannel::take(&reporter).unwrap();
+        let result = channel.exchange(&denied, &fatal, |_| None).await;
+        assert!(matches!(result, Err(Failure::Admission)));
+        expect_eof(&mut parent).await;
+
+        let (reporter, mut parent) = StartupReporter::test_channel().unwrap();
+        ChildChannel::take(&reporter)
+            .unwrap()
+            .fail_before_offer(&denied);
+        expect_eof(&mut parent).await;
+
+        let (reporter, mut parent) = StartupReporter::test_channel().unwrap();
+        let channel = ChildChannel::take(&reporter).unwrap();
+        let ack_sent = Arc::new(AtomicBool::new(false));
+        let switch = ack_sent.clone();
+        let admission = Admission::new(&trip, move || !switch.load(Ordering::Relaxed));
+        let child = channel.exchange(&admission, &fatal, |_| None);
+        let parent_exchange = async {
+            expect_byte(&mut parent, b'R').await;
+            parent.write_all(b"A").await.unwrap();
+            ack_sent.store(true, Ordering::Relaxed);
+            expect_eof(&mut parent).await;
+        };
+        let (result, ()) = tokio::join!(child, parent_exchange);
+        assert!(matches!(result, Err(Failure::Admission)));
+    }
+
+    #[tokio::test]
     async fn malformed_ack_and_closed_parent_cannot_commit() {
         for (ack, expected) in [
             (Some(b'C'), Failure::Acknowledgement),
@@ -337,10 +427,7 @@ mod tests {
         expect_eof(&mut parent).await;
     }
 
-    #[tokio::test]
-    async fn pending_offer_write_wakes_on_fatal_without_parent_reading() {
-        let (reporter, mut parent) = StartupReporter::test_channel().unwrap();
-        let mut channel = ChildChannel::take(&reporter).unwrap();
+    fn backpressure(channel: &mut ChildChannel) -> usize {
         let mut sent = 0;
         loop {
             match channel.0.write(&[b'x'; 8192]) {
@@ -349,10 +436,27 @@ mod tests {
                     sent += written;
                     assert!(sent < 4 * 1024 * 1024);
                 }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return sent,
                 Err(error) => panic!("could not fill fixture socket: {error}"),
             }
         }
+    }
+
+    async fn expect_only_backlog(parent: &mut UnixStream, sent: usize) {
+        let mut received = Vec::new();
+        tokio::time::timeout(TEST_DEADLINE, parent.read_to_end(&mut received))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(received.len(), sent);
+        assert!(received.iter().all(|byte| *byte == b'x'));
+    }
+
+    #[tokio::test]
+    async fn pending_offer_write_wakes_on_fatal_without_parent_reading() {
+        let (reporter, mut parent) = StartupReporter::test_channel().unwrap();
+        let mut channel = ChildChannel::take(&reporter).unwrap();
+        let sent = backpressure(&mut channel);
 
         let (trip, fatal, _) = admission();
         let attempted = CancellationToken::new();
@@ -374,13 +478,33 @@ mod tests {
             .unwrap();
         assert!(matches!(result, Err(Failure::Fatal)));
 
-        let mut received = Vec::new();
-        tokio::time::timeout(TEST_DEADLINE, parent.read_to_end(&mut received))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(received.len(), sent);
-        assert!(received.iter().all(|byte| *byte == b'x'));
+        expect_only_backlog(&mut parent, sent).await;
+    }
+
+    #[tokio::test]
+    async fn resumed_pending_offer_needs_fresh_admission() {
+        let (reporter, mut parent) = StartupReporter::test_channel().unwrap();
+        let mut channel = ChildChannel::take(&reporter).unwrap();
+        let sent = backpressure(&mut channel);
+        let (trip, fatal, _) = admission();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let admission = Admission::new(&trip, {
+            let attempts = attempts.clone();
+            move || attempts.fetch_add(1, Ordering::Relaxed) == 0
+        });
+
+        let mut child = pin!(channel.exchange(&admission, &fatal, |_| None));
+        let result = poll_fn(|cx| {
+            assert!(child.as_mut().poll(cx).is_pending());
+            assert_eq!(attempts.load(Ordering::Relaxed), 1);
+            // Force a resume while the actual socket is still backpressured.
+            // The resumed poll must consult Admission before retrying I/O.
+            Poll::Ready(child.as_mut().poll(cx))
+        })
+        .await;
+        assert!(matches!(result, Poll::Ready(Err(Failure::Admission))));
+        assert_eq!(attempts.load(Ordering::Relaxed), 2);
+        expect_only_backlog(&mut parent, sent).await;
     }
 
     #[tokio::test]
