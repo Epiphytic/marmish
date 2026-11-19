@@ -1,6 +1,6 @@
 # Qualify the installed Manual recipient through its local listener
 
-This plan tests the [private Manual handoff](peer-candidate-manual-handoff.md) with the reviewed guarded ingress, local scheduling and same-row Pending observation. Base `8aec89aeda6e423a85d233a0f3bbcad61f155d24`. The selector stays out of ordinary CI and a claim about running it requires fresh results from the exact integrated executable. The separate installed ordinary dispatcher-loss suite retains its existing acceptance cases and fault timeline.
+This plan tests the [private Manual handoff](peer-candidate-manual-handoff.md) with the reviewed guarded ingress, local scheduling and same-row Pending observation. Use the final integrated revision stamped through `MARMISH_BUILD_COMMIT`. The selector stays out of ordinary CI and a claim about running it requires fresh results from the exact integrated executable. The separate installed ordinary dispatcher-loss suite retains its existing acceptance cases and fault timeline.
 
 ## Installed artifacts and test ownership
 

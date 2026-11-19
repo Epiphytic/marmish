@@ -1,14 +1,16 @@
 # Serve the private Manual actor on its checked connection
 
-This is the scheduler and mount supplement to the [approved actor design](peer-candidate-manual-actor-mount.md). It combines the [idle handoff](peer-candidate-manual-handoff.md), guarded ingress, [measured expiry retirement](peer-candidate-expired-delivery.md), and [sealed Pending observation](../validation/peer-candidate-pending-observation.md). The integrated implementation base is
-`5b423ba1121fba8ab5c3636fcfe032249c0c204a`. It reconciles the two changes in
-the Delivery wake and tests. Use this exact crate tree plus the publication
-evidence when implementing. Verify the port, shared owner, guarded ingress,
-retirement and Producer interfaces against that tree. The installed controller in [the acceptance plan](peer-candidate-manual-installed-proof.md) remains the externally observed test. Stock and Passive retain their current paths. Only the explicit private Manual example makes the new actor reachable. The first service can publish Pending. Healthy Empty, approval and Auto need their own approved mounts.
+This is the scheduler and mount supplement to the [approved actor design](peer-candidate-manual-actor-mount.md). It combines the [idle handoff](peer-candidate-manual-handoff.md), guarded ingress, [measured expiry retirement](peer-candidate-expired-delivery.md), and [sealed Pending observation](../validation/peer-candidate-pending-observation.md). The reviewed integrated crate tree is `5b423ba1121fba8ab5c3636fcfe032249c0c204a`.
+Its published source-identical ancestor `e6e2661` is in this design's history.
+Implement from the commit containing this design. The
+[guarded service design](peer-candidate-manual-service.md) supplies effect fences.
+This supplement supersedes its Offer order, the selection order, and the
+expired-Delivery disposition. The two reviews of guarded ingress and expiry
+already cover the reconciled Delivery wake and test seams. The installed controller in [the acceptance plan](peer-candidate-manual-installed-proof.md) remains the externally observed test. Stock and Passive retain their current paths. Only the explicit private Manual example makes the new actor reachable. The first service can publish Pending. Healthy Empty, approval and Auto need their own approved mounts.
 
 ## Exact owner and shutdown
 
-Keep open and initial readiness under the existing 15-second startup budget from the second readiness edge. After the authenticated port is open and that budget is checked, move its existing actor-local borrowed owner and the sole Producer into the Manual branch of the caught future. No extra thread, relay, cursor, key, slot or lease opens from the branch. Passive stays on its current idle loop. Only startup calls the readiness budget or fence deadline. Update the private test constructors to supply the optional stop cell. Share the existing cancellation token for asynchronous waits and an actor-issued stop cell for synchronous guard callbacks. Only the Manual worker carries an actor-issued `Arc<AtomicBool>`; Passive needs only the existing token. Both Actor stop and Drop set the cell with Release before cancelling. Give the worker an RAII stop guard that sets the same cell on any exit or unwind. When the loop observes Fatal or Ready stopped, set the cell before returning. A synchronous check uses Acquire and checks the readiness watch and Fatal independently; the watch is not a second stop-cell writer. The cell and watch handed to every native turn come from that actor, not from an adapter-created substitute. Each iteration independently checks forwarding even after a local error. A suspected default dispatcher displacement rechecks and trips the registered shared Fatal through the existing path.
+Keep open and initial readiness under the existing 15-second startup budget from the second readiness edge. After the authenticated port is open and that budget is checked, move its existing actor-local borrowed owner and the sole Producer into the Manual branch of the caught future. No extra thread, relay, cursor, key, slot or lease opens from the branch. Passive stays on its current idle loop. Only startup calls the readiness budget or fence deadline. Update the private test constructors to supply the optional stop cell. Share the existing cancellation token for asynchronous waits and an actor-issued stop cell for synchronous guard callbacks. Only the Manual worker carries an actor-issued `Arc<AtomicBool>`; Passive needs only the existing token. Both Actor stop and Drop set the cell with Release before cancelling. Give the worker an RAII stop guard that sets the same cell on any exit or unwind. When the loop observes Fatal or Ready stopped, set the cell before returning. A synchronous check uses Acquire and checks the readiness watch and Fatal independently; ready loss itself does not write the cell; the actor exit guard writes after classification. The cell and watch handed to every native turn come from that actor, not from an adapter-created substitute. Each iteration independently checks forwarding even after a local error. A suspected default dispatcher displacement rechecks and trips the registered shared Fatal through the existing path.
 
 Keep every in-flight port operation owned until its existing deadline, except when permanent stop or Fatal discards it and the exact port is never reused. No detached tasks own exchanges, synchronous file work, or transaction leases. A view-drop guard closes the read side before raw exact route revocation and reap. Keep the actor and ordinary lease alive until actual join. Every route, cursor, history or live ingress error permanently stops the Peer generation and closes the view. No managed, retry, or projection work runs after ingress fails. Add a Manual exit classifier that checks forwarding and gives registered Fatal
 priority. With no Fatal, a set synchronous stop cell or cancelled token is
@@ -25,12 +27,14 @@ The live arm calls `live_turn` for at most one record. When work is pending, pas
 clock. When idle, pass the next view tick, or the next 500 ms rotor check if
 history is incomplete. Ingress further clamps either deadline to its 500 ms
 live limit and the current physical horizon. The idle read is admitted for at
-most 20 ms per work-bearing pass, exclusive of a measured record. History gets
-a full five-second page exchange allowance through its internally measured
-limit, which still honors the current route horizon. A page timeout stops the
+most 20 ms per work-bearing pass, exclusive of a measured record. Pass history a deadline at least `now + 5 s`, independent of the next rotor
+or view tick. History then clamps to its own five-second limit after draining
+buffered records and to the current route horizon. Pass that five-second page
+allowance plus up to 20 seconds for the admitted buffered native windows so a
+full bounded drain cannot cut short the page. A page timeout stops the
 generation. A same-founder cursor `Backlog` also stops it permanently. The scheduler never drops an ingress future to satisfy a maintenance tick. Only permanent stop or Fatal may discard it with the entire port and generation. A measured live record can outlast the idle deadline. Only the port can classify timeout as an idle read. Page failure cannot become completion.
 
-Use proven exact reads for the next due selectors. The existing test-only `daemon_due` is founder-specific and includes Auto, so it cannot choose candidate work. Reuse its verified query predicates and coordinate decoder where the schema matches. Derive an installed-owned due selector from the single Unknown charge for active stage, outbox, Held, JoinStarted or Pending. Check source and verified wall, exact nonterminal custody and current stage generation, and honor retry and signed deadlines. The fresh received-Offer choice orders currently eligible unreserved invitations by exact canonical server bytes, Offer ID and Offer revision. Existing rows record no local arrival sequence. Neither signed time, nullable decision time nor SQLite rowid supplies one. Use the existing bounded lifetime, quotas and cooldowns without promising first-arrival ordering. If there is a charged slot, an ambiguous image or a failed proof, fresh provisioning is ineligible. Revalidate selection in each effect's existing aperture. A selection read lends coordinates only. It cannot create a Reservation, a signed package, or a joined witness. Use existing exact due/retirement classification for saved Delivery, with expired retirement admitting one exact tested row. Apply the following closed retirement table after the Manual exit check.
+Use proven exact reads for the next due selectors. The existing test-only `daemon_due` is founder-specific and includes Auto, so it cannot choose candidate work. Reuse its verified query predicates and coordinate decoder where the schema matches. Derive an installed-owned due selector from the single Unknown charge for active stage, outbox, Held, JoinStarted or Pending. Check source and verified wall, exact nonterminal custody and current stage generation, and honor retry and signed deadlines. The fresh received-Offer choice orders currently eligible unreserved invitations by exact canonical server bytes, Offer ID and Offer revision. Existing rows record no local arrival sequence. Neither signed time, nullable decision time nor SQLite rowid supplies one. Use the existing bounded lifetime, quotas and cooldowns without promising first-arrival ordering. If there is a charged slot, an ambiguous image or a failed proof, fresh provisioning is ineligible. Revalidate selection in each effect's existing aperture. A selection read lends coordinates only. It cannot create a Reservation, a signed package, or a joined witness. The saved-Delivery visit uses the exact two-step work described below. Apply the following closed retirement table after the Manual exit check.
 
 | Retirement | Rotor action and connection |
 | --- | --- |
@@ -43,7 +47,7 @@ Authoritative corruption, refusal of forwarding, or a lost current route stops t
 
 Read selectors under `Checkpoint::read_installed_consent` on the current
 physical recipient aperture. Compare the full single class charge and stage
-journal. SQL selection leaves both floors unchanged. Verify the durable schema
+journal. SQL selection leaves both floors unchanged for Manual, Pending and saved-Delivery probes. Verify the durable schema
 and both retained floors, and preserve `Fenced` and `JournalCandidate` as
 ineligible for fresh work. Re-read the exact signed Offer through
 `installed_live_offer` before creating its native window. Revalidate its
@@ -57,6 +61,7 @@ Use the separate stage apertures and timers in `RecoveredOwner` for Bound, Nativ
 | Turn | Scoped input and output |
 | --- | --- |
 | Pick managed work | `RecoveredOwner::due_manual_work(&mut self, &mut PeerRecipientPort) -> Result<Option<ManualDue>>`. Its closed output is `Provision(Selector)`, `Resume(Selector)`, `Publish(Selector)`, `Held(Selector,u64)`, or `JoinStarted(Selector,u64)`. Select exact open outbox, reservation, or custody with the same origin, nonterminal generation, physical lease and due deadline; the SQL aperture accepts the checked wall and source only. |
+| Saved Delivery | Use a read-only `probe_due_managed_delivery` returning exact coordinates for the same bounded oldest-due row, ordered by `retry_at,id`. It returns no frame or native authority and leaves both wall floors unchanged. Use the existing installed source, scope and cursor checks. The coordinate includes origin, ID, revision and record digest. Once the rotor selects this visit, invalidate the view before acquisition. The guarded `due_managed_delivery` must compare the precise observed coordinates while re-querying that due head, then acquire the exact snapshot. A gone, stale or replaced head cannot advance either floor or admit a second row on this visit. It follows the stale `Reobserve` disposition. |
 | Fresh provisioning | Derive `Reservation` from `checkpoint.reserve_provisioning(source, selector, wall)` within the checked recipient aperture. Check exact eligible Unknown slot and current invitation again. `start_package(quota, &reservation, &window)` yields a single `StartedPackage` only for Bound. |
 | Recovery of Bound | `checkpoint.recover_provisioning(source, selector, wall)` under the same checked aperture. Use the existing allocation and exact file checks only, with no reissue from NativeStarted. |
 | Schema and first issuance | Consume `StartedPackage` at `prestage_package(quota, &reservation, started)` to get `PrestagedPackage` with its signed-clamped issue window. `issue_package(quota, &reservation, prestaged)` consumes it once to get `Artifact`. An interruption after binding remains NativeStarted. |
@@ -77,11 +82,43 @@ actor receives only its outcome. Apply the exit check and then the table.
 | `Settled(Wake::Failed)` | End the Peer generation and preserve its settled ACK and custody state for later recovery. |
 
 An unsigned image at NativeStarted stays charged and blocks the single slot.
-Treat it as unavailable for Resume so that the rotor can serve other classes.
-An image whose claimed signed evidence fails validation ends the generation;
-a newly minted token cannot replace either image.
+The existing attestation uses the same invalid result for absent signature
+and corrupt signed evidence. End this generation on that refusal. Keep the
+original charge and never mint a replacement token from either image.
 
 Only a current Held row may invoke `PendingTurn::arm`, then consume the returned single-use token for one guarded ingest. Use the existing bounded native window. An ambiguous ingest or cold JoinStarted may only use `PendingTurn::qualify` through the existing readback. A successful current Pending CAS merely makes the row eligible for an independently checked view refresh. The projection cannot run any package, Welcome or durable effects.
+
+## Saved Delivery effects
+
+Acquire and observe using the same registered port and owner, no retained
+borrows across visits. `use_saved_delivery` supplies the exact checked snapshot
+to `observe_managed_saved_delivery`. The current actor owns a native-window
+guard that checks the paired stop cell, readiness, forwarding and the current
+port's precise Fatal route provenance. In addition to the existing data
+checks add final hooks to the writing `due_with_fence` and
+`retry_again_with_fence` paths. Run each hook after the precise head or
+snapshot check and after speculative UPDATE and wall-floor writes, just
+before commit. A refusal drops the transaction and rolls back all writes.
+The unguarded entry points used by the old fixtures keep their semantics.
+The new actor never calls them. Apply the effect fences already named in the
+guarded service design to normal measured retry, provisioning, Consent and
+Held effects as they are mounted.
+
+| Observed snapshot | One rotor disposition |
+| --- | --- |
+| `ManagedSaved::Waiting` | The checked no-ACK backoff already updates the same row under its guarded transaction. Keep the port, grant no native witness and honor that due time. |
+| `ManagedSaved::Live` | Use `use_saved_delivery_native` or the current saved-native challenge seam to seal the exact `PreparedSaved` challenge. Pass the same owner predicate to `measure_delivery_guarded` and the guarded `finish_measured_saved_delivery`. Re-enter the same port through `use_saved_delivery` for finish, rechecking signed lifetime and source, before the existing Held or invalid commit. Reobserve next visit if a current snapshot has aged past its cutoff, cancelling any tentative live commit. No other errors can convert live data to expired retirement. |
+| `ManagedSaved::Expired` | Use `use_expired_delivery_native` to obtain the historical sealed measurement, then `retire_expired_delivery` in the current stop and readiness window with the owner predicate. Map only the exact retirement outcome through its table. Historical authority grants deletion only. |
+
+The pass admits at most 85.020 s of explicitly timed awaits and native
+windows. This is the sum of 45 s for history, 20 ms idle live probing and
+5 s for one live measurement, 25 s for one managed visit, 5 s for one saved
+retry or retirement and 5 s for one view verification. Clamp further by
+signed and route deadlines. There is no hard wall-clock limit for a stalled
+synchronous call. Stop/late checks retain ownership until return and
+prevent new effects. Deterministic tests cover changed and empty save
+heads, both precommit refusals and both floors, plus fairness when one
+durable class cannot progress.
 
 ## View cadence
 
