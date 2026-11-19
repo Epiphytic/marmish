@@ -20,13 +20,18 @@ the paired passive case paused pending the baseline disposition.
   polling within the existing two-second `STEP`. For other failures
   do one nonblocking observation. Use Linux `waitid` with
   `WEXITED | WNOHANG | WNOWAIT` on this exact owned child. The
-  launcher put it in its own process group before exec. If it is
-  waitable, verify that group using the still unreaped child and
-  signal it before reaping the leader with `Child::try_wait`.
+  launcher put it in its own process group and session before exec.
+  A zero signal-info PID means the child is still running. If it is
+  waitable after an exit, kill or dump, require both its process group
+  and session IDs to equal its still-unreaped PID. Signal the private
+  group before reaping the leader with `Child::try_wait`. A group or
+  session mismatch reports failure and cleanup can signal only the
+  leader. An interrupted or failed observation keeps the guard.
   Classify running, exit 1, fixture exit 86, test failure 101, signal,
   other exit, or observation failure. Keep the cleanup guard intact
   on observation error or timeout. After an actual reap, clear the
   guard. Never signal a numeric group after reaping its leader.
+  Descendants that leave the private group are outside this diagnostic.
   The bounded post-failure poll does not extend an acceptance
   deadline. At S failure record once whether the stale Status socket
   is pending, closed, reset, delivered a byte, or had another I/O
@@ -62,8 +67,9 @@ connect-not-ready, decoded activating and degraded, and send/read
 failure without another request. Test malformed, lost and unknown-X
 controller frames. Verify exit 1, 86, 101 and signal observations
 with short-lived children. Test pre-reap group cleanup with a real
-private descendant holding a pipe or socket open, and the fixed log
-fallback when an X frame cannot be sent. Confirm the exact candidate
+private descendant holding a pipe or socket open. Check closure
+through the existing reader handle. Verify the fixed log fallback
+when an X frame cannot be sent. Confirm the exact candidate
 and stock builds with the existing strict scope.
 Run the old two-cut ignored selector with the revised fixture and
 matching stamped package three times serially, with new private profiles
