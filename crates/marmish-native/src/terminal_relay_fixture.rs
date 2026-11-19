@@ -82,7 +82,19 @@ pub(super) enum Observation {
     Read(bool, Option<PublicKey>),
     Write(EventId, u16, bool),
     WriteBytes(EventId, usize),
-    Request(PublicKey, Subscription),
+    Request(
+        #[cfg_attr(
+            not(all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            )),
+            allow(dead_code)
+        )]
+        usize,
+        PublicKey,
+        Subscription,
+    ),
     Close(PublicKey, Subscription),
 }
 
@@ -98,6 +110,61 @@ enum QuietConnection {
     Standard,
     AwaitingRequest,
     Subscribed(String),
+}
+
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct RecipientRuntimeRequests {
+    pub(crate) live: usize,
+    pub(crate) history: usize,
+    pub(crate) unexpected: usize,
+}
+
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+impl RecipientRuntimeRequests {
+    fn record(&mut self, sub: &Subscription) {
+        // Any accepted request on this scoped relay already has the exact kind and
+        // authenticated account filter. Match the lane ID and declared bounds.
+        let lane = sub
+            .id
+            .strip_prefix("mp/")
+            .and_then(|id| id.split_once('/'))
+            .filter(|(namespace, _)| {
+                namespace.len() == 32
+                    && namespace
+                        .bytes()
+                        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            })
+            .map(|(_, lane)| lane);
+        let [filter] = &sub.filters[..] else {
+            self.unexpected += 1;
+            return;
+        };
+        match (lane, filter["limit"].as_u64()) {
+            (Some("l"), Some(0)) => self.live += 1,
+            (Some(lane), Some(limit))
+                if limit == peer::history_limit(&sub.filters) as u64
+                    && lane.strip_prefix("p/").is_some_and(|number| {
+                        number.parse::<u64>().is_ok_and(|number| number > 0)
+                    })
+                    && filter["since"]
+                        .as_u64()
+                        .zip(filter["until"].as_u64())
+                        .is_some_and(|(since, until)| since <= until) =>
+            {
+                self.history += 1;
+            }
+            _ => self.unexpected += 1,
+        }
+    }
 }
 
 struct QuietAliases {
@@ -638,7 +705,7 @@ fn handle_message(
                 socket.subscription = true;
             }
             let account = account.unwrap();
-            state.observe(Observation::Request(account, subscription.clone()));
+            state.observe(Observation::Request(id, account, subscription.clone()));
             if state.recipient_fault == Some(RecipientFault::WrongLiveEose) {
                 state.recipient_fault.take();
                 return vec![json!(["EOSE", "wrong-subscription"])];
@@ -1072,8 +1139,39 @@ impl Relay {
             .unwrap()
             .observations
             .iter()
-            .filter(|item| matches!(item, Observation::Request(who, _) if *who == account))
+            .filter(|item| matches!(item, Observation::Request(_, who, _) if *who == account))
             .count()
+    }
+
+    /// Classify the historical request transcript for the exact authenticated
+    /// active recipient socket. Includes history requests already closed.
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn recipient_runtime_requests(
+        &self,
+        id: usize,
+        account: PublicKey,
+    ) -> Option<RecipientRuntimeRequests> {
+        let state = self.state.lock().unwrap();
+        if !state.recipient_runtime || state.connections.get(&id)?.account != Some(account) {
+            return None;
+        }
+        let mut requests = RecipientRuntimeRequests::default();
+        for observation in &state.observations {
+            if let Observation::Request(socket, signer, sub) = observation
+                && *socket == id
+            {
+                if *signer == account {
+                    requests.record(sub);
+                } else {
+                    requests.unexpected += 1;
+                }
+            }
+        }
+        Some(requests)
     }
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -1485,7 +1583,7 @@ impl Relay {
             .observations
             .iter()
             .fold((0, 0), |(req, close), entry| match entry {
-                Observation::Request(who, sub)
+                Observation::Request(_, who, sub)
                     if *who == account && sub.serves(kind, tag, value) =>
                 {
                     (req + 1, close)
