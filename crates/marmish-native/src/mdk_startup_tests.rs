@@ -236,7 +236,7 @@ fn active_cut(
     use std::future::{Future, poll_fn};
     use std::pin::pin;
     use std::task::{Context, Poll, Waker};
-    use std::time::{Duration, Instant};
+    use tokio::time::{Duration, Instant};
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
