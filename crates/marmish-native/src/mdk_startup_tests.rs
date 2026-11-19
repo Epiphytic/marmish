@@ -13,6 +13,9 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+#[path = "mdk_active_cut_tests.rs"]
+mod active_cuts;
+
 #[derive(Clone, Copy)]
 enum Fault {
     Cut(Step),
@@ -64,6 +67,10 @@ pub(crate) fn qualify(
         .unwrap();
     if case == "active_cut" {
         active_cut(lease, material, connector, admission, fatal, cut);
+        return;
+    }
+    if case.starts_with("active_effect_") {
+        active_cuts::qualify(case, lease, material, connector, admission, fatal, cut);
         return;
     }
     if case == "panic_forget" {

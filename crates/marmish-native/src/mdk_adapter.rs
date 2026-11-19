@@ -12,6 +12,8 @@ mod command_runtime;
 #[cfg(feature = "installed-checks")]
 #[path = "installed_check.rs"]
 pub(crate) mod installed_check;
+#[cfg(test)]
+use active::Observation;
 use active::{ActiveMode, DISPATCHER_LOST};
 #[path = "mdk_startup.rs"]
 mod startup;
@@ -586,6 +588,8 @@ impl TransportAdapter for PublicationGate {
         &self,
         request: TransportPublishRequest,
     ) -> std::result::Result<TransportPublishReport, TransportAdapterError> {
+        #[cfg(test)]
+        self.mode.observe(Observation::Publish);
         let refusal = if self.mode.admit().is_err() {
             Some(DISPATCHER_LOST)
         } else if self.blocked() {
@@ -889,6 +893,8 @@ impl KeyPackagePublisher for ActivePublisher {
         &self,
         publication: KeyPackagePublication,
     ) -> std::result::Result<SignedPublicationArtifact, KeyPackagePublishError> {
+        #[cfg(test)]
+        self.mode.observe(Observation::PreparePackage);
         self.mode
             .admit()
             .map_err(|_| KeyPackagePublishError::unexposed(DISPATCHER_LOST))?;
@@ -1259,6 +1265,8 @@ impl MdkOwner {
             })
             .collect();
         for group in self.native_group_union()? {
+            #[cfg(test)]
+            self.active_mode.observe(Observation::OrphanBeforeRecord);
             self.active_mode.admit()?;
             if self
                 .journal
@@ -1293,6 +1301,8 @@ impl MdkOwner {
             self.active_mode.admit()?;
             self.remove_owned_route(&group);
             self.forget_and_confirm(&group)?;
+            #[cfg(test)]
+            self.active_mode.observe(Observation::OrphanAfterForget);
         }
         for group in self.journal.pending_group_cleanup()? {
             self.forget_and_confirm(&GroupId::new(group))?;
@@ -2621,6 +2631,8 @@ impl MdkOwner {
     }
     async fn receive_one(&mut self, deadline: Instant) -> Result<()> {
         let mode = self.active_mode.clone();
+        #[cfg(test)]
+        let mode = mode.observe_receive();
         let receive_deadline = deadline.min(Instant::now() + Duration::from_millis(20));
         match mode
             .native(async {

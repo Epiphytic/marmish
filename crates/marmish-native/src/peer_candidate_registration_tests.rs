@@ -161,6 +161,19 @@ fn candidate_native_owner_active_cut_qualification() {
     run_registration_cases(&["owner_startup_active_cut"]);
 }
 
+#[test]
+#[ignore = "fresh processes with real registered Command owners and VFS displacement"]
+fn candidate_native_owner_active_effect_cut_qualification() {
+    run_registration_cases(&[
+        "owner_startup_active_effect_inventory_before",
+        "owner_startup_active_effect_inventory_after",
+        "owner_startup_active_effect_receive_pending",
+        "owner_startup_active_effect_receive_ready",
+        "owner_startup_active_effect_orphan_second",
+        "owner_startup_active_effect_publication",
+    ]);
+}
+
 fn run_registration_cases(modes: &[&str]) {
     for &mode in modes {
         let root = start_profile_with_account(mode != "owner_startup_cut_lifecycle_write");
