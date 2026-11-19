@@ -204,6 +204,121 @@ fn prepared_consent_always_denies_unowned_writes_and_temp_shadow() {
     );
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+impl Checkpoint {
+    pub(crate) fn consent_fixture_clocks(&self) -> (u64, u64) {
+        let (origin, checkpoint): (i64, i64) = self
+            .cursor
+            .conn
+            .query_row(
+                "SELECT (SELECT wall FROM peer_cursor_origin),
+                    (SELECT wall FROM peer_consent_version)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        (origin.try_into().unwrap(), checkpoint.try_into().unwrap())
+    }
+
+    pub(crate) fn fixture_assert_managed_consent_boundaries(
+        &mut self,
+        source: &Source,
+        reservation: &Reservation,
+        consent: &wire::Prepared<wire::Consent>,
+        before_expiry: u64,
+        boundary: u64,
+        queue_refusal: Error,
+    ) {
+        let candidate = self
+            .inspect_exact_prepared(source, reservation, before_expiry, true)
+            .unwrap();
+        let signed = || Unsaved {
+            offer_carrier: candidate.offer.flight().carrier_id.to_bytes(),
+            binding: candidate.binding,
+            witness: candidate.witness,
+            artifact: candidate.artifact,
+            row: outbox::Outbox::new(
+                &candidate,
+                Transcript::from_consent(&consent.flight),
+                consent.frame(),
+            ),
+        };
+        let floors = self.consent_fixture_clocks();
+        let origin = candidate.binding.origin;
+        let key = candidate.binding.key;
+        assert_eq!(
+            self.queue_exact_prepared(source, reservation, signed(), boundary, true, |_| {
+                panic!("queue reached commit at its exclusive deadline");
+            })
+            .err(),
+            Some(queue_refusal)
+        );
+        assert_eq!(self.consent_fixture_clocks(), floors);
+        assert!(
+            !outbox::exists(
+                &self.cursor.conn.unchecked_transaction().unwrap(),
+                key,
+                origin
+            )
+            .unwrap()
+        );
+        let queued = self
+            .queue_exact_prepared(source, reservation, signed(), before_expiry, true, |_| {
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(queued.deadline(), boundary);
+        let floors = self.consent_fixture_clocks();
+        assert_eq!(
+            self.change_installed_consent::<()>(
+                source,
+                &queued,
+                boundary,
+                |_, _| panic!("exclusive deadline reached the reserve/settle mutation"),
+                || panic!("exclusive deadline reached commit"),
+            )
+            .err(),
+            Some(Error::Expired)
+        );
+        assert_eq!(self.consent_fixture_clocks(), floors);
+        let persisted = outbox::load(
+            &self.cursor.conn.unchecked_transaction().unwrap(),
+            &queued.prepared,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(persisted == queued.row);
+    }
+
+    pub(crate) fn fixture_assert_managed_consent_custodied(
+        &mut self,
+        source: &Source,
+        queued: &Queued,
+        wall: u64,
+    ) {
+        let floors = self.consent_fixture_clocks();
+        assert_eq!(
+            self.change_installed_consent::<()>(
+                source,
+                queued,
+                wall,
+                |_, _| panic!("custodied tuple reached the reserve/settle mutation"),
+                || panic!("custodied tuple reached commit"),
+            )
+            .err(),
+            Some(Error::Custodied)
+        );
+        assert_eq!(self.consent_fixture_clocks(), floors);
+        let persisted = outbox::load(
+            &self.cursor.conn.unchecked_transaction().unwrap(),
+            &queued.prepared,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(persisted == queued.row);
+    }
+}
+
 impl Checkpoint {
     // Stores real signed bytes through the checked writer. The stage coordinates
     // and settlement are fixture inputs; this exercises no native join or relay.
@@ -218,6 +333,7 @@ impl Checkpoint {
             .inspect_prepared_consent(source, reservation, wall)
             .unwrap();
         let signed = Unsaved {
+            offer_carrier: [0; 32],
             binding: prepared.binding,
             witness: prepared.witness,
             artifact: prepared.artifact,

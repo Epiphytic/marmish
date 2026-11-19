@@ -1,5 +1,6 @@
 //! Exact owner-local attempts and compare-and-swap acknowledgement.
 
+#[cfg(test)]
 use crate::peer_invitation::prepared_consent::{MatchingAck, NativeAttestation};
 use nostr::key::PublicKey;
 use std::sync::Arc;
@@ -13,7 +14,11 @@ pub(crate) struct Attempt {
 }
 
 impl Attempt {
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     pub(super) fn selector(&self) -> Selector {
         self.queued.prepared.binding.key
     }
@@ -53,6 +58,7 @@ impl Attempt {
 }
 
 impl Checkpoint {
+    #[cfg(test)]
     fn change_queued<T>(
         &mut self,
         source: &Source,
@@ -119,6 +125,7 @@ impl Checkpoint {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn reserve_prepared_attempt(
         &mut self,
         source: &Source,
@@ -128,13 +135,7 @@ impl Checkpoint {
     ) -> Result<Option<Attempt>> {
         self.verify_queued_consent(&queued, native, wall)?;
         let reservation = self.change_queued(source, &queued, wall, |tx, prepared, row| {
-            if row.ack_at.is_some() || row.retry_at.is_some_and(|retry| retry > wall) {
-                return Ok(None);
-            }
-            let attempt = row.attempt.checked_add(1).ok_or(CursorError::Range)?;
-            let retry_at = wall.checked_add(RETRY_SECONDS).ok_or(CursorError::Range)?;
-            outbox::advance(tx, prepared, row, Advance::Reserve { attempt, retry_at })?;
-            Ok(Some((attempt, retry_at)))
+            reserve_row(tx, prepared, row, wall)
         })?;
         Ok(reservation.map(|(attempt, retry_at)| {
             queued.row.attempt = attempt;
@@ -146,6 +147,73 @@ impl Checkpoint {
         }))
     }
 
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    fn reserve_managed_prepared_attempt(
+        &mut self,
+        source: &Source,
+        managed: ManagedQueued,
+        wall: u64,
+        before_commit: impl FnOnce() -> Result<()>,
+    ) -> Result<Option<Attempt>> {
+        self.require_managed_package_target(&managed.target)?;
+        let mut queued = managed.queued;
+        let reservation = self.change_installed_consent(
+            source,
+            &queued,
+            wall,
+            |tx, current| reserve_row(tx, &current.prepared, &current.row, wall),
+            before_commit,
+        )?;
+        Ok(reservation.map(|(attempt, retry_at)| {
+            queued.row.attempt = attempt;
+            queued.row.retry_at = Some(retry_at);
+            Attempt {
+                owner: self.owner.clone(),
+                queued,
+            }
+        }))
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    fn settle_managed_prepared_attempt(
+        &mut self,
+        source: &Source,
+        attempt: &Attempt,
+        wall: u64,
+        before_commit: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        self.check_local_owner(&attempt.owner)?;
+        self.change_installed_consent(
+            source,
+            &attempt.queued,
+            wall,
+            |tx, current| {
+                if current.row.attempt == 0 || current.row.ack_at.is_some() {
+                    return Err(CursorError::Stale.into());
+                }
+                outbox::advance(
+                    tx,
+                    &current.prepared,
+                    &current.row,
+                    Advance::Acknowledge { wall },
+                )?;
+                Ok(Some(()))
+            },
+            before_commit,
+        )?
+        .ok_or(CursorError::Stale)?;
+        Ok(())
+    }
+
+    #[cfg(test)]
     pub(crate) fn check_current_attempt(
         &mut self,
         source: &Source,
@@ -156,6 +224,7 @@ impl Checkpoint {
         self.change_queued(source, &attempt.queued, wall, |_, _, _| Ok(()))
     }
 
+    #[cfg(test)]
     pub(crate) fn settle_prepared_ack(
         &mut self,
         source: &Source,
@@ -165,6 +234,7 @@ impl Checkpoint {
         self.settle_attempt(source, receipt.into_attempt(), wall)
     }
 
+    #[cfg(test)]
     fn settle_attempt(&mut self, source: &Source, attempt: Attempt, wall: u64) -> Result<()> {
         self.check_local_owner(&attempt.owner)?;
         self.change_queued(source, &attempt.queued, wall, |tx, prepared, row| {
@@ -173,6 +243,22 @@ impl Checkpoint {
     }
 }
 
+fn reserve_row(
+    tx: &Transaction<'_>,
+    prepared: &Candidate,
+    row: &outbox::Outbox,
+    wall: u64,
+) -> Result<Option<(u64, u64)>> {
+    if row.ack_at.is_some() || row.retry_at.is_some_and(|retry| retry > wall) {
+        return Ok(None);
+    }
+    let attempt = row.attempt.checked_add(1).ok_or(CursorError::Range)?;
+    let retry_at = wall.checked_add(RETRY_SECONDS).ok_or(CursorError::Range)?;
+    outbox::advance(tx, prepared, row, Advance::Reserve { attempt, retry_at })?;
+    Ok(Some((attempt, retry_at)))
+}
+
+#[cfg(test)]
 fn exact_row(
     tx: &Transaction<'_>,
     epoch: &Epoch,
@@ -210,3 +296,12 @@ fn exact_row(
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 native_consent_publication_fixture!();
+
+#[cfg(all(
+    not(test),
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "peer_installed_consent_settlement.rs"]
+pub(in crate::peer_invitation) mod installed_settlement;

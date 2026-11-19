@@ -55,7 +55,16 @@ mod schema_tests;
 ))]
 use super::super::Offer;
 #[cfg(test)]
-use super::super::wire::{self, Transcript};
+use super::super::wire;
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
+use super::super::wire::Transcript;
 #[cfg(any(
     test,
     all(
@@ -178,8 +187,33 @@ impl Queued {
         (self.row.attempt, self.row.retry_at, self.row.ack_at)
     }
 
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    fn deadline(&self) -> u64 {
+        self.row
+            .transcript
+            .expires
+            .min(self.prepared.offer.flight().expires_at)
+            .min(self.prepared.artifact.expires)
+    }
+
     pub(crate) fn stage(&self) -> (Binding, FileWitness) {
         self.prepared.stage()
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(super) fn matches_exact(&self, prior: &Self) -> bool {
+        self.stage() == prior.stage()
+            && self.prepared.artifact == prior.prepared.artifact
+            && self.prepared.offer.flight().carrier_id == prior.prepared.offer.flight().carrier_id
+            && self.row == prior.row
     }
 }
 
@@ -188,6 +222,7 @@ impl Queued {
     target_os = "linux",
     target_arch = "x86_64"
 ))]
+#[derive(Clone)]
 pub(crate) struct PackageTarget {
     owner: std::sync::Arc<()>,
     binding: Binding,
@@ -237,8 +272,13 @@ impl ManagedQueued {
         &self.target
     }
 
-    pub(crate) fn into_target(self) -> PackageTarget {
-        self.target
+    #[cfg(test)]
+    pub(crate) fn fixture_retry_at(&self) -> Option<u64> {
+        self.queued.row.retry_at
+    }
+
+    pub(crate) fn matches_saved(&self, saved: &Queued) -> bool {
+        self.queued.matches_exact(saved)
     }
 }
 
@@ -253,30 +293,80 @@ impl Checkpoint {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 pub(crate) struct Unsaved {
     binding: Binding,
     witness: FileWitness,
     artifact: Artifact,
+    offer_carrier: [u8; 32],
     row: outbox::Outbox,
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PreparedUse {
+    Fixture,
+    ManagedRead,
+    ManagedWrite,
+}
+
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 impl Checkpoint {
     pub(crate) fn require_reservation_owner(&self, reservation: &Reservation) -> Result<()> {
         self.check_local_owner(&reservation.owner)
     }
 
+    #[cfg(test)]
     pub(crate) fn inspect_prepared_consent(
         &mut self,
         source: &Source,
         reservation: &Reservation,
         wall: u64,
     ) -> Result<Candidate> {
-        self.check_local_owner(&reservation.owner)?;
-        self.read_live_prepared(source, reservation.binding, wall, |_, candidate, _, _| {
-            Ok(candidate)
-        })
+        self.inspect_exact_prepared(source, reservation, wall, false)
+    }
+
+    fn inspect_exact_prepared(
+        &mut self,
+        source: &Source,
+        reservation: &Reservation,
+        wall: u64,
+        managed: bool,
+    ) -> Result<Candidate> {
+        self.require_reservation_owner(reservation)?;
+        self.read_live_prepared(
+            source,
+            reservation.binding,
+            wall,
+            if managed {
+                PreparedUse::ManagedRead
+            } else {
+                PreparedUse::Fixture
+            },
+            |_, candidate, _, _| Ok(candidate),
+            |_| Ok(()),
+        )
     }
 
     fn read_live_prepared<T>(
@@ -284,8 +374,21 @@ impl Checkpoint {
         source: &Source,
         binding: Binding,
         wall: u64,
+        purpose: PreparedUse,
         work: impl FnOnce(&Transaction<'_>, Candidate, &[Origin], &Epoch) -> Result<T>,
+        before_commit: impl FnOnce(&Transaction<'_>) -> Result<()>,
     ) -> Result<T> {
+        let managed = purpose != PreparedUse::Fixture;
+        if managed
+            && (binding.generation.known
+                || !self.is_installed_custody()
+                || !matches!(
+                    self.installed_receive_policy(),
+                    Some(custody::ReceivePolicy::Manual)
+                ))
+        {
+            return Err(Error::Policy);
+        }
         let epoch = self.export_epoch.ok_or(CursorError::Binding)?;
         let account = self.signer.public_key().to_bytes();
         let signer = self.signer.clone();
@@ -294,20 +397,40 @@ impl Checkpoint {
         let signed_route = super::super::Route::configured(&route.urls[0])?;
         let origins = self.cursor.origins.clone();
         // Stage access and schema checking run through the same exact owner turn.
-        let (tx, _) = self.stage_transaction(source, binding, wall)?;
+        let (tx, _) = self.stage_transaction_with_expiry(source, binding, wall, !managed)?;
         schema::verify_for_epoch(&tx, account, &origins, &epoch)?;
         let current = Invitation::load(&tx, binding.key, binding.origin)?;
         if current.decision_at.is_some() {
             return Err(CursorError::Binding.into());
         }
         let offer = Self::check_signed_offer(&codec, &signer, &signed_route, &current, wall)?;
+        if managed
+            && (offer.version() != crate::peer_control_version::ControlVersion::V2
+                || custody::owns(&tx, binding.key, binding.origin)?
+                || outbox::exists(&tx, binding.key, binding.origin)?)
+        {
+            return Err(CursorError::Stale.into());
+        }
         let candidate = Candidate::read(&tx, binding, account, offer)?;
+        if managed && wall >= candidate.artifact.expires {
+            return Err(Error::Expired);
+        }
         let result = work(&tx, candidate, &origins, &epoch)?;
-        rows::advance_wall(&tx, wall)?;
+        if purpose == PreparedUse::ManagedRead {
+            return Ok(result);
+        }
+        if managed {
+            rows::advance_wall(&tx, wall)?;
+            before_commit(&tx)?;
+        } else {
+            before_commit(&tx)?;
+            rows::advance_wall(&tx, wall)?;
+        }
         tx.commit()?;
         Ok(result)
     }
 
+    #[cfg(test)]
     pub(crate) fn sign_prepared_consent(
         &self,
         candidate: &Candidate,
@@ -315,10 +438,10 @@ impl Checkpoint {
         wall: u64,
     ) -> Result<Unsaved> {
         let exact = package.require(candidate.stage(), candidate.artifact, wall)?;
-        self.sign_exact_prepared_fixture(candidate, exact, wall)
+        self.sign_exact_prepared(candidate, exact, wall)
     }
 
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
     pub(crate) fn sign_managed_prepared_fixture(
         &self,
         candidate: &Candidate,
@@ -334,10 +457,10 @@ impl Checkpoint {
         {
             return Err(Error::Package);
         }
-        self.sign_exact_prepared_fixture(candidate, exact, wall)
+        self.sign_exact_prepared(candidate, exact, wall)
     }
 
-    fn sign_exact_prepared_fixture(
+    fn sign_exact_prepared(
         &self,
         candidate: &Candidate,
         exact: &[u8],
@@ -362,16 +485,30 @@ impl Checkpoint {
             binding: candidate.binding,
             witness: candidate.witness,
             artifact: candidate.artifact,
+            offer_carrier: candidate.offer.flight().carrier_id.to_bytes(),
             row,
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn queue_prepared_consent(
         &mut self,
         source: &Source,
         reservation: &Reservation,
         unsaved: Unsaved,
         wall: u64,
+        before_commit: impl FnOnce(&Transaction<'_>) -> Result<()>,
+    ) -> Result<Queued> {
+        self.queue_exact_prepared(source, reservation, unsaved, wall, false, before_commit)
+    }
+
+    fn queue_exact_prepared(
+        &mut self,
+        source: &Source,
+        reservation: &Reservation,
+        unsaved: Unsaved,
+        wall: u64,
+        managed: bool,
         before_commit: impl FnOnce(&Transaction<'_>) -> Result<()>,
     ) -> Result<Queued> {
         self.check_local_owner(&reservation.owner)?;
@@ -382,23 +519,31 @@ impl Checkpoint {
             source,
             reservation.binding,
             wall,
+            if managed {
+                PreparedUse::ManagedWrite
+            } else {
+                PreparedUse::Fixture
+            },
             |tx, prepared, origins, epoch| {
                 if (prepared.witness, prepared.artifact) != (unsaved.witness, unsaved.artifact)
                     || wall >= unsaved.row.transcript.expires
+                    || (managed
+                        && prepared.offer.flight().carrier_id.to_bytes() != unsaved.offer_carrier)
                 {
                     return Err(Error::Package);
                 }
                 unsaved.row.insert(tx, &prepared)?;
                 schema::verify_for_epoch(tx, prepared.account, origins, epoch)?;
-                before_commit(tx)?;
                 Ok(Queued {
                     prepared,
                     row: unsaved.row,
                 })
             },
+            before_commit,
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn fixture_read_offer(
         &mut self,
         source: &Source,
@@ -412,6 +557,7 @@ impl Checkpoint {
         Self::check_signed_offer(&self.codec, &self.signer, &route, &row, creation_wall)
     }
 
+    #[cfg(test)]
     pub(crate) fn recover_queued_consent(
         &mut self,
         source: &Source,
@@ -469,6 +615,7 @@ impl Checkpoint {
         Ok(Some(Queued { prepared, row }))
     }
 
+    #[cfg(test)]
     pub(crate) fn verify_queued_delivery(
         &self,
         recovered: &Queued,
@@ -497,6 +644,7 @@ impl Checkpoint {
             .map_err(|_| Error::Package)
     }
 
+    #[cfg(test)]
     pub(crate) fn verify_queued_consent(
         &self,
         recovered: &Queued,
@@ -520,8 +668,22 @@ impl Checkpoint {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 #[path = "peer_prepared_consent_attempt.rs"]
 pub(crate) mod publication;
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 pub(crate) use publication::Attempt;
