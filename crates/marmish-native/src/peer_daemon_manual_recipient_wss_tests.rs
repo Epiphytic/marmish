@@ -109,9 +109,14 @@ fn manual_failure_log(log: &File) -> String {
 }
 
 fn approval_timings(log: &File) -> [u64; 2] {
-    let mut bytes = vec![0; 64 * 1024];
-    let size = log.read_at(&mut bytes, 0).unwrap();
-    let readings: Vec<_> = String::from_utf8_lossy(&bytes[..size])
+    let size = usize::try_from(log.metadata().unwrap().len()).unwrap();
+    assert!(
+        size <= 512 * 1024,
+        "approval diagnostics exceeded log budget"
+    );
+    let mut bytes = vec![0; size];
+    log.read_exact_at(&mut bytes, 0).unwrap();
+    let readings: Vec<_> = String::from_utf8_lossy(&bytes)
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .filter(|value| value["event"] == "manual_approval_timing")
