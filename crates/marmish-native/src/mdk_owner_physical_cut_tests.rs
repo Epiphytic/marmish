@@ -711,9 +711,8 @@ async fn healthy_owned_stop_reports_cut_during_final_cleanup_and_retains_lease()
     assert!(!report.graceful_complete && report.fatal);
 }
 
-#[tokio::test]
-async fn healthy_owned_stop_joins_real_started_command_engine() {
-    use crate::mdk_adapter::healthy_stop::HealthyStop;
+async fn stop_started_engine(quiesce: bool) {
+    use crate::{command_engine::CleanupState, mdk_adapter::healthy_stop::HealthyStop};
     let fixture = Fixture::new();
     let (trip, _) = Trip::new();
     let trip = Arc::new(trip);
@@ -721,15 +720,49 @@ async fn healthy_owned_stop_joins_real_started_command_engine() {
     let mut owner = open_healthy(&fixture, &trip, &admission);
     let client = Keys::generate().public_key().to_bytes();
     fixture.install_engine(&mut owner, &admission, "wss://127.0.0.1:9/", client);
+    if quiesce {
+        let expires = deadline();
+        loop {
+            match owner.command_begin_cleanup() {
+                Ok(_) => break,
+                Err(Error::Storage("command_cleanup_busy")) => {
+                    assert!(
+                        Instant::now() < expires,
+                        "Command worker did not become ready"
+                    );
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                Err(error) => panic!("unexpected Command cleanup preparation error: {error:?}"),
+            }
+        }
+        while owner.command_poll_cleanup().unwrap().0 != CleanupState::Quiesced {
+            assert!(Instant::now() < expires, "Command cleanup did not quiesce");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
     let mut stopping = HealthyStop::begin(owner, &fixture.lease, &admission)
         .ok()
         .unwrap();
     let report = stopping.observe(deadline()).await;
-    assert_eq!(report.physical.engine, Barrier::Complete);
-    assert!(report.graceful_complete);
-    assert!(
-        stopping
-            .complete(|| fixture.lease.cleanup_runtime())
-            .is_ok()
-    );
+    assert!(report.physical.all_complete());
+    assert_eq!(report.graceful_complete, quiesce);
+    assert!(!report.fatal);
+    let result = stopping.complete(|| {
+        assert!(
+            quiesce,
+            "Command worker join alone cannot authorize cleanup"
+        );
+        fixture.lease.cleanup_runtime()
+    });
+    assert_eq!(result.is_ok(), quiesce);
+}
+
+#[tokio::test]
+async fn healthy_owned_stop_joins_real_started_engine_without_authorizing_cleanup() {
+    stop_started_engine(false).await;
+}
+
+#[tokio::test]
+async fn healthy_owned_stop_allows_cleanup_after_real_engine_quiescence() {
+    stop_started_engine(true).await;
 }
