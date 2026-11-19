@@ -50,3 +50,27 @@ This qualification covers the guarded ingress component. Installed
 daemon startup and scheduling, the read view, guarded outbound Consent,
 native retry expiry and full invitation acceptance remain separate from
 these tests.
+
+## Linux AMD64 composition with expired Delivery retirement
+
+The composed source `5b423ba1121fba8ab5c3636fcfe032249c0c204a`
+retains upstream MDK master locked at
+`e4421e86a6c73f336b0154ee09c13826d8fafff5`. Strict all-target native
+Clippy passed in stock mode (38.37 s) and candidate mode (33.24 s).
+The stock libtest SHA-256 was
+`dc3b2e18b1eb978a13661f648f40bfbd2949bffdfa421494d85dd98ce4f7e7be`.
+
+| Composed stock libtest selector | Result |
+| --- | --- |
+| `manual_ingress_attributes_history_and_live_on_one_private_port` | Four private WSS child cases passed in 31.76 s. |
+| `managed_expired_delivery_private_wss` | Two private WSS child cases passed in 44.78 s. Measured native retirement took 402.920 and 421.189 ms. |
+| `final_scan_and_page_refusals_roll_back_their_sql_writes` | Passed in 0.10 s. |
+| `expiry_refusals_preserve_corruption_and_reobserve_stale_rows` | Passed. |
+| `peer_cursor` | 15 passed, 1 opt-in skipped in 16.69 s. |
+| `managed_consent_single_port_private_wss` | Seven existing private WSS child cases passed in 118.25 s. |
+
+Scoped Rust formatting and diff checks passed. Workspace-wide formatting
+also reported unrelated existing differences inherited from the base. Each
+live case ran on loopback with disposable profiles. The candidate build was
+checked statically. The composed executable for this validation was the
+stock test build, which includes the Linux AMD64 candidate-only test paths.

@@ -30,3 +30,25 @@ candidate build checks documented in the
 [validation report](../validation/peer-candidate-manual-ingress.md).
 The reviewers inspected the recorded results and shared nearby build
 resources with the author.
+
+## Composition with expired Delivery retirement
+
+Claude Code Sonnet 5.5 Auto approved exact composition
+`5b423ba1121fba8ab5c3636fcfe032249c0c204a` in session
+`eaf82ac2-2039-45cc-8eaa-f1235cf8740f`. The reviewer checked the merged
+source against both approved parents, including the measurement gate, the
+saved route scope, the exact retirement proof, and the SQL commit hooks.
+
+The test-only publisher now serves both lifetimes. The expired case passes
+the short lifetime and still checks the original cutoff. Ordinary and
+guarded live Delivery use the full lifetime. The older unguarded observation
+and finalization wrappers remain available to the existing unmounted caller.
+The measurement wrapper is test-only. Inspection found no guarded ingress
+caller bypassing the guarded methods.
+
+Subsequent composed validation is recorded in the
+[validation report](../validation/peer-candidate-manual-ingress.md). The
+remaining mount must establish how it guards saved retry and its separate
+retirement turn. A failed ingress consumes its local scan state, so any
+higher-level retry needs a fresh owner and authenticated port. These are
+mount obligations under the reviewed design.
