@@ -196,7 +196,12 @@ impl Checkpoint {
             return Err(Error::Expired);
         }
         measured.require_turn(&prepared.turn)?;
-        self.commit_saved(source, checked, prepared, Native::Managed(measured))
+        self.commit_saved(
+            source,
+            checked,
+            prepared,
+            Native::Managed(measured, &|| Ok(())),
+        )
     }
 
     fn commit_saved(
