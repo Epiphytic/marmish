@@ -231,7 +231,10 @@ fn open_stock(
     let peer_role = commands.as_ref().map(|config| config.role());
     if let Some(commands) = commands {
         #[cfg(test)]
-        let installed_daemon = fixture.map(|fixture| fixture.layout).or(installed_daemon);
+        let installed_daemon = fixture
+            .as_ref()
+            .map(|fixture| fixture.layout)
+            .or(installed_daemon);
         let executable;
         let installed_daemon = match installed_daemon {
             Some(installed_daemon) => installed_daemon,
@@ -240,8 +243,15 @@ fn open_stock(
                 executable.as_path()
             }
         };
-        let worker = crate::native_layout::resolve(installed_daemon)?.worker;
-        owner.enable_commands(&profile, &material, commands, worker)?;
+        let layout = crate::native_layout::resolve(installed_daemon)?;
+        #[cfg(test)]
+        if fixture.is_some() {
+            owner.enable_stock_fixture_commands(&profile, &material, commands, layout)?;
+        } else {
+            owner.enable_commands(&profile, &material, commands, layout.worker)?;
+        }
+        #[cfg(not(test))]
+        owner.enable_commands(&profile, &material, commands, layout.worker)?;
         owner.command_set_lifetime(lifetime);
     }
     Ok(Opened {

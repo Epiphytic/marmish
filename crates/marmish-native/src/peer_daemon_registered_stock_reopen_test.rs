@@ -21,6 +21,10 @@ pub(super) fn run() {
             .unwrap();
         let ca = PathBuf::from(setting("MARMISH_TEST_STOCK_REOPEN_CA"));
         assert!(root.is_absolute() && layout.is_absolute() && ca.starts_with(&root));
+        crate::native_install::read_receipt(layout.ancestors().nth(3).unwrap())
+            .expect("claimed stock installation prefix");
+        let stock = crate::native_layout::resolve(&layout).unwrap();
+        assert_eq!(stock.helper, layout.with_file_name("marmish"));
         let profile = root.join(PROFILE);
         let mut roots = rustls::RootCertStore::empty();
         roots.add(fs_read_fixture_ca(&ca)).unwrap();
@@ -40,7 +44,7 @@ pub(super) fn run() {
             state_dir: root,
             identity: PROFILE.into(),
             backend: BackendChoice::File,
-            helper: crate::native_layout::resolve(&layout).unwrap().helper,
+            helper: stock.helper,
             relay_policy: policy,
             allowed_peers: vec![],
             retention: Duration::from_secs(86_400),

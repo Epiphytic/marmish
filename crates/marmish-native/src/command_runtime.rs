@@ -138,6 +138,24 @@ impl MdkOwner {
         )
     }
 
+    #[cfg(test)]
+    pub(crate) fn enable_stock_fixture_commands(
+        &mut self,
+        profile: &ProfileLease,
+        material: &IdentityMaterial,
+        config: CommandConfig,
+        layout: crate::native_layout::ExecutableLayout,
+    ) -> Result<()> {
+        self.enable_commands_inner(
+            profile,
+            material,
+            config,
+            layout.worker,
+            CommandStartup::Stock,
+            || Ok(layout.helper),
+        )
+    }
+
     /// The caller retains this owner for disposition on every startup error.
     #[cfg(all(
         any(test, marmish_peer_receiver_candidate),

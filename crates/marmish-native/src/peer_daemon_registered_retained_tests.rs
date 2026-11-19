@@ -163,6 +163,7 @@ async fn retained() {
     let sender_args = arguments(&daemon, sender.path(), &relay, &sender_ca);
     let log = tempfile::tempfile_in(sender.path()).unwrap();
     let mut sender_child = OwnedChild(fresh_process(&example, &sender_args, log).spawn().unwrap());
+    println!("retained stage=sender");
     wait_active(&mut sender_child, &sender_socket).await;
 
     let ca = root.path().join("fixture-root.der");
@@ -172,6 +173,7 @@ async fn retained() {
     let clock = Instant::now();
     let (mut child, report) = private_parent(example, args, log).await;
     report.expect("private registered Both R/A/C report");
+    println!("retained stage=registered");
     wait_active(&mut child, &socket).await;
     let startup = clock.elapsed();
 
@@ -203,6 +205,7 @@ async fn retained() {
 
     let clock = Instant::now();
     let mut stock = launch_stock(&daemon, root.path(), &relay, &ca);
+    println!("retained stage=stock-reopen");
     wait_active(&mut stock, &socket).await;
     assert_stock_rows(&socket, sender_key, [first, second]).await;
     let cold = clock.elapsed();
