@@ -1150,12 +1150,24 @@ fn attach_installed_parent(f: &Fixture) {
 fn installed_approval_epochs_are_exclusive_and_preserve_the_v2_inventory() {
     use custody_schema::InstalledKind::{ApprovalV3, V2};
 
-    for (exact, other, marker) in [
-        (V2, ApprovalV3, "peer_installed_custody_v2"),
-        (ApprovalV3, V2, "peer_installed_custody_approval_v3"),
+    for (exact, other, marker, drift_error) in [
+        (
+            V2,
+            ApprovalV3,
+            "peer_installed_custody_v2",
+            Error::Cursor(CursorError::Binding),
+        ),
+        (
+            ApprovalV3,
+            V2,
+            "peer_installed_custody_approval_v3",
+            Error::Layout,
+        ),
     ] {
         let f = Fixture::new();
-        attach_installed_parent(&f);
+        if exact == V2 {
+            attach_installed_parent(&f);
+        }
         let mut checkpoint = open_installed(&f, exact).unwrap();
         let source = checkpoint.bind_source(URL).unwrap();
         assert_eq!(checkpoint.sweep(&source, WALL).err(), Some(Error::Layout));
@@ -1185,10 +1197,7 @@ fn installed_approval_epochs_are_exclusive_and_preserve_the_v2_inventory() {
             .unwrap();
         drop(conn);
         let drifted = f.inventory();
-        assert_eq!(
-            open_installed(&f, exact).err(),
-            Some(Error::Cursor(CursorError::Binding))
-        );
+        assert_eq!(open_installed(&f, exact).err(), Some(drift_error));
         assert_eq!(f.inventory(), drifted);
     }
 }
@@ -1197,16 +1206,10 @@ fn installed_approval_epochs_are_exclusive_and_preserve_the_v2_inventory() {
 fn installed_approval_epoch_refuses_partial_mixed_and_fixture_inventories() {
     use custody_schema::InstalledKind::{ApprovalV3, V2};
 
-    for (ddl, v3_error) in [
-        (
-            "CREATE TABLE peer_installed_custody_approval_v3 (version INTEGER PRIMARY KEY) STRICT",
-            Error::Cursor(CursorError::Binding),
-        ),
-        (
-            "CREATE TABLE peer_installed_custody_v2 (version INTEGER PRIMARY KEY) STRICT;
-             CREATE TABLE peer_installed_custody_approval_v3 (version INTEGER PRIMARY KEY) STRICT",
-            Error::Layout,
-        ),
+    for ddl in [
+        "CREATE TABLE peer_installed_custody_approval_v3 (version INTEGER PRIMARY KEY) STRICT",
+        "CREATE TABLE peer_installed_custody_v2 (version INTEGER PRIMARY KEY) STRICT;
+         CREATE TABLE peer_installed_custody_approval_v3 (version INTEGER PRIMARY KEY) STRICT",
     ] {
         let f = Fixture::new();
         attach_installed_parent(&f);
@@ -1215,7 +1218,7 @@ fn installed_approval_epoch_refuses_partial_mixed_and_fixture_inventories() {
         drop(conn);
         let before = f.inventory();
         assert_eq!(open_installed(&f, V2).err(), Some(Error::Layout));
-        assert_eq!(open_installed(&f, ApprovalV3).err(), Some(v3_error));
+        assert_eq!(open_installed(&f, ApprovalV3).err(), Some(Error::Layout));
         assert_eq!(f.inventory(), before);
     }
 
@@ -1224,10 +1227,7 @@ fn installed_approval_epoch_refuses_partial_mixed_and_fixture_inventories() {
     drop(f.prepared().unwrap());
     drop(f.custody().unwrap());
     let before = f.inventory();
-    assert_eq!(
-        open_installed(&f, ApprovalV3).err(),
-        Some(Error::Cursor(CursorError::Binding))
-    );
+    assert_eq!(open_installed(&f, ApprovalV3).err(), Some(Error::Layout));
     assert_eq!(f.inventory(), before);
 }
 
