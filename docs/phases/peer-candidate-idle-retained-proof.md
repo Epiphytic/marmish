@@ -58,7 +58,10 @@ Observe actual clean child exit, IPC socket removal and release of the exact
 profile lease before starting the stock reopen process. Leave Peer config and
 ordinary identity unchanged across that reopen.
 
-Build two source-matched Linux AMD64 libtest drivers using
+Build and privately install both Linux AMD64 package classes from the same
+source, each with its own same-class packager, daemon, worker and manifest.
+Use distinct prefixes and verify both install receipts. Build the two
+source-matched Linux AMD64 libtest drivers using
 `cargo test --locked -p marmish-native --lib --no-run`. The candidate driver
 uses the reviewed private candidate cfg and runs from the installed version's
 `deps` directory. Use separate warmed `CARGO_TARGET_DIR` values for the
@@ -66,7 +69,11 @@ two drivers. Build them from the same exact worktree commit with the same
 explicit nonzero `MARMISH_BUILD_COMMIT` and without `installed-checks`.
 The stock build must also unset the candidate flag from target Rust flags.
 Record both test binary SHA-256 digests and pass the stock binary's
-absolute canonical path to the candidate controller as `MARMISH_TEST_REGISTERED_STOCK_LIBTEST`. The controller runs
+absolute canonical path to the candidate controller as
+`MARMISH_TEST_REGISTERED_STOCK_LIBTEST`. Supply the distinct stock installed
+daemon as `MARMISH_TEST_REGISTERED_STOCK_DAEMON`. The controller passes its
+canonical path to the child, which validates and uses that stock layout.
+The controller runs
 `--ignored --exact peer_invitation::daemon_wss_tests::registered_stock_reopen_child
 --nocapture`. This selector is compiled only on stock Linux AMD64. Follow
 the existing exact ignored-child subprocess pattern. Pass the absolute
@@ -84,14 +91,16 @@ matched tests therefore fail the proof. Missing inputs, failure or timeout
 are hard test failures.
 
 The child's test-only `daemon::run_peer_fixture` uses `bootstrap: None`,
-the same validated installed utility layout and
+the separately installed, source-matched stock utility layout and
 `RelayConnector::for_loopback_fixture` for the isolated relay's exact
 temporary CA. Follow `peer_daemon_wss_tests.rs`'s existing
 `Round::start` config construction. Use a file backend, 24-hour retention,
 no test command or uptime caps and the same direct one-relay policy.
 Set the connector's Arti directory names under the owned profile as
 `arti_state` and `arti_cache`. The daemon's standard stock startup
-acquires and releases its own lease. Parent owns no lease while it runs. It reaches stock `open_stock` and `serve_opened`. This
+acquires and releases its own lease. Parent owns no lease while it runs. It reaches stock `open_stock` and `serve_opened`. The stock resolver refuses the candidate receipt, so the child must use stock
+utilities. Use the same state root, exact identity and untouched configuration
+across both processes. This
 proves stock cold reopen in a separate process under fixture trust. The
 shipping stock connector uses bundled roots and the markerless candidate
 would reselect Registered for this unchanged profile. Query
@@ -145,6 +154,6 @@ Time the private setup separately from the two finite invocations, quiet settlin
 SIGTERM to actual child reap, and stock reopen. Report counts and elapsed intervals as
 one opt-in fixture run. The installed test remains ignored by default. Run the
 existing no-engine case and stock unit regressions around `command_service`
-and `idle_cleanup_`. Require exact candidate and stock strict Clippy, a fresh
-source-matched candidate installation, and independent Claude Code Auto code
+and `idle_cleanup_`. Require exact candidate and stock strict Clippy, fresh
+source-matched candidate and stock installations, and independent Claude Code Auto code
 review before reporting the positive proof complete.
