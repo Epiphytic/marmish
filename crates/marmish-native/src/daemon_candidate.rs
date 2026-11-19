@@ -228,6 +228,17 @@ impl Listener {
         Ok((requests, status))
     }
 
+    async fn exited(&mut self) {
+        poll_fn(|cx| {
+            if self.poll_exit(cx) {
+                std::task::Poll::Ready(())
+            } else {
+                std::task::Poll::Pending
+            }
+        })
+        .await
+    }
+
     fn poll_exit(&mut self, cx: &mut Context<'_>) -> bool {
         if let Some(task) = self.task.as_mut()
             && let std::task::Poll::Ready(outcome) = Pin::new(task).poll(cx)
@@ -277,8 +288,10 @@ async fn finite_dispatch(
         | Request::CommandCursors { .. }
         | Request::CommandUnconsumed { .. }
         | Request::CommandInvocations { .. }
-        | Request::CommandConsume { .. }
-        | Request::ClientInventory { .. } => super::dispatch(owner, profile, rooms, request).await,
+        | Request::CommandConsume { .. } => super::dispatch(owner, profile, rooms, request).await,
+        Request::ClientInventory { request } => Ok(Response::inventory(
+            owner.checked_client_inventory(request)?,
+        )),
         _ => Err(Error::Invalid("registered_command_only")),
     }
 }
@@ -379,13 +392,7 @@ impl RegisteredOwner {
                 _ = stopped.as_mut() => return Err(Error::Storage("candidate_dispatcher_lost")),
                 _ = shutdown.as_mut() => return Ok(()),
                 _ = expired.as_mut() => return Ok(()),
-                _ = poll_fn(|cx| {
-                    if listener.poll_exit(cx) {
-                        std::task::Poll::Ready(())
-                    } else {
-                        std::task::Poll::Pending
-                    }
-                }) => return Err(Error::Invalid("ipc_listener_stopped")),
+                _ = listener.exited() => return Err(Error::Invalid("ipc_listener_stopped")),
                 pending = requests.recv() => {
                     let pending = pending.ok_or(Error::Invalid("ipc_listener_stopped"))?;
                     admit(admission)?;
@@ -397,9 +404,13 @@ impl RegisteredOwner {
                         _ = stopped.as_mut() => return Err(Error::Storage("candidate_dispatcher_lost")),
                         _ = shutdown.as_mut() => return Ok(()),
                         _ = expired.as_mut() => return Ok(()),
+                        _ = listener.exited() => return Err(Error::Invalid("ipc_listener_stopped")),
                         result = finite_dispatch(owner, profile, &mut rooms, pending.request) => result,
                     };
                     admit(admission)?;
+                    if matches!(reply, Err(Error::Storage("candidate_dispatcher_lost"))) {
+                        return reply.map(|_| ());
+                    }
                     let _ = pending.respond.send(reply.unwrap_or_else(super::failure));
                 }
                 _ = interval.tick() => {
@@ -409,6 +420,7 @@ impl RegisteredOwner {
                         _ = stopped.as_mut() => return Err(Error::Storage("candidate_dispatcher_lost")),
                         _ = shutdown.as_mut() => return Ok(()),
                         _ = expired.as_mut() => return Ok(()),
+                        _ = listener.exited() => return Err(Error::Invalid("ipc_listener_stopped")),
                         result = turn => result?,
                     };
                     admit(admission)?;
