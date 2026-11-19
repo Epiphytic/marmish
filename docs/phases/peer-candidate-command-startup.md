@@ -1,7 +1,7 @@
 # Prepare Command on the registered candidate owner
 
 This bounded adapter supplies the Command startup turn in
-[daemon composition](peer-candidate-daemon-composition.md),
+[daemon composition](peer-candidate-daemon-composition.md) and
 [dispatcher shutdown](peer-candidate-dispatcher-shutdown.md).
 Bead `marmish-dwt.4.12.2` tracks the wider composition. Apply this source
 against `10c4249`. The exact concurrent service-admissions plan is
@@ -69,8 +69,8 @@ outside the accepted layout. The test changes only the lazy input and covers
 the development sibling layout. Exercise both actual entry points without a
 worker for the stock/ordinary candidate client case. Also check that a failed
 helper resolution happens only after successful configure/bind, and that
-a healthy stock server starts its real Command engine through the shared body. Keep tests local and
-bounded; physical default VFS displacement and actual installed Command
+a healthy stock server starts its real Command engine through the shared body.
+Keep tests local and bounded. Physical default VFS displacement and actual installed Command
 execution through WSS remain qualification of the assembled daemon.
 Run focused tests, candidate and stock compile/lint checks, and independent
 Claude Code Auto review of the exact source before composition.
