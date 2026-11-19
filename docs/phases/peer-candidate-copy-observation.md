@@ -1,32 +1,43 @@
 # Observe the installed receiver's clean copy charge
 
-The installed near-cap qualification will measure a genuine recovered
-Pending stage before recording latency. The receiver makes an encrypted copy
-of the exact original inside the normal installed daemon and checks its native
-SQLCipher Pending readback. Observe the copy with test-only metadata reads
-instead of changing the daemon, its storage, or its debug schema.
+The installed near-cap qualification measures a genuine recovered Pending stage
+and records refresh latency. The receiver makes an encrypted copy of the exact
+original on its existing 500 ms scheduled native read. Observe that copy with
+test-only metadata reads instead of changing the daemon, storage or debug schema.
 
-During a separate measurement before the latency cohorts, the controller can
-sample the fixed original, snapshot and Known file families in the private
-profile's peer directory. Read metadata only, with bounded 2 ms pacing and a
-3 second deadline. Accept a sample only if two immediate observations agree,
-the original matches the offline qualified logical and allocated extents,
-the full snapshot has the original's logical length and a different inode,
-and the Known family and all three families' sidecars are absent. All file
-observations require regular single-link files. Read the original and the
-snapshot before and after the absence checks to reject disappearance,
-replacement or growth during observation. The temporary profile is held
-exclusively by the installed candidate, and the test has a single valid
-Pending stage on that route. The controller never opens the snapshot's data.
+After both latency cohorts, keep the same installed process and exact Pending
+profile running. The controller observes the next normal scheduled native
+Pending refresh. It sends no request to trigger a copy or change custody, and
+does not poll metadata during either latency cohort. This measures the already
+warm stage and spends at most three seconds of the existing fixture deadline.
+There is one bounded observation window, without retries or extension. Missing
+stable evidence fails qualification. Report the filesystem type.
 
-Compute the observed aggregate from the installed cursor's fixed reservation
-and each observed family's maximum of logical and allocated extent, matching
-`Inventory::calculate`. Require a snapshot under the closed stage cap and
-aggregate strictly below the total admission cap. Report the exact logical
-and allocated extents from those metadata reads and the observed charge.
-Make no peak claim. Missing evidence fails the fixture. The installed native
-classifier and its own independent quota checks establish correctness of the
-real read and the completed publication. The observer only measures footprint.
+Pin the private peer directory with a nofollow directory file descriptor,
+require the same directory device and inode at the beginning and end, and
+enumerate via that descriptor. Read file metadata with `fstatat` and
+`AT_SYMLINK_NOFOLLOW`. Require exactly the fixed cursor, Known/Unknown original
+and snapshot names for qualification. Specifically, the cursor must be present,
+with the Known original and all sidecars absent. The healthy installed daemon
+may handle other states; this fixture qualifies only that narrow state. Require
+regular single-link files with distinct device/inode pairs on the local volume.
 
-No metadata polling runs during the timed cohorts. Capture only bounded
-numeric observations. The ordinary installed proof and core CI remain unchanged.
+Take original and snapshot metadata before and after enumeration to reject
+disappearance, replacement or growth during a sample. Accept only two complete
+matching observations spaced by 2 ms, within the single three-second window.
+Require the original to match the exact offline cursor witness's device, inode,
+logical length and allocation, and the snapshot to have the same logical length
+with a distinct inode. A mismatch fails observation. The controller never opens
+the snapshot data.
+
+Report the observed logical and allocated extents and the aggregate at those
+sampling instants, with no peak claim or claim that the daemon observed the same
+allocation. Match `Inventory::calculate` using `max(logical, allocated)` for
+each family and the installed cursor reservation from `RESERVED_BYTES`. The
+snapshot logical extent must be positive and at most `CLOSED_STAGE_LIMIT`.
+Aggregate charged bytes must be strictly below `TOTAL_ADMISSION`. Independently
+the installed native classifier and its own physical admission checks establish
+the real read and completed publication.
+
+Capture only bounded numeric observations. The ordinary installed proof and
+core CI are unaffected.
