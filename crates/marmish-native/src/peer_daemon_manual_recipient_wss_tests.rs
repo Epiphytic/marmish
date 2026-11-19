@@ -7,7 +7,7 @@ use super::{
 };
 use crate::peer_relay_trust::qualified_both_command_fixture;
 use nostr::key::Keys;
-use std::sync::Arc;
+use std::{os::unix::fs::FileExt as _, sync::Arc};
 use tokio::time::timeout_at;
 
 #[path = "peer_daemon_manual_founder_fixture.rs"]
@@ -82,6 +82,23 @@ async fn pending(
     entry
 }
 
+fn manual_failure_log(log: &File) -> String {
+    let mut bytes = vec![0; 64 * 1024];
+    let size = log.read_at(&mut bytes, 0).unwrap();
+    String::from_utf8_lossy(&bytes[..size])
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|value| {
+            value["event"] == "diagnostic"
+                && value["stage"]
+                    .as_str()
+                    .is_some_and(|stage| stage.starts_with("manual_"))
+        })
+        .map(|value| format!("{}: {}", value["stage"], value["category"]))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 async fn mounted() {
     let example = PathBuf::from(std::env::var_os(EXAMPLE).expect("private example"));
     assert_eq!(example.canonicalize().unwrap(), example);
@@ -120,7 +137,10 @@ async fn mounted() {
     write_private(&ca, ordinary.qualification_ca());
     let mut args = arguments(&daemon, root.path(), &ordinary, &ca);
     args.insert(0, "--manual-recipient".into());
-    let (mut child, mut report, _) = provisional(&example, &args, root.path()).await;
+    args.insert(0, "--debug".into());
+    let recipient_log = tempfile::tempfile_in(root.path()).unwrap();
+    let (mut child, mut report, _) =
+        provisional_with_log(&example, &args, recipient_log.try_clone().unwrap()).await;
     unavailable(&socket).await;
     tokio::time::sleep(PROVISIONAL_HOLD).await;
     no_recipient_dial(&peer, signer);
@@ -158,7 +178,14 @@ async fn mounted() {
         loop {
             tokio::select! {
                 result = &mut proof => break result,
-                () = tokio::time::sleep(Duration::from_millis(100)) => unavailable(&socket).await,
+                () = tokio::time::sleep(Duration::from_millis(100)) => {
+                    assert!(
+                        peer.runtime_socket_active(recipient),
+                        "Manual route closed before Consent; {}",
+                        manual_failure_log(&recipient_log),
+                    );
+                    unavailable(&socket).await;
+                }
             }
         }
     };

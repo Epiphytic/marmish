@@ -27,7 +27,14 @@ async fn provisional(
     args: &[OsString],
     state: &Path,
 ) -> (OwnedChild, UnixStream, Duration) {
-    let log = tempfile::tempfile_in(state).unwrap();
+    provisional_with_log(example, args, tempfile::tempfile_in(state).unwrap()).await
+}
+
+async fn provisional_with_log(
+    example: &Path,
+    args: &[OsString],
+    log: File,
+) -> (OwnedChild, UnixStream, Duration) {
     let start = Instant::now();
     let (child, channel) =
         candidate_parent::spawn_observed(example, args, log.try_clone().unwrap()).unwrap();

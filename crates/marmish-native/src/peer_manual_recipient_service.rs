@@ -69,6 +69,34 @@ impl ManualService<'_, '_, '_> {
         .map_or(Ok(()), Err)
     }
 
+    fn effect_failed(&self, stage: &'static str, error: super::super::Error) -> Exit {
+        use super::super::{
+            Error,
+            store::{self, consent_checkpoint},
+        };
+        let category = match error {
+            Error::Binding => "binding",
+            Error::Clock => "clock",
+            Error::Socket(_) => "socket",
+            Error::Cursor(store::Error::ClockRegressed)
+            | Error::Checkpoint(consent_checkpoint::Error::Cursor(store::Error::ClockRegressed)) => {
+                "clock_regressed"
+            }
+            Error::Cursor(store::Error::Stale)
+            | Error::Checkpoint(consent_checkpoint::Error::Cursor(store::Error::Stale)) => "stale",
+            Error::Cursor(_) | Error::Checkpoint(consent_checkpoint::Error::Cursor(_)) => "cursor",
+            Error::Checkpoint(consent_checkpoint::Error::Source) => "source",
+            Error::Checkpoint(consent_checkpoint::Error::Policy) => "policy",
+            Error::Checkpoint(consent_checkpoint::Error::Expired) => "expired",
+            Error::Checkpoint(consent_checkpoint::Error::Package) => "package",
+            Error::Checkpoint(_) => "checkpoint",
+            Error::Native(_) => "native",
+            Error::Path | Error::StageIdentityMismatch | Error::RetirementBusy => "file_state",
+        };
+        crate::diagnostics::event(stage, category);
+        self.local_failure()
+    }
+
     fn local_failure(&self) -> Exit {
         self.check().err().unwrap_or(Exit::LocalUnavailable)
     }
@@ -84,7 +112,7 @@ impl ManualService<'_, '_, '_> {
             self.stop.clone(),
             self.fence.forwarding.clone(),
         )
-        .map_err(|_| self.local_failure())?;
+        .map_err(|error| self.effect_failed("manual_recover", error))?;
         let mut history_complete = false;
         loop {
             self.check()?;
@@ -96,7 +124,8 @@ impl ManualService<'_, '_, '_> {
                     () = self.fence.ready.stopped() => return Err(self.local_failure()),
                     result = ingress.history_turn(self.owner, self.port, None) => result,
                 };
-                history_complete = history.map_err(|_| self.local_failure())?;
+                history_complete =
+                    history.map_err(|error| self.effect_failed("manual_history", error))?;
                 self.check()?;
             }
 
@@ -104,14 +133,14 @@ impl ManualService<'_, '_, '_> {
             let mut managed = if schedule.managed_retry <= now {
                 self.owner
                     .due_manual_work(self.port)
-                    .map_err(|_| self.local_failure())?
+                    .map_err(|error| self.effect_failed("manual_work", error))?
             } else {
                 None
             };
             let mut saved = if schedule.saved_retry <= now {
                 self.owner
                     .probe_due_managed_delivery(self.port)
-                    .map_err(|_| self.local_failure())?
+                    .map_err(|error| self.effect_failed("manual_saved_selector", error))?
             } else {
                 None
             };
@@ -127,13 +156,15 @@ impl ManualService<'_, '_, '_> {
                 () = self.fence.ready.stopped() => return Err(self.local_failure()),
                 result = ingress.live_turn(self.owner, self.port, deadline, || self.producer.invalidate()) => result,
             };
-            let live_changed = live.map_err(|_| self.local_failure())?.is_some();
+            let live_changed = live
+                .map_err(|error| self.effect_failed("manual_live", error))?
+                .is_some();
             self.check()?;
             if live_changed && schedule.saved_retry <= Instant::now() {
                 saved = self
                     .owner
                     .probe_due_managed_delivery(self.port)
-                    .map_err(|_| self.local_failure())?;
+                    .map_err(|error| self.effect_failed("manual_saved_selector", error))?;
             }
             let saved_visited = saved.is_some();
 
@@ -149,7 +180,7 @@ impl ManualService<'_, '_, '_> {
                         self.stop,
                         self.fence.forwarding,
                     )
-                    .map_err(|_| self.local_failure())?;
+                    .map_err(|error| self.effect_failed("manual_saved_effect", error))?;
                 self.check()?;
                 match outcome {
                     SavedVisit::Stop => return Err(self.local_failure()),
@@ -164,7 +195,7 @@ impl ManualService<'_, '_, '_> {
                 managed = self
                     .owner
                     .due_manual_work(self.port)
-                    .map_err(|_| self.local_failure())?;
+                    .map_err(|error| self.effect_failed("manual_work", error))?;
             }
             if let Some(managed) = managed
                 && self.managed(managed, &readiness).await?
@@ -208,7 +239,7 @@ impl ManualService<'_, '_, '_> {
                             forwarding,
                         },
                     )
-                    .map_err(|_| self.local_failure())?;
+                    .map_err(|error| self.effect_failed("manual_package", error))?;
             }
             ManualDue::Publish(selector) => {
                 let outcome = self
@@ -229,6 +260,7 @@ impl ManualService<'_, '_, '_> {
                     Publication::NotSent(_)
                     | Publication::PossiblyExposed(_)
                     | Publication::Settled(Wake::Failed) => {
+                        crate::diagnostics::event("manual_consent", "unsettled");
                         return Err(self.local_failure());
                     }
                 }
@@ -247,7 +279,7 @@ impl ManualService<'_, '_, '_> {
                     // measured join returns, only the next readback may advance.
                     pending.ingest(self.port, armed, clock(readiness, self.stop, forwarding))
                 })()
-                .map_err(|_| self.local_failure())?;
+                .map_err(|error| self.effect_failed("manual_join_arm", error))?;
                 if result.result.is_err() {
                     return self.check().map(|()| false);
                 }
@@ -263,7 +295,7 @@ impl ManualService<'_, '_, '_> {
                             clock(readiness, self.stop, forwarding),
                         )
                     })
-                    .map_err(|_| self.local_failure())?;
+                    .map_err(|error| self.effect_failed("manual_join_readback", error))?;
             }
         }
         self.check()?;
