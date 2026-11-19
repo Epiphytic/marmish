@@ -103,7 +103,7 @@ impl Checkpoint {
             if !joined.matches_quota(quota) || !joined.matches(prior, &delivery) {
                 return Err(CursorError::Binding.into());
             }
-            if let Progress::Pending { joined: saved, .. } = &prior.saved.progress {
+            if prior.state() == CustodyState::Pending {
                 let selector = Selector::from(prior.offer());
                 let current = self
                     .read_installed_custody(
@@ -115,16 +115,7 @@ impl Checkpoint {
                         prior.stage().0.coordinates().1,
                     )?
                     .ok_or(Error::Missing)?;
-                if !current.same_turn(prior)
-                    || (
-                        saved.native.group.as_slice(),
-                        saved.native.epoch,
-                        saved.native.epoch_identity,
-                        saved.native.own_leaf,
-                    ) != joined.coordinates()
-                {
-                    return Err(CursorError::Stale.into());
-                }
+                require_same_pending(&current, prior, joined)?;
                 require_current(fence)?;
                 return Ok(());
             }
@@ -142,6 +133,63 @@ impl Checkpoint {
         .map_err(|_| Error::Source)?
     }
 
+    #[cfg(marmish_peer_receiver_candidate)]
+    pub(in crate::peer_invitation) fn observe_installed_pending(
+        &mut self,
+        source: &Source,
+        port: &mut PeerRecipientPort,
+        prior: &HeldEvidence,
+        joined: &InstalledJoinedReadback<'_>,
+        quota: &ReceiverQuota<'_>,
+    ) -> Result<(crate::ipc::peer_read::Entry, u64, u64)> {
+        use crate::ipc::peer_read::{Entry, Selection, State};
+
+        port.use_current_recipient(|account, origin, wall| {
+            let delivery = self.current_installed_delivery(prior, wall)?;
+            if !joined.matches_quota(quota) || !joined.matches(prior, &delivery) {
+                return Err(CursorError::Binding.into());
+            }
+            let selector = Selector::from(prior.offer());
+            let generation = prior.stage().0.coordinates().1;
+            self.read_installed_consent(source, account, origin, wall, |tx, cx| {
+                let current = read_pending_custody_row(tx, cx, selector, generation)?
+                    .ok_or(Error::Missing)?;
+                require_same_pending(&current, prior, joined)?;
+                require_sole_pending(tx)?;
+                let (origin_floor, global_floor) = tx.query_row(
+                    "SELECT origin.wall, version.wall
+                     FROM peer_cursor_origin origin
+                     JOIN peer_consent_version version ON version.singleton=1
+                     WHERE origin.origin=?1",
+                    [cx.origin],
+                    |row| Ok((read_seconds(row, 0)?, read_seconds(row, 1)?)),
+                )?;
+                let floor = origin_floor.max(global_floor);
+                let held_at = current.held_at();
+                let expires_at = current.pending_deadline().ok_or(Error::Missing)?;
+                if generation == 0 || wall < floor || wall < held_at || wall >= expires_at {
+                    return Err(CursorError::Stale.into());
+                }
+                Ok((
+                    Entry {
+                        selection: Selection {
+                            server: selector.server,
+                            offer_id: selector.id,
+                            revision: selector.revision,
+                            generation,
+                        },
+                        state: State::Pending,
+                        held_at,
+                        expires_at,
+                    },
+                    wall,
+                    floor,
+                ))
+            })
+        })
+        .map_err(|_| Error::Source)?
+    }
+
     fn read_installed_custody(
         &mut self,
         source: &Source,
@@ -155,16 +203,7 @@ impl Checkpoint {
             return Err(Error::Policy);
         }
         self.read_installed_consent(source, account, origin, wall, |tx, cx| {
-            if terminalized(tx, selector, cx.origin)? {
-                return Ok(None);
-            }
-            let Some(queued) = cx.exact_consent(tx, selector)? else {
-                return Ok(None);
-            };
-            if queued.prepared.binding.generation.count != generation {
-                return Ok(None);
-            }
-            cx.read_evidence(tx, queued)
+            read_pending_custody_row(tx, cx, selector, generation)
         })
     }
 
@@ -200,6 +239,58 @@ impl Checkpoint {
             .reopen_custodied_delivery(&self.signer, held, wall)
             .map_err(|_| Error::Package)
     }
+}
+
+fn require_same_pending(
+    current: &HeldEvidence,
+    prior: &HeldEvidence,
+    joined: &InstalledJoinedReadback<'_>,
+) -> Result<()> {
+    let Progress::Pending { joined: saved, .. } = &current.saved.progress else {
+        return Err(CursorError::Stale.into());
+    };
+    if !current.same_turn(prior)
+        || (
+            saved.native.group.as_slice(),
+            saved.native.epoch,
+            saved.native.epoch_identity,
+            saved.native.own_leaf,
+        ) != joined.coordinates()
+    {
+        return Err(CursorError::Stale.into());
+    }
+    Ok(())
+}
+
+fn read_pending_custody_row(
+    tx: &Transaction<'_>,
+    cx: &Context,
+    selector: Selector,
+    generation: u64,
+) -> Result<Option<HeldEvidence>> {
+    if terminalized(tx, selector, cx.origin)? {
+        return Ok(None);
+    }
+    let Some(queued) = cx.exact_consent(tx, selector)? else {
+        return Ok(None);
+    };
+    if queued.prepared.binding.generation.count != generation {
+        return Ok(None);
+    }
+    cx.read_evidence(tx, queued)
+}
+
+#[cfg(marmish_peer_receiver_candidate)]
+fn require_sole_pending(tx: &Transaction<'_>) -> Result<()> {
+    let pending: u64 = tx.query_row(
+        "SELECT count(*) FROM peer_pending_custody WHERE state=2",
+        [],
+        |row| row.get(0),
+    )?;
+    if pending != 1 {
+        return Err(CursorError::Stale.into());
+    }
+    Ok(())
 }
 
 // This module is mounted for Linux AMD64 native tests. Change
@@ -261,4 +352,26 @@ impl Checkpoint {
         tx.commit()?;
         Ok(())
     }
+}
+
+#[cfg(all(test, marmish_peer_receiver_candidate))]
+#[test]
+fn pending_observation_requires_one_pending_slot() {
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    let tx = conn.transaction().unwrap();
+    tx.execute_batch(
+        "CREATE TABLE peer_pending_custody (
+          class INTEGER PRIMARY KEY CHECK (class IN (0,1)),
+          state INTEGER NOT NULL
+        ) STRICT;
+        INSERT INTO peer_pending_custody VALUES (0,0);",
+    )
+    .unwrap();
+    assert!(require_sole_pending(&tx).is_err());
+    tx.execute("UPDATE peer_pending_custody SET state=2 WHERE class=0", [])
+        .unwrap();
+    require_sole_pending(&tx).unwrap();
+    tx.execute("INSERT INTO peer_pending_custody VALUES (1,2)", [])
+        .unwrap();
+    assert!(require_sole_pending(&tx).is_err());
 }

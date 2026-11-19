@@ -39,6 +39,8 @@ use crate::peer_invitation::{
     },
 };
 use store::TrustedOutcome;
+#[cfg(marmish_peer_receiver_candidate)]
+use store::consent_checkpoint::provisioning::prepared_consent::custody::HeldEvidence;
 
 const CHILD_FLAG: &str = "MARMISH_PRIVATE_V2_PENDING_STEP";
 const SCENARIO: &str = "MARMISH_PRIVATE_V2_PENDING_SCENARIO";
@@ -442,6 +444,132 @@ fn observe_turn<T>(window: &str, signed_end: u64, run: impl FnOnce() -> T) -> T 
     output
 }
 
+#[cfg(marmish_peer_receiver_candidate)]
+struct ObservationFixture {
+    _startup: crate::peer_candidate_startup::Startup,
+    _listener: crate::peer_candidate_startup::ListenerRegistration,
+    _worker: crate::peer_candidate_startup::Ready,
+    readiness: crate::peer_candidate_startup::Readiness,
+    stop: Arc<AtomicBool>,
+    producer: crate::ipc::peer_read::pending_view::Producer,
+    reader: crate::ipc::peer_read::pending_view::Reader,
+}
+
+#[cfg(marmish_peer_receiver_candidate)]
+impl ObservationFixture {
+    async fn new() -> Self {
+        let (startup, listener, worker) = crate::peer_candidate_startup::pair();
+        startup.ordinary_ready();
+        listener.registered();
+        let worker = worker.ready().await.unwrap();
+        let readiness = worker.readiness();
+        let (producer, reader) =
+            crate::ipc::peer_read::pending_view::pair(NonZeroU64::MIN).unwrap();
+        Self {
+            _startup: startup,
+            _listener: listener,
+            _worker: worker,
+            readiness,
+            stop: Arc::new(AtomicBool::new(false)),
+            producer,
+            reader,
+        }
+    }
+
+    fn refresh(
+        &self,
+        receiver: &mut PendingReceiver<'_>,
+        port: &mut PeerRecipientPort,
+        selector: Selector,
+        generation: u64,
+    ) -> Result<()> {
+        use crate::peer_invitation::receiver_inventory::v2_pending::PendingClock;
+
+        receiver.observe_pending(
+            port,
+            selector,
+            generation,
+            PendingClock::Candidate {
+                readiness: &self.readiness,
+                stop: &self.stop,
+            },
+            &self.producer,
+        )
+    }
+
+    fn read(
+        &self,
+        request: crate::ipc::peer_read::Request,
+    ) -> Option<crate::ipc::peer_read::Reply> {
+        let generation = NonZeroU64::MIN;
+        self.reader.admit(generation)?.reply_before_write(
+            request,
+            generation,
+            tokio::time::Instant::now() + Duration::from_secs(1),
+        )
+    }
+}
+
+#[cfg(marmish_peer_receiver_candidate)]
+async fn prove_pending_observation(
+    receiver: &mut PendingReceiver<'_>,
+    port: &mut PeerRecipientPort,
+    exact: &HeldCoordinates,
+    held: &HeldEvidence,
+) {
+    use crate::ipc::peer_read::{Entry, Reply, Request, Selection, State};
+
+    let fixture = ObservationFixture::new().await;
+    let selector = exact.selector();
+    let entry = Entry {
+        selection: Selection {
+            server: selector.server,
+            offer_id: selector.id,
+            revision: selector.revision,
+            generation: exact.generation,
+        },
+        state: State::Pending,
+        held_at: held.held_at(),
+        expires_at: held.pending_deadline().unwrap(),
+    };
+    let effects = Effects::read();
+    let list = Request::List {};
+    assert_eq!(fixture.read(list), None);
+    fixture
+        .refresh(receiver, port, selector, exact.generation)
+        .unwrap();
+    assert_eq!(
+        fixture.read(list),
+        Some(Reply::List {
+            entries: vec![entry]
+        })
+    );
+    assert_eq!(
+        fixture.read(Request::Show {
+            selection: entry.selection
+        }),
+        Some(Reply::Show { entry })
+    );
+    assert!(
+        fixture
+            .refresh(receiver, port, selector, exact.generation + 1)
+            .is_err()
+    );
+    assert_eq!(fixture.read(list), None);
+    fixture
+        .refresh(receiver, port, selector, exact.generation)
+        .unwrap();
+    PendingReceiver::stop_next_observation_at_final_fence(fixture.stop.clone());
+    assert!(
+        fixture
+            .refresh(receiver, port, selector, exact.generation)
+            .is_err()
+    );
+    assert!(fixture.stop.load(std::sync::atomic::Ordering::Acquire));
+    assert_eq!(fixture.read(list), None);
+    effects.assert_since("sealed-pending-observation", (0, 0, 0));
+}
+
 async fn run_recipient(
     public: &Path,
     home: &Path,
@@ -639,6 +767,17 @@ async fn run_recipient(
                 (held.state(), held.delivery_carrier()),
                 (CustodyState::JoinStarted, exact.carrier)
             );
+            #[cfg(marmish_peer_receiver_candidate)]
+            if scenario == "joined" {
+                let fixture = ObservationFixture::new().await;
+                assert!(
+                    fixture
+                        .refresh(&mut receiver, &mut port, selector, exact.generation)
+                        .is_err()
+                );
+                assert_eq!(fixture.read(crate::ipc::peer_read::Request::List {}), None);
+                effects.assert_since("observation-before-pending", (0, 0, 0));
+            }
             if matches!(scenario, "joined" | "uncertain") {
                 let joined =
                     observe_turn("joined-readback-and-pending", held.held_deadline(), || {
@@ -727,6 +866,8 @@ async fn run_recipient(
                 );
                 effects.assert_since("pending-and-delivery-replay", (0, 0, 0));
                 if scenario == "joined" {
+                    #[cfg(marmish_peer_receiver_candidate)]
+                    prove_pending_observation(&mut receiver, &mut port, &exact, &after).await;
                     assert_ne!(native.identity, [0; 32]);
                     receiver
                         .fixture_change_pending_epoch(exact.carrier)
@@ -744,6 +885,17 @@ async fn run_recipient(
                             store::Error::Stale
                         )))
                     );
+                    #[cfg(marmish_peer_receiver_candidate)]
+                    {
+                        let fixture = ObservationFixture::new().await;
+                        assert_eq!(
+                            fixture.refresh(&mut receiver, &mut port, selector, exact.generation),
+                            Err(Error::Checkpoint(CheckpointError::Cursor(
+                                store::Error::Stale
+                            ))),
+                        );
+                        assert_eq!(fixture.read(crate::ipc::peer_read::Request::List {}), None);
+                    }
                     comparison.assert_since("retained-epoch-mismatch", (0, 0, 0));
                     let still_changed = receiver
                         .saved_custody(&mut port, selector, exact.generation)

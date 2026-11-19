@@ -24,23 +24,34 @@ fn entry() -> Entry {
     }
 }
 
+fn origin(monotonic: Instant) -> ClockOrigin {
+    ClockOrigin {
+        monotonic,
+        continuous: Duration::from_secs(10),
+    }
+}
+
 fn sample(monotonic: Instant, wall: u64) -> impl FnOnce() -> Option<Sample> + Copy {
-    move || Some(Sample { monotonic, wall })
+    at(origin(monotonic), wall)
+}
+
+fn at(time: ClockOrigin, wall: u64) -> impl FnOnce() -> Option<Sample> + Copy {
+    move || Some(Sample { time, wall })
 }
 
 fn observation(entry: Option<Entry>) -> Observation {
     Observation {
-        entry,
+        projection: entry.map_or(Projection::SyntheticEmpty, Projection::Pending),
         wall_floor: FLOOR,
         verified_wall: FLOOR,
     }
 }
 
-fn publish(producer: &Producer, origin: Instant, entry: Option<Entry>) {
+fn publish(producer: &Producer, time: Instant, entry: Option<Entry>) {
     assert!(producer.publish(
-        producer.begin(false, || origin).unwrap(),
+        producer.begin(false, || Some(origin(time))).unwrap(),
         observation(entry),
-        sample(origin, FLOOR)
+        sample(time, FLOOR)
     ));
 }
 
@@ -55,7 +66,7 @@ fn query(
 }
 
 pub(in crate::ipc) fn publish_live_fixture(producer: &Producer) -> Entry {
-    let ticket = producer.begin(false, Instant::now).unwrap();
+    let ticket = producer.read_ticket().unwrap();
     let observed = Sample::now().unwrap();
     let row = Entry {
         held_at: observed.wall,
@@ -65,7 +76,7 @@ pub(in crate::ipc) fn publish_live_fixture(producer: &Producer) -> Entry {
     assert!(producer.publish(
         ticket,
         Observation {
-            entry: Some(row),
+            projection: Projection::Pending(row),
             wall_floor: observed.wall,
             verified_wall: observed.wall,
         },
@@ -159,7 +170,7 @@ fn admission_rechecks_declared_generation_age_and_wall_floor() {
     assert!(reader.admit(NonZeroU64::new(2).unwrap()).is_none());
     let read = reader.admit(generation()).unwrap();
     let row = entry();
-    let ticket = producer.begin(false, || time).unwrap();
+    let ticket = producer.begin(false, || Some(origin(time))).unwrap();
     assert!(!producer.publish(
         ticket,
         Observation {
@@ -195,13 +206,17 @@ fn both_clock_samples_apply_at_their_exact_admission_boundaries() {
     let time = Instant::now();
     let (producer, reader) = pair(generation()).unwrap();
     let row = entry();
-    let ticket = producer.begin(false, || time).unwrap();
+    let ticket = producer.begin(false, || Some(origin(time))).unwrap();
     assert!(!producer.publish(ticket, observation(Some(row)), || None));
     publish(&producer, time, Some(row));
     let read = reader.admit(generation()).unwrap();
     assert!(read.select(LIST, || None).is_none());
+    assert!(read.select(LIST, sample(time, FLOOR)).is_none());
+    publish(&producer, time, Some(row));
     let selected = read.select(LIST, sample(time, FLOOR)).unwrap();
     assert!(read.reply(selected, || None).is_none());
+    assert!(read.select(LIST, sample(time, FLOOR)).is_none());
+    publish(&producer, time, Some(row));
 
     let selected = read.select(LIST, sample(time, FLOOR)).unwrap();
     let almost_expired = time + LIFETIME - Duration::from_nanos(1);
@@ -221,13 +236,13 @@ fn only_the_current_producer_can_latch_an_expired_record() {
     let (producer, reader) = pair(generation()).unwrap();
     let (other, _) = pair(generation()).unwrap();
     let row = entry();
-    let foreign = other.begin(false, || time).unwrap();
+    let foreign = other.begin(false, || Some(origin(time))).unwrap();
     assert!(!producer.publish(foreign, observation(Some(row)), sample(time, EXPIRES)));
     publish(&producer, time, Some(row));
 
-    let fresh = producer.begin(false, || time).unwrap();
+    let fresh = producer.begin(false, || Some(origin(time))).unwrap();
     assert!(!producer.publish(fresh, observation(Some(row)), sample(time, EXPIRES)));
-    let again = producer.begin(true, || time).unwrap();
+    let again = producer.begin(true, || Some(origin(time))).unwrap();
     assert!(!producer.publish(again, observation(Some(row)), sample(time, EXPIRES - 1)));
     assert!(query(&reader, LIST, sample(time, EXPIRES - 1)).is_none());
 }
@@ -253,7 +268,7 @@ fn expiry_is_exact_and_latched_until_the_actor_stops() {
     assert_eq!(query(&reader, show, sample(time, EXPIRES - 1)), None);
 
     let new_time = time + LIFETIME;
-    let ticket = producer.begin(true, || new_time).unwrap();
+    let ticket = producer.begin(true, || Some(origin(new_time))).unwrap();
     assert!(!producer.publish(
         ticket,
         observation(Some(row)),
@@ -276,10 +291,10 @@ fn a_second_invalidation_or_changed_owner_rejects_old_tickets_and_replies() {
     let current = sample(time, FLOOR);
     let (producer, reader) = pair(generation()).unwrap();
     let (other, other_reader) = pair(generation()).unwrap();
-    let first = producer.begin(true, || time).unwrap();
+    let first = producer.begin(true, || Some(origin(time))).unwrap();
     assert!(producer.publish(first, observation(Some(entry())), current));
 
-    let other_turn = other.begin(true, || time).unwrap();
+    let other_turn = other.begin(true, || Some(origin(time))).unwrap();
     assert!(other.publish(other_turn, observation(Some(entry())), current));
     let read = reader.admit(generation()).unwrap();
     let old_reply = read.select(LIST, current).unwrap();
@@ -287,22 +302,22 @@ fn a_second_invalidation_or_changed_owner_rejects_old_tickets_and_replies() {
     let alternate_reply = alternate.select(LIST, current).unwrap();
     assert_eq!(old_reply.stamp.sequence, alternate_reply.stamp.sequence);
     assert!(alternate.reply(old_reply, current).is_none());
-    let foreign = producer.begin(false, || time).unwrap();
+    let foreign = producer.begin(false, || Some(origin(time))).unwrap();
     assert_eq!(foreign.stamp.sequence, alternate_reply.stamp.sequence);
     assert!(!other.publish(foreign, observation(Some(entry())), current));
 
     let old_reply = read.select(LIST, current).unwrap();
-    let first = producer.begin(true, || time).unwrap();
-    let second = producer.begin(true, || time).unwrap();
+    let first = producer.begin(true, || Some(origin(time))).unwrap();
+    let second = producer.begin(true, || Some(origin(time))).unwrap();
     assert!(!producer.publish(first, observation(Some(entry())), current));
     assert!(producer.publish(second, observation(Some(entry())), current));
     assert!(read.reply(old_reply, current).is_none());
 
-    let ticket = producer.begin(false, || time).unwrap();
+    let ticket = producer.begin(false, || Some(origin(time))).unwrap();
     reader.stop();
     assert!(!producer.publish(ticket, observation(Some(entry())), current));
     assert!(reader.admit(generation()).is_none());
-    assert!(producer.begin(false, || time).is_none());
+    assert!(producer.begin(false, || Some(origin(time))).is_none());
 }
 
 #[test]
@@ -332,5 +347,77 @@ fn read_budget_and_failed_owners_release_or_refuse_immediately() {
     assert!(poison.join().is_err());
     assert!(read.select(LIST, current).is_none());
     assert!(reader.admit(generation()).is_none());
-    assert!(producer.begin(false, || time).is_none());
+    assert!(producer.begin(false, || Some(origin(time))).is_none());
+}
+
+#[test]
+fn suspend_clock_and_verified_wall_independently_bound_the_proof() {
+    let time = Instant::now();
+    let initial = origin(time);
+    let (producer, reader) = pair(generation()).unwrap();
+    let row = entry();
+    let read = reader.admit(generation()).unwrap();
+
+    let early = ClockOrigin {
+        continuous: initial.continuous + LIFETIME - Duration::from_nanos(1),
+        ..initial
+    };
+    let stale = ClockOrigin {
+        continuous: initial.continuous + LIFETIME,
+        ..initial
+    };
+    let backward = ClockOrigin {
+        continuous: initial.continuous - Duration::from_nanos(1),
+        ..initial
+    };
+    let ticket = producer.begin(false, || Some(initial)).unwrap();
+    assert!(!producer.publish(ticket, observation(Some(row)), at(stale, FLOOR)));
+    publish(&producer, time, Some(row));
+    let selected = read.select(LIST, at(early, FLOOR)).unwrap();
+    assert!(read.reply(selected, at(stale, FLOOR)).is_none());
+    publish(&producer, time, Some(row));
+    assert!(read.select(LIST, at(backward, FLOOR)).is_none());
+
+    let ticket = producer.begin(false, || Some(initial)).unwrap();
+    assert!(producer.publish(
+        ticket,
+        Observation {
+            verified_wall: FLOOR + 2,
+            ..observation(Some(row))
+        },
+        at(initial, FLOOR + 2),
+    ));
+    let selected = read.select(LIST, at(initial, FLOOR + 2)).unwrap();
+    assert!(read.reply(selected, at(initial, FLOOR + 1)).is_none());
+}
+
+#[test]
+fn refresh_retains_prior_until_exact_refusal_or_replacement() {
+    let time = Instant::now();
+    let current = sample(time, FLOOR);
+    let (producer, reader) = pair(generation()).unwrap();
+    let (foreign, _) = pair(generation()).unwrap();
+    let row = entry();
+    publish(&producer, time, Some(row));
+    let stale = producer.begin(false, || Some(origin(time))).unwrap();
+    assert_eq!(
+        query(&reader, LIST, current),
+        Some(Reply::List { entries: vec![row] })
+    );
+
+    publish(&producer, time, Some(row));
+    producer.refuse(stale);
+    producer.refuse(foreign.begin(false, || Some(origin(time))).unwrap());
+    assert_eq!(
+        query(&reader, LIST, current),
+        Some(Reply::List { entries: vec![row] })
+    );
+
+    let exact = producer.begin(false, || Some(origin(time))).unwrap();
+    producer.refuse(exact);
+    assert!(query(&reader, LIST, current).is_none());
+
+    publish(&producer, time, Some(row));
+    assert!(producer.begin(false, || None).is_none());
+    assert!(query(&reader, LIST, current).is_none());
 }

@@ -5,6 +5,7 @@
 )]
 
 use super::{Entry, Reply, Request, Selection};
+use crate::{command_limits::continuous_time, peer_invitation::PendingObservation};
 use std::{
     num::NonZeroU64,
     sync::{
@@ -29,43 +30,75 @@ struct Stamp {
     sequence: u64,
 }
 
-#[cfg(test)]
-struct Ticket {
+pub(crate) struct Ticket {
     stamp: Stamp,
-    origin: Instant,
+    origin: ClockOrigin,
+}
+
+#[derive(Clone, Copy)]
+struct ClockOrigin {
+    monotonic: Instant,
+    continuous: Duration,
+}
+
+impl ClockOrigin {
+    fn now() -> Option<Self> {
+        Some(Self {
+            monotonic: Instant::now(),
+            continuous: continuous_time().ok()?,
+        })
+    }
+
+    fn fresh(self, origin: Self) -> bool {
+        self.monotonic
+            .checked_duration_since(origin.monotonic)
+            .is_some_and(|elapsed| elapsed < LIFETIME)
+            && self
+                .continuous
+                .checked_sub(origin.continuous)
+                .is_some_and(|elapsed| elapsed < LIFETIME)
+    }
 }
 
 #[derive(Clone, Copy)]
 struct Sample {
-    monotonic: Instant,
+    time: ClockOrigin,
     wall: u64,
 }
 
 impl Sample {
     fn now() -> Option<Self> {
         Some(Self {
-            monotonic: Instant::now(),
+            time: ClockOrigin::now()?,
             wall: SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs(),
         })
     }
-
-    fn fresh(self, origin: Instant) -> bool {
-        self.monotonic
-            .checked_duration_since(origin)
-            .is_some_and(|elapsed| elapsed < LIFETIME)
-    }
 }
 
-// The installed owner must supply an opaque proof from its exact fenced readback.
-struct Observation {
-    entry: Option<Entry>,
-    wall_floor: u64,
+enum Projection {
+    Pending(Entry),
     #[cfg(test)]
+    SyntheticEmpty,
+}
+
+struct Observation {
+    projection: Projection,
+    wall_floor: u64,
     verified_wall: u64,
 }
 
+impl Observation {
+    fn entry(&self) -> Option<Entry> {
+        match self.projection {
+            Projection::Pending(entry) => Some(entry),
+            #[cfg(test)]
+            Projection::SyntheticEmpty => None,
+        }
+    }
+}
+
 struct Published {
-    origin: Instant,
+    origin: ClockOrigin,
     observation: Observation,
 }
 
@@ -95,15 +128,19 @@ impl Inner {
         true
     }
 
-    fn observe(&mut self, sample: Sample) -> Option<Option<Entry>> {
+    fn observe(&mut self, sample: Option<Sample>) -> Option<Option<Entry>> {
         let State::Live(published) = &self.state else {
             return None;
         };
-        if !sample.fresh(published.origin) || sample.wall < published.observation.wall_floor {
+        let Some(sample) = sample.filter(|sample| {
+            sample.time.fresh(published.origin)
+                && sample.wall >= published.observation.verified_wall
+                && sample.wall >= published.observation.wall_floor
+        }) else {
             self.advance();
             return None;
-        }
-        let Some(entry) = published.observation.entry else {
+        };
+        let Some(entry) = published.observation.entry() else {
             return Some(None);
         };
         if sample.wall >= entry.expires_at {
@@ -139,16 +176,48 @@ impl Shared {
 
 pub(crate) struct Producer(Arc<Shared>);
 
-#[cfg(test)]
 impl Producer {
-    fn begin(&self, changes_image: bool, origin: impl FnOnce() -> Instant) -> Option<Ticket> {
+    pub(crate) fn read_ticket(&self) -> Option<Ticket> {
+        self.begin(false, ClockOrigin::now)
+    }
+
+    pub(crate) fn refuse(&self, ticket: Ticket) {
+        if let Ok(mut inner) = self.0.view.lock()
+            && self.0.stamp(&inner) == ticket.stamp
+        {
+            inner.advance();
+        }
+    }
+
+    pub(crate) fn publish_pending(&self, proof: PendingObservation) -> bool {
+        let (ticket, entry, verified_wall, wall_floor) = proof.into_parts();
+        self.publish(
+            ticket,
+            Observation {
+                projection: Projection::Pending(entry),
+                wall_floor,
+                verified_wall,
+            },
+            Sample::now,
+        )
+    }
+
+    fn begin(
+        &self,
+        changes_image: bool,
+        origin: impl FnOnce() -> Option<ClockOrigin>,
+    ) -> Option<Ticket> {
         let mut inner = self.0.view.lock().ok()?;
         if matches!(inner.state, State::Stopped) || (changes_image && !inner.advance()) {
             return None;
         }
+        let Some(origin) = origin() else {
+            inner.advance();
+            return None;
+        };
         Some(Ticket {
             stamp: self.0.stamp(&inner),
-            origin: origin(),
+            origin,
         })
     }
 
@@ -161,32 +230,34 @@ impl Producer {
         let Ok(mut inner) = self.0.view.lock() else {
             return false;
         };
-        let Some(sample) = sample() else { return false };
-        if ticket.stamp != self.0.stamp(&inner)
-            || matches!(inner.state, State::Stopped)
-            || observation.verified_wall < observation.wall_floor
-        {
+        if ticket.stamp != self.0.stamp(&inner) || matches!(inner.state, State::Stopped) {
             return false;
         }
-        if let Some(entry) = observation.entry {
+        let Some(sample) = sample().filter(|sample| {
+            sample.time.fresh(ticket.origin)
+                && sample.wall >= observation.verified_wall
+                && observation.verified_wall >= observation.wall_floor
+        }) else {
+            inner.advance();
+            return false;
+        };
+        if let Some(entry) = observation.entry() {
             if entry.selection.generation == 0
                 || entry.held_at >= entry.expires_at
                 || entry.held_at > observation.verified_wall
             {
+                inner.advance();
                 return false;
             }
-            if observation.verified_wall >= entry.expires_at || sample.wall >= entry.expires_at {
+            if sample.wall >= entry.expires_at {
                 inner.expired = Some(entry.selection);
-                return false;
             }
             if inner.expired == Some(entry.selection) {
+                inner.advance();
                 return false;
             }
         }
-        if !sample.fresh(ticket.origin)
-            || sample.wall < observation.verified_wall
-            || !inner.advance()
-        {
+        if !inner.advance() {
             return false;
         }
         inner.state = State::Live(Published {
@@ -242,17 +313,14 @@ impl Read<'_> {
         listener: NonZeroU64,
         deadline: ExchangeInstant,
     ) -> Option<Reply> {
-        if listener != self.shared.listener {
+        if listener != self.shared.listener || ExchangeInstant::now() >= deadline {
             return None;
         }
-        let sample = || {
-            if ExchangeInstant::now() >= deadline {
-                return None;
-            }
-            Sample::now()
-        };
-        let selected = self.select(request, sample)?;
-        self.reply(selected, sample)
+        let selected = self.select(request, Sample::now)?;
+        if ExchangeInstant::now() >= deadline {
+            return None;
+        }
+        self.reply(selected, Sample::now)
     }
 
     fn select(
@@ -261,7 +329,7 @@ impl Read<'_> {
         sample: impl FnOnce() -> Option<Sample>,
     ) -> Option<Selected> {
         let mut inner = self.shared.view.lock().ok()?;
-        let entry = inner.observe(sample()?)?;
+        let entry = inner.observe(sample())?;
         if matches!(request, Request::Show { selection } if entry.map(|row| row.selection) != Some(selection))
         {
             return None;
@@ -275,8 +343,7 @@ impl Read<'_> {
 
     fn reply(&self, selected: Selected, sample: impl FnOnce() -> Option<Sample>) -> Option<Reply> {
         let mut inner = self.shared.view.lock().ok()?;
-        if self.shared.stamp(&inner) != selected.stamp
-            || inner.observe(sample()?)? != selected.entry
+        if self.shared.stamp(&inner) != selected.stamp || inner.observe(sample())? != selected.entry
         {
             return None;
         }

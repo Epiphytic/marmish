@@ -15,6 +15,11 @@ use crate::{
 };
 
 use super::*;
+#[cfg(marmish_peer_receiver_candidate)]
+use crate::ipc::peer_read::{
+    Entry,
+    pending_view::{Producer, Ticket},
+};
 #[cfg(test)]
 use crate::peer_quota_vfs::dispatch::JoinMetrics;
 use clean::CleanFiles;
@@ -57,9 +62,29 @@ pub(in crate::peer_invitation) struct PendingTurn<'turn, 'lease> {
     native: NativePending<'lease>,
 }
 
+#[cfg(marmish_peer_receiver_candidate)]
+pub(crate) struct PendingObservation {
+    ticket: Ticket,
+    entry: Entry,
+    verified_wall: u64,
+    wall_floor: u64,
+}
+
+#[cfg(marmish_peer_receiver_candidate)]
+impl PendingObservation {
+    pub(crate) fn into_parts(self) -> (Ticket, Entry, u64, u64) {
+        (self.ticket, self.entry, self.verified_wall, self.wall_floor)
+    }
+}
+
 pub(in crate::peer_invitation) struct ArmedWelcome<'lease> {
     prepared: PreparedWelcome<'lease>,
     started: JoinStarted,
+}
+
+#[cfg(all(test, marmish_peer_receiver_candidate))]
+thread_local! {
+    static STOP_OBSERVATION: Cell<Option<Arc<AtomicBool>>> = const { Cell::new(None) };
 }
 
 #[cfg(test)]
@@ -125,6 +150,31 @@ impl<'lease> PendingReceiver<'lease> {
     ) -> Result<InstalledJoinedReadback<'lease>> {
         self.turn()?
             .qualify(port, selector, generation, PendingClock::Fixture(stop))
+    }
+
+    #[cfg(marmish_peer_receiver_candidate)]
+    pub(in crate::peer_invitation) fn observe_pending(
+        &mut self,
+        port: &mut PeerRecipientPort,
+        selector: Selector,
+        generation: u64,
+        clock: PendingClock<'_>,
+        producer: &Producer,
+    ) -> Result<()> {
+        PendingTurn::observe_pending(
+            &mut self.owner,
+            self.lease,
+            port,
+            selector,
+            generation,
+            clock,
+            producer,
+        )
+    }
+
+    #[cfg(marmish_peer_receiver_candidate)]
+    pub(in crate::peer_invitation) fn stop_next_observation_at_final_fence(stop: Arc<AtomicBool>) {
+        assert!(STOP_OBSERVATION.replace(Some(stop)).is_none());
     }
 
     pub(in crate::peer_invitation) fn custody_state(
@@ -277,6 +327,87 @@ impl<'turn, 'lease> PendingTurn<'turn, 'lease> {
                     .join(self.owner, port, fence, armed, &current, &delivery)
             },
         )
+    }
+
+    #[cfg(marmish_peer_receiver_candidate)]
+    pub(in crate::peer_invitation) fn observe_pending(
+        owner: &'turn mut RecoveredOwner<'lease>,
+        lease: &'lease ProfileLease,
+        port: &mut PeerRecipientPort,
+        selector: Selector,
+        generation: u64,
+        clock: PendingClock<'_>,
+        producer: &Producer,
+    ) -> Result<()> {
+        let ticket = producer.read_ticket().ok_or(Error::Clock)?;
+        let proof = Self::borrow(owner, lease)
+            .and_then(|mut turn| turn.read_pending(port, selector, generation, clock));
+        match proof {
+            Ok((entry, verified_wall, wall_floor)) => producer
+                .publish_pending(PendingObservation {
+                    ticket,
+                    entry,
+                    verified_wall,
+                    wall_floor,
+                })
+                .then_some(())
+                .ok_or(Error::Clock),
+            Err(error) => {
+                producer.refuse(ticket);
+                Err(error)
+            }
+        }
+    }
+
+    #[cfg(marmish_peer_receiver_candidate)]
+    fn read_pending(
+        &mut self,
+        port: &mut PeerRecipientPort,
+        selector: Selector,
+        generation: u64,
+        clock: PendingClock<'_>,
+    ) -> Result<(Entry, u64, u64)> {
+        let (held, delivery, wall) = self.owner.checkpoint.read_installed_join_custody(
+            &self.owner.source,
+            port,
+            selector,
+            generation,
+        )?;
+        let deadline = held
+            .pending_deadline()
+            .filter(|_| held.state() == CustodyState::Pending)
+            .ok_or(Error::Binding)?;
+        clock.run(port, &self.native, wall, deadline, |port, fence| {
+            let joined = self
+                .native
+                .read_joined(self.owner, &held, &delivery, fence)?;
+            fence.sample()?;
+            self.owner.cursor.unchanged()?;
+            let (entry, sql_wall, floor) = self.owner.checkpoint.observe_installed_pending(
+                &self.owner.source,
+                port,
+                &held,
+                &joined,
+                self.native.quota,
+            )?;
+            let verified_wall = port.use_current_recipient(|account, origin, wall| {
+                if account != self.native.signer.public_key()
+                    || origin != self.native.origin
+                    || wall < sql_wall
+                    || wall >= deadline
+                {
+                    return Err(Error::Binding);
+                }
+                Ok(wall)
+            })??;
+            self.owner.cursor.unchanged()?;
+            #[cfg(test)]
+            if let Some(stop) = STOP_OBSERVATION.take() {
+                stop.store(true, std::sync::atomic::Ordering::Release);
+            }
+            fence.sample()?;
+            Ok((entry, verified_wall, floor))
+        })
     }
 
     pub(in crate::peer_invitation) fn qualify(

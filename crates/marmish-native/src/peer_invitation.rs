@@ -83,6 +83,12 @@ pub(crate) use paths::retirement::recovery::RollbackFiles;
 #[cfg(test)]
 pub(crate) use prepared_consent::leave_owner::{LeaveSnapshot, TurnFence};
 #[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub(crate) use receiver_inventory::v2_pending::PendingObservation;
+#[cfg(all(
     any(test, marmish_peer_receiver_candidate),
     target_os = "linux",
     target_arch = "x86_64"
