@@ -271,13 +271,15 @@ impl Pages {
         Ok(Self {
             // SQLCipher intercepts the statement as its cipher setting. The
             // table-valued form reads the actual pager, as MDK compaction does.
-            size: conn
-                .query_row(
+            size: u64::try_from(
+                conn.query_row(
                     "SELECT CAST(page_size AS INTEGER) FROM pragma_page_size()",
                     [],
-                    |row| row.get(0),
+                    |row| row.get::<_, i64>(0),
                 )
                 .map_err(|_| "page_size")?,
+            )
+            .map_err(|_| "page_size")?,
             count: pragma(conn, "page_count")?,
             free: pragma(conn, "freelist_count")?,
         })
