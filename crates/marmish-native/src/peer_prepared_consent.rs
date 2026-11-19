@@ -416,8 +416,13 @@ impl Checkpoint {
         if purpose == PreparedUse::ManagedRead {
             return Ok(result);
         }
-        rows::advance_wall(&tx, wall)?;
-        before_commit(&tx)?;
+        if managed {
+            rows::advance_wall(&tx, wall)?;
+            before_commit(&tx)?;
+        } else {
+            before_commit(&tx)?;
+            rows::advance_wall(&tx, wall)?;
+        }
         tx.commit()?;
         Ok(result)
     }
