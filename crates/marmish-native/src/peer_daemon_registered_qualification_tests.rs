@@ -232,14 +232,16 @@ async fn fresh_registered_startup() {
     );
     let private_dir = private();
     let command = CommandPeer::new(private_dir.path(), "command");
-    let (mut relay, root, lease, identity) = qualified_manual_recipient_fixture(
+    let mut relay = Relay::start().await;
+    let (mut peer_relay, root, lease, identity) = qualified_manual_recipient_fixture(
         command.public(),
         nostr::key::Keys::generate().public_key(),
         private_dir.path(),
-        Some(command.public()),
+        Some((command.public(), relay.url.as_str())),
     )
     .await;
-    assert_eq!(relay.qualification_connections(), 4);
+    assert_eq!(peer_relay.qualification_connections(), 4);
+    assert_ne!(relay.url, peer_relay.url);
     let signer = identity.public_key();
     relay.ordinary(signer);
     relay.ordinary(command.public());
@@ -294,6 +296,8 @@ async fn fresh_registered_startup() {
     command.stop_fixture_server(server).await;
     assert!(relay.publication_attempts(445) > 0);
     assert_eq!(relay.publication_attempts(7435), 0);
+    assert_eq!(peer_relay.publication_attempts(7435), 0);
+    assert_eq!(peer_relay.recipient_requests(signer), 0);
 
     // Fresh no-marker example retains a deliberately unrelated inherited fd 3.
     let log = tempfile::tempfile_in(root.path()).unwrap();
@@ -351,6 +355,7 @@ async fn fresh_registered_startup() {
     fallback.stop().await;
     assert!(!socket.exists());
     assert!(ProfileLease::acquire_ready(root.path(), PROFILE).is_ok());
+    peer_relay.stop().await;
     relay.stop().await;
     println!(
         "registered readiness ms={} finite command ms={}",

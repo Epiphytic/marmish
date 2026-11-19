@@ -20,6 +20,7 @@ use crate::{
 };
 use std::{
     future::{Future, poll_fn},
+    io::Write,
     path::Path,
     pin::{Pin, pin},
     sync::Arc,
@@ -584,6 +585,15 @@ pub(crate) async fn run(
                 Err(error) => Err(error),
             };
             if let Some((channel, admission)) = channel.zip(custody.admission.as_ref()) {
+                if let Err(error) = &result {
+                    let mut log = std::io::stderr().lock();
+                    let _ = match error {
+                        Error::DaemonStartup(_) => {
+                            writeln!(log, "marmish qualification startup failed")
+                        }
+                        _ => writeln!(log, "marmish qualification startup: {error}"),
+                    };
+                }
                 channel.fail_before_offer(admission);
             }
             finish(custody, listener, result).await

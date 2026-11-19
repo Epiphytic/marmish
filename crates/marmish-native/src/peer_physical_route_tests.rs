@@ -151,7 +151,7 @@ pub(crate) async fn qualified_manual_recipient_fixture(
     founder: PublicKey,
     third: PublicKey,
     parent: &Path,
-    trusted_remote: Option<PublicKey>,
+    command: Option<(PublicKey, &str)>,
 ) -> (
     Relay,
     tempfile::TempDir,
@@ -169,10 +169,13 @@ pub(crate) async fn qualified_manual_recipient_fixture(
                 temp,
                 lease,
                 |lease, origin, trust| {
+                    let (command_relay, trusted_remotes) = match command {
+                        Some((remote, relay)) => (relay, vec![remote.to_hex()]),
+                        None => (origin, Vec::new()),
+                    };
                     let config = serde_json::json!({
-                        "version":1, "role":"client", "relays":[origin], "tor":"off",
-                        "trusted_remotes":trusted_remote.map(|key| key.to_hex()).into_iter().collect::<Vec<_>>(),
-                        "execution_clients":[],
+                        "version":1, "role":"client", "relays":[command_relay], "tor":"off",
+                        "trusted_remotes":trusted_remotes, "execution_clients":[],
                         "command_policy":{"version":1}, "cwd":null, "limits":{}, "aliases":{},
                         "peer":{"relay":origin, "relay_trust":trust, "receive":{"mode":"manual"}}
                     });
