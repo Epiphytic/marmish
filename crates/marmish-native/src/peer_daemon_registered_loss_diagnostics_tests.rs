@@ -64,17 +64,21 @@ async fn status_retries_before_send_or_after_activating_only() {
     let private = tempfile::tempdir().unwrap();
     let path = private.path().join("ipc");
     let end = Instant::now() + STEP;
-    let (result, ()) = tokio::join!(wait_active(&path, end), async {
-        sleep(Duration::from_millis(35)).await;
-        let old = UnixListener::bind(&path).unwrap();
-        drop(old); // A socket node with no listener exercises ConnectionRefused.
-        sleep(Duration::from_millis(35)).await;
-        fs::remove_file(&path).unwrap();
-        let real = UnixListener::bind(&path).unwrap();
-        fixture_respond(&real, Some(status("activating"))).await;
-        fixture_respond(&real, Some(status("active"))).await;
-    });
+    let (result, fixture) = tokio::join!(
+        wait_active(&path, end),
+        timeout_at(end, async {
+            sleep(Duration::from_millis(35)).await;
+            let old = UnixListener::bind(&path).unwrap();
+            drop(old); // A socket node with no listener exercises ConnectionRefused.
+            sleep(Duration::from_millis(35)).await;
+            fs::remove_file(&path).unwrap();
+            let real = UnixListener::bind(&path).unwrap();
+            fixture_respond(&real, Some(status("activating"))).await;
+            fixture_respond(&real, Some(status("active"))).await;
+        })
+    );
     assert_eq!(result, Ok(()));
+    fixture.expect("bounded paired Status fixture");
 
     fs::remove_file(&path).unwrap();
     let listener = UnixListener::bind(&path).unwrap();
@@ -89,11 +93,13 @@ async fn status_retries_before_send_or_after_activating_only() {
             StatusSetupFailure::Unexpected,
         ),
     ] {
-        let (result, ()) = tokio::join!(
-            wait_active(&path, Instant::now() + STEP),
-            fixture_respond(&listener, response)
+        let end = Instant::now() + STEP;
+        let (result, fixture) = tokio::join!(
+            wait_active(&path, end),
+            timeout_at(end, fixture_respond(&listener, response))
         );
         assert_eq!(result, Err(expected));
+        fixture.expect("bounded paired Status fixture");
     }
 
     let (mut rejected, _open) = AsyncUnixStream::pair().unwrap();
@@ -102,6 +108,48 @@ async fn status_retries_before_send_or_after_activating_only() {
         status_turn(&mut rejected).await,
         Err(StatusSetupFailure::Send)
     );
+}
+
+#[tokio::test]
+async fn stale_status_socket_uses_a_non_consuming_kernel_snapshot() {
+    let (mut controller, mut peer) = AsyncUnixStream::pair().unwrap();
+    assert_eq!(status_socket_state(&controller), "pending");
+    peer.write_all(b"x").await.unwrap();
+    assert_eq!(status_socket_state(&controller), "bytes_available");
+    let end = Instant::now() + STEP;
+    assert_eq!(
+        timeout_at(end, controller.read_u8())
+            .await
+            .unwrap()
+            .unwrap(),
+        b'x'
+    );
+    drop(peer);
+    assert_eq!(status_socket_state(&controller), "closed");
+
+    let (mut controller, peer) = AsyncUnixStream::pair().unwrap();
+    controller.write_all(b"x").await.unwrap();
+    drop(peer);
+    assert_eq!(status_socket_state(&controller), "reset");
+}
+
+#[test]
+fn status_with_non_status_result_fields_is_unexpected() {
+    let mut command = status("active");
+    command.command = Some(crate::command_local::LocalResult::LocalBusy);
+    let mut stream = status("active");
+    stream.stream = Some(crate::stream_service::StreamLocalResult::Pending);
+    let mut terminal = status("active");
+    terminal.terminal_stream = Some(crate::terminal_ipc_wire::Role::Observer);
+    for response in [
+        command,
+        stream,
+        terminal,
+        status("unknown"),
+        ipc::Response::success(serde_json::json!({})),
+    ] {
+        assert_eq!(status_state(&response), StatusState::Unexpected);
+    }
 }
 
 fn grouped_shell(script: &str) -> (OwnedChild, tokio::process::ChildStdout) {
@@ -156,6 +204,50 @@ async fn failure_cleans_descendant_before_reaping_private_session_leader() {
     );
 }
 
+#[tokio::test]
+async fn observation_failures_retain_the_exact_child_guard() {
+    let (mut child, _stdout) = grouped_shell("exit 86");
+    let pid = child.pid();
+    assert_eq!(
+        child
+            .observe_failure(
+                false,
+                |_| Err(io::Error::from_raw_os_error(libc::ECHILD)),
+                |_| panic!("waitid did not identify a child")
+            )
+            .await,
+        ChildEnd::ObservationFailed,
+    );
+    assert_eq!(child.pid(), pid);
+    assert_eq!(
+        child
+            .observe_failure(true, waitable, |observed| {
+                assert_eq!(observed, pid);
+                false
+            })
+            .await,
+        ChildEnd::ObservationFailed,
+    );
+    assert_eq!(child.pid(), pid);
+    assert_eq!(child.failure_status(true).await, ChildEnd::FixtureRefused);
+    assert!(child.0.is_none());
+
+    // A plain child inherits the existing session and is not its leader.
+    let mut foreign = OwnedChild(Some(
+        std::process::Command::new("/bin/sh")
+            .args(["-c", "exit 86"])
+            .spawn()
+            .unwrap(),
+    ));
+    let pid = foreign.pid();
+    assert_eq!(
+        foreign.failure_status(true).await,
+        ChildEnd::ObservationFailed
+    );
+    assert_eq!(foreign.pid(), pid);
+    drop(foreign);
+}
+
 const REFUSAL_CHILD: &str = concat!(module_path!(), "::refusal_without_controller");
 
 #[test]
@@ -196,5 +288,64 @@ async fn refusal_log_survives_an_unwritable_controller() {
     assert_eq!(
         known_child_diagnostics(&log),
         ("read", vec!["release_frame"])
+    );
+}
+
+const DEGRADED_CHILD: &str = concat!(module_path!(), "::degraded_status_child");
+
+#[tokio::test]
+#[ignore = "requires a launcher-owned private startup and control descriptor"]
+async fn degraded_status_child() {
+    let (_, stream) = crate::daemon_launch::StartupReporter::claim_fault_fixture().unwrap();
+    crate::diagnostics::enable();
+    let _args = super::super::start_control(stream).unwrap();
+    let control = super::super::CONTROL.get().unwrap();
+    control
+        .active_status
+        .store(1, std::sync::atomic::Ordering::Release);
+    let (_trip, fatal) = crate::dispatcher_fatal::Trip::new();
+    super::super::before_status_write(
+        &status("transport_degraded"),
+        Some(&fatal),
+        Instant::now() + STEP,
+    )
+    .await;
+    panic!("second Status degraded without a categorized refusal");
+}
+
+#[tokio::test]
+async fn ready_child_refuses_degraded_status_before_displacement() {
+    let log = tempfile::tempfile().unwrap();
+    let (mut controller, controlled) = UnixStream::pair().unwrap();
+    let executable = std::env::current_exe().unwrap().canonicalize().unwrap();
+    let selector = DEGRADED_CHILD.split_once("::").unwrap().1;
+    let args = ["--ignored", "--exact", "--nocapture", selector].map(OsString::from);
+    let (child, _report) = candidate_parent::spawn_fault_fixture(
+        &executable,
+        &args,
+        log.try_clone().unwrap(),
+        OwnedFd::from(controlled),
+    )
+    .unwrap();
+    let mut child = OwnedChild(Some(child));
+    controller.set_write_timeout(Some(STEP)).unwrap();
+    send(
+        &mut controller,
+        b'B',
+        &boot(Scenario::Status, [OsStr::new("fixture"); 4]),
+    )
+    .unwrap();
+    controller.set_nonblocking(true).unwrap();
+    let mut controller = AsyncUnixStream::from_std(controller).unwrap();
+    assert_eq!(
+        frame(&mut controller, b'S', 32, Instant::now() + STEP).await,
+        Err(FrameFailure::Refused(Some(
+            Refusal::StatusDegradedBeforeCut
+        ))),
+    );
+    assert_eq!(child.failure_status(true).await, ChildEnd::FixtureRefused);
+    assert_eq!(
+        known_child_diagnostics(&log),
+        ("read", vec!["status_degraded_before_cut"])
     );
 }

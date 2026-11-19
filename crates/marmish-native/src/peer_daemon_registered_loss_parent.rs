@@ -14,7 +14,7 @@ use std::{
     fs::{self, File, OpenOptions, Permissions},
     io::{self, Write},
     os::{
-        fd::OwnedFd,
+        fd::{AsRawFd, OwnedFd},
         unix::{
             fs::{FileExt, OpenOptionsExt, PermissionsExt},
             process::ExitStatusExt,
@@ -93,6 +93,16 @@ impl OwnedChild {
     }
 
     async fn failure_status(&mut self, disconnected: bool) -> ChildEnd {
+        self.observe_failure(disconnected, waitable, signal_private_group)
+            .await
+    }
+
+    async fn observe_failure(
+        &mut self,
+        disconnected: bool,
+        waitable: impl Fn(libc::pid_t) -> io::Result<bool>,
+        signal_group: impl FnOnce(libc::pid_t) -> bool,
+    ) -> ChildEnd {
         let end = Instant::now() + STEP;
         let Some(child) = self.0.as_mut() else {
             return ChildEnd::ObservationFailed;
@@ -111,7 +121,7 @@ impl OwnedChild {
                 Err(_) => return ChildEnd::ObservationFailed,
             }
         }
-        if !signal_private_group(pid) {
+        if !signal_group(pid) {
             return ChildEnd::ObservationFailed;
         }
         let Ok(Some(status)) = child.try_wait() else {
@@ -265,12 +275,25 @@ async fn status_turn(stream: &mut AsyncUnixStream) -> Result<StatusState, Status
 }
 
 fn status_socket_state(stream: &AsyncUnixStream) -> &'static str {
-    match stream.try_read(&mut [0; 1]) {
-        Ok(0) => "closed",
-        Ok(_) => "bytes_available",
-        Err(error) if error.kind() == io::ErrorKind::ConnectionReset => "reset",
-        Err(error) if error.kind() == io::ErrorKind::WouldBlock => "pending",
-        Err(_) => "read_failed",
+    let mut byte = 0u8;
+    // SAFETY: the stream lends a live fd and byte is a valid one-byte buffer.
+    // Peek checks the kernel once without consuming bytes or waiting on Tokio.
+    let result = unsafe {
+        libc::recv(
+            stream.as_raw_fd(),
+            (&mut byte as *mut u8).cast(),
+            1,
+            libc::MSG_PEEK | libc::MSG_DONTWAIT,
+        )
+    };
+    match result {
+        0 => "closed",
+        1 => "bytes_available",
+        _ => match io::Error::last_os_error().kind() {
+            io::ErrorKind::ConnectionReset => "reset",
+            io::ErrorKind::WouldBlock => "pending",
+            _ => "read_failed",
+        },
     }
 }
 
