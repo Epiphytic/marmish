@@ -79,3 +79,21 @@ in a one-second physical observation slice can leave little time
 for the single graceful attempt. Exhausting that time keeps the
 evidence and yields a nonzero exit. The started-engine installed
 scenario and per-subeffect interruptions still need live evidence.
+
+## Fresh physical observation slice
+
+Claude Code in Auto mode approved the design in
+`409c84e8-f3be-4fd5-b4d8-3fc872594947` and the exact implementation
+`8adc5b3ad1144e49969ff047891053cc7e9300af` in
+`21782461-878f-434d-b4ca-42c8cfdf457d`. The reviewer traced the original
+lease and owner across the synchronous handoff and confirmed that
+pending physical barriers still prevent trusted cleanup. Fatal,
+failed-prelude and NeverStarted paths retain their earlier behavior.
+This addresses the timing limit described in the composed review.
+
+In separate Auto session `946202ee-8932-4850-ac28-ff7907897925`,
+Claude ran the seven focused cases against the author's archived
+stock binary and approved the runtime results. The three selectors
+took 12.03 s, 3.50 s and 0.41 s respectively. An initial invocation
+used an unsupported nightly test-runner flag and ran zero cases.
+The successful reruns used the stable runner without that flag.

@@ -139,7 +139,9 @@ qualification example runs against a verified installed layout. Started
 local Command engines, registered dispatcher loss and the installed Peer
 actor need their own live proofs. The [idle engine shutdown validation](validation/peer-candidate-idle-command-stop.md)
 covers the integrated shutdown path with an in-process real Command engine
-and the stock core regression selectors on Linux AMD64.
+and the stock core regression selectors on Linux AMD64. A proved idle
+prelude hands the original owner and lease to physical stop, which gets a
+fresh observation slice for its graceful attempt.
 
 **CI execution direction (2026-11-13):** prefer Epiphytic self-hosted runners;
 do not launch GitHub-hosted qualification as an implicit fallback. The

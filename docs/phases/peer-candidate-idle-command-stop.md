@@ -31,6 +31,9 @@ advance or consuming enqueue as progress. After a Draining poll without one
 of those changes, wait ten milliseconds or until fatal or expiry. Never spin
 on an unchanged state or replay delayed timer ticks. This admission and
 acceptance budget is separate from the one-second physical observation slices.
+After a proved prelude, transfer the exact owner and lease synchronously and
+return pending physical evidence. The next observation gets a full physical
+slice for the single graceful attempt.
 The existing 15 s incomplete diagnostic still measures from shutdown entry,
 including the prelude. The engine's five-second native acquisition budget,
 SQLCipher busy waits or scheduling can outlast the remaining prelude.

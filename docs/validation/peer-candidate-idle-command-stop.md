@@ -67,3 +67,16 @@ The exact [independent review](../reviews/peer-candidate-idle-command-stop.md#co
 covers the source integration and its local runtime tests. Live
 installed Both with retained results, effect-boundary loss, macOS and
 Linux ARM64 have separate validation.
+
+## Fresh physical observation slice
+
+Exact source `8adc5b3ad1144e49969ff047891053cc7e9300af` passed all-target
+strict Clippy for stock (29.52 s) and the Linux AMD64 candidate
+(31.23 s), plus an exact stock test link (46.30 s). The author ran
+seven tests across `registered_idle_prelude`,
+`registered_stop_without_engine` and `healthy_stop`. The real
+in-process idle-engine test held the profile lock across the
+pending handoff and verified that a new observation slice completed
+the physical stop. One unloaded sample with zero retained rows
+took 36.37 ms. Claude independently reran all seven cases.
+See the [review](../reviews/peer-candidate-idle-command-stop.md#fresh-physical-observation-slice).
