@@ -96,7 +96,7 @@ async fn registered_route_subprocess() {
     let founder = Keys::generate();
     let third = Keys::generate().public_key();
     let (mut relay, _temp, lease, material) =
-        qualified_manual_recipient_fixture(founder.public_key(), third, parent).await;
+        qualified_manual_recipient_fixture(founder.public_key(), third, parent, None).await;
     assert_eq!(relay.qualification_connections(), 4);
     let account = material.public_key();
     if case == "native_no_fatal" {

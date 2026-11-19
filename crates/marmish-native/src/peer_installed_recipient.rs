@@ -368,6 +368,7 @@ mod tests {
             Keys::generate().public_key(),
             Keys::generate().public_key(),
             Path::new(&parent),
+            None,
         )
         .await;
         let account = material.public_key();

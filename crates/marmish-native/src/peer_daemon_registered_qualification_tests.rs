@@ -1,6 +1,9 @@
 //! Fresh private example exec using a source-matched installed candidate layout.
 use super::*;
-use crate::{daemon_launch::candidate_parent, mdk_adapter::MdkOwner};
+use crate::{
+    daemon_launch::candidate_parent, mdk_adapter::MdkOwner,
+    peer_relay_trust::qualified_manual_recipient_fixture,
+};
 use std::{
     ffi::{OsString, c_int},
     fs::File,
@@ -10,6 +13,7 @@ use std::{
     process::{Child, Command, Stdio},
 };
 
+const PROFILE: &str = "test";
 const EXAMPLE: &str = "MARMISH_TEST_REGISTERED_QUALIFICATION_EXAMPLE";
 const DAEMON: &str = "MARMISH_TEST_REGISTERED_QUALIFICATION_DAEMON";
 const STARTUP_MARKER: &str = "MARMISH_INTERNAL_STARTUP";
@@ -60,22 +64,12 @@ fn write_private(path: &Path, bytes: &[u8]) {
         .unwrap();
 }
 
-fn configure(lease: &ProfileLease, relay: &Relay, remote: PublicKey, manual: bool) {
-    let peer = if manual {
-        json!({
-            "receive": {"mode":"manual"},
-            "relay": "wss://private.example/",
-            "relay_trust": format!("spki-sha256:{}", "ab".repeat(32))
-        })
-    } else {
-        json!({"receive":{"mode":"off"}})
-    };
+fn configure_off(lease: &ProfileLease, relay: &Relay, remote: PublicKey) {
     let config = json!({
         "version": 1, "role": "client", "relays": [relay.url.as_str()],
-        "tor": "off", "cwd": "/", "limits": {}, "aliases": {},
+        "tor": "off", "cwd": null, "limits": {}, "aliases": {},
         "trusted_remotes": [remote.to_hex()], "execution_clients": [],
-        "command_policy": {"version": 1, "defaults": {"allow_exec": []}},
-        "peer": peer
+        "command_policy": {"version": 1}, "peer": {"receive":{"mode":"off"}}
     });
     write_private(
         &lease.root().join("config.json"),
@@ -236,42 +230,60 @@ async fn fresh_registered_startup() {
         daemon,
         "run the controller from the installed version's deps directory"
     );
-    let root = private();
-    let mut relay = Relay::start().await;
-    let command = CommandPeer::new(root.path(), "command");
-    let ca = root.path().join("fixture-root.der");
-    write_private(&ca, relay.qualification_ca());
-    let args = arguments(&daemon, root.path(), &relay, &ca);
-
-    let mut lease = ProfileLease::acquire(root.path(), PROFILE).unwrap();
-    let identity = material(&mut lease, &daemon);
+    let private_dir = private();
+    let command = CommandPeer::new(private_dir.path(), "command");
+    let (mut relay, root, lease, identity) = qualified_manual_recipient_fixture(
+        command.public(),
+        nostr::key::Keys::generate().public_key(),
+        private_dir.path(),
+        Some(command.public()),
+    )
+    .await;
+    assert_eq!(relay.qualification_connections(), 4);
     let signer = identity.public_key();
     relay.ordinary(signer);
     relay.ordinary(command.public());
-    configure(&lease, &relay, command.public(), true);
-    let seed = MdkOwner::open(
-        &lease,
-        &identity,
-        relay.connector(lease.root(), true, None),
-        vec![],
-    )
-    .unwrap();
-    lease.mark_ready(seed.opened_binding()).unwrap();
     let socket = lease.socket_path();
-    daemon::stop_silent(lease, seed).await.unwrap();
+    drop(lease);
     drop(identity);
+
+    let ca = root.path().join("fixture-root.der");
+    write_private(&ca, relay.qualification_ca());
+    let args = arguments(&daemon, root.path(), &relay, &ca);
 
     wrong_marker_and_descriptor(&example, &args, root.path(), &socket).await;
     wrong_fixture_route(&example, &args, root.path(), &socket).await;
     let begin = Instant::now();
     let log = tempfile::tempfile_in(root.path()).unwrap();
-    let (mut child, report) = private_parent(example.clone(), args.clone(), log).await;
-    report.expect("private registered R/A/C report committed");
+    let (mut child, report) =
+        private_parent(example.clone(), args.clone(), log.try_clone().unwrap()).await;
+    if let Err(error) = report {
+        let status = child.0.try_wait().unwrap();
+        panic!(
+            "private registered R/A/C report failed: {error}; child status {status:?}; {}",
+            diagnostic(log).trim_end(),
+        );
+    }
     let startup = begin.elapsed();
     wait_active(&mut child, &socket).await;
     assert!(matches!(
         ProfileLease::acquire(root.path(), PROFILE),
         Err(crate::Error::Identity("profile_in_use"))
+    ));
+    use ipc::terminal_handshake::{Attach, Start, start};
+    let terminal = Start {
+        remote: command.public().to_hex(),
+        session: "0123456789abcdef0123456789abcdef".into(),
+        relays: vec![relay.url.as_str().into()],
+        attach: Attach::Default,
+        session_slot: None,
+        offer: None,
+        rows: 24,
+        columns: 80,
+    };
+    assert!(matches!(
+        start(&socket, terminal, Instant::now() + STEP).await,
+        Err(crate::Error::Invalid("terminal_unavailable"))
     ));
     let began = Instant::now();
     let server = run_real_command(&command, &socket, &relay, signer).await;
@@ -315,7 +327,7 @@ async fn fresh_registered_startup() {
     assert!(!socket.exists());
     let fallback = ProfileLease::acquire_ready(root.path(), PROFILE).unwrap();
     std::fs::remove_file(fallback.root().join("config.json")).unwrap();
-    configure(&fallback, &relay, remote, false);
+    configure_off(&fallback, &relay, remote);
     drop(fallback);
 
     let log = tempfile::tempfile_in(root.path()).unwrap();

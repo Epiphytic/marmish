@@ -62,6 +62,7 @@ async fn managed_consent_ack_child() {
         founder.public_key(),
         Keys::generate().public_key(),
         root.path(),
+        None,
     )
     .await;
     let account = material.public_key();
