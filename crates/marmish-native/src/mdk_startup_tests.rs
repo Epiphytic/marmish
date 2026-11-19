@@ -232,7 +232,7 @@ fn active_cut(
     fatal: &Fatal,
     displace: fn(),
 ) {
-    use super::super::DISPATCHER_LOST;
+    use super::super::{DISPATCHER_LOST, GroupId};
     use std::future::{Future, poll_fn};
     use std::pin::pin;
     use std::task::{Context, Poll, Waker};
@@ -292,6 +292,19 @@ fn active_cut(
     ));
     assert!(matches!(
         owner.command_count_exit_ready(),
+        Err(Error::Storage(DISPATCHER_LOST))
+    ));
+    let group = GroupId::new(vec![23; 32]);
+    assert!(matches!(
+        owner.reconcile_orphans(),
+        Err(Error::Storage(DISPATCHER_LOST))
+    ));
+    assert!(matches!(
+        owner.forget_and_confirm(&group),
+        Err(Error::Storage(DISPATCHER_LOST))
+    ));
+    assert!(matches!(
+        owner.command_forget_and_confirm(&group),
         Err(Error::Storage(DISPATCHER_LOST))
     ));
     assert!(!owner.active && owner.forwarder.is_none());

@@ -1246,6 +1246,7 @@ impl MdkOwner {
         Ok(groups.into_values().collect())
     }
     fn reconcile_orphans(&mut self) -> Result<()> {
+        self.active_mode.admit()?;
         let pending = mdk(self.storage.list_pending_application_events())?;
         let joins: BTreeSet<_> = pending
             .iter()
@@ -1258,6 +1259,7 @@ impl MdkOwner {
             })
             .collect();
         for group in self.native_group_union()? {
+            self.active_mode.admit()?;
             if self
                 .journal
                 .conversation_by_group(group.as_slice())?
@@ -1275,6 +1277,7 @@ impl MdkOwner {
                     if foundation::classify_new_id(&session, current, self.journal.replay_floor()?)?
                         == foundation::Freshness::Eligible
                     {
+                        self.active_mode.admit()?;
                         self.journal.reject_group_at(
                             group.as_slice(),
                             Some(foundation::id_timestamp(&session)?),
@@ -1287,6 +1290,7 @@ impl MdkOwner {
                 Err(Error::Transport("group_state_unavailable")) => {}
                 Err(e) => return Err(e),
             }
+            self.active_mode.admit()?;
             self.remove_owned_route(&group);
             self.forget_and_confirm(&group)?;
         }
@@ -2158,8 +2162,10 @@ impl MdkOwner {
         Ok(())
     }
     fn forget_and_confirm(&mut self, group: &GroupId) -> Result<()> {
+        self.active_mode.admit()?;
         self.terminal_authority.retire(group.as_slice());
         mdk(self.runtime.forget_group_local(group))?;
+        self.active_mode.admit()?;
         let pending = mdk(self.storage.list_pending_application_events())?;
         let remains = pending.iter().any(|e| match e {
             GroupEvent::GroupJoined { group_id, .. }
@@ -2170,6 +2176,7 @@ impl MdkOwner {
         if remains {
             return Err(Error::Storage("group_cleanup_pending"));
         }
+        self.active_mode.admit()?;
         self.journal.mark_group_cleanup_complete(group.as_slice())
     }
     fn project_join(&mut self, event: GroupEvent) -> Result<()> {
@@ -2474,7 +2481,9 @@ impl MdkOwner {
                 Err(Error::Mdk(_)) => {
                     // A cross-store crash can retain a native Welcome without
                     // an application acceptance. Never publish that orphan.
+                    mode.admit()?;
                     self.reconcile_orphans()?;
+                    mode.admit()?;
                     self.remove_owned_route(&group);
                     if self.journal.command_room(group.as_slice())?.is_some() {
                         self.command_forget_and_confirm(&group)?;
