@@ -31,7 +31,7 @@ Only confirmed registration enters registered ownership. A proved Untouched
 result drops temporary witnesses and unwraps the same lease for the stock
 continuation. Reuse the prepared identity and connector and do not repeat
 their construction. Apply the same stock precedence and origin evidence
-to this later fallback. Registration
+to this later fallback, including relay binding on a policy disagreement. Registration
 LocalUnavailable means conflict, calls no competing witness, reports
 the fixed diagnostic and releases its own lease and temporary witnesses.
 Indeterminate retains the original lease and
@@ -79,7 +79,14 @@ R and C are each a single byte. In the registered reporter's write future
 check exact Admission on every poll before calling AsyncWrite::poll_write
 on a borrowed dispatcher_fatal::FencedStream around the Tokio UnixStream.
 FencedStream supplies sticky Fatal and wake on pending I/O, as used in
-ipc::ListenerFence::write. A resumed write retries after WouldBlock and
+ipc::SocketFence::write in the prerequisite composition 0cab7eb
+(git show 0cab7eb:crates/marmish-native/src/ipc.rs, lines 378–393).
+The registered Admission's ForwardingVerifier::recheck_default trips the
+exact Fatal on failure through RegistryTurn::fail or the poisoned registry
+acquisition path. A latent default displacement is not a wake by itself.
+It becomes a wake once any checked effect detects it. Before then a
+pending exchange cannot emit a new byte and still has its fixed timeout.
+A resumed write retries after WouldBlock and
 performs the same independent admission. Give the entire child R, A, C
 exchange one ACK_TIMEOUT (5 seconds).
 The private parent bounds the exchange by STARTUP_TIMEOUT (240 seconds)
