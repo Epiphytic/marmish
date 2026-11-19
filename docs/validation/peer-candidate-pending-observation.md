@@ -32,3 +32,15 @@ This evidence qualifies the sealed observation and existing capped custody
 fixture on Linux AMD64. The fixture uses a test-only physical guard. Installed
 registration, actor scheduling, listener mounting and a healthy-empty scan
 are outside this increment.
+
+## Composition with managed Delivery
+
+The exact composed source `d2d014b` passed candidate and stock strict
+Clippy in 31.81 and 29.90 seconds. The composed candidate libtest linked
+in 46.69 seconds. Its SHA-256 was
+`5bea7dc872b606bf286de51947716fd1102555db1d618f7b3f15c8a3af9e13fb`.
+The exact single-row test, the full `peer_read` selector and all three
+private WSS cold subprocess scenarios passed. The latter took 60.15
+seconds and observed no bridge relay publications. The replay onto
+the published managed Delivery evidence preserves native source and
+all seven patches. The workspace formatting exception is unchanged.

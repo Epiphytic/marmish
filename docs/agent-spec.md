@@ -117,8 +117,11 @@ block later eligible work. The
 [storage and listener composition](validation/peer-candidate-owner-leaves-composition.md)
 qualifies the managed queued-package reader, borrowed Pending over private
 WSS, account custody across dispatcher cuts, and the same-user read
-listener on Linux AMD64. The mounted passive actor has no invitation
-service or positive Pending read path.
+listener on Linux AMD64. The [sealed Pending observation proof](validation/peer-candidate-pending-observation.md)
+checks exact same-row SQLCipher and native group state before publishing a
+local List or Show result. The proof uses a guarded private WSS fixture.
+The mounted passive actor still lacks invitation service and positive
+Pending reads.
 The [private Peer record codec](validation/peer-status-codec.md) verifies
 heartbeat fields, capability states and complete permission snapshot
 assembly in deterministic tests. The [heartbeat sampler](validation/peer-heartbeat-sampler.md)
