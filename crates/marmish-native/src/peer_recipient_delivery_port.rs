@@ -95,6 +95,12 @@ pub(in crate::peer_invitation) struct CheckedDeliveryRoute<'route, 'turn> {
 }
 
 impl<'route, 'turn> CheckedDeliveryRoute<'route, 'turn> {
+    pub(in crate::peer_invitation) fn route(
+        &self,
+    ) -> &crate::peer_relay_trust::NativeRouteWindow<'_> {
+        &self.route
+    }
+
     pub(in crate::peer_invitation) fn into_parts(
         self,
     ) -> (

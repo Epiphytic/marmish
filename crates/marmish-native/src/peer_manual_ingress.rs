@@ -11,6 +11,7 @@ use std::sync::{
 };
 
 use crate::{
+    dispatcher_fatal::Fatal,
     peer_candidate_startup::Readiness,
     peer_invitation::{
         socket::{
@@ -27,7 +28,7 @@ use crate::{
             pages::Cursor,
         },
     },
-    peer_relay_trust::candidate_registration::ForwardingVerifier,
+    peer_relay_trust::{NativeRouteWindow, candidate_registration::ForwardingVerifier},
 };
 
 use super::*;
@@ -75,9 +76,7 @@ impl Guard {
             return Err(Error::Binding);
         }
         port.use_current_native(|route| {
-            if !route.matches_fatal(&self.forwarding.fatal()) {
-                return Err(Error::Binding);
-            }
+            require_fatal(&route, &self.forwarding.fatal())?;
             route
                 .window(self.readiness.clone(), self.stop.clone(), u64::MAX)
                 .map_err(|_| Error::Clock)
@@ -268,6 +267,8 @@ impl Ingress {
         };
         let quota = owner.package_quota.ok_or(Error::Binding)?;
         let measured = port.use_delivery_native(prepared.challenge()?, |checked| {
+            require_fatal(checked.route(), &self.guard.forwarding.fatal())?;
+            admit()?;
             owner.measure_delivery_guarded(
                 quota,
                 checked,
@@ -284,6 +285,16 @@ impl Ingress {
         admit()?;
         Ok(effect)
     }
+}
+
+pub(in crate::peer_invitation) fn require_fatal(
+    route: &NativeRouteWindow<'_>,
+    fatal: &Fatal,
+) -> Result<()> {
+    if !route.matches_fatal(fatal) {
+        return Err(Error::Binding);
+    }
+    Ok(())
 }
 
 enum Input<'a> {

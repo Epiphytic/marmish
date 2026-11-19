@@ -227,6 +227,7 @@ impl<'lease> RecoveredOwner<'lease> {
         check: &dyn Fn() -> consent_checkpoint::Result<()>,
     ) -> Result<MeasuredDelivery<'lease>> {
         self.cursor.unchanged()?;
+        check()?;
         let (route, challenge) = route.into_parts();
         let wall = route.wall().as_secs();
         let window = route

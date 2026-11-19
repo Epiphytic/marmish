@@ -196,6 +196,8 @@ impl Checkpoint {
             return Err(Error::Expired);
         }
         measured.require_turn(&prepared.turn)?;
+        // The installed Manual saved-retry turn is not mounted in this phase.
+        // Keep its existing measured native-window check and SQL behavior.
         self.commit_saved(
             source,
             checked,

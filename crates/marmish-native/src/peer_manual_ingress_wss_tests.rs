@@ -1,6 +1,9 @@
 use crate::{
     mdk_adapter::terminal_relay_fixture::{RecipientFault, Relay},
-    peer_invitation::{receiver_inventory::manual_ingress::Ingress, socket::wire::CARRIER},
+    peer_invitation::{
+        receiver_inventory::manual_ingress::{Ingress, require_fatal},
+        socket::wire::CARRIER,
+    },
     peer_relay_trust::candidate_registration::ForwardingVerifier,
 };
 
@@ -56,12 +59,24 @@ pub(super) async fn exercise(fixture: Fixture<'_, '_>) {
             )
             .unwrap()
     };
+    // Use four expired offers in the backfill window. The only allowed
+    // founder may have only one live Offer, reserved for the live check.
+    let past = now - 86_405;
     let history = [
-        offer(11, now - 4),
-        offer(12, now - 3),
-        offer(13, now - 2),
-        offer(14, now - 1),
+        offer(11, past),
+        offer(12, past),
+        offer(13, past),
+        offer(14, past),
     ];
+    let (_, alien) = crate::dispatcher_fatal::Trip::new();
+    port.use_current_native(|route| {
+        require_fatal(&route, &forwarding.fatal()).unwrap();
+        assert!(matches!(
+            require_fatal(&route, &alien),
+            Err(receiver_inventory::Error::Binding)
+        ));
+    })
+    .unwrap();
     for message in &history {
         assert!(
             sender
@@ -125,19 +140,17 @@ pub(super) async fn measured_delivery(
     let before = fixture.relay.publication_attempts(CARRIER);
     let carrier = fixture.send_delivery(queued).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-    let status = loop {
-        if let Some(status) = ingress
+    loop {
+        if ingress
             .live_turn(owner, fixture.port, deadline)
             .await
             .unwrap()
+            == Some(consent_checkpoint::Status::Deferred)
         {
-            if status == consent_checkpoint::Status::Deferred {
-                break status;
-            }
+            break;
         }
         assert!(tokio::time::Instant::now() < deadline);
-    };
-    assert_eq!(status, consent_checkpoint::Status::Deferred);
+    }
     owner
         .checkpoint
         .fixture_retry_row(&owner.source, carrier)
