@@ -81,7 +81,9 @@ impl Checkpoint {
         input: OfferInput<'_>,
     ) -> Result<OfferIngress> {
         match self.classify_installed_carrier(source, &input)? {
-            InstalledCarrier::Offer(offer) => self.record_installed_offer(source, input, *offer),
+            InstalledCarrier::Offer(offer) => {
+                self.record_installed_offer(source, input, *offer, || Ok(()))
+            }
             InstalledCarrier::InvalidOffer => Ok(OfferIngress::Invalid),
             InstalledCarrier::InvalidFrame | InstalledCarrier::Delivery(_) => {
                 Ok(OfferIngress::NotOffer)
@@ -136,6 +138,7 @@ impl Checkpoint {
         source: &Source,
         input: OfferInput<'_>,
         offer: wire::Offer,
+        before_commit: impl FnOnce() -> Result<()>,
     ) -> Result<OfferIngress> {
         let cx = self.custody_context(source)?;
         let wall = input.wall;
@@ -145,9 +148,11 @@ impl Checkpoint {
             return Err(Error::Index);
         }
 
-        let committed = self
-            .cursor
-            .commit_trusted_exact(cx.origin, record, wall, |tx| {
+        let committed = self.cursor.commit_trusted_exact_guarded(
+            cx.origin,
+            record,
+            wall,
+            |tx| {
                 cx.verify(tx, wall)?;
                 if super::super::cooldown::under_cooldown(tx, flight.author.to_bytes(), wall)? {
                     return Ok(TrustedOutcome::SkippedCooldown);
@@ -166,7 +171,9 @@ impl Checkpoint {
                     Selector::from(&offer),
                 )?;
                 Ok(outcome)
-            });
+            },
+            || before_commit().map_err(schema::cursor_error),
+        );
         match committed {
             Ok((receipt, outcome)) => Ok(OfferIngress::Recorded(Disposition {
                 status: Status::Accepted(outcome),

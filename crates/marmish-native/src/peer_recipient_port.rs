@@ -284,6 +284,51 @@ impl ControlSendPermit<'_> {
 
 pub(in crate::peer_invitation) struct PeerRecipientPort(Owner);
 
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub(in crate::peer_invitation) struct Incarnation(Arc<Scope>);
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+impl Incarnation {
+    pub(in crate::peer_invitation) fn is_live(&self) -> bool {
+        self.0.live.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+impl PeerRecipientPort {
+    pub(in crate::peer_invitation) fn claim_recovery(&mut self) -> Result<Incarnation> {
+        self.check_observation()?;
+        if std::mem::replace(&mut self.0.recovery_claimed, true) {
+            return Err(Failure::Binding);
+        }
+        Ok(Incarnation(self.0.scope.clone()))
+    }
+
+    pub(in crate::peer_invitation) fn matches_incarnation(
+        &self,
+        incarnation: &Incarnation,
+    ) -> bool {
+        self.0.current(&incarnation.0)
+    }
+
+    pub(in crate::peer_invitation) fn take_buffered_live(&mut self) -> Result<Option<LiveRecord>> {
+        self.check_observation()?;
+        Ok(self.0.pop_live())
+    }
+}
+
 impl PeerRecipientPort {
     pub(in crate::peer_invitation) async fn open(
         admission: ReceiverRouteAdmission,

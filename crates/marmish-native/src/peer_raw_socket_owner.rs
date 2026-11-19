@@ -91,6 +91,12 @@ pub(in crate::peer_invitation) struct Owner {
     scope: Arc<Scope>,
     live_id: String,
     next_page: u64,
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    recovery_claimed: bool,
     live_records: VecDeque<LiveRecord>,
     live_reserve: Reserve,
     #[cfg(test)]
@@ -177,6 +183,12 @@ impl Owner {
             }),
             live_id,
             next_page: 0,
+            #[cfg(all(
+                any(test, marmish_peer_receiver_candidate),
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            recovery_claimed: false,
             live_records: VecDeque::with_capacity(RECORD_LIMIT),
             live_reserve: Reserve::default(),
             #[cfg(test)]

@@ -1518,3 +1518,63 @@ fn peer_cursor_benchmark() {
         );
     }
 }
+
+#[test]
+fn final_scan_and_page_refusals_roll_back_their_sql_writes() {
+    let fixture = Fixture::new();
+    let mut store = fixture.open();
+    let mut checks = 0;
+    assert_eq!(
+        store
+            .scan_guarded(A, ScanStart::Recovery, W + 1, || {
+                checks += 1;
+                Err(Error::Stale)
+            })
+            .err(),
+        Some(Error::Stale)
+    );
+    let start = begin(&mut store, A, W);
+    assert_eq!(start.revision, 1);
+    assert_eq!(
+        store
+            .scan_guarded(A, ScanStart::Recovery, W + 1, || {
+                checks += 1;
+                Err(Error::Stale)
+            })
+            .err(),
+        Some(Error::Stale)
+    );
+    assert_eq!(begin(&mut store, A, W), start);
+
+    let oversized = [record(1, W); 5];
+    for records in [&oversized[..], &[]] {
+        assert_eq!(
+            store
+                .commit_page_guarded(
+                    &start,
+                    &request(&start, records),
+                    &[],
+                    W + 1,
+                    |_| Ok(()),
+                    || {
+                        checks += 1;
+                        Err(Error::Stale)
+                    },
+                )
+                .err(),
+            Some(Error::Stale)
+        );
+        // Reopen the real file so rolled-back quarantine, completion, or
+        // wall writes cannot disappear through in-memory state alone.
+        drop(store);
+        store = fixture.open();
+        assert_eq!(begin(&mut store, A, W), start);
+    }
+    assert_eq!(checks, 4);
+    assert!(
+        store
+            .commit_page(&start, &request(&start, &[]), &[], W)
+            .unwrap()
+            .is_none()
+    );
+}

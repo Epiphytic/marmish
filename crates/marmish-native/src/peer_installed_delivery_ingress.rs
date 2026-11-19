@@ -12,7 +12,7 @@ use crate::peer_invitation::store::{Auth, Metadata, Page, Receipt, ScanStart, pa
 enum Native<'a, 'lease> {
     #[cfg(test)]
     Fixture(&'a NativeAttestation),
-    Managed(&'a MeasuredDelivery<'lease>),
+    Managed(&'a MeasuredDelivery<'lease>, &'a dyn Fn() -> Result<()>),
 }
 
 impl Native<'_, '_> {
@@ -20,21 +20,24 @@ impl Native<'_, '_> {
         match self {
             #[cfg(test)]
             Self::Fixture(_) => Ok(()),
-            Self::Managed(measured) => measured
-                .window()
-                .sample()
-                .map_err(|_| Error::Expired)
-                .and_then(|sample| {
-                    if sample.as_secs() < wall {
-                        return Err(CursorError::ClockRegressed.into());
-                    }
-                    Ok(())
-                }),
+            Self::Managed(measured, check) => {
+                check()?;
+                measured
+                    .window()
+                    .sample()
+                    .map_err(|_| Error::Expired)
+                    .and_then(|sample| {
+                        if sample.as_secs() < wall {
+                            return Err(CursorError::ClockRegressed.into());
+                        }
+                        Ok(())
+                    })
+            }
         }
     }
 
     fn require_same_turn(&self, observed: &Queued, expected: &Queued) -> Result<()> {
-        if matches!(self, Self::Managed(_)) && !observed.matches_exact(expected) {
+        if matches!(self, Self::Managed(..)) && !observed.matches_exact(expected) {
             return Err(CursorError::Stale.into());
         }
         Ok(())
@@ -218,8 +221,22 @@ impl Checkpoint {
         wall: u64,
         start: ScanStart,
     ) -> Result<Option<Cursor>> {
+        self.installed_delivery_scan_guarded(source, account, origin, wall, start, || Ok(()))
+    }
+
+    pub(in crate::peer_invitation) fn installed_delivery_scan_guarded(
+        &mut self,
+        source: &Source,
+        account: PublicKey,
+        origin: &str,
+        wall: u64,
+        start: ScanStart,
+        before_commit: impl FnOnce() -> Result<()>,
+    ) -> Result<Option<Cursor>> {
         self.check_installed_consent_scope(source, account, origin, wall)?;
-        Ok(self.cursor.scan(source.origin, start, wall)?)
+        Ok(self.cursor.scan_guarded(source.origin, start, wall, || {
+            before_commit().map_err(schema::cursor_error)
+        })?)
     }
 
     pub(in crate::peer_invitation) fn commit_installed_delivery_page(
@@ -228,6 +245,17 @@ impl Checkpoint {
         cursor: &Cursor,
         page: CheckedPage<'_>,
         receipts: &[Receipt],
+    ) -> Result<Option<Cursor>> {
+        self.commit_installed_delivery_page_guarded(source, cursor, page, receipts, || Ok(()))
+    }
+
+    pub(in crate::peer_invitation) fn commit_installed_delivery_page_guarded(
+        &mut self,
+        source: &Source,
+        cursor: &Cursor,
+        page: CheckedPage<'_>,
+        receipts: &[Receipt],
+        before_commit: impl FnOnce() -> Result<()>,
     ) -> Result<Option<Cursor>> {
         let CheckedPage {
             account,
@@ -246,18 +274,32 @@ impl Checkpoint {
             until,
             records: &records,
         };
-        Ok(self
-            .cursor
-            .commit_page_with_fence(cursor, &page, receipts, wall, |tx| {
+        Ok(self.cursor.commit_page_guarded(
+            cursor,
+            &page,
+            receipts,
+            wall,
+            |tx| {
                 cx.verify(tx, wall)?;
                 rows::advance_wall(tx, wall)
-            })?)
+            },
+            || before_commit().map_err(schema::cursor_error),
+        )?)
     }
 
     pub(in crate::peer_invitation) fn observe_installed_delivery(
         &mut self,
         source: &Source,
         carrier: CheckedCarrier<'_>,
+    ) -> Result<Observation> {
+        self.observe_installed_delivery_guarded(source, carrier, || Ok(()))
+    }
+
+    pub(in crate::peer_invitation) fn observe_installed_delivery_guarded(
+        &mut self,
+        source: &Source,
+        carrier: CheckedCarrier<'_>,
+        before_commit: impl FnOnce() -> Result<()>,
     ) -> Result<Observation> {
         let wall = carrier.wall();
         let raw = carrier.record();
@@ -277,7 +319,7 @@ impl Checkpoint {
             })?;
         let incoming = match classified {
             InstalledCarrier::Offer(offer) => {
-                return match self.record_installed_offer(source, input, *offer)? {
+                return match self.record_installed_offer(source, input, *offer, before_commit)? {
                     OfferIngress::Recorded(disposition) => Ok(Observation::Receipted(disposition)),
                     OfferIngress::Backpressure => Err(CursorError::Backlog.into()),
                     _ => Err(CursorError::Binding.into()),
@@ -285,12 +327,12 @@ impl Checkpoint {
             }
             InstalledCarrier::Delivery(incoming) => incoming,
             InstalledCarrier::InvalidOffer | InstalledCarrier::InvalidFrame => {
-                return self.receipt_invalid_delivery(source, carrier);
+                return self.receipt_invalid_delivery(source, carrier, before_commit);
             }
         };
         let selector = Selector::from_delivery(&incoming);
         if matches!(self.custody_mode(selector.server), Err(Error::Policy)) {
-            return self.receipt_invalid_delivery(source, carrier);
+            return self.receipt_invalid_delivery(source, carrier, before_commit);
         }
         let ancestry = self.read_installed_consent(
             source,
@@ -300,19 +342,24 @@ impl Checkpoint {
             |tx, cx| cx.installed_ancestry(tx, selector),
         )?;
         let queued = match ancestry {
-            Ancestry::Absent => return self.receipt_invalid_delivery(source, carrier),
+            Ancestry::Absent => {
+                return self.receipt_invalid_delivery(source, carrier, before_commit);
+            }
             Ancestry::Terminal => {
                 return self
-                    .commit_invalid_delivery(source, carrier, |cx, tx| {
-                        match cx.installed_ancestry(tx, selector)? {
+                    .commit_invalid_delivery_guarded(
+                        source,
+                        carrier,
+                        |cx, tx| match cx.installed_ancestry(tx, selector)? {
                             Ancestry::Terminal => Ok(()),
                             _ => Err(CursorError::Stale.into()),
-                        }
-                    })
+                        },
+                        before_commit,
+                    )
                     .map(Observation::Receipted);
             }
             Ancestry::Held(held) => {
-                return self.receipt_held_replay(source, carrier, *incoming, &held);
+                return self.receipt_held_replay(source, carrier, *incoming, &held, before_commit);
             }
             Ancestry::Queued(queued) => queued,
         };
@@ -321,7 +368,7 @@ impl Checkpoint {
             .min(incoming.expires_at())
             .saturating_sub(MARGIN);
         if deadline <= wall {
-            return self.receipt_invalid_delivery(source, carrier);
+            return self.receipt_invalid_delivery(source, carrier, before_commit);
         }
         Ok(Observation::Inspect(Box::new(Prepared {
             witness: carrier.witness(),
@@ -364,15 +411,16 @@ impl Checkpoint {
         self.finish_delivery(source, carrier, prepared, Native::Fixture(native))
     }
 
-    pub(in crate::peer_invitation) fn finish_managed_delivery(
+    pub(in crate::peer_invitation) fn finish_managed_delivery_guarded(
         &mut self,
         source: &Source,
         carrier: CheckedCarrier<'_>,
         prepared: Prepared,
         measured: &MeasuredDelivery<'_>,
+        check: &dyn Fn() -> Result<()>,
     ) -> Result<Disposition> {
         measured.require_turn(&prepared.turn)?;
-        self.finish_delivery(source, carrier, prepared, Native::Managed(measured))
+        self.finish_delivery(source, carrier, prepared, Native::Managed(measured, check))
     }
 
     fn verify_installed_delivery(
@@ -386,7 +434,7 @@ impl Checkpoint {
         match native {
             #[cfg(test)]
             Native::Fixture(proof) => self.verify_custody_delivery(consent, proof, incoming, wall),
-            Native::Managed(measured) => {
+            Native::Managed(measured, _) => {
                 self.check_local_owner(&consent.owner)?;
                 let target = PackageTarget {
                     owner: Arc::clone(&consent.owner),
@@ -530,8 +578,9 @@ impl Checkpoint {
         &mut self,
         source: &Source,
         carrier: CheckedCarrier<'_>,
+        before_commit: impl FnOnce() -> Result<()>,
     ) -> Result<Observation> {
-        self.commit_invalid_delivery(source, carrier, |_, _| Ok(()))
+        self.commit_invalid_delivery_guarded(source, carrier, |_, _| Ok(()), before_commit)
             .map(Observation::Receipted)
     }
 
@@ -554,15 +603,6 @@ impl Checkpoint {
             },
             || native.check_at(wall),
         )
-    }
-
-    fn commit_invalid_delivery(
-        &mut self,
-        source: &Source,
-        carrier: CheckedCarrier<'_>,
-        require_ancestry: impl FnOnce(&Context, &Transaction<'_>) -> Result<()>,
-    ) -> Result<Disposition> {
-        self.commit_invalid_delivery_guarded(source, carrier, require_ancestry, || Ok(()))
     }
 
     fn commit_invalid_delivery_guarded(
@@ -608,6 +648,7 @@ impl Checkpoint {
         carrier: CheckedCarrier<'_>,
         incoming: IncomingDelivery,
         held: &HeldEvidence,
+        before_commit: impl FnOnce() -> Result<()>,
     ) -> Result<Observation> {
         let cx = self.custody_context(source)?;
         let wall = carrier.wall();
@@ -637,17 +678,21 @@ impl Checkpoint {
         };
         if !exact || wall >= held.replay_until() {
             return self
-                .commit_invalid_delivery(source, carrier, require_current)
+                .commit_invalid_delivery_guarded(source, carrier, require_current, before_commit)
                 .map(Observation::Receipted);
         }
-        let (receipt, outcome) = self
-            .cursor
-            .commit_trusted_exact(cx.origin, raw, wall, |tx| {
+        let (receipt, outcome) = self.cursor.commit_trusted_exact_guarded(
+            cx.origin,
+            raw,
+            wall,
+            |tx| {
                 cx.verify(tx, wall)?;
                 require_current(&cx, tx).map_err(schema::cursor_error)?;
                 rows::advance_wall(tx, wall)?;
                 Ok(TrustedOutcome::AlreadyApplied)
-            })?;
+            },
+            || before_commit().map_err(schema::cursor_error),
+        )?;
         Ok(Observation::Receipted(Disposition {
             status: Status::Accepted(outcome),
             receipt,

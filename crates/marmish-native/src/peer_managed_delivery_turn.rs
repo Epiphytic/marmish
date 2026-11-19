@@ -48,10 +48,18 @@ impl<'lease> RecoveredOwner<'lease> {
         &mut self,
         carrier: CheckedCarrier<'_>,
     ) -> Result<Observation> {
+        self.observe_managed_delivery_guarded(carrier, || Ok(()))
+    }
+
+    pub(in crate::peer_invitation) fn observe_managed_delivery_guarded(
+        &mut self,
+        carrier: CheckedCarrier<'_>,
+        check: impl FnOnce() -> consent_checkpoint::Result<()>,
+    ) -> Result<Observation> {
         self.cursor.unchanged()?;
-        let outcome = self
-            .checkpoint
-            .observe_installed_delivery(&self.source, carrier)?;
+        let outcome =
+            self.checkpoint
+                .observe_installed_delivery_guarded(&self.source, carrier, check)?;
         self.cursor.unchanged()?;
         Ok(outcome)
     }
@@ -206,6 +214,17 @@ impl<'lease> RecoveredOwner<'lease> {
         readiness: crate::peer_candidate_startup::Readiness,
         stop: Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<MeasuredDelivery<'lease>> {
+        self.measure_delivery_guarded(quota, route, readiness, stop, &|| Ok(()))
+    }
+
+    pub(in crate::peer_invitation) fn measure_delivery_guarded(
+        &mut self,
+        quota: &ReceiverQuota<'_>,
+        route: CheckedDeliveryRoute<'_, '_>,
+        readiness: crate::peer_candidate_startup::Readiness,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        check: &dyn Fn() -> consent_checkpoint::Result<()>,
+    ) -> Result<MeasuredDelivery<'lease>> {
         self.cursor.unchanged()?;
         let (route, challenge) = route.into_parts();
         let wall = route.wall().as_secs();
@@ -220,7 +239,9 @@ impl<'lease> RecoveredOwner<'lease> {
             wall,
             challenge,
         )?;
+        check()?;
         let package = self.attest_queued_package(quota, &queued, &window)?;
+        check()?;
         self.cursor.unchanged()?;
         window.sample()?;
         Ok(MeasuredDelivery {
@@ -237,11 +258,28 @@ impl<'lease> RecoveredOwner<'lease> {
         prepared: Prepared,
         measured: MeasuredDelivery<'lease>,
     ) -> Result<Disposition> {
+        self.finish_measured_delivery_guarded(quota, carrier, prepared, measured, &|| Ok(()))
+    }
+
+    pub(in crate::peer_invitation) fn finish_measured_delivery_guarded(
+        &mut self,
+        quota: &ReceiverQuota<'_>,
+        carrier: CheckedCarrier<'_>,
+        prepared: Prepared,
+        measured: MeasuredDelivery<'lease>,
+        check: &dyn Fn() -> consent_checkpoint::Result<()>,
+    ) -> Result<Disposition> {
         self.cursor.unchanged()?;
+        check()?;
         self.recheck_managed_package(quota, &measured.package, &measured.window)?;
-        let outcome =
-            self.checkpoint
-                .finish_managed_delivery(&self.source, carrier, prepared, &measured)?;
+        check()?;
+        let outcome = self.checkpoint.finish_managed_delivery_guarded(
+            &self.source,
+            carrier,
+            prepared,
+            &measured,
+            check,
+        )?;
         self.cursor.unchanged()?;
         measured.window.sample()?;
         Ok(outcome)

@@ -15,6 +15,8 @@ use crate::{
 
 #[path = "peer_managed_consent_port_wss_tests.rs"]
 mod joined_port;
+#[path = "peer_manual_ingress_wss_tests.rs"]
+mod manual_ingress;
 
 const ACK_CASE: &str = "MARMISH_MANAGED_CONSENT_ACK_CASE";
 
@@ -80,6 +82,9 @@ async fn managed_consent_ack_child() {
         .unwrap()
         .register(&lease, &material)
         .unwrap();
+    let forwarding = case
+        .starts_with("ingress")
+        .then(|| registered.forwarding_verifier());
     create_empty(&lease.root().join("peer/cursor.db"));
     let mut registered = registered.attach(&lease, &material).unwrap();
     let (quota, mut route) = registered.actor_parts();
@@ -97,6 +102,20 @@ async fn managed_consent_ack_child() {
     let mut sender = Owner::open(&connector, url, founder.public_key(), &founder, deadline())
         .await
         .unwrap();
+    if matches!(case.as_str(), "ingress" | "ingress-bad-history") {
+        manual_ingress::exercise(manual_ingress::Fixture {
+            bad_history: case == "ingress-bad-history",
+            relay: &relay,
+            port: &mut port,
+            sender: &mut sender,
+            founder: &founder,
+            account,
+            owner: &mut owner,
+            forwarding: forwarding.unwrap(),
+        })
+        .await;
+        return;
+    }
     let offer = wire::Codec::for_version(wire::MAX_OUTER_BYTES, ControlVersion::V2)
         .unwrap()
         .prepare_offer(
@@ -113,20 +132,40 @@ async fn managed_consent_ack_child() {
             .await
             .unwrap()
     );
-    let live = port.wait_live(deadline()).await.unwrap().unwrap();
-    port.use_live_carrier(&live, |checked| {
-        owner
-            .checkpoint
-            .admit_installed_custody_offer(&owner.source, checked)
-    })
-    .unwrap()
-    .unwrap();
     let selector = Selector::from(&offer.flight);
     let (startup, listener, worker) = peer_candidate_startup::pair();
     startup.ordinary_ready();
     listener.registered();
     let ready = worker.ready().await.unwrap();
     let stopped = Arc::new(AtomicBool::new(false));
+    let mut ingress = if let Some(forwarding) = forwarding {
+        let mut ingress =
+            crate::peer_invitation::receiver_inventory::manual_ingress::Ingress::recover(
+                &mut owner,
+                &mut port,
+                ready.readiness(),
+                Arc::clone(&stopped),
+                forwarding,
+            )
+            .unwrap();
+        assert!(
+            ingress
+                .history_turn(&mut owner, &mut port, deadline())
+                .await
+                .unwrap()
+        );
+        Some(ingress)
+    } else {
+        let live = port.wait_live(deadline()).await.unwrap().unwrap();
+        port.use_live_carrier(&live, |checked| {
+            owner
+                .checkpoint
+                .admit_installed_custody_offer(&owner.source, checked)
+        })
+        .unwrap()
+        .unwrap();
+        None
+    };
     let fresh_window = |port: &mut PeerRecipientPort| {
         port.use_current_native(|scope| {
             scope.window(
@@ -159,6 +198,21 @@ async fn managed_consent_ack_child() {
     let queued = owner
         .queue_managed_consent(quota, &reservation, &proof, &window)
         .unwrap();
+    if let Some(ingress) = &mut ingress {
+        let mut fixture = joined_port::Fixture {
+            relay: &relay,
+            port: &mut port,
+            sender: &mut sender,
+            founder: &founder,
+            offer: &offer.flight,
+            quota,
+            readiness: ready.readiness(),
+            stop: stopped,
+            profile: lease.root(),
+        };
+        manual_ingress::measured_delivery(ingress, &mut fixture, &mut owner, &queued).await;
+        return;
+    }
     if let Some(case) = case.strip_prefix("port-") {
         joined_port::run(
             case,

@@ -105,12 +105,23 @@ impl CursorStore {
         start: ScanStart,
         wall: u64,
     ) -> Result<Option<Cursor>> {
+        self.scan_guarded(origin, start, wall, || Ok(()))
+    }
+
+    pub(crate) fn scan_guarded(
+        &mut self,
+        origin: Origin,
+        start: ScanStart,
+        wall: u64,
+        before_commit: impl FnOnce() -> Result<()>,
+    ) -> Result<Option<Cursor>> {
         let tx = self.with_wall(origin, wall)?;
         let state = load(&tx, origin)?;
         if state.quarantine_until.is_some() {
             return Err(Error::RelayContract);
         }
         if state.active.is_some() {
+            before_commit()?;
             tx.commit()?;
             return Ok(state.active);
         }
@@ -119,6 +130,7 @@ impl CursorStore {
                 .completed_wall
                 .is_some_and(|done| wall.saturating_sub(done) < CADENCE)
         {
+            before_commit()?;
             tx.commit()?;
             return Ok(None);
         }
@@ -130,6 +142,7 @@ impl CursorStore {
             params![origin, seconds(wall)?, seconds(lower)?, upper],
         )?;
         let cursor = load(&tx, origin)?.active.ok_or(Error::Storage)?;
+        before_commit()?;
         tx.commit()?;
         Ok(Some(cursor))
     }
@@ -152,6 +165,18 @@ impl CursorStore {
         wall: u64,
         fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
     ) -> Result<Option<Cursor>> {
+        self.commit_page_guarded(cursor, page, receipts, wall, fence, || Ok(()))
+    }
+
+    pub(crate) fn commit_page_guarded(
+        &mut self,
+        cursor: &Cursor,
+        page: &Page<'_>,
+        receipts: &[Receipt],
+        wall: u64,
+        fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
+        before_commit: impl FnOnce() -> Result<()>,
+    ) -> Result<Option<Cursor>> {
         if page.origin != cursor.origin || page.since != cursor.lower || page.until != cursor.until
         {
             return Err(Error::Page);
@@ -172,6 +197,7 @@ impl CursorStore {
                 "UPDATE peer_cursor_origin SET quarantine_until=?2 WHERE origin=?1",
                 params![origin, after(wall, QUARANTINE)?],
             )?;
+            before_commit()?;
             tx.commit()?;
             return Err(Error::RelayContract);
         };
@@ -189,6 +215,7 @@ impl CursorStore {
             )?;
             None
         };
+        before_commit()?;
         tx.commit()?;
         Ok(remaining)
     }

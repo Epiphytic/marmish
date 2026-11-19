@@ -28,6 +28,7 @@ pub(super) struct RecoveredOwner<'lease> {
     cursor: CheckedFile,
     checkpoint: Checkpoint,
     source: Source,
+    ingress_owner: Arc<()>,
     signer: Arc<Keys>,
     relay: String,
     package_quota: Option<&'lease ReceiverQuota<'lease>>,
@@ -73,6 +74,8 @@ pub(crate) use clean::CleanPermit;
 mod managed_consent;
 #[path = "peer_managed_delivery_turn.rs"]
 mod managed_delivery;
+#[path = "peer_manual_ingress.rs"]
+pub(in crate::peer_invitation) mod manual_ingress;
 pub(super) use managed_delivery::MeasuredDelivery;
 #[path = "peer_candidate_package_owner.rs"]
 pub(super) mod package;
@@ -194,6 +197,7 @@ impl<'lease> RecoveredOwner<'lease> {
             cursor,
             checkpoint,
             source,
+            ingress_owner: Arc::new(()),
             signer,
             relay: relay.to_owned(),
             package_quota,

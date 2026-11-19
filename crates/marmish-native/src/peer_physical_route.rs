@@ -450,6 +450,10 @@ impl NativeRouteWindow<'_> {
         self.fence.wall()
     }
 
+    pub(crate) fn matches_fatal(&self, fatal: &Fatal) -> bool {
+        self.fence.fatal.same_lifetime(fatal)
+    }
+
     pub(crate) fn horizon(&self) -> tokio::time::Instant {
         self.fence.horizon
     }

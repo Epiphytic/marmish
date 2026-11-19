@@ -61,9 +61,12 @@ fn deadline() -> tokio::time::Instant {
 }
 
 impl Fixture<'_, '_> {
-    async fn defer_delivery(
+    pub(super) async fn send_delivery(&mut self, queued: &ManagedQueued) -> [u8; 32] {
+        self.publish_delivery(queued, false).await.0
+    }
+
+    async fn publish_delivery(
         &mut self,
-        owner: &mut RecoveredOwner<'_>,
         queued: &ManagedQueued,
         short_lived: bool,
     ) -> ([u8; 32], u64) {
@@ -98,6 +101,16 @@ impl Fixture<'_, '_> {
                 .await
                 .unwrap()
         );
+        (flight.carrier_id.to_bytes(), expires - 300)
+    }
+
+    async fn defer_delivery(
+        &mut self,
+        owner: &mut RecoveredOwner<'_>,
+        queued: &ManagedQueued,
+        short_lived: bool,
+    ) -> ([u8; 32], u64) {
+        let (carrier, cutoff) = self.publish_delivery(queued, short_lived).await;
         let live = self.port.wait_live(deadline()).await.unwrap().unwrap();
         let prepare = |port: &mut PeerRecipientPort, owner: &mut RecoveredOwner<'_>| {
             let observation = port
@@ -174,7 +187,7 @@ impl Fixture<'_, '_> {
         for _ in 0..if short_lived { 0 } else { 3 } {
             let (due, _, _) = owner
                 .checkpoint
-                .fixture_retry_row(&owner.source, flight.carrier_id.to_bytes())
+                .fixture_retry_row(&owner.source, carrier)
                 .unwrap();
             while wall() < due {
                 tokio::time::sleep(Duration::from_millis(20)).await;
@@ -200,7 +213,7 @@ impl Fixture<'_, '_> {
                 .unwrap();
             assert!(observation.is_none());
         }
-        (flight.carrier_id.to_bytes(), expires - 300)
+        (carrier, cutoff)
     }
 }
 
