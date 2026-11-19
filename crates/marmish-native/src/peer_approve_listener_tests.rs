@@ -269,6 +269,61 @@ async fn path_absence_wrong_uid_stop_and_fatal_are_fail_closed() {
 }
 
 #[tokio::test]
+async fn registration_requires_the_exact_lease_path_and_fatal_once() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let lease = Arc::new(ProfileLease::acquire(directory.path(), "local").unwrap());
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(lease.runtime_dir())
+        .unwrap();
+    let _runtime = FixtureRuntime(lease.runtime_dir().to_path_buf());
+    let (_trip, fatal) = Trip::new();
+    let (_other_trip, other_fatal) = Trip::new();
+    let readiness = peer_candidate_startup::pair().1.readiness();
+    let wrong_path = directory.path().join("wrong");
+    let wrong_listener = ipc::bind(&wrong_path).unwrap();
+    let (wrong, _wrong_worker) = pair(wrong_path, lease.clone(), readiness.clone(), fatal.clone());
+    assert!(!wrong.register(&wrong_listener, Some(&fatal)));
+    assert!(!wrong.0.state.lock().unwrap().registered);
+
+    let path = lease.socket_path();
+    let listener = ipc::bind(&path).unwrap();
+    let (paired, _worker) = pair(path, lease, readiness, fatal.clone());
+    assert!(!paired.register(&listener, None));
+    assert!(!paired.register(&listener, Some(&other_fatal)));
+    assert!(!paired.0.state.lock().unwrap().registered);
+    assert!(paired.register(&listener, Some(&fatal)));
+    assert!(!paired.register(&listener, Some(&fatal)));
+}
+
+#[tokio::test]
+async fn claimed_busy_is_uncertain_and_worker_drop_wakes_an_open_exchange() {
+    let fixture = Fixture::start(true, true);
+    let selector = selection();
+    let mut socket = fixture.socket(selector).await;
+    fixture.submitted().await;
+    fixture.worker.try_claim().unwrap().refuse(Failure::Busy);
+    let response: Response = read_frame(&mut socket).await.unwrap();
+    assert_eq!(response.error.as_deref(), Some("operation_uncertain"));
+
+    let mut socket = fixture.socket(selector).await;
+    fixture.submitted().await;
+    let claim = fixture.worker.try_claim().unwrap();
+    drop(fixture.worker);
+    assert!(fixture.pair.is_closed());
+    assert!(!claim.check_live());
+    assert!(claim.consume(&fixture.lease, selector).is_none());
+    let received =
+        tokio::time::timeout(Duration::from_secs(1), read_frame::<Response>(&mut socket))
+            .await
+            .expect("dropped worker did not close an open exchange");
+    assert!(received.is_err());
+    fixture.drain.send(()).unwrap();
+    fixture.task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn unclaimed_disconnect_releases_slot_and_no_stale_claim_can_finish() {
     let fixture = Fixture::start(true, true);
     let selector = selection();
