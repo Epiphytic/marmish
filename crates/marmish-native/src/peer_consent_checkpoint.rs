@@ -36,7 +36,14 @@ pub(crate) enum Error {
     Source,
     LocalOwner,
     Index,
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     ObservedLexicalConflict,
     #[cfg(test)]
     ObservedPageConflict,

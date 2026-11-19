@@ -1088,6 +1088,28 @@ fn peer_cursor_installed_scope_cap_and_exact_expiry_preserve_sql_floors() {
         expires,
         ..metadata(Auth::FlightVerified, Some(id(6)))
     };
+    let uncommitted = state(&checkpoint.cursor);
+    let attempted = std::cell::Cell::new(false);
+    assert_eq!(
+        checkpoint
+            .cursor
+            .defer_guarded(
+                origin,
+                record(0, W),
+                saved_metadata,
+                W,
+                |tx| {
+                    fence(tx, W)?;
+                    attempted.set(true);
+                    Ok(())
+                },
+                || Err(Error::ClockRegressed),
+            )
+            .err(),
+        Some(Error::ClockRegressed)
+    );
+    assert!(attempted.get());
+    assert_eq!(state(&checkpoint.cursor), uncommitted);
     for n in 0..u16::try_from(VISIBLE).unwrap() {
         checkpoint
             .cursor
@@ -1174,6 +1196,50 @@ fn peer_cursor_installed_scope_cap_and_exact_expiry_preserve_sql_floors() {
     );
 
     let saved = checkpoint.cursor.existing(origin, id(0)).unwrap().unwrap();
+    let fresh_wall = W + 1;
+    for invalid in [false, true] {
+        attempted.set(false);
+        let before_commit = || Err(Error::ClockRegressed);
+        if invalid {
+            let proof = saved.reverify(|_| Some(RetryFinding::Invalid)).unwrap();
+            assert_eq!(
+                checkpoint.cursor.finish_retry_guarded(
+                    proof,
+                    fresh_wall,
+                    |tx| {
+                        fence(tx, fresh_wall)?;
+                        attempted.set(true);
+                        Ok(())
+                    },
+                    before_commit,
+                ),
+                Err(Error::ClockRegressed)
+            );
+        } else {
+            assert_eq!(
+                checkpoint
+                    .cursor
+                    .commit_trusted_exact_guarded(
+                        origin,
+                        saved.record(),
+                        fresh_wall,
+                        |tx| {
+                            saved.require_current_flight(tx, origin, id(6))?;
+                            fence(tx, fresh_wall)?;
+                            attempted.set(true);
+                            Ok(TrustedOutcome::Held)
+                        },
+                        before_commit,
+                    )
+                    .err(),
+                Some(Error::ClockRegressed)
+            );
+        }
+        assert!(attempted.get());
+        assert_eq!(state(&checkpoint.cursor), baseline);
+        let current = checkpoint.cursor.existing(origin, id(0)).unwrap().unwrap();
+        assert_eq!(current.record().digest(), saved.record().digest());
+    }
     let expired = || {
         saved
             .reverify(|raw| {

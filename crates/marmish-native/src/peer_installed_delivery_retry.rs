@@ -3,7 +3,7 @@
 use super::*;
 use crate::peer_invitation::{
     socket::owner::recipient::{CheckedSavedDelivery, SavedPortWitness},
-    store::{RetryFinding, retry::Snapshot},
+    store::retry::{RetryFinding, Snapshot},
 };
 
 pub(in crate::peer_invitation) struct SavedDelivery {
@@ -25,6 +25,7 @@ impl SavedDelivery {
 
 pub(in crate::peer_invitation) struct PreparedSaved<'saved> {
     port: SavedPortWitness,
+    turn: Arc<()>,
     saved: &'saved SavedDelivery,
     queued: Box<Queued>,
     incoming: IncomingDelivery,
@@ -33,8 +34,19 @@ pub(in crate::peer_invitation) struct PreparedSaved<'saved> {
 }
 
 impl PreparedSaved<'_> {
+    #[cfg(test)]
     pub(in crate::peer_invitation) fn native_coordinates(&self) -> ((Binding, FileWitness), u64) {
         (self.queued.stage(), self.sample)
+    }
+
+    pub(in crate::peer_invitation) fn challenge(&self) -> DeliveryChallenge<'_> {
+        DeliveryChallenge {
+            queued: &self.queued,
+            turn: &self.turn,
+            port: DeliveryPort::Saved(&self.port),
+            deadline: self.expires,
+            observation: self.sample,
+        }
     }
 }
 
@@ -124,6 +136,7 @@ impl Checkpoint {
         let sample = wall.min(expires.checked_sub(1).ok_or(Error::Expired)?);
         Ok(Some(PreparedSaved {
             port: checked.witness(),
+            turn: Arc::new(()),
             saved,
             queued,
             incoming: *incoming,
@@ -132,6 +145,7 @@ impl Checkpoint {
         }))
     }
 
+    #[cfg(test)]
     pub(in crate::peer_invitation) fn commit_saved_delivery(
         &mut self,
         source: &Source,
@@ -139,7 +153,32 @@ impl Checkpoint {
         prepared: PreparedSaved<'_>,
         native: &NativeAttestation,
     ) -> Result<Option<Status>> {
+        self.commit_saved(source, checked, prepared, Native::Fixture(native))
+    }
+
+    pub(in crate::peer_invitation) fn commit_managed_saved_delivery(
+        &mut self,
+        source: &Source,
+        checked: CheckedSavedDelivery<'_, '_>,
+        prepared: PreparedSaved<'_>,
+        measured: &MeasuredDelivery<'_>,
+    ) -> Result<Option<Status>> {
+        if checked.observation().1 >= prepared.expires {
+            return Err(Error::Expired);
+        }
+        measured.require_turn(&prepared.turn)?;
+        self.commit_saved(source, checked, prepared, Native::Managed(measured))
+    }
+
+    fn commit_saved(
+        &mut self,
+        source: &Source,
+        checked: CheckedSavedDelivery<'_, '_>,
+        prepared: PreparedSaved<'_>,
+        native: Native<'_, '_>,
+    ) -> Result<Option<Status>> {
         let (saved, wall) = checked.observation();
+        native.check_at(wall)?;
         if !checked.matches(&prepared.port) || !std::ptr::eq(saved, prepared.saved) {
             return Err(Error::Source);
         }
@@ -148,6 +187,7 @@ impl Checkpoint {
         let queued =
             self.read_installed_consent(source, saved.account, &saved.origin, wall, |tx, cx| {
                 let existing = cx.current_delivery_consent(tx, key, &prepared.queued)?;
+                native.require_same_turn(&existing, &prepared.queued)?;
                 saved.snapshot.require_current_flight(
                     tx,
                     cx.origin,
@@ -161,8 +201,16 @@ impl Checkpoint {
         };
         let expired = wall >= prepared.expires;
         let verification_wall = if expired { prepared.sample } else { wall };
-        let verified =
-            self.verify_custody_delivery(&consent, native, prepared.incoming, verification_wall)?;
+        let ConsentAuthority::Fresh(queued) = &consent.authority else {
+            return Err(Error::Custodied);
+        };
+        let verified = self.verify_installed_delivery(
+            &consent,
+            queued,
+            &native,
+            prepared.incoming,
+            verification_wall,
+        )?;
         match verified {
             Some((delivery, package)) => {
                 if delivery_expiry(&prepared.queued, &delivery, &package) != Some(prepared.expires)
@@ -174,9 +222,9 @@ impl Checkpoint {
                         source,
                         HeldInput::Saved(&saved.snapshot),
                         &consent,
-                        &delivery,
-                        &package,
+                        (&delivery, &package),
                         wall,
+                        || native.check_at(wall),
                     )?;
                     return Ok(Some(disposition.status));
                 }
@@ -197,17 +245,27 @@ impl Checkpoint {
             .reverify(|_| Some(finding))
             .ok_or(CursorError::Classification)?;
         let cx = self.custody_context(source)?;
-        self.cursor.finish_retry_with_fence(proof, wall, |tx| {
-            cx.verify(tx, wall)?;
-            cx.current_delivery_consent(tx, key, &prepared.queued)
-                .map_err(schema::cursor_error)?;
-            saved.snapshot.require_current_flight(
-                tx,
-                cx.origin,
-                prepared.queued.row.transcript.carrier,
-            )?;
-            rows::advance_wall(tx, wall)
-        })?;
+        self.cursor.finish_retry_guarded(
+            proof,
+            wall,
+            |tx| {
+                native.check_at(wall).map_err(schema::cursor_error)?;
+                cx.verify(tx, wall)?;
+                let existing = cx
+                    .current_delivery_consent(tx, key, &prepared.queued)
+                    .map_err(schema::cursor_error)?;
+                native
+                    .require_same_turn(&existing, &prepared.queued)
+                    .map_err(schema::cursor_error)?;
+                saved.snapshot.require_current_flight(
+                    tx,
+                    cx.origin,
+                    prepared.queued.row.transcript.carrier,
+                )?;
+                rows::advance_wall(tx, wall)
+            },
+            || native.check_at(wall).map_err(schema::cursor_error),
+        )?;
         Ok(None)
     }
 }

@@ -2,7 +2,7 @@
 //! converting the saved bytes into an observed relay record.
 
 use super::*;
-use crate::peer_invitation::store::consent_checkpoint::provisioning::prepared_consent::custody::delivery_ingress::retry::SavedDelivery;
+use crate::peer_invitation::store::consent_checkpoint::provisioning::prepared_consent::custody::delivery_ingress::{DeliveryChallenge, DeliveryPort, retry::SavedDelivery};
 
 pub(in crate::peer_invitation) struct CheckedSavedDelivery<'port, 'saved> {
     scope: &'port Arc<Scope>,
@@ -27,6 +27,21 @@ impl<'saved> CheckedSavedDelivery<'_, 'saved> {
 }
 
 impl PeerRecipientPort {
+    pub(in crate::peer_invitation) fn use_delivery_native<'turn, T>(
+        &mut self,
+        challenge: DeliveryChallenge<'turn>,
+        use_checked: impl FnOnce(CheckedDeliveryRoute<'_, 'turn>) -> T,
+    ) -> Result<T> {
+        let scope = match challenge.port() {
+            DeliveryPort::Observed(witness) => &witness.scope,
+            DeliveryPort::Saved(witness) => &witness.0,
+        };
+        if !self.0.current(scope) {
+            return Err(Failure::Binding);
+        }
+        self.use_current_native(|route| use_checked(CheckedDeliveryRoute { route, challenge }))
+    }
+
     pub(in crate::peer_invitation) fn use_saved_delivery<'saved, T>(
         &mut self,
         saved: &'saved SavedDelivery,
@@ -41,5 +56,22 @@ impl PeerRecipientPort {
             saved,
             wall,
         }))
+    }
+}
+
+/// Origin, horizon and cancellation for the same port that supplied the paired carrier.
+pub(in crate::peer_invitation) struct CheckedDeliveryRoute<'route, 'turn> {
+    route: crate::peer_relay_trust::NativeRouteWindow<'route>,
+    challenge: DeliveryChallenge<'turn>,
+}
+
+impl<'route, 'turn> CheckedDeliveryRoute<'route, 'turn> {
+    pub(in crate::peer_invitation) fn into_parts(
+        self,
+    ) -> (
+        crate::peer_relay_trust::NativeRouteWindow<'route>,
+        DeliveryChallenge<'turn>,
+    ) {
+        (self.route, self.challenge)
     }
 }

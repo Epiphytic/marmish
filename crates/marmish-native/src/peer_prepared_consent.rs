@@ -54,7 +54,14 @@ mod schema_tests;
     )
 ))]
 use super::super::Offer;
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 use super::super::wire;
 #[cfg(any(
     test,
@@ -95,7 +102,14 @@ use stage_journal::{Artifact, FileWitness, State};
 #[path = "peer_prepared_consent_rows.rs"]
 mod outbox;
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 impl super::super::Selector {
     pub(crate) fn from_delivery(incoming: &wire::IncomingDelivery) -> Self {
         let offer = incoming.offer();

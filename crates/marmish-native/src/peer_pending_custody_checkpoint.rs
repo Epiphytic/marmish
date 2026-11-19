@@ -15,7 +15,14 @@ use nostr::key::PublicKey;
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
 use rusqlite::params;
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -43,7 +50,14 @@ use super::super::super::super::read_seconds;
     )
 ))]
 use super::super::super::wire::IncomingDelivery;
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 use super::super::super::wire::VerifiedDeliveryPackage;
 #[cfg(any(
     test,
@@ -67,6 +81,15 @@ use super::*;
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 native_offer_ingress_fixture!();
+
+#[cfg(all(
+    not(test),
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "peer_installed_delivery_ingress.rs"]
+pub(in crate::peer_invitation) mod delivery_ingress;
 
 #[cfg(all(
     not(test),
@@ -162,7 +185,14 @@ pub(crate) enum ReceivePolicy {
     AutoFounders(BTreeSet<PublicKey>),
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 const MARGIN: u64 = 300;
 #[cfg(any(
     test,
@@ -204,34 +234,71 @@ pub(crate) enum Approval<'a> {
     Automatic,
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 enum HeldInput<'a> {
+    #[cfg(test)]
     Observed(RawRecord<'a>),
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     InstalledObserved(RawRecord<'a>),
     Saved(&'a super::super::super::super::retry::Snapshot),
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 impl<'a> HeldInput<'a> {
     fn record(&self) -> RawRecord<'a> {
         match *self {
+            #[cfg(test)]
             Self::Observed(raw) => raw,
-            #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+            #[cfg(all(
+                any(test, marmish_peer_receiver_candidate),
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
             Self::InstalledObserved(raw) => raw,
             Self::Saved(snapshot) => snapshot.record(),
         }
     }
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 pub(crate) struct CustodyConsent {
-    #[cfg(test)]
     owner: Arc<()>,
     authority: ConsentAuthority,
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 enum ConsentAuthority {
     Fresh(Box<Queued>),
     Held(Box<HeldEvidence>),
@@ -633,7 +700,11 @@ impl Context {
         Ok(Some(Queued { prepared, row }))
     }
 
-    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     fn require_no_delivery_competitor(
         &self,
         tx: &Transaction<'_>,
@@ -1155,6 +1226,26 @@ impl Checkpoint {
         let ConsentAuthority::Fresh(queued) = &recovered.authority else {
             return Err(Error::Custodied);
         };
+        self.verify_exact_delivery(queued, incoming, wall, |stage, artifact| {
+            package.require(stage, artifact, wall)
+        })
+    }
+
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
+    fn verify_exact_delivery<'proof>(
+        &self,
+        queued: &Queued,
+        incoming: IncomingDelivery,
+        wall: u64,
+        require: impl FnOnce((Binding, FileWitness), Artifact) -> Result<&'proof [u8]>,
+    ) -> Result<Option<(Delivery, VerifiedDeliveryPackage)>> {
         let prepared = &queued.prepared;
         if Selector::from_delivery(&incoming) != prepared.binding.key {
             return Ok(None);
@@ -1162,7 +1253,7 @@ impl Checkpoint {
         if wall >= queued.row.transcript.expires || wall >= queued.prepared.artifact.expires {
             return Err(Error::Expired);
         }
-        let exact = package.require(prepared.stage(), prepared.artifact, wall)?;
+        let exact = require(queued.stage(), prepared.artifact)?;
         queued
             .row
             .transcript
@@ -1251,22 +1342,30 @@ impl Checkpoint {
             source,
             HeldInput::Observed(raw),
             prior,
-            delivery,
-            package,
+            (delivery, package),
             wall,
+            || Ok(()),
         )
     }
 
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     fn commit_custody_held_input(
         &mut self,
         source: &Source,
         input: HeldInput<'_>,
         prior: &CustodyConsent,
-        delivery: &Delivery,
-        package: &VerifiedDeliveryPackage,
+        verified: (&Delivery, &VerifiedDeliveryPackage),
         wall: u64,
+        guard: impl Fn() -> Result<()>,
     ) -> Result<Disposition> {
+        let (delivery, package) = verified;
         let raw = input.record();
         raw.check()?;
         self.check_local_owner(&prior.owner)?;
@@ -1285,52 +1384,60 @@ impl Checkpoint {
         if package.frame_digest() != frame_digest || !package.matches_index(raw.id, raw.stamp) {
             return Err(Error::Index);
         }
-        let (receipt, outcome) = self
-            .cursor
-            .commit_trusted_exact(cx.origin, raw, wall, |tx| {
-                let write = || -> Result<()> {
-                    cx.verify(tx, wall)?;
-                    let current = cx.exact_consent(tx, key)?.ok_or(CursorError::Stale)?;
-                    if owns(tx, key, cx.origin)?
-                        || prior.stage() != current.stage()
-                        || prior.row != current.row
-                    {
-                        return Err(CursorError::Stale.into());
+        let write_effect_and_fence = |tx: &Transaction<'_>| {
+            let write = || -> Result<()> {
+                guard()?;
+                cx.verify(tx, wall)?;
+                let current = cx.exact_consent(tx, key)?.ok_or(CursorError::Stale)?;
+                #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+                let same_flight = prior.matches_exact(&current);
+                #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+                let same_flight = prior.stage() == current.stage() && prior.row == current.row;
+                if owns(tx, key, cx.origin)? || !same_flight {
+                    return Err(CursorError::Stale.into());
+                }
+                match input {
+                    #[cfg(test)]
+                    HeldInput::Observed(_) => {}
+                    #[cfg(all(
+                        any(test, marmish_peer_receiver_candidate),
+                        target_os = "linux",
+                        target_arch = "x86_64"
+                    ))]
+                    HeldInput::InstalledObserved(_) => {
+                        cx.require_no_delivery_competitor(tx, raw, current.row.transcript.carrier)?;
                     }
-                    match input {
-                        HeldInput::Observed(_) => {}
-                        #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
-                        HeldInput::InstalledObserved(_) => {
-                            cx.require_no_delivery_competitor(
-                                tx,
-                                raw,
-                                current.row.transcript.carrier,
-                            )?;
-                        }
-                        HeldInput::Saved(snapshot) => {
-                            snapshot.require_current_flight(
-                                tx,
-                                cx.origin,
-                                current.row.transcript.carrier,
-                            )?;
-                        }
+                    HeldInput::Saved(snapshot) => {
+                        snapshot.require_current_flight(
+                            tx,
+                            cx.origin,
+                            current.row.transcript.carrier,
+                        )?;
                     }
-                    HeldWrite {
-                        raw,
-                        delivery,
-                        package,
-                        mode,
-                        wall,
-                        deadline,
-                    }
-                    .insert(tx, &current)?;
-                    cx.verify(tx, wall)?;
-                    rows::advance_wall(tx, wall)?;
-                    Ok(())
-                };
-                write().map_err(schema::cursor_error)?;
-                Ok(TrustedOutcome::Held)
-            })?;
+                }
+                HeldWrite {
+                    raw,
+                    delivery,
+                    package,
+                    mode,
+                    wall,
+                    deadline,
+                }
+                .insert(tx, &current)?;
+                cx.verify(tx, wall)?;
+                rows::advance_wall(tx, wall)?;
+                Ok(())
+            };
+            write().map_err(schema::cursor_error)?;
+            Ok(TrustedOutcome::Held)
+        };
+        let (receipt, outcome) = self.cursor.commit_trusted_exact_guarded(
+            cx.origin,
+            raw,
+            wall,
+            write_effect_and_fence,
+            || guard().map_err(schema::cursor_error),
+        )?;
         Ok(Disposition {
             status: Status::Accepted(outcome),
             receipt,
@@ -1601,7 +1708,14 @@ fn exact_readback(prior: &HeldEvidence, proof: &JoinedReadback) -> bool {
     prior.stage == proof.stage() && prior.delivery_carrier() == proof.carrier()
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 struct HeldWrite<'a> {
     raw: RawRecord<'a>,
     delivery: &'a Delivery,
@@ -1611,7 +1725,14 @@ struct HeldWrite<'a> {
     deadline: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 impl HeldWrite<'_> {
     fn insert(self, tx: &Transaction<'_>, current: &Queued) -> Result<()> {
         let Self {

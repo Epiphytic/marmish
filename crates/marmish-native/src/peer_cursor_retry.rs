@@ -112,7 +112,14 @@ pub(crate) struct RetryProof {
 pub(crate) enum TrustedOutcome {
     Applied,
     AlreadyApplied,
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     Held,
     SkippedCooldown,
 }
@@ -133,7 +140,9 @@ impl CursorStore {
         wall: u64,
         write_effect_and_fence: impl FnOnce(&Transaction<'_>) -> Result<TrustedOutcome>,
     ) -> Result<(Receipt, TrustedOutcome)> {
-        self.commit_trusted_with(origin, record, wall, false, write_effect_and_fence)
+        self.commit_trusted_with(origin, record, wall, false, write_effect_and_fence, || {
+            Ok(())
+        })
     }
 
     pub(crate) fn commit_trusted_exact(
@@ -143,7 +152,25 @@ impl CursorStore {
         wall: u64,
         write_effect_and_fence: impl FnOnce(&Transaction<'_>) -> Result<TrustedOutcome>,
     ) -> Result<(Receipt, TrustedOutcome)> {
-        self.commit_trusted_with(origin, record, wall, true, write_effect_and_fence)
+        self.commit_trusted_exact_guarded(origin, record, wall, write_effect_and_fence, || Ok(()))
+    }
+
+    pub(crate) fn commit_trusted_exact_guarded(
+        &mut self,
+        origin: Origin,
+        record: RawRecord<'_>,
+        wall: u64,
+        write_effect_and_fence: impl FnOnce(&Transaction<'_>) -> Result<TrustedOutcome>,
+        before_commit: impl FnOnce() -> Result<()>,
+    ) -> Result<(Receipt, TrustedOutcome)> {
+        self.commit_trusted_with(
+            origin,
+            record,
+            wall,
+            true,
+            write_effect_and_fence,
+            before_commit,
+        )
     }
 
     fn commit_trusted_with(
@@ -153,6 +180,7 @@ impl CursorStore {
         wall: u64,
         exact: bool,
         write_effect_and_fence: impl FnOnce(&Transaction<'_>) -> Result<TrustedOutcome>,
+        before_commit: impl FnOnce() -> Result<()>,
     ) -> Result<(Receipt, TrustedOutcome)> {
         record.check()?;
         let tx = self.with_wall(origin, wall)?;
@@ -167,6 +195,7 @@ impl CursorStore {
                 params![origin, record.id],
             )?;
         }
+        before_commit()?;
         tx.commit()?;
         Ok((Receipt::new(origin, record, ReceiptKind::Accepted), outcome))
     }
@@ -187,10 +216,22 @@ impl CursorStore {
         wall: u64,
         fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
     ) -> Result<Receipt> {
+        self.commit_invalid_guarded(origin, record, wall, fence, || Ok(()))
+    }
+
+    pub(crate) fn commit_invalid_guarded(
+        &mut self,
+        origin: Origin,
+        record: RawRecord<'_>,
+        wall: u64,
+        fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
+        before_commit: impl FnOnce() -> Result<()>,
+    ) -> Result<Receipt> {
         record.check()?;
         let tx = self.with_wall(origin, wall)?;
         fence(&tx)?;
         clear_exact(&tx, origin, record)?;
+        before_commit()?;
         tx.commit()?;
         Ok(Receipt::new(origin, record, ReceiptKind::Invalid))
     }
@@ -212,6 +253,18 @@ impl CursorStore {
         metadata: Metadata,
         wall: u64,
         fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
+    ) -> Result<Receipt> {
+        self.defer_guarded(origin, record, metadata, wall, fence, || Ok(()))
+    }
+
+    pub(crate) fn defer_guarded(
+        &mut self,
+        origin: Origin,
+        record: RawRecord<'_>,
+        metadata: Metadata,
+        wall: u64,
+        fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
+        before_commit: impl FnOnce() -> Result<()>,
     ) -> Result<Receipt> {
         record.check()?;
         let tx = self.with_wall(origin, wall)?;
@@ -247,6 +300,7 @@ impl CursorStore {
                 ],
             )?;
         }
+        before_commit()?;
         tx.commit()?;
         Ok(Receipt::new(origin, record, ReceiptKind::Deferred))
     }
@@ -403,6 +457,16 @@ impl CursorStore {
         wall: u64,
         fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
     ) -> Result<()> {
+        self.finish_retry_guarded(proof, wall, fence, || Ok(()))
+    }
+
+    pub(crate) fn finish_retry_guarded(
+        &mut self,
+        proof: RetryProof,
+        wall: u64,
+        fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
+        before_commit: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
         let tx = self.with_wall(proof.origin, wall)?;
         let snapshot = load(&tx, proof.origin, proof.id)?.ok_or(Error::Stale)?;
         if snapshot.revision != proof.revision || snapshot.record().digest() != proof.digest {
@@ -417,6 +481,7 @@ impl CursorStore {
             "DELETE FROM peer_cursor_deferred WHERE origin=?1 AND id=?2",
             params![proof.origin, proof.id],
         )?;
+        before_commit()?;
         tx.commit()?;
         Ok(())
     }

@@ -91,41 +91,73 @@ impl Fixture<'_, '_> {
                 .unwrap()
         );
         let live = self.port.wait_live(deadline()).await.unwrap().unwrap();
-        let prepared = self
-            .port
-            .use_live_carrier(&live, |checked| {
-                owner
-                    .checkpoint
-                    .observe_installed_delivery(&owner.source, checked)
-            })
-            .unwrap()
-            .unwrap();
-        let Observation::Inspect(prepared) = prepared else {
-            panic!("authenticated Delivery did not reach inspection");
+        let prepare = |port: &mut PeerRecipientPort, owner: &mut RecoveredOwner<'_>| {
+            let observation = port
+                .use_live_carrier(&live, |checked| owner.observe_managed_delivery(checked))
+                .unwrap()
+                .unwrap();
+            let Observation::Inspect(prepared) = observation else {
+                panic!("authenticated Delivery did not reach inspection");
+            };
+            prepared
         };
-        let window = self
+        let prepared = prepare(self.port, owner);
+        let other_turn = prepare(self.port, owner);
+        let measure_refusal = self
             .port
-            .use_current_native(|scope| {
-                scope.window(
+            .use_delivery_native(prepared.challenge().unwrap(), |checked| {
+                owner.measure_delivery(
+                    self.quota,
+                    checked,
                     self.readiness.clone(),
                     Arc::clone(&self.stop),
-                    self.offer.flight().expires_at,
                 )
             })
             .unwrap()
             .unwrap();
-        let native = owner
-            .fixture_attest_delivery(self.quota, queued, &window, prepared.native_coordinates())
+        let before = owner
+            .checkpoint
+            .fixture_delivery_state(&owner.source)
+            .unwrap();
+        assert_eq!(
+            self.port
+                .use_live_carrier(&live, |checked| {
+                    owner.finish_measured_delivery(
+                        self.quota,
+                        checked,
+                        *other_turn,
+                        measure_refusal,
+                    )
+                })
+                .unwrap()
+                .err(),
+            Some(Error::Checkpoint(
+                crate::peer_invitation::store::consent_checkpoint::Error::Source
+            )),
+        );
+        assert_eq!(
+            owner
+                .checkpoint
+                .fixture_delivery_state(&owner.source)
+                .unwrap(),
+            before
+        );
+        let proof = self
+            .port
+            .use_delivery_native(prepared.challenge().unwrap(), |checked| {
+                owner.measure_delivery(
+                    self.quota,
+                    checked,
+                    self.readiness.clone(),
+                    Arc::clone(&self.stop),
+                )
+            })
+            .unwrap()
             .unwrap();
         let result = self
             .port
             .use_live_carrier(&live, |checked| {
-                owner.checkpoint.finish_installed_delivery(
-                    &owner.source,
-                    checked,
-                    *prepared,
-                    &native,
-                )
+                owner.finish_measured_delivery(self.quota, checked, *prepared, proof)
             })
             .unwrap()
             .unwrap();
@@ -396,6 +428,65 @@ pub(super) async fn run<'profile>(
                 .unwrap(),
             state
         );
+        if case == "positive" {
+            let (due, _, _) = matching;
+            while wall() < due {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            let saved = fixture
+                .port
+                .use_current_recipient(|account, origin, wall| {
+                    owner.due_managed_delivery(account, origin, wall)
+                })
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let prepared = fixture
+                .port
+                .use_saved_delivery(&saved, |checked| {
+                    owner.observe_managed_saved_delivery(checked)
+                })
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let proof = fixture
+                .port
+                .use_delivery_native(prepared.challenge(), |checked| {
+                    owner.measure_delivery(
+                        fixture.quota,
+                        checked,
+                        fixture.readiness.clone(),
+                        Arc::clone(&fixture.stop),
+                    )
+                })
+                .unwrap()
+                .unwrap();
+            let outcome = fixture
+                .port
+                .use_saved_delivery(&saved, |checked| {
+                    owner.finish_measured_saved_delivery(fixture.quota, checked, prepared, proof)
+                })
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                outcome,
+                Some(Status::Accepted(
+                    crate::peer_invitation::store::TrustedOutcome::Held
+                ))
+            );
+            assert_eq!(
+                owner
+                    .checkpoint
+                    .fixture_retry_row(&owner.source, other)
+                    .unwrap(),
+                unrelated
+            );
+            let held = owner
+                .checkpoint
+                .fixture_delivery_state(&owner.source)
+                .unwrap();
+            assert_eq!((held[4], held[5]), (state[4] - 1, state[5] + 1));
+        }
     } else {
         let state = owner
             .checkpoint
