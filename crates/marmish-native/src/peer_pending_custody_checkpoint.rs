@@ -836,7 +836,7 @@ impl Checkpoint {
         target_os = "linux",
         target_arch = "x86_64"
     ))]
-    pub(in crate::peer_invitation) fn attach_installed_manual_approval(
+    pub(crate) fn attach_installed_manual_approval(
         conn: HardenedPeerConnection,
         signer: Keys,
         uid: u32,

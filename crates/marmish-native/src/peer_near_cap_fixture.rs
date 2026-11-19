@@ -126,9 +126,9 @@ pub(crate) fn grow(
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct CommittedApproval {
-    pub(crate) decided: u64,
-    pub(crate) origin_floor: u64,
-    pub(crate) consent_floor: u64,
+    pub(crate) decided: i64,
+    pub(crate) origin_floor: i64,
+    pub(crate) consent_floor: i64,
     stage: (u64, u64),
 }
 
@@ -165,7 +165,7 @@ pub(crate) fn committed_approval(
                 selection.server.to_bytes(),
                 selection.offer_id,
                 selection.revision,
-                selection.generation,
+                i64::try_from(selection.generation).map_err(|_| "activating_generation")?,
             ],
             |row| {
                 Ok(CommittedApproval {
@@ -180,7 +180,7 @@ pub(crate) fn committed_approval(
             },
         )
         .map_err(|_| "activating_selection")?;
-    if saved.decided >= entry.expires_at
+    if !u64::try_from(saved.decided).is_ok_and(|decided| decided < entry.expires_at)
         || saved.origin_floor < saved.decided
         || saved.consent_floor < saved.decided
     {
