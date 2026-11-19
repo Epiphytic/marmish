@@ -306,7 +306,8 @@ async fn managed_consent_ack_child() {
         assert!(matches!(foreign_ack, Err(CheckpointError::LocalOwner)));
         assert_eq!(
             port.use_accepted(&ack, |view| view
-                .fixture_at_attempt_deadline(turn.attempt(), url))
+                .fixture_at_wall(turn.attempt().deadline())
+                .exact_attempt(turn.attempt(), url))
                 .unwrap(),
             Err(CheckpointError::Expired)
         );
@@ -348,13 +349,32 @@ async fn managed_consent_ack_child() {
                 .unwrap(),
             Err(CheckpointError::Source)
         ));
-        assert!(
-            port.use_accepted(&ack, |view| {
-                owner.settle_managed_consent(quota, turn, view)
+        let regressed = port
+            .use_accepted(&ack, |view| {
+                owner
+                    .checkpoint
+                    .settle_managed_consent(&owner.source, turn.attempt(), view, || {
+                        panic!("regressed ACK reached commit")
+                    })
             })
-            .map(|outcome| outcome.is_err())
-            .unwrap()
-        );
+            .unwrap();
+        assert!(matches!(
+            regressed,
+            Err(CheckpointError::Cursor(CursorError::ClockRegressed))
+        ));
+        // Advance only the sampled wall, retaining the genuine receipt and
+        // first attempt. The newer row must independently reject that attempt.
+        let stale = port
+            .use_accepted(&ack, |view| {
+                owner.settle_managed_consent(quota, turn, view.fixture_at_wall(retry_wall))
+            })
+            .unwrap();
+        assert!(matches!(
+            stale,
+            Err(Error::Checkpoint(CheckpointError::Cursor(
+                CursorError::Stale
+            )))
+        ));
         assert_eq!(owner.checkpoint.consent_fixture_clocks(), clocks);
         assert_eq!(fs::read(&cursor).unwrap(), baseline);
     }

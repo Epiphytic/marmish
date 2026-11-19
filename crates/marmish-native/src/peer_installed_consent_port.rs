@@ -15,13 +15,9 @@ pub(in crate::peer_invitation) enum PublicationOutcome {
 }
 
 impl CheckedAck<'_> {
-    pub(in crate::peer_invitation) fn fixture_at_attempt_deadline(
-        mut self,
-        attempt: &Attempt,
-        origin: &str,
-    ) -> consent_checkpoint::Result<u64> {
-        self.wall = attempt.deadline();
-        self.exact_attempt(attempt, origin)
+    pub(in crate::peer_invitation) fn fixture_at_wall(mut self, wall: u64) -> Self {
+        self.wall = wall;
+        self
     }
 }
 

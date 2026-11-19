@@ -20,7 +20,7 @@ use crate::{
 };
 
 use super::super::super::store::{
-    TrustedOutcome,
+    Error as CursorError, TrustedOutcome,
     consent_checkpoint::{Error as CheckpointError, wire},
 };
 use super::*;
@@ -352,7 +352,12 @@ fn package_child() {
             let after = owner.checkpoint.consent_fixture_clocks();
             let cursor_after = fs::read(&cursor_path).unwrap();
 
-            assert!(owner.reserve_managed_consent(quota, stale, &turn).is_err());
+            assert!(matches!(
+                owner.reserve_managed_consent(quota, stale, &turn),
+                Err(Error::Checkpoint(CheckpointError::Cursor(
+                    CursorError::Stale
+                )))
+            ));
             let current = load(&mut owner);
             let deferred = owner
                 .reserve_managed_consent(quota, current, &turn)
