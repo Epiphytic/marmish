@@ -1,0 +1,3 @@
+# Status dispatcher abort marker design review
+
+Claude Code Sonnet 5.5 independently reviewed the design in Auto mode. R1 (0bac4bb2-11fe-48b4-a248-40db663c3b17) requested clearer timing interpretation, complete context and tail classification, strict scope, and a process-level test. R2 (d4959347-ed10-4f66-bfba-33cbfedea5d7) approved draft SHA-256 `f3bad7176937841a34befbfba736b1b41debd492fc08a198f0c851260dcb63f3` at base `f301525b7d9d3e4ed56ee2addc247f0fdd3d2fff`. The reviewer approved safe explicit abort with controlled stderr. Implementation must preserve the process-level signal gate, the closed fixed projection, core-dump suppression and the exact size and line boundary tests. The approval does not diagnose the observed dispatcher abort or lift the paired-test gate.
