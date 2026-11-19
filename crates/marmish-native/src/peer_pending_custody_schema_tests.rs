@@ -1185,7 +1185,10 @@ fn installed_approval_epochs_are_exclusive_and_preserve_the_v2_inventory() {
             .unwrap();
         drop(conn);
         let drifted = f.inventory();
-        assert!(open_installed(&f, exact).is_err());
+        assert_eq!(
+            open_installed(&f, exact).err(),
+            Some(Error::Cursor(CursorError::Binding))
+        );
         assert_eq!(f.inventory(), drifted);
     }
 }
@@ -1194,10 +1197,16 @@ fn installed_approval_epochs_are_exclusive_and_preserve_the_v2_inventory() {
 fn installed_approval_epoch_refuses_partial_mixed_and_fixture_inventories() {
     use custody_schema::InstalledKind::{ApprovalV3, V2};
 
-    for ddl in [
-        "CREATE TABLE peer_installed_custody_approval_v3 (version INTEGER PRIMARY KEY) STRICT",
-        "CREATE TABLE peer_installed_custody_v2 (version INTEGER PRIMARY KEY) STRICT;
-         CREATE TABLE peer_installed_custody_approval_v3 (version INTEGER PRIMARY KEY) STRICT",
+    for (ddl, v3_error) in [
+        (
+            "CREATE TABLE peer_installed_custody_approval_v3 (version INTEGER PRIMARY KEY) STRICT",
+            Error::Cursor(CursorError::Binding),
+        ),
+        (
+            "CREATE TABLE peer_installed_custody_v2 (version INTEGER PRIMARY KEY) STRICT;
+             CREATE TABLE peer_installed_custody_approval_v3 (version INTEGER PRIMARY KEY) STRICT",
+            Error::Layout,
+        ),
     ] {
         let f = Fixture::new();
         attach_installed_parent(&f);
@@ -1205,8 +1214,8 @@ fn installed_approval_epoch_refuses_partial_mixed_and_fixture_inventories() {
         conn.execute_batch(ddl).unwrap();
         drop(conn);
         let before = f.inventory();
-        assert!(open_installed(&f, V2).is_err());
-        assert!(open_installed(&f, ApprovalV3).is_err());
+        assert_eq!(open_installed(&f, V2).err(), Some(Error::Layout));
+        assert_eq!(open_installed(&f, ApprovalV3).err(), Some(v3_error));
         assert_eq!(f.inventory(), before);
     }
 
@@ -1215,7 +1224,10 @@ fn installed_approval_epoch_refuses_partial_mixed_and_fixture_inventories() {
     drop(f.prepared().unwrap());
     drop(f.custody().unwrap());
     let before = f.inventory();
-    assert!(open_installed(&f, ApprovalV3).is_err());
+    assert_eq!(
+        open_installed(&f, ApprovalV3).err(),
+        Some(Error::Cursor(CursorError::Binding))
+    );
     assert_eq!(f.inventory(), before);
 }
 
@@ -1224,6 +1236,7 @@ fn installed_approval_trigger_fences_manual_state_and_both_wall_rollbacks() {
     use custody_schema::InstalledKind::{ApprovalV3, V2};
 
     const APPROVE: &str = "UPDATE peer_pending_custody SET state=3,approval=?1,activating_at=?2";
+    let approved_at = i64::try_from(WALL + 3).unwrap();
 
     // Exercise the exact installed overlays with existing schema-level Pending
     // rows. These are SQL-shaped fixtures, without native or actor authority.
@@ -1252,10 +1265,10 @@ fn installed_approval_trigger_fences_manual_state_and_both_wall_rollbacks() {
                         Ok((
                             row.get::<_, u8>(0)?,
                             row.get::<_, Option<u8>>(1)?,
-                            row.get::<_, Option<u64>>(2)?,
-                            row.get::<_, u64>(3)?,
-                            row.get::<_, u64>(4)?,
-                            row.get::<_, u64>(5)?,
+                            row.get::<_, Option<i64>>(2)?,
+                            row.get::<_, i64>(3)?,
+                            row.get::<_, i64>(4)?,
+                            row.get::<_, i64>(5)?,
                         ))
                     },
                 )
@@ -1263,18 +1276,24 @@ fn installed_approval_trigger_fences_manual_state_and_both_wall_rollbacks() {
         };
         let before = stored();
         assert_eq!(before.0, 2);
-        assert!(outside.execute(APPROVE, (0, WALL + 3)).is_err());
+        assert!(before.4 < approved_at && before.5 < approved_at);
+        assert!(outside.execute(APPROVE, (0, approved_at)).is_err());
+
+        if permitted {
+            assert_approval_verifier_refusals(&mut cp, &source, APPROVE, approved_at);
+            assert_eq!(stored(), before);
+        }
 
         let writer = custody_schema::Writer::Update;
         let tx = cp.cursor.with_wall(source.origin, WALL + 3).unwrap();
         writer.guard(&tx, false).unwrap();
-        assert!(tx.execute(APPROVE, (1, WALL + 3)).is_err());
+        assert!(tx.execute(APPROVE, (1, approved_at)).is_err());
         assert!(tx.execute(APPROVE, (0, before.3)).is_err());
-        let approved = tx.execute(APPROVE, (0, WALL + 3));
+        let approved = tx.execute(APPROVE, (0, approved_at));
         if permitted {
             assert_eq!(approved.unwrap(), 1);
             custody_schema::verify_approval_rows(&tx).unwrap();
-            assert!(tx.execute(APPROVE, (0, WALL + 4)).is_err());
+            assert!(tx.execute(APPROVE, (0, approved_at + 1)).is_err());
         } else {
             assert!(approved.is_err());
         }
@@ -1283,19 +1302,97 @@ fn installed_approval_trigger_fences_manual_state_and_both_wall_rollbacks() {
         drop(tx);
 
         assert_eq!(stored(), before);
-        assert!(outside.execute(APPROVE, (0, WALL + 3)).is_err());
+        assert!(outside.execute(APPROVE, (0, approved_at)).is_err());
         if permitted {
             let tx = cp.cursor.with_wall(source.origin, WALL + 3).unwrap();
             writer.guard(&tx, false).unwrap();
-            assert_eq!(tx.execute(APPROVE, (0, WALL + 3)).unwrap(), 1);
+            assert_eq!(tx.execute(APPROVE, (0, approved_at)).unwrap(), 1);
             writer.guard(&tx, true).unwrap();
             rows::advance_wall(&tx, WALL + 3).unwrap();
             tx.commit().unwrap();
             custody_schema::verify_approval_rows(&outside).unwrap();
             assert_eq!(
                 stored(),
-                (3, Some(0), Some(WALL + 3), before.3, WALL + 3, WALL + 3)
+                (
+                    3,
+                    Some(0),
+                    Some(approved_at),
+                    before.3,
+                    approved_at,
+                    approved_at
+                )
             );
         }
+    }
+}
+
+fn assert_approval_verifier_refusals(
+    cp: &mut Checkpoint,
+    source: &Source,
+    approve: &str,
+    approved_at: i64,
+) {
+    let tx = cp.cursor.begin(source.origin).unwrap();
+    terminal_schema::Writer::Insert.guard(&tx, false).unwrap();
+    assert_eq!(
+        tx.execute(
+            "INSERT INTO peer_pending_terminal (
+                class,generation,account,server,origin,offer_id,offer_revision,
+                consent_carrier,delivery_carrier,delivery_digest,outer_stamp,welcome_digest,
+                device,inode,group_id,epoch_number,epoch_identity,own_leaf,qualified_at,
+                pending_deadline,replay_until,offer_replay_until,reason,decided_at,step
+             )
+             SELECT c.class,c.generation,c.account,c.server,c.origin,c.offer_id,c.offer_revision,
+                c.consent_carrier,c.delivery_carrier,zeroblob(32),c.outer_stamp,c.welcome_digest,
+                s.device,s.inode,c.group_id,c.epoch_number,c.epoch_identity,c.own_leaf,c.qualified_at,
+                c.pending_deadline,c.replay_until,i.replay_until,0,?1,0
+             FROM peer_pending_custody c
+             JOIN peer_provisional_stage_v1 s USING (class,generation)
+             JOIN peer_consent_invite i ON i.server=c.server AND i.offer_id=c.offer_id
+                AND i.revision=c.offer_revision AND i.origin=c.origin",
+            [approved_at],
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        custody_schema::verify_approval_rows(&tx),
+        Err(CursorError::Binding)
+    );
+    drop(tx);
+
+    // Corrupt each coordinate independently in a transaction that rolls back.
+    // This tests the read guard without relying on another trigger's verdict.
+    for (corruption, decision) in [("class=0", 0), ("mode=1", 0), ("mode=0", 1)] {
+        let tx = cp.cursor.begin(source.origin).unwrap();
+        custody_schema::Writer::Update.guard(&tx, false).unwrap();
+        tx.execute_batch("DROP TRIGGER peer_custody_next").unwrap();
+        assert_eq!(
+            tx.execute(&format!("UPDATE peer_pending_custody SET {corruption}"), [])
+                .unwrap(),
+            1
+        );
+        let refusal = tx.execute(approve, (decision, approved_at)).unwrap_err();
+        assert!(
+            matches!(refusal, rusqlite::Error::SqliteFailure(_, Some(ref message))
+            if message == "installed custody requires Manual approval")
+        );
+        tx.execute_batch("DROP TRIGGER peer_installed_custody_manual_approval")
+            .unwrap();
+        if decision != 0 {
+            // The common table rejects this combination independently. Test
+            // the reopen predicate against it without changing that contract.
+            tx.pragma_update(None, "ignore_check_constraints", true)
+                .unwrap();
+        }
+        assert_eq!(tx.execute(approve, (decision, approved_at)).unwrap(), 1);
+        if decision != 0 {
+            tx.pragma_update(None, "ignore_check_constraints", false)
+                .unwrap();
+        }
+        assert_eq!(
+            custody_schema::verify_approval_rows(&tx),
+            Err(CursorError::Binding)
+        );
     }
 }
