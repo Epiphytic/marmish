@@ -160,7 +160,7 @@ async fn wrong_fixture_route(example: &Path, args: &[OsString], root: &Path, soc
     assert!(!child.finished().await.success());
     assert_eq!(
         diagnostic(output),
-        "marmish qualification: invalid input: fixture_relay_trust\n"
+        "marmish qualification: invalid input: command_runtime_binding\n"
     );
     assert!(
         matches!(alternate.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
