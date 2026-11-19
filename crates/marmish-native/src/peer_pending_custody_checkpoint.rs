@@ -137,6 +137,15 @@ mod installed_pending;
     target_arch = "x86_64"
 ))]
 use crate::peer_invitation::receiver_inventory::v2_pending::InstalledJoinedReadback;
+#[cfg(all(
+    not(test),
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub(in crate::peer_invitation) use installed_pending::{
+    ApprovalFailure, ApprovalGuard, ApprovalScope,
+};
 
 #[cfg(test)]
 #[path = "peer_terminal_leave_effect.rs"]

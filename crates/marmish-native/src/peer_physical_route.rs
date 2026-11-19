@@ -492,11 +492,29 @@ impl NativeRouteWindow<'_> {
         signed_end_exclusive: u64,
         forwarding: &ForwardingVerifier,
     ) -> Result<crate::peer_invitation::NativeWindow> {
+        self.manual_window_before(
+            readiness,
+            stop,
+            signed_end_exclusive,
+            forwarding,
+            self.horizon(),
+        )
+    }
+
+    pub(crate) fn manual_window_before(
+        &self,
+        readiness: crate::peer_candidate_startup::Readiness,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        signed_end_exclusive: u64,
+        forwarding: &ForwardingVerifier,
+        cutoff: tokio::time::Instant,
+    ) -> Result<crate::peer_invitation::NativeWindow> {
         if !self.matches_fatal(&forwarding.fatal()) {
             return Err(Error::Invalid("peer_receiver_forwarding"));
         }
         let mut fence = self.fence.clone();
         fence.forwarding = Some(forwarding.clone());
+        fence.horizon = fence.horizon.min(cutoff);
         crate::peer_invitation::NativeWindow::start_checked(
             readiness,
             stop,

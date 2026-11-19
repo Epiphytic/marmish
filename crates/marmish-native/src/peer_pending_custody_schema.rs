@@ -28,7 +28,14 @@ WHEN NEW.state>2
 BEGIN SELECT RAISE(ABORT,'installed custody ends at Pending'); END;
 ";
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 const APPROVAL_LAYOUT: &str = "
 CREATE TABLE peer_installed_custody_approval_v3 (
     version INTEGER PRIMARY KEY CHECK (version=3)
@@ -229,13 +236,27 @@ fn expected(kind: Kind) -> std::result::Result<&'static [Entry], CursorError> {
     #[cfg(test)]
     static LEAVE_EFFECT: OnceLock<Vec<Entry>> = OnceLock::new();
     static INSTALLED_V2: OnceLock<Vec<Entry>> = OnceLock::new();
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     static APPROVAL_V3: OnceLock<Vec<Entry>> = OnceLock::new();
     static CUSTODY: OnceLock<Vec<Entry>> = OnceLock::new();
     let expected = match kind {
         Kind::Custody => &CUSTODY,
         Kind::Installed(InstalledKind::V2) => &INSTALLED_V2,
-        #[cfg(test)]
+        #[cfg(any(
+            test,
+            all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            )
+        ))]
         Kind::Installed(InstalledKind::ApprovalV3) => &APPROVAL_V3,
         #[cfg(test)]
         Kind::Publication => &PUBLICATION,
@@ -287,7 +308,14 @@ enum Kind {
 #[derive(Clone, Copy)]
 pub(super) enum InstalledKind {
     V2,
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
     ApprovalV3,
 }
 
@@ -295,7 +323,14 @@ impl InstalledKind {
     pub(super) fn ddl(self) -> &'static str {
         match self {
             Self::V2 => INSTALLED_LAYOUT,
-            #[cfg(test)]
+            #[cfg(any(
+                test,
+                all(
+                    marmish_peer_receiver_candidate,
+                    target_os = "linux",
+                    target_arch = "x86_64"
+                )
+            ))]
             Self::ApprovalV3 => APPROVAL_LAYOUT,
         }
     }
@@ -303,7 +338,14 @@ impl InstalledKind {
     fn other_marker(self) -> &'static str {
         match self {
             Self::V2 => "peer_installed_custody_approval_v3",
-            #[cfg(test)]
+            #[cfg(any(
+                test,
+                all(
+                    marmish_peer_receiver_candidate,
+                    target_os = "linux",
+                    target_arch = "x86_64"
+                )
+            ))]
             Self::ApprovalV3 => "peer_installed_custody_v2",
         }
     }
@@ -312,6 +354,18 @@ impl InstalledKind {
 impl Epoch {
     pub(crate) fn is_installed_v2(self) -> bool {
         matches!(self.0, Kind::Installed(InstalledKind::V2))
+    }
+
+    #[cfg(any(
+        test,
+        all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )
+    ))]
+    pub(super) fn is_approval_v3(self) -> bool {
+        matches!(self.0, Kind::Installed(InstalledKind::ApprovalV3))
     }
 
     #[cfg(test)]
@@ -386,8 +440,15 @@ impl Epoch {
                 return Err(CursorError::Binding);
             }
         }
-        #[cfg(test)]
-        if matches!(self.0, Kind::Installed(InstalledKind::ApprovalV3)) {
+        #[cfg(any(
+            test,
+            all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            )
+        ))]
+        if self.is_approval_v3() {
             let [origin] = origins else {
                 return Err(CursorError::Binding);
             };
@@ -469,7 +530,14 @@ pub(crate) fn fixture_pending_stage(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    )
+))]
 pub(super) fn verify_approval_rows(tx: &Connection) -> std::result::Result<(), CursorError> {
     let valid: bool = tx.query_row(
         "SELECT (SELECT count(*) FROM peer_installed_custody_approval_v3 WHERE version=3)=1

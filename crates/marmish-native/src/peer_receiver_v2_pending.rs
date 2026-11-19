@@ -16,6 +16,10 @@ use crate::{
 };
 
 use super::*;
+
+#[cfg(marmish_peer_receiver_candidate)]
+#[path = "peer_receiver_pending_approval.rs"]
+mod approval;
 #[cfg(marmish_peer_receiver_candidate)]
 use crate::ipc::peer_read::{
     Entry,
@@ -23,6 +27,8 @@ use crate::ipc::peer_read::{
 };
 #[cfg(test)]
 use crate::peer_quota_vfs::dispatch::JoinMetrics;
+#[cfg(marmish_peer_receiver_candidate)]
+pub(in crate::peer_invitation) use approval::DecisionGuard;
 use clean::CleanFiles;
 use consent_checkpoint::{
     provisioning::{
@@ -748,7 +754,7 @@ impl<'lease> NativePending<'lease> {
             _ => return Err(Error::Binding),
         };
         require_deadline(fence, deadline)?;
-        let (binding, witness) = enrollment.stage;
+        let (binding, _) = enrollment.stage;
         if held.state() == CustodyState::JoinStarted
             && matches!(
                 owner.recover(fence.sample()?)?.classes[1],
@@ -764,6 +770,37 @@ impl<'lease> NativePending<'lease> {
                 false,
             )?;
         }
+        self.read_joined_copy(owner, delivery, enrollment, fence)
+    }
+
+    #[cfg(marmish_peer_receiver_candidate)]
+    fn read_joined_for_approval(
+        &self,
+        owner: &mut RecoveredOwner<'_>,
+        held: &HeldEvidence,
+        delivery: &Delivery,
+        fence: &WelcomeFence<'_>,
+    ) -> Result<InstalledJoinedReadback<'lease>> {
+        self.check(owner, held, delivery)?;
+        if !matches!(
+            held.state(),
+            CustodyState::Pending | CustodyState::Activating
+        ) {
+            return Err(Error::Binding);
+        }
+        let enrollment = Enrollment::from_delivery(held, delivery)?;
+        require_deadline(fence, held.pending_deadline().ok_or(Error::Binding)?)?;
+        self.read_joined_copy(owner, delivery, enrollment, fence)
+    }
+
+    fn read_joined_copy(
+        &self,
+        owner: &mut RecoveredOwner<'_>,
+        delivery: &Delivery,
+        enrollment: Enrollment,
+        fence: &WelcomeFence<'_>,
+    ) -> Result<InstalledJoinedReadback<'lease>> {
+        let (binding, witness) = enrollment.stage;
         let welcome = JoinWitness::new(delivery, &self.origin, enrollment.package_digest)?;
         let key = SqlCipherKey::raw(*owner.paths.provisional_key(binding));
         let operation = self.operation(owner, binding, &key, &welcome, fence);

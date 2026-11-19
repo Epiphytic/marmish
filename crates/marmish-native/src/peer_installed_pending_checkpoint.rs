@@ -1,6 +1,10 @@
 //! Exact opt-in Manual v2 native Pending transitions; no relay publication.
 
 use super::*;
+
+#[cfg(marmish_peer_receiver_candidate)]
+#[path = "peer_installed_approval_checkpoint.rs"]
+mod approval;
 use crate::{
     mdk_adapter::peer_native_signer::WelcomeFence,
     peer_invitation::{
@@ -9,6 +13,8 @@ use crate::{
     },
     peer_quota_vfs::dispatch::ReceiverQuota,
 };
+#[cfg(marmish_peer_receiver_candidate)]
+pub(in crate::peer_invitation) use approval::{ApprovalFailure, ApprovalGuard, ApprovalScope};
 
 #[cfg(marmish_peer_receiver_candidate)]
 use super::manual_work::require_sole_pending;
@@ -215,6 +221,19 @@ impl Checkpoint {
         held: &HeldEvidence,
         wall: u64,
     ) -> Result<Delivery> {
+        let permitted = matches!(
+            held.state(),
+            CustodyState::Held | CustodyState::JoinStarted | CustodyState::Pending
+        );
+        self.reopen_installed_delivery(held, wall, permitted)
+    }
+
+    fn reopen_installed_delivery(
+        &self,
+        held: &HeldEvidence,
+        wall: u64,
+        permitted: bool,
+    ) -> Result<Delivery> {
         self.check_local_owner(&held.owner)?;
         if held.is_active()
             || held.saved.automatic
@@ -224,10 +243,7 @@ impl Checkpoint {
                 self.custody_mode(held.offer().flight().author)?,
                 Mode::Manual
             )
-            || !matches!(
-                held.state(),
-                CustodyState::Held | CustodyState::JoinStarted | CustodyState::Pending
-            )
+            || !permitted
         {
             return Err(Error::Policy);
         }
