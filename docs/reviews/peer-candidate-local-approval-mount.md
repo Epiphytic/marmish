@@ -49,3 +49,19 @@ transit and installed startup with the opposite cursor epoch. The
 subsequent compile correction `dca025b` uses checked integer conversion
 at the SQL test boundary and permits the standalone cursor fixture to
 compile the candidate attach entry point.
+
+Claude Code Auto reviewed `06f7de7..44c4c25` in session
+`32c67f94-0bba-4ea0-870b-c33754081eee`. The reviewer found no code
+blocker in the updated provisioning fixtures, SQL integer conversions or
+post-refusal lifecycle check. The offline retired-port test exercises the
+checked port and verifies that a stop observed after the port check
+takes precedence over local unavailability. The real startup and
+registered route are exercised separately. The review was static.
+
+The first installed attempt recorded approval and the immediate retry,
+then failed waiting for an empty List response. Production exposes a
+Pending proof only as long as the row remains verified Pending, and
+refuses the projection ticket otherwise. The original test expected a
+synthetic empty proof available only in unit tests. The correction
+`bcc2a7a` requires Unavailable from the private List and Show while the
+registered route remains live. It preserves the cold SQLCipher assertions.
