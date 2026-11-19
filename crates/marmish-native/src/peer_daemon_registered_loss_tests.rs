@@ -263,6 +263,46 @@ fn dispatcher_loss_child() {
     refuse_at(Refusal::CandidateReturned);
 }
 
+const EDGE_STAGE: &str = "registered_fault_edge";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Edge {
+    SecondActiveSelected,
+    ImageStarted,
+    ImageComplete,
+    RegisterStarted,
+    RegisterChecked,
+    SampleWritten,
+}
+
+impl Edge {
+    const ALL: [Self; 6] = [
+        Self::SecondActiveSelected,
+        Self::ImageStarted,
+        Self::ImageComplete,
+        Self::RegisterStarted,
+        Self::RegisterChecked,
+        Self::SampleWritten,
+    ];
+
+    fn code(self) -> &'static str {
+        match self {
+            Self::SecondActiveSelected => "second_active_selected",
+            Self::ImageStarted => "image_started",
+            Self::ImageComplete => "image_complete",
+            Self::RegisterStarted => "register_started",
+            Self::RegisterChecked => "register_checked",
+            Self::SampleWritten => "sample_written",
+        }
+    }
+
+    fn record(self, control: &ChildControl) {
+        if control.scenario == Scenario::Status {
+            crate::diagnostics::event(EDGE_STAGE, self.code());
+        }
+    }
+}
+
 fn displace(control: &ChildControl, deadline: Instant) {
     let one_second = Duration::from_secs(1);
     if control.cut.swap(1, Ordering::AcqRel) != 0 {
@@ -271,15 +311,18 @@ fn displace(control: &ChildControl, deadline: Instant) {
     if deadline.saturating_duration_since(Instant::now()) < one_second {
         refuse_at(Refusal::DeadlineBeforeImage);
     }
+    Edge::ImageStarted.record(control);
     let image = Image::capture(&control.root).unwrap_or_else(|error| {
         if error.kind() == io::ErrorKind::TimedOut {
             refuse_at(Refusal::ImageDeadline);
         }
         refuse_at(Refusal::ImageUnavailable);
     });
+    Edge::ImageComplete.record(control);
     if deadline.saturating_duration_since(Instant::now()) < one_second {
         refuse_at(Refusal::DeadlineAfterImage);
     }
+    Edge::RegisterStarted.record(control);
     // SAFETY: this exact test child owns live registration, the static
     // initialized unix descriptor lasts for the process, and no restore runs.
     unsafe {
@@ -294,6 +337,7 @@ fn displace(control: &ChildControl, deadline: Instant) {
             refuse_at(Refusal::DispatcherReplacement);
         }
     }
+    Edge::RegisterChecked.record(control);
     let mut frame = Vec::with_capacity(1 + image.bytes().len());
     frame.push(control.scenario as u8);
     frame.extend_from_slice(image.bytes());
@@ -305,6 +349,8 @@ fn displace(control: &ChildControl, deadline: Instant) {
         drop(writer);
         refuse_at(Refusal::SampleWrite);
     }
+    drop(writer);
+    Edge::SampleWritten.record(control);
 }
 
 pub(crate) fn own_admission(admission: &Admission) {
@@ -359,6 +405,7 @@ pub(crate) async fn before_status_write(
         1 => {}
         _ => refuse_at(Refusal::RepeatedStatus),
     }
+    Edge::SecondActiveSelected.record(control);
     if fatal.is_tripped() || !control.admission.get().is_some_and(Admission::admit) {
         refuse_at(Refusal::BeforeStatusAdmission);
     }

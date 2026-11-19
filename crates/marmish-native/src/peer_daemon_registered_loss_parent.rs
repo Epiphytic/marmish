@@ -1,5 +1,7 @@
 //! Controller for isolated faults in the real registered libtest subprocess.
 use super::{Image, PROFILE, Refusal, Scenario, StatusState, UnixStream, send, status_state};
+#[path = "peer_daemon_registered_loss_log.rs"]
+mod child_log;
 use crate::{
     daemon_launch::{
         STARTUP_TIMEOUT,
@@ -9,6 +11,7 @@ use crate::{
     ipc,
     mdk_adapter::terminal_relay_fixture::Relay,
 };
+use child_log::observe as observe_child_log;
 use std::{
     ffi::{OsStr, OsString},
     fs::{self, File, OpenOptions, Permissions},
@@ -16,7 +19,7 @@ use std::{
     os::{
         fd::{AsRawFd, OwnedFd},
         unix::{
-            fs::{FileExt, OpenOptionsExt, PermissionsExt},
+            fs::{OpenOptionsExt, PermissionsExt},
             process::ExitStatusExt,
         },
     },
@@ -307,9 +310,9 @@ async fn frame_failed(
 ) -> ! {
     let status = status.map(status_socket_state);
     let end = child.failure_status(failure.disconnected()).await;
-    let (log_state, known) = known_child_diagnostics(log);
+    let observation = observe_child_log(log, end);
     panic!(
-        "dispatcher case={} expected={} failure={failure:?} child={end:?} stale={status:?} log={log_state} known={known:?}",
+        "dispatcher case={} expected={} failure={failure:?} child={end:?} stale={status:?} log={observation:?}",
         case as u8, tag,
     );
 }
@@ -363,49 +366,11 @@ fn checked_daemon(exe: &Path) -> PathBuf {
     daemon
 }
 
-fn known_child_diagnostics(log: &File) -> (&'static str, Vec<&'static str>) {
-    const CAP: usize = 128 * 1024;
-    let mut bytes = vec![0; CAP];
-    let Ok(len) = log.read_at(&mut bytes, 0) else {
-        return ("unreadable", Vec::new());
-    };
-    let log_state = match len {
-        0 => "empty",
-        CAP => "potentially_truncated",
-        _ => "read",
-    };
-    let mut known = Vec::new();
-    for entry in bytes[..len]
-        .split(|&byte| byte == b'\n')
-        .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
-    {
-        let category = match (entry["stage"].as_str(), entry["category"].as_str()) {
-            (Some("registered_shutdown"), Some("native_startup_failed")) => "native_startup_failed",
-            (Some("registered_shutdown"), Some("owned_stop_failed")) => "owned_stop_failed",
-            (Some("registered_shutdown"), Some("owned_stop_unproved")) => "owned_stop_unproved",
-            (Some("registered_shutdown"), Some("owned_stop_incomplete")) => "owned_stop_incomplete",
-            (Some("registered_shutdown"), Some("registration_indeterminate")) => {
-                "registration_indeterminate"
-            }
-            (Some("registered_fault_fixture"), Some(category)) => {
-                let Some(refusal) = Refusal::from_bytes(category.as_bytes()) else {
-                    continue;
-                };
-                refusal.code()
-            }
-            _ => continue,
-        };
-        if !known.contains(&category) {
-            known.push(category);
-        }
-    }
-    (log_state, known)
-}
-
 fn log_has_fatal_stop(log: &File) {
-    let (_, known) = known_child_diagnostics(log);
     assert!(
-        known.contains(&"owned_stop_failed"),
+        observe_child_log(log, ChildEnd::FatalExit)
+            .known
+            .contains(&"owned_stop_failed"),
         "actual fatal owner category"
     );
 }
