@@ -16,6 +16,7 @@ pub(crate) enum Barrier {
     Pending,
     Complete,
     Incomplete,
+    PossiblyLive,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -28,15 +29,16 @@ pub(crate) struct Report {
 }
 
 impl Report {
-    fn settled(self) -> bool {
-        ![
+    pub(crate) fn requires_process_hold(self) -> bool {
+        [
             self.engine,
             self.runners,
             self.sdk,
             self.forwarder,
             self.raw,
         ]
-        .contains(&Barrier::Pending)
+        .into_iter()
+        .any(|barrier| matches!(barrier, Barrier::Pending | Barrier::PossiblyLive))
     }
 }
 
@@ -60,10 +62,10 @@ impl<T> Task<T> {
             return;
         };
         if let Ok(joined) = timeout_at(deadline, handle).await {
-            self.status = if joined.is_ok_and(check) {
-                Barrier::Complete
-            } else {
-                Barrier::Incomplete
+            self.status = match joined.map(check) {
+                Ok(true) => Barrier::Complete,
+                Ok(false) => Barrier::Incomplete,
+                Err(_) => Barrier::PossiblyLive,
             };
             self.handle = None;
         }
@@ -152,7 +154,7 @@ impl PhysicalCut {
                 Ok(join) => engine = Task::new(Some(keep_fatal_engine(join, lease.clone()))),
                 Err(adapter) => {
                     *parked.refused_engine = Some(adapter);
-                    engine.status = Barrier::Incomplete;
+                    engine.status = Barrier::PossiblyLive;
                 }
             }
         }
@@ -196,11 +198,11 @@ impl PhysicalCut {
         }
     }
 
-    /// Returns the same observer if any barrier remains pending. An incomplete
-    /// settled result transfers parked custody just like a complete result.
+    /// Retains the observer and exact lease if any component may still have
+    /// live ownership. A known-ended failure can transfer parked custody.
     pub(crate) fn finish(self) -> std::result::Result<(ParkedOrdinary, Report), Box<Self>> {
         let report = self.report();
-        if !report.settled() {
+        if report.requires_process_hold() {
             return Err(Box::new(self));
         }
         Ok((self.parked, report))
@@ -218,8 +220,12 @@ async fn observe_runners(runners: &[RunnerHandle], status: &mut Barrier, deadlin
         }
         sleep_until((now + Duration::from_millis(5)).min(deadline)).await;
     }
-    // The marker follows physical child and pipe release, including on panic.
-    *status = Barrier::Complete;
+    // The worker can drop its handles without proving that the child was reaped.
+    *status = if runners.iter().any(RunnerHandle::reap_uncertain) {
+        Barrier::PossiblyLive
+    } else {
+        Barrier::Complete
+    };
 }
 
 async fn observe_raw(connector: &RelayConnector, status: &mut Barrier, deadline: Instant) {
@@ -227,7 +233,7 @@ async fn observe_raw(connector: &RelayConnector, status: &mut Barrier, deadline:
         *status = match connector.reap_fatal_sockets(deadline).await {
             Ok(()) => Barrier::Complete,
             Err(Error::Timeout) => Barrier::Pending,
-            Err(_) => Barrier::Incomplete,
+            Err(_) => Barrier::PossiblyLive,
         };
     }
 }

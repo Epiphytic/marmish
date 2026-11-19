@@ -247,21 +247,22 @@ async fn cached_cut_handles_survive_cancelled_observation_and_failed_join() {
 
     abort.abort();
     let expected = Report {
-        forwarder: Barrier::Incomplete,
+        forwarder: Barrier::PossiblyLive,
         ..report
     };
     assert_eq!(cut.observe(deadline()).await, expected);
     drop(release);
     assert_eq!(cut.observe(deadline()).await, expected);
-    let (parked, final_report) = cut.finish().ok().unwrap();
-    assert_eq!(final_report, expected);
+    assert!(expected.requires_process_hold());
+    let cut = cut.finish().err().unwrap();
+    assert_eq!(cut.report(), expected);
     assert_held(directory.path());
-    release_fixture(parked);
+    release_fixture(cut.parked);
     assert!(ProfileLease::acquire(directory.path(), PROFILE).is_ok());
 }
 
 #[tokio::test]
-async fn previously_closed_slots_remain_incomplete() {
+async fn previously_closed_slots_leave_ownership_unconfirmed() {
     let fixture = Fixture::new();
     let (trip, fatal) = Trip::new();
     let connector = direct(&fixture, fatal);
@@ -270,9 +271,92 @@ async fn previously_closed_slots_remain_incomplete() {
     trip.trip();
     let mut cut = PhysicalCut::begin(owner, &fixture.lease).ok().unwrap();
     let report = cut.observe(deadline()).await;
-    assert_eq!(report.raw, Barrier::Incomplete);
+    assert_eq!(report.raw, Barrier::PossiblyLive);
     assert_eq!(cut.observe(deadline()).await, report);
-    release_fixture(cut.finish().ok().unwrap().0);
+    assert!(report.requires_process_hold());
+    let cut = cut.finish().err().unwrap();
+    release_fixture(cut.parked);
+}
+
+#[tokio::test]
+async fn joined_keeper_failure_differs_from_lost_keeper() {
+    let mut returned = Task::new(Some(tokio::spawn(async {
+        Err::<(), _>(Error::Storage("engine_thread_failed"))
+    })));
+    let lost = tokio::spawn(std::future::pending::<Result<()>>());
+    lost.abort();
+    let mut lost = Task::new(Some(lost));
+
+    returned.observe(deadline(), |result| result.is_ok()).await;
+    lost.observe(deadline(), |result| result.is_ok()).await;
+    assert!(returned.handle.is_none());
+    assert!(lost.handle.is_none());
+    assert_eq!(returned.status, Barrier::Incomplete);
+    assert_eq!(lost.status, Barrier::PossiblyLive);
+    let known_ended = Report {
+        engine: returned.status,
+        runners: Barrier::Complete,
+        sdk: Barrier::Complete,
+        forwarder: Barrier::Complete,
+        raw: Barrier::Complete,
+    };
+    assert!(!known_ended.requires_process_hold());
+    assert!(
+        Report {
+            engine: lost.status,
+            ..known_ended
+        }
+        .requires_process_hold()
+    );
+}
+
+#[tokio::test]
+async fn finished_uncertain_runner_preserves_the_cut_and_lease() {
+    let fixture = Fixture::new();
+    let (trip, fatal) = Trip::new();
+    let mut owner = fixture.open(direct(&fixture, fatal));
+    let (trigger_panic, await_panic) = std::sync::mpsc::channel();
+    let runner = RunnerHandle::panic_before_child_for_test(await_panic).unwrap();
+    let mut live = LiveStream::new();
+    live.runner = Some(runner.clone());
+    owner.streams.live.insert("caught-panic".into(), live);
+    trip.trip();
+
+    let mut cut = PhysicalCut::begin(owner, &fixture.lease).ok().unwrap();
+    let Fixture {
+        directory, lease, ..
+    } = fixture;
+    drop(lease);
+    let before = cut
+        .observe(Instant::now() + Duration::from_millis(35))
+        .await;
+    assert_eq!(before.runners, Barrier::Pending);
+    assert!(before.requires_process_hold());
+    assert!(!runner.finished());
+    assert_held(directory.path());
+    trigger_panic.send(()).unwrap();
+
+    let expected = Report {
+        runners: Barrier::PossiblyLive,
+        engine: Barrier::Complete,
+        sdk: Barrier::Complete,
+        forwarder: Barrier::Complete,
+        raw: Barrier::Complete,
+    };
+    assert_eq!(cut.observe(deadline()).await, expected);
+    assert!(runner.finished());
+    assert!(runner.snapshot().uncertain);
+    assert!(expected.requires_process_hold());
+    for _ in 0..2 {
+        cut = *cut.finish().err().unwrap();
+        assert_held(directory.path());
+        assert_eq!(cut.observe(deadline()).await, expected);
+    }
+
+    // This panic was injected before spawning a child. Only the fixture,
+    // which never displaced native dispatch, can dismantle the parked owner.
+    release_fixture(cut.parked);
+    assert!(ProfileLease::acquire(directory.path(), PROFILE).is_ok());
 }
 
 fn database_bytes(path: &Path) -> [Option<Vec<u8>>; 4] {
@@ -470,6 +554,8 @@ async fn private_wss() {
         }
     );
     assert!(runner.finished());
+    assert!(!runner.snapshot().uncertain);
+    assert!(!report.requires_process_hold());
     until(|| !relay.runtime_socket_active(socket)).await;
     assert_eq!(relay.runtime_socket_end(socket), Some(SocketEnd::Raw));
     assert_eq!(transcript(), before_transcript);
