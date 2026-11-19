@@ -107,9 +107,12 @@ impl FollowUp<'_> {
         })
         .await;
         expect_no_pending_proof(self.socket, exact.selection).await;
-        assert_eq!(
-            peer_approve::client_request(self.socket, exact.selection).await,
-            Err(Failure::Unavailable),
+        assert!(
+            matches!(
+                peer_approve::client_request(self.socket, exact.selection).await,
+                Err(Failure::Unavailable | Failure::Uncertain)
+            ),
+            "the stopped Peer worker cannot acknowledge the original approval",
         );
 
         ordinary_command_bytes(
