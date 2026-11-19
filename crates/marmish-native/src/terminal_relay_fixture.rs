@@ -114,6 +114,18 @@ struct Connection {
     outgoing: mpsc::Sender<Value>,
 }
 
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DispatcherConnection {
+    pub(crate) peer_port: u16,
+    pub(crate) subscription: bool,
+    pub(crate) key_package: bool,
+}
+
 #[derive(Default)]
 struct State {
     mode: Mode,
@@ -133,6 +145,12 @@ struct State {
     connections: BTreeMap<usize, Connection>,
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     record_terminal_socket_ends: bool,
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    dispatcher_connections: Option<BTreeMap<usize, DispatcherConnection>>,
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     socket_ends: BTreeMap<usize, SocketEnd>,
     publication_limit: Option<usize>,
@@ -186,6 +204,18 @@ impl State {
                     "invalid: event size exceeds 65536 bytes"
                 };
                 self.observe(Observation::Write(event.id, kind, accepted));
+                #[cfg(all(
+                    marmish_peer_receiver_candidate,
+                    target_os = "linux",
+                    target_arch = "x86_64"
+                ))]
+                if accepted
+                    && kind == 30443
+                    && let Some(sockets) = &mut self.dispatcher_connections
+                    && let Some(socket) = sockets.get_mut(&connection)
+                {
+                    socket.key_package = true;
+                }
                 return Some(json!(["OK", event.id, accepted, reason]));
             }
         }
@@ -569,6 +599,20 @@ fn handle_message(
                 "fixture subscription bound"
             );
             subscriptions.push(subscription.clone());
+            #[cfg(all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            if filters.iter().any(|filter| {
+                filter["kinds"]
+                    .as_array()
+                    .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_u64() == Some(1059)))
+            }) && let Some(sockets) = &mut state.dispatcher_connections
+                && let Some(socket) = sockets.get_mut(&id)
+            {
+                socket.subscription = true;
+            }
             let account = account.unwrap();
             state.observe(Observation::Request(account, subscription.clone()));
             if state.recipient_fault == Some(RecipientFault::WrongLiveEose) {
@@ -1048,6 +1092,49 @@ impl Relay {
             .count()
     }
 
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) async fn record_dispatcher_connections(&self) {
+        timeout(STEP, async {
+            loop {
+                {
+                    let mut state = self.state.lock().unwrap();
+                    if state.connections.is_empty() {
+                        assert!(
+                            state
+                                .dispatcher_connections
+                                .replace(BTreeMap::new())
+                                .is_none()
+                        );
+                        state.record_terminal_socket_ends = true;
+                        return;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("qualification sockets closed before subprocess");
+    }
+
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn dispatcher_connections(&self) -> BTreeMap<usize, DispatcherConnection> {
+        self.state
+            .lock()
+            .unwrap()
+            .dispatcher_connections
+            .as_ref()
+            .unwrap()
+            .clone()
+    }
+
     pub(crate) fn qualification_connections(&self) -> usize {
         self.state.lock().unwrap().qualification_connections
     }
@@ -1208,11 +1295,22 @@ impl Relay {
             loop {
                 tokio::select! {
                     accepted = listener.accept() => {
-                        let (raw, _) = accepted.unwrap();
+                        let (raw, _remote) = accepted.unwrap();
                         assert!(peers.len() < MAX_CONNECTIONS, "fixture socket bound");
                         next += 1;
-                        if probe_limit.is_some() {
-                            worker_state.lock().unwrap().qualification_connections = next;
+                        {
+                            let mut state = worker_state.lock().unwrap();
+                            if probe_limit.is_some() {
+                                state.qualification_connections = next;
+                            }
+                            #[cfg(all(marmish_peer_receiver_candidate, target_os = "linux", target_arch = "x86_64"))]
+                            if let Some(sockets) = &mut state.dispatcher_connections {
+                                assert!(sockets.len() < MAX_CONNECTIONS, "dispatcher fixture accept bound");
+                                sockets.insert(next, DispatcherConnection {
+                                    peer_port: _remote.port(),
+                                    ..DispatcherConnection::default()
+                                });
+                            }
                         }
                         peers.spawn(serve_connection(raw, acceptor.clone(), worker_state.clone(), worker_url.clone(), next, probe_limit));
                     }

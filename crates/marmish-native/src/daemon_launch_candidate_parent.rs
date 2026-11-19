@@ -21,19 +21,78 @@ pub(crate) fn launch(executable: &Path, argv: &[OsString], log: File) -> Result<
     })
 }
 
-fn read_report(mut channel: UnixStream, end: Instant) -> Result<()> {
+pub(crate) fn spawn_fault_fixture(
+    executable: &Path,
+    argv: &[OsString],
+    log: File,
+    control: OwnedFd,
+) -> Result<(Child, UnixStream)> {
+    let (mut guard, channel) = spawn_child_with_stdio(
+        executable,
+        argv,
+        log,
+        CLEANUP_GRACE,
+        None,
+        None,
+        Stdio::from(control),
+    )?;
+    let child = guard
+        .child
+        .take()
+        .ok_or_else(|| failure("daemon child unavailable"))?;
+    Ok((child, channel))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReportEdge {
+    Ready,
+    Ack,
+    Commit,
+    PostAckClosed,
+}
+
+pub(crate) fn observe_fault_report(
+    channel: UnixStream,
+    end: Instant,
+    observe: impl FnMut(ReportEdge),
+) -> Result<()> {
+    read_report_observed(channel, end, observe)
+}
+
+fn read_report(channel: UnixStream, end: Instant) -> Result<()> {
+    read_report_observed(channel, end, |_| {})
+}
+
+fn read_report_observed(
+    mut channel: UnixStream,
+    end: Instant,
+    mut observe: impl FnMut(ReportEdge),
+) -> Result<()> {
     match read_byte(&mut channel, end)? {
         b'R' => {
+            observe(ReportEdge::Ready);
             let remaining = end
                 .checked_duration_since(Instant::now())
                 .filter(|remaining| !remaining.is_zero())
                 .ok_or_else(|| failure("daemon startup timed out; see daemon.log"))?;
             channel.set_write_timeout(Some(remaining.min(ACK_TIMEOUT)))?;
             channel.write_all(b"A")?;
-            if read_byte(&mut channel, end)? == b'C' {
-                Ok(())
-            } else {
-                Err(failure("daemon startup report invalid"))
+            observe(ReportEdge::Ack);
+            match read_byte_io(&mut channel, end) {
+                Ok(b'C') => {
+                    observe(ReportEdge::Commit);
+                    Ok(())
+                }
+                Ok(_) => Err(failure("daemon startup report invalid")),
+                Err(error) => {
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+                    ) {
+                        observe(ReportEdge::PostAckClosed);
+                    }
+                    Err(unavailable())
+                }
             }
         }
         b'F' => {
@@ -57,11 +116,24 @@ fn read_report(mut channel: UnixStream, end: Instant) -> Result<()> {
 }
 
 fn read_byte(channel: &mut UnixStream, end: Instant) -> Result<u8> {
+    read_byte_io(channel, end).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::TimedOut {
+            failure("daemon startup timed out; see daemon.log")
+        } else {
+            unavailable()
+        }
+    })
+}
+
+fn unavailable() -> Error {
+    failure("daemon startup unavailable or timed out; see daemon.log")
+}
+
+fn read_byte_io(channel: &mut UnixStream, end: Instant) -> std::io::Result<u8> {
     let mut byte = [0];
-    read_before(channel, &mut byte, end)
-        .map_err(|_| failure("daemon startup unavailable or timed out; see daemon.log"))?;
+    read_before(channel, &mut byte, end)?;
     if Instant::now() >= end {
-        return Err(failure("daemon startup timed out; see daemon.log"));
+        return Err(std::io::ErrorKind::TimedOut.into());
     }
     Ok(byte[0])
 }

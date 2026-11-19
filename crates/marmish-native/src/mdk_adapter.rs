@@ -1427,6 +1427,16 @@ impl MdkOwner {
     pub fn received_page(&self, after: Option<u64>, limit: usize) -> Result<Vec<ReceivedMessage>> {
         self.journal.received_page(after, limit)
     }
+    #[cfg(all(
+        test,
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn fixture_empty_command_recovery(&self) -> Result<bool> {
+        Ok(self.journal.command_recovery()?.is_empty())
+    }
+
     pub fn status(&self) -> Result<RuntimeStatus> {
         self.active_mode.admit()?;
         let (conversations, received, pending) = self.journal.status_counts()?;

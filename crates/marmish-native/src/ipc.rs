@@ -432,6 +432,17 @@ async fn exchange(path: &Path, request: &Request, timeout: Duration) -> Result<R
     .map_err(|_| Error::Timeout)?
 }
 
+#[cfg(all(
+    test,
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub(crate) async fn send_fault_fixture_status(stream: &mut UnixStream) -> Result<()> {
+    verify_peer(stream)?;
+    write_frame(stream, &Request::Status {}).await
+}
+
 pub(crate) async fn request(path: &Path, request: &Request) -> Result<Response> {
     exchange(path, request, Duration::from_secs(180)).await
 }
@@ -810,7 +821,14 @@ pub(crate) async fn serve_with_listener(
                     let response = match result {
                         #[cfg(marmish_peer_receiver_candidate)]
                         Ok(Ok(Request::PeerRead { .. })) => Response::failure(peer_read::UNAVAILABLE),
-                        Ok(Ok(Request::Status {})) => status.borrow().clone(),
+                        Ok(Ok(Request::Status {})) => {
+                            let response = status.borrow().clone();
+                            #[cfg(all(test, marmish_peer_receiver_candidate, target_os = "linux", target_arch = "x86_64"))]
+                            crate::daemon::registered::registered_loss::before_status_write(
+                                &response, fence.fatal.as_ref(), exchange_deadline,
+                            ).await;
+                            response
+                        }
                         Ok(Ok(request)) => {
                             let deadline = if short_exchange {exchange_deadline - Duration::from_millis(100)} else {tokio::time::Instant::now() + Duration::from_secs(150)};
                             let (respond, receiver) = oneshot::channel();

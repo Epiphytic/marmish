@@ -32,6 +32,26 @@ pub(crate) struct OwnerReport {
     pub(crate) fatal: bool,
 }
 
+#[cfg(all(test, marmish_peer_receiver_candidate))]
+impl OwnerReport {
+    pub(crate) fn fixture_physical(&self) -> [u8; 5] {
+        let report = self.physical;
+        [
+            report.engine,
+            report.runners,
+            report.sdk,
+            report.forwarder,
+            report.raw,
+        ]
+        .map(|barrier| match barrier {
+            Barrier::Pending => 0,
+            Barrier::Complete => 1,
+            Barrier::Incomplete => 2,
+            Barrier::PossiblyLive => 3,
+        })
+    }
+}
+
 #[must_use = "retain the exact owner and observe until its physical disposition is known"]
 pub(crate) struct HealthyStop {
     owner: ManuallyDrop<Box<MdkOwner>>,

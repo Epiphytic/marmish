@@ -110,7 +110,19 @@ impl ChildChannel {
                         ready!(Pin::new(&mut io).poll_read(cx, &mut read))
                             .map_err(|error| socket_error(fatal, error))?;
                         match read.filled() {
-                            b"A" => stage = Stage::Commit,
+                            b"A" => {
+                                #[cfg(all(
+                                    test,
+                                    marmish_peer_receiver_candidate,
+                                    target_os = "linux",
+                                    target_arch = "x86_64"
+                                ))]
+                                crate::daemon::registered::registered_loss::before_commit(
+                                    admission,
+                                    timeout.as_ref().deadline(),
+                                );
+                                stage = Stage::Commit;
+                            }
                             [] => return Poll::Ready(Err(Failure::ParentEof)),
                             _ => return Poll::Ready(Err(Failure::Acknowledgement)),
                         }

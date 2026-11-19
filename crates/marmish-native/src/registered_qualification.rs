@@ -155,6 +155,24 @@ fn run() -> Result<()> {
     let startup = StartupReporter::take_registered_from_env()?;
     marmish_engine::initialize_process_limits().map_err(|_| Error::Invalid("process_limits"))?;
     let inputs = arguments(std::env::args_os().skip(1))?;
+    run_with_inputs(startup, inputs)
+}
+
+#[cfg(all(
+    test,
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub(crate) fn run_fault_fixture(
+    startup: StartupReporter,
+    args: impl Iterator<Item = OsString>,
+) -> Result<()> {
+    marmish_engine::initialize_process_limits().map_err(|_| Error::Invalid("process_limits"))?;
+    run_with_inputs(Some(startup), arguments(args)?)
+}
+
+fn run_with_inputs(startup: Option<StartupReporter>, inputs: Inputs) -> Result<()> {
     let layout = installed(&inputs.daemon)?;
     let roots = inputs
         .ca

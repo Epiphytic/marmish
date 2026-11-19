@@ -309,6 +309,10 @@ async fn finite_dispatch(
     }
 }
 
+#[cfg(test)]
+#[path = "peer_daemon_registered_loss_tests.rs"]
+pub(crate) mod registered_loss;
+
 impl RegisteredOwner {
     async fn serve(
         &mut self,
@@ -341,6 +345,8 @@ impl RegisteredOwner {
         });
 
         admit(admission)?;
+        #[cfg(test)]
+        registered_loss::own_admission(admission);
         let (mut requests, status) = listener.start(&self.lease, &self.fatal)?;
         let fatal = &self.fatal;
         let mut interrupt = |cx: &mut Context<'_>| {
@@ -375,7 +381,11 @@ impl RegisteredOwner {
             let _commit = channel
                 .exchange(admission, fatal, interrupt)
                 .await
-                .map_err(|failure| report_failure(failure, listener))?;
+                .map_err(|failure| {
+                    #[cfg(test)]
+                    registered_loss::readiness_failure(failure);
+                    report_failure(failure, listener)
+                })?;
         } else {
             let reason = poll_fn(|cx| std::task::Poll::Ready(interrupt(cx))).await;
             if let Some(reason) = reason {
@@ -642,6 +652,12 @@ async fn finish(
                 }
             }
             crate::diagnostics::event("registered_shutdown", "owned_stop_failed");
+            #[cfg(test)]
+            registered_loss::before_fatal_exit(
+                &owner,
+                matches!(listener.outcome.as_ref(), Some(Ok(Ok(())))),
+                owner.fatal,
+            );
             std::mem::forget((custody, listener, stop));
             std::process::exit(1);
         }

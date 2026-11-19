@@ -82,6 +82,24 @@ impl StartupReporter {
         Self::take_inherited_channel().map(Some)
     }
 
+    #[cfg(all(
+        test,
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn claim_fault_fixture() -> Result<(Self, UnixStream)> {
+        validate_channel(libc::STDIN_FILENO)?;
+        validate_channel(CHANNEL_FD)?;
+        set_cloexec(libc::STDIN_FILENO)?;
+        set_cloexec(CHANNEL_FD)?;
+        // SAFETY: the exact private subprocess entry uniquely claims both
+        // inherited channels and does not scan other libtest descriptors.
+        let control = unsafe { UnixStream::from_raw_fd(libc::STDIN_FILENO) };
+        let report = unsafe { UnixStream::from_raw_fd(CHANNEL_FD) };
+        Ok((Self(Arc::new(Mutex::new(Some(report)))), control))
+    }
+
     fn take_inherited_channel() -> Result<Self> {
         validate_channel(CHANNEL_FD)?;
         set_cloexec(CHANNEL_FD)?;
@@ -319,6 +337,26 @@ fn spawn_child_with_marker(
     child_mask: Option<libc::sigset_t>,
     marker: &str,
 ) -> Result<(OwnedChild, UnixStream)> {
+    spawn_child_with_stdio(
+        executable,
+        argv,
+        log,
+        grace,
+        child_mask,
+        Some(marker),
+        Stdio::null(),
+    )
+}
+
+fn spawn_child_with_stdio(
+    executable: &Path,
+    argv: &[OsString],
+    log: File,
+    grace: Duration,
+    child_mask: Option<libc::sigset_t>,
+    marker: Option<&str>,
+    stdin: Stdio,
+) -> Result<(OwnedChild, UnixStream)> {
     let (parent, child) = UnixStream::pair()?;
     set_cloexec(parent.as_raw_fd())?;
     set_cloexec(child.as_raw_fd())?;
@@ -332,10 +370,14 @@ fn spawn_child_with_marker(
     let child = unsafe { OwnedFd::from_raw_fd(reserved) };
     let child_fd = child.as_raw_fd();
     let mut command = Command::new(executable);
+    if let Some(marker) = marker {
+        command.env(MARKER, marker);
+    } else {
+        command.env_remove(MARKER);
+    }
     command
         .args(argv)
-        .env(MARKER, marker)
-        .stdin(Stdio::null())
+        .stdin(stdin)
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log));
     // SAFETY: only async-signal-safe libc calls; no allocation, locks or Rust runtime.
