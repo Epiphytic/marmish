@@ -7,7 +7,7 @@ use tokio::{
 };
 
 const PROBE_CONNECTIONS: usize = 4;
-const PROVISIONAL_HOLD: Duration = Duration::from_millis(150);
+const PROVISIONAL_HOLD: Duration = Duration::from_secs(2);
 
 async fn eventually(label: &'static str, predicate: impl Fn() -> bool) {
     timeout(WAIT, async {
@@ -62,10 +62,17 @@ async fn recipient_live(peer: &Relay, signer: PublicKey, round: usize) -> usize 
 }
 
 async fn unavailable(socket: &Path) {
-    assert!(matches!(
-        peer_read::client_request(socket, peer_read::Request::List {}).await,
-        Err(peer_read::Failure::Unavailable)
-    ));
+    let reply = ipc::request(
+        socket,
+        &ipc::Request::PeerRead {
+            request: peer_read::Request::List {},
+        },
+    )
+    .await
+    .expect("same-UID Peer read response");
+    assert!(!reply.ok);
+    assert!(reply.result.is_none());
+    assert_eq!(reply.error.as_deref(), Some("peer_unavailable"));
 }
 
 async fn command_after_loss(
@@ -118,6 +125,7 @@ async fn fresh_passive_recipient() {
     ordinary.ordinary(signer);
     ordinary.ordinary(command.public());
     let socket = lease.socket_path();
+    let cursor = lease.root().join("peer/cursor.db");
     let ca = root.path().join("fixture-root.der");
     write_private(&ca, ordinary.qualification_ca());
     let mut args = arguments(&daemon, root.path(), &ordinary, &ca);
@@ -126,11 +134,13 @@ async fn fresh_passive_recipient() {
 
     let (mut refused, report, _) = provisional(&example, &args, root.path()).await;
     no_recipient_dial(&peer, signer);
+    assert!(!cursor.try_exists().unwrap());
     drop(report);
     assert!(!refused.finished().await.success());
     assert!(!socket.exists());
     assert!(ProfileLease::acquire_ready(root.path(), PROFILE).is_ok());
     no_recipient_dial(&peer, signer);
+    assert!(!cursor.try_exists().unwrap());
 
     let (mut child, mut report, readiness) = provisional(&example, &args, root.path()).await;
     no_recipient_dial(&peer, signer);
@@ -143,6 +153,7 @@ async fn fresh_passive_recipient() {
     let held = Instant::now();
     tokio::time::sleep(PROVISIONAL_HOLD).await;
     no_recipient_dial(&peer, signer);
+    assert!(!cursor.try_exists().unwrap());
     let hold_time = held.elapsed();
     let begin = Instant::now();
     timeout(STEP, report.write_all(b"A"))
@@ -156,6 +167,7 @@ async fn fresh_passive_recipient() {
     drop(report);
     wait_active(&mut child, &socket).await;
     let background_peer = recipient_live(&peer, signer, 1).await;
+    assert!(std::fs::metadata(&cursor).unwrap().len() > 0);
     let peer_startup = begin.elapsed();
     unavailable(&socket).await;
 

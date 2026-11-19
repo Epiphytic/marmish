@@ -1042,7 +1042,7 @@ async fn ordinary_command_with_inventory(
         }
     }
 
-    let LocalResult::Invocations { entries, .. } = request(
+    let LocalResult::Invocations { entries, next } = request(
         socket,
         &Request::CommandInvocations {
             after: None,
@@ -1054,6 +1054,7 @@ async fn ordinary_command_with_inventory(
         panic!("ordinary invocation inventory");
     };
     assert_eq!(entries.len(), expected_count);
+    assert!(next.is_none(), "complete ordinary invocation inventory");
     let entry = entries
         .iter()
         .find(|entry| entry.handle == handle)

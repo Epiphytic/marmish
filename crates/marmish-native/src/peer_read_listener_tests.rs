@@ -327,6 +327,7 @@ async fn passive_registration_checks_kernel_path_and_stops_on_drop() {
     use crate::ipc::PassiveRegistration;
 
     let directory = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let actual = directory.path().join("daemon.sock");
     let listener = bind(&actual).unwrap();
     let (startup, registration, worker) = peer_candidate_startup::pair();
