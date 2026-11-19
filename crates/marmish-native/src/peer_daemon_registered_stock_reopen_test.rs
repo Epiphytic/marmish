@@ -47,7 +47,7 @@ pub(super) fn run() {
             let mut input = [0];
             let result = std::io::stdin().read_exact(&mut input);
             let _ = stop.send(());
-            assert!(result.is_ok() && input == [b'S'], "stock child stop byte");
+            assert!(result.is_ok() && input == *b"S", "stock child stop byte");
         });
         let fixture = PeerFixture {
             bootstrap: None,
@@ -63,14 +63,14 @@ pub(super) fn run() {
 }
 
 fn fs_read_fixture_ca(path: &Path) -> CertificateDer<'static> {
-    let bytes = OpenOptions::new()
+    let mut bytes = Vec::new();
+    OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
         .open(path)
         .unwrap()
         .take(16 * 1024 + 1)
-        .bytes()
-        .collect::<std::io::Result<Vec<_>>>()
+        .read_to_end(&mut bytes)
         .unwrap();
     assert!((1..=16 * 1024).contains(&bytes.len()));
     CertificateDer::from(bytes)
