@@ -340,6 +340,7 @@ pub(super) async fn run<'profile>(
     assert_eq!(ack.is_some(), wake);
     let retry = stored.fixture_retry_at().unwrap();
     assert!(retry > wall());
+    assert_eq!(stored.is_due(retry), !wake);
     if let Some((delivery, prior, other, unrelated)) = related {
         assert_eq!(
             owner
@@ -361,13 +362,14 @@ pub(super) async fn run<'profile>(
         if case == "positive" {
             let (due, revision, parent) = matching;
             assert!(u64::try_from(ack).unwrap() <= due && due < prior.0);
+            let due = i64::try_from(due).unwrap();
+            assert_eq!(state[2..4], [due, due]);
             assert!(prior.1 < revision);
             assert_eq!(parent, prior.2);
         } else {
             assert_eq!(matching, prior);
             assert_eq!(state[..2], floors[..2]);
-            assert_eq!(state[2], floors[2]);
-            assert_eq!(state[3], ack);
+            assert_eq!(state[2..4], [ack, ack]);
             if let Some(wake_wall) = wake_clock {
                 assert!(u64::try_from(state[3]).unwrap() < wake_wall);
             }
@@ -400,7 +402,8 @@ pub(super) async fn run<'profile>(
             .fixture_delivery_state(&owner.source)
             .unwrap();
         assert_eq!(state[..2], floors[..2]);
-        assert_eq!(state[2], floors[2]);
+        let reserved = i64::try_from(retry.checked_sub(60).unwrap()).unwrap();
+        assert_eq!(state[2..4], [reserved, reserved]);
         assert_eq!(state[4..], floors[4..]);
     }
     assert_eq!(
