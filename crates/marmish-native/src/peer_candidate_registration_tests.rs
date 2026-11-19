@@ -155,6 +155,12 @@ fn candidate_native_owner_startup_qualification() {
     ]);
 }
 
+#[test]
+#[ignore = "fresh process with real registered Command owner and VFS displacement"]
+fn candidate_native_owner_active_cut_qualification() {
+    run_registration_cases(&["owner_startup_active_cut"]);
+}
+
 fn run_registration_cases(modes: &[&str]) {
     for &mode in modes {
         let root = start_profile_with_account(mode != "owner_startup_cut_lifecycle_write");

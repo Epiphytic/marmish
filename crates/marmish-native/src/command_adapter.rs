@@ -111,11 +111,14 @@ impl MdkOwner {
     }
 
     pub(super) fn command_forget_and_confirm(&mut self, group: &GroupId) -> Result<()> {
+        self.active_mode.admit()?;
         if self.journal.command_room(group.as_slice())?.is_some() {
             self.revoke_owned_command_room(group)?;
         }
+        self.active_mode.admit()?;
         self.remove_owned_route(group);
         mdk(self.runtime.forget_group_local(group))?;
+        self.active_mode.admit()?;
         let pending = self
             .storage
             .list_pending_application_events()
