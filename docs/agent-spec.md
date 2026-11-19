@@ -131,6 +131,14 @@ candidate Command worker. Linux AMD64 tests exercised real SQLCipher
 handle refusal and worker cleanup. Live dispatcher displacement and
 installed shutdown remain separate integration checks.
 
+The [healthy registered daemon proof](validation/peer-candidate-registered-daemon-healthy.md)
+exercises a private Linux AMD64 Client startup through its Unix readiness
+handshake, a finite binary-safe remote Command over Marmot, and graceful
+shutdown with an independent stock SQLCipher reopen. The private
+qualification example runs against a verified installed layout. Started
+local Command engines, registered dispatcher loss and the installed Peer
+actor need their own live proofs.
+
 **CI execution direction (2026-11-13):** prefer Epiphytic self-hosted runners;
 do not launch GitHub-hosted qualification as an implicit fallback. The
 [self-hosted migration plan](phases/self-hosted-ci.md) preserves the earlier
