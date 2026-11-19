@@ -84,12 +84,14 @@ async fn prove() {
     assert!(!service.cleanup_observation_pending());
     let mut engine = service.take_engine_for_stop().unwrap();
     assert!(!engine.observation_pending());
-    let result = tokio::task::spawn_blocking(move || {
-        engine.stop_outcome(Clock::now() + Duration::from_secs(3))
+    let (result, joined) = tokio::task::spawn_blocking(move || {
+        let result = engine.stop_outcome(Clock::now() + Duration::from_secs(3));
+        (result, engine.worker_joined())
     })
     .await
-    .unwrap()
     .unwrap();
+    let result = result.unwrap();
+    assert!(joined, "real engine worker was joined");
     assert!(matches!(result, StopOutcome::Ordinary(report) if report.complete && report.quiesced));
     peer.stop_fixture_server(owner).await;
     relay.stop().await;
