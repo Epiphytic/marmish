@@ -186,6 +186,7 @@ enum ServerCommand {
     List,
     /// Show a current Pending enrollment by its exact selector.
     Show(ServerSelectionArgs),
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     /// Record local approval for an exact Pending enrollment.
     #[command(
         long_about = "Record local approval for an exact Pending enrollment. If the result is operation_uncertain, reissue the identical selection. A daemon restart can briefly return busy or peer_unavailable. A later refusal cannot resolve an earlier uncertain result."
@@ -208,8 +209,8 @@ struct ServerSelectionArgs {
 
 #[cfg(marmish_peer_receiver_candidate)]
 impl ServerSelectionArgs {
-    fn selection(&self) -> std::result::Result<ipc::peer_approve::Selection, clap::Error> {
-        ipc::peer_approve::Selection::parse(
+    fn selection(&self) -> std::result::Result<ipc::peer_read::Selection, clap::Error> {
+        ipc::peer_read::Selection::parse(
             &self.server,
             &self.offer_id,
             &self.revision,
@@ -227,7 +228,8 @@ impl ServerSelectionArgs {
 #[cfg(marmish_peer_receiver_candidate)]
 enum ServerRequest {
     Read(ipc::peer_read::Request),
-    Approve(ipc::peer_approve::Selection),
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    Approve(ipc::peer_read::Selection),
 }
 
 #[derive(Subcommand)]
@@ -615,6 +617,7 @@ async fn run(
         };
         let request = match request {
             ServerRequest::Read(request) => *request,
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
             ServerRequest::Approve(selection) => {
                 return match ipc::peer_approve::client_request(&socket, *selection).await {
                     Ok(()) => {
@@ -1613,6 +1616,7 @@ fn candidate_client_matches(
         ServerCommand::Show(args) => ServerRequest::Read(Request::Show {
             selection: args.selection()?,
         }),
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         ServerCommand::Approve(args) => ServerRequest::Approve(args.selection()?),
     };
     Ok((matches, Some(request)))
@@ -2307,13 +2311,18 @@ mod tests {
                 if selection.server == founder && selection.generation == 3
                     && selection.offer_id == [0xab; 16] && selection.revision == [0xcd; 32]
         ));
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         assert!(matches!(
             parse("approve", &npub, &offer, &revision, "3").unwrap().command,
             Some(FrontendCommand::Servers(ServerRequest::Approve(selection)))
                 if selection.server == founder && selection.generation == 3
                     && selection.offer_id == [0xab; 16] && selection.revision == [0xcd; 32]
         ));
-        for action in ["show", "approve"] {
+        for action in [
+            "show",
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            "approve",
+        ] {
             for invalid in [
                 parse(action, &npub.to_ascii_uppercase(), &offer, &revision, "3"),
                 parse(action, "founder-alias", &offer, &revision, "3"),
@@ -2350,24 +2359,27 @@ mod tests {
             assert!(help.to_string().contains(flag));
         }
 
-        let help = public(&["marmish", "servers", "approve", "--help"])
-            .err()
-            .unwrap();
-        assert_eq!(usage_exit_code(&help), 0);
-        let help = help
-            .to_string()
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        for text in [
-            "--server",
-            "--offer-id",
-            "--revision",
-            "--generation",
-            "operation_uncertain, reissue the identical selection",
-            "A later refusal cannot resolve an earlier uncertain result",
-        ] {
-            assert!(help.contains(text));
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        {
+            let help = public(&["marmish", "servers", "approve", "--help"])
+                .err()
+                .unwrap();
+            assert_eq!(usage_exit_code(&help), 0);
+            let help = help
+                .to_string()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            for text in [
+                "--server",
+                "--offer-id",
+                "--revision",
+                "--generation",
+                "operation_uncertain, reissue the identical selection",
+                "A later refusal cannot resolve an earlier uncertain result",
+            ] {
+                assert!(help.contains(text));
+            }
         }
     }
 
