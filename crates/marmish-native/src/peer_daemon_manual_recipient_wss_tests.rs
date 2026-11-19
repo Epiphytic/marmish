@@ -66,15 +66,16 @@ async fn pending(
     assert_eq!(entry.state, State::Pending);
     assert_eq!(entry.expires_at, delivered.pending_expires_at);
     assert!(entry.held_at < entry.expires_at);
-    assert_eq!(
+    assert!(
         client_request(
             socket,
             Request::Show {
                 selection: entry.selection
             }
         )
-        .await,
-        Ok(Reply::Show { entry }),
+        .await
+            == Ok(Reply::Show { entry }),
+        "exact Pending Show",
     );
     let mut wrong = entry.selection.offer_id;
     wrong[0] ^= 1;
@@ -82,9 +83,10 @@ async fn pending(
         offer_id: wrong,
         ..entry.selection
     };
-    assert_eq!(
-        client_request(socket, Request::Show { selection: wrong }).await,
-        Err(Failure::Unavailable),
+    assert!(
+        client_request(socket, Request::Show { selection: wrong }).await
+            == Err(Failure::Unavailable),
+        "unrelated Pending Show refused",
     );
     Some(entry)
 }
@@ -271,7 +273,10 @@ async fn mounted(measure_near_cap: bool) {
     let mut cold_lease = ProfileLease::acquire_ready(root.path(), PROFILE).unwrap();
     let near_cap = measure_near_cap.then(|| {
         let cold_identity = material(&mut cold_lease, &daemon);
-        assert_eq!(cold_identity.public_key(), signer);
+        assert!(
+            cold_identity.public_key() == signer,
+            "same prepared identity"
+        );
         let mut wrong = exact;
         wrong.selection.offer_id[0] ^= 1;
         assert!(matches!(
@@ -311,7 +316,7 @@ async fn mounted(measure_near_cap: bool) {
     if measure_near_cap && cold_entry.is_none() {
         RefreshLog::new(cold_log.try_clone().unwrap()).report_cold_failure();
     }
-    assert_eq!(cold_entry, Some(exact), "exact cold Pending projection");
+    assert!(cold_entry == Some(exact), "exact cold Pending projection");
     let cold_pending = clock.elapsed();
     let mut qualification_passed = true;
     if let Some(stage) = &near_cap {
