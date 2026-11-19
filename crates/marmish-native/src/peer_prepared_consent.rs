@@ -412,6 +412,9 @@ impl Checkpoint {
             return Err(CursorError::Stale.into());
         }
         let candidate = Candidate::read(&tx, binding, account, offer)?;
+        if managed && wall >= candidate.artifact.expires {
+            return Err(Error::Expired);
+        }
         let result = work(&tx, candidate, &origins, &epoch)?;
         if purpose == PreparedUse::ManagedRead {
             return Ok(result);

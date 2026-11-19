@@ -14,7 +14,30 @@ pub(in crate::peer_invitation) enum PublicationOutcome {
     Settled,
 }
 
+impl CheckedAck<'_> {
+    pub(in crate::peer_invitation) fn fixture_at_attempt_deadline(
+        mut self,
+        attempt: &Attempt,
+        origin: &str,
+    ) -> consent_checkpoint::Result<u64> {
+        self.wall = attempt.deadline();
+        self.exact_attempt(attempt, origin)
+    }
+}
+
 impl PeerRecipientPort {
+    pub(in crate::peer_invitation) fn fixture_late_acknowledgement(
+        &mut self,
+        mut ack: Acknowledgement,
+    ) -> Result<()> {
+        // Preserve the genuinely received receipt and its socket identity.
+        // Move only the test deadline to the current physical clock.
+        ack.deadline = self.check_observation()?.1;
+        self.use_accepted(&ack, |_| {
+            panic!("expired acknowledgement reached its callback")
+        })
+    }
+
     pub(in crate::peer_invitation) async fn fixture_publish_managed_attempt(
         &mut self,
         attempt: &Attempt,

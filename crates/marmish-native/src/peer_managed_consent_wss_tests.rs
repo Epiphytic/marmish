@@ -1,3 +1,5 @@
+use std::os::unix::fs::FileExt as _;
+
 use super::*;
 use crate::{
     command_config::CommandConfig,
@@ -16,7 +18,7 @@ const ACK_CASE: &str = "MARMISH_MANAGED_CONSENT_ACK_CASE";
 #[test]
 #[ignore = "opt-in registered SQLCipher and genuine checked private WSS ACK"]
 fn managed_consent_checked_ack_is_exact_and_single_use() {
-    for case in ["settle", "replay", "stale"] {
+    for case in ["settle", "replay", "stale", "guards", "stop"] {
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--ignored",
@@ -74,6 +76,8 @@ async fn managed_consent_ack_child() {
     let mut registered = registered.attach(&lease, &material).unwrap();
     let (quota, mut route) = registered.actor_parts();
     let mut owner = RecoveredOwner::open_registered(&lease, &material, quota, &mut route).unwrap();
+    let mut foreign = (case == "guards")
+        .then(|| RecoveredOwner::open_registered(&lease, &material, quota, &mut route).unwrap());
     let token = route.take_route(&lease, &material).unwrap();
     let (admission, _) = ReceiverRouteAdmission::registered(token).unwrap();
     let deadline = || tokio::time::Instant::now() + Duration::from_secs(15);
@@ -114,11 +118,12 @@ async fn managed_consent_ack_child() {
     startup.ordinary_ready();
     listener.registered();
     let ready = worker.ready().await.unwrap();
+    let stopped = Arc::new(AtomicBool::new(false));
     let fresh_window = |port: &mut PeerRecipientPort| {
         port.use_current_native(|scope| {
             scope.window(
                 ready.readiness(),
-                Arc::new(AtomicBool::new(false)),
+                Arc::clone(&stopped),
                 offer.flight.flight().expires_at,
             )
         })
@@ -154,6 +159,43 @@ async fn managed_consent_ack_child() {
     let stage = lease.root().join("peer/provisional-unknown.db");
     let cursor = lease.root().join("peer/cursor.db");
     let original = fs::read(&stage).unwrap();
+    let last = original.len() - 1;
+    let drift = |changed| {
+        let byte = original[last] ^ u8::from(changed);
+        OpenOptions::new()
+            .write(true)
+            .open(&stage)
+            .unwrap()
+            .write_all_at(&[byte], u64::try_from(last).unwrap())
+            .unwrap();
+    };
+    if let Some(foreign) = &mut foreign {
+        let before = fs::read(&cursor).unwrap();
+        let floors = owner.checkpoint.consent_fixture_clocks();
+        let queued = owner
+            .checkpoint
+            .read_managed_queued(&owner.source, account, url, selector, wall())
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            foreign.checkpoint.reserve_managed_consent(
+                &foreign.source,
+                queued,
+                &proof,
+                wall(),
+                || panic!("foreign reserve reached commit")
+            ),
+            Err(CheckpointError::Package)
+        ));
+        drift(true);
+        assert!(matches!(
+            owner.managed_before_flush(quota, &turn),
+            Err(Error::StageIdentityMismatch)
+        ));
+        drift(false);
+        assert_eq!(owner.checkpoint.consent_fixture_clocks(), floors);
+        assert_eq!(fs::read(&cursor).unwrap(), before);
+    }
 
     let flush_started = Instant::now();
     let ControlOutcome::Accepted(ack) = port
@@ -234,6 +276,53 @@ async fn managed_consent_ack_child() {
         assert!(replay.is_err());
         assert_eq!(owner.checkpoint.consent_fixture_clocks(), floors);
         assert_eq!(fs::read(&cursor).unwrap(), after);
+    } else if case == "stop" {
+        let before = fs::read(&cursor).unwrap();
+        let floors = owner.checkpoint.consent_fixture_clocks();
+        owner.managed_before_flush(quota, &turn).unwrap();
+        stopped.store(true, std::sync::atomic::Ordering::Release);
+        assert!(owner.managed_before_flush(quota, &turn).is_err());
+        assert!(
+            port.use_accepted(&ack, |view| owner.settle_managed_consent(quota, turn, view))
+                .unwrap()
+                .is_err()
+        );
+        assert_eq!(owner.checkpoint.consent_fixture_clocks(), floors);
+        assert_eq!(fs::read(&cursor).unwrap(), before);
+    } else if case == "guards" {
+        let foreign = foreign.as_mut().unwrap();
+        let before = fs::read(&cursor).unwrap();
+        let floors = owner.checkpoint.consent_fixture_clocks();
+        let foreign_ack = port
+            .use_accepted(&ack, |view| {
+                foreign.checkpoint.settle_managed_consent(
+                    &foreign.source,
+                    turn.attempt(),
+                    view,
+                    || panic!("foreign ACK reached commit"),
+                )
+            })
+            .unwrap();
+        assert!(matches!(foreign_ack, Err(CheckpointError::LocalOwner)));
+        assert_eq!(
+            port.use_accepted(&ack, |view| view
+                .fixture_at_attempt_deadline(turn.attempt(), url))
+                .unwrap(),
+            Err(CheckpointError::Expired)
+        );
+        drift(true);
+        assert!(matches!(
+            port.use_accepted(&ack, |view| owner.settle_managed_consent(quota, turn, view))
+                .unwrap(),
+            Err(Error::StageIdentityMismatch)
+        ));
+        drift(false);
+        assert_eq!(owner.checkpoint.consent_fixture_clocks(), floors);
+        assert_eq!(fs::read(&cursor).unwrap(), before);
+        assert_eq!(
+            port.fixture_late_acknowledgement(ack),
+            Err(crate::peer_invitation::socket::Failure::Deadline)
+        );
     } else {
         let queued = owner
             .checkpoint
