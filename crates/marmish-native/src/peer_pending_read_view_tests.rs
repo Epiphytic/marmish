@@ -421,3 +421,37 @@ fn refresh_retains_prior_until_exact_refusal_or_replacement() {
     assert!(producer.begin(false, || None).is_none());
     assert!(query(&reader, LIST, current).is_none());
 }
+
+#[cfg(marmish_peer_receiver_candidate)]
+#[test]
+fn refresh_timing_uses_actual_admission_and_reports_both_prior_deadlines() {
+    use crate::diagnostics::pending_refresh::Clocks;
+
+    let (producer, _) = pair(generation()).unwrap();
+    let start = origin(Instant::now());
+    let later = |monotonic_ms, continuous_ms| ClockOrigin {
+        monotonic: start.monotonic + Duration::from_millis(monotonic_ms),
+        continuous: start.continuous + Duration::from_millis(continuous_ms),
+    };
+    let clocks = |monotonic_ms, continuous_ms| {
+        Some(Clocks {
+            monotonic_ns: monotonic_ms * 1_000_000,
+            continuous_ns: continuous_ms * 1_000_000,
+        })
+    };
+    let row = entry();
+    let admit = |started, admitted| {
+        let ticket = producer.begin(false, || Some(started)).unwrap();
+        producer.publish_timed(ticket, observation(Some(row)), at(admitted, FLOOR))
+    };
+
+    let first = admit(start, later(200, 300)).unwrap();
+    assert_eq!(first.age(), clocks(200, 300));
+    assert!(admit(later(500, 500), later(600, 1_500)).is_none());
+    let second = admit(later(800, 900), later(970, 1_110)).unwrap();
+    assert_eq!(second.age(), clocks(170, 210));
+    assert_eq!(second.gap(first), clocks(770, 810));
+    assert_eq!(second.prior_slack(first), clocks(30, -110));
+    assert!(first.gap(second).is_none());
+    assert!(first.prior_slack(second).is_none());
+}

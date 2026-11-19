@@ -60,6 +60,48 @@ impl ClockOrigin {
     }
 }
 
+/// Timing from an already admitted view. It carries no ticket or authority.
+#[derive(Clone, Copy)]
+pub(crate) struct AcceptedTiming {
+    origin: ClockOrigin,
+    admission: ClockOrigin,
+}
+
+#[cfg(marmish_peer_receiver_candidate)]
+impl AcceptedTiming {
+    pub(crate) fn age(self) -> Option<crate::diagnostics::pending_refresh::Clocks> {
+        self.admission.elapsed(self.origin)
+    }
+
+    pub(crate) fn gap(self, prior: Self) -> Option<crate::diagnostics::pending_refresh::Clocks> {
+        self.admission.elapsed(prior.admission)
+    }
+
+    pub(crate) fn prior_slack(
+        self,
+        prior: Self,
+    ) -> Option<crate::diagnostics::pending_refresh::Clocks> {
+        let elapsed = self.admission.elapsed(prior.origin)?;
+        let lifetime = crate::diagnostics::pending_refresh::nanos(LIFETIME);
+        Some(crate::diagnostics::pending_refresh::Clocks {
+            monotonic_ns: lifetime - elapsed.monotonic_ns,
+            continuous_ns: lifetime - elapsed.continuous_ns,
+        })
+    }
+}
+
+#[cfg(marmish_peer_receiver_candidate)]
+impl ClockOrigin {
+    fn elapsed(self, origin: Self) -> Option<crate::diagnostics::pending_refresh::Clocks> {
+        use crate::diagnostics::pending_refresh::{Clocks, nanos};
+
+        Some(Clocks {
+            monotonic_ns: nanos(self.monotonic.checked_duration_since(origin.monotonic)?),
+            continuous_ns: nanos(self.continuous.checked_sub(origin.continuous)?),
+        })
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Sample {
     time: ClockOrigin,
@@ -195,9 +237,9 @@ impl Producer {
         }
     }
 
-    pub(crate) fn publish_pending(&self, proof: PendingObservation) -> bool {
+    pub(crate) fn publish_pending(&self, proof: PendingObservation) -> Option<AcceptedTiming> {
         let (ticket, entry, verified_wall, wall_floor) = proof.into_parts();
-        self.publish(
+        self.publish_timed(
             ticket,
             Observation {
                 projection: Projection::Pending(entry),
@@ -227,17 +269,25 @@ impl Producer {
         })
     }
 
+    #[cfg(test)]
     fn publish(
         &self,
         ticket: Ticket,
         observation: Observation,
         sample: impl FnOnce() -> Option<Sample>,
     ) -> bool {
-        let Ok(mut inner) = self.0.view.lock() else {
-            return false;
-        };
+        self.publish_timed(ticket, observation, sample).is_some()
+    }
+
+    fn publish_timed(
+        &self,
+        ticket: Ticket,
+        observation: Observation,
+        sample: impl FnOnce() -> Option<Sample>,
+    ) -> Option<AcceptedTiming> {
+        let mut inner = self.0.view.lock().ok()?;
         if ticket.stamp != self.0.stamp(&inner) || matches!(inner.state, State::Stopped) {
-            return false;
+            return None;
         }
         let Some(sample) = sample().filter(|sample| {
             sample.time.fresh(ticket.origin)
@@ -245,7 +295,7 @@ impl Producer {
                 && observation.verified_wall >= observation.wall_floor
         }) else {
             inner.advance();
-            return false;
+            return None;
         };
         if let Some(entry) = observation.entry() {
             if entry.selection.generation == 0
@@ -253,24 +303,27 @@ impl Producer {
                 || entry.held_at > observation.verified_wall
             {
                 inner.advance();
-                return false;
+                return None;
             }
             if sample.wall >= entry.expires_at {
                 inner.expired = Some(entry.selection);
             }
             if inner.expired == Some(entry.selection) {
                 inner.advance();
-                return false;
+                return None;
             }
         }
         if !inner.advance() {
-            return false;
+            return None;
         }
         inner.state = State::Live(Published {
             origin: ticket.origin,
             observation,
         });
-        true
+        Some(AcceptedTiming {
+            origin: ticket.origin,
+            admission: sample.time,
+        })
     }
 }
 

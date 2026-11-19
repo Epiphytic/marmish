@@ -2,6 +2,8 @@
 
 use super::*;
 use crate::{
+    diagnostics::pending_refresh::{self, Outcome, Timing, nanos},
+    ipc::peer_read::pending_view::AcceptedTiming,
     peer_candidate_startup::Readiness,
     peer_invitation::{
         receiver_inventory::{
@@ -73,6 +75,7 @@ impl ManualService<'_, '_, '_> {
 
     async fn run(&mut self, readiness: Readiness) -> Result<(), Exit> {
         let mut schedule = Schedule::new(Instant::now());
+        let mut prior_publish = None;
         self.check()?;
         let mut ingress = Ingress::recover(
             self.owner,
@@ -168,8 +171,17 @@ impl ManualService<'_, '_, '_> {
             {
                 schedule.managed_retry = schedule.next(Instant::now());
             }
-            if schedule.tick(Instant::now()) && history_complete {
-                self.refresh(&readiness)?;
+            if let Some(tick) = schedule.tick(Instant::now())
+                && history_complete
+            {
+                let (result, outcome, accepted) = self.refresh(&readiness);
+                if pending_refresh::enabled() {
+                    pending_refresh::emit(tick.timing(outcome, accepted, prior_publish));
+                    if let Some(accepted) = accepted {
+                        prior_publish = Some(accepted);
+                    }
+                }
+                result?;
             }
         }
     }
@@ -258,11 +270,14 @@ impl ManualService<'_, '_, '_> {
         Ok(false)
     }
 
-    fn refresh(&mut self, readiness: &Readiness) -> Result<(), Exit> {
+    fn refresh(
+        &mut self,
+        readiness: &Readiness,
+    ) -> (Result<(), Exit>, Outcome, Option<AcceptedTiming>) {
         let Some(ticket) = self.producer.read_ticket() else {
-            return self.check();
+            return (self.check(), Outcome::TicketUnavailable, None);
         };
-        match self.owner.current_manual_pending(self.port) {
+        let (outcome, accepted) = match self.owner.current_manual_pending(self.port) {
             Ok(Some((selector, generation))) => {
                 let clock = PendingClock::Candidate {
                     readiness,
@@ -271,22 +286,28 @@ impl ManualService<'_, '_, '_> {
                 };
                 // A refused proof already refuses its exact ticket. The
                 // actual port, stop and forwarding are checked independently.
-                let _ = PendingTurn::observe_with_ticket(
+                match PendingTurn::observe_with_ticket(
                     self.owner,
                     self.lease,
                     self.port,
                     selector,
                     generation,
                     (clock, &self.producer, ticket),
-                );
+                ) {
+                    Ok(accepted) => (Outcome::Published, Some(accepted)),
+                    Err(_) => (Outcome::ProofRefused, None),
+                }
             }
-            Ok(None) => self.producer.refuse(ticket),
+            Ok(None) => {
+                self.producer.refuse(ticket);
+                (Outcome::NoPending, None)
+            }
             Err(_) => {
                 self.producer.refuse(ticket);
-                return Err(self.local_failure());
+                return (Err(self.local_failure()), Outcome::SelectionFailed, None);
             }
-        }
-        self.check()
+        };
+        (self.check(), outcome, accepted)
     }
 }
 
@@ -330,12 +351,45 @@ impl Schedule {
         now + (PERIOD - Duration::from_nanos(remainder as u64))
     }
 
-    fn tick(&mut self, now: Instant) -> bool {
+    fn tick(&mut self, now: Instant) -> Option<Tick> {
         if now < self.refresh {
-            return false;
+            return None;
         }
+        let overdue = now.duration_since(self.refresh).as_nanos();
+        let missed = overdue / PERIOD.as_nanos();
+        let lag = Duration::from_nanos((overdue % PERIOD.as_nanos()) as u64);
         self.refresh = self.next(now);
-        true
+        Some(Tick {
+            schedule_ns: nanos(now.duration_since(self.anchor) - lag),
+            start_lag_ns: nanos(lag),
+            missed_ticks: u64::try_from(missed).unwrap_or(u64::MAX),
+        })
+    }
+}
+
+struct Tick {
+    schedule_ns: i64,
+    start_lag_ns: i64,
+    missed_ticks: u64,
+}
+
+impl Tick {
+    fn timing(
+        self,
+        outcome: Outcome,
+        accepted: Option<AcceptedTiming>,
+        prior: Option<AcceptedTiming>,
+    ) -> Timing {
+        let pair = accepted.zip(prior);
+        Timing {
+            schedule_ns: self.schedule_ns,
+            start_lag_ns: self.start_lag_ns,
+            missed_ticks: self.missed_ticks,
+            outcome,
+            proof_age: accepted.and_then(AcceptedTiming::age),
+            publish_gap: pair.and_then(|(current, prior)| current.gap(prior)),
+            prior_slack: pair.and_then(|(current, prior)| current.prior_slack(prior)),
+        }
     }
 }
 
@@ -364,10 +418,17 @@ mod tests {
         let mut schedule = Schedule::new(origin);
         assert_eq!(schedule.live_deadline(origin, false), origin + PERIOD);
         assert_eq!(schedule.live_deadline(origin, true), origin + PROBE);
-        assert!(!schedule.tick(origin + PERIOD - Duration::from_millis(1)));
+        assert!(
+            schedule
+                .tick(origin + PERIOD - Duration::from_millis(1))
+                .is_none()
+        );
         let late = origin + Duration::from_millis(7_013);
-        assert!(schedule.tick(late));
-        assert!(!schedule.tick(late));
+        let tick = schedule.tick(late).unwrap();
+        assert_eq!(tick.schedule_ns, 7_000_000_000);
+        assert_eq!(tick.start_lag_ns, 13_000_000);
+        assert_eq!(tick.missed_ticks, 13);
+        assert!(schedule.tick(late).is_none());
         assert_eq!(schedule.refresh, origin + Duration::from_millis(7_500));
         assert_eq!(schedule.live_deadline(late, false), schedule.refresh);
     }

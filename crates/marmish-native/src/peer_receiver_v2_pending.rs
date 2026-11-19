@@ -19,7 +19,7 @@ use super::*;
 #[cfg(marmish_peer_receiver_candidate)]
 use crate::ipc::peer_read::{
     Entry,
-    pending_view::{Producer, Ticket},
+    pending_view::{AcceptedTiming, Producer, Ticket},
 };
 #[cfg(test)]
 use crate::peer_quota_vfs::dispatch::JoinMetrics;
@@ -361,6 +361,7 @@ impl<'turn, 'lease> PendingTurn<'turn, 'lease> {
             generation,
             (clock, producer, ticket),
         )
+        .map(|_| ())
     }
 
     #[cfg(marmish_peer_receiver_candidate)]
@@ -371,7 +372,7 @@ impl<'turn, 'lease> PendingTurn<'turn, 'lease> {
         selector: Selector,
         generation: u64,
         (clock, producer, ticket): (PendingClock<'_>, &Producer, Ticket),
-    ) -> Result<()> {
+    ) -> Result<AcceptedTiming> {
         let proof = Self::borrow(owner, lease)
             .and_then(|mut turn| turn.read_pending(port, selector, generation, clock));
         match proof {
@@ -382,7 +383,6 @@ impl<'turn, 'lease> PendingTurn<'turn, 'lease> {
                     verified_wall,
                     wall_floor,
                 })
-                .then_some(())
                 .ok_or(Error::Clock),
             Err(error) => {
                 producer.refuse(ticket);

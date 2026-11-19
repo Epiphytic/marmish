@@ -35,6 +35,16 @@ fn private_arguments_require_explicit_canonical_relay_policy() {
             .intent,
         QualificationIntent::ManualRecipient
     ));
+    let debug_manual =
+        arguments(args(&["--debug", "--manual-recipient"]).chain(args(&base))).unwrap();
+    assert!(debug_manual.debug);
+    assert!(matches!(
+        debug_manual.intent,
+        QualificationIntent::ManualRecipient
+    ));
+    assert!(!arguments(args(&base)).unwrap().debug);
+    assert!(arguments(args(&["--debug", "--debug"]).chain(args(&base))).is_err());
+    assert!(arguments(args(&base).chain(args(&["--debug"]))).is_err());
     assert!(arguments(args(&["--unknown"]).chain(args(&base))).is_err());
     assert!(
         arguments(args(&["--passive-recipient", "--passive-recipient"]).chain(args(&base)))

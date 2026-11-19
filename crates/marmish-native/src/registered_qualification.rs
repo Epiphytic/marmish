@@ -28,6 +28,7 @@ struct Inputs {
     policy: RelayPolicy,
     ca: Option<PathBuf>,
     intent: QualificationIntent,
+    debug: bool,
 }
 
 fn arguments(args: impl Iterator<Item = OsString>) -> Result<Inputs> {
@@ -36,6 +37,7 @@ fn arguments(args: impl Iterator<Item = OsString>) -> Result<Inputs> {
     }
 
     let mut args = args.peekable();
+    let debug = args.next_if(|arg| arg == "--debug").is_some();
     let intent = match args.peek().and_then(|arg| arg.to_str()) {
         Some("--passive-recipient") => QualificationIntent::PassiveRecipient,
         Some("--manual-recipient") => QualificationIntent::ManualRecipient,
@@ -87,6 +89,7 @@ fn arguments(args: impl Iterator<Item = OsString>) -> Result<Inputs> {
         policy,
         ca,
         intent,
+        debug,
     })
 }
 
@@ -168,6 +171,9 @@ fn run() -> Result<()> {
     let startup = StartupReporter::take_registered_from_env()?;
     marmish_engine::initialize_process_limits().map_err(|_| Error::Invalid("process_limits"))?;
     let inputs = arguments(std::env::args_os().skip(1))?;
+    if inputs.debug {
+        crate::diagnostics::enable();
+    }
     run_with_inputs(startup, inputs)
 }
 
