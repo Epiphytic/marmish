@@ -174,11 +174,8 @@ pub(crate) struct Binding {
 ))]
 impl Binding {
     #[cfg(test)]
-    pub(in crate::peer_invitation) fn fixture_unknown(
-        key: Selector,
-        origin: Origin,
-        count: u64,
-    ) -> Self {
+    #[allow(dead_code, reason = "not used by the standalone cursor fixture")]
+    pub(crate) fn fixture_unknown(key: Selector, origin: Origin, count: u64) -> Self {
         Self {
             key,
             origin,
