@@ -102,9 +102,12 @@ async fn managed_consent_ack_child() {
     let mut sender = Owner::open(&connector, url, founder.public_key(), &founder, deadline())
         .await
         .unwrap();
-    if matches!(case.as_str(), "ingress" | "ingress-bad-history") {
+    if matches!(
+        case.as_str(),
+        "ingress" | "ingress-bad-history" | "ingress-backlog"
+    ) {
         manual_ingress::exercise(manual_ingress::Fixture {
-            bad_history: case == "ingress-bad-history",
+            case: &case,
             relay: &relay,
             port: &mut port,
             sender: &mut sender,

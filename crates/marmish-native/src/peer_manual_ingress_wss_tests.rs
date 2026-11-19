@@ -10,7 +10,7 @@ use crate::{
 use super::*;
 
 pub(super) struct Fixture<'a, 'profile> {
-    pub(super) bad_history: bool,
+    pub(super) case: &'a str,
     pub(super) relay: &'a Relay,
     pub(super) port: &'a mut PeerRecipientPort,
     pub(super) sender: &'a mut Owner,
@@ -23,12 +23,17 @@ pub(super) struct Fixture<'a, 'profile> {
 #[test]
 #[ignore = "opt-in registered same-owner Manual ingress over genuine private WSS"]
 fn manual_ingress_attributes_history_and_live_on_one_private_port() {
-    run_cases(&["ingress", "ingress-bad-history", "ingress-delivery"]);
+    run_cases(&[
+        "ingress",
+        "ingress-bad-history",
+        "ingress-backlog",
+        "ingress-delivery",
+    ]);
 }
 
 pub(super) async fn exercise(fixture: Fixture<'_, '_>) {
     let Fixture {
-        bad_history,
+        case,
         relay,
         port,
         sender,
@@ -61,7 +66,11 @@ pub(super) async fn exercise(fixture: Fixture<'_, '_>) {
     };
     // Use four expired offers in the backfill window. The only allowed
     // founder may have only one live Offer, reserved for the live check.
-    let past = now - 86_405;
+    let past = if case == "ingress-backlog" {
+        now
+    } else {
+        now - 86_405
+    };
     let history = [
         offer(11, past),
         offer(12, past),
@@ -95,11 +104,34 @@ pub(super) async fn exercise(fixture: Fixture<'_, '_>) {
     )
     .unwrap();
     assert!(Ingress::recover(owner, port, readiness, stop.clone(), forwarding).is_err());
-    if bad_history {
-        // The oversized actual WSS response cannot establish checked EOSE or
-        // complete recovery, and the consumed port cannot be used for live.
-        relay.recipient_fault(RecipientFault::OversizedHistory);
-        assert!(ingress.history_turn(owner, port, deadline()).await.is_err());
+    if case != "ingress" {
+        let before_page = owner
+            .checkpoint
+            .fixture_delivery_state(&owner.source)
+            .unwrap();
+        if case == "ingress-bad-history" {
+            // The oversized actual WSS response cannot establish checked EOSE.
+            relay.recipient_fault(RecipientFault::OversizedHistory);
+        }
+        let outcome = ingress.history_turn(owner, port, deadline()).await;
+        if case == "ingress-backlog" {
+            use crate::peer_invitation::{receiver_inventory::Error, store::Error as CursorError};
+            assert!(matches!(
+                outcome,
+                Err(Error::Checkpoint(consent_checkpoint::Error::Cursor(
+                    CursorError::Backlog
+                )))
+            ));
+        } else {
+            assert!(outcome.is_err());
+        }
+        let after_page = owner
+            .checkpoint
+            .fixture_delivery_state(&owner.source)
+            .unwrap();
+        // No page revision or retry or custody row was advanced on either error.
+        assert_eq!(after_page[0], before_page[0]);
+        assert_eq!(&after_page[4..], &before_page[4..]);
         assert!(ingress.live_turn(owner, port, deadline()).await.is_err());
         assert_eq!(writes(), before + 4);
         return;
