@@ -161,7 +161,9 @@ macro_rules! native_installed_pending_fixture {
         mod installed_pending;
         use crate::peer_invitation::receiver_inventory::v2_pending::InstalledJoinedReadback;
         #[cfg(marmish_peer_receiver_candidate)]
-        pub(in crate::peer_invitation) use custody_schema::fixture_pending_stage;
+        pub(in crate::peer_invitation) use custody_schema::{
+            fixture_approval_pending_stage, fixture_pending_stage,
+        };
         #[cfg(marmish_peer_receiver_candidate)]
         pub(in crate::peer_invitation) use installed_pending::{
             ApprovalFailure, ApprovalGuard, ApprovalScope,

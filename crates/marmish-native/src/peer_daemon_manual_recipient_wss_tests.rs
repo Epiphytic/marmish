@@ -24,6 +24,9 @@ mod exact_copy_observation;
 #[path = "peer_daemon_manual_approval_reply_loss.rs"]
 mod approval_reply_loss;
 
+#[path = "peer_daemon_manual_later_offer.rs"]
+mod later_offer;
+
 async fn acknowledge(report: &mut UnixStream) {
     timeout(STEP, report.write_all(b"A"))
         .await
@@ -139,6 +142,7 @@ enum ManualCase {
     NearCap,
     Approve,
     ApproveReplyLost,
+    LaterOffer,
 }
 
 async fn expect_no_pending_proof(socket: &Path, selection: peer_read::Selection) {
@@ -195,7 +199,7 @@ async fn mounted(case: ManualCase) {
     let ca = root.path().join("fixture-root.der");
     write_private(&ca, ordinary.qualification_ca());
     let mut args = arguments(&daemon, root.path(), &ordinary, &ca);
-    let intent = if approve {
+    let intent = if approve || case == ManualCase::LaterOffer {
         "--manual-approval-recipient"
     } else {
         "--manual-recipient"
@@ -285,6 +289,28 @@ async fn mounted(case: ManualCase) {
     pending(&socket, &offered, &delivered, Instant::now() + STEP)
         .await
         .expect("installed listener still projects verified Pending");
+
+    if case == ManualCase::LaterOffer {
+        let follow_up = later_offer::FollowUp {
+            root: root.path(),
+            socket: &socket,
+            example: &example,
+            daemon: &daemon,
+            args: &args,
+            signer,
+            peer: &peer,
+            ordinary: &ordinary,
+            sender_socket: &sender_socket,
+        };
+        follow_up
+            .run(&mut child, &mut founder, &offered, &delivered, exact, argv)
+            .await;
+        sender_child.stop().await;
+        drop(founder);
+        peer.stop().await;
+        ordinary.stop().await;
+        return;
+    }
 
     if approve {
         use crate::ipc::peer_approve::{self, Failure};
@@ -559,6 +585,12 @@ fn installed_registered_manual_near_cap_refresh() {
 #[ignore = "opt-in local approval over matching installed Linux AMD64 packages and private WSS"]
 fn installed_registered_manual_approval_and_command() {
     run_native(LIMIT, || mounted(ManualCase::Approve));
+}
+
+#[test]
+#[ignore = "opt-in later Offer recovery with matching installed Linux AMD64 packages and private WSS"]
+fn installed_registered_manual_later_offer_preserves_pending() {
+    run_native(LIMIT, || mounted(ManualCase::LaterOffer));
 }
 
 struct ManualSchemaStartup<'a> {

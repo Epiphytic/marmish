@@ -487,16 +487,52 @@ pub(crate) fn fixture_pending_stage(
     tx: &Transaction<'_>,
     account: PublicKey,
     origin: Origin,
-    (key, generation, held_at, deadline): (Selector, u64, u64, u64),
+    selection: (Selector, u64, u64, u64),
 ) -> Result<(Binding, FileWitness)> {
-    Epoch(Kind::Installed(InstalledKind::V2)).verify(tx, account.to_bytes(), &[origin])?;
+    fixture_pending_stage_in(tx, account, origin, selection, InstalledKind::V2)
+}
+
+#[cfg(all(
+    test,
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[allow(
+    dead_code,
+    reason = "the standalone cursor target has no offline native stage"
+)]
+pub(crate) fn fixture_approval_pending_stage(
+    tx: &Transaction<'_>,
+    account: PublicKey,
+    origin: Origin,
+    selection: (Selector, u64, u64, u64),
+) -> Result<(Binding, FileWitness)> {
+    fixture_pending_stage_in(tx, account, origin, selection, InstalledKind::ApprovalV3)
+}
+
+#[cfg(all(
+    test,
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+fn fixture_pending_stage_in(
+    tx: &Transaction<'_>,
+    account: PublicKey,
+    origin: Origin,
+    (key, generation, held_at, deadline): (Selector, u64, u64, u64),
+    kind: InstalledKind,
+) -> Result<(Binding, FileWitness)> {
+    Epoch(Kind::Installed(kind)).verify(tx, account.to_bytes(), &[origin])?;
     let exact: bool = tx.query_row(
         "SELECT (SELECT count(*) FROM peer_pending_custody)=1
            AND (SELECT count(*) FROM peer_provisional_stage_v1)=1
            AND EXISTS(SELECT 1 FROM peer_pending_custody WHERE class=0
                AND generation=?1 AND account=?2 AND server=?3 AND offer_id=?4
                AND offer_revision=?5 AND origin=?6 AND held_at=?7
-               AND pending_deadline=?8 AND mode=0 AND state=2)",
+               AND pending_deadline=?8 AND mode=0 AND state=2
+               AND approval IS NULL AND activating_at IS NULL)",
         params![
             seconds(generation)?,
             account.to_bytes(),

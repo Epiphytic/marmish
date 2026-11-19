@@ -19,7 +19,7 @@ use crate::{
         socket::owner::Owner,
         store::consent_checkpoint::{
             Selector,
-            wire::{Codec, Consent, MAX_OUTER_BYTES, Offer},
+            wire::{Codec, Consent, Flight, MAX_OUTER_BYTES, Offer},
         },
     },
 };
@@ -43,7 +43,11 @@ impl Offered {
     }
 
     pub(super) fn carrier(&self) -> EventId {
-        self.0.flight().carrier_id
+        self.flight().carrier_id
+    }
+
+    pub(super) fn flight(&self) -> Flight {
+        self.0.flight()
     }
 }
 
@@ -58,6 +62,7 @@ impl Consented {
 pub(super) struct Delivered {
     pub(super) carrier: EventId,
     pub(super) pending_expires_at: u64,
+    pub(super) created_at: u64,
 }
 
 impl<'a> FounderFixture<'a> {
@@ -178,6 +183,7 @@ impl<'a> FounderFixture<'a> {
         Delivered {
             carrier: flight.carrier_id,
             pending_expires_at: expiry - HELD_EXPIRY_MARGIN,
+            created_at: flight.created_at,
         }
     }
 }

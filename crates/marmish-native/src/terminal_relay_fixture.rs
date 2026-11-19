@@ -254,6 +254,18 @@ impl DispatcherTranscript {
     }
 }
 
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+struct RecipientHistoryWatch {
+    socket: usize,
+    account: PublicKey,
+    event: String,
+    written: bool,
+}
+
 #[derive(Default)]
 struct State {
     mode: Mode,
@@ -281,6 +293,12 @@ struct State {
     dispatcher_connections: Option<BTreeMap<usize, DispatcherConnection>>,
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     socket_ends: BTreeMap<usize, SocketEnd>,
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    recipient_history_watch: Option<RecipientHistoryWatch>,
     publication_limit: Option<usize>,
     publications: Vec<Event>,
     observations: Vec<Observation>,
@@ -449,6 +467,45 @@ impl State {
             }
         }
         self.publications.push(event);
+    }
+}
+
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+impl State {
+    fn watches_recipient_history(&self, id: usize, replies: &[Value]) -> bool {
+        let Some(watch) = &self.recipient_history_watch else {
+            return false;
+        };
+        let connection = &self.connections[&id];
+        if watch.written || watch.socket != id || connection.account != Some(watch.account) {
+            return false;
+        }
+        let Some((end, events)) = replies.split_last() else {
+            return false;
+        };
+        let Some(subscription_id) = end[1].as_str().filter(|_| end[0] == "EOSE") else {
+            return false;
+        };
+        let Some(subscription) = connection
+            .subscriptions
+            .iter()
+            .find(|subscription| subscription.id == subscription_id)
+        else {
+            return false;
+        };
+        let mut lanes = RecipientRuntimeRequests::default();
+        lanes.record(subscription);
+        lanes.history == 1
+            && subscription.serves(7435, "#p", &json!(watch.account))
+            && events.iter().any(|event| {
+                event[0] == "EVENT"
+                    && event[1] == subscription_id
+                    && event[2]["id"] == watch.event.as_str()
+            })
     }
 }
 
@@ -969,8 +1026,25 @@ async fn serve_connection(
                     None => break,
                 },
             };
-            if state.lock().unwrap().connections[&id].retired {
-                break;
+            #[cfg(all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            let watched;
+            {
+                let state = state.lock().unwrap();
+                if state.connections[&id].retired {
+                    break;
+                }
+                #[cfg(all(
+                    marmish_peer_receiver_candidate,
+                    target_os = "linux",
+                    target_arch = "x86_64"
+                ))]
+                {
+                    watched = state.watches_recipient_history(id, &replies);
+                }
             }
             let mut connected = true;
             for reply in replies {
@@ -988,6 +1062,20 @@ async fn serve_connection(
             }
             if !connected {
                 break;
+            }
+            #[cfg(all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            if watched {
+                state
+                    .lock()
+                    .unwrap()
+                    .recipient_history_watch
+                    .as_mut()
+                    .unwrap()
+                    .written = true;
             }
         }
     }
@@ -1191,6 +1279,42 @@ impl Relay {
         state.observations.iter().filter(|observation| {
             matches!(observation, Observation::Write(found, 7435, true) if *found == id)
         }).count()
+    }
+
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn watch_recipient_history(
+        &self,
+        socket: usize,
+        account: PublicKey,
+        event: EventId,
+    ) {
+        let mut state = self.state.lock().unwrap();
+        assert!(state.qualification && state.recipient_runtime);
+        assert!(state.recipient_history_watch.is_none());
+        state.recipient_history_watch = Some(RecipientHistoryWatch {
+            socket,
+            account,
+            event: event.to_hex(),
+            written: false,
+        });
+    }
+
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn watched_recipient_history_written(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap()
+            .recipient_history_watch
+            .as_ref()
+            .is_some_and(|watch| watch.written)
     }
 
     /// Classify the historical request transcript for the exact authenticated

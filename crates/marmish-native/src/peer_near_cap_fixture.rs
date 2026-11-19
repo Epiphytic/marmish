@@ -5,7 +5,9 @@ use super::{
     store::consent_checkpoint::{
         Route, Selector,
         provisioning::{
-            Binding, prepared_consent::custody::fixture_pending_stage, stage_journal::FileWitness,
+            Binding,
+            prepared_consent::custody::{fixture_approval_pending_stage, fixture_pending_stage},
+            stage_journal::FileWitness,
         },
     },
 };
@@ -14,7 +16,8 @@ use crate::{
     ipc::peer_read::Entry,
     peer_quota_vfs::dispatch::assert_unmanaged_fixture_default,
 };
-use rusqlite::{Connection, OpenFlags};
+use nostr::event::EventId;
+use rusqlite::{Connection, OpenFlags, Transaction, params};
 use sha2::{Digest as _, Sha256};
 use std::{
     fs::File,
@@ -215,6 +218,89 @@ impl CommittedApproval {
     }
 }
 
+#[derive(PartialEq, Eq)]
+pub(crate) struct ApprovalPending {
+    keeper: FileWitness,
+    digest: [u8; 32],
+    deferred_rows: i64,
+}
+
+pub(crate) fn snapshot_approval_pending(
+    lease: &ProfileLease,
+    material: &IdentityMaterial,
+    relay: &str,
+    entry: &Entry,
+    [offer, delivery]: [EventId; 2],
+    later: Option<EventId>,
+) -> Result<ApprovalPending> {
+    assert_unmanaged_fixture_default()?;
+    if !lease.was_ready_at_acquire() {
+        return Err("profile");
+    }
+    let paths = Paths::new(lease, material).map_err(|_| "profile")?;
+    let route = Route::configured(relay).map_err(|_| "origin")?;
+    let cursor = paths.cursor().map_err(|_| "cursor_identity")?;
+    let key = pending_selector(entry);
+    let (binding, keeper, deferred_rows) = read_cursor(&paths, &cursor, |tx| {
+        let (binding, keeper) = fixture_approval_pending_stage(
+            tx,
+            material.public_key(),
+            route.id,
+            (
+                key,
+                entry.selection.generation,
+                entry.held_at,
+                entry.expires_at,
+            ),
+        )
+        .map_err(|_| "pending_selection")?;
+        let (retained, deferred_rows): (bool, i64) = tx
+            .query_row(
+                "SELECT (SELECT count(*) FROM peer_installed_offer_v2)=1
+                      AND EXISTS(
+                        SELECT 1 FROM peer_installed_offer_v2 m
+                        JOIN peer_consent_invite i USING (server,origin,offer_id,revision)
+                        WHERE m.server=?1 AND m.origin=?2 AND m.offer_id=?3
+                          AND m.revision=?4 AND i.carrier=?5)
+                      AND EXISTS(SELECT 1 FROM peer_pending_custody WHERE delivery_carrier=?6)
+                      AND NOT EXISTS(SELECT 1 FROM peer_cursor_deferred WHERE origin=?2 AND id=?7),
+                      (SELECT count(*) FROM peer_cursor_deferred)",
+                params![
+                    key.server.to_bytes(),
+                    route.id,
+                    key.id,
+                    key.revision,
+                    offer.to_bytes(),
+                    delivery.to_bytes(),
+                    later.map(|id| id.to_bytes())
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|_| "pending_provenance")?;
+        if !retained {
+            return Err("pending_provenance");
+        }
+        Ok((binding, keeper, deferred_rows))
+    })?;
+    let file = paths
+        .reopen_provisional(binding, keeper)
+        .map_err(|_| "stage_identity")?;
+    let digest = file.digest().map_err(|_| "stage_digest")?;
+    Ok(ApprovalPending {
+        keeper,
+        digest,
+        deferred_rows,
+    })
+}
+
+fn pending_selector(entry: &Entry) -> Selector {
+    Selector {
+        server: entry.selection.server,
+        id: entry.selection.offer_id,
+        revision: entry.selection.revision,
+    }
+}
+
 fn read_pending(
     paths: &Paths<'_>,
     cursor: &CheckedFile,
@@ -222,6 +308,28 @@ fn read_pending(
     route: &Route,
     entry: &Entry,
 ) -> Result<(Binding, FileWitness)> {
+    read_cursor(paths, cursor, |tx| {
+        fixture_pending_stage(
+            tx,
+            material.public_key(),
+            route.id,
+            (
+                pending_selector(entry),
+                entry.selection.generation,
+                entry.held_at,
+                entry.expires_at,
+            ),
+        )
+        .map_err(|_| "pending_selection")
+    })
+}
+
+fn read_cursor<T>(
+    paths: &Paths<'_>,
+    cursor: &CheckedFile,
+    read: impl FnOnce(&Transaction<'_>) -> Result<T>,
+) -> Result<T> {
+    cursor.unchanged().map_err(|_| "cursor_identity")?;
     let mut conn = keyed(
         cursor.path(),
         OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -232,26 +340,11 @@ fn read_pending(
     conn.execute_batch("PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;")
         .map_err(|_| "cursor_open")?;
     let tx = conn.transaction().map_err(|_| "cursor_open")?;
-    let selection = entry.selection;
-    let selected = fixture_pending_stage(
-        &tx,
-        material.signer().public_key(),
-        route.id,
-        (
-            Selector {
-                server: selection.server,
-                id: selection.offer_id,
-                revision: selection.revision,
-            },
-            selection.generation,
-            entry.held_at,
-            entry.expires_at,
-        ),
-    )
-    .map_err(|_| "pending_selection");
+    let result = read(&tx);
     tx.rollback().map_err(|_| "cursor_close")?;
     conn.close().map_err(|_| "cursor_close")?;
-    selected
+    cursor.unchanged().map_err(|_| "cursor_identity")?;
+    result
 }
 
 fn cursor_digest(cursor: &CheckedFile) -> Result<[u8; 32]> {
