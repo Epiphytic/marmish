@@ -74,3 +74,22 @@ source reachability, unchanged stock admission, use of typed refusals and
 the unmounted scope. The implementation should assert exact visit order,
 fail when the first wait never reaches Pending, and confirm stock test builds
 ignore installed observers. Both design reviews were read-only.
+
+## Follow-up effect-cut code
+
+Claude Code Sonnet in Auto mode approved exact Rust
+`ec4305264e03a22ec5728c99a053fd5aac0f182c` in session
+`2ddf317f-7cdc-40ab-9369-c9948c1c061f`, with no blocking findings. An earlier
+static pass (`421a93aa-9ba7-441a-8b6e-77b470faf92c`) reviewed a draft before
+the final test compile correction. The final reviewer checked the exact
+source and archive hash and reran the six fresh-process cases and the
+stock observer check. The author ran stock and candidate strict Clippy.
+The draft validation document was outside the reviewed Rust commit.
+
+The ready-edge fixture checks that dispatcher loss supersedes the inner
+result and leaves its exact outcome unspecified. Inventory after-query
+coverage uses the typed `ServerUnavailable` result. The package publisher
+fixture exercises the gate before signing using the same active admission.
+It does not qualify the mounted SDK callback or WSS route. The daemon
+caller still needs an independent admission check before any reply write.
+[Measured validation](../validation/peer-candidate-command-active.md).
