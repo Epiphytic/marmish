@@ -34,3 +34,12 @@ the accessor itself is excluded from normal builds.
 
 See the [validation record](../validation/peer-candidate-dispatcher-loss-subprocess.md)
 for the exact source-matched package and author checks.
+
+## Independent composition review
+
+Claude Code Auto session `15cff011-7f85-4731-846a-9776306bda72` approved
+`01bbff1`. Git range-diff matched all six original patches. The review
+checked the idle prelude handoff and passed stock and candidate test
+compilation in separate private targets. The installed tests above
+identify artifacts built on the original reviewed lineage. The
+composition review did not rerun the installed layout.
